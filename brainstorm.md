@@ -15,6 +15,7 @@
 - Multi-user
   - Homelabbers
   - Non-technical users
+- Loudness normalization
 ## Other requirements
 - Uploading/adding music
 - Recommendations
@@ -34,3 +35,6 @@
 - How to make recommendations smart?
 - Import Spotify/other history?
 - Audiobooks / podcasts
+- Native app plugins
+- OpenSubsonic compatibility
+- Track identity
