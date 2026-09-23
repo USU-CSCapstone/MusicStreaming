@@ -1,0 +1,8 @@
+extends:
+  - recommended
+rules:
+  # Errors on every authenticated endpoint are covered by the `default` Problem
+  # response and the conventions in `info.description`.
+  operation-4xx-response: off
+  # The project license is an open decision (design/general.md §11).
+  info-license: off
