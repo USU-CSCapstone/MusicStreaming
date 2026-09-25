@@ -3,16 +3,16 @@
 ## Overview
 An artist is a name that appears in tags and everything that name connects to. Like albums, artists emerge from the collection rather than being records anyone maintains.
 
-The central problem this file solves is **multiple artists on one piece of music**. Collaborations, features, split credits, and various-artist releases are ordinary in any real collection and are consistently handled badly by self-hosted music software — features get mangled into artist names, collaborations create phantom artists, and a guest appearance pollutes someone's discography. §2 is the most important section here.
+The central problem this file solves is **multiple artists on one piece of music**. Collaborations, features, split credits, and various-artist releases are ordinary in any real collection and are consistently handled badly by self-hosted music software — features get mangled into artist names, collaborations create phantom artists, and a guest appearance pollutes someone's discography. [§2](#2-ownership-discography-vs-appearances) is the most important section here.
 
-Shared behavior follows `conventions.md`.
+Shared behavior follows [`conventions.md`](conventions.md).
 
 ---
 
 ## 1. Identity
 
 - An artist is identified by **name**, drawn from artist and album-artist tags.
-- Tags hold one or more names **separated by semicolons**; each becomes a separate artist. `Kendrick Lamar;SZA` is two artists, never one artist called "Kendrick Lamar;SZA". Tag formats that carry repeated fields natively are read the same way (`tags.md` §3).
+- Tags hold one or more names **separated by semicolons**; each becomes a separate artist. `Kendrick Lamar;SZA` is two artists, never one artist called "Kendrick Lamar;SZA". Tag formats that carry repeated fields natively are read the same way ([`tags.md` §3](tags.md#3-multiple-values)).
 - **The semicolon is the only delimiter.** No inference from "feat.", "ft.", "&", "vs.", or commas. Splitting on those would corrupt correctly-tagged collections in order to rescue badly-tagged ones — "Earth, Wind & Fire" and "Simon & Garfunkel" are single artists whose names contain punctuation.
 - **Order is meaningful**; the first name is the primary credit.
 - Artists sharing a name are the same artist. Distinguishing two different bands with one name needs information tags do not reliably carry.
@@ -43,7 +43,7 @@ Consequences the rest of the system must honor:
 ## 3. Artist Page
 
 ### 3.1 Discography
-Albums where the artist is among the album artists, **split by type** — Albums, EPs, Singles, Compilations (`albums.md` §3). Empty sections are omitted. Within each, releases sort by date, newest first, with other sort options available.
+Albums where the artist is among the album artists, **split by type** — Albums, EPs, Singles, Compilations ([`albums.md` §3](albums.md#3-type)). Empty sections are omitted. Within each, releases sort by date, newest first, with other sort options available.
 
 ### 3.2 Appearances
 Tracks where the artist is credited but is not an album artist of the release.
@@ -56,7 +56,7 @@ Tracks where the artist is credited but is not an album artist of the release.
 The artist's most-played tracks, ranked by **the viewing user's own play counts** — a personal library's value is personal. Includes owned and featured tracks, marked so the difference is visible. An artist the user has never played still shows a sensible ordering rather than an empty section.
 
 ### 3.4 Related Artists
-Derivation is defined in `recommendations.md`. Two constraints regardless of method:
+Derivation is defined in [`recommendations.md`](recommendations.md). Two constraints regardless of method:
 
 - **Related artists never leave the library.** Every suggestion is an artist the user actually has music by.
 - **Collaborators surface naturally** — an artist frequently credited alongside this one is a relationship the collection already contains.
@@ -65,7 +65,7 @@ Derivation is defined in `recommendations.md`. Two constraints regardless of met
 
 ## 4. Images & Biography
 
-Resolution follows `scanning.md` §3.2–3.3; serving, caching, and placeholders follow `conventions.md` §5.
+Resolution follows [`scanning.md` §3.2](scanning.md#32-artist-images)–3.3; serving, caching, and placeholders follow [`conventions.md` §5](conventions.md#5-imagery).
 
 - **Both are optional and usually absent.** A fresh library has neither, and an artist with no image and no biography must look complete and intentional rather than broken. This is the common case.
 - **This is the plugin system's most visible payoff** — install an enrichment plugin and artist pages fill in through the ordinary scan path, with no separate import step.
@@ -74,7 +74,7 @@ Resolution follows `scanning.md` §3.2–3.3; serving, caching, and placeholders
 
 ## 5. Artist-Specific Behavior
 
-Beyond `conventions.md`:
+Beyond [`conventions.md`](conventions.md):
 
 - **Every artist parsed from a semicolon-separated tag is independently browsable**, whether credited first, last, or only ever as a guest.
 - Play counts and last-played **aggregate across owned and featured tracks**.

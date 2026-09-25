@@ -6,20 +6,20 @@ A playlist is an ordered list of tracks. Playlists come in two kinds, and both a
 | | Where it appears | How long it lasts |
 |---|---|---|
 | **Saved playlist** | Among the user's playlists | Until they delete it |
-| **Generated playlist** | Among recommendations (`recommendations.md`) | Temporary, unless the user saves it |
+| **Generated playlist** | Among recommendations ([`recommendations.md`](recommendations.md)) | Temporary, unless the user saves it |
 
 A **filtered view** — the library narrowed by genre, year, or listening data and played directly — is not a playlist. It is a way of browsing, and it leaves nothing behind. Users filter constantly, and doing so must never accumulate hundreds of accidental playlists.
 
-The requirements below describe **saved** playlists unless stated otherwise. Generated playlists are specified in `recommendations.md`; §8 covers what happens when one is saved.
+The requirements below describe **saved** playlists unless stated otherwise. Generated playlists are specified in [`recommendations.md`](recommendations.md); [§8](#8-saving-a-generated-playlist) covers what happens when one is saved.
 
-Shared behavior follows `conventions.md`.
+Shared behavior follows [`conventions.md`](conventions.md).
 
 ---
 
 ## 1. Ownership & Scope
 
-- **Playlists are strictly personal.** Every playlist belongs to one user. There is no sharing, no collaboration, and no visibility to other non-admin accounts (`users.md` §7).
-- **A playlist belongs to one library** and holds only tracks from it (`libraries.md` §4).
+- **Playlists are strictly personal.** Every playlist belongs to one user. There is no sharing, no collaboration, and no visibility to other non-admin accounts ([`users.md` §7](users.md#7-privacy--personal-data)).
+- **A playlist belongs to one library** and holds only tracks from it ([`libraries.md` §4](libraries.md#4-isolation)).
 - Losing access to a library **preserves** its playlists; they return intact if access is restored.
 
 ---
@@ -28,10 +28,10 @@ Shared behavior follows `conventions.md`.
 
 - **Title**, required.
 - **Description**, optional and free-form.
-- **Artwork** (§6).
+- **Artwork** ([§6](#6-artwork)).
 - **Track count** and **total duration**, shown wherever the playlist appears.
 - **Created** and **last modified** times.
-- **Play count** and **last played**, per `conventions.md` §1.
+- **Play count** and **last played**, per [`conventions.md` §1](conventions.md#1-personal-data).
 
 ---
 
@@ -39,14 +39,14 @@ Shared behavior follows `conventions.md`.
 
 - **Order is the user's.** A playlist plays in the order it was arranged and never silently reorders itself.
 - **Duplicates are allowed, with a warning.** Adding a track already in the playlist works, but the user is told it is already there and can back out. Intentional repeats are legitimate; accidental ones are the common case.
-- **Missing tracks stay put.** A track whose file has vanished remains in position, clearly marked, skipped on playback (`conventions.md` §6), and retained for as long as any playlist references it (`scanning.md` §8). If the file returns, it plays again.
-- **There is no arbitrary size limit.** A playlist of tens of thousands of tracks is supported, and the host is the only limit (`general.md` §3.3).
+- **Missing tracks stay put.** A track whose file has vanished remains in position, clearly marked, skipped on playback ([`conventions.md` §6](conventions.md#6-availability)), and retained for as long as any playlist references it ([`scanning.md` §8](scanning.md#8-missing-files)). If the file returns, it plays again.
+- **There is no arbitrary size limit.** A playlist of tens of thousands of tracks is supported, and the host is the only limit ([`general.md` §3.3](general.md#33-the-host-is-the-limiter)).
 
 ---
 
 ## 4. Editing
 
-Every edit is immediate in the interface and reconciled afterward (`general.md` §3.4).
+Every edit is immediate in the interface and reconciled afterward ([`general.md` §3.4](general.md#34-optimistic-by-default)).
 
 - **Add and remove in bulk.** Selecting many tracks and adding or removing them is one action, and it either fully succeeds or fully fails — never half-applied.
 - **Reorder by dragging**, one track or many.
@@ -62,18 +62,18 @@ Every edit is immediate in the interface and reconciled afterward (`general.md` 
 A user editing from several devices must never silently lose work or find changes they did not make.
 
 - **Edits apply only to the version the user was actually looking at.** If the playlist changed since, the edit is refused rather than applied on top of something unexpected.
-- **This does not make rapid editing fragile.** A device's own edits advance the version it holds, so a user reordering ten tracks in a row is never refused by their own previous edit. Refusal means a *different* device or session changed the playlist — the case §5 exists for.
+- **This does not make rapid editing fragile.** A device's own edits advance the version it holds, so a user reordering ten tracks in a row is never refused by their own previous edit. Refusal means a *different* device or session changed the playlist — the case [§5](#5-concurrent-edits) exists for.
 - **A refused edit is explained.** The user is told plainly that the playlist changed elsewhere and their change was not applied — never left believing it worked.
 - **Nothing is merged or overwritten silently.** The playlist is never quietly reshaped by combining two versions, and a later edit never erases an earlier one without the user knowing.
 - **Offline edits follow the same rule.** A device that edited while offline syncs successfully if nothing changed meanwhile, and reports the failure clearly if something did.
-- **Edits reach other devices immediately** (`realtime.md`). A change on a phone appears on a desktop without refreshing.
+- **Edits reach other devices immediately** ([`realtime.md`](realtime.md)). A change on a phone appears on a desktop without refreshing.
 
 ---
 
 ## 6. Artwork
 
 - **Generated by default** — a mosaic built from the album art of the tracks inside, updating as the contents change.
-- **Custom artwork is optional** and overrides the generated image. It lives in Jewelcase's own storage; the music library is never written to (`general.md` §3.1).
+- **Custom artwork is optional** and overrides the generated image. It lives in Jewelcase's own storage; the music library is never written to ([`general.md` §3.1](general.md#31-the-music-library-is-read-only-to-core)).
 - An empty playlist shows a **deliberate placeholder**, not a broken image.
 
 ---
@@ -110,7 +110,7 @@ Note the deliberate asymmetry: Jewelcase **writes** playlist files on export but
 
 ## 10. Playlist-Specific Behavior
 
-Beyond `conventions.md`:
+Beyond [`conventions.md`](conventions.md):
 
 - **Play and queue actions use the playlist's current order**, not a stored snapshot of it.
-- **Download is a standing instruction**, covering tracks added later while the download remains active (`offline.md` §3).
+- **Download is a standing instruction**, covering tracks added later while the download remains active ([`offline.md` §3](offline.md#3-what-can-be-downloaded)).

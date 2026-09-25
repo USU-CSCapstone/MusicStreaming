@@ -12,7 +12,7 @@ Behavior that is identical across tracks, albums, artists, and playlists, define
 Per-user and private. Never shared between accounts, never visible to other non-admin users.
 
 - **Play count** and **last played**, shown on the entity itself.
-- **Listening data** — plays, listen time, and everything derived from them (`analytics.md`).
+- **Listening data** — plays, listen time, and everything derived from them ([`analytics.md`](analytics.md)).
 
 ---
 
@@ -23,13 +23,13 @@ Every entity offers the same actions wherever it appears — in a list, a queue,
 - Play now
 - **Queue Next** and **Queue Last**
 - Add to playlist
-- Start radio / explore recommendations (`recommendations.md`)
-- Download for offline use (`offline.md`)
+- Start radio / explore recommendations ([`recommendations.md`](recommendations.md))
+- Download for offline use ([`offline.md`](offline.md))
 - Navigate to related entities
 
 Playing an album, artist, or playlist covers all its tracks in correct order. Shuffle is available on anything containing more than one track.
 
-Consistency is the requirement: an entity offers the same actions everywhere, so users never learn context-specific behavior. The one exception is external content, which cannot be downloaded and is marked accordingly rather than silently offering an action that will not work (`plugins.md` §10.3).
+Consistency is the requirement: an entity offers the same actions everywhere, so users never learn context-specific behavior. The one exception is external content, which cannot be downloaded and is marked accordingly rather than silently offering an action that will not work ([`plugins.md` §10.3](plugins.md#103-its-limits)).
 
 ---
 
@@ -46,7 +46,7 @@ Consistency is the requirement: an entity offers the same actions everywhere, so
 - Sort by **sort tags where tagged** (`ARTISTSORT`, `ALBUMSORT`, `ALBUMARTISTSORT`), otherwise by display name with **leading articles stripped** — "The Beatles" files under B.
 - Entities without a sortable value sort last, in a stable order that does not change between visits.
 - Browsing supports sorting by name, date added, and play count at minimum, plus filtering by genre and availability.
-- Sorting, filtering, and browsing stay instant at full library scale (`performance.md`).
+- Sorting, filtering, and browsing stay instant at full library scale ([`performance.md`](performance.md)).
 
 ---
 
@@ -56,7 +56,7 @@ Consistency is the requirement: an entity offers the same actions everywhere, so
 - **Artwork stays current.** Replacing an image on disk updates what users see.
 - Missing imagery uses a **consistent, deliberate placeholder**. Absent art is the common case in a fresh library and must look designed, not broken.
 
-Resolution from disk is defined in `scanning.md` §3.
+Resolution from disk is defined in [`scanning.md` §3](scanning.md#3-sidecar-content).
 
 ---
 
@@ -78,4 +78,4 @@ Applies wherever an artist is displayed:
 - **Every credited artist is navigable** — a featured artist is as clickable as a primary one. An artist is never rendered as inert text.
 - Tagged order is preserved; the first credit is primary.
 
-The ownership model that determines discography versus appearances is defined in `artists.md` §2.
+The ownership model that determines discography versus appearances is defined in [`artists.md` §2](artists.md#2-ownership-discography-vs-appearances).

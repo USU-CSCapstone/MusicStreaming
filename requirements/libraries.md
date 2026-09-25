@@ -5,7 +5,7 @@ A library is a collection of music on disk and everything Jewelcase knows about 
 
 Jewelcase's relationship with a library is one-directional. It **reads**. It does not organize, rename, retag, or place anything beside the files. A collection must survive Jewelcase being installed, run for years, and uninstalled without a single byte having changed.
 
-This file covers what a library is, where it lives, and how it is administered. How its contents are read off disk is covered in `scanning.md`.
+This file covers what a library is, where it lives, and how it is administered. How its contents are read off disk is covered in [`scanning.md`](scanning.md).
 
 ---
 
@@ -33,7 +33,7 @@ This file covers what a library is, where it lives, and how it is administered. 
 - Admins can **create, rename, reconfigure, and delete** libraries at any time.
 - **Deleting a library removes only Jewelcase's knowledge of it** — the index, and the playlists, queues, history, and statistics scoped to it. It never deletes, moves, or alters a file on disk. The confirmation must say so unmistakably, since it is the one place a user might reasonably fear otherwise.
 - **Plugins are enabled per library**, toggled independently for each.
-- **Library access is granted per account** (`users.md`).
+- **Library access is granted per account** ([`users.md`](users.md)).
 - Admins see per-library health at a glance: track count, total size, last scan time, current scan state, unavailable roots, missing tracks, outstanding scan problems.
 
 ---
@@ -43,7 +43,7 @@ This file covers what a library is, where it lives, and how it is administered. 
 - Every entity carries its library, and every request is authorized against it.
 - **Search, browse, recommendations, and queue generation never cross a library boundary** — including for admins, who hold access to every library but operate within one at a time.
 - **Playlists and queues cannot mix libraries.** A playlist belongs to a library, and every track in it comes from that library.
-- **Access, not identifiers, decides reach.** A library a user cannot access is indistinguishable from one that does not exist (`users.md` §10).
+- **Access, not identifiers, decides reach.** A library a user cannot access is indistinguishable from one that does not exist ([`users.md` §10](users.md#10-access-semantics)).
 
 ---
 
@@ -53,8 +53,8 @@ A library publishes its changes, and clients follow that feed rather than pollin
 
 - **Library changes reach users without them asking.** A newly scanned album appears on every signed-in device; nobody refreshes, and nobody waits for a scheduled sync.
 - **Every kind of change propagates** — content added, metadata updated, tracks removed, and tracks going missing or returning.
-- **Catching up costs what changed, not what the library holds.** This is what makes carrying a 500,000-track catalog on a phone practical (`offline.md` §1, `performance.md` §6).
+- **Catching up costs what changed, not what the library holds.** This is what makes carrying a 500,000-track catalog on a phone practical ([`offline.md` §1](offline.md#1-the-catalog-is-always-there), [`performance.md` §6](performance.md#6-client-footprint)).
 - **A device that has been away for months recovers correctly**, ending up with an accurate library rather than a stale or partial one.
 - **A large import does not flood clients.** Importing ten thousand tracks must not degrade the experience of anyone listening while it happens.
 
-How clients hold and use that catalog is `offline.md`.
+How clients hold and use that catalog is [`offline.md`](offline.md).
