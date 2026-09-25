@@ -80,6 +80,8 @@ export interface paths {
          * @description Failure is identical for an unknown account, a wrong password, and a suspended
          *     account (`requirements/users.md` §3). Repeated failures are delayed, then
          *     temporarily locked, per account and per origin (`requirements/users.md` §3.1).
+         *     A device logged out with `credentials_changed` passes its `deviceId` to log back in
+         *     as itself.
          */
         post: operations["login"];
         delete?: never;
@@ -167,7 +169,8 @@ export interface paths {
         /**
          * Complete a password reset
          * @description Sets a new password, logs out every device with reason `credentials_changed` —
-         *     so they keep their downloads — and logs in this one (`requirements/users.md` §3).
+         *     so they keep their downloads — and logs in this one (`requirements/users.md` §3),
+         *     as itself when it passes its `deviceId`.
          */
         post: operations["completePasswordReset"];
         delete?: never;
@@ -3114,7 +3117,8 @@ export interface components {
             code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "validation_failed" | "weak_password" | "breached_password" | "username_taken" | "version_conflict" | "capacity_exceeded" | "cursor_expired" | "setup_required" | "unsupported_media" | "root_overlap" | "root_unavailable" | "device_unavailable" | "not_active_device" | "source_unavailable" | "source_timeout" | "plugin_settings_invalid";
             /**
              * @description With `session_revoked`. `credentials_changed` — the device keeps its downloads and
-             *     logs in again; `logged_out` — the device removes them (`requirements/offline.md` §9).
+             *     logs in again with its `deviceId`; `logged_out` — the device removes them
+             *     (`requirements/offline.md` §9).
              * @enum {string}
              */
             reason?: "credentials_changed" | "logged_out";
@@ -3222,7 +3226,16 @@ export interface components {
             /** Format: password */
             password: string;
             device: components["schemas"]["DeviceRegistration"];
+            deviceId?: components["schemas"]["ReclaimedDeviceId"];
         };
+        /**
+         * @description The device's ID from before it was logged out with `credentials_changed`. The device
+         *     returns under that ID, keeping its name, downloads, and history; `device` only updates
+         *     its type and platform. Any other ID — unknown, active, logged out otherwise, or on
+         *     another account — is ignored and a new device is registered. `Session.device.id` says
+         *     which happened.
+         */
+        ReclaimedDeviceId: string;
         Session: {
             /** @description Shown once. Long-lived; idleness never expires it (`requirements/users.md` §4). */
             token: string;
@@ -3244,6 +3257,7 @@ export interface components {
             /** Format: password */
             password: string;
             device: components["schemas"]["DeviceRegistration"];
+            deviceId?: components["schemas"]["ReclaimedDeviceId"];
         };
         PasswordChange: {
             /** Format: password */
