@@ -1,0 +1,28 @@
+[package]
+name = "jewelcase-scanner"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+jewelcase-core = { version = "0.1.0", path = "../core" }
+jewelcase-ffmpeg = { version = "0.1.0", path = "../ffmpeg" }
+lofty = "0.25"
+globset = "0.4"
+notify = "8"
+thiserror = "2"
+tracing = "0.1"
+ebur128 = "0.1"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+imagesize = "0.15"
+hound = { version = "3", optional = true }
+tempfile = { version = "3", optional = true }
+
+[features]
+# Store conformance suite and fixtures, for this crate's tests and for store implementations elsewhere.
+testing = ["dep:hound", "dep:tempfile"]
+
+[dev-dependencies]
+tempfile = "3"
+hound = "3"
+jewelcase-scanner = { path = ".", features = ["testing"] }

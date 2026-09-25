@@ -11,8 +11,9 @@ The scanner reads and never writes. When something is ambiguous or unavailable i
 
 ## 1. Supported Formats
 
-**FLAC, ALAC, WAV, AIFF, MP3, AAC/M4A, Ogg Vorbis, Opus, and WMA.**
+**FLAC, ALAC, WAV, AIFF, MP3, AAC/M4A, Ogg Vorbis, and Opus.**
 
+- **WMA is deliberately unsupported**, and is treated like any other unsupported file. Reading its tags well would need a second, format-specific code path for a format that is rare in collections assembled today, and a half-supported format — playable but badly tagged — is worse than an absent one. The cost is that a WMA-only collection scans clean with nothing indexed; the format list is where a user finds out why.
 - **Unsupported files are ignored, not flagged.** A library containing documents, images, or archives scans cleanly without noise about files Jewelcase was never meant to index.
 - **Supported-but-unreadable files are reported** as scan problems rather than silently dropped.
 - **Technical properties are captured accurately** — duration, sample rate, bit depth, channel count, bitrate, codec — including multi-channel and high-resolution audio. Playback and transcoding depend on these being right.
