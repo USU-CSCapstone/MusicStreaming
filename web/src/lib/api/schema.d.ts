@@ -2138,6 +2138,7 @@ export interface paths {
         /**
          * Delete an account
          * @description Permanent, removing all personal data; never touches audio, metadata, or artwork.
+         *     Invites the account created are deleted with it, so none outlive their creator.
          *     The owner cannot be deleted (`requirements/users.md` §9).
          */
         delete: operations["adminDeleteUser"];
