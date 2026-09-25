@@ -4307,7 +4307,7 @@ components:
 
     DeviceType:
       type: string
-      enum: [phone, tablet, desktop, web]
+      enum: [phone, tablet, desktop, tv]
 
     DeviceRegistration:
       type: object
@@ -4319,11 +4319,16 @@ components:
         type: { $ref: '#/components/schemas/DeviceType' }
         platform: { type: string, description: 'For example `web`, `android`.' }
 
+    Username:
+      type: string
+      pattern: '^[A-Za-z0-9_-]{1,32}$'
+      description: ASCII letters, digits, `_` and `-`. Unique regardless of case; shown as chosen.
+
     SetupRequest:
       type: object
       required: [username, password, device]
       properties:
-        username: { type: string, minLength: 1 }
+        username: { $ref: '#/components/schemas/Username' }
         password: { type: string, format: password }
         displayName: { type: string }
         device: { $ref: '#/components/schemas/DeviceRegistration' }
@@ -4356,7 +4361,7 @@ components:
       type: object
       required: [username, password, device]
       properties:
-        username: { type: string, minLength: 1 }
+        username: { $ref: '#/components/schemas/Username' }
         password: { type: string, format: password }
         displayName: { type: string }
         device: { $ref: '#/components/schemas/DeviceRegistration' }
