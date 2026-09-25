@@ -51,7 +51,7 @@ Every file that reaches the scanner passes through the same stages, and every st
 
 - **Extension is the first filter and costs nothing.** Discovery drops every path whose extension is not in the supported set before opening it. This is what makes "unsupported files are ignored, not flagged" ([`requirements/scanning.md` §1](../requirements/scanning.md#1-supported-formats)) free: documents, images, and archives are never touched.
 - **Content confirms.** For files that pass the extension filter, the probe reads the magic bytes. A `.mp3` that is really a FLAC is read as FLAC; a `.flac` that is a text file is a `corruptAudio` problem, not a crash.
-- **Two libraries cover the nine formats:**
+- **Two libraries cover the eight formats:**
 
 | Format | Tags and properties | Decode |
 |---|---|---|
@@ -117,6 +117,7 @@ Until it is, stage 4 keys on path: a file at a new path is a new track, and a fi
 
 **Batches, not rows.** The scanner accumulates outcomes and hands the store a batch of a few hundred at a time, or whatever has accumulated after a short interval, whichever comes first. One SQLite transaction per batch.
 
+- **Unchanged files are in the batch too**, as a bare "seen by this scan" touch on the track row. That is what reconciliation ([§8](#8-reconciliation-and-missing-files)) reads instead of the scanner holding a set of every path it saw, and it is what makes resume correct: files before the cursor were already touched.
 - **Each batch appends to the library's change feed** ([`requirements/libraries.md` §5](../requirements/libraries.md#5-staying-current), [`general.md` §4](general.md#4-sync-and-mutations)). That is what makes content appear progressively: a client subscribed to the feed sees the first batch seconds after a scan starts, meeting the "first tracks browsable in seconds" budget.
 - **The feed carries net effect, not events.** A track added and updated within one scan is one feed entry. This is the "large import does not flood clients" requirement: a ten-thousand-track import is a few dozen feed pages, not ten thousand notifications.
 - **Albums and artists are derived inside the transaction.** Album identity is title plus album artists ([`requirements/albums.md` §1](../requirements/albums.md#1-identity)); the store upserts the album and artist rows a batch implies and drops any left with no tracks, so grouping is never stale between batches.
@@ -140,6 +141,7 @@ Until it is, stage 4 keys on path: a file at a new path is a new track, and a fi
 
 **One scanner task per library owns one coalescing queue of scopes.** A scope is a root or a folder within one. Every trigger — the filesystem watcher, the schedule, a manual request, a configuration change, a restore — does nothing but enqueue a scope. This is how "overlapping triggers never compound" ([`requirements/scanning.md` §4](../requirements/scanning.md#4-triggers)) is made structurally true rather than defended case by case.
 
+- **A scope has a depth.** A *directory* scope visits only the files directly in a folder, which is what an ordinary file change produces; a *subtree* scope descends. Roots, manual folder scans, directory events, and sidecar changes are subtree scopes.
 - **Enqueue coalesces.** A scope equal to one already queued is dropped. A scope that contains queued scopes replaces them. A scope contained by a queued or running scope is dropped. A whole-library scan therefore subsumes everything, and the API's "an equivalent scan is already running, that scan is returned" is a lookup, not a special case.
 - **The watcher is `notify`, debounced.** Events are grouped by directory over a window of about two seconds and enqueued as one scope per directory, so a copied-in album is one scope, not one per file. Sidecar-named files widen the scope to the subtree ([§5](#5-sidecars)). Watcher overflow or error enqueues the whole root — the watcher is a hint, never the source of truth.
 - **The schedule enqueues the whole library** on the admin's interval. It is the safety net for network mounts where `inotify` does not fire ([`requirements/deployment.md` §3](../requirements/deployment.md#3-storage--permissions)).
@@ -197,6 +199,7 @@ Storage and scheduling:
 - **Results live in `state/`, not `cache/`.** They are rebuildable in principle, but rebuilding costs days ([`general.md` §2](general.md#2-system-shape)); losing them to a cache purge would be an outage. They are keyed by track and versioned by analyzer version, so a release that changes an algorithm reprocesses in the background ([`requirements/deployment.md` §5](../requirements/deployment.md#5-upgrades)) rather than requiring a rescan.
 - **The analysis queue is a store query, not an in-memory list.** "Tracks without results at the current analyzer version, oldest first" is the queue; a restart loses nothing. A track being analyzed when the process dies is simply analyzed again.
 - **Priority within the queue favors what will be heard.** Tracks in a playing or queued context and tracks recently added go first; the long tail follows. This is what makes a two-day analysis feel finished within an hour for the music people actually play.
+- **A file that cannot be decoded gets an empty result at the current version**, so it is not retried on every pass. The failure is recorded as a scan problem, and a later scan that finds the file changed re-upserts the track and clears the placeholder.
 - **Each track is independent.** There is no cross-track state, so a kill, a timeout, or a governor pause affects exactly one track.
 
 ---

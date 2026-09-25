@@ -1,14 +1,15 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Jewelcase shared core.
+//!
+//! Every rule that must behave identically on the server and on a device lives
+//! here (`design/general.md` §3). The crate is pure: no I/O, no clock, no
+//! platform APIs. Callers pass in what it needs.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod audio;
+pub mod format;
+pub mod multi_value;
+pub mod sort;
+pub mod tags;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use audio::AudioProperties;
+pub use format::Format;
+pub use tags::{Lyrics, PartialDate, TagSet};
