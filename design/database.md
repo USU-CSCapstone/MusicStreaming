@@ -99,6 +99,5 @@ Plays and listening history — including the completion-weighted score behind `
 
 ## 9. Open Questions
 
-1. **Invites from deleted admins.** `invites.created_by` becomes `NULL` when its creator is deleted, but the spec's `Invite.createdBy` is required.
-2. **Denormalization.** §3 trades scanner complexity for read speed. Computing counts on read is simpler, but costs a query per row on every browse page.
-3. **Tracks with no disc tag** are stored as disc `0` and shown as `null` in the API.
+1. **Denormalization.** §3 trades scanner complexity for read speed. Computing counts on read is simpler, but costs a query per row on every browse page.
+2. **Tracks with no disc tag** are stored as disc `0` and shown as `null` in the API.

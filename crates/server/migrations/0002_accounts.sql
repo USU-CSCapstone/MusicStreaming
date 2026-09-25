@@ -55,7 +55,8 @@ CREATE INDEX devices_user ON devices (user_id);
 CREATE TABLE invites (
     id         INTEGER PRIMARY KEY,
     code_hash  BLOB    NOT NULL UNIQUE,
-    created_by INTEGER REFERENCES users (id) ON DELETE SET NULL,
+    -- Invites are deleted with their creator
+    created_by INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL,
     max_uses   INTEGER NOT NULL DEFAULT 1 CHECK (max_uses >= 1),
