@@ -116,6 +116,8 @@ jewelcase/
 ├── crates/
 │   ├── core/        # shared core (§3)
 │   ├── core-wasm/   # WebAssembly bindings for the web client
+│   ├── ffmpeg/      # ffmpeg subprocess wrapper — probe, decode, transcode (scanning.md §11)
+│   ├── scanner/     # ingestion pipeline (scanning.md)
 │   └── server/
 ├── web/             # SvelteKit client (SPA mode)
 ├── android/         # native app (later)
