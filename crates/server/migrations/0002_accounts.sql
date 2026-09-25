@@ -87,13 +87,14 @@ CREATE INDEX password_resets_user ON password_resets (user_id);
 CREATE TABLE login_attempts (
     id                 INTEGER PRIMARY KEY,
     at                 INTEGER NOT NULL,
-    username_attempted TEXT    NOT NULL,
+    username_attempted TEXT    NOT NULL COLLATE NOCASE,
     user_id            INTEGER REFERENCES users (id) ON DELETE SET NULL,
     origin             TEXT    NOT NULL,
     succeeded          INTEGER NOT NULL CHECK (succeeded IN (0, 1)),
     locked_out         INTEGER NOT NULL DEFAULT 0 CHECK (locked_out IN (0, 1))
 ) STRICT;
 
-CREATE INDEX login_attempts_user ON login_attempts (user_id, at);
+-- Per-account limits count by the name tried, so unknown usernames lock out exactly as real ones do.
+CREATE INDEX login_attempts_username ON login_attempts (username_attempted, at);
 CREATE INDEX login_attempts_origin ON login_attempts (origin, at);
 CREATE INDEX login_attempts_at ON login_attempts (at);

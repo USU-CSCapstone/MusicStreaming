@@ -49,6 +49,7 @@ CREATE TABLE artists (
 
 CREATE INDEX artists_by_name ON artists (library_id, sort_key, id);
 CREATE INDEX artists_by_added ON artists (library_id, added_at, id);
+CREATE INDEX artists_by_image ON artists (library_id, image_id);
 
 -- ───────────────────────────── Albums ─────────────────────────────
 
@@ -85,8 +86,9 @@ CREATE TABLE albums (
 CREATE INDEX albums_by_name ON albums (library_id, sort_key, id);
 CREATE INDEX albums_by_artist ON albums (library_id, artist_sort_key, sort_key, id);
 CREATE INDEX albums_by_added ON albums (library_id, added_at, id);
-CREATE INDEX albums_by_release ON albums (library_id, release_date, id);
+CREATE INDEX albums_by_release ON albums (library_id, release_date, sort_key, id);
 CREATE INDEX albums_by_duration ON albums (library_id, duration_us, id);
+CREATE INDEX albums_by_image ON albums (library_id, image_id);
 
 CREATE TABLE album_artists (
     library_id INTEGER NOT NULL,
@@ -165,8 +167,7 @@ CREATE INDEX tracks_by_artist ON tracks (library_id, artist_sort_key, sort_key, 
 CREATE INDEX tracks_by_album_order ON tracks (album_id, disc_number, track_number, id);
 CREATE INDEX tracks_by_album ON tracks (library_id, album_sort_key, album_id, disc_number, track_number, id);
 CREATE INDEX tracks_by_added ON tracks (library_id, added_at, id);
-CREATE INDEX tracks_by_release ON tracks (library_id, release_date, id);
-CREATE INDEX tracks_by_duration ON tracks (library_id, duration_us, id);
+CREATE INDEX tracks_by_release ON tracks (library_id, release_date, album_sort_key, album_id, disc_number, track_number, id);
 CREATE INDEX tracks_by_fingerprint ON tracks (library_id, fingerprint);
 CREATE INDEX tracks_missing ON tracks (library_id, missing_since) WHERE missing_since IS NOT NULL;
 CREATE INDEX tracks_unanalyzed ON tracks (library_id, id) WHERE analyzed_at IS NULL;

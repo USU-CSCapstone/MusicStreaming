@@ -597,7 +597,7 @@ paths:
             tracks are `artistId` with `sort=top`.
           schema:
             type: string
-            enum: [name, artist, album, dateAdded, playCount, lastPlayed, releaseDate, duration, top]
+            enum: [name, artist, album, dateAdded, playCount, lastPlayed, releaseDate, top]
             default: name
         - $ref: '#/components/parameters/Order'
         - name: albumId
