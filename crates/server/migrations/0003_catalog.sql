@@ -14,7 +14,8 @@ CREATE TABLE images (
     format      TEXT    NOT NULL,
     width       INTEGER NOT NULL,
     height      INTEGER NOT NULL,
-    placeholder BLOB    NOT NULL,
+    -- A tiny blurred preview, filled by the image job after a decode; NULL until then
+    placeholder BLOB,
     root_id     INTEGER NOT NULL,
     path        TEXT    NOT NULL,
     -- Whether the image is embedded in a track file
@@ -121,14 +122,18 @@ CREATE TABLE tracks (
     album_id        INTEGER NOT NULL,
     -- The album's title as written in this file
     album_title     TEXT,
-    -- A unique fingerprint of the audio, for deduplication
-    fingerprint     BLOB    NOT NULL,
+    -- A content fingerprint of the audio (requirements/scanning.md §6). NULL until track identity
+    -- is settled (design/scanning.md §6); the scanner keys on path meanwhile.
+    fingerprint     BLOB,
     root_id         INTEGER NOT NULL,
     path            TEXT    NOT NULL,
     file_size       INTEGER NOT NULL,
     -- The file's mtime, for detecting changes without reading the whole file (requirements/scanning.md §3.3).
     file_mtime      INTEGER NOT NULL,
     missing_since   INTEGER,
+    -- The scan that last saw this file on disk. Reconciliation marks missing whatever a completed
+    -- scan of a scope did not touch (design/scanning.md §7–§8).
+    last_seen_scan_id INTEGER,
     title           TEXT    NOT NULL,
     sort_key        BLOB    NOT NULL,
     artist_sort_key BLOB    NOT NULL,
@@ -139,6 +144,9 @@ CREATE TABLE tracks (
     disc_total      INTEGER,
     release_date    TEXT    CHECK (release_date GLOB '[0-9][0-9][0-9][0-9]' OR release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]' OR release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
     explicit        INTEGER NOT NULL DEFAULT 0 CHECK (explicit IN (0, 1)),
+    -- Per-file album-type inputs, resolved onto albums.type (requirements/albums.md §3)
+    compilation     INTEGER NOT NULL DEFAULT 0 CHECK (compilation IN (0, 1)),
+    release_type    TEXT,
     isrc            TEXT,
     -- Other identifier tags, passed through by lowercased tag name for plugins.
     identifiers     TEXT    NOT NULL DEFAULT '{}' CHECK (json_valid(identifiers) AND json_type(identifiers) = 'object'),
@@ -154,6 +162,9 @@ CREATE TABLE tracks (
     loudness_lufs   REAL,
     peak_dbtp       REAL,
     analyzed_at     INTEGER,
+    -- Which analyzer produced the results; tracks below the current version are reprocessed in
+    -- the background (design/scanning.md §12)
+    analyzer_version INTEGER,
     added_at        INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL,
     UNIQUE (library_id, id),
@@ -170,7 +181,7 @@ CREATE INDEX tracks_by_added ON tracks (library_id, added_at, id);
 CREATE INDEX tracks_by_release ON tracks (library_id, release_date, album_sort_key, album_id, disc_number, track_number, id);
 CREATE INDEX tracks_by_fingerprint ON tracks (library_id, fingerprint);
 CREATE INDEX tracks_missing ON tracks (library_id, missing_since) WHERE missing_since IS NOT NULL;
-CREATE INDEX tracks_unanalyzed ON tracks (library_id, id) WHERE analyzed_at IS NULL;
+CREATE INDEX tracks_unanalyzed ON tracks (library_id, analyzer_version, id) WHERE missing_since IS NULL;
 
 CREATE TABLE track_artists (
     library_id INTEGER NOT NULL,

@@ -7,7 +7,7 @@
 
 pub mod waveform;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
@@ -242,6 +242,3 @@ fn downmix(interleaved: &[f32], channels: usize, mono: &mut Vec<f32>) {
         mono.push(frame.iter().sum::<f32>() * scale);
     }
 }
-
-#[allow(dead_code)]
-fn _paths(_: PathBuf) {}

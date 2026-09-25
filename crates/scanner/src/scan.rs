@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 use jewelcase_core::sort::sort_key;
 
 use crate::discover::{
-    self, Candidate, Directory, RootUnavailable, Walk, WalkItem, check_root, compile_excludes,
+    Candidate, Directory, RootUnavailable, Walk, WalkItem, check_root, compile_excludes,
 };
 use crate::governor::Governor;
 use crate::identity::{self, FileFacts, Identity};
@@ -95,6 +95,8 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
         let mut batch = Batch::new(scan.id);
         let mut last_flush = Instant::now();
         let mut cancelled = false;
+        // What the store has actually seen, to fall back to if a flush fails.
+        let mut persisted = (scan.cursor.clone(), scan.progress.clone());
 
         let walk = Walk::new(&scope, &excludes, resume_after.as_deref());
         for item in walk {
@@ -122,11 +124,15 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
             if batch.len() >= ctx.options.batch_size
                 || last_flush.elapsed() >= ctx.options.batch_interval
             {
-                flush(ctx, scan, &mut batch);
+                if !flush(ctx, scan, &mut batch, &mut persisted) {
+                    return;
+                }
                 last_flush = Instant::now();
             }
         }
-        flush(ctx, scan, &mut batch);
+        if !flush(ctx, scan, &mut batch, &mut persisted) {
+            return;
+        }
 
         if cancelled {
             break;
@@ -157,12 +163,32 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
     ctx.store.update_scan(scan);
 }
 
-fn flush(ctx: &ScanContext<'_>, scan: &mut Scan, batch: &mut Batch) {
+/// Persist the batch and the scan row. On a store failure the scan suspends
+/// at its last persisted cursor rather than reporting success over lost
+/// work (`requirements/scanning.md` §10: problems are honest). Returns
+/// whether the scan may continue.
+fn flush(
+    ctx: &ScanContext<'_>,
+    scan: &mut Scan,
+    batch: &mut Batch,
+    persisted: &mut (Option<Cursor>, ScanProgress),
+) -> bool {
     if !batch.is_empty() {
         let full = std::mem::replace(batch, Batch::new(scan.id));
-        ctx.store.apply(&ctx.library.id, full);
+        if let Err(e) = ctx.store.apply(&ctx.library.id, full) {
+            tracing::error!(scan = scan.id, error = %e, "batch not persisted; suspending scan");
+            scan.cursor = persisted.0.clone();
+            scan.progress = persisted.1.clone();
+            scan.progress.current_path = None;
+            scan.state = ScanState::Suspended;
+            scan.finished_at = Some(SystemTime::now());
+            ctx.store.update_scan(scan);
+            return false;
+        }
     }
+    *persisted = (scan.cursor.clone(), scan.progress.clone());
     ctx.store.update_scan(scan);
+    true
 }
 
 fn process_directory(
@@ -251,14 +277,20 @@ fn process_file(
     };
     let identity = identity::identify(&facts, &ctx.library.id, ctx.store);
 
-    // Stage 5: sidecars, once per directory.
+    // Stage 5: sidecars, once per directory. Embedded art wins over a
+    // sidecar; sidecar lyrics apply only when the file has none.
     let side = resolved
         .get_or_insert_with(|| sidecars.resolve(&dir.path))
         .clone();
-    let artwork = if read.tags.has_embedded_art {
-        Some(ArtworkSource::Embedded)
-    } else {
-        side.cover.map(ArtworkSource::Sidecar)
+    let artwork = match read.embedded_art {
+        Some(info) => Some(Artwork {
+            source: ArtworkSource::Embedded,
+            info,
+        }),
+        None => side.cover.map(|c| Artwork {
+            source: ArtworkSource::Sidecar(c.path),
+            info: c.info,
+        }),
     };
     let lyrics_sidecar = if read.tags.lyrics.is_none() {
         SidecarResolver::lyrics_for(&candidate.path, &dir.files)
@@ -293,6 +325,7 @@ fn process_file(
 
     let record = TrackRecord {
         id: None,
+        root: scope.root.clone(),
         path: candidate.path.clone(),
         size: candidate.size,
         mtime_ms: candidate.mtime_ms,
@@ -316,6 +349,3 @@ fn process_file(
         }
     }
 }
-
-#[allow(dead_code)]
-fn _assert_discover_used(_: &discover::Directory) {}

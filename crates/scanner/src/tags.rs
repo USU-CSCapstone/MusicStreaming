@@ -15,6 +15,7 @@ use lofty::config::ParseOptions;
 use lofty::error::{FileParseError, UnknownFormatError, UnsupportedTagError};
 use lofty::file::{AudioFile, FileType, TaggedFile, TaggedFileExt};
 use lofty::mp4::{Mp4Codec, Mp4File};
+use lofty::picture::PictureType;
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, Tag, TagType};
 
@@ -39,6 +40,8 @@ pub enum ReadError {
 pub struct ReadResult {
     pub tags: TagSet,
     pub properties: AudioProperties,
+    /// The front cover embedded in the file, described for the `images` table.
+    pub embedded_art: Option<crate::image::ImageInfo>,
 }
 
 /// Read one file. `file_size` comes from discovery's `stat`, so the file is
@@ -89,7 +92,12 @@ pub fn read(path: &Path, file_size: u64) -> Result<ReadResult, ReadError> {
     };
 
     let tags = map_tags(&tagged);
-    Ok(ReadResult { tags, properties })
+    let embedded_art = front_cover(&tagged).and_then(crate::image::describe);
+    Ok(ReadResult {
+        tags,
+        properties,
+        embedded_art,
+    })
 }
 
 /// `ftyp` at offset 4 marks an ISO base media file. lofty's guess handles it
@@ -130,6 +138,15 @@ fn map_parse_error(e: FileParseError) -> ReadError {
         return ReadError::Unsupported(e.to_string());
     }
     ReadError::Malformed(e.to_string())
+}
+
+/// The front cover's bytes: a picture typed as such, else the first picture.
+fn front_cover(file: &TaggedFile) -> Option<&[u8]> {
+    let tags = file.tags();
+    tags.iter()
+        .find_map(|t| t.get_picture_type(PictureType::CoverFront))
+        .or_else(|| tags.iter().find_map(|t| t.pictures().first()))
+        .map(|p| p.data())
 }
 
 // ---------------------------------------------------------------------------

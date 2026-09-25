@@ -6,4 +6,18 @@ edition = "2024"
 [dependencies]
 axum = "0.8.9"
 jewelcase-core = { version = "0.1.0", path = "../core" }
+jewelcase-ffmpeg = { version = "0.1.0", path = "../ffmpeg" }
+jewelcase-scanner = { version = "0.1.0", path = "../scanner" }
+rusqlite = { version = "0.40", features = ["bundled"] }
+rand = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
 tokio = { version = "1.53.1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+lofty = "0.25"
+jewelcase-scanner = { version = "0.1.0", path = "../scanner", features = ["testing"] }

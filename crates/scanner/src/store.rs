@@ -52,6 +52,12 @@ impl Batch {
     }
 }
 
+/// A persistence failure. The scan that hit it suspends at its last
+/// persisted cursor rather than reporting success over lost work.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("store: {0}")]
+pub struct StoreError(pub String);
+
 /// Everything the scanner needs from persistence. Implementations are
 /// synchronous; the scanner calls them from its own blocking threads.
 pub trait Store: Send + Sync {
@@ -65,7 +71,8 @@ pub trait Store: Send + Sync {
     // --- files ---
     fn lookup(&self, library: &LibraryId, path: &Path) -> Option<IndexedFile>;
     /// Apply one batch atomically and append its net effect to the change feed.
-    fn apply(&self, library: &LibraryId, batch: Batch);
+    /// An error means nothing in the batch was persisted.
+    fn apply(&self, library: &LibraryId, batch: Batch) -> Result<(), StoreError>;
     /// Mark every non-missing track under `scope` whose `last_seen_scan` is
     /// not `scan_id` as missing. Returns how many.
     fn mark_missing_unseen(&self, library: &LibraryId, scope: &Scope, scan_id: ScanId) -> usize;
@@ -230,7 +237,7 @@ impl Store for MemoryStore {
         })
     }
 
-    fn apply(&self, library: &LibraryId, batch: Batch) {
+    fn apply(&self, library: &LibraryId, batch: Batch) -> Result<(), StoreError> {
         let mut inner = self.inner.lock().unwrap();
         let Inner {
             libraries,
@@ -289,6 +296,7 @@ impl Store for MemoryStore {
         for problem in batch.problems {
             lib.problems.insert(problem.path.clone(), problem);
         }
+        Ok(())
     }
 
     fn mark_missing_unseen(&self, library: &LibraryId, scope: &Scope, scan_id: ScanId) -> usize {

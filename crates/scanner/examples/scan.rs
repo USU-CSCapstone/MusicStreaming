@@ -66,7 +66,7 @@ fn main() {
             r.tags.artists.join("; "),
             r.display_title(),
             r.tags.album.as_deref().unwrap_or("?"),
-            match &r.artwork {
+            match r.artwork.as_ref().map(|a| &a.source) {
                 Some(ArtworkSource::Embedded) => "art:embedded ",
                 Some(ArtworkSource::Sidecar(_)) => "art:sidecar ",
                 None => "",

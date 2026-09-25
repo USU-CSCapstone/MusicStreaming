@@ -3,8 +3,10 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use jewelcase_core::{AudioProperties, TagSet};
+use jewelcase_core::{AudioProperties, Lyrics, TagSet};
 use serde::{Deserialize, Serialize};
+
+pub use crate::image::ImageInfo;
 
 pub type LibraryId = String;
 pub type TrackId = u64;
@@ -154,8 +156,38 @@ impl Scan {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ArtworkSource {
+    /// Inside the track file itself.
     Embedded,
+    /// A `cover.*` sidecar at this path.
     Sidecar(PathBuf),
+}
+
+/// Artwork found for a track, with what the store needs for an `images` row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Artwork {
+    pub source: ArtworkSource,
+    pub info: ImageInfo,
+}
+
+/// An `artist.*` sidecar image.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidecarImage {
+    pub path: PathBuf,
+    pub info: ImageInfo,
+}
+
+/// An `artist.txt` sidecar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Biography {
+    pub path: PathBuf,
+    pub text: String,
+}
+
+/// A lyrics sidecar, read (`requirements/scanning.md` §3.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidecarLyrics {
+    pub path: PathBuf,
+    pub lyrics: Lyrics,
 }
 
 /// Sort keys computed by the core at scan time (`design/general.md` §3).
@@ -173,16 +205,20 @@ pub struct SortKeys {
 pub struct TrackRecord {
     /// `Some` when updating an existing track, `None` for a new one.
     pub id: Option<TrackId>,
+    /// The library root this file lives under.
+    pub root: PathBuf,
+    /// Absolute path.
     pub path: PathBuf,
     pub size: u64,
     pub mtime_ms: u64,
     pub tags: TagSet,
     pub properties: AudioProperties,
-    pub artwork: Option<ArtworkSource>,
-    pub artist_image: Option<PathBuf>,
-    pub artist_biography: Option<PathBuf>,
-    /// Sidecar lyrics file, when there are no embedded lyrics.
-    pub lyrics_sidecar: Option<PathBuf>,
+    /// Embedded art wins over a sidecar (`requirements/scanning.md` §3.1).
+    pub artwork: Option<Artwork>,
+    pub artist_image: Option<SidecarImage>,
+    pub artist_biography: Option<Biography>,
+    /// Sidecar lyrics, only when the file has no embedded lyrics.
+    pub lyrics_sidecar: Option<SidecarLyrics>,
     pub sort: SortKeys,
     pub last_seen_scan: ScanId,
 }
@@ -195,6 +231,19 @@ impl TrackRecord {
             .title
             .clone()
             .unwrap_or_else(|| filename_title(&self.path))
+    }
+
+    /// Whichever lyrics apply: embedded first, then sidecar.
+    pub fn lyrics(&self) -> Option<&Lyrics> {
+        self.tags
+            .lyrics
+            .as_ref()
+            .or(self.lyrics_sidecar.as_ref().map(|l| &l.lyrics))
+    }
+
+    /// Path relative to the root, as the store keeps it.
+    pub fn relative_path(&self) -> &Path {
+        self.path.strip_prefix(&self.root).unwrap_or(&self.path)
     }
 }
 
@@ -215,6 +264,32 @@ pub enum ProblemKind {
     UnsupportedEncoding,
     CorruptAudio,
     Stalled,
+}
+
+impl ProblemKind {
+    /// The API's and schema's spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProblemKind::Unreadable => "unreadable",
+            ProblemKind::PermissionDenied => "permissionDenied",
+            ProblemKind::MalformedTags => "malformedTags",
+            ProblemKind::UnsupportedEncoding => "unsupportedEncoding",
+            ProblemKind::CorruptAudio => "corruptAudio",
+            ProblemKind::Stalled => "stalled",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<ProblemKind> {
+        Some(match s {
+            "unreadable" => ProblemKind::Unreadable,
+            "permissionDenied" => ProblemKind::PermissionDenied,
+            "malformedTags" => ProblemKind::MalformedTags,
+            "unsupportedEncoding" => ProblemKind::UnsupportedEncoding,
+            "corruptAudio" => ProblemKind::CorruptAudio,
+            "stalled" => ProblemKind::Stalled,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -265,6 +340,34 @@ pub struct Waveform {
     pub rms: Vec<u8>,
 }
 
+impl Waveform {
+    /// Serialize for the `track_waveforms.data` blob: a one-byte version, a
+    /// two-byte little-endian bin count, then peaks, then RMS.
+    pub fn to_blob(&self) -> Vec<u8> {
+        let n = self.peaks.len().min(u16::MAX as usize);
+        let mut out = Vec::with_capacity(3 + 2 * n);
+        out.push(1);
+        out.extend_from_slice(&(n as u16).to_le_bytes());
+        out.extend_from_slice(&self.peaks[..n]);
+        out.extend_from_slice(&self.rms[..n.min(self.rms.len())]);
+        out
+    }
+
+    pub fn from_blob(blob: &[u8]) -> Option<Waveform> {
+        if blob.len() < 3 || blob[0] != 1 {
+            return None;
+        }
+        let n = u16::from_le_bytes([blob[1], blob[2]]) as usize;
+        if blob.len() < 3 + 2 * n {
+            return None;
+        }
+        Some(Waveform {
+            peaks: blob[3..3 + n].to_vec(),
+            rms: blob[3 + n..3 + 2 * n].to_vec(),
+        })
+    }
+}
+
 /// One track's tag-derived facts, for duplicate detection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DuplicateCandidate {
@@ -297,4 +400,23 @@ pub fn system_time_ms(t: SystemTime) -> u64 {
     t.duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+pub fn now_ms() -> u64 {
+    system_time_ms(SystemTime::now())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn waveform_blob_round_trips() {
+        let w = Waveform {
+            peaks: vec![1, 2, 3],
+            rms: vec![4, 5, 6],
+        };
+        assert_eq!(Waveform::from_blob(&w.to_blob()), Some(w));
+        assert_eq!(Waveform::from_blob(&[9, 0, 0]), None);
+    }
 }

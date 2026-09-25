@@ -15,16 +15,19 @@ pub mod discover;
 pub mod duplicates;
 pub mod governor;
 pub mod identity;
+pub mod image;
 pub mod problems;
 pub mod queue;
 pub mod scan;
 pub mod sidecar;
 pub mod store;
 pub mod tags;
+#[cfg(feature = "testing")]
+pub mod testing;
 pub mod triggers;
 pub mod types;
 
 pub use governor::Governor;
 pub use queue::Scanner;
-pub use store::{Batch, IndexedFile, MemoryStore, Store};
+pub use store::{Batch, IndexedFile, MemoryStore, Store, StoreError};
 pub use types::*;

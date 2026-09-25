@@ -63,6 +63,32 @@ impl Format {
         }
     }
 
+    /// The codec name, in ffmpeg's vocabulary. This is what the API's
+    /// `codec` strings and the `codecs` query parameter carry.
+    pub fn codec_name(self) -> &'static str {
+        match self {
+            Format::Flac => "flac",
+            Format::Alac => "alac",
+            Format::Wav | Format::Aiff => "pcm",
+            Format::Mp3 => "mp3",
+            Format::Aac => "aac",
+            Format::Vorbis => "vorbis",
+            Format::Opus => "opus",
+        }
+    }
+
+    /// The container name, in ffmpeg's vocabulary.
+    pub fn container_name(self) -> &'static str {
+        match self {
+            Format::Flac => "flac",
+            Format::Alac | Format::Aac => "mp4",
+            Format::Wav => "wav",
+            Format::Aiff => "aiff",
+            Format::Mp3 => "mp3",
+            Format::Vorbis | Format::Opus => "ogg",
+        }
+    }
+
     /// Whether the format is lossless.
     pub fn is_lossless(self) -> bool {
         matches!(

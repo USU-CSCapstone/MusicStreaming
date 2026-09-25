@@ -1,7 +1,7 @@
 # Database Design
 
 ## Overview
-The SQLite schema behind `api/openapi.yaml`, through the Browse section. Migrations are plain SQL in `crates/server/migrations/`, applied in order at startup (`design/general.md` §2). Personal sections of the API — plays, playlists, queues, downloads — and admin state are added as they are built (§8).
+The SQLite schema behind `api/openapi.yaml`, through the Browse section. Migrations are plain SQL in `crates/server/migrations/`, applied in order at startup (`design/general.md` §2). Personal sections of the API — plays, playlists, queues, downloads — and admin state are added as they are built (§9).
 
 ---
 
@@ -91,13 +91,23 @@ Sorting by play count pages through `personal_stats` first, then continues throu
 
 ---
 
-## 8. Not Yet Modelled
+## 8. Scanning State
 
-Plays and listening history — including the completion-weighted score behind `sort=top`, which belongs in `personal_stats` with an index like `personal_stats_by_plays` — playlists, queues, mixes, downloads, recent searches, scans and scan problems, the job queue, plugins, external sources, and the audit log. Each arrives with its section of the API, and adds its entity types to the account feed's `CHECK`.
+**Scans and their problems are library administration, so they live in `0001_libraries.sql` beside the library they belong to.** A `scans` row mirrors the API's `Scan` object, including the resume cursor the scanner writes at every batch (`design/scanning.md` §9). Problems are two tables: `scan_problem_groups`, one row per distinct `(kind, root, normalized detail)` with a count, and `scan_problems`, one row per path, deleted when the path next scans cleanly (`design/scanning.md` §13).
+
+**Reconciliation is a column, not a set.** `tracks.last_seen_scan_id` is set on every file a scan touched, changed or not, so "what did this scan not see" is one `UPDATE`, and a scan that resumes from its cursor after a crash needs no memory of what it saw before (`design/scanning.md` §7–§8).
+
+**Identity inputs are nullable until identity is settled.** `tracks.fingerprint` stays `NULL` while the scanner keys on path (`design/scanning.md` §6). `images.placeholder` is `NULL` until the image job decodes the file; the scanner fills format, dimensions, and hash from the header.
 
 ---
 
-## 9. Open Questions
+## 9. Not Yet Modelled
+
+Plays and listening history — including the completion-weighted score behind `sort=top`, which belongs in `personal_stats` with an index like `personal_stats_by_plays` — playlists, queues, mixes, downloads, recent searches, the job queue, plugins, external sources, and the audit log. Each arrives with its section of the API, and adds its entity types to the account feed's `CHECK`.
+
+---
+
+## 10. Open Questions
 
 1. **Reclaiming a device after a password change.** The schema keeps the device, but `LoginRequest` has no way to name it, so re-login currently creates a new device and the old one's downloads are orphaned. The spec needs an optional `deviceId`.
 2. **Invites from deleted admins.** `invites.created_by` becomes `NULL` when its creator is deleted, but the spec's `Invite.createdBy` is required.

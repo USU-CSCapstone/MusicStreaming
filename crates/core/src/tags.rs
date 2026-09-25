@@ -38,6 +38,21 @@ impl PartialDate {
     }
 }
 
+impl std::fmt::Display for PartialDate {
+    /// `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`: the shape the database and API
+    /// carry.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:04}", self.year)?;
+        if let Some(m) = self.month {
+            write!(f, "-{m:02}")?;
+            if let Some(d) = self.day {
+                write!(f, "-{d:02}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Lyrics as read from the file or a sidecar (`requirements/tracks.md` §5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -149,6 +164,16 @@ mod tests {
         );
         assert_eq!(PartialDate::parse("unknown"), None);
         assert_eq!(PartialDate::parse("1991-13"), None);
+    }
+
+    #[test]
+    fn dates_format_at_their_precision() {
+        assert_eq!(PartialDate::parse("1991").unwrap().to_string(), "1991");
+        assert_eq!(PartialDate::parse("1991-9").unwrap().to_string(), "1991-09");
+        assert_eq!(
+            PartialDate::parse("1991-09-24").unwrap().to_string(),
+            "1991-09-24"
+        );
     }
 
     #[test]

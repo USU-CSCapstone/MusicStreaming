@@ -5,7 +5,9 @@
 //! platform APIs. Callers pass in what it needs.
 
 pub mod audio;
+pub mod fold;
 pub mod format;
+pub mod lrc;
 pub mod multi_value;
 pub mod sort;
 pub mod tags;
