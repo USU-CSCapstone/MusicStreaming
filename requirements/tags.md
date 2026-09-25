@@ -5,17 +5,17 @@ A tag is a label a file carries about its music. Tags are how a collection is sl
 
 **Genre is the only tag type in v1.** The model is nonetheless general, because the useful additions come later — moods, and eventually personal labels — and a system that can only hold genres would have to be rebuilt to hold anything else.
 
-Shared behavior follows `conventions.md`.
+Shared behavior follows [`conventions.md`](conventions.md).
 
 ---
 
 ## 1. Tags Come From Files
 
-**Tags are read from file metadata and nothing else** (`scanning.md` §2). Jewelcase applies none of its own, infers none from folder names, and offers no interface to add or edit them.
+**Tags are read from file metadata and nothing else** ([`scanning.md` §2](scanning.md#2-tags-are-the-only-truth)). Jewelcase applies none of its own, infers none from folder names, and offers no interface to add or edit them.
 
 - **There are no user-applied tags in v1.** Enriching or correcting genre data means correcting the files — by the user, or by a plugin.
-- **Plugin-written tags are ordinary tags.** A plugin that improves genre metadata writes to the files, and the result is indistinguishable from hand-tagging (`general.md` §3.2).
-- **The core never writes to the library** (`general.md` §3.1).
+- **Plugin-written tags are ordinary tags.** A plugin that improves genre metadata writes to the files, and the result is indistinguishable from hand-tagging ([`general.md` §3.2](general.md#32-the-scanner-is-the-only-ingestion-path)).
+- **The core never writes to the library** ([`general.md` §3.1](general.md#31-the-music-library-is-read-only-to-core)).
 
 ---
 
@@ -23,7 +23,7 @@ Shared behavior follows `conventions.md`.
 
 **Every tag has a type.** In v1 there is exactly one — **genre**.
 
-Anticipated but not built: **mood**, from the standard mood field; **personal labels**, if user tagging is added later; and **personal states** such as favourite or hidden, deliberately out of scope for v1 (`analytics.md` §7).
+Anticipated but not built: **mood**, from the standard mood field; **personal labels**, if user tagging is added later; and **personal states** such as favourite or hidden, deliberately out of scope for v1 ([`analytics.md` §7](analytics.md#7-no-explicit-signals-in-v1)).
 
 - **Types are independent.** Filtering by one never implicitly filters by another, so a mood filter added later composes with the genre filter rather than replacing it.
 - **Adding a type must not change how existing tags behave**, or how users already interact with them.
@@ -33,8 +33,8 @@ Anticipated but not built: **mood**, from the standard mood field; **personal la
 ## 3. Multiple Values
 
 - **A track can carry many tags of one type.** Three genres on one track is normal, not a conflict to resolve.
-- **Multiple values are preserved, never flattened** into a single string (`scanning.md` §2).
-- **Values are semicolon-separated**, the same convention as artists (`artists.md` §1). Tag formats that carry repeated fields natively are read the same way.
+- **Multiple values are preserved, never flattened** into a single string ([`scanning.md` §2](scanning.md#2-tags-are-the-only-truth)).
+- **Values are semicolon-separated**, the same convention as artists ([`artists.md` §1](artists.md#1-identity)). Tag formats that carry repeated fields natively are read the same way.
 - **Order carries no meaning.** Genres are unranked.
 
 ---
@@ -63,18 +63,18 @@ Anticipated but not built: **mood**, from the standard mood field; **personal la
 
 - **Tracks carry tags**, read from their own files.
 - **An album's tags are those of its tracks**, so an album is reachable by any genre its tracks carry.
-- **An artist's tags come from their work** (`artists.md` §2), reflecting what they actually recorded rather than one label applied to a career.
+- **An artist's tags come from their work** ([`artists.md` §2](artists.md#2-ownership-discography-vs-appearances)), reflecting what they actually recorded rather than one label applied to a career.
 - **Derived tags are never written back.** An album is not retagged because its tracks were; nothing on disk changes.
 
 ---
 
 ## 7. Browsing and Filtering
 
-- **Filter by tag anywhere entities are listed** (`conventions.md` §4).
+- **Filter by tag anywhere entities are listed** ([`conventions.md` §4](conventions.md#4-sorting--browsing)).
 - **A tag has a page** — the artists, albums, and tracks carrying it, browsable and playable like any other collection.
 - **Filters compose.** Genre with year, genre with listening data, or several tags at once, narrowing or widening as the user chooses.
-- **A filtered view is not a playlist** (`playlists.md` Overview). It leaves nothing behind.
-- **Filtering stays instant at full scale** (`performance.md` §3).
+- **A filtered view is not a playlist** ([`playlists.md`](playlists.md) Overview). It leaves nothing behind.
+- **Filtering stays instant at full scale** ([`performance.md` §3](performance.md#3-interaction-budgets)).
 
 ---
 

@@ -17,12 +17,12 @@ The scanner reads and never writes. When something is ambiguous or unavailable i
 - **Supported-but-unreadable files are reported** as scan problems rather than silently dropped.
 - **Technical properties are captured accurately** — duration, sample rate, bit depth, channel count, bitrate, codec — including multi-channel and high-resolution audio. Playback and transcoding depend on these being right.
 - **Every track is analyzed**, in **a single decoding pass** producing three results:
-  - its **loudness**, so normalization is consistent however the files were tagged (`playback.md` §5);
-  - a description of **how it sounds** — tempo, key, energy, sonic character — which is what lets recommendations reach music never played and never tagged (`recommendations.md` §2.1);
-  - its **waveform**, which the client draws as the progress bar so a listener can see the shape of a track and scrub to a point in it (`playback.md` §3).
+  - its **loudness**, so normalization is consistent however the files were tagged ([`playback.md` §5](playback.md#5-loudness));
+  - a description of **how it sounds** — tempo, key, energy, sonic character — which is what lets recommendations reach music never played and never tagged ([`recommendations.md` §2.1](recommendations.md#21-how-the-music-sounds));
+  - its **waveform**, which the client draws as the progress bar so a listener can see the shape of a track and scrub to a point in it ([`playback.md` §3](playback.md#3-the-waveform)).
 
-  **All three come out of one decode.** Decoding is nearly the entire cost of analysis, so any result that needs the audio is derived in that pass or not at all — adding a second pass would multiply the most expensive work in the system (`performance.md` §5).
-- **Analysis is background work and never blocks a library.** Results are stored in Jewelcase's own data, never written to the library, and tracks not yet analyzed are simply less well served rather than unavailable. Its cost and priority are budgeted in `performance.md` §5.
+  **All three come out of one decode.** Decoding is nearly the entire cost of analysis, so any result that needs the audio is derived in that pass or not at all — adding a second pass would multiply the most expensive work in the system ([`performance.md` §5](performance.md#5-scanning--analysis-budgets)).
+- **Analysis is background work and never blocks a library.** Results are stored in Jewelcase's own data, never written to the library, and tracks not yet analyzed are simply less well served rather than unavailable. Its cost and priority are budgeted in [`performance.md` §5](performance.md#5-scanning--analysis-budgets).
 
 ---
 
@@ -66,7 +66,7 @@ A file named **`artist.txt`**, resolved by the same upward walk.
 
 Lyrics resolve **only in the track's own directory**. There is no upward walk — inheriting them from a parent folder would attach the wrong words to the wrong song.
 
-Both time-synchronized and plain-text lyrics are read (`tracks.md` §5).
+Both time-synchronized and plain-text lyrics are read ([`tracks.md` §5](tracks.md#5-lyrics)).
 
 ### 3.5 Resolution Rules
 - **The nearest match wins.** A per-album cover overrides a per-artist one, which overrides one at the library root.
@@ -112,8 +112,8 @@ This is a hard requirement, not a best effort. Reorganizing a music collection i
 
 - **Tags changed.** Updates in place, keeping identity, playlist memberships, and history. Grouping changes are applied faithfully — retagging an album moves those tracks, and albums or artists left with no tracks disappear.
 - **Audio replaced.** Re-read, technical properties updated.
-- **File moved or renamed.** Same track, new location (§6).
-- **Sidecar added, replaced, or removed.** Re-resolved per §3, affecting every track that inherited from it.
+- **File moved or renamed.** Same track, new location ([§6](#6-track-identity)).
+- **Sidecar added, replaced, or removed.** Re-resolved per [§3](#3-sidecar-content), affecting every track that inherited from it.
 - **Root or exclude rules changed.** Newly included content indexed; newly excluded content treated as missing.
 - **Storage unavailable.** Scanning suspends for that root; the index is left intact. An unmounted drive is never interpreted as deleted music.
 
@@ -124,13 +124,13 @@ This is a hard requirement, not a best effort. Reorganizing a music collection i
 A track no longer on disk is **marked missing, not removed** — visible, clearly unavailable, unplayable.
 
 - **Retained indefinitely if referenced by any playlist.** If the file returns, the track reconnects with nothing lost.
-- **Removed after 30 days** otherwise. Playlist membership is the only reference that extends retention — a kept queue (`queue.md` §6) expires on its own schedule and does not pin a track, and a copy downloaded to a device does not either (`offline.md` §9).
+- **Removed after 30 days** otherwise. Playlist membership is the only reference that extends retention — a kept queue ([`queue.md` §6](queue.md#6-sessions)) expires on its own schedule and does not pin a track, and a copy downloaded to a device does not either ([`offline.md` §9](offline.md#9-download-lifecycle)).
 - **Admins can clean up immediately**, without waiting out the retention period.
 
 Retention is deliberately generous: an unmounted NAS must not quietly dismantle everyone's playlists, and a stale record costs far less than a destroyed one.
 
 ### 8.1 Purging Never Costs History
-Removing a track record must leave listening history readable and statistics unchanged. History carries its own snapshot for exactly this reason (`analytics.md` §8).
+Removing a track record must leave listening history readable and statistics unchanged. History carries its own snapshot for exactly this reason ([`analytics.md` §8](analytics.md#8-durability)).
 
 ---
 

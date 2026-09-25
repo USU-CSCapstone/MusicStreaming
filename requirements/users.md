@@ -47,7 +47,7 @@ There is no public signup. A person without an invite cannot create an account, 
 - **No account enumeration.** Failure messaging is identical for an unknown account, a wrong password, and a suspended account.
 - **Credentials are never recoverable.** Stored passwords cannot be read back by anyone, including the owner. A forgotten password is resolved by a reset, never by retrieval.
 - **Password resets** are performed by the user when signed in, or initiated by an admin through a single-use expiring link. An admin never sets a password on someone's behalf.
-- **Changing a password** signs out all other devices, leaving the device that made the change signed in. Those devices keep their downloads (`offline.md` §9) — a password change is a security action, not a wipe.
+- **Changing a password** signs out all other devices, leaving the device that made the change signed in. Those devices keep their downloads ([`offline.md` §9](offline.md#9-download-lifecycle)) — a password change is a security action, not a wipe.
 
 ### 3.1 Protection
 Strong, fixed defaults chosen by the project. There is no configuration that can weaken them.
@@ -86,21 +86,21 @@ A device carries a **name** (defaulted to something recognizable, user-editable)
 
 User-controlled, never imposed by an admin.
 
-- **Playback** — crossfade and its duration, volume normalization mode, silence skipping, default shuffle and repeat behavior, endless play, and whether a manual queue carries over into a new context (`queue.md` §6). Gapless is not listed here: it is always on and not configurable (`playback.md` §4).
-- **Streaming quality** — independent choices for unmetered connections, metered connections, and offline downloads, so nobody must choose between quality at home and cost on the move. A further choice decides whether a downloaded track may be streamed when the connection allows better quality, or always plays from the device (`offline.md` §4).
+- **Playback** — crossfade and its duration, volume normalization mode, silence skipping, default shuffle and repeat behavior, endless play, and whether a manual queue carries over into a new context ([`queue.md` §6](queue.md#6-sessions)). Gapless is not listed here: it is always on and not configurable ([`playback.md` §4](playback.md#4-transitions)).
+- **Streaming quality** — independent choices for unmetered connections, metered connections, and offline downloads, so nobody must choose between quality at home and cost on the move. A further choice decides whether a downloaded track may be streamed when the connection allows better quality, or always plays from the device ([`offline.md` §4](offline.md#4-choosing-between-local-and-stream)).
 - **Appearance** — theme, accent color, list-versus-grid density, language.
 - **Identity** — display name and avatar, both editable; username, which identifies the account for sign-in.
 
 ### 6.1 Where Preferences Live
 - **Account preferences follow the person.** Appearance and playback behavior apply everywhere they sign in; a change on one device appears on the others.
-- **Device preferences stay put.** Streaming quality, download quality, storage budget (`offline.md` §5), and **volume** (`realtime.md` §3) are properties of the device and its connection, not the person — a phone on cellular and a desktop on ethernet must be able to disagree.
+- **Device preferences stay put.** Streaming quality, download quality, storage budget ([`offline.md` §5](offline.md#5-storage--quality)), and **volume** ([`realtime.md` §3](realtime.md#3-shifting-control-and-waking)) are properties of the device and its connection, not the person — a phone on cellular and a desktop on ethernet must be able to disagree.
 
 ---
 
 ## 7. Privacy & Personal Data
 
 - **Personal data is private between users.** Playlists, queues, downloads, listening history, search history, and statistics are never visible to other non-admin accounts.
-- **Personal data is clearable by the user**, and clearing is permanent — nothing survives indirectly through anything derived from it (`analytics.md` §9, `search.md` §6).
+- **Personal data is clearable by the user**, and clearing is permanent — nothing survives indirectly through anything derived from it ([`analytics.md` §9](analytics.md#9-privacy-and-control), [`search.md` §6](search.md#6-recent-searches)).
 
 ---
 

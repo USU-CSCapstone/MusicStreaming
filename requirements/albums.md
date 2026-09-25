@@ -5,7 +5,7 @@ An album is a group of tracks released together. It is not a folder and not a re
 
 Albums are therefore as good as the tags in a collection, and Jewelcase does not paper over the difference. A messy library produces albums that accurately reflect the mess; the fix is to fix the tags.
 
-Shared behavior follows `conventions.md`.
+Shared behavior follows [`conventions.md`](conventions.md).
 
 ---
 
@@ -23,11 +23,11 @@ Shared behavior follows `conventions.md`.
 ## 2. Metadata
 
 - **Title**
-- **Album artists** — ordered, as tagged (`artists.md` §2)
+- **Album artists** — ordered, as tagged ([`artists.md` §2](artists.md#2-ownership-discography-vs-appearances))
 - **Release year or date**, at tag precision
-- **Total tracks** and **total discs**, from tags rather than counted from what is present (§3, §4)
-- **Type** (§3)
-- **Genres** (`tags.md`)
+- **Total tracks** and **total discs**, from tags rather than counted from what is present ([§3](#3-type), [§4](#4-track-listing--completeness))
+- **Type** ([§3](#3-type))
+- **Genres** ([`tags.md`](tags.md))
 - **Total duration** and **track count** of the tracks present, shown wherever an album appears
 
 ---
@@ -50,7 +50,7 @@ Albums are classified so an artist's discography can be split into meaningful se
 
 Inference uses **the total-track count from tags, never the number of tracks present in the library.** A user who owns three tracks of a twelve-track album has an incomplete album, not an EP. Inferring from what happens to be on disk would silently reclassify every partial album in a collection and scatter artists' discographies into the wrong sections.
 
-**The default type is Album.** A release with no type tag and no usable total-track count is classified as an album rather than left unclassified — an unclassified release would have nowhere to appear in a discography (`artists.md` §3.1).
+**The default type is Album.** A release with no type tag and no usable total-track count is classified as an album rather than left unclassified — an unclassified release would have nowhere to appear in a discography ([`artists.md` §3.1](artists.md#31-discography)).
 
 ---
 
@@ -60,13 +60,13 @@ Inference uses **the total-track count from tags, never the number of tracks pre
 - **Multi-disc albums are presented as discs**, with clear separation, not one flat run of numbers.
 - **Incomplete albums are shown as incomplete.** Where the tagged total exceeds what is present, the album says so — a user can tell at a glance they have 3 of 12 — rather than silently renumbering to look complete.
 - Incompleteness is **information, not an error**. Partial albums are ordinary in real collections: labeled, never hidden, never flagged as a problem.
-- **Missing tracks** appear in their correct position, marked unavailable (`scanning.md` §8).
+- **Missing tracks** appear in their correct position, marked unavailable ([`scanning.md` §8](scanning.md#8-missing-files)).
 
 ---
 
 ## 5. Artwork
 
-Resolution follows `scanning.md` §3.1; serving, caching, and placeholders follow `conventions.md` §5.
+Resolution follows [`scanning.md` §3.1](scanning.md#31-album-art); serving, caching, and placeholders follow [`conventions.md` §5](conventions.md#5-imagery).
 
 Album-specific: where tracks on one album resolve to different artwork, the album presents **a single coherent cover** rather than changing as playback moves between tracks.
 
@@ -74,7 +74,7 @@ Album-specific: where tracks on one album resolve to different artwork, the albu
 
 ## 6. Album-Specific Behavior
 
-Beyond `conventions.md`:
+Beyond [`conventions.md`](conventions.md):
 
 - Browsing additionally supports **filtering by type and year**, and **sorting by release date and duration**.
 - Play and shuffle cover the whole album in correct disc-and-track order.
