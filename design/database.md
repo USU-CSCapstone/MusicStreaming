@@ -52,7 +52,11 @@ The displayed name — `artists.name`, `albums.title`, `tags.name` — is the sp
 
 ## 4. Pagination
 
-**Keyset, never `OFFSET`.** A cursor encodes the last row's sort columns and `id`, and the next page is `WHERE (sort, id) > (…) ORDER BY sort, id LIMIT n`. Every browse sort has an index ending in `id`, so page 5,000 costs what page 1 does (`requirements/conventions.md` §3).
+**Keyset, never `OFFSET`.** A cursor encodes the last row's sort columns and `id`, and the next page is `WHERE (sort, id) > (…) ORDER BY sort, id LIMIT n`. Every browse sort has an index ending in `id`, so page 5,000 costs what page 1 does (`requirements/conventions.md` §3). Ties are broken by a meaningful column before `id` wherever they are common, since random IDs would otherwise scatter them — albums from the same year sort by name, and tracks by release date keep album order.
+
+**Filtered browsing picks its driving side by size.** A filtered page is either a walk of the sort index that checks each row against the filter, or a lookup of the filter's rows that are then sorted. Each is fast on one side and slow on the other: at 300k tracks, a 100-track genre sorted by name takes 0.8 ms from the tag and 27 ms walking the name index, while a 100k-track genre takes 60 ms from the tag and 10 ms walking. The server chooses using the counts it already stores (`tags.track_count`, `artists.track_count`, `albums.track_count`), rather than leaving it to the planner.
+
+**`PRAGMA optimize` runs periodically**, so the planner has statistics. Without them, the small-genre walk above took 168 ms.
 
 ---
 
@@ -83,11 +87,13 @@ Sorting by play count pages through `personal_stats` first, then continues throu
 
 **Every connection must enable `PRAGMA foreign_keys = ON`.** SQLite leaves foreign keys off by default, and §2 depends on them.
 
+**Foreign keys on large tables are indexed.** Deleting a parent row checks every table referencing it, and an unindexed child column means a full scan per deleted row — deleting 200 images took 1.25 s scanning albums and artists, and 1 ms with `image_id` indexed. Small account tables skip the index, since scanning dozens of rows costs nothing.
+
 ---
 
 ## 8. Not Yet Modelled
 
-Plays and listening history, playlists, queues, mixes, downloads, recent searches, scans and scan problems, the job queue, plugins, external sources, and the audit log. Each arrives with its section of the API, and adds its entity types to the account feed's `CHECK`.
+Plays and listening history — including the completion-weighted score behind `sort=top`, which belongs in `personal_stats` with an index like `personal_stats_by_plays` — playlists, queues, mixes, downloads, recent searches, scans and scan problems, the job queue, plugins, external sources, and the audit log. Each arrives with its section of the API, and adds its entity types to the account feed's `CHECK`.
 
 ---
 
