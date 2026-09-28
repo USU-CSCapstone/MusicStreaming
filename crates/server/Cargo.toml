@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.104"
 axum = "0.8.9"
 jewelcase-core = { version = "0.1.0", path = "../core" }
 jewelcase-ffmpeg = { version = "0.1.0", path = "../ffmpeg" }
@@ -14,10 +15,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1.53.1", features = ["full"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = "3.27.0"
 lofty = "0.25"
 jewelcase-scanner = { version = "0.1.0", path = "../scanner", features = ["testing"] }

@@ -1,14 +1,15 @@
 // Serves the mock API at /api/v1 from `vite dev` and `vite preview`, until the
 // Rust server implements it. Reads the database the real scanner writes under
-// $JEWELCASE_DATA, resolved like any path from the shell (default: the repository's `data/`).
+// $JEWELCASE_DATA_DIR, the server's own setting, resolved like any path from the shell
+// (default: the repository's `data/`).
 
 import { resolve } from 'node:path';
 import type { Plugin } from 'vite';
 import { createApi } from './api.ts';
 
 export function mockApi(): Plugin {
-	const data = process.env.JEWELCASE_DATA
-		? resolve(process.env.JEWELCASE_DATA)
+	const data = process.env.JEWELCASE_DATA_DIR
+		? resolve(process.env.JEWELCASE_DATA_DIR)
 		: resolve(import.meta.dirname, '../../data');
 	const dbPath = resolve(data, 'state/jewelcase.db');
 	const api = createApi(dbPath);

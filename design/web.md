@@ -12,7 +12,7 @@ client.
 ```sh
 # 1. Scan once from the repository root. Leave it running if you want waveforms and loudness: analysis
 #    runs in the background and starts about 30 seconds after launch.
-JEWELCASE_MUSIC=/path/to/music JEWELCASE_DATA=./data cargo run -p jewelcase-server
+JEWELCASE_MUSIC=/path/to/music JEWELCASE_DATA_DIR=./data cargo run -p jewelcase-server
 
 # 2. In another terminal, start the client.
 cd web
@@ -20,9 +20,10 @@ pnpm install
 pnpm dev            # http://localhost:5173
 ```
 
-The mock reads `$JEWELCASE_DATA/state/jewelcase.db`, with `JEWELCASE_DATA` defaulting to the
-repository's `data/`. With no database it serves an empty server, and the client shows its
-"No music yet" state.
+The mock reads `$JEWELCASE_DATA_DIR/state/jewelcase.db`, with `JEWELCASE_DATA_DIR` defaulting to
+the repository's `data/`. The server defaults to `/data`, the path inside its container, so step 1
+sets it. With no database the mock serves an empty server, and the client shows its "No music yet"
+state.
 
 ## Scripts
 
