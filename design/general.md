@@ -103,7 +103,7 @@ Rules:
 
 ## 8. Plugins
 
-The execution model will be settled by a spike. Constraints ([`requirements/plugins.md` §2](../requirements/plugins.md#2-a-fast-system-not-restricted-plugins), [§11](../requirements/plugins.md#11-isolation--boundaries)): near-zero call overhead, warm instances, isolation from crashes and hangs, bounded calls, and batched data access through the scoped layer ([§6](#6-public-api)). The leading candidate is WebAssembly components hosted in-process.
+**Plugins are WebAssembly components hosted in-process by Wasmtime**, settled by a spike against an out-of-process baseline ([`plugins.md`](plugins.md)). Constraints ([`requirements/plugins.md` §2](../requirements/plugins.md#2-a-fast-system-not-restricted-plugins), [§11](../requirements/plugins.md#11-isolation--boundaries)): near-zero call overhead, warm instances, isolation from crashes and hangs, bounded calls, and batched data access through the scoped layer ([§6](#6-public-api)). In-process calls cost under a microsecond against 14 µs through a pipe. Deadlines, memory limits, and pauses hold for every guest. The library scope is bound into each instance rather than passed by the plugin.
 
 Plugin UI surfaces must render natively on both web and Android ([`requirements/plugins.md` §9](../requirements/plugins.md#9-extending-the-interface)), which points to a declarative description rather than shipped web code.
 
@@ -125,7 +125,8 @@ jewelcase/
 ├── bench/           # library generator and benchmark harness
 ├── docker/          # image and reference compose file
 ├── design/
-└── requirements/
+├── requirements/
+└── spikes/          # experiments behind design decisions (plugins.md)
 ```
 
 ---
@@ -144,5 +145,5 @@ jewelcase/
 1. **Audio delivery** — gapless background playback in the browser, above all in an installed iOS web app, and the stream format that serves it.
 2. **On-device catalog and index format**, within [`requirements/performance.md` §6](../requirements/performance.md#6-client-footprint).
 3. **Track identity** that survives retags and moves ([`requirements/scanning.md` §6](../requirements/scanning.md#6-track-identity)) within the cold-scan budget ([`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis-budgets)).
-4. **Plugin execution model and UI description** ([§8](#8-plugins)).
+4. **Plugin UI description** ([§8](#8-plugins)). The execution model is settled ([`plugins.md`](plugins.md)); its remaining questions are listed there.
 5. **Project license.**

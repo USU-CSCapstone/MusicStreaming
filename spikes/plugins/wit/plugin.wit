@@ -1,0 +1,46 @@
+package jewelcase:spike@0.1.0;
+
+/// Library data, scoped by the host. There is no library parameter: the scope is
+/// bound in the host's per-instance store, so a plugin cannot name a library it
+/// was not enabled for (requirements/plugins.md §11).
+interface library {
+  record track {
+    id: u64,
+    title: string,
+    artist: option<string>,
+    duration-us: u64,
+  }
+
+  /// A page of the library's tracks in a stable order; empty past the end.
+  tracks: func(offset: u32, limit: u32) -> list<track>;
+  get-track: func(id: u64) -> option<track>;
+}
+
+/// Host-side persistent key/value storage (requirements/plugins.md §2.1).
+interface state {
+  get: func(key: string) -> option<list<u8>>;
+  set: func(key: string, value: list<u8>);
+}
+
+world plugin {
+  import library;
+  import state;
+
+  /// Call overhead with nothing to do.
+  export noop: func();
+  /// Call overhead with a string each way.
+  export echo: func(s: string) -> string;
+  /// Reads the whole library through `tracks` in pages of `batch`, counting
+  /// titles that contain `needle`.
+  export scan-titles: func(needle: string, batch: u32) -> u32;
+  /// Increments a counter held in the instance's own memory.
+  export counter: func() -> u64;
+  /// Increments a counter held in host `state`, so it survives re-instantiation.
+  export persisted-counter: func() -> u64;
+  /// Never returns.
+  export spin: func();
+  /// Traps.
+  export crash: func();
+  /// Allocates and touches `mb` megabytes; returns how many it got.
+  export hog: func(mb: u32) -> u32;
+}
