@@ -96,7 +96,7 @@ async fn create_first_library(db: &Database, music: &Path) -> anyhow::Result<()>
         .with_context(|| format!("cannot use the music directory set by {}", config::MUSIC))?;
     let path = music.clone();
     let id = db
-        .write(move |tx| libraries::create(tx, "Music", &[&path], &[]))
+        .write(move |tx| libraries::create(tx, None, "Music", &[&path], &[]))
         .await?;
     info!(library = id, path = %music.display(), "created library");
     Ok(())

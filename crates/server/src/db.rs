@@ -238,17 +238,6 @@ fn spawn(name: &str, body: impl FnOnce() + Send + 'static) -> anyhow::Result<Joi
         .with_context(|| format!("cannot start the {name} thread"))
 }
 
-/// A random positive 63-bit id (`design/database.md` §1). Callers retry on
-/// a unique-constraint collision.
-pub fn new_id() -> i64 {
-    loop {
-        let v = rand::random::<u64>() & 0x7FFF_FFFF_FFFF_FFFF;
-        if v != 0 {
-            return v as i64;
-        }
-    }
-}
-
 pub fn now_ms() -> i64 {
     jewelcase_scanner::now_ms() as i64
 }
@@ -355,14 +344,6 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn ids_are_positive_and_distinct() {
-        let a = new_id();
-        let b = new_id();
-        assert!(a > 0 && b > 0);
-        assert_ne!(a, b);
     }
 
     #[test]

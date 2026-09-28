@@ -25,7 +25,7 @@ fn make(root: &Path) -> SqliteStore {
             .query_row("SELECT id FROM libraries WHERE id = 1", [], |r| r.get(0))
             .optional()?;
         if exists.is_none() {
-            libraries::create_with_id(tx, 1, "Test", &[&root], &[])?;
+            libraries::create(tx, Some(1), "Test", &[&root], &[])?;
         }
         Ok(())
     })
