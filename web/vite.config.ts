@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config';
 import { playwright } from '@vitest/browser-playwright';
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
+import { mockApi } from './mock/plugin.ts';
 
 export default defineConfig({
 	plugins: [
@@ -14,7 +15,8 @@ export default defineConfig({
 
 			// SPA mode: static files served by the Rust server, unknown paths fall back to index.html
 			adapter: adapter({ fallback: 'index.html' })
-		})
+		}),
+		mockApi()
 	],
 	test: {
 		expect: { requireAssertions: true },
@@ -38,7 +40,7 @@ export default defineConfig({
 				test: {
 					name: 'server',
 					environment: 'node',
-					include: ['src/**/*.{test,spec}.{js,ts}'],
+					include: ['src/**/*.{test,spec}.{js,ts}', 'mock/**/*.{test,spec}.ts'],
 					exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
 				}
 			}
