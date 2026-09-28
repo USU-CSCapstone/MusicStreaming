@@ -19,7 +19,7 @@ use rusqlite::{Connection, OptionalExtension, Result, Transaction, params};
 use super::catalog::{self, Touched};
 use super::feed::{self, Entity, Op};
 use super::libraries::{self, Root};
-use super::{Database, DbError, new_id, now_ms};
+use super::{Database, DbError, now_ms};
 
 pub struct SqliteStore {
     db: Arc<Database>,
@@ -173,15 +173,14 @@ impl Store for SqliteStore {
         };
         let scan = scan.clone();
         let scopes = serde_json::to_string(&scan.scopes).unwrap_or_else(|_| "[]".into());
-        let result = self.db.write_blocking(move |tx| loop {
-            let id = new_id();
-            let inserted = tx.execute(
-                "INSERT OR IGNORE INTO scans (id, library_id, trigger, state, scopes, cursor_scope, cursor_dir, \
+        let result = self.db.write_blocking(move |tx| {
+            tx.query_row(
+                "INSERT INTO scans (id, library_id, trigger, state, scopes, cursor_scope, cursor_dir, \
                  files_seen, files_processed, added, updated, moved, missing, problems, current_path, \
                  created_at, started_at, finished_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                 VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
+                 RETURNING id",
                 params![
-                    id,
                     lib,
                     trigger_str(scan.trigger),
                     state_str(scan.state),
@@ -206,10 +205,8 @@ impl Store for SqliteStore {
                     time_to_ms(scan.started_at),
                     time_to_ms(scan.finished_at),
                 ],
-            )?;
-            if inserted == 1 {
-                return Ok(id as u64);
-            }
+                |r| r.get::<_, i64>(0).map(|id| id as u64),
+            )
         });
         result.unwrap_or_else(|e| {
             Self::fail("create_scan", e);
@@ -628,14 +625,9 @@ fn upsert_track(
         return Ok(());
     };
     let rel = relative(&rec.root, &rec.path);
-    let updating = rec.id.is_some();
-    let id = match rec.id {
-        Some(id) => id as i64,
-        None => new_id(),
-    };
-    if updating {
+    if let Some(id) = rec.id {
         // Whatever it pointed at before may now be orphaned.
-        touched.track(tx, id)?;
+        touched.track(tx, id as i64)?;
     }
 
     // Artists: the unknown artist (key "") when a file names none.
@@ -695,12 +687,13 @@ fn upsert_track(
     };
     let format = rec.properties.format;
 
-    tx.execute(
+    // A new track (no id yet) gets a random one.
+    let id: i64 = tx.query_row(
             "INSERT INTO tracks (id, library_id, album_id, album_title, fingerprint, root_id, path, file_size, file_mtime, \
              missing_since, last_seen_scan_id, title, sort_key, artist_sort_key, album_sort_key, disc_number, track_number, \
              track_total, disc_total, release_date, explicit, compilation, release_type, isrc, identifiers, lyrics_kind, \
              codec, container, lossless, bitrate_kbps, sample_rate_hz, bit_depth, channels, duration_us, added_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, \
+             VALUES (coalesce(?1, random() & 0x7FFFFFFFFFFFFFFF), ?2, ?3, ?4, NULL, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, \
              ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?33) \
              ON CONFLICT (id) DO UPDATE SET album_id = excluded.album_id, album_title = excluded.album_title, \
              root_id = excluded.root_id, path = excluded.path, file_size = excluded.file_size, file_mtime = excluded.file_mtime, \
@@ -712,9 +705,10 @@ fn upsert_track(
              identifiers = excluded.identifiers, lyrics_kind = excluded.lyrics_kind, codec = excluded.codec, \
              container = excluded.container, lossless = excluded.lossless, bitrate_kbps = excluded.bitrate_kbps, \
              sample_rate_hz = excluded.sample_rate_hz, bit_depth = excluded.bit_depth, channels = excluded.channels, \
-             duration_us = excluded.duration_us, updated_at = excluded.updated_at",
+             duration_us = excluded.duration_us, updated_at = excluded.updated_at \
+             RETURNING id",
             params![
-                id,
+                rec.id.map(|id| id as i64),
                 lib,
                 album_id,
                 rec.tags.album,
@@ -748,6 +742,7 @@ fn upsert_track(
                 (rec.properties.duration_ms * 1000) as i64,
                 now,
             ],
+            |r| r.get(0),
         )?;
 
     // Links: replace wholesale.
@@ -859,33 +854,14 @@ fn record_problem(roots: &Roots, tx: &Transaction<'_>, lib: i64, problem: &Probl
         .unwrap_or_default();
     let key = group_key(problem.kind, &root_path, &problem.detail);
     let seen = system_time_ms(problem.seen_at) as i64;
-    let group_id = match tx
-        .query_row(
-            "SELECT id FROM scan_problem_groups WHERE library_id = ?1 AND group_key = ?2",
-            params![lib, key],
-            |r| r.get::<_, i64>(0),
-        )
-        .optional()?
-    {
-        Some(id) => {
-            tx.execute(
-                "UPDATE scan_problem_groups SET last_seen_at = MAX(last_seen_at, ?2) WHERE id = ?1",
-                params![id, seen],
-            )?;
-            id
-        }
-        None => loop {
-            let id = new_id();
-            let n = tx.execute(
-                    "INSERT OR IGNORE INTO scan_problem_groups (id, library_id, kind, group_key, summary, count, first_seen_at, last_seen_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6)",
-                    params![id, lib, problem.kind.as_str(), key, problem.detail, seen],
-                )?;
-            if n == 1 {
-                break id;
-            }
-        },
-    };
+    let group_id: i64 = tx.query_row(
+        "INSERT INTO scan_problem_groups (id, library_id, kind, group_key, summary, count, first_seen_at, last_seen_at) \
+         VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, 0, ?5, ?5) \
+         ON CONFLICT (library_id, group_key) DO UPDATE SET last_seen_at = MAX(last_seen_at, excluded.last_seen_at) \
+         RETURNING id",
+        params![lib, problem.kind.as_str(), key, problem.detail, seen],
+        |r| r.get(0),
+    )?;
     let existing: Option<i64> = tx
         .query_row(
             "SELECT group_id FROM scan_problems WHERE root_id = ?1 AND path = ?2",
@@ -957,6 +933,9 @@ fn recount_group(tx: &Transaction<'_>, group_id: i64) -> Result<()> {
     Ok(())
 }
 
+// Each find-or-create reads first, since the key is almost always there already, and inserts
+// only when it is not.
+
 fn find_or_create_artist(
     tx: &Transaction<'_>,
     lib: i64,
@@ -968,34 +947,19 @@ fn find_or_create_artist(
         .query_row(
             "SELECT id FROM artists WHERE library_id = ?1 AND name_key = ?2",
             params![lib, key],
-            |r| r.get::<_, i64>(0),
+            |r| r.get(0),
         )
         .optional()?
     {
         return Ok(id);
     }
     let sort_key = sort::sort_key(name.unwrap_or(""), None);
-    loop {
-        let id = new_id();
-        let n = tx.execute(
-            "INSERT OR IGNORE INTO artists (id, library_id, name, name_key, sort_key, added_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-            params![id, lib, name.map(str::trim), key, sort_key.as_bytes(), now],
-        )?;
-        if n == 1 {
-            return Ok(id);
-        }
-        // Collision on id, or a concurrent insert of the same key.
-        if let Some(id) = tx
-            .query_row(
-                "SELECT id FROM artists WHERE library_id = ?1 AND name_key = ?2",
-                params![lib, key],
-                |r| r.get::<_, i64>(0),
-            )
-            .optional()?
-        {
-            return Ok(id);
-        }
-    }
+    tx.query_row(
+        "INSERT INTO artists (id, library_id, name, name_key, sort_key, added_at, updated_at) \
+         VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, ?5, ?5) RETURNING id",
+        params![lib, name.map(str::trim), key, sort_key.as_bytes(), now],
+        |r| r.get(0),
+    )
 }
 
 fn find_or_create_album(
@@ -1012,33 +976,18 @@ fn find_or_create_album(
         .query_row(
             "SELECT id FROM albums WHERE library_id = ?1 AND title_key = ?2 AND artists_key = ?3",
             params![lib, title_key, artists_key],
-            |r| r.get::<_, i64>(0),
+            |r| r.get(0),
         )
         .optional()?
     {
         return Ok(id);
     }
-    loop {
-        let id = new_id();
-        let n = tx.execute(
-            "INSERT OR IGNORE INTO albums (id, library_id, title, title_key, artists_key, sort_key, artist_sort_key, added_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-            params![id, lib, title.map(str::trim), title_key, artists_key, sort_key.as_bytes(), artist_sort_key.as_bytes(), now],
-        )?;
-        if n == 1 {
-            return Ok(id);
-        }
-        if let Some(id) = tx
-            .query_row(
-                "SELECT id FROM albums WHERE library_id = ?1 AND title_key = ?2 AND artists_key = ?3",
-                params![lib, title_key, artists_key],
-                |r| r.get::<_, i64>(0),
-            )
-            .optional()?
-        {
-            return Ok(id);
-        }
-    }
+    tx.query_row(
+        "INSERT INTO albums (id, library_id, title, title_key, artists_key, sort_key, artist_sort_key, added_at, updated_at) \
+         VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7) RETURNING id",
+        params![lib, title.map(str::trim), title_key, artists_key, sort_key.as_bytes(), artist_sort_key.as_bytes(), now],
+        |r| r.get(0),
+    )
 }
 
 fn find_or_create_tag(tx: &Transaction<'_>, lib: i64, name: &str) -> Result<i64> {
@@ -1047,33 +996,19 @@ fn find_or_create_tag(tx: &Transaction<'_>, lib: i64, name: &str) -> Result<i64>
         .query_row(
             "SELECT id FROM tags WHERE library_id = ?1 AND type = 'genre' AND name_key = ?2",
             params![lib, key],
-            |r| r.get::<_, i64>(0),
+            |r| r.get(0),
         )
         .optional()?
     {
         return Ok(id);
     }
     let sort_key = sort::sort_key(name, None);
-    loop {
-        let id = new_id();
-        let n = tx.execute(
-            "INSERT OR IGNORE INTO tags (id, library_id, type, name, name_key, sort_key) VALUES (?1, ?2, 'genre', ?3, ?4, ?5)",
-            params![id, lib, name.trim(), key, sort_key.as_bytes()],
-        )?;
-        if n == 1 {
-            return Ok(id);
-        }
-        if let Some(id) = tx
-            .query_row(
-                "SELECT id FROM tags WHERE library_id = ?1 AND type = 'genre' AND name_key = ?2",
-                params![lib, key],
-                |r| r.get::<_, i64>(0),
-            )
-            .optional()?
-        {
-            return Ok(id);
-        }
-    }
+    tx.query_row(
+        "INSERT INTO tags (id, library_id, type, name, name_key, sort_key) \
+         VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, 'genre', ?2, ?3, ?4) RETURNING id",
+        params![lib, name.trim(), key, sort_key.as_bytes()],
+        |r| r.get(0),
+    )
 }
 
 fn upsert_image(
@@ -1088,31 +1023,16 @@ fn upsert_image(
         .query_row(
             "SELECT id FROM images WHERE library_id = ?1 AND hash = ?2",
             params![lib, info.hash],
-            |r| r.get::<_, i64>(0),
+            |r| r.get(0),
         )
         .optional()?
     {
         return Ok(id);
     }
-    loop {
-        let id = new_id();
-        let n = tx.execute(
-            "INSERT OR IGNORE INTO images (id, library_id, hash, format, width, height, placeholder, root_id, path, embedded) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9)",
-            params![id, lib, info.hash, info.format, info.width as i64, info.height as i64, root_id, rel, embedded],
-        )?;
-        if n == 1 {
-            return Ok(id);
-        }
-        if let Some(id) = tx
-            .query_row(
-                "SELECT id FROM images WHERE library_id = ?1 AND hash = ?2",
-                params![lib, info.hash],
-                |r| r.get::<_, i64>(0),
-            )
-            .optional()?
-        {
-            return Ok(id);
-        }
-    }
+    tx.query_row(
+        "INSERT INTO images (id, library_id, hash, format, width, height, placeholder, root_id, path, embedded) \
+         VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8) RETURNING id",
+        params![lib, info.hash, info.format, info.width as i64, info.height as i64, root_id, rel, embedded],
+        |r| r.get(0),
+    )
 }
