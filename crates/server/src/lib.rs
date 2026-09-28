@@ -1,6 +1,6 @@
 pub mod config;
 pub mod data_dir;
-mod db;
+pub mod db;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
@@ -19,7 +19,7 @@ use tracing::{info, warn};
 
 use crate::config::Config;
 use crate::data_dir::DataDir;
-use crate::db::{Db, SqliteStore, libraries};
+use crate::db::{Database, SqliteStore, libraries};
 
 /// Runs the server until shutdown_signal resolves, then finishes in-flight requests.
 pub async fn run(config: Config) -> anyhow::Result<()> {
@@ -32,11 +32,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         "starting"
     );
 
-    let db = Arc::new(
-        Db::open(&data_dir.state().join("jewelcase.db")).context("cannot open the database")?,
-    );
+    // Run migrations before listening for connections
+    let db = Arc::new(Database::open(&data_dir.state().join("jewelcase.db"))?);
     if let Some(music) = &config.music {
-        create_first_library(&db, music)?;
+        create_first_library(&db, music).await?;
     }
 
     let ffmpeg = Ffmpeg::new(FfmpegConfig::default());
@@ -49,8 +48,13 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         warn!(version = caps.version, missing = ?caps.missing, "ffmpeg lacks decoders; those formats will not be analyzed");
     }
 
-    // Held until shutdown; dropping them stops the watchers.
-    let _scanning = start_scanning(&db, &ffmpeg)?;
+    // Held until shutdown; dropping them stops the watchers. The scanner calls the database
+    // with blocking calls, so it starts outside the async runtime.
+    let _scanning = {
+        let db = db.clone();
+        let ffmpeg = ffmpeg.clone();
+        tokio::task::spawn_blocking(move || start_scanning(&db, &ffmpeg)).await??
+    };
 
     // Planner statistics, hourly (`design/database.md` §4).
     {
@@ -58,7 +62,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(Duration::from_secs(3600));
-                if let Err(e) = db.optimize() {
+                if let Err(e) = db.write_blocking(|tx| tx.execute_batch("PRAGMA optimize")) {
                     tracing::warn!(error = %e, "PRAGMA optimize failed");
                 }
             }
@@ -83,15 +87,17 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
 /// Creates a library from `JEWELCASE_MUSIC` on first start, when there are none yet
 /// (`requirements/deployment.md` §2).
-fn create_first_library(db: &Db, music: &Path) -> anyhow::Result<()> {
-    let conn = db.writer();
-    if !libraries::all(&conn)?.is_empty() {
+async fn create_first_library(db: &Database, music: &Path) -> anyhow::Result<()> {
+    if !db.read(libraries::all).await?.is_empty() {
         return Ok(());
     }
     let music = music
         .canonicalize()
         .with_context(|| format!("cannot use the music directory set by {}", config::MUSIC))?;
-    let id = libraries::create(&conn, "Music", &[&music], &[])?;
+    let path = music.clone();
+    let id = db
+        .write(move |tx| libraries::create(tx, "Music", &[&path], &[]))
+        .await?;
     info!(library = id, path = %music.display(), "created library");
     Ok(())
 }
@@ -99,13 +105,14 @@ fn create_first_library(db: &Db, music: &Path) -> anyhow::Result<()> {
 /// Each library's scanner, and its watcher and schedule if it has them.
 type Scanning = Vec<(Scanner, Option<FsWatcher>, Option<Schedule>)>;
 
-/// Starts a scanner, its triggers, and an analyzer for every library.
-fn start_scanning(db: &Arc<Db>, ffmpeg: &Ffmpeg) -> anyhow::Result<Scanning> {
+/// Starts a scanner, its triggers, and an analyzer for every library. Blocks, so call it
+/// outside the async runtime.
+fn start_scanning(db: &Arc<Database>, ffmpeg: &Ffmpeg) -> anyhow::Result<Scanning> {
     let store = Arc::new(SqliteStore::new(db.clone()).context("cannot initialise the store")?);
     let governor = Arc::new(Governor::new());
 
     let mut running = Vec::new();
-    let libs = libraries::all(&db.writer())?;
+    let libs = db.read_blocking(libraries::all)?;
     if libs.is_empty() {
         warn!("no libraries configured; set JEWELCASE_MUSIC to create one on first start");
     }

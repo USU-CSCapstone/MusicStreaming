@@ -3,9 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use jewelcase_scanner::LibraryConfig;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Result, params};
 
-use super::{Result, new_id, now_ms};
+use super::{new_id, now_ms};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Root {
@@ -72,7 +72,7 @@ pub fn roots(conn: &Connection, library_id: i64) -> Result<Vec<Root>> {
             path: PathBuf::from(r.get::<_, String>(1)?),
         })
     })?;
-    Ok(rows.collect::<std::result::Result<_, _>>()?)
+    rows.collect()
 }
 
 /// Create a library with its roots. Roots are stored as given; callers

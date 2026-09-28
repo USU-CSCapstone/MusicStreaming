@@ -8,26 +8,28 @@ use jewelcase_core::Format;
 use jewelcase_scanner::testing::{self, InspectStore, InspectTrack};
 use jewelcase_scanner::*;
 use lofty::tag::ItemKey;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{OptionalExtension, Result};
 
+use super::Database;
 use super::libraries;
 use super::store::SqliteStore;
-use super::{Db, Result};
 
 /// The suite's library has id "1"; its database lives beside the root.
 fn make(root: &Path) -> SqliteStore {
     let dir = root.parent().unwrap().join("state");
-    let db = Arc::new(Db::open(&dir.join("jewelcase.db")).unwrap());
-    {
-        let conn = db.writer();
-        let exists: Option<i64> = conn
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = Arc::new(Database::open(&dir.join("jewelcase.db")).unwrap());
+    let root = root.to_path_buf();
+    db.write_blocking(move |tx| {
+        let exists: Option<i64> = tx
             .query_row("SELECT id FROM libraries WHERE id = 1", [], |r| r.get(0))
-            .optional()
-            .unwrap();
+            .optional()?;
         if exists.is_none() {
-            libraries::create_with_id(&conn, 1, "Test", &[root], &[]).unwrap();
+            libraries::create_with_id(tx, 1, "Test", &[&root], &[])?;
         }
-    }
+        Ok(())
+    })
+    .unwrap();
     SqliteStore::new(db).unwrap()
 }
 
@@ -47,8 +49,8 @@ fn format_of(codec: &str, container: &str) -> Format {
 impl InspectStore for SqliteStore {
     fn inspect_tracks(&self, library: &LibraryId) -> Vec<InspectTrack> {
         let lib: i64 = library.parse().unwrap();
-        let conn = self.db().writer();
-        let roots: std::collections::HashMap<i64, PathBuf> = libraries::roots(&conn, lib)
+        self.db().read_blocking(move |conn| {
+        let roots: std::collections::HashMap<i64, PathBuf> = libraries::roots(conn, lib)
             .unwrap()
             .into_iter()
             .map(|r| (r.id, r.path))
@@ -140,13 +142,15 @@ impl InspectStore for SqliteStore {
                 analyzed,
             });
         }
-        out
+        Ok(out)
+        })
+        .unwrap()
     }
 
     fn inspect_problems(&self, library: &LibraryId) -> Vec<Problem> {
         let lib: i64 = library.parse().unwrap();
-        let conn = self.db().writer();
-        let roots: std::collections::HashMap<i64, PathBuf> = libraries::roots(&conn, lib)
+        self.db().read_blocking(move |conn| {
+        let roots: std::collections::HashMap<i64, PathBuf> = libraries::roots(conn, lib)
             .unwrap()
             .into_iter()
             .map(|r| (r.id, r.path))
@@ -168,6 +172,7 @@ impl InspectStore for SqliteStore {
         })
         .unwrap()
         .collect::<std::result::Result<_, _>>()
+        })
         .unwrap()
     }
 
@@ -178,12 +183,13 @@ impl InspectStore for SqliteStore {
     fn feed_len(&self, library: &LibraryId) -> usize {
         let lib: i64 = library.parse().unwrap();
         self.db()
-            .writer()
-            .query_row(
-                "SELECT COUNT(*) FROM library_changes WHERE library_id = ?1",
-                [lib],
-                |r| r.get::<_, i64>(0),
-            )
+            .read_blocking(move |conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM library_changes WHERE library_id = ?1",
+                    [lib],
+                    |r| r.get::<_, i64>(0),
+                )
+            })
             .unwrap() as usize
     }
 }
@@ -194,12 +200,21 @@ mod suite {
 
 // ───────────────────────────── Derived rules ─────────────────────────────
 
-fn count(conn: &Connection, sql: &str) -> i64 {
-    conn.query_row(sql, [], |r| r.get(0)).unwrap()
+fn count(store: &SqliteStore, sql: &'static str) -> i64 {
+    store
+        .db()
+        .read_blocking(move |conn| conn.query_row(sql, [], |r| r.get(0)))
+        .unwrap()
 }
 
-fn scalar<T: rusqlite::types::FromSql>(conn: &Connection, sql: &str) -> Option<T> {
-    conn.query_row(sql, [], |r| r.get(0)).optional().unwrap()
+fn scalar<T>(store: &SqliteStore, sql: &'static str) -> Option<T>
+where
+    T: rusqlite::types::FromSql + Send + 'static,
+{
+    store
+        .db()
+        .read_blocking(move |conn| conn.query_row(sql, [], |r| r.get(0)).optional())
+        .unwrap()
 }
 
 fn tagged(root: &Path, rel: &str, items: &[(ItemKey, &str)]) {
@@ -237,36 +252,35 @@ fn album_split_across_folders_is_one_album() -> Result<()> {
     let store = make(&root);
     let lib = testing::library(&root);
     testing::scan_library(&store, &lib);
-    let conn = store.db().writer();
     assert_eq!(
-        count(&conn, "SELECT COUNT(*) FROM albums"),
+        count(&store, "SELECT COUNT(*) FROM albums"),
         1,
         "case-folded title, same artists: one album"
     );
     assert_eq!(
-        scalar::<i64>(&conn, "SELECT track_count FROM albums"),
+        scalar::<i64>(&store, "SELECT track_count FROM albums"),
         Some(2)
     );
     assert_eq!(
-        scalar::<i64>(&conn, "SELECT disc_count FROM albums"),
+        scalar::<i64>(&store, "SELECT disc_count FROM albums"),
         Some(2)
     );
     assert_eq!(
-        scalar::<i64>(&conn, "SELECT track_total FROM albums"),
+        scalar::<i64>(&store, "SELECT track_total FROM albums"),
         Some(10),
         "max of per-file totals"
     );
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM album_discs"), 2);
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM album_artists"), 1);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM album_discs"), 2);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM album_artists"), 1);
     assert_eq!(
         scalar::<i64>(
-            &conn,
+            &store,
             "SELECT album_count FROM artists WHERE name_key = 'band'"
         ),
         Some(1)
     );
     assert_eq!(
-        scalar::<i64>(&conn, "SELECT track_count FROM libraries WHERE id = 1"),
+        scalar::<i64>(&store, "SELECT track_count FROM libraries WHERE id = 1"),
         Some(2)
     );
     Ok(())
@@ -325,23 +339,25 @@ fn most_used_spelling_wins_and_ties_break_by_bytes() {
     let store = make(&root);
     let lib = testing::library(&root);
     testing::scan_library(&store, &lib);
-    let conn = store.db().writer();
     assert_eq!(
-        count(&conn, "SELECT COUNT(*) FROM artists"),
+        count(&store, "SELECT COUNT(*) FROM artists"),
         2,
         "spellings fold to one artist each"
     );
     assert_eq!(
-        scalar::<String>(&conn, "SELECT name FROM artists WHERE name_key = 'nirvana'"),
+        scalar::<String>(
+            &store,
+            "SELECT name FROM artists WHERE name_key = 'nirvana'"
+        ),
         Some("Nirvana".into())
     );
     assert_eq!(
-        scalar::<String>(&conn, "SELECT name FROM artists WHERE name_key = 'beck'"),
+        scalar::<String>(&store, "SELECT name FROM artists WHERE name_key = 'beck'"),
         Some("Beck".into())
     );
     assert_eq!(
         scalar::<i64>(
-            &conn,
+            &store,
             "SELECT track_count FROM artists WHERE name_key = 'nirvana'"
         ),
         Some(3)
@@ -365,14 +381,11 @@ fn retag_moves_track_and_removes_emptied_album_and_artist() {
     let store = make(&root);
     let lib = testing::library(&root);
     testing::scan_library(&store, &lib);
-    {
-        let conn = store.db().writer();
-        assert_eq!(
-            count(&conn, "SELECT COUNT(*) FROM artists WHERE name = 'Old'"),
-            1
-        );
-        assert_eq!(count(&conn, "SELECT COUNT(*) FROM tags"), 1);
-    }
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM artists WHERE name = 'Old'"),
+        1
+    );
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM tags"), 1);
     std::thread::sleep(std::time::Duration::from_millis(20));
     let p = root.join("x/01.wav");
     testing::tag_wav_with(
@@ -390,43 +403,42 @@ fn retag_moves_track_and_removes_emptied_album_and_artist() {
         .unwrap();
     let scan = testing::scan_library(&store, &lib);
     assert_eq!(scan.progress.updated, 1);
-    let conn = store.db().writer();
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM tracks"), 1);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM tracks"), 1);
     assert_eq!(
-        count(&conn, "SELECT COUNT(*) FROM artists"),
+        count(&store, "SELECT COUNT(*) FROM artists"),
         1,
         "Old is gone"
     );
     assert_eq!(
-        scalar::<String>(&conn, "SELECT name FROM artists"),
+        scalar::<String>(&store, "SELECT name FROM artists"),
         Some("New".into())
     );
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM albums"), 1);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM albums"), 1);
     assert_eq!(
-        scalar::<String>(&conn, "SELECT title FROM albums"),
+        scalar::<String>(&store, "SELECT title FROM albums"),
         Some("Second".into())
     );
     assert_eq!(
-        scalar::<String>(&conn, "SELECT name FROM tags"),
+        scalar::<String>(&store, "SELECT name FROM tags"),
         Some("Jazz".into())
     );
     // The feed carries tombstones for what vanished and one row per entity.
     assert_eq!(
         count(
-            &conn,
+            &store,
             "SELECT COUNT(*) FROM library_changes WHERE entity_type = 'artist' AND op = 'delete'"
         ),
         1
     );
     assert_eq!(
         count(
-            &conn,
+            &store,
             "SELECT COUNT(*) FROM library_changes WHERE entity_type = 'track'"
         ),
         1
     );
     assert_eq!(
-        scalar::<i64>(&conn, "SELECT artist_count FROM libraries WHERE id = 1"),
+        scalar::<i64>(&store, "SELECT artist_count FROM libraries WHERE id = 1"),
         Some(1)
     );
 }
@@ -440,24 +452,23 @@ fn untagged_files_share_the_unknown_artist_and_album() {
     let store = make(&root);
     let lib = testing::library(&root);
     testing::scan_library(&store, &lib);
-    let conn = store.db().writer();
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM artists"), 1);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM artists"), 1);
     assert_eq!(
-        scalar::<Option<String>>(&conn, "SELECT name FROM artists"),
+        scalar::<Option<String>>(&store, "SELECT name FROM artists"),
         Some(None),
         "the unknown artist has no name"
     );
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM albums"), 1);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM albums"), 1);
     assert_eq!(
-        scalar::<Option<String>>(&conn, "SELECT title FROM albums"),
+        scalar::<Option<String>>(&store, "SELECT title FROM albums"),
         Some(None)
     );
     assert_eq!(
-        scalar::<i64>(&conn, "SELECT track_count FROM albums"),
+        scalar::<i64>(&store, "SELECT track_count FROM albums"),
         Some(2)
     );
     assert_eq!(
-        scalar::<String>(&conn, "SELECT title FROM tracks WHERE path = 'a/one.wav'"),
+        scalar::<String>(&store, "SELECT title FROM tracks WHERE path = 'a/one.wav'"),
         Some("one".into())
     );
 }
@@ -512,40 +523,39 @@ fn compilations_and_album_types() {
     let store = make(&root);
     let lib = testing::library(&root);
     testing::scan_library(&store, &lib);
-    let conn = store.db().writer();
     assert_eq!(
-        count(&conn, "SELECT COUNT(*) FROM albums WHERE title = 'Hits'"),
+        count(&store, "SELECT COUNT(*) FROM albums WHERE title = 'Hits'"),
         1,
         "one compilation, not one per artist"
     );
     assert_eq!(
-        scalar::<String>(&conn, "SELECT type FROM albums WHERE title = 'Hits'"),
+        scalar::<String>(&store, "SELECT type FROM albums WHERE title = 'Hits'"),
         Some("compilation".into())
     );
     assert_eq!(
-        scalar::<String>(&conn, "SELECT type FROM albums WHERE title = 'Short'"),
+        scalar::<String>(&store, "SELECT type FROM albums WHERE title = 'Short'"),
         Some("ep".into())
     );
     assert_eq!(
-        scalar::<String>(&conn, "SELECT type FROM albums WHERE title = 'One'"),
+        scalar::<String>(&store, "SELECT type FROM albums WHERE title = 'One'"),
         Some("album".into()),
         "the tag beats the size"
     );
     // A and B appear on Hits but do not own it (`requirements/artists.md` §2).
     assert_eq!(
         scalar::<i64>(
-            &conn,
+            &store,
             "SELECT appearance_count FROM artists WHERE name = 'A'"
         ),
         Some(1)
     );
     assert_eq!(
-        scalar::<i64>(&conn, "SELECT album_count FROM artists WHERE name = 'A'"),
+        scalar::<i64>(&store, "SELECT album_count FROM artists WHERE name = 'A'"),
         Some(0)
     );
     assert_eq!(
         scalar::<i64>(
-            &conn,
+            &store,
             "SELECT album_count FROM artists WHERE name = 'Various Artists'"
         ),
         Some(1)
@@ -572,28 +582,27 @@ fn lyrics_and_artwork_land_in_their_tables() {
     let store = make(&root);
     let lib = testing::library(&root);
     testing::scan_library(&store, &lib);
-    let conn = store.db().writer();
     assert_eq!(
-        scalar::<String>(&conn, "SELECT lyrics_kind FROM tracks"),
+        scalar::<String>(&store, "SELECT lyrics_kind FROM tracks"),
         Some("synced".into())
     );
-    let synced: String = scalar(&conn, "SELECT synced FROM track_lyrics").unwrap();
+    let synced: String = scalar(&store, "SELECT synced FROM track_lyrics").unwrap();
     let lines: Vec<serde_json::Value> = serde_json::from_str(&synced).unwrap();
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[1]["startMs"], 2500);
     assert_eq!(
-        count(&conn, "SELECT COUNT(*) FROM images"),
+        count(&store, "SELECT COUNT(*) FROM images"),
         1,
         "cover and artist image are the same bytes: one row"
     );
     assert_eq!(
-        scalar::<String>(&conn, "SELECT format FROM images"),
+        scalar::<String>(&store, "SELECT format FROM images"),
         Some("png".into())
     );
-    assert!(scalar::<i64>(&conn, "SELECT image_id FROM albums").is_some());
-    assert!(scalar::<i64>(&conn, "SELECT image_id FROM artists WHERE name = 'A'").is_some());
+    assert!(scalar::<i64>(&store, "SELECT image_id FROM albums").is_some());
+    assert!(scalar::<i64>(&store, "SELECT image_id FROM artists WHERE name = 'A'").is_some());
     assert_eq!(
-        scalar::<String>(&conn, "SELECT biography FROM artists WHERE name = 'A'"),
+        scalar::<String>(&store, "SELECT biography FROM artists WHERE name = 'A'"),
         Some("A biography.".into())
     );
 }
@@ -608,32 +617,26 @@ fn problems_group_by_kind_and_clear() {
     let store = make(&root);
     let lib = testing::library(&root);
     testing::scan_library(&store, &lib);
-    {
-        let conn = store.db().writer();
-        assert_eq!(
-            count(&conn, "SELECT COUNT(*) FROM scan_problem_groups"),
-            1,
-            "one systemic issue"
-        );
-        assert_eq!(
-            scalar::<i64>(&conn, "SELECT count FROM scan_problem_groups"),
-            Some(2)
-        );
-    }
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM scan_problem_groups"),
+        1,
+        "one systemic issue"
+    );
+    assert_eq!(
+        scalar::<i64>(&store, "SELECT count FROM scan_problem_groups"),
+        Some(2)
+    );
     testing::write_small_wav(&root.join("a/one.flac"));
     testing::scan_library(&store, &lib);
-    let conn = store.db().writer();
     assert_eq!(
-        scalar::<i64>(&conn, "SELECT count FROM scan_problem_groups"),
+        scalar::<i64>(&store, "SELECT count FROM scan_problem_groups"),
         Some(1)
     );
     std::fs::remove_file(root.join("a/two.flac")).unwrap();
-    drop(conn);
     testing::scan_library(&store, &lib);
     // A vanished problem file is not "cleared" by a scan, and stays until it
     // is: that is a purge-policy question, so here we only check nothing broke.
-    let conn = store.db().writer();
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM scan_problem_groups"), 1);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM scan_problem_groups"), 1);
 }
 
 #[test]
@@ -663,19 +666,18 @@ fn analysis_results_reach_tracks_albums_and_waveforms() {
     let report = analyzer.run_once(&lib.id, 10);
     assert_eq!(report.analyzed, 1);
     assert_eq!(analyzer.run_once(&lib.id, 10).analyzed, 0, "nothing left");
-    let conn = store.db().writer();
-    let lufs: f64 = scalar(&conn, "SELECT loudness_lufs FROM tracks").unwrap();
+    let lufs: f64 = scalar(&store, "SELECT loudness_lufs FROM tracks").unwrap();
     assert!((lufs - -6.7).abs() < 1.0, "{lufs}");
     assert_eq!(
-        scalar::<i64>(&conn, "SELECT analyzer_version FROM tracks"),
+        scalar::<i64>(&store, "SELECT analyzer_version FROM tracks"),
         Some(jewelcase_scanner::analysis::ANALYZER_VERSION as i64)
     );
-    let album_lufs: f64 = scalar(&conn, "SELECT loudness_lufs FROM albums").unwrap();
+    let album_lufs: f64 = scalar(&store, "SELECT loudness_lufs FROM albums").unwrap();
     assert!(
         (album_lufs - lufs).abs() < 0.01,
         "a one-track album is as loud as its track"
     );
-    let blob: Vec<u8> = scalar(&conn, "SELECT data FROM track_waveforms").unwrap();
+    let blob: Vec<u8> = scalar(&store, "SELECT data FROM track_waveforms").unwrap();
     assert_eq!(Waveform::from_blob(&blob).unwrap().peaks.len(), 512);
 }
 
