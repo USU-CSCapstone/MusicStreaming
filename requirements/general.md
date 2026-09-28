@@ -17,7 +17,7 @@ This file holds only what the rest of the set derives from: the goals, the bound
 - **Feel instant, always.** No spinners on interactions the user initiates (figuratively).
 - **Never touch the user's files.** Uninstall Jewelcase and find the collection exactly as it was.
 - **Scale to the host, not to an arbitrary ceiling.** The limiting factor on performance must be the server's resources: CPU, disk, and bandwidth.
-- **Be genuinely extensible.** The core serves a library and little else. Anything beyond that is a plugin's to build, with no list of permitted capabilities and no need to wait for a core release ([`plugins.md`](plugins.md)).
+- **Be genuinely extensible.** The core serves a library and little else. Anything beyond that is a plugin's to build, with no list of permitted kinds of plugin and no need to wait for a core release ([`plugins.md`](plugins.md)). What each plugin can reach is the admin's to approve ([`plugins.md` §4](plugins.md#4-trust--permissions)).
 - **Work offline as a first-class mode**, not a degraded fallback ([`offline.md`](offline.md)).
 - **Be pleasant to self-host.** Deployment, upgrades, and backups approachable for a homelab, not just a professional operator ([`deployment.md`](deployment.md)).
 
@@ -43,7 +43,7 @@ These are load-bearing. Requirements throughout the other files derive from them
 ### 3.1 The Music Library Is Read-Only to Core
 The server **only ever reads** from the music library — never writing audio, tags, artwork, or lyrics into that tree. All Jewelcase-owned state (index, playlists, queues, history, accounts, transcode caches) lives in its own data directory.
 
-The one qualification is plugins, which write to the library without restriction ([§3.2](#32-the-scanner-is-the-only-ingestion-path), [`plugins.md` §3](plugins.md#3-writing-to-the-library)). The core's promise is unchanged: uninstall Jewelcase with no plugins installed and the collection is exactly as it was.
+The one qualification is plugins an admin has granted write access, which may then write to that library without restriction ([§3.2](#32-the-scanner-is-the-only-ingestion-path), [`plugins.md` §3](plugins.md#3-writing-to-the-library)). The core's promise is unchanged: uninstall Jewelcase with no plugins installed and the collection is exactly as it was.
 
 ### 3.2 The Scanner Is the Only Ingestion Path
 Content enters exactly one way: it appears in the library and the scanner finds it — whether copied in by a user or written by a plugin.

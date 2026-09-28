@@ -26,7 +26,7 @@ What decided it:
 | Idle footprint | **41 KB** per plugin | 1.7 MB per plugin | |
 
 - **The out-of-process model loses on everything the requirements weight most.** It adds a cost to every call, it makes per-item access ruinous, and it cannot bound memory portably. [`requirements/plugins.md` §2.1](../requirements/plugins.md#21-the-system-adds-nothing) rules each of these out: "no serialization tax", and "never one entity at a time". Its one advantage is below (§4).
-- **Isolation holds with no sandbox promises.** A crash is a trap. A hang is stopped by a deadline, and memory by a limiter. A fresh instance is ready in microseconds. No failure reached the host or another plugin ([§11](../requirements/plugins.md#11-isolation--boundaries)), and every containment check passed for all three Wasm guests.
+- **Isolation holds, and so can permissions.** A crash is a trap. A hang is stopped by a deadline, and memory by a limiter. A fresh instance is ready in microseconds. No failure reached the host or another plugin ([§11](../requirements/plugins.md#11-isolation--boundaries)), and every containment check passed for all three Wasm guests.
 
 ---
 
@@ -43,7 +43,7 @@ What decided it:
 - **Plugin calls run on their own executor, never on the threads serving requests.** Within one executor, a plugin can only delay another by up to about a tick. The core cannot afford even that, so core results never wait behind plugin code, and plugin sections fill in on their own ([§2.2](../requirements/plugins.md#22-results-compose-they-do-not-block)).
 - **A resource limiter per store** bounds each instance's memory. The spike used 128 MiB.
 - **The pooling allocator** cuts Rust instantiation from 11 µs to 7 µs, and matters little for JS.
-- **WASI with nothing granted.** No preopens, sockets, or inherited stdio. What a plugin can reach is exactly the host interfaces it is given.
+- **WASI with nothing granted by default.** No preopens, sockets, or inherited stdio. What a plugin can reach is exactly the host interfaces and directories its instance is given. That is how approved permissions are enforced ([`requirements/plugins.md` §4](../requirements/plugins.md#4-trust--permissions)): an ungranted resource is never linked or preopened, so there is nothing for the plugin to get around. The spike measured only the empty case.
 
 ---
 
@@ -91,6 +91,6 @@ What decided it:
 
 1. **Pi 4 and Ryzen runs.** The decision rests on ratios, which should hold, but the budgets are absolute.
 2. **Plugin UI description.** This is the other half of [`general.md` §11](general.md#11-open-decisions) #4: the declarative format both clients render ([`requirements/plugins.md` §9](../requirements/plugins.md#9-extending-the-interface)).
-3. **The real host interface.** It needs a bulk read encoding (§3), events with replay ([`requirements/plugins.md` §8](../requirements/plugins.md#8-events)), settings and credentials ([§6](../requirements/plugins.md#6-configuration--credentials)), and a writable preopen limited to the library's roots for plugins that write files ([§3](../requirements/plugins.md#3-writing-to-the-library)).
+3. **The real host interface.** It needs a bulk read encoding (§3), events with replay ([`requirements/plugins.md` §8](../requirements/plugins.md#8-events)), and settings and credentials ([§6](../requirements/plugins.md#6-configuration--credentials)). Each permission ([§4.1](../requirements/plugins.md#41-what-can-be-asked-for)) must map onto something the host grants per instance: library reads as scoped imports, library writes as a preopen limited to that library's roots ([§3](../requirements/plugins.md#3-writing-to-the-library)), network as outbound HTTP through a host hook that checks destinations, and listening activity as event delivery. Revoking a permission mid-task has to take effect without a restart.
 4. **Network access and async host calls.** A plugin waiting on a remote service must not hold its instance's thread. Wasmtime supports async host functions and `wasi:http`, but neither was measured.
 5. **Concurrent calls to one plugin.** One instance serializes its calls. Whether a busy plugin gets a small pool of instances, and how its state is shared across them, is untested.
