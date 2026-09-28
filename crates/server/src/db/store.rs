@@ -14,42 +14,44 @@ use jewelcase_core::{fold, sort};
 use jewelcase_scanner::problems::group_key;
 use jewelcase_scanner::store::{Batch, IndexedFile, Store, StoreError};
 use jewelcase_scanner::*;
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Result, Transaction, params};
 
 use super::catalog::{self, Touched};
 use super::feed::{self, Entity, Op};
 use super::libraries::{self, Root};
-use super::{Db, Result, new_id, now_ms};
+use super::{Database, DbError, new_id, now_ms};
 
 pub struct SqliteStore {
-    db: Arc<Db>,
-    /// Active roots per library, refreshed on reconfiguration.
-    roots: RwLock<HashMap<i64, Vec<Root>>>,
+    db: Arc<Database>,
+    /// Active roots per library, refreshed on reconfiguration. Shared with the database jobs
+    /// that need them.
+    roots: Arc<Roots>,
 }
 
 impl SqliteStore {
-    pub fn new(db: Arc<Db>) -> Result<SqliteStore> {
+    /// Loads the roots with a blocking read, so call it outside the async runtime.
+    pub fn new(db: Arc<Database>) -> Result<SqliteStore, DbError> {
         let store = SqliteStore {
             db,
-            roots: RwLock::new(HashMap::new()),
+            roots: Arc::default(),
         };
         store.refresh_roots()?;
         Ok(store)
     }
 
-    pub fn db(&self) -> &Arc<Db> {
+    pub fn db(&self) -> &Arc<Database> {
         &self.db
     }
 
     /// Reload roots from `library_roots`. Call after roots change.
-    pub fn refresh_roots(&self) -> Result<()> {
-        let mut map = HashMap::new();
-        let conn = self.db.writer();
-        for lib in libraries::all(&conn)? {
-            map.insert(lib.id, lib.roots);
-        }
-        drop(conn);
-        *self.roots.write().unwrap() = map;
+    pub fn refresh_roots(&self) -> Result<(), DbError> {
+        let map = self
+            .db
+            .read_blocking(libraries::all)?
+            .into_iter()
+            .map(|lib| (lib.id, lib.roots))
+            .collect();
+        *self.roots.0.write().unwrap() = map;
         Ok(())
     }
 
@@ -57,9 +59,19 @@ impl SqliteStore {
         id.parse().ok()
     }
 
+    fn fail(what: &str, e: impl std::fmt::Display) {
+        tracing::error!(error = %e, "store: {what} failed");
+    }
+}
+
+/// Each library's active roots.
+#[derive(Default)]
+struct Roots(RwLock<HashMap<i64, Vec<Root>>>);
+
+impl Roots {
     /// The root containing `path`, and the path relative to it.
     fn locate(&self, library: i64, path: &Path) -> Option<(i64, String)> {
-        let roots = self.roots.read().unwrap();
+        let roots = self.0.read().unwrap();
         let root = roots
             .get(&library)?
             .iter()
@@ -69,7 +81,7 @@ impl SqliteStore {
     }
 
     fn root_by_path(&self, library: i64, root: &Path) -> Option<i64> {
-        self.roots
+        self.0
             .read()
             .unwrap()
             .get(&library)?
@@ -79,13 +91,9 @@ impl SqliteStore {
     }
 
     fn absolute(&self, library: i64, root_id: i64, rel: &str) -> Option<PathBuf> {
-        let roots = self.roots.read().unwrap();
+        let roots = self.0.read().unwrap();
         let root = roots.get(&library)?.iter().find(|r| r.id == root_id)?;
         Some(join(&root.path, rel))
-    }
-
-    fn fail(what: &str, e: impl std::fmt::Display) {
-        tracing::error!(error = %e, "store: {what} failed");
     }
 }
 
@@ -163,11 +171,11 @@ impl Store for SqliteStore {
         let Some(lib) = Self::lib(&scan.library) else {
             return 0;
         };
-        let conn = self.db.writer();
+        let scan = scan.clone();
         let scopes = serde_json::to_string(&scan.scopes).unwrap_or_else(|_| "[]".into());
-        loop {
+        let result = self.db.write_blocking(move |tx| loop {
             let id = new_id();
-            let r = conn.execute(
+            let inserted = tx.execute(
                 "INSERT OR IGNORE INTO scans (id, library_id, trigger, state, scopes, cursor_scope, cursor_dir, \
                  files_seen, files_processed, added, updated, moved, missing, problems, current_path, \
                  created_at, started_at, finished_at) \
@@ -198,21 +206,21 @@ impl Store for SqliteStore {
                     time_to_ms(scan.started_at),
                     time_to_ms(scan.finished_at),
                 ],
-            );
-            match r {
-                Ok(1) => return id as u64,
-                Ok(_) => continue,
-                Err(e) => {
-                    Self::fail("create_scan", e);
-                    return 0;
-                }
+            )?;
+            if inserted == 1 {
+                return Ok(id as u64);
             }
-        }
+        });
+        result.unwrap_or_else(|e| {
+            Self::fail("create_scan", e);
+            0
+        })
     }
 
     fn update_scan(&self, scan: &Scan) {
-        let conn = self.db.writer();
-        let r = conn.execute(
+        let scan = scan.clone();
+        let r = self.db.write_blocking(move |tx| {
+            tx.execute(
             "UPDATE scans SET state = ?2, cursor_scope = ?3, cursor_dir = ?4, files_seen = ?5, files_processed = ?6, \
              added = ?7, updated = ?8, moved = ?9, missing = ?10, problems = ?11, current_path = ?12, \
              started_at = ?13, finished_at = ?14 WHERE id = ?1",
@@ -238,7 +246,8 @@ impl Store for SqliteStore {
                 time_to_ms(scan.started_at),
                 time_to_ms(scan.finished_at),
             ],
-        );
+        )
+        });
         if let Err(e) = r {
             Self::fail("update_scan", e);
         }
@@ -248,14 +257,15 @@ impl Store for SqliteStore {
         let Some(lib) = Self::lib(library) else {
             return Vec::new();
         };
-        let conn = self.db.writer();
-        match read_scans(
-            &conn,
-            "SELECT id, library_id, trigger, state, scopes, cursor_scope, cursor_dir, files_seen, files_processed, \
-             added, updated, moved, missing, problems, current_path, started_at, finished_at \
-             FROM scans WHERE library_id = ?1 AND state IN ('queued', 'running') ORDER BY created_at, id",
-            lib,
-        ) {
+        match self.db.read_blocking(move |conn| {
+            read_scans(
+                conn,
+                "SELECT id, library_id, trigger, state, scopes, cursor_scope, cursor_dir, files_seen, files_processed, \
+                 added, updated, moved, missing, problems, current_path, started_at, finished_at \
+                 FROM scans WHERE library_id = ?1 AND state IN ('queued', 'running') ORDER BY created_at, id",
+                lib,
+            )
+        }) {
             Ok(v) => v,
             Err(e) => {
                 Self::fail("interrupted_scans", e);
@@ -266,9 +276,9 @@ impl Store for SqliteStore {
 
     fn lookup(&self, library: &LibraryId, path: &Path) -> Option<IndexedFile> {
         let lib = Self::lib(library)?;
-        let (root_id, rel) = self.locate(lib, path)?;
-        let conn = self.db.writer();
-        conn.query_row(
+        let (root_id, rel) = self.roots.locate(lib, path)?;
+        self.db.read_blocking(move |conn| {
+            conn.query_row(
             "SELECT id, file_size, file_mtime, missing_since FROM tracks WHERE root_id = ?1 AND path = ?2",
             params![root_id, rel],
             |r| {
@@ -281,6 +291,7 @@ impl Store for SqliteStore {
             },
         )
         .optional()
+        })
         .unwrap_or_else(|e| {
             Self::fail("lookup", e);
             None
@@ -291,13 +302,12 @@ impl Store for SqliteStore {
         let Some(lib) = Self::lib(library) else {
             return Err(StoreError(format!("unknown library id {library}")));
         };
-        let mut conn = self.db.writer();
-        let result = (|| -> Result<()> {
-            let tx = conn.transaction()?;
+        let roots = self.roots.clone();
+        let result = self.db.write_blocking(move |tx| {
             let now = now_ms();
             let mut touched = Touched::default();
             for record in &batch.upserts {
-                self.upsert_track(&tx, lib, record, batch.scan_id as i64, now, &mut touched)?;
+                upsert_track(&roots, tx, lib, record, batch.scan_id as i64, now, &mut touched)?;
             }
             for id in &batch.touched {
                 tx.execute(
@@ -317,20 +327,18 @@ impl Store for SqliteStore {
                     params![id, batch.scan_id as i64],
                 )?;
                 if changed > 0 {
-                    touched.track(&tx, id)?;
-                    feed::record(&tx, lib, Entity::Track, id, Op::Upsert, now)?;
+                    touched.track(tx, id)?;
+                    feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)?;
                 }
             }
             for path in &batch.cleared {
-                self.clear_problem(&tx, lib, path)?;
+                clear_problem(&roots, tx, lib, path)?;
             }
             for problem in &batch.problems {
-                self.record_problem(&tx, lib, problem)?;
+                record_problem(&roots, tx, lib, problem)?;
             }
-            catalog::recompute(&tx, lib, &mut touched, now)?;
-            tx.commit()?;
-            Ok(())
-        })();
+            catalog::recompute(tx, lib, &mut touched, now)
+        });
         result.map_err(|e| {
             Self::fail("apply", &e);
             StoreError(e.to_string())
@@ -341,13 +349,12 @@ impl Store for SqliteStore {
         let Some(lib) = Self::lib(library) else {
             return 0;
         };
-        let Some(root_id) = self.root_by_path(lib, &scope.root) else {
+        let Some(root_id) = self.roots.root_by_path(lib, &scope.root) else {
             return 0;
         };
         let rel = relative(&scope.root, &scope.path);
-        let mut conn = self.db.writer();
-        let result = (|| -> Result<usize> {
-            let tx = conn.transaction()?;
+        let depth = scope.depth;
+        let result = self.db.write_blocking(move |tx| {
             let now = now_ms();
             // Scope clause without GLOB, so pattern characters in folder
             // names cannot widen or narrow it.
@@ -356,7 +363,7 @@ impl Store for SqliteStore {
             } else {
                 format!("{rel}/")
             };
-            let clause = match scope.depth {
+            let clause = match depth {
                 Depth::Subtree => "substr(path, 1, ?3) = ?4",
                 Depth::Directory => {
                     "substr(path, 1, ?3) = ?4 AND instr(substr(path, ?3 + 1), '/') = 0"
@@ -380,13 +387,12 @@ impl Store for SqliteStore {
                     "UPDATE tracks SET missing_since = ?2, updated_at = ?2 WHERE id = ?1",
                     params![id, now],
                 )?;
-                touched.track(&tx, *id)?;
-                feed::record(&tx, lib, Entity::Track, *id, Op::Upsert, now)?;
+                touched.track(tx, *id)?;
+                feed::record(tx, lib, Entity::Track, *id, Op::Upsert, now)?;
             }
-            catalog::recompute(&tx, lib, &mut touched, now)?;
-            tx.commit()?;
+            catalog::recompute(tx, lib, &mut touched, now)?;
             Ok(ids.len())
-        })();
+        });
         result.unwrap_or_else(|e| {
             Self::fail("mark_missing_unseen", e);
             0
@@ -402,8 +408,8 @@ impl Store for SqliteStore {
         let Some(lib) = Self::lib(library) else {
             return Vec::new();
         };
-        let conn = self.db.writer();
-        let result = (|| -> Result<Vec<(TrackId, PathBuf)>> {
+        let roots = self.roots.clone();
+        let result = self.db.read_blocking(move |conn| {
             let mut stmt = conn.prepare_cached(
                 "SELECT id, root_id, path FROM tracks WHERE library_id = ?1 AND missing_since IS NULL \
                  AND (analyzer_version IS NULL OR analyzer_version < ?2) ORDER BY added_at DESC, id LIMIT ?3",
@@ -419,12 +425,12 @@ impl Store for SqliteStore {
             let mut out = Vec::new();
             for row in rows {
                 let (id, root_id, rel) = row?;
-                if let Some(path) = self.absolute(lib, root_id, &rel) {
+                if let Some(path) = roots.absolute(lib, root_id, &rel) {
                     out.push((id as u64, path));
                 }
             }
             Ok(out)
-        })();
+        });
         result.unwrap_or_else(|e| {
             Self::fail("next_unanalyzed", e);
             Vec::new()
@@ -435,9 +441,7 @@ impl Store for SqliteStore {
         let Some(lib) = Self::lib(library) else {
             return;
         };
-        let mut conn = self.db.writer();
-        let r = (|| -> Result<()> {
-            let tx = conn.transaction()?;
+        let r = self.db.write_blocking(move |tx| {
             let now = now_ms();
             let id = track_id as i64;
             tx.execute(
@@ -466,13 +470,11 @@ impl Store for SqliteStore {
                 })
                 .optional()?
             {
-                catalog::recompute_album_loudness(&tx, album_id)?;
-                feed::record(&tx, lib, Entity::Album, album_id, Op::Upsert, now)?;
+                catalog::recompute_album_loudness(tx, album_id)?;
+                feed::record(tx, lib, Entity::Album, album_id, Op::Upsert, now)?;
             }
-            feed::record(&tx, lib, Entity::Track, id, Op::Upsert, now)?;
-            tx.commit()?;
-            Ok(())
-        })();
+            feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)
+        });
         if let Err(e) = r {
             Self::fail("store_analysis", e);
         }
@@ -482,8 +484,8 @@ impl Store for SqliteStore {
         let Some(lib) = Self::lib(library) else {
             return Vec::new();
         };
-        let conn = self.db.writer();
-        let result = (|| -> Result<Vec<DuplicateCandidate>> {
+        let roots = self.roots.clone();
+        let result = self.db.read_blocking(move |conn| {
             let mut artists: HashMap<i64, Vec<(i64, String)>> = HashMap::new();
             {
                 let mut stmt = conn.prepare(
@@ -539,7 +541,7 @@ impl Store for SqliteStore {
             let mut out = Vec::new();
             for row in rows {
                 let (id, root_id, rel, title, album, track_number, disc) = row?;
-                let Some(path) = self.absolute(lib, root_id, &rel) else {
+                let Some(path) = roots.absolute(lib, root_id, &rel) else {
                     continue;
                 };
                 out.push(DuplicateCandidate {
@@ -554,7 +556,7 @@ impl Store for SqliteStore {
                 });
             }
             Ok(out)
-        })();
+        });
         result.unwrap_or_else(|e| {
             Self::fail("duplicate_candidates", e);
             Vec::new()
@@ -592,106 +594,108 @@ fn read_scans(conn: &Connection, sql: &str, lib: i64) -> Result<Vec<Scan>> {
             finished_at: ms_to_time(r.get(16)?),
         })
     })?;
-    Ok(rows.collect::<std::result::Result<_, _>>()?)
+    rows.collect()
 }
 
 impl SqliteStore {
     /// All scans for a library, newest first. For the admin API and tests.
-    pub fn scans(&self, library: i64) -> Result<Vec<Scan>> {
-        let conn = self.db.writer();
-        read_scans(
-            &conn,
-            "SELECT id, library_id, trigger, state, scopes, cursor_scope, cursor_dir, files_seen, files_processed, \
-             added, updated, moved, missing, problems, current_path, started_at, finished_at \
-             FROM scans WHERE library_id = ?1 ORDER BY created_at DESC, id DESC",
-            library,
-        )
+    pub fn scans(&self, library: i64) -> Result<Vec<Scan>, DbError> {
+        self.db.read_blocking(move |conn| {
+            read_scans(
+                conn,
+                "SELECT id, library_id, trigger, state, scopes, cursor_scope, cursor_dir, files_seen, files_processed, \
+                 added, updated, moved, missing, problems, current_path, started_at, finished_at \
+                 FROM scans WHERE library_id = ?1 ORDER BY created_at DESC, id DESC",
+                library,
+            )
+        })
+    }
+}
+
+// ───────────────────────────── upsert ─────────────────────────────
+
+fn upsert_track(
+    roots: &Roots,
+    tx: &Transaction<'_>,
+    lib: i64,
+    rec: &TrackRecord,
+    scan_id: i64,
+    now: i64,
+    touched: &mut Touched,
+) -> Result<()> {
+    let Some(root_id) = roots.root_by_path(lib, &rec.root) else {
+        tracing::warn!(path = %rec.path.display(), "track under an unknown root; skipped");
+        return Ok(());
+    };
+    let rel = relative(&rec.root, &rec.path);
+    let updating = rec.id.is_some();
+    let id = match rec.id {
+        Some(id) => id as i64,
+        None => new_id(),
+    };
+    if updating {
+        // Whatever it pointed at before may now be orphaned.
+        touched.track(tx, id)?;
     }
 
-    // ───────────────────────────── upsert ─────────────────────────────
+    // Artists: the unknown artist (key "") when a file names none.
+    let credits: Vec<Option<&str>> = if rec.tags.artists.is_empty() {
+        vec![None]
+    } else {
+        rec.tags.artists.iter().map(|s| Some(s.as_str())).collect()
+    };
+    let mut artist_ids = Vec::new();
+    for name in &credits {
+        artist_ids.push(find_or_create_artist(tx, lib, *name, now)?);
+    }
 
-    fn upsert_track(
-        &self,
-        tx: &Transaction<'_>,
-        lib: i64,
-        rec: &TrackRecord,
-        scan_id: i64,
-        now: i64,
-        touched: &mut Touched,
-    ) -> Result<()> {
-        let Some(root_id) = self.root_by_path(lib, &rec.root) else {
-            tracing::warn!(path = %rec.path.display(), "track under an unknown root; skipped");
-            return Ok(());
-        };
-        let rel = relative(&rec.root, &rec.path);
-        let updating = rec.id.is_some();
-        let id = match rec.id {
-            Some(id) => id as i64,
-            None => new_id(),
-        };
-        if updating {
-            // Whatever it pointed at before may now be orphaned.
-            touched.track(tx, id)?;
+    // Album artists: tagged, else the track artists, else unknown for a
+    // compilation with no album-artist tag (`requirements/scanning.md` §2).
+    let album_credits: Vec<Option<&str>> = if !rec.tags.album_artists.is_empty() {
+        rec.tags
+            .album_artists
+            .iter()
+            .map(|s| Some(s.as_str()))
+            .collect()
+    } else if rec.tags.compilation {
+        vec![None]
+    } else {
+        credits.clone()
+    };
+    let mut album_artist_ids = Vec::new();
+    for name in &album_credits {
+        album_artist_ids.push(find_or_create_artist(tx, lib, *name, now)?);
+    }
+    let artists_key = fold::artists_key(album_credits.iter().map(|n| n.unwrap_or("")));
+    let album_id = find_or_create_album(
+        tx,
+        lib,
+        rec.tags.album.as_deref(),
+        &artists_key,
+        &rec.sort.album,
+        &rec.sort.album_artist,
+        now,
+    )?;
+
+    let identifiers = {
+        let mut m = serde_json::Map::new();
+        if let Some(v) = &rec.tags.musicbrainz_recording_id {
+            m.insert("musicbrainz_recordingid".into(), v.clone().into());
         }
-
-        // Artists: the unknown artist (key "") when a file names none.
-        let credits: Vec<Option<&str>> = if rec.tags.artists.is_empty() {
-            vec![None]
-        } else {
-            rec.tags.artists.iter().map(|s| Some(s.as_str())).collect()
-        };
-        let mut artist_ids = Vec::new();
-        for name in &credits {
-            artist_ids.push(find_or_create_artist(tx, lib, *name, now)?);
+        if let Some(v) = &rec.tags.musicbrainz_release_id {
+            m.insert("musicbrainz_albumid".into(), v.clone().into());
         }
+        serde_json::Value::Object(m).to_string()
+    };
+    let lyrics = rec.lyrics();
+    let lyrics_kind = match lyrics {
+        None => "none",
+        Some(l) if l.synced => "synced",
+        Some(_) => "plain",
+    };
+    let format = rec.properties.format;
 
-        // Album artists: tagged, else the track artists, else unknown for a
-        // compilation with no album-artist tag (`requirements/scanning.md` §2).
-        let album_credits: Vec<Option<&str>> = if !rec.tags.album_artists.is_empty() {
-            rec.tags
-                .album_artists
-                .iter()
-                .map(|s| Some(s.as_str()))
-                .collect()
-        } else if rec.tags.compilation {
-            vec![None]
-        } else {
-            credits.clone()
-        };
-        let mut album_artist_ids = Vec::new();
-        for name in &album_credits {
-            album_artist_ids.push(find_or_create_artist(tx, lib, *name, now)?);
-        }
-        let artists_key = fold::artists_key(album_credits.iter().map(|n| n.unwrap_or("")));
-        let album_id = find_or_create_album(
-            tx,
-            lib,
-            rec.tags.album.as_deref(),
-            &artists_key,
-            &rec.sort.album,
-            &rec.sort.album_artist,
-            now,
-        )?;
-
-        let identifiers = {
-            let mut m = serde_json::Map::new();
-            if let Some(v) = &rec.tags.musicbrainz_recording_id {
-                m.insert("musicbrainz_recordingid".into(), v.clone().into());
-            }
-            if let Some(v) = &rec.tags.musicbrainz_release_id {
-                m.insert("musicbrainz_albumid".into(), v.clone().into());
-            }
-            serde_json::Value::Object(m).to_string()
-        };
-        let lyrics = rec.lyrics();
-        let lyrics_kind = match lyrics {
-            None => "none",
-            Some(l) if l.synced => "synced",
-            Some(_) => "plain",
-        };
-        let format = rec.properties.format;
-
-        tx.execute(
+    tx.execute(
             "INSERT INTO tracks (id, library_id, album_id, album_title, fingerprint, root_id, path, file_size, file_mtime, \
              missing_since, last_seen_scan_id, title, sort_key, artist_sort_key, album_sort_key, disc_number, track_number, \
              track_total, disc_total, release_date, explicit, compilation, release_type, isrc, identifiers, lyrics_kind, \
@@ -746,200 +750,199 @@ impl SqliteStore {
             ],
         )?;
 
-        // Links: replace wholesale.
-        tx.execute("DELETE FROM track_artists WHERE track_id = ?1", [id])?;
-        tx.execute("DELETE FROM track_album_artists WHERE track_id = ?1", [id])?;
-        tx.execute("DELETE FROM track_tags WHERE track_id = ?1", [id])?;
-        for (pos, (artist_id, name)) in artist_ids.iter().zip(&credits).enumerate() {
-            tx.execute(
+    // Links: replace wholesale.
+    tx.execute("DELETE FROM track_artists WHERE track_id = ?1", [id])?;
+    tx.execute("DELETE FROM track_album_artists WHERE track_id = ?1", [id])?;
+    tx.execute("DELETE FROM track_tags WHERE track_id = ?1", [id])?;
+    for (pos, (artist_id, name)) in artist_ids.iter().zip(&credits).enumerate() {
+        tx.execute(
                 "INSERT OR IGNORE INTO track_artists (library_id, track_id, position, artist_id, artist_name) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![lib, id, pos as i64, artist_id, name.map(str::trim)],
             )?;
-        }
-        for (pos, (artist_id, name)) in album_artist_ids.iter().zip(&album_credits).enumerate() {
-            tx.execute(
+    }
+    for (pos, (artist_id, name)) in album_artist_ids.iter().zip(&album_credits).enumerate() {
+        tx.execute(
                 "INSERT OR IGNORE INTO track_album_artists (library_id, track_id, position, artist_id, artist_name) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![lib, id, pos as i64, artist_id, name.map(str::trim)],
             )?;
-        }
-        for genre in &rec.tags.genres {
-            let tag_id = find_or_create_tag(tx, lib, genre)?;
-            tx.execute(
+    }
+    for genre in &rec.tags.genres {
+        let tag_id = find_or_create_tag(tx, lib, genre)?;
+        tx.execute(
                 "INSERT OR IGNORE INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES (?1, ?2, ?3, ?4)",
                 params![lib, id, tag_id, genre.trim()],
             )?;
-            touched.tags.insert(tag_id);
-        }
+        touched.tags.insert(tag_id);
+    }
 
-        // Lyrics.
-        tx.execute("DELETE FROM track_lyrics WHERE track_id = ?1", [id])?;
-        if let Some(l) = lyrics {
-            let synced = if l.synced {
-                let lines = jewelcase_core::lrc::parse(&l.text);
-                if lines.is_empty() {
-                    None
-                } else {
-                    Some(serde_json::to_string(&lines).unwrap())
-                }
-            } else {
+    // Lyrics.
+    tx.execute("DELETE FROM track_lyrics WHERE track_id = ?1", [id])?;
+    if let Some(l) = lyrics {
+        let synced = if l.synced {
+            let lines = jewelcase_core::lrc::parse(&l.text);
+            if lines.is_empty() {
                 None
-            };
-            tx.execute(
+            } else {
+                Some(serde_json::to_string(&lines).unwrap())
+            }
+        } else {
+            None
+        };
+        tx.execute(
                 "INSERT INTO track_lyrics (library_id, track_id, plain, synced, embedded) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![lib, id, l.text, synced, rec.tags.lyrics.is_some()],
             )?;
-        }
+    }
 
-        // Artwork: an images row per distinct source; the album keeps the
-        // first it is given (`requirements/scanning.md` §3.1).
-        if let Some(art) = &rec.artwork {
-            let (img_path, embedded) = match &art.source {
-                ArtworkSource::Embedded => (rel.clone(), true),
-                ArtworkSource::Sidecar(p) => (relative(&rec.root, p), false),
-            };
-            let image_id = upsert_image(tx, lib, root_id, &img_path, embedded, &art.info)?;
-            tx.execute(
-                "UPDATE albums SET image_id = ?2 WHERE id = ?1 AND image_id IS NULL",
-                params![album_id, image_id],
-            )?;
-        }
-        let artist_targets: &[i64] = if album_credits.iter().any(|c| c.is_some()) {
-            &album_artist_ids
-        } else {
-            &artist_ids
+    // Artwork: an images row per distinct source; the album keeps the
+    // first it is given (`requirements/scanning.md` §3.1).
+    if let Some(art) = &rec.artwork {
+        let (img_path, embedded) = match &art.source {
+            ArtworkSource::Embedded => (rel.clone(), true),
+            ArtworkSource::Sidecar(p) => (relative(&rec.root, p), false),
         };
-        if let Some(img) = &rec.artist_image {
-            let image_id = upsert_image(
-                tx,
-                lib,
-                root_id,
-                &relative(&rec.root, &img.path),
-                false,
-                &img.info,
-            )?;
-            for artist_id in artist_targets {
-                tx.execute(
+        let image_id = upsert_image(tx, lib, root_id, &img_path, embedded, &art.info)?;
+        tx.execute(
+            "UPDATE albums SET image_id = ?2 WHERE id = ?1 AND image_id IS NULL",
+            params![album_id, image_id],
+        )?;
+    }
+    let artist_targets: &[i64] = if album_credits.iter().any(|c| c.is_some()) {
+        &album_artist_ids
+    } else {
+        &artist_ids
+    };
+    if let Some(img) = &rec.artist_image {
+        let image_id = upsert_image(
+            tx,
+            lib,
+            root_id,
+            &relative(&rec.root, &img.path),
+            false,
+            &img.info,
+        )?;
+        for artist_id in artist_targets {
+            tx.execute(
                     "UPDATE artists SET image_id = ?2 WHERE id = ?1 AND image_id IS NULL AND name IS NOT NULL",
                     params![artist_id, image_id],
                 )?;
-            }
         }
-        if let Some(bio) = &rec.artist_biography {
-            for artist_id in artist_targets {
-                tx.execute(
+    }
+    if let Some(bio) = &rec.artist_biography {
+        for artist_id in artist_targets {
+            tx.execute(
                     "UPDATE artists SET biography = ?2 WHERE id = ?1 AND biography IS NULL AND name IS NOT NULL",
                     params![artist_id, bio.text],
                 )?;
-            }
         }
-
-        touched.albums.insert(album_id);
-        touched
-            .artists
-            .extend(artist_ids.iter().chain(&album_artist_ids));
-        feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)?;
-        Ok(())
     }
 
-    fn record_problem(&self, tx: &Transaction<'_>, lib: i64, problem: &Problem) -> Result<()> {
-        let Some((root_id, rel)) = self.locate(lib, &problem.path) else {
-            return Ok(());
-        };
-        let root_path = self
-            .roots
-            .read()
-            .unwrap()
-            .get(&lib)
-            .and_then(|rs| rs.iter().find(|r| r.id == root_id))
-            .map(|r| r.path.clone())
-            .unwrap_or_default();
-        let key = group_key(problem.kind, &root_path, &problem.detail);
-        let seen = system_time_ms(problem.seen_at) as i64;
-        let group_id = match tx
-            .query_row(
-                "SELECT id FROM scan_problem_groups WHERE library_id = ?1 AND group_key = ?2",
-                params![lib, key],
-                |r| r.get::<_, i64>(0),
-            )
-            .optional()?
-        {
-            Some(id) => {
-                tx.execute(
-                    "UPDATE scan_problem_groups SET last_seen_at = MAX(last_seen_at, ?2) WHERE id = ?1",
-                    params![id, seen],
-                )?;
-                id
-            }
-            None => loop {
-                let id = new_id();
-                let n = tx.execute(
+    touched.albums.insert(album_id);
+    touched
+        .artists
+        .extend(artist_ids.iter().chain(&album_artist_ids));
+    feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)?;
+    Ok(())
+}
+
+fn record_problem(roots: &Roots, tx: &Transaction<'_>, lib: i64, problem: &Problem) -> Result<()> {
+    let Some((root_id, rel)) = roots.locate(lib, &problem.path) else {
+        return Ok(());
+    };
+    let root_path = roots
+        .0
+        .read()
+        .unwrap()
+        .get(&lib)
+        .and_then(|rs| rs.iter().find(|r| r.id == root_id))
+        .map(|r| r.path.clone())
+        .unwrap_or_default();
+    let key = group_key(problem.kind, &root_path, &problem.detail);
+    let seen = system_time_ms(problem.seen_at) as i64;
+    let group_id = match tx
+        .query_row(
+            "SELECT id FROM scan_problem_groups WHERE library_id = ?1 AND group_key = ?2",
+            params![lib, key],
+            |r| r.get::<_, i64>(0),
+        )
+        .optional()?
+    {
+        Some(id) => {
+            tx.execute(
+                "UPDATE scan_problem_groups SET last_seen_at = MAX(last_seen_at, ?2) WHERE id = ?1",
+                params![id, seen],
+            )?;
+            id
+        }
+        None => loop {
+            let id = new_id();
+            let n = tx.execute(
                     "INSERT OR IGNORE INTO scan_problem_groups (id, library_id, kind, group_key, summary, count, first_seen_at, last_seen_at) \
                      VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6)",
                     params![id, lib, problem.kind.as_str(), key, problem.detail, seen],
                 )?;
-                if n == 1 {
-                    break id;
-                }
-            },
-        };
-        let existing: Option<i64> = tx
-            .query_row(
-                "SELECT group_id FROM scan_problems WHERE root_id = ?1 AND path = ?2",
-                params![root_id, rel],
-                |r| r.get(0),
-            )
-            .optional()?;
-        match existing {
-            Some(old) if old == group_id => {
-                tx.execute(
+            if n == 1 {
+                break id;
+            }
+        },
+    };
+    let existing: Option<i64> = tx
+        .query_row(
+            "SELECT group_id FROM scan_problems WHERE root_id = ?1 AND path = ?2",
+            params![root_id, rel],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match existing {
+        Some(old) if old == group_id => {
+            tx.execute(
                     "UPDATE scan_problems SET detail = ?3, seen_at = ?4 WHERE root_id = ?1 AND path = ?2",
                     params![root_id, rel, problem.detail, seen],
                 )?;
-            }
-            _ => {
-                // Insert into the new group before recounting the old one, so
-                // a group is never emptied and deleted while still referenced.
-                tx.execute(
-                    "DELETE FROM scan_problems WHERE root_id = ?1 AND path = ?2",
-                    params![root_id, rel],
-                )?;
-                tx.execute(
-                    "INSERT INTO scan_problems (library_id, group_id, root_id, path, detail, seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![lib, group_id, root_id, rel, problem.detail, seen],
-                )?;
-                recount_group(tx, group_id)?;
-                if let Some(old) = existing {
-                    recount_group(tx, old)?;
-                }
-            }
         }
-        Ok(())
-    }
-
-    fn clear_problem(&self, tx: &Transaction<'_>, lib: i64, path: &Path) -> Result<()> {
-        let Some((root_id, rel)) = self.locate(lib, path) else {
-            return Ok(());
-        };
-        self.clear_problem_rel(tx, root_id, &rel)
-    }
-
-    fn clear_problem_rel(&self, tx: &Transaction<'_>, root_id: i64, rel: &str) -> Result<()> {
-        let group: Option<i64> = tx
-            .query_row(
-                "SELECT group_id FROM scan_problems WHERE root_id = ?1 AND path = ?2",
-                params![root_id, rel],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if let Some(group_id) = group {
+        _ => {
+            // Insert into the new group before recounting the old one, so
+            // a group is never emptied and deleted while still referenced.
             tx.execute(
                 "DELETE FROM scan_problems WHERE root_id = ?1 AND path = ?2",
                 params![root_id, rel],
             )?;
+            tx.execute(
+                    "INSERT INTO scan_problems (library_id, group_id, root_id, path, detail, seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![lib, group_id, root_id, rel, problem.detail, seen],
+                )?;
             recount_group(tx, group_id)?;
+            if let Some(old) = existing {
+                recount_group(tx, old)?;
+            }
         }
-        Ok(())
     }
+    Ok(())
+}
+
+fn clear_problem(roots: &Roots, tx: &Transaction<'_>, lib: i64, path: &Path) -> Result<()> {
+    let Some((root_id, rel)) = roots.locate(lib, path) else {
+        return Ok(());
+    };
+    clear_problem_rel(tx, root_id, &rel)
+}
+
+fn clear_problem_rel(tx: &Transaction<'_>, root_id: i64, rel: &str) -> Result<()> {
+    let group: Option<i64> = tx
+        .query_row(
+            "SELECT group_id FROM scan_problems WHERE root_id = ?1 AND path = ?2",
+            params![root_id, rel],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(group_id) = group {
+        tx.execute(
+            "DELETE FROM scan_problems WHERE root_id = ?1 AND path = ?2",
+            params![root_id, rel],
+        )?;
+        recount_group(tx, group_id)?;
+    }
+    Ok(())
 }
 
 fn recount_group(tx: &Transaction<'_>, group_id: i64) -> Result<()> {

@@ -1,9 +1,7 @@
 //! The library change feed (`design/database.md` §5): one row per entity,
 //! coalesced on write, in the same transaction as the change.
 
-use rusqlite::{Connection, params};
-
-use super::Result;
+use rusqlite::{Connection, Result, params};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Entity {

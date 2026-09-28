@@ -8,9 +8,8 @@
 use std::collections::HashSet;
 
 use jewelcase_core::sort;
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{OptionalExtension, Result, Transaction, params};
 
-use super::Result;
 use super::feed::{self, Entity, Op};
 
 /// Entities whose derived values may be stale after a batch.
@@ -136,9 +135,8 @@ fn refresh_album_links(
 /// The most-used spelling, ties broken by bytes so a tie never flips
 /// between scans (`design/database.md` §3).
 fn most_used(tx: &Transaction<'_>, sql: &str, id: i64) -> Result<Option<String>> {
-    Ok(tx
-        .query_row(sql, [id], |r| r.get::<_, String>(0))
-        .optional()?)
+    tx.query_row(sql, [id], |r| r.get::<_, String>(0))
+        .optional()
 }
 
 fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i64) -> Result<()> {
