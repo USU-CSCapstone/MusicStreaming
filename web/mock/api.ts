@@ -2,8 +2,10 @@
 // uses, answered from the scanner's database, plus plugin administration (`plugins.ts`).
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { join } from 'node:path';
 import type {
 	Device,
+	Lyrics,
 	Problem,
 	SearchResponse,
 	SearchResult,
@@ -15,6 +17,7 @@ import { Db, toKey } from './db.ts';
 import { image, imageSize, playbackInfo, streamAudio, waveform } from './media.ts';
 import { playlist, playlists } from './playlists.ts';
 import { PluginStore, adminRoute } from './plugins.ts';
+import { pluginRunner } from './runner.ts';
 
 type Ctx = {
 	params: string[];
@@ -26,10 +29,14 @@ type Ctx = {
 /** A JSON body, `undefined` for 404, or `null` when the handler wrote the response itself. */
 type Handler = (c: Ctx) => unknown | Promise<unknown>;
 
-export function createApi(dbPath: string, pluginDir: string) {
-	const db = new Db(dbPath);
+export function createApi(dataDir: string) {
+	const db = new Db(join(dataDir, 'state/jewelcase.db'));
 	const catalog = new Catalog(db);
-	const plugins = new PluginStore(pluginDir, () => catalog.libraries().map((l) => l.id));
+	// Installed plugins sit beside the scanner's state, never in the music library.
+	const plugins = new PluginStore(join(dataDir, 'mock-plugins'), () =>
+		catalog.libraries().map((l) => l.id)
+	);
+	const runPlugin = pluginRunner(dataDir);
 
 	// Paths under /libraries/{libraryId}; the library is resolved before the handler runs,
 	// so nothing is reachable in a library that does not exist.
@@ -82,6 +89,7 @@ export function createApi(dbPath: string, pluginDir: string) {
 					return null;
 				})
 		],
+		[/^\/tracks\/([^/]+)\/lyrics$/, ({ lib, params }) => withKey(params[0], (k) => lyrics(lib, k))],
 		[
 			/^\/tracks\/([^/]+)\/playback$/,
 			({ lib, params }) =>
@@ -110,6 +118,22 @@ export function createApi(dbPath: string, pluginDir: string) {
 			}
 		]
 	];
+
+	/** What the scanner stored from embedded tags or a `.lrc`/`.txt` beside the track (`requirements/tracks.md` §5). */
+	function lyrics(lib: bigint, trackId: bigint): Lyrics | undefined {
+		if (!catalog.trackFile(lib, trackId)) return undefined;
+		const row = db.get(
+			'SELECT plain, synced FROM track_lyrics WHERE library_id = ? AND track_id = ?',
+			lib,
+			trackId
+		);
+		if (!row) return { kind: 'none', lines: null, plain: null };
+		if (row.synced !== null) {
+			// The stored text of synced lyrics is the LRC itself, not a plain version.
+			return { kind: 'synced', lines: JSON.parse(String(row.synced)), plain: null };
+		}
+		return { kind: 'plain', lines: null, plain: String(row.plain) };
+	}
 
 	function search(lib: bigint, query: URLSearchParams): SearchResponse | undefined {
 		const text = query.get('q')?.trim() ?? '';
@@ -217,7 +241,8 @@ export function createApi(dbPath: string, pluginDir: string) {
 					req.method ?? 'GET',
 					path,
 					req.headers['content-type'] ?? '',
-					await readBody(req)
+					await readBody(req),
+					runPlugin
 				);
 				if (!out) return problem(res, 404, 'Not Found', 'not_found');
 				res.statusCode = out.status;

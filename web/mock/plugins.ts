@@ -10,7 +10,8 @@ import {
 	type PermissionName,
 	type Plugin,
 	type PluginLibrary,
-	type PluginManifest
+	type PluginManifest,
+	type PluginRunResult
 } from '../src/lib/api/plugins.ts';
 import { PluginFileError, readManifest } from '../../tools/plugin-pack/manifest.mjs';
 
@@ -37,6 +38,7 @@ export class PluginError extends Error {
 	constructor(
 		readonly status: number,
 		readonly code:
+			| 'runner_unavailable'
 			| 'plugin_invalid'
 			| 'plugin_exists'
 			| 'permissions_required'
@@ -267,9 +269,11 @@ export async function adminRoute(
 	method: string,
 	path: string,
 	contentType: string,
-	body: Uint8Array
+	body: Uint8Array,
+	/** Runs an installed plugin; injected so tests need no real runner. */
+	run?: (id: string) => Promise<PluginRunResult>
 ): Promise<AdminResponse | undefined> {
-	const m = /^\/admin\/plugins(?:\/([^/]+))?(?:\/(permissions|libraries)(?:\/([^/]+))?)?$/.exec(
+	const m = /^\/admin\/plugins(?:\/([^/]+))?(?:\/(permissions|libraries|run)(?:\/([^/]+))?)?$/.exec(
 		path
 	);
 	if (!m) return undefined;
@@ -299,6 +303,11 @@ export async function adminRoute(
 		}
 		if (id && sub === 'libraries' && libraryId && method === 'PUT') {
 			return { status: 200, body: store.setEnabled(id, libraryId, json().enabled === true) };
+		}
+		if (id && sub === 'run' && method === 'POST') {
+			store.get(id); // 404 for a plugin that is not installed.
+			if (!run) throw new PluginError(503, 'runner_unavailable', 'Plugins cannot be run here.');
+			return { status: 200, body: await run(id) };
 		}
 		return {
 			status: 405,

@@ -59,3 +59,28 @@ test('explains why a file will not install', async ({ page }) => {
 	await expect(page.getByRole('alert')).toHaveText(/not a WebAssembly file/);
 	await expect(page.getByRole('dialog')).toBeHidden();
 });
+
+test('runs an enabled plugin and shows what it did', async ({ page }) => {
+	await serveLibrary(page);
+	await page.goto('/admin/plugins');
+	await page.locator('input[type=file]').setInputFiles(pluginFile());
+	await page.getByRole('button', { name: 'Approve all' }).click();
+
+	const card = page.getByRole('listitem').filter({ hasText: 'LRCLIB Lyrics' });
+	await card.getByRole('button', { name: 'Run now' }).click();
+	const result = card.getByRole('status');
+	await expect(result).toContainText('Saved lyrics for 2 of 3 tracks');
+	await expect(result).toContainText('scanner picks up the new files');
+	await result.getByText('Log (2 lines)').click();
+	await expect(result.getByText(/Signal Remix — Aurora Lane: not found/)).toBeVisible();
+});
+
+test('a disabled plugin offers nothing to run', async ({ page }) => {
+	await serveLibrary(page);
+	await page.goto('/admin/plugins');
+	await page.locator('input[type=file]').setInputFiles(pluginFile());
+	await page.getByRole('button', { name: 'Approve selected' }).click();
+	const card = page.getByRole('listitem').filter({ hasText: 'LRCLIB Lyrics' });
+	await expect(card.getByRole('switch')).not.toBeChecked();
+	await expect(card.getByRole('button', { name: 'Run now' })).toHaveCount(0);
+});

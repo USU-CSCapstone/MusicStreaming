@@ -1,0 +1,60 @@
+package jewelcase:plugin@0.1.0;
+
+/// The prototype's plugin contract, enough for the lyrics plugin (design/plugins.md §7).
+/// Every import checks its permission in the host. Imports stay linked even when their
+/// permission was declined, so a plugin with an optional permission still loads; the call
+/// answers an error instead, and `granted` lets a plugin adapt up front.
+
+interface host {
+  enum permission {
+    library-read,
+    library-write,
+    network,
+    listening-activity,
+  }
+
+  /// What this run may use.
+  granted: func() -> list<permission>;
+  /// A progress line, shown with the run's result.
+  log: func(message: string);
+}
+
+/// The one library this run is for. There is no library parameter: the host binds it.
+interface library {
+  record track {
+    id: u64,
+    title: string,
+    /// Ordered; the first is primary.
+    artists: list<string>,
+    album: option<string>,
+    duration-ms: u64,
+    has-lyrics: bool,
+  }
+
+  /// Needs library-read. A page of tracks in a stable order; empty past the end.
+  tracks: func(offset: u32, limit: u32) -> result<list<track>, string>;
+
+  /// Needs library-write. Saves lyrics beside the track's audio file: `.lrc` when synced,
+  /// `.txt` otherwise. The host picks the name and never overwrites; the plugin never
+  /// sees a path.
+  save-lyrics: func(track: u64, synced: bool, text: string) -> result<_, string>;
+}
+
+/// Needs network, and only reaches the destinations the manifest declared.
+interface http {
+  record response {
+    status: u16,
+    body: string,
+  }
+
+  get: func(url: string) -> result<response, string>;
+}
+
+world lyrics-plugin {
+  import host;
+  import library;
+  import http;
+
+  /// Does the plugin's work for one library; returns a one-line summary.
+  export run: func() -> result<string, string>;
+}

@@ -30,5 +30,5 @@ pub mod types;
 
 pub use governor::Governor;
 pub use queue::Scanner;
-pub use store::{Batch, IndexedFile, MemoryStore, Store, StoreError};
+pub use store::{Batch, IndexedFile, IndexedLyrics, MemoryStore, Store, StoreError};
 pub use types::*;

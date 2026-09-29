@@ -18,6 +18,16 @@ pub struct IndexedFile {
     pub size: u64,
     pub mtime_ms: u64,
     pub missing: bool,
+    /// Where its lyrics came from, so a lyrics file added or removed beside an
+    /// unchanged track is noticed (`requirements/scanning.md` §7).
+    pub lyrics: IndexedLyrics,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexedLyrics {
+    None,
+    Embedded,
+    Sidecar,
 }
 
 /// One transaction's worth of outcomes (`design/scanning.md` §7).
@@ -236,6 +246,13 @@ impl Store for MemoryStore {
             size: t.record.size,
             mtime_ms: t.record.mtime_ms,
             missing: t.missing,
+            lyrics: if t.record.tags.lyrics.is_some() {
+                IndexedLyrics::Embedded
+            } else if t.record.lyrics_sidecar.is_some() {
+                IndexedLyrics::Sidecar
+            } else {
+                IndexedLyrics::None
+            },
         })
     }
 

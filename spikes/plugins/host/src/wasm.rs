@@ -329,13 +329,15 @@ mod tests {
     async fn a_paused_plugin_stops_reading() {
         let (rt, loaded, catalog) = setup().await;
         let pause = Arc::new(Pause::default());
-        pause.set(true);
         let s = scope(&catalog, BIG);
         let probe = s.probe.clone();
         let mut inst = rt.instantiate(&loaded, s, Opts { pause: pause.clone(), ..Opts::default() }).await.unwrap();
+        // Paused only once it exists: instantiating runs plugin code too, and a tick landing
+        // there would park the instantiation itself, which this test never resumes.
+        pause.set(true);
         let task = tokio::spawn(async move { inst.scan_titles("", 1, DEFAULT_BUDGET).await });
         tokio::time::sleep(Duration::from_millis(30)).await;
-        // Paused from the start: at most the calls before the first tick got through.
+        // Paused before the scan starts: at most the calls before the first tick got through.
         let seen = probe.calls.load(Ordering::Relaxed);
         tokio::time::sleep(Duration::from_millis(30)).await;
         assert_eq!(probe.calls.load(Ordering::Relaxed), seen);

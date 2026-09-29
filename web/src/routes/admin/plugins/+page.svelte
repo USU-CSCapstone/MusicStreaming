@@ -3,11 +3,17 @@
 		ApiError,
 		installPluginFile,
 		installPluginUrl,
+		runPlugin,
 		setPluginEnabled,
 		setPluginPermissions,
 		uninstallPlugin
 	} from '$lib/api/client';
-	import { PERMISSION_LABELS, isLibraryPermission, type Plugin } from '$lib/api/plugins';
+	import {
+		PERMISSION_LABELS,
+		isLibraryPermission,
+		type Plugin,
+		type PluginRunResult
+	} from '$lib/api/plugins';
 	import Icon from '$lib/components/Icon.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import PermissionDialog, { type Decision } from '$lib/components/PermissionDialog.svelte';
@@ -32,6 +38,17 @@
 	let dialogError = $state<string | null>(null);
 	let confirming = $state<string | null>(null);
 	let rowError = $state<Record<string, string>>({});
+	let runs = $state<Record<string, { busy: boolean; result?: PluginRunResult }>>({});
+
+	async function run(p: Plugin) {
+		runs[p.id] = { busy: true };
+		try {
+			runs[p.id] = { busy: false, result: await runPlugin(fetch, p.id) };
+		} catch (e) {
+			const result = { ok: false, summary: message(e), log: [], saved: 0, scannerRunning: false };
+			runs[p.id] = { busy: false, result };
+		}
+	}
 
 	function message(e: unknown): string {
 		return e instanceof ApiError ? e.message : 'Something went wrong. Try again.';
@@ -253,7 +270,40 @@
 
 					{#if rowError[p.id]}<p class="error" role="alert">{rowError[p.id]}</p>{/if}
 
+					{#if runs[p.id]?.result}
+						{@const r = runs[p.id].result!}
+						<div class="result" class:failed={!r.ok} role="status">
+							<p class="summary">
+								<Icon name={r.ok ? 'check' : 'warning'} size={16} />
+								{r.summary}
+							</p>
+							{#if r.saved > 0}
+								<p class="muted small">
+									{#if r.scannerRunning}
+										The server's scanner picks up the new files within a few seconds.
+									{:else}
+										Start the server so the scanner picks up the new files:
+										<code>JEWELCASE_DATA_DIR=./data cargo run -p jewelcase-server</code>
+									{/if}
+								</p>
+							{/if}
+							{#if r.log.length}
+								<details>
+									<summary>Log ({r.log.length} lines)</summary>
+									<ul class="log">
+										{#each r.log as line, i (i)}<li>{line}</li>{/each}
+									</ul>
+								</details>
+							{/if}
+						</div>
+					{/if}
+
 					<div class="actions">
+						{#if p.libraries.some((l) => l.enabled)}
+							<button type="button" class="run" disabled={runs[p.id]?.busy} onclick={() => run(p)}>
+								{runs[p.id]?.busy ? 'Running…' : 'Run now'}
+							</button>
+						{/if}
 						<button
 							type="button"
 							onclick={() => {
@@ -470,6 +520,67 @@
 		background: var(--accent-soft);
 		color: var(--accent);
 		text-decoration: none;
+	}
+
+	.run {
+		background: var(--accent);
+		color: var(--accent-text);
+	}
+
+	.run:hover:not(:disabled) {
+		background: var(--accent);
+		filter: brightness(1.08);
+	}
+
+	.result {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		padding: var(--space-3);
+		border-radius: var(--radius-m);
+		background: var(--accent-soft);
+	}
+
+	.result.failed {
+		background: #dc26261a;
+	}
+
+	.result p {
+		margin: 0;
+	}
+
+	.summary {
+		display: flex;
+		align-items: flex-start;
+		gap: var(--space-2);
+		font-weight: 600;
+	}
+
+	.summary :global(svg) {
+		flex-shrink: 0;
+		margin-top: 2px;
+	}
+
+	.result code {
+		font-family: var(--font-mono);
+		font-size: 12px;
+	}
+
+	details summary {
+		cursor: pointer;
+		font-size: 13px;
+		color: var(--text-muted);
+	}
+
+	.log {
+		margin: var(--space-2) 0 0;
+		padding: 0;
+		list-style: none;
+		max-height: 220px;
+		overflow-y: auto;
+		font-family: var(--font-mono);
+		font-size: 12px;
+		line-height: 1.6;
 	}
 
 	.actions {

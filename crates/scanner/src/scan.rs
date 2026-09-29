@@ -12,7 +12,7 @@ use crate::governor::Governor;
 use crate::identity::{self, FileFacts, Identity};
 use crate::problems;
 use crate::sidecar::SidecarResolver;
-use crate::store::{Batch, Store};
+use crate::store::{Batch, IndexedFile, IndexedLyrics, Store};
 use crate::tags;
 use crate::types::*;
 
@@ -220,6 +220,19 @@ fn process_directory(
     }
 }
 
+/// Whether a lyrics file has appeared beside a track that had none, or gone from one
+/// that had it (`requirements/scanning.md` §7). Checked against the directory listing
+/// discovery already holds, so an unchanged library still costs no extra I/O. Embedded
+/// lyrics win (§3.4), so a sidecar next to them changes nothing.
+fn lyrics_file_changed(ix: &IndexedFile, candidate: &Candidate, dir: &Directory) -> bool {
+    let present = SidecarResolver::lyrics_path_for(&candidate.path, &dir.files).is_some();
+    match ix.lyrics {
+        IndexedLyrics::None => present,
+        IndexedLyrics::Sidecar => !present,
+        IndexedLyrics::Embedded => false,
+    }
+}
+
 fn process_file(
     ctx: &ScanContext<'_>,
     scan: &Scan,
@@ -235,6 +248,7 @@ fn process_file(
     if let Some(ix) = &indexed
         && ix.size == candidate.size
         && ix.mtime_ms == candidate.mtime_ms
+        && !lyrics_file_changed(ix, candidate, dir)
     {
         return if ix.missing {
             FileOutcome::Returned { track_id: ix.track_id }

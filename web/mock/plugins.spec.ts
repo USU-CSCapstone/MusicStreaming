@@ -204,4 +204,39 @@ describe('PluginStore', () => {
 			(await adminRoute(store, 'GET', '/admin/plugins/nope', '', new Uint8Array()))?.status
 		).toBe(404);
 	});
+
+	it('runs an installed plugin through the injected runner', async () => {
+		const none = new Uint8Array();
+		const run = async (id: string) => ({
+			ok: true,
+			summary: `ran ${id}`,
+			log: ['one'],
+			saved: 1,
+			scannerRunning: false
+		});
+		expect(await adminRoute(store, 'POST', '/admin/plugins/nope/run', '', none, run)).toMatchObject(
+			{
+				status: 404
+			}
+		);
+		store.install(packed(), { kind: 'file' });
+		expect(
+			await adminRoute(store, 'POST', '/admin/plugins/lrclib-lyrics/run', '', none)
+		).toMatchObject({
+			status: 503,
+			body: { code: 'runner_unavailable' }
+		});
+		expect(
+			await adminRoute(store, 'POST', '/admin/plugins/lrclib-lyrics/run', '', none, run)
+		).toEqual({
+			status: 200,
+			body: {
+				ok: true,
+				summary: 'ran lrclib-lyrics',
+				log: ['one'],
+				saved: 1,
+				scannerRunning: false
+			}
+		});
+	});
 });

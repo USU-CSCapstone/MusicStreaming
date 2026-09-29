@@ -12,6 +12,7 @@ import type {
 	ImageRef,
 	Library,
 	LoginRequest,
+	Lyrics,
 	PlaybackInfo,
 	Playlist,
 	PlaylistItemPage,
@@ -24,7 +25,7 @@ import type {
 	User,
 	Waveform
 } from './types';
-import type { PermissionGrants, Plugin } from './plugins';
+import type { PermissionGrants, Plugin, PluginRunResult } from './plugins';
 
 type Fetch = typeof fetch;
 type Query = Record<string, string | number | undefined>;
@@ -171,6 +172,9 @@ export async function getWaveform(
 	return res.json();
 }
 
+export const getLyrics = (f: Fetch, libraryId: string, trackId: string) =>
+	get<Lyrics>(f, `${lib(libraryId)}/tracks/${encodeURIComponent(trackId)}/lyrics`);
+
 export const audioUrl = (libraryId: string, trackId: string, variant: string) =>
 	url(`${lib(libraryId)}/tracks/${encodeURIComponent(trackId)}/audio`, { variant });
 
@@ -202,6 +206,10 @@ export const setPluginEnabled = (f: Fetch, id: string, libraryId: string, enable
 	send<Plugin>(f, 'PUT', `${plugin(id)}/libraries/${encodeURIComponent(libraryId)}`, { enabled });
 
 export const uninstallPlugin = (f: Fetch, id: string) => send<void>(f, 'DELETE', plugin(id));
+
+/** Runs it once now, with the permissions approved for it; answers when it finishes. */
+export const runPlugin = (f: Fetch, id: string) =>
+	send<PluginRunResult>(f, 'POST', `${plugin(id)}/run`);
 
 /** Every page of a cursor-paged list. For bounded lists only: an album, a playlist. */
 export async function all<T>(
