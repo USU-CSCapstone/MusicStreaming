@@ -4027,7 +4027,11 @@ components:
     Codecs:
       name: codecs
       in: query
-      description: Codecs and containers the client can play, most preferred first.
+      description: |
+        Codecs and containers the client can play, most preferred first, in ffmpeg's names such
+        as `flac`, `aac`, and `mp4`. The original plays directly only when both its codec and its
+        container are listed, since a codec such as `pcm` plays in some containers and not
+        others. Omitted, the client can play anything.
       style: form
       explode: false
       schema:
