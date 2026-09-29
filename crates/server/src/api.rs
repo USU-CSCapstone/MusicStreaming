@@ -5,6 +5,7 @@ mod artists;
 mod audio;
 pub mod cursor;
 mod id;
+mod images;
 mod libraries;
 mod lyrics;
 mod page;
@@ -16,16 +17,37 @@ mod waveform;
 
 use std::sync::Arc;
 
+use axum::extract::FromRef;
 use axum::routing::{any, get};
 use axum::{Json, Router};
 
 pub use id::Id;
+pub use images::Images;
 pub use problem::{Code, Problem};
 
 use crate::db::Database;
 
+/// What handlers share. Each takes the part it needs, such as `State<Arc<Database>>`.
+#[derive(Clone)]
+struct AppState {
+    db: Arc<Database>,
+    images: Arc<Images>,
+}
+
+impl FromRef<AppState> for Arc<Database> {
+    fn from_ref(state: &AppState) -> Arc<Database> {
+        state.db.clone()
+    }
+}
+
+impl FromRef<AppState> for Arc<Images> {
+    fn from_ref(state: &AppState) -> Arc<Images> {
+        state.images.clone()
+    }
+}
+
 /// The API's routes, nested under `{base_path}/api/v1`.
-pub fn router(base_path: &str, db: Arc<Database>) -> Router {
+pub fn router(base_path: &str, db: Arc<Database>, images: Images) -> Router {
     let prefix = format!("{base_path}/api/v1");
     // Anything else under the API is a Problem, like every other error.
     let api = Router::new()
@@ -38,6 +60,10 @@ pub fn router(base_path: &str, db: Arc<Database>) -> Router {
         .route(
             "/libraries/{library_id}/tracks/{track_id}",
             get(tracks::get),
+        )
+        .route(
+            "/libraries/{library_id}/images/{image_id}",
+            get(images::get),
         )
         .route(
             "/libraries/{library_id}/tracks/{track_id}/lyrics",
@@ -65,7 +91,10 @@ pub fn router(base_path: &str, db: Arc<Database>) -> Router {
         )
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
-        .with_state(db);
+        .with_state(AppState {
+            db,
+            images: Arc::new(images),
+        });
     Router::new()
         .nest(&prefix, api)
         // `nest` leaves out the prefix with a trailing slash.
@@ -101,7 +130,8 @@ mod tests {
     pub(super) fn app(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
         let temp = tempfile::tempdir().unwrap();
         let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
-        let app = router(base_path, db.clone());
+        let images = Images::new(temp.path().join("cache"), "ffmpeg".into());
+        let app = router(base_path, db.clone(), images);
         (temp, db, app)
     }
 

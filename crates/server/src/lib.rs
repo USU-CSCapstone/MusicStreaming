@@ -75,7 +75,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .with_context(|| format!("cannot listen on port {}", config.port))?;
     info!(%address, "listening");
 
-    axum::serve(listener, api::router(&config.base_path, db.clone()))
+    let images = api::Images::new(
+        data_dir.cache().join("images"),
+        ffmpeg.config().ffmpeg.clone(),
+    );
+    axum::serve(listener, api::router(&config.base_path, db.clone(), images))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("server failed")?;
