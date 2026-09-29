@@ -2,7 +2,7 @@
 # workspace, so Wasmtime's compile stays out of the main build.
 [workspace]
 resolver = "3"
-members = ["host", "guest-rust", "guest-process"]
+members = ["host", "guest-rust", "guest-process", "lrclib-lyrics", "runner"]
 
 [workspace.package]
 edition = "2024"
@@ -13,5 +13,9 @@ debug = "line-tables-only"
 
 # Guests ship stripped, as a plugin author would publish them.
 [profile.release.package.guest-rust]
+debug = false
+strip = true
+
+[profile.release.package.lrclib-lyrics]
 debug = false
 strip = true

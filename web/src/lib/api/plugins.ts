@@ -73,3 +73,14 @@ export const PERMISSION_LABELS: Record<PermissionName, { title: string; detail: 
 		detail: 'What is played, and listening history.'
 	}
 };
+
+/** What `POST /admin/plugins/{pluginId}/run` answers: the plugin's own words, and its log. */
+export type PluginRunResult = {
+	ok: boolean;
+	summary: string;
+	log: string[];
+	/** Files it saved into the library. */
+	saved: number;
+	/** Whether the server's scanner is running to pick up what it saved. */
+	scannerRunning: boolean;
+};

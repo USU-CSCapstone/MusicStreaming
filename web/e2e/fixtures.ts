@@ -132,6 +132,30 @@ export function pluginFile() {
 	};
 }
 
+/** Lyrics for the first track, as the scanner stores them from a `.lrc`. */
+export const syncedLyrics = {
+	kind: 'synced',
+	plain: null,
+	lines: [
+		{ startMs: 0, text: 'First line of the song' },
+		{ startMs: 1000, text: 'Second line of the song' }
+	]
+};
+
+/** Stands in for the prototype's plugin runner, so tests never touch a real library. */
+async function fakeRun(id: string) {
+	return {
+		ok: true,
+		summary: `Saved lyrics for 2 of 3 tracks (2 synced, 0 plain); 1 not found.`,
+		log: [
+			`✓ Signal Part 1 — Aurora Lane: saved synced lyrics (${id})`,
+			'· Signal Remix — Aurora Lane: not found'
+		],
+		saved: 2,
+		scannerRunning: true
+	};
+}
+
 /** The password `POST /auth/login` accepts, for any username. */
 export const PASSWORD = 'correct horse battery staple';
 
@@ -195,7 +219,8 @@ export async function serveLibrary(
 				req.method(),
 				path,
 				req.headers()['content-type'] ?? '',
-				new Uint8Array(req.postDataBuffer() ?? [])
+				new Uint8Array(req.postDataBuffer() ?? []),
+				fakeRun
 			);
 			if (!out) return route.fulfill({ status: 404 });
 			return out.body === undefined
@@ -239,7 +264,12 @@ export async function serveLibrary(
 				libraryEmpty: false
 			});
 		}
-		const media = /^\/libraries\/\d+\/tracks\/(\d+)\/(playback|waveform|audio)$/.exec(path);
+		const media = /^\/libraries\/\d+\/tracks\/(\d+)\/(playback|waveform|audio|lyrics)$/.exec(path);
+		if (media?.[2] === 'lyrics') {
+			return json(
+				media[1] === tracks[0].id ? syncedLyrics : { kind: 'none', lines: null, plain: null }
+			);
+		}
 		if (media?.[2] === 'playback') {
 			return json({
 				variant: 'original',

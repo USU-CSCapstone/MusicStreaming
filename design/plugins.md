@@ -53,7 +53,7 @@ What decided it:
 
 - **A 500,000-track pass costs 77 ms from a Rust plugin.** That is 3.2× the host's own paged scan (24 ms). It missed the proposed 2× bar.
 - **Where the extra cost comes from.** The canonical ABI lowers a `list<record>` of strings by calling into the guest to allocate each string, and the host copies each page once before that.
-- **Untested hypothesis:** a column layout for bulk reads (one buffer of titles plus offsets) would remove the per-string round trips. That belongs in the design of the real data interface ([§7](#7-open-questions)).
+- **Untested hypothesis:** a column layout for bulk reads (one buffer of titles plus offsets) would remove the per-string round trips. That belongs in the design of the real data interface ([§8](#8-open-questions)).
 - **Batching barely matters in-process.** One track per call costs 284 ns per track, against 153 ns in pages of 1,000. Out of process the same pattern costs 9.9 µs per track. So the system does not have to force batching on authors to stay fast.
 
 ---
@@ -98,7 +98,19 @@ What decided it:
 
 ---
 
-## 7. Open Questions
+## 7. Running Plugins (Prototype)
+
+**The first real plugin runs end to end.** [`spikes/plugins/lrclib-lyrics`](../spikes/plugins/lrclib-lyrics/) finds tracks without lyrics, looks them up on lrclib.net, and saves `.lrc` files beside them. The scanner then ingests those files like any placed by hand ([`requirements/general.md` §3.2](../requirements/general.md#32-the-scanner-is-the-only-ingestion-path)). On the user's 18-track library it found synced lyrics for 15, in about six seconds. [`plugin-run`](../spikes/plugins/runner/) runs it with exactly the grants approved on the Plugins page, and the page's **Run now** starts it. Its contract is [`wit/lyrics/plugin.wit`](../spikes/plugins/wit/lyrics/plugin.wit).
+
+- **Every host import checks its own permission.** Library reads need read access, `save-lyrics` needs write access, and `http.get` needs network access and only reaches the destinations the manifest names. The check happens before any connection, so a plugin cannot even resolve another host.
+- **Declined imports stay linked, and refuse.** Leaving an import unlinked would stop a plugin from loading at all, which breaks optional permissions ([`requirements/plugins.md` §4.2](../requirements/plugins.md#42-asking-and-approving)). So every import is present, answers "… was not granted" when its permission is missing, and `granted()` lets a plugin adapt up front. The lyrics plugin without write access reports what it would have saved.
+- **Writing is one narrow call, not a directory.** `save-lyrics` takes a track and text. The host picks the filename (the scanner's `<stem>.lrc` or `.txt`), refuses to overwrite any existing lyrics file, and writes to the side then renames. The plugin never sees a path. A preopened library directory, as full write access implies, would need the same no-overwrite guarantees built another way.
+- **Epoch deadlines do not bound waiting.** They count only while the plugin's code runs, so a plugin blocked on a slow host call is invisible to them. Each network call gets its own timeout (15 s), and the whole run a wall-clock limit (5 minutes), on top of the compute budget.
+- **Async host calls work as expected.** `http.get` is an async import. The plugin sees a blocking call while the host awaits the request, so plugin code stays simple and no thread is held (open question 4, in part).
+
+---
+
+## 8. Open Questions
 
 1. **Pi 4 and Ryzen runs.** The decision rests on ratios, which should hold, but the budgets are absolute.
 2. **Plugin UI description.** This is the other half of [`general.md` §11](general.md#11-open-decisions) #4: the declarative format both clients render ([`requirements/plugins.md` §9](../requirements/plugins.md#9-extending-the-interface)).

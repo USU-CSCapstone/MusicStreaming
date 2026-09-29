@@ -287,6 +287,43 @@ pub fn retag_updates_in_place_and_keeps_identity<S: InspectStore>(make: Factory<
     assert_eq!(after.title, "Renamed");
 }
 
+/// A lyrics file written beside a track whose audio did not change, as a plugin does,
+/// is picked up by the next scan, and dropped when it goes (`requirements/scanning.md` §7).
+pub fn lyrics_file_beside_an_unchanged_track<S: InspectStore>(make: Factory<S>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    make_album(&root, "A", "X", 2);
+    let store = make(&root);
+    let lib = library(&root);
+    scan_library(&store, &lib);
+    assert!(live(&store, &lib).iter().all(|t| !t.has_sidecar_lyrics));
+
+    let lrc = root.join("A/X/01 - Track 1.lrc");
+    fs::write(&lrc, "[00:01.00]hello\n").unwrap();
+    let scan = scan_library(&store, &lib);
+    assert_eq!(
+        scan.progress.updated, 1,
+        "only the track beside the new file is re-read"
+    );
+    let with: Vec<InspectTrack> = live(&store, &lib)
+        .into_iter()
+        .filter(|t| t.has_sidecar_lyrics)
+        .collect();
+    assert_eq!(with.len(), 1);
+    assert!(with[0].path.ends_with("01 - Track 1.wav"));
+
+    let again = scan_library(&store, &lib);
+    assert_eq!(
+        again.progress.updated, 0,
+        "and stays incremental afterwards"
+    );
+
+    fs::remove_file(&lrc).unwrap();
+    let scan = scan_library(&store, &lib);
+    assert_eq!(scan.progress.updated, 1);
+    assert!(live(&store, &lib).iter().all(|t| !t.has_sidecar_lyrics));
+}
+
 pub fn missing_then_returned<S: InspectStore>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
@@ -543,6 +580,10 @@ macro_rules! store_suite {
         #[test]
         fn retag_updates_in_place_and_keeps_identity() {
             $crate::testing::retag_updates_in_place_and_keeps_identity($make);
+        }
+        #[test]
+        fn lyrics_file_beside_an_unchanged_track() {
+            $crate::testing::lyrics_file_beside_an_unchanged_track($make);
         }
         #[test]
         fn missing_then_returned() {

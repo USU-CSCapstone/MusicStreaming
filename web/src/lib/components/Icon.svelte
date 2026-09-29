@@ -62,6 +62,10 @@
 		],
 		close: [['path', { d: 'M6 6l12 12M18 6 6 18' }]],
 		check: [['path', { d: 'M5 12.5 10 17.5 19 7' }]],
+		lyrics: [
+			['rect', { x: 9, y: 2.5, width: 6, height: 12, rx: 3 }],
+			['path', { d: 'M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21.5' }]
+		],
 		plugin: [
 			[
 				'path',

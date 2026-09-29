@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { formatDuration } from '$lib/format';
+	import { panels } from '$lib/panels.svelte';
 	import { player } from '$lib/player.svelte';
 	import ArtistLinks from './ArtistLinks.svelte';
 	import Artwork from './Artwork.svelte';
@@ -88,20 +89,33 @@
 		<button
 			type="button"
 			class="icon-btn"
-			aria-label={player.volume > 0 ? 'Mute' : 'Unmute'}
-			onclick={toggleMute}
+			class:on={panels.lyrics}
+			aria-label="Lyrics"
+			aria-pressed={panels.lyrics}
+			title="Lyrics"
+			onclick={() => (panels.lyrics = !panels.lyrics)}
 		>
-			<Icon name={player.volume > 0 ? 'volume' : 'mute'} size={18} />
+			<Icon name="lyrics" size={18} />
 		</button>
-		<input
-			type="range"
-			min="0"
-			max="1"
-			step="0.01"
-			aria-label="Volume"
-			value={player.volume}
-			oninput={(e) => player.setVolume(Number(e.currentTarget.value))}
-		/>
+		<span class="volume">
+			<button
+				type="button"
+				class="icon-btn"
+				aria-label={player.volume > 0 ? 'Mute' : 'Unmute'}
+				onclick={toggleMute}
+			>
+				<Icon name={player.volume > 0 ? 'volume' : 'mute'} size={18} />
+			</button>
+			<input
+				type="range"
+				min="0"
+				max="1"
+				step="0.01"
+				aria-label="Volume"
+				value={player.volume}
+				oninput={(e) => player.setVolume(Number(e.currentTarget.value))}
+			/>
+		</span>
 	</div>
 </section>
 
@@ -218,6 +232,17 @@
 		cursor: default;
 	}
 
+	.icon-btn.on {
+		color: var(--accent);
+		background: var(--accent-soft);
+	}
+
+	.volume {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+
 	.side {
 		display: flex;
 		align-items: center;
@@ -233,10 +258,10 @@
 	/* Phone width: the song and play/pause in a row, the waveform as a thin strip below. */
 	@media (max-width: 767px) {
 		.player {
-			grid-template-columns: minmax(0, 1fr) auto;
+			grid-template-columns: minmax(0, 1fr) auto auto;
 			grid-template-areas:
-				'now controls'
-				'wave wave';
+				'now controls side'
+				'wave wave wave';
 			gap: var(--space-1) var(--space-3);
 			padding: var(--space-2) var(--space-3) var(--space-1);
 		}
@@ -266,8 +291,12 @@
 			max-width: none;
 		}
 
-		.time,
 		.side {
+			grid-area: side;
+		}
+
+		.time,
+		.volume {
 			display: none;
 		}
 	}

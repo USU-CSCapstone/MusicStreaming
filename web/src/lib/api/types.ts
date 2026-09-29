@@ -23,6 +23,7 @@ export type PlaylistPage = Schemas['PlaylistPage'];
 export type PlaylistItem = Schemas['PlaylistItem'];
 export type PlaylistItemPage = Schemas['PlaylistItemPage'];
 export type Waveform = Schemas['Waveform'];
+export type Lyrics = Schemas['Lyrics'];
 export type PlaybackInfo = Schemas['PlaybackInfo'];
 export type SearchResult = Schemas['SearchResult'];
 export type SearchResponse = Schemas['SearchResponse'];

@@ -156,3 +156,28 @@ test('the account is reachable on a phone', async ({ page }) => {
 	await page.getByRole('link', { name: 'Account: Sam' }).click();
 	await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible();
 });
+
+test('lyrics follow the playing track', async ({ page }) => {
+	await serveLibrary(page);
+	await page.goto('/albums');
+	await page
+		.getByRole('link', { name: /Signal/ })
+		.first()
+		.click();
+	await page.getByRole('button', { name: 'Signal Part 1' }).click();
+
+	const player = page.getByRole('region', { name: 'Player' });
+	await player.getByRole('button', { name: 'Lyrics' }).click();
+	const panel = page.getByRole('complementary', { name: 'Lyrics' });
+	await expect(panel.getByRole('button', { name: 'First line of the song' })).toBeVisible();
+	// The fixture's audio is two seconds long, so the second line comes up.
+	await expect(panel.getByRole('button', { name: 'Second line of the song' })).toHaveAttribute(
+		'aria-current',
+		'true'
+	);
+
+	await player.getByRole('button', { name: 'Next' }).click();
+	await expect(panel.getByText('No lyrics for this song.')).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(panel).toBeHidden();
+});

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use jewelcase_scanner::store::{Batch, IndexedFile};
+use jewelcase_scanner::store::{Batch, IndexedFile, IndexedLyrics};
 use jewelcase_scanner::{Depth, DuplicateCandidate, ScanId, Scope};
 use rusqlite::{Connection, OptionalExtension, Result, params};
 
@@ -22,18 +22,26 @@ pub fn lookup(store: &SqliteStore, lib: i64, path: &Path) -> Result<Option<Index
     };
     store.db.read_blocking(move |conn| {
         conn.query_row(
-        "SELECT id, file_size, file_mtime, missing_since FROM tracks WHERE root_id = ?1 AND path = ?2",
-        params![root_id, rel],
-        |r| {
-            Ok(IndexedFile {
-                track_id: r.get::<_, i64>(0)? as u64,
-                size: r.get::<_, i64>(1)? as u64,
-                mtime_ms: r.get::<_, i64>(2)? as u64,
-                missing: r.get::<_, Option<i64>>(3)?.is_some(),
-            })
-        },
-    )
-    .optional()
+            "SELECT t.id, t.file_size, t.file_mtime, t.missing_since, l.embedded \
+             FROM tracks t LEFT JOIN track_lyrics l ON l.track_id = t.id \
+             WHERE t.root_id = ?1 AND t.path = ?2",
+            params![root_id, rel],
+            |r| {
+                Ok(IndexedFile {
+                    track_id: r.get::<_, i64>(0)? as u64,
+                    size: r.get::<_, i64>(1)? as u64,
+                    mtime_ms: r.get::<_, i64>(2)? as u64,
+                    missing: r.get::<_, Option<i64>>(3)?.is_some(),
+                    // So a lyrics file added or removed beside an unchanged track is noticed.
+                    lyrics: match r.get::<_, Option<i64>>(4)? {
+                        None => IndexedLyrics::None,
+                        Some(1) => IndexedLyrics::Embedded,
+                        Some(_) => IndexedLyrics::Sidecar,
+                    },
+                })
+            },
+        )
+        .optional()
     })
 }
 

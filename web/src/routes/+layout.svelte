@@ -2,6 +2,7 @@
 	import '../app.css';
 	import { page } from '$app/state';
 	import favicon from '$lib/assets/favicon.svg';
+	import LyricsPanel from '$lib/components/LyricsPanel.svelte';
 	import Player from '$lib/components/Player.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import TabBar from '$lib/components/TabBar.svelte';
@@ -39,9 +40,12 @@
 {:else}
 	<div class="app">
 		<div class="sidebar"><Sidebar /></div>
-		<main>
-			{@render children()}
-		</main>
+		<div class="main">
+			<main>
+				{@render children()}
+			</main>
+			<LyricsPanel />
+		</div>
 		<div class="player"><Player /></div>
 		<div class="tabs"><TabBar /></div>
 	</div>
@@ -64,8 +68,14 @@
 		min-height: 0;
 	}
 
-	main {
+	.main {
 		grid-area: main;
+		position: relative;
+		min-height: 0;
+		display: grid;
+	}
+
+	main {
 		overflow-y: auto;
 		padding: var(--space-5) var(--space-6) var(--space-6);
 	}
