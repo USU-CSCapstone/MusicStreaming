@@ -1,6 +1,10 @@
 // A tiny library served by intercepting /api/v1, so the tests need no music folder.
 
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Page, Route } from '@playwright/test';
+import type { PluginManifest } from '../src/lib/api/plugins';
 import type {
 	AlbumSummary,
 	Library,
@@ -8,6 +12,8 @@ import type {
 	SetupRequest,
 	TrackSummary
 } from '../src/lib/api/types';
+import { withManifest } from '../../tools/plugin-pack/manifest.mjs';
+import { PluginStore, adminRoute } from '../mock/plugins';
 
 export const library: Library = {
 	id: '11',
@@ -98,6 +104,34 @@ const session = (request: SetupRequest): Session => ({
 
 const pageOf = <T>(items: T[]) => ({ items, total: items.length, nextCursor: null });
 
+export const pluginManifest: PluginManifest = {
+	id: 'lrclib-lyrics',
+	name: 'LRCLIB Lyrics',
+	version: '0.1.0',
+	apiVersion: '0.1',
+	description: 'Fetches synced lyrics for tracks that have none.',
+	permissions: [
+		{ permission: 'libraryRead', required: true, reason: 'To find tracks without lyrics.' },
+		{
+			permission: 'network',
+			required: true,
+			reason: 'To fetch lyrics.',
+			destinations: ['lrclib.net']
+		},
+		{ permission: 'libraryWrite', required: false, reason: 'To save .lrc files beside tracks.' }
+	]
+};
+
+/** A packed plugin: an empty component carrying the manifest. */
+export function pluginFile() {
+	const component = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00]);
+	return {
+		name: 'lrclib-lyrics.wasm',
+		mimeType: 'application/wasm',
+		buffer: Buffer.from(withManifest(component, pluginManifest))
+	};
+}
+
 /** The password `POST /auth/login` accepts, for any username. */
 export const PASSWORD = 'correct horse battery staple';
 
@@ -115,6 +149,10 @@ export async function serveLibrary(
 		role = 'owner' as 'owner' | 'admin' | 'user'
 	} = {}
 ) {
+	// Plugin administration runs through the mock's own logic, on a fresh directory per test.
+	const plugins = new PluginStore(mkdtempSync(join(tmpdir(), 'jc-e2e-plugins-')), () =>
+		empty ? [] : [library.id]
+	);
 	await page.route('**/api/v1/**', async (route: Route) => {
 		const url = new URL(route.request().url());
 		const path = url.pathname.replace(/^.*\/api\/v1/, '');
@@ -148,6 +186,23 @@ export async function serveLibrary(
 		if (path === '/me') {
 			return json({ ...session({ username: 'sam', password: '', device }).user, role });
 		}
+		// Plugins are administered, so a user is refused (`requirements/users.md` §10).
+		if (path.startsWith('/admin/') && role === 'user') return problem(403, 'forbidden');
+		if (path.startsWith('/admin/plugins')) {
+			const req = route.request();
+			const out = await adminRoute(
+				plugins,
+				req.method(),
+				path,
+				req.headers()['content-type'] ?? '',
+				new Uint8Array(req.postDataBuffer() ?? [])
+			);
+			if (!out) return route.fulfill({ status: 404 });
+			return out.body === undefined
+				? route.fulfill({ status: out.status })
+				: route.fulfill({ status: out.status, json: out.body });
+		}
+
 		if (path === '/libraries') return json({ items: empty ? [] : [library] });
 		if (path === `${lib}/albums`) return json(pageOf([album]));
 		if (path === `${lib}/albums/${album.id}`) {

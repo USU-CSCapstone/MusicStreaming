@@ -24,6 +24,7 @@ import type {
 	User,
 	Waveform
 } from './types';
+import type { PermissionGrants, Plugin } from './plugins';
 
 type Fetch = typeof fetch;
 type Query = Record<string, string | number | undefined>;
@@ -75,27 +76,40 @@ async function body<T>(res: Response): Promise<T> {
 const get = async <T>(fetch: Fetch, path: string, query?: Query): Promise<T> =>
 	body(await fetch(url(path, query)));
 
-/** A write. The header lets the server tell it from a cross-site form post (`cookieAuth`). */
-const post = async <T>(fetch: Fetch, path: string, json?: unknown): Promise<T> =>
-	body(
-		await fetch(url(path), {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json', 'X-Jewelcase-Client': 'web' },
-			body: json === undefined ? undefined : JSON.stringify(json)
-		})
-	);
+/**
+ * A state-changing request, with a JSON body or a file. Cookie-authenticated writes must
+ * carry `X-Jewelcase-Client` or they are refused (`api/openapi.yaml`, Authentication).
+ */
+async function send<T>(
+	fetch: Fetch,
+	method: 'POST' | 'PUT' | 'DELETE',
+	path: string,
+	json?: Blob | object
+): Promise<T> {
+	const headers: Record<string, string> = { 'X-Jewelcase-Client': 'web' };
+	let payload: BodyInit | undefined;
+	if (json instanceof Blob) {
+		headers['Content-Type'] = 'application/octet-stream';
+		payload = json;
+	} else if (json !== undefined) {
+		headers['Content-Type'] = 'application/json';
+		payload = JSON.stringify(json);
+	}
+	return body(await fetch(url(path), { method, headers, body: payload }));
+}
 
 export const getServerInfo = (f: Fetch) => get<ServerInfo>(f, '/server');
 
 /** Creates the owner and logs this browser in: the server sets the session cookie. */
 export const completeSetup = (f: Fetch, request: SetupRequest) =>
-	post<Session>(f, '/setup', request);
+	send<Session>(f, 'POST', '/setup', request);
 
 /** Logs this browser in as a new device: the server sets the session cookie. */
-export const login = (f: Fetch, request: LoginRequest) => post<Session>(f, '/auth/login', request);
+export const login = (f: Fetch, request: LoginRequest) =>
+	send<Session>(f, 'POST', '/auth/login', request);
 
 /** Logs this browser out: the server forgets the device and clears the cookie. */
-export const logout = (f: Fetch) => post<void>(f, '/auth/logout');
+export const logout = (f: Fetch) => send<void>(f, 'POST', '/auth/logout');
 
 export const getMe = (f: Fetch) => get<User>(f, '/me');
 
@@ -167,6 +181,27 @@ export function imageUrl(libraryId: string, image: ImageRef, size: number): stri
 		size: Math.round(size * dpr)
 	});
 }
+
+// ───────────────────────────── Plugin administration ─────────────────────────────
+
+const plugin = (id: string) => `/admin/plugins/${encodeURIComponent(id)}`;
+
+export const adminListPlugins = (f: Fetch) => get<{ items: Plugin[] }>(f, '/admin/plugins');
+
+/** Installed disabled for every library (`requirements/plugins.md` §5). */
+export const installPluginFile = (f: Fetch, file: Blob) =>
+	send<Plugin>(f, 'POST', '/admin/plugins', file);
+
+export const installPluginUrl = (f: Fetch, pluginUrl: string) =>
+	send<Plugin>(f, 'POST', '/admin/plugins', { url: pluginUrl });
+
+export const setPluginPermissions = (f: Fetch, id: string, grants: PermissionGrants) =>
+	send<Plugin>(f, 'PUT', `${plugin(id)}/permissions`, grants);
+
+export const setPluginEnabled = (f: Fetch, id: string, libraryId: string, enabled: boolean) =>
+	send<Plugin>(f, 'PUT', `${plugin(id)}/libraries/${encodeURIComponent(libraryId)}`, { enabled });
+
+export const uninstallPlugin = (f: Fetch, id: string) => send<void>(f, 'DELETE', plugin(id));
 
 /** Every page of a cursor-paged list. For bounded lists only: an album, a playlist. */
 export async function all<T>(

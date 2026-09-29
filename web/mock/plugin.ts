@@ -12,7 +12,8 @@ export function mockApi(): Plugin {
 		? resolve(process.env.JEWELCASE_DATA_DIR)
 		: resolve(import.meta.dirname, '../../data');
 	const dbPath = resolve(data, 'state/jewelcase.db');
-	const api = createApi(dbPath);
+	// Installed plugins sit beside the scanner's state, never in the music library.
+	const api = createApi(dbPath, resolve(data, 'mock-plugins'));
 	return {
 		name: 'jewelcase-mock-api',
 		configureServer(server) {

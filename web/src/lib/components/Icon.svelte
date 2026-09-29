@@ -60,7 +60,26 @@
 			['path', { d: 'M11 5 6 9H3v6h3l5 4V5Z' }],
 			['path', { d: 'm16 9 6 6m0-6-6 6' }]
 		],
-		close: [['path', { d: 'M6 6l12 12M18 6 6 18' }]]
+		close: [['path', { d: 'M6 6l12 12M18 6 6 18' }]],
+		check: [['path', { d: 'M5 12.5 10 17.5 19 7' }]],
+		plugin: [
+			[
+				'path',
+				{
+					d: 'M9 3h4a1 1 0 0 1 1 1v1.5a1.5 1.5 0 0 0 3 0V4a1 1 0 0 1 1-1h1a2 2 0 0 1 2 2v4h-1.5a1.5 1.5 0 0 0 0 3H21v7a2 2 0 0 1-2 2h-4v-1.5a1.5 1.5 0 0 0-3 0V21H5a2 2 0 0 1-2-2v-6h1.5a1.5 1.5 0 0 0 0-3H3V5a2 2 0 0 1 2-2h4Z'
+				}
+			]
+		],
+		warning: [
+			[
+				'path',
+				{ d: 'M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z' }
+			],
+			['path', { d: 'M12 9v4M12 17h.01' }]
+		],
+		upload: [
+			['path', { d: 'M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3' }]
+		]
 	} satisfies Record<string, Shape[]>;
 
 	/** Transport icons are solid; the rest are strokes. */

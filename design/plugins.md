@@ -53,7 +53,7 @@ What decided it:
 
 - **A 500,000-track pass costs 77 ms from a Rust plugin.** That is 3.2× the host's own paged scan (24 ms). It missed the proposed 2× bar.
 - **Where the extra cost comes from.** The canonical ABI lowers a `list<record>` of strings by calling into the guest to allocate each string, and the host copies each page once before that.
-- **Untested hypothesis:** a column layout for bulk reads (one buffer of titles plus offsets) would remove the per-string round trips. That belongs in the design of the real data interface ([§6](#6-open-questions)).
+- **Untested hypothesis:** a column layout for bulk reads (one buffer of titles plus offsets) would remove the per-string round trips. That belongs in the design of the real data interface ([§7](#7-open-questions)).
 - **Batching barely matters in-process.** One track per call costs 284 ns per track, against 153 ns in pages of 1,000. Out of process the same pattern costs 9.9 µs per track. So the system does not have to force batching on authors to stay fast.
 
 ---
@@ -87,7 +87,18 @@ What decided it:
 
 ---
 
-## 6. Open Questions
+## 6. Packaging
+
+**A plugin is one WebAssembly component, with its manifest embedded as a custom section named `jewelcase:manifest`.** That makes it one file to drop in or link to ([`requirements/plugins.md` §4.4](../requirements/plugins.md#44-who-is-trusted)), and the manifest can never become separated from the code it describes. Wasmtime ignores unknown custom sections: the spike's guest runs unchanged after packing.
+
+- **The manifest is UTF-8 JSON.** It holds `id`, `name`, `version`, and `apiVersion` (`0.1`), with optional `description`, `author`, and `homepage`. It also lists `permissions`: each request names one of the four permissions ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)), says whether it is `required`, and gives the `reason` shown to the admin. Network requests also list `destinations`, host names or `["*"]`.
+- **The id is the plugin's identity** across updates and reinstalls: lowercase letters, digits, and hyphens. Granted permissions are kept under it when a plugin is uninstalled, and restored if it comes back ([`requirements/plugins.md` §5](../requirements/plugins.md#5-installation--lifecycle)).
+- **Packing validates.** [`tools/plugin-pack`](../tools/plugin-pack/) embeds a manifest, replacing any earlier one, and refuses to write a file that would not install. The same module parses and validates on install, so the tool and the server cannot disagree.
+- **A component's imports will be checked against what it declares.** The host can list what a component imports before running it. A plugin that imports network access without requesting it should be refused at install, so the permission list is a fact about the plugin, not a claim by its author. Not built yet.
+
+---
+
+## 7. Open Questions
 
 1. **Pi 4 and Ryzen runs.** The decision rests on ratios, which should hold, but the budgets are absolute.
 2. **Plugin UI description.** This is the other half of [`general.md` §11](general.md#11-open-decisions) #4: the declarative format both clients render ([`requirements/plugins.md` §9](../requirements/plugins.md#9-extending-the-interface)).
