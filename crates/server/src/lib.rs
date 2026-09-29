@@ -1,3 +1,4 @@
+pub mod api;
 pub mod config;
 pub mod data_dir;
 pub mod db;
@@ -8,7 +9,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use axum::{Json, Router, routing::get};
 use jewelcase_ffmpeg::{Config as FfmpegConfig, Ffmpeg};
 use jewelcase_scanner::analysis::Analyzer;
 use jewelcase_scanner::scan::ScanOptions;
@@ -75,8 +75,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .with_context(|| format!("cannot listen on port {}", config.port))?;
     info!(%address, "listening");
 
-    let app = Router::new().route("/health", get(health));
-    axum::serve(listener, app)
+    axum::serve(listener, api::router(&config.base_path))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("server failed")?;
@@ -149,10 +148,6 @@ fn start_scanning(db: &Arc<Database>, ffmpeg: &Ffmpeg) -> anyhow::Result<Scannin
         std::mem::forget(_worker);
     }
     Ok(running)
-}
-
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "status": "ok" }))
 }
 
 /// Wait for SIGINT or SIGTERM and return

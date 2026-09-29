@@ -194,7 +194,7 @@ export function createApi(dbPath: string) {
 	return async (req: IncomingMessage, res: ServerResponse) => {
 		const url = new URL(req.url ?? '/', 'http://mock');
 		if (req.method !== 'GET' && req.method !== 'HEAD') {
-			return problem(res, 405, 'Method Not Allowed', 'forbidden', 'The mock API is read-only.');
+			return problem(res, 405, 'Method Not Allowed', 'method_not_allowed', 'The mock API is read-only.');
 		}
 		try {
 			const body = await route(req, res, url.pathname.replace(/\/$/, ''), url.searchParams);
