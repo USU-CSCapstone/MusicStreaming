@@ -1,0 +1,9 @@
+# Build output and local state, which images build or mount for themselves.
+**/target
+**/node_modules
+web/.svelte-kit
+web/build
+web/test-results
+data
+**/.env
+.git

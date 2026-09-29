@@ -4,7 +4,11 @@ import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { mockApi } from './mock/plugin.ts';
 
+// Under `docker compose up`, the Rust server answers the API; run on its own, the mock does.
+const apiProxy = process.env.API_PROXY;
+
 export default defineConfig({
+	server: apiProxy ? { proxy: { '/api': apiProxy } } : {},
 	plugins: [
 		sveltekit({
 			compilerOptions: {
@@ -16,7 +20,7 @@ export default defineConfig({
 			// SPA mode: static files served by the Rust server, unknown paths fall back to index.html
 			adapter: adapter({ fallback: 'index.html' })
 		}),
-		mockApi()
+		apiProxy ? [] : mockApi()
 	],
 	test: {
 		expect: { requireAssertions: true },
