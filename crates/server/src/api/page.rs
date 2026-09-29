@@ -8,7 +8,7 @@
 //! ties, an unknown value sorts like any other.
 
 use rusqlite::types::Value;
-use rusqlite::{Connection, Row, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, Row, params_from_iter};
 use serde::{Deserialize, Serialize};
 
 use super::{Code, Problem, cursor};
@@ -70,6 +70,33 @@ pub fn limit(limit: Option<u32>) -> Result<usize, Problem> {
     } else {
         Err(Problem::new(Code::ValidationFailed).detail("limit must be from 1 to 1000"))
     }
+}
+
+/// SQL for a millisecond timestamp column as an RFC 3339 string, with the milliseconds computed
+/// in integer arithmetic so they come out exact.
+macro_rules! timestamp {
+    ($column:literal) => {
+        concat!(
+            "strftime('%Y-%m-%dT%H:%M:%S', ",
+            $column,
+            " / 1000, 'unixepoch') || printf('.%03dZ', ",
+            $column,
+            " % 1000)"
+        )
+    };
+}
+pub(crate) use timestamp;
+
+/// The library's stored count in `column`, such as `album_count`, which the scanner keeps
+/// current; `None` if there is no such library.
+pub fn library_count(
+    conn: &Connection,
+    library: i64,
+    column: &'static str,
+) -> rusqlite::Result<Option<i64>> {
+    conn.prepare_cached(&format!("SELECT {column} FROM libraries WHERE id = ?1"))?
+        .query_row([library], |row| row.get(0))
+        .optional()
 }
 
 impl Sort {
@@ -225,17 +252,51 @@ fn part_query(
     (sql, params)
 }
 
-/// Every query `fetch` makes for `sort` over `source`, in both orders, when a page starts
-/// at `after` or at the top, for tests that check their plans.
+/// Checks that every query `fetch` makes for `sort` over `source` reads one range of an index
+/// and never sorts, so a deep page costs what the first does (`design/database.md` §4). The
+/// planner weighs statistics and the cursor's own values, so `source` should hold enough rows
+/// for `ANALYZE` to matter, and the cursors are real ones: at the top, among the unknowns, and
+/// a tenth, half, and nine tenths of the way in, in both orders.
 #[cfg(test)]
-pub fn queries(source: &Source, sort: &Sort, after: Option<&[Value]>) -> Vec<(String, Vec<Value>)> {
-    let mut queries = Vec::new();
-    for order in [Order::Asc, Order::Desc] {
-        for unknown in parts(sort, after) {
-            queries.push(part_query(source, sort, order, after, unknown, 101));
+pub fn assert_indexed(conn: &Connection, source: &Source, sort: &Sort) -> rusqlite::Result<()> {
+    let columns = sort.columns.join(", ");
+    let rows: i64 = conn.query_row(
+        &format!(
+            "SELECT count(*) FROM {} WHERE {}",
+            source.from, source.filter
+        ),
+        params_from_iter(source.params.iter()),
+        |row| row.get(0),
+    )?;
+    let mut cursors = vec![None];
+    // In column order, unknown values come first: NULL and the empty key are the smallest.
+    for offset in [0, rows / 10, rows / 2, rows * 9 / 10] {
+        let sql = format!(
+            "SELECT {columns} FROM {} WHERE {} ORDER BY {columns} LIMIT 1 OFFSET {offset}",
+            source.from, source.filter
+        );
+        let values = conn.query_row(&sql, params_from_iter(source.params.iter()), |row| {
+            (0..sort.columns.len())
+                .map(|index| row.get::<_, Value>(index))
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })?;
+        cursors.push(Some(values));
+    }
+    for after in &cursors {
+        for order in [Order::Asc, Order::Desc] {
+            for unknown in parts(sort, after.as_deref()) {
+                let (sql, params) = part_query(source, sort, order, after.as_deref(), unknown, 101);
+                let plan: Vec<String> = conn
+                    .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?
+                    .query_map(params_from_iter(params), |row| row.get(3))?
+                    .collect::<rusqlite::Result<_>>()?;
+                let plan = plan.join(" | ");
+                assert!(plan.contains("library_id=?"), "{sql}\n{plan}");
+                assert!(!plan.contains("TEMP B-TREE"), "{sql}\n{plan}");
+            }
         }
     }
-    queries
+    Ok(())
 }
 
 /// How many rows `source` holds, for a page's `total`.

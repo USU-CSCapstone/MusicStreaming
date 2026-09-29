@@ -7,7 +7,7 @@ use axum::extract::{Path, State};
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
-use super::page::{self, Order, Page, Sort, Source, Unknown};
+use super::page::{self, Order, Page, Sort, Source, Unknown, timestamp};
 use super::query::Query;
 use super::refs::{Credit, ImageRef, TagRef};
 use super::{Code, Id, Problem};
@@ -66,8 +66,7 @@ const SELECT: &[&str] = &[
     "al.duration_us",
     "al.image_id",
     "al.available_track_count > 0",
-    // Milliseconds in integer arithmetic, so they come out exact.
-    "strftime('%Y-%m-%dT%H:%M:%S', al.added_at / 1000, 'unixepoch') || printf('.%03dZ', al.added_at % 1000)",
+    timestamp!("al.added_at"),
 ];
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -152,11 +151,7 @@ pub async fn list(
     let filtered = query.artist_id.is_some();
     let source = source(library, query.artist_id.as_deref(), query.artist_credit);
     db.read(move |conn| {
-        let Some(album_count) = conn
-            .prepare_cached("SELECT album_count FROM libraries WHERE id = ?1")?
-            .query_row([library], |row| row.get(0))
-            .optional()?
-        else {
+        let Some(album_count) = page::library_count(conn, library, "album_count")? else {
             return Ok(None);
         };
         // The scanner keeps the library's count, so only a filtered list counts its rows.
@@ -551,9 +546,6 @@ mod tests {
         }
     }
 
-    /// Every unfiltered list reads straight from an index, so a deep page costs what the first
-    /// does (`design/database.md` §4). The planner weighs statistics and the cursor's own
-    /// values, so this checks real cursors from a library large enough for `ANALYZE` to matter.
     #[tokio::test]
     async fn every_sort_reads_from_an_index() {
         let (_temp, db, _app) = app("");
@@ -585,41 +577,7 @@ mod tests {
                 AlbumSort::ReleaseDate,
                 AlbumSort::Duration,
             ] {
-                let sort = sort.sort();
-                let source = source(1, None, ArtistCredit::Any);
-                let columns = sort.columns.join(", ");
-                // Cursors a tenth, half, and nine tenths of the way in, and one among unknowns.
-                let mut cursors = vec![None];
-                for sql in [
-                    format!(
-                        "SELECT {columns} FROM albums al ORDER BY {columns} LIMIT 1 OFFSET 2000"
-                    ),
-                    format!(
-                        "SELECT {columns} FROM albums al ORDER BY {columns} LIMIT 1 OFFSET 10000"
-                    ),
-                    format!(
-                        "SELECT {columns} FROM albums al ORDER BY {columns} LIMIT 1 OFFSET 18000"
-                    ),
-                    format!("SELECT {columns} FROM albums al ORDER BY {columns} LIMIT 1"),
-                ] {
-                    let values: Vec<rusqlite::types::Value> = conn.query_row(&sql, [], |row| {
-                        (0..sort.columns.len())
-                            .map(|i| row.get::<_, rusqlite::types::Value>(i))
-                            .collect()
-                    })?;
-                    cursors.push(Some(values));
-                }
-                for cursor in &cursors {
-                    for (sql, params) in page::queries(&source, sort, cursor.as_deref()) {
-                        let plan: Vec<String> = conn
-                            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?
-                            .query_map(rusqlite::params_from_iter(params), |row| row.get(3))?
-                            .collect::<rusqlite::Result<_>>()?;
-                        let plan = plan.join(" | ");
-                        assert!(plan.contains("library_id=?"), "{sql}\n{plan}");
-                        assert!(!plan.contains("TEMP B-TREE"), "{sql}\n{plan}");
-                    }
-                }
+                page::assert_indexed(conn, &source(1, None, ArtistCredit::Any), sort.sort())?;
             }
             Ok(())
         })

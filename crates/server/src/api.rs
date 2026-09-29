@@ -1,6 +1,7 @@
 //! The public API (`api/openapi.yaml`), served under `{basePath}/api/v1`.
 
 mod albums;
+mod artists;
 pub mod cursor;
 mod id;
 mod libraries;
@@ -28,6 +29,11 @@ pub fn router(base_path: &str, db: Arc<Database>) -> Router {
         .route("/libraries", get(libraries::list))
         .route("/libraries/{library_id}", get(libraries::get))
         .route("/libraries/{library_id}/albums", get(albums::list))
+        .route("/libraries/{library_id}/artists", get(artists::list))
+        .route(
+            "/libraries/{library_id}/artists/{artist_id}",
+            get(artists::get),
+        )
         .route(
             "/libraries/{library_id}/albums/{album_id}",
             get(albums::get),
