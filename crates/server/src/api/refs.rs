@@ -5,7 +5,7 @@ use serde::Serialize;
 use super::Id;
 
 /// The spec's `ArtistCredit`.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct Credit {
     pub id: Id,
     /// `None` for the unknown artist.
@@ -13,14 +13,14 @@ pub struct Credit {
 }
 
 /// The spec's `TagRef`.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct TagRef {
     pub id: Id,
     pub name: String,
 }
 
 /// The spec's `ImageRef`.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct ImageRef {
     id: Id,
     /// A draft field; empty until the image job makes placeholders (`images.placeholder`).
