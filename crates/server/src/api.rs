@@ -9,6 +9,7 @@ mod images;
 mod libraries;
 mod lyrics;
 mod page;
+mod playlists;
 mod problem;
 mod query;
 mod refs;
@@ -56,6 +57,7 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images) -> Router {
         .route("/libraries/{library_id}", get(libraries::get))
         .route("/libraries/{library_id}/albums", get(albums::list))
         .route("/libraries/{library_id}/artists", get(artists::list))
+        .route("/libraries/{library_id}/playlists", get(playlists::list))
         .route("/libraries/{library_id}/tracks", get(tracks::list))
         .route(
             "/libraries/{library_id}/tracks/{track_id}",
