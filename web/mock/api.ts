@@ -1,5 +1,5 @@
 // The mock's routes: the read-only subset of `api/openapi.yaml` the web client
-// uses, answered from the scanner's database.
+// uses, answered from the scanner's database, plus plugin administration (`plugins.ts`).
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type {
@@ -14,6 +14,7 @@ import { Catalog, matchRank, paging, slice } from './catalog.ts';
 import { Db, toKey } from './db.ts';
 import { image, imageSize, playbackInfo, streamAudio, waveform } from './media.ts';
 import { playlist, playlists } from './playlists.ts';
+import { PluginStore, adminRoute } from './plugins.ts';
 
 type Ctx = {
 	params: string[];
@@ -25,9 +26,10 @@ type Ctx = {
 /** A JSON body, `undefined` for 404, or `null` when the handler wrote the response itself. */
 type Handler = (c: Ctx) => unknown | Promise<unknown>;
 
-export function createApi(dbPath: string) {
+export function createApi(dbPath: string, pluginDir: string) {
 	const db = new Db(dbPath);
 	const catalog = new Catalog(db);
+	const plugins = new PluginStore(pluginDir, () => catalog.libraries().map((l) => l.id));
 
 	// Paths under /libraries/{libraryId}; the library is resolved before the handler runs,
 	// so nothing is reachable in a library that does not exist.
@@ -198,20 +200,44 @@ export function createApi(dbPath: string) {
 	/** Connect-style middleware, mounted at `/api/v1`. */
 	return async (req: IncomingMessage, res: ServerResponse) => {
 		const url = new URL(req.url ?? '/', 'http://mock');
-		// Logging in and out are the only writes, so the login page and Log out work.
-		if (req.method === 'POST' && url.pathname === '/auth/logout') {
+		const path = url.pathname.replace(/\/$/, '');
+		// Logging in and out always succeed, so the login page and Log out work.
+		if (req.method === 'POST' && path === '/auth/logout') {
 			res.statusCode = 204;
 			return res.end();
 		}
-		if (req.method === 'POST' && url.pathname === '/auth/login') {
+		if (req.method === 'POST' && path === '/auth/login') {
 			res.setHeader('Content-Type', 'application/json');
 			return res.end(JSON.stringify({ token: 'mock', user: MOCK_USER, device: MOCK_DEVICE }));
+		}
+		if (path.startsWith('/admin/plugins')) {
+			try {
+				const out = await adminRoute(
+					plugins,
+					req.method ?? 'GET',
+					path,
+					req.headers['content-type'] ?? '',
+					await readBody(req)
+				);
+				if (!out) return problem(res, 404, 'Not Found', 'not_found');
+				res.statusCode = out.status;
+				if (out.body === undefined) return res.end();
+				res.setHeader(
+					'Content-Type',
+					out.status < 400 ? 'application/json' : 'application/problem+json'
+				);
+				return res.end(JSON.stringify(out.body));
+			} catch (e) {
+				console.error('[mock api]', e);
+				res.statusCode = 500;
+				return res.end(String(e));
+			}
 		}
 		if (req.method !== 'GET' && req.method !== 'HEAD') {
 			return problem(res, 405, 'Method Not Allowed', 'method_not_allowed', 'The mock API is read-only.');
 		}
 		try {
-			const body = await route(req, res, url.pathname.replace(/\/$/, ''), url.searchParams);
+			const body = await route(req, res, path, url.searchParams);
 			if (body === null) return; // The handler wrote the response.
 			if (body === undefined) return problem(res, 404, 'Not Found', 'not_found');
 			res.setHeader('Content-Type', 'application/json');
@@ -241,6 +267,18 @@ const MOCK_DEVICE: Device = {
 	lastSeenAt: '2026-01-01T00:00:00.000Z',
 	connected: false
 };
+
+/** The request body, up to a little over the 50 MB plugin limit. */
+async function readBody(req: IncomingMessage): Promise<Uint8Array> {
+	const chunks: Buffer[] = [];
+	let size = 0;
+	for await (const chunk of req) {
+		size += (chunk as Buffer).length;
+		if (size > 51 * 1024 * 1024) break;
+		chunks.push(chunk as Buffer);
+	}
+	return new Uint8Array(Buffer.concat(chunks));
+}
 
 function withKey<T>(s: string, f: (k: bigint) => T): T | undefined {
 	const k = toKey(s);

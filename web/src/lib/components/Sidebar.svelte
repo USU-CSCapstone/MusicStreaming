@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { plural } from '$lib/format';
 	import { inSection, sections } from '$lib/sections';
@@ -7,6 +8,9 @@
 	import SearchBox from './SearchBox.svelte';
 
 	const library = $derived(page.data.library);
+	const onPlugins = $derived(page.route.id?.startsWith('/admin/plugins') ?? false);
+	// Plugins are administered, so only admins and the owner see them (`requirements/users.md` §1).
+	const admin = $derived(page.data.me !== null && page.data.me.role !== 'user');
 </script>
 
 <nav class="sidebar" aria-label="Library">
@@ -23,6 +27,20 @@
 			</li>
 		{/each}
 	</ul>
+	{#if admin}
+		<ul class="bottom">
+			<li>
+				<a
+					href={resolve('/admin/plugins')}
+					class:active={onPlugins}
+					aria-current={onPlugins ? 'page' : undefined}
+				>
+					<Icon name="plugin" size={18} />
+					Plugins
+				</a>
+			</li>
+		</ul>
+	{/if}
 	<footer>
 		{#if library}
 			<div class="library muted">
@@ -76,8 +94,17 @@
 		color: var(--accent);
 	}
 
+	/* Pinned to the bottom: the Plugins link if it shows, and the footer under it. */
+	.bottom,
 	footer {
 		margin-top: auto;
+	}
+
+	.bottom + footer {
+		margin-top: 0;
+	}
+
+	footer {
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-4);
