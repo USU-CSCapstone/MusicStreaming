@@ -1,0 +1,81 @@
+# Development: `docker compose up --watch`, then open http://localhost:5173. Edits reach the
+# containers as you save: the web app reloads in place, and the server rebuilds and restarts.
+# `docker compose down` stops everything; `docker compose down --volumes` also deletes the
+# database and build caches.
+#
+# The containers never write to your checkout, so nothing in it ends up owned by root.
+
+name: jewelcase
+
+services:
+  server:
+    build:
+      context: .
+      target: server-dev
+    environment:
+      JEWELCASE_DATA_DIR: /data
+      JEWELCASE_MUSIC: /music
+    # Only on this machine: the API has no authentication yet.
+    ports:
+      - 127.0.0.1:8080:8080
+    volumes:
+      # The checkout, which the server builds from and never writes to.
+      - .:/src:ro
+      # Read-only, as in production (`requirements/deployment.md` §1).
+      - ${JEWELCASE_MUSIC:?set JEWELCASE_MUSIC in .env to the folder of music to develop with}:/music:ro
+      - data:/data
+      - target:/target
+      - cargo-registry:/usr/local/cargo/registry
+    # Healthy once it accepts connections, which on a first start is after a minutes-long build.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      start_period: 10m
+      start_interval: 1s
+      interval: 10s
+    develop:
+      watch:
+        # The source is mounted, not copied, so Cargo sees each file's own time and rebuilds
+        # exactly what changed, as it does outside the container.
+        - path: ./crates
+          action: restart
+        - path: ./Cargo.toml
+          action: restart
+        - path: ./Cargo.lock
+          action: restart
+        - path: ./rust-toolchain.toml
+          action: rebuild
+
+  web:
+    build:
+      context: .
+      target: web-dev
+    # So the app never loads before the API can answer it.
+    depends_on:
+      server:
+        condition: service_healthy
+    environment:
+      API_PROXY: http://server:8080
+    ports:
+      - 127.0.0.1:5173:5173
+    develop:
+      watch:
+        - path: ./web
+          target: /src/web
+          action: sync
+          initial_sync: true
+          ignore:
+            - node_modules/
+            - .svelte-kit/
+            - build/
+            - test-results/
+            - package.json
+            - pnpm-lock.yaml
+        - path: ./web/package.json
+          action: rebuild
+        - path: ./web/pnpm-lock.yaml
+          action: rebuild
+
+volumes:
+  data:
+  target:
+  cargo-registry:

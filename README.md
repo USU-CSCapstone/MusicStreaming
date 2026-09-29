@@ -11,6 +11,31 @@ nothing more. Everything else, from metadata enrichment and scrobbling to
 loudness analysis and recommendation strategies, is a plugin built on a stable
 extension API so the community can extend both server and clients.
 
+# Development
+
+You need Docker with Compose. Point the server at some music by creating a `.env` file at the
+repository root:
+
+```sh
+JEWELCASE_MUSIC=/path/to/music
+```
+
+Then:
+
+```sh
+docker compose up --watch   # start everything, then open http://localhost:5173
+docker compose down         # stop it; add --volumes to also delete the database and caches
+```
+
+As you save, the web app updates in the browser, and the server rebuilds and restarts. The
+first start compiles the server, which takes a minute or so; later starts reuse the build.
+Your music is mounted read-only and the containers never write to your checkout. The server's
+API is also on http://localhost:8080.
+
+Tests and checks run on your machine as usual: `cargo test` and `cargo clippy` at the root, and
+`pnpm test` and `pnpm check` in `web/`. Running `pnpm dev` there on its own serves the web app
+against a mock of the API instead.
+
 # Prototype
 
 Build a thin slice of the core server and plugin system to learn where the
