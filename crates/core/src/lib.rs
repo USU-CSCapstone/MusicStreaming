@@ -9,6 +9,7 @@ pub mod fold;
 pub mod format;
 pub mod lrc;
 pub mod multi_value;
+pub mod search;
 pub mod sort;
 pub mod tags;
 
