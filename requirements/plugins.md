@@ -5,7 +5,7 @@ The core serves a library, quickly, and does little else. Everything beyond that
 
 **The plugin system does not enumerate what a plugin may be.** There is no fixed list of capabilities, no approved categories, and no core release required to make a new kind of plugin possible. A user who wants Jewelcase to do something it does not do should be able to make it do that, without asking the project's permission and without waiting for it.
 
-That openness has exactly one price, and it is not negotiable: **a plugin may do anything, but it may never make Jewelcase slow.** The system is unbounded in *kind* and bounded in *cost* ([§2](#2-a-fast-system-not-restricted-plugins)).
+That openness has two limits, and neither is negotiable. **A plugin may do anything it is granted, and it may never make Jewelcase slow.** The system is unbounded in *kind*, bounded in *cost* ([§2](#2-a-fast-system-not-restricted-plugins)), and bounded in *reach* by what the admin approves ([§4](#4-trust--permissions)).
 
 Shared behavior follows [`conventions.md`](conventions.md).
 
@@ -13,7 +13,7 @@ Shared behavior follows [`conventions.md`](conventions.md).
 
 ## 1. An Open Surface
 
-**If the server knows it or does it, a plugin can reach it.** The useful shorthand: *anything a third-party client can do through the public API ([`general.md` §4](general.md#4-target-platforms)), a plugin can do* — plus the server-side hooks that let it act on its own rather than waiting to be asked.
+**If the server knows it or does it, a plugin can ask for it.** The useful shorthand: *anything a third-party client can do through the public API ([`general.md` §4](general.md#4-target-platforms)), a plugin can be granted* — plus the server-side hooks that let it act on its own rather than waiting to be asked. What it actually reaches is what the admin approves ([§4](#4-trust--permissions)).
 
 Things people will build early, offered as a starting point and explicitly **not** the boundary:
 
@@ -59,13 +59,13 @@ What keeps this open rather than merely long:
 
 ## 3. Writing to the Library
 
-**A plugin may write anything: new files, new audio, changes to existing files, deletions.** It is the only component permitted to, and the permission is unrestricted.
+**A plugin granted write access to a library may write anything in it: new files, new audio, changes to existing files, deletions.** It is the only component that can be permitted to, and within a granted library the permission is unrestricted.
 
 This qualifies a promise made in [`general.md` §1](general.md#1-goals), and is stated plainly rather than buried:
 
-> **The core never touches your files. A plugin you install can do anything to them.**
+> **The core never touches your files. A plugin you grant write access can do anything to them.**
 
-That is the trade, made knowingly at install time ([§5](#5-installation--lifecycle)). Restricting plugins to sidecar files would rule out the two things they are most wanted for: correcting bad tags in place, and bringing new music in.
+That is the trade, made knowingly when write access is granted, library by library ([§4](#4-trust--permissions)). Restricting plugins to sidecar files would rule out the two things they are most wanted for: correcting bad tags in place, and bringing new music in. A plugin without write access to a library cannot change a byte of it.
 
 - **Everything a plugin writes is ingested by the scanner** ([`general.md` §3.2](general.md#32-the-scanner-is-the-only-ingestion-path)). There is no side channel into the database, so a plugin-fetched biography and a hand-placed one are indistinguishable.
 - **Nothing a plugin writes is privileged.** It can be corrected, overwritten, or deleted by the user like any other file.
@@ -74,14 +74,45 @@ That is the trade, made knowingly at install time ([§5](#5-installation--lifecy
 
 ---
 
-## 4. Trust
+## 4. Trust & Permissions
 
-**Installing a plugin is the approval.** There is no permission model, no capability gate, and no sandbox promise the project cannot actually keep — and an open system could not honestly offer one, since it cannot know in advance what a plugin will need.
+**A plugin asks for what it needs, and the admin decides what it gets.** Every plugin declares the permissions it wants; the admin approves all of them, some, or none. Installing a plugin should not mean handing it the whole server: an admin who wants a lyrics fetcher must be able to give it the network and nothing else, and one who wants tag correction must be able to allow writes to one library and not another.
 
-- **Only admins install plugins** ([`users.md` §8](users.md#8-admin-capabilities--visibility)). Ordinary users can neither add nor enable one.
-- **The risk is stated where the decision is made** — at the point of installing, in plain language.
+### 4.1 What Can Be Asked For
+
+**Permissions govern what a plugin can reach, never what it can be.** The open surface ([§1](#1-an-open-surface)) is unchanged — there is still no list of permitted *kinds* of plugin. What is listed is the resources a plugin can touch, because each is something an admin might reasonably withhold.
+
+| Permission | Grants | Granted |
+|---|---|---|
+| **Read the library** | Its catalog, artwork, lyrics, and audio ([§7](#7-working-with-the-library)) | Per library |
+| **Write to the library** | Creating, changing, and deleting files in its folders ([§3](#3-writing-to-the-library)) | Per library |
+| **Network** | Reaching services outside the server — by named destination where the plugin can name them (`api.listenbrainz.org`), or any destination | Per plugin |
+| **Listening activity** | Play events and listening history ([§8](#8-events), [`analytics.md` §10](analytics.md#10-external-services)) | Per plugin |
+
+- **Some things need no permission**: a plugin's own settings and stored state ([§6](#6-configuration--credentials)), and the interface surfaces it adds ([§9](#9-extending-the-interface)). They touch nothing but the plugin itself.
+- **The list belongs to the plugin API** and grows only with it ([§1](#1-an-open-surface)). A resource the core newly exposes to plugins arrives with its own permission; nothing reachable is ever left ungoverned.
+- **A personal source reaches only the users who connected it.** Where a plugin acts for an individual — scrobbling to their own account — it receives only the activity of users who entered their own credentials ([§6](#6-configuration--credentials)), whatever the admin granted.
+
+### 4.2 Asking and Approving
+
+- **Every request carries a reason**, written by the plugin's author in plain language and shown beside it: *"Network: to fetch lyrics from lrclib.net."*
+- **Requests are required or optional.** A plugin marks what it cannot work without. Optional permissions may be declined and the plugin works without the features that depend on them; a plugin cannot be enabled until its required permissions are granted, so the admin learns that at install rather than when it fails.
+- **Approve all, some, or none**, at install and at any time after. Nothing is granted implicitly, and nothing is pre-approved.
+- **Changes take effect immediately**, in both directions, as disabling does ([§5](#5-installation--lifecycle)). A revoked permission is gone mid-task, not at the next restart.
+- **Updates never widen access on their own.** An update asking for more shows the new requests at the point of updating. Until they are approved it runs with what was already granted; if a new request is required, the update waits.
+- **The risk is stated per permission**, where the decision is made — write access above all ([§3](#3-writing-to-the-library)).
+
+### 4.3 Enforcement
+
+- **Grants are enforced by the system, not honoured by the plugin.** A plugin cannot reach what it was not granted, whatever its code does. An attempt is refused and recorded for the admin ([§11](#11-isolation--boundaries)).
+- **A declined permission is not a failure.** The plugin is told what it has, and users never see an error for what it could not do ([§11](#11-isolation--boundaries)).
+- **Admins see every plugin's grants**, per library, alongside its timings and failures ([§2.2](#22-results-compose-they-do-not-block)).
+
+### 4.4 Who Is Trusted
+
+- **Only admins install plugins or grant permissions** ([`users.md` §8](users.md#8-admin-capabilities--visibility)). Ordinary users can neither add nor enable one, and grant nothing beyond connecting their own account to a personal source.
 - **No registry, no curation, no signing.** Plugins are installed by dropping in a file or pasting a link. The project does not maintain a list of blessed plugins, because curation implies a vetting it is not doing.
-- **A plugin is as trusted as the admin who installed it** — the framing every self-hosted tool arrives at honestly: this is software you chose to run on your own machine.
+- **Within its grants, a plugin is as trusted as the admin who installed it** — the framing every self-hosted tool arrives at honestly: this is software you chose to run on your own machine. Permissions bound what it can reach; what it does there is its code.
 
 ---
 
@@ -91,8 +122,8 @@ That is the trade, made knowingly at install time ([§5](#5-installation--lifecy
 - **Enabled per library, independently** ([`libraries.md`](libraries.md)). A plugin may serve one library and never see another.
 - **Disabling is immediate and complete.** A disabled plugin runs nothing, sees nothing, and reaches nothing.
 - **Uninstalling leaves the library alone.** Files a plugin wrote are ordinary files and stay; content it merely *sourced* disappears with it ([§10](#10-external-content-sources)).
-- **Updates are the admin's choice**, never automatic — code with unrestricted write access must not change underneath a running server.
-- **Configuration survives a reinstall**, so removing a plugin to fix something does not mean setting it up again.
+- **Updates are the admin's choice**, never automatic — code that may hold write access must not change underneath a running server. An update never widens its own access ([§4.2](#42-asking-and-approving)).
+- **Configuration and granted permissions survive a reinstall**, so removing a plugin to fix something does not mean setting it up again.
 
 ---
 
@@ -119,7 +150,7 @@ Rules for plugins that read and improve what the user owns:
 
 ## 8. Events
 
-- **Plugins are notified of what happens on the server** — a track played, a scan completed, content added or removed, a user action taken.
+- **Plugins are notified of what happens on the server** — a track played, a scan completed, content added or removed, a user action taken — within their grants: plays and user actions need listening activity, and library events need read access to that library ([§4.1](#41-what-can-be-asked-for)).
 - **Play events carry enough detail to be acted on accurately**, scrobbling included ([`analytics.md` §10](analytics.md#10-external-services)).
 - **Events are delivered reliably.** A plugin briefly unreachable receives what it missed, so a network hiccup does not silently lose a day of scrobbles.
 - **Events never block anything** ([§2](#2-a-fast-system-not-restricted-plugins)). Playback, scanning, and every user action complete regardless of whether a plugin is listening, slow, or broken.
@@ -171,7 +202,7 @@ Within those bounds it is first-class, because content a user has to treat diffe
 
 ## 11. Isolation & Boundaries
 
-A plugin is third-party code with unrestricted write access. The server's obligation is that its failures stay its own.
+A plugin is third-party code, perhaps holding write access to the library. The server's obligation is that its failures stay its own.
 
 - **A failing plugin never degrades the server.** Crashing, hanging, or erroring affects that plugin's features and nothing else — playback, scanning, browsing, and search are unaffected.
 - **A plugin that keeps failing is disabled and reported**, rather than retrying forever against a service that is gone.
@@ -182,4 +213,4 @@ The only things a plugin genuinely may not do, and each is a correctness rule ra
 
 - **Cross the account boundary.** Listening history, playlists, and queues are private between users ([`users.md` §7](users.md#7-privacy--personal-data)).
 - **Cross the library boundary** into libraries it is not enabled for ([`general.md` §3.6](general.md#36-libraries-are-the-isolation-boundary)).
-- **Grant itself anything.** A plugin cannot enable itself, widen its own reach, or install another.
+- **Exceed or grant itself anything.** A plugin cannot reach past its grants, grant itself a permission, enable itself, widen its own reach, or install another ([§4](#4-trust--permissions)). The account and library boundaries above are not permissions at all: no admin can grant a plugin across them.

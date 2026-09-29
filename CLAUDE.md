@@ -23,7 +23,7 @@ Load-bearing. Every requirement derives from them, and a proposal that violates 
 - **Two verification machines**, both cheap and real: a Raspberry Pi 4 at 100k tracks / 10 transcoding listeners, and a Ryzen 7 2700X at 500k / 100. Every budget is met on **both**, and they are benchmarks, not caps ([`requirements/performance.md`](requirements/performance.md)).
 - **Neither scale nor hardware may show in the interface.** Cheap hardware buys a smaller library, never a worse experience.
 - **One adaptive interface** — responsive web (primary, installable as a PWA), Android, iOS via PWA. Every feature at every size, on touch, mouse, and keyboard.
-- **The core serves a library and little else.** Anything beyond that is a plugin's to build, with no list of permitted capabilities ([`requirements/plugins.md`](requirements/plugins.md)).
+- **The core serves a library and little else.** Anything beyond that is a plugin's to build, with no list of permitted kinds of plugin; what each one reaches is the admin's to approve ([`requirements/plugins.md`](requirements/plugins.md)).
 
 ## Out of scope
 

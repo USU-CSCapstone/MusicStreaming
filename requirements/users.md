@@ -12,7 +12,7 @@ The account model is deliberately small. There are no per-library roles, no perm
 Every account holds exactly one:
 
 - **Owner** — a single account, created at first setup. Has every admin capability, plus promoting and demoting admins and transferring ownership. Cannot be demoted, suspended, or deleted by anyone, including itself. This guarantees a server can never be left with nobody able to administer it.
-- **Admin** — operates the server. Manages libraries, storage, and scanning; installs and toggles plugins; manages accounts; grants and revokes library access. Cannot promote or demote other admins, or alter the owner.
+- **Admin** — operates the server. Manages libraries, storage, and scanning; installs and toggles plugins and grants their permissions; manages accounts; grants and revokes library access. Cannot promote or demote other admins, or alter the owner.
 - **User** — listens. Browses, searches, and plays granted libraries, and maintains their own playlists, queues, downloads, history, and statistics. No visibility into server configuration or other accounts.
 
 Ownership may be transferred to another admin. Transfer is explicit and confirmed, and the previous owner becomes a regular admin — the role is never held by two accounts at once and never by none.
