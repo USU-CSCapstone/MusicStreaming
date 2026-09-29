@@ -2,6 +2,7 @@ pub mod api;
 pub mod config;
 pub mod data_dir;
 pub mod db;
+mod web;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
@@ -80,7 +81,18 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         data_dir.cache().join("images"),
         ffmpeg.config().ffmpeg.clone(),
     );
-    axum::serve(listener, api::router(&config.base_path, db.clone(), images))
+    let mut app = api::router(&config.base_path, db.clone(), images);
+    let web = Path::new(web::DIR);
+    if !web.is_dir() {
+        info!(dir = web::DIR, "no web app there; serving the API only");
+    } else if !config.base_path.is_empty() {
+        // The build's links assume the root until startup rewrites them for the base path
+        // (`design/general.md` §7.1).
+        warn!("the web app cannot be served under a base path yet; serving the API only");
+    } else {
+        app = app.merge(web::router(web));
+    }
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("server failed")?;
