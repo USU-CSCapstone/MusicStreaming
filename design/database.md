@@ -97,7 +97,7 @@ Sorting by play count pages through `personal_stats` first, then continues throu
 
 **Reconciliation is a column, not a set.** `tracks.last_seen_scan_id` is set on every file a scan touched, changed or not, so "what did this scan not see" is one `UPDATE`, and a scan that resumes from its cursor after a crash needs no memory of what it saw before (`design/scanning.md` §7–§8).
 
-**Identity inputs are nullable until identity is settled.** `tracks.fingerprint` stays `NULL` while the scanner keys on path (`design/scanning.md` §6). `images.placeholder` is `NULL` until the image job decodes the file; the scanner fills format, dimensions, and hash from the header.
+**Identity inputs are nullable until identity is settled.** `tracks.fingerprint` stays `NULL` while the scanner keys on path (`design/scanning.md` §6). `images.placeholder` is `NULL` until the placeholder job decodes the file into a ThumbHash, and empty when it cannot; the scanner fills format, dimensions, and hash from the header.
 
 ---
 

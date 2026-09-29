@@ -5,7 +5,7 @@
 //! used by tests and the example; the server's SQLite store implements the
 //! same trait.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -87,6 +87,17 @@ pub trait Store: Send + Sync {
     ) -> Vec<(TrackId, PathBuf)>;
     fn store_analysis(&self, library: &LibraryId, track_id: TrackId, result: AnalysisResult);
 
+    // --- placeholders ---
+    /// Images with no placeholder yet, by content hash, with a file to decode each from.
+    fn next_without_placeholder(
+        &self,
+        library: &LibraryId,
+        limit: usize,
+    ) -> Vec<(Vec<u8>, PathBuf)>;
+    /// Stores the placeholder of the image with content `hash`. Empty means it could not be
+    /// decoded, so it is not tried again until its content changes.
+    fn store_placeholder(&self, library: &LibraryId, hash: &[u8], placeholder: Vec<u8>);
+
     // --- duplicates ---
     fn duplicate_candidates(&self, library: &LibraryId) -> Vec<DuplicateCandidate>;
 }
@@ -106,6 +117,8 @@ struct LibraryState {
     by_path: HashMap<PathBuf, TrackId>,
     problems: HashMap<PathBuf, Problem>,
     scans: BTreeMap<ScanId, Scan>,
+    /// Placeholders by image content hash.
+    placeholders: HashMap<Vec<u8>, Vec<u8>>,
     /// Net-effect change feed: one entry per track per batch at most.
     feed: Vec<FeedEntry>,
 }
@@ -171,6 +184,17 @@ impl MemoryStore {
             .get(library)
             .map(|l| l.scans.values().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// The placeholder stored for the image with content `hash`.
+    pub fn placeholder(&self, library: &LibraryId, hash: &[u8]) -> Option<Vec<u8>> {
+        let inner = self.inner.lock().unwrap();
+        inner
+            .libraries
+            .get(library)?
+            .placeholders
+            .get(hash)
+            .cloned()
     }
 
     pub fn feed(&self, library: &LibraryId) -> Vec<FeedEntry> {
@@ -349,6 +373,43 @@ impl Store for MemoryStore {
             .and_then(|l| l.tracks.get_mut(&track_id))
         {
             t.analysis = Some(result);
+        }
+    }
+
+    fn next_without_placeholder(
+        &self,
+        library: &LibraryId,
+        limit: usize,
+    ) -> Vec<(Vec<u8>, PathBuf)> {
+        let inner = self.inner.lock().unwrap();
+        let Some(lib) = inner.libraries.get(library) else {
+            return Vec::new();
+        };
+        let mut seen = HashSet::new();
+        lib.tracks
+            .values()
+            .flat_map(|t| {
+                let artwork = t.record.artwork.as_ref().map(|art| match &art.source {
+                    ArtworkSource::Embedded => (&art.info.hash, &t.record.path),
+                    ArtworkSource::Sidecar(path) => (&art.info.hash, path),
+                });
+                let artist = t
+                    .record
+                    .artist_image
+                    .as_ref()
+                    .map(|image| (&image.info.hash, &image.path));
+                artwork.into_iter().chain(artist)
+            })
+            .filter(|(hash, _)| !lib.placeholders.contains_key(*hash) && seen.insert(*hash))
+            .map(|(hash, path)| (hash.clone(), path.clone()))
+            .take(limit)
+            .collect()
+    }
+
+    fn store_placeholder(&self, library: &LibraryId, hash: &[u8], placeholder: Vec<u8>) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(lib) = inner.libraries.get_mut(library) {
+            lib.placeholders.insert(hash.to_vec(), placeholder);
         }
     }
 

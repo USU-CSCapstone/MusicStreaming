@@ -16,6 +16,7 @@ pub mod duplicates;
 pub mod governor;
 pub mod identity;
 pub mod image;
+pub mod placeholders;
 pub mod problems;
 pub mod queue;
 pub mod scan;

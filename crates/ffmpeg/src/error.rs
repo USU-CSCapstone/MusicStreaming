@@ -18,6 +18,8 @@ pub enum Error {
     Stalled(std::time::Duration),
     #[error("ffprobe output could not be parsed: {0}")]
     Probe(String),
+    #[error("image output could not be parsed: {0}")]
+    Image(String),
     #[error("no audio stream in file")]
     NoAudioStream,
     #[error("io error: {0}")]

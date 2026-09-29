@@ -11,6 +11,7 @@
 
 mod decode;
 mod error;
+mod image;
 mod probe;
 mod registry;
 
@@ -23,6 +24,7 @@ use jewelcase_core::Format;
 
 pub use decode::PcmStream;
 pub use error::Error;
+pub use image::Rgba;
 pub use probe::ProbeInfo;
 pub use registry::Registry;
 
@@ -171,6 +173,13 @@ impl Ffmpeg {
     /// rate and channel layout. Blocks while the pool is full.
     pub fn decode_pcm(&self, path: &std::path::Path, info: &ProbeInfo) -> Result<PcmStream, Error> {
         decode::decode_pcm(&self.config, &self.registry, path, info)
+    }
+
+    /// Decode the image at `path`, or the picture attached to an audio file, scaled to fit
+    /// `max_side` pixels. For small previews: the whole image is held in memory. Blocks while
+    /// the pool is full.
+    pub fn decode_image(&self, path: &std::path::Path, max_side: u32) -> Result<Rgba, Error> {
+        image::decode_image(&self.config, &self.registry, path, max_side)
     }
 
     // `transcode` is the playback design's to specify; it will share this

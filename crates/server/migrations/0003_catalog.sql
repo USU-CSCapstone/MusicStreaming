@@ -14,7 +14,8 @@ CREATE TABLE images (
     format      TEXT    NOT NULL,
     width       INTEGER NOT NULL,
     height      INTEGER NOT NULL,
-    -- A tiny blurred preview, filled by the image job after a decode; NULL until then
+    -- A ThumbHash, filled by the placeholder job after a decode; NULL until then, and empty
+    -- when the image could not be decoded
     placeholder BLOB,
     root_id     INTEGER NOT NULL,
     path        TEXT    NOT NULL,
@@ -24,6 +25,9 @@ CREATE TABLE images (
     UNIQUE (library_id, id),
     FOREIGN KEY (library_id, root_id) REFERENCES library_roots (library_id, id)
 ) STRICT;
+
+-- The placeholder job's queue
+CREATE INDEX images_without_placeholder ON images (library_id) WHERE placeholder IS NULL;
 
 -- ───────────────────────────── Artists ─────────────────────────────
 
