@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
+base64 = "0.23.1"
 jewelcase-core = { version = "0.1.0", path = "../core" }
 jewelcase-ffmpeg = { version = "0.1.0", path = "../ffmpeg" }
 jewelcase-scanner = { version = "0.1.0", path = "../scanner" }
