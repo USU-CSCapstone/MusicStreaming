@@ -255,25 +255,29 @@ fn source(library: i64, artist: Option<&str>, credit: ArtistCredit) -> Source {
     }
 }
 
+/// An album's artists, in order.
+pub fn album_artists(conn: &Connection, album: i64) -> rusqlite::Result<Vec<Credit>> {
+    conn.prepare_cached(
+        "SELECT artists.id, artists.name FROM album_artists \
+         JOIN artists ON artists.id = album_artists.artist_id \
+         WHERE album_artists.album_id = ?1 ORDER BY album_artists.position",
+    )?
+    .query_map([album], |row| {
+        Ok(Credit {
+            id: Id(row.get(0)?),
+            name: row.get(1)?,
+        })
+    })?
+    .collect()
+}
+
 /// An album from a row of [`SELECT`], with its artists and genres.
 fn summary(conn: &Connection, row: &Row) -> rusqlite::Result<AlbumSummary> {
     let id: i64 = row.get(0)?;
     Ok(AlbumSummary {
         id: Id(id),
         title: row.get(1)?,
-        artists: conn
-            .prepare_cached(
-                "SELECT artists.id, artists.name FROM album_artists \
-                 JOIN artists ON artists.id = album_artists.artist_id \
-                 WHERE album_artists.album_id = ?1 ORDER BY album_artists.position",
-            )?
-            .query_map([id], |row| {
-                Ok(Credit {
-                    id: Id(row.get(0)?),
-                    name: row.get(1)?,
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?,
+        artists: album_artists(conn, id)?,
         release_date: row.get(2)?,
         kind: row.get(3)?,
         genres: conn

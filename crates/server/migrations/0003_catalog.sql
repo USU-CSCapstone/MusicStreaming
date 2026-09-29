@@ -175,10 +175,12 @@ CREATE TABLE tracks (
 CREATE UNIQUE INDEX tracks_file ON tracks (root_id, path);
 CREATE INDEX tracks_by_name ON tracks (library_id, sort_key, id);
 CREATE INDEX tracks_by_artist ON tracks (library_id, artist_sort_key, sort_key, id);
-CREATE INDEX tracks_by_album_order ON tracks (album_id, disc_number, track_number, id);
-CREATE INDEX tracks_by_album ON tracks (library_id, album_sort_key, album_id, disc_number, track_number, id);
+-- A track with no number sorts last on its disc (requirements/conventions.md §4). The ifnull keeps
+-- NULL out of browse paging's keyset, where it would match nothing and pages would skip tracks.
+CREATE INDEX tracks_by_album_order ON tracks (album_id, disc_number, ifnull(track_number, 9223372036854775807), id);
+CREATE INDEX tracks_by_album ON tracks (library_id, album_sort_key, album_id, disc_number, ifnull(track_number, 9223372036854775807), id);
 CREATE INDEX tracks_by_added ON tracks (library_id, added_at, id);
-CREATE INDEX tracks_by_release ON tracks (library_id, release_date, album_sort_key, album_id, disc_number, track_number, id);
+CREATE INDEX tracks_by_release ON tracks (library_id, release_date, album_sort_key, album_id, disc_number, ifnull(track_number, 9223372036854775807), id);
 CREATE INDEX tracks_by_fingerprint ON tracks (library_id, fingerprint);
 CREATE INDEX tracks_missing ON tracks (library_id, missing_since) WHERE missing_since IS NOT NULL;
 CREATE INDEX tracks_unanalyzed ON tracks (library_id, analyzer_version, id) WHERE missing_since IS NULL;

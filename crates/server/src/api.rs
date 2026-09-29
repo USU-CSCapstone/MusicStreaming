@@ -9,6 +9,7 @@ mod page;
 mod problem;
 mod query;
 mod refs;
+mod tracks;
 
 use std::sync::Arc;
 
@@ -30,6 +31,11 @@ pub fn router(base_path: &str, db: Arc<Database>) -> Router {
         .route("/libraries/{library_id}", get(libraries::get))
         .route("/libraries/{library_id}/albums", get(albums::list))
         .route("/libraries/{library_id}/artists", get(artists::list))
+        .route("/libraries/{library_id}/tracks", get(tracks::list))
+        .route(
+            "/libraries/{library_id}/tracks/{track_id}",
+            get(tracks::get),
+        )
         .route(
             "/libraries/{library_id}/artists/{artist_id}",
             get(artists::get),

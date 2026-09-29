@@ -291,7 +291,9 @@ pub fn assert_indexed(conn: &Connection, source: &Source, sort: &Sort) -> rusqli
                     .query_map(params_from_iter(params), |row| row.get(3))?
                     .collect::<rusqlite::Result<_>>()?;
                 let plan = plan.join(" | ");
-                assert!(plan.contains("library_id=?"), "{sql}\n{plan}");
+                // A search of an index on its leading columns, not a skip-scan past them.
+                assert!(plan.starts_with("SEARCH"), "{sql}\n{plan}");
+                assert!(!plan.contains("ANY("), "{sql}\n{plan}");
                 assert!(!plan.contains("TEMP B-TREE"), "{sql}\n{plan}");
             }
         }
