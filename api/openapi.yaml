@@ -43,7 +43,9 @@ info:
     `cursor`. `limit` defaults to 100 and may be up to 1000 — a bound on one transfer,
     never on a collection. Lists report `total`.
 
-    **Errors.** `application/problem+json` (RFC 9457) with a machine-readable `code`.
+    **Errors.** `application/problem+json` (RFC 9457) with a machine-readable `code`. A method
+    a path does not support is `405 method_not_allowed`. An unexpected failure is
+    `500 internal`; its cause is logged on the server, never sent.
 
     **Units.** Track and collection durations are integer microseconds (`durationUs`) so
     totals never drift; positions and listen time are integer milliseconds. Timestamps
@@ -4154,6 +4156,7 @@ components:
             - rate_limited
             - forbidden
             - not_found
+            - method_not_allowed
             - validation_failed
             - weak_password
             - breached_password
@@ -4170,6 +4173,7 @@ components:
             - source_unavailable
             - source_timeout
             - plugin_settings_invalid
+            - internal
         reason:
           type: string
           enum: [credentials_changed, logged_out]

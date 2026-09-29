@@ -3115,7 +3115,7 @@ export interface components {
             /** @description Human-readable, safe to show. Never contains credentials or plugin internals. */
             detail?: string;
             /** @enum {string} */
-            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "validation_failed" | "weak_password" | "breached_password" | "username_taken" | "version_conflict" | "capacity_exceeded" | "cursor_expired" | "setup_required" | "unsupported_media" | "root_overlap" | "root_unavailable" | "device_unavailable" | "not_active_device" | "source_unavailable" | "source_timeout" | "plugin_settings_invalid";
+            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "breached_password" | "username_taken" | "version_conflict" | "capacity_exceeded" | "cursor_expired" | "setup_required" | "unsupported_media" | "root_overlap" | "root_unavailable" | "device_unavailable" | "not_active_device" | "source_unavailable" | "source_timeout" | "plugin_settings_invalid" | "internal";
             /**
              * @description With `session_revoked`. `credentials_changed` — the device keeps its downloads and
              *     logs in again with its `deviceId`; `logged_out` — the device removes them
