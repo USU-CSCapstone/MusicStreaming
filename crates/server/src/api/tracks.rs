@@ -79,11 +79,29 @@ pub struct AudioProperties {
 /// The spec's `Loudness`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Loudness {
+pub struct Loudness {
     track_lufs: f64,
     track_peak_dbtp: f64,
     album_lufs: Option<f64>,
     album_peak_dbtp: Option<f64>,
+}
+
+/// The columns [`loudness`] reads, in order, from `tracks t` joined to its album `al`.
+pub const LOUDNESS: &str = "t.loudness_lufs, t.peak_dbtp, al.loudness_lufs, al.peak_dbtp";
+
+/// The track's loudness, from the [`LOUDNESS`] columns starting at `first`. Null until analysis
+/// measures the track (`requirements/playback.md` §5); a track too quiet to measure stays null
+/// too.
+pub fn loudness(row: &Row, first: usize) -> rusqlite::Result<Option<Loudness>> {
+    Ok(match (row.get(first)?, row.get(first + 1)?) {
+        (Some(track_lufs), Some(track_peak_dbtp)) => Some(Loudness {
+            track_lufs,
+            track_peak_dbtp,
+            album_lufs: row.get(first + 2)?,
+            album_peak_dbtp: row.get(first + 3)?,
+        }),
+        _ => None,
+    })
 }
 
 /// The columns [`summary`] reads, in order.
@@ -259,8 +277,7 @@ pub async fn get(
     db.read(move |conn| {
         let sql = format!(
             "SELECT {}, t.container, t.bitrate_kbps, t.sample_rate_hz, t.bit_depth, t.channels, \
-             t.file_size, t.lyrics_kind, t.loudness_lufs, t.peak_dbtp, al.loudness_lufs, \
-             al.peak_dbtp, t.isrc, t.identifiers \
+             t.file_size, t.lyrics_kind, {LOUDNESS}, t.isrc, t.identifiers \
              FROM tracks t JOIN albums al ON al.id = t.album_id \
              WHERE t.library_id = ?1 AND t.id = ?2",
             SELECT.join(", ")
@@ -280,17 +297,6 @@ pub async fn get(
                     channels: row.get(extra + 4)?,
                     file_size_bytes: row.get(extra + 5)?,
                 };
-                // Loudness is null until analysis measures the track (`requirements/playback.md`
-                // §5); a track too quiet to measure stays null too.
-                let loudness = match (row.get(extra + 7)?, row.get(extra + 8)?) {
-                    (Some(track_lufs), Some(track_peak_dbtp)) => Some(Loudness {
-                        track_lufs,
-                        track_peak_dbtp,
-                        album_lufs: row.get(extra + 9)?,
-                        album_peak_dbtp: row.get(extra + 10)?,
-                    }),
-                    _ => None,
-                };
                 // `isrc`, then every other identifier tag as read (`requirements/tracks.md` §6).
                 // The schema checks that identifiers is a JSON object.
                 let mut identifiers: serde_json::Map<String, serde_json::Value> =
@@ -302,7 +308,7 @@ pub async fn get(
                 Ok(Track {
                     summary: summary(conn, row, &mut HashMap::new(), audio)?,
                     lyrics: row.get(extra + 6)?,
-                    loudness,
+                    loudness: loudness(row, extra + 7)?,
                     identifiers,
                 })
             })

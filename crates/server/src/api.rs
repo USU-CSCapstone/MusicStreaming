@@ -2,6 +2,7 @@
 
 mod albums;
 mod artists;
+mod audio;
 pub mod cursor;
 mod id;
 mod libraries;
@@ -35,6 +36,14 @@ pub fn router(base_path: &str, db: Arc<Database>) -> Router {
         .route(
             "/libraries/{library_id}/tracks/{track_id}",
             get(tracks::get),
+        )
+        .route(
+            "/libraries/{library_id}/tracks/{track_id}/playback",
+            get(audio::playback),
+        )
+        .route(
+            "/libraries/{library_id}/tracks/{track_id}/audio",
+            get(audio::audio),
         )
         .route(
             "/libraries/{library_id}/artists/{artist_id}",

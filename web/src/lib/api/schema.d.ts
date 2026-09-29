@@ -5222,7 +5222,12 @@ export interface components {
         Purpose: "stream" | "download";
         /** @description The quality the client wants, chosen from its own settings (`requirements/users.md` §6.1). */
         QualityParam: components["schemas"]["Quality"];
-        /** @description Codecs and containers the client can play, most preferred first. */
+        /**
+         * @description Codecs and containers the client can play, most preferred first, in ffmpeg's names such
+         *     as `flac`, `aac`, and `mp4`. The original plays directly only when both its codec and its
+         *     container are listed, since a codec such as `pcm` plays in some containers and not
+         *     others. Omitted, the client can play anything.
+         */
         Codecs: string[];
         /** @description The `ETag` of the cached copy. */
         IfNoneMatch: string;
@@ -6241,7 +6246,12 @@ export interface operations {
                 purpose?: components["parameters"]["Purpose"];
                 /** @description The quality the client wants, chosen from its own settings (`requirements/users.md` §6.1). */
                 quality: components["parameters"]["QualityParam"];
-                /** @description Codecs and containers the client can play, most preferred first. */
+                /**
+                 * @description Codecs and containers the client can play, most preferred first, in ffmpeg's names such
+                 *     as `flac`, `aac`, and `mp4`. The original plays directly only when both its codec and its
+                 *     container are listed, since a codec such as `pcm` plays in some containers and not
+                 *     others. Omitted, the client can play anything.
+                 */
                 codecs?: components["parameters"]["Codecs"];
             };
             header?: never;
@@ -6726,7 +6736,12 @@ export interface operations {
             query: {
                 /** @description The quality the client wants, chosen from its own settings (`requirements/users.md` §6.1). */
                 quality: components["parameters"]["QualityParam"];
-                /** @description Codecs and containers the client can play, most preferred first. */
+                /**
+                 * @description Codecs and containers the client can play, most preferred first, in ffmpeg's names such
+                 *     as `flac`, `aac`, and `mp4`. The original plays directly only when both its codec and its
+                 *     container are listed, since a codec such as `pcm` plays in some containers and not
+                 *     others. Omitted, the client can play anything.
+                 */
                 codecs?: components["parameters"]["Codecs"];
             };
             header?: never;
