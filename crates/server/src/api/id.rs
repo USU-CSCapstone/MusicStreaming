@@ -9,15 +9,18 @@ use super::{Code, Problem};
 pub struct Id(pub i64);
 
 impl Id {
-    /// Reads an ID from a request. Anything that is not one answers `404`, exactly like an ID
-    /// that is out of the caller's reach (`requirements/users.md` §10).
+    /// Reads an ID from a request path. Anything that is not one answers `404`, exactly like an
+    /// ID that is out of the caller's reach (`requirements/users.md` §10).
     pub fn parse(text: &str) -> Result<Id, Problem> {
+        Id::canonical(text).ok_or_else(|| Problem::new(Code::NotFound))
+    }
+
+    /// Reads an ID in its one canonical spelling: no sign, no leading zeros.
+    pub fn canonical(text: &str) -> Option<Id> {
         text.parse::<i64>()
             .ok()
-            // Only the canonical spelling, so each ID has exactly one: no sign, no leading zeros.
             .filter(|id| *id >= 0 && id.to_string() == text)
             .map(Id)
-            .ok_or_else(|| Problem::new(Code::NotFound))
     }
 }
 

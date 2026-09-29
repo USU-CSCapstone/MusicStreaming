@@ -1,9 +1,13 @@
 //! The public API (`api/openapi.yaml`), served under `{basePath}/api/v1`.
 
+mod albums;
 pub mod cursor;
 mod id;
 mod libraries;
+mod page;
 mod problem;
+mod query;
+mod refs;
 
 use std::sync::Arc;
 
@@ -23,6 +27,11 @@ pub fn router(base_path: &str, db: Arc<Database>) -> Router {
         .route("/health", get(health))
         .route("/libraries", get(libraries::list))
         .route("/libraries/{library_id}", get(libraries::get))
+        .route("/libraries/{library_id}/albums", get(albums::list))
+        .route(
+            "/libraries/{library_id}/albums/{album_id}",
+            get(albums::get),
+        )
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
         .with_state(db);
