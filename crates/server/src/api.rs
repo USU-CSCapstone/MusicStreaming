@@ -1,10 +1,13 @@
 //! The public API (`api/openapi.yaml`), served under `{basePath}/api/v1`.
 
+pub mod cursor;
+mod id;
 mod problem;
 
 use axum::routing::{any, get};
 use axum::{Json, Router};
 
+pub use id::Id;
 pub use problem::{Code, Problem};
 
 /// The API's routes, nested under `{base_path}/api/v1`.

@@ -9,7 +9,7 @@ The SQLite schema behind `api/openapi.yaml`, through the Browse section. Migrati
 
 | | Rule |
 |---|---|
-| **IDs** | Random positive 63-bit integers as `INTEGER PRIMARY KEY`, generated in each `INSERT` by `random() & 0x7FFFFFFFFFFFFFFF`. A collision, about one in 10¹³ per insert at a million rows, fails its transaction rather than being retried. The API encodes them as opaque strings. |
+| **IDs** | Random positive 63-bit integers as `INTEGER PRIMARY KEY`, generated in each `INSERT` by `random() & 0x7FFFFFFFFFFFFFFF`. A collision, about one in 10¹³ per insert at a million rows, fails its transaction rather than being retried. The API shows them as decimal strings, which clients treat as opaque. |
 | **Timestamps** | Integer milliseconds since the Unix epoch, UTC, named `*_at`. |
 | **Durations** | Integer microseconds, named `*_us`, matching the API. |
 | **Booleans** | `INTEGER` with `CHECK (x IN (0, 1))`. |
