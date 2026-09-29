@@ -6,11 +6,13 @@ mod audio;
 pub mod cursor;
 mod id;
 mod libraries;
+mod lyrics;
 mod page;
 mod problem;
 mod query;
 mod refs;
 mod tracks;
+mod waveform;
 
 use std::sync::Arc;
 
@@ -36,6 +38,14 @@ pub fn router(base_path: &str, db: Arc<Database>) -> Router {
         .route(
             "/libraries/{library_id}/tracks/{track_id}",
             get(tracks::get),
+        )
+        .route(
+            "/libraries/{library_id}/tracks/{track_id}/lyrics",
+            get(lyrics::get),
+        )
+        .route(
+            "/libraries/{library_id}/tracks/{track_id}/waveform",
+            get(waveform::get),
         )
         .route(
             "/libraries/{library_id}/tracks/{track_id}/playback",
@@ -82,6 +92,8 @@ mod tests {
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
+    use std::path::Path;
+
     use super::*;
     use crate::db::DbError;
 
@@ -90,6 +102,32 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
         let app = router(base_path, db.clone());
+        (temp, db, app)
+    }
+
+    /// [`app`] with library 1 holding tracks 1 and 2, and library 2 holding track 3, each on
+    /// an album of its own library and with no lyrics or waveform.
+    pub(super) async fn app_with_tracks() -> (tempfile::TempDir, Arc<Database>, Router) {
+        let (temp, db, app) = app("");
+        db.write(|tx| {
+            crate::db::libraries::create(tx, Some(1), "Music", &[Path::new("/music")], &[])?;
+            crate::db::libraries::create(tx, Some(2), "Other", &[Path::new("/other")], &[])?;
+            tx.execute_batch(
+                "INSERT INTO albums (id, library_id, title_key, artists_key, sort_key,
+                                     artist_sort_key, added_at, updated_at)
+                 VALUES (101, 1, 'a', '', x'61', x'', 0, 0), (201, 2, 'a', '', x'61', x'', 0, 0);
+                 WITH t (id, library_id, album_id) AS (VALUES (1, 1, 101), (2, 1, 101), (3, 2, 201))
+                 INSERT INTO tracks (id, library_id, album_id, root_id, path, file_size, file_mtime,
+                                     title, sort_key, artist_sort_key, album_sort_key, codec,
+                                     container, lossless, sample_rate_hz, channels, duration_us,
+                                     added_at, updated_at)
+                 SELECT t.id, t.library_id, t.album_id, r.id, t.id || '.flac', 10, 0, 'A', x'61',
+                        x'', x'61', 'flac', 'flac', 1, 44100, 2, 1000000, 0, 0
+                 FROM t JOIN library_roots r ON r.library_id = t.library_id;",
+            )
+        })
+        .await
+        .unwrap();
         (temp, db, app)
     }
 
