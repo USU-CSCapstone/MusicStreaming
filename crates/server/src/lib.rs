@@ -75,7 +75,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .with_context(|| format!("cannot listen on port {}", config.port))?;
     info!(%address, "listening");
 
-    axum::serve(listener, api::router(&config.base_path))
+    axum::serve(listener, api::router(&config.base_path, db.clone()))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("server failed")?;

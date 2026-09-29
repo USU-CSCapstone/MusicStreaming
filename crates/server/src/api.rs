@@ -2,7 +2,10 @@
 
 pub mod cursor;
 mod id;
+mod libraries;
 mod problem;
+
+use std::sync::Arc;
 
 use axum::routing::{any, get};
 use axum::{Json, Router};
@@ -10,14 +13,19 @@ use axum::{Json, Router};
 pub use id::Id;
 pub use problem::{Code, Problem};
 
+use crate::db::Database;
+
 /// The API's routes, nested under `{base_path}/api/v1`.
-pub fn router(base_path: &str) -> Router {
+pub fn router(base_path: &str, db: Arc<Database>) -> Router {
     let prefix = format!("{base_path}/api/v1");
     // Anything else under the API is a Problem, like every other error.
     let api = Router::new()
         .route("/health", get(health))
+        .route("/libraries", get(libraries::list))
+        .route("/libraries/{library_id}", get(libraries::get))
         .method_not_allowed_fallback(method_not_allowed)
-        .fallback(not_found);
+        .fallback(not_found)
+        .with_state(db);
     Router::new()
         .nest(&prefix, api)
         // `nest` leaves out the prefix with a trailing slash.
@@ -47,7 +55,19 @@ mod tests {
     use super::*;
     use crate::db::DbError;
 
-    async fn send(app: Router, method: &str, uri: &str) -> (StatusCode, Option<String>, Vec<u8>) {
+    /// The API over a fresh database, with the directory that holds it.
+    pub(super) fn app(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
+        let app = router(base_path, db.clone());
+        (temp, db, app)
+    }
+
+    pub(super) async fn send(
+        app: Router,
+        method: &str,
+        uri: &str,
+    ) -> (StatusCode, Option<String>, Vec<u8>) {
         let request = Request::builder()
             .method(method)
             .uri(uri)
@@ -70,8 +90,9 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_paths_are_not_found_problems() {
+        let (_temp, _db, app) = app("");
         for uri in ["/api/v1/nowhere", "/api/v1/", "/api/v1"] {
-            let (status, content_type, body) = send(router(""), "GET", uri).await;
+            let (status, content_type, body) = send(app.clone(), "GET", uri).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
             assert_eq!(
                 content_type.as_deref(),
@@ -87,7 +108,8 @@ mod tests {
 
     #[tokio::test]
     async fn unsupported_methods_are_method_not_allowed_problems() {
-        let (status, content_type, body) = send(router(""), "POST", "/api/v1/health").await;
+        let (_temp, _db, app) = app("");
+        let (status, content_type, body) = send(app, "POST", "/api/v1/health").await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(content_type.as_deref(), Some("application/problem+json"));
         assert_eq!(
@@ -98,9 +120,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_api_is_mounted_under_the_base_path() {
-        let (status, _, _) = send(router("/music"), "GET", "/music/api/v1/health").await;
+        let (_temp, _db, app) = app("/music");
+        let (status, _, _) = send(app.clone(), "GET", "/music/api/v1/health").await;
         assert_eq!(status, StatusCode::OK);
-        let (status, _, _) = send(router("/music"), "GET", "/api/v1/health").await;
+        let (status, _, _) = send(app, "GET", "/api/v1/health").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
