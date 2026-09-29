@@ -36,7 +36,9 @@ pub fn from_ffmpeg(path: &Path, e: &jewelcase_ffmpeg::Error) -> Problem {
     let kind = match e {
         F::Stalled(_) => ProblemKind::Stalled,
         F::Failed { .. } if e.is_unsupported_encoding() => ProblemKind::UnsupportedEncoding,
-        F::Failed { .. } | F::NoAudioStream | F::Probe(_) => ProblemKind::CorruptAudio,
+        F::Failed { .. } | F::NoAudioStream | F::Probe(_) | F::Image(_) => {
+            ProblemKind::CorruptAudio
+        }
         F::Spawn { .. } => ProblemKind::Unreadable,
         F::Io(io) => io_kind(io),
     };

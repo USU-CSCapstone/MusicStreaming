@@ -11,6 +11,7 @@ use std::time::Duration;
 use anyhow::Context;
 use jewelcase_ffmpeg::{Config as FfmpegConfig, Ffmpeg};
 use jewelcase_scanner::analysis::Analyzer;
+use jewelcase_scanner::placeholders::Placeholders;
 use jewelcase_scanner::scan::ScanOptions;
 use jewelcase_scanner::triggers::{FsWatcher, Schedule};
 use jewelcase_scanner::{Governor, Scanner, Trigger};
@@ -150,6 +151,10 @@ fn start_scanning(db: &Arc<Database>, ffmpeg: &Ffmpeg) -> anyhow::Result<Scannin
         ));
         let _worker = analyzer.start(config.id.clone(), Duration::from_secs(30));
         std::mem::forget(_worker);
+
+        // Soon after a scan finds an image, since clients draw its placeholder straight away.
+        let placeholders = Arc::new(Placeholders::new(ffmpeg.clone(), store.clone()));
+        std::mem::forget(placeholders.start(config.id.clone(), Duration::from_secs(5)));
     }
     Ok(running)
 }

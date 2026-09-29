@@ -1,5 +1,5 @@
 //! Image header facts for the `images` table: hash, format, dimensions.
-//! Reads headers only; the placeholder preview is the image job's, later.
+//! Reads headers only; the placeholder is the placeholder job's (`placeholders.rs`).
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

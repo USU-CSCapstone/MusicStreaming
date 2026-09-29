@@ -176,6 +176,22 @@ impl InspectStore for SqliteStore {
         .unwrap()
     }
 
+    fn inspect_placeholder(&self, library: &LibraryId, hash: &[u8]) -> Option<Vec<u8>> {
+        let lib: i64 = library.parse().unwrap();
+        let hash = hash.to_vec();
+        self.db()
+            .read_blocking(move |conn| {
+                conn.query_row(
+                    "SELECT placeholder FROM images WHERE library_id = ?1 AND hash = ?2",
+                    rusqlite::params![lib, hash],
+                    |r| r.get::<_, Option<Vec<u8>>>(0),
+                )
+                .optional()
+            })
+            .unwrap()
+            .flatten()
+    }
+
     fn inspect_scans(&self, library: &LibraryId) -> Vec<Scan> {
         self.scans(library.parse().unwrap()).unwrap()
     }
@@ -221,6 +237,46 @@ fn tagged(root: &Path, rel: &str, items: &[(ItemKey, &str)]) {
     let p = root.join(rel);
     testing::write_small_wav(&p);
     testing::tag_wav_with(&p, items);
+}
+
+#[test]
+fn a_placeholder_is_an_album_change() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    testing::make_album(&root, "A", "X", 1);
+    let status = std::process::Command::new("ffmpeg")
+        .args([
+            "-nostdin",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=red:s=8x8",
+        ])
+        .args(["-frames:v", "1"])
+        .arg(root.join("A/X/cover.png"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let store = make(&root);
+    let lib = testing::library(&root);
+    testing::scan_library(&store, &lib);
+    let album_seq = |store: &SqliteStore| {
+        scalar::<i64>(
+            store,
+            "SELECT seq FROM library_changes WHERE entity_type = 'album'",
+        )
+        .unwrap()
+    };
+    let (hash, _) = store.next_without_placeholder(&lib.id, 1).remove(0);
+
+    // One that could not be made changes nothing clients see.
+    let before = album_seq(&store);
+    store.store_placeholder(&lib.id, &hash, Vec::new());
+    assert_eq!(album_seq(&store), before);
+    store.store_placeholder(&lib.id, &hash, vec![1, 2, 3]);
+    assert!(album_seq(&store) > before);
 }
 
 #[test]

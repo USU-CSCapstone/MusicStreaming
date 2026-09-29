@@ -477,6 +477,82 @@ impl Store for SqliteStore {
         }
     }
 
+    fn next_without_placeholder(
+        &self,
+        library: &LibraryId,
+        limit: usize,
+    ) -> Vec<(Vec<u8>, PathBuf)> {
+        let Some(lib) = Self::lib(library) else {
+            return Vec::new();
+        };
+        let roots = self.roots.clone();
+        let result = self.db.read_blocking(move |conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT hash, root_id, path FROM images \
+                 WHERE library_id = ?1 AND placeholder IS NULL LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![lib, limit as i64], |r| {
+                Ok((
+                    r.get::<_, Vec<u8>>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (hash, root_id, rel) = row?;
+                if let Some(path) = roots.absolute(lib, root_id, &rel) {
+                    out.push((hash, path));
+                }
+            }
+            Ok(out)
+        });
+        result.unwrap_or_else(|e| {
+            Self::fail("next_without_placeholder", e);
+            Vec::new()
+        })
+    }
+
+    fn store_placeholder(&self, library: &LibraryId, hash: &[u8], placeholder: Vec<u8>) {
+        let Some(lib) = Self::lib(library) else {
+            return;
+        };
+        let hash = hash.to_vec();
+        let r = self.db.write_blocking(move |tx| {
+            let now = now_ms();
+            let changed = !placeholder.is_empty();
+            let Some(image) = tx
+                .query_row(
+                    "UPDATE images SET placeholder = ?3 WHERE library_id = ?1 AND hash = ?2 RETURNING id",
+                    params![lib, hash, placeholder],
+                    |r| r.get::<_, i64>(0),
+                )
+                .optional()?
+            else {
+                return Ok(());
+            };
+            // What clients see of an album or artist includes its image's placeholder. One
+            // that could not be made leaves them as they were.
+            if changed {
+                for (entity, table) in [(Entity::Album, "albums"), (Entity::Artist, "artists")] {
+                    let ids: Vec<i64> = tx
+                        .prepare_cached(&format!(
+                            "SELECT id FROM {table} WHERE library_id = ?1 AND image_id = ?2"
+                        ))?
+                        .query_map([lib, image], |r| r.get(0))?
+                        .collect::<rusqlite::Result<_>>()?;
+                    for id in ids {
+                        feed::record(tx, lib, entity, id, Op::Upsert, now)?;
+                    }
+                }
+            }
+            Ok(())
+        });
+        if let Err(e) = r {
+            Self::fail("store_placeholder", e);
+        }
+    }
+
     fn duplicate_candidates(&self, library: &LibraryId) -> Vec<DuplicateCandidate> {
         let Some(lib) = Self::lib(library) else {
             return Vec::new();
