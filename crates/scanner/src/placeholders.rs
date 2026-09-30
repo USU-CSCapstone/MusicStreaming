@@ -65,7 +65,8 @@ impl Placeholders {
             .spawn(move || {
                 while !stopping.load(Ordering::SeqCst) {
                     if self.run_once(&library, 32) == 0 {
-                        std::thread::sleep(idle_sleep);
+                        // Woken early by `stop`.
+                        std::thread::park_timeout(idle_sleep);
                     }
                 }
             })
@@ -86,6 +87,7 @@ impl PlaceholderWorker {
     pub fn stop(mut self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
             let _ = thread.join();
         }
     }

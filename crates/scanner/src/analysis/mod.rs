@@ -178,7 +178,8 @@ impl Analyzer {
         report
     }
 
-    /// Run in the background until stopped, sleeping when idle.
+    /// Run in the background until stopped, sleeping when idle. One track at a time, so a stop
+    /// waits for one track at most.
     pub fn start(self: Arc<Self>, library: LibraryId, idle_sleep: Duration) -> AnalysisWorker {
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = stop.clone();
@@ -186,9 +187,10 @@ impl Analyzer {
             .name("scanner-analysis".into())
             .spawn(move || {
                 while !stop2.load(Ordering::SeqCst) {
-                    let report = self.run_once(&library, 8);
+                    let report = self.run_once(&library, 1);
                     if report.analyzed == 0 && report.failed == 0 {
-                        std::thread::sleep(idle_sleep);
+                        // Woken early by `stop`.
+                        std::thread::park_timeout(idle_sleep);
                     }
                 }
             })
@@ -225,6 +227,7 @@ impl AnalysisWorker {
     pub fn stop(mut self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(t) = self.thread.take() {
+            t.thread().unpark();
             let _ = t.join();
         }
     }
