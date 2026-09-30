@@ -1,4 +1,5 @@
 <script lang="ts">
+	import AccountLink from './AccountLink.svelte';
 	import ViewToggle from './ViewToggle.svelte';
 
 	let {
@@ -13,7 +14,11 @@
 		<h1>{title}</h1>
 		{#if subtitle}<p class="muted">{subtitle}</p>{/if}
 	</div>
-	{#if toggle}<ViewToggle />{/if}
+	<div class="actions">
+		{#if toggle}<ViewToggle />{/if}
+		<!-- On a phone there is no sidebar, so the account is reached from here. -->
+		<span class="account"><AccountLink /></span>
+	</div>
 </header>
 
 <style>
@@ -34,7 +39,21 @@
 		margin: var(--space-1) 0 0;
 	}
 
+	.actions {
+		display: flex;
+		align-items: center;
+		gap: var(--space-3);
+	}
+
+	.account {
+		display: none;
+	}
+
 	@media (max-width: 767px) {
+		.account {
+			display: contents;
+		}
+
 		h1 {
 			font-size: 24px;
 		}

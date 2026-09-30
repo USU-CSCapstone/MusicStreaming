@@ -2,7 +2,8 @@
 // so this is the one module that changes when catalog reads move to the worker
 // (`design/general.md` §7.1).
 
-import { base } from '$app/paths';
+import { redirect } from '@sveltejs/kit';
+import { base, resolve } from '$app/paths';
 import type {
 	Album,
 	AlbumPage,
@@ -10,6 +11,7 @@ import type {
 	ArtistPage,
 	ImageRef,
 	Library,
+	LoginRequest,
 	PlaybackInfo,
 	Playlist,
 	PlaylistItemPage,
@@ -19,6 +21,7 @@ import type {
 	Session,
 	SetupRequest,
 	TrackPage,
+	User,
 	Waveform
 } from './types';
 
@@ -31,7 +34,9 @@ export class ApiError extends Error {
 	constructor(
 		readonly status: number,
 		readonly code: string | undefined,
-		message: string
+		message: string,
+		/** Seconds until trying again is worth it, with `rate_limited`. */
+		readonly retryAfter?: number
 	) {
 		super(message);
 	}
@@ -44,12 +49,25 @@ function url(path: string, query: Query = {}): string {
 	return `${API}${path}${qs ? `?${qs}` : ''}`;
 }
 
-/** The response's JSON, or its Problem as an `ApiError` whose message is safe to show. */
+/** The login page, returning to where the browser is now once logged in. */
+export const loginUrl = () =>
+	`${resolve('/login')}?${new URLSearchParams({ next: location.pathname + location.search })}`;
+
+/**
+ * The response's JSON, or its Problem as an `ApiError` whose message is safe to show. A
+ * request the session no longer covers redirects to the login page; that takes effect where
+ * a page is loading, and is an error like any other elsewhere.
+ */
 async function body<T>(res: Response): Promise<T> {
+	if (res.status === 204) return undefined as T;
 	if (!res.ok) {
 		const problem = await res.json().catch(() => null);
+		if (problem?.code === 'unauthenticated' || problem?.code === 'session_revoked') {
+			redirect(307, loginUrl());
+		}
 		const message = problem?.detail ?? problem?.title ?? res.statusText;
-		throw new ApiError(res.status, problem?.code, message);
+		const retryAfter = Number(res.headers.get('Retry-After')) || undefined;
+		throw new ApiError(res.status, problem?.code, message, retryAfter);
 	}
 	return res.json();
 }
@@ -58,12 +76,12 @@ const get = async <T>(fetch: Fetch, path: string, query?: Query): Promise<T> =>
 	body(await fetch(url(path, query)));
 
 /** A write. The header lets the server tell it from a cross-site form post (`cookieAuth`). */
-const post = async <T>(fetch: Fetch, path: string, json: unknown): Promise<T> =>
+const post = async <T>(fetch: Fetch, path: string, json?: unknown): Promise<T> =>
 	body(
 		await fetch(url(path), {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', 'X-Jewelcase-Client': 'web' },
-			body: JSON.stringify(json)
+			body: json === undefined ? undefined : JSON.stringify(json)
 		})
 	);
 
@@ -72,6 +90,14 @@ export const getServerInfo = (f: Fetch) => get<ServerInfo>(f, '/server');
 /** Creates the owner and logs this browser in: the server sets the session cookie. */
 export const completeSetup = (f: Fetch, request: SetupRequest) =>
 	post<Session>(f, '/setup', request);
+
+/** Logs this browser in as a new device: the server sets the session cookie. */
+export const login = (f: Fetch, request: LoginRequest) => post<Session>(f, '/auth/login', request);
+
+/** Logs this browser out: the server forgets the device and clears the cookie. */
+export const logout = (f: Fetch) => post<void>(f, '/auth/logout');
+
+export const getMe = (f: Fetch) => get<User>(f, '/me');
 
 const lib = (libraryId: string) => `/libraries/${encodeURIComponent(libraryId)}`;
 

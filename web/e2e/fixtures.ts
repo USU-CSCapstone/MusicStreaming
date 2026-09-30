@@ -75,7 +75,9 @@ function wav(): Buffer {
 	return b;
 }
 
-/** The session a successful setup returns. */
+const device = { name: 'Chrome on Linux', type: 'desktop' as const, platform: 'web' };
+
+/** The session a successful setup or login returns. */
 const session = (request: SetupRequest): Session => ({
 	token: 'token',
 	user: {
@@ -96,8 +98,18 @@ const session = (request: SetupRequest): Session => ({
 
 const pageOf = <T>(items: T[]) => ({ items, total: items.length, nextCursor: null });
 
-/** A server whose setup is done unless `setupRequired`, when `POST /setup` completes it. */
-export async function serveLibrary(page: Page, { empty = false, setupRequired = false } = {}) {
+/** The password `POST /auth/login` accepts, for any username. */
+export const PASSWORD = 'correct horse battery staple';
+
+/**
+ * A server whose setup is done unless `setupRequired`, when `POST /setup` completes it, and
+ * with this browser logged in unless `signedIn` is false. Until then, anything but setup and
+ * login answers `401`.
+ */
+export async function serveLibrary(
+	page: Page,
+	{ empty = false, setupRequired = false, signedIn = true } = {}
+) {
 	await page.route('**/api/v1/**', async (route: Route) => {
 		const url = new URL(route.request().url());
 		const path = url.pathname.replace(/^.*\/api\/v1/, '');
@@ -113,9 +125,22 @@ export async function serveLibrary(page: Page, { empty = false, setupRequired = 
 				return problem(422, 'weak_password', 'This is a very common password.');
 			}
 			setupRequired = false;
+			signedIn = true;
 			return route.fulfill({ status: 201, json: session(request) });
 		}
 		if (setupRequired) return problem(503, 'setup_required');
+		if (path === '/auth/login') {
+			const request = route.request().postDataJSON();
+			if (request.password !== PASSWORD) return problem(401, 'invalid_credentials');
+			signedIn = true;
+			return json(session(request));
+		}
+		if (!signedIn) return problem(401, 'unauthenticated');
+		if (path === '/auth/logout') {
+			signedIn = false;
+			return route.fulfill({ status: 204 });
+		}
+		if (path === '/me') return json(session({ username: 'sam', password: '', device }).user);
 		if (path === '/libraries') return json({ items: empty ? [] : [library] });
 		if (path === `${lib}/albums`) return json(pageOf([album]));
 		if (path === `${lib}/albums/${album.id}`) {

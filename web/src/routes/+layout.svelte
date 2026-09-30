@@ -9,8 +9,8 @@
 
 	let { data, children } = $props();
 
-	// Setup comes before there is anything to browse or play.
-	const bare = $derived(page.route.id === '/setup');
+	// Setup and login come before there is anything to browse or play.
+	const bare = $derived(page.route.id === '/setup' || page.route.id === '/login');
 
 	$effect.pre(() => {
 		player.libraryId = data.library?.id ?? '';

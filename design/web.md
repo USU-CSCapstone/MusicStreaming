@@ -48,7 +48,7 @@ and commit the result.
 | `src/lib/player.svelte.ts` | Playback: one audio element, the play context, and Media Session                                                                                        |
 | `src/lib/queue.ts`         | Moving through a context: next/previous and skipping missing tracks                                                                                     |
 | `src/lib/components/`      | Shell (sidebar, tab bar, player), collection and track views, waveform                                                                                  |
-| `src/routes/`              | One route per view: `/albums`, `/albums/[id]`, `/artists/…`, `/playlists/…`, `/songs`, `/search`, and `/setup` for a new server                         |
+| `src/routes/`              | One route per view: `/albums`, `/albums/[id]`, `/artists/…`, `/playlists/…`, `/songs`, `/search`, `/account`; `/setup` and `/login` without the shell   |
 | `mock/`                    | The dev-only mock API. Never bundled into the client.                                                                                                   |
 
 ## What the mock does not do
@@ -62,7 +62,8 @@ It is a stand-in for the server, so it has these limits. None of them are client
 - **Personal data** (play counts, listening history) doesn't exist, so sorts that need it fall back
   to album or name order.
 - Only the read endpoints the client uses are implemented; any write answers `405`.
-- **Accounts** don't exist, so the mock reports setup as done and never asks anyone to log in.
+- **Accounts** don't exist: the mock reports setup as done, everyone is one user, and logging in
+  accepts any password.
 
 ## Not built yet
 

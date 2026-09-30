@@ -32,6 +32,9 @@ export type ServerInfo = Schemas['ServerInfo'];
 export type DeviceRegistration = Schemas['DeviceRegistration'];
 export type SetupRequest = Schemas['SetupRequest'];
 export type Session = Schemas['Session'];
+export type LoginRequest = Schemas['LoginRequest'];
+export type User = Schemas['User'];
+export type Device = Schemas['Device'];
 
 /** A cursor-paged list, as every list endpoint returns it. */
 export type Page<T> = { items: T[]; nextCursor: string | null; total: number };
