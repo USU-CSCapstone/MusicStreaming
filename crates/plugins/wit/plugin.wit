@@ -17,6 +17,10 @@ interface host {
     listening-activity,
     /// A hook: run when tracks are added, changed, or removed (`events.tracks-changed`).
     tracks-changed,
+    /// A hook: run when a scan of the library finishes (`events.scan-finished`).
+    scan-finished,
+    /// A hook: run at the interval the manifest asks for (`events.scheduled`).
+    schedule,
   }
 
   /// What this run may use.
@@ -145,10 +149,23 @@ interface events {
     removed: list<u64>,
   }
 
+  /// What the scans that finished since the last one found, added together.
+  record scan-finished {
+    files-seen: u32,
+    added: u32,
+    updated: u32,
+    moved: u32,
+    missing: u32,
+    problems: u32,
+  }
+
   variant event {
     /// An admin pressed Run now: do the plugin's whole job for this library.
     run,
     tracks-changed(tracks-changed),
+    scan-finished(scan-finished),
+    /// The schedule came round.
+    scheduled,
   }
 }
 

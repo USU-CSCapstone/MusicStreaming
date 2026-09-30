@@ -4674,10 +4674,12 @@ export interface components {
          *     three library permissions are granted per library; `network` and `listeningActivity`
          *     once per plugin. Hooks, which decide when a plugin runs, are requested and granted the
          *     same way (`requirements/plugins.md` §8): `tracksChanged` runs it, per library, as tracks
-         *     are added, changed, or removed, and needs `libraryRead` there too.
+         *     are added, changed, or removed, and `scanFinished` when a scan of the library finishes;
+         *     both need `libraryRead` there too. `schedule` runs it at the interval its request names,
+         *     in every library it is enabled in.
          * @enum {string}
          */
-        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged";
+        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule";
         PermissionRequest: {
             permission: components["schemas"]["PermissionName"];
             /** @description Whether it cannot work without it (`requirements/plugins.md` §4.2). */
@@ -4686,6 +4688,8 @@ export interface components {
             reason: string;
             /** @description With `network` only. Host names it reaches, or `["*"]` for any. */
             destinations?: string[];
+            /** @description With `schedule` only. How often it runs. */
+            everyMinutes?: number;
         };
         PermissionGrants: {
             /** @description Plugin-wide permissions. */

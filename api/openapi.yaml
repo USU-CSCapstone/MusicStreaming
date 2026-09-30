@@ -6502,14 +6502,16 @@ components:
 
     PermissionName:
       type: string
-      enum: [libraryRead, libraryAdd, libraryChange, network, listeningActivity, tracksChanged]
+      enum: [libraryRead, libraryAdd, libraryChange, network, listeningActivity, tracksChanged, scanFinished, schedule]
       description: |
         What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryAdd` creates files
         that do not exist yet; `libraryChange` replaces, renames, and deletes files that do. The
         three library permissions are granted per library; `network` and `listeningActivity`
         once per plugin. Hooks, which decide when a plugin runs, are requested and granted the
         same way (`requirements/plugins.md` §8): `tracksChanged` runs it, per library, as tracks
-        are added, changed, or removed, and needs `libraryRead` there too.
+        are added, changed, or removed, and `scanFinished` when a scan of the library finishes;
+        both need `libraryRead` there too. `schedule` runs it at the interval its request names,
+        in every library it is enabled in.
 
     PermissionRequest:
       type: object
@@ -6524,6 +6526,10 @@ components:
           type: array
           description: With `network` only. Host names it reaches, or `["*"]` for any.
           items: { type: string }
+        everyMinutes:
+          type: integer
+          minimum: 5
+          description: With `schedule` only. How often it runs.
 
     PermissionGrants:
       type: object

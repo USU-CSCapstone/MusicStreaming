@@ -7,7 +7,8 @@ use rusqlite::Connection;
 
 use super::super::Plugins;
 use super::super::testing::database;
-use super::{BACKOFF_MS, MAX_FAILURES, batch, due, record};
+use super::due::{all, batch, event};
+use super::{BACKOFF_MS, Due, Hook, MAX_FAILURES, record};
 use crate::db::Database;
 
 /// Plugin `p` enabled in library 1 with the hook and read access granted there.
@@ -39,9 +40,18 @@ async fn run<T: Send + 'static>(
     db.read(f).await.unwrap()
 }
 
+/// What is due now for `hook`: each plugin, library, and position.
+async fn due_for(db: &Database, hook: Hook, now: i64) -> Vec<(String, i64, i64)> {
+    let due = run(db, move |conn| all(conn, now)).await;
+    due.into_iter().filter(|d| d.hook == hook).map(|d| (d.plugin, d.library, d.position)).collect()
+}
+
 async fn due_pairs(db: &Database, now: i64) -> Vec<(String, i64, i64)> {
-    let due = run(db, move |conn| due(conn, now)).await;
-    due.into_iter().map(|d| (d.plugin, d.library, d.position)).collect()
+    due_for(db, Hook::TracksChanged, now).await
+}
+
+fn due(hook: Hook, failures: i64) -> Due {
+    Due { hook, plugin: "p".into(), library: 1, position: 0, failures }
 }
 
 #[tokio::test]
@@ -132,9 +142,11 @@ async fn failures_wait_longer_each_time_then_disable_the_plugin_there() {
     let fail = |failures: i64| {
         let db = db.clone();
         async move {
-            db.write(move |tx| record(tx, "p", 1, 99, false, failures, "LRCLIB answered 503", 0))
-                .await
-                .unwrap();
+            db.write(move |tx| {
+                record(tx, &due(Hook::TracksChanged, failures), 99, false, "LRCLIB answered 503", 0)
+            })
+            .await
+            .unwrap();
         }
     };
     fail(0).await;
@@ -153,8 +165,63 @@ async fn failures_wait_longer_each_time_then_disable_the_plugin_there() {
     assert!(!enabled);
     assert_eq!(reason, "Stopped after failing 5 times in a row: LRCLIB answered 503");
 
-    db.write(|tx| record(tx, "p", 1, 99, true, 5, "", 0)).await.unwrap();
+    db.write(|tx| record(tx, &due(Hook::TracksChanged, 5), 99, true, "", 0)).await.unwrap();
     assert_eq!(cursor(&db).await, (99, 0, None), "a success moves on and clears the failures");
+}
+
+#[tokio::test]
+async fn a_finished_scan_is_delivered_once_with_its_counts_added_up() {
+    let (_temp, db) = database().await;
+    db.write(|tx| {
+        tx.execute_batch(
+            "INSERT INTO plugin_library_grants VALUES ('p', 1, 'scanFinished'), ('p', 1, 'libraryRead');
+             INSERT INTO plugin_libraries (plugin_id, library_id, enabled) VALUES ('p', 1, 1);
+             INSERT INTO scans (id, library_id, trigger, state, scopes, added, updated, created_at, finished_at)
+             VALUES (1, 1, 'watch', 'completed', '[]', 2, 1, 0, 100),
+                    (2, 1, 'watch', 'completed', '[]', 3, 0, 0, 200),
+                    (3, 1, 'watch', 'running', '[]', 9, 9, 0, NULL),
+                    (4, 2, 'watch', 'completed', '[]', 9, 9, 0, 150);",
+        )
+    })
+    .await
+    .unwrap();
+    assert!(due_for(&db, Hook::ScanFinished, 100).await.is_empty(), "the first finished only now");
+    assert_eq!(due_for(&db, Hook::ScanFinished, 201).await, [("p".to_owned(), 1, 0)]);
+
+    let (next, delivered) = run(&db, |conn| event(conn, &due(Hook::ScanFinished, 0), 201)).await;
+    let Some(jewelcase_plugins::Event::ScanFinished(totals)) = delivered else {
+        panic!("no scan event")
+    };
+    assert_eq!(
+        (next, totals.added, totals.updated),
+        (200, 5, 1),
+        "both scans, not the running one"
+    );
+    db.write(move |tx| record(tx, &due(Hook::ScanFinished, 0), next, true, "", 0)).await.unwrap();
+    assert!(due_for(&db, Hook::ScanFinished, 1000).await.is_empty(), "each is delivered once");
+}
+
+#[tokio::test]
+async fn a_schedule_is_due_when_its_interval_has_passed() {
+    let (_temp, db) = database().await;
+    db.write(|tx| {
+        tx.execute_batch(
+            r#"UPDATE plugins SET manifest = '{"permissions":[{"permission":"schedule","everyMinutes":60}]}';
+               INSERT INTO plugin_libraries (plugin_id, library_id, enabled) VALUES ('p', 1, 1);"#,
+        )
+    })
+    .await
+    .unwrap();
+    assert!(due_for(&db, Hook::Schedule, 0).await.is_empty(), "not granted");
+    db.write(|tx| tx.execute_batch("INSERT INTO plugin_grants VALUES ('p', 'schedule')"))
+        .await
+        .unwrap();
+    assert_eq!(due_for(&db, Hook::Schedule, 0).await.len(), 1, "at once, the first time");
+
+    let hour = 60 * 60_000;
+    db.write(move |tx| record(tx, &due(Hook::Schedule, 0), 1000, true, "", 1000)).await.unwrap();
+    assert!(due_for(&db, Hook::Schedule, 1000 + hour - 1).await.is_empty());
+    assert_eq!(due_for(&db, Hook::Schedule, 1000 + hour).await.len(), 1);
 }
 
 /// The whole path with the real lyrics plugin: a change in the feed reaches its `handle` as
