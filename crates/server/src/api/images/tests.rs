@@ -17,7 +17,8 @@ fn ffmpeg(args: &[&str]) {
 }
 
 /// Library 1 holds image 1, a 300×200 `cover.png`; image 2, a 64×64 picture embedded in
-/// `song.mp3`; and image 3, a `broken.png` that is not an image. Library 2 holds image 4.
+/// `song.mp3`; image 3, a `broken.png` that is not an image; and image 5, recorded with no
+/// content hash. Library 2 holds image 4.
 async fn app_with_images() -> (tempfile::TempDir, Router) {
     let (temp, db, app) = app("");
     let (music, other) = (temp.path().join("music"), temp.path().join("other"));
@@ -71,7 +72,8 @@ async fn app_with_images() -> (tempfile::TempDir, Router) {
         tx.execute_batch(
             "WITH i (id, library_id, hash, path, embedded) AS (VALUES
                  (1, 1, x'01', 'cover.png', 0), (2, 1, x'02', 'song.mp3', 1),
-                 (3, 1, x'03', 'broken.png', 0), (4, 2, x'04', 'cover.png', 0))
+                 (3, 1, x'03', 'broken.png', 0), (4, 2, x'04', 'cover.png', 0),
+                 (5, 1, x'', 'cover.png', 0))
              INSERT INTO images (id, library_id, hash, format, width, height, root_id, path,
                                  embedded)
              SELECT i.id, i.library_id, i.hash, 'png', 1, 1, r.id, i.path, i.embedded
@@ -179,10 +181,44 @@ async fn problems() {
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal",
         ),
+        (
+            "/api/v1/libraries/1/images/5",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+        ),
     ] {
         let (actual, _, body) = send(app.clone(), "GET", uri).await;
         assert_eq!(actual, status, "{uri}");
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["code"], code, "{uri}");
     }
+}
+
+#[tokio::test]
+async fn a_broken_image_is_not_tried_again() {
+    let (temp, app) = app_with_images().await;
+    let uri = "/api/v1/libraries/1/images/3";
+    let (status, _, _) = send(app.clone(), "GET", uri).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(temp.path().join("cache/03/03-512.failed").exists());
+    // Readable now, but its content hash says it is the same broken image, so ffmpeg is not run.
+    let music = temp.path().join("music");
+    std::fs::copy(music.join("cover.png"), music.join("broken.png")).unwrap();
+    let (status, _, _) = send(app, "GET", uri).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn a_missing_file_is_tried_again() {
+    let (temp, app) = app_with_images().await;
+    let (cover, spare) = (
+        temp.path().join("music/cover.png"),
+        temp.path().join("spare.png"),
+    );
+    std::fs::rename(&cover, &spare).unwrap();
+    let uri = "/api/v1/libraries/1/images/1?size=64";
+    let (status, _, _) = send(app.clone(), "GET", uri).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    std::fs::rename(&spare, &cover).unwrap();
+    assert_eq!(dimensions(&app, uri).await, (64, 43));
 }
