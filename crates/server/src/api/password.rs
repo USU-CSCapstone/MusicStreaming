@@ -36,7 +36,7 @@ fn check_strength(password: &str, inputs: &[&str]) -> Result<(), Problem> {
     // The warning names the pattern found, such as "This is a very common password"; it never
     // repeats the password.
     let detail = match entropy.feedback().and_then(|feedback| feedback.warning()) {
-        Some(warning) => format!("{warning}. Choose a longer or less predictable password."),
+        Some(warning) => format!("{warning} Choose a longer or less predictable password."),
         None => "Choose a longer or less predictable password.".to_owned(),
     };
     Err(Problem::new(Code::WeakPassword).detail(detail))

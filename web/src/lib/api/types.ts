@@ -28,6 +28,10 @@ export type SearchResult = Schemas['SearchResult'];
 export type SearchResponse = Schemas['SearchResponse'];
 export type SearchSectionType = Schemas['SearchSectionType'];
 export type Problem = Schemas['Problem'];
+export type ServerInfo = Schemas['ServerInfo'];
+export type DeviceRegistration = Schemas['DeviceRegistration'];
+export type SetupRequest = Schemas['SetupRequest'];
+export type Session = Schemas['Session'];
 
 /** A cursor-paged list, as every list endpoint returns it. */
 export type Page<T> = { items: T[]; nextCursor: string | null; total: number };
