@@ -13,6 +13,7 @@ mod playlists;
 mod problem;
 mod query;
 mod refs;
+mod search;
 mod tracks;
 mod waveform;
 
@@ -25,6 +26,7 @@ use axum::{Json, Router};
 pub use id::Id;
 pub use images::Images;
 pub use problem::{Code, Problem};
+use search::Search;
 
 use crate::db::Database;
 
@@ -33,11 +35,18 @@ use crate::db::Database;
 struct AppState {
     db: Arc<Database>,
     images: Arc<Images>,
+    search: Arc<Search>,
 }
 
 impl FromRef<AppState> for Arc<Database> {
     fn from_ref(state: &AppState) -> Arc<Database> {
         state.db.clone()
+    }
+}
+
+impl FromRef<AppState> for Arc<Search> {
+    fn from_ref(state: &AppState) -> Arc<Search> {
+        state.search.clone()
     }
 }
 
@@ -63,6 +72,7 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images) -> Router {
             "/libraries/{library_id}/tracks/{track_id}",
             get(tracks::get),
         )
+        .route("/libraries/{library_id}/search", get(search::search))
         .route(
             "/libraries/{library_id}/images/{image_id}",
             get(images::get),
@@ -96,6 +106,7 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images) -> Router {
         .with_state(AppState {
             db,
             images: Arc::new(images),
+            search: Arc::default(),
         });
     Router::new()
         .nest(&prefix, api)

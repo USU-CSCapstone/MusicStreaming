@@ -17,7 +17,7 @@ use crate::db::Database;
 
 /// The spec's `TrackSummary`, without `personal` until accounts exist. A full `Track` has the
 /// same fields with more `audio`, so the audio type is a parameter.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackSummary<A = AudioSummary> {
     id: Id,
@@ -48,7 +48,7 @@ pub struct Track {
 
 /// The spec's `AlbumRef`.
 #[derive(Clone, Serialize)]
-struct AlbumRef {
+pub struct AlbumRef {
     id: Id,
     title: Option<String>,
     artists: Vec<Credit>,
@@ -56,7 +56,7 @@ struct AlbumRef {
 }
 
 /// The spec's `AudioSummary`.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct AudioSummary {
     codec: String,
     lossless: bool,
@@ -105,7 +105,7 @@ pub fn loudness(row: &Row, first: usize) -> rusqlite::Result<Option<Loudness>> {
 }
 
 /// The columns [`summary`] reads, in order.
-const SELECT: &[&str] = &[
+pub const SELECT: &[&str] = &[
     "t.id",
     "t.title",
     "t.album_id",
@@ -251,11 +251,7 @@ pub async fn list(
         let mut albums = HashMap::new();
         let (items, next_cursor) =
             page::fetch(conn, &source, sort, query.order, after, limit, |row| {
-                let audio = AudioSummary {
-                    codec: row.get(8)?,
-                    lossless: row.get(9)?,
-                };
-                summary(conn, row, &mut albums, audio)
+                list_summary(conn, row, &mut albums)
             })?;
         Ok(Some(Page {
             items,
@@ -359,6 +355,20 @@ fn source(library: i64, album: Option<&str>, artist: Option<&str>, credit: Artis
 
 /// A track from a row of [`SELECT`], with its artists, album, and genres. `albums` holds the
 /// album references already read.
+/// A track as lists show it, from a row of [`SELECT`]. `albums` holds the album references read
+/// so far, since an album's tracks share one.
+pub fn list_summary(
+    conn: &Connection,
+    row: &Row,
+    albums: &mut HashMap<i64, AlbumRef>,
+) -> rusqlite::Result<TrackSummary> {
+    let audio = AudioSummary {
+        codec: row.get(8)?,
+        lossless: row.get(9)?,
+    };
+    summary(conn, row, albums, audio)
+}
+
 fn summary<A>(
     conn: &Connection,
     row: &Row,
@@ -430,7 +440,7 @@ fn album_ref(conn: &Connection, album: i64) -> rusqlite::Result<AlbumRef> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::path::Path;
 
     use axum::http::StatusCode;
@@ -444,7 +454,7 @@ mod tests {
     /// Library 1: "Abbey Road" by The Beatles with discs 1 and 2, one disc-1 track unnumbered,
     /// and one track missing; "Kid A" by Radiohead with a track The Beatles feature on; and
     /// an untagged file on the unknown album. Library 2 holds one track of its own.
-    fn fixture(tx: &Transaction) -> rusqlite::Result<()> {
+    pub(in crate::api) fn fixture(tx: &Transaction) -> rusqlite::Result<()> {
         libraries::create(tx, Some(1), "Music", &[Path::new("/music")], &[])?;
         libraries::create(tx, Some(2), "Other", &[Path::new("/other")], &[])?;
         let root = |library: i64| -> rusqlite::Result<i64> {
