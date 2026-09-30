@@ -1,125 +1,21 @@
 //! Tracks: `listTracks` and `getTrack` (`api/openapi.yaml`).
 
+mod representation;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Path, State};
-use rusqlite::{Connection, OptionalExtension, Row};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+
+pub use representation::{LOUDNESS, Loudness, SELECT, Track, TrackSummary, list_summary, loudness};
 
 use super::credit::ArtistCredit;
 use super::page::{Order, Page, Request, Sort, Source, Unknown};
 use super::query::Query;
-use super::refs::{self, Credit, ImageRef, TagRef};
-use super::sql::timestamp;
 use super::{Code, Id, Problem};
 use crate::db::Database;
-
-/// The spec's `TrackSummary`, without `personal` until accounts exist. A full `Track` has the
-/// same fields with more `audio`, so the audio type is a parameter.
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TrackSummary<A = AudioSummary> {
-    id: Id,
-    title: String,
-    artists: Vec<Credit>,
-    album: AlbumRef,
-    disc_number: Option<i64>,
-    track_number: Option<i64>,
-    duration_us: i64,
-    release_date: Option<String>,
-    genres: Vec<TagRef>,
-    explicit: bool,
-    audio: A,
-    availability: &'static str,
-    added_at: String,
-}
-
-/// The spec's `Track`.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Track {
-    #[serde(flatten)]
-    summary: TrackSummary<AudioProperties>,
-    lyrics: String,
-    loudness: Option<Loudness>,
-    identifiers: serde_json::Map<String, serde_json::Value>,
-}
-
-/// The spec's `AlbumRef`.
-#[derive(Clone, Serialize)]
-pub struct AlbumRef {
-    id: Id,
-    title: Option<String>,
-    artists: Vec<Credit>,
-    image: Option<ImageRef>,
-}
-
-/// The spec's `AudioSummary`.
-#[derive(Clone, Serialize)]
-pub struct AudioSummary {
-    codec: String,
-    lossless: bool,
-}
-
-/// The spec's `AudioProperties`.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AudioProperties {
-    #[serde(flatten)]
-    summary: AudioSummary,
-    container: String,
-    bitrate_kbps: Option<i64>,
-    sample_rate_hz: i64,
-    bit_depth: Option<i64>,
-    channels: i64,
-    file_size_bytes: i64,
-}
-
-/// The spec's `Loudness`.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Loudness {
-    track_lufs: f64,
-    track_peak_dbtp: f64,
-    album_lufs: Option<f64>,
-    album_peak_dbtp: Option<f64>,
-}
-
-/// The columns [`loudness`] reads, in order, from `tracks t` joined to its album `al`.
-pub const LOUDNESS: &str = "t.loudness_lufs, t.peak_dbtp, al.loudness_lufs, al.peak_dbtp";
-
-/// The track's loudness, from the [`LOUDNESS`] columns starting at `first`. Null until analysis
-/// measures the track (`requirements/playback.md` §5); a track too quiet to measure stays null
-/// too.
-pub fn loudness(row: &Row, first: usize) -> rusqlite::Result<Option<Loudness>> {
-    Ok(match (row.get(first)?, row.get(first + 1)?) {
-        (Some(track_lufs), Some(track_peak_dbtp)) => Some(Loudness {
-            track_lufs,
-            track_peak_dbtp,
-            album_lufs: row.get(first + 2)?,
-            album_peak_dbtp: row.get(first + 3)?,
-        }),
-        _ => None,
-    })
-}
-
-/// The columns [`summary`] reads, in order.
-pub const SELECT: &[&str] = &[
-    "t.id",
-    "t.title",
-    "t.album_id",
-    "t.disc_number",
-    "t.track_number",
-    "t.duration_us",
-    "t.release_date",
-    "t.explicit",
-    "t.codec",
-    "t.lossless",
-    "t.missing_since IS NULL",
-    timestamp!("t.added_at"),
-];
 
 /// A track with no number sorts last on its disc. This matches the indexes' expression
 /// (`0003_catalog.sql`), which keeps NULL out of the keyset.
@@ -246,49 +142,10 @@ pub async fn get(
 ) -> Result<Json<Track>, Problem> {
     let Id(library) = Id::parse(&library_id)?;
     let Id(track) = Id::parse(&track_id)?;
-    db.read(move |conn| {
-        let sql = format!(
-            "SELECT {}, t.container, t.bitrate_kbps, t.sample_rate_hz, t.bit_depth, t.channels, \
-             t.file_size, t.lyrics_kind, {LOUDNESS}, t.isrc, t.identifiers \
-             FROM tracks t JOIN albums al ON al.id = t.album_id \
-             WHERE t.library_id = ?1 AND t.id = ?2",
-            SELECT.join(", ")
-        );
-        conn.prepare_cached(&sql)?
-            .query_row([library, track], |row| {
-                let extra = SELECT.len();
-                let audio = AudioProperties {
-                    summary: AudioSummary {
-                        codec: row.get(8)?,
-                        lossless: row.get(9)?,
-                    },
-                    container: row.get(extra)?,
-                    bitrate_kbps: row.get(extra + 1)?,
-                    sample_rate_hz: row.get(extra + 2)?,
-                    bit_depth: row.get(extra + 3)?,
-                    channels: row.get(extra + 4)?,
-                    file_size_bytes: row.get(extra + 5)?,
-                };
-                // `isrc`, then every other identifier tag as read (`requirements/tracks.md` §6).
-                // The schema checks that identifiers is a JSON object.
-                let mut identifiers: serde_json::Map<String, serde_json::Value> =
-                    serde_json::from_str(&row.get::<_, String>(extra + 12)?).unwrap_or_default();
-                identifiers.insert(
-                    "isrc".to_owned(),
-                    row.get::<_, Option<String>>(extra + 11)?.into(),
-                );
-                Ok(Track {
-                    summary: summary(conn, row, &mut HashMap::new(), audio)?,
-                    lyrics: row.get(extra + 6)?,
-                    loudness: loudness(row, extra + 7)?,
-                    identifiers,
-                })
-            })
-            .optional()
-    })
-    .await?
-    .map(Json)
-    .ok_or_else(|| Problem::new(Code::NotFound))
+    db.read(move |conn| representation::track(conn, library, track))
+        .await?
+        .map(Json)
+        .ok_or_else(|| Problem::new(Code::NotFound))
 }
 
 /// Tracks whose album this artist is an album artist of.
@@ -323,67 +180,6 @@ fn source(library: i64, album: Option<&str>, artist: Option<&str>, credit: Artis
         filter,
         params,
     }
-}
-
-/// A track as lists show it, from a row of [`SELECT`]. `albums` holds the album references read
-/// so far, since an album's tracks share one.
-pub fn list_summary(
-    conn: &Connection,
-    row: &Row,
-    albums: &mut HashMap<i64, AlbumRef>,
-) -> rusqlite::Result<TrackSummary> {
-    let audio = AudioSummary {
-        codec: row.get(8)?,
-        lossless: row.get(9)?,
-    };
-    summary(conn, row, albums, audio)
-}
-
-fn summary<A>(
-    conn: &Connection,
-    row: &Row,
-    albums: &mut HashMap<i64, AlbumRef>,
-    audio: A,
-) -> rusqlite::Result<TrackSummary<A>> {
-    let id: i64 = row.get(0)?;
-    let album_id: i64 = row.get(2)?;
-    let album = match albums.get(&album_id) {
-        Some(album) => album.clone(),
-        None => {
-            let album = album_ref(conn, album_id)?;
-            albums.insert(album_id, album.clone());
-            album
-        }
-    };
-    let disc: i64 = row.get(3)?;
-    Ok(TrackSummary {
-        id: Id(id),
-        title: row.get(1)?,
-        artists: refs::artists(conn, "track", id)?,
-        album,
-        // The scanner files a track with no disc tag as disc 0.
-        disc_number: Some(disc).filter(|disc| *disc != 0),
-        track_number: row.get(4)?,
-        duration_us: row.get(5)?,
-        release_date: row.get(6)?,
-        genres: refs::genres(conn, "track", id)?,
-        explicit: row.get(7)?,
-        audio,
-        availability: if row.get(10)? { "available" } else { "missing" },
-        added_at: row.get(11)?,
-    })
-}
-
-fn album_ref(conn: &Connection, album: i64) -> rusqlite::Result<AlbumRef> {
-    let (title, image) = conn
-        .prepare_cached("SELECT title, image_id FROM albums WHERE id = ?1")?
-        .query_row([album], |row| Ok((row.get(0)?, row.get(1)?)))?;
-    Ok(AlbumRef {
-        id: Id(album),
-        title,
-        artists: refs::artists(conn, "album", album)?,
-        image: ImageRef::new(image),
-    })
 }
 
 #[cfg(test)]
