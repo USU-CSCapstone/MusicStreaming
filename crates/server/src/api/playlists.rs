@@ -29,10 +29,7 @@ enum PlaylistSort {
 /// The spec's parameters, checked like every other list's so a client's mistakes show now.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[expect(
-    dead_code,
-    reason = "with no playlists, the order and filter apply to nothing"
-)]
+#[expect(dead_code, reason = "with no playlists, the order and filter apply to nothing")]
 pub struct ListQuery {
     #[serde(default)]
     sort: PlaylistSort,
@@ -61,11 +58,7 @@ pub async fn list(
     })
     .await?
     .ok_or_else(Problem::not_found)?;
-    Ok(Json(Page {
-        items: Vec::new(),
-        next_cursor: None,
-        total: 0,
-    }))
+    Ok(Json(Page { items: Vec::new(), next_cursor: None, total: 0 }))
 }
 
 #[cfg(test)]
@@ -85,11 +78,7 @@ mod tests {
             let (status, _, body) = send(app.clone(), "GET", uri).await;
             assert_eq!(status, StatusCode::OK, "{uri}");
             let body: Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(
-                body,
-                json!({ "items": [], "nextCursor": null, "total": 0 }),
-                "{uri}"
-            );
+            assert_eq!(body, json!({ "items": [], "nextCursor": null, "total": 0 }), "{uri}");
         }
     }
 
@@ -99,30 +88,14 @@ mod tests {
         for (uri, status) in [
             ("/api/v1/libraries/9/playlists", StatusCode::NOT_FOUND),
             ("/api/v1/libraries/1/playlists/1", StatusCode::NOT_FOUND),
-            (
-                "/api/v1/libraries/1/playlists?cursor=00",
-                StatusCode::UNPROCESSABLE_ENTITY,
-            ),
-            (
-                "/api/v1/libraries/1/playlists?sort=size",
-                StatusCode::UNPROCESSABLE_ENTITY,
-            ),
-            (
-                "/api/v1/libraries/1/playlists?limit=0",
-                StatusCode::UNPROCESSABLE_ENTITY,
-            ),
-            (
-                "/api/v1/libraries/1/playlists?pinned=true",
-                StatusCode::UNPROCESSABLE_ENTITY,
-            ),
+            ("/api/v1/libraries/1/playlists?cursor=00", StatusCode::UNPROCESSABLE_ENTITY),
+            ("/api/v1/libraries/1/playlists?sort=size", StatusCode::UNPROCESSABLE_ENTITY),
+            ("/api/v1/libraries/1/playlists?limit=0", StatusCode::UNPROCESSABLE_ENTITY),
+            ("/api/v1/libraries/1/playlists?pinned=true", StatusCode::UNPROCESSABLE_ENTITY),
         ] {
             let (actual, content_type, _) = send(app.clone(), "GET", uri).await;
             assert_eq!(actual, status, "{uri}");
-            assert_eq!(
-                content_type.as_deref(),
-                Some("application/problem+json"),
-                "{uri}"
-            );
+            assert_eq!(content_type.as_deref(), Some("application/problem+json"), "{uri}");
         }
     }
 }

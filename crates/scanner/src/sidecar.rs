@@ -74,11 +74,7 @@ pub struct SidecarResolver {
 
 impl SidecarResolver {
     pub fn new(root: impl Into<PathBuf>) -> SidecarResolver {
-        SidecarResolver {
-            root: root.into(),
-            local: HashMap::new(),
-            resolved: HashMap::new(),
-        }
+        SidecarResolver { root: root.into(), local: HashMap::new(), resolved: HashMap::new() }
     }
 
     /// Use a listing discovery already made, so the directory is not read
@@ -119,10 +115,8 @@ impl SidecarResolver {
         // ancestors of a folder-scoped scan): read it once.
         let local = match fs::read_dir(dir) {
             Ok(entries) => {
-                let names: Vec<OsString> = entries
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.file_name())
-                    .collect();
+                let names: Vec<OsString> =
+                    entries.filter_map(|e| e.ok()).map(|e| e.file_name()).collect();
                 local_from_names(dir, names.iter().map(|n| n.as_os_str()))
             }
             Err(_) => Sidecars::default(),
@@ -154,10 +148,7 @@ impl SidecarResolver {
     pub fn lyrics_for(audio: &Path, files: &BTreeSet<OsString>) -> Option<SidecarLyrics> {
         let path = Self::lyrics_path_for(audio, files)?;
         let text = read_text(&path)?;
-        Some(SidecarLyrics {
-            path,
-            lyrics: Lyrics::from_text(text),
-        })
+        Some(SidecarLyrics { path, lyrics: Lyrics::from_text(text) })
     }
 }
 
@@ -178,10 +169,7 @@ fn read_text(path: &Path) -> Option<String> {
 fn read_image(path: &Path) -> Option<SidecarImage> {
     let bytes = read_bytes(path)?;
     let info = image::describe(&bytes)?;
-    Some(SidecarImage {
-        path: path.to_path_buf(),
-        info,
-    })
+    Some(SidecarImage { path: path.to_path_buf(), info })
 }
 
 fn local_from_names<'a>(dir: &Path, names: impl Iterator<Item = &'a OsStr>) -> Sidecars {
@@ -247,14 +235,8 @@ mod tests {
 
         let mut r = SidecarResolver::new(&root);
         let album = r.resolve(&root.join("Artist/Album"));
-        assert_eq!(
-            album.cover.unwrap().path,
-            root.join("Artist/Album/cover.jpg")
-        );
-        assert_eq!(
-            album.artist_image.unwrap().path,
-            root.join("Artist/artist.jpg")
-        );
+        assert_eq!(album.cover.unwrap().path, root.join("Artist/Album/cover.jpg"));
+        assert_eq!(album.artist_image.unwrap().path, root.join("Artist/artist.jpg"));
         assert_eq!(album.biography.unwrap().text, "A band.");
 
         let other = r.resolve(&root.join("Artist/Other"));
@@ -279,24 +261,17 @@ mod tests {
         let dir = tmp.path();
         touch(&dir.join("01 - Song.lrc"), b"[00:01.00]hi");
         touch(&dir.join("02 - Other.TXT"), b"plain words");
-        let files: BTreeSet<OsString> = [
-            "01 - Song.flac",
-            "01 - Song.lrc",
-            "02 - Other.flac",
-            "02 - Other.TXT",
-        ]
-        .iter()
-        .map(OsString::from)
-        .collect();
+        let files: BTreeSet<OsString> =
+            ["01 - Song.flac", "01 - Song.lrc", "02 - Other.flac", "02 - Other.TXT"]
+                .iter()
+                .map(OsString::from)
+                .collect();
         let a = SidecarResolver::lyrics_for(&dir.join("01 - Song.flac"), &files).unwrap();
         assert!(a.lyrics.synced);
         assert_eq!(a.path, dir.join("01 - Song.lrc"));
         let b = SidecarResolver::lyrics_for(&dir.join("02 - Other.flac"), &files).unwrap();
         assert!(!b.lyrics.synced);
-        assert_eq!(
-            SidecarResolver::lyrics_for(&dir.join("03.flac"), &files),
-            None
-        );
+        assert_eq!(SidecarResolver::lyrics_for(&dir.join("03.flac"), &files), None);
     }
 
     #[test]

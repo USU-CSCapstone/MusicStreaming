@@ -77,9 +77,7 @@ pub fn album(conn: &Connection, library: i64, album: i64) -> rusqlite::Result<Op
     );
     let Some((summary, labels)) = conn
         .prepare_cached(&sql)?
-        .query_row([library, album], |row| {
-            Ok((summary(row)?, row.get::<_, String>("labels")?))
-        })
+        .query_row([library, album], |row| Ok((summary(row)?, row.get::<_, String>("labels")?)))
         .optional()?
     else {
         return Ok(None);

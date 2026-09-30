@@ -27,13 +27,7 @@ async fn app_with_fixture() -> (tempfile::TempDir, Arc<Database>, Router) {
 /// The item with `id` from a browse list, as the list shows it.
 async fn listed(app: &Router, list: &str, id: &str) -> Value {
     let (_, page) = json(app, &format!("/api/v1/libraries/1/{list}?limit=1000")).await;
-    page["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["id"] == id)
-        .unwrap()
-        .clone()
+    page["items"].as_array().unwrap().iter().find(|item| item["id"] == id).unwrap().clone()
 }
 
 /// Each section's type and item IDs, in order.
@@ -85,23 +79,12 @@ async fn results_look_like_the_browse_lists() {
 async fn sections_follow_the_core_and_the_filters() {
     let (_temp, _db, app) = app_with_fixture().await;
     let (_, body) = json(&app, "/api/v1/libraries/1/search?q=kid").await;
-    assert_eq!(
-        sections(&body),
-        [("albums".to_owned(), vec!["102".to_owned()])]
-    );
-    let (_, body) = json(
-        &app,
-        "/api/v1/libraries/1/search?q=kid&types=tracks,playlists",
-    )
-    .await;
+    assert_eq!(sections(&body), [("albums".to_owned(), vec!["102".to_owned()])]);
+    let (_, body) = json(&app, "/api/v1/libraries/1/search?q=kid&types=tracks,playlists").await;
     assert_eq!(body["sections"], json!([]));
     assert_eq!(body["top"], Value::Null);
     // Equally exact everywhere: tracks, then albums, then artists.
-    let (_, body) = json(
-        &app,
-        "/api/v1/libraries/2/search?q=elsewhere&sectionLimit=1",
-    )
-    .await;
+    let (_, body) = json(&app, "/api/v1/libraries/2/search?q=elsewhere&sectionLimit=1").await;
     assert_eq!(
         sections(&body),
         [
@@ -147,10 +130,7 @@ async fn the_index_follows_the_library() {
     for _ in 0..100 {
         let (_, body) = json(&app, uri).await;
         if body["sections"] != json!([]) {
-            assert_eq!(
-                sections(&body),
-                [("tracks".to_owned(), vec!["1007".to_owned()])]
-            );
+            assert_eq!(sections(&body), [("tracks".to_owned(), vec!["1007".to_owned()])]);
             return;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -163,38 +143,16 @@ async fn problems() {
     let (_temp, _db, app) = app_with_fixture().await;
     for (uri, status) in [
         ("/api/v1/libraries/9/search?q=a", StatusCode::NOT_FOUND),
-        (
-            "/api/v1/libraries/1/search",
-            StatusCode::UNPROCESSABLE_ENTITY,
-        ),
-        (
-            "/api/v1/libraries/1/search?q=",
-            StatusCode::UNPROCESSABLE_ENTITY,
-        ),
-        (
-            "/api/v1/libraries/1/search?q=a&sectionLimit=0",
-            StatusCode::UNPROCESSABLE_ENTITY,
-        ),
-        (
-            "/api/v1/libraries/1/search?q=a&sectionLimit=51",
-            StatusCode::UNPROCESSABLE_ENTITY,
-        ),
-        (
-            "/api/v1/libraries/1/search?q=a&types=songs",
-            StatusCode::UNPROCESSABLE_ENTITY,
-        ),
+        ("/api/v1/libraries/1/search", StatusCode::UNPROCESSABLE_ENTITY),
+        ("/api/v1/libraries/1/search?q=", StatusCode::UNPROCESSABLE_ENTITY),
+        ("/api/v1/libraries/1/search?q=a&sectionLimit=0", StatusCode::UNPROCESSABLE_ENTITY),
+        ("/api/v1/libraries/1/search?q=a&sectionLimit=51", StatusCode::UNPROCESSABLE_ENTITY),
+        ("/api/v1/libraries/1/search?q=a&types=songs", StatusCode::UNPROCESSABLE_ENTITY),
         // Filters not built yet are refused rather than ignored.
-        (
-            "/api/v1/libraries/1/search?q=a&genre=rock",
-            StatusCode::UNPROCESSABLE_ENTITY,
-        ),
+        ("/api/v1/libraries/1/search?q=a&genre=rock", StatusCode::UNPROCESSABLE_ENTITY),
     ] {
         let (actual, content_type, _) = send(app.clone(), "GET", uri).await;
         assert_eq!(actual, status, "{uri}");
-        assert_eq!(
-            content_type.as_deref(),
-            Some("application/problem+json"),
-            "{uri}"
-        );
+        assert_eq!(content_type.as_deref(), Some("application/problem+json"), "{uri}");
     }
 }

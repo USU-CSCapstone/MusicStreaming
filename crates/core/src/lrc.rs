@@ -34,10 +34,7 @@ pub fn parse(text: &str) -> Vec<SyncedLine> {
         }
         let line = rest.trim_end().to_owned();
         for ms in stamps {
-            out.push(SyncedLine {
-                start_ms: ms,
-                text: line.clone(),
-            });
+            out.push(SyncedLine { start_ms: ms, text: line.clone() });
         }
     }
     out.sort_by_key(|l| l.start_ms);
@@ -81,18 +78,9 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                SyncedLine {
-                    start_ms: 12_000,
-                    text: "Load up on guns".into()
-                },
-                SyncedLine {
-                    start_ms: 15_500,
-                    text: "Bring your friends".into()
-                },
-                SyncedLine {
-                    start_ms: 62_000,
-                    text: "It's fun".into()
-                },
+                SyncedLine { start_ms: 12_000, text: "Load up on guns".into() },
+                SyncedLine { start_ms: 15_500, text: "Bring your friends".into() },
+                SyncedLine { start_ms: 62_000, text: "It's fun".into() },
             ]
         );
     }

@@ -57,13 +57,7 @@ impl TrackSort {
             },
             TrackSort::Album => &Sort {
                 label: "tracks.album",
-                columns: &[
-                    "t.album_sort_key",
-                    "t.album_id",
-                    "t.disc_number",
-                    TRACK_NUMBER,
-                    "t.id",
-                ],
+                columns: &["t.album_sort_key", "t.album_id", "t.disc_number", TRACK_NUMBER, "t.id"],
                 unknown: Unknown::Empty,
             },
             TrackSort::DateAdded => &Sort {
@@ -116,25 +110,12 @@ pub async fn list(
     };
     let request = Request::new(sort, query.order, query.cursor, query.limit)?;
     let filtered = query.album_id.is_some() || query.artist_id.is_some();
-    let source = source(
-        library,
-        query.album_id.as_deref(),
-        query.artist_id.as_deref(),
-        query.artist_credit,
-    );
-    db.read(move |conn| {
-        request.read(
-            conn,
-            library,
-            "track_count",
-            filtered,
-            &source,
-            list_summary,
-        )
-    })
-    .await?
-    .map(Json)
-    .ok_or_else(Problem::not_found)
+    let source =
+        source(library, query.album_id.as_deref(), query.artist_id.as_deref(), query.artist_credit);
+    db.read(move |conn| request.read(conn, library, "track_count", filtered, &source, list_summary))
+        .await?
+        .map(Json)
+        .ok_or_else(Problem::not_found)
 }
 
 pub async fn get(
@@ -173,12 +154,7 @@ fn source(library: i64, album: Option<&str>, artist: Option<&str>, credit: Artis
         filter += " AND t.album_id = ?";
         params.push(key(album).into());
     }
-    Source {
-        select: SELECT,
-        from,
-        filter,
-        params,
-    }
+    Source { select: SELECT, from, filter, params }
 }
 
 #[cfg(test)]

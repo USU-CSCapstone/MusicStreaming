@@ -43,11 +43,8 @@ fn fixture(tx: &Transaction) -> rusqlite::Result<()> {
          UPDATE libraries SET album_count = 4 WHERE id = 1;",
     )?;
     // Radiohead also plays on a track of Abbey Road, so it appears there without owning it.
-    let root: i64 = tx.query_row(
-        "SELECT id FROM library_roots WHERE library_id = 1",
-        [],
-        |r| r.get(0),
-    )?;
+    let root: i64 =
+        tx.query_row("SELECT id FROM library_roots WHERE library_id = 1", [], |r| r.get(0))?;
     tx.execute(
         "INSERT INTO tracks (id, library_id, album_id, root_id, path, file_size, file_mtime,
                              title, sort_key, artist_sort_key, album_sort_key, codec, container,
@@ -88,13 +85,8 @@ async fn pages_through_every_sort_with_unknowns_last() {
         // Undated albums come last, in name order; there the unknown album's empty name
         // sorts like any other value, since only a sort's first column has an unknown part.
         assert_eq!(
-            page_through(
-                &app,
-                &format!("{base}?sort=releaseDate&order=desc"),
-                limit,
-                "title"
-            )
-            .await,
+            page_through(&app, &format!("{base}?sort=releaseDate&order=desc"), limit, "title")
+                .await,
             json!(["Kid A", "Abbey Road", "Nevermind", null]),
             "newest first, limit {limit}"
         );
@@ -104,13 +96,7 @@ async fn pages_through_every_sort_with_unknowns_last() {
             "oldest first, limit {limit}"
         );
         assert_eq!(
-            page_through(
-                &app,
-                &format!("{base}?sort=dateAdded&order=desc"),
-                limit,
-                "title"
-            )
-            .await,
+            page_through(&app, &format!("{base}?sort=dateAdded&order=desc"), limit, "title").await,
             json!(["Kid A", null, "Nevermind", "Abbey Road"]),
             "newest additions first, limit {limit}"
         );
@@ -125,23 +111,15 @@ async fn filters_by_artist_credit() {
     let base = "/api/v1/libraries/1/albums";
     for (query, expected, total) in [
         ("artistId=11&artistCredit=owned", json!(["Kid A"]), 1),
-        (
-            "artistId=11&artistCredit=featured",
-            json!(["Abbey Road"]),
-            1,
-        ),
+        ("artistId=11&artistCredit=featured", json!(["Abbey Road"]), 1),
         ("artistId=11", json!(["Abbey Road", "Kid A"]), 2),
         ("artistId=20", json!([]), 0),
         ("artistId=nobody", json!([]), 0),
     ] {
         let (status, page) = json(&app, &format!("{base}?{query}")).await;
         assert_eq!(status, StatusCode::OK, "{query}");
-        let titles: Vec<Value> = page["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|a| a["title"].clone())
-            .collect();
+        let titles: Vec<Value> =
+            page["items"].as_array().unwrap().iter().map(|a| a["title"].clone()).collect();
         assert_eq!(Value::from(titles), expected, "{query}");
         assert_eq!(page["total"], total, "{query}");
     }
@@ -169,10 +147,7 @@ async fn gets_an_album_with_its_discs() {
     assert_eq!(unknown["title"], Value::Null);
     assert_eq!(unknown["artists"], json!([{ "id": "13", "name": null }]));
     assert_eq!(unknown["trackTotal"], Value::Null);
-    assert_eq!(
-        unknown["discs"],
-        json!([{ "number": null, "trackCount": 3, "trackTotal": null }])
-    );
+    assert_eq!(unknown["discs"], json!([{ "number": null, "trackCount": 3, "trackTotal": null }]));
     let (_, missing) = json(&app, "/api/v1/libraries/1/albums/102").await;
     assert_eq!(missing["availability"], "missing");
 }

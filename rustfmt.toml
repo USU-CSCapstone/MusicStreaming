@@ -1,0 +1,2 @@
+# Let short calls, struct literals, and if/else expressions use the whole line width.
+use_small_heuristics = "Max"

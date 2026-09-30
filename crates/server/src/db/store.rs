@@ -32,10 +32,7 @@ pub struct SqliteStore {
 impl SqliteStore {
     /// Loads the roots with a blocking read, so call it outside the async runtime.
     pub fn new(db: Arc<Database>) -> Result<SqliteStore, DbError> {
-        let store = SqliteStore {
-            db,
-            roots: Arc::default(),
-        };
+        let store = SqliteStore { db, roots: Arc::default() };
         store.refresh_roots()?;
         Ok(store)
     }
@@ -87,11 +84,7 @@ impl Store for SqliteStore {
         let Some(lib) = Self::lib(library) else {
             return Vec::new();
         };
-        logged(
-            "interrupted_scans",
-            scans::interrupted(self, lib),
-            Vec::new(),
-        )
+        logged("interrupted_scans", scans::interrupted(self, lib), Vec::new())
     }
 
     fn lookup(&self, library: &LibraryId, path: &Path) -> Option<IndexedFile> {
@@ -160,10 +153,6 @@ impl Store for SqliteStore {
         let Some(lib) = Self::lib(library) else {
             return Vec::new();
         };
-        logged(
-            "duplicate_candidates",
-            tracks::duplicate_candidates(self, lib),
-            Vec::new(),
-        )
+        logged("duplicate_candidates", tracks::duplicate_candidates(self, lib), Vec::new())
     }
 }

@@ -54,9 +54,7 @@ impl Sort {
 
     /// Reads a request's cursor, before the query runs.
     pub fn after(&self, cursor: Option<&str>, order: Order) -> Result<Option<Vec<Value>>, Problem> {
-        cursor
-            .map(|text| cursor::decode(text, &self.label(order), self.columns.len()))
-            .transpose()
+        cursor.map(|text| cursor::decode(text, &self.label(order), self.columns.len())).transpose()
     }
 
     fn is_unknown(&self, first: &Value) -> bool {
@@ -95,14 +93,8 @@ pub fn fetch<T>(
         if rows.len() == wanted {
             break;
         }
-        let (sql, params) = part_query(
-            source,
-            request.sort,
-            request.order,
-            after,
-            unknown,
-            wanted - rows.len(),
-        );
+        let (sql, params) =
+            part_query(source, request.sort, request.order, after, unknown, wanted - rows.len());
         let mut statement = conn.prepare_cached(&sql)?;
         let mut result = statement.query(params_from_iter(params))?;
         while let Some(row) = result.next()? {
@@ -116,8 +108,7 @@ pub fn fetch<T>(
 
     let next = if rows.len() > request.limit {
         rows.truncate(request.limit);
-        rows.last()
-            .map(|(_, key)| cursor::encode(&request.sort.label(request.order), key))
+        rows.last().map(|(_, key)| cursor::encode(&request.sort.label(request.order), key))
     } else {
         None
     };
@@ -150,11 +141,7 @@ fn part_query(
     };
     // In the unknown part the first column is the same for every row, so it is left out of
     // the order and the keyset.
-    let columns = if unknown {
-        &sort.columns[1..]
-    } else {
-        sort.columns
-    };
+    let columns = if unknown { &sort.columns[1..] } else { sort.columns };
     // The cursor applies to the part it is in; the part after it starts from the top.
     let starts_unknown = after.is_some_and(|values| sort.is_unknown(&values[0]));
     let cursor = after.filter(|_| unknown == starts_unknown);
@@ -171,17 +158,11 @@ fn part_query(
     if let Some(values) = cursor {
         let values = if unknown { &values[1..] } else { values };
         let placeholders = vec!["?"; values.len()].join(", ");
-        conditions.push(format!(
-            "({}) {comparison} ({placeholders})",
-            columns.join(", ")
-        ));
+        conditions.push(format!("({}) {comparison} ({placeholders})", columns.join(", ")));
         params.extend(values.iter().cloned());
     }
-    let order_by = columns
-        .iter()
-        .map(|column| format!("{column}{direction}"))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let order_by =
+        columns.iter().map(|column| format!("{column}{direction}")).collect::<Vec<_>>().join(", ");
     // A bound limit keeps the text the same for every page, so the statement cache reuses it.
     params.push(Value::Integer(limit as i64));
     let sql = format!(
@@ -203,10 +184,7 @@ fn part_query(
 pub fn assert_indexed(conn: &Connection, source: &Source, sort: &Sort) -> rusqlite::Result<()> {
     let columns = sort.columns.join(", ");
     let rows: i64 = conn.query_row(
-        &format!(
-            "SELECT count(*) FROM {} WHERE {}",
-            source.from, source.filter
-        ),
+        &format!("SELECT count(*) FROM {} WHERE {}", source.from, source.filter),
         params_from_iter(source.params.iter()),
         |row| row.get(0),
     )?;
@@ -232,14 +210,9 @@ pub fn assert_indexed(conn: &Connection, source: &Source, sort: &Sort) -> rusqli
                 // column's subquery, such as a track's credits, nests below them.
                 let steps: Vec<(i64, String)> = conn
                     .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?
-                    .query_map(params_from_iter(params), |row| {
-                        Ok((row.get(1)?, row.get(3)?))
-                    })?
+                    .query_map(params_from_iter(params), |row| Ok((row.get(1)?, row.get(3)?)))?
                     .collect::<rusqlite::Result<_>>()?;
-                let plan = steps
-                    .iter()
-                    .map(|(_, step)| step.as_str())
-                    .collect::<Vec<_>>();
+                let plan = steps.iter().map(|(_, step)| step.as_str()).collect::<Vec<_>>();
                 let plan = plan.join(" | ");
                 let page: Vec<&str> = steps
                     .iter()
@@ -249,10 +222,7 @@ pub fn assert_indexed(conn: &Connection, source: &Source, sort: &Sort) -> rusqli
                 // A search of an index on its leading columns, not a skip-scan past them, and no
                 // sort of the page. Every subquery searches by a key too.
                 assert!(page[0].starts_with("SEARCH"), "{sql}\n{plan}");
-                assert!(
-                    !page.iter().any(|step| step.contains("TEMP B-TREE")),
-                    "{sql}\n{plan}"
-                );
+                assert!(!page.iter().any(|step| step.contains("TEMP B-TREE")), "{sql}\n{plan}");
                 assert!(!plan.contains("ANY("), "{sql}\n{plan}");
                 assert!(!plan.contains("SCAN "), "{sql}\n{plan}");
             }
@@ -263,10 +233,6 @@ pub fn assert_indexed(conn: &Connection, source: &Source, sort: &Sort) -> rusqli
 
 /// How many rows `source` holds, for a page's `total`.
 pub fn count(conn: &Connection, source: &Source) -> rusqlite::Result<i64> {
-    let sql = format!(
-        "SELECT count(*) FROM {} WHERE {}",
-        source.from, source.filter
-    );
-    conn.prepare_cached(&sql)?
-        .query_row(params_from_iter(source.params.iter()), |row| row.get(0))
+    let sql = format!("SELECT count(*) FROM {} WHERE {}", source.from, source.filter);
+    conn.prepare_cached(&sql)?.query_row(params_from_iter(source.params.iter()), |row| row.get(0))
 }

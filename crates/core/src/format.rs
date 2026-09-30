@@ -91,10 +91,7 @@ impl Format {
 
     /// Whether the format is lossless.
     pub fn is_lossless(self) -> bool {
-        matches!(
-            self,
-            Format::Flac | Format::Alac | Format::Wav | Format::Aiff
-        )
+        matches!(self, Format::Flac | Format::Alac | Format::Wav | Format::Aiff)
     }
 
     /// Display name for clients.

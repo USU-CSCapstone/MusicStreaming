@@ -78,9 +78,7 @@ impl Database {
         // Gathers query-planner statistics where they are missing (design/database.md §4).
         writer.execute_batch("PRAGMA optimize = 0x10002")?;
 
-        let reader_count = thread::available_parallelism()
-            .map_or(4, NonZeroUsize::get)
-            .max(2);
+        let reader_count = thread::available_parallelism().map_or(4, NonZeroUsize::get).max(2);
         let mut readers = Vec::with_capacity(reader_count);
         for _ in 0..reader_count {
             let reader = Connection::open_with_flags(
@@ -135,11 +133,7 @@ impl Database {
             readers = reader_count,
             "database ready"
         );
-        Ok(Database {
-            writer: writer_queue,
-            readers: reader_queue,
-            _threads: Threads(threads),
-        })
+        Ok(Database { writer: writer_queue, readers: reader_queue, _threads: Threads(threads) })
     }
 
     /// Runs `f` on a reader. Every query inside it sees the same snapshot of the database.
@@ -148,9 +142,7 @@ impl Database {
         F: FnOnce(&Connection) -> rusqlite::Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        queue(&self.readers, in_snapshot(f))?
-            .await
-            .map_err(|_| DbError::Aborted)?
+        queue(&self.readers, in_snapshot(f))?.await.map_err(|_| DbError::Aborted)?
     }
 
     /// [`read`](Self::read), for threads outside the async runtime. Panics inside it.
@@ -159,9 +151,7 @@ impl Database {
         F: FnOnce(&Connection) -> rusqlite::Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        queue(&self.readers, in_snapshot(f))?
-            .blocking_recv()
-            .map_err(|_| DbError::Aborted)?
+        queue(&self.readers, in_snapshot(f))?.blocking_recv().map_err(|_| DbError::Aborted)?
     }
 
     /// Runs `f` on the writer in one transaction, committed if it returns `Ok` and rolled back
@@ -171,9 +161,7 @@ impl Database {
         F: FnOnce(&Transaction) -> rusqlite::Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        queue(&self.writer, in_transaction(f))?
-            .await
-            .map_err(|_| DbError::Aborted)?
+        queue(&self.writer, in_transaction(f))?.await.map_err(|_| DbError::Aborted)?
     }
 
     /// [`write`](Self::write), for threads outside the async runtime. Panics inside it.
@@ -182,9 +170,7 @@ impl Database {
         F: FnOnce(&Transaction) -> rusqlite::Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        queue(&self.writer, in_transaction(f))?
-            .blocking_recv()
-            .map_err(|_| DbError::Aborted)?
+        queue(&self.writer, in_transaction(f))?.blocking_recv().map_err(|_| DbError::Aborted)?
     }
 }
 
@@ -288,14 +274,10 @@ mod tests {
     #[tokio::test]
     async fn reads_see_committed_writes() {
         let (_temp, db) = open();
-        db.write(|tx| tx.execute(INSERT_LIBRARY, [1]))
-            .await
-            .unwrap();
+        db.write(|tx| tx.execute(INSERT_LIBRARY, [1])).await.unwrap();
         let name: String = db
             .read(|conn| {
-                conn.query_row("SELECT name FROM libraries WHERE id = 1", [], |row| {
-                    row.get(0)
-                })
+                conn.query_row("SELECT name FROM libraries WHERE id = 1", [], |row| row.get(0))
             })
             .await
             .unwrap();
@@ -343,20 +325,15 @@ mod tests {
     #[tokio::test]
     async fn a_panicking_job_does_not_take_down_its_thread() {
         let (_temp, db) = open();
-        let result = db
-            .write(|_| -> rusqlite::Result<()> { panic!("boom") })
-            .await;
+        let result = db.write(|_| -> rusqlite::Result<()> { panic!("boom") }).await;
         assert!(matches!(result, Err(DbError::Aborted)));
-        db.write(|tx| tx.execute(INSERT_LIBRARY, [1]))
-            .await
-            .unwrap();
+        db.write(|tx| tx.execute(INSERT_LIBRARY, [1])).await.unwrap();
     }
 
     #[test]
     fn blocking_calls_work_outside_the_runtime() {
         let (_temp, db) = open();
-        db.write_blocking(|tx| tx.execute(INSERT_LIBRARY, [1]))
-            .unwrap();
+        db.write_blocking(|tx| tx.execute(INSERT_LIBRARY, [1])).unwrap();
         let count: i64 = db
             .read_blocking(|conn| {
                 conn.query_row("SELECT count(*) FROM libraries", [], |row| row.get(0))
@@ -372,9 +349,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         {
             let db = Database::open(&path).unwrap();
-            runtime
-                .block_on(db.write(|tx| tx.execute(INSERT_LIBRARY, [1])))
-                .unwrap();
+            runtime.block_on(db.write(|tx| tx.execute(INSERT_LIBRARY, [1]))).unwrap();
         }
         let db = Database::open(&path).unwrap();
         let count: i64 = runtime

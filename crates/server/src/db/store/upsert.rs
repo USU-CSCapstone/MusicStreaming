@@ -45,11 +45,7 @@ pub fn upsert_track(
     // Album artists: tagged, else the track artists, else unknown for a
     // compilation with no album-artist tag (`requirements/scanning.md` §2).
     let album_credits: Vec<Option<&str>> = if !rec.tags.album_artists.is_empty() {
-        rec.tags
-            .album_artists
-            .iter()
-            .map(|s| Some(s.as_str()))
-            .collect()
+        rec.tags.album_artists.iter().map(|s| Some(s.as_str())).collect()
     } else if rec.tags.compilation {
         vec![None]
     } else {
@@ -176,11 +172,7 @@ pub fn upsert_track(
     if let Some(l) = lyrics {
         let synced = if l.synced {
             let lines = jewelcase_core::lrc::parse(&l.text);
-            if lines.is_empty() {
-                None
-            } else {
-                Some(serde_json::to_string(&lines).unwrap())
-            }
+            if lines.is_empty() { None } else { Some(serde_json::to_string(&lines).unwrap()) }
         } else {
             None
         };
@@ -203,20 +195,11 @@ pub fn upsert_track(
             params![album_id, image_id],
         )?;
     }
-    let artist_targets: &[i64] = if album_credits.iter().any(|c| c.is_some()) {
-        &album_artist_ids
-    } else {
-        &artist_ids
-    };
+    let artist_targets: &[i64] =
+        if album_credits.iter().any(|c| c.is_some()) { &album_artist_ids } else { &artist_ids };
     if let Some(img) = &rec.artist_image {
-        let image_id = upsert_image(
-            tx,
-            lib,
-            root_id,
-            &relative(&rec.root, &img.path),
-            false,
-            &img.info,
-        )?;
+        let image_id =
+            upsert_image(tx, lib, root_id, &relative(&rec.root, &img.path), false, &img.info)?;
         for artist_id in artist_targets {
             tx.execute(
                     "UPDATE artists SET image_id = ?2 WHERE id = ?1 AND image_id IS NULL AND name IS NOT NULL",
@@ -234,9 +217,7 @@ pub fn upsert_track(
     }
 
     touched.albums.insert(album_id);
-    touched
-        .artists
-        .extend(artist_ids.iter().chain(&album_artist_ids));
+    touched.artists.extend(artist_ids.iter().chain(&album_artist_ids));
     feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)?;
     Ok(())
 }

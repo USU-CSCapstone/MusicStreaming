@@ -35,11 +35,7 @@ impl Scanning {
     pub fn start(db: &Arc<Database>, ffmpeg: &Ffmpeg) -> anyhow::Result<Scanning> {
         let store = Arc::new(SqliteStore::new(db.clone()).context("cannot initialise the store")?);
         let governor = Arc::new(Governor::new());
-        let analyzer = Arc::new(Analyzer::new(
-            ffmpeg.clone(),
-            store.clone(),
-            governor.clone(),
-        ));
+        let analyzer = Arc::new(Analyzer::new(ffmpeg.clone(), store.clone(), governor.clone()));
         let placeholders = Arc::new(Placeholders::new(ffmpeg.clone(), store.clone()));
 
         let libs = db.read_blocking(libraries::all)?;
@@ -74,19 +70,12 @@ impl Scanning {
                 scanner,
                 watcher,
                 schedule,
-                analysis: analyzer
-                    .clone()
-                    .start(config.id.clone(), Duration::from_secs(30)),
+                analysis: analyzer.clone().start(config.id.clone(), Duration::from_secs(30)),
                 // Soon after a scan finds an image, since clients draw its placeholder at once.
-                placeholders: placeholders
-                    .clone()
-                    .start(config.id, Duration::from_secs(5)),
+                placeholders: placeholders.clone().start(config.id, Duration::from_secs(5)),
             });
         }
-        Ok(Scanning {
-            governor,
-            libraries: running,
-        })
+        Ok(Scanning { governor, libraries: running })
     }
 
     /// Stops everything, each once the work in hand is done: the triggers first, so nothing new

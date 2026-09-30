@@ -145,31 +145,21 @@ pub fn tag_wav(path: &Path, title: &str, artist: &str, album: &str) {
 pub fn tag_wav_with(path: &Path, items: &[(ItemKey, &str)]) {
     let mut tag = Tag::new(TagType::Id3v2);
     for (key, value) in items {
-        tag.push(lofty::tag::TagItem::new(
-            *key,
-            lofty::tag::ItemValue::Text((*value).to_owned()),
-        ));
+        tag.push(lofty::tag::TagItem::new(*key, lofty::tag::ItemValue::Text((*value).to_owned())));
     }
     tag.save_to_path(path, WriteOptions::default()).unwrap();
 }
 
 pub fn make_album(root: &Path, artist: &str, album: &str, n: usize) {
     for i in 1..=n {
-        let p = root
-            .join(artist)
-            .join(album)
-            .join(format!("{i:02} - Track {i}.wav"));
+        let p = root.join(artist).join(album).join(format!("{i:02} - Track {i}.wav"));
         write_small_wav(&p);
         tag_wav(&p, &format!("Track {i}"), artist, album);
     }
 }
 
 pub fn library(root: &Path) -> LibraryConfig {
-    LibraryConfig {
-        id: "1".into(),
-        roots: vec![root.to_path_buf()],
-        excludes: Vec::new(),
-    }
+    LibraryConfig { id: "1".into(), roots: vec![root.to_path_buf()], excludes: Vec::new() }
 }
 
 /// Run one scan of `scopes` synchronously against `store`.
@@ -206,20 +196,12 @@ pub fn scan_once(
 }
 
 pub fn scan_library(store: &dyn Store, lib: &LibraryConfig) -> Scan {
-    scan_once(
-        store,
-        lib,
-        Trigger::Manual,
-        lib.roots.iter().map(Scope::root).collect(),
-    )
+    scan_once(store, lib, Trigger::Manual, lib.roots.iter().map(Scope::root).collect())
 }
 
 fn live(store: &dyn InspectStore, lib: &LibraryConfig) -> Vec<InspectTrack> {
-    let mut v: Vec<InspectTrack> = store
-        .inspect_tracks(&lib.id)
-        .into_iter()
-        .filter(|t| !t.missing)
-        .collect();
+    let mut v: Vec<InspectTrack> =
+        store.inspect_tracks(&lib.id).into_iter().filter(|t| !t.missing).collect();
     v.sort_by(|a, b| a.path.cmp(&b.path));
     v
 }
@@ -238,11 +220,7 @@ pub fn cold_scan_then_incremental_is_all_unchanged<S: InspectStore>(make: Factor
     make_album(&root, "Nirvana", "In Utero", 2);
     fs::write(root.join("Nirvana/artist.txt"), "bio").unwrap();
     fs::write(root.join("Nirvana/Nevermind/cover.png"), PNG).unwrap();
-    fs::write(
-        root.join("Nirvana/Nevermind/01 - Track 1.lrc"),
-        "[00:01.00]hi",
-    )
-    .unwrap();
+    fs::write(root.join("Nirvana/Nevermind/01 - Track 1.lrc"), "[00:01.00]hi").unwrap();
     fs::write(root.join("readme.txt"), "ignored").unwrap();
     fs::write(root.join("Nirvana/old.wma"), "ignored too").unwrap();
 
@@ -253,34 +231,20 @@ pub fn cold_scan_then_incremental_is_all_unchanged<S: InspectStore>(make: Factor
     assert_eq!(first.state, ScanState::Completed);
     assert_eq!(first.progress.files_seen, 5);
     assert_eq!(first.progress.added, 5);
-    assert_eq!(
-        first.progress.problems,
-        0,
-        "{:?}",
-        store.inspect_problems(&lib.id)
-    );
+    assert_eq!(first.progress.problems, 0, "{:?}", store.inspect_problems(&lib.id));
     let tracks = live(&store, &lib);
     assert_eq!(tracks.len(), 5);
 
-    let t1 = tracks
-        .iter()
-        .find(|t| t.path.ends_with("Nevermind/01 - Track 1.wav"))
-        .unwrap();
+    let t1 = tracks.iter().find(|t| t.path.ends_with("Nevermind/01 - Track 1.wav")).unwrap();
     assert!(t1.has_artwork, "cover.png in the album folder");
     assert!(t1.has_biography, "artist.txt one level up");
     assert!(t1.has_sidecar_lyrics, "lyrics by stem");
     assert_eq!(t1.title, "Track 1");
     assert_eq!(t1.artists, vec!["Nirvana"]);
     assert_eq!(t1.sort_artist, "nirvana");
-    let utero = tracks
-        .iter()
-        .find(|t| t.path.ends_with("In Utero/01 - Track 1.wav"))
-        .unwrap();
+    let utero = tracks.iter().find(|t| t.path.ends_with("In Utero/01 - Track 1.wav")).unwrap();
     assert!(!utero.has_artwork, "no cover anywhere above In Utero");
-    assert!(
-        utero.has_biography,
-        "biography inherited from the artist folder"
-    );
+    assert!(utero.has_biography, "biography inherited from the artist folder");
 
     let feed_after_first = store.feed_len(&lib.id);
     assert!(feed_after_first >= 5, "at least one feed row per track");
@@ -338,11 +302,8 @@ pub fn missing_then_returned<S: InspectStore>(make: Factory<S>) {
 
     let scan = scan_library(&store, &lib);
     assert_eq!(scan.progress.missing, 1);
-    let missing: Vec<InspectTrack> = store
-        .inspect_tracks(&lib.id)
-        .into_iter()
-        .filter(|t| t.missing)
-        .collect();
+    let missing: Vec<InspectTrack> =
+        store.inspect_tracks(&lib.id).into_iter().filter(|t| t.missing).collect();
     assert_eq!(missing.len(), 1);
     assert!(missing[0].path.ends_with("02 - Track 2.wav"));
     let id = missing[0].id;
@@ -350,24 +311,14 @@ pub fn missing_then_returned<S: InspectStore>(make: Factory<S>) {
 
     // The file comes back byte-identical with its old mtime: reconnects.
     fs::write(&p, &bytes).unwrap();
-    fs::File::open(&p)
-        .unwrap()
-        .set_modified(meta.modified().unwrap())
-        .unwrap();
+    fs::File::open(&p).unwrap().set_modified(meta.modified().unwrap()).unwrap();
     let scan = scan_library(&store, &lib);
     assert_eq!(scan.progress.missing, 0);
     assert_eq!(scan.progress.added, 0);
-    let t = store
-        .inspect_tracks(&lib.id)
-        .into_iter()
-        .find(|t| t.path == p)
-        .unwrap();
+    let t = store.inspect_tracks(&lib.id).into_iter().find(|t| t.path == p).unwrap();
     assert!(!t.missing);
     assert_eq!(t.id, id);
-    assert!(
-        store.feed_len(&lib.id) >= feed_before_return,
-        "the return is announced"
-    );
+    assert!(store.feed_len(&lib.id) >= feed_before_return, "the return is announced");
 }
 
 pub fn unavailable_root_suspends_and_touches_nothing<S: InspectStore>(make: Factory<S>) {
@@ -411,11 +362,7 @@ pub fn bad_file_is_a_problem_that_clears<S: InspectStore>(make: Factory<S>) {
     let lib = library(&root);
 
     let scan = scan_library(&store, &lib);
-    assert_eq!(
-        scan.state,
-        ScanState::Completed,
-        "one bad file never aborts a scan"
-    );
+    assert_eq!(scan.state, ScanState::Completed, "one bad file never aborts a scan");
     assert_eq!(scan.progress.added, 1);
     assert_eq!(scan.progress.problems, 1);
     let problems = store.inspect_problems(&lib.id);
@@ -507,10 +454,7 @@ pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory
         started_at: Some(std::time::SystemTime::now()),
         finished_at: None,
         progress: ScanProgress::default(),
-        cursor: Some(Cursor {
-            scope_index: 0,
-            after_directory: Some(root.join("A/X")),
-        }),
+        cursor: Some(Cursor { scope_index: 0, after_directory: Some(root.join("A/X")) }),
     };
     let mut interrupted_row = interrupted.clone();
     interrupted_row.id = store.create_scan(&interrupted);
@@ -524,14 +468,10 @@ pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory
     assert_eq!(resumed.state, ScanState::Completed);
     assert_eq!(resumed.progress.files_seen, 4, "{:?}", resumed.progress);
 
-    let a = scanner.request(
-        Trigger::Manual,
-        vec![Scope::folder(&root, root.join("A"), Depth::Subtree)],
-    );
-    let b = scanner.request(
-        Trigger::Manual,
-        vec![Scope::folder(&root, root.join("A/X"), Depth::Directory)],
-    );
+    let a = scanner
+        .request(Trigger::Manual, vec![Scope::folder(&root, root.join("A"), Depth::Subtree)]);
+    let b = scanner
+        .request(Trigger::Manual, vec![Scope::folder(&root, root.join("A/X"), Depth::Directory)]);
     let all = scanner.scan_library(Trigger::Scheduled);
     let again = scanner.scan_library(Trigger::Manual);
     assert_eq!(a, b, "a covered scope joins the existing scan");
@@ -539,14 +479,8 @@ pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory
     scanner.wait_idle();
     let final_scans = store.inspect_scans(&lib.id);
     let a_scan = final_scans.iter().find(|s| s.id == a).unwrap();
-    assert!(matches!(
-        a_scan.state,
-        ScanState::Completed | ScanState::Cancelled
-    ));
-    assert_eq!(
-        final_scans.iter().find(|s| s.id == all).unwrap().state,
-        ScanState::Completed
-    );
+    assert!(matches!(a_scan.state, ScanState::Completed | ScanState::Cancelled));
+    assert_eq!(final_scans.iter().find(|s| s.id == all).unwrap().state, ScanState::Completed);
     assert_eq!(live(store.as_ref(), &lib).len(), 6);
     scanner.shutdown();
 }
@@ -562,15 +496,7 @@ pub fn placeholders_fill_once_per_image<S: InspectStore + 'static>(make: Factory
     make_album(&root, "B", "Y", 1);
     let cover = root.join("A/X/cover.png");
     let status = std::process::Command::new("ffmpeg")
-        .args([
-            "-nostdin",
-            "-v",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "color=red:s=300x200",
-        ])
+        .args(["-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=red:s=300x200"])
         .args(["-frames:v", "1"])
         .arg(&cover)
         .status()
@@ -584,27 +510,15 @@ pub fn placeholders_fill_once_per_image<S: InspectStore + 'static>(make: Factory
 
     let pending = store.next_without_placeholder(&lib.id, 10);
     assert_eq!(pending.len(), 2, "one per distinct image: {pending:?}");
-    let red = pending
-        .iter()
-        .find(|(_, path)| *path == cover)
-        .map(|(hash, _)| hash.clone())
-        .unwrap();
-    let broken = pending
-        .iter()
-        .find(|(hash, _)| *hash != red)
-        .unwrap()
-        .0
-        .clone();
+    let red =
+        pending.iter().find(|(_, path)| *path == cover).map(|(hash, _)| hash.clone()).unwrap();
+    let broken = pending.iter().find(|(hash, _)| *hash != red).unwrap().0.clone();
 
     let ffmpeg = jewelcase_ffmpeg::Ffmpeg::new(jewelcase_ffmpeg::Config::default());
     let placeholders = crate::placeholders::Placeholders::new(ffmpeg, store.clone());
     assert_eq!(placeholders.run_once(&lib.id, 10), 2);
     assert!(store.next_without_placeholder(&lib.id, 10).is_empty());
-    assert_eq!(
-        placeholders.run_once(&lib.id, 10),
-        0,
-        "a broken image is not retried"
-    );
+    assert_eq!(placeholders.run_once(&lib.id, 10), 0, "a broken image is not retried");
 
     let hash = store.inspect_placeholder(&lib.id, &red).unwrap();
     assert!(hash.len() < 40, "a few bytes: {}", hash.len());
@@ -613,10 +527,7 @@ pub fn placeholders_fill_once_per_image<S: InspectStore + 'static>(make: Factory
     let ratio = thumbhash::thumb_hash_to_approximate_aspect_ratio(&hash).unwrap();
     // ThumbHash keeps the aspect ratio only coarsely.
     assert!((ratio - 1.5).abs() < 0.2, "{ratio}");
-    assert_eq!(
-        store.inspect_placeholder(&lib.id, &broken),
-        Some(Vec::new())
-    );
+    assert_eq!(store.inspect_placeholder(&lib.id, &broken), Some(Vec::new()));
 }
 
 /// ```ignore

@@ -33,11 +33,7 @@ impl Placeholders {
     /// The placeholder for the image at `path`, or the picture attached to an audio file.
     pub fn placeholder(&self, path: &Path) -> Result<Vec<u8>, jewelcase_ffmpeg::Error> {
         let image = self.ffmpeg.decode_image(path, MAX_SIDE)?;
-        Ok(thumbhash::rgba_to_thumb_hash(
-            image.width,
-            image.height,
-            &image.pixels,
-        ))
+        Ok(thumbhash::rgba_to_thumb_hash(image.width, image.height, &image.pixels))
     }
 
     /// Fills up to `limit` placeholders, and returns how many images it tried; zero means none
@@ -71,10 +67,7 @@ impl Placeholders {
                 }
             })
             .expect("spawn placeholder thread");
-        PlaceholderWorker {
-            stop,
-            thread: Some(thread),
-        }
+        PlaceholderWorker { stop, thread: Some(thread) }
     }
 }
 

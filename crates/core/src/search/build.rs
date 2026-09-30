@@ -7,33 +7,22 @@ use super::{Document, Entry, Index, Kind, words};
 
 impl Index {
     pub fn build(documents: impl IntoIterator<Item = Document>) -> Index {
-        let folded: Vec<(Kind, Vec<String>, i64)> = documents
-            .into_iter()
-            .map(|doc| (doc.kind, words(&doc.name), doc.id))
-            .collect();
+        let folded: Vec<(Kind, Vec<String>, i64)> =
+            documents.into_iter().map(|doc| (doc.kind, words(&doc.name), doc.id)).collect();
 
         // Sorted, so vocabulary indexes compare as the words do. Set order never shows.
-        let distinct: HashSet<&str> = folded
-            .iter()
-            .flat_map(|(_, words, _)| words.iter().map(String::as_str))
-            .collect();
+        let distinct: HashSet<&str> =
+            folded.iter().flat_map(|(_, words, _)| words.iter().map(String::as_str)).collect();
         let mut vocabulary: Vec<&str> = distinct.into_iter().collect();
         vocabulary.sort_unstable();
-        let position: HashMap<&str, u32> = vocabulary
-            .iter()
-            .enumerate()
-            .map(|(i, word)| (*word, i as u32))
-            .collect();
+        let position: HashMap<&str, u32> =
+            vocabulary.iter().enumerate().map(|(i, word)| (*word, i as u32)).collect();
 
         // In tie-break order. Comparing indexes is comparing the words, and cheaper.
         let mut sorted: Vec<(Kind, Vec<u32>, i64)> = folded
             .iter()
             .map(|(kind, words, id)| {
-                (
-                    *kind,
-                    words.iter().map(|w| position[w.as_str()]).collect(),
-                    *id,
-                )
+                (*kind, words.iter().map(|w| position[w.as_str()]).collect(), *id)
             })
             .collect();
         sorted.sort_unstable();

@@ -100,12 +100,7 @@ impl<'a> Walk<'a> {
         excludes: &'a GlobSet,
         resume_after: Option<&'a Path>,
     ) -> Walk<'a> {
-        Walk {
-            scope,
-            excludes,
-            resume_after,
-            stack: vec![scope.path.clone()],
-        }
+        Walk { scope, excludes, resume_after, stack: vec![scope.path.clone()] }
     }
 
     fn relative(&self, path: &Path) -> PathBuf {
@@ -207,11 +202,7 @@ impl Iterator for Walk<'_> {
                 continue;
             }
             candidates.sort_by(|a, b| a.path.cmp(&b.path));
-            return Some(WalkItem::Directory(Directory {
-                path: dir,
-                candidates,
-                files,
-            }));
+            return Some(WalkItem::Directory(Directory { path: dir, candidates, files }));
         }
     }
 }
@@ -265,10 +256,7 @@ mod tests {
             ]
         );
         let resumed = dirs(&scope, &none, Some(&root.join("a/x")));
-        assert_eq!(
-            resumed,
-            vec![root.join("b"), root.join("c"), root.join("c/y")]
-        );
+        assert_eq!(resumed, vec![root.join("b"), root.join("c"), root.join("c/y")]);
         let resumed = dirs(&scope, &none, Some(&root.join("c")));
         assert_eq!(resumed, vec![root.join("c/y")]);
     }
@@ -277,13 +265,9 @@ mod tests {
     fn excludes_and_extension_filter() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        for p in [
-            "keep/1.flac",
-            "keep/notes.txt",
-            "keep/cover.jpg",
-            "backup/2.flac",
-            "keep/song.wma",
-        ] {
+        for p in
+            ["keep/1.flac", "keep/notes.txt", "keep/cover.jpg", "backup/2.flac", "keep/song.wma"]
+        {
             touch(&root.join(p));
         }
         let scope = Scope::root(root);
@@ -315,10 +299,7 @@ mod tests {
     #[test]
     fn root_checks() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(matches!(
-            check_root(tmp.path()),
-            Err(RootUnavailable::Empty)
-        ));
+        assert!(matches!(check_root(tmp.path()), Err(RootUnavailable::Empty)));
         touch(&tmp.path().join("x.flac"));
         assert!(check_root(tmp.path()).is_ok());
         assert!(matches!(

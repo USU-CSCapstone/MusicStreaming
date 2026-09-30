@@ -71,10 +71,7 @@ pub fn roots(conn: &Connection, library_id: i64) -> Result<Vec<Root>> {
         "SELECT id, path FROM library_roots WHERE library_id = ?1 AND removed_at IS NULL ORDER BY path",
     )?;
     let rows = stmt.query_map([library_id], |r| {
-        Ok(Root {
-            id: r.get(0)?,
-            path: PathBuf::from(r.get::<_, String>(1)?),
-        })
+        Ok(Root { id: r.get(0)?, path: PathBuf::from(r.get::<_, String>(1)?) })
     })?;
     rows.collect()
 }

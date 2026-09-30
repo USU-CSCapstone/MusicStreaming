@@ -21,12 +21,7 @@ pub fn describe(bytes: &[u8]) -> Option<ImageInfo> {
     let size = imagesize::blob_size(bytes).ok()?;
     let format = format!("{:?}", imagesize::image_type(bytes).ok()?).to_ascii_lowercase();
     let hash = Sha256::digest(bytes).to_vec();
-    Some(ImageInfo {
-        hash,
-        format,
-        width: size.width as u32,
-        height: size.height as u32,
-    })
+    Some(ImageInfo { hash, format, width: size.width as u32, height: size.height as u32 })
 }
 
 #[cfg(test)]

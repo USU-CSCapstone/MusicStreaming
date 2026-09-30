@@ -16,9 +16,7 @@ pub fn distance(query: &[char], word: &[char], max: u8) -> Option<(u8, bool)> {
         current[0] = j;
         for i in 1..=m {
             let cost = usize::from(query[i - 1] != word[j - 1]);
-            let mut d = (previous[i] + 1)
-                .min(current[i - 1] + 1)
-                .min(previous[i - 1] + cost);
+            let mut d = (previous[i] + 1).min(current[i - 1] + 1).min(previous[i - 1] + cost);
             if i > 1 && j > 1 && query[i - 1] == word[j - 2] && query[i - 2] == word[j - 1] {
                 d = d.min(before[i - 2] + 1);
             }
@@ -57,11 +55,7 @@ mod tests {
         assert_eq!(d("swift", "swift", 1), Some((0, false)));
         assert_eq!(d("swi", "swift", 1), Some((0, true)));
         assert_eq!(d("sweft", "swift", 1), Some((1, false)));
-        assert_eq!(
-            d("tyalor", "taylor", 1),
-            Some((1, false)),
-            "a transposition is one typo"
-        );
+        assert_eq!(d("tyalor", "taylor", 1), Some((1, false)), "a transposition is one typo");
         assert_eq!(d("swfi", "swiftly", 1), Some((1, true)));
         assert_eq!(d("swift", "sw", 1), None);
         assert_eq!(d("abcdef", "uvwxyz", 2), None);

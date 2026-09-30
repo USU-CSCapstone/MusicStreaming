@@ -74,10 +74,7 @@ impl Ffmpeg {
     /// binaries; call [`Ffmpeg::verify`] for that.
     pub fn new(config: Config) -> Ffmpeg {
         let registry = Registry::start(config.stall_timeout, config.max_processes);
-        Ffmpeg {
-            config: Arc::new(config),
-            registry,
-        }
+        Ffmpeg { config: Arc::new(config), registry }
     }
 
     pub fn config(&self) -> &Config {
@@ -98,10 +95,7 @@ impl Ffmpeg {
         let version_out = Command::new(&self.config.ffmpeg)
             .args(["-hide_banner", "-version"])
             .output()
-            .map_err(|e| Error::Spawn {
-                binary: self.config.ffmpeg.clone(),
-                source: e,
-            })?;
+            .map_err(|e| Error::Spawn { binary: self.config.ffmpeg.clone(), source: e })?;
         let version = String::from_utf8_lossy(&version_out.stdout)
             .lines()
             .next()
@@ -115,10 +109,7 @@ impl Ffmpeg {
         let out = Command::new(&self.config.ffmpeg)
             .args(["-hide_banner", "-decoders"])
             .output()
-            .map_err(|e| Error::Spawn {
-                binary: self.config.ffmpeg.clone(),
-                source: e,
-            })?;
+            .map_err(|e| Error::Spawn { binary: self.config.ffmpeg.clone(), source: e })?;
         if !out.status.success() {
             return Err(Error::Failed {
                 status: out.status.code(),
@@ -131,10 +122,7 @@ impl Ffmpeg {
         Command::new(&self.config.ffprobe)
             .args(["-hide_banner", "-version"])
             .output()
-            .map_err(|e| Error::Spawn {
-                binary: self.config.ffprobe.clone(),
-                source: e,
-            })?;
+            .map_err(|e| Error::Spawn { binary: self.config.ffprobe.clone(), source: e })?;
 
         let mut missing = Vec::new();
         for format in Format::ALL {
@@ -143,13 +131,7 @@ impl Ffmpeg {
             }
         }
         // WAV and AIFF may carry wider PCM; check the rest of the family.
-        for pcm in [
-            "pcm_s24le",
-            "pcm_s32le",
-            "pcm_f32le",
-            "pcm_s16be",
-            "pcm_s24be",
-        ] {
+        for pcm in ["pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_s16be", "pcm_s24be"] {
             if !decoders.iter().any(|d| d == pcm) {
                 tracing::warn!(
                     decoder = pcm,
@@ -157,11 +139,7 @@ impl Ffmpeg {
                 );
             }
         }
-        Ok(Capabilities {
-            version,
-            decoders,
-            missing,
-        })
+        Ok(Capabilities { version, decoders, missing })
     }
 
     /// Read stream properties needed to interpret a raw PCM decode.

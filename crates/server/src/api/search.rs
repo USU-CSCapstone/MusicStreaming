@@ -75,9 +75,7 @@ pub async fn search(
     for section in query
         .types
         .as_deref()
-        .map_or(vec!["tracks", "albums", "artists"], |t| {
-            t.split(',').collect()
-        })
+        .map_or(vec!["tracks", "albums", "artists"], |t| t.split(',').collect())
     {
         match section {
             "tracks" => kinds.push(Kind::Track),
@@ -86,9 +84,7 @@ pub async fn search(
             // There are no playlists yet, and lyrics are not indexed yet.
             "playlists" | "lyrics" => {}
             _ => {
-                return Err(invalid(
-                    "types must be tracks, albums, artists, playlists, or lyrics",
-                ));
+                return Err(invalid("types must be tracks, albums, artists, playlists, or lyrics"));
             }
         }
     }
@@ -143,11 +139,7 @@ fn results(conn: &Connection, library: i64, found: Vec<Found>) -> rusqlite::Resu
                 Kind::Album => "albums",
                 Kind::Artist => "artists",
             };
-            sections.push(Section {
-                kind,
-                items,
-                total: section.total,
-            });
+            sections.push(Section { kind, items, total: section.total });
         }
     }
     Ok(sections)

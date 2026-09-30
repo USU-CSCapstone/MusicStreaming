@@ -69,13 +69,7 @@ pub struct RunReport {
 impl Analyzer {
     pub fn new(ffmpeg: Ffmpeg, store: Arc<dyn Store>, governor: Arc<Governor>) -> Analyzer {
         governor.attach_ffmpeg(ffmpeg.registry().clone());
-        Analyzer {
-            ffmpeg,
-            store,
-            governor,
-            features: None,
-            waveform_bins: DEFAULT_WAVEFORM_BINS,
-        }
+        Analyzer { ffmpeg, store, governor, features: None, waveform_bins: DEFAULT_WAVEFORM_BINS }
     }
 
     pub fn with_features(mut self, extractor: Arc<dyn FeatureExtractor>) -> Analyzer {
@@ -94,11 +88,8 @@ impl Analyzer {
         let mut stream = self.ffmpeg.decode_pcm(path, &info)?;
         let channels = info.channels as usize;
 
-        let mut meter = EbuR128::new(
-            info.channels,
-            info.sample_rate,
-            Mode::I | Mode::LRA | Mode::TRUE_PEAK,
-        )?;
+        let mut meter =
+            EbuR128::new(info.channels, info.sample_rate, Mode::I | Mode::LRA | Mode::TRUE_PEAK)?;
         let mut waveform = WaveformBuilder::new(self.waveform_bins, info.estimated_frames());
         let mut features = self.features.as_ref().map(|f| f.begin(info.sample_rate));
 
@@ -118,10 +109,7 @@ impl Analyzer {
             }
         }
 
-        let integrated = meter
-            .loudness_global()
-            .ok()
-            .filter(|l| l.is_finite() && *l > -100.0);
+        let integrated = meter.loudness_global().ok().filter(|l| l.is_finite() && *l > -100.0);
         let range = meter.loudness_range().ok().filter(|l| l.is_finite());
         let mut peak: f64 = 0.0;
         for ch in 0..info.channels {
@@ -129,11 +117,7 @@ impl Analyzer {
                 peak = peak.max(p);
             }
         }
-        let true_peak_dbtp = if peak > 0.0 {
-            Some(20.0 * peak.log10())
-        } else {
-            None
-        };
+        let true_peak_dbtp = if peak > 0.0 { Some(20.0 * peak.log10()) } else { None };
 
         Ok(AnalysisResult {
             analyzer_version: ANALYZER_VERSION,
@@ -160,14 +144,12 @@ impl Analyzer {
                     tracing::warn!(path = %path.display(), kind = ?problem.kind, "analysis failed: {}", problem.detail);
                     // Record a placeholder so the track is not retried every
                     // pass; a later scan of the file clears it by re-upserting.
-                    self.store
-                        .store_analysis(library, track_id, failed_placeholder());
+                    self.store.store_analysis(library, track_id, failed_placeholder());
                     report.failed += 1;
                 }
                 Err(e) => {
                     tracing::warn!(path = %path.display(), error = %e, "analysis failed");
-                    self.store
-                        .store_analysis(library, track_id, failed_placeholder());
+                    self.store.store_analysis(library, track_id, failed_placeholder());
                     report.failed += 1;
                 }
             }
@@ -192,10 +174,7 @@ impl Analyzer {
                 }
             })
             .expect("spawn analysis thread");
-        AnalysisWorker {
-            stop,
-            thread: Some(thread),
-        }
+        AnalysisWorker { stop, thread: Some(thread) }
     }
 }
 
@@ -207,10 +186,7 @@ fn failed_placeholder() -> AnalysisResult {
         integrated_lufs: None,
         loudness_range_lu: None,
         true_peak_dbtp: None,
-        waveform: Waveform {
-            peaks: Vec::new(),
-            rms: Vec::new(),
-        },
+        waveform: Waveform { peaks: Vec::new(), rms: Vec::new() },
         features: None,
     }
 }

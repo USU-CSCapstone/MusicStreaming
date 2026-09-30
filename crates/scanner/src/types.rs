@@ -71,19 +71,11 @@ pub struct Scope {
 impl Scope {
     pub fn root(root: impl Into<PathBuf>) -> Scope {
         let root = root.into();
-        Scope {
-            path: root.clone(),
-            root,
-            depth: Depth::Subtree,
-        }
+        Scope { path: root.clone(), root, depth: Depth::Subtree }
     }
 
     pub fn folder(root: impl Into<PathBuf>, path: impl Into<PathBuf>, depth: Depth) -> Scope {
-        Scope {
-            root: root.into(),
-            path: path.into(),
-            depth,
-        }
+        Scope { root: root.into(), path: path.into(), depth }
     }
 
     /// Whether every file this scope would visit is also visited by `self`.
@@ -146,9 +138,7 @@ pub struct Cursor {
 impl Scan {
     /// Whether `other`'s work is entirely within this scan's.
     pub fn covers(&self, other: &[Scope]) -> bool {
-        other
-            .iter()
-            .all(|o| self.scopes.iter().any(|s| s.covers(o)))
+        other.iter().all(|o| self.scopes.iter().any(|s| s.covers(o)))
     }
 }
 
@@ -227,18 +217,12 @@ impl TrackRecord {
     /// The display title: the tag, or the filename stem
     /// (`requirements/scanning.md` §2).
     pub fn display_title(&self) -> String {
-        self.tags
-            .title
-            .clone()
-            .unwrap_or_else(|| filename_title(&self.path))
+        self.tags.title.clone().unwrap_or_else(|| filename_title(&self.path))
     }
 
     /// Whichever lyrics apply: embedded first, then sidecar.
     pub fn lyrics(&self) -> Option<&Lyrics> {
-        self.tags
-            .lyrics
-            .as_ref()
-            .or(self.lyrics_sidecar.as_ref().map(|l| &l.lyrics))
+        self.tags.lyrics.as_ref().or(self.lyrics_sidecar.as_ref().map(|l| &l.lyrics))
     }
 
     /// Path relative to the root, as the store keeps it.
@@ -361,10 +345,7 @@ impl Waveform {
         if blob.len() < 3 + 2 * n {
             return None;
         }
-        Some(Waveform {
-            peaks: blob[3..3 + n].to_vec(),
-            rms: blob[3 + n..3 + 2 * n].to_vec(),
-        })
+        Some(Waveform { peaks: blob[3..3 + n].to_vec(), rms: blob[3 + n..3 + 2 * n].to_vec() })
     }
 }
 
@@ -397,9 +378,7 @@ pub struct DuplicateGroup {
 
 /// Milliseconds since the Unix epoch, saturating at zero for older clocks.
 pub fn system_time_ms(t: SystemTime) -> u64 {
-    t.duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    t.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 pub fn now_ms() -> u64 {
@@ -412,10 +391,7 @@ mod tests {
 
     #[test]
     fn waveform_blob_round_trips() {
-        let w = Waveform {
-            peaks: vec![1, 2, 3],
-            rms: vec![4, 5, 6],
-        };
+        let w = Waveform { peaks: vec![1, 2, 3], rms: vec![4, 5, 6] };
         assert_eq!(Waveform::from_blob(&w.to_blob()), Some(w));
         assert_eq!(Waveform::from_blob(&[9, 0, 0]), None);
     }

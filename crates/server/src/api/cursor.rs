@@ -140,26 +140,16 @@ mod tests {
     fn stays_compact_for_long_titles() {
         let title =
             "symphony no. 9 in d minor, op. 125 'choral': iv. presto — allegro assai".repeat(4);
-        let cursor = encode(
-            LABEL,
-            &[Value::Blob(title.clone().into_bytes()), Value::Integer(1)],
-        );
-        assert!(
-            cursor.len() < title.len() * 4 / 3 + 100,
-            "{} chars",
-            cursor.len()
-        );
+        let cursor = encode(LABEL, &[Value::Blob(title.clone().into_bytes()), Value::Integer(1)]);
+        assert!(cursor.len() < title.len() * 4 / 3 + 100, "{} chars", cursor.len());
     }
 
     #[test]
     fn is_only_accepted_where_it_came_from() {
         let cursor = encode(LABEL, &row());
-        for (label, columns) in [
-            ("albums.name.desc", 5),
-            ("tracks.name.asc", 5),
-            (LABEL, 4),
-            (LABEL, 6),
-        ] {
+        for (label, columns) in
+            [("albums.name.desc", 5), ("tracks.name.asc", 5), (LABEL, 4), (LABEL, 6)]
+        {
             let problem = decode(&cursor, label, columns).unwrap_err();
             assert_eq!(code(problem), "validation_failed", "{label} {columns}");
         }

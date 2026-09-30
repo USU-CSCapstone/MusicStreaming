@@ -30,12 +30,7 @@ pub struct Images {
 impl Images {
     pub fn new(cache: PathBuf, ffmpeg: PathBuf) -> Images {
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
-        Images {
-            cache,
-            ffmpeg,
-            renders: Semaphore::new(cores),
-            next_temp: AtomicU64::new(0),
-        }
+        Images { cache, ffmpeg, renders: Semaphore::new(cores), next_temp: AtomicU64::new(0) }
     }
 
     /// The resized copy of the image with content `hash` at `size`, from the file at `source`,
@@ -56,10 +51,7 @@ impl Images {
             return Ok(path);
         }
         // A missing file is not a broken image: its drive may be back soon.
-        anyhow::ensure!(
-            tokio::fs::try_exists(source).await?,
-            "the image's file is missing"
-        );
+        anyhow::ensure!(tokio::fs::try_exists(source).await?, "the image's file is missing");
         tokio::fs::create_dir_all(&dir).await?;
         let output = self.render(size, source).await?;
         if !output.status.success() || output.stdout.is_empty() {
@@ -75,10 +67,8 @@ impl Images {
             );
         }
         // Written whole and then renamed, so no request ever reads half a file.
-        let temp = dir.join(format!(
-            "{hex}-{size}.{}.tmp",
-            self.next_temp.fetch_add(1, Ordering::Relaxed)
-        ));
+        let temp = dir
+            .join(format!("{hex}-{size}.{}.tmp", self.next_temp.fetch_add(1, Ordering::Relaxed)));
         let written = match tokio::fs::write(&temp, output.stdout).await {
             Ok(()) => tokio::fs::rename(&temp, &path).await,
             Err(error) => Err(error),

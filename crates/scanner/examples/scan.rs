@@ -24,18 +24,11 @@ fn main() {
     let watch = rest.iter().any(|a| a == "--watch");
 
     let store = Arc::new(MemoryStore::new());
-    let library = LibraryConfig {
-        id: "demo".into(),
-        roots: vec![root.clone()],
-        excludes: Vec::new(),
-    };
+    let library =
+        LibraryConfig { id: "demo".into(), roots: vec![root.clone()], excludes: Vec::new() };
     let governor = Arc::new(Governor::new());
-    let scanner = Scanner::start(
-        store.clone(),
-        library.clone(),
-        governor.clone(),
-        ScanOptions::default(),
-    );
+    let scanner =
+        Scanner::start(store.clone(), library.clone(), governor.clone(), ScanOptions::default());
 
     let started = Instant::now();
     scanner.scan_library(Trigger::Initial);
@@ -44,17 +37,12 @@ fn main() {
 
     let tracks = store.tracks(&library.id);
     let scan = store.scans(&library.id).into_iter().last().unwrap();
-    println!(
-        "scan {:?} in {:.2?}: {:?}",
-        scan.state, elapsed, scan.progress
-    );
+    println!("scan {:?} in {:.2?}: {:?}", scan.state, elapsed, scan.progress);
     println!("{} tracks indexed", tracks.len());
 
     let mut by_format = std::collections::BTreeMap::new();
     for t in &tracks {
-        *by_format
-            .entry(t.record.properties.format.display_name())
-            .or_insert(0usize) += 1;
+        *by_format.entry(t.record.properties.format.display_name()).or_insert(0usize) += 1;
     }
     for (f, n) in &by_format {
         println!("  {f}: {n}");
@@ -71,11 +59,7 @@ fn main() {
                 Some(ArtworkSource::Sidecar(_)) => "art:sidecar ",
                 None => "",
             },
-            if r.lyrics_sidecar.is_some() || r.tags.lyrics.is_some() {
-                "lyrics"
-            } else {
-                ""
-            }
+            if r.lyrics_sidecar.is_some() || r.tags.lyrics.is_some() { "lyrics" } else { "" }
         );
     }
     if tracks.len() > 10 {
@@ -98,10 +82,9 @@ fn main() {
     if analyze {
         let ffmpeg = Ffmpeg::new(Config::default());
         match ffmpeg.verify() {
-            Ok(caps) => println!(
-                "ffmpeg {} ok; missing decoders: {:?}",
-                caps.version, caps.missing
-            ),
+            Ok(caps) => {
+                println!("ffmpeg {} ok; missing decoders: {:?}", caps.version, caps.missing)
+            }
             Err(e) => {
                 eprintln!("ffmpeg unavailable: {e}");
                 std::process::exit(1);
@@ -139,10 +122,7 @@ fn main() {
             let scans = store.scans(&library.id);
             for s in scans.iter().skip(seen) {
                 if s.state != ScanState::Queued && s.state != ScanState::Running {
-                    println!(
-                        "scan {} {:?} {:?}: {:?}",
-                        s.id, s.trigger, s.state, s.progress
-                    );
+                    println!("scan {} {:?} {:?}: {:?}", s.id, s.trigger, s.state, s.progress);
                 }
             }
             seen = scans

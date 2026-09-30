@@ -43,15 +43,7 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<(), DbError>
         let now = now_ms();
         let mut touched = Touched::default();
         for record in &batch.upserts {
-            upsert_track(
-                &roots,
-                tx,
-                lib,
-                record,
-                batch.scan_id as i64,
-                now,
-                &mut touched,
-            )?;
+            upsert_track(&roots, tx, lib, record, batch.scan_id as i64, now, &mut touched)?;
         }
         for id in batch.touched.iter().chain(&batch.returned) {
             tx.execute(
@@ -97,11 +89,7 @@ pub fn mark_missing_unseen(
         let now = now_ms();
         // Scope clause without GLOB, so pattern characters in folder
         // names cannot widen or narrow it.
-        let prefix = if rel.is_empty() {
-            String::new()
-        } else {
-            format!("{rel}/")
-        };
+        let prefix = if rel.is_empty() { String::new() } else { format!("{rel}/") };
         let clause = match depth {
             Depth::Subtree => "substr(path, 1, ?3) = ?4",
             Depth::Directory => "substr(path, 1, ?3) = ?4 AND instr(substr(path, ?3 + 1), '/') = 0",
@@ -112,10 +100,10 @@ pub fn mark_missing_unseen(
         );
         let ids: Vec<i64> = {
             let mut stmt = tx.prepare(&sql)?;
-            let rows = stmt.query_map(
-                params![root_id, scan_id as i64, prefix.len() as i64, prefix],
-                |r| r.get(0),
-            )?;
+            let rows = stmt
+                .query_map(params![root_id, scan_id as i64, prefix.len() as i64, prefix], |r| {
+                    r.get(0)
+                })?;
             rows.collect::<std::result::Result<_, _>>()?
         };
         let mut touched = Touched::default();

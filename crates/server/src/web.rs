@@ -91,10 +91,7 @@ mod tests {
         let (_temp, app) = app();
         let (status, cache, body) = get(&app, "/_app/immutable/entry.abc.js").await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            cache.as_deref(),
-            Some("public, max-age=31536000, immutable")
-        );
+        assert_eq!(cache.as_deref(), Some("public, max-age=31536000, immutable"));
         assert_eq!(body, "js");
         // A stale page asking for a file an update removed gets a 404, not the app.
         let (status, _, _) = get(&app, "/_app/immutable/entry.old.js").await;

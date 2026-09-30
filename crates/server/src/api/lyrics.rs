@@ -81,10 +81,7 @@ mod tests {
                 json!({ "kind": "synced", "lines": [{ "startMs": 1000, "text": "Hello" }],
                         "plain": null }),
             ),
-            (
-                2,
-                json!({ "kind": "plain", "lines": null, "plain": "Hello" }),
-            ),
+            (2, json!({ "kind": "plain", "lines": null, "plain": "Hello" })),
             // Library 2's track 3 has none.
             (3, json!({ "kind": "none", "lines": null, "plain": null })),
         ] {

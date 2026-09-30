@@ -35,11 +35,7 @@ fn expected() -> TagSet {
         track_total: Some(12),
         disc_number: Some(1),
         disc_total: Some(2),
-        release_date: Some(PartialDate {
-            year: 1991,
-            month: Some(9),
-            day: Some(24),
-        }),
+        release_date: Some(PartialDate { year: 1991, month: Some(9), day: Some(24) }),
         genres: vec!["Grunge".into(), "Rock".into()],
         release_type: Some("album".into()),
         explicit: None,
@@ -85,28 +81,13 @@ fn write_tags(path: &Path, tag_type: TagType) {
     // ID3v2 carries lyrics in USLT, which lofty exposes as `UnsyncLyrics`;
     // Vorbis comments and MP4 use `Lyrics`. Real taggers do the same, and
     // the mapper must make both read identically.
-    let lyrics_key = if tag_type == TagType::Id3v2 {
-        ItemKey::UnsyncLyrics
-    } else {
-        ItemKey::Lyrics
-    };
+    let lyrics_key =
+        if tag_type == TagType::Id3v2 { ItemKey::UnsyncLyrics } else { ItemKey::Lyrics };
     tag.insert(text(lyrics_key, &e.lyrics.as_ref().unwrap().text));
-    tag.insert(text(
-        ItemKey::TrackTitleSortOrder,
-        e.title_sort.as_deref().unwrap(),
-    ));
-    tag.insert(text(
-        ItemKey::TrackArtistSortOrder,
-        e.artist_sort.as_deref().unwrap(),
-    ));
-    tag.insert(text(
-        ItemKey::AlbumTitleSortOrder,
-        e.album_sort.as_deref().unwrap(),
-    ));
-    tag.insert(text(
-        ItemKey::AlbumArtistSortOrder,
-        e.album_artist_sort.as_deref().unwrap(),
-    ));
+    tag.insert(text(ItemKey::TrackTitleSortOrder, e.title_sort.as_deref().unwrap()));
+    tag.insert(text(ItemKey::TrackArtistSortOrder, e.artist_sort.as_deref().unwrap()));
+    tag.insert(text(ItemKey::AlbumTitleSortOrder, e.album_sort.as_deref().unwrap()));
+    tag.insert(text(ItemKey::AlbumArtistSortOrder, e.album_artist_sort.as_deref().unwrap()));
     tag.push_picture(
         Picture::unchecked(PNG.to_vec())
             .pic_type(PictureType::CoverFront)
@@ -129,54 +110,14 @@ fn every_format_reads_the_same_tagset() {
 
     // (file, ffmpeg args, tag scheme lofty writes, expected format)
     let cases: Vec<(&str, Vec<&str>, TagType, Format)> = vec![
-        (
-            "t.flac",
-            vec!["-c:a", "flac"],
-            TagType::VorbisComments,
-            Format::Flac,
-        ),
-        (
-            "t.mp3",
-            vec!["-c:a", "libmp3lame", "-b:a", "128k"],
-            TagType::Id3v2,
-            Format::Mp3,
-        ),
-        (
-            "aac.m4a",
-            vec!["-c:a", "aac", "-b:a", "128k"],
-            TagType::Mp4Ilst,
-            Format::Aac,
-        ),
-        (
-            "alac.m4a",
-            vec!["-c:a", "alac"],
-            TagType::Mp4Ilst,
-            Format::Alac,
-        ),
-        (
-            "t.ogg",
-            vec!["-c:a", "libvorbis"],
-            TagType::VorbisComments,
-            Format::Vorbis,
-        ),
-        (
-            "t.opus",
-            vec!["-c:a", "libopus"],
-            TagType::VorbisComments,
-            Format::Opus,
-        ),
-        (
-            "t.aiff",
-            vec!["-c:a", "pcm_s16be"],
-            TagType::Id3v2,
-            Format::Aiff,
-        ),
-        (
-            "t.wav",
-            vec!["-c:a", "pcm_s16le"],
-            TagType::Id3v2,
-            Format::Wav,
-        ),
+        ("t.flac", vec!["-c:a", "flac"], TagType::VorbisComments, Format::Flac),
+        ("t.mp3", vec!["-c:a", "libmp3lame", "-b:a", "128k"], TagType::Id3v2, Format::Mp3),
+        ("aac.m4a", vec!["-c:a", "aac", "-b:a", "128k"], TagType::Mp4Ilst, Format::Aac),
+        ("alac.m4a", vec!["-c:a", "alac"], TagType::Mp4Ilst, Format::Alac),
+        ("t.ogg", vec!["-c:a", "libvorbis"], TagType::VorbisComments, Format::Vorbis),
+        ("t.opus", vec!["-c:a", "libopus"], TagType::VorbisComments, Format::Opus),
+        ("t.aiff", vec!["-c:a", "pcm_s16be"], TagType::Id3v2, Format::Aiff),
+        ("t.wav", vec!["-c:a", "pcm_s16le"], TagType::Id3v2, Format::Wav),
     ];
 
     let want = expected();
@@ -188,10 +129,7 @@ fn every_format_reads_the_same_tagset() {
         let size = std::fs::metadata(&path).unwrap().len();
         let got = tags::read(&path, size).unwrap_or_else(|e| panic!("read {name}: {e}"));
         if got.properties.format != format {
-            failures.push(format!(
-                "{name}: format {:?}, wanted {format:?}",
-                got.properties.format
-            ));
+            failures.push(format!("{name}: format {:?}, wanted {format:?}", got.properties.format));
         }
         if got.tags != want {
             failures.push(format!("{name}:\n  got  {:?}\n  want {:?}", got.tags, want));
@@ -205,11 +143,7 @@ fn every_format_reads_the_same_tagset() {
         );
         assert!(got.properties.sample_rate.is_some(), "{name}");
     }
-    assert!(
-        failures.is_empty(),
-        "golden corpus diverged:\n{}",
-        failures.join("\n")
-    );
+    assert!(failures.is_empty(), "golden corpus diverged:\n{}", failures.join("\n"));
 }
 
 #[test]
@@ -242,13 +176,6 @@ fn id3v23_packed_totals_and_semicolons() {
     assert_eq!(got.disc_total, Some(2));
     assert_eq!(got.artists, vec!["Kendrick Lamar", "SZA"]);
     assert_eq!(got.genres, vec!["Hip-Hop", "R&B"]);
-    assert_eq!(
-        got.release_date,
-        Some(PartialDate {
-            year: 2018,
-            month: None,
-            day: None
-        })
-    );
+    assert_eq!(got.release_date, Some(PartialDate { year: 2018, month: None, day: None }));
     assert!(!got.has_embedded_art);
 }

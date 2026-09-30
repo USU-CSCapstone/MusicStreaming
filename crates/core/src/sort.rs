@@ -77,10 +77,7 @@ mod tests {
 
     #[test]
     fn sort_tag_wins() {
-        assert_eq!(
-            sort_key("The Beatles", Some("Beatles, The")),
-            "beatles, the"
-        );
+        assert_eq!(sort_key("The Beatles", Some("Beatles, The")), "beatles, the");
         assert_eq!(sort_key("The Beatles", Some("  ")), "beatles");
     }
 

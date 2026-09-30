@@ -51,7 +51,9 @@ impl Config {
         Config::from_vars(std::env::vars_os())
     }
 
-    pub fn from_vars(vars: impl IntoIterator<Item = (OsString, OsString)>) -> Result<Config, ConfigError> {
+    pub fn from_vars(
+        vars: impl IntoIterator<Item = (OsString, OsString)>,
+    ) -> Result<Config, ConfigError> {
         let mut config = Config::default();
         let mut problems = Vec::new();
 
@@ -120,15 +122,9 @@ fn parse_base_path(value: &str) -> Result<String, &'static str> {
         !segment.is_empty()
             && segment != "."
             && segment != ".."
-            && segment
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"-._~".contains(&b))
+            && segment.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._~".contains(&b))
     };
-    if rest.split('/').all(valid_segment) {
-        Ok(trimmed.to_owned())
-    } else {
-        Err(EXPECTED)
-    }
+    if rest.split('/').all(valid_segment) { Ok(trimmed.to_owned()) } else { Err(EXPECTED) }
 }
 
 fn parse_log(value: &str) -> Result<String, &'static str> {
@@ -162,10 +158,7 @@ mod tests {
     use super::*;
 
     fn parse(vars: &[(&str, &str)]) -> Result<Config, ConfigError> {
-        Config::from_vars(
-            vars.iter()
-                .map(|(k, v)| (OsString::from(k), OsString::from(v))),
-        )
+        Config::from_vars(vars.iter().map(|(k, v)| (OsString::from(k), OsString::from(v))))
     }
 
     #[test]
@@ -197,27 +190,16 @@ mod tests {
 
     #[test]
     fn base_path_is_normalized() {
-        for (input, expected) in [
-            ("", ""),
-            ("/", ""),
-            ("/music/", "/music"),
-            ("/a/b.c~d", "/a/b.c~d"),
-        ] {
+        for (input, expected) in
+            [("", ""), ("/", ""), ("/music/", "/music"), ("/a/b.c~d", "/a/b.c~d")]
+        {
             assert_eq!(parse_base_path(input), Ok(expected.to_owned()), "{input:?}");
         }
     }
 
     #[test]
     fn base_path_rejects_malformed_paths() {
-        for input in [
-            "music",
-            "//",
-            "/a//b",
-            "/a b",
-            "/../etc",
-            "/music?x",
-            "/caf\u{e9}",
-        ] {
+        for input in ["music", "//", "/a//b", "/a b", "/../etc", "/music?x", "/caf\u{e9}"] {
             assert!(parse_base_path(input).is_err(), "{input:?}");
         }
     }
@@ -239,10 +221,7 @@ mod tests {
         .unwrap_err();
         let message = error.to_string();
         assert_eq!(error.problems.len(), 3, "{message}");
-        assert!(
-            message.contains("JEWELCASE_DATADIR is not a Jewelcase setting"),
-            "{message}"
-        );
+        assert!(message.contains("JEWELCASE_DATADIR is not a Jewelcase setting"), "{message}");
         assert!(
             message.contains("JEWELCASE_PORT is \"http\"; expected a port number"),
             "{message}"

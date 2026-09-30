@@ -32,10 +32,7 @@ pub fn find_duplicates(store: &dyn Store, library: &LibraryId) -> Vec<DuplicateG
         if members.len() > 1 {
             groups.push(DuplicateGroup {
                 reason: DuplicateReason::MatchingTags,
-                tracks: members
-                    .iter()
-                    .map(|c| (c.track_id, c.path.clone()))
-                    .collect(),
+                tracks: members.iter().map(|c| (c.track_id, c.path.clone())).collect(),
             });
         }
     }
@@ -45,28 +42,16 @@ pub fn find_duplicates(store: &dyn Store, library: &LibraryId) -> Vec<DuplicateG
         BTreeMap::new();
     for c in &candidates {
         let Some(album) = &c.album else { continue };
-        let key = format!(
-            "{}\u{1}{}",
-            album.to_lowercase(),
-            c.album_artists.join(";").to_lowercase()
-        );
+        let key =
+            format!("{}\u{1}{}", album.to_lowercase(), c.album_artists.join(";").to_lowercase());
         let dir = c.path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
-        by_album
-            .entry(key)
-            .or_default()
-            .entry(dir)
-            .or_default()
-            .push(c);
+        by_album.entry(key).or_default().entry(dir).or_default().push(c);
     }
     for (_, dirs) in by_album {
         if dirs.len() > 1 {
             groups.push(DuplicateGroup {
                 reason: DuplicateReason::AlbumUnderTwoPaths,
-                tracks: dirs
-                    .values()
-                    .flatten()
-                    .map(|c| (c.track_id, c.path.clone()))
-                    .collect(),
+                tracks: dirs.values().flatten().map(|c| (c.track_id, c.path.clone())).collect(),
             });
         }
     }

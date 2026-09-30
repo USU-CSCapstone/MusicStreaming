@@ -14,11 +14,8 @@ use crate::db::libraries;
 fn fixture(tx: &Transaction) -> rusqlite::Result<()> {
     libraries::create(tx, Some(1), "Music", &[Path::new("/music")], &[])?;
     libraries::create(tx, Some(2), "Other", &[Path::new("/other")], &[])?;
-    let root: i64 = tx.query_row(
-        "SELECT id FROM library_roots WHERE library_id = 1",
-        [],
-        |r| r.get(0),
-    )?;
+    let root: i64 =
+        tx.query_row("SELECT id FROM library_roots WHERE library_id = 1", [], |r| r.get(0))?;
     tx.execute(
         "INSERT INTO images (id, library_id, hash, format, width, height, root_id, path, embedded)
          VALUES (40, 1, x'00', 'jpeg', 600, 600, ?1, 'The Beatles/artist.jpg', 0)",
@@ -66,13 +63,7 @@ async fn pages_through_every_sort_with_the_unknown_artist_last() {
             "limit {limit}"
         );
         assert_eq!(
-            page_through(
-                &app,
-                &format!("{base}?sort=dateAdded&order=desc"),
-                limit,
-                "name"
-            )
-            .await,
+            page_through(&app, &format!("{base}?sort=dateAdded&order=desc"), limit, "name").await,
             json!(["Nirvana", "The Beatles", null, "Radiohead"]),
             "limit {limit}"
         );
@@ -131,10 +122,7 @@ async fn bad_parameters_are_validation_problems() {
     // Shaped exactly like an artist cursor, but from the album list.
     let album_cursor = crate::api::cursor::encode(
         "albums.name.asc",
-        &[
-            rusqlite::types::Value::Blob(b"beatles".to_vec()),
-            rusqlite::types::Value::Integer(10),
-        ],
+        &[rusqlite::types::Value::Blob(b"beatles".to_vec()), rusqlite::types::Value::Integer(10)],
     );
     for query in [
         "limit=0".to_owned(),

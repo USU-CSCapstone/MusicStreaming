@@ -33,19 +33,13 @@ pub fn create(store: &SqliteStore, lib: i64, scan: &Scan) -> Result<ScanId, DbEr
 
 pub fn update(store: &SqliteStore, scan: &Scan) -> Result<(), DbError> {
     let scan = scan.clone();
-    store
-        .db
-        .write_blocking(move |tx| save(tx, scan.id as i64, &scan))
+    store.db.write_blocking(move |tx| save(tx, scan.id as i64, &scan))
 }
 
 /// The library's scans that were queued or running when the server last stopped.
 pub fn interrupted(store: &SqliteStore, lib: i64) -> Result<Vec<Scan>, DbError> {
     store.db.read_blocking(move |conn| {
-        read(
-            conn,
-            lib,
-            "AND state IN ('queued', 'running') ORDER BY created_at, id",
-        )
+        read(conn, lib, "AND state IN ('queued', 'running') ORDER BY created_at, id")
     })
 }
 
@@ -53,8 +47,7 @@ pub fn interrupted(store: &SqliteStore, lib: i64) -> Result<Vec<Scan>, DbError> 
 impl SqliteStore {
     /// All scans for a library, newest first. Only the tests read them until the admin API.
     pub fn scans(&self, library: i64) -> Result<Vec<Scan>, DbError> {
-        self.db
-            .read_blocking(move |conn| read(conn, library, "ORDER BY created_at DESC, id DESC"))
+        self.db.read_blocking(move |conn| read(conn, library, "ORDER BY created_at DESC, id DESC"))
     }
 }
 
@@ -163,14 +156,7 @@ mod tests {
         use Trigger::*;
         assert_eq!(
             [Initial, Watch, Scheduled, Manual, Reconfigure, Restore].map(name),
-            [
-                "initial",
-                "watch",
-                "scheduled",
-                "manual",
-                "reconfigure",
-                "restore"
-            ]
+            ["initial", "watch", "scheduled", "manual", "reconfigure", "restore"]
         );
         assert_eq!(
             [Queued, Running, Completed, Cancelled, Suspended].map(name),

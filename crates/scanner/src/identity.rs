@@ -42,9 +42,7 @@ pub enum Identity {
 /// to look up matches.
 pub fn identify(facts: &FileFacts<'_>, _library: &LibraryId, _store: &dyn Store) -> Identity {
     match facts.indexed {
-        Some(indexed) => Identity::Updated {
-            track_id: indexed.track_id,
-        },
+        Some(indexed) => Identity::Updated { track_id: indexed.track_id },
         None => Identity::New,
     }
 }

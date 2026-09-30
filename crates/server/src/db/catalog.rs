@@ -24,11 +24,9 @@ impl Touched {
     /// Everything a track currently points at.
     pub fn track(&mut self, tx: &Transaction<'_>, track_id: i64) -> Result<()> {
         if let Some(album) = tx
-            .query_row(
-                "SELECT album_id FROM tracks WHERE id = ?1",
-                [track_id],
-                |r| r.get::<_, i64>(0),
-            )
+            .query_row("SELECT album_id FROM tracks WHERE id = ?1", [track_id], |r| {
+                r.get::<_, i64>(0)
+            })
             .optional()?
         {
             self.albums.insert(album);
@@ -135,8 +133,7 @@ fn refresh_album_links(
 /// The most-used spelling, ties broken by bytes so a tie never flips
 /// between scans (`design/database.md` §3).
 fn most_used(tx: &Transaction<'_>, sql: &str, id: i64) -> Result<Option<String>> {
-    tx.query_row(sql, [id], |r| r.get::<_, String>(0))
-        .optional()
+    tx.query_row(sql, [id], |r| r.get::<_, String>(0)).optional()
 }
 
 fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i64) -> Result<()> {
@@ -262,11 +259,7 @@ pub fn recompute_album_loudness(tx: &Transaction<'_>, album: i64) -> Result<()> 
     let mut weight = 0.0f64;
     let mut peak: Option<f64> = None;
     for row in stmt.query_map([album], |r| {
-        Ok((
-            r.get::<_, i64>(0)?,
-            r.get::<_, f64>(1)?,
-            r.get::<_, Option<f64>>(2)?,
-        ))
+        Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?, r.get::<_, Option<f64>>(2)?))
     })? {
         let (dur, lufs, p) = row?;
         let w = (dur.max(1)) as f64;
@@ -276,11 +269,8 @@ pub fn recompute_album_loudness(tx: &Transaction<'_>, album: i64) -> Result<()> 
             peak = Some(peak.map_or(p, |q: f64| q.max(p)));
         }
     }
-    let loudness = if weight > 0.0 && energy > 0.0 {
-        Some(10.0 * (energy / weight).log10())
-    } else {
-        None
-    };
+    let loudness =
+        if weight > 0.0 && energy > 0.0 { Some(10.0 * (energy / weight).log10()) } else { None };
     tx.execute(
         "UPDATE albums SET loudness_lufs = ?2, peak_dbtp = ?3 WHERE id = ?1",
         params![album, loudness, peak],
@@ -301,11 +291,10 @@ fn recompute_artist(
         [artist],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    let album_count: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM album_artists WHERE artist_id = ?1",
-        [artist],
-        |r| r.get(0),
-    )?;
+    let album_count: i64 =
+        tx.query_row("SELECT COUNT(*) FROM album_artists WHERE artist_id = ?1", [artist], |r| {
+            r.get(0)
+        })?;
     let credited_as_album_artist: i64 = tx.query_row(
         "SELECT COUNT(*) FROM track_album_artists WHERE artist_id = ?1",
         [artist],
@@ -377,11 +366,8 @@ fn recompute_artist(
 }
 
 fn recompute_tag(tx: &Transaction<'_>, lib: i64, tag: i64, now: i64) -> Result<()> {
-    let track_count: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM track_tags WHERE tag_id = ?1",
-        [tag],
-        |r| r.get(0),
-    )?;
+    let track_count: i64 =
+        tx.query_row("SELECT COUNT(*) FROM track_tags WHERE tag_id = ?1", [tag], |r| r.get(0))?;
     if track_count == 0 {
         tx.execute("DELETE FROM tags WHERE id = ?1", [tag])?;
         feed::record(tx, lib, Entity::Tag, tag, Op::Delete, now)?;
@@ -393,16 +379,10 @@ fn recompute_tag(tx: &Transaction<'_>, lib: i64, tag: i64, now: i64) -> Result<(
         tag,
     )?
     .unwrap_or_default();
-    let album_count: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM album_tags WHERE tag_id = ?1",
-        [tag],
-        |r| r.get(0),
-    )?;
-    let artist_count: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM artist_tags WHERE tag_id = ?1",
-        [tag],
-        |r| r.get(0),
-    )?;
+    let album_count: i64 =
+        tx.query_row("SELECT COUNT(*) FROM album_tags WHERE tag_id = ?1", [tag], |r| r.get(0))?;
+    let artist_count: i64 =
+        tx.query_row("SELECT COUNT(*) FROM artist_tags WHERE tag_id = ?1", [tag], |r| r.get(0))?;
     tx.execute(
         "UPDATE tags SET name = ?2, sort_key = ?3, track_count = ?4, album_count = ?5, artist_count = ?6 WHERE id = ?1",
         params![tag, name, sort::sort_key(&name, None).into_bytes(), track_count, album_count, artist_count],
@@ -417,28 +397,13 @@ mod tests {
 
     #[test]
     fn album_types_follow_the_requirement() {
-        assert_eq!(
-            album_type(Some("album"), false, Some(3)),
-            "album",
-            "tag beats size"
-        );
-        assert_eq!(
-            album_type(Some("album; compilation"), false, None),
-            "compilation"
-        );
+        assert_eq!(album_type(Some("album"), false, Some(3)), "album", "tag beats size");
+        assert_eq!(album_type(Some("album; compilation"), false, None), "compilation");
         assert_eq!(album_type(Some("ep"), false, None), "ep");
-        assert_eq!(
-            album_type(None, true, Some(12)),
-            "compilation",
-            "flag beats size"
-        );
+        assert_eq!(album_type(None, true, Some(12)), "compilation", "flag beats size");
         assert_eq!(album_type(None, false, Some(2)), "single");
         assert_eq!(album_type(None, false, Some(5)), "ep");
         assert_eq!(album_type(None, false, Some(12)), "album");
-        assert_eq!(
-            album_type(None, false, None),
-            "album",
-            "no usable total falls through"
-        );
+        assert_eq!(album_type(None, false, None), "album", "no usable total falls through");
     }
 }

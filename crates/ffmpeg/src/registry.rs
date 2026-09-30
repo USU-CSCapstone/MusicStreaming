@@ -33,10 +33,7 @@ pub struct Registry {
 impl Registry {
     pub(crate) fn start(stall_timeout: Duration, max_processes: usize) -> Arc<Registry> {
         let registry = Arc::new(Registry {
-            state: Mutex::new(State {
-                children: HashMap::new(),
-                paused: false,
-            }),
+            state: Mutex::new(State { children: HashMap::new(), paused: false }),
             slot_free: Condvar::new(),
             stall_timeout,
             max_processes: max_processes.max(1),
@@ -70,13 +67,9 @@ impl Registry {
     pub(crate) fn register(&self, pid: u32) -> Arc<AtomicBool> {
         let stalled = Arc::new(AtomicBool::new(false));
         let mut state = self.state.lock().unwrap();
-        state.children.insert(
-            pid,
-            Entry {
-                last_progress: Instant::now(),
-                stalled: stalled.clone(),
-            },
-        );
+        state
+            .children
+            .insert(pid, Entry { last_progress: Instant::now(), stalled: stalled.clone() });
         if state.paused {
             // Born into a paused pool: stop it immediately.
             let _ = kill(Pid::from_raw(pid as i32), Signal::SIGSTOP);
