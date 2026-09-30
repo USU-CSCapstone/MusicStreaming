@@ -17,18 +17,21 @@ macro_rules! timestamp {
 }
 pub(crate) use timestamp;
 
-/// The rows of `table` (such as `albums al`, whose alias is `alias`) with these IDs in this
+/// The rows of `table`, named with its alias such as `albums al`, with these IDs in this
 /// library, in the order of `ids`, mapped by `map` from the columns in `select`. An ID that is
 /// not there is left out.
 pub fn by_ids<T>(
     conn: &Connection,
     select: &[&str],
     table: &str,
-    alias: &str,
     library: i64,
     ids: &[i64],
     mut map: impl FnMut(&Row) -> rusqlite::Result<T>,
 ) -> rusqlite::Result<Vec<T>> {
+    let alias = table
+        .rsplit(' ')
+        .next()
+        .expect("split yields at least one piece");
     // The IDs lead the join, so the rows come out in their order.
     let sql = format!(
         "SELECT {} FROM json_each(?2) AS ids CROSS JOIN {table} ON {alias}.id = ids.value \

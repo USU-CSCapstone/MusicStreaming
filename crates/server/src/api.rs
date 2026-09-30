@@ -30,7 +30,7 @@ use axum::{Json, Router};
 pub use id::Id;
 pub use images::Images;
 pub use problem::{Code, Problem};
-use search::Search;
+use search::Indexes;
 
 use crate::db::Database;
 
@@ -39,7 +39,7 @@ use crate::db::Database;
 struct AppState {
     db: Arc<Database>,
     images: Arc<Images>,
-    search: Arc<Search>,
+    indexes: Arc<Indexes>,
 }
 
 impl FromRef<AppState> for Arc<Database> {
@@ -48,9 +48,9 @@ impl FromRef<AppState> for Arc<Database> {
     }
 }
 
-impl FromRef<AppState> for Arc<Search> {
-    fn from_ref(state: &AppState) -> Arc<Search> {
-        state.search.clone()
+impl FromRef<AppState> for Arc<Indexes> {
+    fn from_ref(state: &AppState) -> Arc<Indexes> {
+        state.indexes.clone()
     }
 }
 
@@ -110,7 +110,7 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images) -> Router {
         .with_state(AppState {
             db,
             images: Arc::new(images),
-            search: Arc::default(),
+            indexes: Arc::default(),
         });
     Router::new()
         .nest(&prefix, api)
