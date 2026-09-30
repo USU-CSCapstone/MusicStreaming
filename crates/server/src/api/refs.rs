@@ -1,5 +1,7 @@
 //! Small references to other entities, shared by the browse responses.
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 
 use super::Id;
@@ -23,18 +25,33 @@ pub struct TagRef {
 #[derive(Clone, Serialize)]
 pub struct ImageRef {
     id: Id,
-    /// A draft field; empty until the image job makes placeholders (`images.placeholder`).
-    placeholder: &'static str,
+    /// The image's ThumbHash in base64, from which a client draws a blurred stand-in before the
+    /// image arrives (`requirements/offline.md` §1.1). Empty until the placeholder job has made
+    /// one, and for an image it could not decode.
+    placeholder: String,
 }
 
 impl ImageRef {
-    pub fn new(image_id: Option<i64>) -> Option<ImageRef> {
+    /// The image with this ID, if there is one, and its [`placeholder!`] column.
+    pub fn new(image_id: Option<i64>, placeholder: Option<Vec<u8>>) -> Option<ImageRef> {
         image_id.map(|id| ImageRef {
             id: Id(id),
-            placeholder: "",
+            placeholder: BASE64.encode(placeholder.unwrap_or_default()),
         })
     }
 }
+
+/// SQL for the placeholder of the image whose ID is the SQL `$image_id`, for [`ImageRef::new`].
+macro_rules! placeholder {
+    ($image_id:literal) => {
+        concat!(
+            "(SELECT placeholder FROM images WHERE images.id = ",
+            $image_id,
+            ")"
+        )
+    };
+}
+pub(crate) use placeholder;
 
 /// SQL for the artists credited on an `album` or a `track` whose ID is the SQL `$id`, as JSON
 /// that reads as `Vec<Credit>`, in credit order. Part of the row, so a page is one query.
