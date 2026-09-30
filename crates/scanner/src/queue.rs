@@ -225,18 +225,17 @@ fn worker(inner: Arc<Inner>) {
                 if q.shutdown {
                     return;
                 }
-                if let Some(s) = q.queued.pop_front() {
+                if let Some(mut s) = q.queued.pop_front() {
+                    // Running from the moment it leaves the queue, under the same lock, so a
+                    // request, cancel, or idle check always finds it in one place or the other.
+                    s.state = ScanState::Running;
+                    inner.cancel_running.store(false, Ordering::SeqCst);
+                    q.running = Some(s.clone());
                     break s;
                 }
                 q = inner.wake.wait(q).unwrap();
             }
         };
-        inner.cancel_running.store(false, Ordering::SeqCst);
-        {
-            let mut q = inner.queue.lock().unwrap();
-            scan.state = ScanState::Running;
-            q.running = Some(scan.clone());
-        }
         let library = inner.library.read().unwrap().clone();
         let ctx = ScanContext {
             store: inner.store.as_ref(),
