@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
 use crate::api::Id;
-use crate::api::refs::{Credit, ImageRef, TagRef, artists_json, genres_json};
+use crate::api::refs::{Credit, ImageRef, TagRef, artists_json, genres_json, placeholder};
 use crate::api::sql::{Json, timestamp};
 
 /// The spec's `AlbumSummary`, without `personal` until accounts exist.
@@ -66,6 +66,7 @@ pub const SELECT: &[&str] = &[
     timestamp!("al.added_at"),
     artists_json!("album", "al.id"),
     genres_json!("album", "al.id"),
+    placeholder!("al.image_id"),
 ];
 
 /// The whole album, or `None` if the library has no such album.
@@ -119,7 +120,7 @@ pub fn summary(row: &Row) -> rusqlite::Result<AlbumSummary> {
         disc_count: row.get(6)?,
         disc_total: row.get(7)?,
         duration_us: row.get(8)?,
-        image: ImageRef::new(row.get(9)?),
+        image: ImageRef::new(row.get(9)?, row.get(14)?),
         availability: if row.get(10)? { "available" } else { "missing" },
         added_at: row.get(11)?,
     })

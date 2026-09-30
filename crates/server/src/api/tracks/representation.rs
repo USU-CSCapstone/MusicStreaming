@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
 use crate::api::Id;
-use crate::api::refs::{Credit, ImageRef, TagRef, artists_json, genres_json};
+use crate::api::refs::{Credit, ImageRef, TagRef, artists_json, genres_json, placeholder};
 use crate::api::sql::{Json, timestamp};
 
 /// The spec's `TrackSummary`, without `personal` until accounts exist. A full `Track` has the
@@ -121,6 +121,7 @@ pub const SELECT: &[&str] = &[
     "(SELECT title FROM albums WHERE albums.id = t.album_id)",
     "(SELECT image_id FROM albums WHERE albums.id = t.album_id)",
     artists_json!("album", "t.album_id"),
+    placeholder!("(SELECT image_id FROM albums WHERE albums.id = t.album_id)"),
 ];
 
 /// A track as lists show it, from a row of [`SELECT`].
@@ -185,7 +186,7 @@ fn summary<A>(row: &Row, audio: A) -> rusqlite::Result<TrackSummary<A>> {
             id: Id(row.get(2)?),
             title: row.get(14)?,
             artists: row.get::<_, Json<_>>(16)?.0,
-            image: ImageRef::new(row.get(15)?),
+            image: ImageRef::new(row.get(15)?, row.get(17)?),
         },
         // The scanner files a track with no disc tag as disc 0.
         disc_number: Some(disc).filter(|disc| *disc != 0),

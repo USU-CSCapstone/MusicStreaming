@@ -308,6 +308,36 @@ async fn summaries_and_full_tracks() {
 }
 
 #[tokio::test]
+async fn images_carry_their_placeholders() {
+    let (_temp, db, app) = app("");
+    db.write(|tx| {
+        fixture(tx)?;
+        // Abbey Road's cover has a placeholder; The Beatles' photo could not be decoded, which
+        // the placeholder job records as empty.
+        tx.execute_batch(
+            "INSERT INTO images (id, library_id, hash, format, width, height, placeholder, root_id,
+                                 path, embedded)
+             SELECT 40, 1, x'01', 'jpeg', 1, 1, x'00ff10', id, 'cover.jpg', 0
+             FROM library_roots WHERE library_id = 1
+             UNION ALL
+             SELECT 41, 1, x'02', 'jpeg', 1, 1, x'', id, 'artist.jpg', 0
+             FROM library_roots WHERE library_id = 1;
+             UPDATE albums SET image_id = 40 WHERE id = 101;
+             UPDATE artists SET image_id = 41 WHERE id = 10;",
+        )
+    })
+    .await
+    .unwrap();
+    let cover = json!({ "id": "40", "placeholder": "AP8Q" });
+    let (_, track) = json(&app, "/api/v1/libraries/1/tracks/1001").await;
+    assert_eq!(track["album"]["image"], cover);
+    let (_, album) = json(&app, "/api/v1/libraries/1/albums/101").await;
+    assert_eq!(album["image"], cover);
+    let (_, artist) = json(&app, "/api/v1/libraries/1/artists/10").await;
+    assert_eq!(artist["image"], json!({ "id": "41", "placeholder": "" }));
+}
+
+#[tokio::test]
 async fn another_librarys_track_is_not_found() {
     let (_temp, app) = app_with_fixture().await;
     for uri in [
