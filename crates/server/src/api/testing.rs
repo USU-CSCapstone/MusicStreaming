@@ -5,26 +5,41 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
-use axum::http::{HeaderMap, Request, StatusCode, header};
+use axum::http::{HeaderMap, Request, StatusCode, header, request};
 use serde_json::Value;
 use tower::ServiceExt;
 
+use super::session::token_hash;
 use super::{Images, router};
 use crate::db::{Database, libraries};
 
-/// The API over a fresh database with setup done, and the directory that holds it.
+/// The owner's token in [`app`], which [`send`] and the helpers built on it log in with.
+pub const TOKEN: &str = "owner-token";
+
+/// The API over a fresh database with setup done, and the directory that holds it. The owner,
+/// user 1, is logged in on device 1 with [`TOKEN`].
 pub fn app(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
     let (temp, db, app) = app_before_setup(base_path);
     // Its own connection: tests call this inside the runtime, where `write_blocking` cannot wait.
-    rusqlite::Connection::open(temp.path().join("jewelcase.db"))
-        .unwrap()
-        .execute(
-            "INSERT INTO users (id, username, display_name, role, password, created_at, \
-             updated_at) VALUES (1, 'owner', 'Owner', 'owner', '', 0, 0)",
-            [],
-        )
-        .unwrap();
+    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    conn.execute(
+        "INSERT INTO users (id, username, display_name, role, password, created_at, updated_at) \
+         VALUES (1, 'owner', 'Owner', 'owner', '', 0, 0)",
+        [],
+    )
+    .unwrap();
+    add_device(&conn, 1, 1, TOKEN);
     (temp, db, app)
+}
+
+/// Logs `user` in on a new device `id` with `token`, last seen at the epoch.
+pub fn add_device(conn: &rusqlite::Connection, user: i64, id: i64, token: &str) {
+    conn.execute(
+        "INSERT INTO devices (id, user_id, name, type, token_hash, created_at, last_seen_at) \
+         VALUES (?1, ?2, 'Test', 'desktop', ?3, 0, 0)",
+        rusqlite::params![id, user, token_hash(token)],
+    )
+    .unwrap();
 }
 
 /// The API over a fresh database, as a new server first starts: with no owner.
@@ -62,21 +77,32 @@ pub async fn app_with_tracks() -> (tempfile::TempDir, Arc<Database>, Router) {
     (temp, db, app)
 }
 
-pub async fn send(app: Router, method: &str, uri: &str) -> (StatusCode, Option<String>, Vec<u8>) {
-    let request = Request::builder().method(method).uri(uri).body(Body::empty()).unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    let content_type = response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .map(|value| value.to_str().unwrap().to_owned());
-    (
-        response.status(),
-        content_type,
-        to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec(),
-    )
+/// A request logged in as the owner, to add headers and a body to.
+pub fn owner_request(method: &str, uri: &str) -> request::Builder {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
 }
 
-/// Sends `body` as JSON, and returns the status, headers, and JSON body of the response.
+/// Sends a request with no body, logged in as the owner.
+pub async fn send(app: Router, method: &str, uri: &str) -> (StatusCode, Option<String>, Vec<u8>) {
+    let request = owner_request(method, uri).body(Body::empty()).unwrap();
+    let (status, headers, body) = respond(app, request).await;
+    let content_type =
+        headers.get(header::CONTENT_TYPE).map(|value| value.to_str().unwrap().to_owned());
+    (status, content_type, body)
+}
+
+/// The status, headers, and body of `request`'s response.
+pub async fn respond(app: Router, request: Request<Body>) -> (StatusCode, HeaderMap, Vec<u8>) {
+    let response = app.oneshot(request).await.unwrap();
+    let (parts, body) = response.into_parts();
+    (parts.status, parts.headers, to_bytes(body, usize::MAX).await.unwrap().to_vec())
+}
+
+/// Sends `body` as JSON with no credentials, and returns the status, headers, and JSON body of
+/// the response.
 pub async fn send_json(
     app: Router,
     method: &str,
@@ -89,10 +115,8 @@ pub async fn send_json(
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(body.to_string()))
         .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    let (parts, body) = response.into_parts();
-    let body = to_bytes(body, usize::MAX).await.unwrap();
-    (parts.status, parts.headers, serde_json::from_slice(&body).unwrap())
+    let (status, headers, body) = respond(app, request).await;
+    (status, headers, serde_json::from_slice(&body).unwrap())
 }
 
 /// The status and JSON body of a `GET`.

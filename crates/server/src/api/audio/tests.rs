@@ -1,10 +1,10 @@
 use axum::Router;
 use axum::body::to_bytes;
-use axum::http::{Request, StatusCode};
+use axum::http::StatusCode;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::super::testing::{app, send};
+use super::super::testing::{app, owner_request, send};
 use super::*;
 use crate::db::libraries;
 
@@ -47,7 +47,8 @@ async fn app_with_fixture() -> (tempfile::TempDir, Router) {
 
 /// Sends a `GET` with a `Range` header.
 async fn get_range(app: Router, uri: &str, range: &str) -> Response {
-    let request = Request::get(uri).header(header::RANGE, range).body(Body::empty()).unwrap();
+    let request =
+        owner_request("GET", uri).header(header::RANGE, range).body(Body::empty()).unwrap();
     app.oneshot(request).await.unwrap()
 }
 
