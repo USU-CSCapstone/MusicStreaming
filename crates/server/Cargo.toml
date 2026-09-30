@@ -5,19 +5,23 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+argon2 = "0.6"
 axum = "0.8.9"
 base64 = "0.23.1"
+getrandom = "0.4"
 jewelcase-core = { version = "0.1.0", path = "../core" }
 jewelcase-ffmpeg = { version = "0.1.0", path = "../ffmpeg" }
 jewelcase-scanner = { version = "0.1.0", path = "../scanner" }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["full"] }
 tower-http = { version = "0.7.1", features = ["fs", "set-header"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+zxcvbn = { version = "3.1", default-features = false }
 
 [dev-dependencies]
 tempfile = "3.27.0"

@@ -13,10 +13,13 @@ mod images;
 mod libraries;
 mod lyrics;
 mod page;
+mod password;
 mod playlists;
 mod problem;
 mod refs;
 mod search;
+mod session;
+mod setup;
 mod sql;
 #[cfg(test)]
 mod testing;
@@ -26,13 +29,15 @@ mod waveform;
 use std::sync::Arc;
 
 use axum::extract::FromRef;
-use axum::routing::{any, get};
+use axum::middleware;
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 
 pub use id::Id;
 pub use images::Images;
 pub use problem::{Code, Problem};
 use search::Indexes;
+use setup::Setup;
 
 use crate::db::Database;
 
@@ -42,6 +47,9 @@ struct AppState {
     db: Arc<Database>,
     images: Arc<Images>,
     indexes: Arc<Indexes>,
+    setup: Arc<Setup>,
+    /// Where the API is mounted, `{base_path}/api/v1`.
+    prefix: Arc<str>,
 }
 
 impl FromRef<AppState> for Arc<Database> {
@@ -65,9 +73,15 @@ impl FromRef<AppState> for Arc<Images> {
 /// The API's routes, nested under `{base_path}/api/v1`.
 pub fn router(base_path: &str, db: Arc<Database>, images: Images) -> Router {
     let prefix = format!("{base_path}/api/v1");
-    // Anything else under the API is a Problem, like every other error.
-    let api = Router::new()
-        .route("/health", get(health))
+    let state = AppState {
+        db,
+        images: Arc::new(images),
+        indexes: Arc::default(),
+        setup: Arc::default(),
+        prefix: prefix.as_str().into(),
+    };
+    // Until setup is done, these answer `503 setup_required`.
+    let after_setup = Router::new()
         .route("/libraries", get(libraries::list))
         .route("/libraries/{library_id}", get(libraries::get))
         .route("/libraries/{library_id}/albums", get(albums::list))
@@ -83,9 +97,16 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images) -> Router {
         .route("/libraries/{library_id}/tracks/{track_id}/audio", get(audio::audio))
         .route("/libraries/{library_id}/artists/{artist_id}", get(artists::get))
         .route("/libraries/{library_id}/albums/{album_id}", get(albums::get))
+        .route_layer(middleware::from_fn_with_state(state.clone(), setup::require));
+    // Anything else under the API is a Problem, like every other error.
+    let api = Router::new()
+        .route("/health", get(health))
+        .route("/server", get(setup::server_info))
+        .route("/setup", post(setup::complete))
+        .merge(after_setup)
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
-        .with_state(AppState { db, images: Arc::new(images), indexes: Arc::default() });
+        .with_state(state);
     Router::new()
         .nest(&prefix, api)
         // `nest` leaves out the prefix with a trailing slash.
