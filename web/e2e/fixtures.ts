@@ -108,7 +108,7 @@ export const pluginManifest: PluginManifest = {
 	id: 'lrclib-lyrics',
 	name: 'LRCLIB Lyrics',
 	version: '0.1.0',
-	apiVersion: '0.1',
+	apiVersion: '0.2',
 	description: 'Fetches synced lyrics for tracks that have none.',
 	permissions: [
 		{ permission: 'libraryRead', required: true, reason: 'To find tracks without lyrics.' },
@@ -118,7 +118,7 @@ export const pluginManifest: PluginManifest = {
 			reason: 'To fetch lyrics.',
 			destinations: ['lrclib.net']
 		},
-		{ permission: 'libraryWrite', required: false, reason: 'To save .lrc files beside tracks.' }
+		{ permission: 'libraryAdd', required: false, reason: 'To save .lrc files beside tracks.' }
 	]
 };
 

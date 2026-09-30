@@ -13,7 +13,7 @@ const manifest: PluginManifest = {
 	id: 'lrclib-lyrics',
 	name: 'LRCLIB Lyrics',
 	version: '0.1.0',
-	apiVersion: '0.1',
+	apiVersion: '0.2',
 	permissions: [
 		{ permission: 'libraryRead', required: true, reason: 'To find tracks without lyrics.' },
 		{
@@ -22,7 +22,7 @@ const manifest: PluginManifest = {
 			reason: 'To fetch lyrics.',
 			destinations: ['lrclib.net']
 		},
-		{ permission: 'libraryWrite', required: false, reason: 'To save .lrc files.' }
+		{ permission: 'libraryAdd', required: false, reason: 'To save .lrc files.' }
 	]
 };
 
@@ -102,7 +102,7 @@ describe('PluginStore', () => {
 	const grantAll = () =>
 		store.setPermissions('lrclib-lyrics', {
 			granted: ['network'],
-			libraries: [{ libraryId: LIB, granted: ['libraryRead', 'libraryWrite'] }]
+			libraries: [{ libraryId: LIB, granted: ['libraryRead', 'libraryAdd'] }]
 		});
 
 	it('installs disabled, with nothing granted', () => {
@@ -140,12 +140,12 @@ describe('PluginStore', () => {
 		const p = store.setPermissions('lrclib-lyrics', {
 			granted: ['network', 'listeningActivity', 'libraryRead'],
 			libraries: [
-				{ libraryId: LIB, granted: ['libraryWrite', 'network'] },
+				{ libraryId: LIB, granted: ['libraryAdd', 'network'] },
 				{ libraryId: 'other', granted: ['libraryRead'] }
 			]
 		});
 		expect(p.granted).toEqual(['network']);
-		expect(p.libraries[0].granted).toEqual(['libraryWrite']);
+		expect(p.libraries[0].granted).toEqual(['libraryAdd']);
 	});
 
 	it('disables at once when a required permission is revoked', () => {
@@ -170,7 +170,7 @@ describe('PluginStore', () => {
 		expect(again.granted).toEqual(['network']);
 		expect(again.libraries[0]).toMatchObject({
 			enabled: false,
-			granted: ['libraryRead', 'libraryWrite']
+			granted: ['libraryRead', 'libraryAdd']
 		});
 	});
 

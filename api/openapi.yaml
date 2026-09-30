@@ -6492,10 +6492,12 @@ components:
 
     PermissionName:
       type: string
-      enum: [libraryRead, libraryWrite, network, listeningActivity]
+      enum: [libraryRead, libraryAdd, libraryChange, network, listeningActivity]
       description: |
-        What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryRead` and
-        `libraryWrite` are granted per library; `network` and `listeningActivity` once per plugin.
+        What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryAdd` creates files
+        that do not exist yet; `libraryChange` replaces, renames, and deletes files that do. The
+        three library permissions are granted per library; `network` and `listeningActivity`
+        once per plugin.
 
     PermissionRequest:
       type: object

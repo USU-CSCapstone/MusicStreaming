@@ -11,7 +11,7 @@ function plugin(overrides: Partial<Plugin> = {}): Plugin {
 		id: 'lrclib-lyrics',
 		name: 'LRCLIB Lyrics',
 		version: '0.1.0',
-		apiVersion: '0.1',
+		apiVersion: '0.2',
 		source: { kind: 'file' },
 		installedAt: '2026-09-29T00:00:00Z',
 		permissions: [
@@ -22,7 +22,7 @@ function plugin(overrides: Partial<Plugin> = {}): Plugin {
 				reason: 'To fetch lyrics.',
 				destinations: ['lrclib.net']
 			},
-			{ permission: 'libraryWrite', required: false, reason: 'To save .lrc files.' }
+			{ permission: 'libraryAdd', required: false, reason: 'To save .lrc files.' }
 		],
 		granted: [],
 		libraries: [
@@ -52,7 +52,7 @@ describe('PermissionDialog.svelte', () => {
 		await expect.element(page.getByRole('dialog', { name: /Allow LRCLIB Lyrics/ })).toBeVisible();
 		await expect.element(page.getByText('“To fetch lyrics.”')).toBeVisible();
 		await expect.element(page.getByText('Only lrclib.net')).toBeVisible();
-		for (const name of [/Network access/, /Read the library/, /Write to the library/]) {
+		for (const name of [/Network access/, /Read the library/, /Add files to the library/]) {
 			await expect.element(page.getByRole('checkbox', { name })).not.toBeChecked();
 		}
 	});
@@ -81,7 +81,7 @@ describe('PermissionDialog.svelte', () => {
 		expect(onapprove).toHaveBeenCalledWith({
 			grants: {
 				granted: ['network'],
-				libraries: [{ libraryId: '11', granted: ['libraryRead', 'libraryWrite'] }]
+				libraries: [{ libraryId: '11', granted: ['libraryRead', 'libraryAdd'] }]
 			},
 			enable: { '11': true }
 		});

@@ -2,7 +2,7 @@
 	"id": "lrclib-lyrics",
 	"name": "LRCLIB Lyrics",
 	"version": "0.1.0",
-	"apiVersion": "0.1",
+	"apiVersion": "0.2",
 	"description": "Finds synced lyrics on lrclib.net for tracks that have none, and saves them beside the audio.",
 	"author": "Jewelcase examples",
 	"homepage": "https://lrclib.net",
@@ -14,6 +14,6 @@
 			"reason": "To look up lyrics.",
 			"destinations": ["lrclib.net"]
 		},
-		{ "permission": "libraryWrite", "required": false, "reason": "To save .lrc files beside your tracks." }
+		{ "permission": "libraryAdd", "required": false, "reason": "To save .lrc files beside your tracks." }
 	]
 }

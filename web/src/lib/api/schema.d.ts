@@ -4661,11 +4661,13 @@ export interface components {
             }[];
         };
         /**
-         * @description What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryRead` and
-         *     `libraryWrite` are granted per library; `network` and `listeningActivity` once per plugin.
+         * @description What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryAdd` creates files
+         *     that do not exist yet; `libraryChange` replaces, renames, and deletes files that do. The
+         *     three library permissions are granted per library; `network` and `listeningActivity`
+         *     once per plugin.
          * @enum {string}
          */
-        PermissionName: "libraryRead" | "libraryWrite" | "network" | "listeningActivity";
+        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity";
         PermissionRequest: {
             permission: components["schemas"]["PermissionName"];
             /** @description Whether it cannot work without it (`requirements/plugins.md` §4.2). */

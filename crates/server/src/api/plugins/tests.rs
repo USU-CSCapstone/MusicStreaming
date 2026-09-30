@@ -32,12 +32,12 @@ async fn server() -> (tempfile::TempDir, Router) {
     let (temp, _db, app) = app_with_tracks().await;
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
     let manifest = json!({
-        "id": "lrclib-lyrics", "name": "LRCLIB Lyrics", "version": "0.1.0", "apiVersion": "0.1",
+        "id": "lrclib-lyrics", "name": "LRCLIB Lyrics", "version": "0.1.0", "apiVersion": "0.2",
         "permissions": [
             { "permission": "libraryRead", "required": true, "reason": "To find tracks." },
             { "permission": "network", "required": true, "reason": "To fetch lyrics.",
               "destinations": ["lrclib.net"] },
-            { "permission": "libraryWrite", "required": false, "reason": "To save .lrc files." }
+            { "permission": "libraryAdd", "required": false, "reason": "To save .lrc files." }
         ]
     });
     conn.execute(
@@ -174,7 +174,7 @@ async fn revoking_a_required_permission_disables_it_at_once() {
 #[tokio::test]
 async fn uninstalling_keeps_its_grants_for_a_reinstall() {
     let (temp, app) = server().await;
-    let grants = json!({ "granted": ["network"], "libraries": [{ "libraryId": "2", "granted": ["libraryWrite"] }] });
+    let grants = json!({ "granted": ["network"], "libraries": [{ "libraryId": "2", "granted": ["libraryAdd"] }] });
     call(&app, ADMIN, "PUT", &format!("{PLUGIN}/permissions"), Some(grants)).await;
     assert_eq!(call(&app, ADMIN, "DELETE", PLUGIN, None).await.0, StatusCode::NO_CONTENT);
     assert_eq!(call(&app, ADMIN, "GET", PLUGIN, None).await.0, StatusCode::NOT_FOUND);

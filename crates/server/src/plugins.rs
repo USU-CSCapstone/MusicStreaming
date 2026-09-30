@@ -251,9 +251,9 @@ impl Plugins {
                 .spawn(async move { host.run(&path, grants, RunLibrary::new(db, library)).await })
                 .await
                 .map_err(|e| PluginError::Internal(e.to_string()))?;
-            result.scanning |= self.scan(library, &outcome.saved).await;
+            result.scanning |= self.scan(library, &outcome.touched).await;
             result.ok &= outcome.ok;
-            result.saved += outcome.saved.len();
+            result.saved += outcome.written;
             result.log.extend(outcome.log);
             if !result.summary.is_empty() {
                 result.summary.push(' ');
@@ -263,13 +263,14 @@ impl Plugins {
         Ok(result)
     }
 
-    /// Queues a scan of each folder `saved` is in, and says whether any was queued. Queuing
+    /// Queues a scan of each folder the paths in `touched` are in, and says whether any was
+    /// queued. Queuing
     /// records the scan with a blocking write, which must not run on an async thread: there
     /// it would panic while holding the scanner's queue, and take that library's scanning down.
-    async fn scan(&self, library: i64, saved: &[PathBuf]) -> bool {
+    async fn scan(&self, library: i64, touched: &[PathBuf]) -> bool {
         let Some(scanner) = self.scanners.get(&library).cloned() else { return false };
         let folders: BTreeSet<PathBuf> =
-            saved.iter().filter_map(|file| file.parent()).map(Path::to_path_buf).collect();
+            touched.iter().filter_map(|file| file.parent()).map(Path::to_path_buf).collect();
         tokio::task::spawn_blocking(move || {
             // Every folder is queued, so none is skipped because an earlier one succeeded.
             let queued = folders.iter().map(|folder| scanner.scan_folder(Trigger::Watch, folder));

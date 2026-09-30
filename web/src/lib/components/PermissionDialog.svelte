@@ -129,7 +129,7 @@
 						? 'Any destination'
 						: `Only ${req.destinations?.join(', ')}`}
 				</span>
-			{:else if req.permission === 'libraryWrite'}
+			{:else if req.permission === 'libraryAdd' || req.permission === 'libraryChange'}
 				<!-- The risk is stated where the decision is made (`requirements/plugins.md` §4.2). -->
 				<span class="warn"><Icon name="warning" size={14} /> {label.detail}</span>
 			{:else}

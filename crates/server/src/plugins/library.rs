@@ -1,11 +1,11 @@
-//! The library a plugin run reads (`jewelcase_plugins::Library`): its tracks in pages, and
-//! where a track's audio is, which only the host ever sees.
+//! The library a plugin run reads (`jewelcase_plugins::Library`): its tracks in pages, and its
+//! roots, which the host confines the plugin's file access to.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use jewelcase_plugins::{Library, Track};
-use rusqlite::{OptionalExtension, Row, params};
+use rusqlite::{Row, params};
 
 use crate::db::Database;
 
@@ -28,7 +28,7 @@ impl RunLibrary {
 const TRACK: &str = "SELECT t.id, t.title, \
      (SELECT json_group_array(artist_name) FROM (SELECT artist_name FROM track_artists \
       WHERE track_id = t.id AND artist_name IS NOT NULL ORDER BY position)), \
-     al.title, t.duration_us, t.lyrics_kind <> 'none' \
+     al.title, t.duration_us, t.lyrics_kind <> 'none', t.root_id, t.path \
      FROM tracks t JOIN albums al ON al.id = t.album_id \
      WHERE t.library_id = ?1 AND t.missing_since IS NULL";
 
@@ -41,6 +41,8 @@ fn track(row: &Row) -> rusqlite::Result<Track> {
         album: row.get(3)?,
         duration_ms: (row.get::<_, i64>(4)? / 1000) as u64,
         has_lyrics: row.get(5)?,
+        root: row.get::<_, i64>(6)? as u64,
+        path: row.get(7)?,
     })
 }
 
@@ -71,27 +73,19 @@ impl Library for RunLibrary {
         Ok(page)
     }
 
-    async fn audio_without_lyrics(&mut self, track: u64) -> Result<PathBuf, String> {
+    async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
         let library = self.library;
-        let found = self
-            .db
+        self.db
             .read(move |conn| {
                 conn.prepare_cached(
-                    "SELECT r.path, t.path, t.lyrics_kind <> 'none' FROM tracks t \
-                     JOIN library_roots r ON r.id = t.root_id \
-                     WHERE t.id = ?1 AND t.library_id = ?2 AND t.missing_since IS NULL",
+                    "SELECT id, path FROM library_roots WHERE library_id = ?1 AND removed_at IS NULL",
                 )?
-                .query_row(params![track as i64, library], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, bool>(2)?))
-                })
-                .optional()
+                .query_map([library], |row| {
+                    Ok((row.get::<_, i64>(0)? as u64, PathBuf::from(row.get::<_, String>(1)?)))
+                })?
+                .collect()
             })
             .await
-            .map_err(|_| "the library could not be read".to_owned())?;
-        match found {
-            None => Err("no such track in this library".into()),
-            Some((_, _, true)) => Err("this track already has lyrics".into()),
-            Some((root, path, false)) => Ok(Path::new(&root).join(path)),
-        }
+            .map_err(|_| "the library could not be read".to_owned())
     }
 }

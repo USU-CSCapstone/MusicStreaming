@@ -1,14 +1,18 @@
-package jewelcase:plugin@0.1.0;
+package jewelcase:plugin@0.2.0;
 
-/// The plugin contract, enough for the lyrics plugin so far (design/plugins.md §7).
-/// Every import checks its permission in the host. Imports stay linked even when their
-/// permission was declined, so a plugin with an optional permission still loads; the call
-/// answers an error instead, and `granted` lets a plugin adapt up front.
+/// The plugin contract (design/plugins.md §7). Every import checks its permission in the
+/// host. Imports stay linked even when their permission was declined, so a plugin with an
+/// optional permission still loads; the call answers an error instead, and `granted` lets a
+/// plugin adapt up front.
 
 interface host {
+  /// What a plugin can ask for (requirements/plugins.md §4.1).
   enum permission {
     library-read,
-    library-write,
+    /// Creating files that do not exist yet.
+    library-add,
+    /// Replacing, renaming, and deleting files that do.
+    library-change,
     network,
     listening-activity,
   }
@@ -29,15 +33,45 @@ interface library {
     album: option<string>,
     duration-ms: u64,
     has-lyrics: bool,
+    /// Where its file is: one of the library's roots (`files.roots`), and a path within it.
+    root: u64,
+    path: string,
   }
 
   /// Needs library-read. A page of tracks in a stable order; empty past the end.
   tracks: func(offset: u32, limit: u32) -> result<list<track>, string>;
+}
 
-  /// Needs library-write. Saves lyrics beside the track's audio file: `.lrc` when synced,
-  /// `.txt` otherwise. The host picks the name and never overwrites; the plugin never
-  /// sees a path.
-  save-lyrics: func(track: u64, synced: bool, text: string) -> result<_, string>;
+/// The library's own folders (requirements/plugins.md §3). A path is relative to one of its
+/// roots, with `/` between names, and never leaves that root. Whatever a plugin writes, the
+/// scanner reads in, exactly as if a person had put it there.
+interface files {
+  record entry {
+    name: string,
+    directory: bool,
+    size: u64,
+    modified-ms: u64,
+  }
+
+  enum write-mode {
+    /// Needs library-add. Fails if the file exists.
+    create,
+    /// Needs library-change. Fails unless the file exists.
+    replace,
+  }
+
+  /// The library's roots. Needs library-read, library-add, or library-change.
+  roots: func() -> result<list<u64>, string>;
+  /// Needs library-read. What a folder holds; `""` is the root itself.
+  %list: func(root: u64, folder: string) -> result<list<entry>, string>;
+  /// Needs library-read. Up to `length` bytes from `offset`; fewer at the end of the file.
+  read: func(root: u64, path: string, offset: u64, length: u32) -> result<list<u8>, string>;
+  /// Writes a whole file, making the folders it is in. It appears whole or not at all.
+  write: func(root: u64, path: string, contents: list<u8>, mode: write-mode) -> result<_, string>;
+  /// Needs library-change. Moves a file or folder to a path that does not exist yet.
+  rename: func(root: u64, %from: string, to: string) -> result<_, string>;
+  /// Needs library-change. Removes a file, or a folder that is empty.
+  delete: func(root: u64, path: string) -> result<_, string>;
 }
 
 /// Needs network, and only reaches the destinations the manifest declared.
@@ -50,9 +84,10 @@ interface http {
   get: func(url: string) -> result<response, string>;
 }
 
-world lyrics-plugin {
+world plugin {
   import host;
   import library;
+  import files;
   import http;
 
   /// Does the plugin's work for one library; returns a one-line summary.
