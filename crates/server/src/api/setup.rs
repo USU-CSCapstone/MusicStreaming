@@ -87,7 +87,7 @@ pub async fn complete(
         return Err(Problem::not_found());
     }
     let SetupRequest { username, password, display_name, device } = request;
-    check_username(&username)?;
+    session::check_username(&username)?;
     let display_name = display_name.unwrap_or_else(|| username.clone());
     session::check_name("displayName", &display_name)?;
     device.validate()?;
@@ -118,16 +118,6 @@ pub async fn complete(
 
     let cookie = session::cookie(&state.prefix, &session.token);
     Ok((StatusCode::CREATED, [(header::SET_COOKIE, cookie)], axum::Json(session)).into_response())
-}
-
-/// The spec's `Username`: 1 to 32 ASCII letters, digits, `_`, and `-`.
-fn check_username(username: &str) -> Result<(), Problem> {
-    let allowed = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
-    if (1..=32).contains(&username.len()) && username.bytes().all(allowed) {
-        Ok(())
-    } else {
-        Err(Problem::invalid("username must be 1 to 32 letters, digits, '_', or '-'"))
-    }
 }
 
 #[cfg(test)]

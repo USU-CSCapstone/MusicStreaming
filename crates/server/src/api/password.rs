@@ -1,11 +1,10 @@
-//! Passwords: the strength every new one must have, and the PHC string stored in its place
-//! (`requirements/users.md` §3, `design/database.md`).
+//! Passwords: the strength every new one must have, the PHC string stored in its place, and
+//! checking one against it (`requirements/users.md` §3, `design/database.md`).
 
 use std::sync::LazyLock;
 use std::thread;
 
-use argon2::Argon2;
-use argon2::password_hash::PasswordHasher;
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use tokio::sync::Semaphore;
 use zxcvbn::{Score, zxcvbn};
 
@@ -23,6 +22,13 @@ const SCORED_CHARS: usize = 100;
 /// however many requests arrive.
 static HASHING: LazyLock<Semaphore> = LazyLock::new(|| {
     Semaphore::new(thread::available_parallelism().map_or(1, |cores| cores.get()))
+});
+
+/// What an unknown account's password is checked against, so refusing it takes as long as
+/// refusing a wrong password, and timing does not tell whether an account exists.
+static DUMMY: LazyLock<String> = LazyLock::new(|| {
+    let hash = Argon2::default().hash_password(b"no account has this password");
+    hash.expect("hashing a constant with the default parameters").to_string()
 });
 
 /// Accepts a password that is hard to guess, judged without composition rules. A common or
@@ -46,10 +52,7 @@ fn check_strength(password: &str, inputs: &[&str]) -> Result<(), Problem> {
 /// crate's defaults, which are OWASP's, returning the PHC string to store. Both are CPU-bound,
 /// so they run off the async threads.
 pub async fn hash_new(password: String, inputs: Vec<String>) -> Result<String, Problem> {
-    let permit = HASHING.acquire().await.expect("the semaphore is never closed");
-    tokio::task::spawn_blocking(move || {
-        // Held by the work itself, which runs to the end even if the request is dropped.
-        let _permit = permit;
+    off_thread(move || {
         let inputs: Vec<&str> = inputs.iter().map(String::as_str).collect();
         check_strength(&password, &inputs)?;
         let hash = Argon2::default().hash_password(password.as_bytes());
@@ -59,14 +62,43 @@ pub async fn hash_new(password: String, inputs: Vec<String>) -> Result<String, P
         })
     })
     .await
+}
+
+/// Whether `password` matches the `stored` PHC string. With none stored, or one that cannot be
+/// read, it is checked against a dummy hash and never matches, in the same time.
+pub async fn verify(password: String, stored: Option<String>) -> Result<bool, Problem> {
+    off_thread(move || {
+        let argon2 = Argon2::default();
+        let stored = stored.as_deref().and_then(|stored| PasswordHash::new(stored).ok());
+        Ok(match stored {
+            Some(hash) => argon2.verify_password(password.as_bytes(), &hash).is_ok(),
+            None => {
+                let dummy = PasswordHash::new(&DUMMY).expect("the dummy hash is well formed");
+                let _ = argon2.verify_password(password.as_bytes(), &dummy);
+                false
+            }
+        })
+    })
+    .await
+}
+
+/// Runs CPU-bound password work off the async threads, a core at a time ([`HASHING`]).
+async fn off_thread<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, Problem> + Send + 'static,
+) -> Result<T, Problem> {
+    let permit = HASHING.acquire().await.expect("the semaphore is never closed");
+    tokio::task::spawn_blocking(move || {
+        // Held by the work itself, which runs to the end even if the request is dropped.
+        let _permit = permit;
+        work()
+    })
+    .await
     .map_err(|_| Problem::new(Code::Internal))?
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
-
-    use argon2::password_hash::PasswordVerifier;
 
     use super::*;
 
@@ -99,9 +131,17 @@ mod tests {
     async fn hashes_to_a_phc_string_the_password_verifies_against() {
         let phc = hash_new("correct horse battery staple".into(), vec![]).await.unwrap();
         assert!(phc.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"), "{phc}");
-        let argon2 = Argon2::default();
-        assert!(argon2.verify_password(b"correct horse battery staple", phc.as_str()).is_ok());
-        assert!(argon2.verify_password(b"correct horse battery stapler", phc.as_str()).is_err());
+        let check = |password: &str| verify(password.into(), Some(phc.clone()));
+        assert!(check("correct horse battery staple").await.unwrap());
+        assert!(!check("correct horse battery stapler").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn nothing_matches_a_missing_or_unreadable_hash() {
+        for stored in [None, Some(String::new()), Some("$argon2id$garbage".to_owned())] {
+            assert!(!verify(String::new(), stored.clone()).await.unwrap(), "{stored:?}");
+            assert!(!verify("no account has this password".into(), stored).await.unwrap());
+        }
     }
 
     #[tokio::test]

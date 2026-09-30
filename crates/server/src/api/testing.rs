@@ -1,10 +1,12 @@
 //! Helpers for the API's tests: a server over a fresh database, and requests to it.
 
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
+use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode, header, request};
 use serde_json::Value;
 use tower::ServiceExt;
@@ -47,7 +49,9 @@ pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, R
     let temp = tempfile::tempdir().unwrap();
     let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
     let images = Images::new(temp.path().join("cache"), "ffmpeg".into());
-    let app = router(base_path, db.clone(), images);
+    // A client with a public address, unless a request carries its own `ConnectInfo`.
+    let peer = SocketAddr::from(([203, 0, 113, 1], 50_000));
+    let app = router(base_path, db.clone(), images).layer(MockConnectInfo(peer));
     (temp, db, app)
 }
 
