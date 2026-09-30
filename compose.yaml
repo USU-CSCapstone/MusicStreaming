@@ -22,7 +22,7 @@ services:
       # The checkout, which the server builds from and never writes to.
       - .:/src:ro
       # Read-only, as in production (`requirements/deployment.md` §1).
-      - ${JEWELCASE_MUSIC:?set JEWELCASE_MUSIC in .env to the folder of music to develop with}:/music:ro
+      - ${JEWELCASE_MUSIC:?set JEWELCASE_MUSIC in .env to the folder of music to develop with}:/music
       - data:/data
       - target:/target
       - cargo-registry:/usr/local/cargo/registry
