@@ -12,5 +12,5 @@ pub mod manifest;
 mod rules;
 
 pub use download::{MAX_SIZE, download};
-pub use host::{Grants, Host, Library, Outcome, Track};
+pub use host::{Album, Artist, Grants, Host, Library, Outcome, Track};
 pub use manifest::{InvalidPlugin, Manifest, Permission, PermissionRequest};

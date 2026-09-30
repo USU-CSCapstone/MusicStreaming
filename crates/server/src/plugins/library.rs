@@ -1,91 +1,205 @@
-//! The library a plugin run reads (`jewelcase_plugins::Library`): its tracks in pages, and its
-//! roots, which the host confines the plugin's file access to.
+//! The library a plugin run reads (`jewelcase_plugins::Library`): its catalog in pages by ID,
+//! its roots, which the host confines file access to, and the plugin's own state for it.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use jewelcase_plugins::{Library, Track};
-use rusqlite::{Row, params};
+use jewelcase_plugins::{Album, Artist, Library, Track};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use crate::db::Database;
+use crate::db::{Database, DbError};
 
-/// One library's tracks, read in `id` order. A plugin pages by offset, and SQLite skips an
-/// offset row by row, so reading onward from where the last page ended keeps a whole pass
-/// linear: each page starts after the last ID it returned.
 pub struct RunLibrary {
     db: Arc<Database>,
+    plugin: Arc<str>,
     library: i64,
-    /// The offset the next page would start at, and the last ID before it.
-    next: Option<(u32, i64)>,
 }
 
 impl RunLibrary {
-    pub fn new(db: Arc<Database>, library: i64) -> RunLibrary {
-        RunLibrary { db, library, next: None }
+    pub fn new(db: Arc<Database>, plugin: &str, library: i64) -> RunLibrary {
+        RunLibrary { db, plugin: plugin.into(), library }
+    }
+
+    /// Runs `f` on a reader with this library's ID. A failure is logged here and reaches the
+    /// plugin only as "could not be read", which says nothing of the database.
+    async fn read<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&Connection, i64) -> rusqlite::Result<T> + Send + 'static,
+    ) -> Result<T, String> {
+        let library = self.library;
+        self.db.read(move |conn| f(conn, library)).await.map_err(failed)
     }
 }
 
-const TRACK: &str = "SELECT t.id, t.title, \
+fn failed(error: DbError) -> String {
+    tracing::error!(%error, "cannot serve a plugin's library call");
+    "the library could not be read".to_owned()
+}
+
+/// Up to `limit` rows of `select` with IDs after `after`, in ID order. `select` names this
+/// library `?1` and the ID it continues from `?2`, and has the ID first.
+fn page<T>(
+    conn: &Connection,
+    select: &str,
+    library: i64,
+    after: Option<u64>,
+    limit: u32,
+    map: fn(&Row) -> rusqlite::Result<T>,
+) -> rusqlite::Result<Vec<T>> {
+    let after = after.map_or(-1, |id| id as i64);
+    conn.prepare_cached(&format!("{select} ORDER BY 1 LIMIT ?3"))?
+        .query_map(params![library, after, limit], map)?
+        .collect()
+}
+
+const TRACK_COLUMNS: &str = "SELECT t.id, t.title, \
      (SELECT json_group_array(artist_name) FROM (SELECT artist_name FROM track_artists \
       WHERE track_id = t.id AND artist_name IS NOT NULL ORDER BY position)), \
-     al.title, t.duration_us, t.lyrics_kind <> 'none', t.root_id, t.path \
-     FROM tracks t JOIN albums al ON al.id = t.album_id \
-     WHERE t.library_id = ?1 AND t.missing_since IS NULL";
+     t.album_id, al.title, t.disc_number, t.track_number, t.release_date, t.isrc, t.duration_us, \
+     t.lyrics_kind <> 'none', t.root_id, t.path";
 
 fn track(row: &Row) -> rusqlite::Result<Track> {
-    let artists: String = row.get(2)?;
     Ok(Track {
         id: row.get::<_, i64>(0)? as u64,
         title: row.get(1)?,
-        artists: serde_json::from_str(&artists).unwrap_or_default(),
-        album: row.get(3)?,
-        duration_ms: (row.get::<_, i64>(4)? / 1000) as u64,
-        has_lyrics: row.get(5)?,
-        root: row.get::<_, i64>(6)? as u64,
-        path: row.get(7)?,
+        artists: names(row, 2)?,
+        album_id: row.get::<_, i64>(3)? as u64,
+        album: row.get(4)?,
+        disc_number: row.get(5)?,
+        track_number: row.get(6)?,
+        release_date: row.get(7)?,
+        isrc: row.get(8)?,
+        duration_ms: (row.get::<_, i64>(9)? / 1000) as u64,
+        has_lyrics: row.get(10)?,
+        root: row.get::<_, i64>(11)? as u64,
+        path: row.get(12)?,
+    })
+}
+
+const ALBUM: &str = "SELECT al.id, al.title, \
+     (SELECT json_group_array(name) FROM (SELECT ar.name FROM album_artists aa \
+      JOIN artists ar ON ar.id = aa.artist_id WHERE aa.album_id = al.id AND ar.name IS NOT NULL \
+      ORDER BY aa.position)), \
+     al.release_date, al.track_count FROM albums al \
+     WHERE al.library_id = ?1 AND al.id > ?2 AND al.track_count > 0";
+
+fn album(row: &Row) -> rusqlite::Result<Album> {
+    Ok(Album {
+        id: row.get::<_, i64>(0)? as u64,
+        title: row.get(1)?,
+        artists: names(row, 2)?,
+        release_date: row.get(3)?,
+        track_count: row.get(4)?,
+    })
+}
+
+const ARTIST: &str = "SELECT id, name, album_count, track_count FROM artists \
+     WHERE library_id = ?1 AND id > ?2 AND (album_count > 0 OR track_count > 0)";
+
+fn artist(row: &Row) -> rusqlite::Result<Artist> {
+    Ok(Artist {
+        id: row.get::<_, i64>(0)? as u64,
+        name: row.get(1)?,
+        album_count: row.get(2)?,
+        track_count: row.get(3)?,
+    })
+}
+
+/// A JSON array of names in column `index`.
+fn names(row: &Row, index: usize) -> rusqlite::Result<Vec<String>> {
+    let json: String = row.get(index)?;
+    serde_json::from_str(&json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(e))
     })
 }
 
 impl Library for RunLibrary {
-    async fn tracks(&mut self, offset: u32, limit: u32) -> Result<Vec<Track>, String> {
-        let library = self.library;
-        let after = self.next.filter(|(at, _)| *at == offset).map(|(_, id)| id);
-        let page = self
-            .db
-            .read(move |conn| match after {
-                Some(after) => conn
-                    .prepare_cached(&format!("{TRACK} AND t.id > ?2 ORDER BY t.id LIMIT ?3"))?
-                    .query_map(params![library, after, limit], track)?
-                    .collect::<rusqlite::Result<Vec<_>>>(),
-                None => conn
-                    .prepare_cached(&format!("{TRACK} ORDER BY t.id LIMIT ?3 OFFSET ?2"))?
-                    .query_map(params![library, offset, limit], track)?
-                    .collect(),
-            })
-            .await
-            .map_err(|e| {
-                tracing::error!(error = %e, "cannot read tracks for a plugin");
-                "the library could not be read".to_owned()
-            })?;
-        if let Some(last) = page.last() {
-            self.next = Some((offset + page.len() as u32, last.id as i64));
-        }
-        Ok(page)
+    async fn tracks(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Track>, String> {
+        let select = format!(
+            "{TRACK_COLUMNS} FROM tracks t JOIN albums al ON al.id = t.album_id \
+             WHERE t.library_id = ?1 AND t.id > ?2 AND t.missing_since IS NULL"
+        );
+        self.read(move |conn, library| page(conn, &select, library, after, limit, track)).await
+    }
+
+    async fn get_tracks(&mut self, ids: Vec<u64>) -> Result<Vec<Track>, String> {
+        let ids = serde_json::to_string(&ids).expect("integers serialize");
+        self.read(move |conn, library| {
+            // The IDs lead the join, so the tracks come out in the order asked for.
+            conn.prepare_cached(&format!(
+                "{TRACK_COLUMNS} FROM json_each(?2) ids CROSS JOIN tracks t ON t.id = ids.value \
+                 JOIN albums al ON al.id = t.album_id \
+                 WHERE t.library_id = ?1 AND t.missing_since IS NULL ORDER BY ids.key"
+            ))?
+            .query_map(params![library, ids], track)?
+            .collect()
+        })
+        .await
+    }
+
+    async fn albums(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Album>, String> {
+        self.read(move |conn, library| page(conn, ALBUM, library, after, limit, album)).await
+    }
+
+    async fn artists(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Artist>, String> {
+        self.read(move |conn, library| page(conn, ARTIST, library, after, limit, artist)).await
     }
 
     async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
-        let library = self.library;
+        self.read(|conn, library| {
+            conn.prepare_cached(
+                "SELECT id, path FROM library_roots WHERE library_id = ?1 AND removed_at IS NULL",
+            )?
+            .query_map([library], |row| {
+                Ok((row.get::<_, i64>(0)? as u64, PathBuf::from(row.get::<_, String>(1)?)))
+            })?
+            .collect()
+        })
+        .await
+    }
+
+    async fn state_get(&mut self, key: String) -> Result<Option<Vec<u8>>, String> {
+        let plugin = self.plugin.clone();
+        self.read(move |conn, library| {
+            conn.prepare_cached(
+                "SELECT value FROM plugin_state WHERE plugin_id = ?1 AND library_id = ?2 AND key = ?3",
+            )?
+            .query_row(params![plugin, library, key], |row| row.get(0))
+            .optional()
+        })
+        .await
+    }
+
+    async fn state_set(&mut self, key: String, value: Vec<u8>) -> Result<(), String> {
+        let (plugin, library) = (self.plugin.clone(), self.library);
         self.db
-            .read(move |conn| {
-                conn.prepare_cached(
-                    "SELECT id, path FROM library_roots WHERE library_id = ?1 AND removed_at IS NULL",
-                )?
-                .query_map([library], |row| {
-                    Ok((row.get::<_, i64>(0)? as u64, PathBuf::from(row.get::<_, String>(1)?)))
-                })?
-                .collect()
+            .write(move |tx| {
+                tx.execute(
+                    "INSERT INTO plugin_state (plugin_id, library_id, key, value) \
+                     VALUES (?1, ?2, ?3, ?4) \
+                     ON CONFLICT (plugin_id, library_id, key) DO UPDATE SET value = excluded.value",
+                    params![plugin, library, key, value],
+                )
             })
             .await
-            .map_err(|_| "the library could not be read".to_owned())
+            .map(drop)
+            .map_err(failed)
+    }
+
+    async fn state_delete(&mut self, key: String) -> Result<(), String> {
+        let (plugin, library) = (self.plugin.clone(), self.library);
+        self.db
+            .write(move |tx| {
+                tx.execute(
+                    "DELETE FROM plugin_state WHERE plugin_id = ?1 AND library_id = ?2 AND key = ?3",
+                    params![plugin, library, key],
+                )
+            })
+            .await
+            .map(drop)
+            .map_err(failed)
     }
 }
+
+#[cfg(test)]
+mod tests;

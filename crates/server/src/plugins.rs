@@ -246,9 +246,12 @@ impl Plugins {
                 return Ok(RunResult::failed(format!("It still needs {}.", names.join(" and "))));
             }
             let grants = Grants { permissions, destinations: manifest.destinations().to_vec() };
-            let (host, path, db) = (host.clone(), self.path(&id), self.db.clone());
+            let (host, path, db, plugin_id) =
+                (host.clone(), self.path(&id), self.db.clone(), id.clone());
             let outcome = runtime
-                .spawn(async move { host.run(&path, grants, RunLibrary::new(db, library)).await })
+                .spawn(async move {
+                    host.run(&path, grants, RunLibrary::new(db, &plugin_id, library)).await
+                })
                 .await
                 .map_err(|e| PluginError::Internal(e.to_string()))?;
             result.scanning |= self.scan(library, &outcome.touched).await;

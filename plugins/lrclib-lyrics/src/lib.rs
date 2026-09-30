@@ -40,7 +40,13 @@ mod plugin {
     }
 
     fn fetch(url: &str) -> Result<(u16, String), String> {
-        http::get(url).map(|r| (r.status, r.body))
+        let request = http::Request {
+            method: http::Method::Get,
+            url: url.to_owned(),
+            headers: Vec::new(),
+            body: Vec::new(),
+        };
+        http::send(&request).map(|r| (r.status, String::from_utf8_lossy(&r.body).into_owned()))
     }
 
     fn lookup(t: &library::Track) -> Result<Found, String> {
@@ -80,13 +86,11 @@ mod plugin {
             // would save.
             let can_write = granted.contains(&Permission::LibraryAdd);
             let mut n = Tally::default();
-            let mut offset = 0;
+            let mut after = None;
             loop {
-                let page = library::tracks(offset, 50)?;
-                if page.is_empty() {
-                    break;
-                }
-                offset += page.len() as u32;
+                let page = library::tracks(after, 50)?;
+                let Some(last) = page.last() else { break };
+                after = Some(last.id);
                 for t in &page {
                     let name = format!("{} — {}", t.title, t.artists.join(", "));
                     if t.has_lyrics {

@@ -13,9 +13,10 @@ use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
-use crate::files as library_files;
 use crate::manifest::Permission;
-use crate::rules;
+
+mod http;
+mod library;
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -26,10 +27,10 @@ mod bindings {
     });
 }
 
-use bindings::jewelcase::plugin::{files, host, http, library};
+use bindings::jewelcase::plugin::host;
 use bindings::{Plugin, PluginPre};
 
-pub use bindings::jewelcase::plugin::library::Track;
+pub use bindings::jewelcase::plugin::library::{Album, Artist, Track};
 
 /// Compute a plugin may spend in one run, counted while its code runs.
 const CPU_BUDGET: Duration = Duration::from_secs(60);
@@ -37,25 +38,51 @@ const CPU_BUDGET: Duration = Duration::from_secs(60);
 /// reply, so this is what bounds a plugin waiting on a slow service.
 const WALL_BUDGET: Duration = Duration::from_secs(300);
 const MEMORY_LIMIT: usize = 64 << 20;
-const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
-const HTTP_MAX_BODY: usize = 2 << 20;
-/// The most tracks one page holds, whatever the plugin asks for.
-const PAGE_LIMIT: u32 = 500;
 /// Log lines kept from one run, so a chatty plugin cannot fill the host's memory.
 const LOG_LINES: usize = 1000;
-const USER_AGENT: &str = concat!("Jewelcase/", env!("CARGO_PKG_VERSION"), " (plugin host)");
 
-/// The one library a run is for, as the host reads it.
+/// The one library a run is for, as the host reads it, and the plugin's own state for it.
 pub trait Library: Send + 'static {
-    /// A page of tracks in a stable order; empty past the end.
+    /// Tracks in ID order after `after`, up to `limit`; empty past the end.
     fn tracks(
         &mut self,
-        offset: u32,
+        after: Option<u64>,
         limit: u32,
     ) -> impl Future<Output = Result<Vec<Track>, String>> + Send;
 
+    /// These tracks, in this order, leaving out any not in the library.
+    fn get_tracks(
+        &mut self,
+        ids: Vec<u64>,
+    ) -> impl Future<Output = Result<Vec<Track>, String>> + Send;
+
+    fn albums(
+        &mut self,
+        after: Option<u64>,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<Album>, String>> + Send;
+
+    fn artists(
+        &mut self,
+        after: Option<u64>,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<Artist>, String>> + Send;
+
     /// The library's roots: the ID a plugin knows each by, and where it is on this host.
     fn roots(&mut self) -> impl Future<Output = Result<Vec<(u64, PathBuf)>, String>> + Send;
+
+    fn state_get(
+        &mut self,
+        key: String,
+    ) -> impl Future<Output = Result<Option<Vec<u8>>, String>> + Send;
+
+    fn state_set(
+        &mut self,
+        key: String,
+        value: Vec<u8>,
+    ) -> impl Future<Output = Result<(), String>> + Send;
+
+    fn state_delete(&mut self, key: String) -> impl Future<Output = Result<(), String>> + Send;
 }
 
 /// What a run may use: the permissions granted for its library, and the hosts its manifest
@@ -188,14 +215,40 @@ async fn call<L: Library>(
 struct Refused;
 
 impl Library for Refused {
-    async fn tracks(&mut self, _: u32, _: u32) -> Result<Vec<Track>, String> {
-        Err("no library".into())
+    async fn tracks(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Track>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn get_tracks(&mut self, _: Vec<u64>) -> Result<Vec<Track>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn albums(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Album>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn artists(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Artist>, String> {
+        Err(NO_LIBRARY.into())
     }
 
     async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
-        Err("no library".into())
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn state_get(&mut self, _: String) -> Result<Option<Vec<u8>>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn state_set(&mut self, _: String, _: Vec<u8>) -> Result<(), String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn state_delete(&mut self, _: String) -> Result<(), String> {
+        Err(NO_LIBRARY.into())
     }
 }
+
+const NO_LIBRARY: &str = "no library";
 
 /// A run's state, which the plugin's host calls reach through the store.
 pub struct Run<L> {
@@ -240,13 +293,6 @@ impl<L: Library> Run<L> {
     }
 }
 
-/// Runs file work off the plugin runtime's thread, so one plugin's disk waits hold up no other.
-async fn blocking<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(work).await.map_err(|_| "the file operation failed".to_owned())?
-}
-
 impl<L: Library> WasiView for Run<L> {
     fn ctx(&mut self) -> WasiCtxView<'_> {
         WasiCtxView { ctx: &mut self.wasi, table: &mut self.table }
@@ -272,120 +318,5 @@ impl<L: Library> host::Host for Run<L> {
         if self.log.len() < LOG_LINES {
             self.log.push(message.chars().take(500).collect());
         }
-    }
-}
-
-impl<L: Library> library::Host for Run<L> {
-    async fn tracks(&mut self, offset: u32, limit: u32) -> Result<Vec<Track>, String> {
-        self.may(Permission::LibraryRead)?;
-        self.library.tracks(offset, limit.min(PAGE_LIMIT)).await
-    }
-}
-
-impl<L: Library> files::Host for Run<L> {
-    async fn roots(&mut self) -> Result<Vec<u64>, String> {
-        let file_permissions =
-            [Permission::LibraryRead, Permission::LibraryAdd, Permission::LibraryChange];
-        if !file_permissions.iter().any(|p| self.grants.permissions.contains(p)) {
-            return Err(format!("{} was not granted", Permission::LibraryRead.title()));
-        }
-        Ok(Run::roots(self).await?.iter().map(|(id, _)| *id).collect())
-    }
-
-    async fn list(&mut self, root: u64, folder: String) -> Result<Vec<files::Entry>, String> {
-        self.may(Permission::LibraryRead)?;
-        let root = self.root(root).await?;
-        let entries = blocking(move || library_files::list(&root, &folder)).await?;
-        Ok(entries
-            .into_iter()
-            .map(|e| files::Entry {
-                name: e.name,
-                directory: e.directory,
-                size: e.size,
-                modified_ms: e.modified_ms,
-            })
-            .collect())
-    }
-
-    async fn read(
-        &mut self,
-        root: u64,
-        path: String,
-        offset: u64,
-        length: u32,
-    ) -> Result<Vec<u8>, String> {
-        self.may(Permission::LibraryRead)?;
-        let root = self.root(root).await?;
-        blocking(move || library_files::read(&root, &path, offset, length)).await
-    }
-
-    async fn write(
-        &mut self,
-        root: u64,
-        path: String,
-        contents: Vec<u8>,
-        mode: files::WriteMode,
-    ) -> Result<(), String> {
-        let replace = matches!(mode, files::WriteMode::Replace);
-        self.may(if replace { Permission::LibraryChange } else { Permission::LibraryAdd })?;
-        let root = self.root(root).await?;
-        let written =
-            blocking(move || library_files::write(&root, &path, &contents, replace)).await?;
-        self.written += 1;
-        self.touched.push(written);
-        Ok(())
-    }
-
-    async fn rename(&mut self, root: u64, from: String, to: String) -> Result<(), String> {
-        self.may(Permission::LibraryChange)?;
-        let root = self.root(root).await?;
-        let (from, to) = blocking(move || library_files::rename(&root, &from, &to)).await?;
-        self.touched.extend([from, to]);
-        Ok(())
-    }
-
-    async fn delete(&mut self, root: u64, path: String) -> Result<(), String> {
-        self.may(Permission::LibraryChange)?;
-        let root = self.root(root).await?;
-        let deleted = blocking(move || library_files::delete(&root, &path)).await?;
-        self.touched.push(deleted);
-        Ok(())
-    }
-}
-
-impl<L: Library> http::Host for Run<L> {
-    async fn get(&mut self, url: String) -> Result<http::Response, String> {
-        self.may(Permission::Network)?;
-        rules::allowed(&url, &self.grants.destinations)?;
-        let client = match &self.client {
-            Some(client) => client.clone(),
-            None => {
-                let client = reqwest::Client::builder()
-                    .user_agent(USER_AGENT)
-                    .connect_timeout(Duration::from_secs(10))
-                    .build()
-                    .map_err(|e| format!("the network is unavailable: {e}"))?;
-                self.client.insert(client).clone()
-            }
-        };
-        let fetch = async {
-            let mut res = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(|e| format!("request failed: {}", e.without_url()))?;
-            let status = res.status().as_u16();
-            let mut body = Vec::new();
-            while let Some(chunk) = res.chunk().await.map_err(|e| format!("reply failed: {e}"))? {
-                body.extend_from_slice(&chunk);
-                if body.len() > HTTP_MAX_BODY {
-                    return Err("the reply is over 2 MB".to_owned());
-                }
-            }
-            Ok(http::Response { status, body: String::from_utf8_lossy(&body).into_owned() })
-        };
-        tokio::time::timeout(HTTP_TIMEOUT, fetch)
-            .await
-            .map_err(|_| "the request timed out".to_owned())?
     }
 }
