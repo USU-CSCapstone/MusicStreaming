@@ -14,7 +14,7 @@ use super::{Code, Id, Problem};
 use crate::db::Database;
 
 /// The spec's `AlbumSummary`, without `personal` until accounts exist.
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumSummary {
     id: Id,
@@ -53,7 +53,7 @@ struct Disc {
 }
 
 /// The columns [`summary`] reads, in order.
-const SELECT: &[&str] = &[
+pub const SELECT: &[&str] = &[
     "al.id",
     "al.title",
     "al.release_date",
@@ -272,7 +272,7 @@ pub fn album_artists(conn: &Connection, album: i64) -> rusqlite::Result<Vec<Cred
 }
 
 /// An album from a row of [`SELECT`], with its artists and genres.
-fn summary(conn: &Connection, row: &Row) -> rusqlite::Result<AlbumSummary> {
+pub fn summary(conn: &Connection, row: &Row) -> rusqlite::Result<AlbumSummary> {
     let id: i64 = row.get(0)?;
     Ok(AlbumSummary {
         id: Id(id),
