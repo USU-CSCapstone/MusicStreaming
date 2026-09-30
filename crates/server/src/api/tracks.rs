@@ -8,10 +8,10 @@ use axum::extract::{Path, State};
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
-use super::albums::album_artists;
+use super::credit::ArtistCredit;
 use super::page::{self, Order, Page, Sort, Source, Unknown, timestamp};
 use super::query::Query;
-use super::refs::{Credit, ImageRef, TagRef};
+use super::refs::{self, Credit, ImageRef, TagRef};
 use super::{Code, Id, Problem};
 use crate::db::Database;
 
@@ -191,15 +191,6 @@ impl TrackSort {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum ArtistCredit {
-    #[default]
-    Any,
-    Owned,
-    Featured,
-}
-
 /// The parameters `listTracks` supports so far. Any other, including the spec's other
 /// filters, answers `422` rather than being ignored.
 #[derive(Deserialize)]
@@ -324,19 +315,15 @@ const ON_TRACKS: &str = "SELECT track_id FROM track_artists WHERE artist_id = ?"
 fn source(library: i64, album: Option<&str>, artist: Option<&str>, credit: ArtistCredit) -> Source {
     // A malformed ID matches nothing, like an unknown one: IDs are never negative.
     let key = |text: &str| Id::canonical(text).map_or(-1, |Id(id)| id);
-    let mut params = Vec::new();
-    let from = match artist {
-        None => "tracks t".to_owned(),
+    let (from, mut params) = match artist {
+        None => ("tracks t".to_owned(), Vec::new()),
         Some(artist) => {
-            let (credited, times) = match credit {
-                ArtistCredit::Owned => (OWNED.to_owned(), 1),
-                ArtistCredit::Featured => (format!("{ON_TRACKS} EXCEPT {OWNED}"), 2),
-                ArtistCredit::Any => (format!("{OWNED} UNION {ON_TRACKS}"), 2),
-            };
-            params.extend(vec![key(artist).into(); times]);
+            let (credited, params) = credit.query(OWNED, ON_TRACKS, artist);
             // An artist's tracks are few next to the library's, so the query starts from them
             // and sorts them; `CROSS JOIN` fixes that order.
-            format!("({credited}) credited CROSS JOIN tracks t ON t.id = credited.track_id")
+            let from =
+                format!("({credited}) credited CROSS JOIN tracks t ON t.id = credited.track_id");
+            (from, params)
         }
     };
     let mut filter = "t.library_id = ?".to_owned();
@@ -353,8 +340,6 @@ fn source(library: i64, album: Option<&str>, artist: Option<&str>, credit: Artis
     }
 }
 
-/// A track from a row of [`SELECT`], with its artists, album, and genres. `albums` holds the
-/// album references already read.
 /// A track as lists show it, from a row of [`SELECT`]. `albums` holds the album references read
 /// so far, since an album's tracks share one.
 pub fn list_summary(
@@ -389,37 +374,14 @@ fn summary<A>(
     Ok(TrackSummary {
         id: Id(id),
         title: row.get(1)?,
-        artists: conn
-            .prepare_cached(
-                "SELECT artists.id, artists.name FROM track_artists \
-                 JOIN artists ON artists.id = track_artists.artist_id \
-                 WHERE track_artists.track_id = ?1 ORDER BY track_artists.position",
-            )?
-            .query_map([id], |row| {
-                Ok(Credit {
-                    id: Id(row.get(0)?),
-                    name: row.get(1)?,
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?,
+        artists: refs::artists(conn, "track", id)?,
         album,
         // The scanner files a track with no disc tag as disc 0.
         disc_number: Some(disc).filter(|disc| *disc != 0),
         track_number: row.get(4)?,
         duration_us: row.get(5)?,
         release_date: row.get(6)?,
-        genres: conn
-            .prepare_cached(
-                "SELECT tags.id, tags.name FROM track_tags JOIN tags ON tags.id = track_tags.tag_id \
-                 WHERE track_tags.track_id = ?1 ORDER BY tags.sort_key, tags.id",
-            )?
-            .query_map([id], |row| {
-                Ok(TagRef {
-                    id: Id(row.get(0)?),
-                    name: row.get(1)?,
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?,
+        genres: refs::genres(conn, "track", id)?,
         explicit: row.get(7)?,
         audio,
         availability: if row.get(10)? { "available" } else { "missing" },
@@ -434,7 +396,7 @@ fn album_ref(conn: &Connection, album: i64) -> rusqlite::Result<AlbumRef> {
     Ok(AlbumRef {
         id: Id(album),
         title,
-        artists: album_artists(conn, album)?,
+        artists: refs::artists(conn, "album", album)?,
         image: ImageRef::new(image),
     })
 }

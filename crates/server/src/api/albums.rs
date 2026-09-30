@@ -7,9 +7,10 @@ use axum::extract::{Path, State};
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
+use super::credit::ArtistCredit;
 use super::page::{self, Order, Page, Sort, Source, Unknown, timestamp};
 use super::query::Query;
-use super::refs::{Credit, ImageRef, TagRef};
+use super::refs::{self, Credit, ImageRef, TagRef};
 use super::{Code, Id, Problem};
 use crate::db::Database;
 
@@ -112,15 +113,6 @@ impl AlbumSort {
             },
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum ArtistCredit {
-    #[default]
-    Any,
-    Owned,
-    Featured,
 }
 
 /// The parameters `listAlbums` supports so far. Any other, including the spec's other
@@ -235,14 +227,7 @@ fn source(library: i64, artist: Option<&str>, credit: ArtistCredit) -> Source {
             params: vec![library.into()],
         };
     };
-    // A malformed artist ID matches no album, like an unknown one: IDs are never negative.
-    let artist = Id::canonical(artist).map_or(-1, |Id(id)| id);
-    let (credited, times) = match credit {
-        ArtistCredit::Owned => (OWNED.to_owned(), 1),
-        ArtistCredit::Featured => (format!("{ON_TRACKS} EXCEPT {OWNED}"), 2),
-        ArtistCredit::Any => (format!("{OWNED} UNION {ON_TRACKS}"), 2),
-    };
-    let mut params = vec![artist.into(); times];
+    let (credited, mut params) = credit.query(OWNED, ON_TRACKS, artist);
     params.push(library.into());
     Source {
         select: SELECT,
@@ -255,43 +240,16 @@ fn source(library: i64, artist: Option<&str>, credit: ArtistCredit) -> Source {
     }
 }
 
-/// An album's artists, in order.
-pub fn album_artists(conn: &Connection, album: i64) -> rusqlite::Result<Vec<Credit>> {
-    conn.prepare_cached(
-        "SELECT artists.id, artists.name FROM album_artists \
-         JOIN artists ON artists.id = album_artists.artist_id \
-         WHERE album_artists.album_id = ?1 ORDER BY album_artists.position",
-    )?
-    .query_map([album], |row| {
-        Ok(Credit {
-            id: Id(row.get(0)?),
-            name: row.get(1)?,
-        })
-    })?
-    .collect()
-}
-
 /// An album from a row of [`SELECT`], with its artists and genres.
 pub fn summary(conn: &Connection, row: &Row) -> rusqlite::Result<AlbumSummary> {
     let id: i64 = row.get(0)?;
     Ok(AlbumSummary {
         id: Id(id),
         title: row.get(1)?,
-        artists: album_artists(conn, id)?,
+        artists: refs::artists(conn, "album", id)?,
         release_date: row.get(2)?,
         kind: row.get(3)?,
-        genres: conn
-            .prepare_cached(
-                "SELECT tags.id, tags.name FROM album_tags JOIN tags ON tags.id = album_tags.tag_id \
-                 WHERE album_tags.album_id = ?1 ORDER BY tags.sort_key, tags.id",
-            )?
-            .query_map([id], |row| {
-                Ok(TagRef {
-                    id: Id(row.get(0)?),
-                    name: row.get(1)?,
-                })
-            })?
-            .collect::<rusqlite::Result<_>>()?,
+        genres: refs::genres(conn, "album", id)?,
         track_count: row.get(4)?,
         track_total: row.get(5)?,
         disc_count: row.get(6)?,

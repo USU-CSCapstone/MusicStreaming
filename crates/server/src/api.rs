@@ -3,6 +3,7 @@
 mod albums;
 mod artists;
 mod audio;
+mod credit;
 pub mod cursor;
 mod id;
 mod images;
