@@ -9,9 +9,10 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
 use super::credit::ArtistCredit;
-use super::page::{self, Order, Page, Sort, Source, Unknown, timestamp};
+use super::page::{self, Order, Page, Sort, Source, Unknown};
 use super::query::Query;
 use super::refs::{self, Credit, ImageRef, TagRef};
+use super::sql::timestamp;
 use super::{Code, Id, Problem};
 use crate::db::Database;
 
