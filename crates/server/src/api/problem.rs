@@ -10,33 +10,14 @@ use serde::Serialize;
 
 use crate::db::DbError;
 
-/// The spec's `Problem.code`: what went wrong, for clients to act on.
+/// The spec's `Problem.code`: what went wrong, for clients to act on. Only the codes some
+/// endpoint returns so far; the spec lists the rest, which arrive with their endpoints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Code {
-    Unauthenticated,
-    SessionRevoked,
-    InvalidCredentials,
-    RateLimited,
-    Forbidden,
     NotFound,
     MethodNotAllowed,
     ValidationFailed,
-    WeakPassword,
-    BreachedPassword,
-    UsernameTaken,
-    VersionConflict,
-    CapacityExceeded,
-    CursorExpired,
-    SetupRequired,
-    UnsupportedMedia,
-    RootOverlap,
-    RootUnavailable,
-    DeviceUnavailable,
-    NotActiveDevice,
-    SourceUnavailable,
-    SourceTimeout,
-    PluginSettingsInvalid,
     Internal,
 }
 
@@ -44,30 +25,10 @@ impl Code {
     /// The status the spec pairs with each code.
     pub fn status(self) -> StatusCode {
         match self {
-            Self::Unauthenticated | Self::SessionRevoked | Self::InvalidCredentials => {
-                StatusCode::UNAUTHORIZED
-            }
-            Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
-            Self::VersionConflict | Self::DeviceUnavailable | Self::NotActiveDevice => {
-                StatusCode::CONFLICT
-            }
-            Self::CursorExpired => StatusCode::GONE,
-            Self::UnsupportedMedia => StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            Self::ValidationFailed
-            | Self::WeakPassword
-            | Self::BreachedPassword
-            | Self::UsernameTaken
-            | Self::RootOverlap
-            | Self::RootUnavailable
-            | Self::PluginSettingsInvalid => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            Self::ValidationFailed => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
-            Self::CapacityExceeded | Self::SetupRequired | Self::SourceUnavailable => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
-            Self::SourceTimeout => StatusCode::GATEWAY_TIMEOUT,
         }
     }
 }

@@ -40,6 +40,7 @@ impl SqliteStore {
         Ok(store)
     }
 
+    #[cfg(test)]
     pub fn db(&self) -> &Arc<Database> {
         &self.db
     }

@@ -46,8 +46,9 @@ pub fn interrupted(store: &SqliteStore, lib: i64) -> Result<Vec<Scan>, DbError> 
     })
 }
 
+#[cfg(test)]
 impl SqliteStore {
-    /// All scans for a library, newest first. For the admin API and tests.
+    /// All scans for a library, newest first. Only the tests read them until the admin API.
     pub fn scans(&self, library: i64) -> Result<Vec<Scan>, DbError> {
         self.db
             .read_blocking(move |conn| read(conn, library, "ORDER BY created_at DESC, id DESC"))

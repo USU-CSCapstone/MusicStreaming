@@ -8,10 +8,6 @@
 //! Callers pass a closure and await its result, or, on threads outside the runtime such as
 //! the scanner's, wait for it.
 
-// Read-side helpers here are used by the admin API as it is built and by
-// the tests meanwhile.
-#![allow(dead_code)]
-
 pub mod catalog;
 pub mod feed;
 pub mod libraries;
