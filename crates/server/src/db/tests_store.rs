@@ -530,6 +530,46 @@ fn untagged_files_share_the_unknown_artist_and_album() {
 }
 
 #[test]
+fn duplicates_are_candidates_with_their_credits_in_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    for rel in ["a/01.wav", "b/01.wav"] {
+        tagged(
+            &root,
+            rel,
+            &[
+                (ItemKey::TrackTitle, "Song"),
+                // Credit order, not name order.
+                (ItemKey::TrackArtist, "Zed; Amy"),
+                (ItemKey::AlbumArtist, "Band"),
+                (ItemKey::AlbumTitle, "Record"),
+                (ItemKey::TrackNumber, "1"),
+            ],
+        );
+    }
+    let store = make(&root);
+    let lib = testing::library(&root);
+    testing::scan_library(&store, &lib);
+
+    let candidates = store.duplicate_candidates(&lib.id);
+    assert_eq!(candidates.len(), 2);
+    for candidate in &candidates {
+        assert_eq!(candidate.artists, ["Zed", "Amy"], "{candidate:?}");
+        assert_eq!(candidate.album_artists, ["Band"], "{candidate:?}");
+    }
+    // The same track twice, and so the same album under two folders.
+    let groups = jewelcase_scanner::duplicates::find_duplicates(&store, &lib.id);
+    let reasons: Vec<_> = groups.iter().map(|group| group.reason).collect();
+    assert_eq!(
+        reasons,
+        [
+            DuplicateReason::MatchingTags,
+            DuplicateReason::AlbumUnderTwoPaths
+        ]
+    );
+}
+
+#[test]
 fn compilations_and_album_types() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
