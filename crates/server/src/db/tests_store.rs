@@ -737,6 +737,64 @@ fn analysis_results_reach_tracks_albums_and_waveforms() {
     assert_eq!(Waveform::from_blob(&blob).unwrap().peaks.len(), 512);
 }
 
+#[test]
+fn another_librarys_track_is_left_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    testing::make_album(&root, "A", "X", 1);
+    let store = make(&root);
+    testing::scan_library(&store, &testing::library(&root));
+    let other = tmp.path().join("other");
+    store
+        .db()
+        .write_blocking(move |tx| {
+            libraries::create(tx, Some(2), "Other", &[&other], &[])?;
+            tx.execute_batch(
+                "UPDATE tracks SET missing_since = 5;
+                 INSERT INTO track_waveforms (library_id, track_id, data)
+                 SELECT library_id, id, x'00' FROM tracks;",
+            )
+        })
+        .unwrap();
+    store.refresh_roots().unwrap();
+    let track = scalar::<i64>(&store, "SELECT id FROM tracks").unwrap() as TrackId;
+
+    let other: LibraryId = "2".into();
+    let mut batch = Batch::new(999);
+    batch.returned.push(track);
+    store.apply(&other, batch).unwrap();
+    let result = AnalysisResult {
+        analyzer_version: 1,
+        integrated_lufs: Some(-9.0),
+        loudness_range_lu: None,
+        true_peak_dbtp: None,
+        // No peaks: the path that deletes a waveform.
+        waveform: Waveform {
+            peaks: Vec::new(),
+            rms: Vec::new(),
+        },
+        features: None,
+    };
+    store.store_analysis(&other, track, result);
+
+    let row = "SELECT missing_since, last_seen_scan_id = 999, analyzer_version FROM tracks";
+    let unchanged = store
+        .db()
+        .read_blocking(move |conn| {
+            conn.query_row(row, [], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, bool>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                ))
+            })
+        })
+        .unwrap();
+    assert_eq!(unchanged, (5, false, None));
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM track_waveforms"), 1);
+    assert_eq!(store.feed_len(&other), 0);
+}
+
 /// The cold-scan budget, store side only (`design/scanning.md` §15,
 /// `requirements/performance.md` §5): does persisting a large library and
 /// looking every file up fit inside an hour? Run with
