@@ -1,54 +1,19 @@
 //! Artists: `listArtists` and `getArtist` (`api/openapi.yaml`).
 
+mod representation;
+
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Path, State};
-use rusqlite::{OptionalExtension, Row};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+
+pub use representation::{Artist, ArtistSummary, SELECT, summary};
 
 use super::page::{Order, Page, Request, Sort, Source, Unknown};
 use super::query::Query;
-use super::refs::{self, ImageRef, TagRef};
-use super::sql::timestamp;
 use super::{Code, Id, Problem};
 use crate::db::Database;
-
-/// The spec's `ArtistSummary`, without `personal` until accounts exist.
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ArtistSummary {
-    id: Id,
-    /// `None` for the unknown artist.
-    name: Option<String>,
-    image: Option<ImageRef>,
-    /// Albums the artist owns.
-    album_count: i64,
-    /// Owned and featured tracks.
-    track_count: i64,
-    added_at: String,
-}
-
-/// The spec's `Artist`.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Artist {
-    #[serde(flatten)]
-    summary: ArtistSummary,
-    biography: Option<String>,
-    genres: Vec<TagRef>,
-    appearance_count: i64,
-}
-
-/// The columns [`summary`] reads, in order.
-pub const SELECT: &[&str] = &[
-    "ar.id",
-    "ar.name",
-    "ar.image_id",
-    "ar.album_count",
-    "ar.track_count",
-    timestamp!("ar.added_at"),
-];
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -112,35 +77,10 @@ pub async fn get(
 ) -> Result<Json<Artist>, Problem> {
     let Id(library) = Id::parse(&library_id)?;
     let Id(artist) = Id::parse(&artist_id)?;
-    db.read(move |conn| {
-        let sql = format!(
-            "SELECT {}, ar.biography, ar.appearance_count FROM artists ar \
-             WHERE ar.library_id = ?1 AND ar.id = ?2",
-            SELECT.join(", ")
-        );
-        let Some((summary, biography, appearance_count)) = conn
-            .prepare_cached(&sql)?
-            .query_row([library, artist], |row| {
-                Ok((
-                    summary(row)?,
-                    row.get(SELECT.len())?,
-                    row.get(SELECT.len() + 1)?,
-                ))
-            })
-            .optional()?
-        else {
-            return Ok(None);
-        };
-        Ok(Some(Artist {
-            summary,
-            biography,
-            genres: refs::genres(conn, "artist", artist)?,
-            appearance_count,
-        }))
-    })
-    .await?
-    .map(Json)
-    .ok_or_else(|| Problem::new(Code::NotFound))
+    db.read(move |conn| representation::artist(conn, library, artist))
+        .await?
+        .map(Json)
+        .ok_or_else(|| Problem::new(Code::NotFound))
 }
 
 fn source(library: i64) -> Source {
@@ -150,18 +90,6 @@ fn source(library: i64) -> Source {
         filter: "ar.library_id = ?".to_owned(),
         params: vec![library.into()],
     }
-}
-
-/// An artist from a row of [`SELECT`].
-pub fn summary(row: &Row) -> rusqlite::Result<ArtistSummary> {
-    Ok(ArtistSummary {
-        id: Id(row.get(0)?),
-        name: row.get(1)?,
-        image: ImageRef::new(row.get(2)?),
-        album_count: row.get(3)?,
-        track_count: row.get(4)?,
-        added_at: row.get(5)?,
-    })
 }
 
 #[cfg(test)]
