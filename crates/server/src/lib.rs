@@ -1,7 +1,7 @@
-pub mod api;
+mod api;
 pub mod config;
-pub mod data_dir;
-pub mod db;
+mod data_dir;
+mod db;
 mod scanning;
 mod web;
 
