@@ -3,10 +3,12 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type {
+	Device,
 	Problem,
 	SearchResponse,
 	SearchResult,
-	SearchSectionType
+	SearchSectionType,
+	User
 } from '../src/lib/api/types.ts';
 import { Catalog, matchRank, paging, slice } from './catalog.ts';
 import { Db, toKey } from './db.ts';
@@ -178,8 +180,9 @@ export function createApi(dbPath: string) {
 		query: URLSearchParams
 	) {
 		if (path === '/health') return { status: 'ok' };
-		// The mock has no accounts, so it is always set up and never asks for a login.
+		// The mock has no accounts: it is always set up, and everyone is this one user.
 		if (path === '/server') return { version: 'mock', apiVersion: '1', setupRequired: false };
+		if (path === '/me') return MOCK_USER;
 		if (path === '/libraries') return { items: catalog.libraries() };
 		const m = /^\/libraries\/([^/]+)(.*)$/.exec(path);
 		const lib = toKey(m?.[1]);
@@ -195,6 +198,15 @@ export function createApi(dbPath: string) {
 	/** Connect-style middleware, mounted at `/api/v1`. */
 	return async (req: IncomingMessage, res: ServerResponse) => {
 		const url = new URL(req.url ?? '/', 'http://mock');
+		// Logging in and out are the only writes, so the login page and Log out work.
+		if (req.method === 'POST' && url.pathname === '/auth/logout') {
+			res.statusCode = 204;
+			return res.end();
+		}
+		if (req.method === 'POST' && url.pathname === '/auth/login') {
+			res.setHeader('Content-Type', 'application/json');
+			return res.end(JSON.stringify({ token: 'mock', user: MOCK_USER, device: MOCK_DEVICE }));
+		}
 		if (req.method !== 'GET' && req.method !== 'HEAD') {
 			return problem(res, 405, 'Method Not Allowed', 'method_not_allowed', 'The mock API is read-only.');
 		}
@@ -212,6 +224,23 @@ export function createApi(dbPath: string) {
 		}
 	};
 }
+
+const MOCK_USER: User = {
+	id: '1',
+	username: 'mock',
+	displayName: 'Mock User',
+	role: 'owner',
+	hasAvatar: false
+};
+
+const MOCK_DEVICE: Device = {
+	id: '1',
+	name: 'Mock device',
+	type: 'desktop',
+	firstSeenAt: '2026-01-01T00:00:00.000Z',
+	lastSeenAt: '2026-01-01T00:00:00.000Z',
+	connected: false
+};
 
 function withKey<T>(s: string, f: (k: bigint) => T): T | undefined {
 	const k = toKey(s);

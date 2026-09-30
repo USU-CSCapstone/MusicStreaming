@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { serveLibrary } from './fixtures';
+import { PASSWORD, serveLibrary } from './fixtures';
 
 test('explains an empty server instead of erroring', async ({ page }) => {
 	await serveLibrary(page, { empty: true });
@@ -105,4 +105,46 @@ test('setup is not offered once it is done', async ({ page }) => {
 	await serveLibrary(page);
 	await page.goto('/setup');
 	await expect(page).toHaveURL(/\/albums$/);
+});
+
+test('logging in returns to the page that asked for it', async ({ page }) => {
+	await serveLibrary(page, { signedIn: false });
+	await page.goto('/artists');
+	await expect(page).toHaveURL(/\/login\?next=%2Fartists$/);
+	await expect(page.getByRole('navigation', { name: 'Library' })).toHaveCount(0);
+
+	await page.getByLabel('Username').fill('sam');
+	await page.getByLabel('Password').fill('wrong');
+	await page.getByRole('button', { name: 'Log in' }).click();
+	await expect(page.getByRole('alert')).toHaveText('The username or password is wrong.');
+
+	await page.getByLabel('Password').fill(PASSWORD);
+	await page.getByRole('button', { name: 'Log in' }).click();
+	await expect(page).toHaveURL(/\/artists$/);
+	await expect(page.getByRole('heading', { level: 1, name: 'Artists' })).toBeVisible();
+});
+
+test('logging out ends the session', async ({ page }) => {
+	await serveLibrary(page);
+	await page.goto('/albums');
+	await page
+		.getByRole('navigation', { name: 'Library' })
+		.getByRole('link', { name: 'Sam' })
+		.click();
+	await expect(
+		page.getByText('The admins of this server can see your listening data')
+	).toBeVisible();
+
+	await page.getByRole('button', { name: 'Log out' }).click();
+	await expect(page).toHaveURL(/\/login$/);
+	await page.goto('/albums');
+	await expect(page).toHaveURL(/\/login\?next=%2Falbums$/);
+});
+
+test('the account is reachable on a phone', async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await serveLibrary(page);
+	await page.goto('/albums');
+	await page.getByRole('link', { name: 'Account: Sam' }).click();
+	await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible();
 });

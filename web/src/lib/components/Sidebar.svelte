@@ -2,6 +2,7 @@
 	import { page } from '$app/state';
 	import { plural } from '$lib/format';
 	import { inSection, sections } from '$lib/sections';
+	import AccountLink from './AccountLink.svelte';
 	import Icon from './Icon.svelte';
 	import SearchBox from './SearchBox.svelte';
 
@@ -22,12 +23,15 @@
 			</li>
 		{/each}
 	</ul>
-	{#if library}
-		<footer class="muted">
-			<span class="name">{library.name}</span>
-			<span>{plural(library.trackCount, 'song')}{library.scanning ? ' · scanning' : ''}</span>
-		</footer>
-	{/if}
+	<footer>
+		{#if library}
+			<div class="library muted">
+				<span class="name">{library.name}</span>
+				<span>{plural(library.trackCount, 'song')}{library.scanning ? ' · scanning' : ''}</span>
+			</div>
+		{/if}
+		<AccountLink showName />
+	</footer>
 </nav>
 
 <style>
@@ -76,7 +80,13 @@
 		margin-top: auto;
 		display: flex;
 		flex-direction: column;
+		gap: var(--space-4);
 		padding: 0 var(--space-3);
+	}
+
+	.library {
+		display: flex;
+		flex-direction: column;
 		font-size: 12px;
 	}
 
