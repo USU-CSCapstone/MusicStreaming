@@ -107,7 +107,7 @@ pub async fn playback(
                         channels: row.get(5)?,
                         size_bytes: Some(row.get(6)?),
                         transport: "progressive",
-                        loudness: loudness(row, 7)?,
+                        loudness: loudness(row)?,
                         gapless: (),
                     })
                 })
