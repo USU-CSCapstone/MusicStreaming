@@ -7,6 +7,14 @@ test('explains an empty server instead of erroring', async ({ page }) => {
 	await expect(page.getByRole('heading', { name: 'No music yet' })).toBeVisible();
 });
 
+test('explains to a user with no library that they need access', async ({ page }) => {
+	await serveLibrary(page, { empty: true, role: 'user' });
+	await page.goto('/');
+	await expect(
+		page.getByText("You don't have access to a library on this server yet.")
+	).toBeVisible();
+});
+
 test('sidebar sections route to their views', async ({ page }) => {
 	await serveLibrary(page);
 	await page.goto('/');

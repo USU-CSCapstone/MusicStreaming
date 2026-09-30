@@ -4,7 +4,9 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use serde_json::{Value, json};
 
-use super::super::testing::{add_device, app, app_before_setup, respond, send_json};
+use super::super::testing::{
+    add_device, add_user, app, app_before_setup, app_with_tracks, respond, send_json,
+};
 
 /// A request with these headers, and its status, headers, and JSON body, if any.
 async fn call(
@@ -171,4 +173,65 @@ async fn use_refreshes_when_a_device_was_last_seen() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("last_seen_at was not refreshed");
+}
+
+#[tokio::test]
+async fn a_user_reaches_only_the_libraries_granted_to_them() {
+    let (temp, db, app) = app_with_tracks().await;
+    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    add_user(&conn, 2, "user");
+    add_device(&conn, 2, 2, "user-token");
+    conn.execute(
+        "INSERT INTO library_access (user_id, library_id, granted_at) VALUES (2, 1, 0)",
+        [],
+    )
+    .unwrap();
+    add_user(&conn, 3, "admin");
+    add_device(&conn, 3, 3, "admin-token");
+    let user = [("authorization", "Bearer user-token")];
+
+    // Library 2 answers exactly as library 9, which does not exist, under every path.
+    let (_, _, missing) = call(&app, "GET", "/api/v1/libraries/9", &user).await;
+    for path in [
+        "",
+        "/tracks",
+        "/tracks/3",
+        "/albums",
+        "/albums/201",
+        "/artists",
+        "/playlists",
+        "/search?q=a",
+        "/images/1",
+        "/tracks/3/lyrics",
+        "/tracks/3/waveform",
+        "/tracks/3/playback",
+        "/tracks/3/audio",
+    ] {
+        let uri = format!("/api/v1/libraries/2{path}");
+        let (status, _, problem) = call(&app, "GET", &uri, &user).await;
+        assert_eq!((status, &problem), (StatusCode::NOT_FOUND, &missing), "{uri}");
+    }
+    assert_eq!(
+        call(&app, "GET", "/api/v1/libraries/x/tracks", &user).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    assert_eq!(call(&app, "GET", "/api/v1/libraries/1/tracks", &user).await.0, StatusCode::OK);
+    let admin = [("authorization", "Bearer admin-token")];
+    assert_eq!(call(&app, "GET", "/api/v1/libraries/2/tracks", &admin).await.0, StatusCode::OK);
+    assert_eq!(call(&app, "GET", "/api/v1/libraries/9", &admin).await.0, StatusCode::NOT_FOUND);
+
+    // Revoking access takes effect on the next request.
+    db.write(|tx| tx.execute("DELETE FROM library_access WHERE user_id = 2", [])).await.unwrap();
+    assert_eq!(
+        call(&app, "GET", "/api/v1/libraries/1/tracks", &user).await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn a_bad_token_is_unauthenticated_before_any_library_is_looked_up() {
+    let (_temp, _db, app) = app_with_tracks().await;
+    let (status, _, _) = call(&app, "GET", "/api/v1/libraries/9/tracks", &[]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }

@@ -103,12 +103,17 @@ export const PASSWORD = 'correct horse battery staple';
 
 /**
  * A server whose setup is done unless `setupRequired`, when `POST /setup` completes it, and
- * with this browser logged in unless `signedIn` is false. Until then, anything but setup and
- * login answers `401`.
+ * with this browser logged in, as an account with `role`, unless `signedIn` is false. Until
+ * then, anything but setup and login answers `401`.
  */
 export async function serveLibrary(
 	page: Page,
-	{ empty = false, setupRequired = false, signedIn = true } = {}
+	{
+		empty = false,
+		setupRequired = false,
+		signedIn = true,
+		role = 'owner' as 'owner' | 'admin' | 'user'
+	} = {}
 ) {
 	await page.route('**/api/v1/**', async (route: Route) => {
 		const url = new URL(route.request().url());
@@ -140,7 +145,9 @@ export async function serveLibrary(
 			signedIn = false;
 			return route.fulfill({ status: 204 });
 		}
-		if (path === '/me') return json(session({ username: 'sam', password: '', device }).user);
+		if (path === '/me') {
+			return json({ ...session({ username: 'sam', password: '', device }).user, role });
+		}
 		if (path === '/libraries') return json({ items: empty ? [] : [library] });
 		if (path === `${lib}/albums`) return json(pageOf([album]));
 		if (path === `${lib}/albums/${album.id}`) {
