@@ -2,13 +2,13 @@
 //!
 //! A cursor holds a label naming the list and sort it came from, then the last row's sort
 //! values, which the next query binds as parameters in a keyset condition. Each value is a type
-//! byte and its bytes, with a length before text and blobs; the whole is hex-encoded. That is
+//! byte and its bytes, with a length before text and blobs; the whole is URL-safe base64. That is
 //! opaque to clients but not secret, since it holds only values the caller was just sent. It is
 //! not signed either: a forged cursor can only choose where a page starts, and the query still
 //! runs within the caller's scope.
 
-use std::fmt::Write;
-
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL;
 use rusqlite::types::Value;
 
 use super::{Code, Problem};
@@ -45,11 +45,7 @@ pub fn encode(label: &str, after: &[Value]) -> String {
             }
         }
     }
-    let mut hex = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    hex
+    BASE64URL.encode(bytes)
 }
 
 /// Reads a cursor made by [`encode`] with the same `label` and `columns` sort values. Anything
@@ -62,14 +58,8 @@ pub fn decode(text: &str, label: &str, columns: usize) -> Result<Vec<Value>, Pro
 
 fn read(text: &str, label: &str, columns: usize) -> Option<Vec<Value>> {
     // No length limit is needed here: the server has already read the whole request, and
-    // decoding allocates half as much again.
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    let bytes = (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(text.get(i..i + 2)?, 16).ok())
-        .collect::<Option<Vec<u8>>>()?;
+    // decoding allocates less than it.
+    let bytes = BASE64URL.decode(text).ok()?;
     let mut reader = Reader(&bytes);
     if reader.bytes()? != label.as_bytes() {
         return None;
@@ -143,7 +133,8 @@ mod tests {
     #[test]
     fn round_trips_every_sort_value() {
         let cursor = encode(LABEL, &row());
-        assert!(cursor.bytes().all(|b| b.is_ascii_hexdigit()), "{cursor}");
+        let url_safe = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
+        assert!(cursor.bytes().all(url_safe), "{cursor}");
         assert_eq!(decode(&cursor, LABEL, 5).unwrap(), row());
     }
 
@@ -156,7 +147,7 @@ mod tests {
             &[Value::Blob(title.clone().into_bytes()), Value::Integer(1)],
         );
         assert!(
-            cursor.len() < 2 * title.len() + 100,
+            cursor.len() < title.len() * 4 / 3 + 100,
             "{} chars",
             cursor.len()
         );
@@ -178,19 +169,22 @@ mod tests {
 
     #[test]
     fn rejects_anything_malformed() {
-        let valid = encode(LABEL, &row());
-        // A cursor with the right label and no values, to append one bad value to.
-        let label_only = encode(LABEL, &[]);
+        let bytes = |cursor: String| BASE64URL.decode(cursor).unwrap();
+        let valid = bytes(encode(LABEL, &row()));
+        // A cursor with the right label and then `value`, one bad value.
+        let label_then =
+            |value: &[u8]| BASE64URL.encode([&bytes(encode(LABEL, &[])), value].concat());
         let cases = [
             (String::new(), 5),
             ("abc".to_owned(), 5),
-            ("zz".to_owned(), 5),
             ("é".to_owned(), 5),
-            (valid[..valid.len() - 2].to_owned(), 5), // truncated
-            (format!("{valid}00"), 5),                // trailing bytes
-            (format!("{label_only}09"), 1),           // unknown type
-            (format!("{label_only}0300000001ff"), 1), // text that is not UTF-8
-            (format!("{label_only}04ffffffff"), 1),   // a length past the end
+            (encode(LABEL, &row()) + "=", 5), // padded
+            ("ab+/".to_owned(), 5),           // not the URL-safe alphabet
+            (BASE64URL.encode(&valid[..valid.len() - 1]), 5), // truncated
+            (BASE64URL.encode([&valid[..], &[0]].concat()), 5), // trailing bytes
+            (label_then(&[9]), 1),            // unknown type
+            (label_then(&[3, 0, 0, 0, 1, 0xff]), 1), // text that is not UTF-8
+            (label_then(&[4, 0xff, 0xff, 0xff, 0xff]), 1), // a length past the end
         ];
         for (text, columns) in cases {
             let problem = decode(&text, LABEL, columns).unwrap_err();
