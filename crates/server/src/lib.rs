@@ -2,6 +2,7 @@ mod api;
 pub mod config;
 mod data_dir;
 mod db;
+mod plugins;
 mod scanning;
 mod web;
 
@@ -17,6 +18,7 @@ use tracing::{info, warn};
 use crate::config::Config;
 use crate::data_dir::DataDir;
 use crate::db::{Database, libraries};
+use crate::plugins::Plugins;
 use crate::scanning::Scanning;
 
 /// Runs the server until shutdown_signal resolves, then finishes in-flight requests.
@@ -58,7 +60,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     info!(%address, "listening");
 
     let images = api::Images::new(data_dir.cache().join("images"), ffmpeg.config().ffmpeg.clone());
-    let mut app = api::router(&config.base_path, db.clone(), images);
+    let plugins = Plugins::new(db.clone(), data_dir.state().join("plugins"), scanning.scanners());
+    let mut app = api::router(&config.base_path, db.clone(), images, plugins);
     let web = Path::new(web::DIR);
     if !web.is_dir() {
         info!(dir = web::DIR, "no web app there; serving the API only");

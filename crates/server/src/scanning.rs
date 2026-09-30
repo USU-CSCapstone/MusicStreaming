@@ -1,6 +1,7 @@
 //! Background work on every library: its scanner and the triggers that queue scans, loudness
 //! and waveform analysis, and image placeholders (`design/scanning.md`).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,6 +23,7 @@ pub struct Scanning {
 }
 
 struct Library {
+    id: i64,
     scanner: Scanner,
     watcher: Option<FsWatcher>,
     schedule: Option<Schedule>,
@@ -67,6 +69,7 @@ impl Scanning {
             });
             info!(library = lib.id, name = %lib.name, roots = ?config.roots, "scanner started");
             running.push(Library {
+                id: lib.id,
                 scanner,
                 watcher,
                 schedule,
@@ -76,6 +79,11 @@ impl Scanning {
             });
         }
         Ok(Scanning { governor, libraries: running })
+    }
+
+    /// Each library's scanner, for queuing scans from elsewhere, such as of what a plugin saved.
+    pub fn scanners(&self) -> HashMap<i64, Scanner> {
+        self.libraries.iter().map(|lib| (lib.id, lib.scanner.clone())).collect()
     }
 
     /// Stops everything, each once the work in hand is done: the triggers first, so nothing new

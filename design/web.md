@@ -64,6 +64,8 @@ It is a stand-in for the server, so it has these limits. None of them are client
 - Only the read endpoints the client uses are implemented; any write answers `405`.
 - **Accounts** don't exist: the mock reports setup as done, everyone is one user, and logging in
   accepts any password.
+- **Plugins** can be installed, granted, and enabled, but never run: **Run now** needs the server,
+  which hosts them (`crates/plugins`).
 
 ## Not built yet
 

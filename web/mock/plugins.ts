@@ -1,6 +1,6 @@
-// Plugin administration for the mock: install, permissions, enable, uninstall.
-// Nothing runs a plugin here; this records what is installed and what the admin granted
-// (`requirements/plugins.md` §4–5). State lives under the data directory, never the library.
+// Plugin administration for the mock: install, permissions, enable, uninstall, as the
+// server's `/admin/plugins` does. Nothing runs a plugin here; that needs the server
+// (`crates/plugins`). State lives under the data directory, never the library.
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -306,7 +306,9 @@ export async function adminRoute(
 		}
 		if (id && sub === 'run' && method === 'POST') {
 			store.get(id); // 404 for a plugin that is not installed.
-			if (!run) throw new PluginError(503, 'runner_unavailable', 'Plugins cannot be run here.');
+			if (!run) {
+				throw new PluginError(503, 'runner_unavailable', 'Running a plugin needs the Jewelcase server.');
+			}
 			return { status: 200, body: await run(id) };
 		}
 		return {

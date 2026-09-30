@@ -282,8 +282,7 @@
 									{#if r.scannerRunning}
 										The server's scanner picks up the new files within a few seconds.
 									{:else}
-										Start the server so the scanner picks up the new files:
-										<code>JEWELCASE_DATA_DIR=./data cargo run -p jewelcase-server</code>
+										They appear after the library's next scan.
 									{/if}
 								</p>
 							{/if}
@@ -559,11 +558,6 @@
 	.summary :global(svg) {
 		flex-shrink: 0;
 		margin-top: 2px;
-	}
-
-	.result code {
-		font-family: var(--font-mono);
-		font-size: 12px;
 	}
 
 	details summary {

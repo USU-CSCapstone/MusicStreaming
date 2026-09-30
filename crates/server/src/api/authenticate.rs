@@ -37,8 +37,8 @@ const LAST_SEEN_EVERY: Duration = Duration::from_secs(5 * 60);
 pub struct Caller {
     pub user: i64,
     pub device: i64,
-    /// Whether the account reaches every library, as admins and the owner do.
-    pub reaches_all: bool,
+    /// An admin or the owner: administers the server, and reaches every library.
+    pub admin: bool,
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for Caller {
@@ -50,7 +50,8 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 }
 
 /// Answers `401 unauthenticated` unless the request carries the token of a device whose
-/// account is active, and `404` if its path names a library that account cannot reach.
+/// account is active, `403` if it is under `/admin` and the account is not an admin, and `404`
+/// if its path names a library that account cannot reach.
 /// Otherwise it passes the [`Caller`] on to the handler.
 pub async fn require(
     State(state): State<AppState>,
@@ -75,6 +76,11 @@ pub async fn require(
         return Problem::new(Code::Forbidden)
             .detail("A write authenticated by cookie must send X-Jewelcase-Client.")
             .into_response();
+    }
+    // Everything under `/admin` is for admins and the owner (`requirements/users.md` §1). A user
+    // is told they may not, before anything the path names is looked up (§10).
+    if !caller.admin && request.uri().path().starts_with("/admin/") {
+        return Problem::new(Code::Forbidden).into_response();
     }
     if !reaches_library {
         return Problem::not_found().into_response();
@@ -147,7 +153,7 @@ fn device(
     )?
     .query_row(rusqlite::params![hash, library], |row| {
         Ok(Found {
-            caller: Caller { device: row.get(0)?, user: row.get(1)?, reaches_all: row.get(3)? },
+            caller: Caller { device: row.get(0)?, user: row.get(1)?, admin: row.get(3)? },
             last_seen_at: row.get(2)?,
             reaches_library: row.get(4)?,
         })

@@ -19,6 +19,7 @@ mod origin;
 mod page;
 mod password;
 mod playlists;
+mod plugins;
 mod problem;
 mod refs;
 mod search;
@@ -32,9 +33,9 @@ mod waveform;
 
 use std::sync::Arc;
 
-use axum::extract::FromRef;
+use axum::extract::{DefaultBodyLimit, FromRef};
 use axum::middleware;
-use axum::routing::{any, get, post};
+use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
 
 pub use id::Id;
@@ -44,6 +45,7 @@ use search::Indexes;
 use setup::Setup;
 
 use crate::db::Database;
+use crate::plugins::Plugins;
 
 /// What handlers share. Each takes the part it needs, such as `State<Arc<Database>>`.
 #[derive(Clone)]
@@ -52,6 +54,7 @@ struct AppState {
     images: Arc<Images>,
     indexes: Arc<Indexes>,
     setup: Arc<Setup>,
+    plugins: Arc<Plugins>,
     /// Where the API is mounted, `{base_path}/api/v1`.
     prefix: Arc<str>,
 }
@@ -68,6 +71,12 @@ impl FromRef<AppState> for Arc<Indexes> {
     }
 }
 
+impl FromRef<AppState> for Arc<Plugins> {
+    fn from_ref(state: &AppState) -> Arc<Plugins> {
+        state.plugins.clone()
+    }
+}
+
 impl FromRef<AppState> for Arc<Images> {
     fn from_ref(state: &AppState) -> Arc<Images> {
         state.images.clone()
@@ -75,13 +84,14 @@ impl FromRef<AppState> for Arc<Images> {
 }
 
 /// The API's routes, nested under `{base_path}/api/v1`.
-pub fn router(base_path: &str, db: Arc<Database>, images: Images) -> Router {
+pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Plugins) -> Router {
     let prefix = format!("{base_path}/api/v1");
     let state = AppState {
         db,
         images: Arc::new(images),
         indexes: Arc::default(),
         setup: Arc::default(),
+        plugins: Arc::new(plugins),
         prefix: prefix.as_str().into(),
     };
     // These answer `401` without a token.
@@ -103,6 +113,17 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images) -> Router {
         .route("/libraries/{library_id}/tracks/{track_id}/audio", get(audio::audio))
         .route("/libraries/{library_id}/artists/{artist_id}", get(artists::get))
         .route("/libraries/{library_id}/albums/{album_id}", get(albums::get))
+        .route(
+            "/admin/plugins",
+            // A plugin file may be larger than the default limit on a request body.
+            get(plugins::list)
+                .post(plugins::install)
+                .layer(DefaultBodyLimit::max(jewelcase_plugins::MAX_SIZE)),
+        )
+        .route("/admin/plugins/{plugin_id}", get(plugins::get).delete(plugins::uninstall))
+        .route("/admin/plugins/{plugin_id}/permissions", put(plugins::set_permissions))
+        .route("/admin/plugins/{plugin_id}/libraries/{library_id}", put(plugins::set_enabled))
+        .route("/admin/plugins/{plugin_id}/run", post(plugins::run))
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate::require));
     // Until setup is done, these answer `503 setup_required`.
     let after_setup = Router::new()

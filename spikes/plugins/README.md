@@ -41,25 +41,7 @@ to `design/plugins.md`.
 
 ## The lyrics plugin
 
-Beyond the measurements, this workspace holds a real plugin and the runner that runs it:
-
-| Path | |
-|---|---|
-| `wit/lyrics/plugin.wit` | The plugin contract: scoped library reads, `save-lyrics`, `http.get` to approved destinations, and the host's `granted`/`log` |
-| `lrclib-lyrics/` | The plugin: finds tracks without lyrics, asks lrclib.net, and saves `.lrc` files beside them. `manifest.json` is what the Plugins page shows |
-| `runner/` | `plugin-run <id> --data <dir>`: reads what the Plugins page installed and approved, and runs the plugin with only those permissions |
-
-To use it end to end:
-
-```sh
-./build.sh                                          # also packs target/lrclib-lyrics.wasm
-JEWELCASE_DATA_DIR=./data cargo run -p jewelcase-server   # from the repo root, so the scanner picks up new files
-cd web && pnpm dev
-```
-
-Then, on the Plugins page:
-1. Install `spikes/plugins/target/lrclib-lyrics.wasm`, approve its permissions, and enable it.
-2. Press **Run now**.
-3. Play a song and open **Lyrics** in the player.
-
-Without write access, the plugin reports what it found but saves nothing.
+The real plugin this spike led to, and the host that runs it, have moved out of the spike:
+the plugin to [`plugins/lrclib-lyrics`](../../plugins/lrclib-lyrics/), and the host and its
+contract to [`crates/plugins`](../../crates/plugins/), which the server runs it with
+(`design/plugins.md` §7).

@@ -1,4 +1,4 @@
-//! The runner's rules, kept apart from Wasmtime so they are testable: which destinations a
+//! The host's rules, kept apart from Wasmtime so they are testable: which destinations a
 //! plugin may reach, where lyrics go, and that nothing existing is ever overwritten.
 
 use std::fs;
@@ -6,52 +6,39 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// The scanner's lyrics extensions, synced first (`crates/scanner/src/sidecar.rs`).
-pub const LYRICS_EXTENSIONS: [&str; 2] = ["lrc", "txt"];
+const LYRICS_EXTENSIONS: [&str; 2] = ["lrc", "txt"];
 
 /// Whether `url` may be fetched, given the destinations the manifest declared. Only
 /// http(s), and only to a listed host (or any, for `*`); subdomains must be listed too.
 pub fn allowed(url: &str, destinations: &[String]) -> Result<(), String> {
-    let (scheme, rest) = url.split_once("://").ok_or("not a URL")?;
-    if scheme != "https" && scheme != "http" {
-        return Err(format!("{scheme} is not allowed; only http and https"));
+    let url = reqwest::Url::parse(url).map_err(|_| "not a URL".to_owned())?;
+    if url.scheme() != "https" && url.scheme() != "http" {
+        return Err(format!("{} is not allowed; only http and https", url.scheme()));
     }
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host = authority.rsplit('@').next().unwrap_or("");
-    let host = host.split(':').next().unwrap_or("").to_ascii_lowercase();
-    if host.is_empty() {
-        return Err("the URL has no host".into());
-    }
-    if destinations
-        .iter()
-        .any(|d| d == "*" || d.eq_ignore_ascii_case(&host))
-    {
+    // Parsed, so userinfo and ports are already apart from the host, which is lowercase.
+    let host = url.host_str().ok_or("the URL has no host")?;
+    if destinations.iter().any(|d| d == "*" || d.eq_ignore_ascii_case(host)) {
         Ok(())
     } else {
-        Err(format!(
-            "{host} is not one of this plugin's approved destinations"
-        ))
+        Err(format!("{host} is not one of this plugin's approved destinations"))
     }
 }
 
 /// The lyrics file a track already has beside it, whatever the extension's case.
-pub fn existing_lyrics(audio: &Path) -> Option<PathBuf> {
+fn existing_lyrics(audio: &Path) -> Option<PathBuf> {
     let dir = audio.parent()?;
     let stem = audio.file_stem()?.to_str()?;
-    fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| {
-            p.file_stem().and_then(|s| s.to_str()) == Some(stem)
-                && p.extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| LYRICS_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
-        })
+    fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).find(|p| {
+        p.file_stem().and_then(|s| s.to_str()) == Some(stem)
+            && p.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| LYRICS_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+    })
 }
 
 /// Where lyrics for `audio` go: the same name with `.lrc` (synced) or `.txt` (plain),
 /// which is what the scanner looks for (`requirements/scanning.md` §3.4).
-pub fn lyrics_path(audio: &Path, synced: bool) -> PathBuf {
+fn lyrics_path(audio: &Path, synced: bool) -> PathBuf {
     audio.with_extension(if synced { "lrc" } else { "txt" })
 }
 
@@ -69,10 +56,7 @@ pub fn save_lyrics(audio: &Path, synced: bool, text: &str) -> Result<PathBuf, St
         return Err("synced lyrics need timestamps".into());
     }
     if let Some(existing) = existing_lyrics(audio) {
-        return Err(format!(
-            "{} already exists",
-            existing.file_name().unwrap().to_string_lossy()
-        ));
+        return Err(format!("{} already exists", existing.file_name().unwrap().to_string_lossy()));
     }
     let target = lyrics_path(audio, synced);
     let temp = target.with_extension(format!("{}.part", std::process::id()));
@@ -96,15 +80,6 @@ pub fn save_lyrics(audio: &Path, synced: bool, text: &str) -> Result<PathBuf, St
         format!("could not write: {e}")
     })?;
     Ok(target)
-}
-
-/// The required permissions a run would be missing; it may not start while any are.
-pub fn missing_required<'a>(required: &'a [String], granted: &[String]) -> Vec<&'a str> {
-    required
-        .iter()
-        .filter(|p| !granted.contains(p))
-        .map(String::as_str)
-        .collect()
 }
 
 #[cfg(test)]
@@ -136,24 +111,14 @@ mod tests {
 
         let saved = save_lyrics(&audio, true, "[00:01.00]I'm having trouble").unwrap();
         assert_eq!(saved, dir.path().join("Brain Stew.lrc"));
-        assert_eq!(
-            fs::read_to_string(&saved).unwrap(),
-            "[00:01.00]I'm having trouble\n"
-        );
+        assert_eq!(fs::read_to_string(&saved).unwrap(), "[00:01.00]I'm having trouble\n");
         assert_eq!(fs::read(&audio).unwrap(), b"audio");
 
         // Neither a second synced save nor a plain one replaces it.
         assert!(save_lyrics(&audio, true, "[00:02.00]other").is_err());
         assert!(save_lyrics(&audio, false, "other").is_err());
-        assert_eq!(
-            fs::read_to_string(&saved).unwrap(),
-            "[00:01.00]I'm having trouble\n"
-        );
-        assert_eq!(
-            fs::read_dir(dir.path()).unwrap().count(),
-            2,
-            "no temp files left behind"
-        );
+        assert_eq!(fs::read_to_string(&saved).unwrap(), "[00:01.00]I'm having trouble\n");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2, "no temp files left behind");
     }
 
     #[test]
@@ -173,21 +138,6 @@ mod tests {
         fs::write(&audio, b"audio").unwrap();
         assert!(save_lyrics(&audio, true, "no timestamps here").is_err());
         assert!(save_lyrics(&audio, false, "   ").is_err());
-        assert_eq!(
-            save_lyrics(&audio, false, "words").unwrap(),
-            dir.path().join("Song.txt")
-        );
-    }
-
-    #[test]
-    fn a_run_needs_every_required_permission() {
-        let required = d(&["libraryRead", "network"]);
-        assert_eq!(
-            missing_required(&required, &d(&["libraryRead"])),
-            vec!["network"]
-        );
-        assert!(
-            missing_required(&required, &d(&["network", "libraryRead", "libraryWrite"])).is_empty()
-        );
+        assert_eq!(save_lyrics(&audio, false, "words").unwrap(), dir.path().join("Song.txt"));
     }
 }

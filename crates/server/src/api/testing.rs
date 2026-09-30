@@ -1,5 +1,6 @@
 //! Helpers for the API's tests: a server over a fresh database, and requests to it.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -14,6 +15,7 @@ use tower::ServiceExt;
 use super::session::token_hash;
 use super::{Images, router};
 use crate::db::{Database, libraries};
+use crate::plugins::Plugins;
 
 /// The owner's token in [`app`], which [`send`] and the helpers built on it log in with.
 pub const TOKEN: &str = "owner-token";
@@ -61,7 +63,8 @@ pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, R
     let images = Images::new(temp.path().join("cache"), "ffmpeg".into());
     // A client with a public address, unless a request carries its own `ConnectInfo`.
     let peer = SocketAddr::from(([203, 0, 113, 1], 50_000));
-    let app = router(base_path, db.clone(), images).layer(MockConnectInfo(peer));
+    let plugins = Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new());
+    let app = router(base_path, db.clone(), images, plugins).layer(MockConnectInfo(peer));
     (temp, db, app)
 }
 

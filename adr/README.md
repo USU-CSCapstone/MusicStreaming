@@ -41,3 +41,4 @@ What it costs and what it commits us to.
 | [0003](0003-sveltekit-spa-web-client.md) | Svelte 5 and SvelteKit in SPA mode for the web client | 2026-09-23 | Accepted |
 | [0004](0004-sqlite.md) | SQLite as the only database | 2026-09-25 | Accepted |
 | [0005](0005-data-directory.md) | One data directory split into `state/` and `cache/` | 2026-09-25 | Accepted |
+| [0006](0006-wasm-plugins-in-wasmtime.md) | Plugins as WebAssembly components in Wasmtime | 2026-09-30 | Proposed |

@@ -3616,7 +3616,10 @@ paths:
         required: true
         content:
           application/octet-stream:
-            schema: { type: string, format: binary }
+            schema:
+              type: string
+              format: binary
+              description: One WebAssembly component carrying its manifest (`design/plugins.md` §6), up to 50 MB.
           application/json:
             schema:
               type: object
@@ -3630,7 +3633,16 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Plugin' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '409':
+          description: '`plugin_exists` — a plugin with its `id` is installed; update it instead.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: '`plugin_invalid` — not a plugin that can run here; `detail` says why.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   /admin/plugins/{pluginId}:
@@ -3699,7 +3711,10 @@ paths:
     put:
       tags: [Admin]
       summary: Enable or disable a plugin for a library
-      description: Disabling is immediate and complete. Re-enabling clears an automatic disable.
+      description: |
+        Disabling is immediate and complete. Re-enabling clears an automatic disable. A plugin
+        cannot be enabled in a library until its required permissions are granted there
+        (`requirements/plugins.md` §4.2).
       operationId: adminSetPluginEnabled
       requestBody:
         required: true
@@ -3716,6 +3731,61 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Plugin' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: '`permissions_required` — `detail` names what it still needs.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/plugins/{pluginId}/permissions:
+    parameters:
+      - $ref: '#/components/parameters/PluginId'
+    put:
+      tags: [Admin]
+      summary: Set what a plugin is granted
+      description: |
+        Replaces the plugin-wide grants and, for each library listed, that library's grants
+        (`requirements/plugins.md` §4.2). A permission the plugin never asked for, or in the
+        wrong scope, is ignored. A library that loses a required permission is disabled at
+        once, with `disabledReason` saying why.
+      operationId: adminSetPluginPermissions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PermissionGrants' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Plugin' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /admin/plugins/{pluginId}/run:
+    parameters:
+      - $ref: '#/components/parameters/PluginId'
+    post:
+      tags: [Admin]
+      summary: Run a plugin now
+      description: |
+        Runs the plugin once in each library it is enabled in, with exactly what is granted
+        there, and answers when it is done: up to five minutes. Folders it saved files into are
+        scanned, as the scanner is the only way into the library (`requirements/general.md`
+        §3.2).
+      operationId: adminRunPlugin
+      x-status: draft
+      responses:
+        '200':
+          description: The run finished, whether or not the plugin succeeded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PluginRunResult' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
@@ -4164,6 +4234,9 @@ components:
             - validation_failed
             - weak_password
             - breached_password
+            - plugin_invalid
+            - plugin_exists
+            - permissions_required
             - username_taken
             - version_conflict
             - capacity_exceeded
@@ -6366,7 +6439,7 @@ components:
 
     Plugin:
       type: object
-      required: [id, name, version, apiVersion, source, installedAt, libraries]
+      required: [id, name, version, apiVersion, source, installedAt, permissions, granted, libraries]
       properties:
         id: { type: string }
         name: { type: string }
@@ -6385,18 +6458,90 @@ components:
             url: { type: string, format: uri }
         installedAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+        permissions:
+          type: array
+          description: What it asks for, from its manifest.
+          items: { $ref: '#/components/schemas/PermissionRequest' }
+        granted:
+          type: array
+          description: Plugin-wide permissions granted. Library permissions are per library, below.
+          items: { $ref: '#/components/schemas/PermissionName' }
         libraries:
           type: array
+          description: Every library on the server.
           items:
             type: object
-            required: [libraryId, enabled, autoDisabled]
+            required: [libraryId, enabled, autoDisabled, disabledReason, granted, missingRequired]
             properties:
               libraryId: { type: string }
               enabled: { type: boolean }
               autoDisabled:
                 type: boolean
-                description: Disabled by the server after repeated failures (`requirements/plugins.md` §11).
+                description: |
+                  Disabled by the server: after repeated failures (`requirements/plugins.md` §11),
+                  or when a required permission was revoked.
               disabledReason: { type: [string, 'null'] }
+              granted:
+                type: array
+                description: Library permissions granted here.
+                items: { $ref: '#/components/schemas/PermissionName' }
+              missingRequired:
+                type: array
+                description: Required permissions not granted here. While any remain, it cannot be enabled.
+                items: { $ref: '#/components/schemas/PermissionName' }
+
+    PermissionName:
+      type: string
+      enum: [libraryRead, libraryWrite, network, listeningActivity]
+      description: |
+        What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryRead` and
+        `libraryWrite` are granted per library; `network` and `listeningActivity` once per plugin.
+
+    PermissionRequest:
+      type: object
+      required: [permission, required, reason]
+      properties:
+        permission: { $ref: '#/components/schemas/PermissionName' }
+        required:
+          type: boolean
+          description: Whether it cannot work without it (`requirements/plugins.md` §4.2).
+        reason: { type: string, description: 'The author''s reason, shown to the admin beside the request.' }
+        destinations:
+          type: array
+          description: With `network` only. Host names it reaches, or `["*"]` for any.
+          items: { type: string }
+
+    PermissionGrants:
+      type: object
+      required: [granted, libraries]
+      properties:
+        granted:
+          type: array
+          description: Plugin-wide permissions.
+          items: { $ref: '#/components/schemas/PermissionName' }
+        libraries:
+          type: array
+          items:
+            type: object
+            required: [libraryId, granted]
+            properties:
+              libraryId: { type: string }
+              granted:
+                type: array
+                items: { $ref: '#/components/schemas/PermissionName' }
+
+    PluginRunResult:
+      type: object
+      required: [ok, summary, log, saved, scannerRunning]
+      properties:
+        ok: { type: boolean }
+        summary: { type: string, description: 'The plugin''s own one-line summary, or why the run failed.' }
+        log:
+          type: array
+          description: Progress lines the plugin logged, in order.
+          items: { type: string }
+        saved: { type: integer, description: Files it saved into the library. }
+        scannerRunning: { type: boolean, description: Whether a scan was queued to pick those files up. }
 
     PluginHealth:
       type: object

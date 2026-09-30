@@ -7,7 +7,7 @@ pub mod lrclib;
 mod plugin {
     use crate::lrclib::{self, Found, Query};
 
-    wit_bindgen::generate!({ path: "../wit/lyrics", world: "lyrics-plugin" });
+    wit_bindgen::generate!({ path: "../../crates/plugins/wit", world: "lyrics-plugin" });
 
     use jewelcase::plugin::host::{self, Permission};
     use jewelcase::plugin::{http, library};

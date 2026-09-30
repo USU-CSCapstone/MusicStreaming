@@ -1,9 +1,9 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { PluginManifest } from '../src/lib/api/plugins';
-import { readManifest, withManifest } from '../../tools/plugin-pack/manifest.mjs';
+import { readManifest, validateManifest, withManifest } from '../../tools/plugin-pack/manifest.mjs';
 import { PluginError, PluginStore, adminRoute } from './plugins';
 
 /** The smallest valid component: the header, and nothing in it. */
@@ -36,6 +36,17 @@ function invalid(bytes: Uint8Array): string {
 	}
 	throw new Error('expected the file to be rejected');
 }
+
+describe('manifest validation', () => {
+	// The server's `crates/plugins` is held to the same cases, so the two cannot drift apart.
+	const cases: { name: string; manifest: unknown; problems: string[] }[] = JSON.parse(
+		readFileSync(join(import.meta.dirname, '../../crates/plugins/manifest-cases.json'), 'utf8')
+	);
+
+	it.each(cases.map((c) => [c.name, c] as const))('agrees with the server: %s', (_, c) => {
+		expect(validateManifest(c.manifest)).toEqual(c.problems);
+	});
+});
 
 describe('plugin files', () => {
 	it('round-trips a manifest', () => {

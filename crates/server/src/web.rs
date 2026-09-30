@@ -37,8 +37,11 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+    use std::collections::HashMap;
+
     use crate::api::{self, Images};
     use crate::db::Database;
+    use crate::plugins::Plugins;
 
     /// The API with the web app beside it, as `run` serves them, and a build of three files.
     fn app() -> (tempfile::TempDir, Router) {
@@ -50,7 +53,8 @@ mod tests {
         std::fs::write(web.join("_app/immutable/entry.abc.js"), "js").unwrap();
         let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
         let images = Images::new(temp.path().join("cache"), "ffmpeg".into());
-        let app = api::router("", db, images).merge(router(&web));
+        let plugins = Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new());
+        let app = api::router("", db, images, plugins).merge(router(&web));
         (temp, app)
     }
 

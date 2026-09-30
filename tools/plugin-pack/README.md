@@ -36,4 +36,7 @@ written. The error says what to fix.
 | `permissions` | Any of `libraryRead`, `libraryWrite`, `network`, `listeningActivity` (`requirements/plugins.md` §4.1). Each needs a `reason`, which the admin sees. Mark as `required` only what the plugin cannot work without; an admin can decline the rest. |
 | `destinations` | For `network` only: the host names it talks to, or `["*"]` for any. |
 
-`manifest.mjs` is also what the server side uses to read and validate plugins on install.
+The server validates on install with its own reader in [`crates/plugins`](../../crates/plugins/),
+which is the authority. `manifest.mjs` validates the same way, for authors, the web mock, and its
+tests, and both are held to [`manifest-cases.json`](../../crates/plugins/manifest-cases.json).
+Change one, and the cases, together.

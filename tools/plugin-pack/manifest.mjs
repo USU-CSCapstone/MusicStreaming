@@ -1,7 +1,8 @@
 // The plugin file format (design/plugins.md, Packaging): one WebAssembly component
 // whose manifest is a top-level custom section named `jewelcase:manifest`, holding
-// UTF-8 JSON. Shared by the pack tool and the web mock, so both read and validate
-// plugins the same way.
+// UTF-8 JSON. The server's `crates/plugins` is the authority on what installs; this
+// module validates the same way for authors, the web mock, and its tests, and both are
+// held to `crates/plugins/manifest-cases.json`.
 
 export const SECTION = 'jewelcase:manifest';
 export const API_VERSION = '0.1';
@@ -125,7 +126,7 @@ export function validateManifest(m) {
 	text('version');
 	text('description', false);
 	text('author', false);
-	if (o.homepage !== undefined && !/^https?:\/\//.test(String(o.homepage))) {
+	if (o.homepage !== undefined && !/^https?:\/\//.test(typeof o.homepage === 'string' ? o.homepage : '')) {
 		problems.push('"homepage" must be an http(s) URL');
 	}
 	if (o.apiVersion !== API_VERSION) problems.push(`"apiVersion" must be "${API_VERSION}"`);
@@ -136,7 +137,9 @@ export function validateManifest(m) {
 	const seen = new Set();
 	o.permissions.forEach((p, i) => {
 		const at = `permissions[${i}]`;
-		if (typeof p !== 'object' || p === null) return problems.push(`${at} must be an object`);
+		if (typeof p !== 'object' || p === null || Array.isArray(p)) {
+			return problems.push(`${at} must be an object`);
+		}
 		const r = /** @type {Record<string, unknown>} */ (p);
 		if (!PERMISSIONS.includes(/** @type {string} */ (r.permission))) {
 			return problems.push(`${at}: unknown permission ${JSON.stringify(r.permission)}`);
