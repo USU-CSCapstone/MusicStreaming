@@ -18,7 +18,8 @@ export type PluginRunResult = Schemas['PluginRunResult'];
 export const LIBRARY_PERMISSIONS: readonly PermissionName[] = [
 	'libraryRead',
 	'libraryAdd',
-	'libraryChange'
+	'libraryChange',
+	'tracksChanged'
 ];
 
 export function isLibraryPermission(p: PermissionName): boolean {
@@ -51,5 +52,11 @@ export const PERMISSION_LABELS: Record<PermissionName, { title: string; detail: 
 	listeningActivity: {
 		title: 'Listening activity',
 		detail: 'What is played, and listening history.'
+	},
+	// A hook, approved like a permission: when the plugin runs, rather than what it reaches.
+	tracksChanged: {
+		title: 'Run when tracks change',
+		detail:
+			'Runs on its own as tracks are added, changed, or removed, starting with every track already here.'
 	}
 };

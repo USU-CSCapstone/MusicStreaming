@@ -13,7 +13,9 @@ export const PERMISSIONS = [
 	'libraryAdd',
 	'libraryChange',
 	'network',
-	'listeningActivity'
+	'listeningActivity',
+	// A hook, approved like a permission: run when tracks are added, changed, or removed.
+	'tracksChanged'
 ];
 
 const MAGIC = [0x00, 0x61, 0x73, 0x6d];
@@ -165,6 +167,10 @@ export function validateManifest(m) {
 			problems.push(`${at}: only network takes "destinations"`);
 		}
 	});
+	// A hook's event names tracks, which only reading the library can make anything of.
+	if (seen.has('tracksChanged') && !seen.has('libraryRead')) {
+		problems.push('tracksChanged needs libraryRead as well');
+	}
 	return problems;
 }
 

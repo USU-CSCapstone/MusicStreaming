@@ -775,6 +775,53 @@
 		]
 	},
 	{
+		"name": "a hook with the permission its events need",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "x"
+				},
+				{
+					"permission": "tracksChanged",
+					"required": false,
+					"reason": "y"
+				}
+			]
+		},
+		"problems": []
+	},
+	{
+		"name": "a hook without the permission its events need",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "tracksChanged",
+					"required": true,
+					"reason": "x"
+				}
+			]
+		},
+		"problems": [
+			"tracksChanged needs libraryRead as well"
+		]
+	},
+	{
 		"name": "many problems at once",
 		"manifest": {
 			"id": "Bad ID",

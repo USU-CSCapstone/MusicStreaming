@@ -54,7 +54,7 @@ mod tests {
         let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
         let images = Images::new(temp.path().join("cache"), "ffmpeg".into());
         let plugins = Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new());
-        let app = api::router("", db, images, plugins).merge(router(&web));
+        let app = api::router("", db, images, Arc::new(plugins)).merge(router(&web));
         (temp, app)
     }
 

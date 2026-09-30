@@ -72,7 +72,7 @@ mod plugin {
     }
 
     impl Guest for Plugin {
-        fn run() -> Result<String, String> {
+        fn handle(event: Event) -> Result<String, String> {
             let granted = host::granted();
             for (p, what) in [
                 (Permission::LibraryRead, "read the library"),
@@ -86,52 +86,66 @@ mod plugin {
             // would save.
             let can_write = granted.contains(&Permission::LibraryAdd);
             let mut n = Tally::default();
-            let mut after = None;
-            loop {
-                let page = library::tracks(after, 50)?;
-                let Some(last) = page.last() else { break };
-                after = Some(last.id);
-                for t in &page {
-                    let name = format!("{} — {}", t.title, t.artists.join(", "));
-                    if t.has_lyrics {
-                        n.had_lyrics += 1;
-                        continue;
+            match event {
+                // The whole library, a page at a time.
+                Event::Run => {
+                    let mut after = None;
+                    loop {
+                        let page = library::tracks(after, 50)?;
+                        let Some(last) = page.last() else { break };
+                        after = Some(last.id);
+                        page.iter().for_each(|t| visit(t, can_write, &mut n));
                     }
-                    n.checked += 1;
-                    let (synced, text) = match lookup(t) {
-                        Ok(Found::Synced(s)) => (true, s),
-                        Ok(Found::Plain(s)) => (false, s),
-                        Ok(Found::Instrumental) => {
-                            n.instrumental += 1;
-                            host::log(&format!("♪ {name}: instrumental"));
-                            continue;
-                        }
-                        Ok(Found::Nothing) => {
-                            n.missing += 1;
-                            host::log(&format!("· {name}: not found"));
-                            continue;
-                        }
-                        Err(e) => {
-                            n.failed += 1;
-                            host::log(&format!("✗ {name}: {e}"));
-                            continue;
-                        }
-                    };
-                    let kind = if synced { "synced" } else { "plain" };
-                    if !can_write {
-                        host::log(&format!("✓ {name}: found {kind} lyrics (not saved)"));
-                    } else if let Err(e) = save(t, synced, &text) {
-                        n.failed += 1;
-                        host::log(&format!("✗ {name}: could not save: {e}"));
-                        continue;
-                    } else {
-                        host::log(&format!("✓ {name}: saved {kind} lyrics"));
+                }
+                // Only the tracks that were added or changed; removed ones need nothing.
+                Event::TracksChanged(changes) => {
+                    for ids in changes.changed.chunks(50) {
+                        library::get_tracks(ids)?.iter().for_each(|t| visit(t, can_write, &mut n));
                     }
-                    if synced { n.synced += 1 } else { n.plain += 1 }
                 }
             }
             Ok(summary(&n, can_write))
         }
+    }
+
+    /// Looks up lyrics for `t` if it has none, and saves them if it can.
+    fn visit(t: &library::Track, can_write: bool, n: &mut Tally) {
+        let name = format!("{} — {}", t.title, t.artists.join(", "));
+        if t.has_lyrics {
+            n.had_lyrics += 1;
+            return;
+        }
+        n.checked += 1;
+        let (synced, text) = match lookup(t) {
+            Ok(Found::Synced(s)) => (true, s),
+            Ok(Found::Plain(s)) => (false, s),
+            Ok(Found::Instrumental) => {
+                n.instrumental += 1;
+                host::log(&format!("♪ {name}: instrumental"));
+                return;
+            }
+            Ok(Found::Nothing) => {
+                n.missing += 1;
+                host::log(&format!("· {name}: not found"));
+                return;
+            }
+            Err(e) => {
+                n.failed += 1;
+                host::log(&format!("✗ {name}: {e}"));
+                return;
+            }
+        };
+        let kind = if synced { "synced" } else { "plain" };
+        if !can_write {
+            host::log(&format!("✓ {name}: found {kind} lyrics (not saved)"));
+        } else if let Err(e) = save(t, synced, &text) {
+            n.failed += 1;
+            host::log(&format!("✗ {name}: could not save: {e}"));
+            return;
+        } else {
+            host::log(&format!("✓ {name}: saved {kind} lyrics"));
+        }
+        if synced { n.synced += 1 } else { n.plain += 1 }
     }
 
     /// Saves lyrics beside the track as a new file: lyrics already there are never replaced.

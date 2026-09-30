@@ -248,10 +248,16 @@
 							/>
 							Enabled in {libraryName(lib.libraryId)}
 						</label>
-						{#if lib.missingRequired.length}
+						{#if lib.missingRequired.length || lib.disabledReason}
 							<p class="muted small note">
-								Needs {needs(lib.missingRequired)}.
+								{#if lib.missingRequired.length}Needs {needs(lib.missingRequired)}.{/if}
 								{#if lib.disabledReason}{lib.disabledReason}{/if}
+							</p>
+						{/if}
+						{#if lib.lastRun}
+							<!-- How its last run went, by hook or Run now (`requirements/plugins.md` §11). -->
+							<p class="muted small note" class:failed={!lib.lastRun.ok}>
+								Last ran {new Date(lib.lastRun.at).toLocaleString()}: {lib.lastRun.summary}
 							</p>
 						{/if}
 					{/each}
@@ -473,6 +479,10 @@
 	.description,
 	.note {
 		margin: 0;
+	}
+
+	.note.failed {
+		color: var(--danger);
 	}
 
 	.switch {

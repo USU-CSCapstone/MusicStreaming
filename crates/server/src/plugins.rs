@@ -6,19 +6,22 @@
 //! threads serving requests (`design/plugins.md` §2).
 
 pub mod grants;
+mod hooks;
 mod library;
+mod run;
+#[cfg(test)]
+mod testing;
 
-use std::collections::{BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 
-use jewelcase_plugins::{Grants, Host, InvalidPlugin, Manifest, Permission};
-use jewelcase_scanner::{Scanner, Trigger};
+use jewelcase_plugins::{Host, InvalidPlugin, Permission};
+use jewelcase_scanner::Scanner;
 use rusqlite::params;
 use tokio::runtime::Runtime;
 
 use crate::db::{Database, DbError, now_ms};
-use library::RunLibrary;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {
@@ -45,17 +48,6 @@ impl From<InvalidPlugin> for PluginError {
     }
 }
 
-/// How a run went, as the admin sees it.
-pub struct RunResult {
-    pub ok: bool,
-    pub summary: String,
-    pub log: Vec<String>,
-    /// Files it saved into the library.
-    pub saved: usize,
-    /// Whether a scan was queued to pick those files up.
-    pub scanning: bool,
-}
-
 pub struct Plugins {
     db: Arc<Database>,
     /// `state/plugins`, where installed components are kept.
@@ -65,11 +57,20 @@ pub struct Plugins {
     /// Started on first use, so a server that never runs a plugin pays nothing for them.
     host: OnceLock<Result<Arc<Host>, String>>,
     runtime: OnceLock<Result<Runtime, String>>,
+    /// The plugin and library pairs a hook is delivering to now, so each has one at a time.
+    delivering: Mutex<HashSet<(String, i64)>>,
 }
 
 impl Plugins {
     pub fn new(db: Arc<Database>, dir: PathBuf, scanners: HashMap<i64, Scanner>) -> Plugins {
-        Plugins { db, dir, scanners, host: OnceLock::new(), runtime: OnceLock::new() }
+        Plugins {
+            db,
+            dir,
+            scanners,
+            host: OnceLock::new(),
+            runtime: OnceLock::new(),
+            delivering: Mutex::default(),
+        }
     }
 
     fn host(&self) -> Result<Arc<Host>, PluginError> {
@@ -216,78 +217,6 @@ impl Plugins {
             ))
         }
     }
-
-    /// Runs `id` once in each library it is enabled in, then queues scans of the folders it
-    /// saved into: the scanner is the only way in (`requirements/general.md` §3.2).
-    pub async fn run(&self, id: String) -> Result<RunResult, PluginError> {
-        let plan = {
-            let id = id.clone();
-            self.db.read(move |conn| plan(conn, &id)).await?.ok_or(PluginError::NotFound)?
-        };
-        let (manifest, libraries) = plan;
-        if libraries.is_empty() {
-            return Ok(RunResult::failed(format!(
-                "{} is not enabled in any library.",
-                manifest.name
-            )));
-        }
-        let (host, runtime) = (self.host()?, self.runtime()?);
-        let mut result = RunResult {
-            ok: true,
-            summary: String::new(),
-            log: Vec::new(),
-            saved: 0,
-            scanning: false,
-        };
-        for (library, permissions) in libraries {
-            let missing = grants::missing(&manifest, &permissions);
-            if !missing.is_empty() {
-                let names: Vec<_> = missing.into_iter().map(Permission::title).collect();
-                return Ok(RunResult::failed(format!("It still needs {}.", names.join(" and "))));
-            }
-            let grants = Grants { permissions, destinations: manifest.destinations().to_vec() };
-            let (host, path, db, plugin_id) =
-                (host.clone(), self.path(&id), self.db.clone(), id.clone());
-            let outcome = runtime
-                .spawn(async move {
-                    host.run(&path, grants, RunLibrary::new(db, &plugin_id, library)).await
-                })
-                .await
-                .map_err(|e| PluginError::Internal(e.to_string()))?;
-            result.scanning |= self.scan(library, &outcome.touched).await;
-            result.ok &= outcome.ok;
-            result.saved += outcome.written;
-            result.log.extend(outcome.log);
-            if !result.summary.is_empty() {
-                result.summary.push(' ');
-            }
-            result.summary.push_str(&outcome.summary);
-        }
-        Ok(result)
-    }
-
-    /// Queues a scan of each folder the paths in `touched` are in, and says whether any was
-    /// queued. Queuing
-    /// records the scan with a blocking write, which must not run on an async thread: there
-    /// it would panic while holding the scanner's queue, and take that library's scanning down.
-    async fn scan(&self, library: i64, touched: &[PathBuf]) -> bool {
-        let Some(scanner) = self.scanners.get(&library).cloned() else { return false };
-        let folders: BTreeSet<PathBuf> =
-            touched.iter().filter_map(|file| file.parent()).map(Path::to_path_buf).collect();
-        tokio::task::spawn_blocking(move || {
-            // Every folder is queued, so none is skipped because an earlier one succeeded.
-            let queued = folders.iter().map(|folder| scanner.scan_folder(Trigger::Watch, folder));
-            queued.fold(false, |any, scan| any | scan.is_some())
-        })
-        .await
-        .unwrap_or(false)
-    }
-}
-
-impl RunResult {
-    fn failed(summary: String) -> RunResult {
-        RunResult { ok: false, summary, log: Vec::new(), saved: 0, scanning: false }
-    }
 }
 
 impl Drop for Plugins {
@@ -297,25 +226,6 @@ impl Drop for Plugins {
             runtime.shutdown_background();
         }
     }
-}
-
-/// The manifest of `id`, and each library it is enabled in with what is granted there.
-type Plan = (Manifest, Vec<(i64, Vec<Permission>)>);
-
-fn plan(conn: &rusqlite::Connection, id: &str) -> rusqlite::Result<Option<Plan>> {
-    let Some(manifest) = grants::manifest(conn, id)? else { return Ok(None) };
-    let libraries: Vec<i64> = conn
-        .prepare_cached(
-            "SELECT library_id FROM plugin_libraries WHERE plugin_id = ?1 AND enabled \
-             ORDER BY library_id",
-        )?
-        .query_map([id], |row| row.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    let libraries = libraries
-        .into_iter()
-        .map(|library| Ok((library, grants::granted(conn, id, library)?)))
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(Some((manifest, libraries)))
 }
 
 #[cfg(test)]

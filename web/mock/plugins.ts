@@ -15,7 +15,12 @@ import {
 } from '../src/lib/api/plugins.ts';
 import { PluginFileError, readManifest } from '../../tools/plugin-pack/manifest.mjs';
 
-const LIBRARY_PERMISSIONS: PermissionName[] = ['libraryRead', 'libraryAdd', 'libraryChange'];
+const LIBRARY_PERMISSIONS: PermissionName[] = [
+	'libraryRead',
+	'libraryAdd',
+	'libraryChange',
+	'tracksChanged'
+];
 const MAX_BYTES = 50 * 1024 * 1024;
 
 type Record_ = {
@@ -80,7 +85,9 @@ export class PluginStore {
 				autoDisabled: lib.disabledReason !== null,
 				disabledReason: lib.disabledReason,
 				granted: lib.granted,
-				missingRequired: required.filter((p) => !has.has(p))
+				missingRequired: required.filter((p) => !has.has(p)),
+				// The mock never runs a plugin.
+				lastRun: null
 			};
 		});
 		return {

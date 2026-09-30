@@ -60,7 +60,9 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     info!(%address, "listening");
 
     let images = api::Images::new(data_dir.cache().join("images"), ffmpeg.config().ffmpeg.clone());
-    let plugins = Plugins::new(db.clone(), data_dir.state().join("plugins"), scanning.scanners());
+    let plugins =
+        Arc::new(Plugins::new(db.clone(), data_dir.state().join("plugins"), scanning.scanners()));
+    plugins.start_hooks();
     let mut app = api::router(&config.base_path, db.clone(), images, plugins);
     let web = Path::new(web::DIR);
     if !web.is_dir() {

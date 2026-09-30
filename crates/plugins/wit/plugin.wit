@@ -15,6 +15,8 @@ interface host {
     library-change,
     network,
     listening-activity,
+    /// A hook: run when tracks are added, changed, or removed (`events.tracks-changed`).
+    tracks-changed,
   }
 
   /// What this run may use.
@@ -134,13 +136,31 @@ interface state {
   delete: func(key: string) -> result<_, string>;
 }
 
+/// Why the plugin is running. A hook's event arrives only if the admin approved that hook.
+interface events {
+  /// Tracks added, changed, or removed since the last one, in batches. `changed` holds IDs to
+  /// read with `library.get-tracks`; `removed` holds IDs no longer in the library.
+  record tracks-changed {
+    changed: list<u64>,
+    removed: list<u64>,
+  }
+
+  variant event {
+    /// An admin pressed Run now: do the plugin's whole job for this library.
+    run,
+    tracks-changed(tracks-changed),
+  }
+}
+
 world plugin {
   import host;
   import library;
   import files;
   import http;
   import state;
+  import events;
+  use events.{event};
 
-  /// Does the plugin's work for one library; returns a one-line summary.
-  export run: func() -> result<string, string>;
+  /// Handles one event for the library this run is for, and returns a one-line summary.
+  export handle: func(event: event) -> result<string, string>;
 }

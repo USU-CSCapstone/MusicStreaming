@@ -111,7 +111,7 @@ async fn is_installed_disabled_everywhere_with_nothing_granted() {
     assert_eq!(
         plugin["libraries"][0],
         json!({ "libraryId": "1", "enabled": false, "autoDisabled": false, "disabledReason": null,
-                "granted": [], "missingRequired": ["libraryRead", "network"] })
+                "granted": [], "missingRequired": ["libraryRead", "network"], "lastRun": null })
     );
     assert_eq!(plugin["libraries"].as_array().unwrap().len(), 2, "every library");
     assert_eq!(
@@ -248,4 +248,6 @@ async fn installs_and_runs_a_real_plugin() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(result["ok"], false, "{result}");
     assert_eq!(result["summary"], "It still needs Network access.");
+    let (_, plugin) = call(&app, ADMIN, "GET", PLUGIN, None).await;
+    assert_eq!(plugin["libraries"][0]["lastRun"], Value::Null, "a refused run is not recorded");
 }

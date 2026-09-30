@@ -4649,8 +4649,8 @@ export interface components {
                 libraryId: string;
                 enabled: boolean;
                 /**
-                 * @description Disabled by the server: after repeated failures (`requirements/plugins.md` §11),
-                 *     or when a required permission was revoked.
+                 * @description Disabled by the server: after a hook failed five times in a row
+                 *     (`requirements/plugins.md` §11), or when a required permission was revoked.
                  */
                 autoDisabled: boolean;
                 disabledReason: string | null;
@@ -4658,16 +4658,26 @@ export interface components {
                 granted: components["schemas"]["PermissionName"][];
                 /** @description Required permissions not granted here. While any remain, it cannot be enabled. */
                 missingRequired: components["schemas"]["PermissionName"][];
+                /** @description Its last run here, by Run now or a hook; `null` if it has not run here. */
+                lastRun: {
+                    /** Format: date-time */
+                    at: string;
+                    ok: boolean;
+                    /** @description The plugin's own summary, or why it failed. */
+                    summary: string;
+                } | null;
             }[];
         };
         /**
          * @description What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryAdd` creates files
          *     that do not exist yet; `libraryChange` replaces, renames, and deletes files that do. The
          *     three library permissions are granted per library; `network` and `listeningActivity`
-         *     once per plugin.
+         *     once per plugin. Hooks, which decide when a plugin runs, are requested and granted the
+         *     same way (`requirements/plugins.md` §8): `tracksChanged` runs it, per library, as tracks
+         *     are added, changed, or removed, and needs `libraryRead` there too.
          * @enum {string}
          */
-        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity";
+        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged";
         PermissionRequest: {
             permission: components["schemas"]["PermissionName"];
             /** @description Whether it cannot work without it (`requirements/plugins.md` §4.2). */
