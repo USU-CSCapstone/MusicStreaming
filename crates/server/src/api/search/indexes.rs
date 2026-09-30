@@ -2,14 +2,22 @@
 //! reflects. A search whose library has moved on since starts a rebuild in the background and
 //! answers from the index it has, so no search waits on one; only a library's very first search
 //! waits for its index to be built. The index is rebuildable data (`design/database.md` §7).
+//!
+//! Rebuilds are spaced by how long the last one took, so a library that changes constantly, as
+//! it does during a scan, costs a tenth of a core at most, on any host and at any size. A small
+//! library is rebuilt within moments of a change; a large one on slow hardware, within seconds.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use jewelcase_core::search::{Document, Index, Kind};
 use rusqlite::Connection;
 
 use crate::db::{Database, DbError};
+
+/// A rebuild waits this many times as long as the last one took.
+const REBUILD_SPACING: u32 = 10;
 
 /// Every library's search index.
 #[derive(Default)]
@@ -29,6 +37,16 @@ struct Built {
     index: Arc<Index>,
     /// The library's change-feed position when the index was read.
     position: i64,
+    /// When the index was ready, and how long it took to build.
+    ready: Instant,
+    took: Duration,
+}
+
+impl Built {
+    /// Whether to rebuild for a library now at `position`.
+    fn due(&self, position: i64) -> bool {
+        self.position != position && self.ready.elapsed() >= self.took * REBUILD_SPACING
+    }
 }
 
 impl Indexes {
@@ -48,7 +66,7 @@ impl Indexes {
             .clone();
         let built = slot.built.read().unwrap().clone();
         if let Some(built) = built {
-            if built.position != position
+            if built.due(position)
                 && let Ok(guard) = slot.building.clone().try_lock_owned()
             {
                 let (db, slot) = (db.clone(), slot.clone());
@@ -78,6 +96,7 @@ impl Indexes {
 
 /// Reads the library's names and indexes them.
 async fn build(db: &Database, library: i64) -> Result<Built, DbError> {
+    let started = Instant::now();
     let (position, documents) = db
         .read(move |conn| {
             // The position first: a change landing between the two reads makes the index look
@@ -107,10 +126,36 @@ async fn build(db: &Database, library: i64) -> Result<Built, DbError> {
     Ok(Built {
         index: Arc::new(index),
         position,
+        ready: Instant::now(),
+        took: started.elapsed(),
     })
 }
 
 pub fn feed_position(conn: &Connection, library: i64) -> rusqlite::Result<i64> {
     conn.prepare_cached("SELECT ifnull(max(seq), 0) FROM library_changes WHERE library_id = ?1")?
         .query_row([library], |row| row.get(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn built(position: i64, took: Duration) -> Built {
+        Built {
+            index: Arc::new(Index::build([])),
+            position,
+            ready: Instant::now(),
+            took,
+        }
+    }
+
+    #[test]
+    fn rebuilds_are_spaced_by_how_long_the_last_took() {
+        // A slow build just finished: the library has changed, but it is too soon.
+        assert!(!built(1, Duration::from_secs(60)).due(2));
+        // A quick one is rebuilt at once.
+        assert!(built(1, Duration::ZERO).due(2));
+        // Nothing has changed.
+        assert!(!built(1, Duration::ZERO).due(1));
+    }
 }
