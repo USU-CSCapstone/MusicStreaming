@@ -1,6 +1,8 @@
 //! SQL the responses share for reading rows as the API shows them.
 
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ValueRef};
 use rusqlite::{Connection, Row};
+use serde::de::DeserializeOwned;
 
 /// SQL for a millisecond timestamp column as an RFC 3339 string, with the milliseconds computed
 /// in integer arithmetic so they come out exact.
@@ -42,4 +44,15 @@ pub fn by_ids<T>(
     conn.prepare_cached(&sql)?
         .query_map(rusqlite::params![library, ids], |row| map(row))?
         .collect()
+}
+
+/// A column holding JSON, read as `T`: `row.get::<_, Json<Vec<Credit>>>(12)?.0`.
+pub struct Json<T>(pub T);
+
+impl<T: DeserializeOwned> FromSql for Json<T> {
+    fn column_result(value: ValueRef) -> FromSqlResult<Self> {
+        serde_json::from_slice(value.as_bytes()?)
+            .map(Json)
+            .map_err(|error| FromSqlError::Other(Box::new(error)))
+    }
 }

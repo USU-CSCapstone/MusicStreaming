@@ -7,8 +7,8 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
 use crate::api::Id;
-use crate::api::refs::{self, ImageRef, TagRef};
-use crate::api::sql::timestamp;
+use crate::api::refs::{ImageRef, TagRef, genres_json};
+use crate::api::sql::{Json, timestamp};
 
 /// The spec's `ArtistSummary`, without `personal` until accounts exist.
 #[derive(Clone, Serialize)]
@@ -49,16 +49,17 @@ pub const SELECT: &[&str] = &[
 /// The whole artist, or `None` if the library has no such artist.
 pub fn artist(conn: &Connection, library: i64, artist: i64) -> rusqlite::Result<Option<Artist>> {
     let sql = format!(
-        "SELECT {}, ar.biography AS biography, ar.appearance_count AS appearance_count \
-         FROM artists ar WHERE ar.library_id = ?1 AND ar.id = ?2",
-        SELECT.join(", ")
+        "SELECT {}, ar.biography AS biography, ar.appearance_count AS appearance_count, \
+         {} AS genres FROM artists ar WHERE ar.library_id = ?1 AND ar.id = ?2",
+        SELECT.join(", "),
+        genres_json!("artist", "ar.id"),
     );
     conn.prepare_cached(&sql)?
         .query_row([library, artist], |row| {
             Ok(Artist {
                 summary: summary(row)?,
                 biography: row.get("biography")?,
-                genres: refs::genres(conn, "artist", artist)?,
+                genres: row.get::<_, Json<_>>("genres")?.0,
                 appearance_count: row.get("appearance_count")?,
             })
         })
