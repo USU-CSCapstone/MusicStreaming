@@ -10,7 +10,7 @@
 use rusqlite::types::Value;
 use rusqlite::{Connection, Row, params_from_iter};
 
-use super::Order;
+use super::{Order, Request};
 use crate::api::{Problem, cursor};
 
 /// How the first column of a sort marks a row with no sortable value.
@@ -80,28 +80,26 @@ impl Sort {
     }
 }
 
-/// Reads the page of `source` that follows `after`, in `sort` and `order`.
+/// Reads the page of `source` that `request` asks for.
 pub fn fetch<T>(
     conn: &Connection,
     source: &Source,
-    sort: &Sort,
-    order: Order,
-    after: Option<Vec<Value>>,
-    limit: usize,
+    request: &Request,
     mut map: impl FnMut(&Row) -> rusqlite::Result<T>,
 ) -> rusqlite::Result<(Vec<T>, Option<String>)> {
     // The row after the page, if there is one, says whether there is a next page.
-    let wanted = limit + 1;
+    let wanted = request.limit + 1;
     let mut rows: Vec<(T, Vec<Value>)> = Vec::with_capacity(wanted);
-    for unknown in parts(sort, after.as_deref()) {
+    let after = request.after.as_deref();
+    for unknown in parts(request.sort, after) {
         if rows.len() == wanted {
             break;
         }
         let (sql, params) = part_query(
             source,
-            sort,
-            order,
-            after.as_deref(),
+            request.sort,
+            request.order,
+            after,
             unknown,
             wanted - rows.len(),
         );
@@ -109,17 +107,17 @@ pub fn fetch<T>(
         let mut result = statement.query(params_from_iter(params))?;
         while let Some(row) = result.next()? {
             let width = source.select.len();
-            let key = (width..width + sort.columns.len())
+            let key = (width..width + request.sort.columns.len())
                 .map(|index| row.get::<_, Value>(index))
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             rows.push((map(row)?, key));
         }
     }
 
-    let next = if rows.len() > limit {
-        rows.truncate(limit);
+    let next = if rows.len() > request.limit {
+        rows.truncate(request.limit);
         rows.last()
-            .map(|(_, key)| cursor::encode(&sort.label(order), key))
+            .map(|(_, key)| cursor::encode(&request.sort.label(request.order), key))
     } else {
         None
     };

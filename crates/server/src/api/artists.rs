@@ -7,7 +7,7 @@ use axum::extract::{Path, State};
 use rusqlite::{OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
-use super::page::{self, Order, Page, Sort, Source, Unknown};
+use super::page::{Order, Page, Request, Sort, Source, Unknown};
 use super::query::Query;
 use super::refs::{self, ImageRef, TagRef};
 use super::sql::timestamp;
@@ -98,25 +98,12 @@ pub async fn list(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<ArtistSummary>>, Problem> {
     let Id(library) = Id::parse(&library_id)?;
-    let sort = query.sort.sort();
-    let after = sort.after(query.cursor.as_deref(), query.order)?;
-    let limit = page::limit(query.limit)?;
+    let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
     let source = source(library);
-    db.read(move |conn| {
-        let Some(total) = page::library_count(conn, library, "artist_count")? else {
-            return Ok(None);
-        };
-        let (items, next_cursor) =
-            page::fetch(conn, &source, sort, query.order, after, limit, summary)?;
-        Ok(Some(Page {
-            items,
-            next_cursor,
-            total,
-        }))
-    })
-    .await?
-    .map(Json)
-    .ok_or_else(|| Problem::new(Code::NotFound))
+    db.read(move |conn| request.read(conn, library, "artist_count", false, &source, summary))
+        .await?
+        .map(Json)
+        .ok_or_else(|| Problem::new(Code::NotFound))
 }
 
 pub async fn get(
