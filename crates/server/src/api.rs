@@ -5,6 +5,7 @@ mod artists;
 mod audio;
 mod credit;
 pub mod cursor;
+mod extract;
 mod id;
 mod images;
 mod libraries;
@@ -12,7 +13,6 @@ mod lyrics;
 mod page;
 mod playlists;
 mod problem;
-mod query;
 mod refs;
 mod search;
 mod sql;
@@ -123,7 +123,7 @@ async fn health() -> Json<serde_json::Value> {
 }
 
 async fn not_found() -> Problem {
-    Problem::new(Code::NotFound)
+    Problem::not_found()
 }
 
 async fn method_not_allowed() -> Problem {

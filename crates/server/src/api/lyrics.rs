@@ -3,13 +3,14 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use jewelcase_core::lrc::SyncedLine;
 use rusqlite::OptionalExtension;
 use rusqlite::types::Type;
 use serde::Serialize;
 
-use super::{Code, Id, Problem};
+use super::extract::Path;
+use super::{Id, Problem};
 use crate::db::Database;
 
 /// The spec's `Lyrics`.
@@ -22,10 +23,8 @@ pub struct Lyrics {
 
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Path((library_id, track_id)): Path<(String, String)>,
+    Path((Id(library), Id(track))): Path<(Id, Id)>,
 ) -> Result<Json<Lyrics>, Problem> {
-    let Id(library) = Id::parse(&library_id)?;
-    let Id(track) = Id::parse(&track_id)?;
     db.read(move |conn| {
         conn.prepare_cached(
             "SELECT l.plain, l.synced FROM tracks t LEFT JOIN track_lyrics l ON l.track_id = t.id \
@@ -54,7 +53,7 @@ pub async fn get(
     })
     .await?
     .map(Json)
-    .ok_or_else(|| Problem::new(Code::NotFound))
+    .ok_or_else(Problem::not_found)
 }
 
 #[cfg(test)]

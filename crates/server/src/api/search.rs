@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use jewelcase_core::search::{Kind, Section as Found};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -16,9 +16,9 @@ pub use indexes::Indexes;
 
 use super::albums::{self, AlbumSummary};
 use super::artists::{self, ArtistSummary};
-use super::query::Query;
+use super::extract::{Path, Query};
 use super::tracks::{self, TrackSummary};
-use super::{Code, Id, Problem, page, sql};
+use super::{Id, Problem, page, sql};
 use crate::db::Database;
 
 #[derive(Deserialize)]
@@ -61,11 +61,10 @@ enum SearchResult {
 pub async fn search(
     State(db): State<Arc<Database>>,
     State(indexes): State<Arc<Indexes>>,
-    Path(library_id): Path<String>,
+    Path(Id(library)): Path<Id>,
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<SearchResponse>, Problem> {
-    let Id(library) = Id::parse(&library_id)?;
-    let invalid = |detail| Problem::new(Code::ValidationFailed).detail(detail);
+    let invalid = |detail| Problem::invalid(detail);
     if query.q.is_empty() {
         return Err(invalid("q must not be empty"));
     }
@@ -103,7 +102,7 @@ pub async fn search(
             Ok(Some((track_count, indexes::feed_position(conn, library)?)))
         })
         .await?
-        .ok_or_else(|| Problem::new(Code::NotFound))?;
+        .ok_or_else(Problem::not_found)?;
     let index = indexes.index(&db, library, position).await?;
     let found = index.search(&query.q, &kinds, limit);
     let sections = db.read(move |conn| results(conn, library, found)).await?;

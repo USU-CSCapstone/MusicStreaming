@@ -10,14 +10,14 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::body::Body;
-use axum::extract::{Path, Request, State};
+use axum::extract::{Request, State};
 use axum::http::{HeaderValue, header};
 use axum::response::Response;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use tower_http::services::ServeFile;
 
-use super::query::Query;
+use super::extract::{Path, Query};
 use super::tracks::{LOUDNESS, Loudness, loudness};
 use super::{Code, Id, Problem};
 use crate::db::Database;
@@ -77,12 +77,10 @@ pub struct PlaybackInfo {
 
 pub async fn playback(
     State(db): State<Arc<Database>>,
-    Path((library_id, track_id)): Path<(String, String)>,
+    Path((Id(library), Id(track))): Path<(Id, Id)>,
     Query(query): Query<PlaybackQuery>,
 ) -> Result<Json<PlaybackInfo>, Problem> {
-    let Id(library) = Id::parse(&library_id)?;
-    let Id(track) = Id::parse(&track_id)?;
-    let transcode = |detail| Err(Problem::new(Code::ValidationFailed).detail(detail));
+    let transcode = |detail| Err(Problem::invalid(detail));
     if query.quality != Quality::Original {
         return transcode("only original quality is available until transcoding is built");
     }
@@ -114,7 +112,7 @@ pub async fn playback(
                 .optional()
         })
         .await?
-        .ok_or_else(|| Problem::new(Code::NotFound))?;
+        .ok_or_else(Problem::not_found)?;
 
     // The client can play the original when it names both the codec and its container, since
     // a codec such as `pcm` plays in some containers and not others.
@@ -135,14 +133,12 @@ pub struct AudioQuery {
 
 pub async fn audio(
     State(db): State<Arc<Database>>,
-    Path((library_id, track_id)): Path<(String, String)>,
+    Path((Id(library), Id(track))): Path<(Id, Id)>,
     Query(query): Query<AudioQuery>,
     request: Request,
 ) -> Result<Response, Problem> {
-    let Id(library) = Id::parse(&library_id)?;
-    let Id(track) = Id::parse(&track_id)?;
     if query.variant != ORIGINAL {
-        return Err(Problem::new(Code::NotFound));
+        return Err(Problem::not_found());
     }
     let (root, path, container) = db
         .read(move |conn| {
@@ -161,7 +157,7 @@ pub async fn audio(
             .optional()
         })
         .await?
-        .ok_or_else(|| Problem::new(Code::NotFound))?;
+        .ok_or_else(Problem::not_found)?;
 
     // ServeFile answers ranges, `HEAD`, and the conditional headers, streaming from disk.
     let response = ServeFile::new(PathBuf::from(root).join(path))
@@ -169,7 +165,7 @@ pub async fn audio(
         .await
         .map_err(|error| match error.kind() {
             // The file has gone since the last scan saw it.
-            ErrorKind::NotFound => Problem::new(Code::NotFound),
+            ErrorKind::NotFound => Problem::not_found(),
             _ => {
                 // The cause stays in the log: it names a path on the host.
                 tracing::error!(%error, "cannot read a track's file");

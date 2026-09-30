@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
@@ -12,7 +12,8 @@ use jewelcase_scanner::Waveform as Measured;
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 
-use super::{Code, Id, Problem};
+use super::extract::Path;
+use super::{Id, Problem};
 use crate::db::Database;
 
 /// The spec's `Waveform`.
@@ -25,10 +26,8 @@ struct Waveform {
 
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Path((library_id, track_id)): Path<(String, String)>,
+    Path((Id(library), Id(track))): Path<(Id, Id)>,
 ) -> Result<Response, Problem> {
-    let Id(library) = Id::parse(&library_id)?;
-    let Id(track) = Id::parse(&track_id)?;
     // No track is `None`; a track not yet analyzed is `Some(None)`.
     let blob: Option<Option<Vec<u8>>> = db
         .read(move |conn| {
@@ -40,7 +39,7 @@ pub async fn get(
             .optional()
         })
         .await?;
-    let blob = blob.ok_or_else(|| Problem::new(Code::NotFound))?;
+    let blob = blob.ok_or_else(Problem::not_found)?;
     // A blob from an analyzer version this server does not read counts as not analyzed: the
     // analyzer reprocesses old versions in the background (`design/scanning.md` §12).
     Ok(match blob.as_deref().and_then(Measured::from_blob) {

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 pub use keyset::assert_indexed;
 pub use keyset::{Sort, Source, Unknown};
 
-use super::{Code, Problem};
+use super::Problem;
 
 pub const DEFAULT_LIMIT: u32 = 100;
 pub const MAX_LIMIT: u32 = 1000;
@@ -90,7 +90,7 @@ pub fn limit(limit: Option<u32>) -> Result<usize, Problem> {
     if (1..=MAX_LIMIT).contains(&limit) {
         Ok(limit as usize)
     } else {
-        Err(Problem::new(Code::ValidationFailed).detail("limit must be from 1 to 1000"))
+        Err(Problem::invalid("limit must be from 1 to 1000"))
     }
 }
 

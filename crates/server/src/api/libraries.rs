@@ -6,11 +6,12 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use rusqlite::{OptionalExtension, Row};
 use serde::Serialize;
 
-use super::{Code, Id, Problem};
+use super::extract::Path;
+use super::{Id, Problem};
 use crate::db::Database;
 
 #[derive(Serialize)]
@@ -51,9 +52,8 @@ pub async fn list(State(db): State<Arc<Database>>) -> Result<Json<Libraries>, Pr
 
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Path(library_id): Path<String>,
+    Path(Id(id)): Path<Id>,
 ) -> Result<Json<Library>, Problem> {
-    let Id(id) = Id::parse(&library_id)?;
     db.read(move |conn| {
         conn.prepare_cached(&format!("{SELECT} WHERE id = ?1"))?
             .query_row([id], library)
@@ -61,7 +61,7 @@ pub async fn get(
     })
     .await?
     .map(Json)
-    .ok_or_else(|| Problem::new(Code::NotFound))
+    .ok_or_else(Problem::not_found)
 }
 
 fn library(row: &Row) -> rusqlite::Result<Library> {
