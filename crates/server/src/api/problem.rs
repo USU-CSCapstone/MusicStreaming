@@ -16,6 +16,8 @@ use crate::db::DbError;
 #[serde(rename_all = "snake_case")]
 pub enum Code {
     Unauthenticated,
+    InvalidCredentials,
+    RateLimited,
     Forbidden,
     NotFound,
     MethodNotAllowed,
@@ -29,7 +31,8 @@ impl Code {
     /// The status the spec pairs with each code.
     pub fn status(self) -> StatusCode {
         match self {
-            Self::Unauthenticated => StatusCode::UNAUTHORIZED,
+            Self::Unauthenticated | Self::InvalidCredentials => StatusCode::UNAUTHORIZED,
+            Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,

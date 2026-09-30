@@ -69,7 +69,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     } else {
         app = app.merge(web::router(web));
     }
-    axum::serve(listener, app)
+    // Sign-in limits need the client's address (`api::origin`).
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("server failed")?;

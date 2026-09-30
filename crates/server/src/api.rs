@@ -12,8 +12,10 @@ mod extract;
 mod id;
 mod images;
 mod libraries;
+mod login;
 mod lyrics;
 mod me;
+mod origin;
 mod page;
 mod password;
 mod playlists;
@@ -82,7 +84,7 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images) -> Router {
         setup: Arc::default(),
         prefix: prefix.as_str().into(),
     };
-    // Until setup is done, these answer `503 setup_required`, and after it `401` without a token.
+    // These answer `401` without a token.
     let signed_in = Router::new()
         .route("/auth/logout", post(session::logout))
         .route("/me", get(me::get))
@@ -101,15 +103,18 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images) -> Router {
         .route("/libraries/{library_id}/tracks/{track_id}/audio", get(audio::audio))
         .route("/libraries/{library_id}/artists/{artist_id}", get(artists::get))
         .route("/libraries/{library_id}/albums/{album_id}", get(albums::get))
-        // The last layer added runs first.
-        .route_layer(middleware::from_fn_with_state(state.clone(), authenticate::require))
+        .route_layer(middleware::from_fn_with_state(state.clone(), authenticate::require));
+    // Until setup is done, these answer `503 setup_required`.
+    let after_setup = Router::new()
+        .route("/auth/login", post(login::login))
+        .merge(signed_in)
         .route_layer(middleware::from_fn_with_state(state.clone(), setup::require));
     // Anything else under the API is a Problem, like every other error.
     let api = Router::new()
         .route("/health", get(health))
         .route("/server", get(setup::server_info))
         .route("/setup", post(setup::complete))
-        .merge(signed_in)
+        .merge(after_setup)
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
         .with_state(state);

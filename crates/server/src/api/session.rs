@@ -61,6 +61,16 @@ pub fn check_name(field: &str, value: &str) -> Result<(), Problem> {
     Ok(())
 }
 
+/// The spec's `Username`: 1 to 32 ASCII letters, digits, `_`, and `-`.
+pub fn check_username(username: &str) -> Result<(), Problem> {
+    let allowed = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
+    if (1..=32).contains(&username.len()) && username.bytes().all(allowed) {
+        Ok(())
+    } else {
+        Err(Problem::invalid("username must be 1 to 32 letters, digits, '_', or '-'"))
+    }
+}
+
 #[derive(Serialize)]
 pub struct Session {
     pub token: String,
