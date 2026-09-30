@@ -1,18 +1,22 @@
-//! Sessions: the device every login registers, its token, and the `Session` that setup and
-//! login answer with (`requirements/users.md` §4).
+//! Sessions: the device every login registers, its token, the `Session` that setup and login
+//! answer with, and `logout` (`requirements/users.md` §4).
 //!
 //! A token is shown once and stored only as its SHA-256 hash (`design/database.md`). It is
 //! 256 random bits, so a fast hash is enough; a slow one would only slow every request.
 
-use axum::http::HeaderValue;
+use axum::extract::State;
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL;
 use rusqlite::{Transaction, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::authenticate::Caller;
+use super::me::{self, User};
 use super::sql::timestamp;
-use super::{Code, Id, Problem};
+use super::{AppState, Code, Id, Problem};
 use crate::db::now_ms;
 
 /// The cookie browser clients authenticate with (`cookieAuth` in `api/openapi.yaml`).
@@ -66,16 +70,6 @@ pub struct Session {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct User {
-    id: Id,
-    username: String,
-    display_name: String,
-    role: String,
-    has_avatar: bool,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct Device {
     id: Id,
     name: String,
@@ -104,13 +98,12 @@ pub fn token_hash(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
 
-const SESSION: &str = concat!(
-    "SELECT u.id, u.username, u.display_name, u.role, u.avatar_hash IS NOT NULL, ",
-    "d.id, d.name, d.type, d.platform, ",
-    timestamp!("d.created_at"),
+const DEVICE: &str = concat!(
+    "SELECT id, name, type, platform, ",
+    timestamp!("created_at"),
     ", ",
-    timestamp!("d.last_seen_at"),
-    " FROM devices d JOIN users u ON u.id = d.user_id WHERE d.id = ?1"
+    timestamp!("last_seen_at"),
+    " FROM devices WHERE id = ?1"
 );
 
 /// Registers `device` for `user`, signed in with `token`, and returns its session.
@@ -127,35 +120,39 @@ pub fn register(
         params![user, device.name, device.kind, device.platform, token_hash(&token), now_ms()],
         |row| row.get(0),
     )?;
-    tx.query_row(SESSION, [id], |row| {
-        Ok(Session {
-            token,
-            user: User {
-                id: Id(row.get(0)?),
-                username: row.get(1)?,
-                display_name: row.get(2)?,
-                role: row.get(3)?,
-                has_avatar: row.get(4)?,
-            },
-            device: Device {
-                id: Id(row.get(5)?),
-                name: row.get(6)?,
-                kind: row.get(7)?,
-                platform: row.get(8)?,
-                first_seen_at: row.get(9)?,
-                last_seen_at: row.get(10)?,
-                connected: false,
-            },
+    let device = tx.query_row(DEVICE, [id], |row| {
+        Ok(Device {
+            id: Id(row.get(0)?),
+            name: row.get(1)?,
+            kind: row.get(2)?,
+            platform: row.get(3)?,
+            first_seen_at: row.get(4)?,
+            last_seen_at: row.get(5)?,
+            connected: false,
         })
-    })
+    })?;
+    Ok(Session { token, user: me::user(tx, user)?, device })
+}
+
+/// `logout`: removes the calling device and tells a browser to forget its cookie.
+pub async fn logout(State(state): State<AppState>, caller: Caller) -> Result<Response, Problem> {
+    state
+        .db
+        .write(move |tx| tx.execute("DELETE FROM devices WHERE id = ?1", [caller.device]))
+        .await?;
+    let forget = cookie_header(format!("{COOKIE}=; Path={}; Max-Age=0", state.prefix));
+    Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, forget)]).into_response())
 }
 
 /// The `Set-Cookie` value that has a browser send `token` with every request to the API at
 /// `prefix`, and nowhere else. Scripts cannot read it, and other sites cannot send it.
 pub fn cookie(prefix: &str, token: &str) -> HeaderValue {
-    let cookie = format!(
+    cookie_header(format!(
         "{COOKIE}={token}; Path={prefix}; Max-Age={COOKIE_MAX_AGE_S}; HttpOnly; SameSite=Strict"
-    );
-    // The token is base64url and the base path is limited to URL-safe characters (`config`).
+    ))
+}
+
+fn cookie_header(cookie: String) -> HeaderValue {
+    // Tokens are base64url and the base path is limited to URL-safe characters (`config`).
     HeaderValue::try_from(cookie).expect("a cookie of header-safe characters")
 }

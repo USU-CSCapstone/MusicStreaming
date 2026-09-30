@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use jewelcase_scanner::image::describe;
 use serde_json::Value;
 
-use super::super::testing::{app, send};
+use super::super::testing::{app, owner_request, send};
 use crate::db::libraries;
 
 /// Runs ffmpeg to make a test file.
@@ -103,7 +103,7 @@ async fn resizes_to_the_size_above_the_request() {
 #[tokio::test]
 async fn is_cacheable_by_the_client_only() {
     let (_temp, app) = app_with_images().await;
-    let request = axum::http::Request::get("/api/v1/libraries/1/images/1?size=64")
+    let request = owner_request("GET", "/api/v1/libraries/1/images/1?size=64")
         .body(axum::body::Body::empty())
         .unwrap();
     let response = tower::ServiceExt::oneshot(app, request).await.unwrap();

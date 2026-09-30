@@ -76,7 +76,8 @@ async fn setup_creates_the_owner_and_logs_it_in() {
     assert_eq!(stored_hash, token_hash(&token));
 
     assert_eq!(json(&app, "/api/v1/server").await.1["setupRequired"], false);
-    assert_eq!(json(&app, "/api/v1/libraries").await.0, StatusCode::OK);
+    // Past the setup gate, and now behind a login.
+    assert_eq!(json(&app, "/api/v1/libraries").await.0, StatusCode::UNAUTHORIZED);
     let (status, _, problem) =
         send_json(app, "POST", "/api/v1/setup", &setup_request("Other", PASSWORD)).await;
     assert_eq!((status, &problem["code"]), (StatusCode::NOT_FOUND, &json!("not_found")));
