@@ -15,7 +15,11 @@ export type PermissionGrants = Schemas['PermissionGrants'];
 export type PluginRunResult = Schemas['PluginRunResult'];
 
 /** Granted per library. The rest are granted once per plugin (`requirements/plugins.md` §4.1). */
-export const LIBRARY_PERMISSIONS: readonly PermissionName[] = ['libraryRead', 'libraryWrite'];
+export const LIBRARY_PERMISSIONS: readonly PermissionName[] = [
+	'libraryRead',
+	'libraryAdd',
+	'libraryChange'
+];
 
 export function isLibraryPermission(p: PermissionName): boolean {
 	return LIBRARY_PERMISSIONS.includes(p);
@@ -35,9 +39,13 @@ export type PluginManifest = {
 
 export const PERMISSION_LABELS: Record<PermissionName, { title: string; detail: string }> = {
 	libraryRead: { title: 'Read the library', detail: 'Its catalog, artwork, lyrics, and audio.' },
-	libraryWrite: {
-		title: 'Write to the library',
-		detail: 'Can create, change, and delete files in this library.'
+	libraryAdd: {
+		title: 'Add files to the library',
+		detail: 'Can create new files in this library. It cannot change or delete what is there.'
+	},
+	libraryChange: {
+		title: 'Change or delete files in the library',
+		detail: 'Can replace, move, and delete any file in this library, your music included.'
 	},
 	network: { title: 'Network access', detail: 'Reach services outside this server.' },
 	listeningActivity: {

@@ -12,35 +12,41 @@ use jewelcase_plugins::{Grants, Host, Library, Permission, Track};
 const PLUGIN: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm");
 
-struct Tracks(Vec<(Track, PathBuf)>);
+/// A library with one root, holding these tracks' files.
+struct Tracks {
+    root: PathBuf,
+    tracks: Vec<Track>,
+}
 
 impl Library for Tracks {
     async fn tracks(&mut self, offset: u32, limit: u32) -> Result<Vec<Track>, String> {
-        let page = self.0.iter().skip(offset as usize).take(limit as usize);
-        Ok(page.map(|(track, _)| track.clone()).collect())
+        Ok(self.tracks.iter().skip(offset as usize).take(limit as usize).cloned().collect())
     }
 
-    async fn audio_without_lyrics(&mut self, track: u64) -> Result<PathBuf, String> {
-        let found = self.0.iter().find(|(t, _)| t.id == track && !t.has_lyrics);
-        found.map(|(_, audio)| audio.clone()).ok_or_else(|| "no such track".into())
+    async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
+        Ok(vec![(7, self.root.clone())])
     }
 }
 
 fn library(dir: &Path) -> Tracks {
     let track = |id: u64, title: &str| {
-        let audio = dir.join(format!("{title}.flac"));
-        std::fs::write(&audio, b"audio").unwrap();
-        let track = Track {
+        let path = format!("{title}.flac");
+        std::fs::write(dir.join(&path), b"audio").unwrap();
+        Track {
             id,
             title: title.into(),
             artists: vec!["Aurora Lane".into()],
             album: Some("Signal".into()),
             duration_ms: 200_000,
             has_lyrics: false,
-        };
-        (track, audio)
+            root: 7,
+            path,
+        }
     };
-    Tracks(vec![track(1, "Signal Part 1"), track(2, "Signal Part 2")])
+    Tracks {
+        root: dir.to_path_buf(),
+        tracks: vec![track(1, "Signal Part 1"), track(2, "Signal Part 2")],
+    }
 }
 
 fn grants(permissions: &[Permission], destinations: &[&str]) -> Grants {
@@ -60,14 +66,14 @@ async fn a_missing_required_permission_stops_it_before_it_starts() {
         .await;
     assert!(!outcome.ok);
     assert!(outcome.summary.contains("needs permission to use the network"), "{}", outcome.summary);
-    assert!(outcome.saved.is_empty());
+    assert!(outcome.touched.is_empty());
 }
 
 #[tokio::test]
 #[ignore = "needs plugins/lrclib-lyrics/build.sh"]
 async fn the_network_reaches_only_approved_destinations() {
     let dir = tempfile::tempdir().unwrap();
-    let permissions = [Permission::LibraryRead, Permission::Network, Permission::LibraryWrite];
+    let permissions = [Permission::LibraryRead, Permission::Network, Permission::LibraryAdd];
     // The plugin asks lrclib.net, which this run does not approve, so nothing leaves.
     let outcome = Host::new()
         .unwrap()
@@ -81,7 +87,7 @@ async fn the_network_reaches_only_approved_destinations() {
             "{line}"
         );
     }
-    assert!(outcome.saved.is_empty());
+    assert!(outcome.touched.is_empty());
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "only the audio");
 }
 

@@ -5,7 +5,7 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -24,9 +24,14 @@
 					]
 				},
 				{
-					"permission": "libraryWrite",
+					"permission": "libraryAdd",
 					"required": false,
 					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
 				}
 			]
 		},
@@ -38,7 +43,7 @@
 			"id": "ab",
 			"name": "A",
 			"version": "1",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"permissions": []
 		},
 		"problems": []
@@ -49,7 +54,7 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -88,7 +93,7 @@
 			"id": "Bad ID",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -107,9 +112,14 @@
 					]
 				},
 				{
-					"permission": "libraryWrite",
+					"permission": "libraryAdd",
 					"required": false,
 					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
 				}
 			]
 		},
@@ -121,322 +131,6 @@
 		"name": "a one-character id",
 		"manifest": {
 			"id": "a",
-			"name": "LRCLIB Lyrics",
-			"version": "0.1.0",
-			"apiVersion": "0.1",
-			"description": "Finds lyrics.",
-			"author": "Jewelcase",
-			"homepage": "https://lrclib.net",
-			"permissions": [
-				{
-					"permission": "libraryRead",
-					"required": true,
-					"reason": "To find tracks without lyrics."
-				},
-				{
-					"permission": "network",
-					"required": true,
-					"reason": "To fetch lyrics.",
-					"destinations": [
-						"lrclib.net"
-					]
-				},
-				{
-					"permission": "libraryWrite",
-					"required": false,
-					"reason": "To save .lrc files."
-				}
-			]
-		},
-		"problems": [
-			"\"id\" must be lowercase letters, digits, and hyphens (2–64 characters)"
-		]
-	},
-	{
-		"name": "an id of 65 characters",
-		"manifest": {
-			"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			"name": "LRCLIB Lyrics",
-			"version": "0.1.0",
-			"apiVersion": "0.1",
-			"description": "Finds lyrics.",
-			"author": "Jewelcase",
-			"homepage": "https://lrclib.net",
-			"permissions": [
-				{
-					"permission": "libraryRead",
-					"required": true,
-					"reason": "To find tracks without lyrics."
-				},
-				{
-					"permission": "network",
-					"required": true,
-					"reason": "To fetch lyrics.",
-					"destinations": [
-						"lrclib.net"
-					]
-				},
-				{
-					"permission": "libraryWrite",
-					"required": false,
-					"reason": "To save .lrc files."
-				}
-			]
-		},
-		"problems": [
-			"\"id\" must be lowercase letters, digits, and hyphens (2–64 characters)"
-		]
-	},
-	{
-		"name": "an id starting with a hyphen",
-		"manifest": {
-			"id": "-lyrics",
-			"name": "LRCLIB Lyrics",
-			"version": "0.1.0",
-			"apiVersion": "0.1",
-			"description": "Finds lyrics.",
-			"author": "Jewelcase",
-			"homepage": "https://lrclib.net",
-			"permissions": [
-				{
-					"permission": "libraryRead",
-					"required": true,
-					"reason": "To find tracks without lyrics."
-				},
-				{
-					"permission": "network",
-					"required": true,
-					"reason": "To fetch lyrics.",
-					"destinations": [
-						"lrclib.net"
-					]
-				},
-				{
-					"permission": "libraryWrite",
-					"required": false,
-					"reason": "To save .lrc files."
-				}
-			]
-		},
-		"problems": [
-			"\"id\" must be lowercase letters, digits, and hyphens (2–64 characters)"
-		]
-	},
-	{
-		"name": "no name",
-		"manifest": {
-			"id": "lrclib-lyrics",
-			"version": "0.1.0",
-			"apiVersion": "0.1",
-			"description": "Finds lyrics.",
-			"author": "Jewelcase",
-			"homepage": "https://lrclib.net",
-			"permissions": [
-				{
-					"permission": "libraryRead",
-					"required": true,
-					"reason": "To find tracks without lyrics."
-				},
-				{
-					"permission": "network",
-					"required": true,
-					"reason": "To fetch lyrics.",
-					"destinations": [
-						"lrclib.net"
-					]
-				},
-				{
-					"permission": "libraryWrite",
-					"required": false,
-					"reason": "To save .lrc files."
-				}
-			]
-		},
-		"problems": [
-			"\"name\" must be a non-empty string"
-		]
-	},
-	{
-		"name": "a blank version",
-		"manifest": {
-			"id": "lrclib-lyrics",
-			"name": "LRCLIB Lyrics",
-			"version": "  ",
-			"apiVersion": "0.1",
-			"description": "Finds lyrics.",
-			"author": "Jewelcase",
-			"homepage": "https://lrclib.net",
-			"permissions": [
-				{
-					"permission": "libraryRead",
-					"required": true,
-					"reason": "To find tracks without lyrics."
-				},
-				{
-					"permission": "network",
-					"required": true,
-					"reason": "To fetch lyrics.",
-					"destinations": [
-						"lrclib.net"
-					]
-				},
-				{
-					"permission": "libraryWrite",
-					"required": false,
-					"reason": "To save .lrc files."
-				}
-			]
-		},
-		"problems": [
-			"\"version\" must be a non-empty string"
-		]
-	},
-	{
-		"name": "a description that is not text",
-		"manifest": {
-			"id": "lrclib-lyrics",
-			"name": "LRCLIB Lyrics",
-			"version": "0.1.0",
-			"apiVersion": "0.1",
-			"description": 5,
-			"author": "Jewelcase",
-			"homepage": "https://lrclib.net",
-			"permissions": [
-				{
-					"permission": "libraryRead",
-					"required": true,
-					"reason": "To find tracks without lyrics."
-				},
-				{
-					"permission": "network",
-					"required": true,
-					"reason": "To fetch lyrics.",
-					"destinations": [
-						"lrclib.net"
-					]
-				},
-				{
-					"permission": "libraryWrite",
-					"required": false,
-					"reason": "To save .lrc files."
-				}
-			]
-		},
-		"problems": [
-			"\"description\" must be a non-empty string"
-		]
-	},
-	{
-		"name": "an empty author",
-		"manifest": {
-			"id": "lrclib-lyrics",
-			"name": "LRCLIB Lyrics",
-			"version": "0.1.0",
-			"apiVersion": "0.1",
-			"description": "Finds lyrics.",
-			"author": "",
-			"homepage": "https://lrclib.net",
-			"permissions": [
-				{
-					"permission": "libraryRead",
-					"required": true,
-					"reason": "To find tracks without lyrics."
-				},
-				{
-					"permission": "network",
-					"required": true,
-					"reason": "To fetch lyrics.",
-					"destinations": [
-						"lrclib.net"
-					]
-				},
-				{
-					"permission": "libraryWrite",
-					"required": false,
-					"reason": "To save .lrc files."
-				}
-			]
-		},
-		"problems": [
-			"\"author\" must be a non-empty string"
-		]
-	},
-	{
-		"name": "a homepage that is not http",
-		"manifest": {
-			"id": "lrclib-lyrics",
-			"name": "LRCLIB Lyrics",
-			"version": "0.1.0",
-			"apiVersion": "0.1",
-			"description": "Finds lyrics.",
-			"author": "Jewelcase",
-			"homepage": "ftp://example.com",
-			"permissions": [
-				{
-					"permission": "libraryRead",
-					"required": true,
-					"reason": "To find tracks without lyrics."
-				},
-				{
-					"permission": "network",
-					"required": true,
-					"reason": "To fetch lyrics.",
-					"destinations": [
-						"lrclib.net"
-					]
-				},
-				{
-					"permission": "libraryWrite",
-					"required": false,
-					"reason": "To save .lrc files."
-				}
-			]
-		},
-		"problems": [
-			"\"homepage\" must be an http(s) URL"
-		]
-	},
-	{
-		"name": "a homepage that is not text",
-		"manifest": {
-			"id": "lrclib-lyrics",
-			"name": "LRCLIB Lyrics",
-			"version": "0.1.0",
-			"apiVersion": "0.1",
-			"description": "Finds lyrics.",
-			"author": "Jewelcase",
-			"homepage": [
-				"https://example.com"
-			],
-			"permissions": [
-				{
-					"permission": "libraryRead",
-					"required": true,
-					"reason": "To find tracks without lyrics."
-				},
-				{
-					"permission": "network",
-					"required": true,
-					"reason": "To fetch lyrics.",
-					"destinations": [
-						"lrclib.net"
-					]
-				},
-				{
-					"permission": "libraryWrite",
-					"required": false,
-					"reason": "To save .lrc files."
-				}
-			]
-		},
-		"problems": [
-			"\"homepage\" must be an http(s) URL"
-		]
-	},
-	{
-		"name": "another API version",
-		"manifest": {
-			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
 			"apiVersion": "0.2",
@@ -458,14 +152,380 @@
 					]
 				},
 				{
-					"permission": "libraryWrite",
+					"permission": "libraryAdd",
 					"required": false,
 					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
 				}
 			]
 		},
 		"problems": [
-			"\"apiVersion\" must be \"0.1\""
+			"\"id\" must be lowercase letters, digits, and hyphens (2–64 characters)"
+		]
+	},
+	{
+		"name": "an id of 65 characters",
+		"manifest": {
+			"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			]
+		},
+		"problems": [
+			"\"id\" must be lowercase letters, digits, and hyphens (2–64 characters)"
+		]
+	},
+	{
+		"name": "an id starting with a hyphen",
+		"manifest": {
+			"id": "-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			]
+		},
+		"problems": [
+			"\"id\" must be lowercase letters, digits, and hyphens (2–64 characters)"
+		]
+	},
+	{
+		"name": "no name",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			]
+		},
+		"problems": [
+			"\"name\" must be a non-empty string"
+		]
+	},
+	{
+		"name": "a blank version",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "  ",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			]
+		},
+		"problems": [
+			"\"version\" must be a non-empty string"
+		]
+	},
+	{
+		"name": "a description that is not text",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": 5,
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			]
+		},
+		"problems": [
+			"\"description\" must be a non-empty string"
+		]
+	},
+	{
+		"name": "an empty author",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			]
+		},
+		"problems": [
+			"\"author\" must be a non-empty string"
+		]
+	},
+	{
+		"name": "a homepage that is not http",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "ftp://example.com",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			]
+		},
+		"problems": [
+			"\"homepage\" must be an http(s) URL"
+		]
+	},
+	{
+		"name": "a homepage that is not text",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": [
+				"https://example.com"
+			],
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			]
+		},
+		"problems": [
+			"\"homepage\" must be an http(s) URL"
+		]
+	},
+	{
+		"name": "another API version",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.1",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			]
+		},
+		"problems": [
+			"\"apiVersion\" must be \"0.2\""
 		]
 	},
 	{
@@ -474,7 +534,7 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net"
@@ -489,7 +549,7 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -506,12 +566,34 @@
 		]
 	},
 	{
+		"name": "the write permission from before it was split",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryWrite",
+					"required": false,
+					"reason": "x"
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: unknown permission \"libraryWrite\""
+		]
+	},
+	{
 		"name": "an unknown permission",
 		"manifest": {
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -533,7 +615,7 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -554,7 +636,7 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -581,7 +663,7 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -603,7 +685,7 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -625,7 +707,7 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -647,7 +729,7 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -673,13 +755,13 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
 			"permissions": [
 				{
-					"permission": "libraryWrite",
+					"permission": "libraryAdd",
 					"required": false,
 					"reason": "x",
 					"destinations": [
@@ -714,7 +796,7 @@
 			"\"id\" must be lowercase letters, digits, and hyphens (2–64 characters)",
 			"\"name\" must be a non-empty string",
 			"\"version\" must be a non-empty string",
-			"\"apiVersion\" must be \"0.1\"",
+			"\"apiVersion\" must be \"0.2\"",
 			"permissions[0]: unknown permission \"everything\"",
 			"permissions[1]: every permission needs a \"reason\" shown to the admin",
 			"permissions[1]: network needs \"destinations\", host names or [\"*\"] for any"

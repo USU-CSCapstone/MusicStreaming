@@ -88,6 +88,44 @@ mod tests {
     }
 
     #[test]
+    fn a_plugin_granted_write_access_keeps_both_halves_of_it() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        let split = MIGRATIONS.iter().position(|m| m.name == "0006_plugin_write_split").unwrap();
+        migrate(&mut conn, &MIGRATIONS[..split]).unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO libraries (id, name, created_at, updated_at) VALUES (1, 'Music', 0, 0);
+               INSERT INTO plugins (id, manifest, installed_at, updated_at) VALUES ('lyrics',
+                 '{"id":"lyrics","permissions":[{"permission":"libraryWrite","required":false}]}', 0, 0);
+               INSERT INTO plugin_library_grants VALUES ('lyrics', 1, 'libraryRead'),
+                 ('lyrics', 1, 'libraryWrite'), ('gone', 1, 'libraryRead');"#,
+        )
+        .unwrap();
+
+        migrate(&mut conn, MIGRATIONS).unwrap();
+        let grants: Vec<(String, String)> = conn
+            .prepare("SELECT plugin_id, permission FROM plugin_library_grants ORDER BY 1, 2")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let expected = [
+            ("gone", "libraryRead"),
+            ("lyrics", "libraryAdd"),
+            ("lyrics", "libraryChange"),
+            ("lyrics", "libraryRead"),
+        ];
+        assert_eq!(grants, expected.map(|(p, g)| (p.to_owned(), g.to_owned())));
+        let manifest: String =
+            conn.query_row("SELECT manifest FROM plugins", [], |row| row.get(0)).unwrap();
+        assert!(manifest.contains(r#""permission":"libraryAdd""#), "{manifest}");
+        let refused =
+            conn.execute("INSERT INTO plugin_library_grants VALUES ('x', 1, 'libraryWrite')", []);
+        assert!(refused.is_err(), "the old name is gone");
+    }
+
+    #[test]
     fn refuses_a_database_from_a_newer_version() {
         let mut conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "user_version", 99).unwrap();

@@ -9,27 +9,36 @@ use serde_json::{Map, Value};
 use wasmparser::{Encoding, Parser, Payload};
 
 pub const SECTION: &str = "jewelcase:manifest";
-pub const API_VERSION: &str = "0.1";
+pub const API_VERSION: &str = "0.2";
 
 /// What a plugin can ask for (`requirements/plugins.md` §4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Permission {
     LibraryRead,
-    LibraryWrite,
+    /// Creating files that do not exist yet.
+    LibraryAdd,
+    /// Replacing, renaming, and deleting files that do.
+    LibraryChange,
     Network,
     ListeningActivity,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 4] =
-        [Self::LibraryRead, Self::LibraryWrite, Self::Network, Self::ListeningActivity];
+    pub const ALL: [Permission; 5] = [
+        Self::LibraryRead,
+        Self::LibraryAdd,
+        Self::LibraryChange,
+        Self::Network,
+        Self::ListeningActivity,
+    ];
 
     /// Its name in manifests and the API, such as `libraryRead`.
     pub fn name(self) -> &'static str {
         match self {
             Self::LibraryRead => "libraryRead",
-            Self::LibraryWrite => "libraryWrite",
+            Self::LibraryAdd => "libraryAdd",
+            Self::LibraryChange => "libraryChange",
             Self::Network => "network",
             Self::ListeningActivity => "listeningActivity",
         }
@@ -41,14 +50,15 @@ impl Permission {
 
     /// Granted per library, rather than once for the plugin (`requirements/plugins.md` §4.1).
     pub fn per_library(self) -> bool {
-        matches!(self, Self::LibraryRead | Self::LibraryWrite)
+        matches!(self, Self::LibraryRead | Self::LibraryAdd | Self::LibraryChange)
     }
 
     /// How the admin saw it when granting it.
     pub fn title(self) -> &'static str {
         match self {
             Self::LibraryRead => "Read the library",
-            Self::LibraryWrite => "Write to the library",
+            Self::LibraryAdd => "Add files to the library",
+            Self::LibraryChange => "Change or delete files in the library",
             Self::Network => "Network access",
             Self::ListeningActivity => "Listening activity",
         }
@@ -279,7 +289,7 @@ mod tests {
     #[test]
     fn reads_the_manifest_a_component_carries() {
         let manifest = r#"{"id": "lrclib-lyrics", "name": "LRCLIB Lyrics", "version": "0.1.0",
-            "apiVersion": "0.1", "permissions": [{"permission": "network", "required": true,
+            "apiVersion": "0.2", "permissions": [{"permission": "network", "required": true,
             "reason": "To fetch lyrics.", "destinations": ["lrclib.net"]}]}"#;
         let read = read(&with_section(SECTION, manifest.as_bytes())).unwrap();
         assert_eq!(read.id, "lrclib-lyrics");

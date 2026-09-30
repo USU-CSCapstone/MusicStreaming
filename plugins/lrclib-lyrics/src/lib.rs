@@ -3,12 +3,26 @@
 
 pub mod lrclib;
 
+/// Where lyrics for the track at `path` go: beside it, with the scanner's name for them,
+/// `.lrc` when synced and `.txt` when plain (`requirements/scanning.md` §3.4).
+pub fn lyrics_path(path: &str, synced: bool) -> String {
+    let extension = if synced { "lrc" } else { "txt" };
+    let (folder, name) = path.rsplit_once('/').map_or(("", path), |(f, n)| (f, n));
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    if folder.is_empty() {
+        format!("{stem}.{extension}")
+    } else {
+        format!("{folder}/{stem}.{extension}")
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod plugin {
     use crate::lrclib::{self, Found, Query};
 
-    wit_bindgen::generate!({ path: "../../crates/plugins/wit", world: "lyrics-plugin" });
+    wit_bindgen::generate!({ path: "../../crates/plugins/wit", world: "plugin" });
 
+    use jewelcase::plugin::files::{self, WriteMode};
     use jewelcase::plugin::host::{self, Permission};
     use jewelcase::plugin::{http, library};
 
@@ -62,8 +76,9 @@ mod plugin {
                     return Err(format!("needs permission to {what}"));
                 }
             }
-            // Without write access it still looks everything up, and reports what it would save.
-            let can_write = granted.contains(&Permission::LibraryWrite);
+            // Without access to add files it still looks everything up, and reports what it
+            // would save.
+            let can_write = granted.contains(&Permission::LibraryAdd);
             let mut n = Tally::default();
             let mut offset = 0;
             loop {
@@ -101,7 +116,7 @@ mod plugin {
                     let kind = if synced { "synced" } else { "plain" };
                     if !can_write {
                         host::log(&format!("✓ {name}: found {kind} lyrics (not saved)"));
-                    } else if let Err(e) = library::save_lyrics(t.id, synced, &text) {
+                    } else if let Err(e) = save(t, synced, &text) {
                         n.failed += 1;
                         host::log(&format!("✗ {name}: could not save: {e}"));
                         continue;
@@ -113,6 +128,13 @@ mod plugin {
             }
             Ok(summary(&n, can_write))
         }
+    }
+
+    /// Saves lyrics beside the track as a new file: lyrics already there are never replaced.
+    fn save(t: &library::Track, synced: bool, text: &str) -> Result<(), String> {
+        let contents = format!("{}\n", text.trim());
+        let path = crate::lyrics_path(&t.path, synced);
+        files::write(t.root, &path, contents.as_bytes(), WriteMode::Create)
     }
 
     fn summary(n: &Tally, saved: bool) -> String {
@@ -143,10 +165,25 @@ mod plugin {
         }
         s.push('.');
         if !saved && found > 0 {
-            s.push_str(" Nothing was saved: write access wasn't granted.");
+            s.push_str(" Nothing was saved: adding files wasn't granted.");
         }
         s
     }
 
     export!(Plugin);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lyrics_path;
+
+    #[test]
+    fn lyrics_go_beside_the_audio() {
+        assert_eq!(
+            lyrics_path("Green Day/Insomniac/06 - Brain Stew.flac", true),
+            "Green Day/Insomniac/06 - Brain Stew.lrc"
+        );
+        assert_eq!(lyrics_path("Song.mp3", false), "Song.txt");
+        assert_eq!(lyrics_path("A/B.side.flac", true), "A/B.side.lrc");
+    }
 }

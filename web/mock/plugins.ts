@@ -15,7 +15,7 @@ import {
 } from '../src/lib/api/plugins.ts';
 import { PluginFileError, readManifest } from '../../tools/plugin-pack/manifest.mjs';
 
-const LIBRARY_PERMISSIONS: PermissionName[] = ['libraryRead', 'libraryWrite'];
+const LIBRARY_PERMISSIONS: PermissionName[] = ['libraryRead', 'libraryAdd', 'libraryChange'];
 const MAX_BYTES = 50 * 1024 * 1024;
 
 type Record_ = {
@@ -307,7 +307,11 @@ export async function adminRoute(
 		if (id && sub === 'run' && method === 'POST') {
 			store.get(id); // 404 for a plugin that is not installed.
 			if (!run) {
-				throw new PluginError(503, 'runner_unavailable', 'Running a plugin needs the Jewelcase server.');
+				throw new PluginError(
+					503,
+					'runner_unavailable',
+					'Running a plugin needs the Jewelcase server.'
+				);
 			}
 			return { status: 200, body: await run(id) };
 		}

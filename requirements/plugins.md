@@ -59,7 +59,7 @@ What keeps this open rather than merely long:
 
 ## 3. Writing to the Library
 
-**A plugin granted write access to a library may write anything in it: new files, new audio, changes to existing files, deletions.** It is the only component that can be permitted to, and within a granted library the permission is unrestricted.
+**A plugin granted write access to a library may write anything in it: new files, new audio, changes to existing files, deletions.** It is the only component that can be permitted to, and within a granted library the permission is unrestricted. Write access comes in two parts, granted separately ([§4.1](#41-what-can-be-asked-for)): **adding** files that do not exist yet, and **changing or deleting** files that do. An admin can let a plugin add sidecars without letting it touch anything already there.
 
 This qualifies a promise made in [`general.md` §1](general.md#1-goals), and is stated plainly rather than buried:
 
@@ -85,7 +85,8 @@ That is the trade, made knowingly when write access is granted, library by libra
 | Permission | Grants | Granted |
 |---|---|---|
 | **Read the library** | Its catalog, artwork, lyrics, and audio ([§7](#7-working-with-the-library)) | Per library |
-| **Write to the library** | Creating, changing, and deleting files in its folders ([§3](#3-writing-to-the-library)) | Per library |
+| **Add files to the library** | Creating files that do not exist yet in its folders, such as a sidecar or new music ([§3](#3-writing-to-the-library)) | Per library |
+| **Change or delete files in the library** | Replacing, moving, and deleting files already in its folders, audio included ([§3](#3-writing-to-the-library)) | Per library |
 | **Network** | Reaching services outside the server — by named destination where the plugin can name them (`api.listenbrainz.org`), or any destination | Per plugin |
 | **Listening activity** | Play events and listening history ([§8](#8-events), [`analytics.md` §10](analytics.md#10-external-services)) | Per plugin |
 

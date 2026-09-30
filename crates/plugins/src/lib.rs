@@ -6,6 +6,7 @@
 //! installed and granted, and gives a run its library through [`Library`].
 
 mod download;
+mod files;
 mod host;
 pub mod manifest;
 mod rules;

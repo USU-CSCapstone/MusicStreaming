@@ -5,10 +5,16 @@
 // held to `crates/plugins/manifest-cases.json`.
 
 export const SECTION = 'jewelcase:manifest';
-export const API_VERSION = '0.1';
+export const API_VERSION = '0.2';
 
 /** Permissions a plugin can ask for (requirements/plugins.md §4.1). */
-export const PERMISSIONS = ['libraryRead', 'libraryWrite', 'network', 'listeningActivity'];
+export const PERMISSIONS = [
+	'libraryRead',
+	'libraryAdd',
+	'libraryChange',
+	'network',
+	'listeningActivity'
+];
 
 const MAGIC = [0x00, 0x61, 0x73, 0x6d];
 /** Component-model binaries: version 0x0d, layer 1. A core module is version 1, layer 0. */

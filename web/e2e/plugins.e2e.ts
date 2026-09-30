@@ -21,7 +21,7 @@ test('installs a plugin, approving some of its permissions', async ({ page }) =>
 
 	const card = page.getByRole('listitem').filter({ hasText: 'LRCLIB Lyrics' });
 	await expect(card.getByRole('switch', { name: 'Enabled in Test Library' })).toBeChecked();
-	await expect(card.getByText('Write to the library not granted')).toBeAttached();
+	await expect(card.getByText('Add files to the library not granted')).toBeAttached();
 	await expect(card.getByText('Network access granted')).toBeAttached();
 
 	// Revoking a required permission disables it at once.
