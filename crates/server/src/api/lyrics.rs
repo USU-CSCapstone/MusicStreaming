@@ -62,7 +62,7 @@ mod tests {
     use axum::http::StatusCode;
     use serde_json::{Value, json};
 
-    use super::super::tests::{app_with_tracks, send};
+    use super::super::testing::{app_with_tracks, send};
 
     #[tokio::test]
     async fn serves_each_kind() {

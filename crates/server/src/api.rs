@@ -14,6 +14,8 @@ mod problem;
 mod query;
 mod refs;
 mod search;
+#[cfg(test)]
+mod testing;
 mod tracks;
 mod waveform;
 
@@ -128,76 +130,14 @@ async fn method_not_allowed() -> Problem {
 
 #[cfg(test)]
 mod tests {
-    use axum::body::{Body, to_bytes};
-    use axum::http::{Request, StatusCode, header};
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use serde_json::{Value, json};
-    use tower::ServiceExt;
 
-    use std::path::Path;
-
+    use super::testing::{app, send};
     use super::*;
     use crate::db::DbError;
-
-    /// The API over a fresh database, with the directory that holds it.
-    pub(super) fn app(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
-        let temp = tempfile::tempdir().unwrap();
-        let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
-        let images = Images::new(temp.path().join("cache"), "ffmpeg".into());
-        let app = router(base_path, db.clone(), images);
-        (temp, db, app)
-    }
-
-    /// [`app`] with library 1 holding tracks 1 and 2, and library 2 holding track 3, each on
-    /// an album of its own library and with no lyrics or waveform.
-    pub(super) async fn app_with_tracks() -> (tempfile::TempDir, Arc<Database>, Router) {
-        let (temp, db, app) = app("");
-        db.write(|tx| {
-            crate::db::libraries::create(tx, Some(1), "Music", &[Path::new("/music")], &[])?;
-            crate::db::libraries::create(tx, Some(2), "Other", &[Path::new("/other")], &[])?;
-            tx.execute_batch(
-                "INSERT INTO albums (id, library_id, title_key, artists_key, sort_key,
-                                     artist_sort_key, added_at, updated_at)
-                 VALUES (101, 1, 'a', '', x'61', x'', 0, 0), (201, 2, 'a', '', x'61', x'', 0, 0);
-                 WITH t (id, library_id, album_id) AS (VALUES (1, 1, 101), (2, 1, 101), (3, 2, 201))
-                 INSERT INTO tracks (id, library_id, album_id, root_id, path, file_size, file_mtime,
-                                     title, sort_key, artist_sort_key, album_sort_key, codec,
-                                     container, lossless, sample_rate_hz, channels, duration_us,
-                                     added_at, updated_at)
-                 SELECT t.id, t.library_id, t.album_id, r.id, t.id || '.flac', 10, 0, 'A', x'61',
-                        x'', x'61', 'flac', 'flac', 1, 44100, 2, 1000000, 0, 0
-                 FROM t JOIN library_roots r ON r.library_id = t.library_id;",
-            )
-        })
-        .await
-        .unwrap();
-        (temp, db, app)
-    }
-
-    pub(super) async fn send(
-        app: Router,
-        method: &str,
-        uri: &str,
-    ) -> (StatusCode, Option<String>, Vec<u8>) {
-        let request = Request::builder()
-            .method(method)
-            .uri(uri)
-            .body(Body::empty())
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        let content_type = response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .map(|value| value.to_str().unwrap().to_owned());
-        (
-            response.status(),
-            content_type,
-            to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap()
-                .to_vec(),
-        )
-    }
 
     #[tokio::test]
     async fn unknown_paths_are_not_found_problems() {
