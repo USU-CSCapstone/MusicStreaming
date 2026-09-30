@@ -1,7 +1,7 @@
 //! Libraries: `listLibraries` and `getLibrary` (`api/openapi.yaml`).
 //!
-//! Until accounts exist, every caller reaches every library. Access will narrow both to the
-//! caller's libraries (`requirements/users.md` §5).
+//! Each shows only the libraries the caller reaches (`requirements/users.md` §5): `getLibrary`
+//! through `authenticate`, like every path under a library, and `listLibraries` here.
 
 use std::sync::Arc;
 
@@ -10,6 +10,7 @@ use axum::extract::State;
 use rusqlite::{OptionalExtension, Row};
 use serde::Serialize;
 
+use super::authenticate::Caller;
 use super::extract::Path;
 use super::{Id, Problem};
 use crate::db::Database;
@@ -39,12 +40,18 @@ const SELECT: &str = "SELECT id, name, track_count, album_count, artist_count, d
      FROM libraries";
 
 /// Oldest first: with no default library set, clients open the first one (`AccountSettings`).
-pub async fn list(State(db): State<Arc<Database>>) -> Result<Json<Libraries>, Problem> {
+pub async fn list(
+    State(db): State<Arc<Database>>,
+    caller: Caller,
+) -> Result<Json<Libraries>, Problem> {
     let items = db
-        .read(|conn| {
-            conn.prepare_cached(&format!("{SELECT} ORDER BY created_at, id"))?
-                .query_map([], library)?
-                .collect()
+        .read(move |conn| {
+            conn.prepare_cached(&format!(
+                "{SELECT} WHERE ?1 OR id IN (SELECT library_id FROM library_access \
+                 WHERE user_id = ?2) ORDER BY created_at, id"
+            ))?
+            .query_map(rusqlite::params![caller.reaches_all, caller.user], library)?
+            .collect()
         })
         .await?;
     Ok(Json(Libraries { items }))
@@ -76,10 +83,11 @@ fn library(row: &Row) -> rusqlite::Result<Library> {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::StatusCode;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
     use serde_json::{Value, json};
 
-    use super::super::testing::{app, send};
+    use super::super::testing::{add_device, add_user, app, app_with_tracks, respond, send};
     use crate::db::libraries;
 
     #[tokio::test]
@@ -127,6 +135,35 @@ mod tests {
         let (status, _, body) = send(app, "GET", "/api/v1/libraries/2").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["name"], "Archive");
+    }
+
+    #[tokio::test]
+    async fn lists_only_the_libraries_the_caller_reaches() {
+        let (temp, _db, app) = app_with_tracks().await;
+        let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+        for (id, role) in [(2, "user"), (3, "user"), (4, "admin")] {
+            add_user(&conn, id, role);
+            add_device(&conn, id, id, &format!("token-{id}"));
+        }
+        conn.execute("INSERT INTO library_access VALUES (2, 2, 0)", []).unwrap();
+
+        let ids = |token: &'static str| {
+            let app = app.clone();
+            async move {
+                let request = Request::get("/api/v1/libraries")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap();
+                let (_, _, body) = respond(app, request).await;
+                let items = serde_json::from_slice::<Value>(&body).unwrap()["items"].clone();
+                items.as_array().unwrap().iter().map(|l| l["id"].clone()).collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(ids("token-2").await, ["2"], "granted one");
+        // No access is an empty list, not an error (`requirements/users.md` §5).
+        assert!(ids("token-3").await.is_empty(), "granted none");
+        assert_eq!(ids("token-4").await, ["1", "2"], "an admin");
+        assert_eq!(ids("owner-token").await, ["1", "2"], "the owner");
     }
 
     #[tokio::test]

@@ -34,6 +34,16 @@ pub fn app(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
     (temp, db, app)
 }
 
+/// Adds account `id` with `role`, named after it, such as `user2`.
+pub fn add_user(conn: &rusqlite::Connection, id: i64, role: &str) {
+    conn.execute(
+        "INSERT INTO users (id, username, display_name, role, password, created_at, updated_at) \
+         VALUES (?1, 'user' || ?1, 'User ' || ?1, ?2, '', 0, 0)",
+        rusqlite::params![id, role],
+    )
+    .unwrap();
+}
+
 /// Logs `user` in on a new device `id` with `token`, last seen at the epoch.
 pub fn add_device(conn: &rusqlite::Connection, user: i64, id: i64, token: &str) {
     conn.execute(

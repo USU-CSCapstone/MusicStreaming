@@ -1,13 +1,19 @@
 //! Who is calling: the device a request's token belongs to (`bearerAuth` and `cookieAuth` in
-//! `api/openapi.yaml`).
+//! `api/openapi.yaml`), and whether it may reach the library its path names.
 //!
 //! A request carries its token as `Authorization: Bearer <token>` or, from the web app, in the
 //! session cookie. A browser sends that cookie by itself, so a cookie-authenticated write must
 //! also carry `X-Jewelcase-Client`, which a page on another site cannot add without asking.
+//!
+//! A library the caller cannot reach answers `404` for everything under it, exactly as one that
+//! does not exist (`requirements/users.md` §10). Admins and the owner reach every library;
+//! anyone else only those granted to them (§5). Handlers below `/libraries/{library_id}` can
+//! rely on that, and on nothing the client says.
 
 use std::time::Duration;
 
-use axum::extract::{FromRequestParts, Request, State};
+use axum::extract::rejection::RawPathParamsRejection;
+use axum::extract::{FromRequestParts, RawPathParams, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, header};
 use axum::middleware::Next;
@@ -15,7 +21,7 @@ use axum::response::{IntoResponse, Response};
 use rusqlite::{Connection, OptionalExtension};
 
 use super::session::{COOKIE, token_hash};
-use super::{AppState, Code, Problem};
+use super::{AppState, Code, Id, Problem};
 use crate::db::now_ms;
 
 /// The header a cookie-authenticated write must carry.
@@ -31,6 +37,8 @@ const LAST_SEEN_EVERY: Duration = Duration::from_secs(5 * 60);
 pub struct Caller {
     pub user: i64,
     pub device: i64,
+    /// Whether the account reaches every library, as admins and the owner do.
+    pub reaches_all: bool,
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for Caller {
@@ -42,17 +50,24 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 }
 
 /// Answers `401 unauthenticated` unless the request carries the token of a device whose
-/// account is active, and otherwise passes the [`Caller`] on to the handler.
-pub async fn require(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
+/// account is active, and `404` if its path names a library that account cannot reach.
+/// Otherwise it passes the [`Caller`] on to the handler.
+pub async fn require(
+    State(state): State<AppState>,
+    params: Result<RawPathParams, RawPathParamsRejection>,
+    mut request: Request,
+    next: Next,
+) -> Response {
     let Some((token, from_cookie)) = token(request.headers()) else {
         return unauthenticated();
     };
     let hash = token_hash(token);
-    let found = match state.db.read(move |conn| device(conn, &hash)).await {
+    let library = library(params);
+    let found = match state.db.read(move |conn| device(conn, &hash, library)).await {
         Ok(found) => found,
         Err(error) => return Problem::from(error).into_response(),
     };
-    let Some((caller, last_seen_at)) = found else {
+    let Some(Found { caller, last_seen_at, reaches_library }) = found else {
         return unauthenticated();
     };
     // Checked once the token is known to be good, so a bad one is always `401`.
@@ -60,6 +75,9 @@ pub async fn require(State(state): State<AppState>, mut request: Request, next: 
         return Problem::new(Code::Forbidden)
             .detail("A write authenticated by cookie must send X-Jewelcase-Client.")
             .into_response();
+    }
+    if !reaches_library {
+        return Problem::not_found().into_response();
     }
     let stale_before = now_ms() - LAST_SEEN_EVERY.as_millis() as i64;
     if last_seen_at < stale_before {
@@ -96,14 +114,44 @@ fn token(headers: &HeaderMap) -> Option<(&str, bool)> {
     Some((token, true))
 }
 
-/// The caller and when its device was last seen, if `hash` is a token of an active account.
-/// A suspended account's tokens answer exactly as unknown ones do (`requirements/users.md` §10).
-fn device(conn: &Connection, hash: &[u8; 32]) -> rusqlite::Result<Option<(Caller, i64)>> {
+/// The library the path names, if any. One it names badly is `-1`, which no library is.
+fn library(params: Result<RawPathParams, RawPathParamsRejection>) -> Option<i64> {
+    let Ok(params) = params else { return Some(-1) };
+    let (_, id) = params.iter().find(|(name, _)| *name == "library_id")?;
+    Some(Id::canonical(id).map_or(-1, |Id(id)| id))
+}
+
+struct Found {
+    caller: Caller,
+    last_seen_at: i64,
+    /// Whether the caller reaches the library the path names; true if it names none.
+    reaches_library: bool,
+}
+
+/// The caller behind `hash`, if it is a token of an active account, and whether it reaches
+/// `library`. A suspended account's tokens answer exactly as unknown ones do
+/// (`requirements/users.md` §10).
+fn device(
+    conn: &Connection,
+    hash: &[u8; 32],
+    library: Option<i64>,
+) -> rusqlite::Result<Option<Found>> {
     conn.prepare_cached(
-        "SELECT d.id, d.user_id, d.last_seen_at FROM devices d JOIN users u ON u.id = d.user_id \
+        "SELECT d.id, d.user_id, d.last_seen_at, u.role <> 'user', CASE \
+             WHEN ?2 IS NULL THEN 1 \
+             WHEN u.role <> 'user' THEN EXISTS (SELECT 1 FROM libraries WHERE id = ?2) \
+             ELSE EXISTS (SELECT 1 FROM library_access WHERE user_id = u.id AND library_id = ?2) \
+         END \
+         FROM devices d JOIN users u ON u.id = d.user_id \
          WHERE d.token_hash = ?1 AND u.status = 'active'",
     )?
-    .query_row([hash], |row| Ok((Caller { device: row.get(0)?, user: row.get(1)? }, row.get(2)?)))
+    .query_row(rusqlite::params![hash, library], |row| {
+        Ok(Found {
+            caller: Caller { device: row.get(0)?, user: row.get(1)?, reaches_all: row.get(3)? },
+            last_seen_at: row.get(2)?,
+            reaches_library: row.get(4)?,
+        })
+    })
     .optional()
 }
 

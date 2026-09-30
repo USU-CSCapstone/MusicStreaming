@@ -4,7 +4,14 @@
 </script>
 
 <div class="state">
-	{#if page.error?.message === NO_LIBRARY}
+	{#if page.error?.message === NO_LIBRARY && page.data.me?.role === 'user'}
+		<!-- Admins reach every library, so only a user can be missing access (`requirements/users.md` §5). -->
+		<h1>No music yet</h1>
+		<p class="muted">
+			You don't have access to a library on this server yet. An admin of this server can give it to
+			you.
+		</p>
+	{:else if page.error?.message === NO_LIBRARY}
 		<h1>No music yet</h1>
 		<p class="muted">
 			There is no library to browse. Once the server has scanned a music folder, it appears here.
