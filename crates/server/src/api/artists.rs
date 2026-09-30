@@ -4,12 +4,12 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Path, State};
-use rusqlite::{Connection, OptionalExtension, Row};
+use rusqlite::{OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
 use super::page::{self, Order, Page, Sort, Source, Unknown, timestamp};
 use super::query::Query;
-use super::refs::{ImageRef, TagRef};
+use super::refs::{self, ImageRef, TagRef};
 use super::{Code, Id, Problem};
 use crate::db::Database;
 
@@ -146,7 +146,7 @@ pub async fn get(
         Ok(Some(Artist {
             summary,
             biography,
-            genres: genres(conn, artist)?,
+            genres: refs::genres(conn, "artist", artist)?,
             appearance_count,
         }))
     })
@@ -174,20 +174,6 @@ pub fn summary(row: &Row) -> rusqlite::Result<ArtistSummary> {
         track_count: row.get(4)?,
         added_at: row.get(5)?,
     })
-}
-
-fn genres(conn: &Connection, artist: i64) -> rusqlite::Result<Vec<TagRef>> {
-    conn.prepare_cached(
-        "SELECT tags.id, tags.name FROM artist_tags JOIN tags ON tags.id = artist_tags.tag_id \
-         WHERE artist_tags.artist_id = ?1 ORDER BY tags.sort_key, tags.id",
-    )?
-    .query_map([artist], |row| {
-        Ok(TagRef {
-            id: Id(row.get(0)?),
-            name: row.get(1)?,
-        })
-    })?
-    .collect()
 }
 
 #[cfg(test)]
