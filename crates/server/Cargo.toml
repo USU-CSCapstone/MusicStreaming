@@ -11,6 +11,7 @@ base64 = "0.23.1"
 getrandom = "0.4"
 jewelcase-core = { version = "0.1.0", path = "../core" }
 jewelcase-ffmpeg = { version = "0.1.0", path = "../ffmpeg" }
+jewelcase-plugins = { version = "0.1.0", path = "../plugins" }
 jewelcase-scanner = { version = "0.1.0", path = "../scanner" }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

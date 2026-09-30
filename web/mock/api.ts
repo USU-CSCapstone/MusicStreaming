@@ -17,7 +17,6 @@ import { Db, toKey } from './db.ts';
 import { image, imageSize, playbackInfo, streamAudio, waveform } from './media.ts';
 import { playlist, playlists } from './playlists.ts';
 import { PluginStore, adminRoute } from './plugins.ts';
-import { pluginRunner } from './runner.ts';
 
 type Ctx = {
 	params: string[];
@@ -36,7 +35,6 @@ export function createApi(dataDir: string) {
 	const plugins = new PluginStore(join(dataDir, 'mock-plugins'), () =>
 		catalog.libraries().map((l) => l.id)
 	);
-	const runPlugin = pluginRunner(dataDir);
 
 	// Paths under /libraries/{libraryId}; the library is resolved before the handler runs,
 	// so nothing is reachable in a library that does not exist.
@@ -241,8 +239,7 @@ export function createApi(dataDir: string) {
 					req.method ?? 'GET',
 					path,
 					req.headers['content-type'] ?? '',
-					await readBody(req),
-					runPlugin
+					await readBody(req)
 				);
 				if (!out) return problem(res, 404, 'Not Found', 'not_found');
 				res.statusCode = out.status;

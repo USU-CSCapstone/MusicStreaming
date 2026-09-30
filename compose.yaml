@@ -70,6 +70,9 @@ services:
             - test-results/
             - package.json
             - pnpm-lock.yaml
+        - path: ./tools
+          target: /src/tools
+          action: sync
         - path: ./web/package.json
           action: rebuild
         - path: ./web/pnpm-lock.yaml

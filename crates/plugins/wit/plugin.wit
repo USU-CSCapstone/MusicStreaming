@@ -1,6 +1,6 @@
 package jewelcase:plugin@0.1.0;
 
-/// The prototype's plugin contract, enough for the lyrics plugin (design/plugins.md §7).
+/// The plugin contract, enough for the lyrics plugin so far (design/plugins.md §7).
 /// Every import checks its permission in the host. Imports stay linked even when their
 /// permission was declined, so a plugin with an optional permission still loads; the call
 /// answers an error instead, and `granted` lets a plugin adapt up front.

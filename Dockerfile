@@ -26,4 +26,6 @@ WORKDIR /src/web
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml web/.npmrc ./
 RUN pnpm install --frozen-lockfile
 COPY web .
+# The mock validates plugin files with the pack tool, which it imports from beside the app.
+COPY tools /src/tools
 CMD ["pnpm", "dev", "--host"]

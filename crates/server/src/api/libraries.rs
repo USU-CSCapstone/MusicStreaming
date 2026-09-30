@@ -50,7 +50,7 @@ pub async fn list(
                 "{SELECT} WHERE ?1 OR id IN (SELECT library_id FROM library_access \
                  WHERE user_id = ?2) ORDER BY created_at, id"
             ))?
-            .query_map(rusqlite::params![caller.reaches_all, caller.user], library)?
+            .query_map(rusqlite::params![caller.admin, caller.user], library)?
             .collect()
         })
         .await?;

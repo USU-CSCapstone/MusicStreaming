@@ -1,8 +1,10 @@
+# A first-party example plugin (design/plugins.md §7). Its own workspace: it builds for
+# wasm32-wasip2, and the main workspace builds for the host.
 [package]
 name = "lrclib-lyrics"
 version = "0.1.0"
-edition.workspace = true
-publish.workspace = true
+edition = "2024"
+publish = false
 
 [lib]
 # cdylib is the plugin; rlib lets the pure LRCLIB logic be tested natively.
@@ -14,3 +16,9 @@ serde_json = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wit-bindgen = "0.62"
+
+[workspace]
+
+[profile.release]
+debug = false
+strip = true

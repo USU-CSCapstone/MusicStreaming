@@ -3039,10 +3039,62 @@ export interface paths {
         get?: never;
         /**
          * Enable or disable a plugin for a library
-         * @description Disabling is immediate and complete. Re-enabling clears an automatic disable.
+         * @description Disabling is immediate and complete. Re-enabling clears an automatic disable. A plugin
+         *     cannot be enabled in a library until its required permissions are granted there
+         *     (`requirements/plugins.md` §4.2).
          */
         put: operations["adminSetPluginEnabled"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/plugins/{pluginId}/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pluginId: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set what a plugin is granted
+         * @description Replaces the plugin-wide grants and, for each library listed, that library's grants
+         *     (`requirements/plugins.md` §4.2). A permission the plugin never asked for, or in the
+         *     wrong scope, is ignored. A library that loses a required permission is disabled at
+         *     once, with `disabledReason` saying why.
+         */
+        put: operations["adminSetPluginPermissions"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/plugins/{pluginId}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pluginId: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a plugin now
+         * @description Runs the plugin once in each library it is enabled in, with exactly what is granted
+         *     there, and answers when it is done: up to five minutes. Folders it saved files into are
+         *     scanned, as the scanner is the only way into the library (`requirements/general.md`
+         *     §3.2).
+         */
+        post: operations["adminRunPlugin"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3115,7 +3167,7 @@ export interface components {
             /** @description Human-readable, safe to show. Never contains credentials or plugin internals. */
             detail?: string;
             /** @enum {string} */
-            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "breached_password" | "username_taken" | "version_conflict" | "capacity_exceeded" | "cursor_expired" | "setup_required" | "unsupported_media" | "root_overlap" | "root_unavailable" | "device_unavailable" | "not_active_device" | "source_unavailable" | "source_timeout" | "plugin_settings_invalid" | "internal";
+            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "breached_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "username_taken" | "version_conflict" | "capacity_exceeded" | "cursor_expired" | "setup_required" | "unsupported_media" | "root_overlap" | "root_unavailable" | "device_unavailable" | "not_active_device" | "source_unavailable" | "source_timeout" | "plugin_settings_invalid" | "internal";
             /**
              * @description With `session_revoked`. `credentials_changed` — the device keeps its downloads and
              *     logs in again with its `deviceId`; `logged_out` — the device removes them
@@ -4588,13 +4640,59 @@ export interface components {
             installedAt: string;
             /** Format: date-time */
             updatedAt?: string;
+            /** @description What it asks for, from its manifest. */
+            permissions: components["schemas"]["PermissionRequest"][];
+            /** @description Plugin-wide permissions granted. Library permissions are per library, below. */
+            granted: components["schemas"]["PermissionName"][];
+            /** @description Every library on the server. */
             libraries: {
                 libraryId: string;
                 enabled: boolean;
-                /** @description Disabled by the server after repeated failures (`requirements/plugins.md` §11). */
+                /**
+                 * @description Disabled by the server: after repeated failures (`requirements/plugins.md` §11),
+                 *     or when a required permission was revoked.
+                 */
                 autoDisabled: boolean;
-                disabledReason?: string | null;
+                disabledReason: string | null;
+                /** @description Library permissions granted here. */
+                granted: components["schemas"]["PermissionName"][];
+                /** @description Required permissions not granted here. While any remain, it cannot be enabled. */
+                missingRequired: components["schemas"]["PermissionName"][];
             }[];
+        };
+        /**
+         * @description What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryRead` and
+         *     `libraryWrite` are granted per library; `network` and `listeningActivity` once per plugin.
+         * @enum {string}
+         */
+        PermissionName: "libraryRead" | "libraryWrite" | "network" | "listeningActivity";
+        PermissionRequest: {
+            permission: components["schemas"]["PermissionName"];
+            /** @description Whether it cannot work without it (`requirements/plugins.md` §4.2). */
+            required: boolean;
+            /** @description The author's reason, shown to the admin beside the request. */
+            reason: string;
+            /** @description With `network` only. Host names it reaches, or `["*"]` for any. */
+            destinations?: string[];
+        };
+        PermissionGrants: {
+            /** @description Plugin-wide permissions. */
+            granted: components["schemas"]["PermissionName"][];
+            libraries: {
+                libraryId: string;
+                granted: components["schemas"]["PermissionName"][];
+            }[];
+        };
+        PluginRunResult: {
+            ok: boolean;
+            /** @description The plugin's own one-line summary, or why the run failed. */
+            summary: string;
+            /** @description Progress lines the plugin logged, in order. */
+            log: string[];
+            /** @description Files it saved into the library. */
+            saved: number;
+            /** @description Whether a scan was queued to pick those files up. */
+            scannerRunning: boolean;
         };
         PluginHealth: {
             pluginId: string;
@@ -9647,7 +9745,24 @@ export interface operations {
                 };
             };
             403: components["responses"]["Forbidden"];
-            422: components["responses"]["ValidationFailed"];
+            /** @description `plugin_exists` — a plugin with its `id` is installed; update it instead. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `plugin_invalid` — not a plugin that can run here; `detail` says why. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             default: components["responses"]["Problem"];
         };
     };
@@ -9761,6 +9876,69 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Plugin"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description `permissions_required` — `detail` names what it still needs. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminSetPluginPermissions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pluginId: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PermissionGrants"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Plugin"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminRunPlugin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pluginId: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run finished, whether or not the plugin succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginRunResult"];
                 };
             };
             403: components["responses"]["Forbidden"];
