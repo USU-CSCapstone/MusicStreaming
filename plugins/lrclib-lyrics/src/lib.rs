@@ -87,8 +87,9 @@ mod plugin {
             let can_write = granted.contains(&Permission::LibraryAdd);
             let mut n = Tally::default();
             match event {
-                // The whole library, a page at a time.
-                Event::Run => {
+                // The whole library, a page at a time: asked for, or on the schedule, as
+                // lrclib.net gains lyrics for tracks it had none for.
+                Event::Run | Event::Scheduled => {
                     let mut after = None;
                     loop {
                         let page = library::tracks(after, 50)?;
@@ -103,6 +104,8 @@ mod plugin {
                         library::get_tracks(ids)?.iter().for_each(|t| visit(t, can_write, &mut n));
                     }
                 }
+                // It does not ask to hear about scans.
+                Event::ScanFinished(_) => return Ok("Nothing to do.".into()),
             }
             Ok(summary(&n, can_write))
         }

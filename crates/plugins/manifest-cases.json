@@ -822,6 +822,143 @@
 		]
 	},
 	{
+		"name": "a daily schedule",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "schedule",
+					"required": false,
+					"reason": "x",
+					"everyMinutes": 1440
+				}
+			]
+		},
+		"problems": []
+	},
+	{
+		"name": "a schedule with no interval",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "schedule",
+					"required": false,
+					"reason": "x"
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: schedule needs \"everyMinutes\", a whole number of minutes, at least 5"
+		]
+	},
+	{
+		"name": "a schedule too often",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "schedule",
+					"required": false,
+					"reason": "x",
+					"everyMinutes": 1
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: schedule needs \"everyMinutes\", a whole number of minutes, at least 5"
+		]
+	},
+	{
+		"name": "a schedule in part-minutes",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "schedule",
+					"required": false,
+					"reason": "x",
+					"everyMinutes": 7.5
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: schedule needs \"everyMinutes\", a whole number of minutes, at least 5"
+		]
+	},
+	{
+		"name": "an interval on something else",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": false,
+					"reason": "x",
+					"destinations": [
+						"a"
+					],
+					"everyMinutes": 60
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: only schedule takes \"everyMinutes\""
+		]
+	},
+	{
+		"name": "scan hook without the permission its events need",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "scanFinished",
+					"required": false,
+					"reason": "x"
+				}
+			]
+		},
+		"problems": [
+			"scanFinished needs libraryRead as well"
+		]
+	},
+	{
 		"name": "many problems at once",
 		"manifest": {
 			"id": "Bad ID",

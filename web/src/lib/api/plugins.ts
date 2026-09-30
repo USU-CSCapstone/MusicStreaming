@@ -19,7 +19,8 @@ export const LIBRARY_PERMISSIONS: readonly PermissionName[] = [
 	'libraryRead',
 	'libraryAdd',
 	'libraryChange',
-	'tracksChanged'
+	'tracksChanged',
+	'scanFinished'
 ];
 
 export function isLibraryPermission(p: PermissionName): boolean {
@@ -58,5 +59,24 @@ export const PERMISSION_LABELS: Record<PermissionName, { title: string; detail: 
 		title: 'Run when tracks change',
 		detail:
 			'Runs on its own as tracks are added, changed, or removed, starting with every track already here.'
+	},
+	scanFinished: {
+		title: 'Run when a scan finishes',
+		detail: 'Runs on its own each time a scan of this library finishes.'
+	},
+	schedule: {
+		title: 'Run on a schedule',
+		detail: 'Runs on its own at a set interval, in every library it is enabled in.'
 	}
 };
+
+/** An interval in the largest whole unit: "day", "6 hours", "90 minutes". */
+export function every(minutes: number): string {
+	const [n, unit] =
+		minutes % 1440 === 0
+			? [minutes / 1440, 'day']
+			: minutes % 60 === 0
+				? [minutes / 60, 'hour']
+				: [minutes, 'minute'];
+	return n === 1 ? unit : `${n} ${unit}s`;
+}

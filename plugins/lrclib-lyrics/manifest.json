@@ -15,6 +15,7 @@
 			"destinations": ["lrclib.net"]
 		},
 		{ "permission": "libraryAdd", "required": false, "reason": "To save .lrc files beside your tracks." },
-		{ "permission": "tracksChanged", "required": false, "reason": "To look up lyrics for tracks as they are added." }
+		{ "permission": "tracksChanged", "required": false, "reason": "To look up lyrics for tracks as they are added." },
+		{ "permission": "schedule", "required": false, "reason": "To look again each day for tracks lrclib.net had no lyrics for.", "everyMinutes": 1440 }
 	]
 }

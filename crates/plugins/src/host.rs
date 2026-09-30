@@ -32,7 +32,7 @@ mod bindings {
 use bindings::jewelcase::plugin::host;
 use bindings::{Plugin, PluginPre};
 
-pub use bindings::jewelcase::plugin::events::{Event, TracksChanged};
+pub use bindings::jewelcase::plugin::events::{Event, ScanFinished, TracksChanged};
 pub use bindings::jewelcase::plugin::library::{Album, Artist, Track};
 
 /// Compute a plugin may spend in one run, counted while its code runs.
@@ -342,6 +342,8 @@ fn wit(permission: Permission) -> host::Permission {
         Permission::Network => host::Permission::Network,
         Permission::ListeningActivity => host::Permission::ListeningActivity,
         Permission::TracksChanged => host::Permission::TracksChanged,
+        Permission::ScanFinished => host::Permission::ScanFinished,
+        Permission::Schedule => host::Permission::Schedule,
     }
 }
 

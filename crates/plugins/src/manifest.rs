@@ -11,6 +11,9 @@ use wasmparser::{Encoding, Parser, Payload};
 pub const SECTION: &str = "jewelcase:manifest";
 pub const API_VERSION: &str = "0.2";
 
+/// The shortest interval a schedule may ask for.
+pub const MIN_EVERY_MINUTES: u64 = 5;
+
 /// What a plugin can ask for (`requirements/plugins.md` §4.1): what it may reach, and the hooks
 /// that run it, which are approved the same way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -25,16 +28,22 @@ pub enum Permission {
     ListeningActivity,
     /// A hook: run when tracks are added, changed, or removed. Needs library-read too.
     TracksChanged,
+    /// A hook: run when a scan of the library finishes. Needs library-read too.
+    ScanFinished,
+    /// A hook: run at the interval its request names, in every library it is enabled in.
+    Schedule,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 6] = [
+    pub const ALL: [Permission; 8] = [
         Self::LibraryRead,
         Self::LibraryAdd,
         Self::LibraryChange,
         Self::Network,
         Self::ListeningActivity,
         Self::TracksChanged,
+        Self::ScanFinished,
+        Self::Schedule,
     ];
 
     /// Its name in manifests and the API, such as `libraryRead`.
@@ -46,6 +55,8 @@ impl Permission {
             Self::Network => "network",
             Self::ListeningActivity => "listeningActivity",
             Self::TracksChanged => "tracksChanged",
+            Self::ScanFinished => "scanFinished",
+            Self::Schedule => "schedule",
         }
     }
 
@@ -57,7 +68,11 @@ impl Permission {
     pub fn per_library(self) -> bool {
         matches!(
             self,
-            Self::LibraryRead | Self::LibraryAdd | Self::LibraryChange | Self::TracksChanged
+            Self::LibraryRead
+                | Self::LibraryAdd
+                | Self::LibraryChange
+                | Self::TracksChanged
+                | Self::ScanFinished
         )
     }
 
@@ -70,6 +85,8 @@ impl Permission {
             Self::Network => "Network access",
             Self::ListeningActivity => "Listening activity",
             Self::TracksChanged => "Run when tracks change",
+            Self::ScanFinished => "Run when a scan finishes",
+            Self::Schedule => "Run on a schedule",
         }
     }
 }
@@ -99,6 +116,9 @@ pub struct PermissionRequest {
     /// For network: host names, or `*` for any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub destinations: Option<Vec<String>>,
+    /// For schedule: how often it runs.
+    #[serde(default, rename = "everyMinutes", skip_serializing_if = "Option::is_none")]
+    pub every_minutes: Option<u32>,
 }
 
 impl Manifest {
@@ -106,6 +126,12 @@ impl Manifest {
     pub fn destinations(&self) -> &[String] {
         let network = self.permissions.iter().find(|r| r.permission == Permission::Network);
         network.and_then(|r| r.destinations.as_deref()).unwrap_or_default()
+    }
+
+    /// How often its schedule runs, if it asks for one.
+    pub fn every_minutes(&self) -> Option<u32> {
+        let schedule = self.permissions.iter().find(|r| r.permission == Permission::Schedule);
+        schedule.and_then(|r| r.every_minutes)
     }
 
     pub fn required(&self) -> impl Iterator<Item = Permission> + '_ {
@@ -203,9 +229,11 @@ pub fn validate(manifest: &Value) -> Vec<String> {
         };
         problems.extend(validate_request(&at, r, &mut seen));
     }
-    // A hook's event names tracks, which only reading the library can make anything of.
-    if seen.contains(&Permission::TracksChanged) && !seen.contains(&Permission::LibraryRead) {
-        problems.push("tracksChanged needs libraryRead as well".into());
+    // A library hook's event is about the library, which only reading it can make anything of.
+    for hook in [Permission::TracksChanged, Permission::ScanFinished] {
+        if seen.contains(&hook) && !seen.contains(&Permission::LibraryRead) {
+            problems.push(format!("{} needs libraryRead as well", hook.name()));
+        }
     }
     problems
 }
@@ -242,6 +270,19 @@ fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>
         }
     } else if destinations.is_some() {
         problems.push(format!(r#"{at}: only network takes "destinations""#));
+    }
+    let every = r.get("everyMinutes");
+    if permission == Permission::Schedule {
+        if !every
+            .and_then(Value::as_u64)
+            .is_some_and(|m| (MIN_EVERY_MINUTES..=u32::MAX as u64).contains(&m))
+        {
+            problems.push(format!(
+                r#"{at}: schedule needs "everyMinutes", a whole number of minutes, at least {MIN_EVERY_MINUTES}"#
+            ));
+        }
+    } else if every.is_some() {
+        problems.push(format!(r#"{at}: only schedule takes "everyMinutes""#));
     }
     problems
 }

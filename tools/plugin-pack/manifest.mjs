@@ -14,9 +14,15 @@ export const PERMISSIONS = [
 	'libraryChange',
 	'network',
 	'listeningActivity',
-	// A hook, approved like a permission: run when tracks are added, changed, or removed.
-	'tracksChanged'
+	// Hooks, approved like permissions: when tracks are added, changed, or removed; when a scan
+	// finishes; and at an interval.
+	'tracksChanged',
+	'scanFinished',
+	'schedule'
 ];
+
+/** The shortest interval a schedule may ask for. */
+export const MIN_EVERY_MINUTES = 5;
 
 const MAGIC = [0x00, 0x61, 0x73, 0x6d];
 /** Component-model binaries: version 0x0d, layer 1. A core module is version 1, layer 0. */
@@ -166,10 +172,22 @@ export function validateManifest(m) {
 		} else if (r.destinations !== undefined) {
 			problems.push(`${at}: only network takes "destinations"`);
 		}
+		if (r.permission === 'schedule') {
+			const m = r.everyMinutes;
+			if (!Number.isInteger(m) || /** @type {number} */ (m) < MIN_EVERY_MINUTES || /** @type {number} */ (m) > 4294967295) {
+				problems.push(
+					`${at}: schedule needs "everyMinutes", a whole number of minutes, at least ${MIN_EVERY_MINUTES}`
+				);
+			}
+		} else if (r.everyMinutes !== undefined) {
+			problems.push(`${at}: only schedule takes "everyMinutes"`);
+		}
 	});
-	// A hook's event names tracks, which only reading the library can make anything of.
-	if (seen.has('tracksChanged') && !seen.has('libraryRead')) {
-		problems.push('tracksChanged needs libraryRead as well');
+	// A library hook's event is about the library, which only reading it can make anything of.
+	for (const hook of ['tracksChanged', 'scanFinished']) {
+		if (seen.has(hook) && !seen.has('libraryRead')) {
+			problems.push(`${hook} needs libraryRead as well`);
+		}
 	}
 	return problems;
 }
