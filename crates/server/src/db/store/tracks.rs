@@ -6,7 +6,7 @@ use std::path::Path;
 
 use jewelcase_scanner::store::{Batch, IndexedFile};
 use jewelcase_scanner::{Depth, DuplicateCandidate, ScanId, Scope};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Result, params};
 
 use super::SqliteStore;
 use super::problems::{clear_problem, record_problem};
@@ -138,43 +138,8 @@ pub fn duplicate_candidates(
 ) -> Result<Vec<DuplicateCandidate>, DbError> {
     let roots = store.roots.clone();
     store.db.read_blocking(move |conn| {
-        let mut artists: HashMap<i64, Vec<(i64, String)>> = HashMap::new();
-        {
-            let mut stmt = conn.prepare(
-                "SELECT track_id, position, artist_name FROM track_artists WHERE library_id = ?1 AND artist_name IS NOT NULL",
-            )?;
-            for row in stmt.query_map([lib], |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            })? {
-                let (t, pos, name) = row?;
-                artists.entry(t).or_default().push((pos, name));
-            }
-        }
-        let mut album_artists: HashMap<i64, Vec<(i64, String)>> = HashMap::new();
-        {
-            let mut stmt = conn.prepare(
-                "SELECT track_id, position, artist_name FROM track_album_artists WHERE library_id = ?1 AND artist_name IS NOT NULL",
-            )?;
-            for row in stmt.query_map([lib], |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            })? {
-                let (t, pos, name) = row?;
-                album_artists.entry(t).or_default().push((pos, name));
-            }
-        }
-        let ordered = |m: &mut HashMap<i64, Vec<(i64, String)>>, id: i64| -> Vec<String> {
-            let mut v = m.remove(&id).unwrap_or_default();
-            v.sort();
-            v.into_iter().map(|(_, n)| n).collect()
-        };
+        let mut artists = credited_names(conn, "track_artists", lib)?;
+        let mut album_artists = credited_names(conn, "track_album_artists", lib)?;
         let mut stmt = conn.prepare(
             "SELECT id, root_id, path, title, album_title, track_number, disc_number FROM tracks \
              WHERE library_id = ?1 AND missing_since IS NULL",
@@ -200,13 +165,28 @@ pub fn duplicate_candidates(
                 track_id: id as u64,
                 path,
                 title: Some(title),
-                artists: ordered(&mut artists, id),
+                artists: artists.remove(&id).unwrap_or_default(),
                 album,
-                album_artists: ordered(&mut album_artists, id),
+                album_artists: album_artists.remove(&id).unwrap_or_default(),
                 track_number: track_number.map(|n| n as u32),
                 disc_number: if disc == 0 { None } else { Some(disc as u32) },
             });
         }
         Ok(out)
     })
+}
+
+/// Each track's credited names in `table`, `track_artists` or `track_album_artists`, in credit
+/// order. The table's key is that order, so reading it needs no sort.
+fn credited_names(conn: &Connection, table: &str, lib: i64) -> Result<HashMap<i64, Vec<String>>> {
+    let mut names: HashMap<i64, Vec<String>> = HashMap::new();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT track_id, artist_name FROM {table} \
+         WHERE library_id = ?1 AND artist_name IS NOT NULL ORDER BY track_id, position"
+    ))?;
+    for row in stmt.query_map([lib], |r| Ok((r.get(0)?, r.get(1)?)))? {
+        let (track, name) = row?;
+        names.entry(track).or_default().push(name);
+    }
+    Ok(names)
 }
