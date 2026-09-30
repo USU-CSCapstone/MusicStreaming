@@ -5,15 +5,30 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
-use axum::http::{Request, StatusCode, header};
+use axum::http::{HeaderMap, Request, StatusCode, header};
 use serde_json::Value;
 use tower::ServiceExt;
 
 use super::{Images, router};
 use crate::db::{Database, libraries};
 
-/// The API over a fresh database, with the directory that holds it.
+/// The API over a fresh database with setup done, and the directory that holds it.
 pub fn app(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
+    let (temp, db, app) = app_before_setup(base_path);
+    // Its own connection: tests call this inside the runtime, where `write_blocking` cannot wait.
+    rusqlite::Connection::open(temp.path().join("jewelcase.db"))
+        .unwrap()
+        .execute(
+            "INSERT INTO users (id, username, display_name, role, password, created_at, \
+             updated_at) VALUES (1, 'owner', 'Owner', 'owner', '', 0, 0)",
+            [],
+        )
+        .unwrap();
+    (temp, db, app)
+}
+
+/// The API over a fresh database, as a new server first starts: with no owner.
+pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
     let temp = tempfile::tempdir().unwrap();
     let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
     let images = Images::new(temp.path().join("cache"), "ffmpeg".into());
@@ -59,6 +74,25 @@ pub async fn send(app: Router, method: &str, uri: &str) -> (StatusCode, Option<S
         content_type,
         to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec(),
     )
+}
+
+/// Sends `body` as JSON, and returns the status, headers, and JSON body of the response.
+pub async fn send_json(
+    app: Router,
+    method: &str,
+    uri: &str,
+    body: &Value,
+) -> (StatusCode, HeaderMap, Value) {
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    let (parts, body) = response.into_parts();
+    let body = to_bytes(body, usize::MAX).await.unwrap();
+    (parts.status, parts.headers, serde_json::from_slice(&body).unwrap())
 }
 
 /// The status and JSON body of a `GET`.
