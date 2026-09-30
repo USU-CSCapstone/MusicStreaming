@@ -7,9 +7,10 @@ use axum::extract::{Path, State};
 use rusqlite::{OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
-use super::page::{self, Order, Page, Sort, Source, Unknown, timestamp};
+use super::page::{self, Order, Page, Sort, Source, Unknown};
 use super::query::Query;
 use super::refs::{self, ImageRef, TagRef};
+use super::sql::timestamp;
 use super::{Code, Id, Problem};
 use crate::db::Database;
 

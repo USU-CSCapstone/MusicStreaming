@@ -15,6 +15,7 @@ mod problem;
 mod query;
 mod refs;
 mod search;
+mod sql;
 #[cfg(test)]
 mod testing;
 mod tracks;

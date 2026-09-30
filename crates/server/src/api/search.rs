@@ -16,10 +16,9 @@ use serde::{Deserialize, Serialize};
 
 use super::albums::{self, AlbumSummary};
 use super::artists::{self, ArtistSummary};
-use super::page;
 use super::query::Query;
 use super::tracks::{self, TrackSummary};
-use super::{Code, Id, Problem};
+use super::{Code, Id, Problem, page, sql};
 use crate::db::{Database, DbError};
 
 /// Every library's search index.
@@ -220,7 +219,7 @@ pub async fn search(
                 let (kind, items) = match section.kind {
                     Kind::Track => (
                         "tracks",
-                        page::by_ids(
+                        sql::by_ids(
                             conn,
                             tracks::SELECT,
                             "tracks t",
@@ -235,7 +234,7 @@ pub async fn search(
                     ),
                     Kind::Album => (
                         "albums",
-                        page::by_ids(
+                        sql::by_ids(
                             conn,
                             albums::SELECT,
                             "albums al",
@@ -251,7 +250,7 @@ pub async fn search(
                     ),
                     Kind::Artist => (
                         "artists",
-                        page::by_ids(
+                        sql::by_ids(
                             conn,
                             artists::SELECT,
                             "artists ar",
