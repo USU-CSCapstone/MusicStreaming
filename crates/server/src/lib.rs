@@ -8,7 +8,6 @@ mod web;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::Context;
 use jewelcase_ffmpeg::{Config as FfmpegConfig, Ffmpeg};
@@ -53,19 +52,6 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         let ffmpeg = ffmpeg.clone();
         tokio::task::spawn_blocking(move || Scanning::start(&db, &ffmpeg)).await??
     };
-
-    // Planner statistics, hourly (`design/database.md` §4).
-    {
-        let db = db.clone();
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_secs(3600));
-                if let Err(e) = db.write_blocking(|tx| tx.execute_batch("PRAGMA optimize")) {
-                    tracing::warn!(error = %e, "PRAGMA optimize failed");
-                }
-            }
-        });
-    }
 
     let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.port));
     let listener = TcpListener::bind(address)

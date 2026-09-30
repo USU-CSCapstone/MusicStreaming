@@ -23,8 +23,10 @@ mod tests_store;
 use std::num::NonZeroUsize;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
@@ -32,6 +34,10 @@ use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 
 pub use store::SqliteStore;
+
+/// How often the writer gathers query-planner statistics, which the planner needs to choose
+/// indexes (`design/database.md` §4).
+const OPTIMIZE_EVERY: Duration = Duration::from_secs(3600);
 
 /// Work for a database thread. It sends its own result back to whoever queued it.
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
@@ -98,12 +104,22 @@ impl Database {
         let mut threads = Vec::with_capacity(reader_count + 1);
         threads.push(spawn("db-writer", move || {
             let mut conn = writer;
-            for job in writer_jobs {
-                run(job, &mut conn);
+            let mut next_optimize = Instant::now() + OPTIMIZE_EVERY;
+            loop {
+                match writer_jobs
+                    .recv_timeout(next_optimize.saturating_duration_since(Instant::now()))
+                {
+                    Ok(job) => run(job, &mut conn),
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+                // On the writer between jobs, so it never contends with a write for the lock.
+                if Instant::now() >= next_optimize {
+                    optimize(&conn);
+                    next_optimize = Instant::now() + OPTIMIZE_EVERY;
+                }
             }
-            if let Err(error) = conn.execute_batch("PRAGMA optimize") {
-                warn!(%error, "cannot optimize the database on shutdown");
-            }
+            optimize(&conn);
         })?);
         for (index, mut conn) in readers.into_iter().enumerate() {
             let jobs = Arc::clone(&reader_jobs);
@@ -197,6 +213,13 @@ where
         let value = f(&tx)?;
         tx.commit()?;
         Ok(value)
+    }
+}
+
+/// Gathers query-planner statistics (`design/database.md` §4).
+fn optimize(conn: &Connection) {
+    if let Err(error) = conn.execute_batch("PRAGMA optimize") {
+        warn!(%error, "cannot optimize the database");
     }
 }
 
