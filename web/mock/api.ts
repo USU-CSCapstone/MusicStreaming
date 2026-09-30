@@ -178,6 +178,8 @@ export function createApi(dbPath: string) {
 		query: URLSearchParams
 	) {
 		if (path === '/health') return { status: 'ok' };
+		// The mock has no accounts, so it is always set up and never asks for a login.
+		if (path === '/server') return { version: 'mock', apiVersion: '1', setupRequired: false };
 		if (path === '/libraries') return { items: catalog.libraries() };
 		const m = /^\/libraries\/([^/]+)(.*)$/.exec(path);
 		const lib = toKey(m?.[1]);

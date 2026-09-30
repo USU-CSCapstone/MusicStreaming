@@ -77,3 +77,32 @@ test('search updates as the user types', async ({ page }) => {
 	await page.getByRole('searchbox', { name: 'Search the library' }).first().fill('zzz');
 	await expect(page.getByRole('heading', { name: /No music matches/ })).toBeVisible();
 });
+
+test('a new server sets up its owner, then opens the library', async ({ page }) => {
+	await serveLibrary(page, { setupRequired: true });
+	await page.goto('/albums');
+	await expect(page).toHaveURL(/\/setup$/);
+	await expect(page.getByRole('navigation', { name: 'Library' })).toHaveCount(0);
+
+	await page.getByLabel('Username').fill('sam');
+	await page.getByLabel('Password', { exact: true }).fill('hunter2');
+	await page.getByLabel('Confirm password').fill('hunter3');
+	await page.getByRole('button', { name: 'Create account' }).click();
+	await expect(page.getByRole('alert')).toHaveText("The passwords don't match.");
+
+	await page.getByLabel('Confirm password').fill('hunter2');
+	await page.getByRole('button', { name: 'Create account' }).click();
+	await expect(page.getByRole('alert')).toHaveText('This is a very common password.');
+
+	await page.getByLabel('Password', { exact: true }).fill('correct horse battery staple');
+	await page.getByLabel('Confirm password').fill('correct horse battery staple');
+	await page.getByRole('button', { name: 'Create account' }).click();
+	await expect(page).toHaveURL(/\/albums$/);
+	await expect(page.getByRole('heading', { level: 1, name: 'Albums' })).toBeVisible();
+});
+
+test('setup is not offered once it is done', async ({ page }) => {
+	await serveLibrary(page);
+	await page.goto('/setup');
+	await expect(page).toHaveURL(/\/albums$/);
+});

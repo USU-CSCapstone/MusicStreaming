@@ -15,6 +15,9 @@ import type {
 	PlaylistItemPage,
 	PlaylistPage,
 	SearchResponse,
+	ServerInfo,
+	Session,
+	SetupRequest,
 	TrackPage,
 	Waveform
 } from './types';
@@ -41,14 +44,34 @@ function url(path: string, query: Query = {}): string {
 	return `${API}${path}${qs ? `?${qs}` : ''}`;
 }
 
-async function get<T>(fetch: Fetch, path: string, query?: Query): Promise<T> {
-	const res = await fetch(url(path, query));
+/** The response's JSON, or its Problem as an `ApiError` whose message is safe to show. */
+async function body<T>(res: Response): Promise<T> {
 	if (!res.ok) {
 		const problem = await res.json().catch(() => null);
-		throw new ApiError(res.status, problem?.code, problem?.title ?? res.statusText);
+		const message = problem?.detail ?? problem?.title ?? res.statusText;
+		throw new ApiError(res.status, problem?.code, message);
 	}
 	return res.json();
 }
+
+const get = async <T>(fetch: Fetch, path: string, query?: Query): Promise<T> =>
+	body(await fetch(url(path, query)));
+
+/** A write. The header lets the server tell it from a cross-site form post (`cookieAuth`). */
+const post = async <T>(fetch: Fetch, path: string, json: unknown): Promise<T> =>
+	body(
+		await fetch(url(path), {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', 'X-Jewelcase-Client': 'web' },
+			body: JSON.stringify(json)
+		})
+	);
+
+export const getServerInfo = (f: Fetch) => get<ServerInfo>(f, '/server');
+
+/** Creates the owner and logs this browser in: the server sets the session cookie. */
+export const completeSetup = (f: Fetch, request: SetupRequest) =>
+	post<Session>(f, '/setup', request);
 
 const lib = (libraryId: string) => `/libraries/${encodeURIComponent(libraryId)}`;
 

@@ -1,7 +1,13 @@
 // A tiny library served by intercepting /api/v1, so the tests need no music folder.
 
 import type { Page, Route } from '@playwright/test';
-import type { AlbumSummary, Library, TrackSummary } from '../src/lib/api/types';
+import type {
+	AlbumSummary,
+	Library,
+	Session,
+	SetupRequest,
+	TrackSummary
+} from '../src/lib/api/types';
 
 export const library: Library = {
 	id: '11',
@@ -69,15 +75,47 @@ function wav(): Buffer {
 	return b;
 }
 
+/** The session a successful setup returns. */
+const session = (request: SetupRequest): Session => ({
+	token: 'token',
+	user: {
+		id: '1',
+		username: request.username,
+		displayName: request.displayName ?? request.username,
+		role: 'owner',
+		hasAvatar: false
+	},
+	device: {
+		id: '2',
+		...request.device,
+		firstSeenAt: '2026-09-29T00:00:00.000Z',
+		lastSeenAt: '2026-09-29T00:00:00.000Z',
+		connected: false
+	}
+});
+
 const pageOf = <T>(items: T[]) => ({ items, total: items.length, nextCursor: null });
 
-export async function serveLibrary(page: Page, { empty = false } = {}) {
+/** A server whose setup is done unless `setupRequired`, when `POST /setup` completes it. */
+export async function serveLibrary(page: Page, { empty = false, setupRequired = false } = {}) {
 	await page.route('**/api/v1/**', async (route: Route) => {
 		const url = new URL(route.request().url());
 		const path = url.pathname.replace(/^.*\/api\/v1/, '');
 		const lib = `/libraries/${library.id}`;
 		const json = (body: unknown) => route.fulfill({ json: body });
+		const problem = (status: number, code: string, detail?: string) =>
+			route.fulfill({ status, json: { type: 'about:blank', title: '', status, code, detail } });
 
+		if (path === '/server') return json({ version: 'test', apiVersion: '1', setupRequired });
+		if (path === '/setup' && setupRequired) {
+			const request = route.request().postDataJSON();
+			if (request.password.length < 12) {
+				return problem(422, 'weak_password', 'This is a very common password.');
+			}
+			setupRequired = false;
+			return route.fulfill({ status: 201, json: session(request) });
+		}
+		if (setupRequired) return problem(503, 'setup_required');
 		if (path === '/libraries') return json({ items: empty ? [] : [library] });
 		if (path === `${lib}/albums`) return json(pageOf([album]));
 		if (path === `${lib}/albums/${album.id}`) {
@@ -128,9 +166,6 @@ export async function serveLibrary(page: Page, { empty = false } = {}) {
 		}
 		if (media?.[2] === 'waveform') return route.fulfill({ status: 204 });
 		if (media?.[2] === 'audio') return route.fulfill({ body: wav(), contentType: 'audio/wav' });
-		return route.fulfill({
-			status: 404,
-			json: { type: 'about:blank', title: 'Not Found', status: 404, code: 'not_found' }
-		});
+		return problem(404, 'not_found');
 	});
 }

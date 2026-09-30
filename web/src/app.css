@@ -15,6 +15,7 @@
 	--accent: #6b4df5;
 	--accent-text: #ffffff;
 	--accent-soft: #6b4df51f;
+	--danger: #c62f2f;
 	--wave-rest: #c9c9d3;
 	--shadow: 0 1px 2px #0000000f, 0 4px 16px #00000010;
 
@@ -46,6 +47,7 @@
 		--accent: #9a85ff;
 		--accent-text: #0e0e12;
 		--accent-soft: #9a85ff26;
+		--danger: #ff7070;
 		--wave-rest: #3a3a46;
 		--shadow: 0 1px 2px #00000040, 0 4px 16px #00000040;
 	}
