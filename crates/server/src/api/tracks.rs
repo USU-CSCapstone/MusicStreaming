@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
 use super::credit::ArtistCredit;
-use super::page::{self, Order, Page, Sort, Source, Unknown};
+use super::page::{Order, Page, Request, Sort, Source, Unknown};
 use super::query::Query;
 use super::refs::{self, Credit, ImageRef, TagRef};
 use super::sql::timestamp;
@@ -220,8 +220,7 @@ pub async fn list(
         (TrackSort::Album, Some(_)) => &WITHIN_ALBUM,
         (sort, _) => sort.sort(),
     };
-    let after = sort.after(query.cursor.as_deref(), query.order)?;
-    let limit = page::limit(query.limit)?;
+    let request = Request::new(sort, query.order, query.cursor, query.limit)?;
     let filtered = query.album_id.is_some() || query.artist_id.is_some();
     let source = source(
         library,
@@ -230,26 +229,11 @@ pub async fn list(
         query.artist_credit,
     );
     db.read(move |conn| {
-        let Some(track_count) = page::library_count(conn, library, "track_count")? else {
-            return Ok(None);
-        };
-        // The scanner keeps the library's count, so only a filtered list counts its rows.
-        let total = if filtered {
-            page::count(conn, &source)?
-        } else {
-            track_count
-        };
         // An album's tracks share its reference, so each album is read once per page.
         let mut albums = HashMap::new();
-        let (items, next_cursor) =
-            page::fetch(conn, &source, sort, query.order, after, limit, |row| {
-                list_summary(conn, row, &mut albums)
-            })?;
-        Ok(Some(Page {
-            items,
-            next_cursor,
-            total,
-        }))
+        request.read(conn, library, "track_count", filtered, &source, |row| {
+            list_summary(conn, row, &mut albums)
+        })
     })
     .await?
     .map(Json)

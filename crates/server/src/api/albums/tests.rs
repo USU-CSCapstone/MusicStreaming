@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use super::super::testing::{app, json, page_through};
 use super::*;
+use crate::api::page;
 use crate::db::libraries;
 
 /// Library 1 holds, by name: "Abbey Road" (1969), "Kid A" (2000), "Nevermind" (no date),
