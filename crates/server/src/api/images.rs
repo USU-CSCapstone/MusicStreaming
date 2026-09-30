@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::{Path, Request, State};
+use axum::extract::{Request, State};
 use axum::http::{HeaderValue, header};
 use axum::response::Response;
 use rusqlite::OptionalExtension;
@@ -16,7 +16,7 @@ use tower_http::services::ServeFile;
 
 pub use cache::Images;
 
-use super::query::Query;
+use super::extract::{Path, Query};
 use super::{Code, Id, Problem};
 use crate::db::Database;
 
@@ -33,17 +33,15 @@ pub struct ImageQuery {
 pub async fn get(
     State(db): State<Arc<Database>>,
     State(images): State<Arc<Images>>,
-    Path((library_id, image_id)): Path<(String, String)>,
+    Path((Id(library), Id(image))): Path<(Id, Id)>,
     Query(query): Query<ImageQuery>,
     request: Request,
 ) -> Result<Response, Problem> {
-    let Id(library) = Id::parse(&library_id)?;
-    let Id(image) = Id::parse(&image_id)?;
     let size = match query.size.unwrap_or(DEFAULT_SIZE) {
         requested @ 16..=4096 => SIZES.into_iter().find(|&size| size >= requested),
         _ => None,
     }
-    .ok_or_else(|| Problem::new(Code::ValidationFailed).detail("size must be from 16 to 4096"))?;
+    .ok_or_else(|| Problem::invalid("size must be from 16 to 4096"))?;
     let (hash, root, path) = db
         .read(move |conn| {
             conn.prepare_cached(
@@ -61,7 +59,7 @@ pub async fn get(
             .optional()
         })
         .await?
-        .ok_or_else(|| Problem::new(Code::NotFound))?;
+        .ok_or_else(Problem::not_found)?;
 
     let source = PathBuf::from(root).join(path);
     let resized = images

@@ -7,13 +7,13 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use rusqlite::OptionalExtension;
 use serde::Deserialize;
 
+use super::extract::{Path, Query};
 use super::page::{self, Order, Page};
-use super::query::Query;
-use super::{Code, Id, Problem};
+use super::{Id, Problem};
 use crate::db::Database;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -46,14 +46,13 @@ pub struct ListQuery {
 /// An empty page. Its items have no type yet, so `()` stands in for one.
 pub async fn list(
     State(db): State<Arc<Database>>,
-    Path(library_id): Path<String>,
+    Path(Id(library)): Path<Id>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<()>>, Problem> {
-    let Id(library) = Id::parse(&library_id)?;
     page::limit(query.limit)?;
     // An empty list gives out no cursors, so no cursor is one of ours.
     if query.cursor.is_some() {
-        return Err(Problem::new(Code::ValidationFailed).detail("cursor is not valid"));
+        return Err(Problem::invalid("cursor is not valid"));
     }
     db.read(move |conn| {
         conn.prepare_cached("SELECT 1 FROM libraries WHERE id = ?1")?
@@ -61,7 +60,7 @@ pub async fn list(
             .optional()
     })
     .await?
-    .ok_or_else(|| Problem::new(Code::NotFound))?;
+    .ok_or_else(Problem::not_found)?;
     Ok(Json(Page {
         items: Vec::new(),
         next_cursor: None,

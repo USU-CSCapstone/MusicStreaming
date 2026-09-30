@@ -6,15 +6,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use serde::Deserialize;
 
 pub use representation::{LOUDNESS, Loudness, SELECT, Track, TrackSummary, list_summary, loudness};
 
 use super::credit::ArtistCredit;
+use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Unknown};
-use super::query::Query;
-use super::{Code, Id, Problem};
+use super::{Id, Problem};
 use crate::db::Database;
 
 /// A track with no number sorts last on its disc. This matches the indexes' expression
@@ -107,10 +107,9 @@ pub struct ListQuery {
 
 pub async fn list(
     State(db): State<Arc<Database>>,
-    Path(library_id): Path<String>,
+    Path(Id(library)): Path<Id>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<TrackSummary>>, Problem> {
-    let Id(library) = Id::parse(&library_id)?;
     // An album's own track listing, the common case, reads straight from its index.
     let sort = match (query.sort, &query.album_id) {
         (TrackSort::Album, Some(_)) => &WITHIN_ALBUM,
@@ -133,19 +132,17 @@ pub async fn list(
     })
     .await?
     .map(Json)
-    .ok_or_else(|| Problem::new(Code::NotFound))
+    .ok_or_else(Problem::not_found)
 }
 
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Path((library_id, track_id)): Path<(String, String)>,
+    Path((Id(library), Id(track))): Path<(Id, Id)>,
 ) -> Result<Json<Track>, Problem> {
-    let Id(library) = Id::parse(&library_id)?;
-    let Id(track) = Id::parse(&track_id)?;
     db.read(move |conn| representation::track(conn, library, track))
         .await?
         .map(Json)
-        .ok_or_else(|| Problem::new(Code::NotFound))
+        .ok_or_else(Problem::not_found)
 }
 
 /// Tracks whose album this artist is an album artist of.

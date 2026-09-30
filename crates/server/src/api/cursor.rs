@@ -11,7 +11,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL;
 use rusqlite::types::Value;
 
-use super::{Code, Problem};
+use super::Problem;
 
 const NULL: u8 = 0;
 const INTEGER: u8 = 1;
@@ -51,9 +51,7 @@ pub fn encode(label: &str, after: &[Value]) -> String {
 /// Reads a cursor made by [`encode`] with the same `label` and `columns` sort values. Anything
 /// else is `422 validation_failed`.
 pub fn decode(text: &str, label: &str, columns: usize) -> Result<Vec<Value>, Problem> {
-    read(text, label, columns).ok_or_else(|| {
-        Problem::new(Code::ValidationFailed).detail("cursor is not valid for this list")
-    })
+    read(text, label, columns).ok_or_else(|| Problem::invalid("cursor is not valid for this list"))
 }
 
 fn read(text: &str, label: &str, columns: usize) -> Option<Vec<Value>> {

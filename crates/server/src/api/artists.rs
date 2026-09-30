@@ -5,14 +5,14 @@ mod representation;
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use serde::Deserialize;
 
 pub use representation::{Artist, ArtistSummary, SELECT, summary};
 
+use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Unknown};
-use super::query::Query;
-use super::{Code, Id, Problem};
+use super::{Id, Problem};
 use crate::db::Database;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -59,28 +59,25 @@ pub struct ListQuery {
 /// (`requirements/artists.md` §5).
 pub async fn list(
     State(db): State<Arc<Database>>,
-    Path(library_id): Path<String>,
+    Path(Id(library)): Path<Id>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<ArtistSummary>>, Problem> {
-    let Id(library) = Id::parse(&library_id)?;
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
     let source = source(library);
     db.read(move |conn| request.read(conn, library, "artist_count", false, &source, summary))
         .await?
         .map(Json)
-        .ok_or_else(|| Problem::new(Code::NotFound))
+        .ok_or_else(Problem::not_found)
 }
 
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Path((library_id, artist_id)): Path<(String, String)>,
+    Path((Id(library), Id(artist))): Path<(Id, Id)>,
 ) -> Result<Json<Artist>, Problem> {
-    let Id(library) = Id::parse(&library_id)?;
-    let Id(artist) = Id::parse(&artist_id)?;
     db.read(move |conn| representation::artist(conn, library, artist))
         .await?
         .map(Json)
-        .ok_or_else(|| Problem::new(Code::NotFound))
+        .ok_or_else(Problem::not_found)
 }
 
 fn source(library: i64) -> Source {

@@ -59,6 +59,15 @@ impl Problem {
         }
     }
 
+    pub fn not_found() -> Problem {
+        Problem::new(Code::NotFound)
+    }
+
+    /// A `422 validation_failed` with an explanation, which must be safe to show.
+    pub fn invalid(detail: impl Into<String>) -> Problem {
+        Problem::new(Code::ValidationFailed).detail(detail)
+    }
+
     /// Adds an explanation. It reaches the client, so it must be safe to show.
     pub fn detail(mut self, detail: impl Into<String>) -> Problem {
         self.detail = Some(detail.into());

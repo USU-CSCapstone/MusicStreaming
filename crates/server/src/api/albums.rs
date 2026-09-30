@@ -5,15 +5,15 @@ mod representation;
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::State;
 use serde::Deserialize;
 
 pub use representation::{Album, AlbumSummary, SELECT, summary};
 
 use super::credit::ArtistCredit;
+use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Unknown};
-use super::query::Query;
-use super::{Code, Id, Problem};
+use super::{Id, Problem};
 use crate::db::Database;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -79,10 +79,9 @@ pub struct ListQuery {
 
 pub async fn list(
     State(db): State<Arc<Database>>,
-    Path(library_id): Path<String>,
+    Path(Id(library)): Path<Id>,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<AlbumSummary>>, Problem> {
-    let Id(library) = Id::parse(&library_id)?;
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
     let filtered = query.artist_id.is_some();
     let source = source(library, query.artist_id.as_deref(), query.artist_credit);
@@ -93,19 +92,17 @@ pub async fn list(
     })
     .await?
     .map(Json)
-    .ok_or_else(|| Problem::new(Code::NotFound))
+    .ok_or_else(Problem::not_found)
 }
 
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Path((library_id, album_id)): Path<(String, String)>,
+    Path((Id(library), Id(album))): Path<(Id, Id)>,
 ) -> Result<Json<Album>, Problem> {
-    let Id(library) = Id::parse(&library_id)?;
-    let Id(album) = Id::parse(&album_id)?;
     db.read(move |conn| representation::album(conn, library, album))
         .await?
         .map(Json)
-        .ok_or_else(|| Problem::new(Code::NotFound))
+        .ok_or_else(Problem::not_found)
 }
 
 /// Albums credited to this artist in the album artists.
