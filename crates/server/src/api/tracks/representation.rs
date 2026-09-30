@@ -4,14 +4,12 @@
 //! name costs several times as much. A single track reads the rest by name, with each column
 //! named by `AS`: SQLite leaves unnamed columns' names open.
 
-use std::collections::HashMap;
-
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
 use crate::api::Id;
-use crate::api::refs::{self, Credit, ImageRef, TagRef};
-use crate::api::sql::timestamp;
+use crate::api::refs::{Credit, ImageRef, TagRef, artists_json, genres_json};
+use crate::api::sql::{Json, timestamp};
 
 /// The spec's `TrackSummary`, without `personal` until accounts exist. A full `Track` has the
 /// same fields with more `audio`, so the audio type is a parameter.
@@ -118,16 +116,16 @@ pub const SELECT: &[&str] = &[
     "t.lossless",
     "t.missing_since IS NULL",
     timestamp!("t.added_at"),
+    artists_json!("track", "t.id"),
+    genres_json!("track", "t.id"),
+    "(SELECT title FROM albums WHERE albums.id = t.album_id)",
+    "(SELECT image_id FROM albums WHERE albums.id = t.album_id)",
+    artists_json!("album", "t.album_id"),
 ];
 
-/// A track as lists show it, from a row of [`SELECT`]. `albums` holds the album references read
-/// so far, since an album's tracks share one.
-pub fn list_summary(
-    conn: &Connection,
-    row: &Row,
-    albums: &mut HashMap<i64, AlbumRef>,
-) -> rusqlite::Result<TrackSummary> {
-    summary(conn, row, albums, audio_summary(row)?)
+/// A track as lists show it, from a row of [`SELECT`].
+pub fn list_summary(row: &Row) -> rusqlite::Result<TrackSummary> {
+    summary(row, audio_summary(row)?)
 }
 
 /// The whole track, or `None` if the library has no such track.
@@ -161,7 +159,7 @@ pub fn track(conn: &Connection, library: i64, track: i64) -> rusqlite::Result<Op
                 row.get::<_, Option<String>>("isrc")?.into(),
             );
             Ok(Track {
-                summary: summary(conn, row, &mut HashMap::new(), audio)?,
+                summary: summary(row, audio)?,
                 lyrics: row.get("lyrics_kind")?,
                 loudness: loudness(row)?,
                 identifiers,
@@ -177,49 +175,27 @@ fn audio_summary(row: &Row) -> rusqlite::Result<AudioSummary> {
     })
 }
 
-fn summary<A>(
-    conn: &Connection,
-    row: &Row,
-    albums: &mut HashMap<i64, AlbumRef>,
-    audio: A,
-) -> rusqlite::Result<TrackSummary<A>> {
-    let id: i64 = row.get(0)?;
-    let album_id: i64 = row.get(2)?;
-    let album = match albums.get(&album_id) {
-        Some(album) => album.clone(),
-        None => {
-            let album = album_ref(conn, album_id)?;
-            albums.insert(album_id, album.clone());
-            album
-        }
-    };
+fn summary<A>(row: &Row, audio: A) -> rusqlite::Result<TrackSummary<A>> {
     let disc: i64 = row.get(3)?;
     Ok(TrackSummary {
-        id: Id(id),
+        id: Id(row.get(0)?),
         title: row.get(1)?,
-        artists: refs::artists(conn, "track", id)?,
-        album,
+        artists: row.get::<_, Json<_>>(12)?.0,
+        album: AlbumRef {
+            id: Id(row.get(2)?),
+            title: row.get(14)?,
+            artists: row.get::<_, Json<_>>(16)?.0,
+            image: ImageRef::new(row.get(15)?),
+        },
         // The scanner files a track with no disc tag as disc 0.
         disc_number: Some(disc).filter(|disc| *disc != 0),
         track_number: row.get(4)?,
         duration_us: row.get(5)?,
         release_date: row.get(6)?,
-        genres: refs::genres(conn, "track", id)?,
+        genres: row.get::<_, Json<_>>(13)?.0,
         explicit: row.get(7)?,
         audio,
         availability: if row.get(10)? { "available" } else { "missing" },
         added_at: row.get(11)?,
-    })
-}
-
-fn album_ref(conn: &Connection, album: i64) -> rusqlite::Result<AlbumRef> {
-    let (title, image) = conn
-        .prepare_cached("SELECT title, image_id FROM albums WHERE id = ?1")?
-        .query_row([album], |row| Ok((row.get(0)?, row.get(1)?)))?;
-    Ok(AlbumRef {
-        id: Id(album),
-        title,
-        artists: refs::artists(conn, "album", album)?,
-        image: ImageRef::new(image),
     })
 }

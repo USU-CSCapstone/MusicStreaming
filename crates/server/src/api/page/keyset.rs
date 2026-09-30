@@ -228,15 +228,33 @@ pub fn assert_indexed(conn: &Connection, source: &Source, sort: &Sort) -> rusqli
         for order in [Order::Asc, Order::Desc] {
             for unknown in parts(sort, after.as_deref()) {
                 let (sql, params) = part_query(source, sort, order, after.as_deref(), unknown, 101);
-                let plan: Vec<String> = conn
+                // Each step's parent, and what it does. The page's own steps have parent 0; a
+                // column's subquery, such as a track's credits, nests below them.
+                let steps: Vec<(i64, String)> = conn
                     .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?
-                    .query_map(params_from_iter(params), |row| row.get(3))?
+                    .query_map(params_from_iter(params), |row| {
+                        Ok((row.get(1)?, row.get(3)?))
+                    })?
                     .collect::<rusqlite::Result<_>>()?;
+                let plan = steps
+                    .iter()
+                    .map(|(_, step)| step.as_str())
+                    .collect::<Vec<_>>();
                 let plan = plan.join(" | ");
-                // A search of an index on its leading columns, not a skip-scan past them.
-                assert!(plan.starts_with("SEARCH"), "{sql}\n{plan}");
+                let page: Vec<&str> = steps
+                    .iter()
+                    .filter(|(parent, _)| *parent == 0)
+                    .map(|(_, step)| step.as_str())
+                    .collect();
+                // A search of an index on its leading columns, not a skip-scan past them, and no
+                // sort of the page. Every subquery searches by a key too.
+                assert!(page[0].starts_with("SEARCH"), "{sql}\n{plan}");
+                assert!(
+                    !page.iter().any(|step| step.contains("TEMP B-TREE")),
+                    "{sql}\n{plan}"
+                );
                 assert!(!plan.contains("ANY("), "{sql}\n{plan}");
-                assert!(!plan.contains("TEMP B-TREE"), "{sql}\n{plan}");
+                assert!(!plan.contains("SCAN "), "{sql}\n{plan}");
             }
         }
     }

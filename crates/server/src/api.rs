@@ -3,6 +3,8 @@
 mod albums;
 mod artists;
 mod audio;
+#[cfg(test)]
+mod benchmark;
 mod credit;
 pub mod cursor;
 mod extract;

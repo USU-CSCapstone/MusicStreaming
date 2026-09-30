@@ -85,14 +85,10 @@ pub async fn list(
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
     let filtered = query.artist_id.is_some();
     let source = source(library, query.artist_id.as_deref(), query.artist_credit);
-    db.read(move |conn| {
-        request.read(conn, library, "album_count", filtered, &source, |row| {
-            summary(conn, row)
-        })
-    })
-    .await?
-    .map(Json)
-    .ok_or_else(Problem::not_found)
+    db.read(move |conn| request.read(conn, library, "album_count", filtered, &source, summary))
+        .await?
+        .map(Json)
+        .ok_or_else(Problem::not_found)
 }
 
 pub async fn get(

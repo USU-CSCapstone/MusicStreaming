@@ -3,7 +3,6 @@
 
 mod indexes;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -118,18 +117,16 @@ pub async fn search(
 
 /// The summaries of what the index found, as the browse lists show them.
 fn results(conn: &Connection, library: i64, found: Vec<Found>) -> rusqlite::Result<Vec<Section>> {
-    // Tracks of one album share its reference, so each album is read once.
-    let mut album_refs = HashMap::new();
     let mut sections = Vec::with_capacity(found.len());
     for section in found {
         let ids = &section.ids;
         let items = match section.kind {
             Kind::Track => sql::by_ids(conn, tracks::SELECT, "tracks t", library, ids, |row| {
-                let track = tracks::list_summary(conn, row, &mut album_refs)?;
+                let track = tracks::list_summary(row)?;
                 Ok(SearchResult::Track { track })
             })?,
             Kind::Album => sql::by_ids(conn, albums::SELECT, "albums al", library, ids, |row| {
-                let album = albums::summary(conn, row)?;
+                let album = albums::summary(row)?;
                 Ok(SearchResult::Album { album })
             })?,
             Kind::Artist => {

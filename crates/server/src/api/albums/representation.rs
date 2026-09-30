@@ -7,8 +7,8 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
 use crate::api::Id;
-use crate::api::refs::{self, Credit, ImageRef, TagRef};
-use crate::api::sql::timestamp;
+use crate::api::refs::{Credit, ImageRef, TagRef, artists_json, genres_json};
+use crate::api::sql::{Json, timestamp};
 
 /// The spec's `AlbumSummary`, without `personal` until accounts exist.
 #[derive(Clone, Serialize)]
@@ -64,6 +64,8 @@ pub const SELECT: &[&str] = &[
     "al.image_id",
     "al.available_track_count > 0",
     timestamp!("al.added_at"),
+    artists_json!("album", "al.id"),
+    genres_json!("album", "al.id"),
 ];
 
 /// The whole album, or `None` if the library has no such album.
@@ -75,7 +77,7 @@ pub fn album(conn: &Connection, library: i64, album: i64) -> rusqlite::Result<Op
     let Some((summary, labels)) = conn
         .prepare_cached(&sql)?
         .query_row([library, album], |row| {
-            Ok((summary(conn, row)?, row.get::<_, String>("labels")?))
+            Ok((summary(row)?, row.get::<_, String>("labels")?))
         })
         .optional()?
     else {
@@ -103,15 +105,15 @@ pub fn album(conn: &Connection, library: i64, album: i64) -> rusqlite::Result<Op
 }
 
 /// An album from a row of [`SELECT`], with its artists and genres.
-pub fn summary(conn: &Connection, row: &Row) -> rusqlite::Result<AlbumSummary> {
+pub fn summary(row: &Row) -> rusqlite::Result<AlbumSummary> {
     let id: i64 = row.get(0)?;
     Ok(AlbumSummary {
         id: Id(id),
         title: row.get(1)?,
-        artists: refs::artists(conn, "album", id)?,
+        artists: row.get::<_, Json<_>>(12)?.0,
         release_date: row.get(2)?,
         kind: row.get(3)?,
-        genres: refs::genres(conn, "album", id)?,
+        genres: row.get::<_, Json<_>>(13)?.0,
         track_count: row.get(4)?,
         track_total: row.get(5)?,
         disc_count: row.get(6)?,

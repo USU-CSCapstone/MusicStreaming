@@ -1,20 +1,19 @@
 //! Small references to other entities, shared by the browse responses.
 
-use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::Id;
 
-/// The spec's `ArtistCredit`.
-#[derive(Clone, Serialize)]
+/// The spec's `ArtistCredit`. Read from [`artists_json!`]'s `[id, name]`.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Credit {
     pub id: Id,
     /// `None` for the unknown artist.
     pub name: Option<String>,
 }
 
-/// The spec's `TagRef`.
-#[derive(Clone, Serialize)]
+/// The spec's `TagRef`. Read from [`genres_json!`]'s `[id, name]`.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TagRef {
     pub id: Id,
     pub name: String,
@@ -37,35 +36,38 @@ impl ImageRef {
     }
 }
 
-/// The artists credited on an `album` or a `track`, in credit order, from its
-/// `{owner}_artists` table.
-pub fn artists(conn: &Connection, owner: &'static str, id: i64) -> rusqlite::Result<Vec<Credit>> {
-    conn.prepare_cached(&format!(
-        "SELECT artists.id, artists.name FROM {owner}_artists credit \
-         JOIN artists ON artists.id = credit.artist_id \
-         WHERE credit.{owner}_id = ?1 ORDER BY credit.position"
-    ))?
-    .query_map([id], |row| {
-        Ok(Credit {
-            id: Id(row.get(0)?),
-            name: row.get(1)?,
-        })
-    })?
-    .collect()
+/// SQL for the artists credited on an `album` or a `track` whose ID is the SQL `$id`, as JSON
+/// that reads as `Vec<Credit>`, in credit order. Part of the row, so a page is one query.
+macro_rules! artists_json {
+    ($owner:literal, $id:literal) => {
+        concat!(
+            "(SELECT json_group_array(json_array(CAST(credited.id AS TEXT), credited.name) \
+             ORDER BY credit.position) FROM ",
+            $owner,
+            "_artists credit JOIN artists credited ON credited.id = credit.artist_id WHERE credit.",
+            $owner,
+            "_id = ",
+            $id,
+            ")"
+        )
+    };
 }
+pub(crate) use artists_json;
 
-/// The genres of an `album`, an `artist`, or a `track`, in name order, from its
-/// `{owner}_tags` table.
-pub fn genres(conn: &Connection, owner: &'static str, id: i64) -> rusqlite::Result<Vec<TagRef>> {
-    conn.prepare_cached(&format!(
-        "SELECT tags.id, tags.name FROM {owner}_tags tagged JOIN tags ON tags.id = tagged.tag_id \
-         WHERE tagged.{owner}_id = ?1 ORDER BY tags.sort_key, tags.id"
-    ))?
-    .query_map([id], |row| {
-        Ok(TagRef {
-            id: Id(row.get(0)?),
-            name: row.get(1)?,
-        })
-    })?
-    .collect()
+/// SQL for the genres of an `album`, an `artist`, or a `track` whose ID is the SQL `$id`, as
+/// JSON that reads as `Vec<TagRef>`, in name order.
+macro_rules! genres_json {
+    ($owner:literal, $id:literal) => {
+        concat!(
+            "(SELECT json_group_array(json_array(CAST(tag.id AS TEXT), tag.name) \
+             ORDER BY tag.sort_key, tag.id) FROM ",
+            $owner,
+            "_tags tagged JOIN tags tag ON tag.id = tagged.tag_id WHERE tagged.",
+            $owner,
+            "_id = ",
+            $id,
+            ")"
+        )
+    };
 }
+pub(crate) use genres_json;

@@ -2,7 +2,6 @@
 
 mod representation;
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -124,11 +123,14 @@ pub async fn list(
         query.artist_credit,
     );
     db.read(move |conn| {
-        // An album's tracks share its reference, so each album is read once per page.
-        let mut albums = HashMap::new();
-        request.read(conn, library, "track_count", filtered, &source, |row| {
-            list_summary(conn, row, &mut albums)
-        })
+        request.read(
+            conn,
+            library,
+            "track_count",
+            filtered,
+            &source,
+            list_summary,
+        )
     })
     .await?
     .map(Json)
