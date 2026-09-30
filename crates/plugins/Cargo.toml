@@ -14,4 +14,4 @@ wasmtime-wasi = "49.0.1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
-tokio = { version = "1.53.1", features = ["macros", "rt"] }
+tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt"] }

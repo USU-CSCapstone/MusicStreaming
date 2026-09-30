@@ -23,14 +23,21 @@ interface host {
   log: func(message: string);
 }
 
-/// The one library this run is for. There is no library parameter: the host binds it.
+/// The one library this run is for. There is no library parameter: the host binds it. Every
+/// function needs library-read, and a page holds at most 500.
 interface library {
   record track {
     id: u64,
     title: string,
     /// Ordered; the first is primary.
     artists: list<string>,
+    album-id: u64,
     album: option<string>,
+    disc-number: u32,
+    track-number: option<u32>,
+    /// `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`, as precise as the tags.
+    release-date: option<string>,
+    isrc: option<string>,
     duration-ms: u64,
     has-lyrics: bool,
     /// Where its file is: one of the library's roots (`files.roots`), and a path within it.
@@ -38,8 +45,31 @@ interface library {
     path: string,
   }
 
-  /// Needs library-read. A page of tracks in a stable order; empty past the end.
-  tracks: func(offset: u32, limit: u32) -> result<list<track>, string>;
+  record album {
+    id: u64,
+    /// None for the album of untagged files.
+    title: option<string>,
+    artists: list<string>,
+    release-date: option<string>,
+    track-count: u32,
+  }
+
+  record artist {
+    id: u64,
+    /// None for the artist of untagged files.
+    name: option<string>,
+    album-count: u32,
+    track-count: u32,
+  }
+
+  /// Tracks in ID order after `after`, or from the first; empty past the end.
+  tracks: func(after: option<u64>, limit: u32) -> result<list<track>, string>;
+  /// These tracks, in the order asked for, leaving out any not in this library.
+  get-tracks: func(ids: list<u64>) -> result<list<track>, string>;
+  /// Albums in ID order after `after`, or from the first; empty past the end.
+  albums: func(after: option<u64>, limit: u32) -> result<list<album>, string>;
+  /// Artists in ID order after `after`, or from the first; empty past the end.
+  artists: func(after: option<u64>, limit: u32) -> result<list<artist>, string>;
 }
 
 /// The library's own folders (requirements/plugins.md §3). A path is relative to one of its
@@ -74,14 +104,34 @@ interface files {
   delete: func(root: u64, path: string) -> result<_, string>;
 }
 
-/// Needs network, and only reaches the destinations the manifest declared.
+/// Needs network, and only reaches the destinations the manifest declared, redirects included.
 interface http {
-  record response {
-    status: u16,
-    body: string,
+  enum method { get, head, post, put, patch, delete }
+
+  record request {
+    method: method,
+    url: string,
+    /// `host` and the headers that frame a connection are the host's to set.
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
   }
 
-  get: func(url: string) -> result<response, string>;
+  record response {
+    status: u16,
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
+  }
+
+  send: func(request: request) -> result<response, string>;
+}
+
+/// The plugin's own storage for this library, kept between runs, so nothing learned is
+/// fetched twice (requirements/plugins.md §2.1). Needs no permission. It goes when the plugin
+/// is uninstalled.
+interface state {
+  get: func(key: string) -> result<option<list<u8>>, string>;
+  set: func(key: string, value: list<u8>) -> result<_, string>;
+  delete: func(key: string) -> result<_, string>;
 }
 
 world plugin {
@@ -89,6 +139,7 @@ world plugin {
   import library;
   import files;
   import http;
+  import state;
 
   /// Does the plugin's work for one library; returns a one-line summary.
   export run: func() -> result<string, string>;

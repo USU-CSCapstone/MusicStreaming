@@ -5,26 +5,55 @@
 //!
 //!     plugins/lrclib-lyrics/build.sh && cargo test -p jewelcase-plugins -- --ignored
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use jewelcase_plugins::{Grants, Host, Library, Permission, Track};
+use jewelcase_plugins::{Album, Artist, Grants, Host, Library, Permission, Track};
 
 const PLUGIN: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm");
 
-/// A library with one root, holding these tracks' files.
+/// A library with one root, holding these tracks' files, and the plugin's state in memory.
 struct Tracks {
     root: PathBuf,
     tracks: Vec<Track>,
+    state: HashMap<String, Vec<u8>>,
 }
 
 impl Library for Tracks {
-    async fn tracks(&mut self, offset: u32, limit: u32) -> Result<Vec<Track>, String> {
-        Ok(self.tracks.iter().skip(offset as usize).take(limit as usize).cloned().collect())
+    async fn tracks(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Track>, String> {
+        let after = self.tracks.iter().filter(|t| after.is_none_or(|after| t.id > after));
+        Ok(after.take(limit as usize).cloned().collect())
+    }
+
+    async fn get_tracks(&mut self, ids: Vec<u64>) -> Result<Vec<Track>, String> {
+        Ok(ids.iter().filter_map(|id| self.tracks.iter().find(|t| t.id == *id).cloned()).collect())
+    }
+
+    async fn albums(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Album>, String> {
+        Ok(Vec::new())
+    }
+
+    async fn artists(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Artist>, String> {
+        Ok(Vec::new())
     }
 
     async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
         Ok(vec![(7, self.root.clone())])
+    }
+
+    async fn state_get(&mut self, key: String) -> Result<Option<Vec<u8>>, String> {
+        Ok(self.state.get(&key).cloned())
+    }
+
+    async fn state_set(&mut self, key: String, value: Vec<u8>) -> Result<(), String> {
+        self.state.insert(key, value);
+        Ok(())
+    }
+
+    async fn state_delete(&mut self, key: String) -> Result<(), String> {
+        self.state.remove(&key);
+        Ok(())
     }
 }
 
@@ -38,6 +67,11 @@ fn library(dir: &Path) -> Tracks {
             artists: vec!["Aurora Lane".into()],
             album: Some("Signal".into()),
             duration_ms: 200_000,
+            album_id: 3,
+            disc_number: 1,
+            track_number: Some(id as u32),
+            release_date: Some("2023".into()),
+            isrc: None,
             has_lyrics: false,
             root: 7,
             path,
@@ -46,6 +80,7 @@ fn library(dir: &Path) -> Tracks {
     Tracks {
         root: dir.to_path_buf(),
         tracks: vec![track(1, "Signal Part 1"), track(2, "Signal Part 2")],
+        state: HashMap::new(),
     }
 }
 
