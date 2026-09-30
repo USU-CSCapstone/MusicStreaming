@@ -81,7 +81,7 @@ mod tests {
     use axum::http::StatusCode;
     use serde_json::{Value, json};
 
-    use super::super::tests::{app, send};
+    use super::super::testing::{app, send};
     use crate::db::libraries;
 
     #[tokio::test]
