@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use jewelcase_scanner::LibraryConfig;
+use rusqlite::Error::FromSqlConversionFailure;
+use rusqlite::types::Type;
 use rusqlite::{Connection, Result, params};
 
 use super::now_ms;
@@ -49,7 +51,9 @@ pub fn all(conn: &Connection) -> Result<Vec<LibraryRow>> {
     let mut out = Vec::new();
     for row in rows {
         let (id, name, excludes, watch, interval) = row?;
-        let excludes: Vec<String> = serde_json::from_str(&excludes).unwrap_or_default();
+        // Unreadable patterns fail loudly: read as none, they would scan what the admin excluded.
+        let excludes: Vec<String> = serde_json::from_str(&excludes)
+            .map_err(|error| FromSqlConversionFailure(2, Type::Text, Box::new(error)))?;
         out.push(LibraryRow {
             id,
             name,

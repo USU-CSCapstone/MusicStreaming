@@ -104,14 +104,12 @@ impl Analyzer {
 
         let mut block: Vec<f32> = Vec::with_capacity(BLOCK_FRAMES * channels);
         let mut mono: Vec<f32> = Vec::with_capacity(BLOCK_FRAMES);
-        let mut total_frames: u64 = 0;
         loop {
             self.governor.wait_if_paused();
             let frames = stream.read_frames(&mut block, BLOCK_FRAMES)?;
             if frames == 0 {
                 break;
             }
-            total_frames += frames as u64;
             meter.add_frames_f32(&block)?;
             downmix(&block, channels, &mut mono);
             waveform.push_mono(&mono);
@@ -136,7 +134,6 @@ impl Analyzer {
         } else {
             None
         };
-        let _ = total_frames;
 
         Ok(AnalysisResult {
             analyzer_version: ANALYZER_VERSION,
