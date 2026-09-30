@@ -55,9 +55,7 @@ pub async fn get(
     Path(Id(id)): Path<Id>,
 ) -> Result<Json<Library>, Problem> {
     db.read(move |conn| {
-        conn.prepare_cached(&format!("{SELECT} WHERE id = ?1"))?
-            .query_row([id], library)
-            .optional()
+        conn.prepare_cached(&format!("{SELECT} WHERE id = ?1"))?.query_row([id], library).optional()
     })
     .await?
     .map(Json)
@@ -89,16 +87,11 @@ mod tests {
         let (_temp, db, app) = app("");
         db.write(|tx| {
             // Created in the order 3, 1, 2: neither the name order nor the id order.
-            for (id, name, created_at) in [
-                (1, "Cassettes", 20),
-                (2, "Archive", 30),
-                (3, "Bootlegs", 10),
-            ] {
+            for (id, name, created_at) in
+                [(1, "Cassettes", 20), (2, "Archive", 30), (3, "Bootlegs", 10)]
+            {
                 libraries::create(tx, Some(id), name, &[], &[])?;
-                tx.execute(
-                    "UPDATE libraries SET created_at = ?2 WHERE id = ?1",
-                    [id, created_at],
-                )?;
+                tx.execute("UPDATE libraries SET created_at = ?2 WHERE id = ?1", [id, created_at])?;
             }
             tx.execute(
                 "UPDATE libraries SET track_count = 12, album_count = 1, artist_count = 1, \
@@ -133,27 +126,16 @@ mod tests {
 
         let (status, _, body) = send(app, "GET", "/api/v1/libraries/2").await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap()["name"],
-            "Archive"
-        );
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["name"], "Archive");
     }
 
     #[tokio::test]
     async fn an_unknown_or_malformed_library_is_not_found() {
         let (_temp, _db, app) = app("");
-        for uri in [
-            "/api/v1/libraries/1",
-            "/api/v1/libraries/01",
-            "/api/v1/libraries/x",
-        ] {
+        for uri in ["/api/v1/libraries/1", "/api/v1/libraries/01", "/api/v1/libraries/x"] {
             let (status, content_type, _) = send(app.clone(), "GET", uri).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
-            assert_eq!(
-                content_type.as_deref(),
-                Some("application/problem+json"),
-                "{uri}"
-            );
+            assert_eq!(content_type.as_deref(), Some("application/problem+json"), "{uri}");
         }
     }
 }

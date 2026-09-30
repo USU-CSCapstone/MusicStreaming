@@ -24,13 +24,7 @@ impl Roots {
     }
 
     pub fn root_by_path(&self, library: i64, root: &Path) -> Option<i64> {
-        self.0
-            .read()
-            .unwrap()
-            .get(&library)?
-            .iter()
-            .find(|r| r.path == root)
-            .map(|r| r.id)
+        self.0.read().unwrap().get(&library)?.iter().find(|r| r.path == root).map(|r| r.id)
     }
 
     pub fn absolute(&self, library: i64, root_id: i64, rel: &str) -> Option<PathBuf> {
@@ -50,9 +44,5 @@ pub fn relative(root: &Path, path: &Path) -> String {
 }
 
 pub fn join(root: &Path, rel: &str) -> PathBuf {
-    if rel.is_empty() {
-        root.to_path_buf()
-    } else {
-        root.join(rel)
-    }
+    if rel.is_empty() { root.to_path_buf() } else { root.join(rel) }
 }

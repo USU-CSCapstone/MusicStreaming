@@ -44,11 +44,7 @@ impl ImageRef {
 /// SQL for the placeholder of the image whose ID is the SQL `$image_id`, for [`ImageRef::new`].
 macro_rules! placeholder {
     ($image_id:literal) => {
-        concat!(
-            "(SELECT placeholder FROM images WHERE images.id = ",
-            $image_id,
-            ")"
-        )
+        concat!("(SELECT placeholder FROM images WHERE images.id = ", $image_id, ")")
     };
 }
 pub(crate) use placeholder;

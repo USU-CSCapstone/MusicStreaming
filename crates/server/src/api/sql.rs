@@ -30,10 +30,7 @@ pub fn by_ids<T>(
     ids: &[i64],
     mut map: impl FnMut(&Row) -> rusqlite::Result<T>,
 ) -> rusqlite::Result<Vec<T>> {
-    let alias = table
-        .rsplit(' ')
-        .next()
-        .expect("split yields at least one piece");
+    let alias = table.rsplit(' ').next().expect("split yields at least one piece");
     // The IDs lead the join, so the rows come out in their order.
     let sql = format!(
         "SELECT {} FROM json_each(?2) AS ids CROSS JOIN {table} ON {alias}.id = ids.value \
@@ -41,9 +38,7 @@ pub fn by_ids<T>(
         select.join(", ")
     );
     let ids = serde_json::to_string(ids).expect("integers serialize");
-    conn.prepare_cached(&sql)?
-        .query_map(rusqlite::params![library, ids], |row| map(row))?
-        .collect()
+    conn.prepare_cached(&sql)?.query_map(rusqlite::params![library, ids], |row| map(row))?.collect()
 }
 
 /// A column holding JSON, read as `T`: `row.get::<_, Json<Vec<Credit>>>(12)?.0`.

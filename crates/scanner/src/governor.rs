@@ -65,10 +65,7 @@ impl Governor {
     pub fn wait_if_paused(&self) {
         let mut guard = self.lock.lock().unwrap();
         while self.paused.load(Ordering::SeqCst) {
-            let (g, _) = self
-                .cv
-                .wait_timeout(guard, Duration::from_millis(250))
-                .unwrap();
+            let (g, _) = self.cv.wait_timeout(guard, Duration::from_millis(250)).unwrap();
             guard = g;
         }
     }

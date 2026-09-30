@@ -45,10 +45,7 @@ enum Quality {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PlaybackQuery {
     // The original is a complete file of known size, so it answers both purposes the same.
-    #[expect(
-        dead_code,
-        reason = "accepted and checked, but direct delivery ignores it"
-    )]
+    #[expect(dead_code, reason = "accepted and checked, but direct delivery ignores it")]
     purpose: Option<Purpose>,
     quality: Quality,
     /// Comma-separated, most preferred first.
@@ -148,11 +145,7 @@ pub async fn audio(
                  WHERE t.library_id = ?1 AND t.id = ?2 AND t.missing_since IS NULL",
             )?
             .query_row([library, track], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
             })
             .optional()
         })
@@ -160,10 +153,8 @@ pub async fn audio(
         .ok_or_else(Problem::not_found)?;
 
     // ServeFile answers ranges, `HEAD`, and the conditional headers, streaming from disk.
-    let response = ServeFile::new(PathBuf::from(root).join(path))
-        .try_call(request)
-        .await
-        .map_err(|error| match error.kind() {
+    let response = ServeFile::new(PathBuf::from(root).join(path)).try_call(request).await.map_err(
+        |error| match error.kind() {
             // The file has gone since the last scan saw it.
             ErrorKind::NotFound => Problem::not_found(),
             _ => {
@@ -171,14 +162,14 @@ pub async fn audio(
                 tracing::error!(%error, "cannot read a track's file");
                 Problem::new(Code::Internal)
             }
-        })?;
+        },
+    )?;
     let mut response = response.map(Body::new);
     // ServeFile guesses the type from the extension; the probe read it from the content.
     if response.status().is_success() {
-        response.headers_mut().insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static(mime(&container)),
-        );
+        response
+            .headers_mut()
+            .insert(header::CONTENT_TYPE, HeaderValue::from_static(mime(&container)));
     }
     Ok(response)
 }

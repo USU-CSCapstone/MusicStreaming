@@ -37,11 +37,7 @@ pub fn write_small_wav(path: &Path) {
 }
 
 pub fn ffmpeg_available() -> bool {
-    Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
 }
 
 /// Encode `wav` to `out` with the given ffmpeg codec arguments.
@@ -57,11 +53,7 @@ pub fn encode(wav: &Path, out: &Path, args: &[&str]) {
 }
 
 pub fn library(root: &Path) -> LibraryConfig {
-    LibraryConfig {
-        id: "lib".into(),
-        roots: vec![root.to_path_buf()],
-        excludes: Vec::new(),
-    }
+    LibraryConfig { id: "lib".into(), roots: vec![root.to_path_buf()], excludes: Vec::new() }
 }
 
 /// Run one scan of `scopes` synchronously against `store`.
@@ -98,12 +90,7 @@ pub fn scan_once(
 }
 
 pub fn scan_library(store: &MemoryStore, lib: &LibraryConfig) -> Scan {
-    scan_once(
-        store,
-        lib,
-        Trigger::Manual,
-        lib.roots.iter().map(Scope::root).collect(),
-    )
+    scan_once(store, lib, Trigger::Manual, lib.roots.iter().map(Scope::root).collect())
 }
 
 pub fn shared(store: MemoryStore) -> Arc<MemoryStore> {
@@ -111,12 +98,8 @@ pub fn shared(store: MemoryStore) -> Arc<MemoryStore> {
 }
 
 pub fn paths_of(store: &MemoryStore, lib: &LibraryConfig) -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = store
-        .tracks(&lib.id)
-        .into_iter()
-        .filter(|t| !t.missing)
-        .map(|t| t.record.path)
-        .collect();
+    let mut v: Vec<PathBuf> =
+        store.tracks(&lib.id).into_iter().filter(|t| !t.missing).map(|t| t.record.path).collect();
     v.sort();
     v
 }

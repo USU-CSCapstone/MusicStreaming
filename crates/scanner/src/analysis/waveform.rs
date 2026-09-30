@@ -58,10 +58,7 @@ impl WaveformBuilder {
     pub fn finish(self) -> Waveform {
         let slots = self.peaks.len();
         if slots == 0 {
-            return Waveform {
-                peaks: vec![0; self.bins],
-                rms: vec![0; self.bins],
-            };
+            return Waveform { peaks: vec![0; self.bins], rms: vec![0; self.bins] };
         }
         let mut peaks = Vec::with_capacity(self.bins);
         let mut rms = Vec::with_capacity(self.bins);

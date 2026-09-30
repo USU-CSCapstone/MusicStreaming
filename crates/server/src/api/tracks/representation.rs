@@ -89,17 +89,15 @@ pub const LOUDNESS: &str = "t.loudness_lufs AS track_lufs, t.peak_dbtp AS track_
 /// The track's loudness, from the [`LOUDNESS`] columns. Null until analysis measures the track
 /// (`requirements/playback.md` §5); a track too quiet to measure stays null too.
 pub fn loudness(row: &Row) -> rusqlite::Result<Option<Loudness>> {
-    Ok(
-        match (row.get("track_lufs")?, row.get("track_peak_dbtp")?) {
-            (Some(track_lufs), Some(track_peak_dbtp)) => Some(Loudness {
-                track_lufs,
-                track_peak_dbtp,
-                album_lufs: row.get("album_lufs")?,
-                album_peak_dbtp: row.get("album_peak_dbtp")?,
-            }),
-            _ => None,
-        },
-    )
+    Ok(match (row.get("track_lufs")?, row.get("track_peak_dbtp")?) {
+        (Some(track_lufs), Some(track_peak_dbtp)) => Some(Loudness {
+            track_lufs,
+            track_peak_dbtp,
+            album_lufs: row.get("album_lufs")?,
+            album_peak_dbtp: row.get("album_peak_dbtp")?,
+        }),
+        _ => None,
+    })
 }
 
 /// The columns [`list_summary`] reads, in order.
@@ -155,10 +153,7 @@ pub fn track(conn: &Connection, library: i64, track: i64) -> rusqlite::Result<Op
             // The schema checks that identifiers is a JSON object.
             let mut identifiers: serde_json::Map<String, serde_json::Value> =
                 serde_json::from_str(&row.get::<_, String>("identifiers")?).unwrap_or_default();
-            identifiers.insert(
-                "isrc".to_owned(),
-                row.get::<_, Option<String>>("isrc")?.into(),
-            );
+            identifiers.insert("isrc".to_owned(), row.get::<_, Option<String>>("isrc")?.into());
             Ok(Track {
                 summary: summary(row, audio)?,
                 lyrics: row.get("lyrics_kind")?,
@@ -170,10 +165,7 @@ pub fn track(conn: &Connection, library: i64, track: i64) -> rusqlite::Result<Op
 }
 
 fn audio_summary(row: &Row) -> rusqlite::Result<AudioSummary> {
-    Ok(AudioSummary {
-        codec: row.get(8)?,
-        lossless: row.get(9)?,
-    })
+    Ok(AudioSummary { codec: row.get(8)?, lossless: row.get(9)? })
 }
 
 fn summary<A>(row: &Row, audio: A) -> rusqlite::Result<TrackSummary<A>> {

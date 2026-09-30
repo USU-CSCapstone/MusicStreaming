@@ -93,11 +93,7 @@ pub fn read(path: &Path, file_size: u64) -> Result<ReadResult, ReadError> {
 
     let tags = map_tags(&tagged);
     let embedded_art = front_cover(&tagged).and_then(crate::image::describe);
-    Ok(ReadResult {
-        tags,
-        properties,
-        embedded_art,
-    })
+    Ok(ReadResult { tags, properties, embedded_art })
 }
 
 /// `ftyp` at offset 4 marks an ISO base media file. lofty's guess handles it
@@ -123,10 +119,7 @@ fn map_parse_error(e: FileParseError) -> ReadError {
         if let Some(io) = s.downcast_ref::<io::Error>()
             && io.kind() == io::ErrorKind::PermissionDenied
         {
-            return ReadError::Io(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                io.to_string(),
-            ));
+            return ReadError::Io(io::Error::new(io::ErrorKind::PermissionDenied, io.to_string()));
         }
         source = s.source();
     }
@@ -177,10 +170,7 @@ fn ordered_tags(file: &TaggedFile) -> Vec<&Tag> {
 /// First non-empty string for `key` across the tags, in priority order.
 fn first_string(tags: &[&Tag], key: &ItemKey) -> Option<String> {
     tags.iter().find_map(|t| {
-        t.get_string(*key)
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_owned)
+        t.get_string(*key).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned)
     })
 }
 
@@ -199,14 +189,8 @@ fn strings(tags: &[&Tag], key: &ItemKey) -> Vec<String> {
 /// Parse a number that may be packed as `n/total`.
 fn number_pair(raw: &str) -> (Option<u32>, Option<u32>) {
     let mut it = raw.split('/');
-    let n = it
-        .next()
-        .and_then(|s| s.trim().parse().ok())
-        .filter(|n| *n > 0);
-    let total = it
-        .next()
-        .and_then(|s| s.trim().parse().ok())
-        .filter(|n| *n > 0);
+    let n = it.next().and_then(|s| s.trim().parse().ok()).filter(|n| *n > 0);
+    let total = it.next().and_then(|s| s.trim().parse().ok()).filter(|n| *n > 0);
     (n, total)
 }
 
@@ -259,14 +243,10 @@ fn map_tags(file: &TaggedFile) -> TagSet {
     // Date at tag precision: recording date, release date, bare year, in
     // that order. ID3v2.3's TYER+TDAT and v2.4's TDRC both arrive as
     // RecordingDate through lofty.
-    out.release_date = [
-        ItemKey::RecordingDate,
-        ItemKey::ReleaseDate,
-        ItemKey::Year,
-        ItemKey::OriginalReleaseDate,
-    ]
-    .iter()
-    .find_map(|k| first_string(&tags, k).and_then(|s| PartialDate::parse(&s)));
+    out.release_date =
+        [ItemKey::RecordingDate, ItemKey::ReleaseDate, ItemKey::Year, ItemKey::OriginalReleaseDate]
+            .iter()
+            .find_map(|k| first_string(&tags, k).and_then(|s| PartialDate::parse(&s)));
 
     out.genres = strings(&tags, &ItemKey::Genre);
     out.release_type =

@@ -10,10 +10,7 @@ pub struct Id(pub i64);
 impl Id {
     /// Reads an ID in its one canonical spelling: no sign, no leading zeros.
     pub fn canonical(text: &str) -> Option<Id> {
-        text.parse::<i64>()
-            .ok()
-            .filter(|id| *id >= 0 && id.to_string() == text)
-            .map(Id)
+        text.parse::<i64>().ok().filter(|id| *id >= 0 && id.to_string() == text).map(Id)
     }
 }
 
@@ -45,16 +42,7 @@ mod tests {
 
     #[test]
     fn anything_else_is_not_an_id() {
-        for text in [
-            "",
-            "abc",
-            "-1",
-            "+1",
-            "01",
-            " 1",
-            "1.0",
-            "9223372036854775808",
-        ] {
+        for text in ["", "abc", "-1", "+1", "01", " 1", "1.0", "9223372036854775808"] {
             let json = serde_json::Value::from(text);
             assert!(serde_json::from_value::<Id>(json).is_err(), "{text:?}");
         }

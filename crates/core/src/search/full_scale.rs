@@ -19,9 +19,7 @@ fn full_scale() {
     let vocabulary: Vec<String> = (0..40_000)
         .map(|_| {
             let len = 2 + (next() % 8) as usize;
-            (0..len)
-                .map(|_| letters[(next() % letters.len() as u64) as usize])
-                .collect()
+            (0..len).map(|_| letters[(next() % letters.len() as u64) as usize]).collect()
         })
         .collect();
     let mut word = || {
@@ -31,11 +29,9 @@ fn full_scale() {
         vocabulary[i.min(vocabulary.len() - 1)].clone()
     };
     let mut documents = Vec::new();
-    for (kind, count, words) in [
-        (Kind::Track, 500_000, 4),
-        (Kind::Album, 50_000, 3),
-        (Kind::Artist, 20_000, 2),
-    ] {
+    for (kind, count, words) in
+        [(Kind::Track, 500_000, 4), (Kind::Album, 50_000, 3), (Kind::Artist, 20_000, 2)]
+    {
         for id in 0..count {
             let n = 1 + (id % words) as usize;
             let name = (0..n).map(|_| word()).collect::<Vec<_>>().join(" ");
@@ -57,25 +53,11 @@ fn full_scale() {
         .max_by_key(|w| index.postings[index.prefixed(w).start].len())
         .unwrap()
         .clone();
-    let mut queries = vec![
-        "a".to_owned(),
-        "s".to_owned(),
-        "ab".to_owned(),
-        common.clone(),
-    ];
-    let long = index
-        .vocabulary
-        .iter()
-        .find(|w| w.len() >= 8)
-        .unwrap()
-        .clone();
+    let mut queries = vec!["a".to_owned(), "s".to_owned(), "ab".to_owned(), common.clone()];
+    let long = index.vocabulary.iter().find(|w| w.len() >= 8).unwrap().clone();
     let mut typo = long.clone();
     typo.replace_range(3..4, "z");
-    queries.extend([
-        typo,
-        format!("{common} {long}"),
-        format!("{} {}", &long[..3], &common[..2]),
-    ]);
+    queries.extend([typo, format!("{common} {long}"), format!("{} {}", &long[..3], &common[..2])]);
     for query in &queries {
         let started = std::time::Instant::now();
         let rounds = 20;
@@ -84,9 +66,6 @@ fn full_scale() {
             sections = index.search(query, &Kind::ALL, 5);
         }
         let totals: Vec<usize> = sections.iter().map(|s| s.total).collect();
-        println!(
-            "{query:>22}: {:>8.2?} per search, totals {totals:?}",
-            started.elapsed() / rounds
-        );
+        println!("{query:>22}: {:>8.2?} per search, totals {totals:?}", started.elapsed() / rounds);
     }
 }

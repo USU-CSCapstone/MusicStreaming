@@ -15,7 +15,7 @@ use anyhow::{Context, bail};
 pub struct DataDir {
     /// The root of the data directory
     root: PathBuf,
-    /// Lock file to prevent multiple servers from using the same data directory 
+    /// Lock file to prevent multiple servers from using the same data directory
     _lock: File,
 }
 

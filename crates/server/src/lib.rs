@@ -37,9 +37,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     }
 
     let ffmpeg = Ffmpeg::new(FfmpegConfig::default());
-    let caps = ffmpeg
-        .verify()
-        .context("ffmpeg is required and could not be run")?;
+    let caps = ffmpeg.verify().context("ffmpeg is required and could not be run")?;
     if caps.missing.is_empty() {
         info!(version = caps.version, "ffmpeg ok");
     } else {
@@ -59,10 +57,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .with_context(|| format!("cannot listen on port {}", config.port))?;
     info!(%address, "listening");
 
-    let images = api::Images::new(
-        data_dir.cache().join("images"),
-        ffmpeg.config().ffmpeg.clone(),
-    );
+    let images = api::Images::new(data_dir.cache().join("images"), ffmpeg.config().ffmpeg.clone());
     let mut app = api::router(&config.base_path, db.clone(), images);
     let web = Path::new(web::DIR);
     if !web.is_dir() {
@@ -94,9 +89,7 @@ async fn create_first_library(db: &Database, music: &Path) -> anyhow::Result<()>
         .canonicalize()
         .with_context(|| format!("cannot use the music directory set by {}", config::MUSIC))?;
     let path = music.clone();
-    let id = db
-        .write(move |tx| libraries::create(tx, None, "Music", &[&path], &[]))
-        .await?;
+    let id = db.write(move |tx| libraries::create(tx, None, "Music", &[&path], &[])).await?;
     info!(library = id, path = %music.display(), "created library");
     Ok(())
 }
@@ -104,9 +97,7 @@ async fn create_first_library(db: &Database, music: &Path) -> anyhow::Result<()>
 /// Wait for SIGINT or SIGTERM and return
 async fn shutdown_signal() {
     let interrupt = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("cannot listen for SIGINT");
+        tokio::signal::ctrl_c().await.expect("cannot listen for SIGINT");
     };
     let terminate = async {
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())

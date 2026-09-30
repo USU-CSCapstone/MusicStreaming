@@ -96,9 +96,6 @@ fn recount_group(tx: &Transaction<'_>, group_id: i64) -> Result<()> {
         "UPDATE scan_problem_groups SET count = (SELECT COUNT(*) FROM scan_problems WHERE group_id = ?1) WHERE id = ?1",
         [group_id],
     )?;
-    tx.execute(
-        "DELETE FROM scan_problem_groups WHERE id = ?1 AND count = 0",
-        [group_id],
-    )?;
+    tx.execute("DELETE FROM scan_problem_groups WHERE id = ?1 AND count = 0", [group_id])?;
     Ok(())
 }

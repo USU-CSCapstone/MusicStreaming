@@ -22,8 +22,7 @@ pub struct ProbeInfo {
 impl ProbeInfo {
     /// Frames the decode should yield, when duration is known.
     pub fn estimated_frames(&self) -> Option<u64> {
-        self.duration_secs
-            .map(|d| (d * self.sample_rate as f64).round() as u64)
+        self.duration_secs.map(|d| (d * self.sample_rate as f64).round() as u64)
     }
 }
 
@@ -56,23 +55,13 @@ pub(crate) fn probe(
 ) -> Result<ProbeInfo, Error> {
     registry.acquire();
     let child = Command::new(&config.ffprobe)
-        .args([
-            "-v",
-            "error",
-            "-print_format",
-            "json",
-            "-show_streams",
-            "-show_format",
-        ])
+        .args(["-v", "error", "-print_format", "json", "-show_streams", "-show_format"])
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| Error::Spawn {
-            binary: config.ffprobe.clone(),
-            source: e,
-        })?;
+        .map_err(|e| Error::Spawn { binary: config.ffprobe.clone(), source: e })?;
     let pid = child.id();
     let stalled = registry.register(pid);
     let out = child.wait_with_output();

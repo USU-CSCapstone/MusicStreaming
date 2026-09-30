@@ -121,12 +121,7 @@ fn source(library: i64, artist: Option<&str>, credit: ArtistCredit) -> Source {
         }
     };
     params.push(library.into());
-    Source {
-        select: SELECT,
-        from,
-        filter: "al.library_id = ?".to_owned(),
-        params,
-    }
+    Source { select: SELECT, from, filter: "al.library_id = ?".to_owned(), params }
 }
 
 #[cfg(test)]

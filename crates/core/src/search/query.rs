@@ -68,9 +68,7 @@ impl Index {
 
         // Candidates are the documents the most selective word matched; the others must match
         // every other word too.
-        let fewest = (0..matched.len())
-            .min_by_key(|&i| matched[i].len())
-            .unwrap();
+        let fewest = (0..matched.len()).min_by_key(|&i| matched[i].len()).unwrap();
         let mut scored: [Vec<(Score, u32)>; 3] = Default::default();
         for &d in &matched[fewest] {
             let kind = self.documents[d as usize].kind;
@@ -99,10 +97,7 @@ impl Index {
                 hits[0].0,
                 Section {
                     kind: Kind::ALL[k],
-                    ids: hits
-                        .iter()
-                        .map(|&(_, d)| self.documents[d as usize].id)
-                        .collect(),
+                    ids: hits.iter().map(|&(_, d)| self.documents[d as usize].id).collect(),
                     total,
                 },
             ));
@@ -166,11 +161,7 @@ impl Index {
         let mut candidate: Vec<char> = Vec::with_capacity(MAX_FUZZY_CHARS);
         for w in self.prefixed(first) {
             candidate.clear();
-            candidate.extend(
-                self.vocabulary[w]
-                    .chars()
-                    .take(MAX_FUZZY_CHARS + max_typos as usize),
-            );
+            candidate.extend(self.vocabulary[w].chars().take(MAX_FUZZY_CHARS + max_typos as usize));
             if let Some((typos, prefix)) = distance(&chars, &candidate, max_typos) {
                 found.push((w as u32, quality(typos, prefix)));
             }

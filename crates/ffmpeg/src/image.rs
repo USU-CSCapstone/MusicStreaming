@@ -35,23 +35,12 @@ pub(crate) fn decode_image(
         .arg(input)
         .args(["-map", "0:v:0", "-frames:v", "1", "-vf", &scale])
         // PAM states its own size, so the output needs no guess at how ffmpeg rounded.
-        .args([
-            "-f",
-            "image2pipe",
-            "-c:v",
-            "pam",
-            "-pix_fmt",
-            "rgba",
-            "pipe:1",
-        ])
+        .args(["-f", "image2pipe", "-c:v", "pam", "-pix_fmt", "rgba", "pipe:1"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| Error::Spawn {
-            binary: config.ffmpeg.clone(),
-            source: e,
-        })?;
+        .map_err(|e| Error::Spawn { binary: config.ffmpeg.clone(), source: e })?;
     let pid = child.id();
     let stalled = registry.register(pid);
     let out = child.wait_with_output();
@@ -113,11 +102,7 @@ mod tests {
         pam.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
         assert_eq!(
             parse_pam(&pam),
-            Some(Rgba {
-                width: 2,
-                height: 1,
-                pixels: vec![1, 2, 3, 4, 5, 6, 7, 8],
-            })
+            Some(Rgba { width: 2, height: 1, pixels: vec![1, 2, 3, 4, 5, 6, 7, 8] })
         );
         // Too few pixels for the size it states.
         assert_eq!(parse_pam(&pam[..pam.len() - 1]), None);

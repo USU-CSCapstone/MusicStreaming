@@ -55,11 +55,7 @@ impl Scanner {
             library: RwLock::new(library),
             governor,
             options,
-            queue: Mutex::new(Queue {
-                queued: VecDeque::new(),
-                running: None,
-                shutdown: false,
-            }),
+            queue: Mutex::new(Queue { queued: VecDeque::new(), running: None, shutdown: false }),
             wake: Condvar::new(),
             cancel_running: AtomicBool::new(false),
         });
@@ -75,10 +71,7 @@ impl Scanner {
             .name("scanner".into())
             .spawn(move || worker(worker_inner))
             .expect("spawn scanner worker");
-        Scanner {
-            inner,
-            worker: Arc::new(Mutex::new(Some(handle))),
-        }
+        Scanner { inner, worker: Arc::new(Mutex::new(Some(handle))) }
     }
 
     /// Enqueue work. Returns the id of the scan that will do it, which may be
@@ -140,14 +133,7 @@ impl Scanner {
 
     /// The root containing `path`, if any.
     pub fn root_for(&self, path: &std::path::Path) -> Option<std::path::PathBuf> {
-        self.inner
-            .library
-            .read()
-            .unwrap()
-            .roots
-            .iter()
-            .find(|r| path.starts_with(r))
-            .cloned()
+        self.inner.library.read().unwrap().roots.iter().find(|r| path.starts_with(r)).cloned()
     }
 
     /// Replace the library configuration and reconcile
@@ -180,14 +166,7 @@ impl Scanner {
     }
 
     pub fn queued(&self) -> Vec<Scan> {
-        self.inner
-            .queue
-            .lock()
-            .unwrap()
-            .queued
-            .iter()
-            .cloned()
-            .collect()
+        self.inner.queue.lock().unwrap().queued.iter().cloned().collect()
     }
 
     pub fn is_idle(&self) -> bool {

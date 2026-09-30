@@ -21,11 +21,7 @@ impl PartialDate {
         let raw = raw.trim();
         let date_part = raw.split(['T', ' ']).next()?;
         let mut parts = date_part.split('-');
-        let year: u16 = parts
-            .next()?
-            .parse()
-            .ok()
-            .filter(|y| (1000..=9999).contains(y))?;
+        let year: u16 = parts.next()?.parse().ok().filter(|y| (1000..=9999).contains(y))?;
         let month = match parts.next() {
             Some(m) => Some(m.parse::<u8>().ok().filter(|m| (1..=12).contains(m))?),
             None => None,
@@ -140,27 +136,15 @@ mod tests {
     fn dates_keep_tag_precision() {
         assert_eq!(
             PartialDate::parse("1991"),
-            Some(PartialDate {
-                year: 1991,
-                month: None,
-                day: None
-            })
+            Some(PartialDate { year: 1991, month: None, day: None })
         );
         assert_eq!(
             PartialDate::parse("1991-09"),
-            Some(PartialDate {
-                year: 1991,
-                month: Some(9),
-                day: None
-            })
+            Some(PartialDate { year: 1991, month: Some(9), day: None })
         );
         assert_eq!(
             PartialDate::parse("1991-09-24T00:00:00"),
-            Some(PartialDate {
-                year: 1991,
-                month: Some(9),
-                day: Some(24)
-            })
+            Some(PartialDate { year: 1991, month: Some(9), day: Some(24) })
         );
         assert_eq!(PartialDate::parse("unknown"), None);
         assert_eq!(PartialDate::parse("1991-13"), None);
@@ -170,10 +154,7 @@ mod tests {
     fn dates_format_at_their_precision() {
         assert_eq!(PartialDate::parse("1991").unwrap().to_string(), "1991");
         assert_eq!(PartialDate::parse("1991-9").unwrap().to_string(), "1991-09");
-        assert_eq!(
-            PartialDate::parse("1991-09-24").unwrap().to_string(),
-            "1991-09-24"
-        );
+        assert_eq!(PartialDate::parse("1991-09-24").unwrap().to_string(), "1991-09-24");
     }
 
     #[test]

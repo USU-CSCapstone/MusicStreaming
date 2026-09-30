@@ -49,11 +49,7 @@ impl FsWatcher {
             .name("scanner-watch".into())
             .spawn(move || debounce_loop(scanner, rx, stop2, debounce))
             .expect("spawn watcher thread");
-        Ok(FsWatcher {
-            stop,
-            thread: Some(thread),
-            _watcher: watcher,
-        })
+        Ok(FsWatcher { stop, thread: Some(thread), _watcher: watcher })
     }
 
     pub fn stop(mut self) {
@@ -95,10 +91,7 @@ fn debounce_loop(
                                 p.depth = Depth::Subtree;
                             }
                         })
-                        .or_insert(Pending {
-                            depth,
-                            first_seen: Instant::now(),
-                        });
+                        .or_insert(Pending { depth, first_seen: Instant::now() });
                 }
             }
             Ok(Err(e)) => {
@@ -185,10 +178,7 @@ impl Schedule {
                 }
             })
             .expect("spawn schedule thread");
-        Schedule {
-            stop,
-            thread: Some(thread),
-        }
+        Schedule { stop, thread: Some(thread) }
     }
 
     pub fn stop(mut self) {
@@ -206,18 +196,12 @@ mod tests {
 
     #[test]
     fn sidecars_widen_to_subtree() {
-        let (dir, depth) = classify(
-            &EventKind::Create(CreateKind::File),
-            Path::new("/m/a/cover.jpg"),
-        )
-        .unwrap();
+        let (dir, depth) =
+            classify(&EventKind::Create(CreateKind::File), Path::new("/m/a/cover.jpg")).unwrap();
         assert_eq!(dir, PathBuf::from("/m/a"));
         assert_eq!(depth, Depth::Subtree);
-        let (dir, depth) = classify(
-            &EventKind::Modify(ModifyKind::Any),
-            Path::new("/m/a/01.flac"),
-        )
-        .unwrap();
+        let (dir, depth) =
+            classify(&EventKind::Modify(ModifyKind::Any), Path::new("/m/a/01.flac")).unwrap();
         assert_eq!(dir, PathBuf::from("/m/a"));
         assert_eq!(depth, Depth::Directory);
     }

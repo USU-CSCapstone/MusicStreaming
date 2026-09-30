@@ -37,10 +37,7 @@ pub struct Batch {
 
 impl Batch {
     pub fn new(scan_id: ScanId) -> Batch {
-        Batch {
-            scan_id,
-            ..Default::default()
-        }
+        Batch { scan_id, ..Default::default() }
     }
 
     pub fn len(&self) -> usize {
@@ -160,12 +157,7 @@ impl MemoryStore {
     }
 
     pub fn track(&self, library: &LibraryId, id: TrackId) -> Option<StoredTrack> {
-        self.inner
-            .lock()
-            .unwrap()
-            .libraries
-            .get(library)
-            .and_then(|l| l.tracks.get(&id).cloned())
+        self.inner.lock().unwrap().libraries.get(library).and_then(|l| l.tracks.get(&id).cloned())
     }
 
     pub fn problems(&self, library: &LibraryId) -> Vec<Problem> {
@@ -189,21 +181,12 @@ impl MemoryStore {
     /// The placeholder stored for the image with content `hash`.
     pub fn placeholder(&self, library: &LibraryId, hash: &[u8]) -> Option<Vec<u8>> {
         let inner = self.inner.lock().unwrap();
-        inner
-            .libraries
-            .get(library)?
-            .placeholders
-            .get(hash)
-            .cloned()
+        inner.libraries.get(library)?.placeholders.get(hash).cloned()
     }
 
     pub fn feed(&self, library: &LibraryId) -> Vec<FeedEntry> {
         let inner = self.inner.lock().unwrap();
-        inner
-            .libraries
-            .get(library)
-            .map(|l| l.feed.clone())
-            .unwrap_or_default()
+        inner.libraries.get(library).map(|l| l.feed.clone()).unwrap_or_default()
     }
 }
 
@@ -214,12 +197,7 @@ impl Store for MemoryStore {
         let id = inner.next_scan;
         let mut scan = scan.clone();
         scan.id = id;
-        inner
-            .libraries
-            .entry(scan.library.clone())
-            .or_default()
-            .scans
-            .insert(id, scan);
+        inner.libraries.entry(scan.library.clone()).or_default().scans.insert(id, scan);
         id
     }
 
@@ -263,11 +241,7 @@ impl Store for MemoryStore {
 
     fn apply(&self, library: &LibraryId, batch: Batch) -> Result<(), StoreError> {
         let mut inner = self.inner.lock().unwrap();
-        let Inner {
-            libraries,
-            next_track,
-            ..
-        } = &mut *inner;
+        let Inner { libraries, next_track, .. } = &mut *inner;
         let lib = libraries.entry(library.clone()).or_default();
         for mut record in batch.upserts {
             record.last_seen_scan = batch.scan_id;
@@ -286,19 +260,8 @@ impl Store for MemoryStore {
                 lib.by_path.remove(&old.record.path);
             }
             lib.by_path.insert(record.path.clone(), id);
-            lib.tracks.insert(
-                id,
-                StoredTrack {
-                    record,
-                    missing: false,
-                    analysis: None,
-                },
-            );
-            lib.feed.push(if is_new {
-                FeedEntry::Added(id)
-            } else {
-                FeedEntry::Updated(id)
-            });
+            lib.tracks.insert(id, StoredTrack { record, missing: false, analysis: None });
+            lib.feed.push(if is_new { FeedEntry::Added(id) } else { FeedEntry::Updated(id) });
         }
         for id in batch.touched {
             if let Some(t) = lib.tracks.get_mut(&id) {
@@ -356,9 +319,7 @@ impl Store for MemoryStore {
             .iter()
             .filter(|(_, t)| {
                 !t.missing
-                    && t.analysis
-                        .as_ref()
-                        .is_none_or(|a| a.analyzer_version < analyzer_version)
+                    && t.analysis.as_ref().is_none_or(|a| a.analyzer_version < analyzer_version)
             })
             .map(|(id, t)| (*id, t.record.path.clone()))
             .take(limit)
@@ -367,10 +328,7 @@ impl Store for MemoryStore {
 
     fn store_analysis(&self, library: &LibraryId, track_id: TrackId, result: AnalysisResult) {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(t) = inner
-            .libraries
-            .get_mut(library)
-            .and_then(|l| l.tracks.get_mut(&track_id))
+        if let Some(t) = inner.libraries.get_mut(library).and_then(|l| l.tracks.get_mut(&track_id))
         {
             t.analysis = Some(result);
         }
@@ -393,11 +351,8 @@ impl Store for MemoryStore {
                     ArtworkSource::Embedded => (&art.info.hash, &t.record.path),
                     ArtworkSource::Sidecar(path) => (&art.info.hash, path),
                 });
-                let artist = t
-                    .record
-                    .artist_image
-                    .as_ref()
-                    .map(|image| (&image.info.hash, &image.path));
+                let artist =
+                    t.record.artist_image.as_ref().map(|image| (&image.info.hash, &image.path));
                 artwork.into_iter().chain(artist)
             })
             .filter(|(hash, _)| !lib.placeholders.contains_key(*hash) && seen.insert(*hash))

@@ -73,10 +73,7 @@ mod tests {
     #[test]
     fn a_failed_migration_leaves_the_previous_version_intact() {
         let migrations = [
-            Migration {
-                name: "0001_good",
-                sql: "CREATE TABLE a (x INTEGER);",
-            },
+            Migration { name: "0001_good", sql: "CREATE TABLE a (x INTEGER);" },
             Migration {
                 name: "0002_bad",
                 sql: "CREATE TABLE b (x INTEGER); SELECT * FROM missing;",

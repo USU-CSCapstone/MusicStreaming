@@ -33,26 +33,12 @@ pub(crate) fn decode_pcm(
     let mut child = Command::new(&config.ffmpeg)
         .args(["-nostdin", "-hide_banner", "-v", "error", "-i"])
         .arg(path)
-        .args([
-            "-map",
-            "0:a:0",
-            "-vn",
-            "-sn",
-            "-dn",
-            "-f",
-            "f32le",
-            "-c:a",
-            "pcm_f32le",
-            "pipe:1",
-        ])
+        .args(["-map", "0:a:0", "-vn", "-sn", "-dn", "-f", "f32le", "-c:a", "pcm_f32le", "pipe:1"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| Error::Spawn {
-            binary: config.ffmpeg.clone(),
-            source: e,
-        })?;
+        .map_err(|e| Error::Spawn { binary: config.ffmpeg.clone(), source: e })?;
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take();
     let stalled = registry.register(child.id());
@@ -97,9 +83,7 @@ impl PcmStream {
         let whole = self.buf.len() / frame_bytes * frame_bytes;
         out.reserve(whole / 4);
         for sample in self.buf[..whole].as_chunks::<4>().0 {
-            out.push(f32::from_le_bytes([
-                sample[0], sample[1], sample[2], sample[3],
-            ]));
+            out.push(f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]]));
         }
         self.buf.drain(..whole);
         Ok(whole / frame_bytes)
@@ -117,10 +101,7 @@ impl PcmStream {
             if let Some(mut err) = self.stderr.take() {
                 let _ = err.read_to_string(&mut stderr);
             }
-            return Err(Error::Failed {
-                status: status.code(),
-                stderr: stderr.trim().to_owned(),
-            });
+            return Err(Error::Failed { status: status.code(), stderr: stderr.trim().to_owned() });
         }
         Ok(0)
     }

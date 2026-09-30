@@ -14,12 +14,7 @@ pub fn from_read_error(path: &Path, e: &ReadError) -> Problem {
         ReadError::Unrecognized(d) => (ProblemKind::CorruptAudio, d.clone()),
         ReadError::Malformed(d) => (ProblemKind::MalformedTags, d.clone()),
     };
-    Problem {
-        path: path.to_path_buf(),
-        kind,
-        detail,
-        seen_at: SystemTime::now(),
-    }
+    Problem { path: path.to_path_buf(), kind, detail, seen_at: SystemTime::now() }
 }
 
 pub fn from_io(path: &Path, e: &io::Error) -> Problem {
@@ -42,12 +37,7 @@ pub fn from_ffmpeg(path: &Path, e: &jewelcase_ffmpeg::Error) -> Problem {
         F::Spawn { .. } => ProblemKind::Unreadable,
         F::Io(io) => io_kind(io),
     };
-    Problem {
-        path: path.to_path_buf(),
-        kind,
-        detail: e.to_string(),
-        seen_at: SystemTime::now(),
-    }
+    Problem { path: path.to_path_buf(), kind, detail: e.to_string(), seen_at: SystemTime::now() }
 }
 
 fn io_kind(e: &io::Error) -> ProblemKind {

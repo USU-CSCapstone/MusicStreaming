@@ -57,13 +57,7 @@ impl Indexes {
         library: i64,
         position: i64,
     ) -> Result<Arc<Index>, DbError> {
-        let slot = self
-            .libraries
-            .lock()
-            .unwrap()
-            .entry(library)
-            .or_default()
-            .clone();
+        let slot = self.libraries.lock().unwrap().entry(library).or_default().clone();
         let built = slot.built.read().unwrap().clone();
         if let Some(built) = built {
             if built.due(position)
@@ -123,12 +117,7 @@ async fn build(db: &Database, library: i64) -> Result<Built, DbError> {
     let index = tokio::task::spawn_blocking(move || Index::build(documents))
         .await
         .expect("building a search index does not panic");
-    Ok(Built {
-        index: Arc::new(index),
-        position,
-        ready: Instant::now(),
-        took: started.elapsed(),
-    })
+    Ok(Built { index: Arc::new(index), position, ready: Instant::now(), took: started.elapsed() })
 }
 
 pub fn feed_position(conn: &Connection, library: i64) -> rusqlite::Result<i64> {
@@ -141,12 +130,7 @@ mod tests {
     use super::*;
 
     fn built(position: i64, took: Duration) -> Built {
-        Built {
-            index: Arc::new(Index::build([])),
-            position,
-            ready: Instant::now(),
-            took,
-        }
+        Built { index: Arc::new(Index::build([])), position, ready: Instant::now(), took }
     }
 
     #[test]

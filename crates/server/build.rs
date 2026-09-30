@@ -16,11 +16,7 @@ fn main() {
 
     let mut code = String::from("&[\n");
     for (index, path) in paths.iter().enumerate() {
-        let name = path
-            .file_stem()
-            .unwrap()
-            .to_str()
-            .expect("migration names must be UTF-8");
+        let name = path.file_stem().unwrap().to_str().expect("migration names must be UTF-8");
         // Two branches that each add the next migration collide here instead of both running.
         let expected = format!("{:04}_", index + 1);
         assert!(

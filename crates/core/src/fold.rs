@@ -63,10 +63,7 @@ mod tests {
 
     #[test]
     fn artists_key_is_order_independent() {
-        assert_eq!(
-            artists_key(["SZA", "Kendrick Lamar"]),
-            artists_key(["kendrick lamar", "sza"])
-        );
+        assert_eq!(artists_key(["SZA", "Kendrick Lamar"]), artists_key(["kendrick lamar", "sza"]));
         assert_eq!(artists_key(["A", "A"]), "a");
         assert_eq!(artists_key(std::iter::empty()), "");
     }

@@ -50,12 +50,7 @@ impl Request {
     ) -> Result<Request, Problem> {
         let after = sort.after(cursor.as_deref(), order)?;
         let limit = self::limit(limit)?;
-        Ok(Request {
-            sort,
-            order,
-            after,
-            limit,
-        })
+        Ok(Request { sort, order, after, limit })
     }
 
     /// Reads the page of `source` in `library`, or `None` if there is no such library. Its
@@ -76,11 +71,7 @@ impl Request {
             total = keyset::count(conn, source)?;
         }
         let (items, next_cursor) = keyset::fetch(conn, source, &self, map)?;
-        Ok(Some(Page {
-            items,
-            next_cursor,
-            total,
-        }))
+        Ok(Some(Page { items, next_cursor, total }))
     }
 }
 

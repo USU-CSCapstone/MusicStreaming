@@ -48,11 +48,7 @@ pub async fn app_with_tracks() -> (tempfile::TempDir, Arc<Database>, Router) {
 }
 
 pub async fn send(app: Router, method: &str, uri: &str) -> (StatusCode, Option<String>, Vec<u8>) {
-    let request = Request::builder()
-        .method(method)
-        .uri(uri)
-        .body(Body::empty())
-        .unwrap();
+    let request = Request::builder().method(method).uri(uri).body(Body::empty()).unwrap();
     let response = app.oneshot(request).await.unwrap();
     let content_type = response
         .headers()
@@ -61,10 +57,7 @@ pub async fn send(app: Router, method: &str, uri: &str) -> (StatusCode, Option<S
     (
         response.status(),
         content_type,
-        to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap()
-            .to_vec(),
+        to_bytes(response.into_body(), usize::MAX).await.unwrap().to_vec(),
     )
 }
 

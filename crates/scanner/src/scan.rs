@@ -29,10 +29,7 @@ pub struct ScanOptions {
 
 impl Default for ScanOptions {
     fn default() -> Self {
-        ScanOptions {
-            batch_size: 250,
-            batch_interval: Duration::from_secs(2),
-        }
+        ScanOptions { batch_size: 250, batch_interval: Duration::from_secs(2) }
     }
 }
 
@@ -107,17 +104,13 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
             }
             match item {
                 WalkItem::Error(err) => {
-                    batch
-                        .problems
-                        .push(problems::from_io(&err.path, &err.error));
+                    batch.problems.push(problems::from_io(&err.path, &err.error));
                     scan.progress.problems += 1;
                 }
                 WalkItem::Directory(dir) => {
                     process_directory(ctx, scan, &scope, &dir, &mut sidecars, &mut batch);
-                    scan.cursor = Some(Cursor {
-                        scope_index,
-                        after_directory: Some(dir.path.clone()),
-                    });
+                    scan.cursor =
+                        Some(Cursor { scope_index, after_directory: Some(dir.path.clone()) });
                     scan.progress.current_path = Some(dir.path);
                 }
             }
@@ -140,14 +133,9 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
 
         // Stage 7: reconcile. Only after a complete, uncancelled walk of a
         // root that answered.
-        let missing = ctx
-            .store
-            .mark_missing_unseen(&ctx.library.id, &scope, scan.id);
+        let missing = ctx.store.mark_missing_unseen(&ctx.library.id, &scope, scan.id);
         scan.progress.missing += missing as u64;
-        scan.cursor = Some(Cursor {
-            scope_index: scope_index + 1,
-            after_directory: None,
-        });
+        scan.cursor = Some(Cursor { scope_index: scope_index + 1, after_directory: None });
         ctx.store.update_scan(scan);
     }
 
@@ -249,13 +237,9 @@ fn process_file(
         && ix.mtime_ms == candidate.mtime_ms
     {
         return if ix.missing {
-            FileOutcome::Returned {
-                track_id: ix.track_id,
-            }
+            FileOutcome::Returned { track_id: ix.track_id }
         } else {
-            FileOutcome::Unchanged {
-                track_id: ix.track_id,
-            }
+            FileOutcome::Unchanged { track_id: ix.track_id }
         };
     }
 
@@ -279,18 +263,12 @@ fn process_file(
 
     // Stage 5: sidecars, once per directory. Embedded art wins over a
     // sidecar; sidecar lyrics apply only when the file has none.
-    let side = resolved
-        .get_or_insert_with(|| sidecars.resolve(&dir.path))
-        .clone();
+    let side = resolved.get_or_insert_with(|| sidecars.resolve(&dir.path)).clone();
     let artwork = match read.embedded_art {
-        Some(info) => Some(Artwork {
-            source: ArtworkSource::Embedded,
-            info,
-        }),
-        None => side.cover.map(|c| Artwork {
-            source: ArtworkSource::Sidecar(c.path),
-            info: c.info,
-        }),
+        Some(info) => Some(Artwork { source: ArtworkSource::Embedded, info }),
+        None => {
+            side.cover.map(|c| Artwork { source: ArtworkSource::Sidecar(c.path), info: c.info })
+        }
     };
     let lyrics_sidecar = if read.tags.lyrics.is_none() {
         SidecarResolver::lyrics_for(&candidate.path, &dir.files)
@@ -298,27 +276,16 @@ fn process_file(
         None
     };
 
-    let title = read
-        .tags
-        .title
-        .clone()
-        .unwrap_or_else(|| filename_title(&candidate.path));
+    let title = read.tags.title.clone().unwrap_or_else(|| filename_title(&candidate.path));
     let sort = SortKeys {
         title: sort_key(&title, read.tags.title_sort.as_deref()),
         artist: sort_key(
             read.tags.artists.first().map(String::as_str).unwrap_or(""),
             read.tags.artist_sort.as_deref(),
         ),
-        album: sort_key(
-            read.tags.album.as_deref().unwrap_or(""),
-            read.tags.album_sort.as_deref(),
-        ),
+        album: sort_key(read.tags.album.as_deref().unwrap_or(""), read.tags.album_sort.as_deref()),
         album_artist: sort_key(
-            read.tags
-                .album_artists
-                .first()
-                .map(String::as_str)
-                .unwrap_or(""),
+            read.tags.album_artists.first().map(String::as_str).unwrap_or(""),
             read.tags.album_artist_sort.as_deref(),
         ),
     };
@@ -342,10 +309,7 @@ fn process_file(
     match identity {
         Identity::New => FileOutcome::Added(Box::new(record)),
         Identity::Updated { track_id } | Identity::Moved { track_id, .. } => {
-            FileOutcome::Updated(Box::new(TrackRecord {
-                id: Some(track_id),
-                ..record
-            }))
+            FileOutcome::Updated(Box::new(TrackRecord { id: Some(track_id), ..record }))
         }
     }
 }

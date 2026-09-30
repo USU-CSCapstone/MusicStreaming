@@ -43,11 +43,7 @@ fn sine_measures_as_expected() {
 
     let ffmpeg = Ffmpeg::new(Config::default());
     let caps = ffmpeg.verify().expect("ffmpeg verify");
-    assert!(
-        caps.missing.is_empty(),
-        "missing decoders: {:?}",
-        caps.missing
-    );
+    assert!(caps.missing.is_empty(), "missing decoders: {:?}", caps.missing);
 
     let store = shared(MemoryStore::new());
     let governor = Arc::new(Governor::new());
@@ -59,30 +55,18 @@ fn sine_measures_as_expected() {
         let lufs = r.integrated_lufs.expect("loudness");
         assert!((lufs - -6.7).abs() < 1.0, "{}: {lufs} LUFS", path.display());
         let peak = r.true_peak_dbtp.expect("peak");
-        assert!(
-            (peak - -6.02).abs() < 0.3,
-            "{}: {peak} dBTP",
-            path.display()
-        );
+        assert!((peak - -6.02).abs() < 0.3, "{}: {peak} dBTP", path.display());
         assert_eq!(r.waveform.peaks.len(), 512);
         // Every bin sees the same amplitude.
         let mid = r.waveform.peaks[256];
         assert!((mid as i32 - 128).abs() <= 2, "peak bin {mid}");
-        assert!(
-            r.waveform
-                .peaks
-                .iter()
-                .all(|p| (*p as i32 - mid as i32).abs() <= 2)
-        );
+        assert!(r.waveform.peaks.iter().all(|p| (*p as i32 - mid as i32).abs() <= 2));
         // RMS of a sine is peak / sqrt(2).
         let rms = r.waveform.rms[256] as f64 / 255.0;
         assert!((rms - 0.5 / 2f64.sqrt()).abs() < 0.02, "rms {rms}");
         // The feature sink saw every frame once.
         let frames = u64::from_le_bytes(r.features.unwrap().try_into().unwrap());
-        assert!(
-            (frames as i64 - 3 * 44_100).abs() < 4_096,
-            "frames {frames}"
-        );
+        assert!((frames as i64 - 3 * 44_100).abs() < 4_096, "frames {frames}");
         assert_eq!(r.analyzer_version, ANALYZER_VERSION);
     }
 }
@@ -95,11 +79,8 @@ fn queue_drains_and_broken_files_do_not_repeat() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     write_sine_wav(&root.join("ok.wav"), 440.0, 0.2, 0.5);
-    std::fs::write(
-        root.join("bad.mp3"),
-        b"ID3\x03\x00\x00\x00\x00\x00\x00garbage garbage garbage",
-    )
-    .unwrap();
+    std::fs::write(root.join("bad.mp3"), b"ID3\x03\x00\x00\x00\x00\x00\x00garbage garbage garbage")
+        .unwrap();
 
     let store = shared(MemoryStore::new());
     let lib = library(root);
@@ -117,11 +98,7 @@ fn queue_drains_and_broken_files_do_not_repeat() {
     assert!(first.analyzed >= 1);
     let second = analyzer.run_once(&lib.id, 10);
     assert_eq!(second.analyzed + second.failed, 0, "nothing left to do");
-    let ok = store
-        .tracks(&lib.id)
-        .into_iter()
-        .find(|t| t.record.path.ends_with("ok.wav"))
-        .unwrap();
+    let ok = store.tracks(&lib.id).into_iter().find(|t| t.record.path.ends_with("ok.wav")).unwrap();
     assert!(ok.analysis.unwrap().integrated_lufs.is_some());
 }
 
@@ -135,20 +112,13 @@ fn paused_governor_holds_analysis() {
     write_sine_wav(&wav, 440.0, 0.2, 2.0);
     let ffmpeg = Ffmpeg::new(Config::default());
     let governor = Arc::new(Governor::new());
-    let analyzer = Arc::new(Analyzer::new(
-        ffmpeg,
-        shared(MemoryStore::new()),
-        governor.clone(),
-    ));
+    let analyzer = Arc::new(Analyzer::new(ffmpeg, shared(MemoryStore::new()), governor.clone()));
     governor.pause();
     let a2 = analyzer.clone();
     let w = wav.clone();
     let handle = std::thread::spawn(move || a2.analyze_file(&w));
     std::thread::sleep(std::time::Duration::from_millis(300));
-    assert!(
-        !handle.is_finished(),
-        "analysis must not complete while paused"
-    );
+    assert!(!handle.is_finished(), "analysis must not complete while paused");
     governor.resume();
     let result = handle.join().unwrap().expect("analysis after resume");
     assert!(result.integrated_lufs.is_some());

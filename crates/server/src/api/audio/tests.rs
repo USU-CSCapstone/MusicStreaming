@@ -47,10 +47,7 @@ async fn app_with_fixture() -> (tempfile::TempDir, Router) {
 
 /// Sends a `GET` with a `Range` header.
 async fn get_range(app: Router, uri: &str, range: &str) -> Response {
-    let request = Request::get(uri)
-        .header(header::RANGE, range)
-        .body(Body::empty())
-        .unwrap();
+    let request = Request::get(uri).header(header::RANGE, range).body(Body::empty()).unwrap();
     app.oneshot(request).await.unwrap()
 }
 
@@ -159,11 +156,7 @@ async fn only_the_callers_library_is_reachable() {
     ] {
         let (status, content_type, body) = send(app.clone(), "GET", uri).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
-        assert_eq!(
-            content_type.as_deref(),
-            Some("application/problem+json"),
-            "{uri}"
-        );
+        assert_eq!(content_type.as_deref(), Some("application/problem+json"), "{uri}");
         assert_eq!(json(&body)["code"], "not_found", "{uri}");
     }
 }

@@ -16,11 +16,7 @@ pub(in crate::api) fn fixture(tx: &Transaction) -> rusqlite::Result<()> {
     libraries::create(tx, Some(1), "Music", &[Path::new("/music")], &[])?;
     libraries::create(tx, Some(2), "Other", &[Path::new("/other")], &[])?;
     let root = |library: i64| -> rusqlite::Result<i64> {
-        tx.query_row(
-            "SELECT id FROM library_roots WHERE library_id = ?1",
-            [library],
-            |r| r.get(0),
-        )
+        tx.query_row("SELECT id FROM library_roots WHERE library_id = ?1", [library], |r| r.get(0))
     };
     let (music, other) = (root(1)?, root(2)?);
     tx.execute_batch(
@@ -185,14 +181,7 @@ async fn album_order_is_disc_then_number_with_unnumbered_tracks_last() {
     for limit in [1, 2, 100] {
         assert_eq!(
             page_through(&app, base, limit, "title").await,
-            json!([
-                "Come Together",
-                "Something",
-                "Her Majesty",
-                "Bonus",
-                "Idioteque",
-                "untitled"
-            ]),
+            json!(["Come Together", "Something", "Her Majesty", "Bonus", "Idioteque", "untitled"]),
             "limit {limit}"
         );
         assert_eq!(
@@ -208,26 +197,12 @@ async fn album_order_is_disc_then_number_with_unnumbered_tracks_last() {
                 "title"
             )
             .await,
-            json!([
-                "Idioteque",
-                "Bonus",
-                "Her Majesty",
-                "Something",
-                "Come Together",
-                "untitled"
-            ]),
+            json!(["Idioteque", "Bonus", "Her Majesty", "Something", "Come Together", "untitled"]),
             "limit {limit}"
         );
         assert_eq!(
             page_through(&app, "/api/v1/libraries/1/tracks", limit, "title").await,
-            json!([
-                "Bonus",
-                "Come Together",
-                "Her Majesty",
-                "Idioteque",
-                "Something",
-                "untitled"
-            ]),
+            json!(["Bonus", "Come Together", "Her Majesty", "Idioteque", "Something", "untitled"]),
             "limit {limit}"
         );
     }
@@ -247,16 +222,7 @@ async fn filters_by_artist_credit() {
             json!(["Come Together", "Something", "Her Majesty", "Bonus"]),
         ),
         ("artistId=10&artistCredit=featured", json!(["Idioteque"])),
-        (
-            "artistId=10",
-            json!([
-                "Come Together",
-                "Something",
-                "Her Majesty",
-                "Bonus",
-                "Idioteque"
-            ]),
-        ),
+        ("artistId=10", json!(["Come Together", "Something", "Her Majesty", "Bonus", "Idioteque"])),
         ("artistId=10&albumId=102", json!(["Idioteque"])),
         ("artistId=20", json!([])),
         ("albumId=nope", json!([])),

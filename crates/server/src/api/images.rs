@@ -50,11 +50,7 @@ pub async fn get(
                  WHERE i.library_id = ?1 AND i.id = ?2",
             )?
             .query_row([library, image], |row| {
-                Ok((
-                    row.get::<_, Vec<u8>>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
             })
             .optional()
         })
@@ -62,14 +58,11 @@ pub async fn get(
         .ok_or_else(Problem::not_found)?;
 
     let source = PathBuf::from(root).join(path);
-    let resized = images
-        .resized(&hash, size, &source)
-        .await
-        .map_err(|error| {
-            // The cause stays in the log: it names a path on the host.
-            tracing::warn!(%error, image, "cannot resize an image");
-            Problem::new(Code::Internal)
-        })?;
+    let resized = images.resized(&hash, size, &source).await.map_err(|error| {
+        // The cause stays in the log: it names a path on the host.
+        tracing::warn!(%error, image, "cannot resize an image");
+        Problem::new(Code::Internal)
+    })?;
     let mut response = ServeFile::new(resized)
         .try_call(request)
         .await

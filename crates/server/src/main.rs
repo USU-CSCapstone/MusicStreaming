@@ -13,9 +13,7 @@ async fn main() -> ExitCode {
         }
     };
 
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(&config.log))
-        .init();
+    tracing_subscriber::fmt().with_env_filter(EnvFilter::new(&config.log)).init();
 
     match jewelcase_server::run(config).await {
         Ok(()) => ExitCode::SUCCESS,

@@ -74,46 +74,18 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images) -> Router {
         .route("/libraries/{library_id}/artists", get(artists::list))
         .route("/libraries/{library_id}/playlists", get(playlists::list))
         .route("/libraries/{library_id}/tracks", get(tracks::list))
-        .route(
-            "/libraries/{library_id}/tracks/{track_id}",
-            get(tracks::get),
-        )
+        .route("/libraries/{library_id}/tracks/{track_id}", get(tracks::get))
         .route("/libraries/{library_id}/search", get(search::search))
-        .route(
-            "/libraries/{library_id}/images/{image_id}",
-            get(images::get),
-        )
-        .route(
-            "/libraries/{library_id}/tracks/{track_id}/lyrics",
-            get(lyrics::get),
-        )
-        .route(
-            "/libraries/{library_id}/tracks/{track_id}/waveform",
-            get(waveform::get),
-        )
-        .route(
-            "/libraries/{library_id}/tracks/{track_id}/playback",
-            get(audio::playback),
-        )
-        .route(
-            "/libraries/{library_id}/tracks/{track_id}/audio",
-            get(audio::audio),
-        )
-        .route(
-            "/libraries/{library_id}/artists/{artist_id}",
-            get(artists::get),
-        )
-        .route(
-            "/libraries/{library_id}/albums/{album_id}",
-            get(albums::get),
-        )
+        .route("/libraries/{library_id}/images/{image_id}", get(images::get))
+        .route("/libraries/{library_id}/tracks/{track_id}/lyrics", get(lyrics::get))
+        .route("/libraries/{library_id}/tracks/{track_id}/waveform", get(waveform::get))
+        .route("/libraries/{library_id}/tracks/{track_id}/playback", get(audio::playback))
+        .route("/libraries/{library_id}/tracks/{track_id}/audio", get(audio::audio))
+        .route("/libraries/{library_id}/artists/{artist_id}", get(artists::get))
+        .route("/libraries/{library_id}/albums/{album_id}", get(albums::get))
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
-        .with_state(AppState {
-            db,
-            images: Arc::new(images),
-            indexes: Arc::default(),
-        });
+        .with_state(AppState { db, images: Arc::new(images), indexes: Arc::default() });
     Router::new()
         .nest(&prefix, api)
         // `nest` leaves out the prefix with a trailing slash.
@@ -149,11 +121,7 @@ mod tests {
         for uri in ["/api/v1/nowhere", "/api/v1/", "/api/v1"] {
             let (status, content_type, body) = send(app.clone(), "GET", uri).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
-            assert_eq!(
-                content_type.as_deref(),
-                Some("application/problem+json"),
-                "{uri}"
-            );
+            assert_eq!(content_type.as_deref(), Some("application/problem+json"), "{uri}");
             assert_eq!(
                 serde_json::from_slice::<Value>(&body).unwrap(),
                 json!({ "type": "about:blank", "title": "Not Found", "status": 404, "code": "not_found" })
@@ -167,10 +135,7 @@ mod tests {
         let (status, content_type, body) = send(app, "POST", "/api/v1/health").await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(content_type.as_deref(), Some("application/problem+json"));
-        assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap()["code"],
-            "method_not_allowed"
-        );
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["code"], "method_not_allowed");
     }
 
     #[tokio::test]

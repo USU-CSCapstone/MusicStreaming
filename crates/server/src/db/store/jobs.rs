@@ -96,11 +96,7 @@ pub fn next_without_placeholder(
              WHERE library_id = ?1 AND placeholder IS NULL LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![lib, limit as i64], |r| {
-            Ok((
-                r.get::<_, Vec<u8>>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, String>(2)?,
-            ))
+            Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?))
         })?;
         let mut out = Vec::new();
         for row in rows {

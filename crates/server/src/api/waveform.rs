@@ -57,15 +57,9 @@ fn shape(peaks: &[u8]) -> Waveform {
         peaks.to_vec()
     } else {
         // Rounded to the nearest step, in integers.
-        peaks
-            .iter()
-            .map(|&peak| ((u32::from(peak) * 255 + max / 2) / max) as u8)
-            .collect()
+        peaks.iter().map(|&peak| ((u32::from(peak) * 255 + max / 2) / max) as u8).collect()
     };
-    Waveform {
-        point_count: points.len(),
-        data: BASE64.encode(&points),
-    }
+    Waveform { point_count: points.len(), data: BASE64.encode(&points) }
 }
 
 #[cfg(test)]
@@ -79,10 +73,7 @@ mod tests {
     #[tokio::test]
     async fn serves_the_shaped_peaks() {
         let (_temp, db, app) = app_with_tracks().await;
-        let measured = Measured {
-            peaks: vec![0, 32, 64, 128],
-            rms: vec![0, 16, 32, 64],
-        };
+        let measured = Measured { peaks: vec![0, 32, 64, 128], rms: vec![0, 16, 32, 64] };
         let blob = measured.to_blob();
         db.write(move |tx| {
             tx.execute(
@@ -119,10 +110,9 @@ mod tests {
         })
         .await
         .unwrap();
-        for uri in [
-            "/api/v1/libraries/1/tracks/1/waveform",
-            "/api/v1/libraries/1/tracks/2/waveform",
-        ] {
+        for uri in
+            ["/api/v1/libraries/1/tracks/1/waveform", "/api/v1/libraries/1/tracks/2/waveform"]
+        {
             let (status, _, body) = send(app.clone(), "GET", uri).await;
             assert_eq!(status, StatusCode::NO_CONTENT, "{uri}");
             assert!(body.is_empty(), "{uri}");
@@ -132,11 +122,7 @@ mod tests {
     #[tokio::test]
     async fn only_the_callers_library_is_reachable() {
         let (_temp, db, app) = app_with_tracks().await;
-        let blob = Measured {
-            peaks: vec![1],
-            rms: vec![1],
-        }
-        .to_blob();
+        let blob = Measured { peaks: vec![1], rms: vec![1] }.to_blob();
         db.write(move |tx| {
             tx.execute(
                 "INSERT INTO track_waveforms (library_id, track_id, data) VALUES (2, 3, ?1)",

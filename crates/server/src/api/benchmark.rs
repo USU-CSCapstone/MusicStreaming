@@ -54,13 +54,9 @@ async fn list_pages() {
     })
     .await
     .unwrap();
-    for (list, limit) in [
-        ("tracks", 100),
-        ("tracks", 1000),
-        ("albums", 100),
-        ("albums", 1000),
-        ("artists", 100),
-    ] {
+    for (list, limit) in
+        [("tracks", 100), ("tracks", 1000), ("albums", 100), ("albums", 1000), ("artists", 100)]
+    {
         let uri = format!("/api/v1/libraries/1/{list}?limit={limit}");
         let (_, first) = json(&app, &uri).await;
         let deep = format!("{uri}&cursor={}", first["nextCursor"].as_str().unwrap());
@@ -73,9 +69,6 @@ async fn list_pages() {
             times.push(started.elapsed());
         }
         times.sort();
-        println!(
-            "{list:>8} limit {limit:>4}: median {:>9.2?}  p95 {:>9.2?}",
-            times[30], times[57]
-        );
+        println!("{list:>8} limit {limit:>4}: median {:>9.2?}  p95 {:>9.2?}", times[30], times[57]);
     }
 }
