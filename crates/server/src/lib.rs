@@ -2,6 +2,7 @@ pub mod api;
 pub mod config;
 pub mod data_dir;
 pub mod db;
+mod scanning;
 mod web;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -11,17 +12,13 @@ use std::time::Duration;
 
 use anyhow::Context;
 use jewelcase_ffmpeg::{Config as FfmpegConfig, Ffmpeg};
-use jewelcase_scanner::analysis::Analyzer;
-use jewelcase_scanner::placeholders::Placeholders;
-use jewelcase_scanner::scan::ScanOptions;
-use jewelcase_scanner::triggers::{FsWatcher, Schedule};
-use jewelcase_scanner::{Governor, Scanner, Trigger};
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 use crate::config::Config;
 use crate::data_dir::DataDir;
-use crate::db::{Database, SqliteStore, libraries};
+use crate::db::{Database, libraries};
+use crate::scanning::Scanning;
 
 /// Runs the server until shutdown_signal resolves, then finishes in-flight requests.
 pub async fn run(config: Config) -> anyhow::Result<()> {
@@ -50,12 +47,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         warn!(version = caps.version, missing = ?caps.missing, "ffmpeg lacks decoders; those formats will not be analyzed");
     }
 
-    // Held until shutdown; dropping them stops the watchers. The scanner calls the database
-    // with blocking calls, so it starts outside the async runtime.
-    let _scanning = {
+    // The scanner calls the database with blocking calls, so it starts outside the async runtime.
+    let scanning = {
         let db = db.clone();
         let ffmpeg = ffmpeg.clone();
-        tokio::task::spawn_blocking(move || start_scanning(&db, &ffmpeg)).await??
+        tokio::task::spawn_blocking(move || Scanning::start(&db, &ffmpeg)).await??
     };
 
     // Planner statistics, hourly (`design/database.md` §4).
@@ -96,6 +92,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("server failed")?;
+    tokio::task::spawn_blocking(move || scanning.stop()).await?;
 
     info!("stopped");
     Ok(())
@@ -116,59 +113,6 @@ async fn create_first_library(db: &Database, music: &Path) -> anyhow::Result<()>
         .await?;
     info!(library = id, path = %music.display(), "created library");
     Ok(())
-}
-
-/// Each library's scanner, and its watcher and schedule if it has them.
-type Scanning = Vec<(Scanner, Option<FsWatcher>, Option<Schedule>)>;
-
-/// Starts a scanner, its triggers, and an analyzer for every library. Blocks, so call it
-/// outside the async runtime.
-fn start_scanning(db: &Arc<Database>, ffmpeg: &Ffmpeg) -> anyhow::Result<Scanning> {
-    let store = Arc::new(SqliteStore::new(db.clone()).context("cannot initialise the store")?);
-    let governor = Arc::new(Governor::new());
-
-    let mut running = Vec::new();
-    let libs = db.read_blocking(libraries::all)?;
-    if libs.is_empty() {
-        warn!("no libraries configured; set JEWELCASE_MUSIC to create one on first start");
-    }
-    for lib in &libs {
-        let config = lib.config();
-        let scanner = Scanner::start(
-            store.clone(),
-            config.clone(),
-            governor.clone(),
-            ScanOptions::default(),
-        );
-        scanner.scan_library(Trigger::Initial);
-        let watcher = if lib.watch {
-            FsWatcher::start(scanner.clone(), &config.roots, Duration::from_secs(2))
-                .map_err(
-                    |e| tracing::warn!(error = %e, "watcher unavailable; scheduled scans cover it"),
-                )
-                .ok()
-        } else {
-            None
-        };
-        let schedule = lib
-            .scan_interval_minutes
-            .map(|m| Schedule::start(scanner.clone(), Duration::from_secs(m.max(1) as u64 * 60)));
-        tracing::info!(library = lib.id, name = %lib.name, roots = ?config.roots, "scanner started");
-        running.push((scanner, watcher, schedule));
-
-        let analyzer = Arc::new(Analyzer::new(
-            ffmpeg.clone(),
-            store.clone(),
-            governor.clone(),
-        ));
-        let _worker = analyzer.start(config.id.clone(), Duration::from_secs(30));
-        std::mem::forget(_worker);
-
-        // Soon after a scan finds an image, since clients draw its placeholder straight away.
-        let placeholders = Arc::new(Placeholders::new(ffmpeg.clone(), store.clone()));
-        std::mem::forget(placeholders.start(config.id.clone(), Duration::from_secs(5)));
-    }
-    Ok(running)
 }
 
 /// Wait for SIGINT or SIGTERM and return
