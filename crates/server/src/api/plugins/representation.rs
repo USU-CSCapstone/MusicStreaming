@@ -51,6 +51,15 @@ struct PluginLibrary {
     granted: Vec<Permission>,
     /// Required permissions not granted here: while any remain, it cannot be enabled.
     missing_required: Vec<Permission>,
+    /// Its last run here, by Run now or a hook.
+    last_run: Option<LastRun>,
+}
+
+#[derive(Serialize)]
+struct LastRun {
+    at: String,
+    ok: bool,
+    summary: String,
 }
 
 const SELECT: &str = concat!(
@@ -59,6 +68,22 @@ const SELECT: &str = concat!(
     ", ",
     timestamp!("updated_at"),
     " FROM plugins"
+);
+
+/// A library, and the plugin's standing in it if it was ever enabled or disabled there.
+struct LibraryRow {
+    library: i64,
+    enabled: Option<bool>,
+    disabled_reason: Option<String>,
+    last_run: Option<LastRun>,
+}
+
+const LIBRARIES: &str = concat!(
+    "SELECT l.id, p.enabled, p.disabled_reason, ",
+    timestamp!("p.last_run_at"),
+    ", p.last_run_ok, p.last_run_summary FROM libraries l \
+     LEFT JOIN plugin_libraries p ON p.library_id = l.id AND p.plugin_id = ?1 \
+     ORDER BY l.created_at, l.id"
 );
 
 /// Every installed plugin, by name.
@@ -107,17 +132,25 @@ fn view(conn: &Connection, r: Stored) -> rusqlite::Result<Plugin> {
         )?
         .query_map([&r.id], |row| grants::permission(row.get(0)?))?
         .collect::<rusqlite::Result<_>>()?;
-    let libraries: Vec<(i64, Option<bool>, Option<String>)> = conn
-        .prepare_cached(
-            "SELECT l.id, p.enabled, p.disabled_reason FROM libraries l \
-             LEFT JOIN plugin_libraries p ON p.library_id = l.id AND p.plugin_id = ?1 \
-             ORDER BY l.created_at, l.id",
-        )?
-        .query_map([&r.id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+    let rows: Vec<LibraryRow> = conn
+        .prepare_cached(LIBRARIES)?
+        .query_map([&r.id], |row| {
+            let at: Option<String> = row.get(3)?;
+            let last_run = match at {
+                Some(at) => Some(LastRun { at, ok: row.get(4)?, summary: row.get(5)? }),
+                None => None,
+            };
+            Ok(LibraryRow {
+                library: row.get(0)?,
+                enabled: row.get(1)?,
+                disabled_reason: row.get(2)?,
+                last_run,
+            })
+        })?
         .collect::<rusqlite::Result<_>>()?;
-    let libraries = libraries
+    let libraries = rows
         .into_iter()
-        .map(|(library, enabled, disabled_reason)| {
+        .map(|LibraryRow { library, enabled, disabled_reason, last_run }| {
             let all = grants::granted(conn, &r.id, library)?;
             Ok(PluginLibrary {
                 library_id: Id(library),
@@ -126,6 +159,7 @@ fn view(conn: &Connection, r: Stored) -> rusqlite::Result<Plugin> {
                 missing_required: grants::missing(&r.manifest, &all),
                 granted: all.into_iter().filter(|p| p.per_library()).collect(),
                 disabled_reason,
+                last_run,
             })
         })
         .collect::<rusqlite::Result<_>>()?;

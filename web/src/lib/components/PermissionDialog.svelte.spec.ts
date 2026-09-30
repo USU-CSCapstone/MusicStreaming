@@ -32,7 +32,8 @@ function plugin(overrides: Partial<Plugin> = {}): Plugin {
 				autoDisabled: false,
 				disabledReason: null,
 				granted: [],
-				missingRequired: ['libraryRead', 'network']
+				missingRequired: ['libraryRead', 'network'],
+				lastRun: null
 			}
 		],
 		...overrides

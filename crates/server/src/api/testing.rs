@@ -64,7 +64,7 @@ pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, R
     // A client with a public address, unless a request carries its own `ConnectInfo`.
     let peer = SocketAddr::from(([203, 0, 113, 1], 50_000));
     let plugins = Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new());
-    let app = router(base_path, db.clone(), images, plugins).layer(MockConnectInfo(peer));
+    let app = router(base_path, db.clone(), images, Arc::new(plugins)).layer(MockConnectInfo(peer));
     (temp, db, app)
 }
 

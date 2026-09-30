@@ -84,14 +84,14 @@ impl FromRef<AppState> for Arc<Images> {
 }
 
 /// The API's routes, nested under `{base_path}/api/v1`.
-pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Plugins) -> Router {
+pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Arc<Plugins>) -> Router {
     let prefix = format!("{base_path}/api/v1");
     let state = AppState {
         db,
         images: Arc::new(images),
         indexes: Arc::default(),
         setup: Arc::default(),
-        plugins: Arc::new(plugins),
+        plugins,
         prefix: prefix.as_str().into(),
     };
     // These answer `401` without a token.

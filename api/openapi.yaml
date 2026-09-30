@@ -6471,15 +6471,15 @@ components:
           description: Every library on the server.
           items:
             type: object
-            required: [libraryId, enabled, autoDisabled, disabledReason, granted, missingRequired]
+            required: [libraryId, enabled, autoDisabled, disabledReason, granted, missingRequired, lastRun]
             properties:
               libraryId: { type: string }
               enabled: { type: boolean }
               autoDisabled:
                 type: boolean
                 description: |
-                  Disabled by the server: after repeated failures (`requirements/plugins.md` §11),
-                  or when a required permission was revoked.
+                  Disabled by the server: after a hook failed five times in a row
+                  (`requirements/plugins.md` §11), or when a required permission was revoked.
               disabledReason: { type: [string, 'null'] }
               granted:
                 type: array
@@ -6489,15 +6489,27 @@ components:
                 type: array
                 description: Required permissions not granted here. While any remain, it cannot be enabled.
                 items: { $ref: '#/components/schemas/PermissionName' }
+              lastRun:
+                description: Its last run here, by Run now or a hook; `null` if it has not run here.
+                oneOf:
+                  - type: object
+                    required: [at, ok, summary]
+                    properties:
+                      at: { type: string, format: date-time }
+                      ok: { type: boolean }
+                      summary: { type: string, description: 'The plugin''s own summary, or why it failed.' }
+                  - type: 'null'
 
     PermissionName:
       type: string
-      enum: [libraryRead, libraryAdd, libraryChange, network, listeningActivity]
+      enum: [libraryRead, libraryAdd, libraryChange, network, listeningActivity, tracksChanged]
       description: |
         What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryAdd` creates files
         that do not exist yet; `libraryChange` replaces, renames, and deletes files that do. The
         three library permissions are granted per library; `network` and `listeningActivity`
-        once per plugin.
+        once per plugin. Hooks, which decide when a plugin runs, are requested and granted the
+        same way (`requirements/plugins.md` §8): `tracksChanged` runs it, per library, as tracks
+        are added, changed, or removed, and needs `libraryRead` there too.
 
     PermissionRequest:
       type: object

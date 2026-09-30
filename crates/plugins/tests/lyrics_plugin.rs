@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use jewelcase_plugins::{Album, Artist, Grants, Host, Library, Permission, Track};
+use jewelcase_plugins::{Album, Artist, Event, Grants, Host, Library, Permission, Track};
 
 const PLUGIN: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm");
@@ -97,7 +97,12 @@ async fn a_missing_required_permission_stops_it_before_it_starts() {
     let dir = tempfile::tempdir().unwrap();
     let outcome = Host::new()
         .unwrap()
-        .run(Path::new(PLUGIN), grants(&[Permission::LibraryRead], &[]), library(dir.path()))
+        .run(
+            Path::new(PLUGIN),
+            grants(&[Permission::LibraryRead], &[]),
+            library(dir.path()),
+            Event::Run,
+        )
         .await;
     assert!(!outcome.ok);
     assert!(outcome.summary.contains("needs permission to use the network"), "{}", outcome.summary);
@@ -112,7 +117,12 @@ async fn the_network_reaches_only_approved_destinations() {
     // The plugin asks lrclib.net, which this run does not approve, so nothing leaves.
     let outcome = Host::new()
         .unwrap()
-        .run(Path::new(PLUGIN), grants(&permissions, &["example.invalid"]), library(dir.path()))
+        .run(
+            Path::new(PLUGIN),
+            grants(&permissions, &["example.invalid"]),
+            library(dir.path()),
+            Event::Run,
+        )
         .await;
     assert!(outcome.ok, "{}", outcome.summary);
     assert_eq!(outcome.log.len(), 2, "{:?}", outcome.log);

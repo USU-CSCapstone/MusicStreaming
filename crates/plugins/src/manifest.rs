@@ -11,7 +11,8 @@ use wasmparser::{Encoding, Parser, Payload};
 pub const SECTION: &str = "jewelcase:manifest";
 pub const API_VERSION: &str = "0.2";
 
-/// What a plugin can ask for (`requirements/plugins.md` §4.1).
+/// What a plugin can ask for (`requirements/plugins.md` §4.1): what it may reach, and the hooks
+/// that run it, which are approved the same way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Permission {
@@ -22,15 +23,18 @@ pub enum Permission {
     LibraryChange,
     Network,
     ListeningActivity,
+    /// A hook: run when tracks are added, changed, or removed. Needs library-read too.
+    TracksChanged,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 5] = [
+    pub const ALL: [Permission; 6] = [
         Self::LibraryRead,
         Self::LibraryAdd,
         Self::LibraryChange,
         Self::Network,
         Self::ListeningActivity,
+        Self::TracksChanged,
     ];
 
     /// Its name in manifests and the API, such as `libraryRead`.
@@ -41,6 +45,7 @@ impl Permission {
             Self::LibraryChange => "libraryChange",
             Self::Network => "network",
             Self::ListeningActivity => "listeningActivity",
+            Self::TracksChanged => "tracksChanged",
         }
     }
 
@@ -50,7 +55,10 @@ impl Permission {
 
     /// Granted per library, rather than once for the plugin (`requirements/plugins.md` §4.1).
     pub fn per_library(self) -> bool {
-        matches!(self, Self::LibraryRead | Self::LibraryAdd | Self::LibraryChange)
+        matches!(
+            self,
+            Self::LibraryRead | Self::LibraryAdd | Self::LibraryChange | Self::TracksChanged
+        )
     }
 
     /// How the admin saw it when granting it.
@@ -61,6 +69,7 @@ impl Permission {
             Self::LibraryChange => "Change or delete files in the library",
             Self::Network => "Network access",
             Self::ListeningActivity => "Listening activity",
+            Self::TracksChanged => "Run when tracks change",
         }
     }
 }
@@ -193,6 +202,10 @@ pub fn validate(manifest: &Value) -> Vec<String> {
             continue;
         };
         problems.extend(validate_request(&at, r, &mut seen));
+    }
+    // A hook's event names tracks, which only reading the library can make anything of.
+    if seen.contains(&Permission::TracksChanged) && !seen.contains(&Permission::LibraryRead) {
+        problems.push("tracksChanged needs libraryRead as well".into());
     }
     problems
 }

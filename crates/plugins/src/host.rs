@@ -4,10 +4,12 @@
 //! Imports stay linked when their permission is declined, so a plugin with an optional one
 //! still loads: the call answers "… was not granted", and `granted` lets it adapt up front.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
@@ -30,6 +32,7 @@ mod bindings {
 use bindings::jewelcase::plugin::host;
 use bindings::{Plugin, PluginPre};
 
+pub use bindings::jewelcase::plugin::events::{Event, TracksChanged};
 pub use bindings::jewelcase::plugin::library::{Album, Artist, Track};
 
 /// Compute a plugin may spend in one run, counted while its code runs.
@@ -105,6 +108,9 @@ pub struct Outcome {
 
 pub struct Host {
     engine: Engine,
+    /// Each plugin compiled once, until its file changes: compiling is what costs, and hooks
+    /// run a plugin often.
+    compiled: Mutex<HashMap<PathBuf, (SystemTime, Component)>>,
 }
 
 impl Host {
@@ -125,7 +131,7 @@ impl Host {
                 }
             })
             .map_err(|e| e.to_string())?;
-        Ok(Host { engine })
+        Ok(Host { engine, compiled: Mutex::default() })
     }
 
     /// Refuses a component that could never run here: one that does not compile, or imports
@@ -136,11 +142,39 @@ impl Host {
         self.pre::<Refused>(&component).map(drop)
     }
 
-    /// Runs the plugin in `component` once for `library`, with exactly `grants`.
-    pub async fn run<L: Library>(&self, component: &Path, grants: Grants, library: L) -> Outcome {
-        let loaded = Component::from_file(&self.engine, component)
-            .map_err(|e| format!("the plugin could not be loaded: {}", e.root_cause()))
-            .and_then(|component| self.pre::<L>(&component));
+    /// The plugin in `file`, compiled, from the cache while the file is unchanged.
+    async fn compiled(&self, file: &Path) -> Result<Component, String> {
+        let unloadable = |e: String| format!("the plugin could not be loaded: {e}");
+        let modified = std::fs::metadata(file)
+            .and_then(|m| m.modified())
+            .map_err(|e| unloadable(e.to_string()))?;
+        let cache = |compiled: &HashMap<_, (SystemTime, Component)>| {
+            compiled.get(file).filter(|(at, _)| *at == modified).map(|(_, c)| c.clone())
+        };
+        if let Some(component) = cache(&self.compiled.lock().expect("cache lock")) {
+            return Ok(component);
+        }
+        // Compiling is CPU-bound, up to a second for a JavaScript plugin.
+        let (engine, path) = (self.engine.clone(), file.to_path_buf());
+        let component = tokio::task::spawn_blocking(move || Component::from_file(&engine, path))
+            .await
+            .map_err(|e| unloadable(e.to_string()))?
+            .map_err(|e| unloadable(e.root_cause().to_string()))?;
+        let mut compiled = self.compiled.lock().expect("cache lock");
+        compiled.insert(file.to_path_buf(), (modified, component.clone()));
+        Ok(component)
+    }
+
+    /// Runs the plugin in `component` once for `library`, with exactly `grants`, to handle
+    /// `event`.
+    pub async fn run<L: Library>(
+        &self,
+        component: &Path,
+        grants: Grants,
+        library: L,
+        event: Event,
+    ) -> Outcome {
+        let loaded = self.compiled(component).await.and_then(|component| self.pre::<L>(&component));
         let pre = match loaded {
             Ok(pre) => pre,
             Err(summary) => {
@@ -175,7 +209,7 @@ impl Host {
             Ok(UpdateDeadline::Yield(1))
         });
         store.set_epoch_deadline(1);
-        let result = call(&pre, &mut store).await;
+        let result = call(&pre, &mut store, &event).await;
         // The store owned the run's state while the plugin ran; what it logged and saved is
         // read back from it.
         let run = store.into_data();
@@ -197,13 +231,14 @@ impl Host {
     }
 }
 
-/// Instantiates the plugin and calls its `run`, within the wall-clock budget.
+/// Instantiates the plugin and has it handle `event`, within the wall-clock budget.
 async fn call<L: Library>(
     pre: &PluginPre<Run<L>>,
     store: &mut Store<Run<L>>,
+    event: &Event,
 ) -> Result<String, String> {
     let plugin = pre.instantiate_async(&mut *store).await.map_err(|e| format!("{e:?}"))?;
-    match tokio::time::timeout(WALL_BUDGET, plugin.call_run(&mut *store)).await {
+    match tokio::time::timeout(WALL_BUDGET, plugin.call_handle(&mut *store, event)).await {
         Err(_) => Err(format!("the plugin ran past its {} s time limit", WALL_BUDGET.as_secs())),
         Ok(Err(trap)) => Err(format!("the plugin crashed: {}", trap.root_cause())),
         Ok(Ok(Err(reported))) => Err(format!("the plugin reported an error: {reported}")),
@@ -306,8 +341,12 @@ fn wit(permission: Permission) -> host::Permission {
         Permission::LibraryChange => host::Permission::LibraryChange,
         Permission::Network => host::Permission::Network,
         Permission::ListeningActivity => host::Permission::ListeningActivity,
+        Permission::TracksChanged => host::Permission::TracksChanged,
     }
 }
+
+/// `events` has only types, which the plugin receives; it has nothing to call.
+impl<L: Library> bindings::jewelcase::plugin::events::Host for Run<L> {}
 
 impl<L: Library> host::Host for Run<L> {
     async fn granted(&mut self) -> Vec<host::Permission> {
