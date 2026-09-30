@@ -304,9 +304,17 @@ impl Store for SqliteStore {
             let now = now_ms();
             let mut touched = Touched::default();
             for record in &batch.upserts {
-                upsert_track(&roots, tx, lib, record, batch.scan_id as i64, now, &mut touched)?;
+                upsert_track(
+                    &roots,
+                    tx,
+                    lib,
+                    record,
+                    batch.scan_id as i64,
+                    now,
+                    &mut touched,
+                )?;
             }
-            for id in &batch.touched {
+            for id in batch.touched.iter().chain(&batch.returned) {
                 tx.execute(
                     "UPDATE tracks SET last_seen_scan_id = ?2 WHERE id = ?1 AND library_id = ?3",
                     params![*id as i64, batch.scan_id as i64, lib],
@@ -315,13 +323,9 @@ impl Store for SqliteStore {
             for id in &batch.returned {
                 let id = *id as i64;
                 let changed = tx.execute(
-                    "UPDATE tracks SET missing_since = NULL, last_seen_scan_id = ?2, updated_at = ?3 \
-                     WHERE id = ?1 AND library_id = ?4 AND missing_since IS NOT NULL",
-                    params![id, batch.scan_id as i64, now, lib],
-                )?;
-                tx.execute(
-                    "UPDATE tracks SET last_seen_scan_id = ?2 WHERE id = ?1",
-                    params![id, batch.scan_id as i64],
+                    "UPDATE tracks SET missing_since = NULL, updated_at = ?2 \
+                     WHERE id = ?1 AND library_id = ?3 AND missing_since IS NOT NULL",
+                    params![id, now, lib],
                 )?;
                 if changed > 0 {
                     touched.track(tx, id)?;
@@ -441,18 +445,25 @@ impl Store for SqliteStore {
         let r = self.db.write_blocking(move |tx| {
             let now = now_ms();
             let id = track_id as i64;
-            tx.execute(
-                "UPDATE tracks SET loudness_lufs = ?2, peak_dbtp = ?3, analyzed_at = ?4, analyzer_version = ?5 \
-                 WHERE id = ?1 AND library_id = ?6",
-                params![
-                    id,
-                    result.integrated_lufs,
-                    result.true_peak_dbtp,
-                    now,
-                    result.analyzer_version as i64,
-                    lib
-                ],
-            )?;
+            // No row means the track is not in this library, so nothing else may change.
+            let Some(album_id) = tx
+                .query_row(
+                    "UPDATE tracks SET loudness_lufs = ?2, peak_dbtp = ?3, analyzed_at = ?4, analyzer_version = ?5 \
+                     WHERE id = ?1 AND library_id = ?6 RETURNING album_id",
+                    params![
+                        id,
+                        result.integrated_lufs,
+                        result.true_peak_dbtp,
+                        now,
+                        result.analyzer_version as i64,
+                        lib
+                    ],
+                    |r| r.get::<_, i64>(0),
+                )
+                .optional()?
+            else {
+                return Ok(());
+            };
             if result.waveform.peaks.is_empty() {
                 tx.execute("DELETE FROM track_waveforms WHERE track_id = ?1", [id])?;
             } else {
@@ -461,15 +472,8 @@ impl Store for SqliteStore {
                     params![lib, id, result.waveform.to_blob()],
                 )?;
             }
-            if let Some(album_id) = tx
-                .query_row("SELECT album_id FROM tracks WHERE id = ?1", [id], |r| {
-                    r.get::<_, i64>(0)
-                })
-                .optional()?
-            {
-                catalog::recompute_album_loudness(tx, album_id)?;
-                feed::record(tx, lib, Entity::Album, album_id, Op::Upsert, now)?;
-            }
+            catalog::recompute_album_loudness(tx, album_id)?;
+            feed::record(tx, lib, Entity::Album, album_id, Op::Upsert, now)?;
             feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)
         });
         if let Err(e) = r {
