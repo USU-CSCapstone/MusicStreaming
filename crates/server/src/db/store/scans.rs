@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use jewelcase_scanner::{Cursor, Scan, ScanId, ScanProgress, system_time_ms};
-use rusqlite::Error::FromSqlConversionFailure;
+use rusqlite::Error::{FromSqlConversionFailure, ToSqlConversionFailure};
 use rusqlite::types::Type;
 use rusqlite::{Connection, Result, Row, Transaction, params};
 use serde::Serialize;
@@ -15,8 +15,11 @@ use crate::db::{DbError, now_ms};
 
 pub fn create(store: &SqliteStore, lib: i64, scan: &Scan) -> Result<ScanId, DbError> {
     let scan = scan.clone();
-    let scopes = serde_json::to_string(&scan.scopes).unwrap_or_else(|_| "[]".into());
     store.db.write_blocking(move |tx| {
+        // A path that is not UTF-8 cannot be written: better no record of the scan than one
+        // that resumes as a scan of nothing.
+        let scopes = serde_json::to_string(&scan.scopes)
+            .map_err(|error| ToSqlConversionFailure(Box::new(error)))?;
         let id = tx.query_row(
             "INSERT INTO scans (id, library_id, trigger, state, scopes, created_at) \
              VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, ?5) RETURNING id",
@@ -93,6 +96,8 @@ fn read(conn: &Connection, lib: i64, rest: &str) -> Result<Vec<Scan>> {
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([lib], |r| {
         let scopes: String = r.get(4)?;
+        let scopes = serde_json::from_str(&scopes)
+            .map_err(|error| FromSqlConversionFailure(4, Type::Text, Box::new(error)))?;
         let cursor_scope: Option<i64> = r.get(5)?;
         let cursor_dir: Option<String> = r.get(6)?;
         Ok(Scan {
@@ -100,7 +105,7 @@ fn read(conn: &Connection, lib: i64, rest: &str) -> Result<Vec<Scan>> {
             library: r.get::<_, i64>(1)?.to_string(),
             trigger: parse(r, 2)?,
             state: parse(r, 3)?,
-            scopes: serde_json::from_str(&scopes).unwrap_or_default(),
+            scopes,
             cursor: cursor_scope.map(|s| Cursor {
                 scope_index: s as usize,
                 after_directory: cursor_dir.map(PathBuf::from),

@@ -15,17 +15,13 @@ pub fn record_problem(
     lib: i64,
     problem: &Problem,
 ) -> Result<()> {
+    // Nothing to record under a root that has just been removed.
     let Some((root_id, rel)) = roots.locate(lib, &problem.path) else {
         return Ok(());
     };
-    let root_path = roots
-        .0
-        .read()
-        .unwrap()
-        .get(&lib)
-        .and_then(|rs| rs.iter().find(|r| r.id == root_id))
-        .map(|r| r.path.clone())
-        .unwrap_or_default();
+    let Some(root_path) = roots.absolute(lib, root_id, "") else {
+        return Ok(());
+    };
     let key = group_key(problem.kind, &root_path, &problem.detail);
     let seen = system_time_ms(problem.seen_at) as i64;
     let group_id: i64 = tx.query_row(

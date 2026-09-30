@@ -570,6 +570,57 @@ fn duplicates_are_candidates_with_their_credits_in_order() {
 }
 
 #[test]
+fn unreadable_settings_fail_loudly_rather_than_read_as_empty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    std::fs::create_dir_all(&root).unwrap();
+    let store = make(&root);
+    let lib = testing::library(&root);
+    // Valid JSON arrays, as the schema checks, but not of what they should hold.
+    store
+        .db()
+        .write_blocking(|tx| {
+            tx.execute_batch(
+                "UPDATE libraries SET excludes = '[1]';
+                 INSERT INTO scans (id, library_id, trigger, state, scopes, created_at)
+                 VALUES (7, 1, 'manual', 'running', '[1]', 0);",
+            )
+        })
+        .unwrap();
+    assert!(
+        store.db().read_blocking(libraries::all).is_err(),
+        "excludes"
+    );
+    assert!(store.scans(1).is_err(), "scopes");
+    assert!(store.interrupted_scans(&lib.id).is_empty());
+}
+
+#[test]
+fn a_scan_that_cannot_be_recorded_is_not_recorded_empty() {
+    use std::os::unix::ffi::OsStrExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    std::fs::create_dir_all(&root).unwrap();
+    let store = make(&root);
+    let lib = testing::library(&root);
+    // A folder name that is not UTF-8, as Linux allows.
+    let folder = root.join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+    let scan = Scan {
+        id: 0,
+        library: lib.id.clone(),
+        trigger: Trigger::Watch,
+        scopes: vec![Scope::folder(&root, folder, Depth::Directory)],
+        state: ScanState::Queued,
+        started_at: None,
+        finished_at: None,
+        progress: ScanProgress::default(),
+        cursor: None,
+    };
+    assert_eq!(store.create_scan(&scan), 0);
+    assert!(store.scans(1).unwrap().is_empty());
+}
+
+#[test]
 fn compilations_and_album_types() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
