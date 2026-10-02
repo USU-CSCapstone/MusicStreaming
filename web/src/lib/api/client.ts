@@ -25,7 +25,7 @@ import type {
 	User,
 	Waveform
 } from './types';
-import type { PermissionGrants, Plugin, PluginRunResult } from './plugins';
+import type { PermissionGrants, Plugin, PluginRunResult, PluginSettings } from './plugins';
 
 type Fetch = typeof fetch;
 type Query = Record<string, string | number | undefined>;
@@ -206,6 +206,21 @@ export const setPluginEnabled = (f: Fetch, id: string, libraryId: string, enable
 	send<Plugin>(f, 'PUT', `${plugin(id)}/libraries/${encodeURIComponent(libraryId)}`, { enabled });
 
 export const uninstallPlugin = (f: Fetch, id: string) => send<void>(f, 'DELETE', plugin(id));
+
+/** Its settings at one level: a library's own, or with no library, the server-wide ones. */
+const settingsPath = (id: string, libraryId?: string) =>
+	`${plugin(id)}/settings${libraryId ? `?${new URLSearchParams({ libraryId })}` : ''}`;
+
+export const getPluginSettings = (f: Fetch, id: string, libraryId?: string) =>
+	get<PluginSettings>(f, settingsPath(id, libraryId));
+
+/** Saves after the server and the plugin check them; a secret left out keeps its value. */
+export const setPluginSettings = (
+	f: Fetch,
+	id: string,
+	values: Record<string, unknown>,
+	libraryId?: string
+) => send<PluginSettings>(f, 'PUT', settingsPath(id, libraryId), { values });
 
 /** Runs it once now, with the permissions approved for it; answers when it finishes. */
 export const runPlugin = (f: Fetch, id: string) =>

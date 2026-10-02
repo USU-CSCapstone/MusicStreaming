@@ -6,6 +6,16 @@
 	"description": "Finds synced lyrics on lrclib.net for tracks that have none, and saves them beside the audio.",
 	"author": "Jewelcase examples",
 	"homepage": "https://lrclib.net",
+	"settings": {
+		"properties": {
+			"syncedOnly": {
+				"type": "boolean",
+				"title": "Synced lyrics only",
+				"description": "Skip tracks lrclib.net has only plain lyrics for, so every lyric shown follows along.",
+				"default": false
+			}
+		}
+	},
 	"permissions": [
 		{ "permission": "libraryRead", "required": true, "reason": "To find tracks without lyrics." },
 		{

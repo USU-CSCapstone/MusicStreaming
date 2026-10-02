@@ -84,3 +84,28 @@ test('a disabled plugin offers nothing to run', async ({ page }) => {
 	await expect(card.getByRole('switch')).not.toBeChecked();
 	await expect(card.getByRole('button', { name: 'Run now' })).toHaveCount(0);
 });
+
+test('settings are saved, and a secret is never shown again', async ({ page }) => {
+	await serveLibrary(page);
+	await page.goto('/admin/plugins');
+	await page.locator('input[type=file]').setInputFiles(pluginFile());
+	const allow = page.getByRole('dialog', { name: 'Allow LRCLIB Lyrics' });
+	await allow.getByRole('button', { name: 'Approve all' }).click();
+	await expect(allow).toBeHidden();
+
+	const card = page.getByRole('listitem').filter({ hasText: 'LRCLIB Lyrics' });
+	await card.getByRole('button', { name: 'Settings…' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Settings for LRCLIB Lyrics' });
+	await dialog.getByLabel('Synced lyrics only').check();
+	await dialog.getByLabel('API key').fill('s3cret');
+	await dialog.getByRole('button', { name: 'Save' }).click();
+	await expect(dialog).toBeHidden();
+
+	await card.getByRole('button', { name: 'Settings…' }).click();
+	await expect(dialog.getByLabel('Synced lyrics only')).toBeChecked();
+	await expect(dialog.getByLabel('API key')).toHaveValue('');
+	await expect(dialog.getByLabel('API key')).toHaveAttribute(
+		'placeholder',
+		'Saved; type to replace it'
+	);
+});

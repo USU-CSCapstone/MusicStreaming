@@ -24,6 +24,7 @@ mod plugin {
 
     use jewelcase::plugin::files::{self, WriteMode};
     use jewelcase::plugin::host::{self, Permission};
+    use jewelcase::plugin::settings;
     use jewelcase::plugin::{http, library};
 
     struct Plugin;
@@ -31,6 +32,7 @@ mod plugin {
     #[derive(Default)]
     struct Tally {
         checked: u32,
+        plain_only: u32,
         had_lyrics: u32,
         synced: u32,
         plain: u32,
@@ -73,6 +75,11 @@ mod plugin {
 
     impl Guest for Plugin {
         fn handle(event: Event) -> Result<String, String> {
+            // Before the permissions: settings are checked before anything is granted, and it
+            // has nothing to check them against.
+            if let Event::CheckSettings = event {
+                return Ok("Nothing to check.".into());
+            }
             let granted = host::granted();
             for (p, what) in [
                 (Permission::LibraryRead, "read the library"),
@@ -85,7 +92,9 @@ mod plugin {
             // Without access to add files it still looks everything up, and reports what it
             // would save.
             let can_write = granted.contains(&Permission::LibraryAdd);
+            let synced_only = matches!(settings::get("syncedOnly"), Some(settings::Value::Flag(true)));
             let mut n = Tally::default();
+            let mut visit = |t: &library::Track| visit(t, can_write, synced_only, &mut n);
             match event {
                 // The whole library, a page at a time: asked for, or on the schedule, as
                 // lrclib.net gains lyrics for tracks it had none for.
@@ -95,24 +104,25 @@ mod plugin {
                         let page = library::tracks(after, 50)?;
                         let Some(last) = page.last() else { break };
                         after = Some(last.id);
-                        page.iter().for_each(|t| visit(t, can_write, &mut n));
+                        page.iter().for_each(&mut visit);
                     }
                 }
                 // Only the tracks that were added or changed; removed ones need nothing.
                 Event::TracksChanged(changes) => {
                     for ids in changes.changed.chunks(50) {
-                        library::get_tracks(ids)?.iter().for_each(|t| visit(t, can_write, &mut n));
+                        library::get_tracks(ids)?.iter().for_each(&mut visit);
                     }
                 }
                 // It does not ask to hear about scans.
-                Event::ScanFinished(_) => return Ok("Nothing to do.".into()),
+                // It does not ask to hear about scans, and settings were answered above.
+                Event::ScanFinished(_) | Event::CheckSettings => return Ok("Nothing to do.".into()),
             }
             Ok(summary(&n, can_write))
         }
     }
 
     /// Looks up lyrics for `t` if it has none, and saves them if it can.
-    fn visit(t: &library::Track, can_write: bool, n: &mut Tally) {
+    fn visit(t: &library::Track, can_write: bool, synced_only: bool, n: &mut Tally) {
         let name = format!("{} — {}", t.title, t.artists.join(", "));
         if t.has_lyrics {
             n.had_lyrics += 1;
@@ -121,6 +131,11 @@ mod plugin {
         n.checked += 1;
         let (synced, text) = match lookup(t) {
             Ok(Found::Synced(s)) => (true, s),
+            Ok(Found::Plain(_)) if synced_only => {
+                n.plain_only += 1;
+                host::log(&format!("· {name}: only plain lyrics, skipped"));
+                return;
+            }
             Ok(Found::Plain(s)) => (false, s),
             Ok(Found::Instrumental) => {
                 n.instrumental += 1;
@@ -170,6 +185,9 @@ mod plugin {
         let mut rest = Vec::new();
         if n.missing > 0 {
             rest.push(format!("{} not found", n.missing));
+        }
+        if n.plain_only > 0 {
+            rest.push(format!("{} with only plain lyrics", n.plain_only));
         }
         if n.instrumental > 0 {
             rest.push(format!("{} instrumental", n.instrumental));

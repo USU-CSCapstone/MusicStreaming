@@ -88,6 +88,7 @@ fn grants(permissions: &[Permission], destinations: &[&str]) -> Grants {
     Grants {
         permissions: permissions.to_vec(),
         destinations: destinations.iter().map(|d| d.to_string()).collect(),
+        settings: Default::default(),
     }
 }
 

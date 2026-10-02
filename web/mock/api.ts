@@ -237,7 +237,7 @@ export function createApi(dataDir: string) {
 				const out = await adminRoute(
 					plugins,
 					req.method ?? 'GET',
-					path,
+					path + url.search,
 					req.headers['content-type'] ?? '',
 					await readBody(req)
 				);

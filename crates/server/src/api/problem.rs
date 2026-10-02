@@ -24,6 +24,7 @@ pub enum Code {
     ValidationFailed,
     WeakPassword,
     PluginInvalid,
+    PluginSettingsInvalid,
     PluginExists,
     PermissionsRequired,
     SetupRequired,
@@ -39,9 +40,10 @@ impl Code {
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
-            Self::ValidationFailed | Self::WeakPassword | Self::PluginInvalid => {
-                StatusCode::UNPROCESSABLE_ENTITY
-            }
+            Self::ValidationFailed
+            | Self::WeakPassword
+            | Self::PluginInvalid
+            | Self::PluginSettingsInvalid => StatusCode::UNPROCESSABLE_ENTITY,
             Self::PluginExists | Self::PermissionsRequired => StatusCode::CONFLICT,
             Self::SetupRequired => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,

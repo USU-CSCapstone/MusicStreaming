@@ -124,6 +124,10 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Arc<P
         .route("/admin/plugins/{plugin_id}/permissions", put(plugins::set_permissions))
         .route("/admin/plugins/{plugin_id}/libraries/{library_id}", put(plugins::set_enabled))
         .route("/admin/plugins/{plugin_id}/run", post(plugins::run))
+        .route(
+            "/admin/plugins/{plugin_id}/settings",
+            get(plugins::get_settings).put(plugins::set_settings),
+        )
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate::require));
     // Until setup is done, these answer `503 setup_required`.
     let after_setup = Router::new()

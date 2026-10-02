@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use jewelcase_plugins::{Event, Grants, Manifest, Outcome, Permission};
 use jewelcase_scanner::Trigger;
 use rusqlite::{Connection, params};
+use serde_json::{Map, Value};
 
 use super::library::RunLibrary;
-use super::{PluginError, Plugins, grants};
+use super::{PluginError, Plugins, grants, settings};
 use crate::db::now_ms;
 
 /// How a run went, as the admin sees it.
@@ -82,15 +83,12 @@ impl Plugins {
         permissions: Vec<Permission>,
         event: Event,
     ) -> Result<(Outcome, bool), PluginError> {
-        let (host, runtime) = (self.host()?, self.runtime()?);
-        let grants = Grants { permissions, destinations: manifest.destinations().to_vec() };
-        let (path, db, plugin) = (self.path(id), self.db.clone(), id.to_owned());
-        let outcome = runtime
-            .spawn(async move {
-                host.run(&path, grants, RunLibrary::new(db, &plugin, library), event).await
-            })
-            .await
-            .map_err(|e| PluginError::Internal(e.to_string()))?;
+        let (plugin, schema) = (id.to_owned(), manifest.settings.clone());
+        let settings = self
+            .db
+            .read(move |conn| settings::effective(conn, &plugin, schema.as_ref(), library))
+            .await?;
+        let outcome = self.execute(id, manifest, library, permissions, settings, event).await?;
         let scanning = self.scan(library, &outcome.touched).await;
         let (plugin, ok, summary) = (id.to_owned(), outcome.ok, outcome.summary.clone());
         self.db
@@ -103,6 +101,29 @@ impl Plugins {
             })
             .await?;
         Ok((outcome, scanning))
+    }
+
+    /// Runs `id` in `library` with exactly these permissions and settings, on the plugin
+    /// runtime, and nothing more.
+    pub(super) async fn execute(
+        &self,
+        id: &str,
+        manifest: &Manifest,
+        library: i64,
+        permissions: Vec<Permission>,
+        settings: Map<String, Value>,
+        event: Event,
+    ) -> Result<Outcome, PluginError> {
+        let (host, runtime) = (self.host()?, self.runtime()?);
+        let grants =
+            Grants { permissions, destinations: manifest.destinations().to_vec(), settings };
+        let (path, db, plugin) = (self.path(id), self.db.clone(), id.to_owned());
+        runtime
+            .spawn(async move {
+                host.run(&path, grants, RunLibrary::new(db, &plugin, library), event).await
+            })
+            .await
+            .map_err(|e| PluginError::Internal(e.to_string()))
     }
 
     /// Queues a scan of each folder the paths in `touched` are in, and says whether any was

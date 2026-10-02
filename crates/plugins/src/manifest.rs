@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use wasmparser::{Encoding, Parser, Payload};
 
+use crate::settings::{self, Schema};
+
 pub const SECTION: &str = "jewelcase:manifest";
 pub const API_VERSION: &str = "0.2";
 
@@ -105,6 +107,9 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
     pub permissions: Vec<PermissionRequest>,
+    /// What an admin can set for it (`settings`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<Schema>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -215,6 +220,9 @@ pub fn validate(manifest: &Value) -> Vec<String> {
     }
     if o.get("apiVersion").and_then(Value::as_str) != Some(API_VERSION) {
         problems.push(format!(r#""apiVersion" must be "{API_VERSION}""#));
+    }
+    if let Some(declared) = o.get("settings") {
+        problems.extend(settings::validate(declared));
     }
     let Some(permissions) = o.get("permissions").and_then(Value::as_array) else {
         problems.push(r#""permissions" must be a list (empty if it needs none)"#.into());

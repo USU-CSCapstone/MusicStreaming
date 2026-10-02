@@ -29,6 +29,8 @@ pub struct Plugin {
     permissions: Vec<PermissionRequest>,
     /// Plugin-wide permissions granted.
     granted: Vec<Permission>,
+    /// Whether it declares settings an admin can set.
+    has_settings: bool,
     libraries: Vec<PluginLibrary>,
 }
 
@@ -179,6 +181,7 @@ fn view(conn: &Connection, r: Stored) -> rusqlite::Result<Plugin> {
         installed_at: r.installed_at,
         updated_at: r.updated_at,
         permissions: m.permissions,
+        has_settings: m.settings.as_ref().is_some_and(|s| !s.properties.is_empty()),
         granted: plugin_wide,
         libraries,
     })

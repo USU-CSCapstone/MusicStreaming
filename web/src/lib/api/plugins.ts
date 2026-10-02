@@ -13,6 +13,17 @@ export type PluginLibrary = Plugin['libraries'][number];
 export type PermissionGrants = Schemas['PermissionGrants'];
 /** What `POST /admin/plugins/{pluginId}/run` answers: the plugin's own words, and its log. */
 export type PluginRunResult = Schemas['PluginRunResult'];
+export type PluginSettings = Schemas['PluginSettings'];
+
+/** One setting, as a plugin's settings schema declares it. */
+export type SettingSchema = {
+	type: 'string' | 'number' | 'integer' | 'boolean';
+	title?: string;
+	description?: string;
+	enum?: (string | number | boolean)[];
+	default?: string | number | boolean;
+	writeOnly?: boolean;
+};
 
 /** Granted per library. The rest are granted once per plugin (`requirements/plugins.md` §4.1). */
 export const LIBRARY_PERMISSIONS: readonly PermissionName[] = [
@@ -37,6 +48,7 @@ export type PluginManifest = {
 	author?: string;
 	homepage?: string;
 	permissions: PermissionRequest[];
+	settings?: { properties: Record<string, SettingSchema>; required?: string[] };
 };
 
 export const PERMISSION_LABELS: Record<PermissionName, { title: string; detail: string }> = {

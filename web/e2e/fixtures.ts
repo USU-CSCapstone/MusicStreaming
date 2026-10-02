@@ -110,6 +110,12 @@ export const pluginManifest: PluginManifest = {
 	version: '0.1.0',
 	apiVersion: '0.2',
 	description: 'Fetches synced lyrics for tracks that have none.',
+	settings: {
+		properties: {
+			syncedOnly: { type: 'boolean', title: 'Synced lyrics only', default: false },
+			apiKey: { type: 'string', title: 'API key', writeOnly: true }
+		}
+	},
 	permissions: [
 		{ permission: 'libraryRead', required: true, reason: 'To find tracks without lyrics.' },
 		{
@@ -217,7 +223,7 @@ export async function serveLibrary(
 			const out = await adminRoute(
 				plugins,
 				req.method(),
-				path,
+				path + url.search,
 				req.headers()['content-type'] ?? '',
 				new Uint8Array(req.postDataBuffer() ?? []),
 				fakeRun

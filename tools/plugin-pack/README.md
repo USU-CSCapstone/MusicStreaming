@@ -35,8 +35,11 @@ written. The error says what to fix.
 | `apiVersion` | `0.2` |
 | `permissions` | Any of `libraryRead`, `libraryAdd`, `libraryChange`, `network`, `listeningActivity` (`requirements/plugins.md` §4.1). Each needs a `reason`, which the admin sees. Mark as `required` only what the plugin cannot work without; an admin can decline the rest. |
 | `destinations` | For `network` only: the host names it talks to, or `["*"]` for any. |
+| `everyMinutes` | For `schedule` only: how often it runs, at least 5. |
+| `settings` | Optional. What an admin can set, as `{ "properties": { "name": { "type": "string" \| "number" \| "integer" \| "boolean", "title", "description", "enum", "default", "writeOnly" } }, "required": [names] }`. `writeOnly` marks a secret, never shown again once entered. The plugin reads them with `settings.get`, and checks new ones on `check-settings`. |
 
 The server validates on install with its own reader in [`crates/plugins`](../../crates/plugins/),
 which is the authority. `manifest.mjs` validates the same way, for authors, the web mock, and its
 tests, and both are held to [`manifest-cases.json`](../../crates/plugins/manifest-cases.json).
-Change one, and the cases, together.
+Change one, and the cases, together: add a case as `{ "name", "manifest" }` and run
+`node tools/plugin-pack/cases.mjs` to record what this module says about each.
