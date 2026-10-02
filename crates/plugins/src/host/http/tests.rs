@@ -49,6 +49,7 @@ fn run() -> Run<Refused> {
         grants: Grants {
             permissions: vec![Permission::Network],
             destinations: vec!["127.0.0.1".into()],
+            settings: Default::default(),
         },
         library: Refused,
         client: None,

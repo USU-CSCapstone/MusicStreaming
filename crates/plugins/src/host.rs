@@ -88,11 +88,13 @@ pub trait Library: Send + 'static {
     fn state_delete(&mut self, key: String) -> impl Future<Output = Result<(), String>> + Send;
 }
 
-/// What a run may use: the permissions granted for its library, and the hosts its manifest
-/// names for the network.
+/// What a run may use: the permissions granted for its library, the hosts its manifest names
+/// for the network, and its settings.
 pub struct Grants {
     pub permissions: Vec<Permission>,
     pub destinations: Vec<String>,
+    /// The settings in effect for the run, defaults included.
+    pub settings: serde_json::Map<String, serde_json::Value>,
 }
 
 /// How a run went, in the plugin's own words where it gave them.
@@ -344,6 +346,18 @@ fn wit(permission: Permission) -> host::Permission {
         Permission::TracksChanged => host::Permission::TracksChanged,
         Permission::ScanFinished => host::Permission::ScanFinished,
         Permission::Schedule => host::Permission::Schedule,
+    }
+}
+
+impl<L: Library> bindings::jewelcase::plugin::settings::Host for Run<L> {
+    async fn get(&mut self, name: String) -> Option<bindings::jewelcase::plugin::settings::Value> {
+        use bindings::jewelcase::plugin::settings::Value;
+        match self.grants.settings.get(&name)? {
+            serde_json::Value::String(text) => Some(Value::Text(text.clone())),
+            serde_json::Value::Number(n) => n.as_f64().map(Value::Number),
+            serde_json::Value::Bool(flag) => Some(Value::Flag(*flag)),
+            _ => None,
+        }
     }
 }
 

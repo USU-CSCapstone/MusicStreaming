@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use super::extract::{self, Path};
 use super::{Code, Id, Problem};
 use crate::db::Database;
-use crate::plugins::{PluginError, Plugins};
+use crate::plugins::{PluginError, Plugins, grants, settings};
 use representation::Plugin;
 
 #[derive(Serialize)]
@@ -153,6 +153,81 @@ pub async fn run(
     }))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsLevel {
+    library_id: Option<String>,
+}
+
+/// The level `query` names: a library that exists, or the server-wide settings.
+async fn level(db: &Database, query: SettingsLevel) -> Result<i64, Problem> {
+    let Some(library) = query.library_id else { return Ok(settings::SERVER) };
+    // A malformed ID names no library, like an unknown one.
+    let Some(Id(library)) = Id::canonical(&library) else { return Err(Problem::not_found()) };
+    let exists = db
+        .read(move |conn| {
+            conn.query_row(
+                "SELECT EXISTS (SELECT 1 FROM libraries WHERE id = ?1)",
+                [library],
+                |row| row.get(0),
+            )
+        })
+        .await?;
+    if exists { Ok(library) } else { Err(Problem::not_found()) }
+}
+
+/// The spec's `PluginSettings`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSettings {
+    schema: serde_json::Value,
+    values: serde_json::Map<String, serde_json::Value>,
+    secrets_set: Vec<String>,
+}
+
+/// What is set at a level, secrets left out, and which secrets have a value.
+pub async fn get_settings(
+    State(db): State<Arc<Database>>,
+    Path(id): Path<String>,
+    extract::Query(query): extract::Query<SettingsLevel>,
+) -> Result<Json<PluginSettings>, Problem> {
+    let level = level(&db, query).await?;
+    db.read(move |conn| {
+        let Some(manifest) = grants::manifest(conn, &id)? else { return Ok(None) };
+        let schema = manifest.settings.unwrap_or_default();
+        let mut values = settings::level(conn, &id, level)?;
+        let secrets_set =
+            schema.secrets().filter(|name| values.contains_key(*name)).map(str::to_owned).collect();
+        values.retain(|name, _| !schema.secrets().any(|secret| secret == name));
+        // As JSON Schema has it, an object of these properties.
+        let mut schema = serde_json::to_value(&schema).expect("a schema serializes");
+        schema["type"] = "object".into();
+        Ok(Some(PluginSettings { schema, values, secrets_set }))
+    })
+    .await?
+    .map(Json)
+    .ok_or_else(Problem::not_found)
+}
+
+/// The spec's `PluginSettingsUpdate`.
+#[derive(Deserialize)]
+pub struct SettingsUpdate {
+    values: serde_json::Map<String, serde_json::Value>,
+}
+
+pub async fn set_settings(
+    State(db): State<Arc<Database>>,
+    State(plugins): State<Arc<Plugins>>,
+    Path(id): Path<String>,
+    extract::Query(query): extract::Query<SettingsLevel>,
+    extract::Json(update): extract::Json<SettingsUpdate>,
+) -> Result<Json<PluginSettings>, Problem> {
+    let level_id = query.library_id.clone();
+    let level = level(&db, query).await?;
+    plugins.save_settings(id.clone(), level, update.values).await?;
+    get_settings(State(db), Path(id), extract::Query(SettingsLevel { library_id: level_id })).await
+}
+
 async fn plugin(db: &Database, id: String) -> Result<Plugin, Problem> {
     db.read(move |conn| representation::get(conn, &id)).await?.ok_or_else(Problem::not_found)
 }
@@ -163,6 +238,9 @@ impl From<PluginError> for Problem {
             PluginError::NotFound => Problem::not_found(),
             PluginError::Invalid(detail) => Problem::new(Code::PluginInvalid).detail(detail),
             PluginError::Exists(_) => Problem::new(Code::PluginExists).detail(error.to_string()),
+            PluginError::SettingsInvalid(detail) => {
+                Problem::new(Code::PluginSettingsInvalid).detail(detail)
+            }
             PluginError::PermissionsRequired(_) => {
                 Problem::new(Code::PermissionsRequired).detail(error.to_string())
             }

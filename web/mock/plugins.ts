@@ -11,7 +11,9 @@ import {
 	type Plugin,
 	type PluginLibrary,
 	type PluginManifest,
-	type PluginRunResult
+	type PluginRunResult,
+	type PluginSettings,
+	type SettingSchema
 } from '../src/lib/api/plugins.ts';
 import { PluginFileError, readManifest } from '../../tools/plugin-pack/manifest.mjs';
 
@@ -33,6 +35,8 @@ type Record_ = {
 		string,
 		{ enabled: boolean; granted: PermissionName[]; disabledReason: string | null }
 	>;
+	/** Values set per level: '' for every library, else a library's ID. */
+	settings?: Record<string, Record<string, unknown>>;
 };
 
 /** Grants kept across uninstall, so a reinstall needs no re-approval (`requirements/plugins.md` §5). */
@@ -103,6 +107,7 @@ export class PluginStore {
 			installedAt: r.installedAt,
 			permissions: m.permissions,
 			granted: r.granted,
+			hasSettings: Object.keys(settingsSchema(m).properties).length > 0,
 			libraries
 		};
 	}
@@ -238,6 +243,36 @@ export class PluginStore {
 		return this.#view(r);
 	}
 
+	/** What is set at `level` ('' for every library), secrets left out, and which are set. */
+	settings(id: string, level: string): PluginSettings {
+		const r = this.#get(this.#index(), id);
+		const schema = settingsSchema(r.manifest);
+		const stored = r.settings?.[level] ?? {};
+		const secret = (name: string) => schema.properties[name]?.writeOnly === true;
+		// The spec types these JSON objects only as objects.
+		return {
+			schema: { type: 'object', ...schema },
+			values: Object.fromEntries(Object.entries(stored).filter(([k]) => !secret(k))),
+			secretsSet: Object.keys(stored).filter(secret)
+		} as unknown as PluginSettings;
+	}
+
+	/** Saves as the server does: a secret left out keeps its value, `null` clears one. */
+	setSettings(id: string, level: string, entered: Record<string, unknown>) {
+		const index = this.#index();
+		const r = this.#get(index, id);
+		const schema = settingsSchema(r.manifest);
+		const stored = r.settings?.[level] ?? {};
+		const kept = Object.entries(stored).filter(([k]) => schema.properties[k]?.writeOnly);
+		const values: Record<string, unknown> = Object.fromEntries(kept);
+		for (const [k, v] of Object.entries(entered)) {
+			if (v === null) delete values[k];
+			else values[k] = v;
+		}
+		r.settings = { ...r.settings, [level]: values };
+		this.#save(index);
+	}
+
 	/** Disabling is immediate; enabling needs every required permission (`requirements/plugins.md` §4.2). */
 	setEnabled(id: string, libraryId: string, enabled: boolean): Plugin {
 		const index = this.#index();
@@ -266,6 +301,14 @@ export class PluginStore {
 	}
 }
 
+/** The settings a manifest declares, or none. */
+function settingsSchema(m: PluginManifest): {
+	properties: Record<string, SettingSchema>;
+	required?: string[];
+} {
+	return m.settings ?? { properties: {} };
+}
+
 export type AdminResponse = { status: number; body?: unknown };
 
 /**
@@ -281,9 +324,13 @@ export async function adminRoute(
 	/** Runs an installed plugin; injected so tests need no real runner. */
 	run?: (id: string) => Promise<PluginRunResult>
 ): Promise<AdminResponse | undefined> {
-	const m = /^\/admin\/plugins(?:\/([^/]+))?(?:\/(permissions|libraries|run)(?:\/([^/]+))?)?$/.exec(
-		path
-	);
+	// The path may carry a query, as settings take `libraryId`.
+	const url = new URL(path, 'http://mock');
+	const query = url.searchParams;
+	const m =
+		/^\/admin\/plugins(?:\/([^/]+))?(?:\/(permissions|libraries|run|settings)(?:\/([^/]+))?)?$/.exec(
+			url.pathname
+		);
 	if (!m) return undefined;
 	const [, id, sub, libraryId] = m.map((s) => (s === undefined ? s : decodeURIComponent(s)));
 	const json = () => {
@@ -311,6 +358,11 @@ export async function adminRoute(
 		}
 		if (id && sub === 'libraries' && libraryId && method === 'PUT') {
 			return { status: 200, body: store.setEnabled(id, libraryId, json().enabled === true) };
+		}
+		if (id && sub === 'settings' && (method === 'GET' || method === 'PUT')) {
+			const level = query.get('libraryId') ?? '';
+			if (method === 'PUT') store.setSettings(id, level, json().values ?? {});
+			return { status: 200, body: store.settings(id, level) };
 		}
 		if (id && sub === 'run' && method === 'POST') {
 			store.get(id); // 404 for a plugin that is not installed.

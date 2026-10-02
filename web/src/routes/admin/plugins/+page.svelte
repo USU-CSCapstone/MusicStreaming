@@ -17,6 +17,7 @@
 	import Icon from '$lib/components/Icon.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import PermissionDialog, { type Decision } from '$lib/components/PermissionDialog.svelte';
+	import SettingsDialog from '$lib/components/SettingsDialog.svelte';
 
 	let { data } = $props();
 
@@ -34,6 +35,8 @@
 	let fileInput: HTMLInputElement;
 
 	let dialog = $state<{ plugin: Plugin; mode: 'install' | 'edit' } | null>(null);
+	/** The plugin whose settings are open, if any. */
+	let settingsFor = $state<Plugin | null>(null);
 	let dialogBusy = $state(false);
 	let dialogError = $state<string | null>(null);
 	let confirming = $state<string | null>(null);
@@ -318,6 +321,9 @@
 						>
 							Permissions…
 						</button>
+						{#if p.hasSettings}
+							<button type="button" onclick={() => (settingsFor = p)}>Settings…</button>
+						{/if}
 						{#if confirming === p.id}
 							<span class="confirm">
 								Uninstall {p.name}?
@@ -333,6 +339,10 @@
 		</ul>
 	{/if}
 </section>
+
+{#if settingsFor}
+	<SettingsDialog plugin={settingsFor} {libraries} onclose={() => (settingsFor = null)} />
+{/if}
 
 {#if dialog}
 	<PermissionDialog

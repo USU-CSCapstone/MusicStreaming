@@ -10,6 +10,7 @@ mod files;
 mod host;
 pub mod manifest;
 mod rules;
+pub mod settings;
 
 pub use download::{MAX_SIZE, download};
 pub use host::{

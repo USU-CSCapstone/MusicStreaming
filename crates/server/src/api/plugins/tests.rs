@@ -38,7 +38,15 @@ async fn server() -> (tempfile::TempDir, Router) {
             { "permission": "network", "required": true, "reason": "To fetch lyrics.",
               "destinations": ["lrclib.net"] },
             { "permission": "libraryAdd", "required": false, "reason": "To save .lrc files." }
-        ]
+        ],
+        "settings": {
+            "properties": {
+                "apiKey": { "type": "string", "title": "API key", "writeOnly": true },
+                "mode": { "type": "string", "enum": ["fast", "careful"], "default": "fast" },
+                "limit": { "type": "integer", "title": "Limit" }
+            },
+            "required": ["apiKey"]
+        }
     });
     conn.execute(
         "INSERT INTO plugins (id, manifest, installed_at, updated_at) VALUES ('lrclib-lyrics', ?1, 0, 0)",
@@ -250,4 +258,86 @@ async fn installs_and_runs_a_real_plugin() {
     assert_eq!(result["summary"], "It still needs Network access.");
     let (_, plugin) = call(&app, ADMIN, "GET", PLUGIN, None).await;
     assert_eq!(plugin["libraries"][0]["lastRun"], Value::Null, "a refused run is not recorded");
+
+    // Settings pass its own check, which it answers by running, and are kept.
+    let (status, saved) = call(
+        &app,
+        ADMIN,
+        "PUT",
+        "/api/v1/admin/plugins/lrclib-lyrics/settings",
+        Some(json!({ "values": { "syncedOnly": true } })),
+    )
+    .await;
+    assert_eq!(
+        (status, &saved["values"]),
+        (StatusCode::OK, &json!({ "syncedOnly": true })),
+        "{saved}"
+    );
+}
+
+const SETTINGS: &str = "/api/v1/admin/plugins/lrclib-lyrics/settings";
+
+#[tokio::test]
+async fn settings_show_values_but_never_secrets() {
+    let (temp, app) = server().await;
+    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    conn.execute(
+        r#"INSERT INTO plugin_settings VALUES ('lrclib-lyrics', 0, '{"apiKey":"s3cret","limit":4}')"#,
+        [],
+    )
+    .unwrap();
+    let (status, settings) = call(&app, ADMIN, "GET", SETTINGS, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(settings["values"], json!({ "limit": 4 }));
+    assert_eq!(settings["secretsSet"], json!(["apiKey"]));
+    assert_eq!(settings["schema"]["type"], "object");
+    assert_eq!(settings["schema"]["properties"]["apiKey"]["writeOnly"], true);
+    assert!(!settings.to_string().contains("s3cret"));
+
+    let (status, library) =
+        call(&app, ADMIN, "GET", &format!("{SETTINGS}?libraryId=2"), None).await;
+    assert_eq!(
+        (status, &library["values"]),
+        (StatusCode::OK, &json!({})),
+        "a library sets nothing of its own"
+    );
+    assert_eq!(
+        call(&app, ADMIN, "GET", &format!("{SETTINGS}?libraryId=9"), None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, plugin) = call(&app, ADMIN, "GET", PLUGIN, None).await;
+    assert_eq!(plugin["hasSettings"], true);
+}
+
+#[tokio::test]
+async fn settings_are_checked_before_the_plugin_sees_them() {
+    let (_temp, app) = server().await;
+    for (body, detail) in [
+        (
+            json!({ "limit": 2.5, "mode": "slow" }),
+            r#"Limit must be a whole number; mode must be one of "fast", "careful"."#,
+        ),
+        (json!({ "colour": "red" }), "colour is not one of this plugin's settings."),
+    ] {
+        let (status, problem) =
+            call(&app, ADMIN, "PUT", SETTINGS, Some(json!({ "values": body }))).await;
+        assert_eq!(
+            (status, &problem["code"]),
+            (StatusCode::UNPROCESSABLE_ENTITY, &json!("plugin_settings_invalid"))
+        );
+        assert_eq!(problem["detail"], detail);
+    }
+    // A library's settings, with the server-wide ones under them, leave no required one unset.
+    let (status, problem) = call(
+        &app,
+        ADMIN,
+        "PUT",
+        &format!("{SETTINGS}?libraryId=1"),
+        Some(json!({ "values": { "limit": 2 } })),
+    )
+    .await;
+    assert_eq!(
+        (status, &problem["detail"]),
+        (StatusCode::UNPROCESSABLE_ENTITY, &json!("API key is required."))
+    );
 }

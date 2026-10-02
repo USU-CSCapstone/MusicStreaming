@@ -140,6 +140,18 @@ interface state {
   delete: func(key: string) -> result<_, string>;
 }
 
+/// What an admin set for the plugin, as its manifest declares (requirements/plugins.md §6):
+/// the library's own value, else the server-wide one, else the default. Needs no permission.
+interface settings {
+  variant value {
+    text(string),
+    number(f64),
+    flag(bool),
+  }
+
+  get: func(name: string) -> option<value>;
+}
+
 /// Why the plugin is running. A hook's event arrives only if the admin approved that hook.
 interface events {
   /// Tracks added, changed, or removed since the last one, in batches. `changed` holds IDs to
@@ -166,6 +178,9 @@ interface events {
     scan-finished(scan-finished),
     /// The schedule came round.
     scheduled,
+    /// An admin is saving new settings, which `settings.get` now answers with. An error is
+    /// shown to them and nothing is saved, so a wrong key is caught as it is entered (§6).
+    check-settings,
   }
 }
 
@@ -175,6 +190,7 @@ world plugin {
   import files;
   import http;
   import state;
+  import settings;
   import events;
   use events.{event};
 

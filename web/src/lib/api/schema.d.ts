@@ -4610,9 +4610,17 @@ export interface components {
             input?: Record<string, never>;
         };
         PluginSettings: {
-            /** @description JSON Schema the plugin declares for its settings, so every plugin is configured the same way. */
+            /**
+             * @description JSON Schema the plugin declares for its settings, so every plugin is configured the
+             *     same way: an object whose `properties` are each a `string`, `number`, `integer`, or
+             *     `boolean`, with optional `title`, `description`, `enum`, and `default`, and
+             *     `writeOnly` for a secret. `required` names the ones it needs.
+             */
             schema: Record<string, never>;
-            /** @description Current values, secrets omitted. */
+            /**
+             * @description The values set at this level, secrets omitted. A library's own override the
+             *     server-wide ones, which override the defaults.
+             */
             values: Record<string, never>;
             /** @description Names of secret fields that have a value. Their values are never returned. */
             secretsSet: string[];
@@ -4644,6 +4652,8 @@ export interface components {
             permissions: components["schemas"]["PermissionRequest"][];
             /** @description Plugin-wide permissions granted. Library permissions are per library, below. */
             granted: components["schemas"]["PermissionName"][];
+            /** @description Whether it declares settings, read and set with `adminGetPluginSettings`. */
+            hasSettings: boolean;
             /** @description Every library on the server. */
             libraries: {
                 libraryId: string;

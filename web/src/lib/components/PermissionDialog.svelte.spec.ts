@@ -25,6 +25,7 @@ function plugin(overrides: Partial<Plugin> = {}): Plugin {
 			{ permission: 'libraryAdd', required: false, reason: 'To save .lrc files.' }
 		],
 		granted: [],
+		hasSettings: false,
 		libraries: [
 			{
 				libraryId: LIB.id,

@@ -959,6 +959,554 @@
 		]
 	},
 	{
+		"name": "settings of every kind",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			],
+			"settings": {
+				"properties": {
+					"apiKey": {
+						"type": "string",
+						"title": "API key",
+						"writeOnly": true
+					},
+					"mode": {
+						"type": "string",
+						"enum": [
+							"a",
+							"b"
+						],
+						"default": "a"
+					},
+					"limit": {
+						"type": "integer",
+						"default": 3
+					},
+					"ratio": {
+						"type": "number"
+					},
+					"on": {
+						"type": "boolean",
+						"description": "Turns it on."
+					}
+				},
+				"required": [
+					"apiKey"
+				]
+			}
+		},
+		"problems": []
+	},
+	{
+		"name": "settings that are not an object",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			],
+			"settings": "none"
+		},
+		"problems": [
+			"\"settings\" must be an object with \"properties\""
+		]
+	},
+	{
+		"name": "settings without properties",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			],
+			"settings": {
+				"required": []
+			}
+		},
+		"problems": [
+			"\"settings\" must be an object with \"properties\""
+		]
+	},
+	{
+		"name": "a setting with a bad name",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			],
+			"settings": {
+				"properties": {
+					"1st": {
+						"type": "string"
+					},
+					"two words": {
+						"type": "string"
+					}
+				}
+			}
+		},
+		"problems": [
+			"settings: \"1st\" is not a setting name (letters, digits, and _, starting with a letter)",
+			"settings: \"two words\" is not a setting name (letters, digits, and _, starting with a letter)"
+		]
+	},
+	{
+		"name": "a setting of an unknown type",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			],
+			"settings": {
+				"properties": {
+					"when": {
+						"type": "date"
+					}
+				}
+			}
+		},
+		"problems": [
+			"settings.when: \"type\" must be string, number, integer, or boolean"
+		]
+	},
+	{
+		"name": "a setting that is not an object",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			],
+			"settings": {
+				"properties": {
+					"x": "string"
+				}
+			}
+		},
+		"problems": [
+			"settings.x must be an object"
+		]
+	},
+	{
+		"name": "a setting with a blank title and an odd secret flag",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			],
+			"settings": {
+				"properties": {
+					"x": {
+						"type": "string",
+						"title": " ",
+						"writeOnly": "yes"
+					}
+				}
+			}
+		},
+		"problems": [
+			"settings.x: \"title\" must be a non-empty string",
+			"settings.x: \"writeOnly\" must be true or false"
+		]
+	},
+	{
+		"name": "choices of the wrong kind",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			],
+			"settings": {
+				"properties": {
+					"x": {
+						"type": "integer",
+						"enum": [
+							1,
+							"two"
+						]
+					}
+				}
+			}
+		},
+		"problems": [
+			"settings.x: \"enum\" must be a non-empty list of integer values"
+		]
+	},
+	{
+		"name": "empty choices",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			],
+			"settings": {
+				"properties": {
+					"x": {
+						"type": "string",
+						"enum": []
+					}
+				}
+			}
+		},
+		"problems": [
+			"settings.x: \"enum\" must be a non-empty list of string values"
+		]
+	},
+	{
+		"name": "a default of the wrong kind",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			],
+			"settings": {
+				"properties": {
+					"x": {
+						"type": "boolean",
+						"default": "no"
+					},
+					"y": {
+						"type": "integer",
+						"default": 1.5
+					}
+				}
+			}
+		},
+		"problems": [
+			"settings.x: \"default\" must be true or false",
+			"settings.y: \"default\" must be a whole number"
+		]
+	},
+	{
+		"name": "a required setting that is not declared",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			],
+			"settings": {
+				"properties": {
+					"x": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"y"
+				]
+			}
+		},
+		"problems": [
+			"settings: \"required\" must be a list of its settings' names"
+		]
+	},
+	{
 		"name": "many problems at once",
 		"manifest": {
 			"id": "Bad ID",

@@ -9,6 +9,7 @@ pub mod grants;
 mod hooks;
 mod library;
 mod run;
+pub mod settings;
 #[cfg(test)]
 mod testing;
 
@@ -32,6 +33,9 @@ pub enum PluginError {
     Invalid(String),
     #[error("{0} is already installed.")]
     Exists(String),
+    /// Settings an admin entered that it will not take, in words they can act on.
+    #[error("{0}")]
+    SettingsInvalid(String),
     /// Required permissions not yet granted, named as the admin saw them.
     #[error("It still needs {}.", .0.join(" and "))]
     PermissionsRequired(Vec<&'static str>),

@@ -144,6 +144,7 @@ export function validateManifest(m) {
 		problems.push('"homepage" must be an http(s) URL');
 	}
 	if (o.apiVersion !== API_VERSION) problems.push(`"apiVersion" must be "${API_VERSION}"`);
+	if (o.settings !== undefined) problems.push(...validateSettings(o.settings));
 	if (!Array.isArray(o.permissions)) {
 		problems.push('"permissions" must be a list (empty if it needs none)');
 		return problems;
@@ -188,6 +189,66 @@ export function validateManifest(m) {
 		if (seen.has(hook) && !seen.has('libraryRead')) {
 			problems.push(`${hook} needs libraryRead as well`);
 		}
+	}
+	return problems;
+}
+
+const KINDS = {
+	string: { accepts: (/** @type {unknown} */ v) => typeof v === 'string', described: 'text' },
+	number: { accepts: (/** @type {unknown} */ v) => typeof v === 'number', described: 'a number' },
+	integer: { accepts: (/** @type {unknown} */ v) => Number.isInteger(v), described: 'a whole number' },
+	boolean: { accepts: (/** @type {unknown} */ v) => typeof v === 'boolean', described: 'true or false' }
+};
+
+/**
+ * Every problem with a manifest's `settings`: a small part of JSON Schema, in the same words as
+ * the server's `crates/plugins/src/settings.rs`.
+ * @param {unknown} settings
+ * @returns {string[]}
+ */
+function validateSettings(settings) {
+	const props = /** @type {Record<string, unknown>} */ (settings)?.properties;
+	if (typeof settings !== 'object' || settings === null || typeof props !== 'object' || props === null || Array.isArray(props)) {
+		return ['"settings" must be an object with "properties"'];
+	}
+	const properties = /** @type {Record<string, unknown>} */ (props);
+	const problems = [];
+	// Sorted, as the server's map of them is.
+	for (const name of Object.keys(properties).sort()) {
+		if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name)) {
+			problems.push(`settings: "${name}" is not a setting name (letters, digits, and _, starting with a letter)`);
+			continue;
+		}
+		const at = `settings.${name}`;
+		const s = /** @type {Record<string, unknown>} */ (properties[name]);
+		if (typeof s !== 'object' || s === null || Array.isArray(s)) {
+			problems.push(`${at} must be an object`);
+			continue;
+		}
+		const kind = KINDS[/** @type {keyof typeof KINDS} */ (s.type)];
+		if (typeof s.type !== 'string' || !Object.hasOwn(KINDS, s.type)) {
+			problems.push(`${at}: "type" must be string, number, integer, or boolean`);
+			continue;
+		}
+		for (const key of ['title', 'description']) {
+			const v = s[key];
+			if (v !== undefined && !(typeof v === 'string' && v.trim())) {
+				problems.push(`${at}: "${key}" must be a non-empty string`);
+			}
+		}
+		if (s.writeOnly !== undefined && typeof s.writeOnly !== 'boolean') {
+			problems.push(`${at}: "writeOnly" must be true or false`);
+		}
+		if (s.enum !== undefined && !(Array.isArray(s.enum) && s.enum.length && s.enum.every(kind.accepts))) {
+			problems.push(`${at}: "enum" must be a non-empty list of ${s.type} values`);
+		}
+		if (s.default !== undefined && !kind.accepts(s.default)) {
+			problems.push(`${at}: "default" must be ${kind.described}`);
+		}
+	}
+	const required = /** @type {Record<string, unknown>} */ (settings).required;
+	if (required !== undefined && !(Array.isArray(required) && required.every((n) => typeof n === 'string' && Object.hasOwn(properties, n)))) {
+		problems.push(`settings: "required" must be a list of its settings' names`);
 	}
 	return problems;
 }
