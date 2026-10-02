@@ -5788,10 +5788,11 @@ components:
     # ───────────────────────────── Listening ─────────────────────────────
     PlayReport:
       type: object
-      required: [playId, libraryId, startedAt, listenTimeMs, context, origin, deviceId]
+      required: [playId, libraryId, startedAt, listenTimeMs, context, origin]
       description: |
         Every track that starts is a play; `listenTimeMs` is audio actually heard
-        (`requirements/analytics.md` §1). Exactly one of `trackId` or `external` is set.
+        (`requirements/analytics.md` §1). Exactly one of `trackId` or `external` is set. A
+        play of a track no longer in a library the caller reaches is left out.
       properties:
         playId:
           type: string
@@ -5819,7 +5820,9 @@ components:
           oneOf:
             - $ref: '#/components/schemas/Reason'
             - type: 'null'
-        deviceId: { type: string }
+        deviceId:
+          type: string
+          description: Ignored. A play is recorded on the device whose token reports it.
 
     HistoryEntry:
       type: object

@@ -63,7 +63,10 @@
 				{#if section.type !== 'tracks' && section.type !== 'lyrics'}<ViewToggle />{/if}
 			</header>
 			{#if section.type === 'tracks'}
-				<TrackList tracks={section.items.flatMap((r) => (r.track ? [r.track] : []))} />
+				<TrackList
+					tracks={section.items.flatMap((r) => (r.track ? [r.track] : []))}
+					context={{ type: 'search', query: data.q ?? '', section: 'tracks' }}
+				/>
 			{:else}
 				<CollectionView cards={section.items.flatMap(card)} />
 			{/if}

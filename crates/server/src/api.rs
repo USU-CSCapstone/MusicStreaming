@@ -19,6 +19,7 @@ mod origin;
 mod page;
 mod password;
 mod playlists;
+mod plays;
 mod plugins;
 mod problem;
 mod refs;
@@ -98,6 +99,7 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Arc<P
     let signed_in = Router::new()
         .route("/auth/logout", post(session::logout))
         .route("/me", get(me::get))
+        .route("/me/plays", post(plays::record))
         .route("/libraries", get(libraries::list))
         .route("/libraries/{library_id}", get(libraries::get))
         .route("/libraries/{library_id}/albums", get(albums::list))

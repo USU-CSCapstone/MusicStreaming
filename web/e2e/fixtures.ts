@@ -8,6 +8,7 @@ import type { PluginManifest } from '../src/lib/api/plugins';
 import type {
 	AlbumSummary,
 	Library,
+	PlayReport,
 	Session,
 	SetupRequest,
 	TrackSummary
@@ -168,7 +169,7 @@ export const PASSWORD = 'correct horse battery staple';
 /**
  * A server whose setup is done unless `setupRequired`, when `POST /setup` completes it, and
  * with this browser logged in, as an account with `role`, unless `signedIn` is false. Until
- * then, anything but setup and login answers `401`.
+ * then, anything but setup and login answers `401`. Returns every play reported to it.
  */
 export async function serveLibrary(
 	page: Page,
@@ -183,6 +184,7 @@ export async function serveLibrary(
 	const plugins = new PluginStore(mkdtempSync(join(tmpdir(), 'jc-e2e-plugins-')), () =>
 		empty ? [] : [library.id]
 	);
+	const plays: PlayReport[] = [];
 	await page.route('**/api/v1/**', async (route: Route) => {
 		const url = new URL(route.request().url());
 		const path = url.pathname.replace(/^.*\/api\/v1/, '');
@@ -211,6 +213,10 @@ export async function serveLibrary(
 		if (!signedIn) return problem(401, 'unauthenticated');
 		if (path === '/auth/logout') {
 			signedIn = false;
+			return route.fulfill({ status: 204 });
+		}
+		if (path === '/me/plays') {
+			plays.push(...route.request().postDataJSON().items);
 			return route.fulfill({ status: 204 });
 		}
 		if (path === '/me') {
@@ -291,4 +297,5 @@ export async function serveLibrary(
 		if (media?.[2] === 'audio') return route.fulfill({ body: wav(), contentType: 'audio/wav' });
 		return problem(404, 'not_found');
 	});
+	return { plays };
 }

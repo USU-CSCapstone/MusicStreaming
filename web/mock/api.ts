@@ -224,7 +224,8 @@ export function createApi(dataDir: string) {
 		const url = new URL(req.url ?? '/', 'http://mock');
 		const path = url.pathname.replace(/\/$/, '');
 		// Logging in and out always succeed, so the login page and Log out work.
-		if (req.method === 'POST' && path === '/auth/logout') {
+		// Plays are taken and forgotten: the mock keeps no history.
+		if (req.method === 'POST' && (path === '/auth/logout' || path === '/me/plays')) {
 			res.statusCode = 204;
 			return res.end();
 		}
