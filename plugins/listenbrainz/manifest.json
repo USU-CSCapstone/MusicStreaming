@@ -1,0 +1,31 @@
+{
+	"id": "listenbrainz",
+	"name": "ListenBrainz",
+	"version": "0.1.0",
+	"apiVersion": "0.2",
+	"description": "Sends what you play to your own ListenBrainz account.",
+	"author": "Jewelcase examples",
+	"homepage": "https://listenbrainz.org",
+	"personalSettings": {
+		"properties": {
+			"token": {
+				"type": "string",
+				"title": "User token",
+				"description": "From listenbrainz.org/settings. It is checked as you save it.",
+				"writeOnly": true
+			}
+		},
+		"required": ["token"]
+	},
+	"permissions": [
+		{ "permission": "libraryRead", "required": true, "reason": "To name the tracks you play." },
+		{ "permission": "listeningActivity", "required": true, "reason": "To send what you play to your ListenBrainz account." },
+		{
+			"permission": "network",
+			"required": true,
+			"reason": "To reach ListenBrainz.",
+			"destinations": ["api.listenbrainz.org"]
+		},
+		{ "permission": "played", "required": true, "reason": "To send each play as it ends." }
+	]
+}
