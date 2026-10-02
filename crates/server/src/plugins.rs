@@ -8,6 +8,7 @@
 pub mod grants;
 mod hooks;
 mod library;
+pub mod personal;
 mod run;
 pub mod settings;
 #[cfg(test)]

@@ -1,16 +1,25 @@
 <script lang="ts">
-	// A plugin's settings, as its manifest declares them (`requirements/plugins.md` §6): for every
-	// library, or one library's own. Secrets are never shown again: left empty, a saved one is
-	// kept, and Clear removes it.
+	// A plugin's settings, as its manifest declares them (`requirements/plugins.md` §6): an
+	// admin's, for every library or one library's own, or a user's own. Secrets are never shown
+	// again: left empty, a saved one is kept, and Clear removes it.
 	import { onMount } from 'svelte';
-	import { getPluginSettings, setPluginSettings } from '$lib/api/client';
-	import type { Plugin, PluginSettings, SettingSchema } from '$lib/api/plugins';
+	import type { PluginSettings, SettingSchema } from '$lib/api/plugins';
 
 	let {
-		plugin,
-		libraries,
+		title,
+		libraries = [],
+		load: fetchSettings,
+		save: saveSettings,
 		onclose
-	}: { plugin: Plugin; libraries: { id: string; name: string }[]; onclose: () => void } = $props();
+	}: {
+		title: string;
+		/** Libraries with settings of their own, chosen between; none for a user's own. */
+		libraries?: { id: string; name: string }[];
+		/** The settings at a level: a library's ID, or undefined for every library. */
+		load: (libraryId?: string) => Promise<PluginSettings>;
+		save: (values: Record<string, unknown>, libraryId?: string) => Promise<unknown>;
+		onclose: () => void;
+	} = $props();
 
 	let dialog: HTMLDialogElement;
 	const uid = $props.id();
@@ -33,7 +42,7 @@
 	async function load() {
 		error = '';
 		try {
-			loaded = await getPluginSettings(fetch, plugin.id, level || undefined);
+			loaded = await fetchSettings(level || undefined);
 			const values = loaded.values as Record<string, string | number | boolean>;
 			draft = Object.fromEntries(
 				Object.entries(values).map(([k, v]) => [k, typeof v === 'boolean' ? v : String(v)])
@@ -69,7 +78,7 @@
 		busy = true;
 		error = '';
 		try {
-			await setPluginSettings(fetch, plugin.id, values(), level || undefined);
+			await saveSettings(values(), level || undefined);
 			onclose();
 		} catch (err) {
 			error = err instanceof Error ? err.message : String(err);
@@ -88,7 +97,7 @@
 	}}
 >
 	<form onsubmit={save}>
-		<h2 id={titleId}>Settings for {plugin.name}</h2>
+		<h2 id={titleId}>{title}</h2>
 
 		{#if libraries.length}
 			<label>

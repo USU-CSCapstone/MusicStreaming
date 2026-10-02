@@ -110,6 +110,9 @@ pub struct Manifest {
     /// What an admin can set for it (`settings`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<Schema>,
+    /// What each user sets for themselves, such as their own account on a service.
+    #[serde(default, rename = "personalSettings", skip_serializing_if = "Option::is_none")]
+    pub personal_settings: Option<Schema>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -221,8 +224,17 @@ pub fn validate(manifest: &Value) -> Vec<String> {
     if o.get("apiVersion").and_then(Value::as_str) != Some(API_VERSION) {
         problems.push(format!(r#""apiVersion" must be "{API_VERSION}""#));
     }
-    if let Some(declared) = o.get("settings") {
-        problems.extend(settings::validate(declared));
+    for key in ["settings", "personalSettings"] {
+        if let Some(declared) = o.get(key) {
+            problems.extend(settings::validate(key, declared));
+        }
+    }
+    // A run sees both under one set of names.
+    let names = |key| o.get(key).and_then(|s| s.get("properties")).and_then(Value::as_object);
+    if let (Some(admin), Some(personal)) = (names("settings"), names("personalSettings")) {
+        for name in personal.keys().filter(|name| admin.contains_key(*name)) {
+            problems.push(format!(r#"personalSettings: "{name}" is also one of "settings""#));
+        }
     }
     let Some(permissions) = o.get("permissions").and_then(Value::as_array) else {
         problems.push(r#""permissions" must be a list (empty if it needs none)"#.into());

@@ -266,11 +266,31 @@ export interface paths {
         patch: operations["updateAccountSettings"];
         trace?: never;
     };
+    "/me/plugins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the plugins the caller can connect
+         * @description Plugins that act for each person, such as a scrobbler, connected with the person's own
+         *     account on its service (`requirements/plugins.md` §4.1, §6): every installed plugin
+         *     with personal settings that is enabled in a library the caller reaches.
+         */
+        get: operations["listMyPlugins"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/plugins/{pluginId}/settings": {
         parameters: {
-            query: {
-                libraryId: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 pluginId: components["parameters"]["PluginId"];
@@ -279,16 +299,26 @@ export interface paths {
         };
         /**
          * Get the caller's settings for a plugin
-         * @description Per-user settings and credentials for personal sources (`requirements/plugins.md` §6). Secrets are never returned.
+         * @description Per-user settings and credentials for personal sources (`requirements/plugins.md` §6),
+         *     as the plugin's `personalSettings` declare them. They are the person's, the same in
+         *     every library. Secrets are never returned. Any plugin not in `listMyPlugins` answers
+         *     `404`.
          */
         get: operations["getMyPluginSettings"];
         /**
-         * Set the caller's settings for a plugin
-         * @description Validated by the plugin when entered; an invalid value answers `422 plugin_settings_invalid`.
+         * Connect a plugin, or change what it is connected with
+         * @description Every required setting must have a value. Validated by the plugin when entered, run with
+         *     these and the server-wide settings; an invalid value answers
+         *     `422 plugin_settings_invalid`. The plugin receives the caller's listening from then on,
+         *     never what came before.
          */
         put: operations["setMyPluginSettings"];
         post?: never;
-        delete?: never;
+        /**
+         * Disconnect a plugin
+         * @description Forgets the caller's settings for it; it stops acting for them.
+         */
+        delete: operations["disconnectMyPlugin"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4627,6 +4657,13 @@ export interface components {
             /** @description Names of secret fields that have a value. Their values are never returned. */
             secretsSet: string[];
         };
+        PersonalPlugin: {
+            id: string;
+            name: string;
+            description?: string;
+            /** @description Whether the caller has saved settings for it, and so it acts for them. */
+            connected: boolean;
+        };
         PluginSettingsUpdate: {
             /** @description Omitted secret fields keep their stored value; `null` clears one. */
             values: Record<string, never>;
@@ -5770,11 +5807,32 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    listMyPlugins: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["PersonalPlugin"][];
+                    };
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
     getMyPluginSettings: {
         parameters: {
-            query: {
-                libraryId: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 pluginId: components["parameters"]["PluginId"];
@@ -5798,9 +5856,7 @@ export interface operations {
     };
     setMyPluginSettings: {
         parameters: {
-            query: {
-                libraryId: string;
-            };
+            query?: never;
             header?: never;
             path: {
                 pluginId: components["parameters"]["PluginId"];
@@ -5824,6 +5880,27 @@ export interface operations {
             };
             404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationFailed"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    disconnectMyPlugin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pluginId: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disconnected */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             default: components["responses"]["Problem"];
         };
     };

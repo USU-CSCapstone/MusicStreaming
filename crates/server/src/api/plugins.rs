@@ -13,6 +13,7 @@ use axum::extract::rejection::BytesRejection;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use jewelcase_plugins::Permission;
+use jewelcase_plugins::settings::Schema;
 use serde::{Deserialize, Serialize};
 
 use super::extract::{self, Path};
@@ -185,6 +186,19 @@ pub struct PluginSettings {
     secrets_set: Vec<String>,
 }
 
+impl PluginSettings {
+    /// `values` set for `schema`, secrets left out, and which secrets have a value.
+    pub fn new(schema: Schema, mut values: serde_json::Map<String, serde_json::Value>) -> Self {
+        let secrets_set =
+            schema.secrets().filter(|name| values.contains_key(*name)).map(str::to_owned).collect();
+        values.retain(|name, _| !schema.secrets().any(|secret| secret == name));
+        // As JSON Schema has it, an object of these properties.
+        let mut schema = serde_json::to_value(&schema).expect("a schema serializes");
+        schema["type"] = "object".into();
+        PluginSettings { schema, values, secrets_set }
+    }
+}
+
 /// What is set at a level, secrets left out, and which secrets have a value.
 pub async fn get_settings(
     State(db): State<Arc<Database>>,
@@ -195,14 +209,7 @@ pub async fn get_settings(
     db.read(move |conn| {
         let Some(manifest) = grants::manifest(conn, &id)? else { return Ok(None) };
         let schema = manifest.settings.unwrap_or_default();
-        let mut values = settings::level(conn, &id, level)?;
-        let secrets_set =
-            schema.secrets().filter(|name| values.contains_key(*name)).map(str::to_owned).collect();
-        values.retain(|name, _| !schema.secrets().any(|secret| secret == name));
-        // As JSON Schema has it, an object of these properties.
-        let mut schema = serde_json::to_value(&schema).expect("a schema serializes");
-        schema["type"] = "object".into();
-        Ok(Some(PluginSettings { schema, values, secrets_set }))
+        Ok(Some(PluginSettings::new(schema, settings::level(conn, &id, level)?)))
     })
     .await?
     .map(Json)
@@ -212,7 +219,7 @@ pub async fn get_settings(
 /// The spec's `PluginSettingsUpdate`.
 #[derive(Deserialize)]
 pub struct SettingsUpdate {
-    values: serde_json::Map<String, serde_json::Value>,
+    pub values: serde_json::Map<String, serde_json::Value>,
 }
 
 pub async fn set_settings(

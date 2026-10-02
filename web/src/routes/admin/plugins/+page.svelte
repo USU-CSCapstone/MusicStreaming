@@ -1,11 +1,13 @@
 <script lang="ts">
 	import {
 		ApiError,
+		getPluginSettings,
 		installPluginFile,
 		installPluginUrl,
 		runPlugin,
 		setPluginEnabled,
 		setPluginPermissions,
+		setPluginSettings,
 		uninstallPlugin
 	} from '$lib/api/client';
 	import {
@@ -341,7 +343,14 @@
 </section>
 
 {#if settingsFor}
-	<SettingsDialog plugin={settingsFor} {libraries} onclose={() => (settingsFor = null)} />
+	{@const id = settingsFor.id}
+	<SettingsDialog
+		title="Settings for {settingsFor.name}"
+		{libraries}
+		load={(libraryId) => getPluginSettings(fetch, id, libraryId)}
+		save={(values, libraryId) => setPluginSettings(fetch, id, values, libraryId)}
+		onclose={() => (settingsFor = null)}
+	/>
 {/if}
 
 {#if dialog}

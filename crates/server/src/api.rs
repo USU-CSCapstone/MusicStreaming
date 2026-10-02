@@ -6,6 +6,7 @@ mod audio;
 mod authenticate;
 #[cfg(test)]
 mod benchmark;
+mod connections;
 mod credit;
 pub mod cursor;
 mod extract;
@@ -100,6 +101,13 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Arc<P
         .route("/auth/logout", post(session::logout))
         .route("/me", get(me::get))
         .route("/me/plays", post(plays::record))
+        .route("/me/plugins", get(connections::list))
+        .route(
+            "/me/plugins/{plugin_id}/settings",
+            get(connections::get_settings)
+                .put(connections::set_settings)
+                .delete(connections::disconnect),
+        )
         .route("/libraries", get(libraries::list))
         .route("/libraries/{library_id}", get(libraries::get))
         .route("/libraries/{library_id}/albums", get(albums::list))

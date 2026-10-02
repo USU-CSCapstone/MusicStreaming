@@ -1,5 +1,6 @@
 //! A plugin's settings (`requirements/plugins.md` §6): what its manifest declares, as a small
-//! part of JSON Schema, and the checks on values an admin enters for them.
+//! part of JSON Schema, and the checks on values entered for them. `settings` are an admin's to
+//! set; `personalSettings` each user's own, such as their account on a service.
 //!
 //! Each setting is a string, number, whole number, or true or false, with an optional title,
 //! description, list of choices (`enum`), and default. `writeOnly` marks a secret, which the
@@ -81,20 +82,21 @@ impl Setting {
     }
 }
 
-/// Every problem with a manifest's `settings`, in the words the pack tool uses too.
-pub fn validate(settings: &Value) -> Vec<String> {
+/// Every problem with the settings a manifest declares under `key`, in the words the pack tool
+/// uses too.
+pub fn validate(key: &str, settings: &Value) -> Vec<String> {
     let Some(properties) = settings.get("properties").and_then(Value::as_object) else {
-        return vec![r#""settings" must be an object with "properties""#.into()];
+        return vec![format!(r#""{key}" must be an object with "properties""#)];
     };
     let mut problems = Vec::new();
     for (name, setting) in properties {
         if !valid_name(name) {
             problems.push(format!(
-                r#"settings: "{name}" is not a setting name (letters, digits, and _, starting with a letter)"#
+                r#"{key}: "{name}" is not a setting name (letters, digits, and _, starting with a letter)"#
             ));
             continue;
         }
-        let at = format!("settings.{name}");
+        let at = format!("{key}.{name}");
         let Some(s) = setting.as_object() else {
             problems.push(format!("{at} must be an object"));
             continue;
@@ -131,7 +133,7 @@ pub fn validate(settings: &Value) -> Vec<String> {
             r.iter().all(|n| n.as_str().is_some_and(|n| properties.contains_key(n)))
         });
         if !named {
-            problems.push(r#"settings: "required" must be a list of its settings' names"#.into());
+            problems.push(format!(r#"{key}: "required" must be a list of its settings' names"#));
         }
     }
     problems

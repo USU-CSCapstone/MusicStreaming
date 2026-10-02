@@ -1533,5 +1533,172 @@
 			"permissions[1]: every permission needs a \"reason\" shown to the admin",
 			"permissions[1]: network needs \"destinations\", host names or [\"*\"] for any"
 		]
+	},
+	{
+		"name": "personal settings",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			],
+			"settings": {
+				"properties": {
+					"apiKey": {
+						"type": "string",
+						"title": "API key",
+						"writeOnly": true
+					},
+					"mode": {
+						"type": "string",
+						"enum": [
+							"a",
+							"b"
+						],
+						"default": "a"
+					},
+					"limit": {
+						"type": "integer",
+						"default": 3
+					},
+					"ratio": {
+						"type": "number"
+					},
+					"on": {
+						"type": "boolean",
+						"description": "Turns it on."
+					}
+				},
+				"required": [
+					"apiKey"
+				]
+			},
+			"personalSettings": {
+				"properties": {
+					"token": {
+						"type": "string",
+						"title": "User token",
+						"writeOnly": true
+					}
+				},
+				"required": [
+					"token"
+				]
+			}
+		},
+		"problems": []
+	},
+	{
+		"name": "personal settings that clash or are malformed",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To find tracks without lyrics."
+				},
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To fetch lyrics.",
+					"destinations": [
+						"lrclib.net"
+					]
+				},
+				{
+					"permission": "libraryAdd",
+					"required": false,
+					"reason": "To save .lrc files."
+				},
+				{
+					"permission": "libraryChange",
+					"required": false,
+					"reason": "To replace wrong lyrics."
+				}
+			],
+			"settings": {
+				"properties": {
+					"apiKey": {
+						"type": "string",
+						"title": "API key",
+						"writeOnly": true
+					},
+					"mode": {
+						"type": "string",
+						"enum": [
+							"a",
+							"b"
+						],
+						"default": "a"
+					},
+					"limit": {
+						"type": "integer",
+						"default": 3
+					},
+					"ratio": {
+						"type": "number"
+					},
+					"on": {
+						"type": "boolean",
+						"description": "Turns it on."
+					}
+				},
+				"required": [
+					"apiKey"
+				]
+			},
+			"personalSettings": {
+				"properties": {
+					"apiKey": {
+						"type": "string"
+					},
+					"user": {
+						"type": "text"
+					}
+				},
+				"required": [
+					"missing"
+				]
+			}
+		},
+		"problems": [
+			"personalSettings.user: \"type\" must be string, number, integer, or boolean",
+			"personalSettings: \"required\" must be a list of its settings' names",
+			"personalSettings: \"apiKey\" is also one of \"settings\""
+		]
 	}
 ]
