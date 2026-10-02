@@ -1700,5 +1700,133 @@
 			"personalSettings: \"required\" must be a list of its settings' names",
 			"personalSettings: \"apiKey\" is also one of \"settings\""
 		]
+	},
+	{
+		"name": "a played hook",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To name what was played."
+				},
+				{
+					"permission": "listeningActivity",
+					"required": true,
+					"reason": "To scrobble what you play."
+				},
+				{
+					"permission": "played",
+					"required": true,
+					"reason": "To scrobble each play as it ends."
+				}
+			],
+			"settings": {
+				"properties": {
+					"apiKey": {
+						"type": "string",
+						"title": "API key",
+						"writeOnly": true
+					},
+					"mode": {
+						"type": "string",
+						"enum": [
+							"a",
+							"b"
+						],
+						"default": "a"
+					},
+					"limit": {
+						"type": "integer",
+						"default": 3
+					},
+					"ratio": {
+						"type": "number"
+					},
+					"on": {
+						"type": "boolean",
+						"description": "Turns it on."
+					}
+				},
+				"required": [
+					"apiKey"
+				]
+			},
+			"personalSettings": {
+				"properties": {
+					"token": {
+						"type": "string",
+						"title": "User token",
+						"writeOnly": true
+					}
+				},
+				"required": [
+					"token"
+				]
+			}
+		},
+		"problems": []
+	},
+	{
+		"name": "a played hook without what it needs",
+		"manifest": {
+			"id": "lrclib-lyrics",
+			"name": "LRCLIB Lyrics",
+			"version": "0.1.0",
+			"apiVersion": "0.2",
+			"description": "Finds lyrics.",
+			"author": "Jewelcase",
+			"homepage": "https://lrclib.net",
+			"permissions": [
+				{
+					"permission": "played",
+					"required": true,
+					"reason": "To scrobble each play as it ends."
+				}
+			],
+			"settings": {
+				"properties": {
+					"apiKey": {
+						"type": "string",
+						"title": "API key",
+						"writeOnly": true
+					},
+					"mode": {
+						"type": "string",
+						"enum": [
+							"a",
+							"b"
+						],
+						"default": "a"
+					},
+					"limit": {
+						"type": "integer",
+						"default": 3
+					},
+					"ratio": {
+						"type": "number"
+					},
+					"on": {
+						"type": "boolean",
+						"description": "Turns it on."
+					}
+				},
+				"required": [
+					"apiKey"
+				]
+			}
+		},
+		"problems": [
+			"played needs libraryRead as well",
+			"played needs listeningActivity as well",
+			"played needs \"personalSettings\", which users connect it with"
+		]
 	}
 ]

@@ -52,13 +52,13 @@ fn page<T>(
         .collect()
 }
 
-const TRACK_COLUMNS: &str = "SELECT t.id, t.title, \
+pub const TRACK_COLUMNS: &str = "SELECT t.id, t.title, \
      (SELECT json_group_array(artist_name) FROM (SELECT artist_name FROM track_artists \
       WHERE track_id = t.id AND artist_name IS NOT NULL ORDER BY position)), \
      t.album_id, al.title, t.disc_number, t.track_number, t.release_date, t.isrc, t.duration_us, \
      t.lyrics_kind <> 'none', t.root_id, t.path";
 
-fn track(row: &Row) -> rusqlite::Result<Track> {
+pub fn track(row: &Row) -> rusqlite::Result<Track> {
     Ok(Track {
         id: row.get::<_, i64>(0)? as u64,
         title: row.get(1)?,

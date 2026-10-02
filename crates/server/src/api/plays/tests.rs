@@ -61,6 +61,13 @@ async fn a_play_is_recorded_once_and_keeps_its_most_listened_and_its_end() {
         [(PLAY.into(), 1, started, 30_000, Some("skipped".into()))],
         "an older report arriving late takes nothing back"
     );
+    let reports = json!([report("1", 31_000, json!("skipped"))]);
+    assert_eq!(report_as_owner(&app, reports).await, StatusCode::NO_CONTENT);
+    let ends: i64 = db
+        .read(|conn| conn.query_row("SELECT count(*) FROM play_ends", [], |row| row.get(0)))
+        .await
+        .unwrap();
+    assert_eq!(ends, 1, "it ended once, for the played hook, however often it is reported");
 }
 
 #[tokio::test]

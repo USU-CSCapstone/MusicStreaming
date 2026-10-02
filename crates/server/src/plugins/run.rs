@@ -10,7 +10,7 @@ use rusqlite::{Connection, params};
 use serde_json::{Map, Value};
 
 use super::library::RunLibrary;
-use super::{PluginError, Plugins, grants, settings};
+use super::{PluginError, Plugins, grants, personal, settings};
 use crate::db::now_ms;
 
 /// How a run went, as the admin sees it.
@@ -58,7 +58,7 @@ impl Plugins {
                 return Ok(RunResult::failed(format!("It still needs {}.", names.join(" and "))));
             }
             let (outcome, scanning) =
-                self.run_in(&id, &manifest, library, permissions, Event::Run).await?;
+                self.run_in(&id, &manifest, library, None, permissions, Event::Run).await?;
             result.scanning |= scanning;
             result.ok &= outcome.ok;
             result.saved += outcome.written;
@@ -71,7 +71,8 @@ impl Plugins {
         Ok(result)
     }
 
-    /// Runs `id` in `library` with `permissions` to handle `event`, then queues scans of what it
+    /// Runs `id` in `library` with `permissions` to handle `event`, for `user` if it acts for
+    /// one, with their personal settings beside the shared ones. Then it queues scans of what it
     /// touched, as the scanner is the only way into the library (`requirements/general.md`
     /// §3.2), and records the run for admins. Answers the outcome, and whether a scan was
     /// queued.
@@ -80,13 +81,22 @@ impl Plugins {
         id: &str,
         manifest: &Manifest,
         library: i64,
+        user: Option<i64>,
         permissions: Vec<Permission>,
         event: Event,
     ) -> Result<(Outcome, bool), PluginError> {
         let (plugin, schema) = (id.to_owned(), manifest.settings.clone());
+        let personal_schema = manifest.personal_settings.clone().unwrap_or_default();
         let settings = self
             .db
-            .read(move |conn| settings::effective(conn, &plugin, schema.as_ref(), library))
+            .read(move |conn| {
+                let mut settings = settings::effective(conn, &plugin, schema.as_ref(), library)?;
+                if let Some(user) = user {
+                    let own = personal::values(conn, &plugin, user)?;
+                    settings.extend(personal_schema.with_defaults(&own));
+                }
+                Ok(settings)
+            })
             .await?;
         let outcome = self.execute(id, manifest, library, permissions, settings, event).await?;
         let scanning = self.scan(library, &outcome.touched).await;

@@ -51,6 +51,7 @@ export type PluginManifest = {
 	homepage?: string;
 	permissions: PermissionRequest[];
 	settings?: { properties: Record<string, SettingSchema>; required?: string[] };
+	personalSettings?: { properties: Record<string, SettingSchema>; required?: string[] };
 };
 
 export const PERMISSION_LABELS: Record<PermissionName, { title: string; detail: string }> = {
@@ -81,6 +82,10 @@ export const PERMISSION_LABELS: Record<PermissionName, { title: string; detail: 
 	schedule: {
 		title: 'Run on a schedule',
 		detail: 'Runs on its own at a set interval, in every library it is enabled in.'
+	},
+	played: {
+		title: 'Run when a connected user plays something',
+		detail: 'Runs on its own as each user who connected it finishes playing a track.'
 	}
 };
 

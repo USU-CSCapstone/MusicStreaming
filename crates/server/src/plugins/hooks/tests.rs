@@ -8,6 +8,7 @@ use rusqlite::Connection;
 use super::super::Plugins;
 use super::super::testing::database;
 use super::due::{all, batch, event};
+use super::plays::plays;
 use super::{BACKOFF_MS, Due, Hook, MAX_FAILURES, record};
 use crate::db::Database;
 
@@ -51,7 +52,7 @@ async fn due_pairs(db: &Database, now: i64) -> Vec<(String, i64, i64)> {
 }
 
 fn due(hook: Hook, failures: i64) -> Due {
-    Due { hook, plugin: "p".into(), library: 1, position: 0, failures }
+    Due { hook, plugin: "p".into(), library: 1, position: 0, failures, user: 0 }
 }
 
 #[tokio::test]
@@ -222,6 +223,89 @@ async fn a_schedule_is_due_when_its_interval_has_passed() {
     db.write(move |tx| record(tx, &due(Hook::Schedule, 0), 1000, true, "", 1000)).await.unwrap();
     assert!(due_for(&db, Hook::Schedule, 1000 + hour - 1).await.is_empty());
     assert_eq!(due_for(&db, Hook::Schedule, 1000 + hour).await.len(), 1);
+}
+
+/// `p` granted the played hook and what it needs, enabled in library 1, and connected by user
+/// 7 at time 100; user 8 has not connected it.
+async fn scrobbling(db: &Database) {
+    db.write(|tx| {
+        tx.execute_batch(
+            "INSERT INTO plugin_grants VALUES ('p', 'played'), ('p', 'listeningActivity');
+             INSERT INTO plugin_library_grants VALUES ('p', 1, 'libraryRead');
+             INSERT INTO plugin_libraries (plugin_id, library_id, enabled) VALUES ('p', 1, 1);
+             INSERT INTO users (id, username, display_name, role, password, created_at, updated_at)
+             VALUES (7, 'seven', 'Seven', 'user', '', 0, 0), (8, 'eight', 'Eight', 'user', '', 0, 0);
+             INSERT INTO plugin_user_settings VALUES ('p', 7, '{}', 100);",
+        )
+    })
+    .await
+    .unwrap();
+}
+
+/// User `user` plays track `track` at `at`: reported as it starts, then twice with `end`.
+async fn play(db: &Database, id: &'static str, user: i64, track: i64, at: i64, end: &'static str) {
+    db.write(move |tx| {
+        tx.execute(
+            "INSERT INTO plays (id, user_id, library_id, track_id, started_at, listen_time_ms, \
+                                context, origin, updated_at) \
+             VALUES (?1, ?2, 1, ?3, ?4, 0, '{}', 'context', ?4)",
+            rusqlite::params![id, user, track, at],
+        )?;
+        let ended = "UPDATE plays SET ended = ?2, listen_time_ms = 30000 WHERE id = ?1";
+        tx.execute(ended, rusqlite::params![id, end])?;
+        // Reported again: it ended once.
+        tx.execute(ended, rusqlite::params![id, end])
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn plays_reach_a_plugin_only_for_users_who_connected_it_and_only_since() {
+    let (_temp, db) = database().await;
+    scrobbling(&db).await;
+    play(&db, "before", 7, 11, 50, "finished").await;
+    assert!(due_for(&db, Hook::Played, 0).await.is_empty(), "played before they connected");
+
+    play(&db, "a", 7, 11, 200, "finished").await;
+    play(&db, "b", 8, 12, 210, "finished").await;
+    play(&db, "c", 7, 12, 220, "skipped").await;
+    let due_now = run(&db, |conn| all(conn, 0)).await;
+    let played = due_now.iter().filter(|d| d.hook == Hook::Played);
+    assert_eq!(played.map(|d| (d.library, d.user)).collect::<Vec<_>>(), [(1, 7)], "only theirs");
+
+    let (next, delivered) = run(&db, |conn| plays(conn, "p", 1, 7, 0)).await;
+    let summary: Vec<_> =
+        delivered.iter().map(|p| (p.track.id, p.started_at, p.listen_time_ms, p.end)).collect();
+    use jewelcase_plugins::PlayEnd::{Finished, Skipped};
+    assert_eq!(summary, [(11, 200, 30_000, Finished), (12, 220, 30_000, Skipped)]);
+    assert_eq!(delivered[0].track.artists, ["Aurora Lane"]);
+
+    let seven = Due { user: 7, ..due(Hook::Played, 0) };
+    db.write(move |tx| record(tx, &seven, next, true, "", 0)).await.unwrap();
+    assert!(due_for(&db, Hook::Played, 0).await.is_empty(), "each play is delivered once");
+}
+
+#[tokio::test]
+async fn one_users_failures_never_disable_the_plugin() {
+    let (_temp, db) = database().await;
+    scrobbling(&db).await;
+    for failures in 0..MAX_FAILURES + 2 {
+        let failing = Due { user: 7, ..due(Hook::Played, failures) };
+        db.write(move |tx| record(tx, &failing, 0, false, "Invalid token", 0)).await.unwrap();
+    }
+    let enabled: bool = run(&db, |conn| {
+        conn.query_row("SELECT enabled FROM plugin_libraries", [], |row| row.get(0))
+    })
+    .await;
+    assert!(enabled);
+    let retry: i64 = run(&db, |conn| {
+        conn.query_row("SELECT retry_at FROM plugin_cursors WHERE user_id = 7", [], |row| {
+            row.get(0)
+        })
+    })
+    .await;
+    assert_eq!(retry, 60 * 60_000, "retried hourly");
 }
 
 /// The whole path with the real lyrics plugin: a change in the feed reaches its `handle` as

@@ -113,9 +113,10 @@ mod plugin {
                         library::get_tracks(ids)?.iter().for_each(&mut visit);
                     }
                 }
-                // It does not ask to hear about scans.
-                // It does not ask to hear about scans, and settings were answered above.
-                Event::ScanFinished(_) | Event::CheckSettings => return Ok("Nothing to do.".into()),
+                // It does not ask to hear about scans or plays, and settings were answered above.
+                Event::ScanFinished(_) | Event::CheckSettings | Event::Played(_) => {
+                    return Ok("Nothing to do.".into());
+                }
             }
             Ok(summary(&n, can_write))
         }
