@@ -187,3 +187,22 @@ test('lyrics follow the playing track', async ({ page }) => {
 	await page.keyboard.press('Escape');
 	await expect(panel).toBeHidden();
 });
+
+test('a user connects a plugin with their own token, and can disconnect it', async ({ page }) => {
+	await serveLibrary(page, { role: 'user' });
+	await page.goto('/account');
+	const connections = page.getByRole('region', { name: 'Connections' });
+	await connections.getByRole('button', { name: 'Connect…' }).click();
+
+	const dialog = page.getByRole('dialog', { name: 'Connect Scrobbler' });
+	await dialog.getByLabel('User token').fill('wrong-token');
+	await dialog.getByRole('button', { name: 'Save' }).click();
+	await expect(dialog.getByRole('alert')).toHaveText('The scrobbler refused this token.');
+	await dialog.getByLabel('User token').fill('good-token');
+	await dialog.getByRole('button', { name: 'Save' }).click();
+	await expect(dialog).toBeHidden();
+	await expect(connections.getByText('Connected')).toBeVisible();
+
+	await connections.getByRole('button', { name: 'Disconnect' }).click();
+	await expect(connections.getByRole('button', { name: 'Connect…' })).toBeVisible();
+});

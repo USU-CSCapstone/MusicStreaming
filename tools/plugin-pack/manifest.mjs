@@ -144,7 +144,17 @@ export function validateManifest(m) {
 		problems.push('"homepage" must be an http(s) URL');
 	}
 	if (o.apiVersion !== API_VERSION) problems.push(`"apiVersion" must be "${API_VERSION}"`);
-	if (o.settings !== undefined) problems.push(...validateSettings(o.settings));
+	for (const key of ['settings', 'personalSettings']) {
+		if (o[key] !== undefined) problems.push(...validateSettings(key, o[key]));
+	}
+	// A run sees both under one set of names.
+	const names = (/** @type {string} */ key) => /** @type {any} */ (o[key])?.properties;
+	const [admin, personal] = [names('settings'), names('personalSettings')];
+	if (isObject(admin) && isObject(personal)) {
+		for (const name of Object.keys(personal).sort()) {
+			if (Object.hasOwn(admin, name)) problems.push(`personalSettings: "${name}" is also one of "settings"`);
+		}
+	}
 	if (!Array.isArray(o.permissions)) {
 		problems.push('"permissions" must be a list (empty if it needs none)');
 		return problems;
@@ -200,26 +210,30 @@ const KINDS = {
 	boolean: { accepts: (/** @type {unknown} */ v) => typeof v === 'boolean', described: 'true or false' }
 };
 
+/** @param {unknown} v */
+const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+
 /**
- * Every problem with a manifest's `settings`: a small part of JSON Schema, in the same words as
- * the server's `crates/plugins/src/settings.rs`.
+ * Every problem with the settings a manifest declares under `key`: a small part of JSON Schema,
+ * in the same words as the server's `crates/plugins/src/settings.rs`.
+ * @param {string} key
  * @param {unknown} settings
  * @returns {string[]}
  */
-function validateSettings(settings) {
+function validateSettings(key, settings) {
 	const props = /** @type {Record<string, unknown>} */ (settings)?.properties;
-	if (typeof settings !== 'object' || settings === null || typeof props !== 'object' || props === null || Array.isArray(props)) {
-		return ['"settings" must be an object with "properties"'];
+	if (typeof settings !== 'object' || settings === null || !isObject(props)) {
+		return [`"${key}" must be an object with "properties"`];
 	}
 	const properties = /** @type {Record<string, unknown>} */ (props);
 	const problems = [];
 	// Sorted, as the server's map of them is.
 	for (const name of Object.keys(properties).sort()) {
 		if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name)) {
-			problems.push(`settings: "${name}" is not a setting name (letters, digits, and _, starting with a letter)`);
+			problems.push(`${key}: "${name}" is not a setting name (letters, digits, and _, starting with a letter)`);
 			continue;
 		}
-		const at = `settings.${name}`;
+		const at = `${key}.${name}`;
 		const s = /** @type {Record<string, unknown>} */ (properties[name]);
 		if (typeof s !== 'object' || s === null || Array.isArray(s)) {
 			problems.push(`${at} must be an object`);
@@ -248,7 +262,7 @@ function validateSettings(settings) {
 	}
 	const required = /** @type {Record<string, unknown>} */ (settings).required;
 	if (required !== undefined && !(Array.isArray(required) && required.every((n) => typeof n === 'string' && Object.hasOwn(properties, n)))) {
-		problems.push(`settings: "required" must be a list of its settings' names`);
+		problems.push(`${key}: "required" must be a list of its settings' names`);
 	}
 	return problems;
 }

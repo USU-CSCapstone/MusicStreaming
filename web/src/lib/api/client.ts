@@ -26,7 +26,13 @@ import type {
 	User,
 	Waveform
 } from './types';
-import type { PermissionGrants, Plugin, PluginRunResult, PluginSettings } from './plugins';
+import type {
+	PermissionGrants,
+	PersonalPlugin,
+	Plugin,
+	PluginRunResult,
+	PluginSettings
+} from './plugins';
 
 type Fetch = typeof fetch;
 type Query = Record<string, string | number | undefined>;
@@ -226,6 +232,19 @@ export const setPluginSettings = (
 	values: Record<string, unknown>,
 	libraryId?: string
 ) => send<PluginSettings>(f, 'PUT', settingsPath(id, libraryId), { values });
+
+/** The plugins this user can connect with their own account, such as a scrobbler. */
+export const listMyPlugins = (f: Fetch) => get<{ items: PersonalPlugin[] }>(f, '/me/plugins');
+
+const mySettings = (id: string) => `/me/plugins/${encodeURIComponent(id)}/settings`;
+
+export const getMyPluginSettings = (f: Fetch, id: string) => get<PluginSettings>(f, mySettings(id));
+
+/** Connects it once the server and the plugin accept them; a secret left out keeps its value. */
+export const setMyPluginSettings = (f: Fetch, id: string, values: Record<string, unknown>) =>
+	send<PluginSettings>(f, 'PUT', mySettings(id), { values });
+
+export const disconnectMyPlugin = (f: Fetch, id: string) => send<void>(f, 'DELETE', mySettings(id));
 
 /** Runs it once now, with the permissions approved for it; answers when it finishes. */
 export const runPlugin = (f: Fetch, id: string) =>

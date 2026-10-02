@@ -37,6 +37,7 @@ written. The error says what to fix.
 | `destinations` | For `network` only: the host names it talks to, or `["*"]` for any. |
 | `everyMinutes` | For `schedule` only: how often it runs, at least 5. |
 | `settings` | Optional. What an admin can set, as `{ "properties": { "name": { "type": "string" \| "number" \| "integer" \| "boolean", "title", "description", "enum", "default", "writeOnly" } }, "required": [names] }`. `writeOnly` marks a secret, never shown again once entered. The plugin reads them with `settings.get`, and checks new ones on `check-settings`. |
+| `personalSettings` | Optional. What each user sets for themselves, such as their own account on a service, in the same form as `settings` and with names of its own. Users who save them have connected the plugin, and only their listening reaches it. A run sees both under one set of names. |
 
 The server validates on install with its own reader in [`crates/plugins`](../../crates/plugins/),
 which is the authority. `manifest.mjs` validates the same way, for authors, the web mock, and its

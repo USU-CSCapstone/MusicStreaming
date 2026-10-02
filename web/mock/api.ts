@@ -207,6 +207,8 @@ export function createApi(dataDir: string) {
 		// The mock has no accounts: it is always set up, and everyone is this one user.
 		if (path === '/server') return { version: 'mock', apiVersion: '1', setupRequired: false };
 		if (path === '/me') return MOCK_USER;
+		// Nothing to connect: the mock's plugins act for no one in particular.
+		if (path === '/me/plugins') return { items: [] };
 		if (path === '/libraries') return { items: catalog.libraries() };
 		const m = /^\/libraries\/([^/]+)(.*)$/.exec(path);
 		const lib = toKey(m?.[1]);

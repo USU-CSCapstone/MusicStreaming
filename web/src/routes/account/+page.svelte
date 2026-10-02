@@ -2,11 +2,24 @@
 	import { isRedirect } from '@sveltejs/kit';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { logout } from '$lib/api/client';
+	import {
+		disconnectMyPlugin,
+		getMyPluginSettings,
+		logout,
+		setMyPluginSettings
+	} from '$lib/api/client';
+	import type { PersonalPlugin } from '$lib/api/plugins';
 	import type { User } from '$lib/api/types';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import SettingsDialog from '$lib/components/SettingsDialog.svelte';
+
+	let { data } = $props();
 
 	const me = $derived(page.data.me);
+	// Svelte 5 lets a derived be overwritten locally; it resets when the page reloads its data.
+	let connectable = $derived(data.connectable);
+	let connecting = $state<PersonalPlugin | null>(null);
+	let connectionError = $state('');
 	const roles: Record<User['role'], string> = { owner: 'Owner', admin: 'Admin', user: 'User' };
 
 	let error = $state('');
@@ -27,6 +40,20 @@
 		}
 		// A fresh start, so nothing of this session, playback above all, outlives it.
 		location.assign(resolve('/login'));
+	}
+
+	function connected(id: string, value: boolean) {
+		connectable = connectable.map((p) => (p.id === id ? { ...p, connected: value } : p));
+	}
+
+	async function disconnect(p: PersonalPlugin) {
+		connectionError = '';
+		try {
+			await disconnectMyPlugin(fetch, p.id);
+			connected(p.id, false);
+		} catch (e) {
+			connectionError = e instanceof Error ? e.message : String(e);
+		}
 	}
 </script>
 
@@ -51,6 +78,46 @@
 	</section>
 {/if}
 
+{#if connectable.length}
+	<section aria-labelledby="connections">
+		<h2 id="connections">Connections</h2>
+		<p class="muted">
+			Plugins that act for you with your own account, such as sending what you play to a scrobbling
+			service. Each sees your listening only once you connect it.
+		</p>
+		{#if connectionError}<p class="error" role="alert">{connectionError}</p>{/if}
+		<ul>
+			{#each connectable as p (p.id)}
+				<li>
+					<div>
+						<strong>{p.name}</strong>
+						<span class="muted">{p.connected ? 'Connected' : (p.description ?? '')}</span>
+					</div>
+					<button type="button" onclick={() => (connecting = p)}>
+						{p.connected ? 'Change…' : 'Connect…'}
+					</button>
+					{#if p.connected}
+						<button type="button" onclick={() => disconnect(p)}>Disconnect</button>
+					{/if}
+				</li>
+			{/each}
+		</ul>
+	</section>
+{/if}
+
+{#if connecting}
+	{@const p = connecting}
+	<SettingsDialog
+		title="Connect {p.name}"
+		load={() => getMyPluginSettings(fetch, p.id)}
+		save={async (values) => {
+			await setMyPluginSettings(fetch, p.id, values);
+			connected(p.id, true);
+		}}
+		onclose={() => (connecting = null)}
+	/>
+{/if}
+
 <style>
 	section {
 		display: flex;
@@ -58,6 +125,35 @@
 		align-items: flex-start;
 		gap: var(--space-3);
 		max-width: 560px;
+	}
+
+	section + section {
+		margin-top: var(--space-6);
+	}
+
+	h2 {
+		font-size: 18px;
+	}
+
+	ul {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		width: 100%;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	li {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+	}
+
+	li div {
+		flex: 1;
+		min-width: 0;
 	}
 
 	p {

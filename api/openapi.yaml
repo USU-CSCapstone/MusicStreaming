@@ -413,17 +413,40 @@ paths:
         '422': { $ref: '#/components/responses/ValidationFailed' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /me/plugins:
+    get:
+      tags: [Account]
+      summary: List the plugins the caller can connect
+      description: |
+        Plugins that act for each person, such as a scrobbler, connected with the person's own
+        account on its service (`requirements/plugins.md` §4.1, §6): every installed plugin
+        with personal settings that is enabled in a library the caller reaches.
+      operationId: listMyPlugins
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/PersonalPlugin' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /me/plugins/{pluginId}/settings:
     parameters:
       - $ref: '#/components/parameters/PluginId'
-      - name: libraryId
-        in: query
-        required: true
-        schema: { type: string }
     get:
       tags: [Account]
       summary: Get the caller's settings for a plugin
-      description: Per-user settings and credentials for personal sources (`requirements/plugins.md` §6). Secrets are never returned.
+      description: |
+        Per-user settings and credentials for personal sources (`requirements/plugins.md` §6),
+        as the plugin's `personalSettings` declare them. They are the person's, the same in
+        every library. Secrets are never returned. Any plugin not in `listMyPlugins` answers
+        `404`.
       operationId: getMyPluginSettings
       responses:
         '200':
@@ -435,8 +458,12 @@ paths:
         default: { $ref: '#/components/responses/Problem' }
     put:
       tags: [Account]
-      summary: Set the caller's settings for a plugin
-      description: Validated by the plugin when entered; an invalid value answers `422 plugin_settings_invalid`.
+      summary: Connect a plugin, or change what it is connected with
+      description: |
+        Every required setting must have a value. Validated by the plugin when entered, run with
+        these and the server-wide settings; an invalid value answers
+        `422 plugin_settings_invalid`. The plugin receives the caller's listening from then on,
+        never what came before.
       operationId: setMyPluginSettings
       requestBody:
         required: true
@@ -451,6 +478,14 @@ paths:
               schema: { $ref: '#/components/schemas/PluginSettings' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationFailed' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Account]
+      summary: Disconnect a plugin
+      description: Forgets the caller's settings for it; it stops acting for them.
+      operationId: disconnectMyPlugin
+      responses:
+        '204': { description: Disconnected, or never connected. }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Devices ─────────────────────────────
@@ -6437,6 +6472,17 @@ components:
           type: array
           description: Names of secret fields that have a value. Their values are never returned.
           items: { type: string }
+
+    PersonalPlugin:
+      type: object
+      required: [id, name, connected]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        connected:
+          type: boolean
+          description: Whether the caller has saved settings for it, and so it acts for them.
 
     PluginSettingsUpdate:
       type: object

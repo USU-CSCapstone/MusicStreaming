@@ -14,6 +14,8 @@ export type PermissionGrants = Schemas['PermissionGrants'];
 /** What `POST /admin/plugins/{pluginId}/run` answers: the plugin's own words, and its log. */
 export type PluginRunResult = Schemas['PluginRunResult'];
 export type PluginSettings = Schemas['PluginSettings'];
+/** A plugin a user connects with their own account (`GET /me/plugins`). */
+export type PersonalPlugin = Schemas['PersonalPlugin'];
 
 /** One setting, as a plugin's settings schema declares it. */
 export type SettingSchema = {

@@ -185,6 +185,17 @@ export async function serveLibrary(
 		empty ? [] : [library.id]
 	);
 	const plays: PlayReport[] = [];
+	// A scrobbler this user can connect with their own token, which it never shows again.
+	let token: string | null = null;
+	const mySettings = () => ({
+		schema: {
+			type: 'object',
+			properties: { token: { type: 'string', title: 'User token', writeOnly: true } },
+			required: ['token']
+		},
+		values: {},
+		secretsSet: token ? ['token'] : []
+	});
 	await page.route('**/api/v1/**', async (route: Route) => {
 		const url = new URL(route.request().url());
 		const path = url.pathname.replace(/^.*\/api\/v1/, '');
@@ -218,6 +229,26 @@ export async function serveLibrary(
 		if (path === '/me/plays') {
 			plays.push(...route.request().postDataJSON().items);
 			return route.fulfill({ status: 204 });
+		}
+		if (path === '/me/plugins') {
+			return json({
+				items: [{ id: 'scrobbler', name: 'Scrobbler', connected: token !== null }]
+			});
+		}
+		if (path === '/me/plugins/scrobbler/settings') {
+			const method = route.request().method();
+			if (method === 'DELETE') {
+				token = null;
+				return route.fulfill({ status: 204 });
+			}
+			if (method === 'PUT') {
+				const entered = route.request().postDataJSON().values.token ?? token;
+				if (entered !== 'good-token') {
+					return problem(422, 'plugin_settings_invalid', 'The scrobbler refused this token.');
+				}
+				token = entered;
+			}
+			return json(mySettings());
 		}
 		if (path === '/me') {
 			return json({ ...session({ username: 'sam', password: '', device }).user, role });
