@@ -12,6 +12,7 @@
 	let { data } = $props();
 
 	const artist = $derived(data.artist);
+	const context = $derived({ type: 'artist', id: artist.id, scope: 'all' } as const);
 	const albums = $derived(
 		new Paged(data.albums, (cursor) =>
 			listAlbums(fetch, data.lib, {
@@ -47,7 +48,7 @@
 	seed={artist.id}
 	icon="artist"
 	round
-	onplay={tracks.items.length ? () => player.play(tracks.items, 0) : undefined}
+	onplay={tracks.items.length ? () => player.play(tracks.items, 0, context) : undefined}
 >
 	<span>{counts}</span>
 </DetailHeader>
@@ -75,7 +76,7 @@
 
 <section>
 	<header><h2>Songs</h2></header>
-	<TrackList tracks={tracks.items} sentinel={tracks.sentinel} />
+	<TrackList tracks={tracks.items} sentinel={tracks.sentinel} {context} />
 </section>
 
 <style>

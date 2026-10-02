@@ -4204,7 +4204,8 @@ export interface components {
         };
         /**
          * @description Every track that starts is a play; `listenTimeMs` is audio actually heard
-         *     (`requirements/analytics.md` §1). Exactly one of `trackId` or `external` is set.
+         *     (`requirements/analytics.md` §1). Exactly one of `trackId` or `external` is set. A
+         *     play of a track no longer in a library the caller reaches is left out.
          */
         PlayReport: {
             /**
@@ -4231,7 +4232,8 @@ export interface components {
             origin: components["schemas"]["QueueOrigin"];
             /** @description With `automatic` — why radio or endless play chose it. */
             reason?: components["schemas"]["Reason"] | null;
-            deviceId: string;
+            /** @description Ignored. A play is recorded on the device whose token reports it. */
+            deviceId?: string;
         };
         HistoryEntry: {
             /** Format: uuid */

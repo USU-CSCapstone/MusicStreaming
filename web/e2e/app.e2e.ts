@@ -51,7 +51,7 @@ test('grid and list view switch and are remembered', async ({ page }) => {
 });
 
 test('opening an album and clicking a song plays it', async ({ page }) => {
-	await serveLibrary(page);
+	const { plays } = await serveLibrary(page);
 	await page.goto('/albums');
 	await page
 		.getByRole('link', { name: /Signal/ })
@@ -69,6 +69,12 @@ test('opening an album and clicking a song plays it', async ({ page }) => {
 
 	await player.getByRole('button', { name: 'Next' }).click();
 	await expect(player.getByText('Signal Remix')).toBeVisible();
+
+	// A play is reported as it starts and again as it ends, with the album it was played from.
+	// Its two seconds may have ended before Next was pressed.
+	const ends = () => plays.filter((p) => p.playId === plays[0]?.playId).map((p) => p.end);
+	await expect.poll(ends).toEqual([null, expect.stringMatching(/^(skipped|finished)$/)]);
+	expect(plays[0]).toMatchObject({ context: { type: 'album' }, origin: 'context' });
 });
 
 test('search updates as the user types', async ({ page }) => {

@@ -14,6 +14,7 @@ import type {
 	LoginRequest,
 	Lyrics,
 	PlaybackInfo,
+	PlayReport,
 	Playlist,
 	PlaylistItemPage,
 	PlaylistPage,
@@ -113,6 +114,10 @@ export const login = (f: Fetch, request: LoginRequest) =>
 export const logout = (f: Fetch) => send<void>(f, 'POST', '/auth/logout');
 
 export const getMe = (f: Fetch) => get<User>(f, '/me');
+
+/** Records plays. With `keepalive`, the request outlives the page, for one closing. */
+export const recordPlays = (f: Fetch, items: PlayReport[], keepalive = false) =>
+	send<void>((input, init) => f(input, { ...init, keepalive }), 'POST', '/me/plays', { items });
 
 const lib = (libraryId: string) => `/libraries/${encodeURIComponent(libraryId)}`;
 

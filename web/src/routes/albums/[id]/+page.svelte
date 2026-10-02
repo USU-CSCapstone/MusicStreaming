@@ -8,6 +8,7 @@
 	let { data } = $props();
 
 	const album = $derived(data.album);
+	const context = $derived({ type: 'album', id: album.id } as const);
 	const kinds = { album: 'Album', ep: 'EP', single: 'Single', compilation: 'Compilation' };
 	const kind = $derived(
 		[kinds[album.type], releaseYear(album.releaseDate)].filter(Boolean).join(' · ')
@@ -34,7 +35,7 @@
 	image={album.image}
 	seed={album.id}
 	icon="album"
-	onplay={data.tracks.length ? () => player.play(data.tracks, 0) : undefined}
+	onplay={data.tracks.length ? () => player.play(data.tracks, 0, context) : undefined}
 >
 	<span class="artists"><ArtistLinks artists={album.artists} /></span>
 	<span>
@@ -43,7 +44,7 @@
 	</span>
 </DetailHeader>
 
-<TrackList tracks={data.tracks} variant="album" />
+<TrackList tracks={data.tracks} variant="album" {context} />
 
 <style>
 	.artists {

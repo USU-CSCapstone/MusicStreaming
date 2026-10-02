@@ -39,3 +39,5 @@ export type Device = Schemas['Device'];
 
 /** A cursor-paged list, as every list endpoint returns it. */
 export type Page<T> = { items: T[]; nextCursor: string | null; total: number };
+export type PlayReport = Schemas['PlayReport'];
+export type PlayContext = Schemas['Context'];

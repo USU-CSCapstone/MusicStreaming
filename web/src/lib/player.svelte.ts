@@ -2,9 +2,10 @@
 // Queue editing, sync across devices, and Shift come later (`requirements/queue.md`,
 // `requirements/realtime.md`).
 
-import { audioUrl, getPlaybackInfo, getWaveform, imageUrl } from './api/client';
-import type { TrackSummary } from './api/types';
+import { audioUrl, getPlaybackInfo, getWaveform, imageUrl, recordPlays } from './api/client';
+import type { PlayContext, TrackSummary } from './api/types';
 import { albumTitle, artistName } from './format';
+import { PlayRecorder } from './plays';
 import { firstPlayable, nextPlayable, previousTarget } from './queue';
 import { decodeWaveform } from './waveform';
 
@@ -12,6 +13,8 @@ class Player {
 	libraryId = '';
 
 	tracks = $state<TrackSummary[]>([]);
+	/** Where `tracks` came from, which each play records. */
+	context: PlayContext = { type: 'library' };
 	index = $state(-1);
 	current = $derived<TrackSummary | null>(this.tracks[this.index] ?? null);
 
@@ -27,12 +30,16 @@ class Player {
 	#audio: HTMLAudioElement | null = null;
 	/** Bumped on every load, so a slow response for an earlier track is ignored. */
 	#load = 0;
+	/** The load whose track has started playing, so pausing and resuming is one play. */
+	#started = 0;
+	#plays = new PlayRecorder((items, keepalive) => recordPlays(fetch, items, keepalive));
 
-	/** Play `tracks` as the context, starting at `index`. */
-	play(tracks: TrackSummary[], index: number) {
+	/** Play `tracks` from `context`, starting at `index`. */
+	play(tracks: TrackSummary[], index: number, context: PlayContext = { type: 'library' }) {
 		const start = firstPlayable(tracks, index);
 		if (start === null) return;
 		this.tracks = tracks;
+		this.context = context;
 		this.#go(start);
 	}
 
@@ -48,6 +55,7 @@ class Player {
 		if (i === null) {
 			// End of the context: stop at the end rather than wrapping.
 			this.#audio?.pause();
+			this.#plays.end('skipped');
 			return;
 		}
 		this.#go(i);
@@ -75,6 +83,8 @@ class Player {
 		const track = this.tracks[index];
 		const load = ++this.#load;
 		const audio = this.#ensureAudio();
+		// One that played to its end has ended its play already.
+		this.#plays.end('skipped');
 		audio.pause();
 		this.position = 0;
 		this.duration = track.durationUs / 1_000_000;
@@ -105,12 +115,30 @@ class Player {
 		audio.preload = 'auto';
 		audio.volume = this.volume;
 		audio.addEventListener('play', () => (this.playing = true));
-		audio.addEventListener('pause', () => (this.playing = false));
-		audio.addEventListener('timeupdate', () => (this.position = audio.currentTime));
+		audio.addEventListener('playing', () => {
+			if (this.#started === this.#load || !this.current) return;
+			this.#started = this.#load;
+			this.#plays.start(this.libraryId, this.current.id, this.context, audio.currentTime);
+		});
+		audio.addEventListener('pause', () => {
+			this.playing = false;
+			if (!audio.ended) this.#plays.paused();
+		});
+		audio.addEventListener('timeupdate', () => {
+			this.position = audio.currentTime;
+			this.#plays.heard(audio.currentTime);
+		});
+		audio.addEventListener('seeking', () => this.#plays.seeked(audio.currentTime));
 		audio.addEventListener('durationchange', () => {
 			if (Number.isFinite(audio.duration)) this.duration = audio.duration;
 		});
-		audio.addEventListener('ended', () => this.next());
+		audio.addEventListener('ended', () => {
+			this.#plays.heard(audio.currentTime);
+			this.#plays.end('finished');
+			this.next();
+		});
+		// Closing the page stops what is playing. The report must outlive the page.
+		addEventListener('pagehide', () => this.#plays.end('stopped', true));
 		audio.addEventListener('error', () => {
 			if (audio.src) this.next();
 		});

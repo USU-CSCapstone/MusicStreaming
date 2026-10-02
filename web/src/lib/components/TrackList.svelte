@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import type { TrackSummary } from '$lib/api/types';
+	import type { PlayContext, TrackSummary } from '$lib/api/types';
 	import { albumTitle, formatDuration } from '$lib/format';
 	import { player } from '$lib/player.svelte';
 	import ArtistLinks from './ArtistLinks.svelte';
@@ -11,13 +11,16 @@
 		tracks,
 		variant = 'default',
 		sentinel,
-		empty = 'No songs.'
+		empty = 'No songs.',
+		context = { type: 'library' }
 	}: {
 		tracks: TrackSummary[];
 		/** `album`: track numbers and disc headings, no album column or artwork. */
 		variant?: 'default' | 'album';
 		sentinel?: (el: Element) => () => void;
 		empty?: string;
+		/** Where the tracks are from, which each play records. */
+		context?: PlayContext;
 	} = $props();
 
 	const isAlbum = $derived(variant === 'album');
@@ -25,7 +28,7 @@
 	const multiDisc = $derived(isAlbum && new Set(tracks.map((t) => t.discNumber)).size > 1);
 
 	function play(i: number) {
-		if (tracks[i].availability === 'available') player.play(tracks, i);
+		if (tracks[i].availability === 'available') player.play(tracks, i, context);
 	}
 
 	function rowClick(e: MouseEvent, i: number) {
