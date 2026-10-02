@@ -346,3 +346,71 @@ async fn delivers_changes_to_a_real_plugin() {
     }
     panic!("the change was not delivered");
 }
+
+/// The whole path with the real ListenBrainz plugin and the real service: a token it does not
+/// accept is refused as it is entered, and a play reaches the plugin, which ListenBrainz turns
+/// away, so it is kept to send again without disabling the plugin.
+#[tokio::test]
+#[ignore = "needs plugins/listenbrainz/build.sh and the network"]
+async fn delivers_plays_to_a_real_scrobbler() {
+    let (temp, db) = database().await;
+    db.write(|tx| tx.execute_batch("DELETE FROM plugins")).await.unwrap();
+    let plugins = Arc::new(Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new()));
+    let file =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/listenbrainz/target/listenbrainz.wasm");
+    let id = plugins.install(std::fs::read(file).unwrap(), None).await.unwrap();
+    let plugin_wide = vec![Permission::ListeningActivity, Permission::Network, Permission::Played];
+    let per_library = vec![(1, vec![Permission::LibraryRead])];
+    plugins.set_grants(id.clone(), plugin_wide, per_library).await.unwrap();
+    plugins.set_enabled(id.clone(), 1, true).await.unwrap();
+    db.write(|tx| {
+        tx.execute_batch(
+            "INSERT INTO users (id, username, display_name, role, password, created_at, updated_at)
+             VALUES (7, 'seven', 'Seven', 'user', '', 0, 0);
+             INSERT INTO library_access VALUES (7, 1, 0);",
+        )
+    })
+    .await
+    .unwrap();
+
+    let token = serde_json::json!({ "token": "not-a-real-token" });
+    let refused = plugins.save_personal(id.clone(), 7, false, token.as_object().unwrap().clone());
+    match refused.await {
+        Err(super::super::PluginError::SettingsInvalid(why)) => {
+            assert!(why.contains("ListenBrainz did not accept this token"), "{why}")
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // Connected as if it had been accepted, then a play long enough to count.
+    db.write(|tx| {
+        tx.execute_batch(
+            r#"INSERT INTO plugin_user_settings VALUES ('listenbrainz', 7, '{"token":"not-a-real-token"}', 0)"#,
+        )
+    })
+    .await
+    .unwrap();
+    play(&db, "a", 7, 11, 1_790_942_400_000, "finished").await;
+    db.write(|tx| tx.execute_batch("UPDATE plays SET listen_time_ms = 180000")).await.unwrap();
+
+    plugins.dispatch().await;
+    for _ in 0..500 {
+        let summary: Option<String> = run(&db, |conn| {
+            conn.query_row("SELECT last_run_summary FROM plugin_libraries", [], |row| row.get(0))
+        })
+        .await;
+        if let Some(summary) = summary {
+            assert!(summary.contains("ListenBrainz answered 401"), "{summary}");
+            let (failures, user): (i64, i64) = run(&db, |conn| {
+                conn.query_row("SELECT failures, user_id FROM plugin_cursors", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+            })
+            .await;
+            assert_eq!((failures, user), (1, 7), "kept for user 7 to send again");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("the play was not delivered");
+}
