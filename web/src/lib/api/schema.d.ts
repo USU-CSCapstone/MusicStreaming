@@ -4725,10 +4725,12 @@ export interface components {
          *     same way (`requirements/plugins.md` §8): `tracksChanged` runs it, per library, as tracks
          *     are added, changed, or removed, and `scanFinished` when a scan of the library finishes;
          *     both need `libraryRead` there too. `schedule` runs it at the interval its request names,
-         *     in every library it is enabled in.
+         *     in every library it is enabled in. `played` runs it, granted once per plugin, as each
+         *     user who connected it (`listMyPlugins`) finishes playing something; it needs
+         *     `listeningActivity`, and `libraryRead` in the library played from.
          * @enum {string}
          */
-        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule";
+        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played";
         PermissionRequest: {
             permission: components["schemas"]["PermissionName"];
             /** @description Whether it cannot work without it (`requirements/plugins.md` §4.2). */

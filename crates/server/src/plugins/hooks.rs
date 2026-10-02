@@ -3,11 +3,14 @@
 //!
 //! `tracksChanged` reads the library change feed (`0004_feeds.sql`), which records every
 //! track added, changed, or removed in the same transaction as the change; `scanFinished`
-//! reads finished scans; `schedule` runs at the interval the plugin asks for. For each hook,
-//! each plugin and library pair keeps its own position (`plugin_cursors`), which moves only
-//! once the plugin has handled what came before it. A failure is retried later from the same place, so nothing is
-//! lost to a crash, a restart, or a service that was briefly down. One that keeps failing is
-//! disabled in that library, and the admin is told why (§11).
+//! reads finished scans; `schedule` runs at the interval the plugin asks for; `played` reads
+//! the plays each user who connected the plugin has ended (`0013_plugin_played.sql`). For each
+//! hook, each plugin and library pair keeps its own position (`plugin_cursors`), and in
+//! `played` each user too, which moves only once the plugin has handled what came before it.
+//! A failure is retried later from the same place, so nothing is lost to a crash, a restart,
+//! or a service that was briefly down. One that keeps failing is disabled in that library, and
+//! the admin is told why (§11), except in `played`: one user's failing account must not stop
+//! the plugin for everyone, so theirs is retried hourly instead.
 
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -15,6 +18,7 @@ use std::time::Duration;
 use rusqlite::{Connection, params};
 
 mod due;
+mod plays;
 
 use super::{Plugins, grants};
 use crate::db::now_ms;
@@ -36,6 +40,7 @@ enum Hook {
     TracksChanged,
     ScanFinished,
     Schedule,
+    Played,
 }
 
 impl Hook {
@@ -44,6 +49,7 @@ impl Hook {
             Hook::TracksChanged => "tracksChanged",
             Hook::ScanFinished => "scanFinished",
             Hook::Schedule => "schedule",
+            Hook::Played => "played",
         }
     }
 }
@@ -55,6 +61,8 @@ struct Due {
     library: i64,
     position: i64,
     failures: i64,
+    /// The user it acts for, in `played`; otherwise 0.
+    user: i64,
 }
 
 impl Plugins {
@@ -71,8 +79,8 @@ impl Plugins {
         });
     }
 
-    /// Starts each delivery that is due and not already under way. One plugin, library, and
-    /// hook has at most one delivery at a time; different ones run side by side.
+    /// Starts each delivery that is due and not already under way. One plugin, library, hook,
+    /// and user has at most one delivery at a time; different ones run side by side.
     pub async fn dispatch(self: &Arc<Plugins>) {
         let due = match self.db.read(|conn| due::all(conn, now_ms())).await {
             Ok(due) => due,
@@ -80,7 +88,7 @@ impl Plugins {
         };
         let Ok(runtime) = self.runtime() else { return };
         for due in due {
-            let key = (due.plugin.clone(), due.library, due.hook.name());
+            let key = (due.plugin.clone(), due.library, due.hook.name(), due.user);
             if !self.delivering.lock().expect("delivery lock").insert(key.clone()) {
                 continue;
             }
@@ -94,12 +102,13 @@ impl Plugins {
 
     /// Delivers what is due to one plugin in one library, and records how it went.
     async fn deliver(&self, due: Due) {
-        let (plugin, library) = (due.plugin.clone(), due.library);
+        let (plugin, library, user) = (due.plugin.clone(), due.library, due.user);
         let (hook, position) = (due.hook, due.position);
         let read = self
             .db
             .read(move |conn| {
-                let at = Due { hook, plugin: plugin.clone(), library, position, failures: 0 };
+                let plugin_id = plugin.clone();
+                let at = Due { hook, plugin: plugin_id, library, position, failures: 0, user };
                 let event = due::event(conn, &at, now_ms())?;
                 Ok((
                     event,
@@ -117,7 +126,8 @@ impl Plugins {
         let (succeeded, summary) = match event {
             None => (true, String::new()),
             Some(event) => {
-                match self.run_in(&due.plugin, &manifest, due.library, permissions, event).await {
+                let user = (due.user != 0).then_some(due.user);
+                match self.run_in(&due.plugin, &manifest, library, user, permissions, event).await {
                     Ok((outcome, _)) => (outcome.ok, outcome.summary),
                     Err(error) => (false, error.to_string()),
                 }
@@ -133,7 +143,7 @@ impl Plugins {
 
 /// Moves the position on to `next` after a success. After a failure it keeps the position and
 /// waits longer each time before trying again, and disables the plugin in the library once
-/// it has failed [`MAX_FAILURES`] times in a row.
+/// it has failed [`MAX_FAILURES`] times in a row, unless it is acting for one user.
 fn record(
     conn: &Connection,
     due: &Due,
@@ -142,25 +152,25 @@ fn record(
     summary: &str,
     now: i64,
 ) -> rusqlite::Result<()> {
-    let (plugin, library, hook) = (&due.plugin, due.library, due.hook.name());
+    let (plugin, library, hook, user) = (&due.plugin, due.library, due.hook.name(), due.user);
     if succeeded {
         conn.execute(
-            "INSERT INTO plugin_cursors (plugin_id, library_id, hook, position) \
-             VALUES (?1, ?2, ?3, ?4) ON CONFLICT (plugin_id, library_id, hook) \
+            "INSERT INTO plugin_cursors (plugin_id, library_id, hook, user_id, position) \
+             VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (plugin_id, library_id, hook, user_id) \
              DO UPDATE SET position = excluded.position, failures = 0, retry_at = NULL",
-            params![plugin, library, hook, next],
+            params![plugin, library, hook, user, next],
         )?;
         return Ok(());
     }
     let failures = due.failures + 1;
     let backoff = (BACKOFF_MS << (failures - 1).min(10)).min(MAX_BACKOFF_MS);
     conn.execute(
-        "INSERT INTO plugin_cursors (plugin_id, library_id, hook, failures, retry_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (plugin_id, library_id, hook) \
+        "INSERT INTO plugin_cursors (plugin_id, library_id, hook, user_id, failures, retry_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT (plugin_id, library_id, hook, user_id) \
          DO UPDATE SET failures = excluded.failures, retry_at = excluded.retry_at",
-        params![plugin, library, hook, failures, now + backoff],
+        params![plugin, library, hook, user, failures, now + backoff],
     )?;
-    if failures >= MAX_FAILURES {
+    if failures >= MAX_FAILURES && user == 0 {
         let reason = format!("Stopped after failing {failures} times in a row: {summary}");
         conn.execute(
             "UPDATE plugin_libraries SET enabled = 0, disabled_reason = ?3 \

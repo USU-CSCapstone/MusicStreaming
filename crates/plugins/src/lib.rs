@@ -14,6 +14,7 @@ pub mod settings;
 
 pub use download::{MAX_SIZE, download};
 pub use host::{
-    Album, Artist, Event, Grants, Host, Library, Outcome, ScanFinished, Track, TracksChanged,
+    Album, Artist, Event, Grants, Host, Library, Outcome, Play, PlayEnd, ScanFinished, Track,
+    TracksChanged,
 };
 pub use manifest::{InvalidPlugin, Manifest, Permission, PermissionRequest};

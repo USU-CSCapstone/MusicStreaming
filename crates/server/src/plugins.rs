@@ -62,8 +62,9 @@ pub struct Plugins {
     /// Started on first use, so a server that never runs a plugin pays nothing for them.
     host: OnceLock<Result<Arc<Host>, String>>,
     runtime: OnceLock<Result<Runtime, String>>,
-    /// The plugin, library, and hook of each delivery under way, so each has one at a time.
-    delivering: Mutex<HashSet<(String, i64, &'static str)>>,
+    /// The plugin, library, hook, and user of each delivery under way, so each has one at a
+    /// time.
+    delivering: Mutex<HashSet<(String, i64, &'static str, i64)>>,
 }
 
 impl Plugins {

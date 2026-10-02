@@ -34,10 +34,13 @@ pub enum Permission {
     ScanFinished,
     /// A hook: run at the interval its request names, in every library it is enabled in.
     Schedule,
+    /// A hook: run when a user who connected it finishes playing something. Needs
+    /// listening-activity, library-read where it was played, and personal settings to connect.
+    Played,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 8] = [
+    pub const ALL: [Permission; 9] = [
         Self::LibraryRead,
         Self::LibraryAdd,
         Self::LibraryChange,
@@ -46,6 +49,7 @@ impl Permission {
         Self::TracksChanged,
         Self::ScanFinished,
         Self::Schedule,
+        Self::Played,
     ];
 
     /// Its name in manifests and the API, such as `libraryRead`.
@@ -59,6 +63,7 @@ impl Permission {
             Self::TracksChanged => "tracksChanged",
             Self::ScanFinished => "scanFinished",
             Self::Schedule => "schedule",
+            Self::Played => "played",
         }
     }
 
@@ -89,6 +94,7 @@ impl Permission {
             Self::TracksChanged => "Run when tracks change",
             Self::ScanFinished => "Run when a scan finishes",
             Self::Schedule => "Run on a schedule",
+            Self::Played => "Run when a connected user plays something",
         }
     }
 }
@@ -253,6 +259,17 @@ pub fn validate(manifest: &Value) -> Vec<String> {
     for hook in [Permission::TracksChanged, Permission::ScanFinished] {
         if seen.contains(&hook) && !seen.contains(&Permission::LibraryRead) {
             problems.push(format!("{} needs libraryRead as well", hook.name()));
+        }
+    }
+    // Its events are plays of a library's tracks, by the users who connected it.
+    if seen.contains(&Permission::Played) {
+        for needed in [Permission::LibraryRead, Permission::ListeningActivity] {
+            if !seen.contains(&needed) {
+                problems.push(format!("played needs {} as well", needed.name()));
+            }
+        }
+        if o.get("personalSettings").is_none() {
+            problems.push(r#"played needs "personalSettings", which users connect it with"#.into());
         }
     }
     problems

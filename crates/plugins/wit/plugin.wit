@@ -21,6 +21,9 @@ interface host {
     scan-finished,
     /// A hook: run at the interval the manifest asks for (`events.scheduled`).
     schedule,
+    /// A hook: run when a user who connected the plugin finishes playing something
+    /// (`events.played`).
+    played,
   }
 
   /// What this run may use.
@@ -154,6 +157,8 @@ interface settings {
 
 /// Why the plugin is running. A hook's event arrives only if the admin approved that hook.
 interface events {
+  use library.{track};
+
   /// Tracks added, changed, or removed since the last one, in batches. `changed` holds IDs to
   /// read with `library.get-tracks`; `removed` holds IDs no longer in the library.
   record tracks-changed {
@@ -171,6 +176,27 @@ interface events {
     problems: u32,
   }
 
+  /// How a play ended.
+  enum play-end {
+    /// It played to its end.
+    finished,
+    /// The listener moved on before the end.
+    skipped,
+    /// Playback stopped, such as by closing the app.
+    stopped,
+  }
+
+  /// A play that has ended (requirements/analytics.md §1). A play is any track that started;
+  /// whether it counts as a listen, such as a scrobble, is the plugin's to judge from these.
+  record play {
+    track: track,
+    /// When it started, in milliseconds since the Unix epoch.
+    started-at: u64,
+    /// The audio actually heard. Pausing adds nothing; replaying part of it adds that again.
+    listen-time-ms: u64,
+    end: play-end,
+  }
+
   variant event {
     /// An admin pressed Run now: do the plugin's whole job for this library.
     run,
@@ -180,7 +206,11 @@ interface events {
     scheduled,
     /// An admin is saving new settings, which `settings.get` now answers with. An error is
     /// shown to them and nothing is saved, so a wrong key is caught as it is entered (§6).
+    /// A user connecting the plugin is checked the same way, with their personal settings.
     check-settings,
+    /// Plays one user who connected the plugin has finished in this library, oldest first.
+    /// `settings.get` answers with that user's personal settings, as well as the shared ones.
+    played(list<play>),
   }
 }
 

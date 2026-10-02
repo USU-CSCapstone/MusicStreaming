@@ -18,7 +18,9 @@ export const PERMISSIONS = [
 	// finishes; and at an interval.
 	'tracksChanged',
 	'scanFinished',
-	'schedule'
+	'schedule',
+	// When a user who connected it finishes playing something.
+	'played'
 ];
 
 /** The shortest interval a schedule may ask for. */
@@ -198,6 +200,15 @@ export function validateManifest(m) {
 	for (const hook of ['tracksChanged', 'scanFinished']) {
 		if (seen.has(hook) && !seen.has('libraryRead')) {
 			problems.push(`${hook} needs libraryRead as well`);
+		}
+	}
+	// Its events are plays of a library's tracks, by the users who connected it.
+	if (seen.has('played')) {
+		for (const needed of ['libraryRead', 'listeningActivity']) {
+			if (!seen.has(needed)) problems.push(`played needs ${needed} as well`);
+		}
+		if (o.personalSettings === undefined) {
+			problems.push('played needs "personalSettings", which users connect it with');
 		}
 	}
 	return problems;
