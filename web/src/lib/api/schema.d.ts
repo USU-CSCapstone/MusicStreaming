@@ -1208,52 +1208,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/libraries/{libraryId}/playlists/deleted": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-            };
-            cookie?: never;
-        };
-        /**
-         * List recently deleted playlists
-         * @description Deletion is recoverable for a retention window (`requirements/playlists.md` §4).
-         */
-        get: operations["listDeletedPlaylists"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/libraries/{libraryId}/playlists/import": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Import a Jewelcase playlist file
-         * @description Imports the complete export format, for moving between servers
-         *     (`requirements/playlists.md` §9). Entries that match no track are reported.
-         *     Playlist files inside a library are never read.
-         */
-        post: operations["importPlaylist"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/libraries/{libraryId}/playlists/{playlistId}": {
         parameters: {
             query?: never;
@@ -1268,10 +1222,7 @@ export interface paths {
         get: operations["getPlaylist"];
         put?: never;
         post?: never;
-        /**
-         * Delete a playlist
-         * @description Recoverable until the retention window ends.
-         */
+        /** Delete a playlist */
         delete: operations["deletePlaylist"];
         options?: never;
         head?: never;
@@ -1280,26 +1231,6 @@ export interface paths {
          * @description Applies only against `baseVersion`; otherwise `409 version_conflict` (`requirements/playlists.md` §5).
          */
         patch: operations["updatePlaylist"];
-        trace?: never;
-    };
-    "/libraries/{libraryId}/playlists/{playlistId}/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-                playlistId: components["parameters"]["PlaylistId"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Restore a deleted playlist */
-        post: operations["restorePlaylist"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
         trace?: never;
     };
     "/libraries/{libraryId}/playlists/{playlistId}/items": {
@@ -1393,32 +1324,6 @@ export interface paths {
         post?: never;
         /** Revert to the generated image */
         delete: operations["deletePlaylistImage"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/libraries/{libraryId}/playlists/{playlistId}/export": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-                playlistId: components["parameters"]["PlaylistId"];
-            };
-            cookie?: never;
-        };
-        /**
-         * Export a playlist
-         * @description `m3u` for other players — the one place a listener receives file paths, requested
-         *     explicitly (`requirements/general.md` §3.7). Paths are absolute as mounted in the
-         *     container; `rootPath` rewrites a root's prefix to where the other player sees it.
-         *     `jewelcase` is the complete format for backup and moving between servers.
-         */
-        get: operations["exportPlaylist"];
-        put?: never;
-        post?: never;
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3825,13 +3730,6 @@ export interface components {
         PlaylistPage: components["schemas"]["PageInfo"] & {
             items: components["schemas"]["Playlist"][];
         };
-        DeletedPlaylist: {
-            playlist: components["schemas"]["Playlist"];
-            /** Format: date-time */
-            deletedAt: string;
-            /** Format: date-time */
-            restorableUntil: string;
-        };
         /** @description Exactly one of `track` or `external` is set. A duplicate track is a separate item. */
         PlaylistItem: {
             /** @description Identifies this position, stable across reorders. */
@@ -3888,14 +3786,6 @@ export interface components {
             version: number;
             trackCount: number;
             durationUs: components["schemas"]["DurationUs"];
-        };
-        PlaylistImportResult: {
-            playlist: components["schemas"]["Playlist"];
-            unmatched: {
-                title?: string;
-                artists?: string[];
-                album?: string;
-            }[];
         };
         /**
          * @description Anything playable as a run of tracks (`requirements/queue.md` Overview). A context
@@ -7365,64 +7255,6 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
-    listDeletedPlaylists: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        items: components["schemas"]["DeletedPlaylist"][];
-                    };
-                };
-            };
-            404: components["responses"]["NotFound"];
-            default: components["responses"]["Problem"];
-        };
-    };
-    importPlaylist: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description Client-generated. A repeated key returns the original result without applying twice. */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
-            };
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/vnd.jewelcase.playlist+json": Record<string, never>;
-            };
-        };
-        responses: {
-            /** @description Imported. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PlaylistImportResult"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-            422: components["responses"]["ValidationFailed"];
-            default: components["responses"]["Problem"];
-        };
-    };
     getPlaylist: {
         parameters: {
             query?: never;
@@ -7499,31 +7331,6 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["ValidationFailed"];
-            default: components["responses"]["Problem"];
-        };
-    };
-    restorePlaylist: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-                playlistId: components["parameters"]["PlaylistId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Restored. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Playlist"];
-                };
-            };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -7668,36 +7475,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            404: components["responses"]["NotFound"];
-            default: components["responses"]["Problem"];
-        };
-    };
-    exportPlaylist: {
-        parameters: {
-            query: {
-                format: "m3u" | "jewelcase";
-                /** @description Repeatable `{rootId}:{path}` — replace that root's container path with `path`. */
-                rootPath?: string[];
-            };
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-                playlistId: components["parameters"]["PlaylistId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The playlist file. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "audio/x-mpegurl": string;
-                    "application/vnd.jewelcase.playlist+json": Record<string, never>;
-                };
             };
             404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
