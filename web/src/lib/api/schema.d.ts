@@ -5896,7 +5896,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Disconnected */
+            /** @description Disconnected, or never connected. */
             204: {
                 headers: {
                     [name: string]: unknown;
