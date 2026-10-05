@@ -1,3 +1,0 @@
-target/
-guest-js/node_modules/
-guest-js/*.wasm
