@@ -3806,9 +3806,11 @@ export interface components {
             description: string | null;
             /** @description Custom, or a mosaic of the tracks inside; `null` for an empty playlist. */
             image: components["schemas"]["ImageRef"] | null;
-            customImage?: boolean;
+            /** @description Whether `image` is a custom upload rather than the generated mosaic; `deletePlaylistImage` reverts it. */
+            customImage: boolean;
+            /** @description Every track in the playlist, missing ones included (`requirements/playlists.md` §3). */
             trackCount: number;
-            missingCount?: number;
+            /** @description Of every track in the playlist, missing ones included. */
             durationUs: components["schemas"]["DurationUs"];
             pinned: boolean;
             /** Format: date-time */

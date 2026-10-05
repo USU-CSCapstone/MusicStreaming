@@ -5198,7 +5198,7 @@ components:
     # ───────────────────────────── Playlists ─────────────────────────────
     Playlist:
       type: object
-      required: [id, libraryId, title, description, image, trackCount, durationUs, pinned, createdAt, modifiedAt, version]
+      required: [id, libraryId, title, description, image, customImage, trackCount, durationUs, pinned, createdAt, modifiedAt, version]
       properties:
         id: { $ref: '#/components/schemas/Id' }
         libraryId: { $ref: '#/components/schemas/Id' }
@@ -5209,10 +5209,16 @@ components:
           oneOf:
             - $ref: '#/components/schemas/ImageRef'
             - type: 'null'
-        customImage: { type: boolean }
-        trackCount: { type: integer }
-        missingCount: { type: integer }
-        durationUs: { $ref: '#/components/schemas/DurationUs' }
+        customImage:
+          type: boolean
+          description: Whether `image` is a custom upload rather than the generated mosaic; `deletePlaylistImage` reverts it.
+        trackCount:
+          type: integer
+          description: Every track in the playlist, missing ones included (`requirements/playlists.md` §3).
+        durationUs:
+          description: Of every track in the playlist, missing ones included.
+          allOf:
+            - $ref: '#/components/schemas/DurationUs'
         pinned: { type: boolean }
         createdAt: { type: string, format: date-time }
         modifiedAt: { type: string, format: date-time }

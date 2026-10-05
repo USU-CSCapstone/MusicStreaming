@@ -60,7 +60,7 @@ function build(db: Db, lib: bigint): MockPlaylist[] {
 		const trackIds = db.all(r.sql, lib, ...(r.params ?? [])).map((row) => row.id as bigint);
 		if (trackIds.length === 0) return [];
 		const totals = db.get(
-			`SELECT SUM(duration_us) AS us, SUM(missing_since IS NOT NULL) AS missing
+			`SELECT SUM(duration_us) AS us
 			 FROM tracks WHERE id IN (${trackIds.map(() => '?').join(', ')})`,
 			...trackIds
 		);
@@ -76,7 +76,6 @@ function build(db: Db, lib: bigint): MockPlaylist[] {
 					image: { id: `mosaic-${r.id}`, placeholder: '' },
 					customImage: false,
 					trackCount: trackIds.length,
-					missingCount: num(totals?.missing ?? 0),
 					durationUs: num(totals?.us ?? 0),
 					pinned: false,
 					createdAt: created,
