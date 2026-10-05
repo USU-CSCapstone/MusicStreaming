@@ -117,16 +117,19 @@ jewelcase/
 │   ├── core/        # shared core (§3)
 │   ├── core-wasm/   # WebAssembly bindings for the web client
 │   ├── ffmpeg/      # ffmpeg subprocess wrapper — probe, decode, transcode (scanning.md §11)
+│   ├── plugins/     # plugin host — Wasmtime, the WIT contract, manifests (plugins.md)
 │   ├── scanner/     # ingestion pipeline (scanning.md)
 │   └── server/
+├── plugins/         # example plugins, each its own workspace
+├── tools/           # plugin-pack, which embeds a manifest in a plugin
 ├── web/             # SvelteKit client (SPA mode)
 ├── android/         # native app (later)
 ├── api/             # OpenAPI spec — the API contract
-├── bench/           # library generator and benchmark harness
-├── docker/          # image and reference compose file
+├── bench/           # library generator and benchmark harness (not yet)
+├── Dockerfile, compose.yaml  # development containers
+├── adr/
 ├── design/
-├── requirements/
-└── spikes/          # experiments behind design decisions (plugins.md)
+└── requirements/
 ```
 
 ---

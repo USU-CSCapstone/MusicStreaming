@@ -149,7 +149,7 @@ export const syncedLyrics = {
 	]
 };
 
-/** Stands in for the prototype's plugin runner, so tests never touch a real library. */
+/** Stands in for a plugin run, which needs the server, so tests never touch a real library. */
 async function fakeRun(id: string) {
 	return {
 		ok: true,

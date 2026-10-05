@@ -95,7 +95,7 @@ UI.
 1. Schema, scanner, identity
 2. Job queue
 3. Streaming, API, web client
-4. Execution model spike
-5. Plugin host
+4. Execution model spike (done: `design/plugins.md`)
+5. Plugin host (done: `crates/plugins`)
 6. Loudness and next-track plugins
 7. Search at scale
