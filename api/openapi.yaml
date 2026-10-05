@@ -90,10 +90,10 @@ tags:
     description: Tracks, albums, artists, and tags (`requirements/conventions.md` §4).
   - name: Media
     description: Artwork, lyrics, waveforms, and audio delivery.
-  - name: Search
-    description: Library search and recent searches (`requirements/search.md`).
   - name: Playlists
     description: Saved playlists (`requirements/playlists.md`).
+  - name: Search
+    description: Library search and recent searches (`requirements/search.md`).
   - name: Queue
     description: Manual Queue, Context Queue, History, and kept queues (`requirements/queue.md`).
   - name: Player
@@ -488,7 +488,7 @@ paths:
         with it stops too, as `setMySearchSharing` turning it off does.
       operationId: disconnectMyPlugin
       responses:
-        '204': { description: Disconnected, or never connected. }
+        '204': { description: 'Disconnected, or never connected.' }
         default: { $ref: '#/components/responses/Problem' }
 
   /me/plugins/{pluginId}/search-sharing:
