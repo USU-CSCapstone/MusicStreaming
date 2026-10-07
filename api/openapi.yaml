@@ -33,12 +33,12 @@ info:
     catalog data never carries it; devices receive it through the account feed.
 
     **Optimistic writes.** Writes clients apply locally before confirmation — queue and
-    player commands, playlist edits, plays — carry a client-generated ID in the body
-    (`commandId`, `editId`, `playId`, `createId`). The server applies each ID once however
-    often it arrives (for player commands, see `CommandResult`), and IDs of anything those
-    writes create are derived from it, so a device and the server agree without a round
-    trip. Other state-changing `POST`s accept an `Idempotency-Key` header with the same
-    guarantee.
+    player commands, plays — carry a client-generated ID in the body (`commandId`,
+    `playId`). The server applies each ID once however often it arrives (for player
+    commands, see `CommandResult`), and IDs of anything those writes create are derived
+    from it, so a device and the server agree without a round trip. Playlists need neither:
+    the server assigns a playlist's ID, and edits name its tracks by position at a version.
+    Other state-changing writes accept an `Idempotency-Key` header with the same guarantee.
 
     **Pagination.** Lists are cursor-paged: pass the previous page's `nextCursor` as
     `cursor`. `limit` defaults to 100 and may be up to 1000 — a bound on one transfer,
@@ -1556,10 +1556,13 @@ paths:
       tags: [Playlists]
       summary: Create a playlist
       description: |
-        Optionally with initial items, or by saving a generated mix (`requirements/playlists.md` §8).
-        The playlist's ID derives from `createId` and it starts at version 1, so a device can
-        create a playlist offline and queue edits to it.
+        At version 1, optionally with initial items, or by saving a generated mix
+        (`requirements/playlists.md` §8). A playlist created offline exists only on its device,
+        which folds any edits into it and creates it here, final contents and all, once online.
+        Send an `Idempotency-Key`, so a retry does not create a second playlist.
       operationId: createPlaylist
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -1593,17 +1596,24 @@ paths:
         default: { $ref: '#/components/responses/Problem' }
     patch:
       tags: [Playlists]
-      summary: Update playlist details
-      description: Applies only against `baseVersion`; otherwise `409 version_conflict` (`requirements/playlists.md` §5).
-      operationId: updatePlaylist
+      summary: Edit a playlist
+      description: |
+        Changes details and contents — adds, removes, and moves, including non-contiguous
+        selections — as one atomic edit against `baseVersion`; otherwise `409 version_conflict`
+        (`requirements/playlists.md` §4–§5). A device chains its queued edits, each against the
+        version the previous one produced. Undo is a further edit that reverses the last. Send
+        an `Idempotency-Key`, so a retried edit is not refused because its first attempt applied.
+      operationId: editPlaylist
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/PlaylistUpdate' }
+            schema: { $ref: '#/components/schemas/PlaylistEdit' }
       responses:
         '200':
-          description: Updated.
+          description: Applied.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Playlist' }
@@ -1627,7 +1637,9 @@ paths:
     get:
       tags: [Playlists]
       summary: List playlist items
-      description: In the user's order. Missing tracks stay in position (`requirements/playlists.md` §3).
+      description: |
+        In the user's order, where an item's index is its position for `editPlaylist`. Missing
+        tracks stay in position (`requirements/playlists.md` §3). Every page comes from one version.
       operationId: listPlaylistItems
       parameters:
         - $ref: '#/components/parameters/Cursor'
@@ -1639,35 +1651,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PlaylistItemPage' }
         '404': { $ref: '#/components/responses/NotFound' }
-        default: { $ref: '#/components/responses/Problem' }
-
-  /libraries/{libraryId}/playlists/{playlistId}/edits:
-    parameters:
-      - $ref: '#/components/parameters/LibraryId'
-      - $ref: '#/components/parameters/PlaylistId'
-    post:
-      tags: [Playlists]
-      summary: Edit playlist contents
-      description: |
-        Adds, removes, and moves — including non-contiguous selections — as one atomic
-        edit against `baseVersion` (`requirements/playlists.md` §4–§5). A device chains its
-        queued edits, each using the version the previous one produced. Undo is a further
-        edit that reverses the last.
-      operationId: editPlaylist
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/PlaylistEdit' }
-      responses:
-        '200':
-          description: Applied.
+        '410':
+          description: '`cursor_expired` — the playlist changed since the first page; start again.'
           content:
-            application/json:
-              schema: { $ref: '#/components/schemas/PlaylistEditResult' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/VersionConflict' }
-        '422': { $ref: '#/components/responses/ValidationFailed' }
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/playlists/{playlistId}/duplicates:
@@ -5134,12 +5122,10 @@ components:
 
     PlaylistItem:
       type: object
-      required: [itemId]
-      description: Exactly one of `track` or `external` is set. A duplicate track is a separate item.
+      description: |
+        Exactly one of `track` or `external` is set. Items are named by position, so a
+        duplicate track is a separate item.
       properties:
-        itemId:
-          type: string
-          description: Identifies this position, stable across reorders.
         track: { $ref: '#/components/schemas/TrackSummary' }
         external: { $ref: '#/components/schemas/ExternalTrack' }
         addedAt: { type: string, format: date-time }
@@ -5148,17 +5134,19 @@ components:
       allOf:
         - $ref: '#/components/schemas/PageInfo'
         - type: object
-          required: [items]
+          required: [version, items]
           properties:
+            version:
+              type: integer
+              description: The playlist version these positions belong to, the `baseVersion` for edits made from them.
             items:
               type: array
               items: { $ref: '#/components/schemas/PlaylistItem' }
 
     PlaylistCreate:
       type: object
-      required: [createId, title]
+      required: [title]
       properties:
-        createId: { $ref: '#/components/schemas/CommandId' }
         title: { type: string, minLength: 1 }
         description: { type: string }
         items:
@@ -5169,17 +5157,10 @@ components:
           type: string
           description: Save a generated mix as it is now (`requirements/playlists.md` §8). `title` defaults sensibly.
 
-    PlaylistUpdate:
-      type: object
-      required: [editId, baseVersion]
-      properties:
-        editId: { $ref: '#/components/schemas/CommandId' }
-        baseVersion: { type: integer }
-        title: { type: string, minLength: 1 }
-        description: { type: [string, 'null'] }
-        pinned: { type: boolean }
-
     PlaylistOp:
+      description: |
+        Positions are zero-based indexes into the playlist as this op finds it, after the ops
+        before it in the same edit. A position out of range fails the whole edit.
       oneOf:
         - type: object
           required: [op, items]
@@ -5187,48 +5168,53 @@ components:
             op: { const: add }
             items:
               type: array
+              minItems: 1
               items: { $ref: '#/components/schemas/Playable' }
-            before:
-              type: [string, 'null']
-              description: Insert before this item. `null` appends.
+            at:
+              type: integer
+              minimum: 0
+              description: Position the first added track takes. Omitted appends.
         - type: object
-          required: [op, itemIds]
+          required: [op, positions]
           properties:
             op: { const: remove }
-            itemIds:
+            positions:
               type: array
-              items: { type: string }
+              minItems: 1
+              uniqueItems: true
+              items: { type: integer, minimum: 0 }
         - type: object
-          required: [op, itemIds, before]
+          required: [op, positions, at]
           properties:
             op: { const: move }
-            itemIds:
+            positions:
               type: array
+              minItems: 1
+              uniqueItems: true
               description: Any selection, contiguous or not; relative order is preserved.
-              items: { type: string }
-            before:
-              type: [string, 'null']
-              description: Move before this item. `null` moves to the end.
+              items: { type: integer, minimum: 0 }
+            at:
+              type: integer
+              minimum: 0
+              description: Position the first moved track takes once the move is done.
 
     PlaylistEdit:
       type: object
-      required: [editId, baseVersion, ops]
+      required: [baseVersion]
+      minProperties: 2
+      description: Every part applies, or none does.
       properties:
-        editId: { $ref: '#/components/schemas/CommandId' }
-        baseVersion: { type: integer }
+        baseVersion:
+          type: integer
+          description: The version the edit was made against.
+        title: { type: string, minLength: 1 }
+        description: { type: [string, 'null'] }
+        pinned: { type: boolean }
         ops:
           type: array
           minItems: 1
-          description: Applied in order, atomically — all or nothing.
+          description: Applied in order.
           items: { $ref: '#/components/schemas/PlaylistOp' }
-
-    PlaylistEditResult:
-      type: object
-      required: [version, trackCount, durationUs]
-      properties:
-        version: { type: integer }
-        trackCount: { type: integer }
-        durationUs: { $ref: '#/components/schemas/DurationUs' }
 
     # ───────────────────────────── Contexts ─────────────────────────────
     Context:
