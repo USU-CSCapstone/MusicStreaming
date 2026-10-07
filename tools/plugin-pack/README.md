@@ -35,6 +35,7 @@ written. The error says what to fix.
 | `apiVersion` | `0.2` |
 | `permissions` | Any of `libraryRead`, `libraryAdd`, `libraryChange`, `network`, `listeningActivity` (`requirements/plugins.md` §4.1), and the hooks `tracksChanged`, `scanFinished`, `schedule`, `played` (`design/plugins.md` §7). Each needs a `reason`, which the admin sees. Mark as `required` only what the plugin cannot work without; an admin can decline the rest. |
 | `destinations` | For `network` only: the host names it talks to, or `["*"]` for any. |
+| `rateLimits` | For `network` only, optional: the most often each destination may be asked, as `{ "musicbrainz.org": "1/s" }`, per `s`, `min`, or `h`. Every plugin's requests to that host keep to the strictest pace any declared (`design/plugins.md` §7). |
 | `everyMinutes` | For `schedule` only: how often it runs, at least 5. |
 | `settings` | Optional. What an admin can set, as `{ "properties": { "name": { "type": "string" \| "number" \| "integer" \| "boolean", "title", "description", "enum", "default", "writeOnly" } }, "required": [names] }`. `writeOnly` marks a secret, never shown again once entered. The plugin reads them with `settings.get`, and checks new ones on `check-settings`. |
 | `personalSettings` | Optional. What each user sets for themselves, such as their own account on a service, in the same form as `settings` and with names of its own. Users who save them have connected the plugin, and only their listening reaches it. A run sees both under one set of names. |

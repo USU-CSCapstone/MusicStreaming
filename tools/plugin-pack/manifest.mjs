@@ -26,6 +26,9 @@ export const PERMISSIONS = [
 /** The shortest interval a schedule may ask for. */
 export const MIN_EVERY_MINUTES = 5;
 
+/** A rate limit for a destination: up to nine digits, no leading zero, per second, minute, or hour. */
+const RATE_LIMIT = /^[1-9][0-9]{0,8}\/(s|min|h)$/;
+
 const MAGIC = [0x00, 0x61, 0x73, 0x6d];
 /** Component-model binaries: version 0x0d, layer 1. A core module is version 1, layer 0. */
 const COMPONENT_VERSION = [0x0d, 0x00, 0x01, 0x00];
@@ -185,6 +188,10 @@ export function validateManifest(m) {
 		} else if (r.destinations !== undefined) {
 			problems.push(`${at}: only network takes "destinations"`);
 		}
+		if (r.rateLimits !== undefined) {
+			if (r.permission === 'network') problems.push(...validateRateLimits(at, r.rateLimits, r.destinations));
+			else problems.push(`${at}: only network takes "rateLimits"`);
+		}
 		if (r.permission === 'schedule') {
 			const m = r.everyMinutes;
 			if (!Number.isInteger(m) || /** @type {number} */ (m) < MIN_EVERY_MINUTES || /** @type {number} */ (m) > 4294967295) {
@@ -209,6 +216,32 @@ export function validateManifest(m) {
 		}
 		if (o.personalSettings === undefined) {
 			problems.push('played needs "personalSettings", which users connect it with');
+		}
+	}
+	return problems;
+}
+
+/**
+ * Every problem with a network request's rate limits, in the same words as the server's
+ * `crates/plugins/src/manifest.rs`.
+ * @param {string} at
+ * @param {unknown} limits
+ * @param {unknown} destinations
+ * @returns {string[]}
+ */
+function validateRateLimits(at, limits, destinations) {
+	if (!isObject(limits)) return [`${at}: "rateLimits" must map destinations to limits such as "1/s"`];
+	const ascii = (/** @type {string} */ s) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+	const hosts = Array.isArray(destinations) ? destinations.filter((d) => typeof d === 'string') : [];
+	const problems = [];
+	const entries = /** @type {Record<string, unknown>} */ (limits);
+	// Sorted, as the server's map of them is.
+	for (const host of Object.keys(entries).sort()) {
+		const listed = host !== '*' && hosts.some((d) => d === '*' || ascii(d) === ascii(host));
+		if (!listed) problems.push(`${at}: rateLimits: "${host}" is not one of its destinations`);
+		const limit = entries[host];
+		if (typeof limit !== 'string' || !RATE_LIMIT.test(limit)) {
+			problems.push(`${at}: rateLimits: "${host}" needs a limit such as "1/s", "60/min", or "1000/h"`);
 		}
 	}
 	return problems;
