@@ -125,8 +125,14 @@ impl Plugins {
         event: Event,
     ) -> Result<Outcome, PluginError> {
         let (host, runtime) = (self.host()?, self.runtime()?);
-        let grants =
-            Grants { permissions, destinations: manifest.destinations().to_vec(), settings };
+        let grants = Grants {
+            plugin: id.to_owned(),
+            library,
+            permissions,
+            destinations: manifest.destinations().to_vec(),
+            rate_limits: manifest.rate_limits(),
+            settings,
+        };
         let (path, db, plugin) = (self.path(id), self.db.clone(), id.to_owned());
         runtime
             .spawn(async move {

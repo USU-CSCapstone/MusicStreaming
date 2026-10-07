@@ -9,6 +9,7 @@ mod download;
 mod files;
 mod host;
 pub mod manifest;
+mod network;
 mod rules;
 pub mod settings;
 

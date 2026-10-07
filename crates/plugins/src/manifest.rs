@@ -4,6 +4,9 @@
 //! This is the authority on what installs. `tools/plugin-pack` validates the same way for
 //! authors, and both are held to `manifest-cases.json`, so they cannot drift apart.
 
+use std::collections::BTreeMap;
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use wasmparser::{Encoding, Parser, Payload};
@@ -130,6 +133,10 @@ pub struct PermissionRequest {
     /// For network: host names, or `*` for any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub destinations: Option<Vec<String>>,
+    /// For network: the most often each destination may be asked, such as `"1/s"`
+    /// ([`rate_limit_gap`]).
+    #[serde(default, rename = "rateLimits", skip_serializing_if = "Option::is_none")]
+    pub rate_limits: Option<BTreeMap<String, String>>,
     /// For schedule: how often it runs.
     #[serde(default, rename = "everyMinutes", skip_serializing_if = "Option::is_none")]
     pub every_minutes: Option<u32>,
@@ -142,6 +149,13 @@ impl Manifest {
         network.and_then(|r| r.destinations.as_deref()).unwrap_or_default()
     }
 
+    /// The gap its network request asks for between requests to each host that has one.
+    pub fn rate_limits(&self) -> Vec<(String, Duration)> {
+        let network = self.permissions.iter().find(|r| r.permission == Permission::Network);
+        let limits = network.and_then(|r| r.rate_limits.as_ref()).into_iter().flatten();
+        limits.filter_map(|(host, limit)| Some((host.clone(), rate_limit_gap(limit)?))).collect()
+    }
+
     /// How often its schedule runs, if it asks for one.
     pub fn every_minutes(&self) -> Option<u32> {
         let schedule = self.permissions.iter().find(|r| r.permission == Permission::Schedule);
@@ -151,6 +165,25 @@ impl Manifest {
     pub fn required(&self) -> impl Iterator<Item = Permission> + '_ {
         self.permissions.iter().filter(|r| r.required).map(|r| r.permission)
     }
+}
+
+/// The gap between requests that keeps to a rate limit: `"1/s"`, `"60/min"`, or `"1000/h"`.
+/// Requests are spaced evenly rather than let through in bursts, which keeps within the limit
+/// however the service counts it.
+pub fn rate_limit_gap(limit: &str) -> Option<Duration> {
+    let (count, per) = limit.split_once('/')?;
+    let period = match per {
+        "s" => 1,
+        "min" => 60,
+        "h" => 60 * 60,
+        _ => return None,
+    };
+    // Digits only, as the pack tool reads them: no sign, no leading zero, and no more than nine.
+    let digits = count.bytes().all(|b| b.is_ascii_digit()) && !count.starts_with('0');
+    if !digits || count.is_empty() || count.len() > 9 {
+        return None;
+    }
+    Some(Duration::from_secs(period) / count.parse::<u32>().ok()?)
 }
 
 /// Why a file is not a plugin, in words an admin can act on.
@@ -308,6 +341,13 @@ fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>
     } else if destinations.is_some() {
         problems.push(format!(r#"{at}: only network takes "destinations""#));
     }
+    match r.get("rateLimits") {
+        Some(limits) if permission == Permission::Network => {
+            problems.extend(validate_rate_limits(at, limits, destinations));
+        }
+        Some(_) => problems.push(format!(r#"{at}: only network takes "rateLimits""#)),
+        None => {}
+    }
     let every = r.get("everyMinutes");
     if permission == Permission::Schedule {
         if !every
@@ -320,6 +360,32 @@ fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>
         }
     } else if every.is_some() {
         problems.push(format!(r#"{at}: only schedule takes "everyMinutes""#));
+    }
+    problems
+}
+
+fn validate_rate_limits(at: &str, limits: &Value, destinations: Option<&Value>) -> Vec<String> {
+    let Some(limits) = limits.as_object() else {
+        return vec![format!(
+            r#"{at}: "rateLimits" must map destinations to limits such as "1/s""#
+        )];
+    };
+    let hosts = destinations.and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    let mut problems = Vec::new();
+    for (host, limit) in limits {
+        let listed = host != "*"
+            && hosts
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|d| d == "*" || d.eq_ignore_ascii_case(host));
+        if !listed {
+            problems.push(format!(r#"{at}: rateLimits: "{host}" is not one of its destinations"#));
+        }
+        if !limit.as_str().is_some_and(|limit| rate_limit_gap(limit).is_some()) {
+            problems.push(format!(
+                r#"{at}: rateLimits: "{host}" needs a limit such as "1/s", "60/min", or "1000/h""#
+            ));
+        }
     }
     problems
 }
@@ -386,6 +452,18 @@ mod tests {
         assert_eq!(read.id, "lrclib-lyrics");
         assert_eq!(read.destinations(), ["lrclib.net"]);
         assert_eq!(read.required().collect::<Vec<_>>(), [Permission::Network]);
+    }
+
+    #[test]
+    fn rate_limits_become_even_gaps() {
+        let gap = |limit| rate_limit_gap(limit).map(|gap| gap.as_millis());
+        assert_eq!(gap("1/s"), Some(1000));
+        assert_eq!(gap("4/s"), Some(250));
+        assert_eq!(gap("60/min"), Some(1000));
+        assert_eq!(gap("1000/h"), Some(3600));
+        for wrong in ["0/s", "01/s", "+1/s", "1/sec", "1 /s", "/s", "1", "1000000000/s"] {
+            assert_eq!(gap(wrong), None, "{wrong}");
+        }
     }
 
     #[test]
