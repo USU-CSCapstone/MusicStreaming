@@ -105,12 +105,11 @@ export function createApi(dataDir: string) {
 			({ lib, params, query }) => {
 				const list = playlist(db, lib, params[0]);
 				if (!list) return undefined;
-				const items = catalog.tracksByIds(lib, list.trackIds).map((track, i) => ({
-					itemId: `${list.playlist.id}-${i}`,
+				const items = catalog.tracksByIds(lib, list.trackIds).map((track) => ({
 					track,
 					addedAt: list.playlist.createdAt
 				}));
-				return slice(items, paging(query));
+				return { ...slice(items, paging(query)), version: list.playlist.version };
 			}
 		],
 		[/^\/search$/, ({ lib, query }) => search(lib, query)],

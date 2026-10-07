@@ -1197,9 +1197,10 @@ export interface paths {
         put?: never;
         /**
          * Create a playlist
-         * @description Optionally with initial items, or by saving a generated mix (`requirements/playlists.md` §8).
-         *     The playlist's ID derives from `createId` and it starts at version 1, so a device can
-         *     create a playlist offline and queue edits to it.
+         * @description At version 1, optionally with initial items, or by saving a generated mix
+         *     (`requirements/playlists.md` §8). A playlist created offline exists only on its device,
+         *     which folds any edits into it and creates it here, final contents and all, once online.
+         *     Send an `Idempotency-Key`, so a retry does not create a second playlist.
          */
         post: operations["createPlaylist"];
         delete?: never;
@@ -1227,10 +1228,14 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Update playlist details
-         * @description Applies only against `baseVersion`; otherwise `409 version_conflict` (`requirements/playlists.md` §5).
+         * Edit a playlist
+         * @description Changes details and contents — adds, removes, and moves, including non-contiguous
+         *     selections — as one atomic edit against `baseVersion`; otherwise `409 version_conflict`
+         *     (`requirements/playlists.md` §4–§5). A device chains its queued edits, each against the
+         *     version the previous one produced. Undo is a further edit that reverses the last. Send
+         *     an `Idempotency-Key`, so a retried edit is not refused because its first attempt applied.
          */
-        patch: operations["updatePlaylist"];
+        patch: operations["editPlaylist"];
         trace?: never;
     };
     "/libraries/{libraryId}/playlists/{playlistId}/items": {
@@ -1245,37 +1250,12 @@ export interface paths {
         };
         /**
          * List playlist items
-         * @description In the user's order. Missing tracks stay in position (`requirements/playlists.md` §3).
+         * @description In the user's order, where an item's index is its position for `editPlaylist`. Missing
+         *     tracks stay in position (`requirements/playlists.md` §3). Every page comes from one version.
          */
         get: operations["listPlaylistItems"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/libraries/{libraryId}/playlists/{playlistId}/edits": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-                playlistId: components["parameters"]["PlaylistId"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Edit playlist contents
-         * @description Adds, removes, and moves — including non-contiguous selections — as one atomic
-         *     edit against `baseVersion` (`requirements/playlists.md` §4–§5). A device chains its
-         *     queued edits, each using the version the previous one produced. Undo is a further
-         *     edit that reverses the last.
-         */
-        post: operations["editPlaylist"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3730,20 +3710,22 @@ export interface components {
         PlaylistPage: components["schemas"]["PageInfo"] & {
             items: components["schemas"]["Playlist"][];
         };
-        /** @description Exactly one of `track` or `external` is set. A duplicate track is a separate item. */
+        /**
+         * @description Exactly one of `track` or `external` is set. Items are named by position, so a
+         *     duplicate track is a separate item.
+         */
         PlaylistItem: {
-            /** @description Identifies this position, stable across reorders. */
-            itemId: string;
             track?: components["schemas"]["TrackSummary"];
             external?: components["schemas"]["ExternalTrack"];
             /** Format: date-time */
             addedAt?: string;
         };
         PlaylistItemPage: components["schemas"]["PageInfo"] & {
+            /** @description The playlist version these positions belong to, the `baseVersion` for edits made from them. */
+            version: number;
             items: components["schemas"]["PlaylistItem"][];
         };
         PlaylistCreate: {
-            createId: components["schemas"]["CommandId"];
             title: string;
             description?: string;
             /** @description Albums, artists, and playlists expand to their tracks in order. */
@@ -3751,41 +3733,37 @@ export interface components {
             /** @description Save a generated mix as it is now (`requirements/playlists.md` §8). `title` defaults sensibly. */
             fromMix?: string;
         };
-        PlaylistUpdate: {
-            editId: components["schemas"]["CommandId"];
-            baseVersion: number;
-            title?: string;
-            description?: string | null;
-            pinned?: boolean;
-        };
+        /**
+         * @description Positions are zero-based indexes into the playlist as this op finds it, after the ops
+         *     before it in the same edit. A position out of range fails the whole edit.
+         */
         PlaylistOp: {
             /** @constant */
             op: "add";
             items: components["schemas"]["Playable"][];
-            /** @description Insert before this item. `null` appends. */
-            before?: string | null;
+            /** @description Position the first added track takes. Omitted appends. */
+            at?: number;
         } | {
             /** @constant */
             op: "remove";
-            itemIds: string[];
+            positions: number[];
         } | {
             /** @constant */
             op: "move";
             /** @description Any selection, contiguous or not; relative order is preserved. */
-            itemIds: string[];
-            /** @description Move before this item. `null` moves to the end. */
-            before: string | null;
+            positions: number[];
+            /** @description Position the first moved track takes once the move is done. */
+            at: number;
         };
+        /** @description Every part applies, or none does. */
         PlaylistEdit: {
-            editId: components["schemas"]["CommandId"];
+            /** @description The version the edit was made against. */
             baseVersion: number;
-            /** @description Applied in order, atomically — all or nothing. */
-            ops: components["schemas"]["PlaylistOp"][];
-        };
-        PlaylistEditResult: {
-            version: number;
-            trackCount: number;
-            durationUs: components["schemas"]["DurationUs"];
+            title?: string;
+            description?: string | null;
+            pinned?: boolean;
+            /** @description Applied in order. */
+            ops?: components["schemas"]["PlaylistOp"][];
         };
         /**
          * @description Anything playable as a run of tracks (`requirements/queue.md` Overview). A context
@@ -7229,7 +7207,10 @@ export interface operations {
     createPlaylist: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Client-generated. A repeated key returns the original result without applying twice. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 libraryId: components["parameters"]["LibraryId"];
             };
@@ -7303,10 +7284,13 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
-    updatePlaylist: {
+    editPlaylist: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Client-generated. A repeated key returns the original result without applying twice. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 libraryId: components["parameters"]["LibraryId"];
                 playlistId: components["parameters"]["PlaylistId"];
@@ -7315,11 +7299,11 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PlaylistUpdate"];
+                "application/json": components["schemas"]["PlaylistEdit"];
             };
         };
         responses: {
-            /** @description Updated. */
+            /** @description Applied. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7359,37 +7343,15 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
-            default: components["responses"]["Problem"];
-        };
-    };
-    editPlaylist: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-                playlistId: components["parameters"]["PlaylistId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PlaylistEdit"];
-            };
-        };
-        responses: {
-            /** @description Applied. */
-            200: {
+            /** @description `cursor_expired` — the playlist changed since the first page; start again. */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PlaylistEditResult"];
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["VersionConflict"];
-            422: components["responses"]["ValidationFailed"];
             default: components["responses"]["Problem"];
         };
     };
