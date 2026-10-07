@@ -5,7 +5,7 @@ What a plugin can call on the host. This file lists the host interfaces that are
 
 The one thing this design exists to get right: **the fast way to do something is the easy way** ([`requirements/plugins.md` §2.1](../requirements/plugins.md#21-the-system-adds-nothing)). Most slow plugins are slow because the host offered no better access pattern than a slow one. So when an import is missing, the cost is more than inconvenience: authors work around it, and the workaround is slow.
 
-Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`exports.md`](exports.md), covering what the host can call on a plugin. Everything in §3 is proposed, not decided.
+Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`exports.md`](exports.md), covering what the host can call on a plugin. Everything in §3 is proposed, not decided, except what it marks as built.
 
 ---
 
@@ -20,11 +20,13 @@ Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`ex
 | `files` | `roots`, `list`, `read` | `libraryRead` (`roots`: any library permission) | 10,000 entries per list; 8 MB per read |
 | `files` | `write` (`create`) | `libraryAdd` | 32 MB, written whole or not at all |
 | `files` | `write` (`replace`), `rename`, `delete` | `libraryChange` | 32 MB; a folder is deleted only when empty |
-| `http` | `send` | `network`, to declared destinations only, redirects included | 16 MB bodies, 15 s per request, 5 redirects |
+| `http` | `send` | `network`, to declared destinations only, redirects included | 16 MB bodies, 15 s per request, 5 redirects; a shared pace and cache (below) |
 | `state` | `get`, `set`, `delete` | — (per plugin and library) | 512 B keys, 1 MB values |
 | `settings` | `get` | — | Library value, else server-wide value, else the default, plus the connected user's personal settings |
 
 The limits on every run are 64 MiB of memory, 60 s of compute, and 5 minutes of wall clock.
+
+**`http.send` shares a pace and a cache across every plugin** ([`plugins.md` §7](plugins.md#7-running-plugins)). A network request declares `rateLimits` per destination, and the strictest declared pace applies to every request to that host. A `429`, or a `503` with `Retry-After`, pauses that host for everyone. A GET is answered from a fresh reply already fetched for the same library, URL, and headers, and a stale one is checked with its `ETag` or `Last-Modified`.
 
 ---
 
@@ -45,22 +47,17 @@ The limits on every run are 64 MiB of memory, 60 s of compute, and 5 minutes of 
 
 These close gaps where [`requirements/plugins.md`](../requirements/plugins.md) already promises something the contract cannot do.
 
-#### Shared Cache
+#### Shared Cache and Coordinated Rate Limits
 
-**[§2.1](../requirements/plugins.md#21-the-system-adds-nothing) requires that "two plugins asking the same question ask it once"**, and nothing provides that yet.
+**Built** (§1, [`plugins.md` §7](plugins.md#7-running-plugins)). The design moved in two ways from what was first proposed here:
 
-- **First form: a response cache inside `http.send`.** It follows `Cache-Control` and `ETag` and is shared across plugins. A request whose headers carry credentials (`Authorization`, cookies, an API key in the URL the manifest marks as secret) is cached only for that plugin. Otherwise one plugin's account would answer another's question.
-- **Second form, if the first is not enough: `cache.get` and `cache.set` with a time to live**, for derived results that are not HTTP responses. These are scoped to the plugin. Sharing derived results between plugins needs a key both agree on, which is an API in itself.
-- **Needs** nothing beyond what the request already needs.
+- **Credentials did not need marking.** The proposal was to cache a request carrying credentials only for its own plugin. Instead the cache key is the library, the URL, and every header sent. A reply fetched with a credential is then reused only by a request carrying the same credential, wherever the credential is, so the host never has to recognise one.
+- **The cache is per library, not server-wide.** Whether a reply is already cached, measured by how fast it comes back, would tell a plugin what another library holds. Plugins in one library still share.
 
-#### Coordinated Rate Limits
+What remains:
 
-**[§7](../requirements/plugins.md#7-working-with-the-library) requires respecting rate limits, and no single plugin can do that alone.** MusicBrainz allows one request per second per IP address. Two plugins that each respect it still break it together.
-
-- **The manifest declares a limit per destination**, for example `"rateLimits": {"musicbrainz.org": "1/s"}`. The host enforces it for all plugins together. The strictest declared limit for a host wins.
-- **`http.send` waits for its turn** rather than failing. That wait does not count against the run's compute budget, but does count against its wall clock.
-- **The host also honours `429` and `Retry-After`** for every plugin reaching that destination, not just the one that was told.
-- **Needs** `network`.
+- **`cache.get` and `cache.set`**, for derived results that are not HTTP replies, if the HTTP cache proves not to be enough. Scoped to the plugin.
+- **Merging requests in flight.** Two plugins asking the same question at the same moment both ask, because the second misses before the first reply is kept.
 
 #### Progress and Checkpoints
 
@@ -136,7 +133,6 @@ These close gaps where [`requirements/plugins.md`](../requirements/plugins.md) a
 
 ## 4. Open Questions
 
-1. **Credentials and the shared cache** (§3.1). How the host knows a request carries a credential when it is a query parameter or a body field rather than a header. A plugin could mark it, or the manifest could mark which settings are secrets, which it already does with `writeOnly`.
-2. **Who declares a rate limit.** Each plugin declaring its own lets two plugins disagree about the same host. The host could keep a list for well-known services, but that is curation the project said it does not do ([`requirements/plugins.md` §4.4](../requirements/plugins.md#44-who-is-trusted)).
-3. **Cross-plugin calls** (§3.6): whether they happen at all, and under whose grants.
-4. **Imports checked at install.** [`plugins.md` §6](plugins.md#6-packaging) proposes refusing a plugin that imports network access it did not request. Each import added here makes that check more valuable, and it is not built.
+1. **Who declares a rate limit.** Each plugin declares its own and the strictest wins, so a careless plugin can only make things slower, never faster. A host-kept list for well-known services would be curation the project said it does not do ([`requirements/plugins.md` §4.4](../requirements/plugins.md#44-who-is-trusted)). A declaration is remembered until restart, even after its plugin is uninstalled, which errs the same way.
+2. **Cross-plugin calls** (§3.6): whether they happen at all, and under whose grants.
+3. **Imports checked at install.** [`plugins.md` §6](plugins.md#6-packaging) proposes refusing a plugin that imports network access it did not request. Each import added here makes that check more valuable, and it is not built.
