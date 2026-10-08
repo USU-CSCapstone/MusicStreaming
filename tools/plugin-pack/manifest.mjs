@@ -23,11 +23,14 @@ export const PERMISSIONS = [
 	'schedule',
 	// When a user who connected it finishes playing something, and when they start.
 	'played',
-	'playing'
+	'playing',
+	// The searches of users who share them with it, and running when they settle on one.
+	'searchActivity',
+	'searched'
 ];
 
 /** The contract version that added each permission, where it is later than the first. */
-const SINCE = { playing: '0.3' };
+const SINCE = { playing: '0.3', searchActivity: '0.3', searched: '0.3' };
 
 /** The shortest interval a schedule may ask for. */
 export const MIN_EVERY_MINUTES = 5;
@@ -220,9 +223,10 @@ export function validateManifest(m) {
 			problems.push(`${hook} needs libraryRead as well`);
 		}
 	}
-	// Their events are plays of a library's tracks, by the users who connected it.
-	for (const hook of ['played', 'playing'].filter((h) => seen.has(h))) {
-		for (const needed of ['libraryRead', 'listeningActivity']) {
+	// Their events are plays of a library's tracks or searches of it, by the users who connected it.
+	const hooks = { played: 'listeningActivity', playing: 'listeningActivity', searched: 'searchActivity' };
+	for (const [hook, activity] of Object.entries(hooks).filter(([h]) => seen.has(h))) {
+		for (const needed of ['libraryRead', activity]) {
 			if (!seen.has(needed)) problems.push(`${hook} needs ${needed} as well`);
 		}
 		if (o.personalSettings === undefined) {

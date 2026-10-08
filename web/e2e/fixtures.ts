@@ -188,8 +188,10 @@ export async function serveLibrary(
 	);
 	const plays: PlayReport[] = [];
 	const searches: RecentSearch[] = [];
-	// A scrobbler this user can connect with their own token, which it never shows again.
+	// A scrobbler this user can connect with their own token, which it never shows again, and
+	// share their searches with once connected.
 	let token: string | null = null;
+	let sharesSearches = false;
 	const mySettings = () => ({
 		schema: {
 			type: 'object',
@@ -235,13 +237,34 @@ export async function serveLibrary(
 		}
 		if (path === '/me/plugins') {
 			return json({
-				items: [{ id: 'scrobbler', name: 'Scrobbler', connected: token !== null }]
+				items: [
+					{
+						id: 'scrobbler',
+						name: 'Scrobbler',
+						connected: token !== null,
+						asksForSearches: true,
+						sharesSearches
+					}
+				]
 			});
+		}
+		if (path === '/me/plugins/scrobbler/search-sharing') {
+			const { sharing } = route.request().postDataJSON();
+			if (sharing && token === null) {
+				return problem(
+					422,
+					'validation_failed',
+					'Connect it before sharing your searches with it.'
+				);
+			}
+			sharesSearches = sharing;
+			return route.fulfill({ status: 204 });
 		}
 		if (path === '/me/plugins/scrobbler/settings') {
 			const method = route.request().method();
 			if (method === 'DELETE') {
 				token = null;
+				sharesSearches = false;
 				return route.fulfill({ status: 204 });
 			}
 			if (method === 'PUT') {

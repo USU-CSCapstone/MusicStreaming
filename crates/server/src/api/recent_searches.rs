@@ -10,6 +10,11 @@
 //! A client records a search once it settles: when the user acts on a result, submits it, or
 //! leaves it after it has stood a moment. Searching the same words again, ignoring case and
 //! accents, replaces the earlier entry, so it moves to the top under a new ID.
+//!
+//! For a user who shares their searches with a plugin, each one recorded, and each one they
+//! remove, is noted for the `searched` hook (`0016_plugin_searched.sql`). Only explicit removal
+//! asks a plugin to forget: a search replaced by the same words, pushed out by newer ones, or
+//! aged out of the window does not (`requirements/search.md` §6).
 
 use std::sync::Arc;
 
@@ -22,6 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use super::authenticate::Caller;
 use super::extract::{Json as Body, Path};
+use super::search::{Indexes, totals};
 use super::sql::timestamp;
 use super::{Id, Problem};
 use crate::db::{Database, now_ms};
@@ -84,9 +90,30 @@ fn row(row: &Row) -> rusqlite::Result<RecentSearch> {
     Ok(RecentSearch { id: Id(row.get(0)?), query: row.get(1)?, selected, searched_at: row.get(4)? })
 }
 
-/// Deletes every search, anyone's, that has aged out of the window.
+/// Deletes every search, anyone's, that has aged out of the window, and what the `searched`
+/// hook noted about searches as old.
 fn sweep(tx: &Transaction, now: i64) -> rusqlite::Result<()> {
     tx.execute("DELETE FROM recent_searches WHERE searched_at < ?1", [now - WINDOW_MS])?;
+    tx.execute("DELETE FROM search_events WHERE at < ?1", [now - WINDOW_MS])?;
+    Ok(())
+}
+
+/// Notes that `user` recorded or removed `search`, for the plugins they share their searches
+/// with; nothing if they share with none.
+fn note(
+    tx: &Transaction,
+    user: i64,
+    library: i64,
+    kind: &str,
+    search: i64,
+    now: i64,
+) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT INTO search_events (user_id, library_id, kind, search_id, at) \
+         SELECT ?1, ?2, ?3, ?4, ?5 \
+         WHERE EXISTS (SELECT 1 FROM plugin_search_sharing WHERE user_id = ?1)",
+        params![user, library, kind, search, now],
+    )?;
     Ok(())
 }
 
@@ -111,6 +138,7 @@ pub async fn list(
 
 pub async fn record(
     State(db): State<Arc<Database>>,
+    State(indexes): State<Arc<Indexes>>,
     caller: Caller,
     Path(Id(library)): Path<Id>,
     Body(Create { query, selected }): Body<Create>,
@@ -135,6 +163,8 @@ pub async fn record(
             Some((*kind, *table, id))
         }
     };
+    let [tracks, albums, artists] = totals(&db, &indexes, library, &query).await?;
+    let found = [tracks, albums, artists].map(|n| n as i64);
     let user = caller.user;
     let recorded = db
         .write(move |tx| {
@@ -152,11 +182,13 @@ pub async fn record(
             let (kind, id) = selected.map(|(kind, _, id)| (kind, id)).unzip();
             let id: i64 = tx.query_row(
                 "INSERT INTO recent_searches (user_id, library_id, query, folded, selected_type, \
-                                              selected_id, searched_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id",
-                params![user, library, query, folded, kind, id, now],
+                                              selected_id, searched_at, found_tracks, \
+                                              found_albums, found_artists) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id",
+                params![user, library, query, folded, kind, id, now, found[0], found[1], found[2]],
                 |row| row.get(0),
             )?;
+            note(tx, user, library, "searched", id, now)?;
             // Only the newest are kept.
             tx.execute(
                 "DELETE FROM recent_searches WHERE user_id = ?1 AND library_id = ?2 AND id NOT IN \
@@ -185,11 +217,16 @@ pub async fn delete(
     let user = caller.user;
     let deleted = db
         .write(move |tx| {
-            sweep(tx, now_ms())?;
-            tx.execute(
+            let now = now_ms();
+            sweep(tx, now)?;
+            let deleted = tx.execute(
                 "DELETE FROM recent_searches WHERE id = ?1 AND user_id = ?2 AND library_id = ?3",
                 params![search, user, library],
-            )
+            )?;
+            if deleted > 0 {
+                note(tx, user, library, "forgotten", search, now)?;
+            }
+            Ok(deleted)
         })
         .await?;
     // Someone else's is as absent as one that never was (`requirements/users.md` §10).
@@ -206,11 +243,18 @@ pub async fn clear(
 ) -> Result<StatusCode, Problem> {
     let user = caller.user;
     db.write(move |tx| {
-        sweep(tx, now_ms())?;
-        tx.execute(
-            "DELETE FROM recent_searches WHERE user_id = ?1 AND library_id = ?2",
-            params![user, library],
-        )
+        let now = now_ms();
+        sweep(tx, now)?;
+        let cleared: Vec<i64> = tx
+            .prepare(
+                "DELETE FROM recent_searches WHERE user_id = ?1 AND library_id = ?2 RETURNING id",
+            )?
+            .query_map(params![user, library], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for search in cleared {
+            note(tx, user, library, "forgotten", search, now)?;
+        }
+        Ok(())
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)

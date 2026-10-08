@@ -109,6 +109,7 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Arc<P
                 .put(connections::set_settings)
                 .delete(connections::disconnect),
         )
+        .route("/me/plugins/{plugin_id}/search-sharing", put(connections::set_search_sharing))
         .route("/libraries", get(libraries::list))
         .route("/libraries/{library_id}", get(libraries::get))
         .route("/libraries/{library_id}/albums", get(albums::list))

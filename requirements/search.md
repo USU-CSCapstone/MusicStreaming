@@ -90,6 +90,8 @@ Nothing else in the library. File paths and folder names are **not** searched: t
 - **Individually removable, and clearable entirely.**
 - **Private to the user** ([`users.md` §7](users.md#7-privacy--personal-data)), and kept only for a recent window.
 - **There is no permanent search history** — nothing to browse, nothing to audit, nothing to leak.
+- **Shared with a plugin only if the user turns it on**, for that plugin, separately from connecting it, and off by default ([`users.md` §7](users.md#7-privacy--personal-data)). A plugin they share with receives each search as it settles: the words, how many of their own tracks, albums, and artists matched, and the result they acted on, if any. Searches that found nothing are included, since they are what such a plugin is most often for.
+- **Removing or clearing a search asks every plugin it was shared with to forget it.** Aging out of the recent window does not, so a plugin keeping a wishlist is not emptied each month. Turning sharing off asks the plugin to forget every search it was sent.
 
 ---
 

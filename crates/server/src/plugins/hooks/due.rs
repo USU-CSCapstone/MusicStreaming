@@ -3,14 +3,16 @@
 //! A hook is due for a plugin in a library when the plugin is enabled there, the hook (and the
 //! permission its events need) is granted, it is not waiting to retry a failure, and there is
 //! something past its position: changes, a finished scan, its interval gone by, plays ended
-//! by a user who connected it, or a play one of them has just started and is still playing.
-//! Each user has a position of their own in `played` and `playing`.
+//! by a user who connected it, a play one of them has just started and is still playing, or
+//! searches by a user who shares them with it. Each user has a position of their own in
+//! `played`, `playing`, and `searched`.
 
 use jewelcase_plugins::{Event, ScanFinished, TracksChanged};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::playing::{deliverable, playing};
 use super::plays::plays;
+use super::searches::searches;
 use super::{BATCH, Due, Hook};
 
 /// The pair's position in the hook `?2`, its failures, and the user it is for. `per_user`
@@ -93,6 +95,27 @@ pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
         granted_here("libraryRead"),
         deliverable("p.library_id", "s.user_id", "coalesce(c.position, 0)"),
     );
+    // For each user who shares their searches with it, what they searched or removed since; and
+    // for each who stopped, the request to forget, which needs only the hook.
+    let searched = format!(
+        "SELECT p.plugin_id, p.library_id, coalesce(c.position, 0), coalesce(c.failures, 0), \
+                u.user_id FROM plugin_libraries p \
+         JOIN (SELECT plugin_id, user_id FROM plugin_search_sharing \
+               UNION SELECT plugin_id, user_id FROM search_events WHERE kind = 'stopped') u \
+              ON u.plugin_id = p.plugin_id \
+         LEFT JOIN plugin_search_sharing ss \
+              ON ss.plugin_id = p.plugin_id AND ss.user_id = u.user_id \
+         LEFT JOIN plugin_cursors c ON c.plugin_id = p.plugin_id \
+              AND c.library_id = p.library_id AND c.hook = ?2 AND c.user_id = u.user_id \
+         WHERE {READY} AND {} \
+         AND EXISTS (SELECT 1 FROM search_events e WHERE e.library_id = p.library_id \
+                     AND e.user_id = u.user_id AND e.seq > coalesce(c.position, 0) \
+                     AND ((e.kind <> 'stopped' AND e.at >= ss.shared_at AND {} AND {}) \
+                          OR (e.kind = 'stopped' AND e.plugin_id = p.plugin_id)))",
+        granted_to_plugin("searched"),
+        granted_to_plugin("searchActivity"),
+        granted_here("libraryRead"),
+    );
     let mut due = Vec::new();
     for (hook, sql) in [
         (Hook::TracksChanged, tracks),
@@ -100,6 +123,7 @@ pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
         (Hook::Schedule, schedules),
         (Hook::Played, played),
         (Hook::Playing, playing),
+        (Hook::Searched, searched),
     ] {
         let mut statement = conn.prepare_cached(&sql)?;
         let pairs = statement.query_map(params![now, hook.name()], |row| {
@@ -135,6 +159,7 @@ pub fn event(conn: &Connection, due: &Due, now: i64) -> rusqlite::Result<(i64, O
             let (next, plays) = plays(conn, &due.plugin, due.library, due.user, due.position)?;
             (next, (!plays.is_empty()).then_some(Event::Played(plays)))
         }
+        Hook::Searched => searches(conn, &due.plugin, due.library, due.user, due.position)?,
         // One that ended or went stale since it was found due is no longer news.
         Hook::Playing => {
             match playing(conn, &due.plugin, due.library, due.user, due.position, now)? {

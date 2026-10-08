@@ -69,10 +69,16 @@ pub enum Permission {
     /// A hook: run when a user who connected it starts playing something. Needs what `Played`
     /// does. Since 0.3.
     Playing,
+    /// The searches of users who turned on sharing them with it. Since 0.3.
+    SearchActivity,
+    /// A hook: run when a user who shares their searches settles on one, or asks for some to be
+    /// forgotten. Needs search-activity, library-read, and personal settings to connect.
+    /// Since 0.3.
+    Searched,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 10] = [
+    pub const ALL: [Permission; 12] = [
         Self::LibraryRead,
         Self::LibraryAdd,
         Self::LibraryChange,
@@ -83,6 +89,8 @@ impl Permission {
         Self::Schedule,
         Self::Played,
         Self::Playing,
+        Self::SearchActivity,
+        Self::Searched,
     ];
 
     /// Its name in manifests and the API, such as `libraryRead`.
@@ -98,6 +106,8 @@ impl Permission {
             Self::Schedule => "schedule",
             Self::Played => "played",
             Self::Playing => "playing",
+            Self::SearchActivity => "searchActivity",
+            Self::Searched => "searched",
         }
     }
 
@@ -130,13 +140,15 @@ impl Permission {
             Self::Schedule => "Run on a schedule",
             Self::Played => "Run when a connected user plays something",
             Self::Playing => "Run when a connected user starts playing something",
+            Self::SearchActivity => "Search activity",
+            Self::Searched => "Run when a user who shares their searches settles on one",
         }
     }
 
     /// The contract version that added it. A manifest declaring an older one cannot ask for it.
     pub fn since(self) -> Api {
         match self {
-            Self::Playing => Api::V0_3,
+            Self::Playing | Self::SearchActivity | Self::Searched => Api::V0_3,
             _ => Api::V0_2,
         }
     }
@@ -342,10 +354,16 @@ pub fn validate(manifest: &Value) -> Vec<String> {
             problems.push(format!("{} needs libraryRead as well", hook.name()));
         }
     }
-    // Their events are plays of a library's tracks, by the users who connected it.
-    for hook in [Permission::Played, Permission::Playing].into_iter().filter(|h| seen.contains(h)) {
+    // Their events are plays of a library's tracks or searches of it, by the users who
+    // connected it.
+    let hooks = [
+        (Permission::Played, Permission::ListeningActivity),
+        (Permission::Playing, Permission::ListeningActivity),
+        (Permission::Searched, Permission::SearchActivity),
+    ];
+    for (hook, activity) in hooks.into_iter().filter(|(h, _)| seen.contains(h)) {
         let hook = hook.name();
-        for needed in [Permission::LibraryRead, Permission::ListeningActivity] {
+        for needed in [Permission::LibraryRead, activity] {
             if !seen.contains(&needed) {
                 problems.push(format!("{hook} needs {} as well", needed.name()));
             }

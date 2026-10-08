@@ -251,6 +251,14 @@ test('a user connects a plugin with their own token, and can disconnect it', asy
 	await expect(dialog).toBeHidden();
 	await expect(connections.getByText('Connected')).toBeVisible();
 
+	// Searches are shared only once the user turns it on, and stay so after a reload.
+	const share = connections.getByRole('checkbox', { name: /Share my searches with Scrobbler/ });
+	await expect(share).not.toBeChecked();
+	await share.check();
+	await page.reload();
+	await expect(share).toBeChecked();
+
 	await connections.getByRole('button', { name: 'Disconnect' }).click();
 	await expect(connections.getByRole('button', { name: 'Connect…' })).toBeVisible();
+	await expect(share).toHaveCount(0);
 });

@@ -91,6 +91,15 @@ export const PERMISSION_LABELS: Record<PermissionName, { title: string; detail: 
 		title: 'Run when a connected user starts playing something',
 		detail:
 			'Runs on its own as each user who connected it starts a track, to show what is playing now.'
+	},
+	searchActivity: {
+		title: 'Search activity',
+		detail: 'What people search for, from those who choose to share it with this plugin.'
+	},
+	searched: {
+		title: 'Run when a user who shares their searches settles on one',
+		detail:
+			'Runs on its own as each user who chose to share their searches settles on one, or removes one.'
 	}
 };
 

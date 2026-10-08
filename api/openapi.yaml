@@ -482,10 +482,36 @@ paths:
     delete:
       tags: [Account]
       summary: Disconnect a plugin
-      description: Forgets the caller's settings for it; it stops acting for them.
+      description: |
+        Forgets the caller's settings for it; it stops acting for them. Sharing their searches
+        with it stops too, as `setMySearchSharing` turning it off does.
       operationId: disconnectMyPlugin
       responses:
         '204': { description: Disconnected, or never connected. }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /me/plugins/{pluginId}/search-sharing:
+    parameters:
+      - $ref: '#/components/parameters/PluginId'
+    put:
+      tags: [Account]
+      summary: Turn sharing the caller's searches with a plugin on or off
+      description: |
+        Off until the caller turns it on (`requirements/search.md` §6). On, the plugin is sent
+        each search the caller settles on from then, never one before. Off, or disconnecting,
+        asks it to forget every search it was sent; what it already sent on is not recalled
+        (`requirements/users.md` §7). Turning it on needs the caller to have connected the
+        plugin, and the plugin to ask for searches (`asksForSearches`), or answers `422`.
+      operationId: setMySearchSharing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SearchSharing' }
+      responses:
+        '204': { description: Set. }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Devices ─────────────────────────────
@@ -6485,7 +6511,7 @@ components:
 
     PersonalPlugin:
       type: object
-      required: [id, name, connected]
+      required: [id, name, connected, asksForSearches, sharesSearches]
       properties:
         id: { type: string }
         name: { type: string }
@@ -6493,6 +6519,20 @@ components:
         connected:
           type: boolean
           description: Whether the caller has saved settings for it, and so it acts for them.
+        asksForSearches:
+          type: boolean
+          description: |
+            Whether the caller could share their searches with it: it asks for them, and an admin
+            allowed it.
+        sharesSearches:
+          type: boolean
+          description: Whether the caller has turned on sharing their searches with it.
+
+    SearchSharing:
+      type: object
+      required: [sharing]
+      properties:
+        sharing: { type: boolean }
 
     PluginSettingsUpdate:
       type: object
@@ -6570,7 +6610,7 @@ components:
 
     PermissionName:
       type: string
-      enum: [libraryRead, libraryAdd, libraryChange, network, listeningActivity, tracksChanged, scanFinished, schedule, played, playing]
+      enum: [libraryRead, libraryAdd, libraryChange, network, listeningActivity, tracksChanged, scanFinished, schedule, played, playing, searchActivity, searched]
       description: |
         What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryAdd` creates files
         that do not exist yet; `libraryChange` replaces, renames, and deletes files that do. The
@@ -6583,7 +6623,11 @@ components:
         user who connected it (`listMyPlugins`) finishes playing something; it needs
         `listeningActivity`, and `libraryRead` in the library played from. `playing` runs it the
         same way as each of them starts something, while it is still playing; it needs what
-        `played` does, and a plugin built against API version 0.3 or later.
+        `played` does, and a plugin built against API version 0.3 or later. `searchActivity`,
+        granted once per plugin, is the searches of users who turn on sharing them with it
+        (`setMySearchSharing`); the `searched` hook runs it as each of them settles on a search
+        or removes one, and needs `searchActivity`, `libraryRead`, and API version 0.3 or later
+        (`requirements/search.md` §6).
 
     PermissionRequest:
       type: object

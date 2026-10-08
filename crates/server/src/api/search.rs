@@ -111,6 +111,27 @@ pub async fn search(
     }))
 }
 
+/// How many of `library`'s tracks, albums, and artists match `q`, as a search counts them.
+pub async fn totals(
+    db: &Arc<Database>,
+    indexes: &Indexes,
+    library: i64,
+    q: &str,
+) -> Result<[usize; 3], Problem> {
+    let position = db.read(move |conn| indexes::feed_position(conn, library)).await?;
+    let index = indexes.index(db, library, position).await?;
+    let mut totals = [0; 3];
+    for section in index.search(q, &[Kind::Track, Kind::Album, Kind::Artist], 1) {
+        let at = match section.kind {
+            Kind::Track => 0,
+            Kind::Album => 1,
+            Kind::Artist => 2,
+        };
+        totals[at] = section.total;
+    }
+    Ok(totals)
+}
+
 /// The summaries of what the index found, as the browse lists show them.
 fn results(conn: &Connection, library: i64, found: Vec<Found>) -> rusqlite::Result<Vec<Section>> {
     let mut sections = Vec::with_capacity(found.len());

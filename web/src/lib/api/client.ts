@@ -273,6 +273,10 @@ export const setMyPluginSettings = (f: Fetch, id: string, values: Record<string,
 
 export const disconnectMyPlugin = (f: Fetch, id: string) => send<void>(f, 'DELETE', mySettings(id));
 
+/** Turns sharing the caller's searches with a plugin on or off (`requirements/search.md` §6). */
+export const setMySearchSharing = (f: Fetch, id: string, sharing: boolean) =>
+	send<void>(f, 'PUT', `/me/plugins/${encodeURIComponent(id)}/search-sharing`, { sharing });
+
 /** Runs it once now, with the permissions approved for it; answers when it finishes. */
 export const runPlugin = (f: Fetch, id: string) =>
 	send<PluginRunResult>(f, 'POST', `${plugin(id)}/run`);

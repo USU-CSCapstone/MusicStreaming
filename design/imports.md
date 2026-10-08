@@ -92,7 +92,7 @@ These close gaps where [`requirements/plugins.md`](../requirements/plugins.md) a
 | Import | Why |
 |---|---|
 | `track-by-path(root, path)` | A plugin that just wrote a sidecar, or found a file through `files.list`, needs to know which track it belongs to. |
-| `get-albums(ids)`, `get-artists(ids)` | `get-tracks` exists; albums and artists are only reachable by paging. The album and artist hooks need these ([`hooks.md` §3.2](hooks.md#32-albums-changed-and-artists-changed)). |
+| `get-albums(ids)`, `get-artists(ids)` | `get-tracks` exists; albums and artists are only reachable by paging. The album and artist hooks need these ([`hooks.md` §3.1](hooks.md#31-albums-changed-and-artists-changed)). |
 | `album-tracks(album-id)`, `artist-albums(artist-id)` | Artwork and biography plugins think in albums and artists. Rebuilding those from a full pass is the slow access pattern §2.1 warns about. |
 | `tracks-by-identifier(kind, values)` | Matching by ISRC or MusicBrainz ID, which is what [`requirements/tracks.md` §6](../requirements/tracks.md#6-classification--identifiers) stores identifiers for. |
 | `search(query, limit)` | The core's own search over this library ([`requirements/search.md`](../requirements/search.md)). An external source, or a plugin mapping a ListenBrainz recommendation to an owned track, needs "which of my tracks is this", and should not have to build its own matcher. |

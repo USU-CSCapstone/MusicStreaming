@@ -116,7 +116,7 @@ Adding an explicit signal later must not invalidate what was recorded before it 
 
 - **Private between users** ([`users.md` §7](users.md#7-privacy--personal-data)). Admins can view any account's history and statistics, and can never modify them ([`users.md` §8](users.md#8-admin-capabilities--visibility)).
 - **Clearable individually or entirely**, and clearing is permanent.
-- **Deleted means deleted.** Removing history removes its influence on statistics and recommendations. A cleared play must not resurface through an aggregate derived from it.
+- **Deleted means deleted.** Removing history removes its influence on statistics and recommendations. A cleared play must not resurface through an aggregate derived from it. A plugin the user connected that received it is asked to forget it; what it already sent on, such as a scrobble, stays sent ([`users.md` §7](users.md#7-privacy--personal-data)).
 - **Exportable** in a portable, documented format, by the user or by an admin on their behalf ([`users.md` §9](users.md#9-account-lifecycle)).
 
 ---

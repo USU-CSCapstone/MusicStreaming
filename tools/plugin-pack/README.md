@@ -33,7 +33,7 @@ written. The error says what to fix.
 |---|---|
 | `id` | Lowercase letters, digits, and hyphens. Stays the same across versions. |
 | `apiVersion` | `0.3`, the current contract ([`crates/plugins/wit/plugin.wit`](../../crates/plugins/wit/plugin.wit)). `0.2` still installs, without what 0.3 added. |
-| `permissions` | Any of `libraryRead`, `libraryAdd`, `libraryChange`, `network`, `listeningActivity` (`requirements/plugins.md` §4.1), and the hooks `tracksChanged`, `scanFinished`, `schedule`, `played`, and, since 0.3, `playing` (`design/hooks.md`). Each needs a `reason`, which the admin sees. Mark as `required` only what the plugin cannot work without; an admin can decline the rest. |
+| `permissions` | Any of `libraryRead`, `libraryAdd`, `libraryChange`, `network`, `listeningActivity` (`requirements/plugins.md` §4.1), and, since 0.3, `searchActivity`; and the hooks `tracksChanged`, `scanFinished`, `schedule`, `played`, and, since 0.3, `playing` and `searched` (`design/hooks.md`). Each needs a `reason`, which the admin sees. Mark as `required` only what the plugin cannot work without; an admin can decline the rest. |
 | `destinations` | For `network` only: the host names it talks to, or `["*"]` for any. |
 | `rateLimits` | For `network` only, optional: the most often each destination may be asked, as `{ "musicbrainz.org": "1/s" }`, per `s`, `min`, or `h`. Every plugin's requests to that host keep to the strictest pace any declared (`design/plugins.md` §7). |
 | `everyMinutes` | For `schedule` only: how often it runs, at least 5. |

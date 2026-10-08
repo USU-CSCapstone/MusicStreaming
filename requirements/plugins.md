@@ -89,11 +89,13 @@ That is the trade, made knowingly when write access is granted, library by libra
 | **Change or delete files in the library** | Replacing, moving, and deleting files already in its folders, audio included ([§3](#3-writing-to-the-library)) | Per library |
 | **Network** | Reaching services outside the server — by named destination where the plugin can name them (`api.listenbrainz.org`), or any destination | Per plugin |
 | **Listening activity** | Play events and listening history ([§8](#8-events), [`analytics.md` §10](analytics.md#10-external-services)) | Per plugin |
+| **Search activity** | Each search a user settles on, from users who turned on sharing searches with the plugin ([`search.md` §6](search.md#6-recent-searches)) | Per plugin |
 | **Hooks** | Running on its own when something happens, such as tracks changing ([§8](#8-events)), rather than only when an admin asks | Per library, or per plugin for hooks not about a library |
 
 - **Some things need no permission**: a plugin's own settings and stored state ([§6](#6-configuration--credentials)), and the interface surfaces it adds ([§9](#9-extending-the-interface)). They touch nothing but the plugin itself.
 - **The list belongs to the plugin API** and grows only with it ([§1](#1-an-open-surface)). A resource the core newly exposes to plugins arrives with its own permission; nothing reachable is ever left ungoverned.
-- **A personal source reaches only the users who connected it.** Where a plugin acts for an individual — scrobbling to their own account — it receives only the activity of users who entered their own credentials ([§6](#6-configuration--credentials)), whatever the admin granted.
+- **A personal source reaches only the users who connected it.** Where a plugin acts for an individual — scrobbling to their own account — it receives only the activity of users who entered their own credentials ([§6](#6-configuration--credentials)), whatever the admin granted. Searches take one step more: a connected user must also turn on sharing them ([`search.md` §6](search.md#6-recent-searches)).
+- **What a user shares, they can ask back.** When they clear listening history or searches a plugin received, the plugin is told to forget them. It cannot be made to, and what it already sent on stays sent, which the user is told before they share ([`users.md` §7](users.md#7-privacy--personal-data)).
 
 ### 4.2 Asking and Approving
 
@@ -153,7 +155,8 @@ Rules for plugins that read and improve what the user owns:
 ## 8. Events
 
 - **Each hook is asked for and approved like a permission** ([§4.2](#42-asking-and-approving)), required or optional and with a reason, so an admin decides when a plugin runs as well as what it reaches. A hook still needs the permission for what its events carry.
-- **Plugins are notified of what happens on the server** — a track played, a scan completed, content added or removed, a user action taken — within their grants: plays and user actions need listening activity, and library events need read access to that library ([§4.1](#41-what-can-be-asked-for)).
+- **Plugins are notified of what happens on the server** — a track played, a scan completed, content added or removed, a user action taken, a search settled — within their grants: plays and user actions need listening activity, searches need search activity, and library events need read access to that library ([§4.1](#41-what-can-be-asked-for)).
+- **Clearing is an event too.** A plugin that received plays or searches a user then clears is told to forget them, reliably, like any other event ([§4.1](#41-what-can-be-asked-for)).
 - **Play events carry enough detail to be acted on accurately**, scrobbling included ([`analytics.md` §10](analytics.md#10-external-services)).
 - **Events are delivered reliably.** A plugin briefly unreachable receives what it missed, so a network hiccup does not silently lose a day of scrobbles.
 - **Events never block anything** ([§2](#2-a-fast-system-not-restricted-plugins)). Playback, scanning, and every user action complete regardless of whether a plugin is listening, slow, or broken.
