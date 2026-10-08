@@ -12,6 +12,7 @@ import type {
 	PlayerState,
 	RealtimeClientMessage,
 	RealtimeServerMessage,
+	RecentSearch,
 	Session,
 	SetupRequest,
 	TrackSummary
@@ -174,7 +175,8 @@ export const PASSWORD = 'correct horse battery staple';
 /**
  * A server whose setup is done unless `setupRequired`, when `POST /setup` completes it, and
  * with this browser logged in, as an account with `role`, unless `signedIn` is false. Until
- * then, anything but setup and login answers `401`. Returns every play reported to it.
+ * then, anything but setup and login answers `401`. Returns every play reported to it, and its
+ * recent searches, newest first.
  */
 export async function serveLibrary(
 	page: Page,
@@ -190,6 +192,7 @@ export async function serveLibrary(
 		empty ? [] : [library.id]
 	);
 	const plays: PlayReport[] = [];
+	const searches: RecentSearch[] = [];
 	// A scrobbler this user can connect with their own token, which it never shows again.
 	let token: string | null = null;
 	const mySettings = () => ({
@@ -293,6 +296,29 @@ export async function serveLibrary(
 			return json(pageOf([{ ...artist, image: null, albumCount: 1, trackCount: 3 }]));
 		}
 		if (path === `${lib}/playlists`) return json(pageOf([]));
+		const recent = new RegExp(`^${lib}/recent-searches(?:/(\\d+))?$`).exec(path);
+		if (recent) {
+			const method = route.request().method();
+			if (method === 'POST') {
+				const { query, selected } = route.request().postDataJSON();
+				const at = searches.findIndex((r) => r.query.toLowerCase() === query.toLowerCase());
+				if (at >= 0) searches.splice(at, 1);
+				const search = {
+					id: String(Date.now() + searches.length),
+					query,
+					selected: selected ?? null,
+					searchedAt: new Date().toISOString()
+				};
+				searches.unshift(search);
+				return route.fulfill({ status: 201, json: search });
+			}
+			if (method === 'DELETE') {
+				const at = recent[1] ? searches.findIndex((r) => r.id === recent[1]) : 0;
+				searches.splice(at, recent[1] ? 1 : searches.length);
+				return route.fulfill({ status: 204 });
+			}
+			return json({ items: searches });
+		}
 		if (path === `${lib}/search`) {
 			const q = url.searchParams.get('q') ?? '';
 			const hits = tracks.filter((t) => t.title.toLowerCase().includes(q.toLowerCase()));
@@ -338,7 +364,7 @@ export async function serveLibrary(
 		if (media?.[2] === 'audio') return route.fulfill({ body: wav(), contentType: 'audio/wav' });
 		return problem(404, 'not_found');
 	});
-	return { plays };
+	return { plays, searches };
 }
 
 /** Another of the account's devices, connected, which the realtime fixture has playing. */

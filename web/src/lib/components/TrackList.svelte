@@ -12,7 +12,8 @@
 		variant = 'default',
 		sentinel,
 		empty = 'No songs.',
-		context = { type: 'library' }
+		context = { type: 'library' },
+		onplay
 	}: {
 		tracks: TrackSummary[];
 		/** `album`: track numbers and disc headings, no album column or artwork. */
@@ -21,6 +22,8 @@
 		empty?: string;
 		/** Where the tracks are from, which each play records. */
 		context?: PlayContext;
+		/** Called as the user starts one playing. */
+		onplay?: (track: TrackSummary) => void;
 	} = $props();
 
 	const isAlbum = $derived(variant === 'album');
@@ -28,7 +31,9 @@
 	const multiDisc = $derived(isAlbum && new Set(tracks.map((t) => t.discNumber)).size > 1);
 
 	function play(i: number) {
-		if (tracks[i].availability === 'available') player.play(tracks, i, context);
+		if (tracks[i].availability !== 'available') return;
+		player.play(tracks, i, context);
+		onplay?.(tracks[i]);
 	}
 
 	function rowClick(e: MouseEvent, i: number) {
