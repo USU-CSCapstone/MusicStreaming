@@ -64,7 +64,7 @@ Any proposed hook must keep these. A hook that breaks one is rejected on that ba
 
 **Run when a connected user settles on a search.** This makes possible plugins that act on what someone looked for. Examples: a wishlist of what the user searched for and does not own, an acquisition plugin requesting it on their behalf, or a "did you mean" built from an external catalog.
 
-- **Delivers settled searches, never keystrokes.** Results update on every keystroke ([`requirements/search.md` §7](../requirements/search.md#7-speed)), and a plugin has no use for `b`, `bo`, `bon`. A settled search is the same thing that enters the user's recent searches ([`requirements/search.md` §6](../requirements/search.md#6-recent-searches)), so the server already has to define it.
+- **Delivers settled searches, never keystrokes.** Results update on every keystroke ([`requirements/search.md` §7](../requirements/search.md#7-speed)), and a plugin has no use for `b`, `bo`, `bon`. A settled search is exactly what enters the user's recent searches, which are built: one the user acted on, submitted, or left after it stood a moment ([`requirements/search.md` §6](../requirements/search.md#6-recent-searches), `crates/server/src/api/recent_searches.rs`). That includes searches that found nothing, which this hook most needs.
 - **Each search carries:**
   - the query text;
   - the library it searched;

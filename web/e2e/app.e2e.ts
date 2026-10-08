@@ -92,6 +92,54 @@ test('search updates as the user types', async ({ page }) => {
 	await expect(page.getByRole('heading', { name: /No music matches/ })).toBeVisible();
 });
 
+test('a search played from is offered again when the box is empty, and can be removed', async ({
+	page
+}) => {
+	const { searches } = await serveLibrary(page);
+	await page.goto('/albums');
+	const box = page.getByRole('searchbox', { name: 'Search the library' }).first();
+	await box.pressSequentially('remix');
+	await page.getByRole('button', { name: 'Signal Remix' }).click();
+	await expect
+		.poll(() => searches.map((s) => [s.query, s.selected]))
+		.toEqual([['remix', { type: 'track', id: '43' }]]);
+
+	await box.fill('');
+	const recent = page.getByRole('region', { name: 'Recent searches' });
+	await recent.getByRole('button', { name: 'remix', exact: true }).click();
+	await expect(page).toHaveURL(/\/search\?q=remix$/);
+
+	await box.fill('');
+	await recent.getByRole('button', { name: 'Remove “remix” from recent searches' }).click();
+	await expect(recent).toHaveCount(0);
+	await expect.poll(() => searches.length).toBe(0);
+});
+
+test('a search that found nothing is kept once the user leaves it', async ({ page }) => {
+	const { searches } = await serveLibrary(page);
+	const box = page.getByRole('searchbox', { name: 'Search the library' }).first();
+	const songs = page
+		.getByRole('navigation', { name: 'Library' })
+		.first()
+		.getByRole('link', { name: 'Songs' });
+	await page.goto('/albums');
+
+	// Left at once, it was only typing.
+	await box.pressSequentially('zzz');
+	await expect(page.getByRole('heading', { name: /No music matches/ })).toBeVisible();
+	await songs.click();
+	await expect(page).toHaveURL(/\/songs$/);
+	expect(searches).toEqual([]);
+
+	// Left after it has stood, it was a search, though it found nothing.
+	await box.pressSequentially('zzz');
+	await expect(page.getByRole('heading', { name: /No music matches/ })).toBeVisible();
+	await page.waitForTimeout(2_100);
+	await songs.click();
+	await expect(page).toHaveURL(/\/songs$/);
+	await expect.poll(() => searches.map((s) => [s.query, s.selected])).toEqual([['zzz', null]]);
+});
+
 test('a new server sets up its owner, then opens the library', async ({ page }) => {
 	await serveLibrary(page, { setupRequired: true });
 	await page.goto('/albums');
