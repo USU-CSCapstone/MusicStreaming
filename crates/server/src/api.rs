@@ -143,6 +143,7 @@ pub fn router(
                 .delete(connections::disconnect),
         )
         .route("/realtime", get(realtime::open))
+        .route("/me/plugins/{plugin_id}/search-sharing", put(connections::set_search_sharing))
         .route("/libraries", get(libraries::list))
         .route("/libraries/{library_id}", get(libraries::get))
         .route("/libraries/{library_id}/albums", get(albums::list))

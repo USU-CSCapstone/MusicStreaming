@@ -219,6 +219,7 @@ impl<L: Library> Run<L> {
             user: grants.user,
             library_read: grants.permissions.contains(&Permission::LibraryRead),
             listening_activity: grants.permissions.contains(&Permission::ListeningActivity),
+            search_activity: grants.permissions.contains(&Permission::SearchActivity),
         }
     }
 }

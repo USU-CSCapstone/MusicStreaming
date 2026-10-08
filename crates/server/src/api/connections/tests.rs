@@ -52,7 +52,13 @@ async fn a_user_sees_and_disconnects_only_what_they_can_reach() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         list,
-        json!({ "items": [{ "id": "scrobbler", "name": "Scrobbler", "connected": true }] })
+        json!({ "items": [{
+            "id": "scrobbler",
+            "name": "Scrobbler",
+            "connected": true,
+            "asksForSearches": false,
+            "sharesSearches": false
+        }] })
     );
 
     let (_, settings) = call(&app, 2, "GET", "/me/plugins/scrobbler/settings").await;
@@ -67,4 +73,29 @@ async fn a_user_sees_and_disconnects_only_what_they_can_reach() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (_, list) = call(&app, 2, "GET", "/me/plugins").await;
     assert_eq!(list["items"][0]["connected"], json!(false));
+}
+
+async fn share(app: &axum::Router, user: i64, plugin: &str, sharing: bool) -> StatusCode {
+    let request = Request::builder()
+        .method("PUT")
+        .uri(format!("/api/v1/me/plugins/{plugin}/search-sharing"))
+        .header(header::AUTHORIZATION, format!("Bearer token-{user}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "sharing": sharing }).to_string()))
+        .unwrap();
+    respond(app.clone(), request).await.0
+}
+
+#[tokio::test]
+async fn searches_are_shared_only_with_a_plugin_allowed_them_that_the_user_reaches() {
+    let (_temp, app) = setup().await;
+    // This scrobbler does not ask for searches.
+    assert_eq!(share(&app, 2, "scrobbler", true).await, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        share(&app, 2, "scrobbler", false).await,
+        StatusCode::NO_CONTENT,
+        "off is always fine"
+    );
+    assert_eq!(share(&app, 3, "scrobbler", false).await, StatusCode::NOT_FOUND, "out of reach");
+    assert_eq!(share(&app, 2, "nothing", true).await, StatusCode::NOT_FOUND);
 }
