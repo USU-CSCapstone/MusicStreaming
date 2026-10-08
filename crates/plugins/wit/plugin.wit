@@ -1,10 +1,11 @@
 package jewelcase:plugin@0.3.0;
 
 /// The plugin contract (design/plugins.md §7). 0.3 gave `http.send` an error a plugin can act
-/// on, and added `host-rate-limits` and the `playing` hook; plugins built against 0.2 still
-/// load (`0.2/`). Every import checks its permission in the host. Imports stay linked even
-/// when their permission was declined, so a plugin with an optional permission still loads;
-/// the call answers an error instead, and `granted` lets a plugin adapt up front.
+/// on, and added `host-rate-limits`, search activity, and the `playing` and `searched` hooks;
+/// plugins built against 0.2 still load (`0.2/`). Every import checks its permission in the
+/// host. Imports stay linked even when their permission was declined, so a plugin with an
+/// optional permission still loads; the call answers an error instead, and `granted` lets a
+/// plugin adapt up front.
 
 interface host {
   /// What a plugin can ask for (requirements/plugins.md §4.1).
@@ -28,6 +29,11 @@ interface host {
     /// A hook: run when a user who connected the plugin starts playing something
     /// (`events.playing`).
     playing,
+    /// The searches of users who turned on sharing them with the plugin.
+    search-activity,
+    /// A hook: run when a user who shares their searches settles on one, or asks for some to
+    /// be forgotten (`events.searched`, `events.searches-forgotten`).
+    searched,
     /// Its rate limits that say `"per": "host"` are kept to by every plugin's requests to that
     /// host. Without it, they count only its own requests.
     host-rate-limits,
@@ -231,6 +237,35 @@ interface events {
     started-at: u64,
   }
 
+  /// A kind of result a search returns.
+  enum result-kind { track, album, artist }
+
+  /// The result a user acted on.
+  record selected {
+    kind: result-kind,
+    id: u64,
+  }
+
+  /// How many of the user's own tracks, albums, and artists a search matched. All zero is a
+  /// search for something they do not own.
+  record found {
+    tracks: u32,
+    albums: u32,
+    artists: u32,
+  }
+
+  /// A search the user settled on: acted on a result, submitted, or left after it stood a
+  /// moment (requirements/search.md §6).
+  record search {
+    /// What `searches-forgotten` names it by.
+    id: u64,
+    query: string,
+    found: found,
+    selected: option<selected>,
+    /// When it was searched, in milliseconds since the Unix epoch.
+    searched-at: u64,
+  }
+
   variant event {
     /// An admin pressed Run now: do the plugin's whole job for this library.
     run,
@@ -248,6 +283,13 @@ interface events {
     /// One user who connected the plugin has started playing something in this library.
     /// `settings.get` answers with that user's personal settings, as for `played`.
     playing(playing),
+    /// Searches one user who shares them with the plugin settled on in this library, oldest
+    /// first. `settings.get` answers with that user's personal settings, as for `played`.
+    searched(list<search>),
+    /// That user removed these searches, by `search.id`: forget them. None means they stopped
+    /// sharing, so forget every search of theirs from this library. What was already sent on
+    /// is not the host's to recall (requirements/users.md §7).
+    searches-forgotten(option<list<u64>>),
   }
 }
 

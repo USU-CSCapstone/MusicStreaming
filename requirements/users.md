@@ -100,7 +100,8 @@ User-controlled, never imposed by an admin.
 ## 7. Privacy & Personal Data
 
 - **Personal data is private between users.** Playlists, queues, downloads, listening history, search history, and statistics are never visible to other non-admin accounts.
-- **Personal data is clearable by the user**, and clearing is permanent — nothing survives indirectly through anything derived from it ([`analytics.md` §9](analytics.md#9-privacy-and-control), [`search.md` §6](search.md#6-recent-searches)).
+- **Personal data is clearable by the user**, and clearing is permanent — nothing survives indirectly through anything derived from it ([`analytics.md` §9](analytics.md#9-privacy-and-control), [`search.md` §6](search.md#6-recent-searches)). The one exception is what the user chose to share with a plugin, below.
+- **Sharing personal data with a plugin is the user's own choice, made knowingly.** A plugin receives a user's listening activity only once they connect it, and their searches only once they also turn on sharing searches with it ([`plugins.md` §4.1](plugins.md#41-what-can-be-asked-for)). An admin's grant alone shares nothing. What a plugin has received may already have left the server, to the user's own account on a service or anywhere its code sends it. **Clearing asks every plugin that received the data to forget it, but cannot recall what a plugin already sent on.** The user is told this where they connect or turn on sharing, not after they clear.
 
 ---
 

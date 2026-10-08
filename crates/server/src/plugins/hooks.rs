@@ -8,7 +8,9 @@
 //! `playing` those they have just started (`0016_plugin_playing.sql`). For each hook, each
 //! plugin and library pair keeps its own position (`plugin_cursors`), and in `played` and
 //! `playing` each user too, which moves only once the plugin has handled what came before it.
-//! `playing` alone never catches up: what was playing a while ago is no longer news.
+//! `playing` alone never catches up: what was playing a while ago is no longer news. `searched`
+//! reads the searches of users who share them with the plugin, and those they ask it to forget
+//! (`0018_plugin_searched.sql`), with a position per user as well.
 //! A failure is retried later from the same place, so nothing is lost to a crash, a restart,
 //! or a service that was briefly down. One that keeps failing is disabled in that library, and
 //! the admin is told why (§11), except in `played`: one user's failing account must not stop
@@ -22,6 +24,7 @@ use rusqlite::{Connection, params};
 mod due;
 mod playing;
 mod plays;
+mod searches;
 
 use super::run::RunFor;
 use super::{Plugins, grants};
@@ -46,6 +49,7 @@ enum Hook {
     Schedule,
     Played,
     Playing,
+    Searched,
 }
 
 impl Hook {
@@ -56,6 +60,7 @@ impl Hook {
             Hook::Schedule => "schedule",
             Hook::Played => "played",
             Hook::Playing => "playing",
+            Hook::Searched => "searched",
         }
     }
 }
@@ -67,7 +72,7 @@ struct Due {
     library: i64,
     position: i64,
     failures: i64,
-    /// The user it acts for, in `played` and `playing`; otherwise 0.
+    /// The user it acts for, in `played`, `playing`, and `searched`; otherwise 0.
     user: i64,
 }
 

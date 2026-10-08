@@ -8,7 +8,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::Problem;
 use super::authenticate::Caller;
@@ -16,7 +16,7 @@ use super::extract::{self, Path};
 use super::plugins::{PluginSettings, SettingsUpdate};
 use crate::db::Database;
 use crate::plugins::Plugins;
-use crate::plugins::personal;
+use crate::plugins::personal::{self, SharingRefused};
 
 /// The spec's `PersonalPlugin`.
 #[derive(Serialize)]
@@ -27,6 +27,9 @@ pub struct PersonalPlugin {
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     connected: bool,
+    /// Whether the caller could share their searches with it.
+    asks_for_searches: bool,
+    shares_searches: bool,
 }
 
 #[derive(Serialize)]
@@ -46,6 +49,8 @@ pub async fn list(
             name: p.name,
             description: p.description,
             connected: p.connected,
+            asks_for_searches: p.asks_for_searches,
+            shares_searches: p.shares_searches,
         })
         .collect();
     Ok(Json(PersonalPluginList { items }))
@@ -79,6 +84,34 @@ pub async fn set_settings(
 ) -> Result<Json<PluginSettings>, Problem> {
     plugins.save_personal(id.clone(), caller.user, caller.admin, update.values).await?;
     get_settings(State(db), caller, Path(id)).await
+}
+
+/// The spec's `SearchSharing`.
+#[derive(Deserialize)]
+pub struct SearchSharing {
+    sharing: bool,
+}
+
+/// Turns sharing the caller's searches with it on or off (`requirements/search.md` §6).
+pub async fn set_search_sharing(
+    State(db): State<Arc<Database>>,
+    caller: Caller,
+    Path(id): Path<String>,
+    extract::Json(SearchSharing { sharing }): extract::Json<SearchSharing>,
+) -> Result<StatusCode, Problem> {
+    let set = db
+        .write(move |tx| personal::set_search_sharing(tx, &id, caller.user, caller.admin, sharing))
+        .await?;
+    match set {
+        Ok(()) => Ok(StatusCode::NO_CONTENT),
+        Err(SharingRefused::Unknown) => Err(Problem::not_found()),
+        Err(SharingRefused::Unconnected) => {
+            Err(Problem::invalid("Connect it before sharing your searches with it."))
+        }
+        Err(SharingRefused::SearchesNotAllowed) => {
+            Err(Problem::invalid("This plugin has not been allowed your searches."))
+        }
+    }
 }
 
 /// Disconnects it: what the caller set is forgotten, and it stops acting for them.

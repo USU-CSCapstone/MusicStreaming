@@ -46,7 +46,7 @@ const OWN_CACHING: [&str; 8] = [
 ];
 
 /// What a run can see, which a reply kept for it could tell another run about. Runs that see
-/// the same share replies.
+/// the same share replies. Each permission that reaches library or personal data is here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Visible {
     pub library: i64,
@@ -56,6 +56,8 @@ pub struct Visible {
     pub library_read: bool,
     /// Whether it may see listening activity.
     pub listening_activity: bool,
+    /// Whether it may see the searches of users who share them with it.
+    pub search_activity: bool,
 }
 
 /// Which request a reply answers.
@@ -313,7 +315,13 @@ mod tests {
 
     /// What a run in `library` for no user sees, granted neither reading nor listening.
     fn visible(library: i64) -> Visible {
-        Visible { library, user: None, library_read: false, listening_activity: false }
+        Visible {
+            library,
+            user: None,
+            library_read: false,
+            listening_activity: false,
+            search_activity: false,
+        }
     }
 
     fn key(url: &str) -> Key {
@@ -432,6 +440,7 @@ mod tests {
         let theirs = [("authorization".to_owned(), "Token theirs".to_owned())];
         let reader = Visible { library_read: true, ..visible(1) };
         let listener = Visible { listening_activity: true, ..visible(1) };
+        let searcher = Visible { search_activity: true, ..visible(1) };
         let for_user = |user| Visible { user: Some(user), ..visible(1) };
         for other in [
             Key::new(visible(1), "https://api.example/", &theirs).unwrap(),
@@ -439,6 +448,7 @@ mod tests {
             Key::new(visible(2), "https://api.example/", &token).unwrap(),
             Key::new(reader, "https://api.example/", &token).unwrap(),
             Key::new(listener, "https://api.example/", &token).unwrap(),
+            Key::new(searcher, "https://api.example/", &token).unwrap(),
             Key::new(for_user(7), "https://api.example/", &token).unwrap(),
         ] {
             assert!(matches!(cache.lookup(&other, now), Lookup::Miss), "{other:?}");

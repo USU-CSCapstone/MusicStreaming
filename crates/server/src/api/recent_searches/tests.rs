@@ -146,3 +146,48 @@ async fn a_search_is_kept_per_library() {
     let (status, other) = json(&app, "/api/v1/libraries/2/recent-searches").await;
     assert_eq!((status, &other["items"]), (StatusCode::OK, &json!([])));
 }
+
+/// The events noted for the `searched` hook: each kind and search.
+async fn events(db: &Database) -> Vec<(String, Option<i64>)> {
+    db.read(|conn| {
+        conn.prepare("SELECT kind, search_id FROM search_events ORDER BY seq")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect()
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn what_was_found_is_kept_and_noted_only_for_a_user_who_shares() {
+    let (_temp, db, app) = app_with_tracks().await;
+    let (_, first) = record(&app, json!({ "query": "a" })).await;
+    let found: i64 = db
+        .read(|conn| conn.query_row("SELECT found_tracks FROM recent_searches", [], |r| r.get(0)))
+        .await
+        .unwrap();
+    assert_eq!(found, 2, "both of library 1's tracks are called A");
+    assert!(events(&db).await.is_empty(), "the owner shares with no plugin");
+
+    db.write(|tx| tx.execute("INSERT INTO plugin_search_sharing VALUES ('p', 1, 0)", []))
+        .await
+        .unwrap();
+    let (_, second) = record(&app, json!({ "query": "b" })).await;
+    let id = |search: &Value| search["id"].as_str().unwrap().parse::<i64>().unwrap();
+    // Replaced by the same words: not a removal, so nothing to forget.
+    let (_, again) = record(&app, json!({ "query": "B" })).await;
+    assert_eq!(
+        send(&app, "DELETE", &format!("{URI}/{}", id(&first))).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(send(&app, "DELETE", URI).await, StatusCode::NO_CONTENT);
+    assert_eq!(
+        events(&db).await,
+        [
+            ("searched".into(), Some(id(&second))),
+            ("searched".into(), Some(id(&again))),
+            ("forgotten".into(), Some(id(&first))),
+            ("forgotten".into(), Some(id(&again))),
+        ]
+    );
+}
