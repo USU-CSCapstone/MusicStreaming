@@ -20,7 +20,8 @@ pub fn lyrics_path(path: &str, synced: bool) -> String {
 mod plugin {
     use crate::lrclib::{self, Found, Query};
 
-    wit_bindgen::generate!({ path: "../../crates/plugins/wit", world: "plugin" });
+    // Built against 0.2 on purpose: it is how the host's tests know an older plugin still runs.
+    wit_bindgen::generate!({ path: "../../crates/plugins/wit/0.2", world: "plugin" });
 
     use jewelcase::plugin::files::{self, WriteMode};
     use jewelcase::plugin::host::{self, Permission};

@@ -1,14 +1,15 @@
 //! The lyrics plugin (`plugins/lrclib-lyrics`), run by the real host with a library in memory.
 //! No test here reaches the network: each one grants too little for a request to leave.
 //!
-//! Needs the packed plugin, so these are ignored until it is built:
+//! The plugin is built against the 0.2 contract, so these also show that a 0.2 plugin still
+//! runs. Needs the packed plugin, so these are ignored until it is built:
 //!
 //!     plugins/lrclib-lyrics/build.sh && cargo test -p jewelcase-plugins -- --ignored
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use jewelcase_plugins::{Album, Artist, Event, Grants, Host, Library, Permission, Track};
+use jewelcase_plugins::{Album, Api, Artist, Event, Grants, Host, Library, Permission, Track};
 
 const PLUGIN: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm");
@@ -103,6 +104,7 @@ async fn a_missing_required_permission_stops_it_before_it_starts() {
         .unwrap()
         .run(
             Path::new(PLUGIN),
+            Api::V0_2,
             grants(&[Permission::LibraryRead], &[]),
             library(dir.path()),
             Event::Run,
@@ -123,6 +125,7 @@ async fn the_network_reaches_only_approved_destinations() {
         .unwrap()
         .run(
             Path::new(PLUGIN),
+            Api::V0_2,
             grants(&permissions, &["example.invalid"]),
             library(dir.path()),
             Event::Run,
@@ -144,6 +147,9 @@ async fn the_network_reaches_only_approved_destinations() {
 #[ignore = "needs plugins/lrclib-lyrics/build.sh"]
 fn a_real_plugin_passes_the_install_check() {
     let host = Host::new().unwrap();
-    host.check(&std::fs::read(PLUGIN).unwrap()).unwrap();
-    assert!(host.check(b"not a component").is_err());
+    let bytes = std::fs::read(PLUGIN).unwrap();
+    host.check(&bytes, Api::V0_2).unwrap();
+    // It is built against 0.2, whose `event` has no `playing`, so it does not fit 0.3.
+    assert!(host.check(&bytes, Api::V0_3).is_err());
+    assert!(host.check(b"not a component", Api::CURRENT).is_err());
 }

@@ -11,7 +11,7 @@ Its companions are [`imports.md`](imports.md), covering what a plugin can call, 
 
 ## 1. Built Hooks
 
-**Four hooks are built, each approved like a permission** ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)). The dispatcher is `crates/server/src/plugins/hooks.rs`, and the contract is [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.2`.
+**Five hooks are built, each approved like a permission** ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)). The dispatcher is `crates/server/src/plugins/hooks.rs`, and the contract is [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.3`. Plugins built against `0.2` still load, without `playing` ([`plugins.md` §6](plugins.md#6-packaging)).
 
 | Hook (manifest / WIT) | Delivers | Granted | Also needs |
 |---|---|---|---|
@@ -19,17 +19,29 @@ Its companions are [`imports.md`](imports.md), covering what a plugin can call, 
 | `scanFinished` / `scan-finished` | The summed counts of every scan that finished since the last delivery | Per library | `libraryRead` |
 | `schedule` / `scheduled` | Nothing. The interval named by `everyMinutes` (at least 5) came round. | Per plugin | — |
 | `played` / `played` | Plays one connected user ended in this library, oldest first, up to 100, each with its track | Per plugin | `libraryRead`, `listeningActivity`, `personalSettings` |
+| `playing` / `playing` | The newest play one connected user started in this library, while it is still playing and under a minute old ([§1.1](#11-playing)) | Per plugin | As `played`, and `apiVersion` 0.3 |
 
 Two more events need no approval, because nothing happens without someone asking:
 
 - **`run`**: an admin pressed **Run now**.
 - **`check-settings`**: an admin is saving settings, or a user is connecting. An error refuses the save ([`requirements/plugins.md` §6](../requirements/plugins.md#6-configuration--credentials)).
 
-All four hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-running-plugins)):
+All five hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-running-plugins)), except that `playing` never catches up ([§1.1](#11-playing)):
 
-- **A position per plugin and library, and per user in `played`.** The position moves only once the plugin has handled a batch, so a crash, a restart, or an unreachable service loses nothing.
-- **Failures back off.** The retry comes after a minute, doubles up to an hour, and five failures in a row disable the plugin in that library. In `played`, one user's failures are retried hourly and never disable the plugin for everyone else.
+- **A position per plugin and library, and per user in `played` and `playing`.** The position moves only once the plugin has handled a batch, so a crash, a restart, or an unreachable service loses nothing.
+- **Failures back off.** The retry comes after a minute, doubles up to an hour, and five failures in a row disable the plugin in that library. In `played` and `playing`, one user's failures are retried at most hourly and never disable the plugin for everyone else.
 - **One delivery per pair at a time**, polled every 5 seconds.
+
+### 1.1 Playing
+
+**Run when a connected user starts a track.** ListenBrainz's `playing_now` and Last.fm's `updateNowPlaying` both need the start. `played` only arrives once the play has ended. [`plugins/listenbrainz`](../plugins/listenbrainz/) uses it, as an optional permission, to show what is playing now.
+
+- **Delivers** `playing { track, started-at }`: the newest play one connected user started in this library. The run sees that user's personal settings, as in `played`.
+- **Where starts come from.** A trigger on `plays` records each play first reported before it ended (`play_starts`, `crates/server/migrations/0014_plugin_playing.sql`). It is timed by the server's clock at that first report, never the device's. A device catching up after being offline reports its plays already ended, so they are never announced as playing. Each new start clears those over an hour old.
+- **Not replayed.** "Now playing" from an hour ago is wrong, not late. A start is due only while it is under a minute old and its play has not ended, and the newest passes over every start before it. A failed delivery backs off as any hook's does, so by the retry that start is stale and only a newer one goes. This is the one exception to reliable delivery in [§2](#2-rules-every-hook-follows), and the reason is recorded here so it is not "fixed".
+- **Needs** the same grants as `played`: `libraryRead`, `listeningActivity`, and `personalSettings` to connect. It also needs `apiVersion` 0.3, the first contract with a `playing` event.
+- **Latency.** Up to the dispatcher's 5-second poll. A wake from the plays endpoint would remove that; it is not built, because that endpoint knows nothing of plugins.
+- **Cost.** One run per track started per connected user, which the warm instance in [`plugins.md` §2](plugins.md#2-execution-model) makes cheap. It is not cheap until that instance exists.
 
 ---
 
@@ -39,7 +51,7 @@ Any proposed hook must keep these. A hook that breaks one is rejected on that ba
 
 - **A signal, never a veto.** The thing happens first and the plugin hears about it afterwards. Nothing waits on delivery ([`requirements/plugins.md` §2.2](../requirements/plugins.md#22-results-compose-they-do-not-block)).
 - **Approved like a permission**, required or optional and with a reason. **It still needs the permission for what it carries.** A hook about a library needs `libraryRead`. A hook about a person needs whatever covers that person's data, and reaches only users who connected the plugin ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)).
-- **Delivered reliably, from a position**, by the same machinery as §1, unless being late makes the event worthless (`playing`, [§3.1](#31-playing)). Then it is dropped rather than replayed, and the hook says so.
+- **Delivered reliably, from a position**, by the same machinery as §1, unless being late makes the event worthless (`playing`, [§1.1](#11-playing)). Then it is dropped rather than replayed, and the hook says so.
 - **Batched.** One event carries everything since the last, up to a cap, so a burst becomes a few runs, not thousands.
 - **It names what changed, not its contents**, where the plugin can read the contents itself. That keeps events small and current, as the change feed does.
 - **Library-scoped hooks only ever see their own library** ([`requirements/general.md` §3.6](../requirements/general.md#36-libraries-are-the-isolation-boundary)), and person-scoped hooks only the person they are for ([`requirements/users.md` §7](../requirements/users.md#7-privacy--personal-data)).
@@ -48,16 +60,7 @@ Any proposed hook must keep these. A hook that breaks one is rejected on that ba
 
 ## 3. Proposed Hooks
 
-### 3.1 Playing
-
-**Run when a connected user starts a track.** ListenBrainz's `playing_now` and Last.fm's `updateNowPlaying` both need the start. `played` only arrives once the play has ended.
-
-- **Delivers** one play in progress: the track, when it started, and the user, as `played` does.
-- **Not replayed.** "Now playing" from an hour ago is wrong, not late. A delivery that cannot happen within a minute or so is dropped, and only the latest per user is kept. This is the one exception to reliable delivery in §2, and the reason is recorded here so it is not "fixed".
-- **Needs** the same grants as `played`: `libraryRead`, `listeningActivity`, and `personalSettings` to connect.
-- **Cost.** One run per track started per connected user, which the warm instance in [`plugins.md` §2](plugins.md#2-execution-model) makes cheap. It is not cheap until that instance exists.
-
-### 3.2 Searched
+### 3.1 Searched
 
 **Run when a connected user settles on a search.** This makes possible plugins that act on what someone looked for. Examples: a wishlist of what the user searched for and does not own, an acquisition plugin requesting it on their behalf, or a "did you mean" built from an external catalog.
 
@@ -78,7 +81,7 @@ Any proposed hook must keep these. A hook that breaks one is rejected on that ba
   This needs a decision in the requirements, not just here ([§5](#5-open-questions)).
 - **Not the same as answering searches.** An external source answers queries through the `source` export ([`exports.md` §3.1](exports.md#31-external-content-source)), which is called as the user types and returns results. This hook is called afterwards and returns nothing.
 
-### 3.3 Albums Changed and Artists Changed
+### 3.2 Albums Changed and Artists Changed
 
 **Run when albums or artists are added, changed, or removed.** Artwork and biography plugins think in albums and artists ([`requirements/scanning.md` §3](../requirements/scanning.md#3-sidecar-content)). Today they rebuild those from track IDs and work out for themselves which album changed.
 
@@ -87,7 +90,7 @@ Any proposed hook must keep these. A hook that breaks one is rejected on that ba
 - **Two hooks, not one `libraryChanged`.** A plugin hears only about what it asked for, and the admin sees "run when albums change" rather than a vaguer grant. The cost is two names in the manifest rather than one.
 - **Needs** `libraryRead`. Granted per library.
 
-### 3.4 Scan Problems
+### 3.3 Scan Problems
 
 **Run when the scanner finds files it could not read or could not make sense of** ([`requirements/scanning.md` §10](../requirements/scanning.md#10-problems)). A tag-fixing plugin wants exactly these files, and `scanFinished` gives only a count.
 
@@ -95,7 +98,7 @@ Any proposed hook must keep these. A hook that breaks one is rejected on that ba
 - **Needs** `libraryRead`. Fixing a problem needs `libraryChange` as well, but hearing about it does not.
 - **Built on** the scanner's problem list, with a position of its own like the change feed. A problem that is fixed and then recurs is delivered again.
 
-### 3.5 User Actions
+### 3.4 User Actions
 
 **Run when a connected user does something worth acting on.** [`requirements/plugins.md` §8](../requirements/plugins.md#8-events) promises "a user action taken", and no hook delivers one yet.
 
@@ -105,7 +108,7 @@ Any proposed hook must keep these. A hook that breaks one is rejected on that ba
 - **Not every action.** Queue edits and seeking are too frequent and too dull to deliver, and a plugin that wants playback has `played` and `playing`.
 - **Needs** a permission for what each action carries. Playlists are personal data, and `listeningActivity` does not cover them. Either the permission list grows (`playlistActivity`), or this hook carries its own permission per action kind. To decide ([§5](#5-open-questions)).
 
-### 3.6 Lifecycle
+### 3.5 Lifecycle
 
 **Tell a plugin about changes to itself.** These touch nothing but the plugin itself, so they reach nothing ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)).
 
@@ -119,7 +122,7 @@ Any proposed hook must keep these. A hook that breaks one is rejected on that ba
 - **Delivered reliably**, since a missed `updated` or `user-disconnected` leaves data the plugin should have dealt with.
 - **Whether they need approval.** [`requirements/plugins.md` §8](../requirements/plugins.md#8-events) says every hook is approved like a permission. These reach nothing, so approving them is ceremony. Either they are events, like `run` and `check-settings`, or the requirement says which hooks need approval ([§5](#5-open-questions)).
 
-### 3.7 Clock-Time Schedules
+### 3.6 Clock-Time Schedules
 
 **Run at a time of day, not only every N minutes.** "Every day at 03:00" keeps a whole-library pass off-hours, and `everyMinutes` cannot say that.
 
@@ -143,8 +146,8 @@ Each would let a plugin veto or alter something ([`requirements/plugins.md` §8]
 
 ## 5. Open Questions
 
-1. **Search activity and permanent history** (§3.2). Whether a plugin may receive searches at all, given [`requirements/search.md` §6](../requirements/search.md#6-recent-searches). If it may, the requirement should say so and what clearing then means.
-2. **Which hooks need approval** (§3.6). Lifecycle events reach nothing, and [`requirements/plugins.md` §8](../requirements/plugins.md#8-events) currently says every hook is approved.
-3. **Permissions for user actions** (§3.5). One per kind of personal data, or one per action kind.
-4. **A position older than the feed's horizon.** The change feed drops tombstones after a retention window. A plugin disabled for longer than that comes back to a position the feed can no longer serve, and a removal it never heard about is lost. That matters to `tracksChanged` now, and to §3.3 when it is built.
+1. **Search activity and permanent history** (§3.1). Whether a plugin may receive searches at all, given [`requirements/search.md` §6](../requirements/search.md#6-recent-searches). If it may, the requirement should say so and what clearing then means.
+2. **Which hooks need approval** (§3.5). Lifecycle events reach nothing, and [`requirements/plugins.md` §8](../requirements/plugins.md#8-events) currently says every hook is approved.
+3. **Permissions for user actions** (§3.4). One per kind of personal data, or one per action kind.
+4. **A position older than the feed's horizon.** The change feed drops tombstones after a retention window. A plugin disabled for longer than that comes back to a position the feed can no longer serve, and a removal it never heard about is lost. That matters to `tracksChanged` now, and to §3.2 when it is built.
 5. **Ordering between hooks.** A scan can produce `tracksChanged`, `albumsChanged`, and `scanFinished` together. Whether a plugin can rely on any order between them, or must treat each as independent, should be stated before anyone depends on one.

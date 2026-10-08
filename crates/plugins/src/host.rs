@@ -1,6 +1,10 @@
 //! Running a plugin (`design/plugins.md` §2, §7): one engine per server, a fresh instance per
 //! run, and host imports that each check their own permission.
 //!
+//! The imports are written once, against the current contract. A plugin built against an older
+//! one is linked against its own bindings, whose imports pass each call on to the current
+//! ones (`v0_2`).
+//!
 //! Imports stay linked when their permission is declined, so a plugin with an optional one
 //! still loads: the call answers "… was not granted", and `granted` lets it adapt up front.
 
@@ -15,25 +19,39 @@ use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
-use crate::manifest::Permission;
+use crate::manifest::{Api, Permission};
 use crate::network::Network;
 
 mod http;
 mod library;
+mod v0_2;
 
 mod bindings {
+    // The current contract.
     wasmtime::component::bindgen!({
         path: "wit",
         world: "plugin",
         imports: { default: async },
         exports: { default: async },
     });
+
+    /// The 0.2 contract, frozen.
+    pub mod v0_2 {
+        wasmtime::component::bindgen!({
+            path: "wit/0.2",
+            world: "plugin",
+            imports: { default: async },
+            exports: { default: async },
+        });
+    }
 }
 
 use bindings::jewelcase::plugin::host;
 use bindings::{Plugin, PluginPre};
 
-pub use bindings::jewelcase::plugin::events::{Event, Play, PlayEnd, ScanFinished, TracksChanged};
+pub use bindings::jewelcase::plugin::events::{
+    Event, Play, PlayEnd, Playing, ScanFinished, TracksChanged,
+};
 pub use bindings::jewelcase::plugin::library::{Album, Artist, Track};
 
 /// Compute a plugin may spend in one run, counted while its code runs.
@@ -144,12 +162,12 @@ impl Host {
         Ok(Host { engine, compiled: Mutex::default(), network: Arc::default() })
     }
 
-    /// Refuses a component that could never run here: one that does not compile, or imports
-    /// something the plugin world does not offer.
-    pub fn check(&self, bytes: &[u8]) -> Result<(), String> {
+    /// Refuses a component that could never run here: one that does not compile, or does not
+    /// fit the contract version `api` its manifest declares.
+    pub fn check(&self, bytes: &[u8], api: Api) -> Result<(), String> {
         let component =
             Component::new(&self.engine, bytes).map_err(|e| e.root_cause().to_string())?;
-        self.pre::<Refused>(&component).map(drop)
+        self.pre::<Refused>(&component, api).map(drop)
     }
 
     /// The plugin in `file`, compiled, from the cache while the file is unchanged.
@@ -175,16 +193,18 @@ impl Host {
         Ok(component)
     }
 
-    /// Runs the plugin in `component` once for `library`, with exactly `grants`, to handle
-    /// `event`.
+    /// Runs the plugin in `component`, built against contract version `api`, once for
+    /// `library`, with exactly `grants`, to handle `event`.
     pub async fn run<L: Library>(
         &self,
         component: &Path,
+        api: Api,
         grants: Grants,
         library: L,
         event: Event,
     ) -> Outcome {
-        let loaded = self.compiled(component).await.and_then(|component| self.pre::<L>(&component));
+        let compiled = self.compiled(component).await;
+        let loaded = compiled.and_then(|component| self.pre::<L>(&component, api));
         let pre = match loaded {
             Ok(pre) => pre,
             Err(summary) => {
@@ -231,25 +251,55 @@ impl Host {
         Outcome { ok, summary, log: run.log, written: run.written, touched: run.touched }
     }
 
-    fn pre<L: Library>(&self, component: &Component) -> Result<PluginPre<Run<L>>, String> {
+    /// The component linked against the bindings of contract version `api`.
+    fn pre<L: Library>(&self, component: &Component, api: Api) -> Result<Pre<L>, String> {
         let mut linker = Linker::new(&self.engine);
         // WASI with nothing granted: no files, sockets, or environment. Only the imports below.
         wasmtime_wasi::p2::add_to_linker_async(&mut linker).map_err(|e| format!("{e:?}"))?;
-        Plugin::add_to_linker::<Run<L>, HasSelf<Run<L>>>(&mut linker, |run| run)
-            .map_err(|e| format!("{e:?}"))?;
+        let linked = match api {
+            Api::V0_2 => {
+                bindings::v0_2::Plugin::add_to_linker::<Run<L>, HasSelf<Run<L>>>(&mut linker, |r| r)
+            }
+            Api::V0_3 => Plugin::add_to_linker::<Run<L>, HasSelf<Run<L>>>(&mut linker, |run| run),
+        };
+        linked.map_err(|e| format!("{e:?}"))?;
         let pre = linker.instantiate_pre(component).map_err(|e| e.root_cause().to_string())?;
-        PluginPre::new(pre).map_err(|e| e.root_cause().to_string())
+        let unfit = |e: wasmtime::Error| e.root_cause().to_string();
+        Ok(match api {
+            Api::V0_2 => Pre::V0_2(bindings::v0_2::PluginPre::new(pre).map_err(unfit)?),
+            Api::V0_3 => Pre::Current(PluginPre::new(pre).map_err(unfit)?),
+        })
     }
+}
+
+/// A component linked and ready to instantiate, by the contract it was built against.
+enum Pre<L: Library> {
+    Current(PluginPre<Run<L>>),
+    V0_2(bindings::v0_2::PluginPre<Run<L>>),
 }
 
 /// Instantiates the plugin and has it handle `event`, within the wall-clock budget.
 async fn call<L: Library>(
-    pre: &PluginPre<Run<L>>,
+    pre: &Pre<L>,
     store: &mut Store<Run<L>>,
     event: &Event,
 ) -> Result<String, String> {
-    let plugin = pre.instantiate_async(&mut *store).await.map_err(|e| format!("{e:?}"))?;
-    match tokio::time::timeout(WALL_BUDGET, plugin.call_handle(&mut *store, event)).await {
+    let instantiated = |e: wasmtime::Error| format!("{e:?}");
+    let handled = match pre {
+        Pre::Current(pre) => {
+            let plugin = pre.instantiate_async(&mut *store).await.map_err(instantiated)?;
+            tokio::time::timeout(WALL_BUDGET, plugin.call_handle(&mut *store, event)).await
+        }
+        Pre::V0_2(pre) => {
+            // The server never sends an event the plugin's manifest could not ask for.
+            let Some(event) = v0_2::event(event) else {
+                return Err("the plugin's contract version has no such event".into());
+            };
+            let plugin = pre.instantiate_async(&mut *store).await.map_err(instantiated)?;
+            tokio::time::timeout(WALL_BUDGET, plugin.call_handle(&mut *store, &event)).await
+        }
+    };
+    match handled {
         Err(_) => Err(format!("the plugin ran past its {} s time limit", WALL_BUDGET.as_secs())),
         Ok(Err(trap)) => Err(format!("the plugin crashed: {}", trap.root_cause())),
         Ok(Ok(Err(reported))) => Err(format!("the plugin reported an error: {reported}")),
@@ -357,6 +407,7 @@ fn wit(permission: Permission) -> host::Permission {
         Permission::ScanFinished => host::Permission::ScanFinished,
         Permission::Schedule => host::Permission::Schedule,
         Permission::Played => host::Permission::Played,
+        Permission::Playing => host::Permission::Playing,
     }
 }
 
