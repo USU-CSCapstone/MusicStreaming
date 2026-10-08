@@ -21,11 +21,15 @@ export const PERMISSIONS = [
 	'tracksChanged',
 	'scanFinished',
 	'schedule',
-	// When a user who connected it finishes playing something.
+	// When a user who connected it finishes playing something, and when they start.
 	'played',
+	'playing',
 	// Setting a rate limit, "per": "host", that every plugin's requests to a host keep to.
 	'hostRateLimits'
 ];
+
+/** The contract version that added each permission, where it is later than the first. */
+const SINCE = { playing: '0.3' };
 
 /** Whose requests a rate limit counts: the plugin's, one user's runs of it, or every plugin's. */
 const PER = ['plugin', 'user', 'host'];
@@ -157,7 +161,8 @@ export function validateManifest(m) {
 	if (o.homepage !== undefined && !/^https?:\/\//.test(typeof o.homepage === 'string' ? o.homepage : '')) {
 		problems.push('"homepage" must be an http(s) URL');
 	}
-	if (!API_VERSIONS.includes(/** @type {string} */ (o.apiVersion))) {
+	const api = API_VERSIONS.indexOf(/** @type {string} */ (o.apiVersion));
+	if (api < 0) {
 		problems.push(`"apiVersion" must be one of ${API_VERSIONS.map((v) => `"${v}"`).join(', ')}`);
 	}
 	for (const key of ['settings', 'personalSettings']) {
@@ -187,6 +192,10 @@ export function validateManifest(m) {
 		}
 		if (seen.has(r.permission)) problems.push(`${at}: ${r.permission} is requested twice`);
 		seen.add(r.permission);
+		const since = SINCE[/** @type {keyof typeof SINCE} */ (r.permission)];
+		if (since && api >= 0 && api < API_VERSIONS.indexOf(since)) {
+			problems.push(`${at}: ${r.permission} needs "apiVersion" ${since} or later`);
+		}
 		if (typeof r.required !== 'boolean') problems.push(`${at}: "required" must be true or false`);
 		if (typeof r.reason !== 'string' || !r.reason.trim()) {
 			problems.push(`${at}: every permission needs a "reason" shown to the admin`);
@@ -232,13 +241,13 @@ export function validateManifest(m) {
 			problems.push(`${hook} needs libraryRead as well`);
 		}
 	}
-	// Its events are plays of a library's tracks, by the users who connected it.
-	if (seen.has('played')) {
+	// Their events are plays of a library's tracks, by the users who connected it.
+	for (const hook of ['played', 'playing'].filter((h) => seen.has(h))) {
 		for (const needed of ['libraryRead', 'listeningActivity']) {
-			if (!seen.has(needed)) problems.push(`played needs ${needed} as well`);
+			if (!seen.has(needed)) problems.push(`${hook} needs ${needed} as well`);
 		}
 		if (o.personalSettings === undefined) {
-			problems.push('played needs "personalSettings", which users connect it with');
+			problems.push(`${hook} needs "personalSettings", which users connect it with`);
 		}
 	}
 	return problems;

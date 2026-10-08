@@ -3,8 +3,9 @@
 //! each event goes to the plugin as 0.2 describes it.
 //!
 //! 0.2 differs in `http.send`'s error, which is a message there, in the words 0.3's error is
-//! described in, and in lacking `host-rate-limits`, which `granted` leaves out. Its records are
-//! the current ones under other names, copied field by field.
+//! described in, and in lacking what 0.3 added: `host-rate-limits`, which `granted` leaves
+//! out, and the `playing` hook, which a 0.2 manifest cannot ask for. Its records are the
+//! current ones under other names, copied field by field.
 
 use super::bindings::jewelcase::plugin as now;
 use super::bindings::v0_2::jewelcase::plugin as old;
@@ -100,22 +101,23 @@ fn permission(permission: now::host::Permission) -> Option<old::host::Permission
         P::ScanFinished => O::ScanFinished,
         P::Schedule => O::Schedule,
         P::Played => O::Played,
-        P::HostRateLimits => return None,
+        P::Playing | P::HostRateLimits => return None,
     })
 }
 
-/// The event as 0.2 describes it.
-pub(super) fn event(event: &now::events::Event) -> old::events::Event {
+/// The event as 0.2 describes it, or none for one added since.
+pub(super) fn event(event: &now::events::Event) -> Option<old::events::Event> {
     use now::events::Event as E;
     use old::events::Event as O;
-    match event.clone() {
+    Some(match event.clone() {
         E::Run => O::Run,
         E::TracksChanged(changes) => O::TracksChanged(changes.into()),
         E::ScanFinished(totals) => O::ScanFinished(totals.into()),
         E::Scheduled => O::Scheduled,
         E::CheckSettings => O::CheckSettings,
         E::Played(plays) => O::Played(all(plays)),
-    }
+        E::Playing(_) => return None,
+    })
 }
 
 /// `error` as 0.2 gave it, for a request to `url`.
@@ -247,7 +249,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn events_reach_a_0_2_plugin_as_0_2_describes_them() {
+    fn every_event_but_playing_reaches_a_0_2_plugin() {
         use now::events::Event as E;
         let track = now::library::Track {
             id: 1,
@@ -265,16 +267,19 @@ mod tests {
             path: "a.flac".into(),
         };
         let play = now::events::Play {
-            track,
+            track: track.clone(),
             started_at: 5,
             listen_time_ms: 900,
             end: now::events::PlayEnd::Finished,
         };
-        let old::events::Event::Played(plays) = event(&E::Played(vec![play])) else {
+        let Some(old::events::Event::Played(plays)) = event(&E::Played(vec![play])) else {
             panic!("plays reach a 0.2 plugin");
         };
         assert_eq!((plays[0].track.title.as_str(), plays[0].listen_time_ms), ("Signal", 900));
-        assert!(matches!(event(&E::Run), old::events::Event::Run));
+        assert!(matches!(event(&E::Run), Some(old::events::Event::Run)));
+        let playing = now::events::Playing { track, started_at: 5 };
+        assert!(event(&E::Playing(playing)).is_none());
+        assert!(permission(now::host::Permission::Playing).is_none());
     }
 
     #[test]

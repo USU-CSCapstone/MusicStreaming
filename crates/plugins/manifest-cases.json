@@ -2272,5 +2272,115 @@
 		"problems": [
 			"permissions[0]: rateLimits: \"musicbrainz.org.\" is not a host name; each limit is for one host"
 		]
+	},
+	{
+		"name": "the current API version",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": []
+		},
+		"problems": []
+	},
+	{
+		"name": "a playing hook",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "Because."
+				},
+				{
+					"permission": "listeningActivity",
+					"required": true,
+					"reason": "Because."
+				},
+				{
+					"permission": "playing",
+					"required": false,
+					"reason": "Because."
+				}
+			],
+			"personalSettings": {
+				"properties": {
+					"token": {
+						"type": "string",
+						"writeOnly": true
+					}
+				},
+				"required": [
+					"token"
+				]
+			}
+		},
+		"problems": []
+	},
+	{
+		"name": "a playing hook without what it needs",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "playing",
+					"required": true,
+					"reason": "Because."
+				}
+			]
+		},
+		"problems": [
+			"playing needs libraryRead as well",
+			"playing needs listeningActivity as well",
+			"playing needs \"personalSettings\", which users connect it with"
+		]
+	},
+	{
+		"name": "a playing hook on the API version before it",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.2",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "Because."
+				},
+				{
+					"permission": "listeningActivity",
+					"required": true,
+					"reason": "Because."
+				},
+				{
+					"permission": "playing",
+					"required": true,
+					"reason": "Because."
+				}
+			],
+			"personalSettings": {
+				"properties": {
+					"token": {
+						"type": "string",
+						"writeOnly": true
+					}
+				},
+				"required": [
+					"token"
+				]
+			}
+		},
+		"problems": [
+			"permissions[2]: playing needs \"apiVersion\" 0.3 or later"
+		]
 	}
 ]

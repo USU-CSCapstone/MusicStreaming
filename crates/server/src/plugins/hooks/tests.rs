@@ -8,6 +8,7 @@ use rusqlite::Connection;
 use super::super::Plugins;
 use super::super::testing::database;
 use super::due::{all, batch, event};
+use super::playing::{FRESH_MS, playing};
 use super::plays::plays;
 use super::{BACKOFF_MS, Due, Hook, MAX_FAILURES, record};
 use crate::db::Database;
@@ -306,6 +307,90 @@ async fn one_users_failures_never_disable_the_plugin() {
     })
     .await;
     assert_eq!(retry, 60 * 60_000, "retried hourly");
+}
+
+/// `p` set up as for [`scrobbling`], with the playing hook granted too.
+async fn now_playing(db: &Database) {
+    scrobbling(db).await;
+    db.write(|tx| tx.execute_batch("INSERT INTO plugin_grants VALUES ('p', 'playing')"))
+        .await
+        .unwrap();
+}
+
+/// User `user` starts track `track`, first reported at `at`, and has not finished it.
+async fn start(db: &Database, id: &'static str, user: i64, track: i64, at: i64) {
+    db.write(move |tx| {
+        tx.execute(
+            "INSERT INTO plays (id, user_id, library_id, track_id, started_at, listen_time_ms, \
+                                context, origin, updated_at) \
+             VALUES (?1, ?2, 1, ?3, ?4, 0, '{}', 'context', ?4)",
+            rusqlite::params![id, user, track, at],
+        )
+    })
+    .await
+    .unwrap();
+}
+
+/// Who `playing` is due for at `now`: each library and user.
+async fn playing_due(db: &Database, now: i64) -> Vec<(i64, i64)> {
+    let due = run(db, move |conn| all(conn, now)).await;
+    due.into_iter().filter(|d| d.hook == Hook::Playing).map(|d| (d.library, d.user)).collect()
+}
+
+#[tokio::test]
+async fn only_the_newest_start_reaches_a_user_who_connected_it() {
+    let (_temp, db) = database().await;
+    now_playing(&db).await;
+    start(&db, "before", 7, 11, 50).await;
+    assert!(playing_due(&db, 60).await.is_empty(), "started before they connected");
+
+    start(&db, "a", 7, 11, 200).await;
+    start(&db, "b", 7, 12, 210).await;
+    start(&db, "c", 8, 12, 220).await;
+    assert_eq!(playing_due(&db, 1000).await, [(1, 7)], "only theirs");
+
+    let (next, now) = run(&db, |conn| playing(conn, "p", 1, 7, 0, 1000)).await.unwrap();
+    assert_eq!((now.track.id, now.started_at), (12, 210), "the newest, passing over the first");
+
+    let seven = Due { user: 7, ..due(Hook::Playing, 0) };
+    db.write(move |tx| record(tx, &seven, next, true, "", 1000)).await.unwrap();
+    assert!(playing_due(&db, 1000).await.is_empty(), "each start is delivered once");
+}
+
+#[tokio::test]
+async fn a_start_that_ended_or_went_stale_is_never_delivered() {
+    let (_temp, db) = database().await;
+    now_playing(&db).await;
+    start(&db, "a", 7, 11, 200).await;
+    assert_eq!(playing_due(&db, 200 + FRESH_MS).await.len(), 1);
+    assert!(playing_due(&db, 200 + FRESH_MS + 1).await.is_empty(), "a minute is too late");
+
+    let later = 200 + 2 * FRESH_MS;
+    start(&db, "b", 7, 12, later).await;
+    db.write(|tx| tx.execute_batch("UPDATE plays SET ended = 'skipped' WHERE id = 'b'"))
+        .await
+        .unwrap();
+    assert!(playing_due(&db, later).await.is_empty(), "skipped before it could be announced");
+    let gone = Due { user: 7, ..due(Hook::Playing, 0) };
+    let (position, nothing) = run(&db, move |conn| event(conn, &gone, later)).await;
+    assert!(nothing.is_none() && position == 0, "nothing to deliver, so nothing moves");
+
+    // A device catching up after being offline reports its plays already ended.
+    play(&db, "offline", 7, 11, later, "finished").await;
+    assert!(playing_due(&db, later).await.is_empty(), "it was never playing as far as we knew");
+}
+
+#[tokio::test]
+async fn starts_an_hour_old_are_cleared_away() {
+    let (_temp, db) = database().await;
+    now_playing(&db).await;
+    start(&db, "old", 7, 11, 0).await;
+    start(&db, "new", 7, 12, 60 * 60_000 + 1).await;
+    let kept: Vec<String> = run(&db, |conn| {
+        conn.prepare("SELECT play_id FROM play_starts")?.query_map([], |row| row.get(0))?.collect()
+    })
+    .await;
+    assert_eq!(kept, ["new"]);
 }
 
 /// The whole path with the real lyrics plugin: a change in the feed reaches its `handle` as

@@ -4826,13 +4826,15 @@ export interface components {
          *     both need `libraryRead` there too. `schedule` runs it at the interval its request names,
          *     in every library it is enabled in. `played` runs it, granted once per plugin, as each
          *     user who connected it (`listMyPlugins`) finishes playing something; it needs
-         *     `listeningActivity`, and `libraryRead` in the library played from.
+         *     `listeningActivity`, and `libraryRead` in the library played from. `playing` runs it the
+         *     same way as each of them starts something, while it is still playing; it needs what
+         *     `played` does, and a plugin built against API version 0.3 or later.
          *     `hostRateLimits`, granted once per plugin, makes its rate limits that say
          *     `"per": "host"` ones every plugin's requests to that host keep to, so it can slow the
          *     others; without it, they count only its own requests.
          * @enum {string}
          */
-        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played" | "hostRateLimits";
+        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played" | "playing" | "hostRateLimits";
         PermissionRequest: {
             permission: components["schemas"]["PermissionName"];
             /** @description Whether it cannot work without it (`requirements/plugins.md` §4.2). */
