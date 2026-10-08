@@ -811,13 +811,19 @@ export interface paths {
         };
         /**
          * List recent searches
-         * @description Kept only for a recent window; there is no permanent search history (`requirements/search.md` §6).
+         * @description The caller's own, newest first. Kept only for a recent window, the 20 newest and none
+         *     older than 30 days, after which they are deleted; there is no permanent search history
+         *     (`requirements/search.md` §6).
          */
         get: operations["listRecentSearches"];
         put?: never;
         /**
          * Record a recent search
-         * @description Recorded when the user acts on a result, not on every keystroke.
+         * @description Recorded once a search settles: the user acts on a result, submits it, or leaves it after
+         *     it has stood a moment, never on every keystroke (`requirements/search.md` §6). The same
+         *     words searched again, ignoring case and accents, replace the earlier entry under a new
+         *     ID. `422` for a query with nothing to search for or over 500 bytes, or a `selected`
+         *     that is not a track, album, or artist in this library.
          */
         post: operations["recordRecentSearch"];
         /** Clear recent searches */
@@ -3739,7 +3745,9 @@ export interface components {
             searchedAt: string;
         };
         RecentSearchCreate: {
+            /** @description Trimmed. At most 500 bytes. */
             query: string;
+            /** @description The result acted on, if any. A track, album, or artist in this library. */
             selected?: components["schemas"]["EntityRef"];
         };
         Playlist: {

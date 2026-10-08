@@ -89,7 +89,8 @@ export const PERMISSION_LABELS: Record<PermissionName, { title: string; detail: 
 	},
 	playing: {
 		title: 'Run when a connected user starts playing something',
-		detail: 'Runs on its own as each user who connected it starts a track, to show what is playing now.'
+		detail:
+			'Runs on its own as each user who connected it starts a track, to show what is playing now.'
 	}
 };
 

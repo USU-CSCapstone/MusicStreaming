@@ -18,6 +18,7 @@ import type {
 	Playlist,
 	PlaylistItemPage,
 	PlaylistPage,
+	RecentSearch,
 	SearchResponse,
 	ServerInfo,
 	Session,
@@ -164,6 +165,32 @@ export const listPlaylistItems = (
 
 export const search = (f: Fetch, libraryId: string, q: string, query: Query = {}) =>
 	get<SearchResponse>(f, `${lib(libraryId)}/search`, { q, ...query });
+
+const recent = (libraryId: string) => `${lib(libraryId)}/recent-searches`;
+
+export const listRecentSearches = (f: Fetch, libraryId: string) =>
+	get<{ items: RecentSearch[] }>(f, recent(libraryId));
+
+/** Records a settled search. With `keepalive`, the request outlives the page, for one closing. */
+export const recordRecentSearch = (
+	f: Fetch,
+	libraryId: string,
+	query: string,
+	selected?: RecentSearch['selected'],
+	keepalive = false
+) =>
+	send<RecentSearch>(
+		(input, init) => f(input, { ...init, keepalive }),
+		'POST',
+		recent(libraryId),
+		selected ? { query, selected } : { query }
+	);
+
+export const deleteRecentSearch = (f: Fetch, libraryId: string, id: string) =>
+	send<void>(f, 'DELETE', `${recent(libraryId)}/${encodeURIComponent(id)}`);
+
+export const clearRecentSearches = (f: Fetch, libraryId: string) =>
+	send<void>(f, 'DELETE', recent(libraryId));
 
 // `original` until streaming-quality settings exist (`requirements/users.md` §6).
 export const getPlaybackInfo = (f: Fetch, libraryId: string, trackId: string) =>

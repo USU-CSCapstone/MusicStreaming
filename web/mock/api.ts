@@ -7,6 +7,7 @@ import type {
 	Device,
 	Lyrics,
 	Problem,
+	RecentSearch,
 	SearchResponse,
 	SearchResult,
 	SearchSectionType,
@@ -35,6 +36,44 @@ export function createApi(dataDir: string) {
 	const plugins = new PluginStore(join(dataDir, 'mock-plugins'), () =>
 		catalog.libraries().map((l) => l.id)
 	);
+
+	// Recent searches, kept in memory per library, newest first, so the search box can offer
+	// them. Searching the same words again moves them to the top, as the server does.
+	const recentSearches = new Map<string, RecentSearch[]>();
+	let lastRecentId = 0;
+
+	async function recent(req: IncomingMessage, res: ServerResponse, lib: string, id?: string) {
+		const list = recentSearches.get(lib) ?? [];
+		const reply = (status: number, body?: unknown) => {
+			res.statusCode = status;
+			if (body === undefined) return res.end();
+			res.setHeader('Content-Type', 'application/json');
+			res.end(JSON.stringify(body));
+		};
+		if (req.method === 'GET' && !id) return reply(200, { items: list });
+		if (req.method === 'POST' && !id) {
+			const { query, selected } = JSON.parse(new TextDecoder().decode(await readBody(req)));
+			const q = String(query ?? '').trim();
+			if (!q) return problem(res, 422, 'Unprocessable', 'validation_failed', 'query is empty.');
+			const search: RecentSearch = {
+				id: String(++lastRecentId),
+				query: q,
+				selected: selected ?? null,
+				searchedAt: new Date().toISOString()
+			};
+			const others = list.filter((r) => r.query.toLowerCase() !== q.toLowerCase());
+			recentSearches.set(lib, [search, ...others].slice(0, 20));
+			return reply(201, search);
+		}
+		if (req.method === 'DELETE') {
+			if (!id) recentSearches.delete(lib);
+			else if (list.some((r) => r.id === id)) {
+				recentSearches.set(lib, list.filter((r) => r.id !== id));
+			} else return problem(res, 404, 'Not Found', 'not_found');
+			return reply(204);
+		}
+		return problem(res, 405, 'Method Not Allowed', 'method_not_allowed');
+	}
 
 	// Paths under /libraries/{libraryId}; the library is resolved before the handler runs,
 	// so nothing is reachable in a library that does not exist.
@@ -235,6 +274,8 @@ export function createApi(dataDir: string) {
 			res.setHeader('Content-Type', 'application/json');
 			return res.end(JSON.stringify({ token: 'mock', user: MOCK_USER, device: MOCK_DEVICE }));
 		}
+		const recentPath = /^\/libraries\/([^/]+)\/recent-searches(?:\/([^/]+))?$/.exec(path);
+		if (recentPath) return recent(req, res, recentPath[1], recentPath[2]);
 		if (path.startsWith('/admin/plugins')) {
 			try {
 				const out = await adminRoute(
