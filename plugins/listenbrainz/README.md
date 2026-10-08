@@ -2,8 +2,10 @@
 
 A first-party example plugin (`design/plugins.md` §7). Each user who connects it with their
 own ListenBrainz token has their plays sent to their account as they end, once half the
-track or four minutes was heard, as ListenBrainz asks. The token is checked with ListenBrainz
-as it is saved. A play ListenBrainz turns away is kept and sent again later. Its contract is
+track or four minutes was heard, as ListenBrainz asks. Where an admin also approves the
+optional `playing` hook, what they start is shown on their profile as playing now; that is
+never sent late, so one ListenBrainz turns away is not sent again. The token is checked with
+ListenBrainz as it is saved. A play ListenBrainz turns away is kept and sent again later. Its contract is
 [`crates/plugins/wit/plugin.wit`](../../crates/plugins/wit/plugin.wit), and `manifest.json`
 is what the Plugins page shows.
 

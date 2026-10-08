@@ -1,5 +1,6 @@
 //! What ListenBrainz takes (https://listenbrainz.readthedocs.io/en/latest/users/api/core.html):
-//! which plays count as listens, and the body that submits them.
+//! which plays count as listens, the body that submits them, and the one that says what is
+//! playing now.
 
 use serde_json::{Value, json};
 
@@ -36,7 +37,17 @@ pub fn submission(listens: &[Listen]) -> Value {
     json!({ "listen_type": "import", "payload": payload })
 }
 
+/// The body that tells ListenBrainz `l` is playing now. ListenBrainz shows it until the track
+/// would have ended, and takes it with no `listened_at`, since it is not yet a listen.
+pub fn playing_now(l: &Listen) -> Value {
+    json!({ "listen_type": "playing_now", "payload": [{ "track_metadata": metadata(l) }] })
+}
+
 fn listen(l: &Listen) -> Value {
+    json!({ "listened_at": l.started_at / 1000, "track_metadata": metadata(l) })
+}
+
+fn metadata(l: &Listen) -> Value {
     let mut info = json!({
         "media_player": "Jewelcase",
         "submission_client": "Jewelcase ListenBrainz plugin",
@@ -60,7 +71,7 @@ fn listen(l: &Listen) -> Value {
     if let Some(album) = l.album.filter(|a| !a.is_empty()) {
         metadata["release_name"] = album.into();
     }
-    json!({ "listened_at": l.started_at / 1000, "track_metadata": metadata })
+    metadata
 }
 
 /// Whether the answer to a token check says it is valid.
@@ -102,6 +113,27 @@ mod tests {
         assert_eq!(first["track_metadata"]["release_name"], "Signal");
         assert_eq!(first["track_metadata"]["additional_info"]["tracknumber"], 3);
         assert_eq!(first["track_metadata"]["additional_info"]["artist_names"][1], "Guest");
+    }
+
+    #[test]
+    fn playing_now_names_the_track_but_not_when() {
+        let artists = ["Aurora Lane".to_owned()];
+        let listen = Listen {
+            title: "Signal",
+            artists: &artists,
+            album: None,
+            isrc: None,
+            track_number: None,
+            duration_ms: 180_000,
+            started_at: 1_790_942_400_500,
+            listen_time_ms: 0,
+        };
+        let body = playing_now(&listen);
+        assert_eq!(body["listen_type"], "playing_now");
+        let only = body["payload"].as_array().unwrap();
+        assert_eq!(only.len(), 1);
+        assert_eq!(only[0]["track_metadata"]["track_name"], "Signal");
+        assert!(only[0].get("listened_at").is_none());
     }
 
     #[test]

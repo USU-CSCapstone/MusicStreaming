@@ -64,13 +64,16 @@ pub enum Permission {
     /// A hook: run when a user who connected it finishes playing something. Needs
     /// listening-activity, library-read where it was played, and personal settings to connect.
     Played,
+    /// A hook: run when a user who connected it starts playing something. Needs what `Played`
+    /// does. Since 0.3.
+    Playing,
     /// Its rate limits that say `"per": "host"` are kept to by every plugin's requests to that
     /// host, so it can slow other plugins. Without it, they count its own.
     HostRateLimits,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 10] = [
+    pub const ALL: [Permission; 11] = [
         Self::LibraryRead,
         Self::LibraryAdd,
         Self::LibraryChange,
@@ -80,6 +83,7 @@ impl Permission {
         Self::ScanFinished,
         Self::Schedule,
         Self::Played,
+        Self::Playing,
         Self::HostRateLimits,
     ];
 
@@ -95,6 +99,7 @@ impl Permission {
             Self::ScanFinished => "scanFinished",
             Self::Schedule => "schedule",
             Self::Played => "played",
+            Self::Playing => "playing",
             Self::HostRateLimits => "hostRateLimits",
         }
     }
@@ -127,7 +132,16 @@ impl Permission {
             Self::ScanFinished => "Run when a scan finishes",
             Self::Schedule => "Run on a schedule",
             Self::Played => "Run when a connected user plays something",
+            Self::Playing => "Run when a connected user starts playing something",
             Self::HostRateLimits => "Limit a service for every plugin",
+        }
+    }
+
+    /// The contract version that added it. A manifest declaring an older one cannot ask for it.
+    pub fn since(self) -> Api {
+        match self {
+            Self::Playing => Api::V0_3,
+            _ => Api::V0_2,
         }
     }
 }
@@ -347,7 +361,8 @@ pub fn validate(manifest: &Value) -> Vec<String> {
             problems.push(r#""homepage" must be an http(s) URL"#.into());
         }
     }
-    if !o.get("apiVersion").is_some_and(|v| Api::deserialize(v).is_ok()) {
+    let api = o.get("apiVersion").and_then(|v| Api::deserialize(v).ok());
+    if api.is_none() {
         let known: Vec<_> = Api::ALL.iter().map(|api| format!(r#""{}""#, api.name())).collect();
         problems.push(format!(r#""apiVersion" must be one of {}"#, known.join(", ")));
     }
@@ -374,7 +389,7 @@ pub fn validate(manifest: &Value) -> Vec<String> {
             problems.push(format!("{at} must be an object"));
             continue;
         };
-        problems.extend(validate_request(&at, r, &mut seen));
+        problems.extend(validate_request(&at, r, api, &mut seen));
     }
     // Limiting every plugin is what the permission is for, and only it allows that.
     let host = permissions
@@ -393,21 +408,28 @@ pub fn validate(manifest: &Value) -> Vec<String> {
             problems.push(format!("{} needs libraryRead as well", hook.name()));
         }
     }
-    // Its events are plays of a library's tracks, by the users who connected it.
-    if seen.contains(&Permission::Played) {
+    // Their events are plays of a library's tracks, by the users who connected it.
+    for hook in [Permission::Played, Permission::Playing].into_iter().filter(|h| seen.contains(h)) {
+        let hook = hook.name();
         for needed in [Permission::LibraryRead, Permission::ListeningActivity] {
             if !seen.contains(&needed) {
-                problems.push(format!("played needs {} as well", needed.name()));
+                problems.push(format!("{hook} needs {} as well", needed.name()));
             }
         }
         if o.get("personalSettings").is_none() {
-            problems.push(r#"played needs "personalSettings", which users connect it with"#.into());
+            problems
+                .push(format!(r#"{hook} needs "personalSettings", which users connect it with"#));
         }
     }
     problems
 }
 
-fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>) -> Vec<String> {
+fn validate_request(
+    at: &str,
+    r: &Map<String, Value>,
+    api: Option<Api>,
+    seen: &mut Vec<Permission>,
+) -> Vec<String> {
     let Some(permission) =
         r.get("permission").and_then(Value::as_str).and_then(Permission::from_name)
     else {
@@ -420,6 +442,11 @@ fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>
         problems.push(format!("{at}: {} is requested twice", permission.name()));
     }
     seen.push(permission);
+    if api.is_some_and(|api| api < permission.since()) {
+        let since = permission.since().name();
+        problems
+            .push(format!(r#"{at}: {} needs "apiVersion" {since} or later"#, permission.name()));
+    }
     if !r.get("required").is_some_and(Value::is_boolean) {
         problems.push(format!(r#"{at}: "required" must be true or false"#));
     }

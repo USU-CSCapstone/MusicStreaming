@@ -49,7 +49,9 @@ mod bindings {
 use bindings::jewelcase::plugin::host;
 use bindings::{Plugin, PluginPre};
 
-pub use bindings::jewelcase::plugin::events::{Event, Play, PlayEnd, ScanFinished, TracksChanged};
+pub use bindings::jewelcase::plugin::events::{
+    Event, Play, PlayEnd, Playing, ScanFinished, TracksChanged,
+};
 pub use bindings::jewelcase::plugin::library::{Album, Artist, Track};
 
 /// Compute a plugin may spend in one run, counted while its code runs.
@@ -294,8 +296,11 @@ async fn call<L: Library>(
             tokio::time::timeout(WALL_BUDGET, plugin.call_handle(&mut *store, event)).await
         }
         Pre::V0_2(pre) => {
+            // The server never sends an event the plugin's manifest could not ask for.
+            let Some(event) = v0_2::event(event) else {
+                return Err("the plugin's contract version has no such event".into());
+            };
             let plugin = pre.instantiate_async(&mut *store).await.map_err(instantiated)?;
-            let event = v0_2::event(event);
             tokio::time::timeout(WALL_BUDGET, plugin.call_handle(&mut *store, &event)).await
         }
     };
@@ -407,6 +412,7 @@ fn wit(permission: Permission) -> host::Permission {
         Permission::ScanFinished => host::Permission::ScanFinished,
         Permission::Schedule => host::Permission::Schedule,
         Permission::Played => host::Permission::Played,
+        Permission::Playing => host::Permission::Playing,
         Permission::HostRateLimits => host::Permission::HostRateLimits,
     }
 }
