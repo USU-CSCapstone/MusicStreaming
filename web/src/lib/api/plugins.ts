@@ -33,7 +33,9 @@ export const LIBRARY_PERMISSIONS: readonly PermissionName[] = [
 	'libraryAdd',
 	'libraryChange',
 	'tracksChanged',
-	'scanFinished'
+	'scanFinished',
+	'albumsChanged',
+	'artistsChanged'
 ];
 
 export function isLibraryPermission(p: PermissionName): boolean {
@@ -95,6 +97,16 @@ export const PERMISSION_LABELS: Record<PermissionName, { title: string; detail: 
 	searchActivity: {
 		title: 'Search activity',
 		detail: 'What people search for, from those who choose to share it with this plugin.'
+	},
+	albumsChanged: {
+		title: 'Run when albums change',
+		detail:
+			'Runs on its own as albums are added, changed, or removed, starting with every album already here.'
+	},
+	artistsChanged: {
+		title: 'Run when artists change',
+		detail:
+			'Runs on its own as artists are added, changed, or removed, starting with every artist already here.'
 	},
 	searched: {
 		title: 'Run when a user who shares their searches settles on one',

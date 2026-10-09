@@ -11,11 +11,12 @@ Its companions are [`imports.md`](imports.md), covering what a plugin can call, 
 
 ## 1. Built Hooks
 
-**Six hooks are built, each approved like a permission** ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)). The dispatcher is `crates/server/src/plugins/hooks.rs`, and the contract is [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.3`. Plugins built against `0.2` still load, without `playing` or `searched` ([`plugins.md` §6](plugins.md#6-packaging)).
+**Eight hooks are built, each approved like a permission** ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)). The dispatcher is `crates/server/src/plugins/hooks.rs`, and the contract is [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.3`. Plugins built against `0.2` still load, without the hooks 0.3 added ([`plugins.md` §6](plugins.md#6-packaging)).
 
 | Hook (manifest / WIT) | Delivers | Granted | Also needs |
 |---|---|---|---|
 | `tracksChanged` / `tracks-changed` | Track IDs changed or removed since the last delivery, up to 100 per event | Per library | `libraryRead` |
+| `albumsChanged` / `albums-changed`, `artistsChanged` / `artists-changed` | Album or artist IDs changed or removed since the last delivery, up to 100 per event ([§1.3](#13-albums-changed-and-artists-changed)) | Per library | `libraryRead`, `apiVersion` 0.3 |
 | `scanFinished` / `scan-finished` | The summed counts of every scan that finished since the last delivery | Per library | `libraryRead` |
 | `schedule` / `scheduled` | Nothing. The interval named by `everyMinutes` (at least 5) came round. | Per plugin | — |
 | `played` / `played` | Plays one connected user ended in this library, oldest first, up to 100, each with its track | Per plugin | `libraryRead`, `listeningActivity`, `personalSettings` |
@@ -27,7 +28,7 @@ Two more events need no approval, because nothing happens without someone asking
 - **`run`**: an admin pressed **Run now**.
 - **`check-settings`**: an admin is saving settings, or a user is connecting. An error refuses the save ([`requirements/plugins.md` §6](../requirements/plugins.md#6-configuration--credentials)).
 
-All six hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-running-plugins)), except that `playing` never catches up ([§1.1](#11-playing)):
+All eight hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-running-plugins)), except that `playing` never catches up ([§1.1](#11-playing)):
 
 - **A position per plugin and library, and per user in `played`, `playing`, and `searched`.** The position moves only once the plugin has handled a batch, so a crash, a restart, or an unreachable service loses nothing.
 - **Failures back off.** The retry comes after a minute, doubles up to an hour, and five failures in a row disable the plugin in that library. In `played`, `playing`, and `searched`, one user's failures are retried at most hourly and never disable the plugin for everyone else.
@@ -61,6 +62,17 @@ All six hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-run
 - **Searches a device answers offline** ([`requirements/search.md` §2](../requirements/search.md#2-where-search-runs)) are to be delivered once they reach the server, so a plugin sees the same person offline as on. Recent searches do not sync from devices yet, so there are none to deliver.
 - **Not the same as answering searches.** An external source answers queries through the `source` export ([`exports.md` §3.1](exports.md#31-external-content-source)), which is called as the user types and returns results. This hook is called afterwards and returns nothing.
 
+### 1.3 Albums Changed and Artists Changed
+
+**Run when albums or artists are added, changed, or removed.** Artwork and biography plugins think in albums and artists ([`requirements/scanning.md` §3](../requirements/scanning.md#3-sidecar-content)), and need not rebuild them from track IDs.
+
+- **Delivers** `albums-changed` or `artists-changed`: up to 100 IDs changed or removed, as `tracksChanged` delivers track IDs.
+- **What counts as a change** is whatever the library change feed records (`crates/server/src/db/catalog.rs`). An album is recorded as it is recomputed when its tracks change, when its artwork's placeholder changes, and when its loudness is analysed; an artist as it is recomputed or its image changes. A plugin may be told of an album whose title it already has.
+- **Read from what exists.** The change feed already recorded `album` and `artist` rows (`crates/server/migrations/0004_feeds.sql`). Each hook reads only its own kind, with a position of its own that starts at zero, so a plugin new to a library first hears of every album or artist in it. `tracksChanged` now reads only tracks the same way, so an album changing no longer wakes a track hook.
+- **Two hooks, not one `libraryChanged`.** A plugin hears only about what it asked for, and the admin sees "run when albums change" rather than a vaguer grant. The cost is two names in the manifest rather than one.
+- **Needs** `libraryRead`, granted per library, and `apiVersion` 0.3.
+- **Reading one by ID is not yet possible.** `library.albums` and `library.artists` page through the whole library; `get-albums` and `get-artists` are proposed ([`imports.md` §3.2](imports.md#32-reading-the-library)).
+
 ---
 
 ## 2. Rules Every Hook Follows
@@ -78,16 +90,7 @@ Any proposed hook must keep these. A hook that breaks one is rejected on that ba
 
 ## 3. Proposed Hooks
 
-### 3.1 Albums Changed and Artists Changed
-
-**Run when albums or artists are added, changed, or removed.** Artwork and biography plugins think in albums and artists ([`requirements/scanning.md` §3](../requirements/scanning.md#3-sidecar-content)). Today they rebuild those from track IDs and work out for themselves which album changed.
-
-- **Delivers** album or artist IDs changed or removed, as `tracksChanged` delivers track IDs.
-- **Built from what exists.** The library change feed already records `album` and `artist` rows (`crates/server/migrations/0004_feeds.sql`). These hooks read it filtered by entity type, with a position of their own.
-- **Two hooks, not one `libraryChanged`.** A plugin hears only about what it asked for, and the admin sees "run when albums change" rather than a vaguer grant. The cost is two names in the manifest rather than one.
-- **Needs** `libraryRead`. Granted per library.
-
-### 3.2 Scan Problems
+### 3.1 Scan Problems
 
 **Run when the scanner finds files it could not read or could not make sense of** ([`requirements/scanning.md` §10](../requirements/scanning.md#10-problems)). A tag-fixing plugin wants exactly these files, and `scanFinished` gives only a count.
 
@@ -95,7 +98,7 @@ Any proposed hook must keep these. A hook that breaks one is rejected on that ba
 - **Needs** `libraryRead`. Fixing a problem needs `libraryChange` as well, but hearing about it does not.
 - **Built on** the scanner's problem list, with a position of its own like the change feed. A problem that is fixed and then recurs is delivered again.
 
-### 3.3 User Actions
+### 3.2 User Actions
 
 **Run when a connected user does something worth acting on.** [`requirements/plugins.md` §8](../requirements/plugins.md#8-events) promises "a user action taken", and no hook delivers one yet.
 
@@ -105,7 +108,7 @@ Any proposed hook must keep these. A hook that breaks one is rejected on that ba
 - **Not every action.** Queue edits and seeking are too frequent and too dull to deliver, and a plugin that wants playback has `played` and `playing`.
 - **Needs** a permission for what each action carries. Playlists are personal data, and `listeningActivity` does not cover them. Either the permission list grows (`playlistActivity`), or this hook carries its own permission per action kind. To decide ([§5](#5-open-questions)).
 
-### 3.4 Lifecycle
+### 3.3 Lifecycle
 
 **Tell a plugin about changes to itself.** These touch nothing but the plugin itself, so they reach nothing ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)).
 
@@ -119,14 +122,14 @@ Any proposed hook must keep these. A hook that breaks one is rejected on that ba
 - **Delivered reliably**, since a missed `updated` or `user-disconnected` leaves data the plugin should have dealt with.
 - **Whether they need approval.** [`requirements/plugins.md` §8](../requirements/plugins.md#8-events) says every hook is approved like a permission. These reach nothing, so approving them is ceremony. Either they are events, like `run` and `check-settings`, or the requirement says which hooks need approval ([§5](#5-open-questions)).
 
-### 3.5 Clock-Time Schedules
+### 3.4 Clock-Time Schedules
 
 **Run at a time of day, not only every N minutes.** "Every day at 03:00" keeps a whole-library pass off-hours, and `everyMinutes` cannot say that.
 
 - **An extension of `schedule`, not a new hook.** The request takes `at: "03:00"` (server local time) and optionally days of the week, instead of `everyMinutes`. It is still one permission and one approval.
 - **The admin can move it.** The plugin proposes a time and the admin decides, as with everything else it asks for.
 
-### 3.6 Forgetting Plays
+### 3.5 Forgetting Plays
 
 **Tell a plugin to forget plays a user cleared.** [`requirements/users.md` §7](../requirements/users.md#7-privacy--personal-data) and [`requirements/analytics.md` §9](../requirements/analytics.md#9-privacy-and-control) require it: clearing listening history asks every plugin that received those plays to forget them. `played` hands plays over, and nothing asks for them back.
 
@@ -152,7 +155,7 @@ Each would let a plugin veto or alter something ([`requirements/plugins.md` §8]
 
 ## 5. Open Questions
 
-1. **Which hooks need approval** (§3.4). Lifecycle events reach nothing, and [`requirements/plugins.md` §8](../requirements/plugins.md#8-events) currently says every hook is approved.
-2. **Permissions for user actions** (§3.3). One per kind of personal data, or one per action kind.
-3. **A position older than the feed's horizon.** The change feed drops tombstones after a retention window. A plugin disabled for longer than that comes back to a position the feed can no longer serve, and a removal it never heard about is lost. That matters to `tracksChanged` and `searched` now, and to §3.1 when it is built.
+1. **Which hooks need approval** (§3.3). Lifecycle events reach nothing, and [`requirements/plugins.md` §8](../requirements/plugins.md#8-events) currently says every hook is approved.
+2. **Permissions for user actions** (§3.2). One per kind of personal data, or one per action kind.
+3. **A position older than the feed's horizon.** The change feed drops tombstones after a retention window. A plugin disabled for longer than that comes back to a position the feed can no longer serve, and a removal it never heard about is lost. That matters to `tracksChanged`, `albumsChanged`, `artistsChanged`, and `searched`.
 4. **Ordering between hooks.** A scan can produce `tracksChanged`, `albumsChanged`, and `scanFinished` together. Whether a plugin can rely on any order between them, or must treat each as independent, should be stated before anyone depends on one.

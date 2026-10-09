@@ -2172,5 +2172,81 @@
 		"problems": [
 			"permissions[0]: searchActivity needs \"apiVersion\" 0.3 or later"
 		]
+	},
+	{
+		"name": "album and artist hooks with the permission their events need",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "Because."
+				},
+				{
+					"permission": "albumsChanged",
+					"required": true,
+					"reason": "Because."
+				},
+				{
+					"permission": "artistsChanged",
+					"required": false,
+					"reason": "Because."
+				}
+			]
+		},
+		"problems": []
+	},
+	{
+		"name": "album and artist hooks without the permission their events need",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "albumsChanged",
+					"required": true,
+					"reason": "Because."
+				},
+				{
+					"permission": "artistsChanged",
+					"required": true,
+					"reason": "Because."
+				}
+			]
+		},
+		"problems": [
+			"albumsChanged needs libraryRead as well",
+			"artistsChanged needs libraryRead as well"
+		]
+	},
+	{
+		"name": "an album hook on the API version before it",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.2",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "Because."
+				},
+				{
+					"permission": "albumsChanged",
+					"required": true,
+					"reason": "Because."
+				}
+			]
+		},
+		"problems": [
+			"permissions[1]: albumsChanged needs \"apiVersion\" 0.3 or later"
+		]
 	}
 ]

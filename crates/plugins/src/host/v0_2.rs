@@ -2,8 +2,8 @@
 //! (`requirements/plugins.md` §1). Each 0.2 import passes the call on to the current one, and
 //! each event goes to the plugin as 0.2 describes it.
 //!
-//! 0.2 differs only in lacking what 0.3 added, the `playing` and `searched` hooks and search
-//! activity, which a 0.2 manifest cannot ask for. Its records are the current ones under other names, copied field by field.
+//! 0.2 differs only in lacking what 0.3 added: the `playing`, `searched`, `albums-changed`, and
+//! `artists-changed` hooks and search activity, which a 0.2 manifest cannot ask for. Its records are the current ones under other names, copied field by field.
 
 use super::bindings::jewelcase::plugin as now;
 use super::bindings::v0_2::jewelcase::plugin as old;
@@ -98,7 +98,9 @@ fn permission(permission: now::host::Permission) -> Option<old::host::Permission
         P::ScanFinished => O::ScanFinished,
         P::Schedule => O::Schedule,
         P::Played => O::Played,
-        P::Playing | P::SearchActivity | P::Searched => return None,
+        P::Playing | P::SearchActivity | P::Searched | P::AlbumsChanged | P::ArtistsChanged => {
+            return None;
+        }
     })
 }
 
@@ -113,7 +115,11 @@ pub(super) fn event(event: &now::events::Event) -> Option<old::events::Event> {
         E::Scheduled => O::Scheduled,
         E::CheckSettings => O::CheckSettings,
         E::Played(plays) => O::Played(all(plays)),
-        E::Playing(_) | E::Searched(_) | E::SearchesForgotten(_) => return None,
+        E::Playing(_)
+        | E::Searched(_)
+        | E::SearchesForgotten(_)
+        | E::AlbumsChanged(_)
+        | E::ArtistsChanged(_) => return None,
     })
 }
 
