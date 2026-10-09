@@ -39,6 +39,22 @@ impl Library for Tracks {
         Ok(Vec::new())
     }
 
+    async fn get_albums(&mut self, _: Vec<u64>) -> Result<Vec<Album>, String> {
+        Ok(Vec::new())
+    }
+
+    async fn get_artists(&mut self, _: Vec<u64>) -> Result<Vec<Artist>, String> {
+        Ok(Vec::new())
+    }
+
+    async fn album_tracks(&mut self, album: u64) -> Result<Vec<Track>, String> {
+        Ok(self.tracks.iter().filter(|t| t.album_id == album).cloned().collect())
+    }
+
+    async fn artist_albums(&mut self, _: u64) -> Result<Vec<Album>, String> {
+        Ok(Vec::new())
+    }
+
     async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
         Ok(vec![(7, self.root.clone())])
     }

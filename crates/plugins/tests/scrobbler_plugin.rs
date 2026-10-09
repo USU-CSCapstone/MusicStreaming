@@ -35,6 +35,22 @@ impl Library for Empty {
         Ok(Vec::new())
     }
 
+    async fn get_albums(&mut self, _: Vec<u64>) -> Result<Vec<Album>, String> {
+        Ok(Vec::new())
+    }
+
+    async fn get_artists(&mut self, _: Vec<u64>) -> Result<Vec<Artist>, String> {
+        Ok(Vec::new())
+    }
+
+    async fn album_tracks(&mut self, _: u64) -> Result<Vec<Track>, String> {
+        Ok(Vec::new())
+    }
+
+    async fn artist_albums(&mut self, _: u64) -> Result<Vec<Album>, String> {
+        Ok(Vec::new())
+    }
+
     async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
         Ok(Vec::new())
     }
