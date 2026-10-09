@@ -26,11 +26,20 @@ export const PERMISSIONS = [
 	'playing',
 	// The searches of users who share them with it, and running when they settle on one.
 	'searchActivity',
-	'searched'
+	'searched',
+	// When albums, or artists, are added, changed, or removed.
+	'albumsChanged',
+	'artistsChanged'
 ];
 
 /** The contract version that added each permission, where it is later than the first. */
-const SINCE = { playing: '0.3', searchActivity: '0.3', searched: '0.3' };
+const SINCE = {
+	playing: '0.3',
+	searchActivity: '0.3',
+	searched: '0.3',
+	albumsChanged: '0.3',
+	artistsChanged: '0.3'
+};
 
 /** The shortest interval a schedule may ask for. */
 export const MIN_EVERY_MINUTES = 5;
@@ -218,7 +227,7 @@ export function validateManifest(m) {
 		}
 	});
 	// A library hook's event is about the library, which only reading it can make anything of.
-	for (const hook of ['tracksChanged', 'scanFinished']) {
+	for (const hook of ['tracksChanged', 'scanFinished', 'albumsChanged', 'artistsChanged']) {
 		if (seen.has(hook) && !seen.has('libraryRead')) {
 			problems.push(`${hook} needs libraryRead as well`);
 		}

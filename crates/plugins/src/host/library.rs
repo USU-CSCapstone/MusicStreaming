@@ -6,7 +6,8 @@ use super::{Album, Artist, Library, Run, Track};
 use crate::files as library_files;
 use crate::manifest::Permission;
 
-/// The most one page, or one `get-tracks`, holds, whatever the plugin asks for.
+/// The most one page, or one `get-tracks`, `get-albums`, or `get-artists`, holds, whatever the
+/// plugin asks for.
 const PAGE_LIMIT: u32 = 500;
 /// The longest state key, and the largest value.
 const MAX_KEY: usize = 512;
@@ -32,6 +33,28 @@ impl<L: Library> library::Host for Run<L> {
     async fn artists(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Artist>, String> {
         self.may(Permission::LibraryRead)?;
         self.library.artists(after, limit.min(PAGE_LIMIT)).await
+    }
+
+    async fn get_albums(&mut self, mut ids: Vec<u64>) -> Result<Vec<Album>, String> {
+        self.may(Permission::LibraryRead)?;
+        ids.truncate(PAGE_LIMIT as usize);
+        self.library.get_albums(ids).await
+    }
+
+    async fn get_artists(&mut self, mut ids: Vec<u64>) -> Result<Vec<Artist>, String> {
+        self.may(Permission::LibraryRead)?;
+        ids.truncate(PAGE_LIMIT as usize);
+        self.library.get_artists(ids).await
+    }
+
+    async fn album_tracks(&mut self, album: u64) -> Result<Vec<Track>, String> {
+        self.may(Permission::LibraryRead)?;
+        self.library.album_tracks(album).await
+    }
+
+    async fn artist_albums(&mut self, artist: u64) -> Result<Vec<Album>, String> {
+        self.may(Permission::LibraryRead)?;
+        self.library.artist_albums(artist).await
     }
 }
 

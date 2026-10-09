@@ -76,12 +76,12 @@ pub fn track(row: &Row) -> rusqlite::Result<Track> {
     })
 }
 
-const ALBUM: &str = "SELECT al.id, al.title, \
+/// An album's columns, as `al`. Only one with tracks is shown, as the browse lists show them.
+const ALBUM_COLUMNS: &str = "SELECT al.id, al.title, \
      (SELECT json_group_array(name) FROM (SELECT ar.name FROM album_artists aa \
       JOIN artists ar ON ar.id = aa.artist_id WHERE aa.album_id = al.id AND ar.name IS NOT NULL \
       ORDER BY aa.position)), \
-     al.release_date, al.track_count FROM albums al \
-     WHERE al.library_id = ?1 AND al.id > ?2 AND al.track_count > 0";
+     al.release_date, al.track_count, al.image_id IS NOT NULL";
 
 fn album(row: &Row) -> rusqlite::Result<Album> {
     Ok(Album {
@@ -90,11 +90,13 @@ fn album(row: &Row) -> rusqlite::Result<Album> {
         artists: names(row, 2)?,
         release_date: row.get(3)?,
         track_count: row.get(4)?,
+        has_artwork: row.get(5)?,
     })
 }
 
-const ARTIST: &str = "SELECT id, name, album_count, track_count FROM artists \
-     WHERE library_id = ?1 AND id > ?2 AND (album_count > 0 OR track_count > 0)";
+/// An artist's columns, as `ar`. Only one with music is shown.
+const ARTIST_COLUMNS: &str = "SELECT ar.id, ar.name, ar.album_count, ar.track_count, \
+     ar.image_id IS NOT NULL, coalesce(ar.biography, '') <> ''";
 
 fn artist(row: &Row) -> rusqlite::Result<Artist> {
     Ok(Artist {
@@ -102,7 +104,22 @@ fn artist(row: &Row) -> rusqlite::Result<Artist> {
         name: row.get(1)?,
         album_count: row.get(2)?,
         track_count: row.get(3)?,
+        has_image: row.get(4)?,
+        has_biography: row.get(5)?,
     })
+}
+
+/// `select`'s rows for these IDs, in their order, leaving out any not in `library`. `select`
+/// names the IDs, as JSON, `?2`, and this library `?1`.
+fn by_ids<T>(
+    conn: &Connection,
+    select: &str,
+    library: i64,
+    ids: &[u64],
+    map: fn(&Row) -> rusqlite::Result<T>,
+) -> rusqlite::Result<Vec<T>> {
+    let ids = serde_json::to_string(ids).expect("integers serialize");
+    conn.prepare_cached(select)?.query_map(params![library, ids], map)?.collect()
 }
 
 /// A JSON array of names in column `index`.
@@ -138,11 +155,67 @@ impl Library for RunLibrary {
     }
 
     async fn albums(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Album>, String> {
-        self.read(move |conn, library| page(conn, ALBUM, library, after, limit, album)).await
+        let select = format!(
+            "{ALBUM_COLUMNS} FROM albums al \
+             WHERE al.library_id = ?1 AND al.id > ?2 AND al.track_count > 0"
+        );
+        self.read(move |conn, library| page(conn, &select, library, after, limit, album)).await
     }
 
     async fn artists(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Artist>, String> {
-        self.read(move |conn, library| page(conn, ARTIST, library, after, limit, artist)).await
+        let select = format!(
+            "{ARTIST_COLUMNS} FROM artists ar WHERE ar.library_id = ?1 AND ar.id > ?2 \
+             AND (ar.album_count > 0 OR ar.track_count > 0)"
+        );
+        self.read(move |conn, library| page(conn, &select, library, after, limit, artist)).await
+    }
+
+    async fn get_albums(&mut self, ids: Vec<u64>) -> Result<Vec<Album>, String> {
+        // The IDs lead the join, so the albums come out in the order asked for.
+        let select = format!(
+            "{ALBUM_COLUMNS} FROM json_each(?2) ids CROSS JOIN albums al ON al.id = ids.value \
+             WHERE al.library_id = ?1 AND al.track_count > 0 ORDER BY ids.key"
+        );
+        self.read(move |conn, library| by_ids(conn, &select, library, &ids, album)).await
+    }
+
+    async fn get_artists(&mut self, ids: Vec<u64>) -> Result<Vec<Artist>, String> {
+        let select = format!(
+            "{ARTIST_COLUMNS} FROM json_each(?2) ids CROSS JOIN artists ar ON ar.id = ids.value \
+             WHERE ar.library_id = ?1 AND (ar.album_count > 0 OR ar.track_count > 0) \
+             ORDER BY ids.key"
+        );
+        self.read(move |conn, library| by_ids(conn, &select, library, &ids, artist)).await
+    }
+
+    async fn album_tracks(&mut self, album: u64) -> Result<Vec<Track>, String> {
+        let select = format!(
+            "{TRACK_COLUMNS} FROM tracks t JOIN albums al ON al.id = t.album_id \
+             WHERE t.library_id = ?1 AND t.album_id = ?2 AND t.missing_since IS NULL \
+             ORDER BY t.disc_number, t.track_number IS NULL, t.track_number, t.id"
+        );
+        self.read(move |conn, library| {
+            conn.prepare_cached(&select)?
+                .query_map(params![library, album as i64], track)?
+                .collect()
+        })
+        .await
+    }
+
+    async fn artist_albums(&mut self, artist: u64) -> Result<Vec<Album>, String> {
+        // Album artists only: an artist's discography, not their appearances
+        // (`requirements/artists.md` §2).
+        let select = format!(
+            "{ALBUM_COLUMNS} FROM albums al WHERE al.library_id = ?1 AND al.track_count > 0 \
+             AND al.id IN (SELECT album_id FROM album_artists WHERE artist_id = ?2) \
+             ORDER BY al.release_date IS NULL, al.release_date, al.id"
+        );
+        self.read(move |conn, library| {
+            conn.prepare_cached(&select)?
+                .query_map(params![library, artist as i64], album)?
+                .collect()
+        })
+        .await
     }
 
     async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {

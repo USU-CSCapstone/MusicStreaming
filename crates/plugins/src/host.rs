@@ -50,7 +50,8 @@ use bindings::jewelcase::plugin::host;
 use bindings::{Plugin, PluginPre};
 
 pub use bindings::jewelcase::plugin::events::{
-    Event, Found, Play, PlayEnd, Playing, ResultKind, ScanFinished, Search, Selected, TracksChanged,
+    AlbumsChanged, ArtistsChanged, Event, Found, Play, PlayEnd, Playing, ResultKind, ScanFinished,
+    Search, Selected, TracksChanged,
 };
 pub use bindings::jewelcase::plugin::library::{Album, Artist, Track};
 
@@ -89,6 +90,31 @@ pub trait Library: Send + 'static {
         after: Option<u64>,
         limit: u32,
     ) -> impl Future<Output = Result<Vec<Artist>, String>> + Send;
+
+    /// These albums, in this order, leaving out any not in the library.
+    fn get_albums(
+        &mut self,
+        ids: Vec<u64>,
+    ) -> impl Future<Output = Result<Vec<Album>, String>> + Send;
+
+    /// These artists, in this order, leaving out any not in the library.
+    fn get_artists(
+        &mut self,
+        ids: Vec<u64>,
+    ) -> impl Future<Output = Result<Vec<Artist>, String>> + Send;
+
+    /// The album's tracks, by disc and number; none for an album not in the library.
+    fn album_tracks(
+        &mut self,
+        album: u64,
+    ) -> impl Future<Output = Result<Vec<Track>, String>> + Send;
+
+    /// The albums the artist is an album artist of, oldest first; none for an artist not in the
+    /// library.
+    fn artist_albums(
+        &mut self,
+        artist: u64,
+    ) -> impl Future<Output = Result<Vec<Album>, String>> + Send;
 
     /// The library's roots: the ID a plugin knows each by, and where it is on this host.
     fn roots(&mut self) -> impl Future<Output = Result<Vec<(u64, PathBuf)>, String>> + Send;
@@ -327,6 +353,22 @@ impl Library for Refused {
         Err(NO_LIBRARY.into())
     }
 
+    async fn get_albums(&mut self, _: Vec<u64>) -> Result<Vec<Album>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn get_artists(&mut self, _: Vec<u64>) -> Result<Vec<Artist>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn album_tracks(&mut self, _: u64) -> Result<Vec<Track>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn artist_albums(&mut self, _: u64) -> Result<Vec<Album>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
     async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
         Err(NO_LIBRARY.into())
     }
@@ -410,6 +452,8 @@ fn wit(permission: Permission) -> host::Permission {
         Permission::Playing => host::Permission::Playing,
         Permission::SearchActivity => host::Permission::SearchActivity,
         Permission::Searched => host::Permission::Searched,
+        Permission::AlbumsChanged => host::Permission::AlbumsChanged,
+        Permission::ArtistsChanged => host::Permission::ArtistsChanged,
     }
 }
 

@@ -22,7 +22,9 @@ const LIBRARY_PERMISSIONS: PermissionName[] = [
 	'libraryAdd',
 	'libraryChange',
 	'tracksChanged',
-	'scanFinished'
+	'scanFinished',
+	'albumsChanged',
+	'artistsChanged'
 ];
 const MAX_BYTES = 50 * 1024 * 1024;
 

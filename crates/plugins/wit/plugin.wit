@@ -1,8 +1,9 @@
 package jewelcase:plugin@0.3.0;
 
 /// The plugin contract (design/plugins.md §7). Every import checks its permission in the
-/// host. 0.3 added the `playing` and `searched` hooks and search activity; plugins built against
-/// 0.2 still load (`0.2/`). Imports stay linked even when their permission was declined, so a plugin with an
+/// host. 0.3 added the `playing`, `searched`, `albums-changed`, and `artists-changed` hooks,
+/// search activity, and reading albums and artists by ID; plugins built against 0.2 still load
+/// (`0.2/`). Imports stay linked even when their permission was declined, so a plugin with an
 /// optional permission still loads; the call answers an error instead, and `granted` lets a
 /// plugin adapt up front.
 
@@ -33,6 +34,10 @@ interface host {
     /// A hook: run when a user who shares their searches settles on one, or asks for some to
     /// be forgotten (`events.searched`, `events.searches-forgotten`).
     searched,
+    /// A hook: run when albums are added, changed, or removed (`events.albums-changed`).
+    albums-changed,
+    /// A hook: run when artists are added, changed, or removed (`events.artists-changed`).
+    artists-changed,
   }
 
   /// What this run may use.
@@ -42,7 +47,8 @@ interface host {
 }
 
 /// The one library this run is for. There is no library parameter: the host binds it. Every
-/// function needs library-read, and a page holds at most 500.
+/// function needs library-read. A page, or a list asked for by ID, holds at most 500; an album's
+/// tracks and an artist's albums come whole.
 interface library {
   record track {
     id: u64,
@@ -70,6 +76,9 @@ interface library {
     artists: list<string>,
     release-date: option<string>,
     track-count: u32,
+    /// Whether it has artwork, embedded or a `cover.*` beside its tracks or above them
+    /// (requirements/scanning.md §3.1).
+    has-artwork: bool,
   }
 
   record artist {
@@ -78,6 +87,10 @@ interface library {
     name: option<string>,
     album-count: u32,
     track-count: u32,
+    /// Whether it has an image, from an `artist.*` (requirements/scanning.md §3.2).
+    has-image: bool,
+    /// Whether it has a biography, from an `artist.txt` (requirements/scanning.md §3.3).
+    has-biography: bool,
   }
 
   /// Tracks in ID order after `after`, or from the first; empty past the end.
@@ -88,6 +101,16 @@ interface library {
   albums: func(after: option<u64>, limit: u32) -> result<list<album>, string>;
   /// Artists in ID order after `after`, or from the first; empty past the end.
   artists: func(after: option<u64>, limit: u32) -> result<list<artist>, string>;
+  /// These albums, in the order asked for, leaving out any not in this library.
+  get-albums: func(ids: list<u64>) -> result<list<album>, string>;
+  /// These artists, in the order asked for, leaving out any not in this library.
+  get-artists: func(ids: list<u64>) -> result<list<artist>, string>;
+  /// The album's tracks, by disc and number; empty for an album not in this library. Where they
+  /// are is where its `cover.*` belongs.
+  album-tracks: func(album-id: u64) -> result<list<track>, string>;
+  /// The albums the artist is credited on as an album artist, oldest first, leaving out those
+  /// they only appear on (requirements/artists.md §2); empty for an artist not in this library.
+  artist-albums: func(artist-id: u64) -> result<list<album>, string>;
 }
 
 /// The library's own folders (requirements/plugins.md §3). A path is relative to one of its
@@ -171,6 +194,21 @@ interface events {
   /// Tracks added, changed, or removed since the last one, in batches. `changed` holds IDs to
   /// read with `library.get-tracks`; `removed` holds IDs no longer in the library.
   record tracks-changed {
+    changed: list<u64>,
+    removed: list<u64>,
+  }
+
+  /// Albums added, changed, or removed since the last one, in batches, as `tracks-changed`
+  /// gives tracks. An album changes when anything it shows does: its title, artists, artwork,
+  /// or the tracks on it.
+  record albums-changed {
+    changed: list<u64>,
+    removed: list<u64>,
+  }
+
+  /// Artists added, changed, or removed since the last one, in batches, as `tracks-changed`
+  /// gives tracks.
+  record artists-changed {
     changed: list<u64>,
     removed: list<u64>,
   }
@@ -268,6 +306,8 @@ interface events {
     /// sharing, so forget every search of theirs from this library. What was already sent on
     /// is not the host's to recall (requirements/users.md §7).
     searches-forgotten(option<list<u64>>),
+    albums-changed(albums-changed),
+    artists-changed(artists-changed),
   }
 }
 

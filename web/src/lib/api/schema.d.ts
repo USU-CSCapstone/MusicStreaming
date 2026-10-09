@@ -4769,7 +4769,8 @@ export interface components {
          *     once per plugin. Hooks, which decide when a plugin runs, are requested and granted the
          *     same way (`requirements/plugins.md` §8): `tracksChanged` runs it, per library, as tracks
          *     are added, changed, or removed, and `scanFinished` when a scan of the library finishes;
-         *     both need `libraryRead` there too. `schedule` runs it at the interval its request names,
+         *     `albumsChanged` and `artistsChanged` run it, per library, as albums or artists do (API
+         *     version 0.3 or later). All four need `libraryRead` there too. `schedule` runs it at the interval its request names,
          *     in every library it is enabled in. `played` runs it, granted once per plugin, as each
          *     user who connected it (`listMyPlugins`) finishes playing something; it needs
          *     `listeningActivity`, and `libraryRead` in the library played from. `playing` runs it the
@@ -4781,7 +4782,7 @@ export interface components {
          *     (`requirements/search.md` §6).
          * @enum {string}
          */
-        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played" | "playing" | "searchActivity" | "searched";
+        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played" | "playing" | "searchActivity" | "searched" | "albumsChanged" | "artistsChanged";
         PermissionRequest: {
             permission: components["schemas"]["PermissionName"];
             /** @description Whether it cannot work without it (`requirements/plugins.md` §4.2). */
