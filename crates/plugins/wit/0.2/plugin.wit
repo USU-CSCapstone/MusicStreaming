@@ -1,7 +1,10 @@
-package jewelcase:plugin@0.3.0;
+// Frozen. Plugins built against 0.2 keep loading, adapted to the current contract by the host
+// (`src/host/v0_2.rs`). Never change it: the contract is `../plugin.wit`.
+
+package jewelcase:plugin@0.2.0;
 
 /// The plugin contract (design/plugins.md §7). Every import checks its permission in the
-/// host. 0.3 added the `playing` hook; plugins built against 0.2 still load (`0.2/`). Imports stay linked even when their permission was declined, so a plugin with an
+/// host. Imports stay linked even when their permission was declined, so a plugin with an
 /// optional permission still loads; the call answers an error instead, and `granted` lets a
 /// plugin adapt up front.
 
@@ -24,9 +27,6 @@ interface host {
     /// A hook: run when a user who connected the plugin finishes playing something
     /// (`events.played`).
     played,
-    /// A hook: run when a user who connected the plugin starts playing something
-    /// (`events.playing`).
-    playing,
   }
 
   /// What this run may use.
@@ -200,15 +200,6 @@ interface events {
     end: play-end,
   }
 
-  /// A play that has just started, for "now playing". Only the latest start of each user is
-  /// delivered, and only while it is still playing and under a minute old: one that could not
-  /// be delivered in time is dropped rather than delivered late (design/hooks.md §1.1).
-  record playing {
-    track: track,
-    /// When it started, in milliseconds since the Unix epoch, as the device reported it.
-    started-at: u64,
-  }
-
   variant event {
     /// An admin pressed Run now: do the plugin's whole job for this library.
     run,
@@ -223,9 +214,6 @@ interface events {
     /// Plays one user who connected the plugin has finished in this library, oldest first.
     /// `settings.get` answers with that user's personal settings, as well as the shared ones.
     played(list<play>),
-    /// One user who connected the plugin has started playing something in this library.
-    /// `settings.get` answers with that user's personal settings, as for `played`.
-    playing(playing),
   }
 }
 

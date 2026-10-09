@@ -14,7 +14,33 @@ use wasmparser::{Encoding, Parser, Payload};
 use crate::settings::{self, Schema};
 
 pub const SECTION: &str = "jewelcase:manifest";
-pub const API_VERSION: &str = "0.2";
+
+/// A version of the plugin contract (`wit/plugin.wit`). Every one a plugin may declare keeps
+/// loading, so a plugin written against an older one keeps working
+/// (`requirements/plugins.md` §1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Api {
+    V0_2,
+    V0_3,
+}
+
+impl Api {
+    /// Oldest first; the last is current.
+    pub const ALL: [Api; 2] = [Api::V0_2, Api::V0_3];
+    pub const CURRENT: Api = Api::V0_3;
+
+    /// As a manifest's `apiVersion` gives it, such as `0.3`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Api::V0_2 => "0.2",
+            Api::V0_3 => "0.3",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Api> {
+        Api::ALL.into_iter().find(|api| api.name() == name)
+    }
+}
 
 /// The shortest interval a schedule may ask for.
 pub const MIN_EVERY_MINUTES: u64 = 5;
@@ -40,10 +66,13 @@ pub enum Permission {
     /// A hook: run when a user who connected it finishes playing something. Needs
     /// listening-activity, library-read where it was played, and personal settings to connect.
     Played,
+    /// A hook: run when a user who connected it starts playing something. Needs what `Played`
+    /// does. Since 0.3.
+    Playing,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 9] = [
+    pub const ALL: [Permission; 10] = [
         Self::LibraryRead,
         Self::LibraryAdd,
         Self::LibraryChange,
@@ -53,6 +82,7 @@ impl Permission {
         Self::ScanFinished,
         Self::Schedule,
         Self::Played,
+        Self::Playing,
     ];
 
     /// Its name in manifests and the API, such as `libraryRead`.
@@ -67,6 +97,7 @@ impl Permission {
             Self::ScanFinished => "scanFinished",
             Self::Schedule => "schedule",
             Self::Played => "played",
+            Self::Playing => "playing",
         }
     }
 
@@ -98,6 +129,15 @@ impl Permission {
             Self::ScanFinished => "Run when a scan finishes",
             Self::Schedule => "Run on a schedule",
             Self::Played => "Run when a connected user plays something",
+            Self::Playing => "Run when a connected user starts playing something",
+        }
+    }
+
+    /// The contract version that added it. A manifest declaring an older one cannot ask for it.
+    pub fn since(self) -> Api {
+        match self {
+            Self::Playing => Api::V0_3,
+            _ => Api::V0_2,
         }
     }
 }
@@ -160,6 +200,12 @@ impl Manifest {
     pub fn every_minutes(&self) -> Option<u32> {
         let schedule = self.permissions.iter().find(|r| r.permission == Permission::Schedule);
         schedule.and_then(|r| r.every_minutes)
+    }
+
+    /// The contract it was built against. A stored manifest was validated on install, so its
+    /// version is always one the host knows.
+    pub fn api(&self) -> Api {
+        Api::from_name(&self.api_version).unwrap_or(Api::CURRENT)
     }
 
     pub fn required(&self) -> impl Iterator<Item = Permission> + '_ {
@@ -260,8 +306,10 @@ pub fn validate(manifest: &Value) -> Vec<String> {
             problems.push(r#""homepage" must be an http(s) URL"#.into());
         }
     }
-    if o.get("apiVersion").and_then(Value::as_str) != Some(API_VERSION) {
-        problems.push(format!(r#""apiVersion" must be "{API_VERSION}""#));
+    let api = o.get("apiVersion").and_then(Value::as_str).and_then(Api::from_name);
+    if api.is_none() {
+        let known: Vec<_> = Api::ALL.iter().map(|api| format!(r#""{}""#, api.name())).collect();
+        problems.push(format!(r#""apiVersion" must be one of {}"#, known.join(", ")));
     }
     for key in ["settings", "personalSettings"] {
         if let Some(declared) = o.get(key) {
@@ -286,7 +334,7 @@ pub fn validate(manifest: &Value) -> Vec<String> {
             problems.push(format!("{at} must be an object"));
             continue;
         };
-        problems.extend(validate_request(&at, r, &mut seen));
+        problems.extend(validate_request(&at, r, api, &mut seen));
     }
     // A library hook's event is about the library, which only reading it can make anything of.
     for hook in [Permission::TracksChanged, Permission::ScanFinished] {
@@ -294,21 +342,28 @@ pub fn validate(manifest: &Value) -> Vec<String> {
             problems.push(format!("{} needs libraryRead as well", hook.name()));
         }
     }
-    // Its events are plays of a library's tracks, by the users who connected it.
-    if seen.contains(&Permission::Played) {
+    // Their events are plays of a library's tracks, by the users who connected it.
+    for hook in [Permission::Played, Permission::Playing].into_iter().filter(|h| seen.contains(h)) {
+        let hook = hook.name();
         for needed in [Permission::LibraryRead, Permission::ListeningActivity] {
             if !seen.contains(&needed) {
-                problems.push(format!("played needs {} as well", needed.name()));
+                problems.push(format!("{hook} needs {} as well", needed.name()));
             }
         }
         if o.get("personalSettings").is_none() {
-            problems.push(r#"played needs "personalSettings", which users connect it with"#.into());
+            problems
+                .push(format!(r#"{hook} needs "personalSettings", which users connect it with"#));
         }
     }
     problems
 }
 
-fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>) -> Vec<String> {
+fn validate_request(
+    at: &str,
+    r: &Map<String, Value>,
+    api: Option<Api>,
+    seen: &mut Vec<Permission>,
+) -> Vec<String> {
     let Some(permission) =
         r.get("permission").and_then(Value::as_str).and_then(Permission::from_name)
     else {
@@ -321,6 +376,11 @@ fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>
         problems.push(format!("{at}: {} is requested twice", permission.name()));
     }
     seen.push(permission);
+    if api.is_some_and(|api| api < permission.since()) {
+        let since = permission.since().name();
+        problems
+            .push(format!(r#"{at}: {} needs "apiVersion" {since} or later"#, permission.name()));
+    }
     if !r.get("required").is_some_and(Value::is_boolean) {
         problems.push(format!(r#"{at}: "required" must be true or false"#));
     }

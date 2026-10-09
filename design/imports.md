@@ -5,13 +5,13 @@ What a plugin can call on the host. This file lists the host interfaces that are
 
 The one thing this design exists to get right: **the fast way to do something is the easy way** ([`requirements/plugins.md` §2.1](../requirements/plugins.md#21-the-system-adds-nothing)). Most slow plugins are slow because the host offered no better access pattern than a slow one. So when an import is missing, the cost is more than inconvenience: authors work around it, and the workaround is slow.
 
-Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`exports.md`](exports.md), covering what the host can call on a plugin. Everything in §3 is proposed, not decided, except what it marks as built.
+Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`exports.md`](exports.md), covering what the host can call on a plugin. Everything in §3 is proposed, not decided.
 
 ---
 
 ## 1. Built Imports
 
-**Seven interfaces, all in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.2`.** Every import checks its own permission in the host. Every import stays linked when its permission is declined and answers an error instead, so optional permissions work ([`plugins.md` §7](plugins.md#7-running-plugins)). WASI is linked with nothing granted: no preopens, sockets, or inherited stdio.
+**Seven interfaces, all in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.3`, and the same seven in `0.2`**, which still loads ([`plugins.md` §6](plugins.md#6-packaging)). Every import checks its own permission in the host. Every import stays linked when its permission is declined and answers an error instead, so optional permissions work ([`plugins.md` §7](plugins.md#7-running-plugins)). WASI is linked with nothing granted: no preopens, sockets, or inherited stdio.
 
 | Interface | Functions | Needs | Limits |
 |---|---|---|---|
@@ -20,13 +20,20 @@ Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`ex
 | `files` | `roots`, `list`, `read` | `libraryRead` (`roots`: any library permission) | 10,000 entries per list; 8 MB per read |
 | `files` | `write` (`create`) | `libraryAdd` | 32 MB, written whole or not at all |
 | `files` | `write` (`replace`), `rename`, `delete` | `libraryChange` | 32 MB; a folder is deleted only when empty |
-| `http` | `send` | `network`, to declared destinations only, redirects included | 16 MB bodies, 15 s per request, 5 redirects; a shared pace and cache (below) |
+| `http` | `send` | `network`, to declared destinations only, redirects included | 16 MB bodies, 15 s per request, 5 redirects; a shared pace and cache (§1.1) |
 | `state` | `get`, `set`, `delete` | — (per plugin and library) | 512 B keys, 1 MB values |
 | `settings` | `get` | — | Library value, else server-wide value, else the default, plus the connected user's personal settings |
 
 The limits on every run are 64 MiB of memory, 60 s of compute, and 5 minutes of wall clock.
 
-**`http.send` shares a pace and a cache across every plugin** ([`plugins.md` §7](plugins.md#7-running-plugins)). A network request declares `rateLimits` per destination, and the strictest declared pace applies to every request to that host. A `429`, or a `503` with `Retry-After`, pauses that host for everyone. A GET is answered from a fresh reply already fetched for the same library, URL, and headers, and a stale one is checked with its `ETag` or `Last-Modified`.
+### 1.1 Shared Pace and Cache
+
+**`http.send` shares a pace and a cache across every plugin** (`crates/plugins/src/network/`). Many services limit by address, so plugins that each keep to a limit would break it together. And [`requirements/plugins.md` §2.1](../requirements/plugins.md#21-the-system-adds-nothing) requires that two plugins asking the same question ask it once. The limits and sizes are in [`plugins.md` §7](plugins.md#7-running-plugins).
+
+- **Pace.** A network request declares `rateLimits` per destination, and the strictest declared pace applies to every request to that host. A `429`, or a `503` with `Retry-After`, pauses that host for everyone.
+- **Cache.** A GET is answered from a fresh reply already fetched for the same library, URL, and headers, and a stale one is checked with its `ETag` or `Last-Modified`.
+- **Credentials need no marking.** The cache key includes the URL and every header sent. A reply fetched with a credential is then reused only by a request carrying the same credential, wherever the credential is, so the host never has to recognise one.
+- **Per library, not server-wide.** Whether a reply is already cached, measured by how fast it comes back, would tell a plugin what another library holds. Plugins in one library still share.
 
 ---
 
@@ -47,14 +54,9 @@ The limits on every run are 64 MiB of memory, 60 s of compute, and 5 minutes of 
 
 These close gaps where [`requirements/plugins.md`](../requirements/plugins.md) already promises something the contract cannot do.
 
-#### Shared Cache and Coordinated Rate Limits
+#### Beyond the Shared Cache
 
-**Built** (§1, [`plugins.md` §7](plugins.md#7-running-plugins)). The design moved in two ways from what was first proposed here:
-
-- **Credentials did not need marking.** The proposal was to cache a request carrying credentials only for its own plugin. Instead the cache key is the library, the URL, and every header sent. A reply fetched with a credential is then reused only by a request carrying the same credential, wherever the credential is, so the host never has to recognise one.
-- **The cache is per library, not server-wide.** Whether a reply is already cached, measured by how fast it comes back, would tell a plugin what another library holds. Plugins in one library still share.
-
-What remains:
+**The HTTP cache leaves two gaps** (§1.1):
 
 - **`cache.get` and `cache.set`**, for derived results that are not HTTP replies, if the HTTP cache proves not to be enough. Scoped to the plugin.
 - **Merging requests in flight.** Two plugins asking the same question at the same moment both ask, because the second misses before the first reply is kept.
@@ -90,7 +92,7 @@ What remains:
 | Import | Why |
 |---|---|
 | `track-by-path(root, path)` | A plugin that just wrote a sidecar, or found a file through `files.list`, needs to know which track it belongs to. |
-| `get-albums(ids)`, `get-artists(ids)` | `get-tracks` exists; albums and artists are only reachable by paging. The album and artist hooks need these ([`hooks.md` §3.3](hooks.md#33-albums-changed-and-artists-changed)). |
+| `get-albums(ids)`, `get-artists(ids)` | `get-tracks` exists; albums and artists are only reachable by paging. The album and artist hooks need these ([`hooks.md` §3.2](hooks.md#32-albums-changed-and-artists-changed)). |
 | `album-tracks(album-id)`, `artist-albums(artist-id)` | Artwork and biography plugins think in albums and artists. Rebuilding those from a full pass is the slow access pattern §2.1 warns about. |
 | `tracks-by-identifier(kind, values)` | Matching by ISRC or MusicBrainz ID, which is what [`requirements/tracks.md` §6](../requirements/tracks.md#6-classification--identifiers) stores identifiers for. |
 | `search(query, limit)` | The core's own search over this library ([`requirements/search.md`](../requirements/search.md)). An external source, or a plugin mapping a ListenBrainz recommendation to an owned track, needs "which of my tracks is this", and should not have to build its own matcher. |
@@ -133,6 +135,6 @@ What remains:
 
 ## 4. Open Questions
 
-1. **Who declares a rate limit.** Each plugin declares its own and the strictest wins, so a careless plugin can only make things slower, never faster. A host-kept list for well-known services would be curation the project said it does not do ([`requirements/plugins.md` §4.4](../requirements/plugins.md#44-who-is-trusted)). A declaration is remembered until restart, even after its plugin is uninstalled, which errs the same way.
+1. **Who declares a rate limit** (§1.1). Each plugin declares its own and the strictest wins, so a careless plugin can only make things slower, never faster. A host-kept list for well-known services would be curation the project said it does not do ([`requirements/plugins.md` §4.4](../requirements/plugins.md#44-who-is-trusted)). A declaration is remembered until restart, even after its plugin is uninstalled, which errs the same way.
 2. **Cross-plugin calls** (§3.6): whether they happen at all, and under whose grants.
 3. **Imports checked at install.** [`plugins.md` §6](plugins.md#6-packaging) proposes refusing a plugin that imports network access it did not request. Each import added here makes that check more valuable, and it is not built.

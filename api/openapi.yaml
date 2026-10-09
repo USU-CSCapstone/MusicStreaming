@@ -6560,7 +6560,7 @@ components:
 
     PermissionName:
       type: string
-      enum: [libraryRead, libraryAdd, libraryChange, network, listeningActivity, tracksChanged, scanFinished, schedule, played]
+      enum: [libraryRead, libraryAdd, libraryChange, network, listeningActivity, tracksChanged, scanFinished, schedule, played, playing]
       description: |
         What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryAdd` creates files
         that do not exist yet; `libraryChange` replaces, renames, and deletes files that do. The
@@ -6571,7 +6571,9 @@ components:
         both need `libraryRead` there too. `schedule` runs it at the interval its request names,
         in every library it is enabled in. `played` runs it, granted once per plugin, as each
         user who connected it (`listMyPlugins`) finishes playing something; it needs
-        `listeningActivity`, and `libraryRead` in the library played from.
+        `listeningActivity`, and `libraryRead` in the library played from. `playing` runs it the
+        same way as each of them starts something, while it is still playing; it needs what
+        `played` does, and a plugin built against API version 0.3 or later.
 
     PermissionRequest:
       type: object
@@ -6590,6 +6592,13 @@ components:
           type: integer
           minimum: 5
           description: With `schedule` only. How often it runs.
+        rateLimits:
+          type: object
+          additionalProperties: { type: string, pattern: '^[1-9][0-9]{0,8}/(s|min|h)$' }
+          description: |
+            With `network` only, optional. The most often each destination may be asked, such
+            as `{"musicbrainz.org": "1/s"}`. Every plugin's requests to that host keep to the
+            strictest pace any plugin declared.
 
     PermissionGrants:
       type: object

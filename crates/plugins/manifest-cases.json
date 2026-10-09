@@ -525,7 +525,7 @@
 			]
 		},
 		"problems": [
-			"\"apiVersion\" must be \"0.2\""
+			"\"apiVersion\" must be one of \"0.2\", \"0.3\""
 		]
 	},
 	{
@@ -1528,7 +1528,7 @@
 			"\"id\" must be lowercase letters, digits, and hyphens (2–64 characters)",
 			"\"name\" must be a non-empty string",
 			"\"version\" must be a non-empty string",
-			"\"apiVersion\" must be \"0.2\"",
+			"\"apiVersion\" must be one of \"0.2\", \"0.3\"",
 			"permissions[0]: unknown permission \"everything\"",
 			"permissions[1]: every permission needs a \"reason\" shown to the admin",
 			"permissions[1]: network needs \"destinations\", host names or [\"*\"] for any"
@@ -1983,6 +1983,116 @@
 		},
 		"problems": [
 			"permissions[0]: only network takes \"rateLimits\""
+		]
+	},
+	{
+		"name": "the current API version",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": []
+		},
+		"problems": []
+	},
+	{
+		"name": "a playing hook",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "Because."
+				},
+				{
+					"permission": "listeningActivity",
+					"required": true,
+					"reason": "Because."
+				},
+				{
+					"permission": "playing",
+					"required": false,
+					"reason": "Because."
+				}
+			],
+			"personalSettings": {
+				"properties": {
+					"token": {
+						"type": "string",
+						"writeOnly": true
+					}
+				},
+				"required": [
+					"token"
+				]
+			}
+		},
+		"problems": []
+	},
+	{
+		"name": "a playing hook without what it needs",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "playing",
+					"required": true,
+					"reason": "Because."
+				}
+			]
+		},
+		"problems": [
+			"playing needs libraryRead as well",
+			"playing needs listeningActivity as well",
+			"playing needs \"personalSettings\", which users connect it with"
+		]
+	},
+	{
+		"name": "a playing hook on the API version before it",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.2",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "Because."
+				},
+				{
+					"permission": "listeningActivity",
+					"required": true,
+					"reason": "Because."
+				},
+				{
+					"permission": "playing",
+					"required": true,
+					"reason": "Because."
+				}
+			],
+			"personalSettings": {
+				"properties": {
+					"token": {
+						"type": "string",
+						"writeOnly": true
+					}
+				},
+				"required": [
+					"token"
+				]
+			}
+		},
+		"problems": [
+			"permissions[2]: playing needs \"apiVersion\" 0.3 or later"
 		]
 	}
 ]

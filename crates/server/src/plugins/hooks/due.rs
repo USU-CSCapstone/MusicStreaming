@@ -2,12 +2,14 @@
 //!
 //! A hook is due for a plugin in a library when the plugin is enabled there, the hook (and the
 //! permission its events need) is granted, it is not waiting to retry a failure, and there is
-//! something past its position: changes, a finished scan, its interval gone by, or plays
-//! ended by a user who connected it. Each user has a position of their own in `played`.
+//! something past its position: changes, a finished scan, its interval gone by, plays ended
+//! by a user who connected it, or a play one of them has just started and is still playing.
+//! Each user has a position of their own in `played` and `playing`.
 
 use jewelcase_plugins::{Event, ScanFinished, TracksChanged};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use super::playing::{deliverable, playing};
 use super::plays::plays;
 use super::{BATCH, Due, Hook};
 
@@ -81,12 +83,23 @@ pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
         granted_to_plugin("listeningActivity"),
         granted_here("libraryRead"),
     );
+    // For each user who connected it, a play they started in the library that is still fresh.
+    let playing = format!(
+        "SELECT p.plugin_id, p.library_id, {} WHERE {READY} AND {} AND {} AND {} \
+         AND EXISTS (SELECT 1 FROM play_starts st JOIN plays pl ON pl.id = st.play_id WHERE {})",
+        position(true),
+        granted_to_plugin("playing"),
+        granted_to_plugin("listeningActivity"),
+        granted_here("libraryRead"),
+        deliverable("p.library_id", "s.user_id", "coalesce(c.position, 0)"),
+    );
     let mut due = Vec::new();
     for (hook, sql) in [
         (Hook::TracksChanged, tracks),
         (Hook::ScanFinished, scans),
         (Hook::Schedule, schedules),
         (Hook::Played, played),
+        (Hook::Playing, playing),
     ] {
         let mut statement = conn.prepare_cached(&sql)?;
         let pairs = statement.query_map(params![now, hook.name()], |row| {
@@ -121,6 +134,13 @@ pub fn event(conn: &Connection, due: &Due, now: i64) -> rusqlite::Result<(i64, O
         Hook::Played => {
             let (next, plays) = plays(conn, &due.plugin, due.library, due.user, due.position)?;
             (next, (!plays.is_empty()).then_some(Event::Played(plays)))
+        }
+        // One that ended or went stale since it was found due is no longer news.
+        Hook::Playing => {
+            match playing(conn, &due.plugin, due.library, due.user, due.position, now)? {
+                Some((next, started)) => (next, Some(Event::Playing(started))),
+                None => (due.position, None),
+            }
         }
     })
 }

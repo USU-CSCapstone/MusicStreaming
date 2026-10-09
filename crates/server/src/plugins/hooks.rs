@@ -4,9 +4,11 @@
 //! `tracksChanged` reads the library change feed (`0004_feeds.sql`), which records every
 //! track added, changed, or removed in the same transaction as the change; `scanFinished`
 //! reads finished scans; `schedule` runs at the interval the plugin asks for; `played` reads
-//! the plays each user who connected the plugin has ended (`0013_plugin_played.sql`). For each
-//! hook, each plugin and library pair keeps its own position (`plugin_cursors`), and in
-//! `played` each user too, which moves only once the plugin has handled what came before it.
+//! the plays each user who connected the plugin has ended (`0013_plugin_played.sql`), and
+//! `playing` those they have just started (`0014_plugin_playing.sql`). For each hook, each
+//! plugin and library pair keeps its own position (`plugin_cursors`), and in `played` and
+//! `playing` each user too, which moves only once the plugin has handled what came before it.
+//! `playing` alone never catches up: what was playing a while ago is no longer news.
 //! A failure is retried later from the same place, so nothing is lost to a crash, a restart,
 //! or a service that was briefly down. One that keeps failing is disabled in that library, and
 //! the admin is told why (§11), except in `played`: one user's failing account must not stop
@@ -18,6 +20,7 @@ use std::time::Duration;
 use rusqlite::{Connection, params};
 
 mod due;
+mod playing;
 mod plays;
 
 use super::{Plugins, grants};
@@ -41,6 +44,7 @@ enum Hook {
     ScanFinished,
     Schedule,
     Played,
+    Playing,
 }
 
 impl Hook {
@@ -50,6 +54,7 @@ impl Hook {
             Hook::ScanFinished => "scanFinished",
             Hook::Schedule => "schedule",
             Hook::Played => "played",
+            Hook::Playing => "playing",
         }
     }
 }
@@ -61,7 +66,7 @@ struct Due {
     library: i64,
     position: i64,
     failures: i64,
-    /// The user it acts for, in `played`; otherwise 0.
+    /// The user it acts for, in `played` and `playing`; otherwise 0.
     user: i64,
 }
 

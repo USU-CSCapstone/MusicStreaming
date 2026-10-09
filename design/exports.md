@@ -11,7 +11,7 @@ Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`im
 
 ## 1. The Built Export
 
-**One function: `handle(event) -> result<string, string>`** in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.2`. Every run goes through it: a hook ([`hooks.md` §1](hooks.md#1-built-hooks)), **Run now**, or a settings check. It returns a one-line summary on success or a reason on failure, which admins see with the run.
+**One function: `handle(event) -> result<string, string>`** in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.3`. Every run goes through it: a hook ([`hooks.md` §1](hooks.md#1-built-hooks)), **Run now**, or a settings check. It returns a one-line summary on success or a reason on failure, which admins see with the run.
 
 This covers everything a plugin does in the background. It covers none of what a plugin does while someone waits, because nothing in the contract is called on a user's behalf and answered back to them. [`requirements/plugins.md` §9](../requirements/plugins.md#9-extending-the-interface) and [§10](../requirements/plugins.md#10-external-content-sources) need exactly that.
 
@@ -139,7 +139,7 @@ record outcome {
 The base world keeps every import.
 
 - **A plugin that fills several roles is built against a world that includes several.** The host reads which exports a component has at install. That is a fact about the component, as imports will be ([`plugins.md` §6](plugins.md#6-packaging)). The manifest does not declare roles.
-- **Version `0.3` adds the role worlds and keeps `0.2` linking.** A plugin written against `0.2` must keep working ([`requirements/plugins.md` §1](../requirements/plugins.md#1-an-open-surface)). The host links both until `0.2` is retired by a documented deprecation.
+- **The version that adds the role worlds keeps every earlier one linking**, as `0.3` does for `0.2` ([`plugins.md` §6](plugins.md#6-packaging)). A plugin written against an older version must keep working ([`requirements/plugins.md` §1](../requirements/plugins.md#1-an-open-surface)). The host links each until it is retired by a documented deprecation.
 - **`source` and `ui` are called on hot paths, which background runs never were.** They depend on work [`plugins.md` §7](plugins.md#7-running-plugins) lists as not done:
   - one warm instance per plugin and library, rather than a fresh instance per run;
   - a small pool per busy plugin, since one instance serializes its calls ([`plugins.md` §8](plugins.md#8-open-questions) #5);
@@ -151,7 +151,7 @@ The base world keeps every import.
 
 ## 5. Open Questions
 
-1. **Sending queries to an external source.** Every user who types in a library with a source enabled has their typing sent to a third party. The admin enabled the source, but the user did not. Whether a user must opt in, or at least be told, needs deciding in the requirements. The same decision covers the `searched` hook ([`hooks.md` §3.2](hooks.md#32-searched)).
+1. **Sending queries to an external source.** Every user who types in a library with a source enabled has their typing sent to a third party. The admin enabled the source, but the user did not. Whether a user must opt in, or at least be told, needs deciding in the requirements. The same decision covers the `searched` hook ([`hooks.md` §3.1](hooks.md#31-searched)).
 2. **What a playlist keeps of an external entry.** If its source goes away, the entry stays in place, unplayable, and explained ([`requirements/plugins.md` §10.2](../requirements/plugins.md#102-it-behaves-like-music)). Explaining it needs at least a title and artist, so something is stored. That sits uneasily with "nothing was stored" ([§10.1](../requirements/plugins.md#101-it-is-not-library-content)). The likely answer is a display snapshot the playlist owns, not the source.
 3. **The interface format** (§3.2). This is the same decision as [`general.md` §11](general.md#11-open-decisions) #4.
 4. **Deadlines per export.** How long a section or a search may take before it is dropped. This should be stated as a number in [`requirements/performance.md`](../requirements/performance.md), not chosen here.
