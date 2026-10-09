@@ -50,7 +50,8 @@ use bindings::jewelcase::plugin::host;
 use bindings::{Plugin, PluginPre};
 
 pub use bindings::jewelcase::plugin::events::{
-    Event, Found, Play, PlayEnd, Playing, ResultKind, ScanFinished, Search, Selected, TracksChanged,
+    AlbumsChanged, ArtistsChanged, Event, Found, Play, PlayEnd, Playing, ResultKind, ScanFinished,
+    Search, Selected, TracksChanged,
 };
 pub use bindings::jewelcase::plugin::library::{Album, Artist, Track};
 
@@ -415,6 +416,8 @@ fn wit(permission: Permission) -> host::Permission {
         Permission::Playing => host::Permission::Playing,
         Permission::SearchActivity => host::Permission::SearchActivity,
         Permission::Searched => host::Permission::Searched,
+        Permission::AlbumsChanged => host::Permission::AlbumsChanged,
+        Permission::ArtistsChanged => host::Permission::ArtistsChanged,
         Permission::HostRateLimits => host::Permission::HostRateLimits,
     }
 }

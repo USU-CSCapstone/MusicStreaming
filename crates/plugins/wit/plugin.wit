@@ -1,11 +1,11 @@
 package jewelcase:plugin@0.3.0;
 
 /// The plugin contract (design/plugins.md §7). 0.3 gave `http.send` an error a plugin can act
-/// on, and added `host-rate-limits`, search activity, and the `playing` and `searched` hooks;
-/// plugins built against 0.2 still load (`0.2/`). Every import checks its permission in the
-/// host. Imports stay linked even when their permission was declined, so a plugin with an
-/// optional permission still loads; the call answers an error instead, and `granted` lets a
-/// plugin adapt up front.
+/// on, and added `host-rate-limits`, search activity, and the `playing`, `searched`,
+/// `albums-changed`, and `artists-changed` hooks; plugins built against 0.2 still load
+/// (`0.2/`). Every import checks its permission in the host. Imports stay linked even
+/// when their permission was declined, so a plugin with an optional permission still loads;
+/// the call answers an error instead, and `granted` lets a plugin adapt up front.
 
 interface host {
   /// What a plugin can ask for (requirements/plugins.md §4.1).
@@ -34,6 +34,10 @@ interface host {
     /// A hook: run when a user who shares their searches settles on one, or asks for some to
     /// be forgotten (`events.searched`, `events.searches-forgotten`).
     searched,
+    /// A hook: run when albums are added, changed, or removed (`events.albums-changed`).
+    albums-changed,
+    /// A hook: run when artists are added, changed, or removed (`events.artists-changed`).
+    artists-changed,
     /// Its rate limits that say `"per": "host"` are kept to by every plugin's requests to that
     /// host. Without it, they count only its own requests.
     host-rate-limits,
@@ -197,6 +201,21 @@ interface events {
     removed: list<u64>,
   }
 
+  /// Albums added, changed, or removed since the last one, in batches, as `tracks-changed`
+  /// gives tracks. An album changes when anything it shows does: its title, artists, artwork,
+  /// or the tracks on it.
+  record albums-changed {
+    changed: list<u64>,
+    removed: list<u64>,
+  }
+
+  /// Artists added, changed, or removed since the last one, in batches, as `tracks-changed`
+  /// gives tracks.
+  record artists-changed {
+    changed: list<u64>,
+    removed: list<u64>,
+  }
+
   /// What the scans that finished since the last one found, added together.
   record scan-finished {
     files-seen: u32,
@@ -290,6 +309,8 @@ interface events {
     /// sharing, so forget every search of theirs from this library. What was already sent on
     /// is not the host's to recall (requirements/users.md §7).
     searches-forgotten(option<list<u64>>),
+    albums-changed(albums-changed),
+    artists-changed(artists-changed),
   }
 }
 

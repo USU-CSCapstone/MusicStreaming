@@ -104,9 +104,9 @@ async fn a_pair_is_due_while_enabled_with_both_grants_and_changes_waiting() {
 async fn a_batch_names_the_tracks_changed_and_removed() {
     let (_temp, db) = database().await;
     changes(&db, "(1, 'track', 11, 'upsert', 0), (1, 'album', 101, 'upsert', 0), (1, 'track', 12, 'delete', 0), (2, 'track', 21, 'upsert', 0)").await;
-    let (next, tracks) = run(&db, |conn| batch(conn, 1, 0)).await;
+    let (next, tracks) = run(&db, |conn| batch(conn, 1, 0, "track")).await;
     assert_eq!((tracks.changed, tracks.removed), (vec![11], vec![12]));
-    let (after, rest) = run(&db, move |conn| batch(conn, 1, next)).await;
+    let (after, rest) = run(&db, move |conn| batch(conn, 1, next, "track")).await;
     assert_eq!(after, next, "nothing further in library 1");
     assert!(rest.changed.is_empty() && rest.removed.is_empty());
 }
@@ -123,10 +123,52 @@ async fn a_batch_is_at_most_a_hundred_changes() {
     })
     .await
     .unwrap();
-    let (next, first) = run(&db, |conn| batch(conn, 1, 0)).await;
-    let (_, second) = run(&db, move |conn| batch(conn, 1, next)).await;
+    let (next, first) = run(&db, |conn| batch(conn, 1, 0, "track")).await;
+    let (_, second) = run(&db, move |conn| batch(conn, 1, next, "track")).await;
     assert_eq!((first.changed.len(), second.changed.len()), (100, 100));
     assert_eq!((first.changed[0], second.changed[0]), (1001, 1101));
+}
+
+#[tokio::test]
+async fn album_and_artist_hooks_hear_only_their_own_kind_in_their_own_library() {
+    use jewelcase_plugins::Event;
+    let (_temp, db) = database().await;
+    db.write(|tx| {
+        tx.execute_batch(
+            "INSERT INTO plugin_library_grants VALUES ('p', 1, 'albumsChanged'), ('p', 1, 'libraryRead');
+             INSERT INTO plugin_libraries (plugin_id, library_id, enabled) VALUES ('p', 1, 1);",
+        )
+    })
+    .await
+    .unwrap();
+    changes(&db, "(1, 'track', 11, 'upsert', 0)").await;
+    assert!(due_for(&db, Hook::AlbumsChanged, 0).await.is_empty(), "a track is not an album");
+    assert!(due_pairs(&db, 0).await.is_empty(), "tracksChanged was not granted");
+
+    changes(
+        &db,
+        "(1, 'album', 101, 'upsert', 0), (1, 'artist', 301, 'upsert', 0), \
+         (1, 'album', 102, 'delete', 0), (2, 'album', 201, 'upsert', 0)",
+    )
+    .await;
+    assert_eq!(due_for(&db, Hook::AlbumsChanged, 0).await.len(), 1, "only library 1");
+    assert!(due_for(&db, Hook::ArtistsChanged, 0).await.is_empty(), "not granted");
+    let albums = due(Hook::AlbumsChanged, 0);
+    let (next, found) = run(&db, move |conn| event(conn, &albums, 0)).await;
+    let Some(Event::AlbumsChanged(found)) = found else { panic!("{found:?}") };
+    assert_eq!((found.changed, found.removed), (vec![101], vec![102]));
+    db.write(move |tx| record(tx, &due(Hook::AlbumsChanged, 0), next, true, "", 0)).await.unwrap();
+    assert!(due_for(&db, Hook::AlbumsChanged, 0).await.is_empty(), "each change is delivered once");
+
+    db.write(|tx| {
+        tx.execute_batch("INSERT INTO plugin_library_grants VALUES ('p', 1, 'artistsChanged')")
+    })
+    .await
+    .unwrap();
+    let artists = due(Hook::ArtistsChanged, 0);
+    let (_, found) = run(&db, move |conn| event(conn, &artists, 0)).await;
+    let Some(Event::ArtistsChanged(found)) = found else { panic!("{found:?}") };
+    assert_eq!((found.changed, found.removed), (vec![301], vec![]), "its own position, from zero");
 }
 
 async fn cursor(db: &Database) -> (i64, i64, Option<i64>) {

@@ -4,8 +4,9 @@
 //!
 //! 0.2 differs in `http.send`'s error, which is a message there, in the words 0.3's error is
 //! described in, and in lacking what 0.3 added: `host-rate-limits`, which `granted` leaves
-//! out, and search activity and the `playing` and `searched` hooks, which a 0.2 manifest
-//! cannot ask for. Its records are the current ones under other names, copied field by field.
+//! out, and search activity and the `playing`, `searched`, `albums-changed`, and
+//! `artists-changed` hooks, which a 0.2 manifest cannot ask for. Its records are the current
+//! ones under other names, copied field by field.
 
 use super::bindings::jewelcase::plugin as now;
 use super::bindings::v0_2::jewelcase::plugin as old;
@@ -101,7 +102,12 @@ fn permission(permission: now::host::Permission) -> Option<old::host::Permission
         P::ScanFinished => O::ScanFinished,
         P::Schedule => O::Schedule,
         P::Played => O::Played,
-        P::Playing | P::SearchActivity | P::Searched | P::HostRateLimits => return None,
+        P::Playing
+        | P::SearchActivity
+        | P::Searched
+        | P::AlbumsChanged
+        | P::ArtistsChanged
+        | P::HostRateLimits => return None,
     })
 }
 
@@ -116,7 +122,11 @@ pub(super) fn event(event: &now::events::Event) -> Option<old::events::Event> {
         E::Scheduled => O::Scheduled,
         E::CheckSettings => O::CheckSettings,
         E::Played(plays) => O::Played(all(plays)),
-        E::Playing(_) | E::Searched(_) | E::SearchesForgotten(_) => return None,
+        E::Playing(_)
+        | E::Searched(_)
+        | E::SearchesForgotten(_)
+        | E::AlbumsChanged(_)
+        | E::ArtistsChanged(_) => return None,
     })
 }
 
@@ -249,7 +259,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_event_but_playing_reaches_a_0_2_plugin() {
+    fn only_what_0_2_has_reaches_a_0_2_plugin() {
         use now::events::Event as E;
         let track = now::library::Track {
             id: 1,
@@ -280,8 +290,24 @@ mod tests {
         let playing = now::events::Playing { track, started_at: 5 };
         assert!(event(&E::Playing(playing)).is_none());
         assert!(event(&E::SearchesForgotten(None)).is_none());
-        assert!(permission(now::host::Permission::Playing).is_none());
-        assert!(permission(now::host::Permission::Searched).is_none());
+        let (changed, removed) = (vec![1], Vec::new());
+        let albums =
+            now::events::AlbumsChanged { changed: changed.clone(), removed: removed.clone() };
+        assert!(event(&E::AlbumsChanged(albums)).is_none());
+        assert!(
+            event(&E::ArtistsChanged(now::events::ArtistsChanged { changed, removed })).is_none()
+        );
+        use now::host::Permission as P;
+        for added in [
+            P::Playing,
+            P::SearchActivity,
+            P::Searched,
+            P::AlbumsChanged,
+            P::ArtistsChanged,
+            P::HostRateLimits,
+        ] {
+            assert!(permission(added).is_none(), "{added:?}");
+        }
     }
 
     #[test]
