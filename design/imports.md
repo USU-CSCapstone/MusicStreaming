@@ -11,12 +11,13 @@ Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`ex
 
 ## 1. Built Imports
 
-**Seven interfaces, all in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.3`.** A plugin built against `0.2` still loads: the host links it against [`wit/0.2`](../crates/plugins/wit/0.2/plugin.wit), whose imports pass each call on to the current ones ([`host/v0_2.rs`](../crates/plugins/src/host/v0_2.rs)). Every import checks its own permission in the host. Every import stays linked when its permission is declined and answers an error instead, so optional permissions work ([`plugins.md` §7](plugins.md#7-running-plugins)). WASI is linked with nothing granted: no preopens, sockets, or inherited stdio.
+**Seven interfaces, all in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.3`.** A plugin built against `0.2` still loads: the host links it against [`wit/0.2`](../crates/plugins/wit/0.2/plugin.wit), whose seven interfaces lack what 0.3 added, such as new permissions, events, and `library` functions (§1.1), and whose imports pass each call on to the current ones ([`host/v0_2.rs`](../crates/plugins/src/host/v0_2.rs)). Every import checks its own permission in the host. Every import stays linked when its permission is declined and answers an error instead, so optional permissions work ([`plugins.md` §7](plugins.md#7-running-plugins)). WASI is linked with nothing granted: no preopens, sockets, or inherited stdio.
 
 | Interface | Functions | Needs | Limits |
 |---|---|---|---|
 | `host` | `granted`, `log` | — | 1,000 log lines per run |
 | `library` | `tracks`, `get-tracks`, `albums`, `artists` | `libraryRead` | 500 per page; pages continue from the last ID |
+| `library` | `get-albums`, `get-artists`, `album-tracks`, `artist-albums` (§1.1) | `libraryRead` | 500 per list by ID; an album's tracks and an artist's albums whole |
 | `files` | `roots`, `list`, `read` | `libraryRead` (`roots`: any library permission) | 10,000 entries per list; 8 MB per read |
 | `files` | `write` (`create`) | `libraryAdd` | 32 MB, written whole or not at all |
 | `files` | `write` (`replace`), `rename`, `delete` | `libraryChange` | 32 MB; a folder is deleted only when empty |
@@ -29,6 +30,16 @@ The limits on every run are 64 MiB of memory, 60 s of compute, and 5 minutes of 
 **`http.send` keeps to a declared pace and shares a cache** ([`plugins.md` §7](plugins.md#7-running-plugins)). A network request declares `rateLimits` per destination, each counting the plugin's own requests, its runs for each user apart, or, with `hostRateLimits`, every plugin's requests to that host, at the strictest any plugin in force declared, except those an admin exempted. A `429` or `503` pauses only the scope of the request it answered, for as long as `Retry-After` asks or with exponential backoff and full jitter. A GET is answered from a fresh reply already fetched by a run that sees the same (the same library and user, and the same grant or not of `libraryRead`, `listeningActivity`, and `searchActivity`) for the same URL and headers, and a stale one is checked with its `ETag` or `Last-Modified`.
 
 **`http.send` says why a request has no response, so a plugin can act on it.** Since `0.3` its error is a variant: `not-granted`; `refused`, not sent, with a message (a URL, destination, header, or body the host will not send); `rate-limited`, not sent, with how many milliseconds until the destination may be asked again; `timed-out`; and `failed`, sent but with no reply to give, with a message. A `0.2` plugin gets the same failures as messages, in the words it always did.
+
+### 1.1 Albums and Artists
+
+**Reading albums and artists by ID, and what they already have**, for artwork and biography plugins: they hear of albums and artists changing ([`hooks.md` §1.3](hooks.md#13-albums-changed-and-artists-changed)), and need to read just those, find where they are, and know whether anything is missing. All since 0.3; a 0.2 plugin sees neither the functions nor the new fields.
+
+- **`get-albums(ids)` and `get-artists(ids)`** read up to 500 in the order asked for, leaving out any not in the run's library, as `get-tracks` does.
+- **`album-tracks(album-id)`** gives an album's present tracks by disc and number. Their paths are where the album is, and so where a `cover.*` belongs ([`requirements/scanning.md` §3.1](../requirements/scanning.md#31-album-art)).
+- **`artist-albums(artist-id)`** gives the albums the artist is an album artist of, oldest first, and not those they only appear on ([`requirements/artists.md` §2](../requirements/artists.md#2-ownership-discography-vs-appearances)). An artist has no folder of their own: a plugin saving an `artist.*` or `artist.txt` chooses one from their albums' tracks, usually the folder above them, which the scanner finds by its upward walk ([`requirements/scanning.md` §3.2](../requirements/scanning.md#32-artist-images)).
+- **`album.has-artwork`, `artist.has-image`, and `artist.has-biography`** say whether the catalog already holds one, so a plugin fetches only what is missing.
+- **Whole lists, not pages.** An album's tracks and an artist's albums are bounded by what one album or artist holds. A compilation artist on thousands of albums is the large case, and still a few megabytes.
 
 ---
 
@@ -88,13 +99,11 @@ What remains:
 
 ### 3.2 Reading the Library
 
-**[§4.1](../requirements/plugins.md#41-what-can-be-asked-for) says `libraryRead` covers "its catalog, artwork, lyrics, and audio".** Only the catalog is reachable, and only by paging through it.
+**[§4.1](../requirements/plugins.md#41-what-can-be-asked-for) says `libraryRead` covers "its catalog, artwork, lyrics, and audio".** Only the catalog is reachable: by paging through it, or albums and artists by ID (§1.1).
 
 | Import | Why |
 |---|---|
 | `track-by-path(root, path)` | A plugin that just wrote a sidecar, or found a file through `files.list`, needs to know which track it belongs to. |
-| `get-albums(ids)`, `get-artists(ids)` | `get-tracks` exists; albums and artists are only reachable by paging. The album and artist hooks need these ([`hooks.md` §1.3](hooks.md#13-albums-changed-and-artists-changed)). |
-| `album-tracks(album-id)`, `artist-albums(artist-id)` | Artwork and biography plugins think in albums and artists. Rebuilding those from a full pass is the slow access pattern §2.1 warns about. |
 | `tracks-by-identifier(kind, values)` | Matching by ISRC or MusicBrainz ID, which is what [`requirements/tracks.md` §6](../requirements/tracks.md#6-classification--identifiers) stores identifiers for. |
 | `search(query, limit)` | The core's own search over this library ([`requirements/search.md`](../requirements/search.md)). An external source, or a plugin mapping a ListenBrainz recommendation to an owned track, needs "which of my tracks is this", and should not have to build its own matcher. |
 | `artwork(album-id)` | The image bytes, for a plugin that checks resolution before fetching a better one ([`requirements/albums.md` §5](../requirements/albums.md#5-artwork)). |
