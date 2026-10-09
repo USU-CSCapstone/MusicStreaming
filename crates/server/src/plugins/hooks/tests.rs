@@ -10,6 +10,7 @@ use super::super::testing::database;
 use super::due::{all, batch, event};
 use super::playing::{FRESH_MS, playing};
 use super::plays::plays;
+use super::searches::searches;
 use super::{BACKOFF_MS, Due, Hook, MAX_FAILURES, record};
 use crate::db::Database;
 
@@ -391,6 +392,168 @@ async fn starts_an_hour_old_are_cleared_away() {
     })
     .await;
     assert_eq!(kept, ["new"]);
+}
+
+/// `p` granted the searched hook and what it needs, enabled in library 1, and connected by user
+/// 7 at time 100, who has shared their searches with it since then; user 8 shares nothing.
+async fn search_sharing(db: &Database) {
+    scrobbling(db).await;
+    db.write(|tx| {
+        tx.execute_batch(
+            "INSERT INTO plugin_grants VALUES ('p', 'searched'), ('p', 'searchActivity');
+             INSERT INTO plugin_search_sharing VALUES ('p', 7, 100);",
+        )
+    })
+    .await
+    .unwrap();
+}
+
+/// User `user` settles on search `id` for `query` at `at`, which matched `tracks` tracks.
+async fn searched(db: &Database, id: i64, user: i64, query: &'static str, at: i64, tracks: i64) {
+    db.write(move |tx| {
+        tx.execute(
+            "INSERT INTO recent_searches (id, user_id, library_id, query, folded, searched_at, \
+                                          found_tracks, selected_type, selected_id) \
+             VALUES (?1, ?2, 1, ?3, ?3, ?4, ?5, 'track', 11)",
+            rusqlite::params![id, user, query, at, tracks],
+        )?;
+        tx.execute(
+            "INSERT INTO search_events (user_id, library_id, kind, search_id, at) \
+             VALUES (?1, 1, 'searched', ?2, ?3)",
+            rusqlite::params![user, id, at],
+        )
+    })
+    .await
+    .unwrap();
+}
+
+/// User 7 removes search `id` at `at`.
+async fn forgot(db: &Database, id: i64, at: i64) {
+    db.write(move |tx| {
+        tx.execute("DELETE FROM recent_searches WHERE id = ?1", [id])?;
+        tx.execute(
+            "INSERT INTO search_events (user_id, library_id, kind, search_id, at) \
+             VALUES (7, 1, 'forgotten', ?1, ?2)",
+            rusqlite::params![id, at],
+        )
+    })
+    .await
+    .unwrap();
+}
+
+/// Who `searched` is due for now: each library and user.
+async fn searched_due(db: &Database) -> Vec<(i64, i64)> {
+    let due = run(db, |conn| all(conn, 0)).await;
+    due.into_iter().filter(|d| d.hook == Hook::Searched).map(|d| (d.library, d.user)).collect()
+}
+
+#[tokio::test]
+async fn searches_reach_a_plugin_only_from_users_who_share_them_and_only_since() {
+    let (_temp, db) = database().await;
+    search_sharing(&db).await;
+    searched(&db, 1, 7, "before", 50, 2).await;
+    assert!(searched_due(&db).await.is_empty(), "searched before they shared");
+
+    searched(&db, 2, 7, "a song they do not own", 200, 0).await;
+    searched(&db, 3, 8, "not shared", 210, 1).await;
+    assert_eq!(searched_due(&db).await, [(1, 7)], "only theirs");
+
+    let (next, event) = run(&db, |conn| searches(conn, "p", 1, 7, 0)).await;
+    let Some(jewelcase_plugins::Event::Searched(found)) = event else { panic!("{event:?}") };
+    let summary: Vec<_> = found.iter().map(|s| (s.id, s.query.as_str(), s.found.tracks)).collect();
+    assert_eq!(summary, [(2, "a song they do not own", 0)], "nothing found is still sent");
+    assert_eq!(found[0].selected.map(|s| s.id), Some(11));
+
+    let seven = Due { user: 7, ..due(Hook::Searched, 0) };
+    db.write(move |tx| record(tx, &seven, next, true, "", 0)).await.unwrap();
+    assert!(searched_due(&db).await.is_empty(), "each search is delivered once");
+}
+
+#[tokio::test]
+async fn a_removed_search_is_never_sent_and_a_forget_follows_what_it_names() {
+    let (_temp, db) = database().await;
+    search_sharing(&db).await;
+    searched(&db, 2, 7, "kept", 200, 1).await;
+    searched(&db, 3, 7, "removed", 210, 1).await;
+    forgot(&db, 3, 220).await;
+
+    let (next, event) = run(&db, |conn| searches(conn, "p", 1, 7, 0)).await;
+    let Some(jewelcase_plugins::Event::Searched(found)) = event else { panic!("{event:?}") };
+    assert_eq!(found.iter().map(|s| s.id).collect::<Vec<_>>(), [2], "removed before it was sent");
+    let (_, event) = run(&db, move |conn| searches(conn, "p", 1, 7, next)).await;
+    assert!(
+        matches!(event, Some(jewelcase_plugins::Event::SearchesForgotten(Some(ref ids))) if ids == &[3]),
+        "{event:?}"
+    );
+}
+
+#[tokio::test]
+async fn stopping_asks_the_plugin_to_forget_everything_even_once_disconnected() {
+    let (_temp, db) = database().await;
+    search_sharing(&db).await;
+    searched(&db, 2, 7, "kept", 200, 1).await;
+    db.write(|tx| super::super::personal::disconnect(tx, "p", 7)).await.unwrap();
+    let shared: i64 = run(&db, |conn| {
+        conn.query_row("SELECT count(*) FROM plugin_search_sharing", [], |row| row.get(0))
+    })
+    .await;
+    assert_eq!(shared, 0, "disconnecting stops sharing");
+
+    assert_eq!(searched_due(&db).await, [(1, 7)], "still told, though no longer connected");
+    let (_, event) = run(&db, |conn| searches(conn, "p", 1, 7, 0)).await;
+    assert!(
+        matches!(event, Some(jewelcase_plugins::Event::SearchesForgotten(None))),
+        "the search sent before is not sent now, and everything is to be forgotten: {event:?}"
+    );
+}
+
+#[tokio::test]
+async fn sharing_is_turned_on_only_by_a_connected_user_of_a_plugin_allowed_searches() {
+    use super::super::personal::{SharingRefused, set_search_sharing};
+    let (_temp, db) = database().await;
+    scrobbling(&db).await;
+    let manifest = serde_json::json!({
+        "id": "p", "name": "P", "version": "1", "apiVersion": "0.3",
+        "personalSettings": { "properties": { "token": { "type": "string" } } },
+        "permissions": [
+            { "permission": "libraryRead", "required": true, "reason": "r" },
+            { "permission": "searchActivity", "required": true, "reason": "r" },
+            { "permission": "searched", "required": true, "reason": "r" }
+        ]
+    });
+    db.write(move |tx| {
+        tx.execute("UPDATE plugins SET manifest = ?1", [manifest.to_string()]).map(drop)
+    })
+    .await
+    .unwrap();
+    let set = |user: i64, sharing: bool| {
+        let db = db.clone();
+        async move {
+            db.write(move |tx| set_search_sharing(tx, "p", user, true, sharing)).await.unwrap()
+        }
+    };
+    assert!(matches!(set(8, true).await, Err(SharingRefused::Unconnected)));
+    assert!(
+        matches!(set(7, true).await, Err(SharingRefused::SearchesNotAllowed)),
+        "not granted searches"
+    );
+    db.write(|tx| {
+        tx.execute_batch(
+            "INSERT INTO plugin_grants VALUES ('p', 'searched'), ('p', 'searchActivity')",
+        )
+    })
+    .await
+    .unwrap();
+    assert!(set(7, true).await.is_ok());
+    assert!(set(7, true).await.is_ok(), "turning it on twice keeps when it was first turned on");
+    assert!(set(7, false).await.is_ok());
+    let stopped: i64 = run(&db, |conn| {
+        conn.query_row("SELECT count(*) FROM search_events WHERE kind = 'stopped'", [], |row| {
+            row.get(0)
+        })
+    })
+    .await;
+    assert_eq!(stopped, 1, "one request to forget, in the one library it serves");
 }
 
 /// The whole path with the real lyrics plugin: a change in the feed reaches its `handle` as

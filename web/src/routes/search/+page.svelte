@@ -1,10 +1,14 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
+	import type { NavigationTarget } from '@sveltejs/kit';
+	import { beforeNavigate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import type { SearchResult } from '$lib/api/types';
 	import { albumCard, artistCard, playlistCard, type Card } from '$lib/cards';
 	import CollectionView from '$lib/components/CollectionView.svelte';
-	import SearchBox from '$lib/components/SearchBox.svelte';
+	import SearchBox, { settler } from '$lib/components/SearchBox.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
+	import type { Selected } from '$lib/recent';
 	import ViewToggle from '$lib/components/ViewToggle.svelte';
 
 	let { data } = $props();
@@ -25,6 +29,35 @@
 	}
 
 	const sections = $derived(data.results?.sections ?? []);
+
+	// A search is kept once it settles (`$lib/recent`): the user opens or plays one of its
+	// results, submits it in the box, or leaves it after it has stood a moment.
+	$effect(() => settler.shown(data.library?.id ?? '', data.q ?? ''));
+
+	/** The album or artist among these results that `to` opens, if it is one. */
+	function opened(to: NavigationTarget | null): Selected | undefined {
+		const id = to?.params?.id;
+		const route = to?.route.id;
+		const type = route === '/albums/[id]' ? 'album' : route === '/artists/[id]' ? 'artist' : null;
+		if (!id || !type) return undefined;
+		const found = sections.some((s) => s.items.some((r) => r[type]?.id === id));
+		return found ? { type, id } : undefined;
+	}
+
+	beforeNavigate(({ to, willUnload }) => {
+		// Another query is still the same search.
+		if (to?.route.id === '/search') return;
+		const selected = opened(to);
+		if (selected) settler.settle(selected);
+		settler.leave(willUnload);
+	});
+
+	// Closing the page or the app, which a phone may do without warning.
+	onMount(() => {
+		const closing = () => settler.leave(true);
+		addEventListener('pagehide', closing);
+		return () => removeEventListener('pagehide', closing);
+	});
 </script>
 
 <svelte:head><title>{data.q ? `${data.q} · ` : ''}Search · Jewelcase</title></svelte:head>
@@ -66,6 +99,7 @@
 				<TrackList
 					tracks={section.items.flatMap((r) => (r.track ? [r.track] : []))}
 					context={{ type: 'search', query: data.q ?? '', section: 'tracks' }}
+					onplay={(track) => settler.settle({ type: 'track', id: track.id })}
 				/>
 			{:else}
 				<CollectionView cards={section.items.flatMap(card)} />

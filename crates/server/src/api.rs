@@ -23,6 +23,7 @@ mod playlists;
 mod plays;
 mod plugins;
 mod problem;
+mod recent_searches;
 mod refs;
 mod search;
 mod session;
@@ -37,7 +38,7 @@ use std::sync::Arc;
 
 use axum::extract::{DefaultBodyLimit, FromRef};
 use axum::middleware;
-use axum::routing::{any, get, post, put};
+use axum::routing::{any, delete, get, post, put};
 use axum::{Json, Router};
 
 pub use id::Id;
@@ -108,6 +109,7 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Arc<P
                 .put(connections::set_settings)
                 .delete(connections::disconnect),
         )
+        .route("/me/plugins/{plugin_id}/search-sharing", put(connections::set_search_sharing))
         .route("/libraries", get(libraries::list))
         .route("/libraries/{library_id}", get(libraries::get))
         .route("/libraries/{library_id}/albums", get(albums::list))
@@ -116,6 +118,14 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Arc<P
         .route("/libraries/{library_id}/tracks", get(tracks::list))
         .route("/libraries/{library_id}/tracks/{track_id}", get(tracks::get))
         .route("/libraries/{library_id}/search", get(search::search))
+        .route(
+            "/libraries/{library_id}/recent-searches",
+            get(recent_searches::list).post(recent_searches::record).delete(recent_searches::clear),
+        )
+        .route(
+            "/libraries/{library_id}/recent-searches/{recent_search_id}",
+            delete(recent_searches::delete),
+        )
         .route("/libraries/{library_id}/images/{image_id}", get(images::get))
         .route("/libraries/{library_id}/tracks/{track_id}/lyrics", get(lyrics::get))
         .route("/libraries/{library_id}/tracks/{track_id}/waveform", get(waveform::get))

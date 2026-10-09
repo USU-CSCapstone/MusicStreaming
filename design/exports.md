@@ -151,7 +151,7 @@ The base world keeps every import.
 
 ## 5. Open Questions
 
-1. **Sending queries to an external source.** Every user who types in a library with a source enabled has their typing sent to a third party. The admin enabled the source, but the user did not. Whether a user must opt in, or at least be told, needs deciding in the requirements. The same decision covers the `searched` hook ([`hooks.md` §3.1](hooks.md#31-searched)).
+1. **Sending queries to an external source.** Every user who types in a library with a source enabled has their typing sent to a third party. The admin enabled the source, but the user did not. Whether a user must opt in, or at least be told, needs deciding in the requirements. The same decision covers the `searched` hook ([`hooks.md` §1.2](hooks.md#12-searched)).
 2. **What a playlist keeps of an external entry.** If its source goes away, the entry stays in place, unplayable, and explained ([`requirements/plugins.md` §10.2](../requirements/plugins.md#102-it-behaves-like-music)). Explaining it needs at least a title and artist, so something is stored. That sits uneasily with "nothing was stored" ([§10.1](../requirements/plugins.md#101-it-is-not-library-content)). The likely answer is a display snapshot the playlist owns, not the source.
 3. **The interface format** (§3.2). This is the same decision as [`general.md` §11](general.md#11-open-decisions) #4.
 4. **Deadlines per export.** How long a section or a search may take before it is dropped. This should be stated as a number in [`requirements/performance.md`](../requirements/performance.md), not chosen here.

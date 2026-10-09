@@ -316,9 +316,36 @@ export interface paths {
         post?: never;
         /**
          * Disconnect a plugin
-         * @description Forgets the caller's settings for it; it stops acting for them.
+         * @description Forgets the caller's settings for it; it stops acting for them. Sharing their searches
+         *     with it stops too, as `setMySearchSharing` turning it off does.
          */
         delete: operations["disconnectMyPlugin"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/plugins/{pluginId}/search-sharing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pluginId: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Turn sharing the caller's searches with a plugin on or off
+         * @description Off until the caller turns it on (`requirements/search.md` §6). On, the plugin is sent
+         *     each search the caller settles on from then, never one before. Off, or disconnecting,
+         *     asks it to forget every search it was sent; what it already sent on is not recalled
+         *     (`requirements/users.md` §7). Turning it on needs the caller to have connected the
+         *     plugin, and the plugin to ask for searches (`asksForSearches`), or answers `422`.
+         */
+        put: operations["setMySearchSharing"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -811,13 +838,19 @@ export interface paths {
         };
         /**
          * List recent searches
-         * @description Kept only for a recent window; there is no permanent search history (`requirements/search.md` §6).
+         * @description The caller's own, newest first. Kept only for a recent window, the 20 newest and none
+         *     older than 30 days, after which they are deleted; there is no permanent search history
+         *     (`requirements/search.md` §6).
          */
         get: operations["listRecentSearches"];
         put?: never;
         /**
          * Record a recent search
-         * @description Recorded when the user acts on a result, not on every keystroke.
+         * @description Recorded once a search settles: the user acts on a result, submits it, or leaves it after
+         *     it has stood a moment, never on every keystroke (`requirements/search.md` §6). The same
+         *     words searched again, ignoring case and accents, replace the earlier entry under a new
+         *     ID. `422` for a query with nothing to search for or over 500 bytes, or a `selected`
+         *     that is not a track, album, or artist in this library.
          */
         post: operations["recordRecentSearch"];
         /** Clear recent searches */
@@ -3739,7 +3772,9 @@ export interface components {
             searchedAt: string;
         };
         RecentSearchCreate: {
+            /** @description Trimmed. At most 500 bytes. */
             query: string;
+            /** @description The result acted on, if any. A track, album, or artist in this library. */
             selected?: components["schemas"]["EntityRef"];
         };
         Playlist: {
@@ -4663,6 +4698,16 @@ export interface components {
             description?: string;
             /** @description Whether the caller has saved settings for it, and so it acts for them. */
             connected: boolean;
+            /**
+             * @description Whether the caller could share their searches with it: it asks for them, and an admin
+             *     allowed it.
+             */
+            asksForSearches: boolean;
+            /** @description Whether the caller has turned on sharing their searches with it. */
+            sharesSearches: boolean;
+        };
+        SearchSharing: {
+            sharing: boolean;
         };
         PluginSettingsUpdate: {
             /** @description Omitted secret fields keep their stored value; `null` clears one. */
@@ -4729,10 +4774,14 @@ export interface components {
          *     user who connected it (`listMyPlugins`) finishes playing something; it needs
          *     `listeningActivity`, and `libraryRead` in the library played from. `playing` runs it the
          *     same way as each of them starts something, while it is still playing; it needs what
-         *     `played` does, and a plugin built against API version 0.3 or later.
+         *     `played` does, and a plugin built against API version 0.3 or later. `searchActivity`,
+         *     granted once per plugin, is the searches of users who turn on sharing them with it
+         *     (`setMySearchSharing`); the `searched` hook runs it as each of them settles on a search
+         *     or removes one, and needs `searchActivity`, `libraryRead`, and API version 0.3 or later
+         *     (`requirements/search.md` §6).
          * @enum {string}
          */
-        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played" | "playing";
+        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played" | "playing" | "searchActivity" | "searched";
         PermissionRequest: {
             permission: components["schemas"]["PermissionName"];
             /** @description Whether it cannot work without it (`requirements/plugins.md` §4.2). */
@@ -5913,6 +5962,33 @@ export interface operations {
                 };
                 content?: never;
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    setMySearchSharing: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pluginId: components["parameters"]["PluginId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchSharing"];
+            };
+        };
+        responses: {
+            /** @description Set. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationFailed"];
             default: components["responses"]["Problem"];
         };
     };

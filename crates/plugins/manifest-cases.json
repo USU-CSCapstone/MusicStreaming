@@ -2094,5 +2094,83 @@
 		"problems": [
 			"permissions[2]: playing needs \"apiVersion\" 0.3 or later"
 		]
+	},
+	{
+		"name": "a searched hook",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "Because."
+				},
+				{
+					"permission": "searchActivity",
+					"required": true,
+					"reason": "Because."
+				},
+				{
+					"permission": "searched",
+					"required": false,
+					"reason": "Because."
+				}
+			],
+			"personalSettings": {
+				"properties": {
+					"token": {
+						"type": "string",
+						"writeOnly": true
+					}
+				},
+				"required": [
+					"token"
+				]
+			}
+		},
+		"problems": []
+	},
+	{
+		"name": "a searched hook without what it needs",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "searched",
+					"required": true,
+					"reason": "Because."
+				}
+			]
+		},
+		"problems": [
+			"searched needs libraryRead as well",
+			"searched needs searchActivity as well",
+			"searched needs \"personalSettings\", which users connect it with"
+		]
+	},
+	{
+		"name": "search activity on the API version before it",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.2",
+			"permissions": [
+				{
+					"permission": "searchActivity",
+					"required": true,
+					"reason": "Because."
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: searchActivity needs \"apiVersion\" 0.3 or later"
+		]
 	}
 ]
