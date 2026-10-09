@@ -50,6 +50,55 @@ async fn pages_albums_and_artists_with_music() {
 }
 
 #[tokio::test]
+async fn gets_albums_and_artists_by_id_with_what_they_have() {
+    let (_temp, db) = database().await;
+    db.write(|tx| {
+        tx.execute_batch(
+            "INSERT INTO images (id, library_id, hash, format, width, height, root_id, path, embedded)
+             SELECT 1, 1, x'01', 'jpeg', 600, 600, id, 'Signal/cover.jpg', 0
+             FROM library_roots WHERE library_id = 1;
+             UPDATE albums SET image_id = 1 WHERE id = 101;
+             UPDATE artists SET biography = 'From the coast.' WHERE id = 301;",
+        )
+    })
+    .await
+    .unwrap();
+    let mut library = RunLibrary::new(db, "p", 1);
+    let albums = library.get_albums(vec![201, 102, 101, 999]).await.unwrap();
+    assert_eq!(ids(&albums, |a| a.id), [101], "not another library's, nor the empty one");
+    assert!(albums[0].has_artwork);
+    assert!(!library.albums(None, 10).await.unwrap().is_empty());
+
+    let artists = library.get_artists(vec![999, 301]).await.unwrap();
+    assert_eq!(ids(&artists, |a| a.id), [301]);
+    assert_eq!((artists[0].has_image, artists[0].has_biography), (false, true));
+}
+
+#[tokio::test]
+async fn reads_an_albums_tracks_and_an_artists_albums() {
+    let (_temp, db) = database().await;
+    // An artist who only appears on a track, and owns no album (`requirements/artists.md` §2).
+    db.write(|tx| {
+        tx.execute_batch(
+            "INSERT INTO artists (id, library_id, name, name_key, sort_key, album_count,
+                                  track_count, added_at, updated_at)
+             VALUES (302, 1, 'Guest', 'guest', x'67', 0, 1, 0, 0);
+             INSERT INTO track_artists (library_id, track_id, position, artist_id, artist_name)
+             VALUES (1, 12, 1, 302, 'Guest');",
+        )
+    })
+    .await
+    .unwrap();
+    let mut library = RunLibrary::new(db, "p", 1);
+    let tracks = library.album_tracks(101).await.unwrap();
+    assert_eq!(ids(&tracks, |t| t.id), [11, 12], "by number, and not 13, which is missing");
+    assert!(library.album_tracks(201).await.unwrap().is_empty(), "another library's");
+
+    assert_eq!(ids(&library.artist_albums(301).await.unwrap(), |a| a.id), [101]);
+    assert!(library.artist_albums(302).await.unwrap().is_empty(), "an appearance only");
+}
+
+#[tokio::test]
 async fn keeps_state_per_plugin_and_library_until_uninstalled() {
     let (_temp, db) = database().await;
     let mut here = RunLibrary::new(db.clone(), "p", 1);

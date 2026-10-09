@@ -3,7 +3,9 @@
 //! each event goes to the plugin as 0.2 describes it.
 //!
 //! 0.2 differs only in lacking what 0.3 added: the `playing`, `searched`, `albums-changed`, and
-//! `artists-changed` hooks and search activity, which a 0.2 manifest cannot ask for. Its records are the current ones under other names, copied field by field.
+//! `artists-changed` hooks and search activity, which a 0.2 manifest cannot ask for, and reading
+//! albums and artists by ID. Its records are the current ones under other names, copied field
+//! by field, less the fields 0.3 added to `album` and `artist`.
 
 use super::bindings::jewelcase::plugin as now;
 use super::bindings::v0_2::jewelcase::plugin as old;

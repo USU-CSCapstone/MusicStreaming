@@ -71,7 +71,7 @@ All eight hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-r
 - **Read from what exists.** The change feed already recorded `album` and `artist` rows (`crates/server/migrations/0004_feeds.sql`). Each hook reads only its own kind, with a position of its own that starts at zero, so a plugin new to a library first hears of every album or artist in it. `tracksChanged` now reads only tracks the same way, so an album changing no longer wakes a track hook.
 - **Two hooks, not one `libraryChanged`.** A plugin hears only about what it asked for, and the admin sees "run when albums change" rather than a vaguer grant. The cost is two names in the manifest rather than one.
 - **Needs** `libraryRead`, granted per library, and `apiVersion` 0.3.
-- **Reading one by ID is not yet possible.** `library.albums` and `library.artists` page through the whole library; `get-albums` and `get-artists` are proposed ([`imports.md` §3.2](imports.md#32-reading-the-library)).
+- **Read what changed by ID** with `get-albums` and `get-artists`, and where an album is with `album-tracks` ([`imports.md` §1.2](imports.md#12-albums-and-artists)).
 
 ---
 
