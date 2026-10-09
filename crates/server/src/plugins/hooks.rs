@@ -1,8 +1,9 @@
 //! Hooks: running plugins when something happens, rather than when an admin asks
 //! (`requirements/plugins.md` §8).
 //!
-//! `tracksChanged` reads the library change feed (`0004_feeds.sql`), which records every
-//! track added, changed, or removed in the same transaction as the change; `scanFinished`
+//! `tracksChanged`, `albumsChanged`, and `artistsChanged` read the library change feed
+//! (`0004_feeds.sql`), which records every track, album, and artist added, changed, or removed
+//! in the same transaction as the change, each hook only its own kind; `scanFinished`
 //! reads finished scans; `schedule` runs at the interval the plugin asks for; `played` reads
 //! the plays each user who connected the plugin has ended (`0013_plugin_played.sql`), and
 //! `playing` those they have just started (`0016_plugin_playing.sql`). For each hook, each
@@ -50,6 +51,8 @@ enum Hook {
     Played,
     Playing,
     Searched,
+    AlbumsChanged,
+    ArtistsChanged,
 }
 
 impl Hook {
@@ -61,6 +64,8 @@ impl Hook {
             Hook::Played => "played",
             Hook::Playing => "playing",
             Hook::Searched => "searched",
+            Hook::AlbumsChanged => "albumsChanged",
+            Hook::ArtistsChanged => "artistsChanged",
         }
     }
 }
@@ -133,7 +138,7 @@ impl Plugins {
             Ok((_, None, _)) => return,
             Err(error) => return tracing::error!(%error, "cannot read hook events"),
         };
-        // Nothing for the plugin, such as a batch of album changes alone, moves the position on.
+        // Nothing for the plugin, such as a start that went stale, moves the position on.
         let (succeeded, summary) = match event {
             None => (true, String::new()),
             Some(event) => {

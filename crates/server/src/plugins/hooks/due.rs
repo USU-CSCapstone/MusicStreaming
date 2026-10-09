@@ -2,12 +2,12 @@
 //!
 //! A hook is due for a plugin in a library when the plugin is enabled there, the hook (and the
 //! permission its events need) is granted, it is not waiting to retry a failure, and there is
-//! something past its position: changes, a finished scan, its interval gone by, plays ended
+//! something past its position: changes of the kind it asked for, a finished scan, its interval gone by, plays ended
 //! by a user who connected it, a play one of them has just started and is still playing, or
 //! searches by a user who shares them with it. Each user has a position of their own in
 //! `played`, `playing`, and `searched`.
 
-use jewelcase_plugins::{Event, ScanFinished, TracksChanged};
+use jewelcase_plugins::{AlbumsChanged, ArtistsChanged, Event, ScanFinished, TracksChanged};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::playing::{deliverable, playing};
@@ -49,13 +49,17 @@ const READY: &str = "p.enabled AND (c.retry_at IS NULL OR c.retry_at <= ?1)";
 
 pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
     let pair = position(false);
-    let tracks = format!(
-        "SELECT p.plugin_id, p.library_id, {pair} WHERE {READY} AND {} AND {} \
-         AND EXISTS (SELECT 1 FROM library_changes f \
-                     WHERE f.library_id = p.library_id AND f.seq > coalesce(c.position, 0))",
-        granted_here("tracksChanged"),
-        granted_here("libraryRead"),
-    );
+    // Changes of one kind of entity in the library, for the hook that asked for them.
+    let changes = |hook: &str, entity: &str| {
+        format!(
+            "SELECT p.plugin_id, p.library_id, {pair} WHERE {READY} AND {} AND {} \
+             AND EXISTS (SELECT 1 FROM library_changes f \
+                         WHERE f.library_id = p.library_id AND f.entity_type = '{entity}' \
+                         AND f.seq > coalesce(c.position, 0))",
+            granted_here(hook),
+            granted_here("libraryRead"),
+        )
+    };
     // Only scans finished before now, so one finishing this millisecond is never skipped.
     let scans = format!(
         "SELECT p.plugin_id, p.library_id, {pair} WHERE {READY} AND {} AND {} \
@@ -118,7 +122,9 @@ pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
     );
     let mut due = Vec::new();
     for (hook, sql) in [
-        (Hook::TracksChanged, tracks),
+        (Hook::TracksChanged, changes("tracksChanged", "track")),
+        (Hook::AlbumsChanged, changes("albumsChanged", "album")),
+        (Hook::ArtistsChanged, changes("artistsChanged", "artist")),
         (Hook::ScanFinished, scans),
         (Hook::Schedule, schedules),
         (Hook::Played, played),
@@ -146,9 +152,19 @@ pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
 pub fn event(conn: &Connection, due: &Due, now: i64) -> rusqlite::Result<(i64, Option<Event>)> {
     Ok(match due.hook {
         Hook::TracksChanged => {
-            let (next, changes) = batch(conn, due.library, due.position)?;
-            let empty = changes.changed.is_empty() && changes.removed.is_empty();
-            (next, (!empty).then_some(Event::TracksChanged(changes)))
+            let (next, c) = batch(conn, due.library, due.position, "track")?;
+            let event = TracksChanged { changed: c.changed, removed: c.removed };
+            (next, (!c.empty).then_some(Event::TracksChanged(event)))
+        }
+        Hook::AlbumsChanged => {
+            let (next, c) = batch(conn, due.library, due.position, "album")?;
+            let event = AlbumsChanged { changed: c.changed, removed: c.removed };
+            (next, (!c.empty).then_some(Event::AlbumsChanged(event)))
+        }
+        Hook::ArtistsChanged => {
+            let (next, c) = batch(conn, due.library, due.position, "artist")?;
+            let event = ArtistsChanged { changed: c.changed, removed: c.removed };
+            (next, (!c.empty).then_some(Event::ArtistsChanged(event)))
         }
         Hook::ScanFinished => match scans(conn, due.library, due.position, now)? {
             Some((next, totals)) => (next, Some(Event::ScanFinished(totals))),
@@ -170,29 +186,36 @@ pub fn event(conn: &Connection, due: &Due, now: i64) -> rusqlite::Result<(i64, O
     })
 }
 
-/// The next batch of changes to `library` after `position`: the position after it, and the
-/// tracks it names.
+/// Entities of one kind added or changed, and removed.
+pub struct Changes {
+    pub changed: Vec<u64>,
+    pub removed: Vec<u64>,
+    pub empty: bool,
+}
+
+/// The next batch of changes to `library`'s entities of type `entity` (`track`, `album`, or
+/// `artist`) after `position`: the position after it, and the IDs it names.
 pub fn batch(
     conn: &Connection,
     library: i64,
     position: i64,
-) -> rusqlite::Result<(i64, TracksChanged)> {
-    let rows: Vec<(i64, String, i64, String)> = conn
+    entity: &str,
+) -> rusqlite::Result<(i64, Changes)> {
+    let rows: Vec<(i64, i64, String)> = conn
         .prepare_cached(
-            "SELECT seq, entity_type, entity_id, op FROM library_changes \
-             WHERE library_id = ?1 AND seq > ?2 ORDER BY seq LIMIT ?3",
+            "SELECT seq, entity_id, op FROM library_changes \
+             WHERE library_id = ?1 AND entity_type = ?2 AND seq > ?3 ORDER BY seq LIMIT ?4",
         )?
-        .query_map(params![library, position, BATCH], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        .query_map(params![library, entity, position, BATCH], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })?
         .collect::<rusqlite::Result<_>>()?;
     let next = rows.last().map_or(position, |(seq, ..)| *seq);
-    let mut changes = TracksChanged { changed: Vec::new(), removed: Vec::new() };
-    for (_, entity, id, op) in rows {
-        match (entity.as_str(), op.as_str()) {
-            ("track", "delete") => changes.removed.push(id as u64),
-            ("track", _) => changes.changed.push(id as u64),
-            _ => {}
+    let mut changes = Changes { changed: Vec::new(), removed: Vec::new(), empty: rows.is_empty() };
+    for (_, id, op) in rows {
+        match op.as_str() {
+            "delete" => changes.removed.push(id as u64),
+            _ => changes.changed.push(id as u64),
         }
     }
     Ok((next, changes))

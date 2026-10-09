@@ -73,13 +73,18 @@ pub enum Permission {
     /// forgotten. Needs search-activity, library-read, and personal settings to connect.
     /// Since 0.3.
     Searched,
+    /// A hook: run when albums are added, changed, or removed. Needs library-read too. Since 0.3.
+    AlbumsChanged,
+    /// A hook: run when artists are added, changed, or removed. Needs library-read too.
+    /// Since 0.3.
+    ArtistsChanged,
     /// Its rate limits that say `"per": "host"` are kept to by every plugin's requests to that
     /// host, so it can slow other plugins. Without it, they count its own.
     HostRateLimits,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 13] = [
+    pub const ALL: [Permission; 15] = [
         Self::LibraryRead,
         Self::LibraryAdd,
         Self::LibraryChange,
@@ -92,6 +97,8 @@ impl Permission {
         Self::Playing,
         Self::SearchActivity,
         Self::Searched,
+        Self::AlbumsChanged,
+        Self::ArtistsChanged,
         Self::HostRateLimits,
     ];
 
@@ -110,6 +117,8 @@ impl Permission {
             Self::Playing => "playing",
             Self::SearchActivity => "searchActivity",
             Self::Searched => "searched",
+            Self::AlbumsChanged => "albumsChanged",
+            Self::ArtistsChanged => "artistsChanged",
             Self::HostRateLimits => "hostRateLimits",
         }
     }
@@ -127,6 +136,8 @@ impl Permission {
                 | Self::LibraryChange
                 | Self::TracksChanged
                 | Self::ScanFinished
+                | Self::AlbumsChanged
+                | Self::ArtistsChanged
         )
     }
 
@@ -145,6 +156,8 @@ impl Permission {
             Self::Playing => "Run when a connected user starts playing something",
             Self::SearchActivity => "Search activity",
             Self::Searched => "Run when a user who shares their searches settles on one",
+            Self::AlbumsChanged => "Run when albums change",
+            Self::ArtistsChanged => "Run when artists change",
             Self::HostRateLimits => "Limit a service for every plugin",
         }
     }
@@ -152,7 +165,11 @@ impl Permission {
     /// The contract version that added it. A manifest declaring an older one cannot ask for it.
     pub fn since(self) -> Api {
         match self {
-            Self::Playing | Self::SearchActivity | Self::Searched => Api::V0_3,
+            Self::Playing
+            | Self::SearchActivity
+            | Self::Searched
+            | Self::AlbumsChanged
+            | Self::ArtistsChanged => Api::V0_3,
             _ => Api::V0_2,
         }
     }
@@ -415,7 +432,13 @@ pub fn validate(manifest: &Value) -> Vec<String> {
         problems.push(r#"hostRateLimits needs a rate limit "per": "host""#.into());
     }
     // A library hook's event is about the library, which only reading it can make anything of.
-    for hook in [Permission::TracksChanged, Permission::ScanFinished] {
+    let library_hooks = [
+        Permission::TracksChanged,
+        Permission::ScanFinished,
+        Permission::AlbumsChanged,
+        Permission::ArtistsChanged,
+    ];
+    for hook in library_hooks {
         if seen.contains(&hook) && !seen.contains(&Permission::LibraryRead) {
             problems.push(format!("{} needs libraryRead as well", hook.name()));
         }

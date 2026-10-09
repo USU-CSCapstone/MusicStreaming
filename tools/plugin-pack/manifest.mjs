@@ -27,12 +27,21 @@ export const PERMISSIONS = [
 	// The searches of users who share them with it, and running when they settle on one.
 	'searchActivity',
 	'searched',
+	// When albums, or artists, are added, changed, or removed.
+	'albumsChanged',
+	'artistsChanged',
 	// Setting a rate limit, "per": "host", that every plugin's requests to a host keep to.
 	'hostRateLimits'
 ];
 
 /** The contract version that added each permission, where it is later than the first. */
-const SINCE = { playing: '0.3', searchActivity: '0.3', searched: '0.3' };
+const SINCE = {
+	playing: '0.3',
+	searchActivity: '0.3',
+	searched: '0.3',
+	albumsChanged: '0.3',
+	artistsChanged: '0.3'
+};
 
 /** Whose requests a rate limit counts: the plugin's, one user's runs of it, or every plugin's. */
 const PER = ['plugin', 'user', 'host'];
@@ -239,7 +248,7 @@ export function validateManifest(m) {
 		problems.push('hostRateLimits needs a rate limit "per": "host"');
 	}
 	// A library hook's event is about the library, which only reading it can make anything of.
-	for (const hook of ['tracksChanged', 'scanFinished']) {
+	for (const hook of ['tracksChanged', 'scanFinished', 'albumsChanged', 'artistsChanged']) {
 		if (seen.has(hook) && !seen.has('libraryRead')) {
 			problems.push(`${hook} needs libraryRead as well`);
 		}
