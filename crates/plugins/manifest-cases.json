@@ -1828,5 +1828,161 @@
 			"played needs listeningActivity as well",
 			"played needs \"personalSettings\", which users connect it with"
 		]
+	},
+	{
+		"name": "network with rate limits",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.2",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"musicbrainz.org",
+						"coverartarchive.org"
+					],
+					"rateLimits": {
+						"musicbrainz.org": "1/s",
+						"coverartarchive.org": "60/min"
+					}
+				}
+			]
+		},
+		"problems": []
+	},
+	{
+		"name": "a rate limit for a host reachable through any destination",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.2",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"*"
+					],
+					"rateLimits": {
+						"MusicBrainz.org": "1000/h"
+					}
+				}
+			]
+		},
+		"problems": []
+	},
+	{
+		"name": "a rate limit for a host that is not a destination",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.2",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"musicbrainz.org"
+					],
+					"rateLimits": {
+						"lrclib.net": "1/s",
+						"*": "1/s"
+					}
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: rateLimits: \"*\" is not one of its destinations",
+			"permissions[0]: rateLimits: \"lrclib.net\" is not one of its destinations"
+		]
+	},
+	{
+		"name": "rate limits that are not limits",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.2",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"a.example",
+						"b.example",
+						"c.example",
+						"d.example"
+					],
+					"rateLimits": {
+						"a.example": "0/s",
+						"b.example": "1/sec",
+						"c.example": 5,
+						"d.example": "01/min"
+					}
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: rateLimits: \"a.example\" needs a limit such as \"1/s\", \"60/min\", or \"1000/h\"",
+			"permissions[0]: rateLimits: \"b.example\" needs a limit such as \"1/s\", \"60/min\", or \"1000/h\"",
+			"permissions[0]: rateLimits: \"c.example\" needs a limit such as \"1/s\", \"60/min\", or \"1000/h\"",
+			"permissions[0]: rateLimits: \"d.example\" needs a limit such as \"1/s\", \"60/min\", or \"1000/h\""
+		]
+	},
+	{
+		"name": "rate limits that are not a map",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.2",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"a.example"
+					],
+					"rateLimits": [
+						"1/s"
+					]
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: \"rateLimits\" must map destinations to limits such as \"1/s\""
+		]
+	},
+	{
+		"name": "rate limits on something other than network",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.2",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "To read.",
+					"rateLimits": {
+						"a.example": "1/s"
+					}
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: only network takes \"rateLimits\""
+		]
 	}
 ]

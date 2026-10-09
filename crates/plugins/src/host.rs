@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -16,6 +16,7 @@ use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDea
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::manifest::Permission;
+use crate::network::Network;
 
 mod http;
 mod library;
@@ -91,8 +92,13 @@ pub trait Library: Send + 'static {
 /// What a run may use: the permissions granted for its library, the hosts its manifest names
 /// for the network, and its settings.
 pub struct Grants {
+    /// The plugin and library the run is for, which scope what it shares with other runs.
+    pub plugin: String,
+    pub library: i64,
     pub permissions: Vec<Permission>,
     pub destinations: Vec<String>,
+    /// The gap its manifest asks for between requests to each of these hosts.
+    pub rate_limits: Vec<(String, Duration)>,
     /// The settings in effect for the run, defaults included.
     pub settings: serde_json::Map<String, serde_json::Value>,
 }
@@ -113,6 +119,8 @@ pub struct Host {
     /// Each plugin compiled once, until its file changes: compiling is what costs, and hooks
     /// run a plugin often.
     compiled: Mutex<HashMap<PathBuf, (SystemTime, Component)>>,
+    /// What every run's requests share: each destination's pace, and replies to reuse.
+    network: Arc<Network>,
 }
 
 impl Host {
@@ -133,7 +141,7 @@ impl Host {
                 }
             })
             .map_err(|e| e.to_string())?;
-        Ok(Host { engine, compiled: Mutex::default() })
+        Ok(Host { engine, compiled: Mutex::default(), network: Arc::default() })
     }
 
     /// Refuses a component that could never run here: one that does not compile, or imports
@@ -197,6 +205,7 @@ impl Host {
             grants,
             library,
             client: None,
+            network: self.network.clone(),
             roots: None,
             log: Vec::new(),
             written: 0,
@@ -297,6 +306,7 @@ pub struct Run<L> {
     library: L,
     /// Made on the first request, so a plugin that never uses the network costs no client.
     client: Option<reqwest::Client>,
+    network: Arc<Network>,
     /// Read on first use, and kept for the run.
     roots: Option<Vec<(u64, PathBuf)>>,
     log: Vec<String>,
