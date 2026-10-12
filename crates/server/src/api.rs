@@ -46,7 +46,7 @@ use axum::{Json, Router};
 
 pub use id::Id;
 pub use images::Images;
-use player::Players;
+pub use player::Players;
 pub use problem::{Code, Problem};
 use realtime::Hub;
 use search::Indexes;
@@ -108,7 +108,13 @@ impl FromRef<AppState> for Arc<Images> {
 }
 
 /// The API's routes, nested under `{base_path}/api/v1`.
-pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Arc<Plugins>) -> Router {
+pub fn router(
+    base_path: &str,
+    db: Arc<Database>,
+    images: Images,
+    plugins: Arc<Plugins>,
+    players: Arc<Players>,
+) -> Router {
     let prefix = format!("{base_path}/api/v1");
     let state = AppState {
         db,
@@ -117,7 +123,7 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Arc<P
         setup: Arc::default(),
         plugins,
         hub: Arc::default(),
-        players: Arc::default(),
+        players,
         prefix: prefix.as_str().into(),
     };
     // These answer `401` without a token.
