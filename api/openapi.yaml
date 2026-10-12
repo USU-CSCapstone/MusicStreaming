@@ -35,7 +35,7 @@ info:
     **Optimistic writes.** Writes clients apply locally before confirmation — queue and
     player commands, playlist edits, plays — carry a client-generated ID in the body
     (`commandId`, `editId`, `playId`, `createId`). The server applies each ID once however
-    often it arrives, and IDs of anything those writes create are derived from it, so a
+    often it arrives — for player commands, among the account's latest 32 — and IDs of anything those writes create are derived from it, so a
     device and the server agree without a round trip. Other state-changing `POST`s accept an
     `Idempotency-Key` header with the same guarantee.
 
@@ -2328,8 +2328,12 @@ paths:
       summary: Control playback on any device
       description: |
         Play, pause, seek, skip, volume, transfer, and wake, targeting any of the caller's
-        devices (`requirements/realtime.md` §3). Last command wins. The result reports
-        whether the target carried it out.
+        devices (`requirements/realtime.md` §3). Last command wins. For clients without a
+        realtime connection; clients with one send `playerCommand` there instead. Answers once
+        the target has carried the command out or failed to, within 5 seconds: `applied` or
+        `failed`. A command sent again is not carried out again: while it waits, its result
+        goes to where it was sent from last, and an earlier request still waiting for it
+        answers `pending`; once it has finished, this answers its result.
       operationId: sendPlayerCommand
       requestBody:
         required: true
@@ -2338,13 +2342,18 @@ paths:
             schema: { $ref: '#/components/schemas/PlayerCommand' }
       responses:
         '200':
-          description: Accepted.
+          description: How the target carried it out.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CommandResult' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '429':
+          description: '`rate_limited` — too many of the account''s commands are waiting for the target.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '409':
-          description: '`device_unavailable` — the target device is not connected.'
+          description: '`device_unavailable` — the target device is not connected, or, until waking is built, nothing is playing or the device named is not the one playing.'
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -5787,9 +5796,10 @@ components:
             (`requirements/realtime.md` §5): at once when nothing is playing, or the command
             is invalid or not one the server carries out; when the target's connection
             closes; and after 5 seconds when the target has not answered. A command sent
-            again with the same `commandId` while it waits is passed on once, and its result
-            goes to the connection it was last sent from. An account has at most 16 commands
-            waiting at a time.
+            again with the same `commandId` is carried out once: while it waits its result
+            goes to where it was sent from last, and once it has finished, the result of any
+            of the account's latest 32 commands is answered again. An account has at most 16
+            commands waiting at a time.
         reason: { type: [string, 'null'] }
 
     ProgressReport:

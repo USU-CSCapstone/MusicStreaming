@@ -1893,8 +1893,12 @@ export interface paths {
         /**
          * Control playback on any device
          * @description Play, pause, seek, skip, volume, transfer, and wake, targeting any of the caller's
-         *     devices (`requirements/realtime.md` §3). Last command wins. The result reports
-         *     whether the target carried it out.
+         *     devices (`requirements/realtime.md` §3). Last command wins. For clients without a
+         *     realtime connection; clients with one send `playerCommand` there instead. Answers once
+         *     the target has carried the command out or failed to, within 5 seconds: `applied` or
+         *     `failed`. A command sent again is not carried out again: while it waits, its result
+         *     goes to where it was sent from last, and an earlier request still waiting for it
+         *     answers `pending`; once it has finished, this answers its result.
          */
         post: operations["sendPlayerCommand"];
         delete?: never;
@@ -4203,9 +4207,10 @@ export interface components {
              *     (`requirements/realtime.md` §5): at once when nothing is playing, or the command
              *     is invalid or not one the server carries out; when the target's connection
              *     closes; and after 5 seconds when the target has not answered. A command sent
-             *     again with the same `commandId` while it waits is passed on once, and its result
-             *     goes to the connection it was last sent from. An account has at most 16 commands
-             *     waiting at a time.
+             *     again with the same `commandId` is carried out once: while it waits its result
+             *     goes to where it was sent from last, and once it has finished, the result of any
+             *     of the account's latest 32 commands is answered again. An account has at most 16
+             *     commands waiting at a time.
              * @enum {string}
              */
             status: "pending" | "applied" | "failed";
@@ -8216,7 +8221,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Accepted. */
+            /** @description How the target carried it out. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -8225,9 +8230,18 @@ export interface operations {
                     "application/json": components["schemas"]["CommandResult"];
                 };
             };
-            404: components["responses"]["NotFound"];
-            /** @description `device_unavailable` — the target device is not connected. */
+            /** @description `device_unavailable` — the target device is not connected, or, until waking is built, nothing is playing or the device named is not the one playing. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            422: components["responses"]["ValidationFailed"];
+            /** @description `rate_limited` — too many of the account's commands are waiting for the target. */
+            429: {
                 headers: {
                     [name: string]: unknown;
                 };
