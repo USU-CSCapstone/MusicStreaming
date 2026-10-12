@@ -3,6 +3,7 @@
 	import { formatDuration } from '$lib/format';
 	import { panels } from '$lib/panels.svelte';
 	import { player } from '$lib/player.svelte';
+	import { realtime } from '$lib/realtime.svelte';
 	import ArtistLinks from './ArtistLinks.svelte';
 	import Artwork from './Artwork.svelte';
 	import Icon from './Icon.svelte';
@@ -25,7 +26,8 @@
 
 <svelte:window bind:innerWidth />
 
-<section class="player" class:idle={!track} aria-label="Player">
+<!-- Shown on a phone while offline even with nothing playing, so the user knows. -->
+<section class="player" class:idle={!track && !realtime.offline} aria-label="Player">
 	<div class="now">
 		{#if track}
 			<a class="art" href={resolve('/albums/[id]', { id: track.album.id })} aria-label="Open album">
@@ -86,6 +88,8 @@
 	</div>
 
 	<div class="side">
+		<!-- Always there, so a screen reader announces the change. -->
+		<span class="offline" role="status">{realtime.offline ? 'Offline' : ''}</span>
 		<button
 			type="button"
 			class="icon-btn"
@@ -235,6 +239,19 @@
 	.icon-btn.on {
 		color: var(--accent);
 		background: var(--accent-soft);
+	}
+
+	.offline:empty {
+		display: none;
+	}
+
+	.offline {
+		padding: 2px var(--space-2);
+		border: 1px solid var(--danger);
+		border-radius: var(--radius-s);
+		color: var(--danger);
+		font-size: 12px;
+		white-space: nowrap;
 	}
 
 	.volume {
