@@ -29,8 +29,9 @@ docker compose down         # stop it; add --volumes to also delete the database
 
 As you save, the web app updates in the browser, and the server rebuilds and restarts. The
 first start compiles the server, which takes a minute or so; later starts reuse the build.
-Your music is mounted read-only and the containers never write to your checkout. The server's
-API is also on http://localhost:8080.
+Your music is mounted writable so plugins can save into it, though Jewelcase itself only reads
+it, and the containers never write to your checkout. The server's API is also on
+http://localhost:8080.
 
 Tests and checks run on your machine as usual: `cargo test` and `cargo clippy` at the root, and
 `pnpm test` and `pnpm check` in `web/`. Running `pnpm dev` there on its own serves the web app

@@ -11,14 +11,14 @@ Jewelcase is self-hosted software, which means the install is part of the produc
 
 Three things, and nothing else:
 
-- **A path to their music**, mounted into the container. Mounted **read-only**, because the core has no reason to write to it ([`general.md` §3.1](general.md#31-the-music-library-is-read-only-to-core)) and the filesystem should enforce that rather than trusting the code to.
+- **A path to their music**, mounted into the container. **Writable or read-only, as the user chooses.** The core only ever reads it ([`general.md` §3.1](general.md#31-the-music-library-is-read-only-to-core)), so it works completely on a read-only mount. A writable mount is what lets plugins granted write access save into the library ([`plugins.md` §3](plugins.md#3-writing-to-the-library)), so it is the default.
 - **A path for Jewelcase's own data** — index, playlists, queues, history, accounts, analysis results, transcode cache. This is the only thing Jewelcase writes, and the only thing that needs backing up ([§4](#4-backup--restore)).
 - **A port** to reach it on.
 
 Everything else has a working default. **A user who sets only these three runs a correct server**, and any variable they never touch is one the project chose well.
 
 - **Configuration is environment variables**, not a config file to learn. Compose files are already how homelab users configure everything else they run.
-- **Defaults are safe, not permissive.** No setting that ships enabled can weaken authentication ([`users.md` §3.1](users.md#31-protection)), expose the data directory, or grant write access to the music.
+- **Defaults are safe, not permissive.** No setting that ships enabled can weaken authentication ([`users.md` §3.1](users.md#31-protection)), expose the data directory, or give a plugin write access to the music — a writable mount only makes that grant possible ([`plugins.md` §4](plugins.md#4-trust--permissions)).
 - **Bad configuration fails loudly at startup**, naming what is wrong and what was expected. A server must never start in a state that silently misbehaves later.
 
 ---

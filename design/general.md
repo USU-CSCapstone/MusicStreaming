@@ -27,7 +27,7 @@ The core stack and system architecture. Subsystem designs build on this file and
 ## 2. System Shape
 
 - **One server process in one container.** No sidecars, broker, or external services.
-- **Music is mounted read-only**, so [`requirements/general.md` §3.1](../requirements/general.md#31-the-music-library-is-read-only-to-core) is enforced by the filesystem. A writable mount is the admin's choice, for plugins.
+- **Music is mounted writable by default**, so plugins granted write access can save into it ([`requirements/plugins.md` §3](../requirements/plugins.md#3-writing-to-the-library)). The core only reads it ([`requirements/general.md` §3.1](../requirements/general.md#31-the-music-library-is-read-only-to-core)), so a read-only mount works just as well.
 - **The data directory splits precious from rebuildable:**
   ```
   data/

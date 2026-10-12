@@ -16,6 +16,6 @@ Then, with the server running:
 2. Press **Run now**.
 3. Play a song and open **Lyrics** in the player.
 
-Saving needs the music mounted writable; the development `compose.yaml` mounts it read-only.
+Saving needs the music mounted writable, as the development `compose.yaml` mounts it.
 The host's own tests run this plugin once it is built:
 `cargo test -p jewelcase-plugins -- --ignored`.
