@@ -59,12 +59,12 @@ impl Hub {
         self.retain(user, |connection| connection.outbox.try_send(message.clone()).is_ok())
     }
 
-    /// Sends `message` to one connection, closing it if its outbox is full. Its `serve` sends
-    /// its device list once it ends.
-    pub fn send(&self, presence: &Presence, message: &ServerMessage) {
+    /// Sends `message` to `user`'s connection `id`, if it is still open, closing it if its
+    /// outbox is full. Its `serve` sends its device list once it ends.
+    pub fn send(&self, user: i64, id: u64, message: &ServerMessage) {
         let message = encode(message);
-        let _ = self.retain(presence.user, |connection| {
-            connection.id != presence.id || connection.outbox.try_send(message.clone()).is_ok()
+        let _ = self.retain(user, |connection| {
+            connection.id != id || connection.outbox.try_send(message.clone()).is_ok()
         });
     }
 

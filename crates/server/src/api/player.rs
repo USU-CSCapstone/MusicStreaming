@@ -19,6 +19,7 @@
 //!
 //! Where each account was is also saved, to resume from after the server restarts.
 
+mod commands;
 mod saved;
 
 use std::collections::HashMap;
@@ -34,6 +35,7 @@ use super::realtime::{Hub, Presence, ServerMessage};
 use super::time::serialize_rfc3339;
 use super::{AppState, Code, Id, Problem, devices};
 use crate::db::now_ms;
+pub use commands::{CommandResult, PlayerCommand};
 
 /// Longer item IDs are refused, so no one keeps megabytes in memory as their place in a queue.
 const MAX_ITEM_ID: usize = 100;
@@ -42,6 +44,8 @@ const MAX_ITEM_ID: usize = 100;
 #[derive(Default)]
 pub struct Players {
     accounts: Mutex<HashMap<i64, PlayerState>>,
+    /// Remote commands passed on to the connection playing and not yet answered, by ID.
+    waiting: Mutex<HashMap<commands::Key, commands::Waiting>>,
 }
 
 /// The spec's `PlayerState`.
@@ -139,7 +143,7 @@ impl Players {
     pub fn send_state(&self, hub: &Hub, user: i64, presence: &Presence) {
         let accounts = self.lock();
         let state = accounts.get(&user).cloned().unwrap_or_else(PlayerState::stopped);
-        hub.send(presence, &ServerMessage::Player { state });
+        hub.send(user, presence.id(), &ServerMessage::Player { state });
     }
 
     /// Stops `user`'s playback where it got to by `heard_at`, when its client was last heard
@@ -147,6 +151,8 @@ impl Players {
     /// connections (`requirements/realtime.md` §6). Any of them can carry on from there.
     pub fn disconnected(&self, hub: &Hub, user: i64, connection: u64, heard_at: i64) {
         let mut accounts = self.lock();
+        // Under the lock, so no command can see this connection still playing and wait on it.
+        self.fail_commands_to(hub, user, connection);
         let Some(state) = accounts.get_mut(&user) else { return };
         if state.active_connection != Some(connection) {
             return;

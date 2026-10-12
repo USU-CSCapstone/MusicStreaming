@@ -24,7 +24,8 @@ impl Players {
     /// device is connected yet to be playing (`requirements/realtime.md` §6). A state whose
     /// track is gone or out of its account's reach is left out (`requirements/users.md` §10).
     pub async fn load(db: &Database) -> Result<Players, crate::db::DbError> {
-        Ok(Players { accounts: std::sync::Mutex::new(db.read(load).await?) })
+        let accounts = std::sync::Mutex::new(db.read(load).await?);
+        Ok(Players { accounts, ..Players::default() })
     }
 
     /// Saves unsaved states every [`SAVE_EVERY`] until the returned task is aborted, which

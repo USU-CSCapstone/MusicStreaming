@@ -4142,7 +4142,13 @@ export interface components {
             /** @description The active device's volume, as it last reported. Changed with `setVolume`. */
             volume?: number | null;
         };
-        /** @description Transport control, targeting any of the caller's devices. Last command wins. */
+        /**
+         * @description Transport control, targeting any of the caller's devices. Last command wins. Sent over
+         *     the realtime connection as `playerCommand`, and passed on to the target as `execute`.
+         *     Until waking an idle device and `transfer` are built, which need the queue, every
+         *     command goes to the connection playing, and one whose `deviceId` names any other
+         *     device fails.
+         */
         PlayerCommand: components["schemas"]["TransportCommand"] | components["schemas"]["SeekCommand"] | components["schemas"]["VolumeCommand"] | components["schemas"]["TransferCommand"];
         /** @description `play` sent to an idle connected device wakes it with the current queue (`requirements/realtime.md` §3). */
         TransportCommand: {
@@ -4193,7 +4199,13 @@ export interface components {
         CommandResult: {
             commandId: components["schemas"]["CommandId"];
             /**
-             * @description `pending` until the target device confirms. A failure is always reported (`requirements/realtime.md` §5).
+             * @description `pending` until the target device confirms. A failure is always reported
+             *     (`requirements/realtime.md` §5): at once when nothing is playing, or the command
+             *     is invalid or not one the server carries out; when the target's connection
+             *     closes; and after 5 seconds when the target has not answered. A command sent
+             *     again with the same `commandId` while it waits is passed on once, and its result
+             *     goes to the connection it was last sent from. An account has at most 16 commands
+             *     waiting at a time.
              * @enum {string}
              */
             status: "pending" | "applied" | "failed";
