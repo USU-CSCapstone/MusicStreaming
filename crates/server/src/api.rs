@@ -9,6 +9,7 @@ mod benchmark;
 mod connections;
 mod credit;
 pub mod cursor;
+mod devices;
 mod extract;
 mod id;
 mod images;
@@ -100,6 +101,7 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Arc<P
     let signed_in = Router::new()
         .route("/auth/logout", post(session::logout))
         .route("/me", get(me::get))
+        .route("/me/devices", get(devices::list))
         .route("/me/plays", post(plays::record))
         .route("/me/plugins", get(connections::list))
         .route(

@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::authenticate::Caller;
+use super::devices::{self, Device};
 use super::me::{self, User};
-use super::sql::timestamp;
-use super::{AppState, Code, Id, Problem};
+use super::{AppState, Code, Problem};
 use crate::db::now_ms;
 
 /// The cookie browser clients authenticate with (`cookieAuth` in `api/openapi.yaml`).
@@ -78,21 +78,6 @@ pub struct Session {
     device: Device,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Device {
-    id: Id,
-    name: String,
-    #[serde(rename = "type")]
-    kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    platform: Option<String>,
-    first_seen_at: String,
-    last_seen_at: String,
-    /// Whether the device holds a realtime connection, which none can open yet.
-    connected: bool,
-}
-
 /// A new, random token.
 pub fn new_token() -> Result<String, Problem> {
     let mut bytes = [0; 32];
@@ -108,14 +93,6 @@ pub fn token_hash(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
 
-const DEVICE: &str = concat!(
-    "SELECT id, name, type, platform, ",
-    timestamp!("created_at"),
-    ", ",
-    timestamp!("last_seen_at"),
-    " FROM devices WHERE id = ?1"
-);
-
 /// Registers `device` for `user`, signed in with `token`, and returns its session.
 pub fn register(
     tx: &Transaction,
@@ -130,17 +107,7 @@ pub fn register(
         params![user, device.name, device.kind, device.platform, token_hash(&token), now_ms()],
         |row| row.get(0),
     )?;
-    let device = tx.query_row(DEVICE, [id], |row| {
-        Ok(Device {
-            id: Id(row.get(0)?),
-            name: row.get(1)?,
-            kind: row.get(2)?,
-            platform: row.get(3)?,
-            first_seen_at: row.get(4)?,
-            last_seen_at: row.get(5)?,
-            connected: false,
-        })
-    })?;
+    let device = devices::get(tx, id)?;
     Ok(Session { token, user: me::user(tx, user)?, device })
 }
 
