@@ -116,6 +116,16 @@ impl PlayerState {
             unsaved: false,
         }
     }
+
+    /// Where playback is at `now`: past where it was reported, if it is playing. A clock that
+    /// stepped back counts as no time.
+    fn played_to(&self, now: i64) -> u32 {
+        let played = match self.status {
+            Status::Playing => u32::try_from(now - self.position_at).unwrap_or(0),
+            Status::Paused | Status::Stopped => 0,
+        };
+        self.position_ms.saturating_add(played)
+    }
 }
 
 impl Players {
@@ -130,6 +140,26 @@ impl Players {
         let accounts = self.lock();
         let state = accounts.get(&user).cloned().unwrap_or_else(PlayerState::stopped);
         hub.send(presence, &ServerMessage::Player { state });
+    }
+
+    /// Stops `user`'s playback where it got to by `heard_at`, when its client was last heard
+    /// from, if `connection`, now closed, was the one playing, and tells the account's other
+    /// connections (`requirements/realtime.md` §6). Any of them can carry on from there.
+    pub fn disconnected(&self, hub: &Hub, user: i64, connection: u64, heard_at: i64) {
+        let mut accounts = self.lock();
+        let Some(state) = accounts.get_mut(&user) else { return };
+        if state.active_connection != Some(connection) {
+            return;
+        }
+        state.position_ms = state.played_to(heard_at);
+        state.position_at = now_ms();
+        state.status = Status::Stopped;
+        state.active_device_id = None;
+        state.active_connection = None;
+        state.unsaved = true;
+        // Any connection this closes is already gone from the hub, so the device list its
+        // `serve` sends as it ends counts it out.
+        let _ = hub.broadcast(user, &ServerMessage::Player { state: state.clone() });
     }
 
     /// Applies `report` from `caller` over `connection`, already checked, and sends the new

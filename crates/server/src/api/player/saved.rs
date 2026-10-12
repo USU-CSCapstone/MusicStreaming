@@ -52,14 +52,10 @@ impl Players {
             else {
                 continue;
             };
-            // Saved as far as it has played, which a restart would otherwise lose.
-            let played = match state.status {
-                Status::Playing => u32::try_from(now - state.position_at).unwrap_or(0),
-                Status::Paused | Status::Stopped => 0,
-            };
             // Still unsaved while playing, so its place keeps being saved as it moves on.
             state.unsaved = state.status == Status::Playing;
-            rows.push((user, item, library.0, track.0, state.position_ms.saturating_add(played)));
+            // Saved as far as it has played, which a restart would otherwise lose.
+            rows.push((user, item, library.0, track.0, state.played_to(now)));
         }
         if rows.is_empty() {
             return;

@@ -5683,7 +5683,9 @@ components:
           description: |
             The one device holding playback for the account, playing or paused
             (`requirements/realtime.md` §2). `null` when stopped or before anything has played.
-            The single source of truth for which device is active.
+            The single source of truth for which device is active. When the connection it
+            plays over closes, playback stops where it got to, and any device can carry on
+            from there (§6).
         itemId:
           type: [string, 'null']
           description: The queue item playing.
@@ -5804,14 +5806,19 @@ components:
           type: boolean
           default: false
           description: |
-            Set when the user started playback on this connection, and whenever this
-            connection is playing but the last state it received named no active device, as
-            after the server restarts. It takes over from the device playing
-            (`requirements/realtime.md` §2). A report without it from any connection but the
-            active one is refused, so a device taken over from cannot take playback back
-            with reports sent before it heard. A device stops playing only when the state
-            names another device active; a device holding several connections, such as
-            browser tabs, plays in one at a time. A `stopped` report never takes over.
+            Set when the user starts playback on this connection. It takes over from the
+            device playing (`requirements/realtime.md` §2). A report without it from any
+            connection but the active one is refused, so a device taken over from cannot
+            take playback back with reports sent before it heard. A device stops playing only
+            when the state names another device active; a device holding several
+            connections, such as browser tabs, plays in one at a time. A `stopped` report
+            never takes over.
+
+            A new connection is never the active one. A device still playing when it
+            connects, after a dropped connection or a server restart, waits for the state it
+            is sent on connecting: if that names another device it stops, and otherwise it
+            sets `start` on its next report. A device that is playing also sets `start`
+            whenever a state it receives names no active device.
         status:
           type: string
           enum: [playing, paused, stopped, buffering]
