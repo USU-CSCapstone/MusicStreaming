@@ -35,7 +35,7 @@ use super::realtime::{Hub, Presence, ServerMessage};
 use super::time::serialize_rfc3339;
 use super::{AppState, Code, Id, Problem, devices};
 use crate::db::now_ms;
-pub use commands::{CommandResult, PlayerCommand};
+pub use commands::{CommandResult, PlayerCommand, send as send_command};
 
 /// Longer item IDs are refused, so no one keeps megabytes in memory as their place in a queue.
 const MAX_ITEM_ID: usize = 100;
@@ -44,8 +44,8 @@ const MAX_ITEM_ID: usize = 100;
 #[derive(Default)]
 pub struct Players {
     accounts: Mutex<HashMap<i64, PlayerState>>,
-    /// Remote commands passed on to the connection playing and not yet answered, by ID.
-    waiting: Mutex<HashMap<commands::Key, commands::Waiting>>,
+    /// Each account's remote commands, waiting and lately answered.
+    commands: Mutex<HashMap<i64, commands::Commands>>,
 }
 
 /// The spec's `PlayerState`.

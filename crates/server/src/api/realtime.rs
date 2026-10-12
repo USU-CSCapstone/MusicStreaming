@@ -252,7 +252,8 @@ async fn handle(
             if !signed_in || !presence.is_open() {
                 return None;
             }
-            let result = state.players.command(&state.hub, caller, presence.id(), command);
+            let result =
+                state.players.command_from_connection(&state.hub, caller, presence.id(), command);
             Some(ServerMessage::CommandResult { result })
         }
         ClientMessage::CommandResult { result } => {

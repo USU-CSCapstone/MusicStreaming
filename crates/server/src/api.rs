@@ -132,6 +132,7 @@ pub fn router(
         .route("/me", get(me::get))
         .route("/me/devices", get(devices::list))
         .route("/me/player", get(player::get))
+        .route("/me/player/commands", post(player::send_command))
         .route("/me/plays", post(plays::record))
         .route("/me/plugins", get(connections::list))
         .route(
