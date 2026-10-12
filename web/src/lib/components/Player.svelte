@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { formatDuration } from '$lib/format';
 	import { panels } from '$lib/panels.svelte';
+	import { playback } from '$lib/playback.svelte';
 	import { player } from '$lib/player.svelte';
 	import { realtime } from '$lib/realtime.svelte';
 	import ArtistLinks from './ArtistLinks.svelte';
@@ -9,7 +10,30 @@
 	import Icon from './Icon.svelte';
 	import Waveform from './Waveform.svelte';
 
-	const track = $derived(player.current);
+	// Another device's playback is shown here, to be picked up (`requirements/realtime.md` §2, §6).
+	const remote = $derived(playback.shows(player.playing));
+	const track = $derived(remote ? playback.track : player.current);
+	const playing = $derived(remote ? playback.state?.status === 'playing' : player.playing);
+	const duration = $derived(remote ? (track?.durationUs ?? 0) / 1e6 : player.duration);
+	const where = $derived(
+		playback.state?.status === 'stopped'
+			? 'Stopped'
+			: realtime.connected
+				? `On ${playback.deviceName}`
+				: `Last on ${playback.deviceName}`
+	);
+	let now = $state(Date.now());
+	$effect(() => {
+		if (!remote || !playing) return;
+		const timer = setInterval(() => (now = Date.now()), 250);
+		return () => clearInterval(timer);
+	});
+	const position = $derived(remote ? playback.positionAt(now) : player.position);
+
+	/** Plays here what the other device was playing, from where it got to. */
+	function playHere() {
+		if (playback.track) player.pickUp(playback.track, playback.positionAt(Date.now()));
+	}
 	let lastVolume = 1;
 	let innerWidth = $state(1024);
 	const compact = $derived(innerWidth < 768);
@@ -27,7 +51,7 @@
 <svelte:window bind:innerWidth />
 
 <!-- Shown on a phone while offline even with nothing playing, so the user knows. -->
-<section class="player" class:idle={!track && !realtime.offline} aria-label="Player">
+<section class="player" class:idle={!track && !remote && !realtime.offline} aria-label="Player">
 	<div class="now">
 		{#if track}
 			<a class="art" href={resolve('/albums/[id]', { id: track.album.id })} aria-label="Open album">
@@ -36,7 +60,16 @@
 			<div class="meta">
 				<span class="title">{track.title}</span>
 				<span class="muted artists"><ArtistLinks artists={track.artists} /></span>
+				{#if remote}
+					<span class="where">
+						<span class="device">{where}</span>
+						<span aria-hidden="true">·</span>
+						<button type="button" class="link" onclick={playHere}>Play here</button>
+					</span>
+				{/if}
 			</div>
+		{:else if remote}
+			<span class="muted">{where}</span>
 		{:else}
 			<span class="muted">Nothing playing</span>
 		{/if}
@@ -48,7 +81,7 @@
 				type="button"
 				class="icon-btn skip"
 				aria-label="Previous"
-				disabled={!track}
+				disabled={!track || remote}
 				onclick={() => player.previous()}
 			>
 				<Icon name="previous" size={18} />
@@ -56,34 +89,35 @@
 			<button
 				type="button"
 				class="play"
-				aria-label={player.playing ? 'Pause' : 'Play'}
-				disabled={!track}
+				aria-label={playing ? 'Pause' : 'Play'}
+				disabled={!track || remote}
 				onclick={() => player.toggle()}
 			>
-				<Icon name={player.playing ? 'pause' : 'play'} size={18} />
+				<Icon name={playing ? 'pause' : 'play'} size={18} />
 			</button>
 			<button
 				type="button"
 				class="icon-btn skip"
 				aria-label="Next"
-				disabled={!track}
+				disabled={!track || remote}
 				onclick={() => player.next()}
 			>
 				<Icon name="next" size={18} />
 			</button>
 		</div>
 		<div class="progress">
-			<span class="time muted tabular">{formatDuration(player.position * 1e6)}</span>
+			<span class="time muted tabular">{formatDuration(position * 1e6)}</span>
 			<div class="wave-slot">
 				<Waveform
 					height={compact ? 20 : 40}
-					points={track ? player.waveform : null}
-					position={player.position}
-					duration={track ? player.duration : 0}
+					points={track ? (remote ? playback.waveform : player.waveform) : null}
+					{position}
+					duration={track ? duration : 0}
+					seekable={!remote}
 					onseek={(s) => player.seek(s)}
 				/>
 			</div>
-			<span class="time muted tabular">{formatDuration(player.duration * 1e6)}</span>
+			<span class="time muted tabular">{formatDuration(duration * 1e6)}</span>
 		</div>
 	</div>
 
@@ -163,6 +197,36 @@
 		display: flex;
 		min-width: 0;
 		font-size: 13px;
+	}
+
+	.where {
+		display: flex;
+		align-items: center;
+		gap: var(--space-1);
+		min-width: 0;
+		color: var(--accent);
+		font-size: 12px;
+	}
+
+	/* A long device name gives way, never the button. */
+	.device {
+		min-width: 0;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.link {
+		flex-shrink: 0;
+		min-height: 24px;
+		padding: 0;
+		border: 0;
+		background: none;
+		color: inherit;
+		font: inherit;
+		font-weight: 600;
+		text-decoration: underline;
+		cursor: pointer;
 	}
 
 	.center {

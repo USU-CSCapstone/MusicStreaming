@@ -7,6 +7,7 @@
 		position,
 		duration,
 		onseek,
+		seekable = true,
 		height = 40,
 		label = 'Seek'
 	}: {
@@ -16,6 +17,8 @@
 		position: number;
 		duration: number;
 		onseek: (seconds: number) => void;
+		/** False shows the position without letting it be moved. */
+		seekable?: boolean;
 		height?: number;
 		label?: string;
 	} = $props();
@@ -33,7 +36,7 @@
 	const heights = $derived(points ? bars(points, count) : null);
 	const shown = $derived(dragging ?? position);
 	const progress = $derived(duration > 0 ? Math.min(1, Math.max(0, shown / duration)) : 0);
-	const disabled = $derived(duration <= 0);
+	const disabled = $derived(duration <= 0 || !seekable);
 
 	function at(e: PointerEvent, el: HTMLElement): number {
 		const rect = el.getBoundingClientRect();

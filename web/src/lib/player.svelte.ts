@@ -100,6 +100,22 @@ class Player {
 		this.#plays.end('stopped');
 	}
 
+	/**
+	 * Plays here `track`, which another device was playing, from `seconds` in: within the
+	 * context this player has, if the track is in it, or on its own. Until the server keeps
+	 * the queue, what came after it on the other device does not come along.
+	 */
+	pickUp(track: TrackSummary, seconds: number) {
+		let index = this.tracks.findIndex((t) => t.id === track.id);
+		if (index < 0) {
+			this.tracks = [track];
+			this.context = { type: 'library' };
+			index = 0;
+		}
+		this.#started();
+		this.#go(index, seconds);
+	}
+
 	/** Play `tracks` from `context`, starting at `index`. */
 	play(tracks: TrackSummary[], index: number, context: PlayContext = { type: 'library' }) {
 		const start = firstPlayable(tracks, index);
@@ -223,7 +239,8 @@ class Player {
 		});
 	}
 
-	#go(index: number) {
+	/** Plays `index` from `startAt` seconds in. */
+	#go(index: number, startAt = 0) {
 		this.index = index;
 		const track = this.tracks[index];
 		const load = ++this.#load;
@@ -231,7 +248,7 @@ class Player {
 		// One that played to its end has ended its play already.
 		this.#plays.end('skipped');
 		audio.pause();
-		this.position = 0;
+		this.position = startAt;
 		this.duration = track.durationUs / 1_000_000;
 		this.waveform = null;
 		this.#mediaSession(track);
@@ -244,6 +261,15 @@ class Player {
 			.then((info) => {
 				if (load !== this.#load) return;
 				audio.src = audioUrl(lib, track.id, info.variant);
+				if (startAt > 0) {
+					// Before the audio loads this is where it starts, in most browsers; the rest
+					// are moved there once they know how long it is.
+					audio.currentTime = startAt;
+					const start = () => {
+						if (load === this.#load && audio.currentTime < startAt - 1) audio.currentTime = startAt;
+					};
+					audio.addEventListener('loadedmetadata', start, { once: true });
+				}
 				return audio.play();
 			})
 			.catch(() => {
