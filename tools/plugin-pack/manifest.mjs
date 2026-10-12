@@ -28,6 +28,7 @@ export const MIN_EVERY_MINUTES = 5;
 
 /** A rate limit for a destination: up to nine digits, no leading zero, per second, minute, or hour. */
 const RATE_LIMIT = /^[1-9][0-9]{0,8}\/(s|min|h)$/;
+const HOST_NAME = /^[A-Za-z0-9.-]+$/;
 
 const MAGIC = [0x00, 0x61, 0x73, 0x6d];
 /** Component-model binaries: version 0x0d, layer 1. A core module is version 1, layer 0. */
@@ -237,8 +238,12 @@ function validateRateLimits(at, limits, destinations) {
 	const entries = /** @type {Record<string, unknown>} */ (limits);
 	// Sorted, as the server's map of them is.
 	for (const host of Object.keys(entries).sort()) {
-		const listed = host !== '*' && hosts.some((d) => d === '*' || ascii(d) === ascii(host));
-		if (!listed) problems.push(`${at}: rateLimits: "${host}" is not one of its destinations`);
+		// Matched exactly against the host a request names, so `*` or a pattern never would be.
+		if (!HOST_NAME.test(host)) {
+			problems.push(`${at}: rateLimits: "${host}" is not a host name; each limit is for one host`);
+		} else if (!hosts.some((d) => d === '*' || ascii(d) === ascii(host))) {
+			problems.push(`${at}: rateLimits: "${host}" is not one of its destinations`);
+		}
 		const limit = entries[host];
 		if (typeof limit !== 'string' || !RATE_LIMIT.test(limit)) {
 			problems.push(`${at}: rateLimits: "${host}" needs a limit such as "1/s", "60/min", or "1000/h"`);
