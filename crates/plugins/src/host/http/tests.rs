@@ -10,7 +10,7 @@ use wasmtime_wasi::WasiCtx;
 
 use super::super::{Grants, Refused, Run};
 use super::http::{self, Error, Host as _};
-use crate::manifest::Permission;
+use crate::manifest::{Per, Permission, RateLimit};
 use crate::network::Network;
 
 /// How many requests the test server has had for each path.
@@ -91,6 +91,7 @@ fn with(network: Arc<Network>, plugin: &str, library: i64) -> Run<Refused> {
         grants: Grants {
             plugin: plugin.into(),
             library,
+            user: None,
             permissions: vec![Permission::Network],
             destinations: vec!["127.0.0.1".into()],
             rate_limits: Vec::new(),
@@ -199,17 +200,59 @@ fn assert_waits_two_minutes(error: Error) {
     assert!((110_000..=120_000).contains(&ms), "{ms}");
 }
 
+/// A limit on requests to the test server.
+fn limit(gap: Duration, per: Per) -> RateLimit {
+    RateLimit { host: "127.0.0.1".into(), gap, per }
+}
+
 #[tokio::test]
-async fn a_429_pauses_the_destination_for_every_plugin() {
-    let (port, hits) = server().await;
+async fn a_429_pauses_only_the_plugin_that_was_told() {
+    let (port, _) = server().await;
     let network = Arc::new(Network::default());
     let mut told = with(network.clone(), "told", 1);
     let reply = told.send(get(format!("http://127.0.0.1:{port}/busy"))).await.unwrap();
     assert_eq!(reply.status, 429);
-    let mut other = with(network, "other", 2);
-    let refused = other.send(get(format!("http://127.0.0.1:{port}/"))).await.unwrap_err();
+    let refused = told.send(get(format!("http://127.0.0.1:{port}/"))).await.unwrap_err();
     assert_waits_two_minutes(refused);
+    assert_eq!(body(&mut with(network, "other", 1), port, "/").await, "hello");
+}
+
+#[tokio::test]
+async fn a_429_for_one_user_pauses_only_their_runs() {
+    let (port, _) = server().await;
+    let network = Arc::new(Network::default());
+    let as_user = |user| {
+        let mut run = with(network.clone(), "scrobbler", 1);
+        run.grants.user = Some(user);
+        run.grants.rate_limits = vec![limit(Duration::from_millis(1), Per::User)];
+        run
+    };
+    let reply = as_user(1).send(get(format!("http://127.0.0.1:{port}/busy"))).await.unwrap();
+    assert_eq!(reply.status, 429);
+    let refused = as_user(1).send(get(format!("http://127.0.0.1:{port}/"))).await.unwrap_err();
+    assert_waits_two_minutes(refused);
+    assert_eq!(body(&mut as_user(2), port, "/").await, "hello");
+}
+
+#[tokio::test]
+async fn a_429_on_a_global_limit_pauses_every_plugin_allowed_to_share_it() {
+    let (port, hits) = server().await;
+    let network = Arc::new(Network::default());
+    let sharing = |plugin, allowed| {
+        let mut run = with(network.clone(), plugin, 1);
+        run.grants.rate_limits = vec![limit(Duration::from_millis(1), Per::Global)];
+        if allowed {
+            run.grants.permissions.push(Permission::GlobalRateLimits);
+        }
+        run
+    };
+    let reply = sharing("told", true).send(get(format!("http://127.0.0.1:{port}/busy"))).await;
+    assert_eq!(reply.unwrap().status, 429);
+    let refused = sharing("other", true).send(get(format!("http://127.0.0.1:{port}/"))).await;
+    assert_waits_two_minutes(refused.unwrap_err());
     assert!(!hits.lock().unwrap().contains_key("/"));
+    // Not allowed to share it, a plugin's global limit counts only its own requests.
+    assert_eq!(body(&mut sharing("apart", false), port, "/").await, "hello");
 }
 
 #[tokio::test]
@@ -230,7 +273,7 @@ async fn requests_keep_to_the_declared_pace() {
     let (port, _) = server().await;
     let mut run = run();
     let gap = Duration::from_millis(200);
-    run.grants.rate_limits = vec![("127.0.0.1".into(), gap)];
+    run.grants.rate_limits = vec![limit(gap, Per::Plugin)];
     let started = Instant::now();
     for _ in 0..3 {
         assert_eq!(body(&mut run, port, "/").await, "hello");

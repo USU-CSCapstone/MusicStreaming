@@ -19,7 +19,7 @@ use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
-use crate::manifest::{Api, Permission};
+use crate::manifest::{Api, Permission, RateLimit};
 use crate::network::Network;
 
 mod http;
@@ -111,10 +111,12 @@ pub struct Grants {
     /// The plugin and library the run is for, which scope what it shares with other runs.
     pub plugin: String,
     pub library: i64,
+    /// The user it acts for, if it acts for one, whose `"per": "user"` rate limits it keeps to.
+    pub user: Option<i64>,
     pub permissions: Vec<Permission>,
     pub destinations: Vec<String>,
-    /// The gap its manifest asks for between requests to each of these hosts.
-    pub rate_limits: Vec<(String, Duration)>,
+    /// The rate limits its manifest declares.
+    pub rate_limits: Vec<RateLimit>,
     /// The settings in effect for the run, defaults included.
     pub settings: serde_json::Map<String, serde_json::Value>,
 }
@@ -402,6 +404,7 @@ fn wit(permission: Permission) -> host::Permission {
         Permission::ScanFinished => host::Permission::ScanFinished,
         Permission::Schedule => host::Permission::Schedule,
         Permission::Played => host::Permission::Played,
+        Permission::GlobalRateLimits => host::Permission::GlobalRateLimits,
     }
 }
 

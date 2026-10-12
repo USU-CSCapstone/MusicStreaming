@@ -3,16 +3,18 @@
 //! approved service cannot hand the plugin on to one that was not.
 //!
 //! Every plugin's requests share two things (`crate::network`). Each waits its turn at the
-//! pace its destination allows. A GET is answered from a reply already fetched while that
-//! reply is fresh, and a stale one is checked rather than fetched again.
+//! pace its destination allows, counted with the requests its manifest says. A GET is answered
+//! from a reply already fetched while that reply is fresh, and a stale one is checked rather
+//! than fetched again.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use super::bindings::jewelcase::plugin::http;
 use super::{Library, Run};
-use crate::manifest::Permission;
+use crate::manifest::{Per, Permission};
 use crate::network::cache::{self, Key, Lookup, Reply};
+use crate::network::limits::Scope;
 use crate::rules;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
@@ -101,9 +103,9 @@ impl<L: Library> http::Host for Run<L> {
         }
         // `allowed` has parsed it, so it has a host.
         let host = host_of(&request.url);
-        let limits = &self.grants.rate_limits;
-        let declared = limits.iter().find(|(d, _)| d.eq_ignore_ascii_case(&host)).map(|l| l.1);
-        let turn = self.network.limits.turn(&host, &self.grants.plugin, declared, Instant::now());
+        let (scope, declared) = self.pace(&host);
+        let plugin = &self.grants.plugin;
+        let turn = self.network.limits.turn(&host, &scope, plugin, declared, Instant::now());
         // Rounded up, so a plugin that waits that long finds its turn has come.
         let turn =
             turn.map_err(|wait| http::Error::RateLimited(wait.as_micros().div_ceil(1000) as u64))?;
@@ -126,7 +128,9 @@ impl<L: Library> http::Host for Run<L> {
         let (now, clock) = (Instant::now(), SystemTime::now());
         let retry_after = reply.header("retry-after");
         // Redirects have been followed, so the answer is from where the last one led.
-        self.network.limits.answered(&host_of(&reply.url), reply.status, retry_after, now, clock);
+        let answered = host_of(&reply.url);
+        let (scope, _) = self.pace(&answered);
+        self.network.limits.answered(&answered, &scope, reply.status, retry_after, now, clock);
         let Some(key) = key else { return Ok(response(reply)) };
         let reply = match stale {
             Some(stale) if reply.status == 304 => {
@@ -142,6 +146,21 @@ impl<L: Library> http::Host for Run<L> {
 }
 
 impl<L: Library> Run<L> {
+    /// Whose requests to `host` this run's are counted with, and the gap its manifest declares
+    /// there, if any. A global limit the admin did not let it share, or a user's limit in a run
+    /// for no user, counts the plugin's own.
+    fn pace(&self, host: &str) -> (Scope, Option<Duration>) {
+        let grants = &self.grants;
+        let limit = grants.rate_limits.iter().find(|l| l.host.eq_ignore_ascii_case(host));
+        let sharing = grants.permissions.contains(&Permission::GlobalRateLimits);
+        let scope = match (limit.map(|l| l.per), grants.user) {
+            (Some(Per::Global), _) if sharing => Scope::Global,
+            (Some(Per::User), Some(user)) => Scope::User(grants.plugin.clone(), user),
+            _ => Scope::Plugin(grants.plugin.clone()),
+        };
+        (scope, limit.map(|l| l.gap))
+    }
+
     /// A kept reply, if this plugin may reach where it came from: one that was redirected is
     /// refused to a plugin that could not have followed the redirect itself.
     fn reuse(&self, reply: Reply) -> Result<http::Response, http::Error> {

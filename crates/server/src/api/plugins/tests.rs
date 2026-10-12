@@ -163,6 +163,36 @@ async fn cannot_be_enabled_until_its_required_permissions_are_granted() {
 }
 
 #[tokio::test]
+async fn sharing_rate_limits_is_granted_like_any_other_permission() {
+    let (temp, app) = server().await;
+    let manifest = json!({
+        "id": "artwork", "name": "Artwork", "version": "1.0.0", "apiVersion": "0.3",
+        "permissions": [
+            { "permission": "network", "required": true, "reason": "To fetch artwork.",
+              "destinations": ["musicbrainz.org"],
+              "rateLimits": { "musicbrainz.org": { "limit": "1/s", "per": "global" } } },
+            { "permission": "globalRateLimits", "required": false,
+              "reason": "MusicBrainz limits each server, not each plugin." }
+        ]
+    });
+    rusqlite::Connection::open(temp.path().join("jewelcase.db"))
+        .unwrap()
+        .execute(
+            "INSERT INTO plugins (id, manifest, installed_at, updated_at) VALUES ('artwork', ?1, 0, 0)",
+            [manifest.to_string()],
+        )
+        .unwrap();
+    let grants = json!({ "granted": ["network", "globalRateLimits"], "libraries": [] });
+    let (status, plugin) =
+        call(&app, ADMIN, "PUT", "/api/v1/admin/plugins/artwork/permissions", Some(grants)).await;
+    assert_eq!(status, StatusCode::OK, "{plugin}");
+    assert_eq!(plugin["granted"], json!(["globalRateLimits", "network"]));
+    // The admin sees what it would share before granting it.
+    let limits = &plugin["permissions"][0]["rateLimits"];
+    assert_eq!(limits, &json!({ "musicbrainz.org": { "limit": "1/s", "per": "global" } }));
+}
+
+#[tokio::test]
 async fn revoking_a_required_permission_disables_it_at_once() {
     let (_temp, app) = server().await;
     let all = json!({ "granted": ["network"], "libraries": [{ "libraryId": "1", "granted": ["libraryRead"] }] });

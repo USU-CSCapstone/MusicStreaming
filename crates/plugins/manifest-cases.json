@@ -1969,6 +1969,143 @@
 		]
 	},
 	{
+		"name": "rate limits counted per plugin, per user, and with every plugin that shares them",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"lrclib.net",
+						"api.listenbrainz.org",
+						"musicbrainz.org",
+						"coverartarchive.org"
+					],
+					"rateLimits": {
+						"lrclib.net": "2/s",
+						"api.listenbrainz.org": {
+							"limit": "1/s",
+							"per": "user"
+						},
+						"musicbrainz.org": {
+							"limit": "1/s",
+							"per": "global"
+						},
+						"coverartarchive.org": {
+							"limit": "60/min",
+							"per": "plugin"
+						}
+					}
+				},
+				{
+					"permission": "globalRateLimits",
+					"required": false,
+					"reason": "MusicBrainz limits each server, not each plugin."
+				}
+			]
+		},
+		"problems": []
+	},
+	{
+		"name": "a global rate limit without globalRateLimits",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"musicbrainz.org"
+					],
+					"rateLimits": {
+						"musicbrainz.org": {
+							"limit": "1/s",
+							"per": "global"
+						}
+					}
+				}
+			]
+		},
+		"problems": [
+			"a rate limit \"per\": \"global\" needs globalRateLimits as well"
+		]
+	},
+	{
+		"name": "globalRateLimits without a global rate limit",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"musicbrainz.org"
+					],
+					"rateLimits": {
+						"musicbrainz.org": "1/s"
+					}
+				},
+				{
+					"permission": "globalRateLimits",
+					"required": false,
+					"reason": "MusicBrainz limits each server, not each plugin."
+				}
+			]
+		},
+		"problems": [
+			"globalRateLimits needs a rate limit \"per\": \"global\""
+		]
+	},
+	{
+		"name": "rate limits that do not say whose requests they count",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"*"
+					],
+					"rateLimits": {
+						"a.example": {
+							"limit": "1/s"
+						},
+						"b.example": {
+							"limit": "1/s",
+							"per": "everyone"
+						},
+						"c.example": {
+							"per": "user"
+						}
+					}
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: rateLimits: \"a.example\" needs \"per\": \"plugin\", \"user\", or \"global\"",
+			"permissions[0]: rateLimits: \"b.example\" needs \"per\": \"plugin\", \"user\", or \"global\"",
+			"permissions[0]: rateLimits: \"c.example\" needs a limit such as \"1/s\", \"60/min\", or \"1000/h\""
+		]
+	},
+	{
 		"name": "rate limits that are not a map",
 		"manifest": {
 			"id": "x-plugin",

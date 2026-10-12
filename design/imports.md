@@ -20,13 +20,13 @@ Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`ex
 | `files` | `roots`, `list`, `read` | `libraryRead` (`roots`: any library permission) | 10,000 entries per list; 8 MB per read |
 | `files` | `write` (`create`) | `libraryAdd` | 32 MB, written whole or not at all |
 | `files` | `write` (`replace`), `rename`, `delete` | `libraryChange` | 32 MB; a folder is deleted only when empty |
-| `http` | `send` | `network`, to declared destinations only, redirects included | 16 MB bodies, 15 s per request, 5 redirects; a shared pace and cache (below) |
+| `http` | `send` | `network`, to declared destinations only, redirects included | 16 MB bodies, 15 s per request, 5 redirects; a declared pace and a shared cache (below) |
 | `state` | `get`, `set`, `delete` | — (per plugin and library) | 512 B keys, 1 MB values |
 | `settings` | `get` | — | Library value, else server-wide value, else the default, plus the connected user's personal settings |
 
 The limits on every run are 64 MiB of memory, 60 s of compute, and 5 minutes of wall clock.
 
-**`http.send` shares a pace and a cache across every plugin** ([`plugins.md` §7](plugins.md#7-running-plugins)). A network request declares `rateLimits` per destination, and the strictest declared pace applies to every request to that host. A `429`, or a `503` with `Retry-After`, pauses that host for everyone. A GET is answered from a fresh reply already fetched for the same library, URL, and headers, and a stale one is checked with its `ETag` or `Last-Modified`.
+**`http.send` keeps to a declared pace and shares a cache** ([`plugins.md` §7](plugins.md#7-running-plugins)). A network request declares `rateLimits` per destination, each counting the plugin's own requests, its runs for each user apart, or, with `globalRateLimits`, those of every plugin sharing the limit, at the strictest pace any declared. A `429`, or a `503` with `Retry-After`, pauses only the requests counted with the one it answered. A GET is answered from a fresh reply already fetched for the same library, URL, and headers, and a stale one is checked with its `ETag` or `Last-Modified`.
 
 **`http.send` says why a request has no response, so a plugin can act on it.** Since `0.3` its error is a variant: `not-granted`; `refused`, not sent, with a message (a URL, destination, header, or body the host will not send); `rate-limited`, not sent, with how many milliseconds until the destination may be asked again; `timed-out`; and `failed`, sent but with no reply to give, with a message. A `0.2` plugin gets the same failures as messages, in the words it always did.
 
@@ -51,10 +51,11 @@ These close gaps where [`requirements/plugins.md`](../requirements/plugins.md) a
 
 #### Shared Cache and Coordinated Rate Limits
 
-**Built** (§1, [`plugins.md` §7](plugins.md#7-running-plugins)). The design moved in two ways from what was first proposed here:
+**Built** (§1, [`plugins.md` §7](plugins.md#7-running-plugins)). The design moved in three ways from what was first proposed here:
 
 - **Credentials did not need marking.** The proposal was to cache a request carrying credentials only for its own plugin. Instead the cache key is the library, the URL, and every header sent. A reply fetched with a credential is then reused only by a request carrying the same credential, wherever the credential is, so the host never has to recognise one.
 - **The cache is per library, not server-wide.** Whether a reply is already cached, measured by how fast it comes back, would tell a plugin what another library holds. Plugins in one library still share.
+- **Rate limits are shared only by permission.** At first every declared limit applied to every plugin's requests to that host, and any `429` paused it for all of them. That slowed services that limit each account rather than each address, such as a scrobbler's, and let any plugin slow every other. A limit now counts the plugin's own requests unless it says `"per": "user"` or `"per": "global"`, and sharing one needs `globalRateLimits`.
 
 What remains:
 
@@ -135,6 +136,6 @@ What remains:
 
 ## 4. Open Questions
 
-1. **Who declares a rate limit.** Each plugin declares its own and the strictest wins, so a careless plugin can only make things slower, never faster. A host-kept list for well-known services would be curation the project said it does not do ([`requirements/plugins.md` §4.4](../requirements/plugins.md#44-who-is-trusted)). A declaration is remembered until restart, even after its plugin is uninstalled, which errs the same way.
+1. **Who declares a rate limit.** Each plugin declares its own, and among plugins sharing a global one the strictest wins, so a careless plugin can only make the others sharing it slower, never faster. A host-kept list for well-known services would be curation the project said it does not do ([`requirements/plugins.md` §4.4](../requirements/plugins.md#44-who-is-trusted)). Two plugins that each count a per-address limit alone, because neither declared it global or the admin declined to let them share, can break it together. A declaration is remembered until restart, even after its plugin is uninstalled, which errs the same way.
 2. **Cross-plugin calls** (§3.6): whether they happen at all, and under whose grants.
 3. **Imports checked at install.** [`plugins.md` §6](plugins.md#6-packaging) proposes refusing a plugin that imports network access it did not request. Each import added here makes that check more valuable, and it is not built.
