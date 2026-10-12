@@ -18,7 +18,7 @@ use super::devices::{self, Device};
 use super::me::{self, User};
 use super::realtime::Revoked;
 use super::{AppState, Code, Problem};
-use crate::db::now_ms;
+use crate::db::{DbError, now_ms};
 
 /// The cookie browser clients authenticate with (`cookieAuth` in `api/openapi.yaml`).
 pub const COOKIE: &str = "jewelcase_session";
@@ -115,11 +115,20 @@ pub fn register(
 /// `logout`: removes the calling device, closes its realtime connections, and tells a browser
 /// to forget its cookie.
 pub async fn logout(State(state): State<AppState>, caller: Caller) -> Result<Response, Problem> {
-    state
-        .db
-        .write(move |tx| tx.execute("DELETE FROM devices WHERE id = ?1", [caller.device]))
-        .await?;
-    state.hub.revoke(caller.user, caller.device, Revoked::LoggedOut);
+    let (db, hub) = (state.db.clone(), state.hub.clone());
+    // Spawned: a client that hangs up drops this request, which must not leave the device's
+    // connections open once its row is gone.
+    let logout = tokio::spawn(async move {
+        db.write(move |tx| tx.execute("DELETE FROM devices WHERE id = ?1", [caller.device]))
+            .await?;
+        hub.revoke(caller.user, caller.device, Revoked::LoggedOut);
+        devices::changed(db, hub, caller.user);
+        Ok::<_, DbError>(())
+    });
+    logout.await.map_err(|error| {
+        tracing::error!(%error, "logging out did not complete");
+        Problem::new(Code::Internal)
+    })??;
     let forget = cookie_header(format!("{COOKIE}=; Path={}; Max-Age=0", state.prefix));
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, forget)]).into_response())
 }

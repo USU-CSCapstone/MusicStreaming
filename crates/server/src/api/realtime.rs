@@ -30,6 +30,7 @@ pub use hub::Hub;
 use hub::Presence;
 
 use super::authenticate::{Caller, unauthenticated};
+use super::devices::{self, Device};
 use super::time::rfc3339;
 use super::{AppState, Code, Id, Problem};
 use crate::db::{Database, now_ms};
@@ -57,9 +58,10 @@ enum ClientMessage {
 /// The spec's `RealtimeServerMessage`, as far as it is built.
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
-enum ServerMessage {
+pub enum ServerMessage {
     Hello { device_id: Id, server_time: String },
     Pong { server_time: String },
+    Devices { devices: Vec<Device> },
     SessionRevoked { reason: Revoked },
 }
 
@@ -92,7 +94,7 @@ pub async fn open(
     Ok(upgrade
         .max_message_size(MAX_MESSAGE)
         .max_frame_size(MAX_MESSAGE)
-        .on_upgrade(move |socket| serve(socket, presence, state.db, caller)))
+        .on_upgrade(move |socket| serve(socket, presence, state.db, state.hub, caller)))
 }
 
 /// Whether `device` still has a token.
@@ -124,9 +126,17 @@ fn same_origin(headers: &HeaderMap) -> bool {
 }
 
 /// Holds `socket` open for `caller` until either side closes it or it goes silent.
-async fn serve(mut socket: WebSocket, mut presence: Presence, db: Arc<Database>, caller: Caller) {
+async fn serve(
+    mut socket: WebSocket,
+    mut presence: Presence,
+    db: Arc<Database>,
+    hub: Arc<Hub>,
+    caller: Caller,
+) {
     let hello = ServerMessage::Hello { device_id: Id(caller.device), server_time: now() };
     if send(&mut socket, encode(&hello)).await {
+        // Every connection of the account, this one included, learns it is connected.
+        devices::changed(db.clone(), hub.clone(), caller.user);
         let mut heartbeat = interval_at(Instant::now() + HEARTBEAT, HEARTBEAT);
         let mut heard = Instant::now();
         loop {
@@ -142,13 +152,13 @@ async fn serve(mut socket: WebSocket, mut presence: Presence, db: Arc<Database>,
                         break;
                     }
                 }
-                Some(message) = presence.next() => {
-                    let revoked = matches!(message, ServerMessage::SessionRevoked { .. });
-                    if !send(&mut socket, encode(&message)).await {
-                        break;
-                    }
-                    if revoked {
+                message = presence.next() => {
+                    let Some(message) = message else {
+                        // The hub let go of this connection, after any last word it had for it.
                         send(&mut socket, Message::Close(None)).await;
+                        break;
+                    };
+                    if !send(&mut socket, message).await {
                         break;
                     }
                 }
@@ -169,6 +179,7 @@ async fn serve(mut socket: WebSocket, mut presence: Presence, db: Arc<Database>,
     if let Err(error) = seen.await {
         tracing::warn!(%error, "cannot record when a device was last seen");
     }
+    devices::changed(db, hub, caller.user);
 }
 
 /// Sends `message`, and whether it went within [`SILENCE`].
