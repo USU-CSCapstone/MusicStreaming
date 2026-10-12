@@ -43,3 +43,5 @@ export type PlayReport = Schemas['PlayReport'];
 export type PlayContext = Schemas['Context'];
 export type RealtimeClientMessage = Schemas['RealtimeClientMessage'];
 export type RealtimeServerMessage = Schemas['RealtimeServerMessage'];
+export type PlayerState = Schemas['PlayerState'];
+export type ProgressReport = Schemas['ProgressReport'];
