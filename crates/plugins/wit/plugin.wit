@@ -1,6 +1,7 @@
-package jewelcase:plugin@0.2.0;
+package jewelcase:plugin@0.3.0;
 
-/// The plugin contract (design/plugins.md §7). Every import checks its permission in the
+/// The plugin contract (design/plugins.md §7). 0.3 gave `http.send` an error a plugin can act
+/// on; plugins built against 0.2 still load (`0.2/`). Every import checks its permission in the
 /// host. Imports stay linked even when their permission was declined, so a plugin with an
 /// optional permission still loads; the call answers an error instead, and `granted` lets a
 /// plugin adapt up front.
@@ -131,7 +132,25 @@ interface http {
     body: list<u8>,
   }
 
-  send: func(request: request) -> result<response, string>;
+  /// Why a request has no response.
+  variant error {
+    /// The network permission was not granted.
+    not-granted,
+    /// Not sent, as the message says: not an http(s) URL, a destination the manifest does not
+    /// name, a header the host sets, or a body over 16 MB.
+    refused(string),
+    /// Not sent: its destination cannot be asked again for this many milliseconds, because it
+    /// asked to be left alone or every plugin's requests to it have used their pace for now.
+    /// Ask again after that long.
+    rate-limited(u64),
+    /// Sent, but no reply came within 15 s.
+    timed-out,
+    /// Sent, but with no reply to give, as the message says: the connection failed, a redirect
+    /// led somewhere not approved or too many times, or the reply was over 16 MB.
+    failed(string),
+  }
+
+  send: func(request: request) -> result<response, error>;
 }
 
 /// The plugin's own storage for this library, kept between runs, so nothing learned is

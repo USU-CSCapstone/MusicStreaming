@@ -5,7 +5,9 @@
 // held to `crates/plugins/manifest-cases.json`.
 
 export const SECTION = 'jewelcase:manifest';
-export const API_VERSION = '0.2';
+/** Contract versions a plugin may be built against, oldest first; the last is current. */
+export const API_VERSIONS = ['0.2', '0.3'];
+export const API_VERSION = API_VERSIONS[API_VERSIONS.length - 1];
 
 /** Permissions a plugin can ask for (requirements/plugins.md §4.1). */
 export const PERMISSIONS = [
@@ -149,7 +151,9 @@ export function validateManifest(m) {
 	if (o.homepage !== undefined && !/^https?:\/\//.test(typeof o.homepage === 'string' ? o.homepage : '')) {
 		problems.push('"homepage" must be an http(s) URL');
 	}
-	if (o.apiVersion !== API_VERSION) problems.push(`"apiVersion" must be "${API_VERSION}"`);
+	if (!API_VERSIONS.includes(/** @type {string} */ (o.apiVersion))) {
+		problems.push(`"apiVersion" must be one of ${API_VERSIONS.map((v) => `"${v}"`).join(', ')}`);
+	}
 	for (const key of ['settings', 'personalSettings']) {
 		if (o[key] !== undefined) problems.push(...validateSettings(key, o[key]));
 	}

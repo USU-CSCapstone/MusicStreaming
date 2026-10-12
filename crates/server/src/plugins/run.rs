@@ -133,10 +133,11 @@ impl Plugins {
             rate_limits: manifest.rate_limits(),
             settings,
         };
-        let (path, db, plugin) = (self.path(id), self.db.clone(), id.to_owned());
+        let (path, db, plugin, api) =
+            (self.path(id), self.db.clone(), id.to_owned(), manifest.api());
         runtime
             .spawn(async move {
-                host.run(&path, grants, RunLibrary::new(db, &plugin, library), event).await
+                host.run(&path, api, grants, RunLibrary::new(db, &plugin, library), event).await
             })
             .await
             .map_err(|e| PluginError::Internal(e.to_string()))

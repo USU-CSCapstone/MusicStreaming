@@ -37,15 +37,16 @@ struct Destination {
 }
 
 impl Limits {
-    /// When a request from `plugin` to `host` may go, with that turn taken, or why it may not
-    /// go soon. `declared` is the gap its manifest asks for there, if any.
+    /// When a request from `plugin` to `host` may go, with that turn taken, or how long until
+    /// it may if that is more than [`MAX_WAIT`]. `declared` is the gap its manifest asks for
+    /// there, if any.
     pub fn turn(
         &self,
         host: &str,
         plugin: &str,
         declared: Option<Duration>,
         now: Instant,
-    ) -> Result<Instant, String> {
+    ) -> Result<Instant, Duration> {
         let host = host.to_ascii_lowercase();
         let mut destinations = self.destinations.lock().expect("limits lock");
         // Most hosts have no limit and no pause, and are never recorded.
@@ -59,8 +60,7 @@ impl Limits {
         };
         let start = destination.next.map_or(now, |next| next.max(now));
         if start > now + MAX_WAIT {
-            let wait = (start - now).as_secs_f64().ceil();
-            return Err(format!("{host} cannot be asked again for {wait} s"));
+            return Err(start - now);
         }
         let gap = destination.declared.values().max().copied().unwrap_or_default();
         if destination.declared.is_empty() && start == now {
@@ -182,10 +182,7 @@ mod tests {
     fn a_long_pause_is_refused_rather_than_waited_for_and_capped() {
         let (limits, now, clock) = (Limits::default(), Instant::now(), SystemTime::now());
         limits.answered("api.example", 429, Some("86400"), now, clock);
-        assert_eq!(
-            limits.turn("api.example", "p", None, now),
-            Err("api.example cannot be asked again for 3600 s".into())
-        );
+        assert_eq!(limits.turn("api.example", "p", None, now), Err(MAX_PAUSE));
         // A refused request takes no turn, so the pause does not grow.
         assert_eq!(limits.turn("api.example", "p", None, now + MAX_PAUSE), Ok(now + MAX_PAUSE));
     }

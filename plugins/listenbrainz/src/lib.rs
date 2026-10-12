@@ -7,7 +7,7 @@ pub mod listens;
 mod plugin {
     use crate::listens::{self, Listen};
 
-    wit_bindgen::generate!({ path: "../../crates/plugins/wit", world: "plugin" });
+    wit_bindgen::generate!({ path: "../../crates/plugins/wit/0.2", world: "plugin" });
 
     use jewelcase::plugin::events::Play;
     use jewelcase::plugin::{http, settings};

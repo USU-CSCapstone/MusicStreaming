@@ -77,15 +77,16 @@ fn describe(error: reqwest::Error) -> String {
 }
 
 impl<L: Library> http::Host for Run<L> {
-    async fn send(&mut self, request: http::Request) -> Result<http::Response, String> {
-        self.may(Permission::Network)?;
-        rules::allowed(&request.url, &self.grants.destinations)?;
+    async fn send(&mut self, request: http::Request) -> Result<http::Response, http::Error> {
+        self.may(Permission::Network).map_err(|_| http::Error::NotGranted)?;
+        rules::allowed(&request.url, &self.grants.destinations).map_err(http::Error::Refused)?;
         if request.body.len() > MAX_BODY {
-            return Err(format!("a request body is at most {} MB", MAX_BODY >> 20));
+            let refused = format!("a request body is at most {} MB", MAX_BODY >> 20);
+            return Err(http::Error::Refused(refused));
         }
         let reserved = |name: &String| RESERVED.contains(&name.to_ascii_lowercase().as_str());
         if let Some((name, _)) = request.headers.iter().find(|(name, _)| reserved(name)) {
-            return Err(format!("{name} is set by the host"));
+            return Err(http::Error::Refused(format!("{name} is set by the host")));
         }
         let key = matches!(request.method, http::Method::Get)
             .then(|| Key::new(self.grants.library, &request.url, &request.headers))
@@ -102,11 +103,14 @@ impl<L: Library> http::Host for Run<L> {
         let host = host_of(&request.url);
         let limits = &self.grants.rate_limits;
         let declared = limits.iter().find(|(d, _)| d.eq_ignore_ascii_case(&host)).map(|l| l.1);
+        let turn = self.network.limits.turn(&host, &self.grants.plugin, declared, Instant::now());
+        // Rounded up, so a plugin that waits that long finds its turn has come.
         let turn =
-            self.network.limits.turn(&host, &self.grants.plugin, declared, Instant::now())?;
+            turn.map_err(|wait| http::Error::RateLimited(wait.as_micros().div_ceil(1000) as u64))?;
         tokio::time::sleep_until(turn.into()).await;
 
-        let mut builder = self.client()?.request(method(request.method), &request.url);
+        let client = self.client().map_err(http::Error::Failed)?;
+        let mut builder = client.request(method(request.method), &request.url);
         let conditions = stale.as_ref().map(cache::conditions).unwrap_or_default();
         for (name, value) in request.headers.into_iter().chain(conditions) {
             builder = builder.header(name, value);
@@ -117,7 +121,8 @@ impl<L: Library> http::Host for Run<L> {
         // The wait for a turn is not the service's slowness, so only the request is timed.
         let reply = tokio::time::timeout(TIMEOUT, fetch(builder))
             .await
-            .map_err(|_| "the request timed out".to_owned())??;
+            .map_err(|_| http::Error::TimedOut)?
+            .map_err(http::Error::Failed)?;
         let (now, clock) = (Instant::now(), SystemTime::now());
         let retry_after = reply.header("retry-after");
         // Redirects have been followed, so the answer is from where the last one led.
@@ -139,15 +144,16 @@ impl<L: Library> http::Host for Run<L> {
 impl<L: Library> Run<L> {
     /// A kept reply, if this plugin may reach where it came from: one that was redirected is
     /// refused to a plugin that could not have followed the redirect itself.
-    fn reuse(&self, reply: Reply) -> Result<http::Response, String> {
-        rules::allowed(&reply.url, &self.grants.destinations)
-            .map_err(|refused| format!("request failed: it redirected elsewhere: {refused}"))?;
+    fn reuse(&self, reply: Reply) -> Result<http::Response, http::Error> {
+        rules::allowed(&reply.url, &self.grants.destinations).map_err(|refused| {
+            http::Error::Failed(format!("request failed: it redirected elsewhere: {refused}"))
+        })?;
         Ok(response(reply))
     }
 }
 
 /// The host `url` names, or nothing if it is not a URL.
-fn host_of(url: &str) -> String {
+pub(super) fn host_of(url: &str) -> String {
     reqwest::Url::parse(url)
         .ok()
         .and_then(|url| url.host_str().map(str::to_owned))
