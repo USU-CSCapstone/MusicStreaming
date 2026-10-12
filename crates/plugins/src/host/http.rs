@@ -99,10 +99,7 @@ impl<L: Library> http::Host for Run<L> {
             }
         }
         // `allowed` has parsed it, so it has a host.
-        let host = reqwest::Url::parse(&request.url)
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_owned))
-            .unwrap_or_default();
+        let host = host_of(&request.url);
         let limits = &self.grants.rate_limits;
         let declared = limits.iter().find(|(d, _)| d.eq_ignore_ascii_case(&host)).map(|l| l.1);
         let turn =
@@ -123,7 +120,8 @@ impl<L: Library> http::Host for Run<L> {
             .map_err(|_| "the request timed out".to_owned())??;
         let (now, clock) = (Instant::now(), SystemTime::now());
         let retry_after = reply.header("retry-after");
-        self.network.limits.answered(&host, reply.status, retry_after, now, clock);
+        // Redirects have been followed, so the answer is from where the last one led.
+        self.network.limits.answered(&host_of(&reply.url), reply.status, retry_after, now, clock);
         let Some(key) = key else { return Ok(response(reply)) };
         let reply = match stale {
             Some(stale) if reply.status == 304 => {
@@ -146,6 +144,14 @@ impl<L: Library> Run<L> {
             .map_err(|refused| format!("request failed: it redirected elsewhere: {refused}"))?;
         Ok(response(reply))
     }
+}
+
+/// The host `url` names, or nothing if it is not a URL.
+fn host_of(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_default()
 }
 
 /// Sends the request and reads the whole reply.
