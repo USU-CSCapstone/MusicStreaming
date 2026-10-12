@@ -2120,11 +2120,16 @@ export interface paths {
         };
         /**
          * Open the realtime connection
-         * @description Upgrades to a WebSocket. Browser clients authenticate with the session cookie;
-         *     others send an `auth` message first. Messages are JSON objects matching
-         *     `RealtimeClientMessage` and `RealtimeServerMessage`. The server heartbeats; a
-         *     reconnecting client resumes by following its feeds from its cursors and receives
-         *     current playback state (`requirements/realtime.md` §6).
+         * @description Upgrades to a WebSocket. Authenticates like any other request, by bearer token or
+         *     session cookie. A request with an `Origin` — one from a web page — is refused `403`
+         *     unless that origin names the host it was sent to, as `Host` or `X-Forwarded-Host`,
+         *     so another site's page cannot open a connection with the user's cookie.
+         *     Messages are JSON objects matching `RealtimeClientMessage` and
+         *     `RealtimeServerMessage`, each at most 64 KiB; a message whose `type` the server
+         *     does not know is ignored. The server pings every 15 seconds and closes a connection
+         *     it has heard nothing from, pongs included, for 40 seconds. A reconnecting client
+         *     resumes by following its feeds from its cursors and receives current playback state
+         *     (`requirements/realtime.md` §6).
          */
         get: operations["openRealtime"];
         put?: never;
@@ -5100,10 +5105,6 @@ export interface components {
         };
         /** @description A message a client sends over `/realtime`. */
         RealtimeClientMessage: {
-            /** @constant */
-            type: "auth";
-            token: string;
-        } | {
             /** @constant */
             type: "queueCommand";
             command: components["schemas"]["QueueCommand"];
@@ -8498,6 +8499,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            403: components["responses"]["Forbidden"];
             default: components["responses"]["Problem"];
         };
     };

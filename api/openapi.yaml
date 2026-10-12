@@ -2591,13 +2591,17 @@ paths:
       tags: [Realtime]
       summary: Open the realtime connection
       description: |
-        Upgrades to a WebSocket. Browser clients authenticate with the session cookie;
-        others send an `auth` message first. Messages are JSON objects matching
-        `RealtimeClientMessage` and `RealtimeServerMessage`. The server heartbeats; a
-        reconnecting client resumes by following its feeds from its cursors and receives
-        current playback state (`requirements/realtime.md` §6).
+        Upgrades to a WebSocket. Authenticates like any other request, by bearer token or
+        session cookie. A request with an `Origin` — one from a web page — is refused `403`
+        unless that origin names the host it was sent to, as `Host` or `X-Forwarded-Host`,
+        so another site's page cannot open a connection with the user's cookie.
+        Messages are JSON objects matching `RealtimeClientMessage` and
+        `RealtimeServerMessage`, each at most 64 KiB; a message whose `type` the server
+        does not know is ignored. The server pings every 15 seconds and closes a connection
+        it has heard nothing from, pongs included, for 40 seconds. A reconnecting client
+        resumes by following its feeds from its cursors and receives current playback state
+        (`requirements/realtime.md` §6).
       operationId: openRealtime
-      security: []
       x-messages:
         client: { $ref: '#/components/schemas/RealtimeClientMessage' }
         server: { $ref: '#/components/schemas/RealtimeServerMessage' }
@@ -2608,6 +2612,7 @@ paths:
           schema: { type: string, const: websocket }
       responses:
         '101': { description: Switching to WebSocket. }
+        '403': { $ref: '#/components/responses/Forbidden' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Admin: accounts ─────────────────────────────
@@ -7169,12 +7174,6 @@ components:
     RealtimeClientMessage:
       description: A message a client sends over `/realtime`.
       oneOf:
-        - type: object
-          required: [type, token]
-          description: First message, for clients not using the session cookie.
-          properties:
-            type: { const: auth }
-            token: { type: string }
         - type: object
           required: [type, command]
           properties:

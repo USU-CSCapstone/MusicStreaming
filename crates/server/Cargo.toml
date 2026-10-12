@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 argon2 = "0.6"
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["ws"] }
 base64 = "0.23.1"
 getrandom = "0.4"
 jewelcase-core = { version = "0.1.0", path = "../core" }
@@ -25,7 +25,9 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 zxcvbn = { version = "3.1", default-features = false }
 
 [dev-dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 tempfile = "3.27.0"
 tower = { version = "0.5.3", features = ["util"] }
 lofty = "0.25"
+tokio-tungstenite = "0.29"
 jewelcase-scanner = { version = "0.1.0", path = "../scanner", features = ["testing"] }

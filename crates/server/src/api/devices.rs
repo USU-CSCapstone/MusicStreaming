@@ -12,6 +12,7 @@ use rusqlite::{Connection, Row};
 use serde::Serialize;
 
 use super::authenticate::Caller;
+use super::realtime::Hub;
 use super::sql::timestamp;
 use super::{Id, Problem};
 use crate::db::Database;
@@ -28,7 +29,7 @@ pub struct Device {
     platform: Option<String>,
     first_seen_at: String,
     last_seen_at: String,
-    /// Whether the device holds a realtime connection, which none can open yet.
+    /// Whether the device holds a realtime connection.
     connected: bool,
     /// Whether this is the calling device. Only `/me` responses say.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -69,6 +70,7 @@ pub fn get(conn: &Connection, id: i64) -> rusqlite::Result<Device> {
 /// `listDevices`: the caller's signed-in devices, most recently seen first.
 pub async fn list(
     State(db): State<Arc<Database>>,
+    State(hub): State<Arc<Hub>>,
     caller: Caller,
 ) -> Result<Json<DeviceList>, Problem> {
     let mut items = db
@@ -81,8 +83,10 @@ pub async fn list(
             .collect::<rusqlite::Result<Vec<_>>>()
         })
         .await?;
+    let connected = hub.connected(caller.user);
     for item in &mut items {
         item.current = Some(item.id.0 == caller.device);
+        item.connected = connected.contains(&item.id.0);
     }
     Ok(Json(DeviceList { items }))
 }
