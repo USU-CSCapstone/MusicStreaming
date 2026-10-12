@@ -2350,26 +2350,6 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
-  /me/player/progress:
-    post:
-      tags: [Player]
-      summary: Report playback progress
-      description: Sent by the playing device; usually over the realtime connection instead.
-      operationId: reportProgress
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/ProgressReport' }
-      responses:
-        '204': { description: Recorded. }
-        '409':
-          description: '`not_active_device` — another device has taken over.'
-          content:
-            application/problem+json:
-              schema: { $ref: '#/components/schemas/Problem' }
-        default: { $ref: '#/components/responses/Problem' }
-
   /me/player/failures:
     post:
       tags: [Player]
@@ -5707,6 +5687,10 @@ components:
         itemId:
           type: [string, 'null']
           description: The queue item playing.
+        libraryId:
+          type: [string, 'null']
+          x-status: draft
+          description: The library of `trackId`, until the server keeps the queue, which names it.
         trackId: { type: [string, 'null'] }
         external:
           oneOf:
@@ -5796,20 +5780,51 @@ components:
 
     ProgressReport:
       type: object
-      required: [deviceId, itemId, status, positionMs, at]
+      x-status: draft
+      required: [deviceId, itemId, libraryId, trackId, status, positionMs]
+      description: |
+        Sent by the playing device over its realtime connection, which it needs anyway to be
+        controlled and to hear that another device took over. A report that is refused —
+        invalid, from any connection but the active one, or of a track out of the caller's
+        reach — is answered with the current state; one that does not parse is ignored.
+        A `buffering` report is recorded
+        as `paused` at its position, so other devices are not shown running ahead.
+
+        Until the server keeps the queue, a report names its track, and `itemId` is the
+        device's own name for its place in its queue, at most 100 characters. `libraryId`
+        and `trackId` give way to the queue's item when it does.
       properties:
-        deviceId: { type: string }
-        itemId: { type: string }
+        deviceId:
+          type: string
+          description: The reporting device's own.
+        itemId: { type: string, minLength: 1, maxLength: 100 }
+        libraryId: { type: string }
+        trackId: { type: string }
+        start:
+          type: boolean
+          default: false
+          description: |
+            Set when the user started playback on this connection, and whenever this
+            connection is playing but the last state it received named no active device, as
+            after the server restarts. It takes over from the device playing
+            (`requirements/realtime.md` §2). A report without it from any connection but the
+            active one is refused, so a device taken over from cannot take playback back
+            with reports sent before it heard. A device stops playing only when the state
+            names another device active; a device holding several connections, such as
+            browser tabs, plays in one at a time. A `stopped` report never takes over.
         status:
           type: string
           enum: [playing, paused, stopped, buffering]
-        positionMs: { type: integer }
+        positionMs: { type: integer, minimum: 0 }
         volume:
           type: number
           minimum: 0
           maximum: 1
           description: The device's current volume, so remote controls show it (`requirements/realtime.md` §3).
-        at: { type: string, format: date-time }
+        at:
+          type: string
+          format: date-time
+          description: Not read. Position is timed by when the report arrives, since a device's clock may be off by more than a report takes to arrive.
 
     PlaybackFailureReport:
       type: object

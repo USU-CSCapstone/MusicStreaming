@@ -20,6 +20,7 @@ mod me;
 mod origin;
 mod page;
 mod password;
+mod player;
 mod playlists;
 mod plays;
 mod plugins;
@@ -45,6 +46,7 @@ use axum::{Json, Router};
 
 pub use id::Id;
 pub use images::Images;
+use player::Players;
 pub use problem::{Code, Problem};
 use realtime::Hub;
 use search::Indexes;
@@ -63,6 +65,8 @@ struct AppState {
     plugins: Arc<Plugins>,
     /// The open realtime connections.
     hub: Arc<Hub>,
+    /// Each account's playback state.
+    players: Arc<Players>,
     /// Where the API is mounted, `{base_path}/api/v1`.
     prefix: Arc<str>,
 }
@@ -91,6 +95,12 @@ impl FromRef<AppState> for Arc<Hub> {
     }
 }
 
+impl FromRef<AppState> for Arc<Players> {
+    fn from_ref(state: &AppState) -> Arc<Players> {
+        state.players.clone()
+    }
+}
+
 impl FromRef<AppState> for Arc<Images> {
     fn from_ref(state: &AppState) -> Arc<Images> {
         state.images.clone()
@@ -107,6 +117,7 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Arc<P
         setup: Arc::default(),
         plugins,
         hub: Arc::default(),
+        players: Arc::default(),
         prefix: prefix.as_str().into(),
     };
     // These answer `401` without a token.
@@ -114,6 +125,7 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Arc<P
         .route("/auth/logout", post(session::logout))
         .route("/me", get(me::get))
         .route("/me/devices", get(devices::list))
+        .route("/me/player", get(player::get))
         .route("/me/plays", post(plays::record))
         .route("/me/plugins", get(connections::list))
         .route(

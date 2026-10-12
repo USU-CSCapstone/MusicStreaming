@@ -59,6 +59,15 @@ impl Hub {
         self.retain(user, |connection| connection.outbox.try_send(message.clone()).is_ok())
     }
 
+    /// Sends `message` to one connection, closing it if its outbox is full. Its `serve` sends
+    /// its device list once it ends.
+    pub fn send(&self, presence: &Presence, message: &ServerMessage) {
+        let message = encode(message);
+        let _ = self.retain(presence.user, |connection| {
+            connection.id != presence.id || connection.outbox.try_send(message.clone()).is_ok()
+        });
+    }
+
     /// Tells every connection `device` of `user` holds that it was signed out, and closes it.
     /// Call it once the sign-out is committed: a connection that joins after this checks then.
     pub fn revoke(&self, user: i64, device: i64, reason: Revoked) {
@@ -111,6 +120,17 @@ impl Presence {
     /// closed it.
     pub(super) async fn next(&mut self) -> Option<Message> {
         self.messages.recv().await
+    }
+
+    /// Tells this connection apart from every other, its device's included.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Whether the hub still counts this connection. One it has closed only sends what was
+    /// queued, and must not act for its client.
+    pub(super) fn is_open(&self) -> bool {
+        !self.messages.is_closed()
     }
 }
 

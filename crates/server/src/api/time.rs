@@ -24,6 +24,12 @@ pub fn rfc3339(ms: i64) -> String {
     )
 }
 
+/// Serializes a millisecond timestamp field as [`rfc3339`]:
+/// `#[serde(serialize_with = "serialize_rfc3339")]`.
+pub fn serialize_rfc3339<S: serde::Serializer>(ms: &i64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&rfc3339(*ms))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::sql::timestamp;

@@ -17,6 +17,8 @@ use super::{Images, router};
 use crate::db::{Database, libraries};
 use crate::plugins::Plugins;
 
+pub mod socket;
+
 /// The owner's token in [`app`], which [`send`] and the helpers built on it log in with.
 pub const TOKEN: &str = "owner-token";
 
