@@ -16,6 +16,10 @@
 //!
 //! Position is timed by when a report arrives, not by its `at`: a device's clock may be off by
 //! more than a report takes to arrive.
+//!
+//! Where each account was is also saved, to resume from after the server restarts.
+
+mod saved;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -34,7 +38,7 @@ use crate::db::now_ms;
 /// Longer item IDs are refused, so no one keeps megabytes in memory as their place in a queue.
 const MAX_ITEM_ID: usize = 100;
 
-/// Each account's playback state, for those that have played anything since the server started.
+/// Each account's playback state, for those that have played anything.
 #[derive(Default)]
 pub struct Players {
     accounts: Mutex<HashMap<i64, PlayerState>>,
@@ -59,6 +63,9 @@ pub struct PlayerState {
     #[serde(serialize_with = "serialize_rfc3339")]
     position_at: i64,
     volume: Option<f64>,
+    /// Whether it changed since it was last saved.
+    #[serde(skip)]
+    unsaved: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -94,7 +101,7 @@ enum Reported {
 }
 
 impl PlayerState {
-    /// The state of an account that has not played anything since the server started.
+    /// The state of an account that has not played anything.
     fn stopped() -> PlayerState {
         PlayerState {
             status: Status::Stopped,
@@ -106,6 +113,7 @@ impl PlayerState {
             position_ms: 0,
             position_at: now_ms(),
             volume: None,
+            unsaved: false,
         }
     }
 }
@@ -144,12 +152,13 @@ impl Players {
             return Err(Problem::new(Code::NotActiveDevice));
         }
         // Nothing advances while buffering, so other devices are not shown running ahead.
-        state.status = match report.status {
+        let status = match report.status {
             Reported::Playing => Status::Playing,
             Reported::Paused | Reported::Buffering => Status::Paused,
             Reported::Stopped => Status::Stopped,
         };
-        let playing = state.status != Status::Stopped;
+        state.status = status;
+        let playing = status != Status::Stopped;
         state.active_device_id = playing.then_some(Id(device));
         state.active_connection = playing.then_some(connection);
         state.item_id = Some(report.item_id);
@@ -158,6 +167,7 @@ impl Players {
         state.position_ms = report.position_ms;
         state.position_at = now_ms();
         state.volume = report.volume;
+        state.unsaved = true;
         Ok(hub.broadcast(user, &ServerMessage::Player { state: state.clone() }))
     }
 

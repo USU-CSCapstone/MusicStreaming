@@ -63,7 +63,9 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let plugins =
         Arc::new(Plugins::new(db.clone(), data_dir.state().join("plugins"), scanning.scanners()));
     plugins.start_hooks();
-    let mut app = api::router(&config.base_path, db.clone(), images, plugins);
+    let players = Arc::new(api::Players::load(&db).await?);
+    let saving = players.keep_saved(db.clone());
+    let mut app = api::router(&config.base_path, db.clone(), images, plugins, players.clone());
     let web = Path::new(web::DIR);
     if !web.is_dir() {
         info!(dir = web::DIR, "no web app there; serving the API only");
@@ -79,6 +81,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("server failed")?;
+    // Where everyone was, as the server stops: not just as of the last periodic save.
+    saving.abort();
+    let _ = saving.await;
+    players.save(&db).await;
     tokio::task::spawn_blocking(move || scanning.stop()).await?;
 
     info!("stopped");
