@@ -985,20 +985,21 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/libraries/{libraryId}/external/{sourceId}/items/{itemId}": {
+    "/libraries/{libraryId}/external/{sourceId}/items/{entityType}/{entityId}": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 libraryId: components["parameters"]["LibraryId"];
                 sourceId: components["parameters"]["SourceId"];
-                itemId: string;
+                entityType: "albums" | "artists" | "playlists";
+                entityId: string;
             };
             cookie?: never;
         };
         /**
-         * Browse an external item
-         * @description An artist, album, or playlist in whatever structure the source offers.
+         * Browse an external album, artist, or playlist
+         * @description In the same shapes as library content, with `source` set.
          */
         get: operations["getExternalItem"];
         put?: never;
@@ -3106,6 +3107,12 @@ export interface components {
         /** @description Opaque, stable identifier. */
         Id: string;
         /**
+         * @description The external source content comes from, absent for library content. External content is
+         *     always shown labelled with its source (`requirements/plugins.md` §10.1). IDs inside it,
+         *     such as its artists' and album's, are the same source's.
+         */
+        Source: string;
+        /**
          * Format: uuid
          * @description Client-generated. Identifies the write for idempotency and seeds the IDs of items it creates.
          */
@@ -3117,7 +3124,10 @@ export interface components {
          * @description Microseconds.
          */
         DurationUs: number;
-        /** @enum {string} */
+        /**
+         * @description External content its source cannot provide now is `missing`, and behaves exactly like a missing track (`requirements/plugins.md` §10.2).
+         * @enum {string}
+         */
         Availability: "available" | "missing";
         /**
          * @default 30d
@@ -3133,9 +3143,9 @@ export interface components {
         /** @description Something that can be queued or added to a playlist — library content or an external track. */
         Playable: components["schemas"]["EntityRef"] | components["schemas"]["ExternalTrackRef"];
         ImageRef: {
-            /** @description Fetch from `getImage`. Changes whenever the image does. */
+            /** @description Fetch from `getImage`, or `getExternalImage` for content with a `source`. Changes whenever the image does. */
             id: string;
-            /** @description A few bytes, base64, decoding to a recognizable correctly-coloured stand-in (`requirements/offline.md` §1.1). */
+            /** @description A few bytes, base64, decoding to a recognizable correctly-coloured stand-in (`requirements/offline.md` §1.1). Empty when there is none, as for external images. */
             placeholder: string;
         };
         ArtistCredit: {
@@ -3347,22 +3357,29 @@ export interface components {
             id: components["schemas"]["Id"];
             name: string;
         };
-        TrackSummary: {
+        /** @description What any source can say about a track. `TrackSummary` adds what only the library knows. */
+        TrackBase: {
+            source?: components["schemas"]["Source"];
             id: components["schemas"]["Id"];
             /** @description Falls back to the filename for untagged files. */
             title: string;
             /** @description Ordered; the first is primary (`requirements/conventions.md` §7). */
             artists: components["schemas"]["ArtistCredit"][];
-            album: components["schemas"]["AlbumRef"];
+            /** @description `null` only for an external track that is on no album. */
+            album: components["schemas"]["AlbumRef"] | null;
             discNumber?: number | null;
             trackNumber?: number | null;
             durationUs: components["schemas"]["DurationUs"];
             releaseDate?: components["schemas"]["PartialDate"] | null;
-            genres?: components["schemas"]["TagRef"][];
+            explicit?: boolean;
+            availability: components["schemas"]["Availability"];
+        };
+        TrackSummary: components["schemas"]["TrackBase"] & {
+            album?: components["schemas"]["AlbumRef"];
             explicit: boolean;
+            genres?: components["schemas"]["TagRef"][];
             /** @description Enough to tell a FLAC from an MP3 at a glance (`requirements/tracks.md` §4). The full `Track` extends it. */
             audio: components["schemas"]["AudioSummary"];
-            availability: components["schemas"]["Availability"];
             /** Format: date-time */
             addedAt?: string;
             /** @description The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed. */
@@ -3472,16 +3489,18 @@ export interface components {
          * @enum {string}
          */
         AlbumType: "album" | "ep" | "single" | "compilation";
+        /** @description What any source can say about an album. `AlbumSummary` adds what only the library knows. */
+        AlbumBase: components["schemas"]["AlbumRef"] & {
+            source?: components["schemas"]["Source"];
+            releaseDate?: components["schemas"]["PartialDate"] | null;
+            type?: components["schemas"]["AlbumType"];
+        };
         /**
          * @description Completeness has two parts (`requirements/albums.md` §4): tracks missing from discs you
          *     have (`trackCount` below `trackTotal`), and discs you do not have (`discCount` below
          *     `discTotal`). Incomplete is information, never an error.
          */
-        AlbumSummary: {
-            id: components["schemas"]["Id"];
-            title: string | null;
-            artists: components["schemas"]["ArtistCredit"][];
-            releaseDate?: components["schemas"]["PartialDate"] | null;
+        AlbumSummary: components["schemas"]["AlbumBase"] & {
             type: components["schemas"]["AlbumType"];
             genres?: components["schemas"]["TagRef"][];
             /**
@@ -3500,7 +3519,6 @@ export interface components {
             /** @description Tagged total number of discs. */
             discTotal: number | null;
             durationUs: components["schemas"]["DurationUs"];
-            image: components["schemas"]["ImageRef"] | null;
             availability: components["schemas"]["Availability"];
             /** Format: date-time */
             addedAt?: string;
@@ -3526,10 +3544,12 @@ export interface components {
         AlbumPage: components["schemas"]["PageInfo"] & {
             items: components["schemas"]["AlbumSummary"][];
         };
-        ArtistSummary: {
-            id: components["schemas"]["Id"];
-            name: string | null;
+        /** @description What any source can say about an artist. `ArtistSummary` adds what only the library knows. */
+        ArtistBase: components["schemas"]["ArtistCredit"] & {
+            source?: components["schemas"]["Source"];
             image: components["schemas"]["ImageRef"] | null;
+        };
+        ArtistSummary: components["schemas"]["ArtistBase"] & {
             /** @description Albums the artist owns. */
             albumCount: number;
             /** @description Owned and featured tracks. */
@@ -3627,13 +3647,17 @@ export interface components {
             query: string;
             selected?: components["schemas"]["EntityRef"];
         };
-        Playlist: {
+        /** @description What any source can say about a playlist. `Playlist` adds what only the user's own playlists have. */
+        PlaylistBase: {
+            source?: components["schemas"]["Source"];
             id: components["schemas"]["Id"];
-            libraryId: components["schemas"]["Id"];
             title: string;
             description: string | null;
-            /** @description Custom, or a mosaic of the tracks inside; `null` for an empty playlist. */
+            /** @description For the user's own playlist, custom or a mosaic of the tracks inside; `null` when empty. */
             image: components["schemas"]["ImageRef"] | null;
+        };
+        Playlist: components["schemas"]["PlaylistBase"] & {
+            libraryId: components["schemas"]["Id"];
             /** @description Whether `image` is a custom upload rather than the generated mosaic; `deletePlaylistImage` reverts it. */
             customImage: boolean;
             /** @description Every track in the playlist, missing ones included (`requirements/playlists.md` §3). */
@@ -3654,12 +3678,12 @@ export interface components {
             items: components["schemas"]["Playlist"][];
         };
         /**
-         * @description Exactly one of `track` or `external` is set. Items are named by position, so a
-         *     duplicate track is a separate item.
+         * @description Exactly one of `track`, from the library, or `external`, from a source, is set. Items are
+         *     named by position, so a duplicate track is a separate item.
          */
         PlaylistItem: {
             track?: components["schemas"]["TrackSummary"];
-            external?: components["schemas"]["ExternalTrack"];
+            external?: components["schemas"]["TrackBase"];
             /** Format: date-time */
             addedAt?: string;
         };
@@ -4179,7 +4203,7 @@ export interface components {
             } | {
                 /** @constant */
                 type: "external";
-                external: components["schemas"]["ExternalTrack"];
+                external: components["schemas"]["TrackBase"];
             };
             playCount: number;
             /** Format: int64 */
@@ -4456,43 +4480,27 @@ export interface components {
             status: "available" | "unavailable";
             statusDetail?: string | null;
         };
-        /** @description Always shown as external and labelled with its source. Never downloadable. */
-        ExternalTrack: {
-            sourceId: string;
-            externalId: string;
-            title: string;
-            artists: {
-                name: string;
-                /** @description Browsable within the source. */
-                itemId?: string | null;
-            }[];
-            album?: {
-                title?: string;
-                itemId?: string | null;
-            } | null;
-            durationUs: components["schemas"]["DurationUs"];
-            /** @description Fetch from `getExternalImage`. */
-            imageId?: string | null;
-            /** @enum {string} */
-            availability?: "available" | "unavailable";
-        };
+        /**
+         * @description An album, artist, or playlist from a source, set under its `type`, with a page of what it
+         *     holds: an album's or playlist's tracks, or an artist's albums and any tracks the source
+         *     offers for them. Never downloadable (`requirements/plugins.md` §10.3).
+         */
         ExternalItem: {
-            sourceId: string;
-            itemId: string;
             /** @enum {string} */
-            kind: "artist" | "album" | "playlist" | "collection";
-            title: string;
-            subtitle?: string | null;
-            imageId?: string | null;
-            children?: components["schemas"]["ExternalItem"][];
-            tracks?: components["schemas"]["ExternalTrack"][];
-            nextCursor?: string | null;
+            type: "album" | "artist" | "playlist";
+            album?: components["schemas"]["AlbumBase"];
+            artist?: components["schemas"]["ArtistBase"];
+            playlist?: components["schemas"]["PlaylistBase"];
+            tracks: components["schemas"]["TrackBase"][];
+            albums: components["schemas"]["AlbumBase"][];
+            nextCursor: string | null;
         };
         ExternalSearchResponse: {
-            sourceId: string;
             query: string;
-            tracks: components["schemas"]["ExternalTrack"][];
-            items: components["schemas"]["ExternalItem"][];
+            tracks: components["schemas"]["TrackBase"][];
+            albums: components["schemas"]["AlbumBase"][];
+            artists: components["schemas"]["ArtistBase"][];
+            playlists: components["schemas"]["PlaylistBase"][];
         };
         ExtensionSurface: {
             pluginId: string;
@@ -6785,7 +6793,8 @@ export interface operations {
             path: {
                 libraryId: components["parameters"]["LibraryId"];
                 sourceId: components["parameters"]["SourceId"];
-                itemId: string;
+                entityType: "albums" | "artists" | "playlists";
+                entityId: string;
             };
             cookie?: never;
         };
