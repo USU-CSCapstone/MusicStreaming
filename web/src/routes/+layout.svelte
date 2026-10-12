@@ -7,6 +7,7 @@
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import TabBar from '$lib/components/TabBar.svelte';
 	import { player } from '$lib/player.svelte';
+	import { realtime } from '$lib/realtime.svelte';
 
 	let { data, children } = $props();
 
@@ -15,6 +16,13 @@
 
 	$effect.pre(() => {
 		player.libraryId = data.library?.id ?? '';
+	});
+
+	// Live updates for someone signed in; setup and login have nothing to update.
+	$effect(() => {
+		if (bare || !data.me) return;
+		realtime.start();
+		return () => realtime.stop();
 	});
 
 	/** Space plays and pauses, unless focus is somewhere Space already means something. */

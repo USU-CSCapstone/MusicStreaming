@@ -41,3 +41,5 @@ export type Device = Schemas['Device'];
 export type Page<T> = { items: T[]; nextCursor: string | null; total: number };
 export type PlayReport = Schemas['PlayReport'];
 export type PlayContext = Schemas['Context'];
+export type RealtimeClientMessage = Schemas['RealtimeClientMessage'];
+export type RealtimeServerMessage = Schemas['RealtimeServerMessage'];
