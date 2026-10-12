@@ -4,9 +4,14 @@ import type { PlayerState, RealtimeServerMessage, Track } from '$lib/api/types';
 const fake = vi.hoisted(() => ({
 	listeners: [] as ((message: RealtimeServerMessage) => void)[],
 	tracks: new Map<string, Promise<unknown>>(),
+	sent: [] as { type: string; command: { type: string; commandId: string; volume?: number } }[],
 	realtime: {
 		deviceId: '1',
 		connected: true,
+		send(message: never) {
+			if (fake.realtime.connected) fake.sent.push(message);
+			return fake.realtime.connected;
+		},
 		// This browser's clock is 2 s behind the server's.
 		clockOffset: 2000,
 		on: (listener: (message: RealtimeServerMessage) => void) => fake.listeners.push(listener)
@@ -45,6 +50,7 @@ function state(device: string | null, trackId: string, changes: Partial<PlayerSt
 beforeEach(() => {
 	vi.useFakeTimers();
 	fake.tracks.clear();
+	fake.sent.length = 0;
 	fake.realtime.connected = true;
 });
 
@@ -122,5 +128,69 @@ describe('playback', () => {
 		slow(track('c', 30));
 		await Promise.resolve();
 		expect(playback.track?.id).toBe('d');
+	});
+
+	it('shows a command at once, and keeps it until the server says how it went', () => {
+		state('2', 'h');
+		playback.pause();
+		expect(playback.shown?.status).toBe('paused');
+		const id = fake.sent[0].command.commandId;
+		expect(fake.sent[0].command.type).toBe('pause');
+
+		state('2', 'h');
+		expect(playback.shown?.status, 'a state from before it was carried out').toBe('paused');
+		send({ type: 'commandResult', result: { commandId: id, status: 'applied' } });
+		state('2', 'h', { status: 'paused' });
+		state('2', 'h');
+		expect(playback.shown?.status, 'the server decides from then on').toBe('playing');
+	});
+
+	it('undoes a command that failed, and says why', () => {
+		state('2', 'i');
+		playback.seek(20);
+		expect(playback.positionAt(Date.now())).toBe(20);
+		const id = fake.sent[0].command.commandId;
+		const reason = 'The device playing did not answer.';
+		send({ type: 'commandResult', result: { commandId: id, status: 'failed', reason } });
+		expect(playback.positionAt(Date.now())).toBe(10);
+		expect(playback.error).toBe(reason);
+		vi.advanceTimersByTime(5000);
+		expect(playback.error).toBeNull();
+
+		fake.realtime.connected = false;
+		playback.next();
+		expect(playback.error).toBe('Not connected to the server.');
+	});
+
+	it('sends the volume once the slider rests', () => {
+		state('2', 'j');
+		for (const volume of [0.9, 0.7, 0.5]) playback.setVolume(volume);
+		expect(playback.shown?.volume).toBe(0.5);
+		expect(fake.sent).toEqual([]);
+		vi.advanceTimersByTime(250);
+		expect(fake.sent.map((m) => m.command.volume)).toEqual([0.5]);
+	});
+
+	it('lets go of what it asked once the answer can no longer come', () => {
+		state('2', 'k');
+		playback.pause();
+		send({ type: 'hello', deviceId: '1', serverTime: new Date().toISOString() });
+		state('2', 'k');
+		expect(playback.shown?.status, 'reconnected').toBe('playing');
+
+		playback.pause();
+		state('3', 'k');
+		expect(playback.shown?.status, 'another device took over').toBe('playing');
+	});
+
+	it('keeps the volume being dragged while a state arrives', () => {
+		state('2', 'l');
+		playback.setVolume(0.3);
+		state('2', 'l');
+		expect(playback.shown?.volume).toBe(0.3);
+
+		fake.realtime.connected = false;
+		vi.advanceTimersByTime(250);
+		expect(playback.shown?.volume, 'not sent, so not shown').not.toBe(0.3);
 	});
 });

@@ -4,10 +4,11 @@
 	import type { Lyrics } from '$lib/api/types';
 	import { artistName } from '$lib/format';
 	import { panels } from '$lib/panels.svelte';
-	import { player } from '$lib/player.svelte';
+	import { controls } from '$lib/controls.svelte';
 	import Icon from './Icon.svelte';
 
-	const track = $derived(player.current);
+	// The track the player bar shows, here or on another device.
+	const track = $derived(controls.track);
 	let lyrics = $state<Lyrics | null>(null);
 	let failed = $state(false);
 	let list = $state<HTMLOListElement>();
@@ -33,7 +34,7 @@
 
 	/** The line being sung: the last one that has started. Stays right through seeks and pauses. */
 	const now = $derived.by(() => {
-		const ms = player.position * 1000;
+		const ms = controls.position * 1000;
 		let at = -1;
 		for (let i = 0; i < lines.length && lines[i].startMs <= ms; i++) at = i;
 		return at;
@@ -86,7 +87,7 @@
 								class:current={i === now}
 								class:past={i < now}
 								aria-current={i === now ? 'true' : undefined}
-								onclick={() => player.seek(line.startMs / 1000)}
+								onclick={() => controls.seek(line.startMs / 1000)}
 							>
 								{line.text || '♪'}
 							</button>

@@ -1,12 +1,27 @@
 // The account's playback as the server last told it (`requirements/realtime.md` §2, §4): which
 // device plays, what, and where, and the names of the account's devices. A device that is not
 // the one playing shows this instead of its own player, so the user can see where the music
-// went and take it back.
+// went, control it, and take it back.
+//
+// A command to the device playing shows its effect at once and is set right by the next
+// state; one that fails is undone, and says why (§5).
 
 import { getTrack, getWaveform } from './api/client';
-import type { Device, PlayerState, TrackSummary } from './api/types';
+import type { Device, PlayerCommand, PlayerState, TrackSummary } from './api/types';
 import { realtime } from './realtime.svelte';
 import { decodeWaveform } from './waveform';
+
+/** How long a failed command's message stays. */
+const ERROR_FOR_MS = 5_000;
+/** How long the volume rests before it is sent, so dragging the slider is one command. */
+const VOLUME_SETTLES_MS = 250;
+
+/** A command as sent, but for its ID. */
+type Command = PlayerCommand extends infer C
+	? C extends unknown
+		? Omit<C, 'commandId'>
+		: never
+	: never;
 
 class Playback {
 	/** The latest state, or null before the server has sent one. */
@@ -15,6 +30,16 @@ class Playback {
 	/** The track the state names, once fetched; the one before until then. */
 	track = $state<TrackSummary | null>(null);
 	waveform = $state<Uint8Array | null>(null);
+	/** Why the latest command failed, for a few seconds. */
+	error = $state<string | null>(null);
+	/** What commands just asked of the device playing, shown until the server says how it went. */
+	#asked = $state<Partial<PlayerState>>({});
+	/** The state as shown: the server's, with what was just asked of it. */
+	shown = $derived(this.state && { ...this.state, ...this.#asked });
+	/** Commands sent and not yet answered, by ID. */
+	#waiting: Record<string, true> = {};
+	#errorTimer: ReturnType<typeof setTimeout> | undefined;
+	#volumeTimer: ReturnType<typeof setTimeout> | undefined;
 
 	/** Whether another device holds playback, playing or paused. */
 	elsewhere = $derived(
@@ -32,9 +57,17 @@ class Playback {
 
 	constructor() {
 		realtime.on((message) => {
+			// The answer to a command sent over a connection now gone is lost with it.
+			if (message.type === 'hello') this.#forget();
 			if (message.type === 'devices') this.devices = message.devices;
+			if (message.type === 'commandResult') this.#answered(message.result);
 			if (message.type !== 'player') return;
+			// What was asked of one device means nothing to another that has taken over.
+			if (message.state.activeDeviceId !== this.state?.activeDeviceId) this.#forget();
 			this.state = message.state;
+			// A state from before a command was carried out may still be on its way until then.
+			const asking = Object.keys(this.#waiting).length > 0 || this.#volumeTimer !== undefined;
+			if (!asking) this.#asked = {};
 			// The device playing has its own track; any other fetches the one it plays.
 			if (message.state.activeDeviceId !== realtime.deviceId) this.#fetch(message.state);
 		});
@@ -56,16 +89,101 @@ class Playback {
 	 * moves on only while connected: one that is not cannot know it is still playing (§6).
 	 */
 	positionAt(now: number): number {
-		const state = this.state;
+		const state = this.shown;
 		if (!state) return 0;
 		let ms = state.positionMs;
 		const at = Date.parse(state.positionAt);
 		// Moving on from where it was when the server last heard, by the server's clock.
+		// Never back: a `now` from before the state was true is as good as when it was.
 		if (state.status === 'playing' && realtime.connected && Number.isFinite(at)) {
-			ms += now + realtime.clockOffset - at;
+			ms += Math.max(0, now + realtime.clockOffset - at);
 		}
 		const end = this.track ? this.track.durationUs / 1000 : Infinity;
 		return Math.max(0, Math.min(ms, end)) / 1000;
+	}
+
+	play() {
+		this.#send({ type: 'play' }, { status: 'playing', ...this.#here() });
+	}
+
+	pause() {
+		this.#send({ type: 'pause' }, { status: 'paused', ...this.#here() });
+	}
+
+	next() {
+		this.#send({ type: 'next' });
+	}
+
+	previous() {
+		this.#send({ type: 'previous' });
+	}
+
+	seek(seconds: number) {
+		const positionMs = Math.round(seconds * 1000);
+		this.#send({ type: 'seek', positionMs }, { positionMs, positionAt: this.#serverNow() });
+	}
+
+	/** Shows `volume` at once, and sends it once the slider rests. */
+	setVolume(volume: number) {
+		// The device it is turned up or down on, wherever playback goes meanwhile.
+		const deviceId = this.state?.activeDeviceId;
+		if (!deviceId) return;
+		this.#asked = { ...this.#asked, volume };
+		clearTimeout(this.#volumeTimer);
+		this.#volumeTimer = setTimeout(() => {
+			this.#volumeTimer = undefined;
+			this.#send({ type: 'setVolume', deviceId, volume }, { volume });
+		}, VOLUME_SETTLES_MS);
+	}
+
+	/** Lets go of every command still waiting, and what they asked for. */
+	#forget() {
+		this.#waiting = {};
+		this.#asked = {};
+		clearTimeout(this.#volumeTimer);
+		this.#volumeTimer = undefined;
+	}
+
+	/** Where playback is now, as a state would say it. */
+	#here(): Partial<PlayerState> {
+		return {
+			positionMs: Math.round(this.positionAt(Date.now()) * 1000),
+			positionAt: this.#serverNow()
+		};
+	}
+
+	#serverNow(): string {
+		return new Date(Date.now() + realtime.clockOffset).toISOString();
+	}
+
+	/** Sends `command` to the device playing, showing `change` until the server answers. */
+	#send(command: Command, change: Partial<PlayerState> = {}) {
+		const commandId = crypto.randomUUID();
+		if (
+			!realtime.send({ type: 'playerCommand', command: { ...command, commandId } as PlayerCommand })
+		) {
+			this.#asked = {};
+			this.#failed('Not connected to the server.');
+			return;
+		}
+		this.#waiting[commandId] = true;
+		this.#asked = { ...this.#asked, ...change };
+	}
+
+	#answered(result: { commandId: string; status: string; reason?: string | null }) {
+		if (result.status === 'pending' || !this.#waiting[result.commandId]) return;
+		delete this.#waiting[result.commandId];
+		if (result.status === 'failed') {
+			// What it asked for did not happen: back to what the server says did.
+			this.#asked = {};
+			this.#failed(result.reason ?? 'That did not work.');
+		}
+	}
+
+	#failed(reason: string) {
+		this.error = reason;
+		clearTimeout(this.#errorTimer);
+		this.#errorTimer = setTimeout(() => (this.error = null), ERROR_FOR_MS);
 	}
 
 	#fetch({ libraryId, trackId }: PlayerState) {
