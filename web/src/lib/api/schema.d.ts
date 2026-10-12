@@ -4780,9 +4780,12 @@ export interface components {
          *     in every library it is enabled in. `played` runs it, granted once per plugin, as each
          *     user who connected it (`listMyPlugins`) finishes playing something; it needs
          *     `listeningActivity`, and `libraryRead` in the library played from.
+         *     `globalRateLimits`, granted once per plugin, shares its rate limits that say
+         *     `"per": "global"` with every other plugin granted it, so each can slow the others;
+         *     without it, they count only its own requests.
          * @enum {string}
          */
-        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played";
+        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played" | "globalRateLimits";
         PermissionRequest: {
             permission: components["schemas"]["PermissionName"];
             /** @description Whether it cannot work without it (`requirements/plugins.md` §4.2). */
@@ -4791,6 +4794,20 @@ export interface components {
             reason: string;
             /** @description With `network` only. Host names it reaches, or `["*"]` for any. */
             destinations?: string[];
+            /**
+             * @description With `network` only, optional. The most often each destination may be asked, such
+             *     as `"1/s"`, which counts only this plugin's requests, or as
+             *     `{"limit": "1/s", "per": "user"}`. `per` is `plugin`; `user`, this plugin's runs for
+             *     one connected user each; or `global`, every plugin granted `globalRateLimits` that
+             *     declares it so, keeping to the strictest pace any of them declared.
+             */
+            rateLimits?: {
+                [key: string]: string | {
+                    limit: string;
+                    /** @enum {string} */
+                    per: "plugin" | "user" | "global";
+                };
+            };
             /** @description With `schedule` only. How often it runs. */
             everyMinutes?: number;
         };

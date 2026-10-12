@@ -22,8 +22,13 @@ export const PERMISSIONS = [
 	'scanFinished',
 	'schedule',
 	// When a user who connected it finishes playing something.
-	'played'
+	'played',
+	// Sharing its rate limits that say "per": "global" with other plugins.
+	'globalRateLimits'
 ];
+
+/** Whose requests a rate limit counts: the plugin's, one user's runs of it, or every plugin's. */
+const PER = ['plugin', 'user', 'global'];
 
 /** The shortest interval a schedule may ask for. */
 export const MIN_EVERY_MINUTES = 5;
@@ -208,6 +213,18 @@ export function validateManifest(m) {
 			problems.push(`${at}: only schedule takes "everyMinutes"`);
 		}
 	});
+	// Sharing a limit is what the permission is for, and a limit is shared only with it.
+	const global = o.permissions.some(
+		(r) =>
+			isObject(r) &&
+			isObject(r.rateLimits) &&
+			Object.values(r.rateLimits).some((limit) => isObject(limit) && limit.per === 'global')
+	);
+	if (global && !seen.has('globalRateLimits')) {
+		problems.push('a rate limit "per": "global" needs globalRateLimits as well');
+	} else if (seen.has('globalRateLimits') && !global) {
+		problems.push('globalRateLimits needs a rate limit "per": "global"');
+	}
 	// A library hook's event is about the library, which only reading it can make anything of.
 	for (const hook of ['tracksChanged', 'scanFinished']) {
 		if (seen.has(hook) && !seen.has('libraryRead')) {
@@ -249,8 +266,13 @@ function validateRateLimits(at, limits, destinations) {
 			problems.push(`${at}: rateLimits: "${host}" is not one of its destinations`);
 		}
 		const limit = entries[host];
-		if (typeof limit !== 'string' || !RATE_LIMIT.test(limit)) {
+		const counted = isObject(limit) ? /** @type {Record<string, unknown>} */ (limit) : undefined;
+		const pace = counted ? counted.limit : limit;
+		if (typeof pace !== 'string' || !RATE_LIMIT.test(pace)) {
 			problems.push(`${at}: rateLimits: "${host}" needs a limit such as "1/s", "60/min", or "1000/h"`);
+		}
+		if (counted && !PER.includes(/** @type {string} */ (counted.per))) {
+			problems.push(`${at}: rateLimits: "${host}" needs "per": "plugin", "user", or "global"`);
 		}
 	}
 	return problems;

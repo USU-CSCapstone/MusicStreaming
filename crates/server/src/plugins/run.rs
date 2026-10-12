@@ -98,7 +98,8 @@ impl Plugins {
                 Ok(settings)
             })
             .await?;
-        let outcome = self.execute(id, manifest, library, permissions, settings, event).await?;
+        let outcome =
+            self.execute(id, manifest, library, user, permissions, settings, event).await?;
         let scanning = self.scan(library, &outcome.touched).await;
         let (plugin, ok, summary) = (id.to_owned(), outcome.ok, outcome.summary.clone());
         self.db
@@ -113,13 +114,15 @@ impl Plugins {
         Ok((outcome, scanning))
     }
 
-    /// Runs `id` in `library` with exactly these permissions and settings, on the plugin
-    /// runtime, and nothing more.
+    /// Runs `id` in `library`, for `user` if it acts for one, with exactly these permissions
+    /// and settings, on the plugin runtime, and nothing more.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn execute(
         &self,
         id: &str,
         manifest: &Manifest,
         library: i64,
+        user: Option<i64>,
         permissions: Vec<Permission>,
         settings: Map<String, Value>,
         event: Event,
@@ -128,6 +131,7 @@ impl Plugins {
         let grants = Grants {
             plugin: id.to_owned(),
             library,
+            user,
             permissions,
             destinations: manifest.destinations().to_vec(),
             rate_limits: manifest.rate_limits(),

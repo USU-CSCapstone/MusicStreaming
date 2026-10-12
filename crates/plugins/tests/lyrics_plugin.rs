@@ -89,6 +89,7 @@ fn grants(permissions: &[Permission], destinations: &[&str]) -> Grants {
     Grants {
         plugin: "lrclib-lyrics".into(),
         library: 1,
+        user: None,
         permissions: permissions.to_vec(),
         destinations: destinations.iter().map(|d| d.to_string()).collect(),
         rate_limits: Vec::new(),

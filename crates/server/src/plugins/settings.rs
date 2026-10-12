@@ -127,7 +127,7 @@ impl Plugins {
         }
         let candidate = schema.with_defaults(&set);
         let outcome = self
-            .execute(&id, &manifest, level, permissions, candidate, Event::CheckSettings)
+            .execute(&id, &manifest, level, None, permissions, candidate, Event::CheckSettings)
             .await?;
         if !outcome.ok {
             return Err(PluginError::SettingsInvalid(outcome.summary));

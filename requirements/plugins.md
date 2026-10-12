@@ -89,6 +89,7 @@ That is the trade, made knowingly when write access is granted, library by libra
 | **Change or delete files in the library** | Replacing, moving, and deleting files already in its folders, audio included ([§3](#3-writing-to-the-library)) | Per library |
 | **Network** | Reaching services outside the server — by named destination where the plugin can name them (`api.listenbrainz.org`), or any destination | Per plugin |
 | **Listening activity** | Play events and listening history ([§8](#8-events), [`analytics.md` §10](analytics.md#10-external-services)) | Per plugin |
+| **Shared rate limits** | Pacing its requests to a service together with other plugins granted the same, for a service that limits each server rather than each plugin — so each can slow the others. Without it, a plugin keeps to its limits alone | Per plugin |
 | **Hooks** | Running on its own when something happens, such as tracks changing ([§8](#8-events)), rather than only when an admin asks | Per library, or per plugin for hooks not about a library |
 
 - **Some things need no permission**: a plugin's own settings and stored state ([§6](#6-configuration--credentials)), and the interface surfaces it adds ([§9](#9-extending-the-interface)). They touch nothing but the plugin itself.

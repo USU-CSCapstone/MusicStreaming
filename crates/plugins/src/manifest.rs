@@ -66,10 +66,13 @@ pub enum Permission {
     /// A hook: run when a user who connected it finishes playing something. Needs
     /// listening-activity, library-read where it was played, and personal settings to connect.
     Played,
+    /// Its rate limits that say `"per": "global"` count every plugin's requests that do, so it
+    /// can slow other plugins and be slowed by them. Without it, they count its own.
+    GlobalRateLimits,
 }
 
 impl Permission {
-    pub const ALL: [Permission; 9] = [
+    pub const ALL: [Permission; 10] = [
         Self::LibraryRead,
         Self::LibraryAdd,
         Self::LibraryChange,
@@ -79,6 +82,7 @@ impl Permission {
         Self::ScanFinished,
         Self::Schedule,
         Self::Played,
+        Self::GlobalRateLimits,
     ];
 
     /// Its name in manifests and the API, such as `libraryRead`.
@@ -93,6 +97,7 @@ impl Permission {
             Self::ScanFinished => "scanFinished",
             Self::Schedule => "schedule",
             Self::Played => "played",
+            Self::GlobalRateLimits => "globalRateLimits",
         }
     }
 
@@ -124,6 +129,7 @@ impl Permission {
             Self::ScanFinished => "Run when a scan finishes",
             Self::Schedule => "Run on a schedule",
             Self::Played => "Run when a connected user plays something",
+            Self::GlobalRateLimits => "Share rate limits with other plugins",
         }
     }
 }
@@ -160,9 +166,9 @@ pub struct PermissionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub destinations: Option<Vec<String>>,
     /// For network: the most often each destination may be asked, such as `"1/s"`
-    /// ([`rate_limit_gap`]).
+    /// ([`rate_limit_gap`]), and whose requests that counts.
     #[serde(default, rename = "rateLimits", skip_serializing_if = "Option::is_none")]
-    pub rate_limits: Option<BTreeMap<String, String>>,
+    pub rate_limits: Option<BTreeMap<String, Limit>>,
     /// For schedule: how often it runs.
     #[serde(default, rename = "everyMinutes", skip_serializing_if = "Option::is_none")]
     pub every_minutes: Option<u32>,
@@ -175,11 +181,18 @@ impl Manifest {
         network.and_then(|r| r.destinations.as_deref()).unwrap_or_default()
     }
 
-    /// The gap its network request asks for between requests to each host that has one.
-    pub fn rate_limits(&self) -> Vec<(String, Duration)> {
+    /// The rate limit its network request declares for each host that has one.
+    pub fn rate_limits(&self) -> Vec<RateLimit> {
         let network = self.permissions.iter().find(|r| r.permission == Permission::Network);
         let limits = network.and_then(|r| r.rate_limits.as_ref()).into_iter().flatten();
-        limits.filter_map(|(host, limit)| Some((host.clone(), rate_limit_gap(limit)?))).collect()
+        let limit = |(host, limit): (&String, &Limit)| {
+            let (pace, per) = match limit {
+                Limit::Pace(pace) => (pace, Per::Plugin),
+                Limit::Counted { limit, per } => (limit, *per),
+            };
+            Some(RateLimit { host: host.clone(), gap: rate_limit_gap(pace)?, per })
+        };
+        limits.filter_map(limit).collect()
     }
 
     /// How often its schedule runs, if it asks for one.
@@ -197,6 +210,50 @@ impl Manifest {
     pub fn required(&self) -> impl Iterator<Item = Permission> + '_ {
         self.permissions.iter().filter(|r| r.required).map(|r| r.permission)
     }
+}
+
+/// A destination's rate limit as a manifest gives it: `"1/s"`, which counts the plugin's own
+/// requests, or `{"limit": "1/s", "per": "user"}`, which says whose it counts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Limit {
+    Pace(String),
+    Counted { limit: String, per: Per },
+}
+
+/// Whose requests to a destination a rate limit counts (`design/plugins.md` §7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Per {
+    /// The plugin's own, in every library and for every user.
+    Plugin,
+    /// The plugin's own in runs for one connected user, for a service that limits each
+    /// account. A run for no user counts as the plugin's.
+    User,
+    /// Every plugin's that declared it global, for a service that limits each address. Needs
+    /// [`Permission::GlobalRateLimits`]; without it, it counts the plugin's own.
+    Global,
+}
+
+impl Per {
+    pub const ALL: [Per; 3] = [Per::Plugin, Per::User, Per::Global];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Per::Plugin => "plugin",
+            Per::User => "user",
+            Per::Global => "global",
+        }
+    }
+}
+
+/// A rate limit a manifest declares, read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RateLimit {
+    pub host: String,
+    /// The gap kept between requests.
+    pub gap: Duration,
+    pub per: Per,
 }
 
 /// The gap between requests that keeps to a rate limit: `"1/s"`, `"60/min"`, or `"1000/h"`.
@@ -321,6 +378,16 @@ pub fn validate(manifest: &Value) -> Vec<String> {
         };
         problems.extend(validate_request(&at, r, &mut seen));
     }
+    // Sharing a limit is what the permission is for, and a limit is shared only with it.
+    let global = permissions.iter().filter_map(|r| r.get("rateLimits")?.as_object()).any(|l| {
+        l.values().any(|limit| limit.get("per").and_then(Value::as_str) == Some("global"))
+    });
+    let sharing = seen.contains(&Permission::GlobalRateLimits);
+    if global && !sharing {
+        problems.push(r#"a rate limit "per": "global" needs globalRateLimits as well"#.into());
+    } else if sharing && !global {
+        problems.push(r#"globalRateLimits needs a rate limit "per": "global""#.into());
+    }
     // A library hook's event is about the library, which only reading it can make anything of.
     for hook in [Permission::TracksChanged, Permission::ScanFinished] {
         if seen.contains(&hook) && !seen.contains(&Permission::LibraryRead) {
@@ -420,9 +487,19 @@ fn validate_rate_limits(at: &str, limits: &Value, destinations: Option<&Value>) 
         } else if !listed() {
             problems.push(format!(r#"{at}: rateLimits: "{host}" is not one of its destinations"#));
         }
-        if !limit.as_str().is_some_and(|limit| rate_limit_gap(limit).is_some()) {
+        let (pace, per) = match limit {
+            Value::Object(o) => (o.get("limit"), o.get("per")),
+            _ => (Some(limit), None),
+        };
+        if !pace.and_then(Value::as_str).is_some_and(|pace| rate_limit_gap(pace).is_some()) {
             problems.push(format!(
                 r#"{at}: rateLimits: "{host}" needs a limit such as "1/s", "60/min", or "1000/h""#
+            ));
+        }
+        let known = |per: &str| Per::ALL.iter().any(|p| p.name() == per);
+        if limit.is_object() && !per.and_then(Value::as_str).is_some_and(known) {
+            problems.push(format!(
+                r#"{at}: rateLimits: "{host}" needs "per": "plugin", "user", or "global""#
             ));
         }
     }
@@ -503,6 +580,31 @@ mod tests {
         for wrong in ["0/s", "01/s", "+1/s", "1/sec", "1 /s", "/s", "1", "1000000000/s"] {
             assert_eq!(gap(wrong), None, "{wrong}");
         }
+    }
+
+    #[test]
+    fn rate_limits_say_whose_requests_they_count() {
+        let manifest: Manifest = serde_json::from_value(serde_json::json!({
+            "id": "p", "name": "P", "version": "1", "apiVersion": "0.3",
+            "permissions": [{"permission": "network", "required": true, "reason": "r",
+                "destinations": ["a.example", "b.example", "c.example"],
+                "rateLimits": {"a.example": "2/s", "b.example": {"limit": "1/s", "per": "user"},
+                    "c.example": {"limit": "60/min", "per": "global"}}}]
+        }))
+        .unwrap();
+        let limit = |host: &str, ms, per| RateLimit {
+            host: host.into(),
+            gap: Duration::from_millis(ms),
+            per,
+        };
+        assert_eq!(
+            manifest.rate_limits(),
+            [
+                limit("a.example", 500, Per::Plugin),
+                limit("b.example", 1000, Per::User),
+                limit("c.example", 1000, Per::Global),
+            ]
+        );
     }
 
     #[test]

@@ -115,7 +115,15 @@ impl Plugins {
         }
         candidate.extend(schema.with_defaults(&values));
         let outcome = self
-            .execute(&id, &manifest, SERVER, permissions, candidate, Event::CheckSettings)
+            .execute(
+                &id,
+                &manifest,
+                SERVER,
+                Some(user),
+                permissions,
+                candidate,
+                Event::CheckSettings,
+            )
             .await?;
         if !outcome.ok {
             return Err(PluginError::SettingsInvalid(outcome.summary));

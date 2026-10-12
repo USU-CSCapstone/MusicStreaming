@@ -2,8 +2,8 @@
 //! (`requirements/plugins.md` §1). Each 0.2 import passes the call on to the current one, and
 //! each event goes to the plugin as 0.2 describes it.
 //!
-//! 0.2 differs only in `http.send`'s error, which is a message there, in the words 0.3's error
-//! is described in. Its records are the current ones under other names, copied field by field.
+//! 0.2 differs in `http.send`'s error, which is a message there, in the words 0.3's error is
+//! described in, and in lacking `global-rate-limits`, which `granted` leaves out. Its records are the current ones under other names, copied field by field.
 
 use super::bindings::jewelcase::plugin as now;
 use super::bindings::v0_2::jewelcase::plugin as old;
@@ -85,11 +85,11 @@ fn all<A, B: From<A>>(items: Vec<A>) -> Vec<B> {
     items.into_iter().map(B::from).collect()
 }
 
-/// A permission as 0.2 names it.
-fn permission(permission: now::host::Permission) -> old::host::Permission {
+/// A permission as 0.2 names it, or none for one added since.
+fn permission(permission: now::host::Permission) -> Option<old::host::Permission> {
     use now::host::Permission as P;
     use old::host::Permission as O;
-    match permission {
+    Some(match permission {
         P::LibraryRead => O::LibraryRead,
         P::LibraryAdd => O::LibraryAdd,
         P::LibraryChange => O::LibraryChange,
@@ -99,7 +99,8 @@ fn permission(permission: now::host::Permission) -> old::host::Permission {
         P::ScanFinished => O::ScanFinished,
         P::Schedule => O::Schedule,
         P::Played => O::Played,
-    }
+        P::GlobalRateLimits => return None,
+    })
 }
 
 /// The event as 0.2 describes it.
@@ -133,7 +134,7 @@ fn message(error: now::http::Error, url: &str) -> String {
 impl<L: Library> old::host::Host for Run<L> {
     async fn granted(&mut self) -> Vec<old::host::Permission> {
         let granted = now::host::Host::granted(self).await;
-        granted.into_iter().map(permission).collect()
+        granted.into_iter().filter_map(permission).collect()
     }
 
     async fn log(&mut self, message: String) {

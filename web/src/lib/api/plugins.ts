@@ -86,6 +86,11 @@ export const PERMISSION_LABELS: Record<PermissionName, { title: string; detail: 
 	played: {
 		title: 'Run when a connected user plays something',
 		detail: 'Runs on its own as each user who connected it finishes playing a track.'
+	},
+	globalRateLimits: {
+		title: 'Share rate limits with other plugins',
+		detail:
+			'Paces its requests to a service together with other plugins that share it, so each can slow the others. Without it, it keeps to the limit alone.'
 	}
 };
 
