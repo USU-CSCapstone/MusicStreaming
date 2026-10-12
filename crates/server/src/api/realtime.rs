@@ -7,6 +7,9 @@
 //!
 //! The server pings every [`HEARTBEAT`] and drops a connection it has heard nothing from for
 //! [`SILENCE`], so a device that went away stops counting as connected.
+//!
+//! A device is authenticated only as it connects, so whatever signs one out must also
+//! [`Hub::revoke`] it, which tells its connections and closes them.
 
 mod hub;
 
@@ -19,12 +22,14 @@ use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, header};
 use axum::response::Response;
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, interval_at, timeout};
 
 pub use hub::Hub;
+use hub::Presence;
 
-use super::authenticate::Caller;
+use super::authenticate::{Caller, unauthenticated};
 use super::time::rfc3339;
 use super::{AppState, Code, Id, Problem};
 use crate::db::{Database, now_ms};
@@ -55,6 +60,14 @@ enum ClientMessage {
 enum ServerMessage {
     Hello { device_id: Id, server_time: String },
     Pong { server_time: String },
+    SessionRevoked { reason: Revoked },
+}
+
+/// Why a device was signed out: the spec's `sessionRevoked` `reason`.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Revoked {
+    LoggedOut,
 }
 
 /// `openRealtime`: upgrades to a WebSocket for the calling device.
@@ -70,10 +83,29 @@ pub async fn open(
     }
     let upgrade =
         upgrade.map_err(|_| Problem::invalid("GET /realtime must be a WebSocket upgrade"))?;
+    // A sign-out between authenticating the request and joining the hub would tell no one, so
+    // the device is checked again once joined. Any sign-out after that tells this connection.
+    let presence = state.hub.connect(caller.user, caller.device);
+    if !signed_in(&state.db, caller.device).await? {
+        return Ok(unauthenticated());
+    }
     Ok(upgrade
         .max_message_size(MAX_MESSAGE)
         .max_frame_size(MAX_MESSAGE)
-        .on_upgrade(move |socket| serve(socket, state.hub, state.db, caller)))
+        .on_upgrade(move |socket| serve(socket, presence, state.db, caller)))
+}
+
+/// Whether `device` still has a token.
+async fn signed_in(db: &Database, device: i64) -> Result<bool, Problem> {
+    let found = db.read(move |conn| {
+        conn.query_row(
+            "SELECT 1 FROM devices WHERE id = ?1 AND token_hash IS NOT NULL",
+            [device],
+            |_| Ok(()),
+        )
+        .optional()
+    });
+    Ok(found.await?.is_some())
 }
 
 /// Whether the request is not from a page, which sends no `Origin`, or is from a page this
@@ -92,8 +124,7 @@ fn same_origin(headers: &HeaderMap) -> bool {
 }
 
 /// Holds `socket` open for `caller` until either side closes it or it goes silent.
-async fn serve(mut socket: WebSocket, hub: Arc<Hub>, db: Arc<Database>, caller: Caller) {
-    let presence = hub.connect(caller.user, caller.device);
+async fn serve(mut socket: WebSocket, mut presence: Presence, db: Arc<Database>, caller: Caller) {
     let hello = ServerMessage::Hello { device_id: Id(caller.device), server_time: now() };
     if send(&mut socket, encode(&hello)).await {
         let mut heartbeat = interval_at(Instant::now() + HEARTBEAT, HEARTBEAT);
@@ -108,6 +139,16 @@ async fn serve(mut socket: WebSocket, hub: Arc<Hub>, db: Arc<Database>, caller: 
                     let Ok(ClientMessage::Ping) = serde_json::from_str(&text) else { continue };
                     let pong = ServerMessage::Pong { server_time: now() };
                     if !send(&mut socket, encode(&pong)).await {
+                        break;
+                    }
+                }
+                Some(message) = presence.next() => {
+                    let revoked = matches!(message, ServerMessage::SessionRevoked { .. });
+                    if !send(&mut socket, encode(&message)).await {
+                        break;
+                    }
+                    if revoked {
+                        send(&mut socket, Message::Close(None)).await;
                         break;
                     }
                 }
