@@ -23,7 +23,8 @@ type Hits = Arc<Mutex<HashMap<String, usize>>>;
 /// - `/fresh` with how many times it was asked, fresh for a minute;
 /// - `/checked` with how many times it was asked and an ETag, to be checked every time, and
 ///   `304 Not Modified` to a check;
-/// - `/busy` with `429 Too Many Requests` for two minutes;
+/// - `/busy` with `429 Too Many Requests` for two minutes, and `/sent-on` with a redirect to
+///   `/busy` on `localhost`;
 /// - anything else with `hello`.
 async fn server() -> (u16, Hits) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -62,6 +63,9 @@ async fn server() -> (u16, Hits) {
                         .to_owned()
                 }
                 "/checked" => ok("Cache-Control: no-cache\r\nETag: \"v1\"\r\n", &hit.to_string()),
+                "/sent-on" => format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://localhost:{port}/busy\r\nContent-Length: 0\r\n\r\n"
+                ),
                 "/busy" => "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\nContent-Length: 0\r\n\r\n"
                     .to_owned(),
                 _ => ok("X-Served: yes\r\n", "hello"),
@@ -190,6 +194,19 @@ async fn a_429_pauses_the_destination_for_every_plugin() {
     let refused = other.send(get(format!("http://127.0.0.1:{port}/"))).await.unwrap_err();
     assert_eq!(refused, "127.0.0.1 cannot be asked again for 120 s");
     assert!(!hits.lock().unwrap().contains_key("/"));
+}
+
+#[tokio::test]
+async fn a_429_after_a_redirect_pauses_where_it_led() {
+    let (port, _) = server().await;
+    let mut run = run();
+    run.grants.destinations.push("localhost".into());
+    let reply = run.send(get(format!("http://127.0.0.1:{port}/sent-on"))).await.unwrap();
+    assert_eq!(reply.status, 429);
+    let refused = run.send(get(format!("http://localhost:{port}/"))).await.unwrap_err();
+    assert_eq!(refused, "localhost cannot be asked again for 120 s");
+    // Where the request started did not answer it, so is not paused.
+    assert_eq!(body(&mut run, port, "/").await, "hello");
 }
 
 #[tokio::test]
