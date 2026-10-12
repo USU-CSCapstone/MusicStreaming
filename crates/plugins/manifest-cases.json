@@ -1900,8 +1900,38 @@
 			]
 		},
 		"problems": [
-			"permissions[0]: rateLimits: \"*\" is not one of its destinations",
+			"permissions[0]: rateLimits: \"*\" is not a host name; each limit is for one host",
 			"permissions[0]: rateLimits: \"lrclib.net\" is not one of its destinations"
+		]
+	},
+	{
+		"name": "a rate limit for a pattern or anything else that is not one host",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.2",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"*"
+					],
+					"rateLimits": {
+						"*.last.fm": "1/s",
+						"last.fm:443": "1/s",
+						"": "1/s",
+						"ws.audioscrobbler.com": "1/s"
+					}
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: rateLimits: \"\" is not a host name; each limit is for one host",
+			"permissions[0]: rateLimits: \"*.last.fm\" is not a host name; each limit is for one host",
+			"permissions[0]: rateLimits: \"last.fm:443\" is not a host name; each limit is for one host"
 		]
 	},
 	{

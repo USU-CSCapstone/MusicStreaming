@@ -373,12 +373,18 @@ fn validate_rate_limits(at: &str, limits: &Value, destinations: Option<&Value>) 
     let hosts = destinations.and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
     let mut problems = Vec::new();
     for (host, limit) in limits {
-        let listed = host != "*"
-            && hosts
-                .iter()
-                .filter_map(Value::as_str)
-                .any(|d| d == "*" || d.eq_ignore_ascii_case(host));
-        if !listed {
+        // Matched exactly against the host a request names, so `*` or a pattern never would be.
+        let named = !host.is_empty()
+            && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.');
+        let listed = || {
+            let mut listed = hosts.iter().filter_map(Value::as_str);
+            listed.any(|d| d == "*" || d.eq_ignore_ascii_case(host))
+        };
+        if !named {
+            problems.push(format!(
+                r#"{at}: rateLimits: "{host}" is not a host name; each limit is for one host"#
+            ));
+        } else if !listed() {
             problems.push(format!(r#"{at}: rateLimits: "{host}" is not one of its destinations"#));
         }
         if !limit.as_str().is_some_and(|limit| rate_limit_gap(limit).is_some()) {
