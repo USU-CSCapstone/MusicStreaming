@@ -24,6 +24,7 @@ mod playlists;
 mod plays;
 mod plugins;
 mod problem;
+mod realtime;
 mod refs;
 mod search;
 mod session;
@@ -31,6 +32,7 @@ mod setup;
 mod sql;
 #[cfg(test)]
 mod testing;
+mod time;
 mod tracks;
 mod waveform;
 
@@ -44,6 +46,7 @@ use axum::{Json, Router};
 pub use id::Id;
 pub use images::Images;
 pub use problem::{Code, Problem};
+use realtime::Hub;
 use search::Indexes;
 use setup::Setup;
 
@@ -58,6 +61,8 @@ struct AppState {
     indexes: Arc<Indexes>,
     setup: Arc<Setup>,
     plugins: Arc<Plugins>,
+    /// The open realtime connections.
+    hub: Arc<Hub>,
     /// Where the API is mounted, `{base_path}/api/v1`.
     prefix: Arc<str>,
 }
@@ -80,6 +85,12 @@ impl FromRef<AppState> for Arc<Plugins> {
     }
 }
 
+impl FromRef<AppState> for Arc<Hub> {
+    fn from_ref(state: &AppState) -> Arc<Hub> {
+        state.hub.clone()
+    }
+}
+
 impl FromRef<AppState> for Arc<Images> {
     fn from_ref(state: &AppState) -> Arc<Images> {
         state.images.clone()
@@ -95,6 +106,7 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Arc<P
         indexes: Arc::default(),
         setup: Arc::default(),
         plugins,
+        hub: Arc::default(),
         prefix: prefix.as_str().into(),
     };
     // These answer `401` without a token.
@@ -110,6 +122,7 @@ pub fn router(base_path: &str, db: Arc<Database>, images: Images, plugins: Arc<P
                 .put(connections::set_settings)
                 .delete(connections::disconnect),
         )
+        .route("/realtime", get(realtime::open))
         .route("/libraries", get(libraries::list))
         .route("/libraries/{library_id}", get(libraries::get))
         .route("/libraries/{library_id}/albums", get(albums::list))
