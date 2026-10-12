@@ -129,12 +129,12 @@ fn same_origin(headers: &HeaderMap) -> bool {
 /// Holds `socket` open for `caller` until either side closes it or it goes silent.
 async fn serve(mut socket: WebSocket, mut presence: Presence, state: AppState, caller: Caller) {
     let hello = ServerMessage::Hello { device_id: Id(caller.device), server_time: now() };
+    let mut heard = Instant::now();
     if send(&mut socket, encode(&hello)).await {
         state.players.send_state(&state.hub, caller.user, &presence);
         // Every connection of the account, this one included, learns it is connected.
         devices::changed(state.db.clone(), state.hub.clone(), caller.user);
         let mut heartbeat = interval_at(Instant::now() + HEARTBEAT, HEARTBEAT);
-        let mut heard = Instant::now();
         loop {
             tokio::select! {
                 received = socket.recv() => {
@@ -164,7 +164,12 @@ async fn serve(mut socket: WebSocket, mut presence: Presence, state: AppState, c
             }
         }
     }
+    let connection = presence.id();
     drop(presence);
+    // A connection that went silent is dropped up to a minute later, and whatever was playing
+    // over it is taken to have got only as far as when it was last heard from.
+    let heard_at = now_ms() - i64::try_from(heard.elapsed().as_millis()).unwrap_or(i64::MAX);
+    state.players.disconnected(&state.hub, caller.user, connection, heard_at);
     // A connected device is in use the whole time, which requests alone would not show.
     let device = caller.device;
     let seen = state.db.write(move |tx| {

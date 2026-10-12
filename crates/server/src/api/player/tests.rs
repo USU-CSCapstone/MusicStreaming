@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use futures_util::SinkExt;
+use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -266,4 +266,79 @@ async fn one_accounts_place_failing_to_save_keeps_no_one_elses_from_saving() {
     players.report(&Hub::default(), caller, 8, report.unwrap(), Id(9), Id(1)).unwrap();
     players.save(&db).await;
     assert_eq!(restarted(&db).await["positionMs"], json!(1000));
+}
+
+/// The next playback state `socket` is sent with `status`.
+async fn state_with(socket: &mut Socket, status: &str) -> Value {
+    loop {
+        let message = next_of(socket, "player").await;
+        if message["state"]["status"] == status {
+            return message["state"].clone();
+        }
+    }
+}
+
+#[tokio::test]
+async fn losing_the_playing_connection_stops_playback_where_it_got_to() {
+    let (_temp, app, address) = setup().await;
+    let mut desk = connect_with(address, TOKEN).await;
+    let mut phone = connect_with(address, "phone").await;
+    next_of(&mut phone, "player").await; // As it was on connecting: stopped at nothing.
+    report(&mut desk, "1", "playing", json!({ "start": true })).await;
+    desk.close(None).await.unwrap();
+
+    let state = state_with(&mut phone, "stopped").await;
+    assert_eq!((&state["activeDeviceId"], &state["trackId"]), (&json!(null), &json!("1")));
+    let position = state["positionMs"].as_u64().unwrap();
+    assert!((1000..2000).contains(&position), "as far as it played: {position}");
+    assert_eq!(player(&app, TOKEN).await, state);
+
+    // Any device can carry on from there.
+    report(&mut phone, "2", "playing", json!({ "start": true })).await;
+    assert_eq!(player(&app, TOKEN).await["activeDeviceId"], json!("2"));
+}
+
+#[tokio::test]
+async fn a_paused_place_is_kept_exactly_and_other_connections_closing_change_nothing() {
+    let (_temp, app, address) = setup().await;
+    let mut desk = connect_with(address, TOKEN).await;
+    let mut phone = connect_with(address, "phone").await;
+    report(&mut desk, "1", "paused", json!({ "start": true })).await;
+
+    phone.close(None).await.unwrap();
+    // The phone's connection is let go before its device list is sent.
+    loop {
+        let list = next_of(&mut desk, "devices").await;
+        if list["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["id"] == "2" && d["connected"] == false)
+        {
+            break;
+        }
+    }
+    assert_eq!(player(&app, TOKEN).await["activeDeviceId"], json!("1"));
+
+    let mut tab = connect_with(address, TOKEN).await;
+    assert_eq!(next_of(&mut tab, "player").await["state"]["status"], json!("paused"));
+    desk.close(None).await.unwrap();
+    let state = state_with(&mut tab, "stopped").await;
+    assert_eq!(state["positionMs"], json!(1000), "paused, so it got no further");
+}
+
+#[tokio::test]
+async fn an_old_connection_closing_after_its_device_took_over_again_changes_nothing() {
+    let (_temp, app, address) = setup().await;
+    let mut old = connect_with(address, TOKEN).await;
+    report(&mut old, "1", "playing", json!({ "start": true })).await;
+    // Reconnected while the old connection lingers, and took over on the new one.
+    let mut new = connect_with(address, TOKEN).await;
+    report(&mut new, "1", "playing", json!({ "start": true, "trackId": "2" })).await;
+    old.close(None).await.unwrap();
+    while old.next().await.is_some() {}
+    // Nothing can be waited on when nothing changes: give the server time to let go.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let state = player(&app, TOKEN).await;
+    assert_eq!((&state["status"], &state["trackId"]), (&json!("playing"), &json!("2")));
 }
