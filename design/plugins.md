@@ -72,7 +72,7 @@ What decided it:
 
 - **JavaScript is fine for what small plugins mostly do.** Reacting to events, enriching metadata in the background, and scheduled jobs all qualify. "A plugin can be trivial" ([`requirements/plugins.md` §1](../requirements/plugins.md#1-an-open-surface)) holds.
 - **It is not fine on a per-keystroke path or for a whole-library pass inside an interactive budget.** 500,000 tracks take 1.3–1.7 s. Plugin cost is attributable to the plugin ([§2.2](../requirements/plugins.md#22-results-compose-they-do-not-block)), and the author documentation should give these numbers.
-- **The out-of-process baseline had one edge over JS: memory.** A native process idled at 1.7 MB against JS's 8.5 MB. Twenty JS plugins come to about 170 MB, which the Pi's 4 GB floor absorbs ([`requirements/performance.md` §1](../requirements/performance.md#1-verification-hardware)), but it should be watched.
+- **The out-of-process baseline had one edge over JS: memory.** A native process idled at 1.7 MB against JS's 8.5 MB. Twenty JS plugins come to about 170 MB, which a 4 GB Pi absorbs ([`requirements/performance.md` §1](../requirements/performance.md#1-target-hardware)), but it should be watched.
 - **AOT compilation buys 20% on compute and costs 3 MB and slightly more memory.** Whether to use it is the plugin author's choice, not the system's.
 
 ---
@@ -83,7 +83,7 @@ What decided it:
 - **Versions:** Wasmtime 49 with its WASI p2 implementation. Guests: Rust through wit-bindgen for `wasm32-wasip2`; JS through componentize-js 0.23; the process baseline as length-prefixed JSON over stdin/stdout.
 - **Catalog:** synthetic, 500,000 plus 20,000 tracks, held in memory so SQLite's paging does not blur the boundary cost.
 - **Assertions:** containment, scoping, and state are asserted, and `cargo test` covers the fast versions. Performance bars were proposals and are reported rather than asserted. The spike's interface is [`spikes/plugins/wit/plugin.wit`](https://github.com/USU-CSCapstone/MusicStreaming/blob/3364419344d92814817bc6b31f9b6e23071a222f/spikes/plugins/wit/plugin.wit).
-- **Not yet run on the verification machines.** The budgets are defined on the Pi 4 and the Ryzen 7 2700X ([`requirements/performance.md` §1](../requirements/performance.md#1-verification-hardware)). The harness is one binary that cross-compiles, and those runs are the first open item below.
+- **Not yet run on low-power hardware**, which is the design target ([`requirements/performance.md` §1](../requirements/performance.md#1-target-hardware)). The harness is one binary that cross-compiles, and those runs are the first open item below.
 
 ---
 
@@ -123,7 +123,7 @@ What decided it:
 
 ## 8. Open Questions
 
-1. **Pi 4 and Ryzen runs.** The spike ran only on an Apple M5, and will not be run again. The decision rests on ratios, which should hold, but the budgets are absolute, so they are to be checked against the real host in `crates/plugins` on both machines.
+1. **Low-power hardware runs.** The spike ran only on an Apple M5, and will not be run again. The decision rests on ratios, which should hold, but absolute costs still need checking against the real host in `crates/plugins` on Pi-class hardware.
 2. **Plugin UI description.** This is the other half of [`general.md` §11](general.md#11-open-decisions) #4: the declarative format both clients render ([`requirements/plugins.md` §9](../requirements/plugins.md#9-extending-the-interface)).
 3. **What the host interface still lacks.** Events with replay, settings and credentials, and a host-side check for every permission are built (§7). Still missing: a bulk read encoding (§3), since runs read the library a page at a time; and revoking a permission mid-run, which has to take effect without a restart, while grants are now read only when a run starts. What the contract could add beyond that is catalogued in [`hooks.md`](hooks.md), [`imports.md`](imports.md), and [`exports.md`](exports.md).
 4. **The cost of async host calls.** `http.send` is async and holds no thread while it waits (§7), but its overhead was never measured, nor `wasi:http` as an alternative.

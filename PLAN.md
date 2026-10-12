@@ -21,7 +21,7 @@ Anything not listed as Built below is Open.
 1. **Start a stage by re-reading its requirement files.** Settle any changes to its Open requirements first, then update `api/openapi.yaml`, then write code. The requirements and the spec never fall behind the code.
 2. **Make one small, reviewable change at a time**, one branch and one PR each. Changes stack when they depend on each other.
 3. **Close a stage by checking its end goal**: move its requirements to Built in the status table, and write down anything deferred.
-4. **Test every change at its boundary.** Library and account isolation are checked on each new endpoint ([`general.md` §3.6](requirements/general.md#36-libraries-are-the-isolation-boundary)), and new work is measured against [`performance.md`](requirements/performance.md) once the benchmark harness exists (Stage 8).
+4. **Test every change at its boundary.** Library and account isolation are checked on each new endpoint ([`general.md` §3.6](requirements/general.md#36-libraries-are-the-isolation-boundary)), and new work is checked against the goals in [`performance.md`](requirements/performance.md), on low-power hardware once the benchmark harness exists (Stage 8).
 
 The stages are in dependency order. Stages that don't depend on each other can run in parallel, for example 2 with 3, or 6 with 7.
 
@@ -100,7 +100,7 @@ Rust server, SQLite, and a SvelteKit SPA ([ADRs 0001–0006](adr/)). Scanner wit
 - A web worker holding the catalog, synced from the change feeds. A durable command queue for optimistic actions.
 - A service worker, an installable PWA, downloads with a storage budget, choosing between local and stream, and reconciliation.
 
-**Open:** The on-device catalog and index format within the [`performance.md` §6](requirements/performance.md#6-client-footprint) budget ([`design/general.md` §11.2](design/general.md#11-open-decisions)).
+**Open:** The on-device catalog and index format, within the [`performance.md` §6](requirements/performance.md#6-client-footprint) footprint goals ([`design/general.md` §11.2](design/general.md#11-open-decisions)).
 
 **End goal:** The web app works the same with or without a network, apart from what audio can play and what there is to search. [`general.md` §3.4–3.5](requirements/general.md#34-optimistic-by-default), [`offline.md`](requirements/offline.md), [`search.md` §2](requirements/search.md#2-where-search-runs), and [`libraries.md` §5](requirements/libraries.md#5-staying-current) are met.
 
@@ -126,7 +126,7 @@ Rust server, SQLite, and a SvelteKit SPA ([ADRs 0001–0006](adr/)). Scanner wit
 ## Stage 8 — Production readiness
 
 - A multi-arch production image and compose file, startup config validation, safe migrations, a health endpoint, and docs for reverse proxies and backups.
-- A benchmark harness and library generator (`bench/`). Measure every budget on the Pi 4 and the desktop machine, and publish the results.
+- A benchmark harness and library generator (`bench/`). Measure on low-power hardware such as a Pi as well as a typical desktop, and publish the results. Concrete numeric targets can be set here, once there's real data.
 
 **Open:** The project license ([`design/general.md` §11.5](design/general.md#11-open-decisions)).
 

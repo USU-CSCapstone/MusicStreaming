@@ -26,7 +26,7 @@ Twenty documents defining what Jewelcase must do. Project overview and core prin
 | [`realtime.md`](realtime.md) | Shift — live updates, remote control, playback transfer. |
 | [`offline.md`](offline.md) | Catalog sync, downloads, local-versus-stream, offline determinism. |
 | [`plugins.md`](plugins.md) | The open surface, cost constraints, trust, lifecycle, external content. |
-| [`performance.md`](performance.md) | Verification hardware, budgets, benchmarks, saturation behavior. |
+| [`performance.md`](performance.md) | Target hardware, speed goals, benchmarks, saturation behavior. |
 | [`deployment.md`](deployment.md) | Container deployment, configuration, backup, upgrades, remote access, observability. |
 
 ## Where cross-cutting things live
@@ -36,7 +36,7 @@ The lookups where the obvious file isn't the owning one.
 | Looking for | It lives in |
 |---|---|
 | Anything true of *every* entity — actions, rendering, sorting, availability | [`conventions.md`](conventions.md), not the entity file |
-| What "instant" or "at scale" means as a number | [`performance.md` §3](performance.md#3-interaction-budgets)–[§6](performance.md#6-client-footprint) |
+| What "instant" or "at scale" means | [`performance.md` §3](performance.md#3-interactions)–[§6](performance.md#6-client-footprint) |
 | Sidecar conventions (`cover.*`, `artist.*`, `artist.txt`, `.lrc`) | [`scanning.md` §3](scanning.md#3-sidecar-content) — a **public contract** plugins depend on |
 | Artwork *found* vs *served* | [`scanning.md` §3.1](scanning.md#31-album-art) vs [`conventions.md` §5](conventions.md#5-imagery) |
 | Track identity, and why moving or retagging files is safe | [`scanning.md` §6](scanning.md#6-track-identity) |

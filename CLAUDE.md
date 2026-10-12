@@ -20,7 +20,7 @@ Load-bearing. Every requirement derives from them, and a proposal that violates 
 
 ## Constraints
 
-- **Performance is a key concern.** Jewelcase must run well on low-power hardware like a Raspberry Pi, even with a large library. Specific targets and reference hardware aren't set yet ([`requirements.md` §4](requirements.md#4-performance)).
+- **Performance is a key concern.** Jewelcase must be fast and run well on low-power hardware like a Raspberry Pi, even with a large library. The goals are deliberately qualitative for now, not tied to specific devices or numbers ([`requirements/performance.md`](requirements/performance.md)).
 - **Neither scale nor hardware may show in the interface.** Cheap hardware buys a smaller library, never a worse experience.
 - **One adaptive interface** — responsive web (primary, installable as a PWA), Android, iOS via PWA. Every feature at every size, on touch, mouse, and keyboard.
 - **The core serves a library and little else.** Anything beyond that is a plugin's to build, with no list of permitted kinds of plugin; what each one reaches is the admin's to approve ([`requirements/plugins.md`](requirements/plugins.md)).

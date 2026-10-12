@@ -97,7 +97,7 @@ Nothing else in the library. File paths and folder names are **not** searched: t
 
 ## 7. Speed
 
-- **Results within 50 ms at full scale** ([`performance.md` §3](performance.md#3-interaction-budgets)), measured on both verification machines — and **on the device, against the catalog it holds** ([`performance.md` §6](performance.md#6-client-footprint)). Client search meets the same budget as server search; parity of capability ([§2.1](#21-one-search-two-places-to-run-it)) is worth nothing if the device takes a second to deliver it.
+- **Results are instant at any library size** ([`performance.md` §3](performance.md#3-interactions)), on the server and **on the device, against the catalog it holds** ([`performance.md` §6](performance.md#6-client-footprint)). Client search is as fast as server search; parity of capability ([§2.1](#21-one-search-two-places-to-run-it)) is worth nothing if the device takes a second to deliver it.
 - **Results update as the user types**, with no submit step and no perceptible lag between a keystroke and its result.
 - **Typing is never blocked.** A slow or failed result must never delay the next character.
 - **Results never arrive out of order.** A slower earlier query must not replace a faster later one; a user always sees results for what is currently in the box.

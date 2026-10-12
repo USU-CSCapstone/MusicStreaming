@@ -14,7 +14,7 @@ This file covers how audio is delivered, how it sounds, how a listener navigates
 - **Quality is automatic, not managed.** It follows the per-connection settings ([`users.md` §6](users.md#6-profile--preferences)).
 - **The user can see what they are hearing** — original or transcoded, and at what bitrate. Automatic must not mean opaque, particularly for people who chose self-hosting to keep their lossless files lossless.
 - **Repeat listening costs no more than the first time.** Hearing a track again at the same quality does not repeat work already done.
-- **Both paths reach the concurrency targets** for each verification machine, with every listener transcoding ([`performance.md` §1](performance.md#1-verification-hardware)).
+- **Both paths scale with the host.** Even with every listener transcoding, the number served is limited by hardware, not by Jewelcase ([`performance.md` §2](performance.md#2-no-ceilings)).
 
 ---
 
@@ -36,8 +36,8 @@ This file covers how audio is delivered, how it sounds, how a listener navigates
 - **Honest.** Shaping for legibility must never invent structure or move a transition from where it falls. Scrubbing to what looks like the drop lands on the drop.
 - **Deterministic.** The same audio always yields the same waveform, on every device and between sessions.
 - **Produced by the single analysis decode pass** ([`scanning.md` §1](scanning.md#1-supported-formats)) — never a second pass over the library — from the original file, so a track looks identical streamed, transcoded, or downloaded, and unchanged by loudness normalization ([§5](#5-loudness)).
-- **Absent until analyzed.** Analysis takes days at full scale ([`performance.md` §5](performance.md#5-scanning--analysis-budgets)), so a track without one plays immediately behind an ordinary progress bar. That plain bar is a legitimate state: no placeholder shape and no fake waveform suggesting structure nobody measured.
-- **Scrubbable everywhere.** Dragging it seeks within the normal budget ([`performance.md` §4](performance.md#4-playback-budgets)), at every size and by touch, mouse, and keyboard, with the keyboard path never depending on seeing the shape ([`general.md` §4](general.md#4-target-platforms)).
+- **Absent until analyzed.** Analysis takes far longer than indexing ([`performance.md` §5](performance.md#5-scanning--analysis)), so a track without one plays immediately behind an ordinary progress bar. That plain bar is a legitimate state: no placeholder shape and no fake waveform suggesting structure nobody measured.
+- **Scrubbable everywhere.** Dragging it seeks as quickly as any other seek ([`performance.md` §4](performance.md#4-playback)), at every size and by touch, mouse, and keyboard, with the keyboard path never depending on seeing the shape ([`general.md` §4](general.md#4-target-platforms)).
 - **Carried like lyrics, not like catalog** — with downloads and on demand, never pre-synced wholesale ([`offline.md` §1.1](offline.md#11-footprint)).
 
 ---
