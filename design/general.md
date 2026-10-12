@@ -16,7 +16,7 @@ The core stack and system architecture. Subsystem designs build on this file and
 | Database | SQLite |
 | Distribution | One container image, `linux/amd64` and `linux/arm64` |
 
-- **Rust.** Offline parity ([`requirements/general.md` §3.5](../requirements/general.md#35-offline-parity)) requires search, sort, and shuffle to be a single implementation on every platform, and Rust compiles one to the server, the browser, and Android. It also fits the Pi's memory limits and p95/p99 budgets without GC pauses ([`requirements/performance.md` §1](../requirements/performance.md#1-verification-hardware), [§3](../requirements/performance.md#3-interaction-budgets)). Cost: compile times and iteration speed.
+- **Rust.** Offline parity ([`requirements/general.md` §3.5](../requirements/general.md#35-offline-parity)) requires search, sort, and shuffle to be a single implementation on every platform, and Rust compiles one to the server, the browser, and Android. It also fits low-power hardware's memory limits and keeps tail latency free of GC pauses ([`requirements/performance.md` §1](../requirements/performance.md#1-target-hardware), [§3](../requirements/performance.md#3-interactions)). Cost: compile times and iteration speed.
 - **Svelte 5.** Fine-grained updates suit the one-frame input budget.
 - **SvelteKit, SPA mode only.** It provides routing, nested layouts, per-route code splitting, and navigation that waits for a page's data, so views arrive complete ([`requirements/conventions.md` §3](../requirements/conventions.md#3-rendering)). These are maintained upstream and familiar to contributors. The static adapter emits plain files the Rust server serves. There is no Node server in production, which would break the single container and cost Pi memory, and no server routes, which would bypass the public API ([§6](#6-public-api)). Cost: SvelteKit fixes the base path at build time ([§7.1](#71-web)).
 - **Native Android.** Background audio, media-session and car integration, and durable downloads ([`requirements/playback.md` §7](../requirements/playback.md#7-system-integration), [`requirements/offline.md` §11](../requirements/offline.md#11-platform-parity)) are first-class on the platform rather than bridged. iOS remains the installed web app ([`requirements/general.md` §4](../requirements/general.md#4-target-platforms)).
@@ -139,7 +139,7 @@ jewelcase/
 - **Parity tests:** every build of the core produces byte-identical results for the same inputs.
 - **Isolation tests:** cross-library and cross-account access attempted through every endpoint.
 - **API compatibility check** in CI ([§6](#6-public-api)).
-- **Benchmarks** against a generated full-scale library on both verification machines, at p95 and p99. Regressions block releases ([`requirements/performance.md` §8](../requirements/performance.md#8-measurement)).
+- **Benchmarks** against a generated large library, on low-power hardware as well as typical machines, reporting percentiles. Regressions are defects ([`requirements/performance.md` §8](../requirements/performance.md#8-measurement)).
 
 ---
 
@@ -147,6 +147,6 @@ jewelcase/
 
 1. **Audio delivery** — gapless background playback in the browser, above all in an installed iOS web app, and the stream format that serves it.
 2. **On-device catalog and index format**, within [`requirements/performance.md` §6](../requirements/performance.md#6-client-footprint).
-3. **Track identity** that survives retags and moves ([`requirements/scanning.md` §6](../requirements/scanning.md#6-track-identity)) within the cold-scan budget ([`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis-budgets)).
+3. **Track identity** that survives retags and moves ([`requirements/scanning.md` §6](../requirements/scanning.md#6-track-identity)) without slowing cold scans ([`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis)).
 4. **Plugin UI description** ([§8](#8-plugins)). The execution model is settled ([`plugins.md`](plugins.md)); its remaining questions are listed there.
 5. **Project license.**

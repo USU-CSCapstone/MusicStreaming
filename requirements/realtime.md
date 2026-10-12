@@ -60,7 +60,7 @@ Two rules across all three:
 
 ## 5. Timeliness
 
-- **Control feels immediate.** A command issued on one device takes effect on another within **300 ms** on a healthy connection ([`performance.md` §3](performance.md#3-interaction-budgets)).
+- **Control feels immediate.** A command issued on one device takes effect on another with no perceptible delay on a healthy connection ([`performance.md` §3](performance.md#3-interactions)).
 - **The controlling device responds instantly**, without waiting for the target — optimistic, then reconciled ([`general.md` §3.4](general.md#34-optimistic-by-default)).
 - **Position never drifts.** A client watching playback for an hour still shows the right position, without the user reopening anything.
 - **A failed command is visible.** If the target did not do what was asked, the controlling device says so rather than showing a state that never happened.

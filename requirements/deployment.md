@@ -34,7 +34,7 @@ Everything else has a working default. **A user who sets only these three runs a
 
 ## 3. Storage & Permissions
 
-- **The data directory needs speed; the music does not** ([`performance.md` §1](performance.md#1-verification-hardware)). This is stated where users choose their mounts, because it is the single most consequential deployment decision and the easiest to get wrong.
+- **The data directory needs speed; the music does not** ([`performance.md` §1](performance.md#1-target-hardware)). This is stated where users choose their mounts, because it is the single most consequential deployment decision and the easiest to get wrong.
 - **Read-only music mounts are fully supported** ([`libraries.md` §2](libraries.md#2-storage)). A user who mounts their collection read-only loses only plugin-supplied enrichment.
 - **File ownership is the user's to set**, through the conventional container mechanism, so files Jewelcase creates are readable by the person who owns the host.
 - **Network storage is first-class** ([`libraries.md` §2](libraries.md#2-storage)). NFS and SMB mounts work, and where live filesystem watching is unreliable across them, scheduled scans cover it ([`scanning.md` §4](scanning.md#4-triggers)).
