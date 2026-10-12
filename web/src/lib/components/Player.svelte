@@ -15,12 +15,16 @@
 	const remote = $derived(controls.remote);
 	const track = $derived(controls.track);
 	const playing = $derived(controls.playing);
+	/** Where the music plays, when another device plays it; stopped, it plays nowhere. */
 	const where = $derived(
 		controls.stopped
-			? 'Stopped'
+			? null
 			: realtime.connected
 				? `On ${playback.deviceName}`
 				: `Last on ${playback.deviceName}`
+	);
+	const devicesLabel = $derived(
+		playback.elsewhere ? `Devices, playing on ${playback.deviceName}` : 'Devices'
 	);
 	let lastVolume = 1;
 	let innerWidth = $state(1024);
@@ -48,23 +52,17 @@
 			<div class="meta">
 				<span class="title">{track.title}</span>
 				<span class="muted artists"><ArtistLinks artists={track.artists} /></span>
-				{#if remote}
+				{#if remote && (playback.error || where)}
 					<span class="where">
 						{#if playback.error}
 							<span class="device error" role="alert" title={playback.error}>{playback.error}</span>
 						{:else}
 							<span class="device">{where}</span>
 						{/if}
-						{#if controls.pickable}
-							<span aria-hidden="true">·</span>
-							<button type="button" class="link" onclick={() => controls.playHere()}>
-								Play here
-							</button>
-						{/if}
 					</span>
 				{/if}
 			</div>
-		{:else if remote}
+		{:else if remote && where}
 			<span class="muted">{where}</span>
 		{:else}
 			<span class="muted">Nothing playing</span>
@@ -127,9 +125,28 @@
 			aria-label="Lyrics"
 			aria-pressed={panels.lyrics}
 			title="Lyrics"
-			onclick={() => (panels.lyrics = !panels.lyrics)}
+			onclick={() => {
+				panels.lyrics = !panels.lyrics;
+				panels.devices = false;
+			}}
 		>
 			<Icon name="lyrics" size={18} />
+		</button>
+		<!-- Marked while another device plays, where the music can be taken back from. -->
+		<button
+			type="button"
+			class="icon-btn"
+			class:on={panels.devices}
+			class:elsewhere={playback.elsewhere}
+			aria-label={devicesLabel}
+			aria-pressed={panels.devices}
+			title={devicesLabel}
+			onclick={() => {
+				panels.devices = !panels.devices;
+				panels.lyrics = false;
+			}}
+		>
+			<Icon name="devices" size={18} />
 		</button>
 		<span class="volume">
 			<button
@@ -218,19 +235,6 @@
 		text-overflow: ellipsis;
 	}
 
-	.link {
-		flex-shrink: 0;
-		min-height: 24px;
-		padding: 0;
-		border: 0;
-		background: none;
-		color: inherit;
-		font: inherit;
-		font-weight: 600;
-		text-decoration: underline;
-		cursor: pointer;
-	}
-
 	.center {
 		display: flex;
 		flex-direction: column;
@@ -300,6 +304,23 @@
 	button:disabled {
 		opacity: 0.4;
 		cursor: default;
+	}
+
+	.icon-btn.elsewhere {
+		position: relative;
+		color: var(--accent);
+	}
+
+	.icon-btn.elsewhere::after {
+		content: '';
+		position: absolute;
+		bottom: 1px;
+		left: 50%;
+		width: 4px;
+		height: 4px;
+		border-radius: 50%;
+		background: var(--accent);
+		transform: translateX(-50%);
 	}
 
 	.icon-btn.on {

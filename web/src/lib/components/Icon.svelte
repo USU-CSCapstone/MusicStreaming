@@ -81,6 +81,27 @@
 			],
 			['path', { d: 'M12 9v4M12 17h.01' }]
 		],
+		devices: [
+			['rect', { x: 2, y: 4, width: 13, height: 10, rx: 1.5 }],
+			['path', { d: 'M5 18h7' }],
+			['rect', { x: 17, y: 8, width: 5, height: 12, rx: 1 }]
+		],
+		phone: [
+			['rect', { x: 7, y: 2.5, width: 10, height: 19, rx: 2 }],
+			['path', { d: 'M11 18h2' }]
+		],
+		tablet: [
+			['rect', { x: 4, y: 2.5, width: 16, height: 19, rx: 2 }],
+			['path', { d: 'M11 18h2' }]
+		],
+		desktop: [
+			['rect', { x: 3, y: 4, width: 18, height: 12, rx: 2 }],
+			['path', { d: 'M8 20h8M12 16v4' }]
+		],
+		tv: [
+			['rect', { x: 2, y: 5, width: 20, height: 13, rx: 2 }],
+			['path', { d: 'M8 21h8' }]
+		],
 		upload: [
 			['path', { d: 'M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3' }]
 		]

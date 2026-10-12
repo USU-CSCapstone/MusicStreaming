@@ -5,7 +5,7 @@
 	import { artistName } from '$lib/format';
 	import { panels } from '$lib/panels.svelte';
 	import { controls } from '$lib/controls.svelte';
-	import Icon from './Icon.svelte';
+	import Panel from './Panel.svelte';
 
 	// The track the player bar shows, here or on another device.
 	const track = $derived(controls.track);
@@ -48,123 +48,46 @@
 	});
 </script>
 
-<svelte:window
-	onkeydown={(e) => {
-		if (panels.lyrics && e.key === 'Escape') panels.lyrics = false;
-	}}
-/>
-
 {#if panels.lyrics}
-	<aside class="panel" aria-label="Lyrics">
-		<header>
-			<div class="meta">
-				<h2>Lyrics</h2>
-				{#if track}
-					<p class="muted">
-						{track.title} · {track.artists.map((a) => artistName(a.name)).join(', ')}
-					</p>
-				{/if}
-			</div>
-			<button type="button" aria-label="Close lyrics" onclick={() => (panels.lyrics = false)}>
-				<Icon name="close" size={18} />
-			</button>
-		</header>
-
-		<div class="body">
-			{#if !track}
-				<p class="state muted">Play something to see its lyrics.</p>
-			{:else if failed}
-				<p class="state muted">Lyrics could not be loaded.</p>
-			{:else if !lyrics}
-				<p class="state muted" aria-busy="true">Loading…</p>
-			{:else if lyrics.kind === 'synced'}
-				<ol bind:this={list} class="synced">
-					{#each lines as line, i (i)}
-						<li>
-							<!-- Clicking a line seeks there. -->
-							<button
-								type="button"
-								class:current={i === now}
-								class:past={i < now}
-								aria-current={i === now ? 'true' : undefined}
-								onclick={() => controls.seek(line.startMs / 1000)}
-							>
-								{line.text || '♪'}
-							</button>
-						</li>
-					{/each}
-				</ol>
-			{:else if lyrics.kind === 'plain'}
-				<p class="plain">{lyrics.plain}</p>
-			{:else}
-				<p class="state muted">No lyrics for this song.</p>
-			{/if}
-		</div>
-	</aside>
+	<Panel
+		title="Lyrics"
+		subtitle={track
+			? `${track.title} · ${track.artists.map((a) => artistName(a.name)).join(', ')}`
+			: undefined}
+		onclose={() => (panels.lyrics = false)}
+	>
+		{#if !track}
+			<p class="state muted">Play something to see its lyrics.</p>
+		{:else if failed}
+			<p class="state muted">Lyrics could not be loaded.</p>
+		{:else if !lyrics}
+			<p class="state muted" aria-busy="true">Loading…</p>
+		{:else if lyrics.kind === 'synced'}
+			<ol bind:this={list} class="synced">
+				{#each lines as line, i (i)}
+					<li>
+						<!-- Clicking a line seeks there. -->
+						<button
+							type="button"
+							class:current={i === now}
+							class:past={i < now}
+							aria-current={i === now ? 'true' : undefined}
+							onclick={() => controls.seek(line.startMs / 1000)}
+						>
+							{line.text || '♪'}
+						</button>
+					</li>
+				{/each}
+			</ol>
+		{:else if lyrics.kind === 'plain'}
+			<p class="plain">{lyrics.plain}</p>
+		{:else}
+			<p class="state muted">No lyrics for this song.</p>
+		{/if}
+	</Panel>
 {/if}
 
 <style>
-	.panel {
-		position: absolute;
-		inset: 0 0 0 auto;
-		z-index: 10;
-		display: flex;
-		flex-direction: column;
-		width: min(400px, 100%);
-		background: var(--surface);
-		border-left: 1px solid var(--border);
-		box-shadow: var(--shadow);
-	}
-
-	header {
-		display: flex;
-		align-items: flex-start;
-		justify-content: space-between;
-		gap: var(--space-3);
-		padding: var(--space-4) var(--space-4) var(--space-3) var(--space-5);
-		border-bottom: 1px solid var(--border);
-	}
-
-	.meta {
-		min-width: 0;
-	}
-
-	h2 {
-		font-size: 18px;
-	}
-
-	.meta p {
-		margin: 2px 0 0;
-		font-size: 13px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	header button {
-		display: grid;
-		place-items: center;
-		width: 32px;
-		height: 32px;
-		border: 0;
-		border-radius: 50%;
-		background: transparent;
-		color: var(--text-muted);
-		cursor: pointer;
-		flex-shrink: 0;
-	}
-
-	header button:hover {
-		background: var(--surface-hover);
-		color: var(--text);
-	}
-
-	.body {
-		flex: 1;
-		overflow-y: auto;
-		padding: var(--space-4) var(--space-5) var(--space-6);
-	}
-
 	.state {
 		margin: var(--space-6) 0 0;
 		text-align: center;

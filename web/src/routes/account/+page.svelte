@@ -10,6 +10,7 @@
 	} from '$lib/api/client';
 	import type { PersonalPlugin } from '$lib/api/plugins';
 	import type { User } from '$lib/api/types';
+	import DeviceList from '$lib/components/DeviceList.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import SettingsDialog from '$lib/components/SettingsDialog.svelte';
 
@@ -75,6 +76,17 @@
 		<button type="button" onclick={logOut} disabled={busy}>
 			{busy ? 'Logging out…' : 'Log out'}
 		</button>
+	</section>
+{/if}
+
+{#if me}
+	<section aria-labelledby="devices">
+		<h2 id="devices">Devices</h2>
+		<p class="muted">
+			Everywhere you're signed in. Music plays on one at a time, and any of the others can control
+			it or take it over.
+		</p>
+		<DeviceList />
 	</section>
 {/if}
 
