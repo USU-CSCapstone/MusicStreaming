@@ -162,7 +162,7 @@ fn device(
 }
 
 /// A `401`, with the challenge RFC 9110 asks every `401` to name.
-fn unauthenticated() -> Response {
+pub fn unauthenticated() -> Response {
     let challenge = [(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"))];
     (challenge, Problem::new(Code::Unauthenticated)).into_response()
 }

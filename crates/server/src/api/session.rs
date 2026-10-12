@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 use super::authenticate::Caller;
 use super::devices::{self, Device};
 use super::me::{self, User};
+use super::realtime::Revoked;
 use super::{AppState, Code, Problem};
 use crate::db::now_ms;
 
@@ -111,12 +112,14 @@ pub fn register(
     Ok(Session { token, user: me::user(tx, user)?, device })
 }
 
-/// `logout`: removes the calling device and tells a browser to forget its cookie.
+/// `logout`: removes the calling device, closes its realtime connections, and tells a browser
+/// to forget its cookie.
 pub async fn logout(State(state): State<AppState>, caller: Caller) -> Result<Response, Problem> {
     state
         .db
         .write(move |tx| tx.execute("DELETE FROM devices WHERE id = ?1", [caller.device]))
         .await?;
+    state.hub.revoke(caller.user, caller.device, Revoked::LoggedOut);
     let forget = cookie_header(format!("{COOKIE}=; Path={}; Max-Age=0", state.prefix));
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, forget)]).into_response())
 }

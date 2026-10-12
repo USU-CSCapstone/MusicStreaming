@@ -9,7 +9,7 @@ use tokio_tungstenite::tungstenite::{Error, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use super::super::session::COOKIE;
-use super::super::testing::{TOKEN, app, json};
+use super::super::testing::{TOKEN, add_device, app, json, send};
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -102,4 +102,31 @@ async fn a_page_connects_only_from_this_server() {
             connect(address, &[("cookie", &cookie), ("origin", origin)]).await.unwrap_err();
         assert_eq!(status(refused), StatusCode::FORBIDDEN, "{origin}");
     }
+}
+
+#[tokio::test]
+async fn logging_out_closes_the_devices_connections_and_no_others() {
+    let (temp, _db, app) = app("");
+    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    add_device(&conn, 1, 2, "other-token");
+    let address = serve(app.clone()).await;
+    let bearer = format!("Bearer {TOKEN}");
+    let mut tabs = Vec::new();
+    for _ in 0..2 {
+        let mut tab = connect(address, &[("authorization", &bearer)]).await.unwrap();
+        receive(&mut tab).await;
+        tabs.push(tab);
+    }
+    let mut other = connect(address, &[("authorization", "Bearer other-token")]).await.unwrap();
+    receive(&mut other).await;
+
+    let (status, _, _) = send(app, "POST", "/api/v1/auth/logout").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    for mut tab in tabs {
+        let revoked = receive(&mut tab).await;
+        assert_eq!(revoked, json!({ "type": "sessionRevoked", "reason": "logged_out" }));
+        assert!(matches!(tab.next().await, Some(Ok(Message::Close(_)))));
+    }
+    other.send(Message::text(r#"{"type":"ping"}"#)).await.unwrap();
+    assert_eq!(receive(&mut other).await["type"], json!("pong"), "another device stays");
 }
