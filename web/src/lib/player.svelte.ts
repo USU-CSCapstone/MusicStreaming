@@ -1,15 +1,17 @@
 // Local playback: one audio element playing through a context of tracks. It reports its
-// progress to the server and stops when another device takes over (`progress.ts`), and plays
-// in one tab of this browser at a time, since every tab is the same device to the server.
+// progress to the server and stops when another device takes over (`progress.ts`), carries out
+// commands from the user's other devices while it plays (`remote.ts`), and plays in one tab of
+// this browser at a time, since every tab is the same device to the server.
 // Queue editing and Shift come later (`requirements/queue.md`, `requirements/realtime.md`).
 
 import { audioUrl, getPlaybackInfo, getWaveform, imageUrl, recordPlays } from './api/client';
-import type { PlayContext, TrackSummary } from './api/types';
+import type { PlayContext, PlayerCommand, PlayerState, TrackSummary } from './api/types';
 import { albumTitle, artistName } from './format';
 import { PlayRecorder } from './plays';
 import { Progress } from './progress';
 import { firstPlayable, nextPlayable, previousTarget } from './queue';
 import { realtime } from './realtime.svelte';
+import { carryOut, type Controls } from './remote';
 import { decodeWaveform } from './waveform';
 
 /** How often a playing player says where it is, so a device picking up is never far behind. */
@@ -57,13 +59,34 @@ class Player {
 	constructor() {
 		realtime.on((message) => {
 			if (message.type === 'hello') this.#progress.connected();
-			if (message.type !== 'player' || !realtime.deviceId) return;
-			const playing = this.playing || this.#loading;
-			const action = this.#progress.heard(realtime.deviceId, message.state, playing);
-			if (action === 'stop') this.#yield();
-			else if (action === 'report') this.#report();
+			else if (message.type === 'player') this.#heard(message.state);
+			else if (message.type === 'execute') void this.#execute(message.command);
 		});
 		this.#tabs?.addEventListener('message', () => this.#yield());
+	}
+
+	/** The account's playback state, as the server just sent it. */
+	#heard(state: PlayerState) {
+		if (!realtime.deviceId) return;
+		const playing = this.playing || this.#loading;
+		const action = this.#progress.heard(realtime.deviceId, state, playing);
+		if (action === 'stop') this.#yield();
+		else if (action === 'report') this.#report();
+	}
+
+	/** Carries out `command` from another device, and tells it how that went. */
+	async #execute(command: PlayerCommand) {
+		let reason: string | null;
+		try {
+			reason = await carryOut(this.#remote, command);
+		} catch {
+			reason = 'This device could not do that.';
+		}
+		const status = reason === null ? 'applied' : 'failed';
+		realtime.send({
+			type: 'commandResult',
+			result: { commandId: command.commandId, status, reason }
+		});
 	}
 
 	/** Another device or tab took over: this one stops where it is, and can take it back. */
@@ -88,16 +111,30 @@ class Player {
 	}
 
 	toggle() {
+		if (!this.#audio || !this.current) return;
+		if (this.#audio.paused) void this.resume().catch(() => {});
+		else this.pause();
+	}
+
+	/** Plays the current track from where it is: settles once the audio plays, or fails. */
+	async resume() {
+		await this.#resume(true);
+	}
+
+	/** Resumes, as the user here (`byUser`) or another device would. */
+	async #resume(byUser: boolean) {
 		const audio = this.#audio;
-		if (!audio || !this.current) return;
-		if (audio.paused) {
-			this.#started();
-			if (this.#stale) this.#go(this.index);
-			else void audio.play().catch(() => {});
-		} else {
-			this.#progress.paused();
-			audio.pause();
-		}
+		if (!audio || !this.current) throw new Error('Nothing is loaded.');
+		// The track is on its way, and its audio is not yet the audio element's.
+		if (this.#loading) return;
+		if (byUser) this.#started();
+		if (this.#stale) this.#go(this.index);
+		else await audio.play();
+	}
+
+	pause() {
+		this.#progress.paused();
+		this.#audio?.pause();
 	}
 
 	next() {
@@ -106,14 +143,36 @@ class Player {
 	}
 
 	previous() {
+		this.#previous(true);
+	}
+
+	/** Back a track, or to the start of this one, as the user here (`byUser`) or another device would. */
+	#previous(byUser: boolean) {
 		const target = previousTarget(this.tracks, this.index, this.position);
 		// Back to the start of this track takes nothing over; it leaves it playing or not.
 		if (target.restart) this.seek(0);
 		else {
-			this.#started();
+			if (byUser) this.#started();
 			this.#go(target.index);
 		}
 	}
+
+	/**
+	 * The player as another device controls it: as the user here would, but taking nothing
+	 * over, since only the connection playing is sent commands, and a command still on its
+	 * way when another device took over must not take playback back. A track loading counts
+	 * as playing.
+	 */
+	#remote: Controls = {
+		loaded: () => this.current !== null,
+		playing: () => this.playing || this.#loading,
+		resume: () => this.#resume(false),
+		pause: () => this.pause(),
+		next: () => this.#next(),
+		previous: () => this.#previous(false),
+		seek: (seconds) => this.seek(seconds),
+		setVolume: (volume) => this.setVolume(volume)
+	};
 
 	seek(seconds: number) {
 		const s = Math.max(0, Math.min(seconds, this.duration || 0));

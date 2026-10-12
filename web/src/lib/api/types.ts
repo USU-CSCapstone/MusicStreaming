@@ -45,3 +45,4 @@ export type RealtimeClientMessage = Schemas['RealtimeClientMessage'];
 export type RealtimeServerMessage = Schemas['RealtimeServerMessage'];
 export type PlayerState = Schemas['PlayerState'];
 export type ProgressReport = Schemas['ProgressReport'];
+export type PlayerCommand = Schemas['PlayerCommand'];
