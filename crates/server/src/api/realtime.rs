@@ -29,7 +29,7 @@ pub use hub::{Hub, Presence};
 
 use super::authenticate::{Caller, unauthenticated};
 use super::devices::{self, Device};
-use super::player::{self, PlayerState, ProgressReport};
+use super::player::{self, CommandResult, PlayerCommand, PlayerState, ProgressReport};
 use super::time::rfc3339;
 use super::{AppState, Code, Id, Problem};
 use crate::db::{Database, now_ms};
@@ -52,18 +52,45 @@ const FORWARDED_HOST: &str = "x-forwarded-host";
 #[serde(tag = "type", rename_all = "camelCase")]
 enum ClientMessage {
     Ping,
-    Progress { report: ProgressReport },
+    Progress {
+        report: ProgressReport,
+    },
+    /// Read in two steps, so one that is not a command it carries out can still be answered.
+    PlayerCommand {
+        command: serde_json::Value,
+    },
+    CommandResult {
+        result: CommandResult,
+    },
 }
 
 /// The spec's `RealtimeServerMessage`, as far as it is built.
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ServerMessage {
-    Hello { device_id: Id, server_time: String },
-    Pong { server_time: String },
-    Devices { devices: Vec<Device> },
-    Player { state: PlayerState },
-    SessionRevoked { reason: Revoked },
+    Hello {
+        device_id: Id,
+        server_time: String,
+    },
+    Pong {
+        server_time: String,
+    },
+    Devices {
+        devices: Vec<Device>,
+    },
+    Player {
+        state: PlayerState,
+    },
+    /// A command for the connection playing to carry out.
+    Execute {
+        command: PlayerCommand,
+    },
+    CommandResult {
+        result: CommandResult,
+    },
+    SessionRevoked {
+        reason: Revoked,
+    },
 }
 
 /// Why a device was signed out: the spec's `sessionRevoked` `reason`.
@@ -98,11 +125,12 @@ pub async fn open(
         .on_upgrade(move |socket| serve(socket, presence, state, caller)))
 }
 
-/// Whether `device` still has a token.
+/// Whether `device` still has a token, and its account may still sign in.
 async fn signed_in(db: &Database, device: i64) -> Result<bool, Problem> {
     let found = db.read(move |conn| {
         conn.query_row(
-            "SELECT 1 FROM devices WHERE id = ?1 AND token_hash IS NOT NULL",
+            "SELECT 1 FROM devices d JOIN users u ON u.id = d.user_id \
+             WHERE d.id = ?1 AND d.token_hash IS NOT NULL AND u.status = 'active'",
             [device],
             |_| Ok(()),
         )
@@ -199,13 +227,36 @@ async fn handle(
     match message {
         ClientMessage::Ping => Some(ServerMessage::Pong { server_time: now() }),
         // A connection the hub has closed acts for no one: its device may be signed out.
-        ClientMessage::Progress { .. } if !presence.is_open() => None,
+        ClientMessage::Progress { .. }
+        | ClientMessage::PlayerCommand { .. }
+        | ClientMessage::CommandResult { .. }
+            if !presence.is_open() =>
+        {
+            None
+        }
         ClientMessage::Progress { report } => {
             if let Err(problem) = player::apply(state, caller, presence, report).await {
                 tracing::debug!(?problem, "progress report refused");
                 // So the device sees how things stand instead of what it reported.
                 state.players.send_state(&state.hub, caller.user, presence);
             }
+            None
+        }
+        ClientMessage::PlayerCommand { command } => {
+            let command = match PlayerCommand::read(command) {
+                Ok(command) => command,
+                Err(result) => return result.map(|result| ServerMessage::CommandResult { result }),
+            };
+            // Authenticated as the connection opened, perhaps hours ago, so checked again.
+            let signed_in = signed_in(&state.db, caller.device).await.unwrap_or(false);
+            if !signed_in || !presence.is_open() {
+                return None;
+            }
+            let result = state.players.command(&state.hub, caller, presence.id(), command);
+            Some(ServerMessage::CommandResult { result })
+        }
+        ClientMessage::CommandResult { result } => {
+            state.players.answered(&state.hub, caller.user, presence.id(), result);
             None
         }
     }

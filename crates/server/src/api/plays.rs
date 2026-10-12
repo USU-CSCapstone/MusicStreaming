@@ -131,7 +131,7 @@ fn checked(report: PlayReport) -> Result<Play, Problem> {
     })
 }
 
-fn is_uuid(text: &str) -> bool {
+pub(super) fn is_uuid(text: &str) -> bool {
     text.len() == 36
         && text.char_indices().all(|(i, c)| match i {
             8 | 13 | 18 | 23 => c == '-',
