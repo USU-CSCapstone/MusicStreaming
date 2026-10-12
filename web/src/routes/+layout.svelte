@@ -6,7 +6,7 @@
 	import Player from '$lib/components/Player.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import TabBar from '$lib/components/TabBar.svelte';
-	import { playback } from '$lib/playback.svelte';
+	import { controls } from '$lib/controls.svelte';
 	import { player } from '$lib/player.svelte';
 	import { realtime } from '$lib/realtime.svelte';
 
@@ -27,17 +27,16 @@
 	});
 
 	/**
-	 * Space plays and pauses, unless focus is somewhere Space already means something, or the
-	 * player shows another device's playback, which it does not control.
+	 * Space plays and pauses what the player bar shows, here or on another device, unless focus
+	 * is somewhere Space already means something.
 	 */
 	function onkeydown(e: KeyboardEvent) {
 		if (e.key !== ' ' || e.repeat || e.defaultPrevented) return;
-		if (playback.shows(player.playing || player.finished)) return;
 		const target = e.target as HTMLElement;
 		if (target.closest('input, textarea, select, button, a, [role="slider"], [contenteditable]'))
 			return;
 		e.preventDefault();
-		player.toggle();
+		controls.toggle();
 	}
 </script>
 

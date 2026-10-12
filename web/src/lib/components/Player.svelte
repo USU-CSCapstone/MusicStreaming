@@ -1,57 +1,37 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { formatDuration } from '$lib/format';
+	import { controls } from '$lib/controls.svelte';
 	import { panels } from '$lib/panels.svelte';
 	import { playback } from '$lib/playback.svelte';
-	import { player } from '$lib/player.svelte';
 	import { realtime } from '$lib/realtime.svelte';
 	import ArtistLinks from './ArtistLinks.svelte';
 	import Artwork from './Artwork.svelte';
 	import Icon from './Icon.svelte';
 	import Waveform from './Waveform.svelte';
 
-	// Another device's playback is shown here, to be picked up (`requirements/realtime.md` §2, §6).
-	const remote = $derived(playback.shows(player.playing || player.finished));
-	const track = $derived(remote ? playback.track : player.current);
-	const playing = $derived(remote ? playback.state?.status === 'playing' : player.playing);
-	const duration = $derived(remote ? (track?.durationUs ?? 0) / 1e6 : player.duration);
+	// This device's player, or another device's playback to control and pick up
+	// (`requirements/realtime.md` §2, §3, §6).
+	const remote = $derived(controls.remote);
+	const track = $derived(controls.track);
+	const playing = $derived(controls.playing);
 	const where = $derived(
-		playback.state?.status === 'stopped'
+		controls.stopped
 			? 'Stopped'
 			: realtime.connected
 				? `On ${playback.deviceName}`
 				: `Last on ${playback.deviceName}`
 	);
-	let now = $state(Date.now());
-	$effect(() => {
-		if (!remote || !playing) return;
-		const timer = setInterval(() => (now = Date.now()), 250);
-		return () => clearInterval(timer);
-	});
-	const position = $derived(remote ? playback.positionAt(now) : player.position);
-
-	/** Whether what the other device was playing can play here: it is of this device's library. */
-	const pickable = $derived(
-		playback.track !== null && playback.state?.libraryId === player.libraryId
-	);
-
-	/** Plays here what the other device was playing, from where it got to. */
-	function playHere() {
-		const { track, state } = playback;
-		if (track && state?.libraryId) {
-			player.pickUp(state.libraryId, track, playback.positionAt(Date.now()));
-		}
-	}
 	let lastVolume = 1;
 	let innerWidth = $state(1024);
 	const compact = $derived(innerWidth < 768);
 
 	function toggleMute() {
-		if (player.volume > 0) {
-			lastVolume = player.volume;
-			player.setVolume(0);
+		if (controls.volume > 0) {
+			lastVolume = controls.volume;
+			controls.setVolume(0);
 		} else {
-			player.setVolume(lastVolume || 1);
+			controls.setVolume(lastVolume || 1);
 		}
 	}
 </script>
@@ -70,10 +50,16 @@
 				<span class="muted artists"><ArtistLinks artists={track.artists} /></span>
 				{#if remote}
 					<span class="where">
-						<span class="device">{where}</span>
-						{#if pickable}
+						{#if playback.error}
+							<span class="device error" role="alert" title={playback.error}>{playback.error}</span>
+						{:else}
+							<span class="device">{where}</span>
+						{/if}
+						{#if controls.pickable}
 							<span aria-hidden="true">·</span>
-							<button type="button" class="link" onclick={playHere}>Play here</button>
+							<button type="button" class="link" onclick={() => controls.playHere()}>
+								Play here
+							</button>
 						{/if}
 					</span>
 				{/if}
@@ -91,8 +77,8 @@
 				type="button"
 				class="icon-btn skip"
 				aria-label="Previous"
-				disabled={!track || remote}
-				onclick={() => player.previous()}
+				disabled={!track || controls.stopped}
+				onclick={() => controls.previous()}
 			>
 				<Icon name="previous" size={18} />
 			</button>
@@ -100,8 +86,8 @@
 				type="button"
 				class="play"
 				aria-label={playing ? 'Pause' : 'Play'}
-				disabled={!track || remote}
-				onclick={() => player.toggle()}
+				disabled={!track}
+				onclick={() => controls.toggle()}
 			>
 				<Icon name={playing ? 'pause' : 'play'} size={18} />
 			</button>
@@ -109,25 +95,25 @@
 				type="button"
 				class="icon-btn skip"
 				aria-label="Next"
-				disabled={!track || remote}
-				onclick={() => player.next()}
+				disabled={!track || controls.stopped}
+				onclick={() => controls.next()}
 			>
 				<Icon name="next" size={18} />
 			</button>
 		</div>
 		<div class="progress">
-			<span class="time muted tabular">{formatDuration(position * 1e6)}</span>
+			<span class="time muted tabular">{formatDuration(controls.position * 1e6)}</span>
 			<div class="wave-slot">
 				<Waveform
 					height={compact ? 20 : 40}
-					points={track ? (remote ? playback.waveform : player.waveform) : null}
-					{position}
-					duration={track ? duration : 0}
-					seekable={!remote}
-					onseek={(s) => player.seek(s)}
+					points={track ? controls.waveform : null}
+					position={controls.position}
+					duration={track ? controls.duration : 0}
+					seekable={!controls.stopped}
+					onseek={(s) => controls.seek(s)}
 				/>
 			</div>
-			<span class="time muted tabular">{formatDuration(duration * 1e6)}</span>
+			<span class="time muted tabular">{formatDuration(controls.duration * 1e6)}</span>
 		</div>
 	</div>
 
@@ -149,10 +135,11 @@
 			<button
 				type="button"
 				class="icon-btn"
-				aria-label={player.volume > 0 ? 'Mute' : 'Unmute'}
+				disabled={controls.stopped}
+				aria-label={controls.volume > 0 ? 'Mute' : 'Unmute'}
 				onclick={toggleMute}
 			>
-				<Icon name={player.volume > 0 ? 'volume' : 'mute'} size={18} />
+				<Icon name={controls.volume > 0 ? 'volume' : 'mute'} size={18} />
 			</button>
 			<input
 				type="range"
@@ -160,8 +147,9 @@
 				max="1"
 				step="0.01"
 				aria-label="Volume"
-				value={player.volume}
-				oninput={(e) => player.setVolume(Number(e.currentTarget.value))}
+				disabled={controls.stopped}
+				value={controls.volume}
+				oninput={(e) => controls.setVolume(Number(e.currentTarget.value))}
 			/>
 		</span>
 	</div>
@@ -216,6 +204,10 @@
 		min-width: 0;
 		color: var(--accent);
 		font-size: 12px;
+	}
+
+	.device.error {
+		color: var(--danger);
 	}
 
 	/* A long device name gives way, never the button. */
