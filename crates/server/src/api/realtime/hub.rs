@@ -1,32 +1,49 @@
 //! Which of each account's devices hold a realtime connection (`requirements/realtime.md` §1),
 //! and the way to reach them.
+//!
+//! The hub closes a connection by letting go of its outbox: the connection sends what is
+//! already queued, then closes. A client that falls [`OUTBOX`] messages behind is closed that
+//! way rather than queued for without end. On reconnecting it receives current state, which is
+//! all it would have caught up to (§6).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use axum::extract::ws::Message;
+use tokio::sync::mpsc::{self, Receiver, Sender};
 
-use super::{Revoked, ServerMessage};
+use super::{Revoked, ServerMessage, encode};
+
+/// How many messages a connection may have waiting to be sent.
+pub(super) const OUTBOX: usize = 64;
 
 #[derive(Default)]
 pub struct Hub {
     /// Each account's open connections. A device may hold several, such as two browser tabs
     /// sharing one sign-in.
     accounts: Mutex<HashMap<i64, Vec<Connection>>>,
+    /// Tells connections apart, a device's included.
+    next_id: AtomicU64,
+    /// Held while a device list is read and sent, so an earlier list never arrives after a
+    /// later one.
+    device_lists: tokio::sync::Mutex<()>,
 }
 
 struct Connection {
+    id: u64,
     device: i64,
-    /// Messages for the connection to send its client.
-    outbox: UnboundedSender<ServerMessage>,
+    /// Messages for the connection to send its client, already encoded.
+    outbox: Sender<Message>,
 }
 
 impl Hub {
     /// Counts `device` of `user` as connected until the returned [`Presence`] is dropped.
     pub fn connect(self: &Arc<Self>, user: i64, device: i64) -> Presence {
-        let (outbox, messages) = unbounded_channel();
-        self.lock().entry(user).or_default().push(Connection { device, outbox: outbox.clone() });
-        Presence { hub: self.clone(), user, outbox, messages }
+        let (outbox, messages) = mpsc::channel(OUTBOX);
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        self.lock().entry(user).or_default().push(Connection { id, device, outbox });
+        Presence { hub: self.clone(), user, id, messages }
     }
 
     /// The devices of `user` that hold a connection, once for each they hold.
@@ -35,16 +52,45 @@ impl Hub {
         accounts.get(&user).into_iter().flatten().map(|connection| connection.device).collect()
     }
 
-    /// Tells every connection `device` of `user` holds that it was signed out, which closes it.
+    /// Sends `message` to every connection of `user`, closing any whose outbox is full, and
+    /// whether it closed any.
+    pub fn broadcast(&self, user: i64, message: &ServerMessage) -> bool {
+        let message = encode(message);
+        self.retain(user, |connection| connection.outbox.try_send(message.clone()).is_ok())
+    }
+
+    /// Tells every connection `device` of `user` holds that it was signed out, and closes it.
     /// Call it once the sign-out is committed: a connection that joins after this checks then.
     pub fn revoke(&self, user: i64, device: i64, reason: Revoked) {
-        let accounts = self.lock();
-        for connection in accounts.get(&user).into_iter().flatten() {
-            if connection.device == device {
-                // Fails only for a connection already closing, which needs no telling.
-                let _ = connection.outbox.send(ServerMessage::SessionRevoked { reason });
+        let message = encode(&ServerMessage::SessionRevoked { reason });
+        let _ = self.retain(user, |connection| {
+            if connection.device != device {
+                return true;
             }
+            // A full outbox loses the message, but the connection still closes, and the
+            // device finds it is signed out when it tries to reconnect.
+            let _ = connection.outbox.try_send(message.clone());
+            false
+        });
+    }
+
+    /// Waits for the turn to read and send a device list, which lasts until the guard drops.
+    pub async fn device_list_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.device_lists.lock().await
+    }
+
+    /// Keeps the connections of `user` that `keep` is true for, closes the rest, and whether
+    /// there were any to close.
+    fn retain(&self, user: i64, keep: impl FnMut(&Connection) -> bool) -> bool {
+        let mut accounts = self.lock();
+        let Some(connections) = accounts.get_mut(&user) else { return false };
+        let before = connections.len();
+        connections.retain(keep);
+        let closed = connections.len() < before;
+        if connections.is_empty() {
+            accounts.remove(&user);
         }
+        closed
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<i64, Vec<Connection>>> {
@@ -56,25 +102,20 @@ impl Hub {
 pub struct Presence {
     hub: Arc<Hub>,
     user: i64,
-    /// Tells this connection's entry in the hub apart from its device's others.
-    outbox: UnboundedSender<ServerMessage>,
-    messages: UnboundedReceiver<ServerMessage>,
+    id: u64,
+    messages: Receiver<Message>,
 }
 
 impl Presence {
-    /// The next message the hub has for this connection's client.
-    pub(super) async fn next(&mut self) -> Option<ServerMessage> {
+    /// The next message the hub has for this connection's client, or `None` once the hub has
+    /// closed it.
+    pub(super) async fn next(&mut self) -> Option<Message> {
         self.messages.recv().await
     }
 }
 
 impl Drop for Presence {
     fn drop(&mut self) {
-        let mut accounts = self.hub.lock();
-        let Some(connections) = accounts.get_mut(&self.user) else { return };
-        connections.retain(|connection| !connection.outbox.same_channel(&self.outbox));
-        if connections.is_empty() {
-            accounts.remove(&self.user);
-        }
+        let _ = self.hub.retain(self.user, |connection| connection.id != self.id);
     }
 }
