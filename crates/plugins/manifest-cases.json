@@ -525,7 +525,7 @@
 			]
 		},
 		"problems": [
-			"\"apiVersion\" must be \"0.2\""
+			"\"apiVersion\" must be one of \"0.2\", \"0.3\""
 		]
 	},
 	{
@@ -1528,7 +1528,7 @@
 			"\"id\" must be lowercase letters, digits, and hyphens (2–64 characters)",
 			"\"name\" must be a non-empty string",
 			"\"version\" must be a non-empty string",
-			"\"apiVersion\" must be \"0.2\"",
+			"\"apiVersion\" must be one of \"0.2\", \"0.3\"",
 			"permissions[0]: unknown permission \"everything\"",
 			"permissions[1]: every permission needs a \"reason\" shown to the admin",
 			"permissions[1]: network needs \"destinations\", host names or [\"*\"] for any"

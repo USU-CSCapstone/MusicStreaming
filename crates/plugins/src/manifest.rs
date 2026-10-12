@@ -14,7 +14,33 @@ use wasmparser::{Encoding, Parser, Payload};
 use crate::settings::{self, Schema};
 
 pub const SECTION: &str = "jewelcase:manifest";
-pub const API_VERSION: &str = "0.2";
+
+/// A version of the plugin contract (`wit/plugin.wit`). Every one a plugin may declare keeps
+/// loading, so a plugin written against an older one keeps working
+/// (`requirements/plugins.md` §1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Api {
+    V0_2,
+    V0_3,
+}
+
+impl Api {
+    /// Oldest first; the last is current.
+    pub const ALL: [Api; 2] = [Api::V0_2, Api::V0_3];
+    pub const CURRENT: Api = Api::V0_3;
+
+    /// As a manifest's `apiVersion` gives it, such as `0.3`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Api::V0_2 => "0.2",
+            Api::V0_3 => "0.3",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Api> {
+        Api::ALL.into_iter().find(|api| api.name() == name)
+    }
+}
 
 /// The shortest interval a schedule may ask for.
 pub const MIN_EVERY_MINUTES: u64 = 5;
@@ -162,6 +188,12 @@ impl Manifest {
         schedule.and_then(|r| r.every_minutes)
     }
 
+    /// The contract it was built against. A stored manifest was validated on install, so its
+    /// version is always one the host knows.
+    pub fn api(&self) -> Api {
+        Api::from_name(&self.api_version).unwrap_or(Api::CURRENT)
+    }
+
     pub fn required(&self) -> impl Iterator<Item = Permission> + '_ {
         self.permissions.iter().filter(|r| r.required).map(|r| r.permission)
     }
@@ -260,8 +292,9 @@ pub fn validate(manifest: &Value) -> Vec<String> {
             problems.push(r#""homepage" must be an http(s) URL"#.into());
         }
     }
-    if o.get("apiVersion").and_then(Value::as_str) != Some(API_VERSION) {
-        problems.push(format!(r#""apiVersion" must be "{API_VERSION}""#));
+    if o.get("apiVersion").and_then(Value::as_str).and_then(Api::from_name).is_none() {
+        let known: Vec<_> = Api::ALL.iter().map(|api| format!(r#""{}""#, api.name())).collect();
+        problems.push(format!(r#""apiVersion" must be one of {}"#, known.join(", ")));
     }
     for key in ["settings", "personalSettings"] {
         if let Some(declared) = o.get(key) {

@@ -11,7 +11,7 @@ Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`ex
 
 ## 1. Built Imports
 
-**Seven interfaces, all in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.2`.** Every import checks its own permission in the host. Every import stays linked when its permission is declined and answers an error instead, so optional permissions work ([`plugins.md` §7](plugins.md#7-running-plugins)). WASI is linked with nothing granted: no preopens, sockets, or inherited stdio.
+**Seven interfaces, all in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.3`.** A plugin built against `0.2` still loads: the host links it against [`wit/0.2`](../crates/plugins/wit/0.2/plugin.wit), whose imports pass each call on to the current ones ([`host/v0_2.rs`](../crates/plugins/src/host/v0_2.rs)). Every import checks its own permission in the host. Every import stays linked when its permission is declined and answers an error instead, so optional permissions work ([`plugins.md` §7](plugins.md#7-running-plugins)). WASI is linked with nothing granted: no preopens, sockets, or inherited stdio.
 
 | Interface | Functions | Needs | Limits |
 |---|---|---|---|
@@ -27,6 +27,8 @@ Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`ex
 The limits on every run are 64 MiB of memory, 60 s of compute, and 5 minutes of wall clock.
 
 **`http.send` shares a pace and a cache across every plugin** ([`plugins.md` §7](plugins.md#7-running-plugins)). A network request declares `rateLimits` per destination, and the strictest declared pace applies to every request to that host. A `429`, or a `503` with `Retry-After`, pauses that host for everyone. A GET is answered from a fresh reply already fetched for the same library, URL, and headers, and a stale one is checked with its `ETag` or `Last-Modified`.
+
+**`http.send` says why a request has no response, so a plugin can act on it.** Since `0.3` its error is a variant: `not-granted`; `refused`, not sent, with a message (a URL, destination, header, or body the host will not send); `rate-limited`, not sent, with how many milliseconds until the destination may be asked again; `timed-out`; and `failed`, sent but with no reply to give, with a message. A `0.2` plugin gets the same failures as messages, in the words it always did.
 
 ---
 

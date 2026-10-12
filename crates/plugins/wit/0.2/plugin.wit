@@ -1,0 +1,232 @@
+// Frozen. Plugins built against 0.2 keep loading, adapted to the current contract by the host
+// (`src/host/v0_2.rs`). Never change it: the contract is `../plugin.wit`.
+
+package jewelcase:plugin@0.2.0;
+
+/// The plugin contract (design/plugins.md §7). Every import checks its permission in the
+/// host. Imports stay linked even when their permission was declined, so a plugin with an
+/// optional permission still loads; the call answers an error instead, and `granted` lets a
+/// plugin adapt up front.
+
+interface host {
+  /// What a plugin can ask for (requirements/plugins.md §4.1).
+  enum permission {
+    library-read,
+    /// Creating files that do not exist yet.
+    library-add,
+    /// Replacing, renaming, and deleting files that do.
+    library-change,
+    network,
+    listening-activity,
+    /// A hook: run when tracks are added, changed, or removed (`events.tracks-changed`).
+    tracks-changed,
+    /// A hook: run when a scan of the library finishes (`events.scan-finished`).
+    scan-finished,
+    /// A hook: run at the interval the manifest asks for (`events.scheduled`).
+    schedule,
+    /// A hook: run when a user who connected the plugin finishes playing something
+    /// (`events.played`).
+    played,
+  }
+
+  /// What this run may use.
+  granted: func() -> list<permission>;
+  /// A progress line, shown with the run's result.
+  log: func(message: string);
+}
+
+/// The one library this run is for. There is no library parameter: the host binds it. Every
+/// function needs library-read, and a page holds at most 500.
+interface library {
+  record track {
+    id: u64,
+    title: string,
+    /// Ordered; the first is primary.
+    artists: list<string>,
+    album-id: u64,
+    album: option<string>,
+    disc-number: u32,
+    track-number: option<u32>,
+    /// `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`, as precise as the tags.
+    release-date: option<string>,
+    isrc: option<string>,
+    duration-ms: u64,
+    has-lyrics: bool,
+    /// Where its file is: one of the library's roots (`files.roots`), and a path within it.
+    root: u64,
+    path: string,
+  }
+
+  record album {
+    id: u64,
+    /// None for the album of untagged files.
+    title: option<string>,
+    artists: list<string>,
+    release-date: option<string>,
+    track-count: u32,
+  }
+
+  record artist {
+    id: u64,
+    /// None for the artist of untagged files.
+    name: option<string>,
+    album-count: u32,
+    track-count: u32,
+  }
+
+  /// Tracks in ID order after `after`, or from the first; empty past the end.
+  tracks: func(after: option<u64>, limit: u32) -> result<list<track>, string>;
+  /// These tracks, in the order asked for, leaving out any not in this library.
+  get-tracks: func(ids: list<u64>) -> result<list<track>, string>;
+  /// Albums in ID order after `after`, or from the first; empty past the end.
+  albums: func(after: option<u64>, limit: u32) -> result<list<album>, string>;
+  /// Artists in ID order after `after`, or from the first; empty past the end.
+  artists: func(after: option<u64>, limit: u32) -> result<list<artist>, string>;
+}
+
+/// The library's own folders (requirements/plugins.md §3). A path is relative to one of its
+/// roots, with `/` between names, and never leaves that root. Whatever a plugin writes, the
+/// scanner reads in, exactly as if a person had put it there.
+interface files {
+  record entry {
+    name: string,
+    directory: bool,
+    size: u64,
+    modified-ms: u64,
+  }
+
+  enum write-mode {
+    /// Needs library-add. Fails if the file exists.
+    create,
+    /// Needs library-change. Fails unless the file exists.
+    replace,
+  }
+
+  /// The library's roots. Needs library-read, library-add, or library-change.
+  roots: func() -> result<list<u64>, string>;
+  /// Needs library-read. What a folder holds; `""` is the root itself.
+  %list: func(root: u64, folder: string) -> result<list<entry>, string>;
+  /// Needs library-read. Up to `length` bytes from `offset`; fewer at the end of the file.
+  read: func(root: u64, path: string, offset: u64, length: u32) -> result<list<u8>, string>;
+  /// Writes a whole file, making the folders it is in. It appears whole or not at all.
+  write: func(root: u64, path: string, contents: list<u8>, mode: write-mode) -> result<_, string>;
+  /// Needs library-change. Moves a file or folder to a path that does not exist yet.
+  rename: func(root: u64, %from: string, to: string) -> result<_, string>;
+  /// Needs library-change. Removes a file, or a folder that is empty.
+  delete: func(root: u64, path: string) -> result<_, string>;
+}
+
+/// Needs network, and only reaches the destinations the manifest declared, redirects included.
+interface http {
+  enum method { get, head, post, put, patch, delete }
+
+  record request {
+    method: method,
+    url: string,
+    /// `host` and the headers that frame a connection are the host's to set.
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
+  }
+
+  record response {
+    status: u16,
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
+  }
+
+  send: func(request: request) -> result<response, string>;
+}
+
+/// The plugin's own storage for this library, kept between runs, so nothing learned is
+/// fetched twice (requirements/plugins.md §2.1). Needs no permission. It goes when the plugin
+/// is uninstalled.
+interface state {
+  get: func(key: string) -> result<option<list<u8>>, string>;
+  set: func(key: string, value: list<u8>) -> result<_, string>;
+  delete: func(key: string) -> result<_, string>;
+}
+
+/// What an admin set for the plugin, as its manifest declares (requirements/plugins.md §6):
+/// the library's own value, else the server-wide one, else the default. Needs no permission.
+interface settings {
+  variant value {
+    text(string),
+    number(f64),
+    flag(bool),
+  }
+
+  get: func(name: string) -> option<value>;
+}
+
+/// Why the plugin is running. A hook's event arrives only if the admin approved that hook.
+interface events {
+  use library.{track};
+
+  /// Tracks added, changed, or removed since the last one, in batches. `changed` holds IDs to
+  /// read with `library.get-tracks`; `removed` holds IDs no longer in the library.
+  record tracks-changed {
+    changed: list<u64>,
+    removed: list<u64>,
+  }
+
+  /// What the scans that finished since the last one found, added together.
+  record scan-finished {
+    files-seen: u32,
+    added: u32,
+    updated: u32,
+    moved: u32,
+    missing: u32,
+    problems: u32,
+  }
+
+  /// How a play ended.
+  enum play-end {
+    /// It played to its end.
+    finished,
+    /// The listener moved on before the end.
+    skipped,
+    /// Playback stopped, such as by closing the app.
+    stopped,
+  }
+
+  /// A play that has ended (requirements/analytics.md §1). A play is any track that started;
+  /// whether it counts as a listen, such as a scrobble, is the plugin's to judge from these.
+  record play {
+    track: track,
+    /// When it started, in milliseconds since the Unix epoch.
+    started-at: u64,
+    /// The audio actually heard. Pausing adds nothing; replaying part of it adds that again.
+    listen-time-ms: u64,
+    end: play-end,
+  }
+
+  variant event {
+    /// An admin pressed Run now: do the plugin's whole job for this library.
+    run,
+    tracks-changed(tracks-changed),
+    scan-finished(scan-finished),
+    /// The schedule came round.
+    scheduled,
+    /// An admin is saving new settings, which `settings.get` now answers with. An error is
+    /// shown to them and nothing is saved, so a wrong key is caught as it is entered (§6).
+    /// A user connecting the plugin is checked the same way, with their personal settings.
+    check-settings,
+    /// Plays one user who connected the plugin has finished in this library, oldest first.
+    /// `settings.get` answers with that user's personal settings, as well as the shared ones.
+    played(list<play>),
+  }
+}
+
+world plugin {
+  import host;
+  import library;
+  import files;
+  import http;
+  import state;
+  import settings;
+  import events;
+  use events.{event};
+
+  /// Handles one event for the library this run is for, and returns a one-line summary.
+  export handle: func(event: event) -> result<string, string>;
+}

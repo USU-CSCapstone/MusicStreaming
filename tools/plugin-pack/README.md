@@ -18,7 +18,7 @@ written. The error says what to fix.
   "id": "lrclib-lyrics",
   "name": "LRCLIB Lyrics",
   "version": "0.1.0",
-  "apiVersion": "0.2",
+  "apiVersion": "0.3",
   "description": "Fetches synced lyrics for tracks that have none.",
   "author": "You",
   "permissions": [
@@ -32,7 +32,7 @@ written. The error says what to fix.
 | Field | |
 |---|---|
 | `id` | Lowercase letters, digits, and hyphens. Stays the same across versions. |
-| `apiVersion` | `0.2` |
+| `apiVersion` | `0.3`, or `0.2`, which still installs. `0.3` gives `http.send` an error a plugin can act on, such as `rate-limited` with how long to wait (`design/imports.md` §1). |
 | `permissions` | Any of `libraryRead`, `libraryAdd`, `libraryChange`, `network`, `listeningActivity` (`requirements/plugins.md` §4.1), and the hooks `tracksChanged`, `scanFinished`, `schedule`, `played` (`design/plugins.md` §7). Each needs a `reason`, which the admin sees. Mark as `required` only what the plugin cannot work without; an admin can decline the rest. |
 | `destinations` | For `network` only: the host names it talks to, or `["*"]` for any. |
 | `rateLimits` | For `network` only, optional: the most often each destination may be asked, as `{ "musicbrainz.org": "1/s" }`, per `s`, `min`, or `h`. Each key is one host name from `destinations`, or any host if they are `["*"]`; no wildcards. Every plugin's requests to that host keep to the strictest pace any declared (`design/plugins.md` §7). |

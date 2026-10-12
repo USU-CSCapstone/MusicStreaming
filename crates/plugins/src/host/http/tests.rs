@@ -9,7 +9,7 @@ use wasmtime::component::ResourceTable;
 use wasmtime_wasi::WasiCtx;
 
 use super::super::{Grants, Refused, Run};
-use super::http::{self, Host as _};
+use super::http::{self, Error, Host as _};
 use crate::manifest::Permission;
 use crate::network::Network;
 
@@ -118,8 +118,11 @@ async fn follows_redirects_only_to_approved_destinations() {
     assert_eq!((reply.status, reply.body.as_slice()), (200, b"hello".as_slice()));
     assert!(reply.headers.iter().any(|(name, value)| name == "x-served" && value == "yes"));
 
-    let refused = run.send(get(format!("http://127.0.0.1:{port}/away"))).await.unwrap_err();
-    assert!(refused.contains("redirected elsewhere: localhost is not one of"), "{refused}");
+    let failed = run.send(get(format!("http://127.0.0.1:{port}/away"))).await.unwrap_err();
+    assert!(
+        matches!(&failed, Error::Failed(why) if why.contains("redirected elsewhere: localhost is not one of")),
+        "{failed:?}"
+    );
 }
 
 #[tokio::test]
@@ -127,18 +130,21 @@ async fn the_host_header_is_the_hosts() {
     let (port, _) = server().await;
     let mut request = get(format!("http://127.0.0.1:{port}/"));
     request.headers.push(("Host".into(), "elsewhere.example".into()));
-    assert_eq!(run().send(request).await.unwrap_err(), "Host is set by the host");
+    let refused = run().send(request).await.unwrap_err();
+    assert!(
+        matches!(&refused, Error::Refused(why) if why == "Host is set by the host"),
+        "{refused:?}"
+    );
 }
 
 #[tokio::test]
 async fn needs_the_network_and_an_approved_destination() {
     let mut run = run();
-    assert!(run.send(get("http://example.com/".into())).await.unwrap_err().contains("not one of"));
+    let refused = run.send(get("http://example.com/".into())).await.unwrap_err();
+    assert!(matches!(&refused, Error::Refused(why) if why.contains("not one of")), "{refused:?}");
     run.grants.permissions.clear();
-    assert_eq!(
-        run.send(get("http://127.0.0.1/".into())).await.unwrap_err(),
-        "Network access was not granted"
-    );
+    let refused = run.send(get("http://127.0.0.1/".into())).await.unwrap_err();
+    assert!(matches!(refused, Error::NotGranted), "{refused:?}");
 }
 
 /// The body of a GET of `path` on the test server, as text.
@@ -179,8 +185,18 @@ async fn a_kept_reply_is_not_handed_to_a_plugin_that_could_not_follow_its_redire
     both.grants.destinations.push("localhost".into());
     assert_eq!(body(&mut both, port, "/far").await, "1");
     let mut near = with(network, "near", 1);
-    let refused = near.send(get(format!("http://127.0.0.1:{port}/far"))).await.unwrap_err();
-    assert!(refused.contains("redirected elsewhere: localhost is not one of"), "{refused}");
+    let failed = near.send(get(format!("http://127.0.0.1:{port}/far"))).await.unwrap_err();
+    assert!(
+        matches!(&failed, Error::Failed(why) if why.contains("redirected elsewhere: localhost is not one of")),
+        "{failed:?}"
+    );
+}
+
+/// That `error` says to wait out the test server's two-minute `Retry-After`, less what has
+/// passed since.
+fn assert_waits_two_minutes(error: Error) {
+    let Error::RateLimited(ms) = error else { panic!("{error:?}") };
+    assert!((110_000..=120_000).contains(&ms), "{ms}");
 }
 
 #[tokio::test]
@@ -192,7 +208,7 @@ async fn a_429_pauses_the_destination_for_every_plugin() {
     assert_eq!(reply.status, 429);
     let mut other = with(network, "other", 2);
     let refused = other.send(get(format!("http://127.0.0.1:{port}/"))).await.unwrap_err();
-    assert_eq!(refused, "127.0.0.1 cannot be asked again for 120 s");
+    assert_waits_two_minutes(refused);
     assert!(!hits.lock().unwrap().contains_key("/"));
 }
 
@@ -204,7 +220,7 @@ async fn a_429_after_a_redirect_pauses_where_it_led() {
     let reply = run.send(get(format!("http://127.0.0.1:{port}/sent-on"))).await.unwrap();
     assert_eq!(reply.status, 429);
     let refused = run.send(get(format!("http://localhost:{port}/"))).await.unwrap_err();
-    assert_eq!(refused, "localhost cannot be asked again for 120 s");
+    assert_waits_two_minutes(refused);
     // Where the request started did not answer it, so is not paused.
     assert_eq!(body(&mut run, port, "/").await, "hello");
 }

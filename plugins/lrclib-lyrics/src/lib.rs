@@ -20,7 +20,7 @@ pub fn lyrics_path(path: &str, synced: bool) -> String {
 mod plugin {
     use crate::lrclib::{self, Found, Query};
 
-    wit_bindgen::generate!({ path: "../../crates/plugins/wit", world: "plugin" });
+    wit_bindgen::generate!({ path: "../../crates/plugins/wit/0.2", world: "plugin" });
 
     use jewelcase::plugin::files::{self, WriteMode};
     use jewelcase::plugin::host::{self, Permission};

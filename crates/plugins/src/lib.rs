@@ -18,4 +18,4 @@ pub use host::{
     Album, Artist, Event, Grants, Host, Library, Outcome, Play, PlayEnd, ScanFinished, Track,
     TracksChanged,
 };
-pub use manifest::{InvalidPlugin, Manifest, Permission, PermissionRequest};
+pub use manifest::{Api, InvalidPlugin, Manifest, Permission, PermissionRequest};
