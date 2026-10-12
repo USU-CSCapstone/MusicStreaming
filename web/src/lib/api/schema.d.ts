@@ -1903,26 +1903,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/me/player/progress": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Report playback progress
-         * @description Sent by the playing device; usually over the realtime connection instead.
-         */
-        post: operations["reportProgress"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/me/player/failures": {
         parameters: {
             query?: never;
@@ -4147,6 +4127,8 @@ export interface components {
             activeDeviceId: string | null;
             /** @description The queue item playing. */
             itemId: string | null;
+            /** @description The library of `trackId`, until the server keeps the queue, which names it. */
+            libraryId?: string | null;
             trackId?: string | null;
             external?: components["schemas"]["ExternalTrackRef"] | null;
             positionMs: number;
@@ -4215,16 +4197,46 @@ export interface components {
             status: "pending" | "applied" | "failed";
             reason?: string | null;
         };
+        /**
+         * @description Sent by the playing device over its realtime connection, which it needs anyway to be
+         *     controlled and to hear that another device took over. A report that is refused —
+         *     invalid, from any connection but the active one, or of a track out of the caller's
+         *     reach — is answered with the current state; one that does not parse is ignored.
+         *     A `buffering` report is recorded
+         *     as `paused` at its position, so other devices are not shown running ahead.
+         *
+         *     Until the server keeps the queue, a report names its track, and `itemId` is the
+         *     device's own name for its place in its queue, at most 100 characters. `libraryId`
+         *     and `trackId` give way to the queue's item when it does.
+         */
         ProgressReport: {
+            /** @description The reporting device's own. */
             deviceId: string;
             itemId: string;
+            libraryId: string;
+            trackId: string;
+            /**
+             * @description Set when the user started playback on this connection, and whenever this
+             *     connection is playing but the last state it received named no active device, as
+             *     after the server restarts. It takes over from the device playing
+             *     (`requirements/realtime.md` §2). A report without it from any connection but the
+             *     active one is refused, so a device taken over from cannot take playback back
+             *     with reports sent before it heard. A device stops playing only when the state
+             *     names another device active; a device holding several connections, such as
+             *     browser tabs, plays in one at a time. A `stopped` report never takes over.
+             * @default false
+             */
+            start: boolean;
             /** @enum {string} */
             status: "playing" | "paused" | "stopped" | "buffering";
             positionMs: number;
             /** @description The device's current volume, so remote controls show it (`requirements/realtime.md` §3). */
             volume?: number;
-            /** Format: date-time */
-            at: string;
+            /**
+             * Format: date-time
+             * @description Not read. Position is timed by when the report arrives, since a device's clock may be off by more than a report takes to arrive.
+             */
+            at?: string;
         };
         PlaybackFailureReport: {
             libraryId: string;
@@ -8196,38 +8208,6 @@ export interface operations {
             };
             404: components["responses"]["NotFound"];
             /** @description `device_unavailable` — the target device is not connected. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            default: components["responses"]["Problem"];
-        };
-    };
-    reportProgress: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ProgressReport"];
-            };
-        };
-        responses: {
-            /** @description Recorded. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description `not_active_device` — another device has taken over. */
             409: {
                 headers: {
                     [name: string]: unknown;

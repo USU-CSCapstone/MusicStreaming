@@ -13,7 +13,6 @@
 
 mod hub;
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
@@ -26,11 +25,11 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, interval_at, timeout};
 
-pub use hub::Hub;
-use hub::Presence;
+pub use hub::{Hub, Presence};
 
 use super::authenticate::{Caller, unauthenticated};
 use super::devices::{self, Device};
+use super::player::{self, PlayerState, ProgressReport};
 use super::time::rfc3339;
 use super::{AppState, Code, Id, Problem};
 use crate::db::{Database, now_ms};
@@ -53,6 +52,7 @@ const FORWARDED_HOST: &str = "x-forwarded-host";
 #[serde(tag = "type", rename_all = "camelCase")]
 enum ClientMessage {
     Ping,
+    Progress { report: ProgressReport },
 }
 
 /// The spec's `RealtimeServerMessage`, as far as it is built.
@@ -62,6 +62,7 @@ pub enum ServerMessage {
     Hello { device_id: Id, server_time: String },
     Pong { server_time: String },
     Devices { devices: Vec<Device> },
+    Player { state: PlayerState },
     SessionRevoked { reason: Revoked },
 }
 
@@ -94,7 +95,7 @@ pub async fn open(
     Ok(upgrade
         .max_message_size(MAX_MESSAGE)
         .max_frame_size(MAX_MESSAGE)
-        .on_upgrade(move |socket| serve(socket, presence, state.db, state.hub, caller)))
+        .on_upgrade(move |socket| serve(socket, presence, state, caller)))
 }
 
 /// Whether `device` still has a token.
@@ -126,17 +127,12 @@ fn same_origin(headers: &HeaderMap) -> bool {
 }
 
 /// Holds `socket` open for `caller` until either side closes it or it goes silent.
-async fn serve(
-    mut socket: WebSocket,
-    mut presence: Presence,
-    db: Arc<Database>,
-    hub: Arc<Hub>,
-    caller: Caller,
-) {
+async fn serve(mut socket: WebSocket, mut presence: Presence, state: AppState, caller: Caller) {
     let hello = ServerMessage::Hello { device_id: Id(caller.device), server_time: now() };
     if send(&mut socket, encode(&hello)).await {
+        state.players.send_state(&state.hub, caller.user, &presence);
         // Every connection of the account, this one included, learns it is connected.
-        devices::changed(db.clone(), hub.clone(), caller.user);
+        devices::changed(state.db.clone(), state.hub.clone(), caller.user);
         let mut heartbeat = interval_at(Instant::now() + HEARTBEAT, HEARTBEAT);
         let mut heard = Instant::now();
         loop {
@@ -145,10 +141,8 @@ async fn serve(
                     let Some(Ok(message)) = received else { break };
                     heard = Instant::now();
                     let Message::Text(text) = message else { continue };
-                    // Messages for parts not built yet are ignored, as a newer client's would be.
-                    let Ok(ClientMessage::Ping) = serde_json::from_str(&text) else { continue };
-                    let pong = ServerMessage::Pong { server_time: now() };
-                    if !send(&mut socket, encode(&pong)).await {
+                    let reply = handle(&state, caller, &presence, &text).await;
+                    if let Some(reply) = reply && !send(&mut socket, encode(&reply)).await {
                         break;
                     }
                 }
@@ -173,13 +167,43 @@ async fn serve(
     drop(presence);
     // A connected device is in use the whole time, which requests alone would not show.
     let device = caller.device;
-    let seen = db.write(move |tx| {
+    let seen = state.db.write(move |tx| {
         tx.execute("UPDATE devices SET last_seen_at = ?2 WHERE id = ?1", [device, now_ms()])
     });
     if let Err(error) = seen.await {
         tracing::warn!(%error, "cannot record when a device was last seen");
     }
-    devices::changed(db, hub, caller.user);
+    devices::changed(state.db, state.hub, caller.user);
+}
+
+/// Acts on `text` from `caller`'s client, and answers the reply it gets, if any. Messages for
+/// parts not built yet are ignored, as a newer client's would be.
+async fn handle(
+    state: &AppState,
+    caller: Caller,
+    presence: &Presence,
+    text: &str,
+) -> Option<ServerMessage> {
+    let message = match serde_json::from_str(text) {
+        Ok(message) => message,
+        Err(error) => {
+            tracing::debug!(%error, "realtime message ignored");
+            return None;
+        }
+    };
+    match message {
+        ClientMessage::Ping => Some(ServerMessage::Pong { server_time: now() }),
+        // A connection the hub has closed acts for no one: its device may be signed out.
+        ClientMessage::Progress { .. } if !presence.is_open() => None,
+        ClientMessage::Progress { report } => {
+            if let Err(problem) = player::apply(state, caller, presence, report).await {
+                tracing::debug!(?problem, "progress report refused");
+                // So the device sees how things stand instead of what it reported.
+                state.players.send_state(&state.hub, caller.user, presence);
+            }
+            None
+        }
+    }
 }
 
 /// Sends `message`, and whether it went within [`SILENCE`].

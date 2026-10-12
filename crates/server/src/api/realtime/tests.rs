@@ -1,55 +1,26 @@
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
-use std::time::Duration;
 
 use axum::http::StatusCode;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::time::timeout;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{Error, Message};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use super::super::session::COOKIE;
+use super::super::testing::socket::{Socket, connect, next, next_of, serve};
 use super::super::testing::{
-    TOKEN, add_device, add_user, app, app_before_setup, json, respond, send, send_json,
+    TOKEN, add_device, add_user, app, app_before_setup, app_with_tracks, json, respond, send,
+    send_json,
 };
 use super::{Hub, ServerMessage};
 
 const PASSWORD: &str = "correct horse battery staple";
 
-type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
-
-/// Serves [`app`] on a port of its own, and returns its address.
-async fn serve(app: axum::Router) -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    address
-}
-
-/// Opens `/realtime` at `address` with `headers`.
-async fn connect(address: SocketAddr, headers: &[(&'static str, &str)]) -> Result<Socket, Error> {
-    let mut request = format!("ws://{address}/api/v1/realtime").into_client_request().unwrap();
-    for &(name, value) in headers {
-        request.headers_mut().insert(name, value.parse().unwrap());
-    }
-    Ok(tokio_tungstenite::connect_async(request).await?.0)
-}
-
-/// The next message, of any type.
-async fn next(socket: &mut Socket) -> Value {
-    let message = timeout(Duration::from_secs(5), socket.next()).await.expect("a message");
-    serde_json::from_str(message.unwrap().unwrap().to_text().unwrap()).unwrap()
-}
-
-/// The next message other than a device list, which arrives whenever a device of the account
-/// connects, disconnects, logs in, or logs out.
+/// The next message other than the state every connection of the account is sent on
+/// connecting and whenever it changes: its device list and its playback state.
 async fn receive(socket: &mut Socket) -> Value {
     loop {
         let message = next(socket).await;
-        if message["type"] != "devices" {
+        if message["type"] != "devices" && message["type"] != "player" {
             return message;
         }
     }
@@ -243,4 +214,38 @@ async fn a_client_that_falls_behind_is_closed_once_it_has_what_was_queued() {
         assert!(slow.next().await.is_some());
     }
     assert!(slow.next().await.is_none(), "then closed");
+}
+
+#[tokio::test]
+async fn playback_state_reaches_every_connection_of_the_account() {
+    let (temp, _db, app) = app_with_tracks().await;
+    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    add_device(&conn, 1, 2, "phone");
+    add_user(&conn, 2, "user");
+    add_device(&conn, 2, 3, "stranger");
+    let address = serve(app).await;
+    let mut desk =
+        connect(address, &[("authorization", &format!("Bearer {TOKEN}"))]).await.unwrap();
+    let mut phone = connect(address, &[("authorization", "Bearer phone")]).await.unwrap();
+    let mut stranger = connect(address, &[("authorization", "Bearer stranger")]).await.unwrap();
+    for socket in [&mut desk, &mut phone, &mut stranger] {
+        let greeting = next_of(socket, "player").await;
+        assert_eq!(
+            greeting["state"]["status"],
+            json!("stopped"),
+            "the current state on connecting"
+        );
+    }
+
+    let report = json!({ "type": "progress", "report": {
+        "deviceId": "1", "itemId": "item-1", "libraryId": "1", "trackId": "2",
+        "status": "playing", "positionMs": 500, "start": true, "at": "2026-10-12T00:00:00Z",
+    } });
+    desk.send(Message::text(report.to_string())).await.unwrap();
+    for socket in [&mut phone, &mut desk] {
+        let state = &next_of(socket, "player").await["state"];
+        assert_eq!((&state["activeDeviceId"], &state["trackId"]), (&json!("1"), &json!("2")));
+    }
+    stranger.send(Message::text(r#"{"type":"ping"}"#)).await.unwrap();
+    assert_eq!(receive(&mut stranger).await["type"], json!("pong"), "no other account's state");
 }

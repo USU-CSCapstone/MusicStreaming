@@ -27,6 +27,7 @@ pub enum Code {
     PluginSettingsInvalid,
     PluginExists,
     PermissionsRequired,
+    NotActiveDevice,
     SetupRequired,
     Internal,
 }
@@ -44,7 +45,9 @@ impl Code {
             | Self::WeakPassword
             | Self::PluginInvalid
             | Self::PluginSettingsInvalid => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::PluginExists | Self::PermissionsRequired => StatusCode::CONFLICT,
+            Self::PluginExists | Self::PermissionsRequired | Self::NotActiveDevice => {
+                StatusCode::CONFLICT
+            }
             Self::SetupRequired => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
