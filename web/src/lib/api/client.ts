@@ -22,6 +22,7 @@ import type {
 	ServerInfo,
 	Session,
 	SetupRequest,
+	Track,
 	TrackPage,
 	User,
 	Waveform
@@ -137,6 +138,9 @@ export const getAlbum = (f: Fetch, libraryId: string, albumId: string) =>
 
 export const listTracks = (f: Fetch, libraryId: string, query: Query = {}) =>
 	get<TrackPage>(f, `${lib(libraryId)}/tracks`, query);
+
+export const getTrack = (f: Fetch, libraryId: string, trackId: string) =>
+	get<Track>(f, `${lib(libraryId)}/tracks/${encodeURIComponent(trackId)}`);
 
 export const listArtists = (f: Fetch, libraryId: string, query: Query = {}) =>
 	get<ArtistPage>(f, `${lib(libraryId)}/artists`, query);

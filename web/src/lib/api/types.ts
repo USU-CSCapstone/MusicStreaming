@@ -11,6 +11,7 @@ export type ImageRef = Schemas['ImageRef'];
 export type ArtistCredit = Schemas['ArtistCredit'];
 export type AlbumRef = Schemas['AlbumRef'];
 export type TrackSummary = Schemas['TrackSummary'];
+export type Track = Schemas['Track'];
 export type TrackPage = Schemas['TrackPage'];
 export type AlbumSummary = Schemas['AlbumSummary'];
 export type Album = Schemas['Album'];
