@@ -206,6 +206,44 @@ describe('sending', () => {
 	});
 });
 
+describe('undo', () => {
+	it('puts removed tracks back where they were, and saves that too', async () => {
+		const undo = list.edit({ ops: [{ op: 'remove', positions: [0, 2] }] });
+		expect(ids(list.items)).toEqual(['2']);
+		await list.idle();
+		undo();
+		expect(ids(list.items)).toEqual(['1', '2', '3']);
+		expect(list.playlist.trackCount).toBe(3);
+		await list.idle();
+		expect(api.edits().at(-1)?.body.ops).toEqual([
+			{ op: 'add', at: 0, items: [{ type: 'track', id: '1' }] },
+			{ op: 'add', at: 2, items: [{ type: 'track', id: '3' }] }
+		]);
+		expect(list.playlist.version).toBe(3);
+	});
+
+	it('reverses details too', () => {
+		const undo = list.edit({ title: 'Renamed', pinned: true });
+		undo();
+		expect(list.playlist).toMatchObject({ title: 'Road Trip', pinned: false });
+	});
+
+	it('does nothing once the contents have changed again', () => {
+		const undo = list.edit({ ops: [{ op: 'remove', positions: [0] }] });
+		list.edit({ ops: [{ op: 'move', positions: [0], at: 1 }] });
+		undo();
+		expect(ids(list.items)).toEqual(['3', '2']);
+	});
+
+	it('still undoes after a change to the details alone', () => {
+		const undo = list.edit({ ops: [{ op: 'remove', positions: [1] }] });
+		list.edit({ pinned: true });
+		undo();
+		expect(ids(list.items)).toEqual(['1', '2', '3']);
+		expect(list.playlist.pinned).toBe(true);
+	});
+});
+
 describe('when the server refuses', () => {
 	it('reloads after a conflict, drops what was pending, and says why', async () => {
 		// Another device moved the playlist on, and left one track.
