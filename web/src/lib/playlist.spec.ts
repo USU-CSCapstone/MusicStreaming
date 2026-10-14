@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Playlist, PlaylistItem, TrackSummary } from './api/types';
-import { CONFLICT_MESSAGE, EditablePlaylist, loadPlaylist } from './playlist.svelte';
+import { CONFLICT_MESSAGE, EditablePlaylist, loadPlaylist, rowMoveOps } from './playlist.svelte';
+import { applyOps } from './playlist-ops';
 import { toaster } from './toast.svelte';
 
 const track = (n: number): TrackSummary => ({
@@ -300,5 +301,33 @@ describe('loadPlaylist', () => {
 		const loaded = await loadPlaylist(api.fetch, '11', 'p1');
 		expect(loaded.playlist.version).toBe(2);
 		expect(api.requests.filter((r) => r.path.endsWith('/items'))).toHaveLength(2);
+	});
+});
+
+describe('rowMoveOps', () => {
+	// Rows show tracks only, so the external item is in the playlist but not in the list.
+	const external = { external: { id: 'e', durationUs: 0 } } as unknown as PlaylistItem;
+	const items = [item(1), external, item(2), item(3), item(4)];
+	const order = (moves: { indexes: number[]; to: number }[]) =>
+		applyOps(items, rowMoveOps(items, moves), () => []).map((i) => i.track?.id ?? 'ext');
+
+	it('moves rows around an external item the list does not show', () => {
+		// The rows are 1, 2, 3, 4.
+		expect(order([{ indexes: [0], to: 1 }])).toEqual(['ext', '2', '1', '3', '4']);
+		expect(order([{ indexes: [3], to: 0 }])).toEqual(['4', '1', 'ext', '2', '3']);
+	});
+
+	it('gathers scattered rows, and moves them to the end', () => {
+		expect(order([{ indexes: [0, 2], to: 2 }])).toEqual(['ext', '2', '4', '1', '3']);
+	});
+
+	it('makes each move on the rows as the one before left them', () => {
+		// Rows 2 and 4 each up one place, as Alt+↑ does.
+		expect(
+			order([
+				{ indexes: [1], to: 0 },
+				{ indexes: [3], to: 2 }
+			])
+		).toEqual(['2', '1', 'ext', '4', '3']);
 	});
 });

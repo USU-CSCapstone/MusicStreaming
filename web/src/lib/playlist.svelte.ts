@@ -10,7 +10,14 @@
 // comes with the worker (`design/general.md` §4).
 
 import { ApiError, editPlaylist, getPlaylist, listPlaylistItems } from './api/client';
-import type { Playable, Playlist, PlaylistEdit, PlaylistItem, TrackSummary } from './api/types';
+import type {
+	Playable,
+	Playlist,
+	PlaylistEdit,
+	PlaylistItem,
+	PlaylistOp,
+	TrackSummary
+} from './api/types';
 import { type Resolve, applyOps, invertOps } from './playlist-ops';
 import { toast } from './toast.svelte';
 
@@ -181,6 +188,32 @@ export class EditablePlaylist {
 		if (this.items.length === 0) playlist.image = null;
 		this.playlist = playlist;
 	}
+}
+
+/**
+ * Moves of the rows a list shows, which leave out external items, as moves of positions in the
+ * playlist. Each row move is made on the rows as the ones before it left them, and so is each op.
+ */
+export function rowMoveOps(
+	items: PlaylistItem[],
+	moves: { indexes: number[]; to: number }[]
+): PlaylistOp[] {
+	const ops: PlaylistOp[] = [];
+	for (const { indexes, to } of moves) {
+		const shown = items.flatMap((item, position) => (item.track ? [position] : []));
+		const positions = indexes.map((i) => shown[i]);
+		const rest = shown.filter((p) => !positions.includes(p));
+		// In front of the row that will follow them, or at the end.
+		const next = rest[to];
+		const at =
+			next === undefined
+				? items.length - positions.length
+				: next - positions.filter((p) => p < next).length;
+		const op: PlaylistOp = { op: 'move', positions, at };
+		ops.push(op);
+		items = applyOps(items, [op], () => []);
+	}
+	return ops;
 }
 
 /**
