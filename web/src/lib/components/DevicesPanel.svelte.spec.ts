@@ -25,6 +25,11 @@ vi.mock('$lib/realtime.svelte', () => ({ realtime: fake.realtime }));
 vi.mock('$lib/playback.svelte', () => ({ playback: fake.playback }));
 vi.mock('$lib/controls.svelte', () => ({ controls: fake.controls }));
 
+// As reactive as the real ones, so a change after rendering shows.
+const playback = $state(fake.playback);
+const controls = $state(fake.controls);
+Object.assign(fake, { playback, controls });
+
 const { panels } = await import('$lib/panels.svelte');
 const { default: DevicesPanel } = await import('./DevicesPanel.svelte');
 
@@ -75,6 +80,13 @@ describe('DevicesPanel', () => {
 		await here.click();
 		expect(playHere).toHaveBeenCalledOnce();
 		await expect.element(rows().nth(1).getByRole('button')).not.toBeInTheDocument();
+
+		// Once it plays here the button goes, leaving focus on the list, and says so.
+		fake.controls.remote = false;
+		fake.playback.state = playingOn('2');
+		await expect.element(here).not.toBeInTheDocument();
+		await expect.element(page.getByRole('list', { name: 'Devices' })).toHaveFocus();
+		await expect.element(page.getByRole('status')).toHaveTextContent('Playback is on this device');
 	});
 
 	it('offers nothing to take of a library this device does not play from', async () => {
@@ -90,10 +102,17 @@ describe('DevicesPanel', () => {
 		render(DevicesPanel);
 		const room = rows().nth(2);
 		await expect.element(room).toHaveTextContent(/Living Room\s*Connected/);
-		await room.getByRole('button', { name: 'Play there, on Living Room' }).click();
+		const there = room.getByRole('button', { name: 'Play there, on Living Room' });
+		await there.click();
 		expect(transfer).toHaveBeenCalledWith('4');
 		// Not to the device playing it, nor one not connected.
 		expect(page.getByRole('button', { name: 'Play there' }).elements()).toHaveLength(1);
+
+		// Once it plays there the button goes, leaving focus on the list, and says so.
+		fake.playback.state = playingOn('4');
+		await expect.element(there).not.toBeInTheDocument();
+		await expect.element(page.getByRole('list', { name: 'Devices' })).toHaveFocus();
+		await expect.element(page.getByRole('status')).toHaveTextContent('Playback is on Living Room');
 	});
 
 	it('says playback is on its way, and moves it one place at a time', async () => {

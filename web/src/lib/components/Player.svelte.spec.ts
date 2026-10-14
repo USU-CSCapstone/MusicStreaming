@@ -50,6 +50,18 @@ describe('Player.svelte', () => {
 		await expect.element(page.getByRole('button', { name: 'Play' })).toBeDisabled();
 	});
 
+	it('says where playback is as the device list does, through a blip in the connection', async () => {
+		Object.assign(fake.controls, { stopped: false });
+		Object.assign(fake.realtime, { connected: false, offline: false });
+		render(Player);
+		await expect.element(page.getByText('On Desk', { exact: true })).toBeVisible();
+		fake.realtime.offline = true;
+		render(Player);
+		await expect.element(page.getByText('Last on Desk')).toBeVisible();
+		Object.assign(fake.controls, { stopped: true });
+		Object.assign(fake.realtime, { connected: true, offline: false });
+	});
+
 	it('says why a command failed with nothing playing here', async () => {
 		fake.playback.error = 'That device is not connected.';
 		const { remote, track } = fake.controls;

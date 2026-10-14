@@ -16,6 +16,9 @@
 	const rank = (device: Device) => (device.id === realtime.deviceId ? 0 : device.connected ? 1 : 2);
 	const devices = $derived([...playback.devices].sort((a, b) => rank(a) - rank(b)));
 	const stale = $derived(realtime.offline);
+	/** The device holding playback, said aloud as playback moves, as the buttons here move it. */
+	const holder = $derived(devices.find((device) => device.id === playback.state?.activeDeviceId));
+	let list = $state<HTMLUListElement>();
 	/**
 	 * Whether there is playback elsewhere, playing or stopped, for this device to take: offline
 	 * too, from where it was last heard of, and only of the library this device plays from.
@@ -50,6 +53,13 @@
 		if (!device.connected) return 'Not connected';
 		return stale ? 'Was connected' : 'Connected';
 	}
+
+	/** A button gone once it has done its job leaves focus on the list, not lost to the page. */
+	function keepFocus() {
+		return () => {
+			if (document.activeElement === document.body) list?.focus();
+		};
+	}
 </script>
 
 {#if devices.length === 0}
@@ -57,7 +67,7 @@
 		{realtime.connected ? 'Loading…' : 'Your devices show once connected.'}
 	</p>
 {:else}
-	<ul aria-label="Devices">
+	<ul bind:this={list} aria-label="Devices" tabindex="-1">
 		{#each devices as device (device.id)}
 			<li class:off={!device.connected}>
 				<span class="icon" class:playing={device.id === playback.state?.activeDeviceId}>
@@ -70,7 +80,12 @@
 					</span>
 				</span>
 				{#if device.id === realtime.deviceId && takeable}
-					<button type="button" class="action" onclick={() => controls.playHere()}>
+					<button
+						type="button"
+						class="action"
+						{@attach keepFocus}
+						onclick={() => controls.playHere()}
+					>
 						Play here
 					</button>
 				{:else if movable(device)}
@@ -78,6 +93,7 @@
 					<button
 						type="button"
 						class="action"
+						{@attach keepFocus}
 						aria-label="Play there, on {device.name}"
 						aria-disabled={playback.moving !== null}
 						onclick={() => {
@@ -90,6 +106,11 @@
 			</li>
 		{/each}
 	</ul>
+	<p class="visually-hidden" role="status">
+		{holder
+			? `Playback is on ${holder.id === realtime.deviceId ? 'this device' : holder.name}`
+			: ''}
+	</p>
 {/if}
 
 <style>

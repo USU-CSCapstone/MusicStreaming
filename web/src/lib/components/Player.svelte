@@ -15,13 +15,16 @@
 	const remote = $derived(controls.remote);
 	const track = $derived(controls.track);
 	const playing = $derived(controls.playing);
-	/** Where the music plays, when another device plays it; stopped, it plays nowhere. */
+	/**
+	 * Where the music plays, when another device plays it; stopped, it plays nowhere. As the
+	 * device list says it: a blip in the connection is not shown (`realtime.svelte.ts`).
+	 */
 	const where = $derived(
 		controls.stopped
 			? null
-			: realtime.connected
-				? `On ${playback.deviceName}`
-				: `Last on ${playback.deviceName}`
+			: realtime.offline
+				? `Last on ${playback.deviceName}`
+				: `On ${playback.deviceName}`
 	);
 	const devicesLabel = $derived(
 		playback.elsewhere ? `Devices, playing on ${playback.deviceName}` : 'Devices'
@@ -225,7 +228,13 @@
 		text-overflow: ellipsis;
 	}
 
+	/* Up to two lines, so a phone, which shows no title, shows most of why. */
 	.where.error {
+		display: -webkit-box;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		white-space: normal;
 		color: var(--danger);
 	}
 

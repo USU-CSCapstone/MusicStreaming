@@ -6,6 +6,7 @@
 // A command to the device playing shows its effect at once and is set right by the next
 // state; one that fails is undone, and says why (§5).
 
+import { flushSync } from 'svelte';
 import { getTrack, getWaveform } from './api/client';
 import type { Device, PlayerCommand, PlayerState, TrackSummary } from './api/types';
 import { realtime } from './realtime.svelte';
@@ -187,6 +188,11 @@ class Playback {
 
 	/** Shows why something asked of playback did not happen, for a few seconds. */
 	fail(reason: string) {
+		// The same reason again is cleared first, so it is shown, and said, again.
+		if (this.error === reason) {
+			this.error = null;
+			flushSync();
+		}
 		this.error = reason;
 		clearTimeout(this.#errorTimer);
 		this.#errorTimer = setTimeout(() => (this.error = null), ERROR_FOR_MS);
