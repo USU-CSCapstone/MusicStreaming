@@ -61,6 +61,7 @@
 			['path', { d: 'm16 9 6 6m0-6-6 6' }]
 		],
 		close: [['path', { d: 'M6 6l12 12M18 6 6 18' }]],
+		plus: [['path', { d: 'M12 5v14M5 12h14' }]],
 		check: [['path', { d: 'M5 12.5 10 17.5 19 7' }]],
 		lyrics: [
 			['rect', { x: 9, y: 2.5, width: 6, height: 12, rx: 3 }],

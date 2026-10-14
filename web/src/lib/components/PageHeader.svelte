@@ -1,12 +1,20 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import AccountLink from './AccountLink.svelte';
 	import ViewToggle from './ViewToggle.svelte';
 
 	let {
 		title,
 		subtitle,
-		toggle = false
-	}: { title: string; subtitle?: string; toggle?: boolean } = $props();
+		toggle = false,
+		actions
+	}: {
+		title: string;
+		subtitle?: string;
+		toggle?: boolean;
+		/** The page's own actions, before the view toggle. */
+		actions?: Snippet;
+	} = $props();
 </script>
 
 <header>
@@ -15,6 +23,7 @@
 		{#if subtitle}<p class="muted">{subtitle}</p>{/if}
 	</div>
 	<div class="actions">
+		{@render actions?.()}
 		{#if toggle}<ViewToggle />{/if}
 		<!-- On a phone there is no sidebar, so the account is reached from here. -->
 		<span class="account"><AccountLink /></span>

@@ -14,6 +14,7 @@ import type {
 	TrackSummary
 } from '../src/lib/api/types';
 import { withManifest } from '../../tools/plugin-pack/manifest.mjs';
+import { type PlaylistLibrary, PlaylistStore, playlistRoute } from '../mock/playlists';
 import { PluginStore, adminRoute } from '../mock/plugins';
 
 export const library: Library = {
@@ -61,6 +62,21 @@ export const tracks = [
 	track('42', 'Signal Part 2', 1, 2),
 	track('43', 'Signal Remix', 2, 1)
 ];
+
+/** The library above, for the mock's playlist store: no playlists to start with. */
+const playlistLibrary: PlaylistLibrary = {
+	generated: () => [],
+	expand(_, ref) {
+		const found =
+			ref.type === 'track'
+				? tracks.filter((t) => t.id === ref.id)
+				: ref.id === (ref.type === 'album' ? album.id : artist.id)
+					? tracks
+					: [];
+		return found.length ? found.map((t) => BigInt(t.id)) : undefined;
+	},
+	track: (_, id) => tracks.find((t) => t.id === String(id))
+};
 
 /** Two seconds of 8 kHz mono silence. */
 function wav(): Buffer {
@@ -184,6 +200,8 @@ export async function serveLibrary(
 	const plugins = new PluginStore(mkdtempSync(join(tmpdir(), 'jc-e2e-plugins-')), () =>
 		empty ? [] : [library.id]
 	);
+	// Playlists, too, run through the mock's own store.
+	const playlists = new PlaylistStore(playlistLibrary);
 	const plays: PlayReport[] = [];
 	// A scrobbler this user can connect with their own token, which it never shows again.
 	let token: string | null = null;
@@ -201,6 +219,12 @@ export async function serveLibrary(
 		const path = url.pathname.replace(/^.*\/api\/v1/, '');
 		const lib = `/libraries/${library.id}`;
 		const json = (body: unknown) => route.fulfill({ json: body });
+		const reply = (out: { status: number; body?: unknown } | undefined) =>
+			!out
+				? route.fulfill({ status: 404 })
+				: out.body === undefined
+					? route.fulfill({ status: out.status })
+					: route.fulfill({ status: out.status, json: out.body });
 		const problem = (status: number, code: string, detail?: string) =>
 			route.fulfill({ status, json: { type: 'about:blank', title: '', status, code, detail } });
 
@@ -265,10 +289,7 @@ export async function serveLibrary(
 				new Uint8Array(req.postDataBuffer() ?? []),
 				fakeRun
 			);
-			if (!out) return route.fulfill({ status: 404 });
-			return out.body === undefined
-				? route.fulfill({ status: out.status })
-				: route.fulfill({ status: out.status, json: out.body });
+			return reply(out);
 		}
 
 		if (path === '/libraries') return json({ items: empty ? [] : [library] });
@@ -287,7 +308,19 @@ export async function serveLibrary(
 		if (path === `${lib}/artists`) {
 			return json(pageOf([{ ...artist, image: null, albumCount: 1, trackCount: 3 }]));
 		}
-		if (path === `${lib}/playlists`) return json(pageOf([]));
+		if (path.startsWith(`${lib}/playlists`)) {
+			const req = route.request();
+			return reply(
+				playlistRoute(
+					playlists,
+					BigInt(library.id),
+					req.method(),
+					path.slice(lib.length) + url.search,
+					new Uint8Array(req.postDataBuffer() ?? []),
+					req.headers()['idempotency-key']
+				)
+			);
+		}
 		if (path === `${lib}/search`) {
 			const q = url.searchParams.get('q') ?? '';
 			const hits = tracks.filter((t) => t.title.toLowerCase().includes(q.toLowerCase()));
