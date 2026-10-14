@@ -3,8 +3,9 @@
 //! A report only marks its account's state as unsaved. One task saves every unsaved state
 //! together every [`SAVE_EVERY`], and once more as the server stops, so the database sees one
 //! write however many people are listening and however often their players report. Where an
-//! account plays on through the same track, only its place changes, and that is saved only
-//! every [`SAVE_PLAYING_EVERY`], sparing an SD card a write every few seconds all day.
+//! account only plays on through the same track, its place moves only as time passes, and that
+//! is saved only every [`SAVE_PLAYING_EVERY`], sparing an SD card a write every few seconds all
+//! day. A seek, like any other change, is saved at once.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,6 +24,10 @@ const SAVE_EVERY: Duration = Duration::from_secs(5);
 
 /// How long the place of an account playing on through the same track may go unsaved.
 pub(super) const SAVE_PLAYING_EVERY: Duration = Duration::from_secs(60);
+
+/// How far from where its last save puts it an account playing on may be before it counts as a
+/// seek: enough to forgive a player's reports lagging a little behind.
+const PLAYING_ON_WITHIN: Duration = Duration::from_secs(2);
 
 impl Players {
     /// Every account's state as saved, as the server starts: stopped where it was, since no
@@ -54,7 +59,8 @@ impl Players {
     }
 
     /// Saves every state changed since it was last saved, in one write, except where an
-    /// account plays on through the item and track it was saved at less than `playing` ago.
+    /// account plays on through the item and track it was saved at less than `playing` ago,
+    /// where that save says it would be by now.
     pub(super) async fn save_where(&self, db: &Database, playing: Duration) {
         let now = now_ms();
         let mut rows = Vec::new();
@@ -64,17 +70,23 @@ impl Players {
             else {
                 continue;
             };
-            let saved = state.saved.as_ref();
-            if state.status == Status::Playing
-                && saved.is_some_and(|s| s.0 == item && s.1 == track && s.2.elapsed() < playing)
-            {
+            // Saved as far as it has played, which a restart would otherwise lose.
+            let position_ms = state.played_to(now);
+            let playing_on = |(at_item, at_track, at_ms, at): &(String, Id, u32, Instant)| {
+                let since = at.elapsed();
+                let expected = u128::from(*at_ms) + since.as_millis();
+                *at_item == item
+                    && *at_track == track
+                    && since < playing
+                    && u128::from(position_ms).abs_diff(expected) < PLAYING_ON_WITHIN.as_millis()
+            };
+            if state.status == Status::Playing && state.saved.as_ref().is_some_and(playing_on) {
                 continue;
             }
-            state.saved = Some((item.clone(), track, Instant::now()));
+            state.saved = Some((item.clone(), track, position_ms, Instant::now()));
             // Still unsaved while playing, so its place keeps being saved as it moves on.
             state.unsaved = state.status == Status::Playing;
-            // Saved as far as it has played, which a restart would otherwise lose.
-            rows.push((user, item, library.0, track.0, state.played_to(now)));
+            rows.push((user, item, library.0, track.0, position_ms));
         }
         if rows.is_empty() {
             return;

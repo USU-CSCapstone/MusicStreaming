@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
@@ -277,17 +278,23 @@ async fn playing_on_through_a_track_is_saved_only_now_and_then() {
     let players = Players::default();
     let save = async || players.save_where(&db, super::saved::SAVE_PLAYING_EVERY).await;
     let saved = async || restarted(&db).await["positionMs"].as_u64().unwrap() / 1000;
+    // As if `by` passed since it was last saved.
+    let wait = |by| players.lock().get_mut(&1).unwrap().saved.as_mut().unwrap().3 -= by;
     report_to(&players, "playing", 1, 1000);
     save().await;
     assert_eq!(saved().await, 1, "at once as it starts");
 
+    wait(Duration::from_secs(29));
     report_to(&players, "playing", 1, 30_000);
     save().await;
     assert_eq!(saved().await, 1, "not as it plays on, reported or not");
-    players.lock().get_mut(&1).unwrap().saved.as_mut().unwrap().2 -=
-        super::saved::SAVE_PLAYING_EVERY;
+    wait(super::saved::SAVE_PLAYING_EVERY);
     save().await;
     assert_eq!(saved().await, 30, "until long enough after");
+
+    report_to(&players, "playing", 1, 50_000);
+    save().await;
+    assert_eq!(saved().await, 50, "at once as it seeks");
 
     report_to(&players, "paused", 1, 40_000);
     save().await;
