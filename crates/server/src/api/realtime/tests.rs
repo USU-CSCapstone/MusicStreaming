@@ -222,3 +222,24 @@ async fn a_client_that_falls_behind_is_closed_once_it_has_what_was_queued() {
     }
     assert!(slow.next().await.is_none(), "then closed");
 }
+
+#[tokio::test]
+async fn a_device_list_waiting_its_turn_stands_for_later_changes() {
+    /// Whether `turn` is still waiting once polled: it is polled before the timeout is.
+    async fn pending(turn: impl Future) -> bool {
+        tokio::time::timeout(std::time::Duration::ZERO, turn).await.is_err()
+    }
+    let hub = Hub::default();
+    let sending = hub.device_list_turn(1).await.unwrap();
+    let mut waiting = Box::pin(hub.device_list_turn(1));
+    assert!(pending(&mut waiting).await);
+    assert!(hub.device_list_turn(1).await.is_none(), "the waiting list is read after this");
+    assert!(hub.device_list_turn(2).await.is_some(), "another account's is not");
+
+    drop(sending);
+    let reading = waiting.await.unwrap();
+    let mut next = Box::pin(hub.device_list_turn(1));
+    assert!(pending(&mut next).await, "the list being read may be stale");
+    drop(reading);
+    assert!(next.await.is_some());
+}

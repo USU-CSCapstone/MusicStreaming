@@ -98,8 +98,9 @@ pub async fn list(
 pub fn changed(db: Arc<Database>, hub: Arc<Hub>, user: i64) {
     tokio::spawn(async move {
         // Read in turn, so the list sent last was read after the latest change. A connection
-        // that comes or goes during the read sends another list after this one.
-        let _turn = hub.device_list_turn(user).await;
+        // that comes or goes during the read sends another list after this one, unless one is
+        // already waiting to.
+        let Some(_turn) = hub.device_list_turn(user).await else { return };
         let connected = hub.connected(user);
         if connected.is_empty() {
             return;
