@@ -66,9 +66,10 @@
 			<ol bind:this={list} class="synced">
 				{#each lines as line, i (i)}
 					<li>
-						<!-- Clicking a line seeks there. -->
+						<!-- Clicking a line seeks there, as the bar does: not where playback stopped. -->
 						<button
 							type="button"
+							disabled={controls.stopped}
 							class:current={i === now}
 							class:past={i < now}
 							aria-current={i === now ? 'true' : undefined}
@@ -114,7 +115,11 @@
 		transition: color 150ms ease-out;
 	}
 
-	.synced button:hover {
+	.synced button:disabled {
+		cursor: default;
+	}
+
+	.synced button:hover:not(:disabled) {
 		background: var(--surface-hover);
 	}
 

@@ -1,3 +1,4 @@
+import { flushSync } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlayerState, RealtimeServerMessage, Track } from '$lib/api/types';
 
@@ -153,6 +154,26 @@ describe('playback', () => {
 		fake.realtime.connected = false;
 		playback.next();
 		expect(playback.error).toBe('Not connected to the server.');
+	});
+
+	it('says the same reason again when it fails again', () => {
+		const shown: (string | null)[] = [];
+		const stop = $effect.root(() => {
+			$effect(() => {
+				shown.push(playback.error);
+			});
+		});
+		flushSync();
+		playback.fail('The device did not answer.');
+		flushSync();
+		playback.fail('The device did not answer.');
+		flushSync();
+		stop();
+		expect(shown.slice(-3)).toEqual([
+			'The device did not answer.',
+			null,
+			'The device did not answer.'
+		]);
 	});
 
 	it('sends the volume once the slider rests', () => {

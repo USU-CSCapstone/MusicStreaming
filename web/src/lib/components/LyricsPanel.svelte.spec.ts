@@ -15,6 +15,7 @@ vi.mock('$lib/api/client', async (actual) => ({
 
 const { panels } = await import('$lib/panels.svelte');
 const { player } = await import('$lib/player.svelte');
+const { playback } = await import('$lib/playback.svelte');
 const { default: LyricsPanel } = await import('./LyricsPanel.svelte');
 
 const track = {
@@ -40,6 +41,7 @@ function open(l: Lyrics) {
 
 afterEach(() => {
 	panels.lyrics = false;
+	playback.state = null;
 });
 
 describe('LyricsPanel.svelte', () => {
@@ -68,6 +70,22 @@ describe('LyricsPanel.svelte', () => {
 
 		// An empty line is an instrumental break, shown as a note.
 		await expect.element(page.getByRole('button', { name: '♪' })).toBeVisible();
+	});
+
+	it('seeks nowhere while playback is stopped', async () => {
+		const sung = { kind: 'synced', plain: null, lines: [{ startMs: 13_000, text: 'Sleep' }] };
+		open(sung as Lyrics);
+		playback.track = track;
+		playback.state = {
+			status: 'stopped',
+			activeDeviceId: null,
+			itemId: '0',
+			libraryId: '11',
+			trackId: track.id,
+			positionMs: 0,
+			positionAt: new Date().toISOString()
+		};
+		await expect.element(page.getByRole('button', { name: 'Sleep' })).toBeDisabled();
 	});
 
 	it('shows plain lyrics as text', async () => {
