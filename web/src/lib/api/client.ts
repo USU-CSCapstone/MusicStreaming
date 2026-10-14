@@ -164,7 +164,7 @@ export const createPlaylist = (
 	f: Fetch,
 	libraryId: string,
 	request: PlaylistCreate,
-	key = crypto.randomUUID()
+	key: string = crypto.randomUUID()
 ) => send<Playlist>(f, 'POST', `${lib(libraryId)}/playlists`, request, key);
 
 /**
@@ -177,7 +177,7 @@ export const editPlaylist = (
 	libraryId: string,
 	playlistId: string,
 	edit: PlaylistEdit,
-	key = crypto.randomUUID()
+	key: string = crypto.randomUUID()
 ) => send<Playlist>(f, 'PATCH', playlist(libraryId, playlistId), edit, key);
 
 export const deletePlaylist = (f: Fetch, libraryId: string, playlistId: string) =>
