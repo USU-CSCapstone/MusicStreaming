@@ -164,13 +164,13 @@ async fn serve(mut socket: WebSocket, state: AppState, caller: Caller) {
     // Joined only once upgraded, so every connection the hub counts is let go of below. A
     // sign-out between authenticating the request and joining would tell no one, so the device
     // is checked again once joined; any sign-out after that tells this connection.
-    let mut presence = state.hub.connect(caller.user, caller.device);
+    let mut presence = state.players.connect(&state.hub, caller.user, caller.device);
     let hello = ServerMessage::Hello { device_id: Id(caller.device), server_time: now() };
     let mut heard = Instant::now();
-    if matches!(signed_in(&state.db, caller.device).await, Ok(true))
-        && send(&mut socket, encode(&hello)).await
-    {
-        state.players.send_state(&state.hub, caller.user, &presence);
+    if !matches!(signed_in(&state.db, caller.device).await, Ok(true)) {
+        // Closed rather than dropped, so its client gives up at once and asks why.
+        send(&mut socket, Message::Close(None)).await;
+    } else if send(&mut socket, encode(&hello)).await {
         // Every connection of the account, this one included, learns it is connected.
         devices::changed(state.db.clone(), state.hub.clone(), caller.user);
         let mut heartbeat = interval_at(Instant::now() + HEARTBEAT, HEARTBEAT);
