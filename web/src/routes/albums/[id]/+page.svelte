@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { collection } from '$lib/adding.svelte';
+	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import ArtistLinks from '$lib/components/ArtistLinks.svelte';
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
@@ -9,6 +11,16 @@
 
 	const album = $derived(data.album);
 	const context = $derived({ type: 'album', id: album.id } as const);
+	// The whole album, as the server expands it: every track, in disc then track order.
+	const adding = $derived(
+		collection(
+			'album',
+			album.id,
+			albumTitle(album.title),
+			data.tracks.length,
+			async () => data.tracks
+		)
+	);
 	const kinds = { album: 'Album', ep: 'EP', single: 'Single', compilation: 'Compilation' };
 	const kind = $derived(
 		[kinds[album.type], releaseYear(album.releaseDate)].filter(Boolean).join(' · ')
@@ -42,6 +54,9 @@
 		{plural(album.trackCount, 'song')} · {formatLength(album.durationUs)}
 		{#if completeness}· <span class="incomplete">{completeness}</span>{/if}
 	</span>
+	{#snippet actions()}
+		{#if data.tracks.length}<AddToPlaylistButton what={adding} />{/if}
+	{/snippet}
 </DetailHeader>
 
 <TrackList tracks={data.tracks} variant="album" {context} />

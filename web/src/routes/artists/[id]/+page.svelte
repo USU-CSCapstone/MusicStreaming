@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { listAlbums, listTracks } from '$lib/api/client';
+	import { artistTracks, collection } from '$lib/adding.svelte';
 	import { albumCard } from '$lib/cards';
+	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import CollectionView from '$lib/components/CollectionView.svelte';
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
@@ -29,6 +31,17 @@
 			listTracks(fetch, data.lib, { artistId: artist.id, sort: 'album', cursor })
 		)
 	);
+	// Every song the artist is credited on, as the server expands an artist, which the page
+	// shows a page at a time; `tracks.total` counts the same songs.
+	const adding = $derived(
+		collection(
+			'artist',
+			artist.id,
+			artistName(artist.name),
+			tracks.total,
+			artistTracks(fetch, data.lib, artist.id)
+		)
+	);
 	const counts = $derived(
 		[
 			artist.albumCount > 0 ? plural(artist.albumCount, 'album') : null,
@@ -51,6 +64,9 @@
 	onplay={tracks.items.length ? () => player.play(tracks.items, 0, context) : undefined}
 >
 	<span>{counts}</span>
+	{#snippet actions()}
+		{#if tracks.total}<AddToPlaylistButton what={adding} />{/if}
+	{/snippet}
 </DetailHeader>
 
 {#if artist.biography}

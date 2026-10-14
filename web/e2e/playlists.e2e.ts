@@ -1,5 +1,5 @@
 import { type Page, expect, test } from '@playwright/test';
-import { album, longMix, roadTrip, serveLibrary, signalMix } from './fixtures';
+import { album, artist, longMix, roadTrip, serveLibrary, signalMix } from './fixtures';
 
 test('creates a playlist and opens it', async ({ page }) => {
 	await serveLibrary(page);
@@ -453,6 +453,92 @@ test.describe('adding to a playlist', () => {
 		await page.keyboard.press('Escape');
 		await expect(page.getByRole('menu')).toBeHidden();
 		await expect(more(page, 'Signal Part 1')).toBeFocused();
+	});
+});
+
+test.describe('adding a whole album, artist, or playlist', () => {
+	const titles = (page: Page) => page.locator('.track .title');
+	/** The ops the next edit sends. */
+	const nextEdit = (page: Page) =>
+		page
+			.waitForRequest((r) => r.method() === 'PATCH')
+			.then((r) => r.postDataJSON().ops as { items: unknown[] }[]);
+
+	test('adds an album, which the server expands', async ({ page }) => {
+		await serveLibrary(page, { playlists: [roadTrip] });
+		await page.goto(`/albums/${album.id}`);
+		await page.getByRole('button', { name: 'Add “Signal” to a playlist' }).click();
+		const sent = nextEdit(page);
+		await page.getByRole('menuitem', { name: /Road Trip/ }).click();
+		expect((await sent)[0].items).toEqual([{ type: 'album', id: album.id }]);
+		await expect(page.getByRole('status')).toHaveText(/Added “Signal” to “Road Trip”/);
+
+		await page.getByRole('button', { name: 'Open' }).click();
+		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+	});
+
+	test('skips the songs of an album already there, if asked', async ({ page }) => {
+		await serveLibrary(page, {
+			playlists: [{ ...roadTrip, trackIds: [BigInt(signalMix.trackIds[1])] }]
+		});
+		await page.goto(`/albums/${album.id}`);
+		await page.getByRole('button', { name: 'Add “Signal” to a playlist' }).click();
+		await page.getByRole('menuitem', { name: /Road Trip/ }).click();
+		const dialog = page.getByRole('dialog', { name: 'Already in this playlist' });
+		await expect(dialog).toContainText(
+			'1 of the 3 songs in “Signal” is already in “Road Trip”. Add them anyway?'
+		);
+		const sent = nextEdit(page);
+		await dialog.getByRole('button', { name: 'Skip duplicates' }).click();
+		// Only the others, by name, as the album would bring the repeat with it.
+		expect((await sent)[0].items).toEqual([
+			{ type: 'track', id: '41' },
+			{ type: 'track', id: '43' }
+		]);
+		await expect(page.getByRole('status')).toHaveText(/Added 2 songs to “Road Trip”/);
+		await page.getByRole('button', { name: 'Open' }).click();
+		await expect(titles(page)).toHaveText(['Signal Part 2', 'Signal Part 1', 'Signal Remix']);
+	});
+
+	test('makes a new playlist from an artist', async ({ page }) => {
+		await serveLibrary(page);
+		await page.goto(`/artists/${artist.id}`);
+		await page.getByRole('button', { name: 'Add “Aurora Lane” to a playlist' }).click();
+		await page.getByRole('menuitem', { name: 'New playlist…' }).click();
+		const dialog = page.getByRole('dialog', { name: 'New playlist' });
+		await dialog.getByRole('textbox', { name: 'Title' }).fill('All of Aurora');
+		const created = page.waitForRequest(
+			(r) => r.method() === 'POST' && r.url().endsWith('/playlists')
+		);
+		await dialog.getByRole('button', { name: 'Create' }).click();
+		expect((await created).postDataJSON().items).toEqual([{ type: 'artist', id: artist.id }]);
+		await expect(page.getByRole('status')).toHaveText(/Added “Aurora Lane” to “All of Aurora”/);
+
+		await page.goto('/playlists');
+		await expect(page.getByRole('link', { name: /All of Aurora/ })).toContainText('3 songs');
+	});
+
+	test('adds a playlist to another, or to itself at once', async ({ page }) => {
+		await serveLibrary(page, { playlists: [signalMix, roadTrip] });
+		await page.goto(`/playlists/${signalMix.id}`);
+		const more = page.getByRole('button', { name: 'Add “Signal Mix” to a playlist' });
+
+		await more.click();
+		const sent = nextEdit(page);
+		await page.getByRole('menuitem', { name: /Road Trip/ }).click();
+		expect((await sent)[0].items).toEqual([{ type: 'playlist', id: signalMix.id }]);
+
+		await more.click();
+		await page.getByRole('menuitem', { name: /Signal Mix/ }).click();
+		const dialog = page.getByRole('dialog', { name: 'Already in this playlist' });
+		await expect(dialog).toContainText('All of “Signal Mix” is already in “Signal Mix”.');
+		await expect(dialog.getByRole('button', { name: 'Skip duplicates' })).toBeHidden();
+		await dialog.getByRole('button', { name: 'Add anyway' }).click();
+		await expect(titles(page)).toHaveCount(6);
+		await expect(page.getByText('6 songs · ')).toBeVisible();
+
+		await page.goto(`/playlists/${roadTrip.id}`);
+		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
 	});
 });
 

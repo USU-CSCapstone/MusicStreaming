@@ -10,6 +10,7 @@
 	import type { PlayContext, TrackSummary } from '$lib/api/types';
 	import { albumTitle, formatDuration, plural } from '$lib/format';
 	import { player } from '$lib/player.svelte';
+	import { songs } from '$lib/adding.svelte';
 	import { applyOps } from '$lib/playlist-ops';
 	import ArtistLinks from './ArtistLinks.svelte';
 	import Artwork from './Artwork.svelte';
@@ -512,7 +513,7 @@
 {/if}
 
 {#if adding}
-	<AddToPlaylistMenu tracks={adding.tracks} anchor={adding.anchor} onclose={closeAdding} />
+	<AddToPlaylistMenu what={songs(adding.tracks)} anchor={adding.anchor} onclose={closeAdding} />
 {/if}
 
 {#if editable}
