@@ -138,8 +138,18 @@ impl Players {
         self.lock().get(&user).cloned().unwrap_or_else(PlayerState::stopped)
     }
 
-    /// Sends one connection its account's current state: on opening, and when a report of its
-    /// is refused. Sent in turn with changes, so it cannot arrive after a newer state.
+    /// Counts `device` of `user` as connected, with its account's current state queued first.
+    /// Under the lock a transfer picks its connection under, so none can arrive before it.
+    pub fn connect(&self, hub: &Arc<Hub>, user: i64, device: i64) -> Presence {
+        let accounts = self.lock();
+        let presence = hub.connect(user, device);
+        let state = accounts.get(&user).cloned().unwrap_or_else(PlayerState::stopped);
+        hub.send(user, presence.id(), &ServerMessage::Player { state });
+        presence
+    }
+
+    /// Sends one connection its account's current state when a report of its is refused. Sent
+    /// in turn with changes, so it cannot arrive after a newer state.
     pub fn send_state(&self, hub: &Hub, user: i64, presence: &Presence) {
         let accounts = self.lock();
         let state = accounts.get(&user).cloned().unwrap_or_else(PlayerState::stopped);
@@ -180,11 +190,12 @@ impl Players {
     ) -> Result<(), Problem> {
         let (user, device) = (caller.user, caller.device);
         let mut accounts = self.lock();
-        let state = accounts.entry(user).or_insert_with(PlayerState::stopped);
         let starts = report.start && !matches!(report.status, Reported::Stopped);
-        if !starts && state.active_connection != Some(connection) {
+        let active = accounts.get(&user).and_then(|state| state.active_connection);
+        if !starts && active != Some(connection) {
             return Err(Problem::invalid("Only the playing connection reports, unless it starts."));
         }
+        let state = accounts.entry(user).or_insert_with(PlayerState::stopped);
         // Nothing advances while buffering, so other devices are not shown running ahead.
         let status = match report.status {
             Reported::Playing => Status::Playing,
