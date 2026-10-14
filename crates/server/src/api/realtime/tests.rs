@@ -254,7 +254,7 @@ async fn playback_state_reaches_every_connection_of_the_account() {
 
     let report = json!({ "type": "progress", "report": {
         "deviceId": "1", "itemId": "item-1", "libraryId": "1", "trackId": "2",
-        "status": "playing", "positionMs": 500, "start": true, "at": "2026-10-12T00:00:00Z",
+        "status": "playing", "positionMs": 500, "start": true,
     } });
     desk.send(Message::text(report.to_string())).await.unwrap();
     for socket in [&mut phone, &mut desk] {

@@ -35,9 +35,10 @@ info:
     **Optimistic writes.** Writes clients apply locally before confirmation — queue and
     player commands, playlist edits, plays — carry a client-generated ID in the body
     (`commandId`, `editId`, `playId`, `createId`). The server applies each ID once however
-    often it arrives — for player commands, among the account's latest 32 — and IDs of anything those writes create are derived from it, so a
-    device and the server agree without a round trip. Other state-changing `POST`s accept an
-    `Idempotency-Key` header with the same guarantee.
+    often it arrives (for player commands, see `CommandResult`), and IDs of anything those
+    writes create are derived from it, so a device and the server agree without a round
+    trip. Other state-changing `POST`s accept an `Idempotency-Key` header with the same
+    guarantee.
 
     **Pagination.** Lists are cursor-paged: pass the previous page's `nextCursor` as
     `cursor`. `limit` defaults to 100 and may be up to 1000 — a bound on one transfer,
@@ -2330,10 +2331,8 @@ paths:
         Play, pause, seek, skip, volume, transfer, and wake, targeting any of the caller's
         devices (`requirements/realtime.md` §3). Last command wins. For clients without a
         realtime connection; clients with one send `playerCommand` there instead. Answers once
-        the target has carried the command out or failed to, within 5 seconds: `applied` or
-        `failed`. A command sent again is not carried out again: while it waits, its result
-        goes to where it was sent from last, and an earlier request still waiting for it
-        answers `pending`; once it has finished, this answers its result.
+        the target has carried the command out or failed to: `applied` or `failed`, or
+        `pending` to an earlier request for a command sent again (see `CommandResult`).
       operationId: sendPlayerCommand
       requestBody:
         required: true
@@ -4276,7 +4275,6 @@ components:
             - root_overlap
             - root_unavailable
             - device_unavailable
-            - not_active_device
             - source_unavailable
             - source_timeout
             - plugin_settings_invalid
@@ -5698,7 +5696,10 @@ components:
             from there (§6).
         itemId:
           type: [string, 'null']
-          description: The queue item playing.
+          x-status: draft
+          description: |
+            The active device's own name for its place in its queue, as it last reported:
+            opaque to everyone else. The queue item playing once the server keeps the queue.
         libraryId:
           type: [string, 'null']
           x-status: draft
@@ -5742,7 +5743,7 @@ components:
     TransportCommand:
       type: object
       required: [type, commandId]
-      description: '`play` sent to an idle connected device wakes it with the current queue (`requirements/realtime.md` §3).'
+      description: Goes to the device playing, so it fails when nothing is; `transfer` wakes an idle device (`requirements/realtime.md` §3).
       properties:
         type:
           type: string
@@ -5775,16 +5776,17 @@ components:
       required: [type, commandId, deviceId]
       x-status: draft
       description: |
-        Shift — move playback to another device at the same track, position, and queue. Sent
-        to the device named (its newest connection), which takes playback over from wherever
-        it is; the device that was playing stops, as for any takeover. It also wakes an idle
-        device, picking up where playback stopped. Moving it to the device already holding it
-        is `applied` at once, or, when it is paused there and `play` is true, plays it. The
-        device answers once it has taken over, not once its audio plays, which may take longer
-        to load than a command has to answer in. Until the server keeps the queue, the device
-        picks up the track and where it was in it, and nothing after it comes along; its own
-        volume stays its own. `device_unavailable` when the device is not connected or nothing
-        has played.
+        Shift — move playback to another device. Sent to the device named (its newest
+        connection), which takes the track and position from the latest `player` state it
+        received (`libraryId`, `trackId`, and `positionMs`, moved on from `positionAt` while
+        playing) and takes playback over with a `start` report; the device that was playing
+        stops, as for any takeover. So it also wakes an idle device, picking up where
+        playback stopped. Moving it to the device already holding it is `applied` at once,
+        or, when it is paused there and `play` is true, plays it. The device answers once it
+        has taken over, not once its audio plays, which may take longer to load than a
+        command has to answer in. The queue comes along once the server keeps it; the
+        device's volume stays its own. `device_unavailable` when the device is not connected
+        or nothing has played.
       properties:
         type: { const: transfer }
         commandId: { $ref: '#/components/schemas/CommandId' }
@@ -5806,7 +5808,8 @@ components:
             `pending` until the target device confirms. A failure is always reported
             (`requirements/realtime.md` §5): at once when nothing is playing, or the command
             is invalid or not one the server carries out; when the target's connection
-            closes; and after 5 seconds when the target has not answered. A command sent
+            closes; and after 5 seconds when the target has not answered. Over HTTP, the
+            failures at once are `409`, `422`, and `429` problems instead. A command sent
             again with the same `commandId` is carried out once: while it waits its result
             goes to where it was sent from last, and once it has finished, the result of any
             of the account's latest 32 commands is answered again. An account has at most 16
@@ -5818,21 +5821,21 @@ components:
       x-status: draft
       required: [deviceId, itemId, libraryId, trackId, status, positionMs]
       description: |
-        Sent by the playing device over its realtime connection, which it needs anyway to be
-        controlled and to hear that another device took over. A report that is refused —
-        invalid, from any connection but the active one, or of a track out of the caller's
-        reach — is answered with the current state; one that does not parse is ignored.
-        A `buffering` report is recorded
-        as `paused` at its position, so other devices are not shown running ahead.
+        Sent by the playing device, or one taking playback over (`start`), over its realtime
+        connection, which it needs anyway to be controlled and to hear that another device
+        took over. A report that is refused — invalid, from any connection but the active
+        one, or of a track out of the caller's reach — is answered with the current state;
+        one that does not parse is ignored. A `buffering` report is recorded as `paused` at
+        its position, so other devices are not shown running ahead.
 
         Until the server keeps the queue, a report names its track, and `itemId` is the
-        device's own name for its place in its queue, at most 100 characters. `libraryId`
-        and `trackId` give way to the queue's item when it does.
+        device's own name for its place in its queue, opaque to the server, at most 100
+        characters. `libraryId` and `trackId` give way to the queue's item when it does.
       properties:
         deviceId:
           type: string
           description: The reporting device's own.
-        itemId: { type: string, minLength: 1, maxLength: 100 }
+        itemId: { type: string, minLength: 1, maxLength: 100, x-status: draft }
         libraryId: { type: string }
         trackId: { type: string }
         start:
@@ -5861,10 +5864,6 @@ components:
           minimum: 0
           maximum: 1
           description: The device's current volume, so remote controls show it (`requirements/realtime.md` §3).
-        at:
-          type: string
-          format: date-time
-          description: Not read. Position is timed by when the report arrives, since a device's clock may be off by more than a report takes to arrive.
 
     PlaybackFailureReport:
       type: object
@@ -7241,7 +7240,7 @@ components:
             command: { $ref: '#/components/schemas/PlayerCommand' }
         - type: object
           required: [type, report]
-          description: From the playing device.
+          description: From the playing device, or one taking playback over.
           properties:
             type: { const: progress }
             report: { $ref: '#/components/schemas/ProgressReport' }

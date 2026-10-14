@@ -1895,10 +1895,8 @@ export interface paths {
          * @description Play, pause, seek, skip, volume, transfer, and wake, targeting any of the caller's
          *     devices (`requirements/realtime.md` §3). Last command wins. For clients without a
          *     realtime connection; clients with one send `playerCommand` there instead. Answers once
-         *     the target has carried the command out or failed to, within 5 seconds: `applied` or
-         *     `failed`. A command sent again is not carried out again: while it waits, its result
-         *     goes to where it was sent from last, and an earlier request still waiting for it
-         *     answers `pending`; once it has finished, this answers its result.
+         *     the target has carried the command out or failed to: `applied` or `failed`, or
+         *     `pending` to an earlier request for a command sent again (see `CommandResult`).
          */
         post: operations["sendPlayerCommand"];
         delete?: never;
@@ -3187,7 +3185,7 @@ export interface components {
             /** @description Human-readable, safe to show. Never contains credentials or plugin internals. */
             detail?: string;
             /** @enum {string} */
-            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "breached_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "username_taken" | "version_conflict" | "capacity_exceeded" | "cursor_expired" | "setup_required" | "unsupported_media" | "root_overlap" | "root_unavailable" | "device_unavailable" | "not_active_device" | "source_unavailable" | "source_timeout" | "plugin_settings_invalid" | "internal";
+            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "breached_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "username_taken" | "version_conflict" | "capacity_exceeded" | "cursor_expired" | "setup_required" | "unsupported_media" | "root_overlap" | "root_unavailable" | "device_unavailable" | "source_unavailable" | "source_timeout" | "plugin_settings_invalid" | "internal";
             /**
              * @description With `session_revoked`. `credentials_changed` — the device keeps its downloads and
              *     logs in again with its `deviceId`; `logged_out` — the device removes them
@@ -4132,7 +4130,10 @@ export interface components {
              *     from there (§6).
              */
             activeDeviceId: string | null;
-            /** @description The queue item playing. */
+            /**
+             * @description The active device's own name for its place in its queue, as it last reported:
+             *     opaque to everyone else. The queue item playing once the server keeps the queue.
+             */
             itemId: string | null;
             /** @description The library of `trackId`, until the server keeps the queue, which names it. */
             libraryId?: string | null;
@@ -4154,7 +4155,7 @@ export interface components {
          *     names any other device fails. `transfer` goes to the device it names.
          */
         PlayerCommand: components["schemas"]["TransportCommand"] | components["schemas"]["SeekCommand"] | components["schemas"]["VolumeCommand"] | components["schemas"]["TransferCommand"];
-        /** @description `play` sent to an idle connected device wakes it with the current queue (`requirements/realtime.md` §3). */
+        /** @description Goes to the device playing, so it fails when nothing is; `transfer` wakes an idle device (`requirements/realtime.md` §3). */
         TransportCommand: {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -4186,16 +4187,17 @@ export interface components {
             volume: number;
         };
         /**
-         * @description Shift — move playback to another device at the same track, position, and queue. Sent
-         *     to the device named (its newest connection), which takes playback over from wherever
-         *     it is; the device that was playing stops, as for any takeover. It also wakes an idle
-         *     device, picking up where playback stopped. Moving it to the device already holding it
-         *     is `applied` at once, or, when it is paused there and `play` is true, plays it. The
-         *     device answers once it has taken over, not once its audio plays, which may take longer
-         *     to load than a command has to answer in. Until the server keeps the queue, the device
-         *     picks up the track and where it was in it, and nothing after it comes along; its own
-         *     volume stays its own. `device_unavailable` when the device is not connected or nothing
-         *     has played.
+         * @description Shift — move playback to another device. Sent to the device named (its newest
+         *     connection), which takes the track and position from the latest `player` state it
+         *     received (`libraryId`, `trackId`, and `positionMs`, moved on from `positionAt` while
+         *     playing) and takes playback over with a `start` report; the device that was playing
+         *     stops, as for any takeover. So it also wakes an idle device, picking up where
+         *     playback stopped. Moving it to the device already holding it is `applied` at once,
+         *     or, when it is paused there and `play` is true, plays it. The device answers once it
+         *     has taken over, not once its audio plays, which may take longer to load than a
+         *     command has to answer in. The queue comes along once the server keeps it; the
+         *     device's volume stays its own. `device_unavailable` when the device is not connected
+         *     or nothing has played.
          */
         TransferCommand: {
             /**
@@ -4217,7 +4219,8 @@ export interface components {
              * @description `pending` until the target device confirms. A failure is always reported
              *     (`requirements/realtime.md` §5): at once when nothing is playing, or the command
              *     is invalid or not one the server carries out; when the target's connection
-             *     closes; and after 5 seconds when the target has not answered. A command sent
+             *     closes; and after 5 seconds when the target has not answered. Over HTTP, the
+             *     failures at once are `409`, `422`, and `429` problems instead. A command sent
              *     again with the same `commandId` is carried out once: while it waits its result
              *     goes to where it was sent from last, and once it has finished, the result of any
              *     of the account's latest 32 commands is answered again. An account has at most 16
@@ -4228,16 +4231,16 @@ export interface components {
             reason?: string | null;
         };
         /**
-         * @description Sent by the playing device over its realtime connection, which it needs anyway to be
-         *     controlled and to hear that another device took over. A report that is refused —
-         *     invalid, from any connection but the active one, or of a track out of the caller's
-         *     reach — is answered with the current state; one that does not parse is ignored.
-         *     A `buffering` report is recorded
-         *     as `paused` at its position, so other devices are not shown running ahead.
+         * @description Sent by the playing device, or one taking playback over (`start`), over its realtime
+         *     connection, which it needs anyway to be controlled and to hear that another device
+         *     took over. A report that is refused — invalid, from any connection but the active
+         *     one, or of a track out of the caller's reach — is answered with the current state;
+         *     one that does not parse is ignored. A `buffering` report is recorded as `paused` at
+         *     its position, so other devices are not shown running ahead.
          *
          *     Until the server keeps the queue, a report names its track, and `itemId` is the
-         *     device's own name for its place in its queue, at most 100 characters. `libraryId`
-         *     and `trackId` give way to the queue's item when it does.
+         *     device's own name for its place in its queue, opaque to the server, at most 100
+         *     characters. `libraryId` and `trackId` give way to the queue's item when it does.
          */
         ProgressReport: {
             /** @description The reporting device's own. */
@@ -4267,11 +4270,6 @@ export interface components {
             positionMs: number;
             /** @description The device's current volume, so remote controls show it (`requirements/realtime.md` §3). */
             volume?: number;
-            /**
-             * Format: date-time
-             * @description Not read. Position is timed by when the report arrives, since a device's clock may be off by more than a report takes to arrive.
-             */
-            at?: string;
         };
         PlaybackFailureReport: {
             libraryId: string;
