@@ -14,7 +14,12 @@ import type {
 	TrackSummary
 } from '../src/lib/api/types';
 import { withManifest } from '../../tools/plugin-pack/manifest.mjs';
-import { type PlaylistLibrary, PlaylistStore, playlistRoute } from '../mock/playlists';
+import {
+	type Generated,
+	type PlaylistLibrary,
+	PlaylistStore,
+	playlistRoute
+} from '../mock/playlists';
 import { PluginStore, adminRoute } from '../mock/plugins';
 
 export const library: Library = {
@@ -63,9 +68,18 @@ export const tracks = [
 	track('43', 'Signal Remix', 2, 1)
 ];
 
-/** The library above, for the mock's playlist store: no playlists to start with. */
-const playlistLibrary: PlaylistLibrary = {
-	generated: () => [],
+/** A playlist of the whole album, for tests that need one to start with. */
+export const signalMix: Generated = {
+	id: 'pl-signal',
+	title: 'Signal Mix',
+	description: 'Everything from Signal.',
+	createdAt: '2026-01-01T00:00:00.000Z',
+	trackIds: tracks.map((t) => BigInt(t.id))
+};
+
+/** The library above, for the mock's playlist store, starting with `playlists`. */
+const playlistLibrary = (playlists: Generated[]): PlaylistLibrary => ({
+	generated: () => playlists,
 	expand(_, ref) {
 		const found =
 			ref.type === 'track'
@@ -76,7 +90,7 @@ const playlistLibrary: PlaylistLibrary = {
 		return found.length ? found.map((t) => BigInt(t.id)) : undefined;
 	},
 	track: (_, id) => tracks.find((t) => t.id === String(id))
-};
+});
 
 /** Two seconds of 8 kHz mono silence. */
 function wav(): Buffer {
@@ -193,7 +207,8 @@ export async function serveLibrary(
 		empty = false,
 		setupRequired = false,
 		signedIn = true,
-		role = 'owner' as 'owner' | 'admin' | 'user'
+		role = 'owner' as 'owner' | 'admin' | 'user',
+		playlists = [] as Generated[]
 	} = {}
 ) {
 	// Plugin administration runs through the mock's own logic, on a fresh directory per test.
@@ -201,7 +216,7 @@ export async function serveLibrary(
 		empty ? [] : [library.id]
 	);
 	// Playlists, too, run through the mock's own store.
-	const playlists = new PlaylistStore(playlistLibrary);
+	const playlistStore = new PlaylistStore(playlistLibrary(playlists));
 	const plays: PlayReport[] = [];
 	// A scrobbler this user can connect with their own token, which it never shows again.
 	let token: string | null = null;
@@ -312,7 +327,7 @@ export async function serveLibrary(
 			const req = route.request();
 			return reply(
 				playlistRoute(
-					playlists,
+					playlistStore,
 					BigInt(library.id),
 					req.method(),
 					path.slice(lib.length) + url.search,

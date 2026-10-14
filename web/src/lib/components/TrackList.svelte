@@ -1,7 +1,8 @@
 <script lang="ts">
+	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
 	import type { PlayContext, TrackSummary } from '$lib/api/types';
-	import { albumTitle, formatDuration } from '$lib/format';
+	import { albumTitle, formatDuration, plural } from '$lib/format';
 	import { player } from '$lib/player.svelte';
 	import ArtistLinks from './ArtistLinks.svelte';
 	import Artwork from './Artwork.svelte';
@@ -12,7 +13,9 @@
 		variant = 'default',
 		sentinel,
 		empty = 'No songs.',
-		context = { type: 'library' }
+		context = { type: 'library' },
+		editable = false,
+		onremove
 	}: {
 		tracks: TrackSummary[];
 		/** `album`: track numbers and disc headings, no album column or artwork. */
@@ -21,7 +24,113 @@
 		empty?: string;
 		/** Where the tracks are from, which each play records. */
 		context?: PlayContext;
+		/**
+		 * Rows can be selected, for edits the selection bar offers. A click, a long press on
+		 * touch, or Space on the title then selects; a double click, the play icon, a tap with
+		 * nothing selected, or Enter on the title plays.
+		 */
+		editable?: boolean;
+		/** Removes the rows at these indexes, in order. */
+		onremove?: (indexes: number[]) => void;
 	} = $props();
+
+	const selected = new SvelteSet<number>();
+	/** Where a Shift-click range starts: the row last clicked on its own. */
+	let anchor: number | null = null;
+	const uid = $props.id();
+	const hintId = `selected-${uid}`;
+
+	// Indexes shift with every change, so a selection does not outlive the list it was made in.
+	$effect.pre(() => {
+		void tracks;
+		clear();
+	});
+
+	function clear() {
+		selected.clear();
+		anchor = null;
+	}
+
+	function toggle(i: number) {
+		if (!selected.delete(i)) selected.add(i);
+		anchor = i;
+	}
+
+	/**
+	 * Shift extends from the anchor, and Ctrl/Cmd adds or takes away one. Otherwise a selected
+	 * row is let go, and any other becomes the selection. On touch, a tap plays until something
+	 * is selected, and then adds or takes away a row.
+	 */
+	function select(e: MouseEvent | KeyboardEvent, i: number) {
+		const adding = e.metaKey || e.ctrlKey;
+		const touch = (e as PointerEvent).pointerType === 'touch';
+		if (e.shiftKey && anchor !== null) {
+			if (!adding) selected.clear();
+			for (let k = Math.min(anchor, i); k <= Math.max(anchor, i); k++) selected.add(k);
+		} else if (adding || selected.has(i) || (touch && selected.size > 0)) {
+			toggle(i);
+		} else if (touch) {
+			play(i);
+		} else {
+			selected.clear();
+			toggle(i);
+		}
+	}
+
+	// A long press selects on touch, where there is no Ctrl or Shift.
+	const LONG_PRESS_MS = 500;
+	let press: { timer: ReturnType<typeof setTimeout>; x: number; y: number } | null = null;
+	/** The click that ends a long press is not a tap. */
+	let longPressed = false;
+
+	function pressStart(e: PointerEvent, i: number) {
+		if (!editable || e.pointerType !== 'touch') return;
+		longPressed = false;
+		const timer = setTimeout(() => {
+			press = null;
+			longPressed = true;
+			selected.add(i);
+			anchor = i;
+		}, LONG_PRESS_MS);
+		press = { timer, x: e.clientX, y: e.clientY };
+	}
+
+	function pressEnd() {
+		if (press) clearTimeout(press.timer);
+		press = null;
+	}
+
+	/** A finger that moves is scrolling, not pressing. */
+	function pressMove(e: PointerEvent) {
+		if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) pressEnd();
+	}
+
+	/** Space on a title selects, as Enter plays. */
+	function titleKey(e: KeyboardEvent, i: number) {
+		if (!editable || e.key !== ' ') return;
+		// The browser would click the button on Space too.
+		e.preventDefault();
+		if (e.type === 'keydown') select(e, i);
+	}
+
+	function remove() {
+		onremove?.([...selected].sort((a, b) => a - b));
+		clear();
+	}
+
+	/** Ctrl/Cmd+A selects every row and Escape lets go, unless focus is somewhere they mean more. */
+	function onkeydown(e: KeyboardEvent) {
+		if (!editable || e.defaultPrevented) return;
+		if ((e.target as Element).closest('input, textarea, select, [contenteditable], dialog')) {
+			return;
+		}
+		if (e.key === 'a' && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
+			e.preventDefault();
+			tracks.forEach((_, i) => selected.add(i));
+		} else if (e.key === 'Escape' && selected.size > 0) {
+			clear();
+		}
+	}
 
 	const isAlbum = $derived(variant === 'album');
 	// Multi-disc albums are presented as discs (`requirements/albums.md` §4).
@@ -32,16 +141,23 @@
 	}
 
 	function rowClick(e: MouseEvent, i: number) {
-		// Links inside the row navigate rather than play.
+		// Links inside the row navigate.
 		if ((e.target as Element).closest('a')) return;
-		play(i);
+		if (longPressed) {
+			longPressed = false;
+			return;
+		}
+		if (editable && !(e.target as Element).closest('.num')) select(e, i);
+		else play(i);
 	}
 </script>
+
+<svelte:window {onkeydown} />
 
 {#if tracks.length === 0}
 	<p class="empty muted">{empty}</p>
 {:else}
-	<ol class="tracks" class:album={isAlbum}>
+	<ol class="tracks" class:album={isAlbum} class:editable>
 		<!-- Keyed by position: a playlist may hold the same track twice. -->
 		{#each tracks as track, i (i)}
 			{#if multiDisc && (i === 0 || tracks[i - 1].discNumber !== track.discNumber)}
@@ -52,7 +168,19 @@
 			<!-- Clicking anywhere on the row is a pointer convenience; the title button is the
 			     keyboard path. -->
 			<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-			<li class="track" class:current class:missing onclick={(e) => rowClick(e, i)}>
+			<li
+				class="track"
+				class:current
+				class:missing
+				class:selected={selected.has(i)}
+				onclick={(e) => rowClick(e, i)}
+				ondblclick={(e) => editable && !(e.target as Element).closest('a') && play(i)}
+				onpointerdown={(e) => pressStart(e, i)}
+				onpointermove={pressMove}
+				onpointerup={pressEnd}
+				onpointercancel={pressEnd}
+				oncontextmenu={(e) => (press || longPressed) && e.preventDefault()}
+			>
 				<span class="num tabular">
 					{#if current && player.playing}
 						<span class="eq" aria-label="Playing"><i></i><i></i><i></i></span>
@@ -67,7 +195,19 @@
 					</span>
 				{/if}
 				<span class="main">
-					<button type="button" class="title" disabled={missing} onclick={() => play(i)}>
+					<!-- A pointer's click on the title selects when rows do; Enter (detail 0) plays.
+					     A missing track can still be selected, to remove it. -->
+					<button
+						type="button"
+						class="title"
+						disabled={missing && !editable}
+						aria-describedby={selected.has(i) ? hintId : undefined}
+						onclick={(e) => {
+							if (!editable || e.detail === 0) play(i);
+						}}
+						onkeydown={(e) => titleKey(e, i)}
+						onkeyup={(e) => titleKey(e, i)}
+					>
 						{track.title}
 					</button>
 					<span class="sub muted">
@@ -88,6 +228,29 @@
 	</ol>
 	{#if sentinel}
 		<div {@attach sentinel} aria-hidden="true"></div>
+	{/if}
+{/if}
+
+{#if editable}
+	<span id={hintId} hidden>Selected</span>
+	<span class="visually-hidden" aria-live="polite">
+		{selected.size ? `${plural(selected.size, 'song')} selected` : ''}
+	</span>
+	{#if selected.size > 0}
+		<!-- Floats over the bottom of the list as it scrolls, so the rows never jump. -->
+		<div class="bar-anchor">
+			<div class="bar" role="toolbar" aria-label="Selected songs">
+				<span class="count">{plural(selected.size, 'song')} selected</span>
+				{#if onremove}
+					<button type="button" class="bar-action" onclick={remove}>
+						<Icon name="trash" size={16} /> Remove
+					</button>
+				{/if}
+				<button type="button" class="bar-close" aria-label="Clear selection" onclick={clear}>
+					<Icon name="close" size={16} />
+				</button>
+			</div>
+		</div>
 	{/if}
 {/if}
 
@@ -115,6 +278,77 @@
 	}
 
 	.track:hover {
+		background: var(--surface-hover);
+	}
+
+	/* Room under the last row for the selection bar, which never covers a row it can scroll off. */
+	.tracks.editable {
+		padding-bottom: 64px;
+	}
+
+	.editable .track {
+		/* Shift-click and a long press select rows, not text. */
+		user-select: none;
+		-webkit-touch-callout: none;
+	}
+
+	.track.selected,
+	.track.selected:hover {
+		background: var(--accent-soft);
+	}
+
+	.bar-anchor {
+		position: sticky;
+		bottom: var(--space-4);
+		height: 0;
+		z-index: 5;
+	}
+
+	.bar {
+		position: absolute;
+		bottom: 0;
+		left: 50%;
+		transform: translateX(-50%);
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: var(--space-1) var(--space-1) var(--space-1) var(--space-4);
+		border: 1px solid var(--border);
+		border-radius: 24px;
+		background: var(--surface);
+		box-shadow: var(--shadow);
+		white-space: nowrap;
+	}
+
+	.count {
+		margin-right: var(--space-2);
+		font-weight: 500;
+	}
+
+	.bar button {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		height: 36px;
+		border: 0;
+		border-radius: 18px;
+		background: transparent;
+		color: var(--text);
+		cursor: pointer;
+	}
+
+	.bar-action {
+		padding: 0 var(--space-3);
+		font-weight: 500;
+	}
+
+	.bar .bar-close {
+		justify-content: center;
+		width: 36px;
+		color: var(--text-muted);
+	}
+
+	.bar button:hover {
 		background: var(--surface-hover);
 	}
 
