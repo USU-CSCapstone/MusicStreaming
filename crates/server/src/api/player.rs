@@ -14,8 +14,8 @@
 //! Until the server keeps the queue, a report names its track itself, and `itemId` is the
 //! device's own name for its place in its queue.
 //!
-//! Position is timed by when a report arrives, not by its `at`: a device's clock may be off by
-//! more than a report takes to arrive.
+//! Position is timed by when a report arrives: a device's clock may be off by more than a
+//! report takes to arrive.
 //!
 //! Where each account was is also saved, to resume from after the server restarts.
 
@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use super::authenticate::Caller;
 use super::realtime::{Hub, Presence, ServerMessage};
 use super::time::serialize_rfc3339;
-use super::{AppState, Code, Id, Problem, devices};
+use super::{AppState, Id, Problem, devices};
 use crate::db::now_ms;
 pub use commands::{CommandResult, PlayerCommand, send as send_command};
 
@@ -80,7 +80,7 @@ enum Status {
     Stopped,
 }
 
-/// The spec's `ProgressReport`. Its `at` is not read (see the module's documentation).
+/// The spec's `ProgressReport`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressReport {
@@ -185,7 +185,7 @@ impl Players {
         let state = accounts.entry(user).or_insert_with(PlayerState::stopped);
         let starts = report.start && !matches!(report.status, Reported::Stopped);
         if !starts && state.active_connection != Some(connection) {
-            return Err(Problem::new(Code::NotActiveDevice));
+            return Err(Problem::invalid("Only the playing connection reports, unless it starts."));
         }
         // Nothing advances while buffering, so other devices are not shown running ahead.
         let status = match report.status {

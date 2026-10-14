@@ -33,7 +33,7 @@ async fn setup() -> (tempfile::TempDir, Router, SocketAddr) {
 async fn report(socket: &mut Socket, device: &str, status: &str, changes: Value) {
     let mut report = json!({
         "deviceId": device, "itemId": "item-1", "libraryId": "1", "trackId": "1",
-        "status": status, "positionMs": 1000, "at": "2026-10-12T00:00:00Z",
+        "status": status, "positionMs": 1000,
     });
     report.as_object_mut().unwrap().extend(changes.as_object().unwrap().clone());
     let progress = json!({ "type": "progress", "report": report });
