@@ -56,7 +56,9 @@ describe('PlayRecorder', () => {
 	it('sends the last report to outlive the page, and nothing once it has ended', () => {
 		const { r, sent, closing } = recorder();
 		r.start('1', '7', album);
+		expect(r.active).toBe(true);
 		r.end('stopped', true);
+		expect(r.active).toBe(false);
 		r.end('stopped', true);
 		r.paused();
 		expect(sent).toHaveLength(2);

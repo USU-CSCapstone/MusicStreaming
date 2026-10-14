@@ -57,8 +57,6 @@ class Player {
 	#audio: HTMLAudioElement | null = null;
 	/** Bumped on every load, so a slow response for an earlier track is ignored. */
 	#load = 0;
-	/** The load whose track has started playing, so pausing and resuming is one play. */
-	#playStarted = 0;
 	#plays = new PlayRecorder((items, keepalive) => recordPlays(fetch, items, keepalive));
 	#progress = new Progress((report) => realtime.send({ type: 'progress', report }));
 	/** Waiting for audio to arrive, though not paused. */
@@ -109,10 +107,14 @@ class Player {
 
 	/** Another device or tab took over: this one stops where it is, and can take it back. */
 	#yield() {
+		// Nor does a takeover from here it could not yet send.
+		this.#progress.paused();
 		if (!this.playing) return;
 		// A track still loading must not start once its audio arrives.
-		this.#load++;
-		if (this.#loading) this.#stale = true;
+		if (this.#loading) {
+			this.#load++;
+			this.#stale = true;
+		}
 		this.playing = this.#loading = false;
 		this.#audio?.pause();
 		this.#plays.end('stopped');
@@ -299,7 +301,7 @@ class Player {
 		this.playing = this.#loading = play;
 		// Until its audio is set, the audio element still has the track before.
 		this.#stale = true;
-		this.#report(play ? 'buffering' : 'paused');
+		this.#report();
 
 		const lib = this.libraryId;
 		getPlaybackInfo(fetch, lib, track.id)
@@ -308,12 +310,12 @@ class Player {
 				audio.src = audioUrl(lib, track.id, info.variant);
 				this.#stale = false;
 				// Where it was to start, or was moved to meanwhile.
-				const at = this.position;
-				if (at > 0) {
+				if (this.position > 0) {
 					// Before the audio loads this is where it starts, in most browsers; the rest
-					// are moved there once they know how long it is.
-					audio.currentTime = at;
+					// are moved to where it is by then, once they know how long it is.
+					audio.currentTime = this.position;
 					const start = () => {
+						const at = this.position;
 						if (load === this.#load && audio.currentTime < at - 1) audio.currentTime = at;
 					};
 					audio.addEventListener('loadedmetadata', start, { once: true });
@@ -323,10 +325,11 @@ class Player {
 			})
 			.catch((error) => {
 				if (load !== this.#load) return;
-				// The browser would not play what this page did not start itself, or it was to wait
-				// paused, or was paused meanwhile: either way it waits here, rather than playing the
-				// next track.
-				const waits = !this.#loading || error?.name === 'NotAllowedError';
+				// The browser would not play what this page did not start itself, or paused it by
+				// itself, or it was to wait paused, or was paused meanwhile: either way it waits
+				// here, rather than playing the next track.
+				const waits =
+					!this.#loading || error?.name === 'NotAllowedError' || error?.name === 'AbortError';
 				this.playing = this.#loading = false;
 				if (waits) this.#report();
 				// A track that cannot play is skipped in place, without a message (`requirements/conventions.md` §6).
@@ -349,8 +352,8 @@ class Player {
 			this.#buffering = false;
 			this.#loading = false;
 			this.#report();
-			if (this.#playStarted === this.#load || !this.current) return;
-			this.#playStarted = this.#load;
+			// Resuming a play under way is the same play.
+			if (this.#plays.active || !this.current) return;
 			this.#plays.start(this.libraryId, this.current.id, this.context, audio.currentTime);
 		});
 		audio.addEventListener('waiting', () => {
@@ -370,8 +373,9 @@ class Player {
 			if (this.playing) this.#report();
 		}, REPORT_EVERY_MS);
 		audio.addEventListener('timeupdate', () => {
-			// Not the time of the track before, while this one is on its way.
-			if (!this.#stale) this.position = audio.currentTime;
+			// Not the time of the track before, while this one is on its way, nor of this one
+			// before it knows where it is.
+			if (!this.#stale && audio.readyState) this.position = audio.currentTime;
 			this.#plays.heard(audio.currentTime);
 		});
 		audio.addEventListener('seeking', () => this.#plays.seeked(audio.currentTime));
