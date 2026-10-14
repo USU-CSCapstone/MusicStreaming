@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PlayerState, RealtimeServerMessage, Track } from '$lib/api/types';
+import type { PlayReport, PlayerState, RealtimeServerMessage, Track } from '$lib/api/types';
 
 const fake = vi.hoisted(() => ({
 	/** Tracks whose fetch is held back, by ID; any other arrives at once, a minute long. */
@@ -7,17 +7,21 @@ const fake = vi.hoisted(() => ({
 	/** The audio's playback info; by default it never arrives, so nothing plays. */
 	info: null as (() => Promise<unknown>) | null,
 	listeners: [] as ((message: RealtimeServerMessage) => void)[],
+	/** Whether messages to the server fail to go. */
+	offline: false,
 	sent: [] as {
 		type: string;
 		report: { status: string; positionMs: number; start: boolean };
 		result: unknown;
 	}[],
+	plays: [] as PlayReport[],
 	realtime: {
 		deviceId: '1',
 		connected: true,
 		clockOffset: 0,
 		on: (listener: (message: RealtimeServerMessage) => void) => fake.listeners.push(listener),
 		send(message: never) {
+			if (fake.offline) return false;
 			fake.sent.push(message);
 			return true;
 		}
@@ -30,6 +34,7 @@ vi.mock('$lib/api/client', async (actual) => ({
 	getTrack: (_: unknown, _library: string, id: string) =>
 		fake.tracks.get(id) ?? Promise.resolve(track(id, 60)),
 	getWaveform: async () => null,
+	recordPlays: async (_: unknown, plays: PlayReport[]) => void fake.plays.push(...plays),
 	getPlaybackInfo: () => fake.info?.() ?? new Promise(() => {})
 }));
 
@@ -75,6 +80,8 @@ const result = () => vi.waitFor(() => fake.sent.find((m) => m.type === 'commandR
 
 beforeEach(() => {
 	fake.sent.length = 0;
+	fake.plays.length = 0;
+	fake.offline = false;
 	fake.tracks.clear();
 	fake.info = null;
 	player.libraryId = '11';
@@ -210,6 +217,73 @@ describe('player', () => {
 		await new Promise((resolve) => setTimeout(resolve));
 		expect(player.current?.id).toBe('52');
 		expect(play).toHaveBeenCalledOnce();
+		play.mockRestore();
+	});
+
+	it('stays on a track the browser pauses while it starts, rather than playing the next', async () => {
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		let abort = () => {};
+		const play = vi
+			.spyOn(HTMLMediaElement.prototype, 'play')
+			.mockImplementation(
+				() => new Promise((_, reject) => (abort = () => reject(new DOMException('', 'AbortError'))))
+			);
+		player.play([track('54', 60), track('55', 60)], 0);
+		await vi.waitFor(() => expect(play).toHaveBeenCalled());
+		// As the browser does by itself, as when headphones are unplugged.
+		(play.mock.contexts[0] as HTMLAudioElement).dispatchEvent(new Event('pause'));
+		abort();
+		await new Promise((resolve) => setTimeout(resolve));
+		expect(player.current?.id).toBe('54');
+		expect(player.playing).toBe(false);
+		play.mockRestore();
+	});
+
+	it('starts where it was moved to before its audio arrived', async () => {
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+		state({ trackId: '56', positionMs: 30_000 });
+		transfer(true);
+		await result();
+		await vi.waitFor(() => expect(play).toHaveBeenCalled());
+		const audio = play.mock.contexts[0] as HTMLAudioElement;
+		player.seek(5);
+		audio.dispatchEvent(new Event('loadedmetadata'));
+		expect(audio.currentTime).toBe(5);
+		play.mockRestore();
+	});
+
+	it('takes nothing over once another tab plays, though it could not say it played here', async () => {
+		fake.offline = true;
+		player.play([track('57', 60)], 0);
+		const tab = new BroadcastChannel('jewelcase.player');
+		tab.postMessage('started');
+		await vi.waitFor(() => expect(player.playing).toBe(false));
+		tab.close();
+		fake.offline = false;
+		send({ type: 'hello', deviceId: '1', serverTime: new Date().toISOString() });
+		state();
+		player.setVolume(0.5);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(fake.sent).toEqual([]);
+	});
+
+	it('starts a new play when it plays again after the page was hidden', async () => {
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+		player.play([track('58', 60)], 0);
+		await vi.waitFor(() => expect(play).toHaveBeenCalled());
+		const audio = play.mock.contexts[0] as HTMLAudioElement;
+		audio.dispatchEvent(new Event('playing'));
+		dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+		// Back from the back/forward cache.
+		audio.dispatchEvent(new Event('playing'));
+		expect(fake.plays.map((p) => [p.trackId, p.end])).toEqual([
+			['58', null],
+			['58', 'stopped'],
+			['58', null]
+		]);
+		expect(fake.plays[2].playId).not.toBe(fake.plays[0].playId);
 		play.mockRestore();
 	});
 

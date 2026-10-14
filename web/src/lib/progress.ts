@@ -41,7 +41,10 @@ export class Progress {
 		this.#start = this.#byUser = true;
 	}
 
-	/** The user paused before a takeover from here could be sent: there is nothing to take. */
+	/**
+	 * The user paused, or another tab took over, before a takeover from here could be sent: there
+	 * is nothing to take.
+	 */
 	paused() {
 		if (this.#byUser) this.#start = this.#byUser = false;
 	}
@@ -61,7 +64,8 @@ export class Progress {
 	 */
 	report(deviceId: string, now: Snapshot) {
 		if (!this.#start && !this.#active) return;
-		const start = this.#start;
+		// The server takes no stop as a takeover.
+		const start = this.#start && now.status !== 'stopped';
 		if (!this.#send({ ...now, deviceId, start })) return;
 		if (start) {
 			this.#start = this.#byUser = false;

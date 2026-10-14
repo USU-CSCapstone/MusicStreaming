@@ -141,6 +141,13 @@ describe('Progress', () => {
 		expect(sent).toEqual([]);
 	});
 
+	it('takes nothing over with a stop, which the server refuses as one', () => {
+		progress.started();
+		progress.report(here, { ...now, status: 'stopped' });
+		progress.report(here, now);
+		expect(starts()).toEqual([false, true]);
+	});
+
 	it('keeps playback the user started here while unable to say so', () => {
 		online = false;
 		progress.started();

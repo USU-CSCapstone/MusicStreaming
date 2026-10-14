@@ -26,6 +26,11 @@ export class PlayRecorder {
 		this.#send = send;
 	}
 
+	/** Whether a play is under way: started, and not yet ended. */
+	get active() {
+		return this.#play !== null;
+	}
+
 	/** A track has started playing at media time `time`. Ends any play before it as skipped. */
 	start(libraryId: string, trackId: string, context: PlayContext, time = 0) {
 		this.end('skipped');
