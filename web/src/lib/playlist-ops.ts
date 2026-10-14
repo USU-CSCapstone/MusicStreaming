@@ -5,7 +5,8 @@
 // Ordering belongs to the shared core (`design/general.md` §3), which the web client does not
 // have yet. When it does, this module is replaced by calls to it.
 
-import type { Playable, PlaylistOp } from './api/types';
+// With its extension: the mock loads this module into the Vite config, which needs one.
+import type { Playable, PlaylistOp } from './api/types.ts';
 
 /** An add's items as playlist items: albums, artists, and playlists expand to their tracks in order. */
 export type Resolve<T> = (items: Playable[]) => T[];
