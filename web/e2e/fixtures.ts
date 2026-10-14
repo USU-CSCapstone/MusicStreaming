@@ -81,6 +81,14 @@ export const signalMix: Generated = {
 	trackIds: tracks.map((t) => BigInt(t.id))
 };
 
+/** A playlist long enough to scroll: the album, over and over. */
+export const longMix: Generated = {
+	...signalMix,
+	id: 'pl-long',
+	title: 'Long Mix',
+	trackIds: Array.from({ length: 15 }, () => signalMix.trackIds).flat()
+};
+
 /** The library above, for the mock's playlist store, starting with `playlists`. */
 const playlistLibrary = (playlists: Generated[]): PlaylistLibrary => ({
 	generated: () => playlists,

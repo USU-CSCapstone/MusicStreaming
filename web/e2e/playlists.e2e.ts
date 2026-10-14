@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test';
-import { serveLibrary, signalMix } from './fixtures';
+import { type Page, expect, test } from '@playwright/test';
+import { longMix, serveLibrary, signalMix } from './fixtures';
 
 test('creates a playlist and opens it', async ({ page }) => {
 	await serveLibrary(page);
@@ -242,8 +242,137 @@ test('reorders with Alt+arrows and Move to…', async ({ page }) => {
 	await expect(titles()).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
 });
 
+test.describe('dragging', () => {
+	const rows = (page: Page) => page.locator('.track');
+	const titles = (page: Page) => page.locator('.track .title');
+
+	/** Presses row `from`, by its duration unless `on` says where, ready to drag. */
+	async function grab(page: Page, from: number, on = '.duration') {
+		const box = (await rows(page).nth(from).locator(on).boundingBox())!;
+		const at = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+		await page.mouse.move(at.x, at.y);
+		await page.mouse.down();
+		return at;
+	}
+
+	/** Just inside the top or bottom edge of row `n`. */
+	async function edgeOf(page: Page, n: number, side: 'top' | 'bottom') {
+		const box = (await rows(page).nth(n).boundingBox())!;
+		return side === 'top' ? box.y + 2 : box.y + box.height - 2;
+	}
+
+	test('drags a song from anywhere on it, and saves the order', async ({ page }) => {
+		await serveLibrary(page, { playlists: [signalMix] });
+		await page.goto(`/playlists/${signalMix.id}`);
+		const at = await grab(page, 0, '.title');
+		await page.mouse.move(at.x, await edgeOf(page, 2, 'bottom'), { steps: 8 });
+		const saved = page.waitForResponse((r) => r.request().method() === 'PATCH');
+		await page.mouse.up();
+		await expect(titles(page)).toHaveText(['Signal Part 2', 'Signal Remix', 'Signal Part 1']);
+		// The dragged song is the selection now.
+		await expect(page.getByRole('toolbar', { name: 'Selected songs' })).toContainText('1 song');
+
+		await saved;
+		await page.reload();
+		await expect(titles(page)).toHaveText(['Signal Part 2', 'Signal Remix', 'Signal Part 1']);
+	});
+
+	test('drags a scattered selection together, showing where it will land', async ({ page }) => {
+		await serveLibrary(page, { playlists: [signalMix] });
+		await page.goto(`/playlists/${signalMix.id}`);
+		await titles(page).nth(1).click();
+		await titles(page)
+			.nth(2)
+			.click({ modifiers: ['ControlOrMeta'] });
+		await titles(page)
+			.nth(1)
+			.click({ modifiers: ['ControlOrMeta'] });
+		await titles(page)
+			.nth(0)
+			.click({ modifiers: ['ControlOrMeta'] });
+		// Parts 1 and Remix selected; dragging Remix, by its album link, carries both.
+		const at = await grab(page, 2, '.album-col a');
+		await page.mouse.move(at.x, await edgeOf(page, 0, 'top'), { steps: 8 });
+		await expect(page.locator('.drop')).toBeVisible();
+		await expect(page.locator('.ghost')).toHaveText('2 songs');
+		await expect(page.getByRole('toolbar', { name: 'Selected songs' })).toBeHidden();
+		await page.mouse.up();
+		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Remix', 'Signal Part 2']);
+		await expect(page.locator('.drop')).toBeHidden();
+		// A drag that starts on a link moves rows; it does not follow the link.
+		await expect(page).toHaveURL(new RegExp(`/playlists/${signalMix.id}$`));
+	});
+
+	test('Escape, or a drop where it started, moves nothing', async ({ page }) => {
+		await serveLibrary(page, { playlists: [signalMix] });
+		await page.goto(`/playlists/${signalMix.id}`);
+		const edits: string[] = [];
+		page.on('request', (r) => r.method() === 'PATCH' && edits.push(r.url()));
+
+		let at = await grab(page, 0);
+		await page.mouse.move(at.x, await edgeOf(page, 2, 'bottom'), { steps: 8 });
+		await page.keyboard.press('Escape');
+		await page.mouse.up();
+		await expect(page.locator('.drop')).toBeHidden();
+
+		at = await grab(page, 1);
+		await page.mouse.move(at.x, at.y + 12, { steps: 4 });
+		await page.mouse.up();
+
+		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+		expect(edits).toEqual([]);
+	});
+
+	test('scrolls while held near the edge', async ({ page }) => {
+		await page.setViewportSize({ width: 1280, height: 600 });
+		await serveLibrary(page, { playlists: [longMix] });
+		await page.goto(`/playlists/${longMix.id}`);
+		const main = page.locator('main');
+		const bottom = (await main.boundingBox())!;
+		const at = await grab(page, 0);
+		await page.mouse.move(at.x, bottom.y + bottom.height - 10, { steps: 8 });
+		await expect.poll(() => main.evaluate((m) => m.scrollTop)).toBeGreaterThan(600);
+		await page.mouse.up();
+		// The first song left the top for well down the list: everything above it moved up one.
+		const before = (await titles(page).allTextContents()).length;
+		const rest = Array.from({ length: before - 1 }, (_, k) =>
+			k % 3 === 2 ? 'Signal Part 1' : k % 3 === 0 ? 'Signal Part 2' : 'Signal Remix'
+		);
+		const order = await titles(page).allTextContents();
+		const landed = order.findIndex((title, k) => title !== rest[k]);
+		expect(landed).toBeGreaterThan(10);
+		expect(order[landed]).toBe('Signal Part 1');
+	});
+});
+
 test.describe('on a touch screen', () => {
 	test.use({ hasTouch: true });
+
+	test('drags a song after a long press', async ({ page }) => {
+		await serveLibrary(page, { playlists: [signalMix] });
+		await page.goto(`/playlists/${signalMix.id}`);
+		const rows = page.locator('.track');
+		const start = (await rows.nth(0).locator('.duration').boundingBox())!;
+		const target = (await rows.nth(2).boundingBox())!;
+		const x = start.x + start.width / 2;
+		const cdp = await page.context().newCDPSession(page);
+		const touch = (type: string, y?: number) =>
+			cdp.send('Input.dispatchTouchEvent', {
+				type,
+				touchPoints: y === undefined ? [] : [{ x, y }]
+			});
+		await touch('touchStart', start.y + start.height / 2);
+		await page.waitForTimeout(700);
+		for (let y = start.y + 20; y < target.y + target.height - 2; y += 12)
+			await touch('touchMove', y);
+		await touch('touchMove', target.y + target.height - 2);
+		await touch('touchEnd');
+		await expect(page.locator('.track .title')).toHaveText([
+			'Signal Part 2',
+			'Signal Remix',
+			'Signal Part 1'
+		]);
+	});
 
 	test('a tap plays, a long press selects, and then a tap selects', async ({ page }) => {
 		await serveLibrary(page, { playlists: [signalMix] });
