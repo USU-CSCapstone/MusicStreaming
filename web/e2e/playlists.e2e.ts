@@ -188,6 +188,60 @@ test('a double click plays a song in a playlist, as a click there selects it', a
 	await expect(player.getByText('Signal Part 2')).toBeVisible();
 });
 
+test('reorders with Alt+arrows and Move to…', async ({ page }) => {
+	await serveLibrary(page, { playlists: [signalMix] });
+	await page.goto(`/playlists/${signalMix.id}`);
+	const row = (title: string) => page.getByRole('button', { name: title, exact: true });
+	const bar = page.getByRole('toolbar', { name: 'Selected songs' });
+	const titles = () => page.locator('.track .title');
+
+	// From the keyboard: the song stays selected and focused as it moves, and stops at the end.
+	await row('Signal Part 1').focus();
+	await page.keyboard.press('Space');
+	await page.keyboard.press('Alt+ArrowDown');
+	await expect(titles()).toHaveText(['Signal Part 2', 'Signal Part 1', 'Signal Remix']);
+	await expect(row('Signal Part 1')).toBeFocused();
+	await expect(row('Signal Part 1')).toHaveAccessibleDescription('Selected');
+	await page.keyboard.press('Alt+ArrowDown');
+	await page.keyboard.press('Alt+ArrowDown');
+	await expect(titles()).toHaveText(['Signal Part 2', 'Signal Remix', 'Signal Part 1']);
+	await page.keyboard.press('Alt+ArrowUp');
+	await expect(titles()).toHaveText(['Signal Part 2', 'Signal Part 1', 'Signal Remix']);
+
+	// A scattered selection steps as it is; the top one cannot go higher, so it stays.
+	await page.keyboard.press('Escape');
+	await row('Signal Part 2').click();
+	await row('Signal Remix').click({ modifiers: ['ControlOrMeta'] });
+	await page.keyboard.press('Alt+ArrowUp');
+	await expect(titles()).toHaveText(['Signal Part 2', 'Signal Remix', 'Signal Part 1']);
+	await expect(bar).toContainText('2 songs selected');
+
+	// Move to… a position, and to the top.
+	await page.keyboard.press('Escape');
+	await row('Signal Part 1').click();
+	await bar.getByRole('button', { name: 'Move to…' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Move 1 song' });
+	const position = dialog.getByRole('spinbutton', { name: /Position/ });
+	await expect(position).toHaveValue('3');
+	await position.fill('2');
+	await dialog.getByRole('button', { name: 'Move', exact: true }).click();
+	await expect(dialog).toBeHidden();
+	await expect(titles()).toHaveText(['Signal Part 2', 'Signal Part 1', 'Signal Remix']);
+	await expect(bar).toContainText('1 song selected');
+
+	await bar.getByRole('button', { name: 'Move to…' }).click();
+	const saved = page.waitForResponse(
+		(r) => r.request().method() === 'PATCH' && r.request().postDataJSON().ops?.[0].at === 0
+	);
+	await dialog.getByRole('button', { name: 'To the top' }).click();
+	await expect(titles()).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+
+	// Saved, in the order shown.
+	await saved;
+	await page.reload();
+	await expect(titles()).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+});
+
 test.describe('on a touch screen', () => {
 	test.use({ hasTouch: true });
 

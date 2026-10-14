@@ -1,12 +1,20 @@
+<script lang="ts" module>
+	/** Rows moving so the first takes index `to`, in the list as the moves before left it. */
+	export type RowMove = { indexes: number[]; to: number };
+</script>
+
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
 	import type { PlayContext, TrackSummary } from '$lib/api/types';
 	import { albumTitle, formatDuration, plural } from '$lib/format';
 	import { player } from '$lib/player.svelte';
+	import { applyOps } from '$lib/playlist-ops';
 	import ArtistLinks from './ArtistLinks.svelte';
 	import Artwork from './Artwork.svelte';
 	import Icon from './Icon.svelte';
+	import MoveToDialog from './MoveToDialog.svelte';
 
 	let {
 		tracks,
@@ -16,7 +24,8 @@
 		context = { type: 'library' },
 		onplay,
 		editable = false,
-		onremove
+		onremove,
+		onmove
 	}: {
 		tracks: TrackSummary[];
 		/** `album`: track numbers and disc headings, no album column or artwork. */
@@ -35,6 +44,8 @@
 		editable?: boolean;
 		/** Removes the rows at these indexes, in order. */
 		onremove?: (indexes: number[]) => void;
+		/** Makes `moves` as one edit. Alt+↑/↓ and the selection bar's Move to… offer it. */
+		onmove?: (moves: RowMove[]) => void;
 	} = $props();
 
 	const selected = new SvelteSet<number>();
@@ -43,20 +54,79 @@
 	const uid = $props.id();
 	const hintId = `selected-${uid}`;
 
-	// Indexes shift with every change, so a selection does not outlive the list it was made in.
+	/** Where the selection is after a move this list made, which it keeps. */
+	let kept: number[] | null = null;
+	let listEl = $state<HTMLOListElement>();
+	let moving = $state(false);
+	/** What the last move was, for screen readers. */
+	let moved = $state('');
+
+	// Indexes shift with every change, so a selection does not outlive the list it was made
+	// in, unless the change was a move made here.
 	$effect.pre(() => {
 		void tracks;
+		const keep = kept;
+		kept = null;
 		clear();
+		for (const i of keep ?? []) selected.add(i);
+		anchor = keep?.[0] ?? null;
 	});
 
 	function clear() {
 		selected.clear();
 		anchor = null;
+		moved = '';
+	}
+
+	/**
+	 * Alt+↑/↓: each selected row steps one place, as lines do in an editor, so a scattered
+	 * selection stays scattered. A row at the edge, or against one that cannot move, stays.
+	 */
+	function step(by: -1 | 1) {
+		const order = [...selected].sort((a, b) => (a - b) * -by);
+		let blocked = by === -1 ? -1 : tracks.length;
+		const moves: RowMove[] = [];
+		for (const i of order) {
+			if (i + by === blocked) blocked = i;
+			else moves.push({ indexes: [i], to: i + by });
+		}
+		if (moves.length)
+			void move(moves, `${plural(selected.size, 'song')} moved ${by < 0 ? 'up' : 'down'}`);
+	}
+
+	/** Makes `moves`, keeping the moved rows selected and focus on the row it was on. */
+	async function move(moves: RowMove[], said: string) {
+		// Where each row ends up: the moves, made on the indexes themselves.
+		const ops = moves.map((m) => ({ op: 'move' as const, positions: m.indexes, at: m.to }));
+		const order = applyOps(
+			tracks.map((_, i) => i),
+			ops,
+			() => []
+		);
+		const titles = () => [...(listEl?.querySelectorAll<HTMLElement>('.title') ?? [])];
+		const focused = titles().findIndex((t) => t === document.activeElement);
+		kept = order.flatMap((was, now) => (selected.has(was) ? [now] : []));
+		try {
+			onmove?.(moves);
+		} catch (e) {
+			kept = null;
+			throw e;
+		}
+		await tick();
+		moved = said;
+		if (focused >= 0) titles()[order.indexOf(focused)]?.focus();
+	}
+
+	/** Move to…: the selection, gathered in order, with its first at `to`. */
+	function moveTo(to: number) {
+		const indexes = [...selected].sort((a, b) => a - b);
+		void move([{ indexes, to }], `${plural(indexes.length, 'song')} moved to position ${to + 1}`);
 	}
 
 	function toggle(i: number) {
 		if (!selected.delete(i)) selected.add(i);
 		anchor = i;
+		moved = '';
 	}
 
 	/**
@@ -68,6 +138,7 @@
 		const adding = e.metaKey || e.ctrlKey;
 		const touch = (e as PointerEvent).pointerType === 'touch';
 		if (e.shiftKey && anchor !== null) {
+			moved = '';
 			if (!adding) selected.clear();
 			for (let k = Math.min(anchor, i); k <= Math.max(anchor, i); k++) selected.add(k);
 		} else if (adding || selected.has(i) || (touch && selected.size > 0)) {
@@ -129,9 +200,18 @@
 		}
 		if (e.key === 'a' && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
 			e.preventDefault();
+			moved = '';
 			tracks.forEach((_, i) => selected.add(i));
 		} else if (e.key === 'Escape' && selected.size > 0) {
 			clear();
+		} else if (
+			(e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+			e.altKey &&
+			onmove &&
+			selected.size > 0
+		) {
+			e.preventDefault();
+			step(e.key === 'ArrowUp' ? -1 : 1);
 		}
 	}
 
@@ -162,7 +242,7 @@
 {#if tracks.length === 0}
 	<p class="empty muted">{empty}</p>
 {:else}
-	<ol class="tracks" class:album={isAlbum} class:editable>
+	<ol class="tracks" class:album={isAlbum} class:editable bind:this={listEl}>
 		<!-- Keyed by position: a playlist may hold the same track twice. -->
 		{#each tracks as track, i (i)}
 			{#if multiDisc && (i === 0 || tracks[i - 1].discNumber !== track.discNumber)}
@@ -239,13 +319,22 @@
 {#if editable}
 	<span id={hintId} hidden>Selected</span>
 	<span class="visually-hidden" aria-live="polite">
-		{selected.size ? `${plural(selected.size, 'song')} selected` : ''}
+		{moved || (selected.size ? `${plural(selected.size, 'song')} selected` : '')}
 	</span>
 	{#if selected.size > 0}
 		<!-- Floats over the bottom of the list as it scrolls, so the rows never jump. -->
 		<div class="bar-anchor">
 			<div class="bar" role="toolbar" aria-label="Selected songs">
-				<span class="count">{plural(selected.size, 'song')} selected</span>
+				<span class="count"
+					>{selected.size.toLocaleString()}<span class="unit"
+						>{` ${selected.size === 1 ? 'song' : 'songs'}`}</span
+					> selected</span
+				>
+				{#if onmove}
+					<button type="button" class="bar-action" onclick={() => (moving = true)}>
+						Move to…
+					</button>
+				{/if}
 				{#if onremove}
 					<button type="button" class="bar-action" onclick={remove}>
 						<Icon name="trash" size={16} /> Remove
@@ -256,6 +345,15 @@
 				</button>
 			</div>
 		</div>
+	{/if}
+	{#if moving && selected.size > 0}
+		<MoveToDialog
+			count={selected.size}
+			last={tracks.length - selected.size + 1}
+			start={Math.min(...selected) + 1}
+			onmove={moveTo}
+			onclose={() => (moving = false)}
+		/>
 	{/if}
 {/if}
 
@@ -326,7 +424,10 @@
 	}
 
 	.count {
+		min-width: 0;
 		margin-right: var(--space-2);
+		overflow: hidden;
+		text-overflow: ellipsis;
 		font-weight: 500;
 	}
 
@@ -506,6 +607,19 @@
 
 		.album .track .num {
 			display: grid;
+		}
+
+		/* The bar fits the screen: "3 selected", and Remove keeps its word but not its icon. */
+		.unit {
+			display: none;
+		}
+
+		.bar {
+			max-width: calc(100vw - 2 * var(--space-3));
+		}
+
+		.bar-action :global(svg) {
+			display: none;
 		}
 	}
 </style>
