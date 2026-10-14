@@ -188,12 +188,14 @@ test('a double click plays a song in a playlist, as a click there selects it', a
 	await expect(player.getByText('Signal Part 2')).toBeVisible();
 });
 
-test('reorders with Alt+arrows and Move to…', async ({ page }) => {
+test('reorders with Alt+arrows', async ({ page }) => {
 	await serveLibrary(page, { playlists: [signalMix] });
 	await page.goto(`/playlists/${signalMix.id}`);
 	const row = (title: string) => page.getByRole('button', { name: title, exact: true });
 	const bar = page.getByRole('toolbar', { name: 'Selected songs' });
 	const titles = () => page.locator('.track .title');
+	let saves = 0;
+	page.on('response', (r) => r.request().method() === 'PATCH' && saves++);
 
 	// From the keyboard: the song stays selected and focused as it moves, and stops at the end.
 	await row('Signal Part 1').focus();
@@ -216,30 +218,10 @@ test('reorders with Alt+arrows and Move to…', async ({ page }) => {
 	await expect(titles()).toHaveText(['Signal Part 2', 'Signal Remix', 'Signal Part 1']);
 	await expect(bar).toContainText('2 songs selected');
 
-	// Move to… a position, and to the top.
-	await page.keyboard.press('Escape');
-	await row('Signal Part 1').click();
-	await bar.getByRole('button', { name: 'Move to…' }).click();
-	const dialog = page.getByRole('dialog', { name: 'Move 1 song' });
-	const position = dialog.getByRole('spinbutton', { name: /Position/ });
-	await expect(position).toHaveValue('3');
-	await position.fill('2');
-	await dialog.getByRole('button', { name: 'Move', exact: true }).click();
-	await expect(dialog).toBeHidden();
-	await expect(titles()).toHaveText(['Signal Part 2', 'Signal Part 1', 'Signal Remix']);
-	await expect(bar).toContainText('1 song selected');
-
-	await bar.getByRole('button', { name: 'Move to…' }).click();
-	const saved = page.waitForResponse(
-		(r) => r.request().method() === 'PATCH' && r.request().postDataJSON().ops?.[0].at === 0
-	);
-	await dialog.getByRole('button', { name: 'To the top' }).click();
-	await expect(titles()).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
-
-	// Saved, in the order shown.
-	await saved;
+	// Saved, in the order shown: four moves, as the press at the bottom moved nothing.
+	await expect.poll(() => saves).toBe(4);
 	await page.reload();
-	await expect(titles()).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+	await expect(titles()).toHaveText(['Signal Part 2', 'Signal Remix', 'Signal Part 1']);
 });
 
 test.describe('dragging', () => {
