@@ -99,17 +99,32 @@ async fn a_page_connects_only_from_this_server() {
 
     let here = format!("http://{address}");
     assert!(connect(address, &[("cookie", &cookie), ("origin", &here)]).await.is_ok());
-    let proxied = [
-        ("cookie", &*cookie),
-        ("origin", "https://music.example"),
-        ("x-forwarded-host", "music.example"),
-    ];
-    assert!(connect(address, &proxied).await.is_ok(), "behind a proxy that changes Host");
+    // Behind a proxy that changes `Host`, or drops the port from it.
+    for (origin, header, host) in [
+        ("https://music.example", "x-forwarded-host", "music.example"),
+        ("https://music.example:8443", "x-forwarded-host", "music.example"),
+        ("https://Music.Example:8443", "host", "music.example"),
+        ("http://[::1]:8443", "host", "[::1]"),
+    ] {
+        let proxied = [("cookie", &*cookie), ("origin", origin), (header, host)];
+        assert!(connect(address, &proxied).await.is_ok(), "{origin} {header}: {host}");
+    }
 
-    for origin in ["https://evil.example", "null"] {
+    let other_port = format!("http://{}:1", address.ip());
+    for origin in ["https://evil.example", "null", &other_port] {
         let refused =
             connect(address, &[("cookie", &cookie), ("origin", origin)]).await.unwrap_err();
         assert_eq!(status(refused), StatusCode::FORBIDDEN, "{origin}");
+    }
+    for (origin, host) in [
+        ("https://music.example:9000", "music.example:8443"),
+        ("https://music.example", "music.example:8443"),
+        ("https://evil.example:8443", "music.example"),
+        ("http://[::2]:8443", "[::1]"),
+    ] {
+        let proxied = [("cookie", &*cookie), ("origin", origin), ("x-forwarded-host", host)];
+        let refused = connect(address, &proxied).await.unwrap_err();
+        assert_eq!(status(refused), StatusCode::FORBIDDEN, "{origin} {host}");
     }
 }
 
