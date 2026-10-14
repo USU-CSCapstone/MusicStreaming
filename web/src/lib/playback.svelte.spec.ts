@@ -4,7 +4,10 @@ import type { PlayerState, RealtimeServerMessage, Track } from '$lib/api/types';
 const fake = vi.hoisted(() => ({
 	listeners: [] as ((message: RealtimeServerMessage) => void)[],
 	tracks: new Map<string, Promise<unknown>>(),
-	sent: [] as { type: string; command: { type: string; commandId: string; volume?: number } }[],
+	sent: [] as {
+		type: string;
+		command: { type: string; commandId: string; volume?: number; play?: boolean };
+	}[],
 	realtime: {
 		deviceId: '1',
 		connected: true,
@@ -181,6 +184,35 @@ describe('playback', () => {
 		playback.pause();
 		state('3', 'k');
 		expect(playback.shown?.status, 'another device took over').toBe('playing');
+	});
+
+	it('moves playback to another device, saying so until it takes over or cannot', () => {
+		state('2', 'm');
+		playback.transfer('3');
+		expect(fake.sent[0].command).toMatchObject({ type: 'transfer', deviceId: '3', play: true });
+		expect(playback.moving?.deviceId).toBe('3');
+		state('2', 'm');
+		expect(playback.moving?.deviceId, 'not yet').toBe('3');
+		state('3', 'm');
+		expect(playback.moving, 'taken over').toBeNull();
+
+		state('3', 'm', { status: 'paused' });
+		playback.transfer('4');
+		expect(fake.sent[1].command, 'arrives paused').toMatchObject({ deviceId: '4', play: false });
+		const commandId = fake.sent[1].command.commandId;
+		const reason = 'That device is not connected.';
+		send({ type: 'commandResult', result: { commandId, status: 'failed', reason } });
+		expect(playback.moving).toBeNull();
+		expect(playback.error).toBe(reason);
+
+		playback.transfer('4');
+		const applied = { commandId: fake.sent[2].command.commandId, status: 'applied' as const };
+		send({ type: 'commandResult', result: applied });
+		expect(playback.moving, 'answered before the state').toBeNull();
+
+		fake.realtime.connected = false;
+		playback.transfer('4');
+		expect(playback.moving, 'not sent').toBeNull();
 	});
 
 	it('keeps the volume being dragged while a state arrives', () => {
