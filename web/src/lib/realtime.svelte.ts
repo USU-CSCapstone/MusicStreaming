@@ -184,10 +184,6 @@ export class Realtime {
 			if (Date.now() - this.#pingedAt > ANSWER_WITHIN_MS) this.#lost();
 			return;
 		}
-		this.#sendPing();
-	}
-
-	#sendPing() {
 		this.#pingedAt = Date.now();
 		this.send({ type: 'ping' });
 	}
@@ -238,12 +234,13 @@ export class Realtime {
 
 	/**
 	 * Back online, or back in view: tries at once instead of waiting out the backoff, or, if
-	 * the connection looks open, pings it so a dead one is found by the next check.
+	 * the connection looks open, checks it now so a dead one is found by the next check at the
+	 * latest.
 	 */
 	#reconnectNow = () => {
 		if (!this.#running || document.visibilityState === 'hidden') return;
 		if (this.connected) {
-			this.#sendPing();
+			this.#check();
 			return;
 		}
 		if (this.#socket) return;
