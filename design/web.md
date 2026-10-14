@@ -58,10 +58,12 @@ It is a stand-in for the server, so it has these limits. None of them are client
 - **Search** is a case-insensitive substring match, not the real typo-tolerant search.
 - **Audio** is always the original file with no transcoding, so formats the browser can't decode
   (AIFF in Chrome, for example) are skipped.
-- **Playlists** are generated from the library and read-only; there is no playlist storage yet.
+- **Playlists** are kept in memory, so they reset when the dev server restarts, and a few are
+  generated from the library to start with. They can be created, edited, and deleted, but have
+  no custom artwork, mixes to save, or external tracks.
 - **Personal data** (play counts, listening history) doesn't exist, so sorts that need it fall back
   to album or name order.
-- Only the read endpoints the client uses are implemented; any write answers `405`.
+- Only the read endpoints the client uses are implemented; any other write answers `405`.
 - **Accounts** don't exist: the mock reports setup as done, everyone is one user, and logging in
   accepts any password.
 - **Plugins** can be installed, granted, and enabled, but never run: **Run now** needs the server,

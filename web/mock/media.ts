@@ -7,7 +7,6 @@ import { join } from 'node:path';
 import type { PlaybackInfo } from '../src/lib/api/types.ts';
 import type { Catalog } from './catalog.ts';
 import { type Db, type Row, num, numOrNull } from './db.ts';
-import { playlist } from './playlists.ts';
 import { toApiWaveform } from './waveform.ts';
 
 const FFMPEG = process.env.FFMPEG ?? 'ffmpeg';
@@ -24,12 +23,21 @@ export function imageSize(requested: string | null): number {
 
 const imageCache = new Map<string, Promise<Buffer | null>>();
 
-/** A library image or playlist mosaic as JPEG, scaled to `size`; null when it does not exist. */
-export function image(db: Db, lib: bigint, imageId: string, size: number): Promise<Buffer | null> {
+/**
+ * A library image or playlist mosaic as JPEG, scaled to `size`; null when it does not exist.
+ * `playlistTracks` gives a playlist's tracks, for its mosaic.
+ */
+export function image(
+	db: Db,
+	lib: bigint,
+	imageId: string,
+	size: number,
+	playlistTracks: (playlistId: string) => bigint[] | undefined
+): Promise<Buffer | null> {
 	const key = `${lib}/${imageId}@${size}`;
 	let hit = imageCache.get(key);
 	if (!hit) {
-		hit = render(db, lib, imageId, size);
+		hit = render(db, lib, imageId, size, playlistTracks);
 		imageCache.set(key, hit);
 		// Missing images are not cached, so a later scan can fill them in.
 		hit.then((b) => b ?? imageCache.delete(key));
@@ -48,12 +56,20 @@ function imagePath(db: Db, lib: bigint, imageId: bigint): string | null {
 	return row ? join(String(row.root), String(row.path)) : null;
 }
 
-async function render(db: Db, lib: bigint, imageId: string, size: number): Promise<Buffer | null> {
-	if (imageId.startsWith('mosaic-')) {
-		const list = playlist(db, lib, imageId.slice('mosaic-'.length));
-		if (!list) return null;
+async function render(
+	db: Db,
+	lib: bigint,
+	imageId: string,
+	size: number,
+	playlistTracks: (playlistId: string) => bigint[] | undefined
+): Promise<Buffer | null> {
+	// `mosaic-{version}-{playlistId}`, from `playlists.ts`.
+	const mosaicOf = /^mosaic-\d+-(.+)$/.exec(imageId);
+	if (mosaicOf) {
+		const trackIds = playlistTracks(mosaicOf[1]);
+		if (!trackIds) return null;
 		const covers = new Set<string>();
-		for (const t of list.trackIds) {
+		for (const t of trackIds) {
 			const row = db.get(
 				'SELECT al.image_id FROM tracks t JOIN albums al ON al.id = t.album_id WHERE t.id = ?',
 				t
