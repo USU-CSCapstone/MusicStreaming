@@ -47,6 +47,11 @@ const track = (id: string, seconds: number) =>
 		artists: []
 	}) as unknown as Track;
 
+// Before the player sets its handlers, so a test can act as the lock screen does.
+const setAction = vi.spyOn(navigator.mediaSession, 'setActionHandler');
+const action = (name: MediaSessionAction) =>
+	setAction.mock.calls.findLast(([a]) => a === name)![1]!({ action: name });
+
 const { player } = await import('./player.svelte');
 const { controls } = await import('./controls.svelte');
 
@@ -285,6 +290,22 @@ describe('player', () => {
 		]);
 		expect(fake.plays[2].playId).not.toBe(fake.plays[0].playId);
 		play.mockRestore();
+	});
+
+	it('leaves the lock screen to the device that took over', () => {
+		player.play([track('59', 60), track('60', 60)], 0);
+		expect(navigator.mediaSession.metadata).not.toBeNull();
+		state({ activeDeviceId: '1', trackId: '59' });
+		state({ trackId: '41' });
+		expect(player.playing).toBe(false);
+		expect(navigator.mediaSession.metadata).toBeNull();
+
+		// As a headset does as it connects, which must not take playback back here.
+		fake.sent.length = 0;
+		action('play');
+		action('nexttrack');
+		expect(fake.sent).toEqual([]);
+		expect(player.current?.id).toBe('59');
 	});
 
 	// Last, since its audio goes on loading.
