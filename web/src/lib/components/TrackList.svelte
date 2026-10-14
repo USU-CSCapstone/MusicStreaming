@@ -14,7 +14,6 @@
 	import ArtistLinks from './ArtistLinks.svelte';
 	import Artwork from './Artwork.svelte';
 	import Icon from './Icon.svelte';
-	import MoveToDialog from './MoveToDialog.svelte';
 
 	let {
 		tracks,
@@ -44,7 +43,7 @@
 		editable?: boolean;
 		/** Removes the rows at these indexes, in order. */
 		onremove?: (indexes: number[]) => void;
-		/** Makes `moves` as one edit. Dragging, Alt+↑/↓, and the selection bar's Move to… offer it. */
+		/** Makes `moves` as one edit, by dragging or Alt+↑/↓. */
 		onmove?: (moves: RowMove[]) => void;
 	} = $props();
 
@@ -77,7 +76,6 @@
 	/** Where the selection is after a move this list made, which it keeps. */
 	let kept: number[] | null = null;
 	let listEl = $state<HTMLOListElement>();
-	let moving = $state(false);
 	/** What the last move was, for screen readers. */
 	let moved = $state('');
 
@@ -136,12 +134,6 @@
 		await tick();
 		moved = said;
 		if (focused >= 0) titles()[order.indexOf(focused)]?.focus();
-	}
-
-	/** Move to…: the selection, gathered in order, with its first at `to`. */
-	function moveTo(to: number) {
-		const indexes = [...selected].sort((a, b) => a - b);
-		void move([{ indexes, to }], `${plural(indexes.length, 'song')} moved to position ${to + 1}`);
 	}
 
 	function toggle(i: number) {
@@ -491,11 +483,6 @@
 						>{` ${selected.size === 1 ? 'song' : 'songs'}`}</span
 					> selected</span
 				>
-				{#if onmove}
-					<button type="button" class="bar-action" onclick={() => (moving = true)}>
-						Move to…
-					</button>
-				{/if}
 				{#if onremove}
 					<button type="button" class="bar-action" onclick={remove}>
 						<Icon name="trash" size={16} /> Remove
@@ -506,15 +493,6 @@
 				</button>
 			</div>
 		</div>
-	{/if}
-	{#if moving && selected.size > 0}
-		<MoveToDialog
-			count={selected.size}
-			last={tracks.length - selected.size + 1}
-			start={Math.min(...selected) + 1}
-			onmove={moveTo}
-			onclose={() => (moving = false)}
-		/>
 	{/if}
 {/if}
 
