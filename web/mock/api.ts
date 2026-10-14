@@ -1,5 +1,6 @@
 // The mock's routes: the read-only subset of `api/openapi.yaml` the web client
-// uses, answered from the scanner's database, plus plugin administration (`plugins.ts`).
+// uses, answered from the scanner's database, plus plugin administration (`plugins.ts`)
+// and the user's playlists (`playlists.ts`).
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
@@ -12,10 +13,10 @@ import type {
 	SearchSectionType,
 	User
 } from '../src/lib/api/types.ts';
-import { Catalog, matchRank, paging, slice } from './catalog.ts';
+import { Catalog, matchRank } from './catalog.ts';
 import { Db, toKey } from './db.ts';
 import { image, imageSize, playbackInfo, streamAudio, waveform } from './media.ts';
-import { playlist, playlists } from './playlists.ts';
+import { PlaylistStore, dbLibrary, playlistRoute } from './playlists.ts';
 import { PluginStore, adminRoute } from './plugins.ts';
 
 type Ctx = {
@@ -35,6 +36,7 @@ export function createApi(dataDir: string) {
 	const plugins = new PluginStore(join(dataDir, 'mock-plugins'), () =>
 		catalog.libraries().map((l) => l.id)
 	);
+	const playlists = new PlaylistStore(dbLibrary(db, catalog));
 
 	// Paths under /libraries/{libraryId}; the library is resolved before the handler runs,
 	// so nothing is reachable in a library that does not exist.
@@ -51,27 +53,6 @@ export function createApi(dataDir: string) {
 		[
 			/^\/artists\/([^/]+)$/,
 			({ lib, params }) => withKey(params[0], (k) => catalog.artist(lib, k))
-		],
-		[
-			/^\/playlists$/,
-			({ lib, query }) =>
-				slice(
-					playlists(db, lib).map((p) => p.playlist),
-					paging(query)
-				)
-		],
-		[/^\/playlists\/([^/]+)$/, ({ lib, params }) => playlist(db, lib, params[0])?.playlist],
-		[
-			/^\/playlists\/([^/]+)\/items$/,
-			({ lib, params, query }) => {
-				const list = playlist(db, lib, params[0]);
-				if (!list) return undefined;
-				const items = catalog.tracksByIds(lib, list.trackIds).map((track) => ({
-					track,
-					addedAt: list.playlist.createdAt
-				}));
-				return { ...slice(items, paging(query)), version: list.playlist.version };
-			}
 		],
 		[/^\/search$/, ({ lib, query }) => search(lib, query)],
 		[
@@ -105,7 +86,9 @@ export function createApi(dataDir: string) {
 		[
 			/^\/images\/([^/]+)$/,
 			async ({ lib, params, query, res }) => {
-				const jpeg = await image(db, lib, params[0], imageSize(query.get('size')));
+				const jpeg = await image(db, lib, params[0], imageSize(query.get('size')), (id) =>
+					playlists.trackIds(lib, id)
+				);
 				if (!jpeg) return undefined;
 				res.setHeader('Content-Type', 'image/jpeg');
 				// Image IDs change whenever the image does, so they cache forever.
@@ -173,8 +156,8 @@ export function createApi(dataDir: string) {
 			artists.total,
 			artists.items[0]?.name ?? null
 		);
-		const lists = playlists(db, lib)
-			.map((p) => p.playlist)
+		const lists = playlists
+			.all(lib)
 			.filter((p) => matchRank(p.title, text) >= 0)
 			.sort((a, b) => matchRank(b.title, text) - matchRank(a.title, text));
 		add(
@@ -235,27 +218,32 @@ export function createApi(dataDir: string) {
 			return res.end(JSON.stringify({ token: 'mock', user: MOCK_USER, device: MOCK_DEVICE }));
 		}
 		if (path.startsWith('/admin/plugins')) {
-			try {
-				const out = await adminRoute(
+			return reply(res, async () =>
+				adminRoute(
 					plugins,
 					req.method ?? 'GET',
 					path + url.search,
 					req.headers['content-type'] ?? '',
 					await readBody(req)
-				);
-				if (!out) return problem(res, 404, 'Not Found', 'not_found');
-				res.statusCode = out.status;
-				if (out.body === undefined) return res.end();
-				res.setHeader(
-					'Content-Type',
-					out.status < 400 ? 'application/json' : 'application/problem+json'
-				);
-				return res.end(JSON.stringify(out.body));
-			} catch (e) {
-				console.error('[mock api]', e);
-				res.statusCode = 500;
-				return res.end(String(e));
-			}
+				)
+			);
+		}
+		// Playlists take writes, so they are answered before the read-only routes.
+		const lists = /^\/libraries\/([^/]+)(\/playlists(?:\/.*)?)$/.exec(path);
+		if (lists) {
+			const lib = toKey(lists[1]);
+			if (lib === null || !catalog.library(lib)) return problem(res, 404, 'Not Found', 'not_found');
+			const key = req.headers['idempotency-key'];
+			return reply(res, async () =>
+				playlistRoute(
+					playlists,
+					lib,
+					req.method ?? 'GET',
+					lists[2] + url.search,
+					await readBody(req),
+					typeof key === 'string' ? key : undefined
+				)
+			);
 		}
 		if (req.method !== 'GET' && req.method !== 'HEAD') {
 			return problem(res, 405, 'Method Not Allowed', 'method_not_allowed', 'The mock API is read-only.');
@@ -302,6 +290,29 @@ async function readBody(req: IncomingMessage): Promise<Uint8Array> {
 		chunks.push(chunk as Buffer);
 	}
 	return new Uint8Array(Buffer.concat(chunks));
+}
+
+/** Writes a route's answer: 404 for none, and a Problem body for a refusal. */
+async function reply(
+	res: ServerResponse,
+	answer: () => Promise<{ status: number; body?: unknown } | undefined>
+) {
+	try {
+		const out = await answer();
+		if (!out) return problem(res, 404, 'Not Found', 'not_found');
+		res.statusCode = out.status;
+		if (out.body === undefined) return res.end();
+		res.setHeader(
+			'Content-Type',
+			out.status < 400 ? 'application/json' : 'application/problem+json'
+		);
+		res.end(JSON.stringify(out.body));
+	} catch (e) {
+		// A mock bug, not an API response; the spec has no Problem code for it.
+		console.error('[mock api]', e);
+		res.statusCode = 500;
+		res.end(String(e));
+	}
 }
 
 function withKey<T>(s: string, f: (k: bigint) => T): T | undefined {
