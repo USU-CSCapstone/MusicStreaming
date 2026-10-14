@@ -7,6 +7,7 @@
 	import Player from '$lib/components/Player.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import TabBar from '$lib/components/TabBar.svelte';
+	import Toast from '$lib/components/Toast.svelte';
 	import { controls } from '$lib/controls.svelte';
 	import { player } from '$lib/player.svelte';
 	import { realtime } from '$lib/realtime.svelte';
@@ -59,6 +60,7 @@
 			</main>
 			<LyricsPanel />
 			<DevicesPanel />
+			<Toast />
 		</div>
 		<div class="player"><Player /></div>
 		<div class="tabs"><TabBar /></div>
