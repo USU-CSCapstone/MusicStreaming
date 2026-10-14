@@ -7,6 +7,7 @@
 	import CollectionView from '$lib/components/CollectionView.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import { deleted } from '$lib/deletions.svelte';
 	import PlaylistDetailsDialog, {
 		type PlaylistDetails
 	} from '$lib/components/PlaylistDetailsDialog.svelte';
@@ -18,6 +19,9 @@
 	const playlists = $derived(
 		new Paged(data.playlists, (cursor) => listPlaylists(fetch, data.lib, { cursor }))
 	);
+	// Deleted ones go at once, while their Undo is still on offer.
+	const shown = $derived(playlists.items.filter((p) => !deleted.has(p.id)));
+	const total = $derived(playlists.total - (playlists.items.length - shown.length));
 	let creating = $state(false);
 
 	/**
@@ -40,7 +44,7 @@
 
 <svelte:head><title>Playlists · Jewelcase</title></svelte:head>
 
-<PageHeader title="Playlists" subtitle={plural(playlists.total, 'playlist')} toggle>
+<PageHeader title="Playlists" subtitle={plural(total, 'playlist')} toggle>
 	{#snippet actions()}
 		<!-- On a phone the label goes, and the button keeps its name. -->
 		<button type="button" class="new" aria-label="New playlist" onclick={() => (creating = true)}>
@@ -50,7 +54,7 @@
 	{/snippet}
 </PageHeader>
 <CollectionView
-	cards={playlists.items.map(playlistCard)}
+	cards={shown.map(playlistCard)}
 	sentinel={playlists.sentinel}
 	empty="No playlists yet."
 />
