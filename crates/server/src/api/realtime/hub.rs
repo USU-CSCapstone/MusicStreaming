@@ -25,10 +25,13 @@ pub struct Hub {
     accounts: Mutex<HashMap<i64, Vec<Connection>>>,
     /// Tells connections apart, a device's included.
     next_id: AtomicU64,
-    /// Each account's turn to read and send a device list, so an earlier list never arrives
-    /// after a later one.
-    device_lists: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
+    /// Each account's turn to read and send a device list.
+    device_lists: Mutex<HashMap<i64, DeviceListTurn>>,
 }
+
+/// An account's turn to read and send a device list, so an earlier list never arrives after a
+/// later one, and whether a list is already waiting for it.
+type DeviceListTurn = (Arc<tokio::sync::Mutex<()>>, bool);
 
 struct Connection {
     id: u64,
@@ -91,11 +94,23 @@ impl Hub {
     }
 
     /// Waits for `user`'s turn to read and send a device list, which lasts until the guard
-    /// drops.
-    pub async fn device_list_turn(&self, user: i64) -> tokio::sync::OwnedMutexGuard<()> {
+    /// drops. `None` if a list is already waiting for its turn: that one is read after this
+    /// call, so it is current enough, and connections coming and going send one list rather
+    /// than one each.
+    pub async fn device_list_turn(&self, user: i64) -> Option<tokio::sync::OwnedMutexGuard<()>> {
         let turns = &self.device_lists;
-        let turn = turns.lock().expect("device list lock").entry(user).or_default().clone();
-        turn.lock_owned().await
+        let turn = {
+            let mut turns = turns.lock().expect("device list lock");
+            let (turn, waiting) = turns.entry(user).or_default();
+            if std::mem::replace(waiting, true) {
+                return None;
+            }
+            turn.clone()
+        };
+        let guard = turn.lock_owned().await;
+        // Before the list is read, so a change after this has a list of its own.
+        turns.lock().expect("device list lock").entry(user).or_default().1 = false;
+        Some(guard)
     }
 
     /// Keeps the connections of `user` that `keep` is true for, and closes the rest.
