@@ -31,6 +31,11 @@ class Player {
 	current = $derived<TrackSummary | null>(this.tracks[this.index] ?? null);
 
 	playing = $state(false);
+	/**
+	 * Whether playback stopped here, at the end of what this player had, and has not started
+	 * anywhere since: nothing holds playback, but this player is still the one to show.
+	 */
+	finished = $state(false);
 	/** Seconds. */
 	position = $state(0);
 	/** Seconds; the tagged duration until the audio reports its own. */
@@ -67,6 +72,10 @@ class Player {
 
 	/** The account's playback state, as the server just sent it. */
 	#heard(state: PlayerState) {
+		// Anything playing since, or a stop that is not this player's, as one heard on reconnecting.
+		if (state.activeDeviceId !== null || state.trackId !== this.current?.id) {
+			this.finished = false;
+		}
 		if (!realtime.deviceId) return;
 		const playing = this.playing || this.#loading;
 		const action = this.#progress.heard(realtime.deviceId, state, playing);
@@ -101,11 +110,13 @@ class Player {
 	}
 
 	/**
-	 * Plays here `track`, which another device was playing, from `seconds` in: within the
-	 * context this player has, if the track is in it, or on its own. Until the server keeps
-	 * the queue, what came after it on the other device does not come along.
+	 * Plays here `track`, which another device was playing from library `libraryId`, from
+	 * `seconds` in: within the context this player has, if the track is in it, or on its own.
+	 * Until the server keeps the queue, what came after it on the other device does not come
+	 * along. A track of a library other than this player's cannot play here.
 	 */
-	pickUp(track: TrackSummary, seconds: number) {
+	pickUp(libraryId: string, track: TrackSummary, seconds: number) {
+		if (libraryId !== this.libraryId) return;
 		let index = this.tracks.findIndex((t) => t.id === track.id);
 		if (index < 0) {
 			this.tracks = [track];
@@ -216,6 +227,11 @@ class Player {
 		if (i === null) {
 			this.#audio?.pause();
 			this.#plays.end('skipped');
+			// Stopped at the start of the last track, so playing again, here or anywhere, plays it:
+			// here, loaded again as a new play, since the audio may be of the track before.
+			this.position = 0;
+			this.#stale = true;
+			this.finished = true;
 			this.#report('stopped');
 			return;
 		}

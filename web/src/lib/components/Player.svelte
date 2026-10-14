@@ -11,7 +11,7 @@
 	import Waveform from './Waveform.svelte';
 
 	// Another device's playback is shown here, to be picked up (`requirements/realtime.md` §2, §6).
-	const remote = $derived(playback.shows(player.playing));
+	const remote = $derived(playback.shows(player.playing || player.finished));
 	const track = $derived(remote ? playback.track : player.current);
 	const playing = $derived(remote ? playback.state?.status === 'playing' : player.playing);
 	const duration = $derived(remote ? (track?.durationUs ?? 0) / 1e6 : player.duration);
@@ -30,9 +30,17 @@
 	});
 	const position = $derived(remote ? playback.positionAt(now) : player.position);
 
+	/** Whether what the other device was playing can play here: it is of this device's library. */
+	const pickable = $derived(
+		playback.track !== null && playback.state?.libraryId === player.libraryId
+	);
+
 	/** Plays here what the other device was playing, from where it got to. */
 	function playHere() {
-		if (playback.track) player.pickUp(playback.track, playback.positionAt(Date.now()));
+		const { track, state } = playback;
+		if (track && state?.libraryId) {
+			player.pickUp(state.libraryId, track, playback.positionAt(Date.now()));
+		}
 	}
 	let lastVolume = 1;
 	let innerWidth = $state(1024);
@@ -63,8 +71,10 @@
 				{#if remote}
 					<span class="where">
 						<span class="device">{where}</span>
-						<span aria-hidden="true">·</span>
-						<button type="button" class="link" onclick={playHere}>Play here</button>
+						{#if pickable}
+							<span aria-hidden="true">·</span>
+							<button type="button" class="link" onclick={playHere}>Play here</button>
+						{/if}
 					</span>
 				{/if}
 			</div>
