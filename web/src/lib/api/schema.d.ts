@@ -4149,9 +4149,8 @@ export interface components {
         /**
          * @description Transport control, targeting any of the caller's devices. Last command wins. Sent over
          *     the realtime connection as `playerCommand`, and passed on to the target as `execute`.
-         *     Until waking an idle device and `transfer` are built, which need the queue, every
-         *     command goes to the connection playing, and one whose `deviceId` names any other
-         *     device fails.
+         *     Every command but `transfer` goes to the connection playing, and one whose `deviceId`
+         *     names any other device fails. `transfer` goes to the device it names.
          */
         PlayerCommand: components["schemas"]["TransportCommand"] | components["schemas"]["SeekCommand"] | components["schemas"]["VolumeCommand"] | components["schemas"]["TransferCommand"];
         /** @description `play` sent to an idle connected device wakes it with the current queue (`requirements/realtime.md` §3). */
@@ -4185,7 +4184,18 @@ export interface components {
             deviceId: string;
             volume: number;
         };
-        /** @description Shift — move playback to another device at the same track, position, and queue. */
+        /**
+         * @description Shift — move playback to another device at the same track, position, and queue. Sent
+         *     to the device named (its newest connection), which takes playback over from wherever
+         *     it is; the device that was playing stops, as for any takeover. It also wakes an idle
+         *     device, picking up where playback stopped. Moving it to the device already holding it
+         *     is `applied` at once, or, when it is paused there and `play` is true, plays it. The
+         *     device answers once it has taken over, not once its audio plays, which may take longer
+         *     to load than a command has to answer in. Until the server keeps the queue, the device
+         *     picks up the track and where it was in it, and nothing after it comes along; its own
+         *     volume stays its own. `device_unavailable` when the device is not connected or nothing
+         *     has played.
+         */
         TransferCommand: {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -8230,7 +8240,7 @@ export interface operations {
                     "application/json": components["schemas"]["CommandResult"];
                 };
             };
-            /** @description `device_unavailable` — the target device is not connected, or, until waking is built, nothing is playing or the device named is not the one playing. */
+            /** @description `device_unavailable` — the target device is not connected or nothing has played; for a command other than `transfer`, nothing is playing or the device named is not the one playing. */
             409: {
                 headers: {
                     [name: string]: unknown;

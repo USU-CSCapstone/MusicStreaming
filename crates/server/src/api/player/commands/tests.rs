@@ -128,7 +128,7 @@ async fn a_command_the_device_playing_does_not_answer_fails() {
     let result = result_of(&mut phone, &json!(id(1))).await;
     assert_eq!(
         (&result["status"], &result["reason"]),
-        (&json!("failed"), &json!("The device playing did not answer."))
+        (&json!("failed"), &json!("The device did not answer."))
     );
 }
 
@@ -157,8 +157,9 @@ async fn an_account_can_have_only_so_many_commands_waiting() {
 async fn a_command_this_server_does_not_carry_out_fails_at_once() {
     let (_temp, _app, address) = setup().await;
     let mut phone = connect_with(address, "phone").await;
-    let transfer = json!({ "type": "transfer", "commandId": id(1), "deviceId": "1" });
-    assert_eq!(command(&mut phone, transfer).await["status"], json!("failed"));
+    let unknown = json!({ "type": "rewind", "commandId": id(1) });
+    let result = command(&mut phone, unknown).await;
+    assert_eq!(result["reason"], json!("Not a command this server carries out."));
     let backwards = json!({ "type": "seek", "commandId": id(2), "positionMs": -1 });
     assert_eq!(command(&mut phone, backwards).await["status"], json!("failed"));
     let quiet = json!({ "type": "setVolume", "commandId": id(3), "volume": 0.5 });
@@ -208,7 +209,7 @@ async fn commands_waiting_on_a_device_that_goes_away_fail_at_once() {
     command(&mut phone, json!({ "type": "pause", "commandId": id(1) })).await;
     desk.close(None).await.unwrap();
     let result = result_of(&mut phone, &json!(id(1))).await;
-    assert_eq!(result["reason"], json!("The device playing went away."));
+    assert_eq!(result["reason"], json!("The device went away."));
 }
 
 /// Sends `command` over HTTP, logged in with `token`.
@@ -249,7 +250,7 @@ async fn a_command_over_http_with_nowhere_to_go_is_refused() {
     play(&mut desk, "1").await;
     for invalid in [
         json!({ "type": "setVolume", "commandId": id(2), "deviceId": "1", "volume": 2 }),
-        json!({ "type": "transfer", "commandId": id(3), "deviceId": "2" }),
+        json!({ "type": "rewind", "commandId": id(3) }),
         json!({ "type": "pause", "commandId": "not-a-uuid" }),
     ] {
         let (status, problem) = post(&app, "phone", invalid.clone()).await;
@@ -295,4 +296,82 @@ async fn a_command_sent_again_while_it_waits_is_answered_where_it_was_sent_last(
     let applied = json!({ "commandId": id(1), "status": "applied" });
     send(&mut desk, json!({ "type": "commandResult", "result": applied })).await;
     assert_eq!(again.await.unwrap(), (StatusCode::OK, applied));
+}
+
+#[tokio::test]
+async fn a_transfer_goes_to_the_device_it_names_and_its_answer_comes_back() {
+    let (_temp, _app, address) = setup().await;
+    let mut desk = connect_with(address, TOKEN).await;
+    let mut phone = connect_with(address, "phone").await;
+    play(&mut desk, "1").await;
+
+    let transfer = json!({ "type": "transfer", "commandId": id(1), "deviceId": "2" });
+    assert_eq!(command(&mut desk, transfer).await["status"], json!("pending"));
+    let sent = next_of(&mut phone, "execute").await["command"].clone();
+    assert_eq!(
+        sent,
+        json!({ "type": "transfer", "commandId": id(1), "deviceId": "2", "play": true })
+    );
+    let applied = json!({ "commandId": id(1), "status": "applied" });
+    send(&mut phone, json!({ "type": "commandResult", "result": applied })).await;
+    assert_eq!(result_of(&mut desk, &json!(id(1))).await, applied);
+
+    let here = json!({ "type": "transfer", "commandId": id(2), "deviceId": "1" });
+    assert_eq!(command(&mut desk, here).await["status"], json!("applied"), "already there");
+}
+
+#[tokio::test]
+async fn a_transfer_to_play_where_it_is_paused_plays_it() {
+    let (_temp, _app, address) = setup().await;
+    let mut desk = connect_with(address, TOKEN).await;
+    let mut phone = connect_with(address, "phone").await;
+    play(&mut desk, "1").await;
+    let report = json!({
+        "deviceId": "1", "itemId": "item-1", "libraryId": "1", "trackId": "1",
+        "status": "paused", "positionMs": 0,
+    });
+    send(&mut desk, json!({ "type": "progress", "report": report })).await;
+    send(&mut desk, json!({ "type": "ping" })).await;
+    next_of(&mut desk, "pong").await;
+
+    let transfer = json!({ "type": "transfer", "commandId": id(1), "deviceId": "1" });
+    assert_eq!(command(&mut phone, transfer).await["status"], json!("pending"));
+    let sent = next_of(&mut desk, "execute").await["command"].clone();
+    assert_eq!(sent, json!({ "type": "play", "commandId": id(1), "deviceId": "1" }));
+}
+
+#[tokio::test]
+async fn a_transfer_wakes_a_device_once_playback_stopped() {
+    let (_temp, _app, address) = setup().await;
+    let mut desk = connect_with(address, TOKEN).await;
+    play(&mut desk, "1").await;
+    desk.close(None).await.unwrap();
+    let mut phone = connect_with(address, "phone").await;
+    let mut laptop = connect_with(address, TOKEN).await;
+
+    let paused = json!({ "type": "transfer", "commandId": id(1), "deviceId": "2", "play": false });
+    assert_eq!(command(&mut laptop, paused).await["status"], json!("pending"));
+    assert_eq!(next_of(&mut phone, "execute").await["command"]["play"], json!(false));
+}
+
+#[tokio::test]
+async fn a_transfer_needs_a_device_of_the_account_that_is_connected_and_something_to_move() {
+    let (temp, _app, address) = setup().await;
+    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    add_device(&conn, 1, 4, "tablet");
+    let mut desk = connect_with(address, TOKEN).await;
+    // Another account's device, connected, which this one still cannot reach.
+    let _stranger = connect_with(address, "stranger").await;
+    let transfer =
+        |n, device: &str| json!({ "type": "transfer", "commandId": id(n), "deviceId": device });
+    let reason = |result: Value| result["reason"].as_str().unwrap_or_default().to_owned();
+
+    assert_eq!(reason(command(&mut desk, transfer(1, "4")).await), "Nothing has played to move.");
+    play(&mut desk, "1").await;
+    for (n, device) in [(2, "4"), (3, "3"), (4, "nonsense")] {
+        let result = command(&mut desk, transfer(n, device)).await;
+        assert_eq!(reason(result), "That device is not connected.", "{device}");
+    }
+    let nameless = json!({ "type": "transfer", "commandId": id(5) });
+    assert_eq!(command(&mut desk, nameless).await["status"], json!("failed"));
 }

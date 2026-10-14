@@ -11,8 +11,10 @@
 //! The results of an account's latest commands are kept, so one sent again, by a client unsure
 //! the first arrived, is carried out once and answered with how it went.
 //!
-//! Waking an idle device and moving playback to another (Shift) need the queue, so for now
-//! every command goes to the device playing, and one that names another device fails.
+//! Every command goes to the connection playing but `transfer` (Shift), which goes to the
+//! device it names, to take playback over from wherever it is, or from where it stopped; so it
+//! also wakes a device that is idle (§3). Until the server keeps the queue, that device picks
+//! up the track and where it was in it, and nothing after it comes along.
 
 mod relay;
 
@@ -31,7 +33,7 @@ use crate::api::{Code, Problem, extract};
 pub use relay::Commands;
 use relay::Reply;
 
-/// The spec's `PlayerCommand`, but for `transfer`, which needs the queue.
+/// The spec's `PlayerCommand`.
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerCommand {
@@ -49,8 +51,21 @@ enum Action {
     Pause,
     Next,
     Previous,
-    Seek { position_ms: u32 },
-    SetVolume { volume: f64 },
+    Seek {
+        position_ms: u32,
+    },
+    SetVolume {
+        volume: f64,
+    },
+    Transfer {
+        /// Whether it plays once it arrives, or arrives paused.
+        #[serde(default = "yes")]
+        play: bool,
+    },
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// The spec's `CommandResult`.
@@ -101,7 +116,7 @@ impl Refused {
     fn reason(&self) -> &'static str {
         match self {
             Refused::Invalid(reason) | Refused::Unavailable(reason) => reason,
-            Refused::Busy => "Too many commands are waiting for the device playing.",
+            Refused::Busy => "Too many commands are waiting for a device to answer.",
         }
     }
 }
@@ -135,7 +150,7 @@ impl Players {
     }
 }
 
-/// `sendPlayerCommand`: answers how the device playing carried the command out, once it has.
+/// `sendPlayerCommand`: answers how the device carried the command out, once it has.
 pub async fn send(
     State(players): State<Arc<Players>>,
     State(hub): State<Arc<Hub>>,
