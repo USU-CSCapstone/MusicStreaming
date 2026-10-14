@@ -24,6 +24,7 @@ vi.mock('$lib/api/client', async (actual) => ({
 }));
 
 const { player } = await import('./player.svelte');
+const { playback } = await import('./playback.svelte');
 const { controls } = await import('./controls.svelte');
 
 function state(device: string | null, status: PlayerState['status'] = 'playing') {
@@ -45,6 +46,8 @@ beforeEach(() => {
 	fake.sent.length = 0;
 	fake.realtime.connected = true;
 	player.playing = false;
+	player.libraryId = '11';
+	playback.error = null;
 	vi.restoreAllMocks();
 });
 
@@ -96,5 +99,25 @@ describe('controls', () => {
 		controls.toggle();
 		expect(sent()).toEqual([]);
 		expect(pickUp).toHaveBeenCalledOnce();
+	});
+
+	it('say so when playback could not be picked up here', async () => {
+		state(null, 'stopped');
+		await vi.waitFor(() => expect(controls.pickable).toBe(true));
+		vi.spyOn(player, 'pickUp').mockRejectedValue(new Error('Playback moved on.'));
+		controls.toggle();
+		await vi.waitFor(() => expect(playback.error).toBe('Could not play that here.'));
+	});
+
+	it('leave playback stopped in another library alone', async () => {
+		player.libraryId = '12';
+		state(null, 'stopped');
+		await vi.waitFor(() => expect(controls.track?.id).toBe('41'));
+		const pickUp = vi.spyOn(player, 'pickUp').mockImplementation(async () => {});
+		expect([controls.stopped, controls.pickable]).toEqual([true, false]);
+		controls.toggle();
+		controls.play();
+		expect(pickUp).not.toHaveBeenCalled();
+		expect(sent()).toEqual([]);
 	});
 });

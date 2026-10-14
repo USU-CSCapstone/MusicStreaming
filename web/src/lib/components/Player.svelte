@@ -84,7 +84,7 @@
 				type="button"
 				class="play"
 				aria-label={playing ? 'Pause' : 'Play'}
-				disabled={!track}
+				disabled={!track || (controls.stopped && !controls.pickable)}
 				onclick={() => controls.toggle()}
 			>
 				<Icon name={playing ? 'pause' : 'play'} size={18} />

@@ -84,9 +84,10 @@ class Controls {
 	/** Whether what the other device was playing can play here: it is of this device's library. */
 	pickable = $derived(playback.track !== null && playback.state?.libraryId === player.libraryId);
 
-	/** Plays here what the other device was playing, from where it got to. */
+	/** Plays here what the other device was playing, from where it got to, or says it could not. */
 	playHere() {
-		void player.pickUp().catch(() => {});
+		if (!this.pickable) return;
+		void player.pickUp().catch(() => playback.fail('Could not play that here.'));
 	}
 }
 

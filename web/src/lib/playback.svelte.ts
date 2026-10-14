@@ -30,7 +30,7 @@ class Playback {
 	/** The track the state names, once fetched; the one before until then. */
 	track = $state<TrackSummary | null>(null);
 	waveform = $state<Uint8Array | null>(null);
-	/** Why the latest command failed, for a few seconds. */
+	/** Why the latest command, or picking up here, failed, for a few seconds. */
 	error = $state<string | null>(null);
 	/** Playback being moved to another device, until it takes over or says it cannot. */
 	moving = $state<{ deviceId: string; commandId: string } | null>(null);
@@ -167,7 +167,7 @@ class Playback {
 			!realtime.send({ type: 'playerCommand', command: { ...command, commandId } as PlayerCommand })
 		) {
 			this.#asked = {};
-			this.#failed('Not connected to the server.');
+			this.fail('Not connected to the server.');
 			return null;
 		}
 		this.#waiting[commandId] = true;
@@ -182,11 +182,12 @@ class Playback {
 		if (result.status === 'failed') {
 			// What it asked for did not happen: back to what the server says did.
 			this.#asked = {};
-			this.#failed(result.reason ?? 'That did not work.');
+			this.fail(result.reason ?? 'That did not work.');
 		}
 	}
 
-	#failed(reason: string) {
+	/** Shows why something asked of playback did not happen, for a few seconds. */
+	fail(reason: string) {
 		this.error = reason;
 		clearTimeout(this.#errorTimer);
 		this.#errorTimer = setTimeout(() => (this.error = null), ERROR_FOR_MS);
