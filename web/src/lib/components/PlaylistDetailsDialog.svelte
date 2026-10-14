@@ -1,47 +1,57 @@
-<script lang="ts">
-	// Names a new playlist, which starts empty (`requirements/playlists.md` §2), and opens it.
-	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
-	import { createPlaylist } from '$lib/api/client';
-	import type { PlaylistCreate } from '$lib/api/types';
+<script lang="ts" module>
+	export type PlaylistDetails = { title: string; description: string | null };
+</script>
 
-	let { libraryId, onclose }: { libraryId: string; onclose: () => void } = $props();
+<script lang="ts">
+	// A playlist's title and description (`requirements/playlists.md` §2), for a new one or an
+	// existing one. Saving is the caller's: a failure it throws shows here, and the dialog stays.
+	import { onMount } from 'svelte';
+
+	let {
+		heading,
+		action,
+		busyAction,
+		initial = { title: '', description: null },
+		onsave,
+		onclose
+	}: {
+		heading: string;
+		/** The submit button: "Create", "Save". */
+		action: string;
+		/** The submit button while saving: "Creating…". */
+		busyAction: string;
+		initial?: PlaylistDetails;
+		/** Trimmed, with an empty description as null. */
+		onsave: (details: PlaylistDetails) => unknown;
+		onclose: () => void;
+	} = $props();
 
 	let dialog: HTMLDialogElement;
 	const uid = $props.id();
-	const titleId = `new-playlist-${uid}`;
+	const titleId = `playlist-details-${uid}`;
 
-	let title = $state('');
-	let description = $state('');
+	// The form starts from the details as they were when it opened.
+	// svelte-ignore state_referenced_locally
+	let title = $state(initial.title);
+	// svelte-ignore state_referenced_locally
+	let description = $state(initial.description ?? '');
 	let error = $state('');
 	let busy = $state(false);
-	/**
-	 * The last request and its `Idempotency-Key`. Sending the same request again reuses the key,
-	 * so a retry after a lost response still makes one playlist; a changed one gets a new key.
-	 */
-	let sent: { request: string; key: string } | null = null;
 
 	onMount(() => {
 		// Focus starts on the title, the first field.
 		dialog.showModal();
 	});
 
-	async function create(e: SubmitEvent) {
+	async function save(e: SubmitEvent) {
 		e.preventDefault();
-		const body: PlaylistCreate = { title: title.trim() };
-		if (description.trim()) body.description = description.trim();
-		const request = JSON.stringify(body);
-		if (sent?.request !== request) sent = { request, key: crypto.randomUUID() };
-
 		busy = true;
 		error = '';
 		try {
-			const playlist = await createPlaylist(fetch, libraryId, body, sent.key);
-			// The dialog stays up, busy, until the new playlist's page replaces this one.
-			await goto(resolve('/playlists/[id]', { id: playlist.id }));
+			await onsave({ title: title.trim(), description: description.trim() || null });
 		} catch (err) {
 			error = err instanceof Error ? err.message : String(err);
+		} finally {
 			busy = false;
 		}
 	}
@@ -55,8 +65,8 @@
 		if (!busy) onclose();
 	}}
 >
-	<form onsubmit={create}>
-		<h2 id={titleId}>New playlist</h2>
+	<form onsubmit={save}>
+		<h2 id={titleId}>{heading}</h2>
 
 		<label>
 			Title
@@ -72,7 +82,7 @@
 		<footer>
 			<button type="button" onclick={onclose} disabled={busy}>Cancel</button>
 			<button type="submit" class="primary" disabled={busy || !title.trim()}
-				>{busy ? 'Creating…' : 'Create'}</button
+				>{busy ? busyAction : action}</button
 			>
 		</footer>
 	</form>
