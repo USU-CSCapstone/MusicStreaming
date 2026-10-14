@@ -81,6 +81,15 @@ export const signalMix: Generated = {
 	trackIds: tracks.map((t) => BigInt(t.id))
 };
 
+/** An empty playlist, to add to. */
+export const roadTrip: Generated = {
+	id: 'pl-road',
+	title: 'Road Trip',
+	description: '',
+	createdAt: '2026-01-02T00:00:00.000Z',
+	trackIds: []
+};
+
 /** A playlist long enough to scroll: the album, over and over. */
 export const longMix: Generated = {
 	...signalMix,
