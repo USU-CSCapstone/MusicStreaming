@@ -12,6 +12,7 @@
 		icon,
 		round = false,
 		onplay,
+		actions,
 		children
 	}: {
 		/** "Album", "Artist", "Playlist" — shown above the title. */
@@ -23,6 +24,8 @@
 		round?: boolean;
 		/** Plays the page's songs from the top; omitted when there is nothing to play. */
 		onplay?: () => void;
+		/** The page's own buttons, beside Play. */
+		actions?: Snippet;
 		/** Credits and details under the title. */
 		children?: Snippet;
 	} = $props();
@@ -36,10 +39,15 @@
 		<span class="kind muted">{kind}</span>
 		<h1>{title}</h1>
 		{#if children}<div class="meta">{@render children()}</div>{/if}
-		{#if onplay}
-			<button type="button" class="play" onclick={onplay}>
-				<Icon name="play" size={16} /> Play
-			</button>
+		{#if onplay || actions}
+			<div class="buttons">
+				{#if onplay}
+					<button type="button" class="play" onclick={onplay}>
+						<Icon name="play" size={16} /> Play
+					</button>
+				{/if}
+				{@render actions?.()}
+			</div>
 		{/if}
 	</div>
 </header>
@@ -89,11 +97,17 @@
 		color: var(--text-muted);
 	}
 
+	.buttons {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		margin-top: var(--space-2);
+	}
+
 	.play {
 		display: inline-flex;
 		align-items: center;
 		gap: var(--space-2);
-		margin-top: var(--space-2);
 		height: 38px;
 		padding: 0 var(--space-5) 0 var(--space-4);
 		border: 0;

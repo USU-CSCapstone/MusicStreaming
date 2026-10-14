@@ -1,10 +1,15 @@
 <script lang="ts">
-	import { listPlaylists } from '$lib/api/client';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { createPlaylist, listPlaylists } from '$lib/api/client';
+	import type { PlaylistCreate } from '$lib/api/types';
 	import { playlistCard } from '$lib/cards';
 	import CollectionView from '$lib/components/CollectionView.svelte';
 	import Icon from '$lib/components/Icon.svelte';
-	import NewPlaylistDialog from '$lib/components/NewPlaylistDialog.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import PlaylistDetailsDialog, {
+		type PlaylistDetails
+	} from '$lib/components/PlaylistDetailsDialog.svelte';
 	import { plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
 
@@ -14,6 +19,23 @@
 		new Paged(data.playlists, (cursor) => listPlaylists(fetch, data.lib, { cursor }))
 	);
 	let creating = $state(false);
+
+	/**
+	 * The last request and its `Idempotency-Key`. Sending the same request again reuses the key,
+	 * so a retry after a lost response still makes one playlist; a changed one gets a new key.
+	 */
+	let sent: { request: string; key: string } | null = null;
+
+	/** A new playlist, empty to start with (`requirements/playlists.md` §2), opened at once. */
+	async function create({ title, description }: PlaylistDetails) {
+		const body: PlaylistCreate = { title };
+		if (description) body.description = description;
+		const request = JSON.stringify(body);
+		if (sent?.request !== request) sent = { request, key: crypto.randomUUID() };
+		const playlist = await createPlaylist(fetch, data.lib, body, sent.key);
+		// The dialog stays up, busy, until the new playlist's page replaces this one.
+		await goto(resolve('/playlists/[id]', { id: playlist.id }));
+	}
 </script>
 
 <svelte:head><title>Playlists · Jewelcase</title></svelte:head>
@@ -34,7 +56,13 @@
 />
 
 {#if creating}
-	<NewPlaylistDialog libraryId={data.lib} onclose={() => (creating = false)} />
+	<PlaylistDetailsDialog
+		heading="New playlist"
+		action="Create"
+		busyAction="Creating…"
+		onsave={create}
+		onclose={() => (creating = false)}
+	/>
 {/if}
 
 <style>
