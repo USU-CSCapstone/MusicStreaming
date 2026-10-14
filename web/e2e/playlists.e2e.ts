@@ -147,6 +147,11 @@ test('selects songs and removes them, with Undo', async ({ page }) => {
 	await expect(bar).toContainText('3 songs selected');
 	await row('Signal Part 2').click({ modifiers: ['ControlOrMeta'] });
 	await expect(bar).toContainText('2 songs selected');
+	// Clicking a selected song lets go of it, and only it.
+	await row('Signal Remix').click();
+	await expect(bar).toContainText('1 song selected');
+	await row('Signal Remix').click({ modifiers: ['ControlOrMeta'] });
+	await expect(row('Signal Remix')).toHaveAccessibleDescription('Selected');
 
 	await bar.getByRole('button', { name: 'Remove' }).click();
 	await expect(titles()).toHaveText(['Signal Part 2']);
@@ -163,9 +168,11 @@ test('selects songs and removes them, with Undo', async ({ page }) => {
 	await page.keyboard.press('Escape');
 	await expect(bar).toBeHidden();
 
-	// The boxes select too, as on a touch screen; the removal is saved.
-	await page.getByRole('checkbox', { name: 'Select Signal Remix' }).check();
+	// From the keyboard, Space on a title selects; the removal is saved.
+	await row('Signal Remix').focus();
+	await page.keyboard.press('Space');
 	await expect(bar).toContainText('1 song selected');
+	await expect(page.getByRole('region', { name: 'Player' }).getByText('Signal Remix')).toBeHidden();
 	const saved = page.waitForResponse((r) => r.request().method() === 'PATCH');
 	await bar.getByRole('button', { name: 'Remove' }).click();
 	await saved;
@@ -184,19 +191,30 @@ test('a double click plays a song in a playlist, as a click there selects it', a
 test.describe('on a touch screen', () => {
 	test.use({ hasTouch: true });
 
-	test('a tap plays until a box is checked, and then selects', async ({ page }) => {
+	test('a tap plays, a long press selects, and then a tap selects', async ({ page }) => {
 		await serveLibrary(page, { playlists: [signalMix] });
 		await page.goto(`/playlists/${signalMix.id}`);
+		const row = (title: string) => page.getByRole('button', { name: title, exact: true });
 		const bar = page.getByRole('toolbar', { name: 'Selected songs' });
 
-		await page.getByRole('button', { name: 'Signal Part 2', exact: true }).tap();
+		await row('Signal Part 2').tap();
 		const player = page.getByRole('region', { name: 'Player' });
 		await expect(player.getByText('Signal Part 2')).toBeVisible();
 		await expect(bar).toBeHidden();
 
-		await page.getByRole('checkbox', { name: 'Select Signal Part 1' }).tap();
-		await page.getByRole('button', { name: 'Signal Remix', exact: true }).tap();
+		// A finger held down, as Chrome reports it.
+		const box = (await row('Signal Part 1').boundingBox())!;
+		const touch = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+		const cdp = await page.context().newCDPSession(page);
+		await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [touch] });
+		await page.waitForTimeout(700);
+		await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+		await expect(bar).toContainText('1 song selected');
+
+		await row('Signal Remix').tap();
 		await expect(bar).toContainText('2 songs selected');
-		await expect(page.getByRole('checkbox', { name: 'Select Signal Remix' })).toBeChecked();
+		await row('Signal Part 1').tap();
+		await expect(bar).toContainText('1 song selected');
+		await expect(row('Signal Remix')).toHaveAccessibleDescription('Selected');
 	});
 });

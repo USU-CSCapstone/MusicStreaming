@@ -25,8 +25,9 @@
 		/** Where the tracks are from, which each play records. */
 		context?: PlayContext;
 		/**
-		 * Rows can be selected, for edits the selection bar offers. A click then selects, and a
-		 * double click, the play icon, or Enter on the title plays.
+		 * Rows can be selected, for edits the selection bar offers. A click, a long press on
+		 * touch, or Space on the title then selects; a double click, the play icon, a tap with
+		 * nothing selected, or Enter on the title plays.
 		 */
 		editable?: boolean;
 		/** Removes the rows at these indexes, in order. */
@@ -36,6 +37,8 @@
 	const selected = new SvelteSet<number>();
 	/** Where a Shift-click range starts: the row last clicked on its own. */
 	let anchor: number | null = null;
+	const uid = $props.id();
+	const hintId = `selected-${uid}`;
 
 	// Indexes shift with every change, so a selection does not outlive the list it was made in.
 	$effect.pre(() => {
@@ -53,14 +56,18 @@
 		anchor = i;
 	}
 
-	function select(e: MouseEvent, i: number) {
+	/**
+	 * Shift extends from the anchor, and Ctrl/Cmd adds or takes away one. Otherwise a selected
+	 * row is let go, and any other becomes the selection. On touch, a tap plays until something
+	 * is selected, and then adds or takes away a row.
+	 */
+	function select(e: MouseEvent | KeyboardEvent, i: number) {
 		const adding = e.metaKey || e.ctrlKey;
-		// On touch, a tap plays until something is selected, and then picks rows like the boxes.
 		const touch = (e as PointerEvent).pointerType === 'touch';
 		if (e.shiftKey && anchor !== null) {
 			if (!adding) selected.clear();
 			for (let k = Math.min(anchor, i); k <= Math.max(anchor, i); k++) selected.add(k);
-		} else if (adding || (touch && selected.size > 0)) {
+		} else if (adding || selected.has(i) || (touch && selected.size > 0)) {
 			toggle(i);
 		} else if (touch) {
 			play(i);
@@ -68,6 +75,42 @@
 			selected.clear();
 			toggle(i);
 		}
+	}
+
+	// A long press selects on touch, where there is no Ctrl or Shift.
+	const LONG_PRESS_MS = 500;
+	let press: { timer: ReturnType<typeof setTimeout>; x: number; y: number } | null = null;
+	/** The click that ends a long press is not a tap. */
+	let longPressed = false;
+
+	function pressStart(e: PointerEvent, i: number) {
+		if (!editable || e.pointerType !== 'touch') return;
+		longPressed = false;
+		const timer = setTimeout(() => {
+			press = null;
+			longPressed = true;
+			selected.add(i);
+			anchor = i;
+		}, LONG_PRESS_MS);
+		press = { timer, x: e.clientX, y: e.clientY };
+	}
+
+	function pressEnd() {
+		if (press) clearTimeout(press.timer);
+		press = null;
+	}
+
+	/** A finger that moves is scrolling, not pressing. */
+	function pressMove(e: PointerEvent) {
+		if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) pressEnd();
+	}
+
+	/** Space on a title selects, as Enter plays. */
+	function titleKey(e: KeyboardEvent, i: number) {
+		if (!editable || e.key !== ' ') return;
+		// The browser would click the button on Space too.
+		e.preventDefault();
+		if (e.type === 'keydown') select(e, i);
 	}
 
 	function remove() {
@@ -78,11 +121,7 @@
 	/** Ctrl/Cmd+A selects every row and Escape lets go, unless focus is somewhere they mean more. */
 	function onkeydown(e: KeyboardEvent) {
 		if (!editable || e.defaultPrevented) return;
-		if (
-			(e.target as Element).closest(
-				'input:not([type="checkbox"]), textarea, select, [contenteditable], dialog'
-			)
-		) {
+		if ((e.target as Element).closest('input, textarea, select, [contenteditable], dialog')) {
 			return;
 		}
 		if (e.key === 'a' && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey) {
@@ -102,10 +141,13 @@
 	}
 
 	function rowClick(e: MouseEvent, i: number) {
-		const target = e.target as Element;
-		// Links inside the row navigate, and its box selects on its own.
-		if (target.closest('a, input')) return;
-		if (editable && !target.closest('.num')) select(e, i);
+		// Links inside the row navigate.
+		if ((e.target as Element).closest('a')) return;
+		if (longPressed) {
+			longPressed = false;
+			return;
+		}
+		if (editable && !(e.target as Element).closest('.num')) select(e, i);
 		else play(i);
 	}
 </script>
@@ -132,18 +174,13 @@
 				class:missing
 				class:selected={selected.has(i)}
 				onclick={(e) => rowClick(e, i)}
-				ondblclick={(e) => editable && !(e.target as Element).closest('a, input') && play(i)}
+				ondblclick={(e) => editable && !(e.target as Element).closest('a') && play(i)}
+				onpointerdown={(e) => pressStart(e, i)}
+				onpointermove={pressMove}
+				onpointerup={pressEnd}
+				onpointercancel={pressEnd}
+				oncontextmenu={(e) => (press || longPressed) && e.preventDefault()}
 			>
-				{#if editable}
-					<span class="check">
-						<input
-							type="checkbox"
-							aria-label="Select {track.title}"
-							checked={selected.has(i)}
-							onchange={() => toggle(i)}
-						/>
-					</span>
-				{/if}
 				<span class="num tabular">
 					{#if current && player.playing}
 						<span class="eq" aria-label="Playing"><i></i><i></i><i></i></span>
@@ -158,14 +195,18 @@
 					</span>
 				{/if}
 				<span class="main">
-					<!-- A pointer's click on the title selects when rows do; Enter (detail 0) plays. -->
+					<!-- A pointer's click on the title selects when rows do; Enter (detail 0) plays.
+					     A missing track can still be selected, to remove it. -->
 					<button
 						type="button"
 						class="title"
-						disabled={missing}
+						disabled={missing && !editable}
+						aria-describedby={selected.has(i) ? hintId : undefined}
 						onclick={(e) => {
 							if (!editable || e.detail === 0) play(i);
 						}}
+						onkeydown={(e) => titleKey(e, i)}
+						onkeyup={(e) => titleKey(e, i)}
 					>
 						{track.title}
 					</button>
@@ -191,6 +232,7 @@
 {/if}
 
 {#if editable}
+	<span id={hintId} hidden>Selected</span>
 	<span class="visually-hidden" aria-live="polite">
 		{selected.size ? `${plural(selected.size, 'song')} selected` : ''}
 	</span>
@@ -245,27 +287,14 @@
 	}
 
 	.editable .track {
-		grid-template-columns: 28px 32px 40px minmax(0, 3fr) minmax(0, 2fr) 56px;
-		/* Shift-click selects rows, not text. */
+		/* Shift-click and a long press select rows, not text. */
 		user-select: none;
+		-webkit-touch-callout: none;
 	}
 
 	.track.selected,
 	.track.selected:hover {
 		background: var(--accent-soft);
-	}
-
-	.check {
-		display: grid;
-		place-items: center;
-	}
-
-	.check input {
-		width: 16px;
-		height: 16px;
-		margin: 0;
-		accent-color: var(--accent);
-		cursor: pointer;
 	}
 
 	.bar-anchor {
@@ -472,10 +501,6 @@
 
 		.album .track .num {
 			display: grid;
-		}
-
-		.editable .track {
-			grid-template-columns: 28px 40px minmax(0, 1fr) 48px;
 		}
 	}
 </style>
