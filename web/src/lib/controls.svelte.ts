@@ -1,6 +1,7 @@
 // What the player bar shows and its controls act on: this device's own player, or the playback
 // another device holds, which they then control (`requirements/realtime.md` §3). The bar, the
-// space bar, the lock screen, and the lyrics all go through here, so they agree on which.
+// space bar, and the lyrics all go through here, so they agree on which. The lock screen and
+// media keys show this device's own player, and so act on it (`player.svelte.ts`).
 
 import { playback } from './playback.svelte';
 import { player } from './player.svelte';
@@ -40,7 +41,6 @@ class Controls {
 				return () => clearInterval(timer);
 			});
 		});
-		player.actions = this;
 	}
 
 	play() {

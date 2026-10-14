@@ -59,23 +59,6 @@ class Player {
 	#load = 0;
 	/** The load whose track has started playing, so pausing and resuming is one play. */
 	#playStarted = 0;
-	/**
-	 * What the lock screen and media keys act on: this player, unless what the player bar shows
-	 * takes their place (`controls.svelte.ts`).
-	 */
-	actions: {
-		play(): void;
-		pause(): void;
-		next(): void;
-		previous(): void;
-		seek(seconds: number): void;
-	} = {
-		play: () => void this.resume().catch(() => {}),
-		pause: () => this.pause(),
-		next: () => this.next(),
-		previous: () => this.previous(),
-		seek: (seconds) => this.seek(seconds)
-	};
 	#plays = new PlayRecorder((items, keepalive) => recordPlays(fetch, items, keepalive));
 	#progress = new Progress((report) => realtime.send({ type: 'progress', report }));
 	/** Waiting for audio to arrive, though not paused. */
@@ -410,14 +393,11 @@ class Player {
 
 		if ('mediaSession' in navigator) {
 			const ms = navigator.mediaSession;
-			ms.setActionHandler('play', () => this.actions.play());
-			ms.setActionHandler('pause', () => this.actions.pause());
-			ms.setActionHandler('previoustrack', () => this.actions.previous());
-			ms.setActionHandler('nexttrack', () => this.actions.next());
-			ms.setActionHandler(
-				'seekto',
-				(d) => d.seekTime !== undefined && this.actions.seek(d.seekTime)
-			);
+			ms.setActionHandler('play', () => void this.resume().catch(() => {}));
+			ms.setActionHandler('pause', () => this.pause());
+			ms.setActionHandler('previoustrack', () => this.previous());
+			ms.setActionHandler('nexttrack', () => this.next());
+			ms.setActionHandler('seekto', (d) => d.seekTime !== undefined && this.seek(d.seekTime));
 		}
 		return audio;
 	}
