@@ -9,6 +9,9 @@ import type {
 	AlbumSummary,
 	Library,
 	PlayReport,
+	PlayerState,
+	RealtimeClientMessage,
+	RealtimeServerMessage,
 	Session,
 	SetupRequest,
 	TrackSummary
@@ -83,6 +86,8 @@ function wav(): Buffer {
 }
 
 const device = { name: 'Chrome on Linux', type: 'desktop' as const, platform: 'web' };
+/** The ID the server gives this browser's device. */
+const deviceId = '2';
 
 /** The session a successful setup or login returns. */
 const session = (request: SetupRequest): Session => ({
@@ -95,7 +100,7 @@ const session = (request: SetupRequest): Session => ({
 		hasAvatar: false
 	},
 	device: {
-		id: '2',
+		id: deviceId,
 		...request.device,
 		firstSeenAt: '2026-09-29T00:00:00.000Z',
 		lastSeenAt: '2026-09-29T00:00:00.000Z',
@@ -307,6 +312,11 @@ export async function serveLibrary(
 				libraryEmpty: false
 			});
 		}
+		const one = tracks.find((t) => path === `${lib}/tracks/${t.id}`);
+		if (one) {
+			const lyrics = one.id === tracks[0].id ? 'synced' : 'none';
+			return json({ ...one, lyrics, loudness: null, identifiers: {} });
+		}
 		const media = /^\/libraries\/\d+\/tracks\/(\d+)\/(playback|waveform|audio|lyrics)$/.exec(path);
 		if (media?.[2] === 'lyrics') {
 			return json(
@@ -329,4 +339,82 @@ export async function serveLibrary(
 		return problem(404, 'not_found');
 	});
 	return { plays };
+}
+
+/** Another of the account's devices, connected, which the realtime fixture has playing. */
+export const phone = {
+	id: '3',
+	name: 'Pixel Phone',
+	type: 'phone' as const,
+	firstSeenAt: '2026-09-29T00:00:00.000Z',
+	lastSeenAt: '2026-09-29T00:00:00.000Z',
+	connected: true
+};
+
+/**
+ * Answers the realtime connection as a server would with `phone` playing the second track: it
+ * says hello, lists this device and the phone, and carries out `play` and `pause` as if the phone
+ * had, or a takeover reported from here. Returns every message the page sent.
+ */
+export async function serveRealtime(page: Page) {
+	const sent: RealtimeClientMessage[] = [];
+	const now = () => new Date().toISOString();
+	let state: PlayerState = {
+		status: 'playing',
+		activeDeviceId: phone.id,
+		itemId: null,
+		libraryId: library.id,
+		trackId: tracks[1].id,
+		positionMs: 0,
+		positionAt: now(),
+		volume: 1
+	};
+	await page.routeWebSocket('**/api/v1/realtime', (ws) => {
+		const send = (message: RealtimeServerMessage) => ws.send(JSON.stringify(message));
+		const devices = [
+			{ ...phone },
+			{
+				id: deviceId,
+				...device,
+				firstSeenAt: phone.firstSeenAt,
+				lastSeenAt: phone.lastSeenAt,
+				connected: true
+			}
+		];
+		send({ type: 'hello', deviceId, serverTime: now() });
+		send({ type: 'devices', devices });
+		send({ type: 'player', state });
+		ws.onMessage((data) => {
+			const message: RealtimeClientMessage = JSON.parse(data.toString());
+			sent.push(message);
+			if (message.type === 'ping') send({ type: 'pong', serverTime: now() });
+			if (message.type === 'playerCommand') {
+				const { command } = message;
+				if (command.type === 'play' || command.type === 'pause') {
+					const status = command.type === 'play' ? 'playing' : 'paused';
+					state = { ...state, status, positionAt: now() };
+					send({
+						type: 'commandResult',
+						result: { commandId: command.commandId, status: 'applied' }
+					});
+					send({ type: 'player', state });
+				}
+			}
+			if (message.type === 'progress' && message.report.start) {
+				const { report } = message;
+				state = {
+					...state,
+					status: report.status === 'buffering' ? 'paused' : report.status,
+					activeDeviceId: report.deviceId,
+					itemId: report.itemId,
+					libraryId: report.libraryId,
+					trackId: report.trackId,
+					positionMs: report.positionMs,
+					positionAt: now()
+				};
+				send({ type: 'player', state });
+			}
+		});
+	});
+	return { sent };
 }
