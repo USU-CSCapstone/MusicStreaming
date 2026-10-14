@@ -11,7 +11,7 @@
 
 import { ApiError, editPlaylist, getPlaylist, listPlaylistItems } from './api/client';
 import type { Playable, Playlist, PlaylistEdit, PlaylistItem, TrackSummary } from './api/types';
-import { applyOps } from './playlist-ops';
+import { type Resolve, applyOps, invertOps } from './playlist-ops';
 import { toast } from './toast.svelte';
 
 type Fetch = typeof fetch;
@@ -63,24 +63,51 @@ export class EditablePlaylist {
 	 * Applies `change` here at once, and queues it for the server. Adds name tracks, whose
 	 * summaries `tracks` gives, so what shows here is exactly what the server stores: expand an
 	 * album or artist before adding it. A position out of range throws, and nothing applies.
+	 *
+	 * Returns its undo (`requirements/playlists.md` §4): a further edit reversing this one, which
+	 * does nothing once the contents have changed again, as its positions would be wrong.
 	 */
-	edit(change: PlaylistChange, tracks: TrackSummary[] = []) {
-		const { ops } = change;
+	edit(change: PlaylistChange, tracks: TrackSummary[] = []): () => void {
 		// Only the timestamp is kept, so nothing needs to react to this date.
 		// eslint-disable-next-line svelte/prefer-svelte-reactivity
 		const addedAt = new Date().toISOString();
-		const resolve = (added: Playable[]) =>
+		return this.#edit(change, (added) =>
 			added.map((p) => {
 				const track = p.type === 'track' ? tracks.find((t) => t.id === p.id) : undefined;
 				if (!track) throw new Error('Adding a track needs its summary.');
 				return { track, addedAt };
-			});
+			})
+		);
+	}
+
+	#edit(change: PlaylistChange, resolve: Resolve<PlaylistItem>): () => void {
+		const before = { playlist: this.playlist, items: this.items };
+		const { ops } = change;
 		const apply = (items: PlaylistItem[]) => (ops ? applyOps(items, ops, resolve) : items);
 
 		this.items = apply(this.items);
 		this.#queue.push({ change, key: crypto.randomUUID(), apply });
 		this.#present();
 		this.#sending ??= this.#send();
+
+		const undo: PlaylistChange = {};
+		if (change.title !== undefined) undo.title = before.playlist.title;
+		if (change.description !== undefined) undo.description = before.playlist.description;
+		if (change.pinned !== undefined) undo.pinned = before.playlist.pinned;
+		const inverse = ops ? invertOps(before.items, ops, resolve, toPlayable) : [];
+		if (inverse.length) undo.ops = inverse;
+		const after = this.items;
+		return () => {
+			if (this.items !== after || Object.keys(undo).length === 0) return;
+			// What comes back is what went: the same items, found among those before.
+			this.#edit(undo, (added) =>
+				added.map((p) => {
+					const item = before.items.find((i) => same(toPlayable(i), p));
+					if (!item) throw new Error('Undo brings back only what was there.');
+					return item;
+				})
+			);
+		};
 	}
 
 	/** Settles once every pending edit is confirmed, refused, or dropped. */
@@ -191,6 +218,15 @@ export async function loadPlaylist(
 		if (attempt === 3) throw new Error('The playlist kept changing while it loaded.');
 	}
 }
+
+/** How an edit names an item: a library track, or one from an external source. */
+function toPlayable(item: PlaylistItem): Playable {
+	if (item.track) return { type: 'track', id: item.track.id };
+	return { type: 'external', sourceId: item.external!.source!, externalId: item.external!.id };
+}
+
+// Both sides come from `toPlayable`, so their keys are in the same order.
+const same = (a: Playable, b: Playable) => JSON.stringify(a) === JSON.stringify(b);
 
 /** Whether `e` is the server out of reach or overloaded, rather than refusing the edit. */
 function unreachable(e: unknown): boolean {

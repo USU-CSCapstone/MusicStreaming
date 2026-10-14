@@ -9,6 +9,7 @@
 	import TrackList from '$lib/components/TrackList.svelte';
 	import { deleteWithUndo } from '$lib/deletions.svelte';
 	import { formatLength, plural } from '$lib/format';
+	import { toast } from '$lib/toast.svelte';
 	import { player } from '$lib/player.svelte';
 	import { EditablePlaylist } from '$lib/playlist.svelte';
 
@@ -17,8 +18,12 @@
 	// Edits show at once and are saved behind them (`requirements/playlists.md` §4).
 	const list = $derived(new EditablePlaylist(fetch, data.loaded));
 	const playlist = $derived(list.playlist);
-	// External tracks from plugins are not shown yet (`requirements/plugins.md` §10).
-	const tracks = $derived(list.items.flatMap((i) => (i.track ? [i.track] : [])));
+	// External tracks from plugins are not shown yet (`requirements/plugins.md` §10), so a row's
+	// index is not always its position in the playlist: `positions` maps one to the other.
+	const rows = $derived(
+		list.items.flatMap((item, position) => (item.track ? [{ track: item.track, position }] : []))
+	);
+	const tracks = $derived(rows.map((r) => r.track));
 	const context = $derived({ type: 'playlist', id: playlist.id } as const);
 	let editing = $state(false);
 
@@ -29,6 +34,14 @@
 		if (description !== playlist.description) change.description = description;
 		if (Object.keys(change).length) list.edit(change);
 		editing = false;
+	}
+
+	/** Removals can be undone (`requirements/playlists.md` §4). */
+	function removeRows(indexes: number[]) {
+		const undo = list.edit({
+			ops: [{ op: 'remove', positions: indexes.map((i) => rows[i].position) }]
+		});
+		toast(`Removed ${plural(indexes.length, 'song')}`, { action: { label: 'Undo', run: undo } });
 	}
 
 	/** No confirmation: Undo is offered instead (`requirements/playlists.md` §4). */
@@ -80,7 +93,7 @@
 	{/snippet}
 </DetailHeader>
 
-<TrackList {tracks} empty="This playlist is empty." {context} />
+<TrackList {tracks} empty="This playlist is empty." {context} editable onremove={removeRows} />
 
 {#if editing}
 	<PlaylistDetailsDialog

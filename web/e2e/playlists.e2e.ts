@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { serveLibrary } from './fixtures';
+import { serveLibrary, signalMix } from './fixtures';
 
 test('creates a playlist and opens it', async ({ page }) => {
 	await serveLibrary(page);
@@ -132,4 +132,71 @@ test('deletes a playlist, with a moment to undo it', async ({ page }) => {
 	// Back does not return to the deleted playlist.
 	await page.goBack();
 	await expect(page).toHaveURL(/\/playlists$/);
+});
+
+test('selects songs and removes them, with Undo', async ({ page }) => {
+	await serveLibrary(page, { playlists: [signalMix] });
+	await page.goto(`/playlists/${signalMix.id}`);
+	const row = (title: string) => page.getByRole('button', { name: title, exact: true });
+	const bar = page.getByRole('toolbar', { name: 'Selected songs' });
+	const titles = () => page.locator('.track .title');
+
+	// Click, Shift-click a range, and Ctrl/Cmd-click one back out.
+	await row('Signal Part 1').click();
+	await row('Signal Remix').click({ modifiers: ['Shift'] });
+	await expect(bar).toContainText('3 songs selected');
+	await row('Signal Part 2').click({ modifiers: ['ControlOrMeta'] });
+	await expect(bar).toContainText('2 songs selected');
+
+	await bar.getByRole('button', { name: 'Remove' }).click();
+	await expect(titles()).toHaveText(['Signal Part 2']);
+	await expect(page.getByText('1 song · ')).toBeVisible();
+	await expect(bar).toBeHidden();
+	await expect(page.getByRole('status')).toHaveText(/Removed 2 songs/);
+
+	await page.getByRole('button', { name: 'Undo' }).click();
+	await expect(titles()).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+
+	// Everything, and then nothing.
+	await page.keyboard.press('ControlOrMeta+a');
+	await expect(bar).toContainText('3 songs selected');
+	await page.keyboard.press('Escape');
+	await expect(bar).toBeHidden();
+
+	// The boxes select too, as on a touch screen; the removal is saved.
+	await page.getByRole('checkbox', { name: 'Select Signal Remix' }).check();
+	await expect(bar).toContainText('1 song selected');
+	const saved = page.waitForResponse((r) => r.request().method() === 'PATCH');
+	await bar.getByRole('button', { name: 'Remove' }).click();
+	await saved;
+	await page.reload();
+	await expect(titles()).toHaveText(['Signal Part 1', 'Signal Part 2']);
+});
+
+test('a double click plays a song in a playlist, as a click there selects it', async ({ page }) => {
+	await serveLibrary(page, { playlists: [signalMix] });
+	await page.goto(`/playlists/${signalMix.id}`);
+	await page.getByRole('button', { name: 'Signal Part 2', exact: true }).dblclick();
+	const player = page.getByRole('region', { name: 'Player' });
+	await expect(player.getByText('Signal Part 2')).toBeVisible();
+});
+
+test.describe('on a touch screen', () => {
+	test.use({ hasTouch: true });
+
+	test('a tap plays until a box is checked, and then selects', async ({ page }) => {
+		await serveLibrary(page, { playlists: [signalMix] });
+		await page.goto(`/playlists/${signalMix.id}`);
+		const bar = page.getByRole('toolbar', { name: 'Selected songs' });
+
+		await page.getByRole('button', { name: 'Signal Part 2', exact: true }).tap();
+		const player = page.getByRole('region', { name: 'Player' });
+		await expect(player.getByText('Signal Part 2')).toBeVisible();
+		await expect(bar).toBeHidden();
+
+		await page.getByRole('checkbox', { name: 'Select Signal Part 1' }).tap();
+		await page.getByRole('button', { name: 'Signal Remix', exact: true }).tap();
+		await expect(bar).toContainText('2 songs selected');
+		await expect(page.getByRole('checkbox', { name: 'Select Signal Remix' })).toBeChecked();
+	});
 });
