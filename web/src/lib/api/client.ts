@@ -15,7 +15,10 @@ import type {
 	Lyrics,
 	PlaybackInfo,
 	PlayReport,
+	Playable,
 	Playlist,
+	PlaylistCreate,
+	PlaylistEdit,
 	PlaylistItemPage,
 	PlaylistPage,
 	RecentSearch,
@@ -89,14 +92,17 @@ const get = async <T>(fetch: Fetch, path: string, query?: Query): Promise<T> =>
 /**
  * A state-changing request, with a JSON body or a file. Cookie-authenticated writes must
  * carry `X-Jewelcase-Client` or they are refused (`api/openapi.yaml`, Authentication).
+ * With `idempotencyKey`, a retry returns the first attempt's result rather than applying twice.
  */
 async function send<T>(
 	fetch: Fetch,
-	method: 'POST' | 'PUT' | 'DELETE',
+	method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
 	path: string,
-	json?: Blob | object
+	json?: Blob | object,
+	idempotencyKey?: string
 ): Promise<T> {
 	const headers: Record<string, string> = { 'X-Jewelcase-Client': 'web' };
+	if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
 	let payload: BodyInit | undefined;
 	if (json instanceof Blob) {
 		headers['Content-Type'] = 'application/octet-stream';
@@ -152,20 +158,53 @@ export const getArtist = (f: Fetch, libraryId: string, artistId: string) =>
 export const listPlaylists = (f: Fetch, libraryId: string, query: Query = {}) =>
 	get<PlaylistPage>(f, `${lib(libraryId)}/playlists`, query);
 
+const playlist = (libraryId: string, playlistId: string) =>
+	`${lib(libraryId)}/playlists/${encodeURIComponent(playlistId)}`;
+
 export const getPlaylist = (f: Fetch, libraryId: string, playlistId: string) =>
-	get<Playlist>(f, `${lib(libraryId)}/playlists/${encodeURIComponent(playlistId)}`);
+	get<Playlist>(f, playlist(libraryId, playlistId));
+
+/** At version 1. To retry, pass the first attempt's `key`, so only one playlist is created. */
+export const createPlaylist = (
+	f: Fetch,
+	libraryId: string,
+	request: PlaylistCreate,
+	key = crypto.randomUUID()
+) => send<Playlist>(f, 'POST', `${lib(libraryId)}/playlists`, request, key);
+
+/**
+ * Applies all of `edit` against `edit.baseVersion`, or none of it: an `ApiError` with
+ * `version_conflict` means the playlist changed elsewhere. To retry, pass the first attempt's
+ * `key`, so an edit that did apply is not refused as a conflict with itself.
+ */
+export const editPlaylist = (
+	f: Fetch,
+	libraryId: string,
+	playlistId: string,
+	edit: PlaylistEdit,
+	key = crypto.randomUUID()
+) => send<Playlist>(f, 'PATCH', playlist(libraryId, playlistId), edit, key);
+
+export const deletePlaylist = (f: Fetch, libraryId: string, playlistId: string) =>
+	send<void>(f, 'DELETE', playlist(libraryId, playlistId));
+
+/** Which of the tracks `items` stand for are already in the playlist, to warn before adding. */
+export const checkPlaylistDuplicates = (
+	f: Fetch,
+	libraryId: string,
+	playlistId: string,
+	items: Playable[]
+) =>
+	send<{ trackIds: string[] }>(f, 'POST', `${playlist(libraryId, playlistId)}/duplicates`, {
+		items
+	});
 
 export const listPlaylistItems = (
 	f: Fetch,
 	libraryId: string,
 	playlistId: string,
 	query: Query = {}
-) =>
-	get<PlaylistItemPage>(
-		f,
-		`${lib(libraryId)}/playlists/${encodeURIComponent(playlistId)}/items`,
-		query
-	);
+) => get<PlaylistItemPage>(f, `${playlist(libraryId, playlistId)}/items`, query);
 
 export const search = (f: Fetch, libraryId: string, q: string, query: Query = {}) =>
 	get<SearchResponse>(f, `${lib(libraryId)}/search`, { q, ...query });
