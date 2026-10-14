@@ -130,6 +130,18 @@ describe('Realtime', () => {
 		expect(sockets).toHaveLength(2);
 	});
 
+	it('counts from the first ping still unanswered when back in view', () => {
+		realtime.start();
+		const first = latest();
+		first.hello();
+		vi.advanceTimersByTime(15_000);
+		vi.advanceTimersByTime(14_000);
+		document.dispatchEvent(new Event('visibilitychange'));
+		vi.advanceTimersByTime(1000);
+		expect(realtime.connected, 'unanswered for 15 s').toBe(false);
+		expect(first.sent).toEqual([{ type: 'ping' }]);
+	});
+
 	it('stops once the server signs this device out', () => {
 		const heard: string[] = [];
 		realtime.on((message) => heard.push(message.type));
