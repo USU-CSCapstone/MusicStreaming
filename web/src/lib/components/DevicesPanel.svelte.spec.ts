@@ -5,7 +5,14 @@ import type { Device, PlayerState } from '$lib/api/types';
 
 const fake = vi.hoisted(() => ({
 	realtime: { deviceId: '2', connected: true, offline: false },
-	playback: { devices: [] as unknown[], state: null as unknown, track: null as unknown },
+	playback: {
+		devices: [] as unknown[],
+		state: null as unknown,
+		track: null as unknown,
+		moving: null as { deviceId: string; commandId: string } | null,
+		error: null as string | null,
+		transfer: (() => {}) as (deviceId: string) => void
+	},
 	controls: {
 		playing: true,
 		remote: true,
@@ -35,6 +42,7 @@ const playingOn = (activeDeviceId: string): PlayerState => ({
 });
 
 beforeEach(() => {
+	vi.restoreAllMocks();
 	Object.assign(fake.realtime, { connected: true, offline: false });
 	fake.playback.devices = [
 		device('3', 'Old Laptop', 'desktop', false),
@@ -43,6 +51,7 @@ beforeEach(() => {
 	];
 	fake.playback.state = playingOn('1');
 	fake.playback.track = fake.controls.track;
+	Object.assign(fake.playback, { moving: null, error: null });
 	fake.controls.playing = true;
 	fake.controls.remote = true;
 	fake.controls.pickable = true;
@@ -74,6 +83,77 @@ describe('DevicesPanel', () => {
 		render(DevicesPanel);
 		await expect.element(rows().nth(0)).toBeVisible();
 		await expect.element(page.getByRole('button', { name: 'Play here' })).not.toBeInTheDocument();
+	});
+
+	it('moves playback to another connected device', async () => {
+		fake.playback.devices.push(device('4', 'Living Room', 'tv', true));
+		const transfer = vi.spyOn(fake.playback, 'transfer');
+		render(DevicesPanel);
+		const room = rows().nth(2);
+		await expect.element(room).toHaveTextContent(/Living Room\s*Connected/);
+		await room.getByRole('button', { name: 'Play there, on Living Room' }).click();
+		expect(transfer).toHaveBeenCalledWith('4');
+		// Not to the device playing it, nor one not connected.
+		expect(page.getByRole('button', { name: 'Play there' }).elements()).toHaveLength(1);
+	});
+
+	it('says playback is on its way, and moves it one place at a time', async () => {
+		fake.playback.devices.push(device('4', 'Living Room', 'tv', true));
+		fake.playback.moving = { deviceId: '4', commandId: 'c' };
+		const transfer = vi.spyOn(fake.playback, 'transfer');
+		render(DevicesPanel);
+		await expect.element(rows().nth(2)).toHaveTextContent(/Living Room\s*Starting…/);
+		const button = rows().nth(2).getByRole('button', { name: 'Play there' });
+		await expect.element(button).toHaveAttribute('aria-disabled', 'true');
+		// As a click would, which a browser still delivers to a button only marked disabled.
+		(button.element() as HTMLElement).click();
+		expect(transfer).not.toHaveBeenCalled();
+	});
+
+	it('says why playback could not move, unless the player bar already does', async () => {
+		fake.playback.error = 'That device is not connected.';
+		fake.controls.remote = false;
+		render(DevicesPanel);
+		await expect
+			.element(page.getByRole('alert'))
+			.toHaveTextContent('That device is not connected.');
+	});
+
+	it("leaves a failure to the player bar while it shows another device's track", async () => {
+		fake.playback.error = 'That device is not connected.';
+		render(DevicesPanel);
+		await expect.element(rows().nth(0)).toBeVisible();
+		await expect.element(page.getByRole('alert')).not.toBeInTheDocument();
+	});
+
+	it('says why playback could not move while the track is not yet known', async () => {
+		fake.playback.error = 'That device is not connected.';
+		const track = fake.controls.track;
+		fake.controls.track = null;
+		render(DevicesPanel);
+		await expect.element(page.getByRole('alert')).toBeVisible();
+		fake.controls.track = track;
+	});
+
+	it('offers nowhere to move playback while offline, nor says it is on its way', async () => {
+		fake.playback.devices.push(device('4', 'Living Room', 'tv', true));
+		fake.playback.moving = { deviceId: '4', commandId: 'c' };
+		Object.assign(fake.realtime, { connected: false, offline: true });
+		render(DevicesPanel);
+		await expect.element(rows().nth(2)).toHaveTextContent(/Living Room\s*Was connected/);
+		await expect.element(page.getByRole('button', { name: 'Play there' })).not.toBeInTheDocument();
+	});
+
+	it('offers nowhere to move playback before anything has played', async () => {
+		fake.playback.state = {
+			...playingOn('1'),
+			status: 'stopped',
+			activeDeviceId: null,
+			trackId: null
+		};
+		render(DevicesPanel);
+		await expect.element(rows().nth(1)).toHaveTextContent(/Desk\s*Connected/);
+		await expect.element(page.getByRole('button', { name: 'Play there' })).not.toBeInTheDocument();
 	});
 
 	it('offers nothing to take while this device plays, or is offline', async () => {

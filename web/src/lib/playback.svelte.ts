@@ -1,7 +1,7 @@
 // The account's playback as the server last told it (`requirements/realtime.md` §2, §4): which
 // device plays, what, and where, and the names of the account's devices. A device that is not
 // the one playing shows this instead of its own player, so the user can see where the music
-// went, control it, and take it back.
+// went, control it, and take it back. Any device can move playback to another (§3).
 //
 // A command to the device playing shows its effect at once and is set right by the next
 // state; one that fails is undone, and says why (§5).
@@ -32,6 +32,8 @@ class Playback {
 	waveform = $state<Uint8Array | null>(null);
 	/** Why the latest command failed, for a few seconds. */
 	error = $state<string | null>(null);
+	/** Playback being moved to another device, until it takes over or says it cannot. */
+	moving = $state<{ deviceId: string; commandId: string } | null>(null);
 	/** What commands just asked of the device playing, shown until the server says how it went. */
 	#asked = $state<Partial<PlayerState>>({});
 	/** The state as shown: the server's, with what was just asked of it. */
@@ -125,6 +127,13 @@ class Playback {
 		this.#send({ type: 'seek', positionMs }, { positionMs, positionAt: this.#serverNow() });
 	}
 
+	/** Moves playback to `deviceId`, playing there unless it is paused, or waking it if stopped. */
+	transfer(deviceId: string) {
+		const play = this.shown?.status !== 'paused';
+		const commandId = this.#send({ type: 'transfer', deviceId, play });
+		this.moving = commandId ? { deviceId, commandId } : null;
+	}
+
 	/** Shows `volume` at once, and sends it once the slider rests. */
 	setVolume(volume: number) {
 		// The device it is turned up or down on, wherever playback goes meanwhile.
@@ -142,6 +151,7 @@ class Playback {
 	#forget() {
 		this.#waiting = {};
 		this.#asked = {};
+		this.moving = null;
 		clearTimeout(this.#volumeTimer);
 		this.#volumeTimer = undefined;
 	}
@@ -158,23 +168,28 @@ class Playback {
 		return new Date(Date.now() + realtime.clockOffset).toISOString();
 	}
 
-	/** Sends `command` to the device playing, showing `change` until the server answers. */
-	#send(command: Command, change: Partial<PlayerState> = {}) {
+	/**
+	 * Sends `command` to the device playing, or the one a transfer names, showing `change` until
+	 * the server answers. Answers its ID, or null if it could not be sent.
+	 */
+	#send(command: Command, change: Partial<PlayerState> = {}): string | null {
 		const commandId = crypto.randomUUID();
 		if (
 			!realtime.send({ type: 'playerCommand', command: { ...command, commandId } as PlayerCommand })
 		) {
 			this.#asked = {};
 			this.#failed('Not connected to the server.');
-			return;
+			return null;
 		}
 		this.#waiting[commandId] = true;
 		this.#asked = { ...this.#asked, ...change };
+		return commandId;
 	}
 
 	#answered(result: { commandId: string; status: string; reason?: string | null }) {
 		if (result.status === 'pending' || !this.#waiting[result.commandId]) return;
 		delete this.#waiting[result.commandId];
+		if (result.commandId === this.moving?.commandId) this.moving = null;
 		if (result.status === 'failed') {
 			// What it asked for did not happen: back to what the server says did.
 			this.#asked = {};

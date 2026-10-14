@@ -9,8 +9,8 @@
 	// settings (`requirements/realtime.md` §1, `requirements/users.md` §4). For each, what
 	// matters for choosing it: its name, its type, whether it is connected, and what it plays.
 	// One not connected is shown, not hidden, so one asleep is not hunted for. While this device
-	// is offline, nothing is shown as current (§6). This device can take playback from elsewhere
-	// here; choosing another to move it to comes with Shift.
+	// is offline, nothing is shown as current (§6). This device can take playback from elsewhere,
+	// and any other connected one can be chosen to move it to (§3).
 
 	/** This device first, then those connected, each as the server orders them: last seen first. */
 	const rank = (device: Device) => (device.id === realtime.deviceId ? 0 : device.connected ? 1 : 2);
@@ -22,9 +22,17 @@
 	 */
 	const takeable = $derived(controls.remote && controls.pickable);
 
+	/** Whether playback can be moved to `device`: connected, not playing it, and with something to move. */
+	function movable(device: Device): boolean {
+		const state = playback.state;
+		if (stale || !device.connected || device.id === realtime.deviceId) return false;
+		return state?.trackId != null && device.id !== state.activeDeviceId;
+	}
+
 	function status(device: Device): string {
 		const state = playback.state;
 		if (device.id === realtime.deviceId && stale) return 'Not connected';
+		if (!stale && device.id === playback.moving?.deviceId) return 'Starting…';
 		if (device.id === state?.activeDeviceId) {
 			// As the player bar shows the device playing, what was just asked of it included.
 			const playing = stale ? state.status === 'playing' : controls.playing;
@@ -39,6 +47,10 @@
 	}
 </script>
 
+<!-- The player bar says why a command failed while it shows another device's track; otherwise, here. -->
+{#if playback.error && !(controls.remote && controls.track)}
+	<p class="error" role="alert">{playback.error}</p>
+{/if}
 {#if devices.length === 0}
 	<p class="empty muted">
 		{realtime.connected ? 'Loading…' : 'Your devices show once connected.'}
@@ -60,6 +72,19 @@
 					<button type="button" class="action" onclick={() => controls.playHere()}>
 						Play here
 					</button>
+				{:else if movable(device)}
+					<!-- One move at a time; kept while it goes, so focus stays where it was. -->
+					<button
+						type="button"
+						class="action"
+						aria-label="Play there, on {device.name}"
+						aria-disabled={playback.moving !== null}
+						onclick={() => {
+							if (!playback.moving) playback.transfer(device.id);
+						}}
+					>
+						Play there
+					</button>
 				{/if}
 			</li>
 		{/each}
@@ -69,6 +94,12 @@
 <style>
 	.empty {
 		margin: var(--space-4) 0 0;
+	}
+
+	.error {
+		margin: 0 0 var(--space-2);
+		color: var(--danger);
+		font-size: 13px;
 	}
 
 	ul {
@@ -136,6 +167,12 @@
 
 	.action:hover {
 		background: var(--accent-soft);
+	}
+
+	.action[aria-disabled='true'] {
+		background: transparent;
+		opacity: 0.5;
+		cursor: default;
 	}
 
 	.name {
