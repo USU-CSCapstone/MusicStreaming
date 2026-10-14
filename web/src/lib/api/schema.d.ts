@@ -2104,9 +2104,11 @@ export interface paths {
          * Open the realtime connection
          * @description Upgrades to a WebSocket. Authenticates like any other request, by bearer token or
          *     session cookie. A request with an `Origin` — one from a web page — is refused `403`
-         *     unless that origin names the host it was sent to, as `Host` or `X-Forwarded-Host`,
-         *     so another site's page cannot open a connection with the user's cookie. The origin's
-         *     port must match too, unless that header names no port.
+         *     unless that origin's host and port match those it was sent to, as `Host` or
+         *     `X-Forwarded-Host`, so another site's page, or another server's on the same host,
+         *     cannot open a connection with the user's cookie. A port left out on either side is
+         *     the default for the origin's scheme, so a proxy on any other port must pass it on
+         *     (with nginx, `$http_host` rather than `$host`).
          *     Messages are JSON objects matching `RealtimeClientMessage` and
          *     `RealtimeServerMessage`, each at most 64 KiB; a message whose `type` the server
          *     does not know is ignored. The server pings every 15 seconds and closes a connection
