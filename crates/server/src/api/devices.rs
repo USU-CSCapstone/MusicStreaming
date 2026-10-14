@@ -99,7 +99,7 @@ pub fn changed(db: Arc<Database>, hub: Arc<Hub>, user: i64) {
     tokio::spawn(async move {
         // Read in turn, so the list sent last was read after the latest change. A connection
         // that comes or goes during the read sends another list after this one.
-        let turn = hub.device_list_turn().await;
+        let _turn = hub.device_list_turn().await;
         if hub.connected(user).is_empty() {
             return;
         }
@@ -111,12 +111,7 @@ pub fn changed(db: Arc<Database>, hub: Arc<Hub>, user: i64) {
         for device in &mut devices {
             device.connected = connected.contains(&device.id.0);
         }
-        let closed = hub.broadcast(user, &ServerMessage::Devices { devices });
-        drop(turn);
-        if closed {
-            // That list counts the connections it closed for falling behind as connected.
-            changed(db, hub, user);
-        }
+        hub.broadcast(user, &ServerMessage::Devices { devices });
     });
 }
 

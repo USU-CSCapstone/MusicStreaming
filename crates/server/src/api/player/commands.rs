@@ -29,7 +29,7 @@ use tokio::sync::oneshot;
 use super::Players;
 use crate::api::authenticate::Caller;
 use crate::api::realtime::Hub;
-use crate::api::{Code, Problem, extract};
+use crate::api::{Problem, extract};
 pub use relay::Commands;
 use relay::Reply;
 
@@ -104,34 +104,6 @@ impl PlayerCommand {
     }
 }
 
-/// Why a command was not passed on.
-pub enum Refused {
-    Invalid(&'static str),
-    /// There is no device to carry it out.
-    Unavailable(&'static str),
-    Busy,
-}
-
-impl Refused {
-    fn reason(&self) -> &'static str {
-        match self {
-            Refused::Invalid(reason) | Refused::Unavailable(reason) => reason,
-            Refused::Busy => "Too many commands are waiting for a device to answer.",
-        }
-    }
-}
-
-impl From<Refused> for Problem {
-    fn from(refused: Refused) -> Problem {
-        let code = match refused {
-            Refused::Invalid(_) => Code::ValidationFailed,
-            Refused::Unavailable(_) => Code::DeviceUnavailable,
-            Refused::Busy => Code::RateLimited,
-        };
-        Problem::new(code).detail(refused.reason())
-    }
-}
-
 impl Players {
     /// [`command`](Self::command) from `caller`'s realtime connection `connection`: what to
     /// tell it now, which is `failed` if the command was not passed on.
@@ -144,9 +116,8 @@ impl Players {
     ) -> CommandResult {
         let id = command.command_id.clone();
         let reply = Reply::Connection(connection);
-        self.command(hub, caller, reply, command).unwrap_or_else(|refused| {
-            CommandResult::new(id, Status::Failed, Some(refused.reason()))
-        })
+        self.command(hub, caller, reply, command)
+            .unwrap_or_else(|refused| CommandResult::new(id, Status::Failed, refused.explanation()))
     }
 }
 

@@ -94,6 +94,11 @@ impl Problem {
         self.detail = Some(detail.into());
         self
     }
+
+    /// Its explanation, if it has one.
+    pub fn explanation(&self) -> Option<&str> {
+        self.detail.as_deref()
+    }
 }
 
 impl IntoResponse for Problem {

@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use super::authenticate::Caller;
 use super::realtime::{Hub, Presence, ServerMessage};
 use super::time::serialize_rfc3339;
-use super::{AppState, Id, Problem, devices};
+use super::{AppState, Id, Problem};
 use crate::db::now_ms;
 pub use commands::{CommandResult, PlayerCommand, send as send_command};
 
@@ -125,7 +125,7 @@ impl PlayerState {
     /// stepped back counts as no time.
     fn played_to(&self, now: i64) -> u32 {
         let played = match self.status {
-            Status::Playing => u32::try_from(now - self.position_at).unwrap_or(0),
+            Status::Playing => u32::try_from((now - self.position_at).max(0)).unwrap_or(u32::MAX),
             Status::Paused | Status::Stopped => 0,
         };
         self.position_ms.saturating_add(played)
@@ -163,14 +163,12 @@ impl Players {
         state.active_device_id = None;
         state.active_connection = None;
         state.unsaved = true;
-        // Any connection this closes is already gone from the hub, so the device list its
-        // `serve` sends as it ends counts it out.
-        let _ = hub.broadcast(user, &ServerMessage::Player { state: state.clone() });
+        hub.broadcast(user, &ServerMessage::Player { state: state.clone() });
     }
 
     /// Applies `report` from `caller` over `connection`, already checked, and sends the new
     /// state to the account's connections. Refuses a report from any connection but the active
-    /// one unless it starts playback, and answers whether sending closed a connection.
+    /// one unless it starts playback.
     fn report(
         &self,
         hub: &Hub,
@@ -179,7 +177,7 @@ impl Players {
         report: ProgressReport,
         library: Id,
         track: Id,
-    ) -> Result<bool, Problem> {
+    ) -> Result<(), Problem> {
         let (user, device) = (caller.user, caller.device);
         let mut accounts = self.lock();
         let state = accounts.entry(user).or_insert_with(PlayerState::stopped);
@@ -208,7 +206,8 @@ impl Players {
         state.position_ms = report.position_ms;
         state.position_at = now_ms();
         state.unsaved = true;
-        Ok(hub.broadcast(user, &ServerMessage::Player { state: state.clone() }))
+        hub.broadcast(user, &ServerMessage::Player { state: state.clone() });
+        Ok(())
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<i64, PlayerState>> {
@@ -255,11 +254,7 @@ pub async fn apply(
     if !reachable.await? {
         return Err(Problem::not_found());
     }
-    let closed = state.players.report(&state.hub, caller, presence.id(), report, library, track)?;
-    if closed {
-        devices::changed(state.db.clone(), state.hub.clone(), caller.user);
-    }
-    Ok(())
+    state.players.report(&state.hub, caller, presence.id(), report, library, track)
 }
 
 /// `getPlayer`.
