@@ -41,13 +41,14 @@ class Playback {
 	}
 
 	/**
-	 * Whether a player that is `playing` here shows this instead of its own: when another
-	 * device holds playback, or it stopped elsewhere and this one is not playing, so any device
-	 * can pick it up from where it stopped (`requirements/realtime.md` §6).
+	 * Whether a player shows this instead of its own, which it has while `own` (playing, or
+	 * stopped at the end of what it played): when another device holds playback, or playback
+	 * stopped elsewhere, so any device can pick it up from where it stopped
+	 * (`requirements/realtime.md` §6).
 	 */
-	shows(playing: boolean): boolean {
+	shows(own: boolean): boolean {
 		const stopped = this.state?.status === 'stopped' && this.state.trackId != null;
-		return this.elsewhere || (stopped && !playing);
+		return this.elsewhere || (stopped && !own);
 	}
 
 	/**

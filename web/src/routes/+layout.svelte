@@ -31,7 +31,8 @@
 	 * player shows another device's playback, which it does not control.
 	 */
 	function onkeydown(e: KeyboardEvent) {
-		if (e.key !== ' ' || e.repeat || e.defaultPrevented || playback.shows(player.playing)) return;
+		if (e.key !== ' ' || e.repeat || e.defaultPrevented) return;
+		if (playback.shows(player.playing || player.finished)) return;
 		const target = e.target as HTMLElement;
 		if (target.closest('input, textarea, select, button, a, [role="slider"], [contenteditable]'))
 			return;
