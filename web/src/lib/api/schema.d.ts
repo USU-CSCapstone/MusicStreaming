@@ -985,20 +985,21 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/libraries/{libraryId}/external/{sourceId}/items/{itemId}": {
+    "/libraries/{libraryId}/external/{sourceId}/items/{entityType}/{entityId}": {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 libraryId: components["parameters"]["LibraryId"];
                 sourceId: components["parameters"]["SourceId"];
-                itemId: string;
+                entityType: "albums" | "artists" | "playlists";
+                entityId: string;
             };
             cookie?: never;
         };
         /**
-         * Browse an external item
-         * @description An artist, album, or playlist in whatever structure the source offers.
+         * Browse an external album, artist, or playlist
+         * @description In the same shapes as library content, with `source` set.
          */
         get: operations["getExternalItem"];
         put?: never;
@@ -1164,57 +1165,12 @@ export interface paths {
         put?: never;
         /**
          * Create a playlist
-         * @description Optionally with initial items, or by saving a generated mix (`requirements/playlists.md` §8).
-         *     The playlist's ID derives from `createId` and it starts at version 1, so a device can
-         *     create a playlist offline and queue edits to it.
+         * @description At version 1, optionally with initial items, or by saving a generated mix
+         *     (`requirements/playlists.md` §8). A playlist created offline exists only on its device,
+         *     which folds any edits into it and creates it here, final contents and all, once online.
+         *     Send an `Idempotency-Key`, so a retry does not create a second playlist.
          */
         post: operations["createPlaylist"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/libraries/{libraryId}/playlists/deleted": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-            };
-            cookie?: never;
-        };
-        /**
-         * List recently deleted playlists
-         * @description Deletion is recoverable for a retention window (`requirements/playlists.md` §4).
-         */
-        get: operations["listDeletedPlaylists"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/libraries/{libraryId}/playlists/import": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Import a Jewelcase playlist file
-         * @description Imports the complete export format, for moving between servers
-         *     (`requirements/playlists.md` §9). Entries that match no track are reported.
-         *     Playlist files inside a library are never read.
-         */
-        post: operations["importPlaylist"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1235,38 +1191,19 @@ export interface paths {
         get: operations["getPlaylist"];
         put?: never;
         post?: never;
-        /**
-         * Delete a playlist
-         * @description Recoverable until the retention window ends.
-         */
+        /** Delete a playlist */
         delete: operations["deletePlaylist"];
         options?: never;
         head?: never;
         /**
-         * Update playlist details
-         * @description Applies only against `baseVersion`; otherwise `409 version_conflict` (`requirements/playlists.md` §5).
+         * Edit a playlist
+         * @description Changes details and contents — adds, removes, and moves, including non-contiguous
+         *     selections — as one atomic edit against `baseVersion`; otherwise `409 version_conflict`
+         *     (`requirements/playlists.md` §4–§5). A device chains its queued edits, each against the
+         *     version the previous one produced. Undo is a further edit that reverses the last. Send
+         *     an `Idempotency-Key`, so a retried edit is not refused because its first attempt applied.
          */
-        patch: operations["updatePlaylist"];
-        trace?: never;
-    };
-    "/libraries/{libraryId}/playlists/{playlistId}/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-                playlistId: components["parameters"]["PlaylistId"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Restore a deleted playlist */
-        post: operations["restorePlaylist"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
+        patch: operations["editPlaylist"];
         trace?: never;
     };
     "/libraries/{libraryId}/playlists/{playlistId}/items": {
@@ -1281,37 +1218,12 @@ export interface paths {
         };
         /**
          * List playlist items
-         * @description In the user's order. Missing tracks stay in position (`requirements/playlists.md` §3).
+         * @description In the user's order, where an item's index is its position for `editPlaylist`. Missing
+         *     tracks stay in position (`requirements/playlists.md` §3). Every page comes from one version.
          */
         get: operations["listPlaylistItems"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/libraries/{libraryId}/playlists/{playlistId}/edits": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-                playlistId: components["parameters"]["PlaylistId"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Edit playlist contents
-         * @description Adds, removes, and moves — including non-contiguous selections — as one atomic
-         *     edit against `baseVersion` (`requirements/playlists.md` §4–§5). A device chains its
-         *     queued edits, each using the version the previous one produced. Undo is a further
-         *     edit that reverses the last.
-         */
-        post: operations["editPlaylist"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1360,32 +1272,6 @@ export interface paths {
         post?: never;
         /** Revert to the generated image */
         delete: operations["deletePlaylistImage"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/libraries/{libraryId}/playlists/{playlistId}/export": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-                playlistId: components["parameters"]["PlaylistId"];
-            };
-            cookie?: never;
-        };
-        /**
-         * Export a playlist
-         * @description `m3u` for other players — the one place a listener receives file paths, requested
-         *     explicitly (`requirements/general.md` §3.7). Paths are absolute as mounted in the
-         *     container; `rootPath` rewrites a root's prefix to where the other player sees it.
-         *     `jewelcase` is the complete format for backup and moving between servers.
-         */
-        get: operations["exportPlaylist"];
-        put?: never;
-        post?: never;
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3206,6 +3092,12 @@ export interface components {
         /** @description Opaque, stable identifier. */
         Id: string;
         /**
+         * @description The external source content comes from, absent for library content. External content is
+         *     always shown labelled with its source (`requirements/plugins.md` §10.1). IDs inside it,
+         *     such as its artists' and album's, are the same source's.
+         */
+        Source: string;
+        /**
          * Format: uuid
          * @description Client-generated. Identifies the write for idempotency and seeds the IDs of items it creates.
          */
@@ -3217,7 +3109,10 @@ export interface components {
          * @description Microseconds.
          */
         DurationUs: number;
-        /** @enum {string} */
+        /**
+         * @description External content its source cannot provide now is `missing`, and behaves exactly like a missing track (`requirements/plugins.md` §10.2).
+         * @enum {string}
+         */
         Availability: "available" | "missing";
         /**
          * @default 30d
@@ -3233,9 +3128,9 @@ export interface components {
         /** @description Something that can be queued or added to a playlist — library content or an external track. */
         Playable: components["schemas"]["EntityRef"] | components["schemas"]["ExternalTrackRef"];
         ImageRef: {
-            /** @description Fetch from `getImage`. Changes whenever the image does. */
+            /** @description Fetch from `getImage`, or `getExternalImage` for content with a `source`. Changes whenever the image does. */
             id: string;
-            /** @description A few bytes, base64, decoding to a recognizable correctly-coloured stand-in (`requirements/offline.md` §1.1). */
+            /** @description A few bytes, base64, decoding to a recognizable correctly-coloured stand-in (`requirements/offline.md` §1.1). Empty when there is none, as for external images. */
             placeholder: string;
         };
         ArtistCredit: {
@@ -3447,22 +3342,29 @@ export interface components {
             id: components["schemas"]["Id"];
             name: string;
         };
-        TrackSummary: {
+        /** @description What any source can say about a track. `TrackSummary` adds what only the library knows. */
+        TrackBase: {
+            source?: components["schemas"]["Source"];
             id: components["schemas"]["Id"];
             /** @description Falls back to the filename for untagged files. */
             title: string;
             /** @description Ordered; the first is primary (`requirements/conventions.md` §7). */
             artists: components["schemas"]["ArtistCredit"][];
-            album: components["schemas"]["AlbumRef"];
+            /** @description `null` only for an external track that is on no album. */
+            album: components["schemas"]["AlbumRef"] | null;
             discNumber?: number | null;
             trackNumber?: number | null;
             durationUs: components["schemas"]["DurationUs"];
             releaseDate?: components["schemas"]["PartialDate"] | null;
-            genres?: components["schemas"]["TagRef"][];
+            explicit?: boolean;
+            availability: components["schemas"]["Availability"];
+        };
+        TrackSummary: components["schemas"]["TrackBase"] & {
+            album?: components["schemas"]["AlbumRef"];
             explicit: boolean;
+            genres?: components["schemas"]["TagRef"][];
             /** @description Enough to tell a FLAC from an MP3 at a glance (`requirements/tracks.md` §4). The full `Track` extends it. */
             audio: components["schemas"]["AudioSummary"];
-            availability: components["schemas"]["Availability"];
             /** Format: date-time */
             addedAt?: string;
             /** @description The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed. */
@@ -3572,16 +3474,18 @@ export interface components {
          * @enum {string}
          */
         AlbumType: "album" | "ep" | "single" | "compilation";
+        /** @description What any source can say about an album. `AlbumSummary` adds what only the library knows. */
+        AlbumBase: components["schemas"]["AlbumRef"] & {
+            source?: components["schemas"]["Source"];
+            releaseDate?: components["schemas"]["PartialDate"] | null;
+            type?: components["schemas"]["AlbumType"];
+        };
         /**
          * @description Completeness has two parts (`requirements/albums.md` §4): tracks missing from discs you
          *     have (`trackCount` below `trackTotal`), and discs you do not have (`discCount` below
          *     `discTotal`). Incomplete is information, never an error.
          */
-        AlbumSummary: {
-            id: components["schemas"]["Id"];
-            title: string | null;
-            artists: components["schemas"]["ArtistCredit"][];
-            releaseDate?: components["schemas"]["PartialDate"] | null;
+        AlbumSummary: components["schemas"]["AlbumBase"] & {
             type: components["schemas"]["AlbumType"];
             genres?: components["schemas"]["TagRef"][];
             /**
@@ -3600,7 +3504,6 @@ export interface components {
             /** @description Tagged total number of discs. */
             discTotal: number | null;
             durationUs: components["schemas"]["DurationUs"];
-            image: components["schemas"]["ImageRef"] | null;
             availability: components["schemas"]["Availability"];
             /** Format: date-time */
             addedAt?: string;
@@ -3626,10 +3529,12 @@ export interface components {
         AlbumPage: components["schemas"]["PageInfo"] & {
             items: components["schemas"]["AlbumSummary"][];
         };
-        ArtistSummary: {
-            id: components["schemas"]["Id"];
-            name: string | null;
+        /** @description What any source can say about an artist. `ArtistSummary` adds what only the library knows. */
+        ArtistBase: components["schemas"]["ArtistCredit"] & {
+            source?: components["schemas"]["Source"];
             image: components["schemas"]["ImageRef"] | null;
+        };
+        ArtistSummary: components["schemas"]["ArtistBase"] & {
             /** @description Albums the artist owns. */
             albumCount: number;
             /** @description Owned and featured tracks. */
@@ -3727,16 +3632,22 @@ export interface components {
             query: string;
             selected?: components["schemas"]["EntityRef"];
         };
-        Playlist: {
+        /** @description What any source can say about a playlist. `Playlist` adds what only the user's own playlists have. */
+        PlaylistBase: {
+            source?: components["schemas"]["Source"];
             id: components["schemas"]["Id"];
-            libraryId: components["schemas"]["Id"];
             title: string;
             description: string | null;
-            /** @description Custom, or a mosaic of the tracks inside; `null` for an empty playlist. */
+            /** @description For the user's own playlist, custom or a mosaic of the tracks inside; `null` when empty. */
             image: components["schemas"]["ImageRef"] | null;
-            customImage?: boolean;
+        };
+        Playlist: components["schemas"]["PlaylistBase"] & {
+            libraryId: components["schemas"]["Id"];
+            /** @description Whether `image` is a custom upload rather than the generated mosaic; `deletePlaylistImage` reverts it. */
+            customImage: boolean;
+            /** @description Every track in the playlist, missing ones included (`requirements/playlists.md` §3). */
             trackCount: number;
-            missingCount?: number;
+            /** @description Of every track in the playlist, missing ones included. */
             durationUs: components["schemas"]["DurationUs"];
             pinned: boolean;
             /** Format: date-time */
@@ -3751,27 +3662,22 @@ export interface components {
         PlaylistPage: components["schemas"]["PageInfo"] & {
             items: components["schemas"]["Playlist"][];
         };
-        DeletedPlaylist: {
-            playlist: components["schemas"]["Playlist"];
-            /** Format: date-time */
-            deletedAt: string;
-            /** Format: date-time */
-            restorableUntil: string;
-        };
-        /** @description Exactly one of `track` or `external` is set. A duplicate track is a separate item. */
+        /**
+         * @description Exactly one of `track`, from the library, or `external`, from a source, is set. Items are
+         *     named by position, so a duplicate track is a separate item.
+         */
         PlaylistItem: {
-            /** @description Identifies this position, stable across reorders. */
-            itemId: string;
             track?: components["schemas"]["TrackSummary"];
-            external?: components["schemas"]["ExternalTrack"];
+            external?: components["schemas"]["TrackBase"];
             /** Format: date-time */
             addedAt?: string;
         };
         PlaylistItemPage: components["schemas"]["PageInfo"] & {
+            /** @description The playlist version these positions belong to, the `baseVersion` for edits made from them. */
+            version: number;
             items: components["schemas"]["PlaylistItem"][];
         };
         PlaylistCreate: {
-            createId: components["schemas"]["CommandId"];
             title: string;
             description?: string;
             /** @description Albums, artists, and playlists expand to their tracks in order. */
@@ -3779,49 +3685,37 @@ export interface components {
             /** @description Save a generated mix as it is now (`requirements/playlists.md` §8). `title` defaults sensibly. */
             fromMix?: string;
         };
-        PlaylistUpdate: {
-            editId: components["schemas"]["CommandId"];
-            baseVersion: number;
-            title?: string;
-            description?: string | null;
-            pinned?: boolean;
-        };
+        /**
+         * @description Positions are zero-based indexes into the playlist as this op finds it, after the ops
+         *     before it in the same edit. A position out of range fails the whole edit.
+         */
         PlaylistOp: {
             /** @constant */
             op: "add";
             items: components["schemas"]["Playable"][];
-            /** @description Insert before this item. `null` appends. */
-            before?: string | null;
+            /** @description Position the first added track takes. Omitted appends. */
+            at?: number;
         } | {
             /** @constant */
             op: "remove";
-            itemIds: string[];
+            positions: number[];
         } | {
             /** @constant */
             op: "move";
             /** @description Any selection, contiguous or not; relative order is preserved. */
-            itemIds: string[];
-            /** @description Move before this item. `null` moves to the end. */
-            before: string | null;
+            positions: number[];
+            /** @description Position the first moved track takes once the move is done. */
+            at: number;
         };
+        /** @description Every part applies, or none does. */
         PlaylistEdit: {
-            editId: components["schemas"]["CommandId"];
+            /** @description The version the edit was made against. */
             baseVersion: number;
-            /** @description Applied in order, atomically — all or nothing. */
-            ops: components["schemas"]["PlaylistOp"][];
-        };
-        PlaylistEditResult: {
-            version: number;
-            trackCount: number;
-            durationUs: components["schemas"]["DurationUs"];
-        };
-        PlaylistImportResult: {
-            playlist: components["schemas"]["Playlist"];
-            unmatched: {
-                title?: string;
-                artists?: string[];
-                album?: string;
-            }[];
+            title?: string;
+            description?: string | null;
+            pinned?: boolean;
+            /** @description Applied in order. */
+            ops?: components["schemas"]["PlaylistOp"][];
         };
         /**
          * @description Anything playable as a run of tracks (`requirements/queue.md` Overview). A context
@@ -4326,7 +4220,7 @@ export interface components {
             } | {
                 /** @constant */
                 type: "external";
-                external: components["schemas"]["ExternalTrack"];
+                external: components["schemas"]["TrackBase"];
             };
             playCount: number;
             /** Format: int64 */
@@ -4603,43 +4497,27 @@ export interface components {
             status: "available" | "unavailable";
             statusDetail?: string | null;
         };
-        /** @description Always shown as external and labelled with its source. Never downloadable. */
-        ExternalTrack: {
-            sourceId: string;
-            externalId: string;
-            title: string;
-            artists: {
-                name: string;
-                /** @description Browsable within the source. */
-                itemId?: string | null;
-            }[];
-            album?: {
-                title?: string;
-                itemId?: string | null;
-            } | null;
-            durationUs: components["schemas"]["DurationUs"];
-            /** @description Fetch from `getExternalImage`. */
-            imageId?: string | null;
-            /** @enum {string} */
-            availability?: "available" | "unavailable";
-        };
+        /**
+         * @description An album, artist, or playlist from a source, set under its `type`, with a page of what it
+         *     holds: an album's or playlist's tracks, or an artist's albums and any tracks the source
+         *     offers for them. Never downloadable (`requirements/plugins.md` §10.3).
+         */
         ExternalItem: {
-            sourceId: string;
-            itemId: string;
             /** @enum {string} */
-            kind: "artist" | "album" | "playlist" | "collection";
-            title: string;
-            subtitle?: string | null;
-            imageId?: string | null;
-            children?: components["schemas"]["ExternalItem"][];
-            tracks?: components["schemas"]["ExternalTrack"][];
-            nextCursor?: string | null;
+            type: "album" | "artist" | "playlist";
+            album?: components["schemas"]["AlbumBase"];
+            artist?: components["schemas"]["ArtistBase"];
+            playlist?: components["schemas"]["PlaylistBase"];
+            tracks: components["schemas"]["TrackBase"][];
+            albums: components["schemas"]["AlbumBase"][];
+            nextCursor: string | null;
         };
         ExternalSearchResponse: {
-            sourceId: string;
             query: string;
-            tracks: components["schemas"]["ExternalTrack"][];
-            items: components["schemas"]["ExternalItem"][];
+            tracks: components["schemas"]["TrackBase"][];
+            albums: components["schemas"]["AlbumBase"][];
+            artists: components["schemas"]["ArtistBase"][];
+            playlists: components["schemas"]["PlaylistBase"][];
         };
         ExtensionSurface: {
             pluginId: string;
@@ -5909,7 +5787,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Disconnected */
+            /** @description Disconnected, or never connected. */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -6928,7 +6806,8 @@ export interface operations {
             path: {
                 libraryId: components["parameters"]["LibraryId"];
                 sourceId: components["parameters"]["SourceId"];
-                itemId: string;
+                entityType: "albums" | "artists" | "playlists";
+                entityId: string;
             };
             cookie?: never;
         };
@@ -7157,7 +7036,10 @@ export interface operations {
     createPlaylist: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Client-generated. A repeated key returns the original result without applying twice. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 libraryId: components["parameters"]["LibraryId"];
             };
@@ -7176,64 +7058,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Playlist"];
-                };
-            };
-            404: components["responses"]["NotFound"];
-            422: components["responses"]["ValidationFailed"];
-            default: components["responses"]["Problem"];
-        };
-    };
-    listDeletedPlaylists: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        items: components["schemas"]["DeletedPlaylist"][];
-                    };
-                };
-            };
-            404: components["responses"]["NotFound"];
-            default: components["responses"]["Problem"];
-        };
-    };
-    importPlaylist: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description Client-generated. A repeated key returns the original result without applying twice. */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
-            };
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/vnd.jewelcase.playlist+json": Record<string, never>;
-            };
-        };
-        responses: {
-            /** @description Imported. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PlaylistImportResult"];
                 };
             };
             404: components["responses"]["NotFound"];
@@ -7289,10 +7113,13 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
-    updatePlaylist: {
+    editPlaylist: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Client-generated. A repeated key returns the original result without applying twice. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 libraryId: components["parameters"]["LibraryId"];
                 playlistId: components["parameters"]["PlaylistId"];
@@ -7301,11 +7128,11 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PlaylistUpdate"];
+                "application/json": components["schemas"]["PlaylistEdit"];
             };
         };
         responses: {
-            /** @description Updated. */
+            /** @description Applied. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -7317,31 +7144,6 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["ValidationFailed"];
-            default: components["responses"]["Problem"];
-        };
-    };
-    restorePlaylist: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-                playlistId: components["parameters"]["PlaylistId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Restored. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Playlist"];
-                };
-            };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -7370,37 +7172,15 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
-            default: components["responses"]["Problem"];
-        };
-    };
-    editPlaylist: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-                playlistId: components["parameters"]["PlaylistId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PlaylistEdit"];
-            };
-        };
-        responses: {
-            /** @description Applied. */
-            200: {
+            /** @description `cursor_expired` — the playlist changed since the first page; start again. */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PlaylistEditResult"];
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["VersionConflict"];
-            422: components["responses"]["ValidationFailed"];
             default: components["responses"]["Problem"];
         };
     };
@@ -7486,36 +7266,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            404: components["responses"]["NotFound"];
-            default: components["responses"]["Problem"];
-        };
-    };
-    exportPlaylist: {
-        parameters: {
-            query: {
-                format: "m3u" | "jewelcase";
-                /** @description Repeatable `{rootId}:{path}` — replace that root's container path with `path`. */
-                rootPath?: string[];
-            };
-            header?: never;
-            path: {
-                libraryId: components["parameters"]["LibraryId"];
-                playlistId: components["parameters"]["PlaylistId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The playlist file. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "audio/x-mpegurl": string;
-                    "application/vnd.jewelcase.playlist+json": Record<string, never>;
-                };
             };
             404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];

@@ -33,10 +33,11 @@ info:
     catalog data never carries it; devices receive it through the account feed.
 
     **Optimistic writes.** Writes clients apply locally before confirmation — queue and
-    player commands, playlist edits, plays — carry a client-generated ID in the body
-    (`commandId`, `editId`, `playId`, `createId`). The server applies each ID once however
-    often it arrives, and IDs of anything those writes create are derived from it, so a
-    device and the server agree without a round trip. Other state-changing `POST`s accept an
+    player commands, plays — carry a client-generated ID in the body (`commandId`,
+    `playId`). The server applies each ID once however often it arrives, and IDs of anything
+    those writes create are derived from it, so a device and the server agree without a
+    round trip. Playlists need neither: the server assigns a playlist's ID, and edits name
+    its tracks by position at a version. Other state-changing writes accept an
     `Idempotency-Key` header with the same guarantee.
 
     **Pagination.** Lists are cursor-paged: pass the previous page's `nextCursor` as
@@ -89,10 +90,10 @@ tags:
     description: Tracks, albums, artists, and tags (`requirements/conventions.md` §4).
   - name: Media
     description: Artwork, lyrics, waveforms, and audio delivery.
-  - name: Search
-    description: Library search and recent searches (`requirements/search.md`).
   - name: Playlists
     description: Saved playlists (`requirements/playlists.md`).
+  - name: Search
+    description: Library search and recent searches (`requirements/search.md`).
   - name: Queue
     description: Manual Queue, Context Queue, History, and kept queues (`requirements/queue.md`).
   - name: Player
@@ -485,7 +486,7 @@ paths:
       description: Forgets the caller's settings for it; it stops acting for them.
       operationId: disconnectMyPlugin
       responses:
-        '204': { description: Disconnected, or never connected. }
+        '204': { description: 'Disconnected, or never connected.' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Devices ─────────────────────────────
@@ -1301,18 +1302,24 @@ paths:
         '504': { $ref: '#/components/responses/SourceTimeout' }
         default: { $ref: '#/components/responses/Problem' }
 
-  /libraries/{libraryId}/external/{sourceId}/items/{itemId}:
+  /libraries/{libraryId}/external/{sourceId}/items/{entityType}/{entityId}:
     parameters:
       - $ref: '#/components/parameters/LibraryId'
       - $ref: '#/components/parameters/SourceId'
-      - name: itemId
+      - name: entityType
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [albums, artists, playlists]
+      - name: entityId
         in: path
         required: true
         schema: { type: string }
     get:
       tags: [External]
-      summary: Browse an external item
-      description: An artist, album, or playlist in whatever structure the source offers.
+      summary: Browse an external album, artist, or playlist
+      description: In the same shapes as library content, with `source` set.
       operationId: getExternalItem
       parameters:
         - $ref: '#/components/parameters/Cursor'
@@ -1521,10 +1528,13 @@ paths:
       tags: [Playlists]
       summary: Create a playlist
       description: |
-        Optionally with initial items, or by saving a generated mix (`requirements/playlists.md` §8).
-        The playlist's ID derives from `createId` and it starts at version 1, so a device can
-        create a playlist offline and queue edits to it.
+        At version 1, optionally with initial items, or by saving a generated mix
+        (`requirements/playlists.md` §8). A playlist created offline exists only on its device,
+        which folds any edits into it and creates it here, final contents and all, once online.
+        Send an `Idempotency-Key`, so a retry does not create a second playlist.
       operationId: createPlaylist
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -1536,57 +1546,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Playlist' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationFailed' }
-        default: { $ref: '#/components/responses/Problem' }
-
-  /libraries/{libraryId}/playlists/deleted:
-    parameters:
-      - $ref: '#/components/parameters/LibraryId'
-    get:
-      tags: [Playlists]
-      summary: List recently deleted playlists
-      description: Deletion is recoverable for a retention window (`requirements/playlists.md` §4).
-      operationId: listDeletedPlaylists
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [items]
-                properties:
-                  items:
-                    type: array
-                    items: { $ref: '#/components/schemas/DeletedPlaylist' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        default: { $ref: '#/components/responses/Problem' }
-
-  /libraries/{libraryId}/playlists/import:
-    parameters:
-      - $ref: '#/components/parameters/LibraryId'
-    post:
-      tags: [Playlists]
-      summary: Import a Jewelcase playlist file
-      description: |
-        Imports the complete export format, for moving between servers
-        (`requirements/playlists.md` §9). Entries that match no track are reported.
-        Playlist files inside a library are never read.
-      operationId: importPlaylist
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/vnd.jewelcase.playlist+json:
-            schema: { type: object }
-      responses:
-        '201':
-          description: Imported.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/PlaylistImportResult' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationFailed' }
         default: { $ref: '#/components/responses/Problem' }
@@ -1609,17 +1568,24 @@ paths:
         default: { $ref: '#/components/responses/Problem' }
     patch:
       tags: [Playlists]
-      summary: Update playlist details
-      description: Applies only against `baseVersion`; otherwise `409 version_conflict` (`requirements/playlists.md` §5).
-      operationId: updatePlaylist
+      summary: Edit a playlist
+      description: |
+        Changes details and contents — adds, removes, and moves, including non-contiguous
+        selections — as one atomic edit against `baseVersion`; otherwise `409 version_conflict`
+        (`requirements/playlists.md` §4–§5). A device chains its queued edits, each against the
+        version the previous one produced. Undo is a further edit that reverses the last. Send
+        an `Idempotency-Key`, so a retried edit is not refused because its first attempt applied.
+      operationId: editPlaylist
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/PlaylistUpdate' }
+            schema: { $ref: '#/components/schemas/PlaylistEdit' }
       responses:
         '200':
-          description: Updated.
+          description: Applied.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Playlist' }
@@ -1630,27 +1596,9 @@ paths:
     delete:
       tags: [Playlists]
       summary: Delete a playlist
-      description: Recoverable until the retention window ends.
       operationId: deletePlaylist
       responses:
         '204': { description: Deleted. }
-        '404': { $ref: '#/components/responses/NotFound' }
-        default: { $ref: '#/components/responses/Problem' }
-
-  /libraries/{libraryId}/playlists/{playlistId}/restore:
-    parameters:
-      - $ref: '#/components/parameters/LibraryId'
-      - $ref: '#/components/parameters/PlaylistId'
-    post:
-      tags: [Playlists]
-      summary: Restore a deleted playlist
-      operationId: restorePlaylist
-      responses:
-        '200':
-          description: Restored.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Playlist' }
         '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
@@ -1661,7 +1609,9 @@ paths:
     get:
       tags: [Playlists]
       summary: List playlist items
-      description: In the user's order. Missing tracks stay in position (`requirements/playlists.md` §3).
+      description: |
+        In the user's order, where an item's index is its position for `editPlaylist`. Missing
+        tracks stay in position (`requirements/playlists.md` §3). Every page comes from one version.
       operationId: listPlaylistItems
       parameters:
         - $ref: '#/components/parameters/Cursor'
@@ -1673,35 +1623,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PlaylistItemPage' }
         '404': { $ref: '#/components/responses/NotFound' }
-        default: { $ref: '#/components/responses/Problem' }
-
-  /libraries/{libraryId}/playlists/{playlistId}/edits:
-    parameters:
-      - $ref: '#/components/parameters/LibraryId'
-      - $ref: '#/components/parameters/PlaylistId'
-    post:
-      tags: [Playlists]
-      summary: Edit playlist contents
-      description: |
-        Adds, removes, and moves — including non-contiguous selections — as one atomic
-        edit against `baseVersion` (`requirements/playlists.md` §4–§5). A device chains its
-        queued edits, each using the version the previous one produced. Undo is a further
-        edit that reverses the last.
-      operationId: editPlaylist
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/PlaylistEdit' }
-      responses:
-        '200':
-          description: Applied.
+        '410':
+          description: '`cursor_expired` — the playlist changed since the first page; start again.'
           content:
-            application/json:
-              schema: { $ref: '#/components/schemas/PlaylistEditResult' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/VersionConflict' }
-        '422': { $ref: '#/components/responses/ValidationFailed' }
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/playlists/{playlistId}/duplicates:
@@ -1769,45 +1695,6 @@ paths:
       operationId: deletePlaylistImage
       responses:
         '204': { description: Reverted. }
-        '404': { $ref: '#/components/responses/NotFound' }
-        default: { $ref: '#/components/responses/Problem' }
-
-  /libraries/{libraryId}/playlists/{playlistId}/export:
-    parameters:
-      - $ref: '#/components/parameters/LibraryId'
-      - $ref: '#/components/parameters/PlaylistId'
-    get:
-      tags: [Playlists]
-      summary: Export a playlist
-      description: |
-        `m3u` for other players — the one place a listener receives file paths, requested
-        explicitly (`requirements/general.md` §3.7). Paths are absolute as mounted in the
-        container; `rootPath` rewrites a root's prefix to where the other player sees it.
-        `jewelcase` is the complete format for backup and moving between servers.
-      operationId: exportPlaylist
-      parameters:
-        - name: format
-          in: query
-          required: true
-          schema:
-            type: string
-            enum: [m3u, jewelcase]
-        - name: rootPath
-          in: query
-          description: 'Repeatable `{rootId}:{path}` — replace that root''s container path with `path`.'
-          style: form
-          explode: true
-          schema:
-            type: array
-            items: { type: string }
-      responses:
-        '200':
-          description: The playlist file.
-          content:
-            audio/x-mpegurl:
-              schema: { type: string }
-            application/vnd.jewelcase.playlist+json:
-              schema: { type: object }
         '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
@@ -4302,6 +4189,13 @@ components:
       type: string
       description: Opaque, stable identifier.
 
+    Source:
+      type: string
+      description: |
+        The external source content comes from, absent for library content. External content is
+        always shown labelled with its source (`requirements/plugins.md` §10.1). IDs inside it,
+        such as its artists' and album's, are the same source's.
+
     CommandId:
       type: string
       format: uuid
@@ -4321,6 +4215,7 @@ components:
     Availability:
       type: string
       enum: [available, missing]
+      description: External content its source cannot provide now is `missing`, and behaves exactly like a missing track (`requirements/plugins.md` §10.2).
 
     Period:
       type: string
@@ -4350,11 +4245,11 @@ components:
       properties:
         id:
           type: string
-          description: Fetch from `getImage`. Changes whenever the image does.
+          description: Fetch from `getImage`, or `getExternalImage` for content with a `source`. Changes whenever the image does.
         placeholder:
           type: string
           x-status: draft
-          description: A few bytes, base64, decoding to a recognizable correctly-coloured stand-in (`requirements/offline.md` §1.1).
+          description: A few bytes, base64, decoding to a recognizable correctly-coloured stand-in (`requirements/offline.md` §1.1). Empty when there is none, as for external images.
 
     ArtistCredit:
       type: object
@@ -4651,10 +4546,12 @@ components:
         id: { $ref: '#/components/schemas/Id' }
         name: { type: string }
 
-    TrackSummary:
+    TrackBase:
       type: object
-      required: [id, title, artists, album, durationUs, availability, audio, explicit]
+      required: [id, title, artists, album, durationUs, availability]
+      description: What any source can say about a track. `TrackSummary` adds what only the library knows.
       properties:
+        source: { $ref: '#/components/schemas/Source' }
         id: { $ref: '#/components/schemas/Id' }
         title:
           type: string
@@ -4663,7 +4560,11 @@ components:
           type: array
           description: Ordered; the first is primary (`requirements/conventions.md` §7).
           items: { $ref: '#/components/schemas/ArtistCredit' }
-        album: { $ref: '#/components/schemas/AlbumRef' }
+        album:
+          description: '`null` only for an external track that is on no album.'
+          oneOf:
+            - $ref: '#/components/schemas/AlbumRef'
+            - type: 'null'
         discNumber: { type: [integer, 'null'] }
         trackNumber: { type: [integer, 'null'] }
         durationUs: { $ref: '#/components/schemas/DurationUs' }
@@ -4671,20 +4572,29 @@ components:
           oneOf:
             - $ref: '#/components/schemas/PartialDate'
             - type: 'null'
-        genres:
-          type: array
-          items: { $ref: '#/components/schemas/TagRef' }
         explicit: { type: boolean }
-        audio:
-          description: Enough to tell a FLAC from an MP3 at a glance (`requirements/tracks.md` §4). The full `Track` extends it.
-          allOf:
-            - $ref: '#/components/schemas/AudioSummary'
         availability: { $ref: '#/components/schemas/Availability' }
-        addedAt: { type: string, format: date-time }
-        personal:
-          description: The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed.
-          allOf:
-            - $ref: '#/components/schemas/Personal'
+
+    TrackSummary:
+      allOf:
+        - $ref: '#/components/schemas/TrackBase'
+        - type: object
+          required: [audio, explicit]
+          properties:
+            album: { $ref: '#/components/schemas/AlbumRef' }
+            explicit: { type: boolean }
+            genres:
+              type: array
+              items: { $ref: '#/components/schemas/TagRef' }
+            audio:
+              description: Enough to tell a FLAC from an MP3 at a glance (`requirements/tracks.md` §4). The full `Track` extends it.
+              allOf:
+                - $ref: '#/components/schemas/AudioSummary'
+            addedAt: { type: string, format: date-time }
+            personal:
+              description: The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed.
+              allOf:
+                - $ref: '#/components/schemas/Personal'
 
     AudioSummary:
       type: object
@@ -4833,55 +4743,57 @@ components:
       enum: [album, ep, single, compilation]
       description: '`requirements/albums.md` §3.'
 
+    AlbumBase:
+      description: What any source can say about an album. `AlbumSummary` adds what only the library knows.
+      allOf:
+        - $ref: '#/components/schemas/AlbumRef'
+        - type: object
+          properties:
+            source: { $ref: '#/components/schemas/Source' }
+            releaseDate:
+              oneOf:
+                - $ref: '#/components/schemas/PartialDate'
+                - type: 'null'
+            type: { $ref: '#/components/schemas/AlbumType' }
+
     AlbumSummary:
-      type: object
-      required: [id, title, artists, type, trackCount, trackTotal, discCount, discTotal, durationUs, image, availability]
       description: |
         Completeness has two parts (`requirements/albums.md` §4): tracks missing from discs you
         have (`trackCount` below `trackTotal`), and discs you do not have (`discCount` below
         `discTotal`). Incomplete is information, never an error.
-      properties:
-        id: { $ref: '#/components/schemas/Id' }
-        title: { type: [string, 'null'] }
-        artists:
-          type: array
-          items: { $ref: '#/components/schemas/ArtistCredit' }
-        releaseDate:
-          oneOf:
-            - $ref: '#/components/schemas/PartialDate'
-            - type: 'null'
-        type: { $ref: '#/components/schemas/AlbumType' }
-        genres:
-          type: array
-          items: { $ref: '#/components/schemas/TagRef' }
-        trackCount:
-          type: integer
-          description: |
-            Tracks from this album in the library, including any marked missing — those stay in
-            position with their own `availability`, so "incomplete" means never had, not lost.
-        trackTotal:
-          type: [integer, 'null']
-          description: |
-            Sum of the tagged per-disc totals for the discs present. Track totals are tagged per
-            disc, so an absent disc contributes nothing; see `discCount`. `null` when no disc
-            present has a tagged total.
-        discCount:
-          type: integer
-          description: Discs with at least one track in the library.
-        discTotal:
-          type: [integer, 'null']
-          description: Tagged total number of discs.
-        durationUs: { $ref: '#/components/schemas/DurationUs' }
-        image:
-          oneOf:
-            - $ref: '#/components/schemas/ImageRef'
-            - type: 'null'
-        availability: { $ref: '#/components/schemas/Availability' }
-        addedAt: { type: string, format: date-time }
-        personal:
-          description: The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed.
-          allOf:
-            - $ref: '#/components/schemas/Personal'
+      allOf:
+        - $ref: '#/components/schemas/AlbumBase'
+        - type: object
+          required: [type, trackCount, trackTotal, discCount, discTotal, durationUs, availability]
+          properties:
+            type: { $ref: '#/components/schemas/AlbumType' }
+            genres:
+              type: array
+              items: { $ref: '#/components/schemas/TagRef' }
+            trackCount:
+              type: integer
+              description: |
+                Tracks from this album in the library, including any marked missing — those stay in
+                position with their own `availability`, so "incomplete" means never had, not lost.
+            trackTotal:
+              type: [integer, 'null']
+              description: |
+                Sum of the tagged per-disc totals for the discs present. Track totals are tagged per
+                disc, so an absent disc contributes nothing; see `discCount`. `null` when no disc
+                present has a tagged total.
+            discCount:
+              type: integer
+              description: Discs with at least one track in the library.
+            discTotal:
+              type: [integer, 'null']
+              description: Tagged total number of discs.
+            durationUs: { $ref: '#/components/schemas/DurationUs' }
+            availability: { $ref: '#/components/schemas/Availability' }
+            addedAt: { type: string, format: date-time }
+            personal:
+              description: The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed.
+              allOf:
+                - $ref: '#/components/schemas/Personal'
 
     Album:
       allOf:
@@ -4923,27 +4835,36 @@ components:
               items: { $ref: '#/components/schemas/AlbumSummary' }
 
     # ───────────────────────────── Artists ─────────────────────────────
+    ArtistBase:
+      description: What any source can say about an artist. `ArtistSummary` adds what only the library knows.
+      allOf:
+        - $ref: '#/components/schemas/ArtistCredit'
+        - type: object
+          required: [image]
+          properties:
+            source: { $ref: '#/components/schemas/Source' }
+            image:
+              oneOf:
+                - $ref: '#/components/schemas/ImageRef'
+                - type: 'null'
+
     ArtistSummary:
-      type: object
-      required: [id, name, image, albumCount, trackCount]
-      properties:
-        id: { $ref: '#/components/schemas/Id' }
-        name: { type: [string, 'null'] }
-        image:
-          oneOf:
-            - $ref: '#/components/schemas/ImageRef'
-            - type: 'null'
-        albumCount:
-          type: integer
-          description: Albums the artist owns.
-        trackCount:
-          type: integer
-          description: Owned and featured tracks.
-        addedAt: { type: string, format: date-time }
-        personal:
-          description: The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed.
-          allOf:
-            - $ref: '#/components/schemas/Personal'
+      allOf:
+        - $ref: '#/components/schemas/ArtistBase'
+        - type: object
+          required: [albumCount, trackCount]
+          properties:
+            albumCount:
+              type: integer
+              description: Albums the artist owns.
+            trackCount:
+              type: integer
+              description: Owned and featured tracks.
+            addedAt: { type: string, format: date-time }
+            personal:
+              description: The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed.
+              allOf:
+                - $ref: '#/components/schemas/Personal'
 
     Artist:
       allOf:
@@ -5113,33 +5034,48 @@ components:
         selected: { $ref: '#/components/schemas/EntityRef' }
 
     # ───────────────────────────── Playlists ─────────────────────────────
-    Playlist:
+    PlaylistBase:
       type: object
-      required: [id, libraryId, title, description, image, trackCount, durationUs, pinned, createdAt, modifiedAt, version]
+      required: [id, title, description, image]
+      description: What any source can say about a playlist. `Playlist` adds what only the user's own playlists have.
       properties:
+        source: { $ref: '#/components/schemas/Source' }
         id: { $ref: '#/components/schemas/Id' }
-        libraryId: { $ref: '#/components/schemas/Id' }
         title: { type: string }
         description: { type: [string, 'null'] }
         image:
-          description: Custom, or a mosaic of the tracks inside; `null` for an empty playlist.
+          description: For the user's own playlist, custom or a mosaic of the tracks inside; `null` when empty.
           oneOf:
             - $ref: '#/components/schemas/ImageRef'
             - type: 'null'
-        customImage: { type: boolean }
-        trackCount: { type: integer }
-        missingCount: { type: integer }
-        durationUs: { $ref: '#/components/schemas/DurationUs' }
-        pinned: { type: boolean }
-        createdAt: { type: string, format: date-time }
-        modifiedAt: { type: string, format: date-time }
-        version:
-          type: integer
-          description: Advances with every change; edits apply only against the version they were made on.
-        personal:
-          description: The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed.
-          allOf:
-            - $ref: '#/components/schemas/Personal'
+
+    Playlist:
+      allOf:
+        - $ref: '#/components/schemas/PlaylistBase'
+        - type: object
+          required: [libraryId, customImage, trackCount, durationUs, pinned, createdAt, modifiedAt, version]
+          properties:
+            libraryId: { $ref: '#/components/schemas/Id' }
+            customImage:
+              type: boolean
+              description: Whether `image` is a custom upload rather than the generated mosaic; `deletePlaylistImage` reverts it.
+            trackCount:
+              type: integer
+              description: Every track in the playlist, missing ones included (`requirements/playlists.md` §3).
+            durationUs:
+              description: Of every track in the playlist, missing ones included.
+              allOf:
+                - $ref: '#/components/schemas/DurationUs'
+            pinned: { type: boolean }
+            createdAt: { type: string, format: date-time }
+            modifiedAt: { type: string, format: date-time }
+            version:
+              type: integer
+              description: Advances with every change; edits apply only against the version they were made on.
+            personal:
+              description: The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed.
+              allOf:
+                - $ref: '#/components/schemas/Personal'
 
     PlaylistPage:
       allOf:
@@ -5151,41 +5087,33 @@ components:
               type: array
               items: { $ref: '#/components/schemas/Playlist' }
 
-    DeletedPlaylist:
-      type: object
-      required: [playlist, deletedAt, restorableUntil]
-      properties:
-        playlist: { $ref: '#/components/schemas/Playlist' }
-        deletedAt: { type: string, format: date-time }
-        restorableUntil: { type: string, format: date-time }
-
     PlaylistItem:
       type: object
-      required: [itemId]
-      description: Exactly one of `track` or `external` is set. A duplicate track is a separate item.
+      description: |
+        Exactly one of `track`, from the library, or `external`, from a source, is set. Items are
+        named by position, so a duplicate track is a separate item.
       properties:
-        itemId:
-          type: string
-          description: Identifies this position, stable across reorders.
         track: { $ref: '#/components/schemas/TrackSummary' }
-        external: { $ref: '#/components/schemas/ExternalTrack' }
+        external: { $ref: '#/components/schemas/TrackBase' }
         addedAt: { type: string, format: date-time }
 
     PlaylistItemPage:
       allOf:
         - $ref: '#/components/schemas/PageInfo'
         - type: object
-          required: [items]
+          required: [version, items]
           properties:
+            version:
+              type: integer
+              description: The playlist version these positions belong to, the `baseVersion` for edits made from them.
             items:
               type: array
               items: { $ref: '#/components/schemas/PlaylistItem' }
 
     PlaylistCreate:
       type: object
-      required: [createId, title]
+      required: [title]
       properties:
-        createId: { $ref: '#/components/schemas/CommandId' }
         title: { type: string, minLength: 1 }
         description: { type: string }
         items:
@@ -5196,17 +5124,10 @@ components:
           type: string
           description: Save a generated mix as it is now (`requirements/playlists.md` §8). `title` defaults sensibly.
 
-    PlaylistUpdate:
-      type: object
-      required: [editId, baseVersion]
-      properties:
-        editId: { $ref: '#/components/schemas/CommandId' }
-        baseVersion: { type: integer }
-        title: { type: string, minLength: 1 }
-        description: { type: [string, 'null'] }
-        pinned: { type: boolean }
-
     PlaylistOp:
+      description: |
+        Positions are zero-based indexes into the playlist as this op finds it, after the ops
+        before it in the same edit. A position out of range fails the whole edit.
       oneOf:
         - type: object
           required: [op, items]
@@ -5214,64 +5135,53 @@ components:
             op: { const: add }
             items:
               type: array
+              minItems: 1
               items: { $ref: '#/components/schemas/Playable' }
-            before:
-              type: [string, 'null']
-              description: Insert before this item. `null` appends.
+            at:
+              type: integer
+              minimum: 0
+              description: Position the first added track takes. Omitted appends.
         - type: object
-          required: [op, itemIds]
+          required: [op, positions]
           properties:
             op: { const: remove }
-            itemIds:
+            positions:
               type: array
-              items: { type: string }
+              minItems: 1
+              uniqueItems: true
+              items: { type: integer, minimum: 0 }
         - type: object
-          required: [op, itemIds, before]
+          required: [op, positions, at]
           properties:
             op: { const: move }
-            itemIds:
+            positions:
               type: array
+              minItems: 1
+              uniqueItems: true
               description: Any selection, contiguous or not; relative order is preserved.
-              items: { type: string }
-            before:
-              type: [string, 'null']
-              description: Move before this item. `null` moves to the end.
+              items: { type: integer, minimum: 0 }
+            at:
+              type: integer
+              minimum: 0
+              description: Position the first moved track takes once the move is done.
 
     PlaylistEdit:
       type: object
-      required: [editId, baseVersion, ops]
+      required: [baseVersion]
+      minProperties: 2
+      description: Every part applies, or none does.
       properties:
-        editId: { $ref: '#/components/schemas/CommandId' }
-        baseVersion: { type: integer }
+        baseVersion:
+          type: integer
+          description: The version the edit was made against.
+        title: { type: string, minLength: 1 }
+        description: { type: [string, 'null'] }
+        pinned: { type: boolean }
         ops:
           type: array
           minItems: 1
-          description: Applied in order, atomically — all or nothing.
+          description: Applied in order.
           items: { $ref: '#/components/schemas/PlaylistOp' }
-
-    PlaylistEditResult:
-      type: object
-      required: [version, trackCount, durationUs]
-      properties:
-        version: { type: integer }
-        trackCount: { type: integer }
-        durationUs: { $ref: '#/components/schemas/DurationUs' }
-
-    PlaylistImportResult:
-      type: object
-      required: [playlist, unmatched]
-      properties:
-        playlist: { $ref: '#/components/schemas/Playlist' }
-        unmatched:
-          type: array
-          items:
-            type: object
-            properties:
-              title: { type: string }
-              artists:
-                type: array
-                items: { type: string }
-              album: { type: string }
 
     # ───────────────────────────── Contexts ─────────────────────────────
     Context:
@@ -5954,7 +5864,7 @@ components:
               description: External content, marked as such (`requirements/plugins.md` §10.2).
               properties:
                 type: { const: external }
-                external: { $ref: '#/components/schemas/ExternalTrack' }
+                external: { $ref: '#/components/schemas/TrackBase' }
         playCount: { type: integer }
         listenTimeMs: { type: integer, format: int64 }
         completion:
@@ -6375,67 +6285,45 @@ components:
           enum: [available, unavailable]
         statusDetail: { type: [string, 'null'] }
 
-    ExternalTrack:
-      type: object
-      required: [sourceId, externalId, title, artists, durationUs]
-      description: Always shown as external and labelled with its source. Never downloadable.
-      properties:
-        sourceId: { type: string }
-        externalId: { type: string }
-        title: { type: string }
-        artists:
-          type: array
-          items:
-            type: object
-            required: [name]
-            properties:
-              name: { type: string }
-              itemId: { type: [string, 'null'], description: Browsable within the source. }
-        album:
-          type: [object, 'null']
-          properties:
-            title: { type: string }
-            itemId: { type: [string, 'null'] }
-        durationUs: { $ref: '#/components/schemas/DurationUs' }
-        imageId:
-          type: [string, 'null']
-          description: Fetch from `getExternalImage`.
-        availability:
-          type: string
-          enum: [available, unavailable]
-
     ExternalItem:
       type: object
-      required: [sourceId, itemId, kind, title]
+      required: [type, tracks, albums, nextCursor]
+      description: |
+        An album, artist, or playlist from a source, set under its `type`, with a page of what it
+        holds: an album's or playlist's tracks, or an artist's albums and any tracks the source
+        offers for them. Never downloadable (`requirements/plugins.md` §10.3).
       properties:
-        sourceId: { type: string }
-        itemId: { type: string }
-        kind:
+        type:
           type: string
-          enum: [artist, album, playlist, collection]
-        title: { type: string }
-        subtitle: { type: [string, 'null'] }
-        imageId: { type: [string, 'null'] }
-        children:
-          type: array
-          items: { $ref: '#/components/schemas/ExternalItem' }
+          enum: [album, artist, playlist]
+        album: { $ref: '#/components/schemas/AlbumBase' }
+        artist: { $ref: '#/components/schemas/ArtistBase' }
+        playlist: { $ref: '#/components/schemas/PlaylistBase' }
         tracks:
           type: array
-          items: { $ref: '#/components/schemas/ExternalTrack' }
+          items: { $ref: '#/components/schemas/TrackBase' }
+        albums:
+          type: array
+          items: { $ref: '#/components/schemas/AlbumBase' }
         nextCursor: { type: [string, 'null'] }
 
     ExternalSearchResponse:
       type: object
-      required: [sourceId, query, tracks, items]
+      required: [query, tracks, albums, artists, playlists]
       properties:
-        sourceId: { type: string }
         query: { type: string }
         tracks:
           type: array
-          items: { $ref: '#/components/schemas/ExternalTrack' }
-        items:
+          items: { $ref: '#/components/schemas/TrackBase' }
+        albums:
           type: array
-          items: { $ref: '#/components/schemas/ExternalItem' }
+          items: { $ref: '#/components/schemas/AlbumBase' }
+        artists:
+          type: array
+          items: { $ref: '#/components/schemas/ArtistBase' }
+        playlists:
+          type: array
+          items: { $ref: '#/components/schemas/PlaylistBase' }
 
     # ───────────────────────────── Extensions ─────────────────────────────
     ExtensionSurface:
