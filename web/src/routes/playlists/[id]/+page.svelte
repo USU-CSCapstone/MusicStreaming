@@ -6,12 +6,12 @@
 	import PlaylistDetailsDialog, {
 		type PlaylistDetails
 	} from '$lib/components/PlaylistDetailsDialog.svelte';
-	import TrackList from '$lib/components/TrackList.svelte';
+	import TrackList, { type RowMove } from '$lib/components/TrackList.svelte';
 	import { deleteWithUndo } from '$lib/deletions.svelte';
 	import { formatLength, plural } from '$lib/format';
 	import { toast } from '$lib/toast.svelte';
 	import { player } from '$lib/player.svelte';
-	import { EditablePlaylist } from '$lib/playlist.svelte';
+	import { EditablePlaylist, rowMoveOps } from '$lib/playlist.svelte';
 
 	let { data } = $props();
 
@@ -42,6 +42,10 @@
 			ops: [{ op: 'remove', positions: indexes.map((i) => rows[i].position) }]
 		});
 		toast(`Removed ${plural(indexes.length, 'song')}`, { action: { label: 'Undo', run: undo } });
+	}
+
+	function moveRows(moves: RowMove[]) {
+		list.edit({ ops: rowMoveOps(list.items, moves) });
 	}
 
 	/** No confirmation: Undo is offered instead (`requirements/playlists.md` §4). */
@@ -93,7 +97,14 @@
 	{/snippet}
 </DetailHeader>
 
-<TrackList {tracks} empty="This playlist is empty." {context} editable onremove={removeRows} />
+<TrackList
+	{tracks}
+	empty="This playlist is empty."
+	{context}
+	editable
+	onremove={removeRows}
+	onmove={moveRows}
+/>
 
 {#if editing}
 	<PlaylistDetailsDialog
