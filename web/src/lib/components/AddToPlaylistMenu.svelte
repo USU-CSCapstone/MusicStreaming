@@ -1,12 +1,13 @@
 <script lang="ts">
-	// Which playlist songs go to, from a row's ⋯ or the selection bar (`requirements/playlists.md`
-	// §4): one of the user's own, or a new one made on the spot. Songs already there are warned
-	// about first, as adding them again is usually a mistake (§3).
+	// Which playlist songs go to — a row's, the selection's, or a whole album's, artist's, or
+	// playlist's (`requirements/playlists.md` §4): one of the user's own, or a new one made on
+	// the spot. Songs already there are warned about first, as adding them again is usually a
+	// mistake (§3).
 	import { onMount, tick } from 'svelte';
 	import { page } from '$app/state';
 	import { createPlaylist, listPlaylists } from '$lib/api/client';
 	import type { Playlist, PlaylistCreate, TrackSummary } from '$lib/api/types';
-	import { addTracks, alreadyIn, describe, playables } from '$lib/adding.svelte';
+	import { type Adding, addTo, alreadyIn } from '$lib/adding.svelte';
 	import { deleted } from '$lib/deletions.svelte';
 	import { plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
@@ -15,11 +16,11 @@
 	import PlaylistDetailsDialog, { type PlaylistDetails } from './PlaylistDetailsDialog.svelte';
 
 	let {
-		tracks,
+		what,
 		anchor,
 		onclose
 	}: {
-		tracks: TrackSummary[];
+		what: Adding;
 		/** What opened it, which it sits beside. */
 		anchor: Element;
 		onclose: () => void;
@@ -29,7 +30,7 @@
 		| { kind: 'menu' }
 		| { kind: 'checking' }
 		| { kind: 'create' }
-		| { kind: 'confirm'; playlist: Playlist; repeated: TrackSummary[] };
+		| { kind: 'confirm'; playlist: Playlist; repeated: string[] };
 	let step = $state<Step>({ kind: 'menu' });
 	let playlists = $state<Paged<Playlist> | null>(null);
 	let failed = $state('');
@@ -103,25 +104,48 @@
 		step = { kind: 'checking' };
 		let repeated: string[];
 		try {
-			repeated = await alreadyIn(fetch, playlist, tracks);
+			repeated = await alreadyIn(fetch, playlist, what);
 		} catch (e) {
 			toast(`Couldn’t add to “${playlist.title}”. ${e instanceof Error ? e.message : ''}`.trim());
 			onclose();
 			return;
 		}
-		if (repeated.length === 0) return add(playlist, tracks);
-		step = {
-			kind: 'confirm',
-			playlist,
-			repeated: tracks.filter((t) => repeated.includes(t.id))
-		};
+		if (repeated.length === 0) return add(playlist);
+		step = { kind: 'confirm', playlist, repeated };
 		await tick();
 		confirm?.showModal();
 	}
 
-	function add(playlist: Playlist, which: TrackSummary[]) {
-		void addTracks(fetch, playlist, which);
+	/** All of it, or `only` some of its songs. */
+	function add(playlist: Playlist, only?: TrackSummary[]) {
+		void addTo(fetch, playlist, what, only);
 		onclose();
+	}
+
+	/** Everything but the songs already there. */
+	async function skip(playlist: Playlist, repeated: string[]) {
+		try {
+			const fresh = (await what.tracks()).filter((t) => !repeated.includes(t.id));
+			if (fresh.length) return add(playlist, fresh);
+			toast(`Nothing new to add to “${playlist.title}”`);
+		} catch (e) {
+			toast(`Couldn’t add to “${playlist.title}”. ${e instanceof Error ? e.message : ''}`.trim());
+		}
+		onclose();
+	}
+
+	/** How much of `what` is already in `playlist`, as a sentence. */
+	function already(playlist: string, repeated: number) {
+		const songs = what.refs[0]?.type === 'track';
+		if (what.count === 1) return `${what.label} is already in “${playlist}”. Add it anyway?`;
+		const all = repeated >= what.count;
+		if (all && songs) return `These songs are already in “${playlist}”. Add them anyway?`;
+		if (all) return `All of ${what.label} is already in “${playlist}”. Add it anyway?`;
+		const of = songs
+			? `of these ${what.count} songs`
+			: `of the ${what.count} songs in ${what.label}`;
+		const verb = repeated === 1 ? 'is' : 'are';
+		return `${repeated} ${of} ${verb} already in “${playlist}”. Add them anyway?`;
 	}
 
 	/**
@@ -131,12 +155,12 @@
 	let sent: { request: string; key: string } | null = null;
 
 	async function create({ title, description }: PlaylistDetails) {
-		const body: PlaylistCreate = { title, items: playables(tracks) };
+		const body: PlaylistCreate = { title, items: what.refs };
 		if (description) body.description = description;
 		const request = JSON.stringify(body);
 		if (sent?.request !== request) sent = { request, key: crypto.randomUUID() };
 		await createPlaylist(fetch, libraryId, body, sent.key);
-		toast(`Added ${describe(tracks)} to “${title}”`);
+		toast(`Added ${what.label} to “${title}”`);
 		onclose();
 	}
 </script>
@@ -148,7 +172,7 @@
 		class="menu"
 		role="menu"
 		tabindex="-1"
-		aria-label="Add {describe(tracks)} to a playlist"
+		aria-label="Add {what.label} to a playlist"
 		bind:this={menu}
 		style:top="{place.top}px"
 		style:left="{place.left}px"
@@ -186,7 +210,6 @@
 	/>
 {:else if step.kind === 'confirm'}
 	{@const { playlist, repeated } = step}
-	{@const fresh = tracks.filter((t) => !repeated.includes(t))}
 	<dialog
 		bind:this={confirm}
 		aria-labelledby={confirmId}
@@ -196,24 +219,13 @@
 		}}
 	>
 		<h2 id={confirmId}>Already in this playlist</h2>
-		<p>
-			{#if tracks.length === 1}
-				{describe(tracks)} is already in “{playlist.title}”. Add it anyway?
-			{:else if fresh.length === 0}
-				These songs are already in “{playlist.title}”. Add them anyway?
-			{:else}
-				{repeated.length} of these {tracks.length} songs {repeated.length === 1 ? 'is' : 'are'}
-				already in “{playlist.title}”. Add them anyway?
-			{/if}
-		</p>
+		<p>{already(playlist.title, repeated.length)}</p>
 		<footer>
 			<button type="button" onclick={onclose}>Cancel</button>
-			{#if fresh.length}
-				<button type="button" onclick={() => add(playlist, fresh)}>Skip duplicates</button>
+			{#if repeated.length < what.count}
+				<button type="button" onclick={() => skip(playlist, repeated)}>Skip duplicates</button>
 			{/if}
-			<button type="button" class="primary" onclick={() => add(playlist, tracks)}>
-				Add anyway
-			</button>
+			<button type="button" class="primary" onclick={() => add(playlist)}> Add anyway </button>
 		</footer>
 	</dialog>
 {/if}
@@ -230,6 +242,8 @@
 		border-radius: var(--radius-m);
 		background: var(--surface);
 		box-shadow: var(--shadow);
+		/* Wherever it opens, such as a header that centres its text on a phone. */
+		text-align: left;
 	}
 
 	.heading {
