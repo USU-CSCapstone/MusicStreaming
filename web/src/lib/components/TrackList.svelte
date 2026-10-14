@@ -41,7 +41,7 @@
 		editable?: boolean;
 		/** Removes the rows at these indexes, in order. */
 		onremove?: (indexes: number[]) => void;
-		/** Makes `moves` as one edit. Alt+↑/↓ and the selection bar's Move to… offer it. */
+		/** Makes `moves` as one edit. Dragging, Alt+↑/↓, and the selection bar's Move to… offer it. */
 		onmove?: (moves: RowMove[]) => void;
 	} = $props();
 
@@ -50,6 +50,26 @@
 	let anchor: number | null = null;
 	const uid = $props.id();
 	const hintId = `selected-${uid}`;
+
+	// Dragging rows, with pointer events so touch works as a mouse does. A row dragged is the
+	// selection if it is selected, and becomes the selection if not.
+	type Drag = {
+		indexes: number[];
+		/** Where the pointer is. */
+		x: number;
+		y: number;
+		/** Once it has moved far enough to be a drag rather than a press. */
+		started: boolean;
+		/** The gap the rows would drop into, counting from the top, and where to draw it. */
+		gap: number | null;
+		line: number;
+	};
+	let drag = $state<Drag | null>(null);
+	let dragFrom = { x: 0, y: 0 };
+	let scroller: Element | null = null;
+	let frame = 0;
+	/** Where the pointer is captured once a drag starts, so it can leave the row. */
+	let dragPointer: { row: Element; id: number } | null = null;
 
 	/** Where the selection is after a move this list made, which it keeps. */
 	let kept: number[] | null = null;
@@ -64,6 +84,7 @@
 		void tracks;
 		const keep = kept;
 		kept = null;
+		dragStop();
 		clear();
 		for (const i of keep ?? []) selected.add(i);
 		anchor = keep?.[0] ?? null;
@@ -148,22 +169,79 @@
 		}
 	}
 
-	// A long press selects on touch, where there is no Ctrl or Shift.
+	// A row is dragged from anywhere on it. With a mouse, a press that moves a few pixels is a
+	// drag, and one that does not is a click. On touch, where a moving finger scrolls, a long
+	// press selects the row and lifts the selection, and the finger then drags it.
 	const LONG_PRESS_MS = 500;
 	let press: { timer: ReturnType<typeof setTimeout>; x: number; y: number } | null = null;
-	/** The click that ends a long press is not a tap. */
+	/** The click that ends a long press, or a drag, is not a click on the row. */
 	let longPressed = false;
+	let dragged = false;
 
-	function pressStart(e: PointerEvent, i: number) {
-		if (!editable || e.pointerType !== 'touch') return;
+	function pointerDown(e: PointerEvent, i: number) {
+		if (!editable || e.button !== 0) return;
 		longPressed = false;
-		const timer = setTimeout(() => {
-			press = null;
-			longPressed = true;
-			selected.add(i);
-			anchor = i;
-		}, LONG_PRESS_MS);
-		press = { timer, x: e.clientX, y: e.clientY };
+		dragged = false;
+		const row = e.currentTarget as Element;
+		const at = { x: e.clientX, y: e.clientY };
+		if (e.pointerType === 'touch') {
+			const timer = setTimeout(() => {
+				press = null;
+				longPressed = true;
+				if (!selected.has(i)) {
+					selected.add(i);
+					anchor = i;
+				}
+				if (onmove) arm(i, row, e.pointerId, at);
+			}, LONG_PRESS_MS);
+			press = { timer, ...at };
+		} else if (onmove && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+			arm(i, row, e.pointerId, at);
+		}
+	}
+
+	/** Ready to drag row `i`, or the selection if it is in it, once the pointer moves. */
+	function arm(i: number, row: Element, id: number, at: { x: number; y: number }) {
+		const indexes = selected.has(i) ? [...selected].sort((a, b) => a - b) : [i];
+		drag = { indexes, ...at, started: false, gap: null, line: 0 };
+		dragFrom = at;
+		dragPointer = { row, id };
+	}
+
+	function pointerMove(e: PointerEvent) {
+		// A finger that moves before the long press is scrolling.
+		if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) pressEnd();
+		if (!drag) return;
+		drag.x = e.clientX;
+		drag.y = e.clientY;
+		if (!drag.started) {
+			if (Math.hypot(e.clientX - dragFrom.x, e.clientY - dragFrom.y) < 4) return;
+			drag.started = true;
+			try {
+				dragPointer?.row.setPointerCapture(dragPointer.id);
+			} catch {
+				// The pointer is gone already; the drag ends with it.
+			}
+			if (!selected.has(drag.indexes[0])) {
+				clear();
+				selected.add(drag.indexes[0]);
+				anchor = drag.indexes[0];
+			}
+			scroller = scrollParent(listEl);
+			frame = requestAnimationFrame(autoScroll);
+		}
+		aim();
+	}
+
+	function pointerUp() {
+		pressEnd();
+		if (drag?.started) dragged = true;
+		dragEnd();
+	}
+
+	function pointerCancel() {
+		pressEnd();
+		dragStop();
 	}
 
 	function pressEnd() {
@@ -171,9 +249,11 @@
 		press = null;
 	}
 
-	/** A finger that moves is scrolling, not pressing. */
-	function pressMove(e: PointerEvent) {
-		if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) pressEnd();
+	/** Once a long press has lifted rows, the finger drags them rather than scrolling the page. */
+	function holdTouch(el: HTMLElement) {
+		const hold = (e: TouchEvent) => drag && e.preventDefault();
+		el.addEventListener('touchmove', hold, { passive: false });
+		return () => el.removeEventListener('touchmove', hold);
 	}
 
 	/** Space on a title selects, as Enter plays. */
@@ -189,9 +269,71 @@
 		clear();
 	}
 
+	function dragEnd() {
+		const done = drag;
+		dragStop();
+		if (!done?.started || done.gap === null) return;
+		const { indexes, gap } = done;
+		const to = gap - indexes.filter((k) => k < gap).length;
+		// Dropped where they were, together: nothing moved.
+		if (indexes.every((k, j) => k === to + j)) return;
+		void move([{ indexes, to }], `${plural(indexes.length, 'song')} moved to position ${to + 1}`);
+	}
+
+	function dragStop() {
+		drag = null;
+		dragPointer = null;
+		cancelAnimationFrame(frame);
+	}
+
+	/** The gap nearest the pointer: before the first row whose middle is below it. */
+	function aim() {
+		if (!drag || !listEl) return;
+		const rows = [...listEl.querySelectorAll<HTMLElement>('.track')];
+		const k = rows.findIndex((r) => {
+			const box = r.getBoundingClientRect();
+			return drag!.y < box.top + box.height / 2;
+		});
+		const last = rows.at(-1)!;
+		drag.gap = k === -1 ? rows.length : k;
+		drag.line = k === -1 ? last.offsetTop + last.offsetHeight : rows[k].offsetTop;
+	}
+
+	/** Near the top or bottom of what scrolls, scrolls toward it, faster the closer it gets. */
+	function autoScroll() {
+		if (!drag?.started) return;
+		const edge = 56;
+		const box = scroller?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight };
+		const into =
+			drag.y < box.top + edge
+				? drag.y - (box.top + edge)
+				: drag.y > box.bottom - edge
+					? drag.y - (box.bottom - edge)
+					: 0;
+		if (into) {
+			(scroller ?? document.scrollingElement!).scrollTop += Math.max(-20, Math.min(20, into / 3));
+			aim();
+		}
+		frame = requestAnimationFrame(autoScroll);
+	}
+
+	/** The nearest ancestor that scrolls, or null for the page itself. */
+	function scrollParent(el: Element | undefined): Element | null {
+		for (let p = el?.parentElement; p; p = p.parentElement) {
+			if (/auto|scroll/.test(getComputedStyle(p).overflowY)) return p;
+		}
+		return null;
+	}
+
 	/** Ctrl/Cmd+A selects every row and Escape lets go, unless focus is somewhere they mean more. */
 	function onkeydown(e: KeyboardEvent) {
 		if (!editable || e.defaultPrevented) return;
+		if (drag && e.key === 'Escape') {
+			// Escape drops nothing.
+			e.preventDefault();
+			dragStop();
+			return;
+		}
 		if ((e.target as Element).closest('input, textarea, select, [contenteditable], dialog')) {
 			return;
 		}
@@ -223,8 +365,8 @@
 	function rowClick(e: MouseEvent, i: number) {
 		// Links inside the row navigate.
 		if ((e.target as Element).closest('a')) return;
-		if (longPressed) {
-			longPressed = false;
+		if (longPressed || dragged) {
+			longPressed = dragged = false;
 			return;
 		}
 		if (editable && !(e.target as Element).closest('.num')) select(e, i);
@@ -237,7 +379,16 @@
 {#if tracks.length === 0}
 	<p class="empty muted">{empty}</p>
 {:else}
-	<ol class="tracks" class:album={isAlbum} class:editable bind:this={listEl}>
+	<ol
+		class="tracks"
+		class:album={isAlbum}
+		class:editable
+		class:reorderable={editable && onmove}
+		class:dragging={drag?.started}
+		bind:this={listEl}
+		{@attach holdTouch}
+		ondragstart={(e) => onmove && e.preventDefault()}
+	>
 		<!-- Keyed by position: a playlist may hold the same track twice. -->
 		{#each tracks as track, i (i)}
 			{#if multiDisc && (i === 0 || tracks[i - 1].discNumber !== track.discNumber)}
@@ -253,12 +404,13 @@
 				class:current
 				class:missing
 				class:selected={selected.has(i)}
+				class:dragged={drag?.started && drag.indexes.includes(i)}
 				onclick={(e) => rowClick(e, i)}
 				ondblclick={(e) => editable && !(e.target as Element).closest('a') && play(i)}
-				onpointerdown={(e) => pressStart(e, i)}
-				onpointermove={pressMove}
-				onpointerup={pressEnd}
-				onpointercancel={pressEnd}
+				onpointerdown={(e) => pointerDown(e, i)}
+				onpointermove={pointerMove}
+				onpointerup={pointerUp}
+				onpointercancel={pointerCancel}
 				oncontextmenu={(e) => (press || longPressed) && e.preventDefault()}
 			>
 				<span class="num tabular">
@@ -305,7 +457,15 @@
 				<span class="duration muted tabular">{formatDuration(track.durationUs)}</span>
 			</li>
 		{/each}
+		{#if drag?.started && drag.gap !== null}
+			<li class="drop" style:top="{drag.line}px" aria-hidden="true"></li>
+		{/if}
 	</ol>
+	{#if drag?.started}
+		<div class="ghost" style:left="{drag.x + 14}px" style:top="{drag.y + 14}px" aria-hidden="true">
+			{plural(drag.indexes.length, 'song')}
+		</div>
+	{/if}
 	{#if sentinel}
 		<div {@attach sentinel} aria-hidden="true"></div>
 	{/if}
@@ -316,8 +476,9 @@
 	<span class="visually-hidden" aria-live="polite">
 		{moved || (selected.size ? `${plural(selected.size, 'song')} selected` : '')}
 	</span>
-	{#if selected.size > 0}
-		<!-- Floats over the bottom of the list as it scrolls, so the rows never jump. -->
+	{#if selected.size > 0 && !drag?.started}
+		<!-- Floats over the bottom of the list as it scrolls, so the rows never jump. It steps
+		     aside during a drag, so as not to hide where the rows would land. -->
 		<div class="bar-anchor">
 			<div class="bar" role="toolbar" aria-label="Selected songs">
 				<span class="count"
@@ -388,6 +549,41 @@
 		/* Shift-click and a long press select rows, not text. */
 		user-select: none;
 		-webkit-touch-callout: none;
+	}
+
+	.reorderable {
+		position: relative;
+	}
+
+	.dragging,
+	.dragging .track {
+		cursor: grabbing;
+	}
+
+	.track.dragged {
+		opacity: 0.4;
+	}
+
+	.drop {
+		position: absolute;
+		left: 0;
+		right: 0;
+		height: 2px;
+		margin-top: -1px;
+		border-radius: 1px;
+		background: var(--accent);
+		pointer-events: none;
+	}
+
+	.ghost {
+		position: fixed;
+		z-index: 30;
+		padding: var(--space-1) var(--space-3);
+		border-radius: var(--radius-m);
+		background: var(--accent);
+		color: var(--accent-text);
+		font-weight: 600;
+		pointer-events: none;
 	}
 
 	.track.selected,
