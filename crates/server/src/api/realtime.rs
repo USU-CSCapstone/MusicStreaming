@@ -19,6 +19,7 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::http::uri::Authority;
 use axum::http::{HeaderMap, header};
 use axum::response::Response;
 use rusqlite::OptionalExtension;
@@ -140,18 +141,24 @@ async fn signed_in(db: &Database, device: i64) -> Result<bool, Problem> {
 }
 
 /// Whether the request is not from a page, which sends no `Origin`, or is from a page this
-/// server served: one whose origin names the host the request was sent to.
+/// server served: one whose origin names the host the request was sent to, and its port too
+/// unless the host was given without one.
 fn same_origin(headers: &HeaderMap) -> bool {
     let Some(origin) = headers.get(header::ORIGIN) else { return true };
-    let Some((_, origin)) = origin.to_str().ok().and_then(|origin| origin.split_once("://")) else {
+    let origin = origin.to_str().ok().and_then(|origin| origin.split_once("://"));
+    let Some(origin) = origin.and_then(|(_, origin)| origin.parse::<Authority>().ok()) else {
         return false;
     };
     // A proxy that lists several hosts puts the one the client asked for first.
-    let host = |name| Some(headers.get(name)?.to_str().ok()?.split(',').next()?.trim());
-    [host(header::HOST.as_str()), host(FORWARDED_HOST)]
-        .into_iter()
-        .flatten()
-        .any(|host| host.eq_ignore_ascii_case(origin))
+    let host = |name| {
+        let host = headers.get(name)?.to_str().ok()?.split(',').next()?;
+        host.trim().parse::<Authority>().ok()
+    };
+    [host(header::HOST.as_str()), host(FORWARDED_HOST)].into_iter().flatten().any(|host| {
+        // A proxy that drops the port cannot say which one the page used.
+        host.host().eq_ignore_ascii_case(origin.host())
+            && host.port_u16().is_none_or(|port| origin.port_u16() == Some(port))
+    })
 }
 
 /// Holds `socket` open for `caller` until either side closes it or it goes silent.
