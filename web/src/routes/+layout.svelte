@@ -6,6 +6,7 @@
 	import Player from '$lib/components/Player.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import TabBar from '$lib/components/TabBar.svelte';
+	import Toast from '$lib/components/Toast.svelte';
 	import { player } from '$lib/player.svelte';
 
 	let { data, children } = $props();
@@ -45,6 +46,7 @@
 				{@render children()}
 			</main>
 			<LyricsPanel />
+			<Toast />
 		</div>
 		<div class="player"><Player /></div>
 		<div class="tabs"><TabBar /></div>
