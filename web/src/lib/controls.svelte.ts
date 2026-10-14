@@ -6,8 +6,17 @@ import { playback } from './playback.svelte';
 import { player } from './player.svelte';
 
 class Controls {
-	/** Whether this shows another device's playback rather than this one's. */
-	remote = $derived(playback.shows(player.playing || player.finished));
+	/**
+	 * Whether this shows another device's playback rather than this one's: never while this one
+	 * plays, or stopped at the end of what it played, whether or not the server has heard yet;
+	 * otherwise when another device holds playback, or playback stopped elsewhere, so any device
+	 * can pick it up from where it stopped (`requirements/realtime.md` §6).
+	 */
+	remote = $derived(
+		!(player.playing || player.finished) &&
+			(playback.elsewhere ||
+				(playback.state?.status === 'stopped' && playback.state.trackId != null))
+	);
 	/** Whether that playback stopped with no device holding it, so playing picks it up here. */
 	stopped = $derived(this.remote && !playback.elsewhere);
 	track = $derived(this.remote ? playback.track : player.current);
