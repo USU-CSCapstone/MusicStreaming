@@ -102,3 +102,34 @@ test('cancelling an edit changes nothing', async ({ page }) => {
 	await expect(dialog).toBeHidden();
 	await expect(page.getByRole('heading', { name: 'Road Trip' })).toBeVisible();
 });
+
+test('deletes a playlist, with a moment to undo it', async ({ page }) => {
+	await serveLibrary(page);
+	await page.goto('/playlists');
+	await page.getByRole('button', { name: 'New playlist' }).click();
+	await page.getByRole('textbox', { name: 'Title' }).fill('Road Trip');
+	await page.getByRole('button', { name: 'Create' }).click();
+	await expect(page.getByRole('heading', { name: 'Road Trip' })).toBeVisible();
+
+	// Undo brings it back, and nothing was sent.
+	await page.getByRole('button', { name: 'Delete playlist' }).click();
+	await expect(page).toHaveURL(/\/playlists$/);
+	await expect(page.getByText('No playlists yet.')).toBeVisible();
+	await expect(page.getByRole('status')).toHaveText(/Deleted “Road Trip”/);
+	await page.getByRole('button', { name: 'Undo' }).click();
+	await expect(page.getByRole('link', { name: /Road Trip/ })).toBeVisible();
+	await expect(page.getByText('1 playlist', { exact: true })).toBeVisible();
+
+	// Dismissing the toast deletes it for good.
+	await page.getByRole('link', { name: /Road Trip/ }).click();
+	await page.getByRole('button', { name: 'Delete playlist' }).click();
+	const sent = page.waitForResponse((r) => r.request().method() === 'DELETE');
+	await page.getByRole('button', { name: 'Dismiss' }).click();
+	expect((await sent).status()).toBe(204);
+	await page.reload();
+	await expect(page.getByText('No playlists yet.')).toBeVisible();
+
+	// Back does not return to the deleted playlist.
+	await page.goBack();
+	await expect(page).toHaveURL(/\/playlists$/);
+});

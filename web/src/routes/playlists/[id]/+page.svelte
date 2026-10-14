@@ -1,10 +1,13 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import PlaylistDetailsDialog, {
 		type PlaylistDetails
 	} from '$lib/components/PlaylistDetailsDialog.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
+	import { deleteWithUndo } from '$lib/deletions.svelte';
 	import { formatLength, plural } from '$lib/format';
 	import { player } from '$lib/player.svelte';
 	import { EditablePlaylist } from '$lib/playlist.svelte';
@@ -26,6 +29,13 @@
 		if (description !== playlist.description) change.description = description;
 		if (Object.keys(change).length) list.edit(change);
 		editing = false;
+	}
+
+	/** No confirmation: Undo is offered instead (`requirements/playlists.md` §4). */
+	function remove() {
+		deleteWithUndo(fetch, playlist, () => list.idle());
+		// Replacing this page, so Back does not lead to a deleted playlist.
+		void goto(resolve('/playlists'), { replaceState: true });
 	}
 </script>
 
@@ -57,6 +67,15 @@
 			onclick={() => list.edit({ pinned: !playlist.pinned })}
 		>
 			<Icon name="pin" size={16} />
+		</button>
+		<button
+			type="button"
+			class="action icon"
+			aria-label="Delete playlist"
+			title="Delete playlist"
+			onclick={remove}
+		>
+			<Icon name="trash" size={16} />
 		</button>
 	{/snippet}
 </DetailHeader>
