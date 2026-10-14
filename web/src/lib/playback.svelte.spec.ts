@@ -96,16 +96,6 @@ describe('playback', () => {
 		expect(playback.positionAt(Date.now())).toBe(10);
 	});
 
-	it('is shown where another device plays, or where it stopped and nothing plays here', () => {
-		state('2', 'e');
-		expect(playback.shows(true)).toBe(true);
-		state('1', 'e');
-		expect(playback.shows(false)).toBe(false);
-		state(null, 'e', { status: 'stopped' });
-		expect(playback.shows(false)).toBe(true);
-		expect(playback.shows(true)).toBe(false);
-	});
-
 	it('fetches a track again after failing to, and not for the device playing it', async () => {
 		fake.tracks.set('f', Promise.reject(new Error('offline')));
 		state('2', 'f');

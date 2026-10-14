@@ -43,6 +43,8 @@ const sent = () => fake.sent.map((message) => message.command.type);
 
 beforeEach(() => {
 	fake.sent.length = 0;
+	fake.realtime.connected = true;
+	player.playing = false;
 	vi.restoreAllMocks();
 });
 
@@ -67,6 +69,22 @@ describe('controls', () => {
 		controls.play();
 		expect(sent()).toEqual(['pause', 'next', 'seek', 'play']);
 	});
+
+	it.each([true, false])(
+		'control this device once it plays, before the server hears (connected: %s)',
+		(connected) => {
+			state('2');
+			fake.realtime.connected = connected;
+			player.playing = true;
+			const toggle = vi.spyOn(player, 'toggle').mockImplementation(() => {});
+			controls.toggle();
+			expect(controls.remote).toBe(false);
+			expect(toggle).toHaveBeenCalledOnce();
+			expect(sent()).toEqual([]);
+			state(null, 'stopped');
+			expect(controls.remote, 'nor where playback stopped').toBe(false);
+		}
+	);
 
 	it('pick up here where playback stopped elsewhere, and do nothing else', async () => {
 		state(null, 'stopped');

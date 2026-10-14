@@ -76,17 +76,6 @@ class Playback {
 	}
 
 	/**
-	 * Whether a player shows this instead of its own, which it has while `own` (playing, or
-	 * stopped at the end of what it played): when another device holds playback, or playback
-	 * stopped elsewhere, so any device can pick it up from where it stopped
-	 * (`requirements/realtime.md` §6).
-	 */
-	shows(own: boolean): boolean {
-		const stopped = this.state?.status === 'stopped' && this.state.trackId != null;
-		return this.elsewhere || (stopped && !own);
-	}
-
-	/**
 	 * Seconds into the track at `now`, as this browser's clock reads, never past its end. It
 	 * moves on only while connected: one that is not cannot know it is still playing (§6).
 	 */

@@ -43,7 +43,7 @@ const track = (id: string, seconds: number) =>
 	}) as unknown as Track;
 
 const { player } = await import('./player.svelte');
-const { playback } = await import('./playback.svelte');
+const { controls } = await import('./controls.svelte');
 
 const send = (message: RealtimeServerMessage) =>
 	fake.listeners.forEach((listener) => listener(message));
@@ -153,7 +153,7 @@ describe('player', () => {
 			positionMs: 0
 		});
 		state({ status: 'stopped', activeDeviceId: null, trackId: '46' });
-		expect(playback.shows(player.playing || player.finished)).toBe(false);
+		expect(controls.remote).toBe(false);
 
 		void player.resume();
 		expect(fake.sent.at(-1)?.report, 'loaded again, taking over').toMatchObject({
@@ -167,7 +167,7 @@ describe('player', () => {
 		state({ activeDeviceId: '2', trackId: '46' });
 		expect(player.finished).toBe(false);
 		state({ status: 'stopped', activeDeviceId: null, trackId: '46' });
-		expect(playback.shows(player.playing || player.finished), 'stopped elsewhere').toBe(true);
+		expect(controls.remote, 'stopped elsewhere').toBe(true);
 	});
 
 	it('shows a stop that is not its own, as one heard on reconnecting', async () => {
