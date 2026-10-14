@@ -48,11 +48,13 @@ describe('Progress', () => {
 
 		progress.started();
 		progress.report(here, now);
+		// Before the server confirms: it takes this connection's reports in turn, so this one
+		// arrives after the takeover, as the audio starting does after picking up.
 		progress.report(here, now);
-		expect(starts()).toEqual([true]);
+		expect(starts()).toEqual([true, false]);
 		expect(progress.heard(here, state(here), true)).toBeNull();
 		progress.report(here, now);
-		expect(sent[1]).toEqual({ ...now, deviceId: here, start: false });
+		expect(sent[2]).toEqual({ ...now, deviceId: here, start: false });
 	});
 
 	it('stops when another device takes over, and reports nothing after', () => {
@@ -70,8 +72,22 @@ describe('Progress', () => {
 		progress.started();
 		progress.report(here, now);
 		expect(progress.heard(here, state('2'), true)).toBeNull();
+		progress.report(here, now);
+		expect(starts(), 'still reporting').toEqual([true, false]);
 		vi.advanceTimersByTime(5000);
 		expect(progress.heard(here, state('2'), true), 'refused, so obeyed').toBe('stop');
+		progress.report(here, now);
+		expect(sent).toHaveLength(2);
+	});
+
+	it('does not try a refused takeover again when nothing else plays', () => {
+		progress.started();
+		progress.report(here, now);
+		vi.advanceTimersByTime(5000);
+		progress.report(here, now);
+		expect(progress.heard(here, state(null), true), 'plays on unreported').toBeNull();
+		progress.report(here, now);
+		expect(starts()).toEqual([true, false]);
 	});
 
 	it('takes over on a new connection, unless another device took over meanwhile', () => {
