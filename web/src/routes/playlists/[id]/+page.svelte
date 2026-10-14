@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { opened } from '$lib/adding.svelte';
+	import { collection, opened } from '$lib/adding.svelte';
+	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import PlaylistDetailsDialog, {
@@ -33,6 +34,11 @@
 	);
 	const tracks = $derived(rows.map((r) => r.track));
 	const context = $derived({ type: 'playlist', id: playlist.id } as const);
+	// This whole playlist, into another. Its songs here leave out external tracks, which only
+	// matters when skipping songs already there.
+	const adding = $derived(
+		collection('playlist', playlist.id, playlist.title, playlist.trackCount, async () => tracks)
+	);
 	let editing = $state(false);
 
 	/** Sends only what changed; nothing changed is no edit. */
@@ -102,6 +108,7 @@
 		>
 			<Icon name="trash" size={16} />
 		</button>
+		{#if tracks.length}<AddToPlaylistButton what={adding} />{/if}
 	{/snippet}
 </DetailHeader>
 
