@@ -54,10 +54,18 @@
 		return stale ? 'Was connected' : 'Connected';
 	}
 
-	/** A button gone once it has done its job leaves focus on the list, not lost to the page. */
-	function keepFocus() {
+	/**
+	 * A button gone once it has done its job leaves focus on the list, not lost to the page; one
+	 * that never had focus leaves it where it is.
+	 */
+	function keepFocus(button: HTMLElement) {
+		let focused = false;
+		const check = () => (focused = document.activeElement === button);
+		button.addEventListener('focus', check);
+		// Not at once, since Chrome blurs a button as it goes, before the teardown below.
+		button.addEventListener('blur', () => queueMicrotask(check));
 		return () => {
-			if (document.activeElement === document.body) list?.focus();
+			if (focused && document.activeElement === document.body) list?.focus();
 		};
 	}
 </script>

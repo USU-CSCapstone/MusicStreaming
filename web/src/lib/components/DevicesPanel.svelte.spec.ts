@@ -89,6 +89,19 @@ describe('DevicesPanel', () => {
 		await expect.element(page.getByRole('status')).toHaveTextContent('Playback is on this device');
 	});
 
+	it('leaves focus where it is when a button it never had goes', async () => {
+		render(DevicesPanel);
+		const here = rows().nth(0).getByRole('button', { name: 'Play here' });
+		await expect.element(here).toBeVisible();
+		(document.activeElement as HTMLElement).blur();
+
+		// Playback starts here from elsewhere, as another device moving it here would.
+		fake.controls.remote = false;
+		fake.playback.state = playingOn('2');
+		await expect.element(here).not.toBeInTheDocument();
+		expect(document.activeElement).toBe(document.body);
+	});
+
 	it('offers nothing to take of a library this device does not play from', async () => {
 		fake.controls.pickable = false;
 		render(DevicesPanel);
