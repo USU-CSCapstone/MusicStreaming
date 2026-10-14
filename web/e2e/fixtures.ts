@@ -32,7 +32,7 @@ export const library: Library = {
 	scanning: false
 };
 
-const artist = { id: '21', name: 'Aurora Lane' };
+export const artist = { id: '21', name: 'Aurora Lane' };
 
 export const album: AlbumSummary = {
 	id: '31',
@@ -339,6 +339,18 @@ export async function serveLibrary(
 		if (path === `${lib}/tracks`) return json(pageOf(tracks));
 		if (path === `${lib}/artists`) {
 			return json(pageOf([{ ...artist, image: null, albumCount: 1, trackCount: 3 }]));
+		}
+		if (path === `${lib}/artists/${artist.id}`) {
+			return json({
+				...artist,
+				image: null,
+				albumCount: 1,
+				trackCount: 3,
+				addedAt: '2026-01-01T00:00:00.000Z',
+				biography: null,
+				genres: [],
+				appearanceCount: 0
+			});
 		}
 		if (path.startsWith(`${lib}/playlists`)) {
 			const req = route.request();
