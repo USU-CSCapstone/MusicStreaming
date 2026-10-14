@@ -100,19 +100,13 @@ fn load(conn: &Connection) -> rusqlite::Result<HashMap<i64, PlayerState>> {
            AND (u.role <> 'user' OR EXISTS \
                 (SELECT 1 FROM library_access WHERE user_id = u.id AND library_id = s.library_id))",
     )?;
-    let now = now_ms();
     let rows = select.query_map([], |row| {
         let state = PlayerState {
-            status: Status::Stopped,
-            active_device_id: None,
-            active_connection: None,
             item_id: Some(row.get(1)?),
             library_id: Some(Id(row.get(2)?)),
             track_id: Some(Id(row.get(3)?)),
             position_ms: row.get(4)?,
-            position_at: now,
-            volume: None,
-            unsaved: false,
+            ..PlayerState::stopped()
         };
         Ok((row.get(0)?, state))
     })?;

@@ -254,11 +254,6 @@ async fn handle(
                 Ok(command) => command,
                 Err(result) => return result.map(|result| ServerMessage::CommandResult { result }),
             };
-            // Authenticated as the connection opened, perhaps hours ago, so checked again.
-            let signed_in = signed_in(&state.db, caller.device).await.unwrap_or(false);
-            if !signed_in || !presence.is_open() {
-                return None;
-            }
             let result =
                 state.players.command_from_connection(&state.hub, caller, presence.id(), command);
             Some(ServerMessage::CommandResult { result })

@@ -1,7 +1,6 @@
 //! Passing commands on to the connection that carries them out, and their results back to
 //! their senders.
 
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,12 +8,12 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 
-use super::{Action, CommandResult, PlayerCommand, Refused, Status};
-use crate::api::Id;
+use super::{Action, CommandResult, PlayerCommand, Status};
 use crate::api::authenticate::Caller;
 use crate::api::player::{Players, Status as PlayStatus};
 use crate::api::plays::is_uuid;
 use crate::api::realtime::{Hub, ServerMessage};
+use crate::api::{Code, Id, Problem};
 
 /// How long a connection has to answer a command before it counts as failed.
 const ANSWER_WITHIN: Duration =
@@ -57,19 +56,6 @@ pub enum Reply {
     Request(oneshot::Sender<CommandResult>),
 }
 
-impl Commands {
-    /// Ends `waiting` with `result`, kept for a client that sends it again, and answers where
-    /// to send that.
-    fn finish(&mut self, waiting: Waiting, result: &CommandResult) -> Reply {
-        waiting.timer.abort();
-        if self.finished.len() == REMEMBERED {
-            self.finished.pop_front();
-        }
-        self.finished.push_back(result.clone());
-        waiting.reply
-    }
-}
-
 impl Players {
     /// Passes `command` from `caller` on to the connection that carries it out, and answers what
     /// to tell the sender now: `pending`, or the result of a command sent again that has
@@ -80,17 +66,17 @@ impl Players {
         caller: Caller,
         reply: Reply,
         mut command: PlayerCommand,
-    ) -> Result<CommandResult, Refused> {
+    ) -> Result<CommandResult, Problem> {
         if !is_uuid(&command.command_id) {
-            return Err(Refused::Invalid("commandId must be a UUID."));
+            return Err(Problem::invalid("commandId must be a UUID."));
         }
         if let Action::SetVolume { volume } = command.action {
             if command.device_id.is_none() {
                 let reason = "setVolume must name its deviceId: volume belongs to a device.";
-                return Err(Refused::Invalid(reason));
+                return Err(Problem::invalid(reason));
             }
             if !(0.0..=1.0).contains(&volume) {
-                return Err(Refused::Invalid("volume must be from 0 to 1."));
+                return Err(Problem::invalid("volume must be from 0 to 1."));
             }
         }
         let id = command.command_id.clone();
@@ -110,10 +96,10 @@ impl Players {
         let state = accounts.get(&caller.user);
         let to = if let Action::Transfer { .. } = command.action {
             let Some(device) = command.device_id.as_deref() else {
-                return Err(Refused::Invalid("transfer must name its deviceId."));
+                return Err(Problem::invalid("transfer must name its deviceId."));
             };
             if state.and_then(|state| state.track_id).is_none() {
-                return Err(Refused::Unavailable("Nothing has played to move."));
+                return Err(unavailable("Nothing has played to move."));
             }
             let device = Id::canonical(device);
             let active = state.filter(|state| device.is_some() && state.active_device_id == device);
@@ -132,7 +118,7 @@ impl Players {
                 // A device of another account is as not connected as one can be.
                 let newest = device.and_then(|device| hub.newest(caller.user, device.0));
                 let Some(to) = newest else {
-                    return Err(Refused::Unavailable("That device is not connected."));
+                    return Err(unavailable("That device is not connected."));
                 };
                 to
             }
@@ -140,15 +126,16 @@ impl Players {
             let playing =
                 state.and_then(|state| Some((state.active_connection?, state.active_device_id?)));
             let Some((to, device)) = playing else {
-                return Err(Refused::Unavailable("Nothing is playing."));
+                return Err(unavailable("Nothing is playing."));
             };
             if command.device_id.as_deref().is_some_and(|id| Id::canonical(id) != Some(device)) {
-                return Err(Refused::Unavailable("That device is not the one playing."));
+                return Err(unavailable("That device is not the one playing."));
             }
             to
         };
         if commands.waiting.len() >= MAX_WAITING {
-            return Err(Refused::Busy);
+            let reason = "Too many commands are waiting for a device to answer.";
+            return Err(Problem::new(Code::RateLimited).detail(reason));
         }
         // Sent while holding `accounts`: if sending closes the connection it goes to, its
         // `disconnected` waits for that lock, finds this command waiting, and fails it at once.
@@ -170,52 +157,50 @@ impl Players {
             return;
         }
         result.reason = result.reason.map(|reason| reason.chars().take(MAX_REASON).collect());
-        let mut all = self.commands.lock().expect("player commands lock");
-        let Some(commands) = all.get_mut(&user) else { return };
-        let Entry::Occupied(entry) = commands.waiting.entry(result.command_id.clone()) else {
-            return;
-        };
-        if entry.get().to != connection {
-            return;
-        }
-        let waiting = entry.remove();
-        let reply = commands.finish(waiting, &result);
-        drop(all);
-        deliver(hub, user, reply, result);
+        let ends =
+            |id: &str, waiting: &Waiting| id == result.command_id && waiting.to == connection;
+        self.end(hub, user, ends, |_| result.clone());
     }
 
     /// Fails at once every command waiting on `user`'s connection `connection`, now closed.
     pub(in crate::api::player) fn fail_commands_to(&self, hub: &Hub, user: i64, connection: u64) {
-        let replies: Vec<_> = {
-            let mut all = self.commands.lock().expect("player commands lock");
-            let Some(commands) = all.get_mut(&user) else { return };
-            let gone: Vec<_> =
-                commands.waiting.extract_if(|_, waiting| waiting.to == connection).collect();
-            let reason = Some("The device went away.");
-            gone.into_iter()
-                .map(|(id, waiting)| {
-                    let result = CommandResult::new(id, Status::Failed, reason);
-                    (commands.finish(waiting, &result), result)
-                })
-                .collect()
-        };
-        for (reply, result) in replies {
-            deliver(hub, user, reply, result);
-        }
+        let failed = |id| CommandResult::new(id, Status::Failed, Some("The device went away."));
+        self.end(hub, user, |_, waiting| waiting.to == connection, failed);
     }
 
     /// Tells the sender of `user`'s command `id`, if it still waits, that it failed for
     /// `reason`.
     fn fail(&self, hub: &Hub, user: i64, id: &str, reason: &str) {
-        let result = CommandResult::new(id.to_owned(), Status::Failed, Some(reason));
-        let reply = {
-            let mut all = self.commands.lock().expect("player commands lock");
-            let Some(commands) = all.get_mut(&user) else { return };
-            let Some(waiting) = commands.waiting.remove(id) else { return };
-            commands.finish(waiting, &result)
-        };
-        deliver(hub, user, reply, result);
+        let failed = |id| CommandResult::new(id, Status::Failed, Some(reason));
+        self.end(hub, user, |other, _| other == id, failed);
     }
+
+    /// Ends each of `user`'s waiting commands that `ends` picks with the result `result` gives
+    /// for its ID, kept for a client that sends it again, and tells its sender.
+    fn end(
+        &self,
+        hub: &Hub,
+        user: i64,
+        mut ends: impl FnMut(&str, &Waiting) -> bool,
+        result: impl Fn(String) -> CommandResult,
+    ) {
+        let mut all = self.commands.lock().expect("player commands lock");
+        let Some(commands) = all.get_mut(&user) else { return };
+        for (id, waiting) in commands.waiting.extract_if(|id, waiting| ends(id, waiting)) {
+            waiting.timer.abort();
+            let result = result(id);
+            if commands.finished.len() == REMEMBERED {
+                commands.finished.pop_front();
+            }
+            commands.finished.push_back(result.clone());
+            deliver(hub, user, waiting.reply, result);
+        }
+    }
+}
+
+/// Refuses a command there is no device to carry out.
+fn unavailable(reason: &str) -> Problem {
+    Problem::new(Code::DeviceUnavailable).detail(reason)
 }
 
 /// Sends `result` to `user`'s `reply`, if it is still there to hear it.

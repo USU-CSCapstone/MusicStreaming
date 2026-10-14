@@ -59,18 +59,18 @@ impl Hub {
         connections.filter(|connection| connection.device == device).map(|c| c.id).max()
     }
 
-    /// Sends `message` to every connection of `user`, closing any whose outbox is full, and
-    /// whether it closed any.
-    pub fn broadcast(&self, user: i64, message: &ServerMessage) -> bool {
+    /// Sends `message` to every connection of `user`, closing any whose outbox is full. The
+    /// `serve` of each it closes sends the device list once it ends.
+    pub fn broadcast(&self, user: i64, message: &ServerMessage) {
         let message = encode(message);
-        self.retain(user, |connection| connection.outbox.try_send(message.clone()).is_ok())
+        self.retain(user, |connection| connection.outbox.try_send(message.clone()).is_ok());
     }
 
     /// Sends `message` to `user`'s connection `id`, if it is still open, closing it if its
-    /// outbox is full. Its `serve` sends its device list once it ends.
+    /// outbox is full. Its `serve` sends the device list once it ends.
     pub fn send(&self, user: i64, id: u64, message: &ServerMessage) {
         let message = encode(message);
-        let _ = self.retain(user, |connection| {
+        self.retain(user, |connection| {
             connection.id != id || connection.outbox.try_send(message.clone()).is_ok()
         });
     }
@@ -79,7 +79,7 @@ impl Hub {
     /// Call it once the sign-out is committed: a connection that joins after this checks then.
     pub fn revoke(&self, user: i64, device: i64, reason: Revoked) {
         let message = encode(&ServerMessage::SessionRevoked { reason });
-        let _ = self.retain(user, |connection| {
+        self.retain(user, |connection| {
             if connection.device != device {
                 return true;
             }
@@ -95,18 +95,14 @@ impl Hub {
         self.device_lists.lock().await
     }
 
-    /// Keeps the connections of `user` that `keep` is true for, closes the rest, and whether
-    /// there were any to close.
-    fn retain(&self, user: i64, keep: impl FnMut(&Connection) -> bool) -> bool {
+    /// Keeps the connections of `user` that `keep` is true for, and closes the rest.
+    fn retain(&self, user: i64, keep: impl FnMut(&Connection) -> bool) {
         let mut accounts = self.lock();
-        let Some(connections) = accounts.get_mut(&user) else { return false };
-        let before = connections.len();
+        let Some(connections) = accounts.get_mut(&user) else { return };
         connections.retain(keep);
-        let closed = connections.len() < before;
         if connections.is_empty() {
             accounts.remove(&user);
         }
-        closed
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<i64, Vec<Connection>>> {
@@ -143,6 +139,6 @@ impl Presence {
 
 impl Drop for Presence {
     fn drop(&mut self) {
-        let _ = self.hub.retain(self.user, |connection| connection.id != self.id);
+        self.hub.retain(self.user, |connection| connection.id != self.id);
     }
 }
