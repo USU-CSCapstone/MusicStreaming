@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { opened } from '$lib/adding.svelte';
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import PlaylistDetailsDialog, {
@@ -17,6 +18,13 @@
 
 	// Edits show at once and are saved behind them (`requirements/playlists.md` §4).
 	const list = $derived(new EditablePlaylist(fetch, data.loaded));
+	// Adding to this playlist from its own page goes through `list`, so it shows at once.
+	$effect(() => {
+		opened.list = list;
+		return () => {
+			if (opened.list === list) opened.list = null;
+		};
+	});
 	const playlist = $derived(list.playlist);
 	// External tracks from plugins are not shown yet (`requirements/plugins.md` §10), so a row's
 	// index is not always its position in the playlist: `positions` maps one to the other.

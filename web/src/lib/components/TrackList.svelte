@@ -13,6 +13,7 @@
 	import { applyOps } from '$lib/playlist-ops';
 	import ArtistLinks from './ArtistLinks.svelte';
 	import Artwork from './Artwork.svelte';
+	import AddToPlaylistMenu from './AddToPlaylistMenu.svelte';
 	import Icon from './Icon.svelte';
 
 	let {
@@ -171,7 +172,7 @@
 	let dragged = false;
 
 	function pointerDown(e: PointerEvent, i: number) {
-		if (!editable || e.button !== 0) return;
+		if (!editable || e.button !== 0 || (e.target as Element).closest('.more')) return;
 		longPressed = false;
 		dragged = false;
 		const row = e.currentTarget as Element;
@@ -354,9 +355,44 @@
 		if (tracks[i].availability === 'available') player.play(tracks, i, context);
 	}
 
+	/** Songs on their way to a playlist, and the row's ⋯ or the selection bar that opened it. */
+	let adding = $state<{
+		tracks: TrackSummary[];
+		anchor: HTMLElement;
+		from: number | 'bar';
+	} | null>(null);
+
+	/** The row's ⋯ adds the row, or the selection if the row is in it, as a second click closes. */
+	function more(e: MouseEvent, i: number) {
+		if (adding?.from === i) return closeAdding();
+		const indexes = selected.has(i) ? [...selected].sort((a, b) => a - b) : [i];
+		adding = {
+			tracks: indexes.map((k) => tracks[k]),
+			anchor: e.currentTarget as HTMLElement,
+			from: i
+		};
+	}
+
+	function addSelected(e: MouseEvent) {
+		if (adding?.from === 'bar') return closeAdding();
+		const indexes = [...selected].sort((a, b) => a - b);
+		adding = {
+			tracks: indexes.map((k) => tracks[k]),
+			anchor: e.currentTarget as HTMLElement,
+			from: 'bar'
+		};
+	}
+
+	/** Focus goes back to what opened the menu. */
+	function closeAdding() {
+		const anchor = adding?.anchor;
+		adding = null;
+		if (anchor?.isConnected) anchor.focus();
+	}
+
 	function rowClick(e: MouseEvent, i: number) {
-		// Links inside the row navigate.
-		if ((e.target as Element).closest('a')) return;
+		// Links inside the row navigate, and its ⋯ opens its own menu.
+		if ((e.target as Element).closest('a, .more')) return;
 		if (longPressed || dragged) {
 			longPressed = dragged = false;
 			return;
@@ -398,7 +434,7 @@
 				class:selected={selected.has(i)}
 				class:dragged={drag?.started && drag.indexes.includes(i)}
 				onclick={(e) => rowClick(e, i)}
-				ondblclick={(e) => editable && !(e.target as Element).closest('a') && play(i)}
+				ondblclick={(e) => editable && !(e.target as Element).closest('a, .more') && play(i)}
 				onpointerdown={(e) => pointerDown(e, i)}
 				onpointermove={pointerMove}
 				onpointerup={pointerUp}
@@ -447,6 +483,18 @@
 					</span>
 				{/if}
 				<span class="duration muted tabular">{formatDuration(track.durationUs)}</span>
+				<button
+					type="button"
+					class="more"
+					class:open={adding?.from === i}
+					aria-expanded={adding?.from === i}
+					aria-label="Add {track.title} to a playlist"
+					title="Add to playlist"
+					aria-haspopup="menu"
+					onclick={(e) => more(e, i)}
+				>
+					<Icon name="more" size={18} />
+				</button>
 			</li>
 		{/each}
 		{#if drag?.started && drag.gap !== null}
@@ -461,6 +509,10 @@
 	{#if sentinel}
 		<div {@attach sentinel} aria-hidden="true"></div>
 	{/if}
+{/if}
+
+{#if adding}
+	<AddToPlaylistMenu tracks={adding.tracks} anchor={adding.anchor} onclose={closeAdding} />
 {/if}
 
 {#if editable}
@@ -478,6 +530,17 @@
 						>{` ${selected.size === 1 ? 'song' : 'songs'}`}</span
 					> selected</span
 				>
+				<button
+					type="button"
+					class="bar-action"
+					aria-haspopup="menu"
+					aria-expanded={adding?.from === 'bar'}
+					aria-label="Add to playlist"
+					onclick={addSelected}
+				>
+					<Icon name="plus" size={16} />
+					<span>Add <span class="unit">to playlist</span></span>
+				</button>
 				{#if onremove}
 					<button type="button" class="bar-action" onclick={remove}>
 						<Icon name="trash" size={16} /> Remove
@@ -500,7 +563,7 @@
 
 	.track {
 		display: grid;
-		grid-template-columns: 32px 40px minmax(0, 3fr) minmax(0, 2fr) 56px;
+		grid-template-columns: 32px 40px minmax(0, 3fr) minmax(0, 2fr) 56px 36px;
 		align-items: center;
 		gap: var(--space-3);
 		min-height: 56px;
@@ -510,8 +573,39 @@
 	}
 
 	.album .track {
-		grid-template-columns: 32px minmax(0, 1fr) 56px;
+		grid-template-columns: 32px minmax(0, 1fr) 56px 36px;
 		min-height: 52px;
+	}
+
+	.more {
+		display: grid;
+		place-items: center;
+		width: 32px;
+		height: 32px;
+		border: 0;
+		border-radius: 50%;
+		background: transparent;
+		color: var(--text-muted);
+		cursor: pointer;
+	}
+
+	.more:hover,
+	.more.open {
+		background: var(--surface-hover);
+		color: var(--text);
+	}
+
+	/* With a mouse, ⋯ shows on the row being pointed at, focused, or selected; on touch, always. */
+	@media (hover: hover) {
+		.more:not(.open) {
+			opacity: 0;
+		}
+
+		.track:hover .more,
+		.track:focus-within .more,
+		.track.selected .more {
+			opacity: 1;
+		}
 	}
 
 	.track:hover {
@@ -761,7 +855,7 @@
 
 	@media (max-width: 767px) {
 		.track {
-			grid-template-columns: 40px minmax(0, 1fr) 48px;
+			grid-template-columns: 40px minmax(0, 1fr) 48px 36px;
 			padding: var(--space-1) var(--space-2);
 		}
 
@@ -771,7 +865,7 @@
 		}
 
 		.album .track {
-			grid-template-columns: 28px minmax(0, 1fr) 48px;
+			grid-template-columns: 28px minmax(0, 1fr) 48px 36px;
 		}
 
 		.album .track .num {
