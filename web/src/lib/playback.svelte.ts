@@ -98,7 +98,9 @@ class Playback {
 		if (state.status === 'playing' && realtime.connected && Number.isFinite(at)) {
 			ms += Math.max(0, now + realtime.clockOffset - at);
 		}
-		const end = this.track ? this.track.durationUs / 1000 : Infinity;
+		// Not the end of a track from before, while the one it names is on its way.
+		const track = this.track?.id === state.trackId ? this.track : null;
+		const end = track ? track.durationUs / 1000 : Infinity;
 		return Math.max(0, Math.min(ms, end)) / 1000;
 	}
 

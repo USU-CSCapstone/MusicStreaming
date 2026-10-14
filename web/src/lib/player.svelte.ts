@@ -1,12 +1,21 @@
 // Local playback: one audio element playing through a context of tracks. It reports its
 // progress to the server and stops when another device takes over (`progress.ts`), carries out
-// commands from the user's other devices while it plays (`remote.ts`), and plays in one tab of
-// this browser at a time, since every tab is the same device to the server.
+// commands from the user's other devices while it plays, and takes playback over when one moves
+// it here (`remote.ts`). It plays in one tab of this browser at a time, since every tab is the
+// same device to the server.
 // Queue editing and Shift come later (`requirements/queue.md`, `requirements/realtime.md`).
 
-import { audioUrl, getPlaybackInfo, getWaveform, imageUrl, recordPlays } from './api/client';
+import {
+	audioUrl,
+	getPlaybackInfo,
+	getTrack,
+	getWaveform,
+	imageUrl,
+	recordPlays
+} from './api/client';
 import type { PlayContext, PlayerCommand, PlayerState, TrackSummary } from './api/types';
 import { albumTitle, artistName } from './format';
+import { playback } from './playback.svelte';
 import { PlayRecorder } from './plays';
 import { Progress } from './progress';
 import { firstPlayable, nextPlayable, previousTarget } from './queue';
@@ -127,13 +136,25 @@ class Player {
 	}
 
 	/**
-	 * Plays here `track`, which another device was playing from library `libraryId`, from
-	 * `seconds` in: within the context this player has, if the track is in it, or on its own.
-	 * Until the server keeps the queue, what came after it on the other device does not come
-	 * along. A track of a library other than this player's cannot play here.
+	 * Takes the account's playback over here, playing, or paused if not `play`: the track it
+	 * names, from where it got to, within the context this player has, if the track is in it, or
+	 * on its own. Until the server keeps the queue, what came after it on the device it was on
+	 * does not come along. The volume stays this device's own. Fails if there is nothing to pick
+	 * up, or playback moves on meanwhile.
 	 */
-	pickUp(libraryId: string, track: TrackSummary, seconds: number) {
-		if (libraryId !== this.libraryId) return;
+	async pickUp(play = true) {
+		const state = playback.state;
+		const { libraryId, trackId } = state ?? {};
+		if (!libraryId || libraryId !== this.libraryId || !trackId) {
+			throw new Error('Nothing here to pick up.');
+		}
+		const track =
+			playback.track?.id === trackId ? playback.track : await getTrack(fetch, libraryId, trackId);
+		// Another device took over, or this one changed library, while the track was on its way.
+		const now = playback.state;
+		const moved = now?.trackId !== trackId || now.activeDeviceId !== state?.activeDeviceId;
+		if (moved || libraryId !== this.libraryId) throw new Error('Playback moved on.');
+		const seconds = Math.min(playback.positionAt(Date.now()), track.durationUs / 1_000_000);
 		let index = this.tracks.findIndex((t) => t.id === track.id);
 		if (index < 0) {
 			this.tracks = [track];
@@ -141,7 +162,7 @@ class Player {
 			index = 0;
 		}
 		this.#started();
-		this.#go(index, seconds);
+		this.#go(index, seconds, play);
 	}
 
 	/** Play `tracks` from `context`, starting at `index`. */
@@ -172,7 +193,7 @@ class Player {
 		// The track is on its way, and its audio is not yet the audio element's.
 		if (this.#loading) return;
 		if (byUser) this.#started();
-		if (this.#stale) this.#go(this.index);
+		if (this.#stale) this.#go(this.index, this.position);
 		else await audio.play();
 	}
 
@@ -215,7 +236,8 @@ class Player {
 		next: () => this.#next(),
 		previous: () => this.#previous(false),
 		seek: (seconds) => this.seek(seconds),
-		setVolume: (volume) => this.setVolume(volume)
+		setVolume: (volume) => this.setVolume(volume),
+		receive: (play) => this.pickUp(play)
 	};
 
 	seek(seconds: number) {
@@ -272,8 +294,8 @@ class Player {
 		});
 	}
 
-	/** Plays `index` from `startAt` seconds in. */
-	#go(index: number, startAt = 0) {
+	/** Plays `index` from `startAt` seconds in, or holds it there paused unless `play`. */
+	#go(index: number, startAt = 0, play = true) {
 		this.index = index;
 		const track = this.tracks[index];
 		const load = ++this.#load;
@@ -285,31 +307,38 @@ class Player {
 		this.duration = track.durationUs / 1_000_000;
 		this.waveform = null;
 		this.#mediaSession(track);
-		this.#loading = true;
-		this.#stale = false;
-		this.#report('buffering');
+		this.#loading = play;
+		// Until its audio is set, the audio element still has the track before.
+		this.#stale = !play;
+		this.#report(play ? 'buffering' : 'paused');
 
 		const lib = this.libraryId;
 		getPlaybackInfo(fetch, lib, track.id)
 			.then((info) => {
 				if (load !== this.#load) return;
 				audio.src = audioUrl(lib, track.id, info.variant);
-				if (startAt > 0) {
+				this.#stale = false;
+				// Where it was to start, or was moved to meanwhile.
+				const at = this.position;
+				if (at > 0) {
 					// Before the audio loads this is where it starts, in most browsers; the rest
 					// are moved there once they know how long it is.
-					audio.currentTime = startAt;
+					audio.currentTime = at;
 					const start = () => {
-						if (load === this.#load && audio.currentTime < startAt - 1) audio.currentTime = startAt;
+						if (load === this.#load && audio.currentTime < at - 1) audio.currentTime = at;
 					};
 					audio.addEventListener('loadedmetadata', start, { once: true });
 				}
-				return audio.play();
+				if (play) return audio.play();
 			})
-			.catch(() => {
-				// A track that cannot play is skipped in place, without a message (`requirements/conventions.md` §6).
+			.catch((error) => {
 				if (load !== this.#load) return;
 				this.#loading = false;
-				this.#next();
+				// The browser would not play what this page did not start itself, or it was to wait
+				// paused: either way it waits here, rather than playing the next track.
+				if (!play || error?.name === 'NotAllowedError') this.#report();
+				// A track that cannot play is skipped in place, without a message (`requirements/conventions.md` §6).
+				else this.#next();
 			});
 		getWaveform(fetch, lib, track.id)
 			.then((w) => {
@@ -346,7 +375,8 @@ class Player {
 			if (this.playing) this.#report();
 		}, REPORT_EVERY_MS);
 		audio.addEventListener('timeupdate', () => {
-			this.position = audio.currentTime;
+			// Not the time of the track before, while this one is on its way.
+			if (!this.#loading && !this.#stale) this.position = audio.currentTime;
 			this.#plays.heard(audio.currentTime);
 		});
 		audio.addEventListener('seeking', () => this.#plays.seeked(audio.currentTime));
@@ -361,7 +391,8 @@ class Player {
 		// Closing the page stops what is playing. The report must outlive the page.
 		addEventListener('pagehide', () => this.#plays.end('stopped', true));
 		audio.addEventListener('error', () => {
-			if (audio.src) this.#next();
+			// One waiting paused waits here, rather than playing the next track.
+			if (audio.src && !audio.paused) this.#next();
 		});
 		this.#audio = audio;
 
