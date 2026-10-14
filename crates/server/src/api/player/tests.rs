@@ -338,6 +338,21 @@ async fn losing_the_playing_connection_stops_playback_where_it_got_to() {
 }
 
 #[tokio::test]
+async fn a_connection_that_drops_played_until_it_dropped() {
+    let (_temp, _app, address) = setup().await;
+    let mut desk = connect_with(address, TOKEN).await;
+    let mut phone = connect_with(address, "phone").await;
+    next_of(&mut phone, "player").await; // As it was on connecting: stopped at nothing.
+    report(&mut desk, "1", "playing", json!({ "start": true })).await;
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // Gone without a close frame, as when the network changes under it.
+    drop(desk);
+
+    let position = state_with(&mut phone, "stopped").await["positionMs"].as_u64().unwrap();
+    assert!((1500..2500).contains(&position), "not rewound to its last report: {position}");
+}
+
+#[tokio::test]
 async fn a_paused_place_is_kept_exactly_and_other_connections_closing_change_nothing() {
     let (_temp, app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
