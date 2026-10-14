@@ -107,6 +107,15 @@ async fn starting_takes_over_and_only_the_active_device_reports() {
 }
 
 #[tokio::test]
+async fn a_report_without_volume_keeps_the_playing_devices_volume() {
+    let (_temp, app, address) = setup().await;
+    let mut desk = connect_with(address, TOKEN).await;
+    report(&mut desk, "1", "playing", json!({ "start": true, "volume": 0.5 })).await;
+    report(&mut desk, "1", "paused", json!({})).await;
+    assert_eq!(player(&app, TOKEN).await["volume"], json!(0.5));
+}
+
+#[tokio::test]
 async fn reports_are_checked() {
     let (_temp, app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
