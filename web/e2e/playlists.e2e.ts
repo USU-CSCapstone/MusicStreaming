@@ -1,5 +1,5 @@
 import { type Page, expect, test } from '@playwright/test';
-import { longMix, serveLibrary, signalMix } from './fixtures';
+import { album, longMix, roadTrip, serveLibrary, signalMix } from './fixtures';
 
 test('creates a playlist and opens it', async ({ page }) => {
 	await serveLibrary(page);
@@ -324,6 +324,135 @@ test.describe('dragging', () => {
 		const landed = order.findIndex((title, k) => title !== rest[k]);
 		expect(landed).toBeGreaterThan(10);
 		expect(order[landed]).toBe('Signal Part 1');
+	});
+});
+
+test.describe('adding to a playlist', () => {
+	const titles = (page: Page) => page.locator('.track .title');
+	const more = (page: Page, title: string) =>
+		page.getByRole('button', { name: `Add ${title} to a playlist` });
+
+	test('adds a song from its ⋯, and opens the playlist', async ({ page }) => {
+		await serveLibrary(page, { playlists: [signalMix, roadTrip] });
+		await page.goto(`/albums/${album.id}`);
+		await more(page, 'Signal Part 2').click();
+		const menu = page.getByRole('menu', { name: 'Add “Signal Part 2” to a playlist' });
+		await menu.getByRole('menuitem', { name: /Road Trip/ }).click();
+		await expect(menu).toBeHidden();
+		await expect(page.getByRole('status')).toHaveText(/Added “Signal Part 2” to “Road Trip”/);
+
+		await page.getByRole('button', { name: 'Open' }).click();
+		await expect(page.getByRole('heading', { name: 'Road Trip' })).toBeVisible();
+		await expect(titles(page)).toHaveText(['Signal Part 2']);
+	});
+
+	test('warns about a song already there, and adds it only if asked', async ({ page }) => {
+		await serveLibrary(page, { playlists: [signalMix] });
+		await page.goto(`/albums/${album.id}`);
+		const dialog = page.getByRole('dialog', { name: 'Already in this playlist' });
+
+		await more(page, 'Signal Part 1').click();
+		await page.getByRole('menuitem', { name: /Signal Mix/ }).click();
+		await expect(dialog).toContainText(
+			'“Signal Part 1” is already in “Signal Mix”. Add it anyway?'
+		);
+		await dialog.getByRole('button', { name: 'Cancel' }).click();
+		await expect(dialog).toBeHidden();
+
+		await more(page, 'Signal Part 1').click();
+		await page.getByRole('menuitem', { name: /Signal Mix/ }).click();
+		const saved = page.waitForResponse((r) => r.request().method() === 'PATCH');
+		await dialog.getByRole('button', { name: 'Add anyway' }).click();
+		await saved;
+		await page.goto(`/playlists/${signalMix.id}`);
+		await expect(titles(page)).toHaveText([
+			'Signal Part 1',
+			'Signal Part 2',
+			'Signal Remix',
+			'Signal Part 1'
+		]);
+	});
+
+	test('makes a new playlist with the song in it', async ({ page }) => {
+		await serveLibrary(page);
+		await page.goto(`/albums/${album.id}`);
+		await more(page, 'Signal Remix').click();
+		await page.getByRole('menuitem', { name: 'New playlist…' }).click();
+		const dialog = page.getByRole('dialog', { name: 'New playlist' });
+		await dialog.getByRole('textbox', { name: 'Title' }).fill('Favorites');
+		await dialog.getByRole('button', { name: 'Create' }).click();
+		await expect(dialog).toBeHidden();
+		await expect(page.getByRole('status')).toHaveText(/Added “Signal Remix” to “Favorites”/);
+		// Still on the album.
+		await expect(page.getByRole('heading', { level: 1, name: 'Signal' })).toBeVisible();
+
+		await page.goto('/playlists');
+		await expect(page.getByRole('link', { name: /Favorites/ })).toContainText('1 song');
+	});
+
+	test('adds the selection, skipping songs already there if asked', async ({ page }) => {
+		await serveLibrary(page, {
+			playlists: [signalMix, { ...roadTrip, trackIds: [BigInt(signalMix.trackIds[1])] }]
+		});
+		await page.goto(`/playlists/${signalMix.id}`);
+		await expect(titles(page)).toHaveCount(3);
+		await page.keyboard.press('ControlOrMeta+a');
+		const bar = page.getByRole('toolbar', { name: 'Selected songs' });
+		await bar.getByRole('button', { name: 'Add to playlist' }).click();
+		await page.getByRole('menuitem', { name: /Road Trip/ }).click();
+
+		const dialog = page.getByRole('dialog', { name: 'Already in this playlist' });
+		await expect(dialog).toContainText('1 of these 3 songs is already in “Road Trip”.');
+		await dialog.getByRole('button', { name: 'Skip duplicates' }).click();
+		await expect(page.getByRole('status')).toHaveText(/Added 2 songs to “Road Trip”/);
+		// The selection is still there, for whatever comes next.
+		await expect(bar).toContainText('3 songs selected');
+
+		await page.getByRole('button', { name: 'Open' }).click();
+		await expect(titles(page)).toHaveText(['Signal Part 2', 'Signal Part 1', 'Signal Remix']);
+	});
+
+	test('adds to the playlist open on screen at once', async ({ page }) => {
+		await serveLibrary(page, { playlists: [signalMix] });
+		await page.goto(`/playlists/${signalMix.id}`);
+		await more(page, 'Signal Remix').click();
+		await page.getByRole('menuitem', { name: /Signal Mix/ }).click();
+		await page.getByRole('button', { name: 'Add anyway' }).click();
+		await expect(titles(page)).toHaveText([
+			'Signal Part 1',
+			'Signal Part 2',
+			'Signal Remix',
+			'Signal Remix'
+		]);
+		await expect(page.getByText('4 songs · ')).toBeVisible();
+
+		// Its next edit is not taken for a change made elsewhere.
+		await titles(page).first().click();
+		const saved = page.waitForResponse(
+			(r) => r.request().method() === 'PATCH' && !!r.request().postDataJSON().ops?.[0].positions
+		);
+		await page.getByRole('toolbar').getByRole('button', { name: 'Remove' }).click();
+		expect((await saved).status()).toBe(200);
+		await expect(page.getByRole('status')).not.toHaveText(/another device/);
+		await page.reload();
+		await expect(titles(page)).toHaveText(['Signal Part 2', 'Signal Remix', 'Signal Remix']);
+	});
+
+	test('works from the keyboard', async ({ page }) => {
+		await serveLibrary(page, { playlists: [signalMix, roadTrip] });
+		await page.goto(`/albums/${album.id}`);
+		await more(page, 'Signal Part 1').focus();
+		await page.keyboard.press('Enter');
+		await expect(page.getByRole('menuitem', { name: 'New playlist…' })).toBeFocused();
+		await expect(page.getByRole('menuitem')).toHaveCount(3);
+		await page.keyboard.press('ArrowDown');
+		await expect(page.getByRole('menuitem', { name: /Signal Mix/ })).toBeFocused();
+		await page.keyboard.press('ArrowUp');
+		await page.keyboard.press('ArrowUp');
+		await expect(page.getByRole('menuitem', { name: /Road Trip/ })).toBeFocused();
+		await page.keyboard.press('Escape');
+		await expect(page.getByRole('menu')).toBeHidden();
+		await expect(more(page, 'Signal Part 1')).toBeFocused();
 	});
 });
 
