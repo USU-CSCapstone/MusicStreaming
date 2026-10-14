@@ -10,7 +10,6 @@ const fake = vi.hoisted(() => ({
 		state: null as unknown,
 		track: null as unknown,
 		moving: null as { deviceId: string; commandId: string } | null,
-		error: null as string | null,
 		transfer: (() => {}) as (deviceId: string) => void
 	},
 	controls: {
@@ -51,7 +50,7 @@ beforeEach(() => {
 	];
 	fake.playback.state = playingOn('1');
 	fake.playback.track = fake.controls.track;
-	Object.assign(fake.playback, { moving: null, error: null });
+	fake.playback.moving = null;
 	fake.controls.playing = true;
 	fake.controls.remote = true;
 	fake.controls.pickable = true;
@@ -108,31 +107,6 @@ describe('DevicesPanel', () => {
 		// As a click would, which a browser still delivers to a button only marked disabled.
 		(button.element() as HTMLElement).click();
 		expect(transfer).not.toHaveBeenCalled();
-	});
-
-	it('says why playback could not move, unless the player bar already does', async () => {
-		fake.playback.error = 'That device is not connected.';
-		fake.controls.remote = false;
-		render(DevicesPanel);
-		await expect
-			.element(page.getByRole('alert'))
-			.toHaveTextContent('That device is not connected.');
-	});
-
-	it("leaves a failure to the player bar while it shows another device's track", async () => {
-		fake.playback.error = 'That device is not connected.';
-		render(DevicesPanel);
-		await expect.element(rows().nth(0)).toBeVisible();
-		await expect.element(page.getByRole('alert')).not.toBeInTheDocument();
-	});
-
-	it('says why playback could not move while the track is not yet known', async () => {
-		fake.playback.error = 'That device is not connected.';
-		const track = fake.controls.track;
-		fake.controls.track = null;
-		render(DevicesPanel);
-		await expect.element(page.getByRole('alert')).toBeVisible();
-		fake.controls.track = track;
 	});
 
 	it('offers nowhere to move playback while offline, nor says it is on its way', async () => {

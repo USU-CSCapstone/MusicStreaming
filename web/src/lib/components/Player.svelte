@@ -26,24 +26,31 @@
 	const devicesLabel = $derived(
 		playback.elsewhere ? `Devices, playing on ${playback.deviceName}` : 'Devices'
 	);
-	let lastVolume = 1;
+	/** Each device's volume before it was muted here, so unmuting one never takes another's. */
+	const unmuted: Record<string, number> = {};
 	let innerWidth = $state(1024);
 	const compact = $derived(innerWidth < 768);
 
 	function toggleMute() {
+		const device = (controls.remote ? playback.state?.activeDeviceId : realtime.deviceId) ?? '';
 		if (controls.volume > 0) {
-			lastVolume = controls.volume;
+			unmuted[device] = controls.volume;
 			controls.setVolume(0);
 		} else {
-			controls.setVolume(lastVolume || 1);
+			controls.setVolume(unmuted[device] || 1);
 		}
 	}
 </script>
 
 <svelte:window bind:innerWidth />
 
-<!-- Shown on a phone while offline even with nothing playing, so the user knows. -->
-<section class="player" class:idle={!track && !remote && !realtime.offline} aria-label="Player">
+<!-- Shown on a phone while offline, or while saying why a command failed, even with nothing
+     playing, so the user knows. -->
+<section
+	class="player"
+	class:idle={!track && !remote && !realtime.offline && !playback.error}
+	aria-label="Player"
+>
 	<div class="now">
 		{#if track}
 			<a class="art" href={resolve('/albums/[id]', { id: track.album.id })} aria-label="Open album">
@@ -52,20 +59,16 @@
 			<div class="meta">
 				<span class="title">{track.title}</span>
 				<span class="muted artists"><ArtistLinks artists={track.artists} /></span>
-				{#if remote && (playback.error || where)}
-					<span class="where">
-						{#if playback.error}
-							<span class="device error" role="alert" title={playback.error}>{playback.error}</span>
-						{:else}
-							<span class="device">{where}</span>
-						{/if}
-					</span>
+				{#if playback.error}
+					<span class="where error" role="alert" title={playback.error}>{playback.error}</span>
+				{:else if remote && where}
+					<span class="where">{where}</span>
 				{/if}
 			</div>
-		{:else if remote && where}
-			<span class="muted">{where}</span>
+		{:else if playback.error}
+			<span class="where error" role="alert" title={playback.error}>{playback.error}</span>
 		{:else}
-			<span class="muted">Nothing playing</span>
+			<span class="muted">{(remote && where) || 'Nothing playing'}</span>
 		{/if}
 	</div>
 
@@ -215,24 +218,15 @@
 	}
 
 	.where {
-		display: flex;
-		align-items: center;
-		gap: var(--space-1);
-		min-width: 0;
 		color: var(--accent);
 		font-size: 12px;
-	}
-
-	.device.error {
-		color: var(--danger);
-	}
-
-	/* A long device name gives way, never the button. */
-	.device {
-		min-width: 0;
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+
+	.where.error {
+		color: var(--danger);
 	}
 
 	.center {

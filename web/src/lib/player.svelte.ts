@@ -3,7 +3,7 @@
 // commands from the user's other devices while it plays, and takes playback over when one moves
 // it here (`remote.ts`). It plays in one tab of this browser at a time, since every tab is the
 // same device to the server.
-// Queue editing and Shift come later (`requirements/queue.md`, `requirements/realtime.md`).
+// Queue editing comes later (`requirements/queue.md`).
 
 import {
 	audioUrl,

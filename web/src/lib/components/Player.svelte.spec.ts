@@ -49,4 +49,16 @@ describe('Player.svelte', () => {
 		render(Player);
 		await expect.element(page.getByRole('button', { name: 'Play' })).toBeDisabled();
 	});
+
+	it('says why a command failed with nothing playing here', async () => {
+		fake.playback.error = 'That device is not connected.';
+		const { remote, track } = fake.controls;
+		Object.assign(fake.controls, { remote: false, track: null });
+		render(Player);
+		await expect
+			.element(page.getByRole('alert'))
+			.toHaveTextContent('That device is not connected.');
+		await expect.element(page.getByText('Nothing playing')).not.toBeInTheDocument();
+		Object.assign(fake.controls, { remote, track });
+	});
 });

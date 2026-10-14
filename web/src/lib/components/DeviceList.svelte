@@ -34,12 +34,17 @@
 		if (device.id === realtime.deviceId && stale) return 'Not connected';
 		if (!stale && device.id === playback.moving?.deviceId) return 'Starting…';
 		if (device.id === state?.activeDeviceId) {
-			// As the player bar shows the device playing, what was just asked of it included.
-			const playing = stale ? state.status === 'playing' : controls.playing;
-			const doing = `${stale ? 'Was ' : ''}${playing ? 'playing' : 'paused'}`;
+			// As the player bar shows the device playing, what was just asked of it included; while
+			// offline, as it was last heard of.
+			const said = stale
+				? state.status === 'playing'
+					? 'Was playing'
+					: 'Was paused'
+				: controls.playing
+					? 'Playing'
+					: 'Paused';
 			const track = controls.track;
 			const title = track && track.id === state.trackId ? track.title : null;
-			const said = doing[0].toUpperCase() + doing.slice(1);
 			return title ? `${said} · ${title}` : said;
 		}
 		if (!device.connected) return 'Not connected';
@@ -47,10 +52,6 @@
 	}
 </script>
 
-<!-- The player bar says why a command failed while it shows another device's track; otherwise, here. -->
-{#if playback.error && !(controls.remote && controls.track)}
-	<p class="error" role="alert">{playback.error}</p>
-{/if}
 {#if devices.length === 0}
 	<p class="empty muted">
 		{realtime.connected ? 'Loading…' : 'Your devices show once connected.'}
@@ -94,12 +95,6 @@
 <style>
 	.empty {
 		margin: var(--space-4) 0 0;
-	}
-
-	.error {
-		margin: 0 0 var(--space-2);
-		color: var(--danger);
-		font-size: 13px;
 	}
 
 	ul {
