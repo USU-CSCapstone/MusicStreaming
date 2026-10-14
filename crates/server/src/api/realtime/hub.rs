@@ -25,9 +25,9 @@ pub struct Hub {
     accounts: Mutex<HashMap<i64, Vec<Connection>>>,
     /// Tells connections apart, a device's included.
     next_id: AtomicU64,
-    /// Held while a device list is read and sent, so an earlier list never arrives after a
-    /// later one.
-    device_lists: tokio::sync::Mutex<()>,
+    /// Each account's turn to read and send a device list, so an earlier list never arrives
+    /// after a later one.
+    device_lists: Mutex<HashMap<i64, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 struct Connection {
@@ -90,9 +90,12 @@ impl Hub {
         });
     }
 
-    /// Waits for the turn to read and send a device list, which lasts until the guard drops.
-    pub async fn device_list_turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
-        self.device_lists.lock().await
+    /// Waits for `user`'s turn to read and send a device list, which lasts until the guard
+    /// drops.
+    pub async fn device_list_turn(&self, user: i64) -> tokio::sync::OwnedMutexGuard<()> {
+        let turns = &self.device_lists;
+        let turn = turns.lock().expect("device list lock").entry(user).or_default().clone();
+        turn.lock_owned().await
     }
 
     /// Keeps the connections of `user` that `keep` is true for, and closes the rest.

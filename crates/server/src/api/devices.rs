@@ -99,15 +99,15 @@ pub fn changed(db: Arc<Database>, hub: Arc<Hub>, user: i64) {
     tokio::spawn(async move {
         // Read in turn, so the list sent last was read after the latest change. A connection
         // that comes or goes during the read sends another list after this one.
-        let _turn = hub.device_list_turn().await;
-        if hub.connected(user).is_empty() {
+        let _turn = hub.device_list_turn(user).await;
+        let connected = hub.connected(user);
+        if connected.is_empty() {
             return;
         }
         let mut devices = match db.read(move |conn| signed_in(conn, user)).await {
             Ok(devices) => devices,
             Err(error) => return tracing::warn!(%error, "cannot read devices to send"),
         };
-        let connected = hub.connected(user);
         for device in &mut devices {
             device.connected = connected.contains(&device.id.0);
         }
