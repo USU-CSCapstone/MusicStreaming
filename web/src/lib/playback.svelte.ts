@@ -38,8 +38,8 @@ class Playback {
 	#asked = $state<Partial<PlayerState>>({});
 	/** The state as shown: the server's, with what was just asked of it. */
 	shown = $derived(this.state && { ...this.state, ...this.#asked });
-	/** Commands sent and not yet answered, by ID. */
-	#waiting: Record<string, true> = {};
+	/** The IDs of commands sent and not yet answered. */
+	#waiting = new Set<string>();
 	#errorTimer: ReturnType<typeof setTimeout> | undefined;
 	#volumeTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -68,7 +68,7 @@ class Playback {
 			if (message.state.activeDeviceId !== this.state?.activeDeviceId) this.#forget();
 			this.state = message.state;
 			// A state from before a command was carried out may still be on its way until then.
-			const asking = Object.keys(this.#waiting).length > 0 || this.#volumeTimer !== undefined;
+			const asking = this.#waiting.size > 0 || this.#volumeTimer !== undefined;
 			if (!asking) this.#asked = {};
 			// The device playing has its own track; any other fetches the one it plays.
 			if (message.state.activeDeviceId !== realtime.deviceId) this.#fetch(message.state);
@@ -138,7 +138,7 @@ class Playback {
 
 	/** Lets go of every command still waiting, and what they asked for. */
 	#forget() {
-		this.#waiting = {};
+		this.#waiting.clear();
 		this.#asked = {};
 		this.moving = null;
 		clearTimeout(this.#volumeTimer);
@@ -170,14 +170,13 @@ class Playback {
 			this.fail('Not connected to the server.');
 			return null;
 		}
-		this.#waiting[commandId] = true;
+		this.#waiting.add(commandId);
 		this.#asked = { ...this.#asked, ...change };
 		return commandId;
 	}
 
 	#answered(result: { commandId: string; status: string; reason?: string | null }) {
-		if (result.status === 'pending' || !this.#waiting[result.commandId]) return;
-		delete this.#waiting[result.commandId];
+		if (result.status === 'pending' || !this.#waiting.delete(result.commandId)) return;
 		if (result.commandId === this.moving?.commandId) this.moving = null;
 		if (result.status === 'failed') {
 			// What it asked for did not happen: back to what the server says did.
