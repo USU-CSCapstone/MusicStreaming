@@ -193,6 +193,11 @@ impl Players {
             Reported::Paused | Reported::Buffering => Status::Paused,
             Reported::Stopped => Status::Stopped,
         };
+        // Volume belongs to the device (`requirements/realtime.md` §3): a report that leaves it
+        // out keeps the active device's, but a device taking over does not inherit the last's.
+        if report.volume.is_some() || state.active_device_id != Some(Id(device)) {
+            state.volume = report.volume;
+        }
         state.status = status;
         let playing = status != Status::Stopped;
         state.active_device_id = playing.then_some(Id(device));
@@ -202,7 +207,6 @@ impl Players {
         state.track_id = Some(track);
         state.position_ms = report.position_ms;
         state.position_at = now_ms();
-        state.volume = report.volume;
         state.unsaved = true;
         Ok(hub.broadcast(user, &ServerMessage::Player { state: state.clone() }))
     }
