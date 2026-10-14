@@ -203,8 +203,10 @@ async fn serve(mut socket: WebSocket, state: AppState, caller: Caller) {
     drop(presence);
     // A connection that went silent is dropped up to [`SILENCE`] and a [`HEARTBEAT`] later, and
     // whatever was playing over it is taken to have got only as far as when it was last heard
-    // from.
-    let heard_at = now_ms() - i64::try_from(heard.elapsed().as_millis()).unwrap_or(i64::MAX);
+    // from. One that ended any other way, even without a word, was there until it ended.
+    let unheard = heard.elapsed();
+    let unheard = if unheard > SILENCE { unheard.as_millis() } else { 0 };
+    let heard_at = now_ms() - i64::try_from(unheard).unwrap_or(i64::MAX);
     state.players.disconnected(&state.hub, caller.user, connection, heard_at);
     // A connected device is in use the whole time, which requests alone would not show.
     let device = caller.device;
