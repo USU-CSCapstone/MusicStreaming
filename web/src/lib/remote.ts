@@ -1,6 +1,7 @@
 // Carrying out commands from the user's other devices (`requirements/realtime.md` §3). The
-// server sends one only to the connection playing, which carries it out and says whether it
-// did, so the device that sent it shows what really happened (§5).
+// server sends one only to the connection playing, or a transfer to the device it moves playback
+// to, which carries it out and says whether it did, so the device that sent it shows what really
+// happened (§5).
 
 import type { PlayerCommand } from './api/types';
 
@@ -16,6 +17,11 @@ export interface Controls {
 	previous(): void;
 	seek(seconds: number): void;
 	setVolume(volume: number): void;
+	/**
+	 * Takes the account's playback over here, playing or paused, settling once it has rather
+	 * than once the audio plays, or failing if it cannot.
+	 */
+	receive(play: boolean): Promise<void>;
 }
 
 /** Carries `command` out on `player`, and answers why it could not, or null if it did. */
@@ -23,6 +29,12 @@ export async function carryOut(player: Controls, command: PlayerCommand): Promis
 	if (command.type === 'setVolume') {
 		player.setVolume(command.volume);
 		return null;
+	}
+	if (command.type === 'transfer') {
+		return player.receive(command.play).then(
+			() => null,
+			() => 'This device could not pick up playback.'
+		);
 	}
 	if (!player.loaded()) return 'Nothing is loaded on this device.';
 	switch (command.type) {

@@ -12,7 +12,8 @@ function player(playing: boolean, resumes = Promise.resolve()) {
 		next: vi.fn(),
 		previous: vi.fn(),
 		seek: vi.fn(),
-		setVolume: vi.fn()
+		setVolume: vi.fn(),
+		receive: vi.fn(() => Promise.resolve())
 	} satisfies Controls;
 }
 
@@ -57,7 +58,21 @@ describe('carryOut', () => {
 		);
 		const volume = command({ type: 'setVolume', deviceId: '1', volume: 0.5 });
 		expect(await carryOut(empty, volume), 'volume belongs to the device').toBeNull();
-		const transfer = command({ type: 'transfer', deviceId: '2' });
-		expect(await carryOut(player(true), transfer)).toBe('This device cannot do that yet.');
+		expect(await carryOut(player(true), command({ type: 'rewind' }))).toBe(
+			'This device cannot do that yet.'
+		);
+	});
+
+	it('takes playback over, with or without anything loaded', async () => {
+		const empty = { ...player(false), loaded: () => false };
+		expect(
+			await carryOut(empty, command({ type: 'transfer', deviceId: '1', play: false }))
+		).toBeNull();
+		expect(empty.receive).toHaveBeenCalledWith(false);
+
+		const failing = { ...player(false), receive: () => Promise.reject(new Error()) };
+		expect(await carryOut(failing, command({ type: 'transfer', deviceId: '1', play: true }))).toBe(
+			'This device could not pick up playback.'
+		);
 	});
 });

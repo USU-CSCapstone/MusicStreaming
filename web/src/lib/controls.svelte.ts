@@ -77,10 +77,7 @@ class Controls {
 
 	/** Plays here what the other device was playing, from where it got to. */
 	playHere() {
-		const { track, state } = playback;
-		if (track && state?.libraryId) {
-			player.pickUp(state.libraryId, track, playback.positionAt(Date.now()));
-		}
+		void player.pickUp().catch(() => {});
 	}
 }
 
