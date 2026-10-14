@@ -52,6 +52,13 @@ impl Hub {
         accounts.get(&user).into_iter().flatten().map(|connection| connection.device).collect()
     }
 
+    /// The connection `device` of `user` opened last, if it holds any.
+    pub fn newest(&self, user: i64, device: i64) -> Option<u64> {
+        let accounts = self.lock();
+        let connections = accounts.get(&user).into_iter().flatten();
+        connections.filter(|connection| connection.device == device).map(|c| c.id).max()
+    }
+
     /// Sends `message` to every connection of `user`, closing any whose outbox is full, and
     /// whether it closed any.
     pub fn broadcast(&self, user: i64, message: &ServerMessage) -> bool {
