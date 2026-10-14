@@ -33,6 +33,17 @@ test('pausing in the bar pauses the other device', async ({ page }) => {
 	await expect(player.getByText(`On ${phone.name}`)).toBeVisible();
 });
 
+test('says why the other device did not do what was asked', async ({ page }) => {
+	await serveLibrary(page);
+	await serveRealtime(page);
+	await page.goto('/albums');
+
+	const player = page.getByRole('region', { name: 'Player' });
+	await player.getByRole('button', { name: 'Next' }).click();
+	await expect(player.getByRole('alert')).toHaveText('The device did not answer.');
+	await expect(player.getByText('Signal Part 2')).toBeVisible();
+});
+
 test('playing here takes playback over from the other device', async ({ page }) => {
 	await serveLibrary(page);
 	const { sent } = await serveRealtime(page);
@@ -49,4 +60,9 @@ test('playing here takes playback over from the other device', async ({ page }) 
 		.poll(takeovers)
 		.toContainEqual(expect.objectContaining({ start: true, deviceId: '2', trackId: '42' }));
 	await expect(player.getByRole('button', { name: 'Devices', exact: true })).toBeVisible();
+	// The button gone, focus stays in the list, which says where playback went.
+	await expect(page.getByRole('list', { name: 'Devices' })).toBeFocused();
+	await expect(page.getByRole('status').filter({ hasText: 'Playback is' })).toHaveText(
+		'Playback is on this device'
+	);
 });

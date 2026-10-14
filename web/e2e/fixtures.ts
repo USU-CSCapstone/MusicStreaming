@@ -353,8 +353,10 @@ export const phone = {
 
 /**
  * Answers the realtime connection as a server would with `phone` playing the second track: it
- * says hello, lists this device and the phone, and carries out `play` and `pause` as if the phone
- * had, or a takeover reported from here. Returns every message the page sent.
+ * says hello, sends the state, and lists this device and the phone. It carries out `play` and
+ * `pause` as if the phone had, and fails any other command as one the phone did not answer. It
+ * takes reports as the server does: from the device playing, or one that starts playing.
+ * Returns every message the page sent.
  */
 export async function serveRealtime(page: Page) {
 	const sent: RealtimeClientMessage[] = [];
@@ -382,35 +384,37 @@ export async function serveRealtime(page: Page) {
 			}
 		];
 		send({ type: 'hello', deviceId, serverTime: now() });
-		send({ type: 'devices', devices });
 		send({ type: 'player', state });
+		send({ type: 'devices', devices });
 		ws.onMessage((data) => {
 			const message: RealtimeClientMessage = JSON.parse(data.toString());
 			sent.push(message);
 			if (message.type === 'ping') send({ type: 'pong', serverTime: now() });
 			if (message.type === 'playerCommand') {
-				const { command } = message;
-				if (command.type === 'play' || command.type === 'pause') {
-					const status = command.type === 'play' ? 'playing' : 'paused';
-					state = { ...state, status, positionAt: now() };
-					send({
-						type: 'commandResult',
-						result: { commandId: command.commandId, status: 'applied' }
-					});
+				const { commandId, type } = message.command;
+				send({ type: 'commandResult', result: { commandId, status: 'pending' } });
+				if (type === 'play' || type === 'pause') {
+					state = { ...state, status: type === 'play' ? 'playing' : 'paused', positionAt: now() };
+					send({ type: 'commandResult', result: { commandId, status: 'applied' } });
 					send({ type: 'player', state });
+				} else {
+					const reason = 'The device did not answer.';
+					send({ type: 'commandResult', result: { commandId, status: 'failed', reason } });
 				}
 			}
-			if (message.type === 'progress' && message.report.start) {
-				const { report } = message;
+			const report = message.type === 'progress' ? message.report : null;
+			const starts = report?.start && report.status !== 'stopped';
+			if (report && (starts || report.deviceId === state.activeDeviceId)) {
 				state = {
 					...state,
 					status: report.status === 'buffering' ? 'paused' : report.status,
-					activeDeviceId: report.deviceId,
+					activeDeviceId: report.status === 'stopped' ? null : report.deviceId,
 					itemId: report.itemId,
 					libraryId: report.libraryId,
 					trackId: report.trackId,
 					positionMs: report.positionMs,
-					positionAt: now()
+					positionAt: now(),
+					volume: report.volume ?? (report.deviceId === state.activeDeviceId ? state.volume : null)
 				};
 				send({ type: 'player', state });
 			}
