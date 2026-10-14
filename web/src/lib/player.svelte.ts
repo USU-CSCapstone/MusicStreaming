@@ -109,6 +109,8 @@ class Player {
 	#yield() {
 		// Nor does a takeover from here it could not yet send.
 		this.#progress.paused();
+		// Nor does the lock screen show what no longer plays here (`requirements/playback.md` §7).
+		if ('mediaSession' in navigator) navigator.mediaSession.metadata = null;
 		if (!this.playing) return;
 		// A track still loading must not start once its audio arrives.
 		if (this.#loading) {
@@ -179,7 +181,11 @@ class Player {
 		if (this.#loading) return;
 		if (byUser) this.#started();
 		if (this.#stale) this.#go(this.index, this.position);
-		else await audio.play();
+		else {
+			// Shown again, as yielding to another tab or device clears it.
+			this.#mediaSession(this.current);
+			await audio.play();
+		}
 	}
 
 	pause() {
@@ -397,11 +403,17 @@ class Player {
 
 		if ('mediaSession' in navigator) {
 			const ms = navigator.mediaSession;
-			ms.setActionHandler('play', () => void this.resume().catch(() => {}));
+			// While another device holds playback, nothing here takes it back, as a headset sending
+			// play as it connects would: "Play here" does.
+			const here = () => !playback.elsewhere;
+			ms.setActionHandler('play', () => here() && void this.resume().catch(() => {}));
 			ms.setActionHandler('pause', () => this.pause());
-			ms.setActionHandler('previoustrack', () => this.previous());
-			ms.setActionHandler('nexttrack', () => this.next());
-			ms.setActionHandler('seekto', (d) => d.seekTime !== undefined && this.seek(d.seekTime));
+			ms.setActionHandler('previoustrack', () => here() && this.previous());
+			ms.setActionHandler('nexttrack', () => here() && this.next());
+			ms.setActionHandler(
+				'seekto',
+				(d) => here() && d.seekTime !== undefined && this.seek(d.seekTime)
+			);
 		}
 		return audio;
 	}
