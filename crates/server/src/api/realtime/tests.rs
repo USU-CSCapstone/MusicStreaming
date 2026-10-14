@@ -6,10 +6,9 @@ use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::{Error, Message};
 
 use super::super::session::COOKIE;
-use super::super::testing::socket::{Socket, connect, next, next_of, serve};
+use super::super::testing::socket::{Socket, connect, connect_with, next, next_of, serve};
 use super::super::testing::{
-    TOKEN, add_device, add_user, app, app_before_setup, app_with_tracks, json, respond, send,
-    send_json,
+    TOKEN, add_device, add_user, app, app_before_setup, json, respond, send, send_json,
 };
 use super::{Hub, ServerMessage};
 
@@ -28,20 +27,14 @@ async fn receive(socket: &mut Socket) -> Value {
 
 /// The next device list, as whether each device is connected, by ID.
 async fn devices(socket: &mut Socket) -> BTreeMap<String, bool> {
-    loop {
-        let message = next(socket).await;
-        if message["type"] == "devices" {
-            let devices = message["devices"].as_array().unwrap().iter();
-            let connected = |device: &Value| {
-                // It would differ for each connection, so only `/me` responses say.
-                assert_eq!(device.get("current"), None, "{device}");
-                device["connected"].as_bool().unwrap()
-            };
-            return devices
-                .map(|device| (device["id"].as_str().unwrap().to_owned(), connected(device)))
-                .collect();
-        }
-    }
+    let message = next_of(socket, "devices").await;
+    let connected = |device: &Value| {
+        // It would differ for each connection, so only `/me` responses say.
+        assert_eq!(device.get("current"), None, "{device}");
+        device["connected"].as_bool().unwrap()
+    };
+    let devices = message["devices"].as_array().unwrap().iter();
+    devices.map(|device| (device["id"].as_str().unwrap().to_owned(), connected(device))).collect()
 }
 
 fn status(error: Error) -> StatusCode {
@@ -55,8 +48,8 @@ fn status(error: Error) -> StatusCode {
 async fn a_device_connects_says_hello_and_answers_pings() {
     let (_temp, _db, app) = app("");
     let address = serve(app.clone()).await;
-    let mut socket =
-        connect(address, &[("authorization", &format!("Bearer {TOKEN}"))]).await.unwrap();
+    let authorized = [("authorization", &*format!("Bearer {TOKEN}"))];
+    let mut socket = connect(address, &authorized).await.unwrap();
 
     let hello = receive(&mut socket).await;
     assert_eq!((&hello["type"], &hello["deviceId"]), (&json!("hello"), &json!("1")));
@@ -134,15 +127,11 @@ async fn logging_out_closes_the_devices_connections_and_no_others() {
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
     add_device(&conn, 1, 2, "other-token");
     let address = serve(app.clone()).await;
-    let bearer = format!("Bearer {TOKEN}");
     let mut tabs = Vec::new();
     for _ in 0..2 {
-        let mut tab = connect(address, &[("authorization", &bearer)]).await.unwrap();
-        receive(&mut tab).await;
-        tabs.push(tab);
+        tabs.push(connect_with(address, TOKEN).await);
     }
-    let mut other = connect(address, &[("authorization", "Bearer other-token")]).await.unwrap();
-    receive(&mut other).await;
+    let mut other = connect_with(address, "other-token").await;
 
     let (status, _, _) = send(app, "POST", "/api/v1/auth/logout").await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -163,8 +152,7 @@ async fn the_accounts_connections_see_its_devices_come_and_go() {
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 3, "stranger");
     let address = serve(app.clone()).await;
-    let mut desk =
-        connect(address, &[("authorization", &format!("Bearer {TOKEN}"))]).await.unwrap();
+    let mut desk = connect_with(address, TOKEN).await;
     // A list from before the latest change may arrive first; each must be only this account's.
     let until = async |socket: &mut Socket, expected: BTreeMap<String, bool>| loop {
         let list = devices(socket).await;
@@ -176,10 +164,10 @@ async fn the_accounts_connections_see_its_devices_come_and_go() {
     let both = |desk, phone| BTreeMap::from([("1".into(), desk), ("2".into(), phone)]);
     until(&mut desk, both(true, false)).await;
 
-    let mut phone = connect(address, &[("authorization", "Bearer phone")]).await.unwrap();
+    let mut phone = connect_with(address, "phone").await;
     until(&mut desk, both(true, true)).await;
     until(&mut phone, both(true, true)).await;
-    let mut stranger = connect(address, &[("authorization", "Bearer stranger")]).await.unwrap();
+    let mut stranger = connect_with(address, "stranger").await;
     assert_eq!(devices(&mut stranger).await, BTreeMap::from([("3".into(), true)]));
 
     phone.close(None).await.unwrap();
@@ -203,9 +191,8 @@ async fn logging_in_adds_a_device_to_the_list() {
     let setup = json!({ "username": "sam", "password": PASSWORD, "device": device });
     let (_, _, session) = send_json(app.clone(), "POST", "/api/v1/setup", &setup).await;
     let laptop = session["device"]["id"].as_str().unwrap().to_owned();
-    let bearer = format!("Bearer {}", session["token"].as_str().unwrap());
     let address = serve(app.clone()).await;
-    let mut socket = connect(address, &[("authorization", &bearer)]).await.unwrap();
+    let mut socket = connect_with(address, session["token"].as_str().unwrap()).await;
     assert_eq!(devices(&mut socket).await, BTreeMap::from([(laptop.clone(), true)]));
 
     let login = json!({ "username": "sam", "password": PASSWORD, "device": device });
@@ -229,38 +216,4 @@ async fn a_client_that_falls_behind_is_closed_once_it_has_what_was_queued() {
         assert!(slow.next().await.is_some());
     }
     assert!(slow.next().await.is_none(), "then closed");
-}
-
-#[tokio::test]
-async fn playback_state_reaches_every_connection_of_the_account() {
-    let (temp, _db, app) = app_with_tracks().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
-    add_device(&conn, 1, 2, "phone");
-    add_user(&conn, 2, "user");
-    add_device(&conn, 2, 3, "stranger");
-    let address = serve(app).await;
-    let mut desk =
-        connect(address, &[("authorization", &format!("Bearer {TOKEN}"))]).await.unwrap();
-    let mut phone = connect(address, &[("authorization", "Bearer phone")]).await.unwrap();
-    let mut stranger = connect(address, &[("authorization", "Bearer stranger")]).await.unwrap();
-    for socket in [&mut desk, &mut phone, &mut stranger] {
-        let greeting = next_of(socket, "player").await;
-        assert_eq!(
-            greeting["state"]["status"],
-            json!("stopped"),
-            "the current state on connecting"
-        );
-    }
-
-    let report = json!({ "type": "progress", "report": {
-        "deviceId": "1", "itemId": "item-1", "libraryId": "1", "trackId": "2",
-        "status": "playing", "positionMs": 500, "start": true,
-    } });
-    desk.send(Message::text(report.to_string())).await.unwrap();
-    for socket in [&mut phone, &mut desk] {
-        let state = &next_of(socket, "player").await["state"];
-        assert_eq!((&state["activeDeviceId"], &state["trackId"]), (&json!("1"), &json!("2")));
-    }
-    stranger.send(Message::text(r#"{"type":"ping"}"#)).await.unwrap();
-    assert_eq!(receive(&mut stranger).await["type"], json!("pong"), "no other account's state");
 }

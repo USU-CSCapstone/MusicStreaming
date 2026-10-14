@@ -9,7 +9,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use super::super::authenticate::Caller;
 use super::super::realtime::Hub;
-use super::super::testing::socket::{Socket, connect_with, next_of, serve};
+use super::super::testing::socket::{Socket, connect_with, next, next_of, serve};
 use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, respond};
 use super::{Id, Players};
 use crate::db::Database;
@@ -66,6 +66,36 @@ async fn before_anything_plays_the_player_is_stopped() {
             "trackId": null, "positionMs": 0, "volume": null,
         })
     );
+}
+
+#[tokio::test]
+async fn playback_state_reaches_every_connection_of_the_account() {
+    let (_temp, _app, address) = setup().await;
+    let mut desk = connect_with(address, TOKEN).await;
+    let mut phone = connect_with(address, "phone").await;
+    let mut stranger = connect_with(address, "user2").await;
+    for socket in [&mut desk, &mut phone, &mut stranger] {
+        let greeting = next_of(socket, "player").await;
+        assert_eq!(
+            greeting["state"]["status"],
+            json!("stopped"),
+            "the current state on connecting"
+        );
+    }
+
+    let report = json!({ "type": "progress", "report": {
+        "deviceId": "1", "itemId": "item-1", "libraryId": "1", "trackId": "2",
+        "status": "playing", "positionMs": 500, "start": true,
+    } });
+    desk.send(Message::text(report.to_string())).await.unwrap();
+    for socket in [&mut phone, &mut desk] {
+        let state = &next_of(socket, "player").await["state"];
+        assert_eq!((&state["activeDeviceId"], &state["trackId"]), (&json!("1"), &json!("2")));
+    }
+    // Its own account's device list is the one other message it is sent.
+    next_of(&mut stranger, "devices").await;
+    stranger.send(Message::text(r#"{"type":"ping"}"#)).await.unwrap();
+    assert_eq!(next(&mut stranger).await["type"], json!("pong"), "no other account's state");
 }
 
 #[tokio::test]

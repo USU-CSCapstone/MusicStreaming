@@ -28,7 +28,7 @@ use tokio::time::{Instant, interval_at, timeout};
 
 pub use hub::{Hub, Presence};
 
-use super::authenticate::{Caller, unauthenticated};
+use super::authenticate::Caller;
 use super::devices::{self, Device};
 use super::player::{self, CommandResult, PlayerCommand, PlayerState, ProgressReport};
 use super::time::rfc3339;
@@ -114,16 +114,10 @@ pub async fn open(
     }
     let upgrade =
         upgrade.map_err(|_| Problem::invalid("GET /realtime must be a WebSocket upgrade"))?;
-    // A sign-out between authenticating the request and joining the hub would tell no one, so
-    // the device is checked again once joined. Any sign-out after that tells this connection.
-    let presence = state.hub.connect(caller.user, caller.device);
-    if !signed_in(&state.db, caller.device).await? {
-        return Ok(unauthenticated());
-    }
     Ok(upgrade
         .max_message_size(MAX_MESSAGE)
         .max_frame_size(MAX_MESSAGE)
-        .on_upgrade(move |socket| serve(socket, presence, state, caller)))
+        .on_upgrade(move |socket| serve(socket, state, caller)))
 }
 
 /// Whether `device` still has a token, and its account may still sign in.
@@ -162,10 +156,16 @@ fn same_origin(headers: &HeaderMap) -> bool {
 }
 
 /// Holds `socket` open for `caller` until either side closes it or it goes silent.
-async fn serve(mut socket: WebSocket, mut presence: Presence, state: AppState, caller: Caller) {
+async fn serve(mut socket: WebSocket, state: AppState, caller: Caller) {
+    // Joined only once upgraded, so every connection the hub counts is let go of below. A
+    // sign-out between authenticating the request and joining would tell no one, so the device
+    // is checked again once joined; any sign-out after that tells this connection.
+    let mut presence = state.hub.connect(caller.user, caller.device);
     let hello = ServerMessage::Hello { device_id: Id(caller.device), server_time: now() };
     let mut heard = Instant::now();
-    if send(&mut socket, encode(&hello)).await {
+    if matches!(signed_in(&state.db, caller.device).await, Ok(true))
+        && send(&mut socket, encode(&hello)).await
+    {
         state.players.send_state(&state.hub, caller.user, &presence);
         // Every connection of the account, this one included, learns it is connected.
         devices::changed(state.db.clone(), state.hub.clone(), caller.user);
@@ -201,8 +201,9 @@ async fn serve(mut socket: WebSocket, mut presence: Presence, state: AppState, c
     }
     let connection = presence.id();
     drop(presence);
-    // A connection that went silent is dropped up to a minute later, and whatever was playing
-    // over it is taken to have got only as far as when it was last heard from.
+    // A connection that went silent is dropped up to [`SILENCE`] and a [`HEARTBEAT`] later, and
+    // whatever was playing over it is taken to have got only as far as when it was last heard
+    // from.
     let heard_at = now_ms() - i64::try_from(heard.elapsed().as_millis()).unwrap_or(i64::MAX);
     state.players.disconnected(&state.hub, caller.user, connection, heard_at);
     // A connected device is in use the whole time, which requests alone would not show.
