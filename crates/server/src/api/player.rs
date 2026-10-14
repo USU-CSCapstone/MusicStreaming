@@ -70,6 +70,9 @@ pub struct PlayerState {
     /// Whether it changed since it was last saved.
     #[serde(skip)]
     unsaved: bool,
+    /// The item and track it was last saved at, and when.
+    #[serde(skip)]
+    saved: Option<(String, Id, std::time::Instant)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -118,6 +121,7 @@ impl PlayerState {
             position_at: now_ms(),
             volume: None,
             unsaved: false,
+            saved: None,
         }
     }
 

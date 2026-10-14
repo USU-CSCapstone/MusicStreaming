@@ -2,11 +2,13 @@
 //!
 //! A report only marks its account's state as unsaved. One task saves every unsaved state
 //! together every [`SAVE_EVERY`], and once more as the server stops, so the database sees one
-//! write however many people are listening and however often their players report.
+//! write however many people are listening and however often their players report. Where an
+//! account plays on through the same track, only its place changes, and that is saved only
+//! every [`SAVE_PLAYING_EVERY`], sparing an SD card a write every few seconds all day.
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, params};
 use tokio::task::JoinHandle;
@@ -18,6 +20,9 @@ use crate::db::{Database, now_ms};
 
 /// How long a change may go unsaved: as much of their place as a crash can lose anyone.
 const SAVE_EVERY: Duration = Duration::from_secs(5);
+
+/// How long the place of an account playing on through the same track may go unsaved.
+pub(super) const SAVE_PLAYING_EVERY: Duration = Duration::from_secs(60);
 
 impl Players {
     /// Every account's state as saved, as the server starts: stopped where it was, since no
@@ -38,13 +43,19 @@ impl Players {
             every.set_missed_tick_behavior(MissedTickBehavior::Delay);
             loop {
                 every.tick().await;
-                players.save(&db).await;
+                players.save_where(&db, SAVE_PLAYING_EVERY).await;
             }
         })
     }
 
     /// Saves every state changed since it was last saved, in one write.
     pub async fn save(&self, db: &Database) {
+        self.save_where(db, Duration::ZERO).await;
+    }
+
+    /// Saves every state changed since it was last saved, in one write, except where an
+    /// account plays on through the item and track it was saved at less than `playing` ago.
+    pub(super) async fn save_where(&self, db: &Database, playing: Duration) {
         let now = now_ms();
         let mut rows = Vec::new();
         for (&user, state) in self.lock().iter_mut().filter(|(_, state)| state.unsaved) {
@@ -53,6 +64,13 @@ impl Players {
             else {
                 continue;
             };
+            let saved = state.saved.as_ref();
+            if state.status == Status::Playing
+                && saved.is_some_and(|s| s.0 == item && s.1 == track && s.2.elapsed() < playing)
+            {
+                continue;
+            }
+            state.saved = Some((item.clone(), track, Instant::now()));
             // Still unsaved while playing, so its place keeps being saved as it moves on.
             state.unsaved = state.status == Status::Playing;
             // Saved as far as it has played, which a restart would otherwise lose.
@@ -85,6 +103,7 @@ impl Players {
             for user in users {
                 if let Some(state) = accounts.get_mut(&user) {
                     state.unsaved = true;
+                    state.saved = None;
                 }
             }
         }

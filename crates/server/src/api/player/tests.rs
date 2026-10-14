@@ -272,6 +272,32 @@ async fn playing_is_saved_as_far_as_it_has_played() {
 }
 
 #[tokio::test]
+async fn playing_on_through_a_track_is_saved_only_now_and_then() {
+    let (_temp, db, _app) = app_with_tracks().await;
+    let players = Players::default();
+    let save = async || players.save_where(&db, super::saved::SAVE_PLAYING_EVERY).await;
+    let saved = async || restarted(&db).await["positionMs"].as_u64().unwrap() / 1000;
+    report_to(&players, "playing", 1, 1000);
+    save().await;
+    assert_eq!(saved().await, 1, "at once as it starts");
+
+    report_to(&players, "playing", 1, 30_000);
+    save().await;
+    assert_eq!(saved().await, 1, "not as it plays on, reported or not");
+    players.lock().get_mut(&1).unwrap().saved.as_mut().unwrap().2 -=
+        super::saved::SAVE_PLAYING_EVERY;
+    save().await;
+    assert_eq!(saved().await, 30, "until long enough after");
+
+    report_to(&players, "paused", 1, 40_000);
+    save().await;
+    assert_eq!(saved().await, 40, "at once as it pauses");
+    report_to(&players, "playing", 2, 0);
+    save().await;
+    assert_eq!(restarted(&db).await["trackId"], json!("2"), "or moves to another track");
+}
+
+#[tokio::test]
 async fn a_saved_place_out_of_reach_is_not_resumed() {
     let (temp, db, _app) = app_with_tracks().await;
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
