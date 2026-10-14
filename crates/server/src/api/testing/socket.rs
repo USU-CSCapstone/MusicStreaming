@@ -34,9 +34,13 @@ pub async fn connect(
     Ok(tokio_tungstenite::connect_async(request).await?.0)
 }
 
-/// Opens `/realtime` at `address` logged in with `token`.
+/// Opens `/realtime` at `address` logged in with `token`, once the server has said hello: only
+/// then does it count the connection.
 pub async fn connect_with(address: SocketAddr, token: &str) -> Socket {
-    connect(address, &[("authorization", &format!("Bearer {token}"))]).await.unwrap()
+    let mut socket =
+        connect(address, &[("authorization", &format!("Bearer {token}"))]).await.unwrap();
+    next_of(&mut socket, "hello").await;
+    socket
 }
 
 /// The next message, of any type.
