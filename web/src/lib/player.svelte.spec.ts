@@ -161,6 +161,8 @@ describe('player', () => {
 			positionMs: 0,
 			start: true
 		});
+		// Its audio fails again.
+		await vi.waitFor(() => expect(player.finished).toBe(true));
 
 		state({ activeDeviceId: '2', trackId: '46' });
 		expect(player.finished).toBe(false);
@@ -175,6 +177,40 @@ describe('player', () => {
 		await vi.waitFor(() => expect(player.finished).toBe(true));
 		state({ status: 'stopped', activeDeviceId: null, trackId: '50' });
 		expect(player.finished).toBe(false);
+	});
+
+	it('stays paused when paused before the track has its audio', async () => {
+		let arrive: (info: unknown) => void = () => {};
+		fake.info = () => new Promise((resolve) => (arrive = resolve));
+		const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+		player.play([track('51', 60)], 0);
+		expect(player.playing, 'shown playing at once').toBe(true);
+		send({ type: 'execute', command: { type: 'pause', commandId: crypto.randomUUID() } });
+		expect(await result()).toMatchObject({ status: 'applied' });
+		expect(player.playing).toBe(false);
+		arrive({ variant: 'original' });
+		await new Promise((resolve) => setTimeout(resolve));
+		expect(play).not.toHaveBeenCalled();
+		play.mockRestore();
+	});
+
+	it('stays on a track paused while it starts, rather than playing the next', async () => {
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		let abort = () => {};
+		const play = vi
+			.spyOn(HTMLMediaElement.prototype, 'play')
+			.mockImplementation(
+				() => new Promise((_, reject) => (abort = () => reject(new DOMException('', 'AbortError'))))
+			);
+		player.play([track('52', 60), track('53', 60)], 0);
+		await vi.waitFor(() => expect(play).toHaveBeenCalled());
+		player.toggle();
+		// As the browser does to a play cut short by a pause.
+		abort();
+		await new Promise((resolve) => setTimeout(resolve));
+		expect(player.current?.id).toBe('52');
+		expect(play).toHaveBeenCalledOnce();
+		play.mockRestore();
 	});
 
 	// Last, since its audio goes on loading.

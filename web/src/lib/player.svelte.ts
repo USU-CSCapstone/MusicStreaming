@@ -39,6 +39,7 @@ class Player {
 	index = $state(-1);
 	current = $derived<TrackSummary | null>(this.tracks[this.index] ?? null);
 
+	/** Whether it plays, or is to once the track's audio arrives. */
 	playing = $state(false);
 	/**
 	 * Whether playback stopped here, at the end of what this player had, and has not started
@@ -81,7 +82,7 @@ class Player {
 	#buffering = false;
 	/** Between choosing a track and its audio starting to play. */
 	#loading = false;
-	/** The audio is of a track before the current one, whose loading a takeover cut short. */
+	/** The audio is not of the current track: it is on its way, or a takeover cut that short. */
 	#stale = false;
 	#volumeReport: ReturnType<typeof setTimeout> | undefined;
 	/** This browser's other tabs, told when playback starts in this one. */
@@ -103,8 +104,7 @@ class Player {
 			this.finished = false;
 		}
 		if (!realtime.deviceId) return;
-		const playing = this.playing || this.#loading;
-		const action = this.#progress.heard(realtime.deviceId, state, playing);
+		const action = this.#progress.heard(realtime.deviceId, state, this.playing);
 		if (action === 'stop') this.#yield();
 		else if (action === 'report') this.#report();
 	}
@@ -126,11 +126,11 @@ class Player {
 
 	/** Another device or tab took over: this one stops where it is, and can take it back. */
 	#yield() {
-		if (!this.playing && !this.#loading) return;
+		if (!this.playing) return;
 		// A track still loading must not start once its audio arrives.
 		this.#load++;
 		if (this.#loading) this.#stale = true;
-		this.#loading = false;
+		this.playing = this.#loading = false;
 		this.#audio?.pause();
 		this.#plays.end('stopped');
 	}
@@ -177,8 +177,8 @@ class Player {
 
 	toggle() {
 		if (!this.#audio || !this.current) return;
-		if (this.#audio.paused) void this.resume().catch(() => {});
-		else this.pause();
+		if (this.playing) this.pause();
+		else void this.resume().catch(() => {});
 	}
 
 	/** Plays the current track from where it is: settles once the audio plays, or fails. */
@@ -199,6 +199,8 @@ class Player {
 
 	pause() {
 		this.#progress.paused();
+		// A track still on its way stays paused once its audio arrives.
+		this.playing = this.#loading = false;
 		this.#audio?.pause();
 	}
 
@@ -230,7 +232,7 @@ class Player {
 	 */
 	#remote: Controls = {
 		loaded: () => this.current !== null,
-		playing: () => this.playing || this.#loading,
+		playing: () => this.playing,
 		resume: () => this.#resume(false),
 		pause: () => this.pause(),
 		next: () => this.#next(),
@@ -264,6 +266,7 @@ class Player {
 	#next() {
 		const i = nextPlayable(this.tracks, this.index, 1);
 		if (i === null) {
+			this.playing = this.#loading = false;
 			this.#audio?.pause();
 			this.#plays.end('skipped');
 			// Stopped at the start of the last track, so playing again, here or anywhere, plays it:
@@ -281,8 +284,11 @@ class Player {
 	#report(status?: Status) {
 		const track = this.current;
 		if (!track || !realtime.deviceId) return;
-		const audio = this.#audio;
-		status ??= !audio || audio.paused ? 'paused' : this.#buffering ? 'buffering' : 'playing';
+		status ??= !this.playing
+			? 'paused'
+			: this.#loading || this.#buffering
+				? 'buffering'
+				: 'playing';
 		this.#progress.report(realtime.deviceId, {
 			// Its place in the context, until the server keeps the queue.
 			itemId: String(this.index),
@@ -307,9 +313,9 @@ class Player {
 		this.duration = track.durationUs / 1_000_000;
 		this.waveform = null;
 		this.#mediaSession(track);
-		this.#loading = play;
+		this.playing = this.#loading = play;
 		// Until its audio is set, the audio element still has the track before.
-		this.#stale = !play;
+		this.#stale = true;
 		this.#report(play ? 'buffering' : 'paused');
 
 		const lib = this.libraryId;
@@ -329,14 +335,17 @@ class Player {
 					};
 					audio.addEventListener('loadedmetadata', start, { once: true });
 				}
-				if (play) return audio.play();
+				// Unless paused meanwhile.
+				if (this.#loading) return audio.play();
 			})
 			.catch((error) => {
 				if (load !== this.#load) return;
-				this.#loading = false;
 				// The browser would not play what this page did not start itself, or it was to wait
-				// paused: either way it waits here, rather than playing the next track.
-				if (!play || error?.name === 'NotAllowedError') this.#report();
+				// paused, or was paused meanwhile: either way it waits here, rather than playing the
+				// next track.
+				const waits = !this.#loading || error?.name === 'NotAllowedError';
+				this.playing = this.#loading = false;
+				if (waits) this.#report();
 				// A track that cannot play is skipped in place, without a message (`requirements/conventions.md` §6).
 				else this.#next();
 			});
@@ -366,17 +375,20 @@ class Player {
 			this.#report();
 		});
 		audio.addEventListener('pause', () => {
+			// Changing track pauses the one before, while the new one is to play.
+			if (this.#loading) return;
 			this.playing = false;
-			if (!audio.ended) this.#plays.paused();
-			// Changing track pauses the one before; the new one is reported as loading instead.
-			if (!audio.ended && !this.#loading) this.#report();
+			if (!audio.ended) {
+				this.#plays.paused();
+				this.#report();
+			}
 		});
 		setInterval(() => {
 			if (this.playing) this.#report();
 		}, REPORT_EVERY_MS);
 		audio.addEventListener('timeupdate', () => {
 			// Not the time of the track before, while this one is on its way.
-			if (!this.#loading && !this.#stale) this.position = audio.currentTime;
+			if (!this.#stale) this.position = audio.currentTime;
 			this.#plays.heard(audio.currentTime);
 		});
 		audio.addEventListener('seeking', () => this.#plays.seeked(audio.currentTime));
