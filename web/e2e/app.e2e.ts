@@ -62,7 +62,7 @@ test('opening an album and clicking a song plays it', async ({ page }) => {
 	await expect(page.getByText('Disc 1')).toBeVisible();
 	await expect(page.getByText('Disc 2')).toBeVisible();
 
-	await page.getByRole('button', { name: 'Signal Part 2' }).click();
+	await page.getByRole('button', { name: 'Signal Part 2', exact: true }).click();
 	const player = page.getByRole('region', { name: 'Player' });
 	await expect(player.getByText('Signal Part 2')).toBeVisible();
 	await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
@@ -86,7 +86,7 @@ test('search updates as the user types', async ({ page }) => {
 		.pressSequentially('remix');
 
 	await expect(page).toHaveURL(/\/search\?q=remix$/);
-	await expect(page.getByRole('button', { name: 'Signal Remix' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Signal Remix', exact: true })).toBeVisible();
 
 	await page.getByRole('searchbox', { name: 'Search the library' }).first().fill('zzz');
 	await expect(page.getByRole('heading', { name: /No music matches/ })).toBeVisible();
@@ -218,7 +218,7 @@ test('lyrics follow the playing track', async ({ page }) => {
 		.getByRole('link', { name: /Signal/ })
 		.first()
 		.click();
-	await page.getByRole('button', { name: 'Signal Part 1' }).click();
+	await page.getByRole('button', { name: 'Signal Part 1', exact: true }).click();
 
 	const player = page.getByRole('region', { name: 'Player' });
 	await player.getByRole('button', { name: 'Lyrics' }).click();
