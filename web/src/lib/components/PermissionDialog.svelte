@@ -8,7 +8,9 @@
 <script lang="ts">
 	import {
 		PERMISSION_LABELS,
+		describeLimit,
 		every,
+		forEveryPlugin,
 		isLibraryPermission,
 		type PermissionName,
 		type PermissionRequest,
@@ -130,9 +132,20 @@
 						? 'Any destination'
 						: `Only ${req.destinations?.join(', ')}`}
 				</span>
+				<!-- Every limit it declares, so one far too strict is caught here (`requirements/plugins.md` §7). -->
+				{#each Object.entries(req.rateLimits ?? {}) as [host, limit] (host)}
+					{#if forEveryPlugin(limit)}
+						<span class="warn">
+							<Icon name="warning" size={14} />
+							{host}: {describeLimit(limit)}, so it can slow other plugins
+						</span>
+					{:else}
+						<span class="detail">{host}: {describeLimit(limit)}</span>
+					{/if}
+				{/each}
 			{:else if req.permission === 'schedule' && req.everyMinutes}
 				<span class="detail">Every {every(req.everyMinutes)}</span>
-			{:else if req.permission === 'libraryAdd' || req.permission === 'libraryChange'}
+			{:else if req.permission === 'libraryAdd' || req.permission === 'libraryChange' || req.permission === 'hostRateLimits'}
 				<!-- The risk is stated where the decision is made (`requirements/plugins.md` §4.2). -->
 				<span class="warn"><Icon name="warning" size={14} /> {label.detail}</span>
 			{:else}

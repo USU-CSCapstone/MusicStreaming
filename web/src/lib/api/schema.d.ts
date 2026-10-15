@@ -3096,6 +3096,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/plugins/{pluginId}/exemptions/{host}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pluginId: components["parameters"]["PluginId"];
+                /** @description One host name, such as `musicbrainz.org`; no `*` or patterns. Kept lowercase. */
+                host: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Exempt a plugin from a limit for every plugin
+         * @description Exempts this plugin's requests from the rate limit for every plugin (`hostLimits`) on
+         *     one host, such as for a plugin whose users each bring credentials with a budget of
+         *     their own (`requirements/plugins.md` §7). The host need not have a limit in force now.
+         *     Exempting it again changes nothing. Its runs keep to the change from their next start.
+         */
+        put: operations["adminExemptPlugin"];
+        post?: never;
+        /**
+         * End a plugin's exemption from a limit for every plugin
+         * @description Its requests to the host keep to the limit again from its runs' next start. Ending an
+         *     exemption it does not have changes nothing.
+         */
+        delete: operations["adminUnexemptPlugin"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/plugins/{pluginId}/run": {
         parameters: {
             query?: never;
@@ -4768,6 +4800,21 @@ export interface components {
                     summary: string;
                 } | null;
             }[];
+            /**
+             * @description The rate limits every plugin's requests keep to (`"per": "host"`), at the hosts this
+             *     plugin can reach: those its `network` request names, or every one for `*`. A limit
+             *     is in force while the plugin that set it is installed, granted `network` and
+             *     `hostRateLimits`, and enabled in a library. A run reads them as it starts.
+             */
+            hostLimits: {
+                host: string;
+                /** @description The strictest any plugin set, such as `1/s`. */
+                limit: string;
+                /** @description IDs of the plugins that set it that strict. */
+                setBy: string[];
+                /** @description Whether this plugin is exempt from it (`adminExemptPlugin`). */
+                exempt: boolean;
+            }[];
         };
         /**
          * @description What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryAdd` creates files
@@ -4780,12 +4827,12 @@ export interface components {
          *     in every library it is enabled in. `played` runs it, granted once per plugin, as each
          *     user who connected it (`listMyPlugins`) finishes playing something; it needs
          *     `listeningActivity`, and `libraryRead` in the library played from.
-         *     `globalRateLimits`, granted once per plugin, shares its rate limits that say
-         *     `"per": "global"` with every other plugin granted it, so each can slow the others;
-         *     without it, they count only its own requests.
+         *     `hostRateLimits`, granted once per plugin, makes its rate limits that say
+         *     `"per": "host"` ones every plugin's requests to that host keep to, so it can slow the
+         *     others; without it, they count only its own requests.
          * @enum {string}
          */
-        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played" | "globalRateLimits";
+        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played" | "hostRateLimits";
         PermissionRequest: {
             permission: components["schemas"]["PermissionName"];
             /** @description Whether it cannot work without it (`requirements/plugins.md` §4.2). */
@@ -4798,14 +4845,16 @@ export interface components {
              * @description With `network` only, optional. The most often each destination may be asked, such
              *     as `"1/s"`, which counts only this plugin's requests, or as
              *     `{"limit": "1/s", "per": "user"}`. `per` is `plugin`; `user`, this plugin's runs for
-             *     one connected user each; or `global`, every plugin granted `globalRateLimits` that
-             *     declares it so, keeping to the strictest pace any of them declared.
+             *     one connected user each; or `host`, every plugin's requests to that host, for a
+             *     service that limits the whole server. A `host` limit needs `hostRateLimits`, and a
+             *     destination named in `destinations` rather than reached through `*`. Where several
+             *     plugins set one for a host, the strictest is kept to.
              */
             rateLimits?: {
                 [key: string]: string | {
                     limit: string;
                     /** @enum {string} */
-                    per: "plugin" | "user" | "global";
+                    per: "plugin" | "user" | "host";
                 };
             };
             /** @description With `schedule` only. How often it runs. */
@@ -10068,6 +10117,58 @@ export interface operations {
             };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminExemptPlugin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pluginId: components["parameters"]["PluginId"];
+                /** @description One host name, such as `musicbrainz.org`; no `*` or patterns. Kept lowercase. */
+                host: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Exempt. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationFailed"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    adminUnexemptPlugin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pluginId: components["parameters"]["PluginId"];
+                /** @description One host name, such as `musicbrainz.org`; no `*` or patterns. Kept lowercase. */
+                host: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Not exempt. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationFailed"];
             default: components["responses"]["Problem"];
         };
     };

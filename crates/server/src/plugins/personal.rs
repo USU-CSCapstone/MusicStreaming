@@ -8,6 +8,7 @@ use jewelcase_plugins::{Event, Manifest};
 use rusqlite::{Connection, OptionalExtension, named_params, params};
 use serde_json::{Map, Value};
 
+use super::run::RunFor;
 use super::settings::{self, SERVER, merge};
 use super::{PluginError, Plugins, grants};
 use crate::db::now_ms;
@@ -118,8 +119,7 @@ impl Plugins {
             .execute(
                 &id,
                 &manifest,
-                SERVER,
-                Some(user),
+                RunFor { library: SERVER, user: Some(user) },
                 permissions,
                 candidate,
                 Event::CheckSettings,

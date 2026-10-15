@@ -10,7 +10,7 @@ use rusqlite::{Connection, params};
 use serde_json::{Map, Value};
 
 use super::library::RunLibrary;
-use super::{PluginError, Plugins, grants, personal, settings};
+use super::{PluginError, Plugins, grants, personal, rate_limits, settings};
 use crate::db::now_ms;
 
 /// How a run went, as the admin sees it.
@@ -28,6 +28,13 @@ impl RunResult {
     fn failed(summary: String) -> RunResult {
         RunResult { ok: false, summary, log: Vec::new(), saved: 0, scanning: false }
     }
+}
+
+/// Where a run is, and who for: a library, and the user it acts for if it acts for one.
+#[derive(Clone, Copy)]
+pub(super) struct RunFor {
+    pub library: i64,
+    pub user: Option<i64>,
 }
 
 impl Plugins {
@@ -57,8 +64,9 @@ impl Plugins {
                 let names: Vec<_> = missing.into_iter().map(Permission::title).collect();
                 return Ok(RunResult::failed(format!("It still needs {}.", names.join(" and "))));
             }
-            let (outcome, scanning) =
-                self.run_in(&id, &manifest, library, None, permissions, Event::Run).await?;
+            let (outcome, scanning) = self
+                .run_in(&id, &manifest, RunFor { library, user: None }, permissions, Event::Run)
+                .await?;
             result.scanning |= scanning;
             result.ok &= outcome.ok;
             result.saved += outcome.written;
@@ -71,20 +79,20 @@ impl Plugins {
         Ok(result)
     }
 
-    /// Runs `id` in `library` with `permissions` to handle `event`, for `user` if it acts for
-    /// one, with their personal settings beside the shared ones. Then it queues scans of what it
-    /// touched, as the scanner is the only way into the library (`requirements/general.md`
-    /// §3.2), and records the run for admins. Answers the outcome, and whether a scan was
-    /// queued.
+    /// Runs `id` in `run_for`'s library with `permissions` to handle `event`, for its user if it
+    /// acts for one, with their personal settings beside the shared ones. Then it queues scans
+    /// of what it touched, as the scanner is the only way into the library
+    /// (`requirements/general.md` §3.2), and records the run for admins. Answers the outcome,
+    /// and whether a scan was queued.
     pub(super) async fn run_in(
         &self,
         id: &str,
         manifest: &Manifest,
-        library: i64,
-        user: Option<i64>,
+        run_for: RunFor,
         permissions: Vec<Permission>,
         event: Event,
     ) -> Result<(Outcome, bool), PluginError> {
+        let RunFor { library, user } = run_for;
         let (plugin, schema) = (id.to_owned(), manifest.settings.clone());
         let personal_schema = manifest.personal_settings.clone().unwrap_or_default();
         let settings = self
@@ -98,8 +106,7 @@ impl Plugins {
                 Ok(settings)
             })
             .await?;
-        let outcome =
-            self.execute(id, manifest, library, user, permissions, settings, event).await?;
+        let outcome = self.execute(id, manifest, run_for, permissions, settings, event).await?;
         let scanning = self.scan(library, &outcome.touched).await;
         let (plugin, ok, summary) = (id.to_owned(), outcome.ok, outcome.summary.clone());
         self.db
@@ -114,20 +121,22 @@ impl Plugins {
         Ok((outcome, scanning))
     }
 
-    /// Runs `id` in `library`, for `user` if it acts for one, with exactly these permissions
-    /// and settings, on the plugin runtime, and nothing more.
-    #[allow(clippy::too_many_arguments)]
+    /// Runs `id` in `run_for`'s library, for its user if it acts for one, with exactly these
+    /// permissions and settings, and the host limits in force now, on the plugin runtime, and
+    /// nothing more.
     pub(super) async fn execute(
         &self,
         id: &str,
         manifest: &Manifest,
-        library: i64,
-        user: Option<i64>,
+        run_for: RunFor,
         permissions: Vec<Permission>,
         settings: Map<String, Value>,
         event: Event,
     ) -> Result<Outcome, PluginError> {
         let (host, runtime) = (self.host()?, self.runtime()?);
+        let plugin = id.to_owned();
+        let host_limits = self.db.read(move |conn| rate_limits::for_run(conn, &plugin)).await?;
+        let RunFor { library, user } = run_for;
         let grants = Grants {
             plugin: id.to_owned(),
             library,
@@ -135,10 +144,11 @@ impl Plugins {
             permissions,
             destinations: manifest.destinations().to_vec(),
             rate_limits: manifest.rate_limits(),
+            host_limits,
             settings,
         };
         let (path, db, plugin, api) =
-            (self.path(id), self.db.clone(), id.to_owned(), manifest.api());
+            (self.path(id), self.db.clone(), id.to_owned(), manifest.api_version);
         runtime
             .spawn(async move {
                 host.run(&path, api, grants, RunLibrary::new(db, &plugin, library), event).await

@@ -117,6 +117,9 @@ pub struct Grants {
     pub destinations: Vec<String>,
     /// The rate limits its manifest declares.
     pub rate_limits: Vec<RateLimit>,
+    /// The hosts every plugin's requests keep to a limit for, lowercase, and the gap that limit
+    /// keeps between them, leaving out those this plugin is exempt from.
+    pub host_limits: Vec<(String, Duration)>,
     /// The settings in effect for the run, defaults included.
     pub settings: serde_json::Map<String, serde_json::Value>,
 }
@@ -404,7 +407,7 @@ fn wit(permission: Permission) -> host::Permission {
         Permission::ScanFinished => host::Permission::ScanFinished,
         Permission::Schedule => host::Permission::Schedule,
         Permission::Played => host::Permission::Played,
-        Permission::GlobalRateLimits => host::Permission::GlobalRateLimits,
+        Permission::HostRateLimits => host::Permission::HostRateLimits,
     }
 }
 

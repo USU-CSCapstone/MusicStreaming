@@ -19,3 +19,4 @@ pub use host::{
     TracksChanged,
 };
 pub use manifest::{Api, InvalidPlugin, Manifest, Per, Permission, PermissionRequest, RateLimit};
+pub use rules::reaches;

@@ -3798,6 +3798,43 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /admin/plugins/{pluginId}/exemptions/{host}:
+    parameters:
+      - $ref: '#/components/parameters/PluginId'
+      - name: host
+        in: path
+        required: true
+        description: One host name, such as `musicbrainz.org`; no `*` or patterns. Kept lowercase.
+        schema: { type: string }
+    put:
+      tags: [Admin]
+      summary: Exempt a plugin from a limit for every plugin
+      description: |
+        Exempts this plugin's requests from the rate limit for every plugin (`hostLimits`) on
+        one host, such as for a plugin whose users each bring credentials with a budget of
+        their own (`requirements/plugins.md` §7). The host need not have a limit in force now.
+        Exempting it again changes nothing. Its runs keep to the change from their next start.
+      operationId: adminExemptPlugin
+      responses:
+        '204': { description: Exempt. }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Admin]
+      summary: End a plugin's exemption from a limit for every plugin
+      description: |
+        Its requests to the host keep to the limit again from its runs' next start. Ending an
+        exemption it does not have changes nothing.
+      operationId: adminUnexemptPlugin
+      responses:
+        '204': { description: Not exempt. }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /admin/plugins/{pluginId}/run:
     parameters:
       - $ref: '#/components/parameters/PluginId'
@@ -6555,7 +6592,7 @@ components:
 
     Plugin:
       type: object
-      required: [id, name, version, apiVersion, source, installedAt, permissions, granted, hasSettings, libraries]
+      required: [id, name, version, apiVersion, source, installedAt, permissions, granted, hasSettings, libraries, hostLimits]
       properties:
         id: { type: string }
         name: { type: string }
@@ -6618,10 +6655,30 @@ components:
                       ok: { type: boolean }
                       summary: { type: string, description: 'The plugin''s own summary, or why it failed.' }
                   - type: 'null'
+        hostLimits:
+          type: array
+          description: |
+            The rate limits every plugin's requests keep to (`"per": "host"`), at the hosts this
+            plugin can reach: those its `network` request names, or every one for `*`. A limit
+            is in force while the plugin that set it is installed, granted `network` and
+            `hostRateLimits`, and enabled in a library. A run reads them as it starts.
+          items:
+            type: object
+            required: [host, limit, setBy, exempt]
+            properties:
+              host: { type: string }
+              limit: { type: string, description: 'The strictest any plugin set, such as `1/s`.' }
+              setBy:
+                type: array
+                description: IDs of the plugins that set it that strict.
+                items: { type: string }
+              exempt:
+                type: boolean
+                description: Whether this plugin is exempt from it (`adminExemptPlugin`).
 
     PermissionName:
       type: string
-      enum: [libraryRead, libraryAdd, libraryChange, network, listeningActivity, tracksChanged, scanFinished, schedule, played, globalRateLimits]
+      enum: [libraryRead, libraryAdd, libraryChange, network, listeningActivity, tracksChanged, scanFinished, schedule, played, hostRateLimits]
       description: |
         What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryAdd` creates files
         that do not exist yet; `libraryChange` replaces, renames, and deletes files that do. The
@@ -6633,9 +6690,9 @@ components:
         in every library it is enabled in. `played` runs it, granted once per plugin, as each
         user who connected it (`listMyPlugins`) finishes playing something; it needs
         `listeningActivity`, and `libraryRead` in the library played from.
-        `globalRateLimits`, granted once per plugin, shares its rate limits that say
-        `"per": "global"` with every other plugin granted it, so each can slow the others;
-        without it, they count only its own requests.
+        `hostRateLimits`, granted once per plugin, makes its rate limits that say
+        `"per": "host"` ones every plugin's requests to that host keep to, so it can slow the
+        others; without it, they count only its own requests.
 
     PermissionRequest:
       type: object
@@ -6656,8 +6713,10 @@ components:
             With `network` only, optional. The most often each destination may be asked, such
             as `"1/s"`, which counts only this plugin's requests, or as
             `{"limit": "1/s", "per": "user"}`. `per` is `plugin`; `user`, this plugin's runs for
-            one connected user each; or `global`, every plugin granted `globalRateLimits` that
-            declares it so, keeping to the strictest pace any of them declared.
+            one connected user each; or `host`, every plugin's requests to that host, for a
+            service that limits the whole server. A `host` limit needs `hostRateLimits`, and a
+            destination named in `destinations` rather than reached through `*`. Where several
+            plugins set one for a host, the strictest is kept to.
           additionalProperties:
             oneOf:
               - { type: string, pattern: '^[1-9][0-9]{0,8}/(s|min|h)$' }
@@ -6665,7 +6724,7 @@ components:
                 required: [limit, per]
                 properties:
                   limit: { type: string, pattern: '^[1-9][0-9]{0,8}/(s|min|h)$' }
-                  per: { type: string, enum: [plugin, user, global] }
+                  per: { type: string, enum: [plugin, user, host] }
         everyMinutes:
           type: integer
           minimum: 5

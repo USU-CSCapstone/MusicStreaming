@@ -89,7 +89,7 @@ That is the trade, made knowingly when write access is granted, library by libra
 | **Change or delete files in the library** | Replacing, moving, and deleting files already in its folders, audio included ([§3](#3-writing-to-the-library)) | Per library |
 | **Network** | Reaching services outside the server — by named destination where the plugin can name them (`api.listenbrainz.org`), or any destination | Per plugin |
 | **Listening activity** | Play events and listening history ([§8](#8-events), [`analytics.md` §10](analytics.md#10-external-services)) | Per plugin |
-| **Shared rate limits** | Pacing its requests to a service together with other plugins granted the same, for a service that limits each server rather than each plugin — so each can slow the others. Without it, a plugin keeps to its limits alone | Per plugin |
+| **Limiting a service for every plugin** | Setting a rate limit that every plugin's requests to one of the destinations it names under **Network** keep to, for a service that limits the whole server ([§7](#7-working-with-the-library)) — so it can slow every other plugin that uses that service | Per plugin |
 | **Hooks** | Running on its own when something happens, such as tracks changing ([§8](#8-events)), rather than only when an admin asks | Per library, or per plugin for hooks not about a library |
 
 - **Some things need no permission**: a plugin's own settings and stored state ([§6](#6-configuration--credentials)), and the interface surfaces it adds ([§9](#9-extending-the-interface)). They touch nothing but the plugin itself.
@@ -146,7 +146,9 @@ Rules for plugins that read and improve what the user owns:
 
 - **Existing metadata is not overwritten blindly.** Whether a plugin may replace metadata already present is the admin's choice — "improve my tags" and "leave my careful tagging alone" are both legitimate.
 - **Long jobs are bounded and resumable.** Enriching a 500,000-track library survives restarts and does not begin again from nothing.
-- **Rate limits are respected.** A plugin that hammers an external service until it is banned has broken something the user cannot fix.
+- **Rate limits are respected.** A plugin that hammers an external service until it is banned has broken something the user cannot fix. So a plugin declares how often each destination it names may be asked, counting either all of its own requests or each connected user's apart, for a service that limits each user's own credentials. Neither needs a permission, since it slows only that plugin.
+  - **A service that limits the whole server is broken by plugins that each keep to its limit alone.** So a plugin granted the permission for it ([§4.1](#41-what-can-be-asked-for)) may set a limit that every plugin's requests to that service keep to, and where several do, the strictest wins. This is the one place plugins wait on each other ([§2.1](#21-the-system-adds-nothing)), and the trade is worth it: a server banned by a service has lost it for every plugin.
+  - **The admin sees every declared limit when installing a plugin**, so one that is far too strict is easy to catch, and can exempt a plugin from a limit it should not share, such as one whose users each bring credentials with a budget of their own.
 - **Results appear as the scanner finds them** ([`scanning.md` §5](scanning.md#5-behavior)), with no separate refresh for the user to perform.
 
 ---

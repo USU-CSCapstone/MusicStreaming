@@ -6,6 +6,7 @@
 		installPluginUrl,
 		runPlugin,
 		setPluginEnabled,
+		setPluginExempt,
 		setPluginPermissions,
 		setPluginSettings,
 		uninstallPlugin
@@ -13,6 +14,7 @@
 	import {
 		PERMISSION_LABELS,
 		isLibraryPermission,
+		pace,
 		type Plugin,
 		type PluginRunResult
 	} from '$lib/api/plugins';
@@ -127,13 +129,45 @@
 	}
 
 	async function toggle(p: Plugin, libraryId: string, enabled: boolean) {
-		rowError = Object.fromEntries(Object.entries(rowError).filter(([id]) => id !== p.id));
+		clearError(p.id);
 		try {
 			replace(await setPluginEnabled(fetch, p.id, libraryId, enabled));
 		} catch (e) {
 			rowError = { ...rowError, [p.id]: message(e) };
 			plugins = [...plugins];
 		}
+	}
+
+	/** Exempts it from, or holds it to, the limit every plugin keeps to at `host`: at once, then
+	 * undone if the server refuses (`requirements/general.md` §3.4). */
+	async function exempt(p: Plugin, host: string, on: boolean) {
+		clearError(p.id);
+		markExempt(p.id, host, on);
+		try {
+			await setPluginExempt(fetch, p.id, host, on);
+		} catch (e) {
+			markExempt(p.id, host, !on);
+			rowError = { ...rowError, [p.id]: message(e) };
+		}
+	}
+
+	/** Clears the error shown on plugin `id`'s row. */
+	function clearError(id: string) {
+		rowError = Object.fromEntries(Object.entries(rowError).filter(([key]) => key !== id));
+	}
+
+	/** Sets whether plugin `id` shows as exempt from the limit at `host`. */
+	function markExempt(id: string, host: string, exempt: boolean) {
+		plugins = plugins.map((x) =>
+			x.id !== id
+				? x
+				: { ...x, hostLimits: x.hostLimits.map((l) => (l.host === host ? { ...l, exempt } : l)) }
+		);
+	}
+
+	/** The plugins that set a limit, by name. */
+	function setters(ids: string[]): string {
+		return ids.map((id) => plugins.find((x) => x.id === id)?.name ?? id).join(' and ');
 	}
 
 	async function remove(p: Plugin) {
@@ -266,6 +300,30 @@
 							</p>
 						{/if}
 					{/each}
+
+					{#if p.hostLimits.length}
+						<!-- Limits other plugins set for a service it reaches (`requirements/plugins.md` §7). -->
+						<div class="limits">
+							{#each p.hostLimits as l (l.host)}
+								<label class="switch">
+									<input
+										type="checkbox"
+										role="switch"
+										checked={l.exempt}
+										onchange={(e) => exempt(p, l.host, e.currentTarget.checked)}
+									/>
+									Exempt from {l.host}'s limit
+								</label>
+								<p class="muted small note">
+									{pace(l.limit)} for every plugin, set by {setters(l.setBy)}.
+								</p>
+							{/each}
+							<p class="muted small note">
+								An exempt plugin's requests still count against this server if the service limits it
+								by address.
+							</p>
+						</div>
+					{/if}
 
 					{#if p.permissions.length}
 						<ul class="chips" aria-label="Permissions">
@@ -521,6 +579,12 @@
 		width: 18px;
 		height: 18px;
 		accent-color: var(--accent);
+	}
+
+	.limits {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
 	}
 
 	.chips {

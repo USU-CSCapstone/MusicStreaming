@@ -37,6 +37,7 @@ function plugin(overrides: Partial<Plugin> = {}): Plugin {
 				lastRun: null
 			}
 		],
+		hostLimits: [],
 		...overrides
 	};
 }
@@ -57,6 +58,26 @@ describe('PermissionDialog.svelte', () => {
 		for (const name of [/Network access/, /Read the library/, /Add files to the library/]) {
 			await expect.element(page.getByRole('checkbox', { name })).not.toBeChecked();
 		}
+	});
+
+	it('shows every rate limit it declares, flagging one every plugin keeps to', async () => {
+		const network = {
+			permission: 'network' as const,
+			required: true,
+			reason: 'To look things up.',
+			destinations: ['musicbrainz.org', 'lrclib.net'],
+			rateLimits: { 'lrclib.net': '2/s', 'musicbrainz.org': { limit: '1/s', per: 'host' as const } }
+		};
+		const limit = { permission: 'hostRateLimits' as const, required: false, reason: 'One limit.' };
+		setup(plugin({ permissions: [network, limit] }));
+		await expect
+			.element(page.getByText('lrclib.net: 2 per second, for this plugin alone'))
+			.toBeVisible();
+		await expect
+			.element(page.getByText(/musicbrainz.org: 1 per second, for every plugin, so it can slow/))
+			.toBeVisible();
+		const checkbox = page.getByRole('checkbox', { name: /Limit a service for every plugin/ });
+		await expect.element(checkbox).not.toBeChecked();
 	});
 
 	it('cannot enable until every required permission is checked', async () => {

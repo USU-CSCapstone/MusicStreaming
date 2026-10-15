@@ -20,6 +20,7 @@ use rusqlite::{Connection, params};
 mod due;
 mod plays;
 
+use super::run::RunFor;
 use super::{Plugins, grants};
 use crate::db::now_ms;
 
@@ -126,8 +127,8 @@ impl Plugins {
         let (succeeded, summary) = match event {
             None => (true, String::new()),
             Some(event) => {
-                let user = (due.user != 0).then_some(due.user);
-                match self.run_in(&due.plugin, &manifest, library, user, permissions, event).await {
+                let run_for = RunFor { library, user: (due.user != 0).then_some(due.user) };
+                match self.run_in(&due.plugin, &manifest, run_for, permissions, event).await {
                     Ok((outcome, _)) => (outcome.ok, outcome.summary),
                     Err(error) => (false, error.to_string()),
                 }

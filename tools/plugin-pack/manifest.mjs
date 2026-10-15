@@ -23,19 +23,20 @@ export const PERMISSIONS = [
 	'schedule',
 	// When a user who connected it finishes playing something.
 	'played',
-	// Sharing its rate limits that say "per": "global" with other plugins.
-	'globalRateLimits'
+	// Setting a rate limit, "per": "host", that every plugin's requests to a host keep to.
+	'hostRateLimits'
 ];
 
 /** Whose requests a rate limit counts: the plugin's, one user's runs of it, or every plugin's. */
-const PER = ['plugin', 'user', 'global'];
+const PER = ['plugin', 'user', 'host'];
 
 /** The shortest interval a schedule may ask for. */
 export const MIN_EVERY_MINUTES = 5;
 
 /** A rate limit for a destination: up to nine digits, no leading zero, per second, minute, or hour. */
 const RATE_LIMIT = /^[1-9][0-9]{0,8}\/(s|min|h)$/;
-const HOST_NAME = /^[A-Za-z0-9.-]+$/;
+/** One host name, as a rate limit or an exemption from one names it: no pattern, and no trailing dot. */
+export const HOST_NAME = /^[A-Za-z0-9.-]*[A-Za-z0-9-]$/;
 
 const MAGIC = [0x00, 0x61, 0x73, 0x6d];
 /** Component-model binaries: version 0x0d, layer 1. A core module is version 1, layer 0. */
@@ -213,17 +214,17 @@ export function validateManifest(m) {
 			problems.push(`${at}: only schedule takes "everyMinutes"`);
 		}
 	});
-	// Sharing a limit is what the permission is for, and a limit is shared only with it.
-	const global = o.permissions.some(
+	// Limiting every plugin is what the permission is for, and only it allows that.
+	const host = o.permissions.some(
 		(r) =>
 			isObject(r) &&
 			isObject(r.rateLimits) &&
-			Object.values(r.rateLimits).some((limit) => isObject(limit) && limit.per === 'global')
+			Object.values(r.rateLimits).some((limit) => isObject(limit) && limit.per === 'host')
 	);
-	if (global && !seen.has('globalRateLimits')) {
-		problems.push('a rate limit "per": "global" needs globalRateLimits as well');
-	} else if (seen.has('globalRateLimits') && !global) {
-		problems.push('globalRateLimits needs a rate limit "per": "global"');
+	if (host && !seen.has('hostRateLimits')) {
+		problems.push('a rate limit "per": "host" needs hostRateLimits as well');
+	} else if (seen.has('hostRateLimits') && !host) {
+		problems.push('hostRateLimits needs a rate limit "per": "host"');
 	}
 	// A library hook's event is about the library, which only reading it can make anything of.
 	for (const hook of ['tracksChanged', 'scanFinished']) {
@@ -258,21 +259,34 @@ function validateRateLimits(at, limits, destinations) {
 	const problems = [];
 	const entries = /** @type {Record<string, unknown>} */ (limits);
 	// Sorted, as the server's map of them is.
-	for (const host of Object.keys(entries).sort()) {
-		// Matched exactly against the host a request names, so `*` or a pattern never would be.
-		if (!HOST_NAME.test(host)) {
-			problems.push(`${at}: rateLimits: "${host}" is not a host name; each limit is for one host`);
-		} else if (!hosts.some((d) => d === '*' || ascii(d) === ascii(host))) {
-			problems.push(`${at}: rateLimits: "${host}" is not one of its destinations`);
+	const keys = Object.keys(entries).sort();
+	for (const [i, host] of keys.entries()) {
+		// Hosts are compared without case, so two keys that differ only in case would be one.
+		const same = keys.slice(0, i).find((key) => ascii(key) === ascii(host));
+		if (same !== undefined) {
+			problems.push(`${at}: rateLimits: "${host}" is the same host as "${same}"`);
+			continue;
 		}
 		const limit = entries[host];
 		const counted = isObject(limit) ? /** @type {Record<string, unknown>} */ (limit) : undefined;
 		const pace = counted ? counted.limit : limit;
+		const named = hosts.some((d) => ascii(d) === ascii(host));
+		// Matched exactly against the host a request names, so `*` or a pattern never would be.
+		if (!HOST_NAME.test(host)) {
+			problems.push(`${at}: rateLimits: "${host}" is not a host name; each limit is for one host`);
+		} else if (!named && !hosts.includes('*')) {
+			problems.push(`${at}: rateLimits: "${host}" is not one of its destinations`);
+		} else if (!named && counted?.per === 'host') {
+			// A limit on every plugin is one the admin approves by name.
+			problems.push(
+				`${at}: rateLimits: "${host}" limits every plugin, so its destinations must name it rather than "*"`
+			);
+		}
 		if (typeof pace !== 'string' || !RATE_LIMIT.test(pace)) {
 			problems.push(`${at}: rateLimits: "${host}" needs a limit such as "1/s", "60/min", or "1000/h"`);
 		}
 		if (counted && !PER.includes(/** @type {string} */ (counted.per))) {
-			problems.push(`${at}: rateLimits: "${host}" needs "per": "plugin", "user", or "global"`);
+			problems.push(`${at}: rateLimits: "${host}" needs "per": "plugin", "user", or "host"`);
 		}
 	}
 	return problems;

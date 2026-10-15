@@ -9,6 +9,7 @@ pub mod grants;
 mod hooks;
 mod library;
 pub mod personal;
+pub mod rate_limits;
 mod run;
 pub mod settings;
 #[cfg(test)]
@@ -124,7 +125,7 @@ impl Plugins {
             return Err(PluginError::Invalid("The file is over 50 MB.".into()));
         }
         let manifest = jewelcase_plugins::manifest::read(&bytes)?;
-        let (host, api) = (self.host()?, manifest.api());
+        let (host, api) = (self.host()?, manifest.api_version);
         // Compiling is CPU-bound: 10 ms for a Rust plugin, about a second for JavaScript.
         let (bytes, checked) = tokio::task::spawn_blocking(move || {
             let checked = host.check(&bytes, api);

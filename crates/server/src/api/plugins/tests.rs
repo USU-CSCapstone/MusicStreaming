@@ -70,6 +70,8 @@ async fn only_admins_administer_plugins() {
         ("GET", PLUGIN),
         ("DELETE", PLUGIN),
         ("PUT", "/api/v1/admin/plugins/lrclib-lyrics/permissions"),
+        ("PUT", "/api/v1/admin/plugins/lrclib-lyrics/exemptions/lrclib.net"),
+        ("DELETE", "/api/v1/admin/plugins/lrclib-lyrics/exemptions/lrclib.net"),
         ("PUT", "/api/v1/admin/plugins/lrclib-lyrics/libraries/1"),
         ("POST", "/api/v1/admin/plugins/lrclib-lyrics/run"),
     ] {
@@ -162,34 +164,110 @@ async fn cannot_be_enabled_until_its_required_permissions_are_granted() {
     );
 }
 
-#[tokio::test]
-async fn sharing_rate_limits_is_granted_like_any_other_permission() {
-    let (temp, app) = server().await;
-    let manifest = json!({
-        "id": "artwork", "name": "Artwork", "version": "1.0.0", "apiVersion": "0.3",
-        "permissions": [
-            { "permission": "network", "required": true, "reason": "To fetch artwork.",
-              "destinations": ["musicbrainz.org"],
-              "rateLimits": { "musicbrainz.org": { "limit": "1/s", "per": "global" } } },
-            { "permission": "globalRateLimits", "required": false,
-              "reason": "MusicBrainz limits each server, not each plugin." }
-        ]
-    });
+/// Installs `manifest` as a row, as `server` installs its plugin.
+fn install(temp: &tempfile::TempDir, manifest: Value) {
     rusqlite::Connection::open(temp.path().join("jewelcase.db"))
         .unwrap()
         .execute(
-            "INSERT INTO plugins (id, manifest, installed_at, updated_at) VALUES ('artwork', ?1, 0, 0)",
-            [manifest.to_string()],
+            "INSERT INTO plugins (id, manifest, installed_at, updated_at) VALUES (?1, ?2, 0, 0)",
+            [manifest["id"].as_str().unwrap(), &manifest.to_string()],
         )
         .unwrap();
-    let grants = json!({ "granted": ["network", "globalRateLimits"], "libraries": [] });
+}
+
+#[tokio::test]
+async fn a_limit_for_every_plugin_is_granted_like_any_other_permission_and_shown_where_it_binds() {
+    let (temp, app) = server().await;
+    install(
+        &temp,
+        json!({
+            "id": "artwork", "name": "Artwork", "version": "1.0.0", "apiVersion": "0.3",
+            "permissions": [
+                { "permission": "network", "required": true, "reason": "To fetch artwork.",
+                  "destinations": ["musicbrainz.org"],
+                  "rateLimits": { "musicbrainz.org": { "limit": "1/s", "per": "host" } } },
+                { "permission": "hostRateLimits", "required": false,
+                  "reason": "MusicBrainz limits each server, not each plugin." }
+            ]
+        }),
+    );
+    install(
+        &temp,
+        json!({
+            "id": "anywhere", "name": "Anywhere", "version": "1.0.0", "apiVersion": "0.3",
+            "permissions": [{ "permission": "network", "required": true, "reason": "To look.",
+                              "destinations": ["*"] }]
+        }),
+    );
+    let artwork = "/api/v1/admin/plugins/artwork";
+    let grants = json!({ "granted": ["network", "hostRateLimits"], "libraries": [] });
     let (status, plugin) =
-        call(&app, ADMIN, "PUT", "/api/v1/admin/plugins/artwork/permissions", Some(grants)).await;
+        call(&app, ADMIN, "PUT", &format!("{artwork}/permissions"), Some(grants)).await;
     assert_eq!(status, StatusCode::OK, "{plugin}");
-    assert_eq!(plugin["granted"], json!(["globalRateLimits", "network"]));
-    // The admin sees what it would share before granting it.
+    assert_eq!(plugin["granted"], json!(["hostRateLimits", "network"]));
+    // The admin sees the limit before granting it.
     let limits = &plugin["permissions"][0]["rateLimits"];
-    assert_eq!(limits, &json!({ "musicbrainz.org": { "limit": "1/s", "per": "global" } }));
+    assert_eq!(limits, &json!({ "musicbrainz.org": { "limit": "1/s", "per": "host" } }));
+    assert_eq!(plugin["hostLimits"], json!([]), "not in force until it is enabled");
+
+    let enable = Some(json!({ "enabled": true }));
+    call(&app, ADMIN, "PUT", &format!("{artwork}/libraries/1"), enable).await;
+    let in_force =
+        json!({ "host": "musicbrainz.org", "limit": "1/s", "setBy": ["artwork"], "exempt": false });
+    let (_, plugin) = call(&app, ADMIN, "GET", "/api/v1/admin/plugins/anywhere", None).await;
+    assert_eq!(plugin["hostLimits"], json!([in_force]), "it reaches any host");
+    let (_, plugin) = call(&app, ADMIN, "GET", PLUGIN, None).await;
+    assert_eq!(plugin["hostLimits"], json!([]), "it reaches only lrclib.net");
+}
+
+#[tokio::test]
+async fn an_admin_exempts_a_plugin_from_limits_for_every_plugin_one_host_at_a_time() {
+    let (temp, app) = server().await;
+    install(
+        &temp,
+        json!({
+            "id": "setter", "name": "Setter", "version": "1.0.0", "apiVersion": "0.3",
+            "permissions": [
+                { "permission": "network", "required": true, "reason": "To look.",
+                  "destinations": ["lrclib.net"],
+                  "rateLimits": { "lrclib.net": { "limit": "1/s", "per": "host" } } },
+                { "permission": "hostRateLimits", "required": true, "reason": "To share." }
+            ]
+        }),
+    );
+    let setter = "/api/v1/admin/plugins/setter";
+    let grants = Some(json!({ "granted": ["network", "hostRateLimits"], "libraries": [] }));
+    call(&app, ADMIN, "PUT", &format!("{setter}/permissions"), grants).await;
+    call(&app, ADMIN, "PUT", &format!("{setter}/libraries/1"), Some(json!({ "enabled": true })))
+        .await;
+    let exempt = || async {
+        call(&app, ADMIN, "GET", PLUGIN, None).await.1["hostLimits"][0]["exempt"].clone()
+    };
+    assert_eq!(exempt().await, json!(false));
+
+    // Each is idempotent, so a repeat changes nothing.
+    let lrclib = format!("{PLUGIN}/exemptions/LRCLIB.net");
+    for (method, now) in [("PUT", true), ("PUT", true), ("DELETE", false), ("DELETE", false)] {
+        let (status, body) = call(&app, ADMIN, method, &lrclib, None).await;
+        assert_eq!((status, body), (StatusCode::NO_CONTENT, Value::Null), "{method}");
+        assert_eq!(exempt().await, json!(now), "{method}");
+    }
+
+    for wrong in ["*", "*.last.fm", "last.fm:443", "a%2Fb"] {
+        for method in ["PUT", "DELETE"] {
+            let uri = format!("{PLUGIN}/exemptions/{wrong}");
+            let (status, problem) = call(&app, ADMIN, method, &uri, None).await;
+            assert_eq!(
+                (status, &problem["code"]),
+                (StatusCode::UNPROCESSABLE_ENTITY, &json!("validation_failed")),
+                "{method} {wrong}"
+            );
+        }
+    }
+    let elsewhere = "/api/v1/admin/plugins/nothing/exemptions/lrclib.net";
+    for method in ["PUT", "DELETE"] {
+        assert_eq!(call(&app, ADMIN, method, elsewhere, None).await.0, StatusCode::NOT_FOUND);
+    }
 }
 
 #[tokio::test]
