@@ -9,6 +9,10 @@ export type PermissionName = Schemas['PermissionName'];
 export type PermissionRequest = Schemas['PermissionRequest'];
 export type Plugin = Schemas['Plugin'];
 export type PluginLibrary = Plugin['libraries'][number];
+/** A rate limit every plugin's requests to a host keep to, at a host this plugin reaches. */
+export type PluginHostLimit = Plugin['hostLimits'][number];
+/** A destination's rate limit as a manifest gives it: `"1/s"`, or with whose requests it counts. */
+export type DeclaredLimit = NonNullable<PermissionRequest['rateLimits']>[string];
 /** The body of `PUT /admin/plugins/{pluginId}/permissions`. */
 export type PermissionGrants = Schemas['PermissionGrants'];
 /** What `POST /admin/plugins/{pluginId}/run` answers: the plugin's own words, and its log. */
@@ -87,12 +91,42 @@ export const PERMISSION_LABELS: Record<PermissionName, { title: string; detail: 
 		title: 'Run when a connected user plays something',
 		detail: 'Runs on its own as each user who connected it finishes playing a track.'
 	},
-	globalRateLimits: {
-		title: 'Share rate limits with other plugins',
+	hostRateLimits: {
+		title: 'Limit a service for every plugin',
 		detail:
-			'Paces its requests to a service together with other plugins that share it, so each can slow the others. Without it, it keeps to the limit alone.'
+			'Can set a rate limit that every plugin keeps to, for a service that limits this whole server. It can slow other plugins.'
 	}
 };
+
+const UNITS: Record<string, string> = { s: 'second', min: 'minute', h: 'hour' };
+
+/** A rate limit such as "60/min" in words: "60 per minute". */
+export function pace(limit: string): string {
+	const [count, unit] = limit.split('/');
+	return `${count} per ${UNITS[unit] ?? unit}`;
+}
+
+/** A declared limit with whose requests it counts: a bare "1/s" counts the plugin's own. */
+function counted(limit: DeclaredLimit): Exclude<DeclaredLimit, string> {
+	return typeof limit === 'string' ? { limit, per: 'plugin' } : limit;
+}
+
+/** Whether a declared limit is one every plugin keeps to. */
+export function forEveryPlugin(limit: DeclaredLimit): boolean {
+	return counted(limit).per === 'host';
+}
+
+const PER = {
+	plugin: 'for this plugin alone',
+	user: 'for each connected user',
+	host: 'for every plugin'
+};
+
+/** A declared limit in words: "1 per second, for every plugin". */
+export function describeLimit(declared: DeclaredLimit): string {
+	const { limit, per } = counted(declared);
+	return `${pace(limit)}, ${PER[per]}`;
+}
 
 /** An interval in the largest whole unit: "day", "6 hours", "90 minutes". */
 export function every(minutes: number): string {

@@ -15,7 +15,7 @@ import {
 	type PluginSettings,
 	type SettingSchema
 } from '../src/lib/api/plugins.ts';
-import { PluginFileError, readManifest } from '../../tools/plugin-pack/manifest.mjs';
+import { HOST_NAME, PluginFileError, readManifest } from '../../tools/plugin-pack/manifest.mjs';
 
 const LIBRARY_PERMISSIONS: PermissionName[] = [
 	'libraryRead',
@@ -42,7 +42,12 @@ type Record_ = {
 /** Grants kept across uninstall, so a reinstall needs no re-approval (`requirements/plugins.md` §5). */
 type Retained = { granted: PermissionName[]; libraries: Record<string, PermissionName[]> };
 
-type Index = { plugins: Record<string, Record_>; retained: Record<string, Retained> };
+/** Hosts whose limits for every plugin each plugin is exempt from, kept across uninstall like grants. */
+type Index = {
+	plugins: Record<string, Record_>;
+	retained: Record<string, Retained>;
+	exemptions?: Record<string, string[]>;
+};
 
 export class PluginError extends Error {
 	constructor(
@@ -78,8 +83,12 @@ export class PluginStore {
 		writeFileSync(join(this.dir, 'index.json'), JSON.stringify(index, null, '\t'));
 	}
 
-	#view(r: Record_): Plugin {
+	#view(r: Record_, index = this.#index()): Plugin {
 		const { manifest: m } = r;
+		const exemptions = index.exemptions?.[m.id] ?? [];
+		const destinations = m.permissions.find((p) => p.permission === 'network')?.destinations ?? [];
+		const reaches = (host: string) =>
+			destinations.some((d) => d === '*' || d.toLowerCase() === host);
 		const required = m.permissions.filter((p) => p.required).map((p) => p.permission);
 		const libraries: PluginLibrary[] = this.libraries().map((libraryId) => {
 			const lib = r.libraries[libraryId] ?? { enabled: false, granted: [], disabledReason: null };
@@ -108,7 +117,10 @@ export class PluginStore {
 			permissions: m.permissions,
 			granted: r.granted,
 			hasSettings: Object.keys(settingsSchema(m).properties).length > 0,
-			libraries
+			libraries,
+			hostLimits: inForce(index)
+				.filter((l) => reaches(l.host))
+				.map((l) => ({ ...l, exempt: exemptions.includes(l.host) }))
 		};
 	}
 
@@ -119,9 +131,10 @@ export class PluginStore {
 	}
 
 	list(): Plugin[] {
-		return Object.values(this.#index().plugins)
+		const index = this.#index();
+		return Object.values(index.plugins)
 			.sort((a, b) => a.manifest.name.localeCompare(b.manifest.name))
-			.map((r) => this.#view(r));
+			.map((r) => this.#view(r, index));
 	}
 
 	get(id: string): Plugin {
@@ -243,6 +256,24 @@ export class PluginStore {
 		return this.#view(r);
 	}
 
+	/** Exempts it from, or holds it to, the limit for every plugin at one host. */
+	setExempt(id: string, host: string, exempt: boolean) {
+		if (!HOST_NAME.test(host)) {
+			throw new PluginError(
+				422,
+				'validation_failed',
+				'An exemption is for one host name, such as musicbrainz.org.'
+			);
+		}
+		const index = this.#index();
+		this.#get(index, id);
+		const lowercase = host.toLowerCase();
+		const others = (index.exemptions?.[id] ?? []).filter((h) => h !== lowercase);
+		const hosts = exempt ? [...others, lowercase].sort() : others;
+		index.exemptions = { ...index.exemptions, [id]: hosts };
+		this.#save(index);
+	}
+
 	/** What is set at `level` ('' for every library), secrets left out, and which are set. */
 	settings(id: string, level: string): PluginSettings {
 		const r = this.#get(this.#index(), id);
@@ -301,6 +332,37 @@ export class PluginStore {
 	}
 }
 
+/**
+ * The limits every plugin keeps to, by host, as the server works them out: each set by a plugin
+ * granted `hostRateLimits` and enabled in a library, the strictest winning.
+ */
+function inForce(index: Index): { host: string; limit: string; setBy: string[] }[] {
+	const limits = new Map<string, { host: string; limit: string; setBy: string[] }>();
+	for (const id of Object.keys(index.plugins).sort()) {
+		const r = index.plugins[id];
+		const enabled = Object.values(r.libraries).some((l) => l.enabled);
+		const granted = ['network', 'hostRateLimits'] as const;
+		if (!enabled || !granted.every((p) => r.granted.includes(p))) continue;
+		for (const request of r.manifest.permissions) {
+			for (const [name, declared] of Object.entries(request.rateLimits ?? {})) {
+				if (typeof declared === 'string' || declared.per !== 'host') continue;
+				const host = name.toLowerCase();
+				const kept = limits.get(host);
+				const stricter = kept ? gap(declared.limit) - gap(kept.limit) : 1;
+				if (stricter > 0) limits.set(host, { host, limit: declared.limit, setBy: [id] });
+				else if (stricter === 0) kept!.setBy.push(id);
+			}
+		}
+	}
+	return [...limits.values()].sort((a, b) => a.host.localeCompare(b.host));
+}
+
+/** The seconds a limit such as "60/min" keeps between requests. */
+function gap(limit: string): number {
+	const [count, unit] = limit.split('/');
+	return ({ s: 1, min: 60, h: 3600 }[unit] ?? 1) / Number(count);
+}
+
 /** The settings a manifest declares, or none. */
 function settingsSchema(m: PluginManifest): {
 	properties: Record<string, SettingSchema>;
@@ -328,7 +390,7 @@ export async function adminRoute(
 	const url = new URL(path, 'http://mock');
 	const query = url.searchParams;
 	const m =
-		/^\/admin\/plugins(?:\/([^/]+))?(?:\/(permissions|libraries|run|settings)(?:\/([^/]+))?)?$/.exec(
+		/^\/admin\/plugins(?:\/([^/]+))?(?:\/(permissions|exemptions|libraries|run|settings)(?:\/([^/]+))?)?$/.exec(
 			url.pathname
 		);
 	if (!m) return undefined;
@@ -355,6 +417,11 @@ export async function adminRoute(
 		}
 		if (id && sub === 'permissions' && method === 'PUT') {
 			return { status: 200, body: store.setPermissions(id, json()) };
+		}
+		if (id && sub === 'exemptions' && libraryId && (method === 'PUT' || method === 'DELETE')) {
+			// The path's last part is the host here.
+			store.setExempt(id, libraryId, method === 'PUT');
+			return { status: 204 };
 		}
 		if (id && sub === 'libraries' && libraryId && method === 'PUT') {
 			return { status: 200, body: store.setEnabled(id, libraryId, json().enabled === true) };

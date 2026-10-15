@@ -93,6 +93,7 @@ fn grants(permissions: &[Permission], destinations: &[&str]) -> Grants {
         permissions: permissions.to_vec(),
         destinations: destinations.iter().map(|d| d.to_string()).collect(),
         rate_limits: Vec::new(),
+        host_limits: Vec::new(),
         settings: Default::default(),
     }
 }

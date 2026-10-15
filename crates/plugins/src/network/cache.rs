@@ -7,11 +7,17 @@
 //! or that sets a cookie. It is held in memory, so a restart empties it. A plugin keeps what
 //! must last in its `state`.
 //!
-//! A reply is reused only for a request with the same library, URL, and every header the
-//! plugin sent. So a reply fetched with a credential, in a header or in the URL, is reused
-//! only by a request carrying that same credential. Nothing fetched for one library is reused
-//! for another, because whether a reply was already cached would tell a plugin something about
-//! a library it cannot read (`requirements/general.md` §3.6).
+//! A reply is reused only for a request with the same URL and every header the plugin sent,
+//! from a run that can see the same things: the same library, the same user, and the same
+//! grant or not of reading the library and of listening activity. So a reply fetched with a
+//! credential, in a header or in the URL, is reused only by a request carrying that same
+//! credential. And since whether a reply was already cached tells a plugin what another asked,
+//! nothing fetched for one library is reused for another (`requirements/general.md` §3.6), and
+//! nothing fetched by a run that could see a library or someone's listening is reused by one
+//! that could not (`requirements/plugins.md` §4.3).
+//!
+//! A POST, PUT, PATCH, or DELETE that succeeds makes whatever was kept for its URL out of date,
+//! so that is forgotten, whoever fetched it (RFC 9111 §4.4).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -39,19 +45,32 @@ const OWN_CACHING: [&str; 8] = [
     "range",
 ];
 
+/// What a run can see, which a reply kept for it could tell another run about. Runs that see
+/// the same share replies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Visible {
+    pub library: i64,
+    /// The user it acts for, if it acts for one.
+    pub user: Option<i64>,
+    /// Whether it may read the library.
+    pub library_read: bool,
+    /// Whether it may see listening activity.
+    pub listening_activity: bool,
+}
+
 /// Which request a reply answers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Key {
-    library: i64,
+    visible: Visible,
     url: String,
     /// Every header the plugin sent, names in lowercase, sorted.
     headers: Vec<(String, String)>,
 }
 
 impl Key {
-    /// The key for a GET of `url` in `library`, or none if the request manages its own
-    /// caching. Only a GET may be cached; the caller checks the method.
-    pub fn new(library: i64, url: &str, headers: &[(String, String)]) -> Option<Key> {
+    /// The key for a GET of `url` by a run that sees `visible`, or none if the request manages
+    /// its own caching. Only a GET without a body may be cached; the caller checks that.
+    pub fn new(visible: Visible, url: &str, headers: &[(String, String)]) -> Option<Key> {
         let mut headers: Vec<_> = headers
             .iter()
             .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
@@ -60,7 +79,7 @@ impl Key {
             return None;
         }
         headers.sort();
-        Some(Key { library, url: url.to_owned(), headers })
+        Some(Key { visible, url: url.to_owned(), headers })
     }
 
     fn size(&self) -> usize {
@@ -85,6 +104,19 @@ impl Reply {
         self.headers.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str())
     }
 
+    /// The age it arrived with, in seconds (RFC 9111 §5.1): 0 if it says none.
+    fn age(&self) -> u64 {
+        self.header("age").and_then(|age| age.trim().parse().ok()).unwrap_or(0)
+    }
+
+    /// As the cache answers with it, `kept` after it arrived: aged by that long.
+    fn aged(mut self, kept: Duration) -> Reply {
+        let age = self.age().saturating_add(kept.as_secs());
+        self.headers.retain(|(name, _)| name != "age");
+        self.headers.push(("age".to_owned(), age.to_string()));
+        self
+    }
+
     fn size(&self) -> usize {
         self.body.len()
             + self.url.len()
@@ -93,9 +125,10 @@ impl Reply {
 }
 
 pub enum Lookup {
-    /// Fresh: use it without asking.
+    /// Fresh: use it without asking. Its `age` says how old it is.
     Fresh(Reply),
     /// No longer fresh, but it can be checked with [`conditions`] rather than fetched whole.
+    /// It is as it arrived.
     Stale(Reply),
     Miss,
 }
@@ -116,6 +149,7 @@ struct Inner {
 
 struct Entry {
     reply: Reply,
+    stored: Instant,
     fresh_until: Instant,
     used: u64,
     size: usize,
@@ -130,8 +164,9 @@ impl Cache {
             inner.remove(key);
             return Lookup::Miss;
         }
+        let kept = now.saturating_duration_since(entry.stored);
         inner.touch(key);
-        if fresh { Lookup::Fresh(reply) } else { Lookup::Stale(reply) }
+        if fresh { Lookup::Fresh(reply.aged(kept)) } else { Lookup::Stale(reply) }
     }
 
     /// Keeps `reply` for `key` if it says it may be kept, and otherwise forgets anything
@@ -140,12 +175,14 @@ impl Cache {
         let mut inner = self.inner.lock().expect("cache lock");
         inner.remove(&key);
         let Some(lifetime) = lifetime(&reply, clock) else { return };
-        let size = key.size() + reply.size();
+        // The key is held twice: by the entry, and by the index of when each was last used.
+        let size = 2 * key.size() + reply.size();
         inner.tick += 1;
         let used = inner.tick;
         inner.used.insert(used, key.clone());
         inner.size += size;
-        inner.entries.insert(key, Entry { reply, fresh_until: now + lifetime, used, size });
+        let entry = Entry { reply, stored: now, fresh_until: now + lifetime, used, size };
+        inner.entries.insert(key, entry);
         while inner.size > MAX_SIZE {
             let Some((_, oldest)) = inner.used.pop_first() else { break };
             if let Some(entry) = inner.entries.remove(&oldest) {
@@ -155,7 +192,8 @@ impl Cache {
     }
 
     /// The service answered a check of `stale` with `304 Not Modified` and these headers: it
-    /// is fresh again, with the headers the `304` updated (RFC 9111 §4.3.4).
+    /// is fresh again, with the headers the `304` updated (RFC 9111 §4.3.4), and as old as the
+    /// `304` says it is: the age it arrived with is not counted again.
     pub fn refresh(
         &self,
         key: Key,
@@ -167,13 +205,24 @@ impl Cache {
         let mut headers: Vec<_> = stale
             .headers
             .into_iter()
-            .filter(|(name, _)| !updated.iter().any(|(n, _)| n == name))
+            .filter(|(name, _)| name != "age" && !updated.iter().any(|(n, _)| n == name))
             .collect();
         // Content-Length describes the 304's empty body, not the one kept.
         headers.extend(updated.into_iter().filter(|(name, _)| name != "content-length"));
         let reply = Reply { headers, ..stale };
         self.store(key, reply.clone(), now, clock);
-        reply
+        reply.aged(Duration::ZERO)
+    }
+
+    /// Forgets every reply kept for `url`, whoever fetched it: a request that changes what is
+    /// there has succeeded (RFC 9111 §4.4). Such requests are rare, so looking through every
+    /// reply costs little.
+    pub fn invalidate(&self, url: &str) {
+        let mut inner = self.inner.lock().expect("cache lock");
+        let keys: Vec<Key> = inner.entries.keys().filter(|key| key.url == url).cloned().collect();
+        for key in keys {
+            inner.remove(&key);
+        }
     }
 }
 
@@ -250,8 +299,8 @@ fn lifetime(reply: &Reply, clock: SystemTime) -> Option<Duration> {
     } else {
         Duration::ZERO
     };
-    let age = reply.header("age").and_then(|a| a.trim().parse().ok()).map(Duration::from_secs);
-    let lifetime = lifetime.saturating_sub(age.unwrap_or_default()).min(MAX_LIFETIME);
+    let age = Duration::from_secs(reply.age());
+    let lifetime = lifetime.saturating_sub(age).min(MAX_LIFETIME);
     let validated = reply.header("etag").is_some() || reply.header("last-modified").is_some();
     (lifetime > Duration::ZERO || validated).then_some(lifetime)
 }
@@ -262,8 +311,13 @@ mod tests {
 
     const SECOND: Duration = Duration::from_secs(1);
 
+    /// What a run in `library` for no user sees, granted neither reading nor listening.
+    fn visible(library: i64) -> Visible {
+        Visible { library, user: None, library_read: false, listening_activity: false }
+    }
+
     fn key(url: &str) -> Key {
-        Key::new(1, url, &[]).unwrap()
+        Key::new(visible(1), url, &[]).unwrap()
     }
 
     fn reply(status: u16, headers: &[(&str, &str)]) -> Reply {
@@ -287,7 +341,8 @@ mod tests {
         let (cache, now, clock) = (Cache::default(), Instant::now(), SystemTime::now());
         let kept = reply(200, &[("cache-control", "public, max-age=60")]);
         cache.store(key("https://api.example/a"), kept.clone(), now, clock);
-        assert_eq!(fresh(cache.lookup(&key("https://api.example/a"), now)), Some(kept));
+        let reused = kept.aged(Duration::ZERO);
+        assert_eq!(fresh(cache.lookup(&key("https://api.example/a"), now)), Some(reused));
         assert!(matches!(cache.lookup(&key("https://api.example/b"), now), Lookup::Miss));
         let later = now + 61 * SECOND;
         assert!(matches!(cache.lookup(&key("https://api.example/a"), later), Lookup::Miss));
@@ -352,33 +407,89 @@ mod tests {
     }
 
     #[test]
-    fn requests_differing_in_library_or_headers_share_nothing() {
+    fn a_checked_reply_is_as_old_as_the_check_says() {
+        let (cache, now, clock) = (Cache::default(), Instant::now(), SystemTime::now());
+        let headers = [("cache-control", "max-age=300"), ("age", "290"), ("etag", "\"v1\"")];
+        cache.store(key("https://api.example/"), reply(200, &headers), now, clock);
+        let later = now + 11 * SECOND;
+        let Lookup::Stale(stale) = cache.lookup(&key("https://api.example/"), later) else {
+            panic!("fresh for only the 10 s its age left it");
+        };
+        // A 304 with no `Age` restarts it, so it is fresh for its whole `max-age` again.
+        cache.refresh(key("https://api.example/"), stale, Vec::new(), later, clock);
+        assert!(fresh(cache.lookup(&key("https://api.example/"), later + 290 * SECOND)).is_some());
+        let expired = cache.lookup(&key("https://api.example/"), later + 301 * SECOND);
+        assert!(matches!(expired, Lookup::Stale(_)));
+    }
+
+    #[test]
+    fn requests_differing_in_headers_or_what_their_run_sees_share_nothing() {
         let (cache, now, clock) = (Cache::default(), Instant::now(), SystemTime::now());
         let token = [("Authorization".to_owned(), "Token mine".to_owned())];
-        let mine = Key::new(1, "https://api.example/", &token).unwrap();
+        let mine = Key::new(visible(1), "https://api.example/", &token).unwrap();
         cache.store(mine.clone(), reply(200, &[("cache-control", "max-age=60")]), now, clock);
         assert!(fresh(cache.lookup(&mine, now)).is_some());
         let theirs = [("authorization".to_owned(), "Token theirs".to_owned())];
+        let reader = Visible { library_read: true, ..visible(1) };
+        let listener = Visible { listening_activity: true, ..visible(1) };
+        let for_user = |user| Visible { user: Some(user), ..visible(1) };
         for other in [
-            Key::new(1, "https://api.example/", &theirs).unwrap(),
-            Key::new(1, "https://api.example/", &[]).unwrap(),
-            Key::new(2, "https://api.example/", &token).unwrap(),
+            Key::new(visible(1), "https://api.example/", &theirs).unwrap(),
+            Key::new(visible(1), "https://api.example/", &[]).unwrap(),
+            Key::new(visible(2), "https://api.example/", &token).unwrap(),
+            Key::new(reader, "https://api.example/", &token).unwrap(),
+            Key::new(listener, "https://api.example/", &token).unwrap(),
+            Key::new(for_user(7), "https://api.example/", &token).unwrap(),
         ] {
             assert!(matches!(cache.lookup(&other, now), Lookup::Miss), "{other:?}");
         }
         // Header names are compared without case.
         let same = [("authorization".to_owned(), "Token mine".to_owned())];
-        assert!(
-            fresh(cache.lookup(&Key::new(1, "https://api.example/", &same).unwrap(), now))
-                .is_some()
-        );
+        let same = Key::new(visible(1), "https://api.example/", &same).unwrap();
+        assert!(fresh(cache.lookup(&same, now)).is_some());
+    }
+
+    #[test]
+    fn runs_that_see_the_same_share_and_different_users_do_not() {
+        let (cache, now, clock) = (Cache::default(), Instant::now(), SystemTime::now());
+        let sees = |user| Visible { user, library_read: true, ..visible(1) };
+        let key = |user| Key::new(sees(user), "https://api.example/", &[]).unwrap();
+        cache.store(key(Some(7)), reply(200, &[("cache-control", "max-age=60")]), now, clock);
+        // Another run, perhaps of another plugin, for the same user with the same grants.
+        assert!(fresh(cache.lookup(&key(Some(7)), now)).is_some());
+        assert!(matches!(cache.lookup(&key(Some(8)), now), Lookup::Miss));
+        assert!(matches!(cache.lookup(&key(None), now), Lookup::Miss));
+    }
+
+    #[test]
+    fn a_reused_reply_says_how_old_it_is() {
+        let (cache, now, clock) = (Cache::default(), Instant::now(), SystemTime::now());
+        let kept = reply(200, &[("cache-control", "max-age=60"), ("age", "5")]);
+        cache.store(key("https://api.example/"), kept, now, clock);
+        let reused = fresh(cache.lookup(&key("https://api.example/"), now + 10 * SECOND)).unwrap();
+        let ages: Vec<_> = reused.headers.iter().filter(|(name, _)| name == "age").collect();
+        assert_eq!(ages, [&("age".to_owned(), "15".to_owned())]);
+    }
+
+    #[test]
+    fn a_change_to_a_url_forgets_what_was_kept_for_it_whoever_fetched_it() {
+        let (cache, now, clock) = (Cache::default(), Instant::now(), SystemTime::now());
+        let reader = Visible { library_read: true, ..visible(1) };
+        let theirs = Key::new(reader, "https://api.example/a", &[]).unwrap();
+        for key in [key("https://api.example/a"), theirs.clone(), key("https://api.example/b")] {
+            cache.store(key, reply(200, &[("cache-control", "max-age=60")]), now, clock);
+        }
+        cache.invalidate("https://api.example/a");
+        assert!(matches!(cache.lookup(&key("https://api.example/a"), now), Lookup::Miss));
+        assert!(matches!(cache.lookup(&theirs, now), Lookup::Miss));
+        assert!(fresh(cache.lookup(&key("https://api.example/b"), now)).is_some());
     }
 
     #[test]
     fn a_request_that_manages_its_own_caching_is_left_alone() {
         for name in ["Cache-Control", "If-None-Match", "Range"] {
             let headers = [(name.to_owned(), "x".to_owned())];
-            assert_eq!(Key::new(1, "https://api.example/", &headers), None);
+            assert_eq!(Key::new(visible(1), "https://api.example/", &headers), None);
         }
     }
 

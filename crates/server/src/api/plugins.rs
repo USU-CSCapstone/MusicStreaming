@@ -13,6 +13,7 @@ use axum::extract::rejection::BytesRejection;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use jewelcase_plugins::Permission;
+use jewelcase_plugins::manifest::is_host_name;
 use jewelcase_plugins::settings::Schema;
 use serde::{Deserialize, Serialize};
 
@@ -108,6 +109,34 @@ pub async fn set_permissions(
         .collect();
     plugins.set_grants(id.clone(), permissions(&grants.granted), per_library).await?;
     Ok(Json(plugin(&db, id).await?))
+}
+
+/// Exempts it from the limit for every plugin on one host (`requirements/plugins.md` §7).
+pub async fn exempt(
+    State(plugins): State<Arc<Plugins>>,
+    Path((id, host)): Path<(String, String)>,
+) -> Result<StatusCode, Problem> {
+    plugins.add_exemption(id, exempted(&host)?).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Ends its exemption from the limit for every plugin on one host.
+pub async fn unexempt(
+    State(plugins): State<Arc<Plugins>>,
+    Path((id, host)): Path<(String, String)>,
+) -> Result<StatusCode, Problem> {
+    plugins.remove_exemption(id, exempted(&host)?).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `host` as an exemption names it, if it is one host name.
+fn exempted(host: &str) -> Result<String, Problem> {
+    if !is_host_name(host) {
+        return Err(Problem::invalid(
+            "An exemption is for one host name, such as musicbrainz.org.",
+        ));
+    }
+    Ok(host.to_ascii_lowercase())
 }
 
 #[derive(Deserialize)]

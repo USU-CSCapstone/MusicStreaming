@@ -166,6 +166,10 @@ pub fn router(
         )
         .route("/admin/plugins/{plugin_id}", get(plugins::get).delete(plugins::uninstall))
         .route("/admin/plugins/{plugin_id}/permissions", put(plugins::set_permissions))
+        .route(
+            "/admin/plugins/{plugin_id}/exemptions/{host}",
+            put(plugins::exempt).delete(plugins::unexempt),
+        )
         .route("/admin/plugins/{plugin_id}/libraries/{library_id}", put(plugins::set_enabled))
         .route("/admin/plugins/{plugin_id}/run", post(plugins::run))
         .route(

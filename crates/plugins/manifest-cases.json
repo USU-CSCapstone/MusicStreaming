@@ -1969,7 +1969,34 @@
 		]
 	},
 	{
-		"name": "rate limits counted per plugin, per user, and with every plugin that shares them",
+		"name": "rate limits for one host twice, in different case",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.2",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"*"
+					],
+					"rateLimits": {
+						"a.example": "1/s",
+						"A.example": "5/s",
+						"b.example": "1/s"
+					}
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: rateLimits: \"a.example\" is the same host as \"A.example\""
+		]
+	},
+	{
+		"name": "rate limits counted per plugin, per user, and for every plugin",
 		"manifest": {
 			"id": "x-plugin",
 			"name": "X",
@@ -1994,7 +2021,7 @@
 						},
 						"musicbrainz.org": {
 							"limit": "1/s",
-							"per": "global"
+							"per": "host"
 						},
 						"coverartarchive.org": {
 							"limit": "60/min",
@@ -2003,7 +2030,7 @@
 					}
 				},
 				{
-					"permission": "globalRateLimits",
+					"permission": "hostRateLimits",
 					"required": false,
 					"reason": "MusicBrainz limits each server, not each plugin."
 				}
@@ -2012,7 +2039,7 @@
 		"problems": []
 	},
 	{
-		"name": "a global rate limit without globalRateLimits",
+		"name": "a host rate limit without hostRateLimits",
 		"manifest": {
 			"id": "x-plugin",
 			"name": "X",
@@ -2029,18 +2056,18 @@
 					"rateLimits": {
 						"musicbrainz.org": {
 							"limit": "1/s",
-							"per": "global"
+							"per": "host"
 						}
 					}
 				}
 			]
 		},
 		"problems": [
-			"a rate limit \"per\": \"global\" needs globalRateLimits as well"
+			"a rate limit \"per\": \"host\" needs hostRateLimits as well"
 		]
 	},
 	{
-		"name": "globalRateLimits without a global rate limit",
+		"name": "hostRateLimits without a host rate limit",
 		"manifest": {
 			"id": "x-plugin",
 			"name": "X",
@@ -2059,15 +2086,84 @@
 					}
 				},
 				{
-					"permission": "globalRateLimits",
+					"permission": "hostRateLimits",
 					"required": false,
 					"reason": "MusicBrainz limits each server, not each plugin."
 				}
 			]
 		},
 		"problems": [
-			"globalRateLimits needs a rate limit \"per\": \"global\""
+			"hostRateLimits needs a rate limit \"per\": \"host\""
 		]
+	},
+	{
+		"name": "a host rate limit for a host reached only through any destination",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"*"
+					],
+					"rateLimits": {
+						"musicbrainz.org": {
+							"limit": "1/s",
+							"per": "host"
+						},
+						"lrclib.net": {
+							"limit": "1/s",
+							"per": "user"
+						}
+					}
+				},
+				{
+					"permission": "hostRateLimits",
+					"required": false,
+					"reason": "MusicBrainz limits each server, not each plugin."
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: rateLimits: \"musicbrainz.org\" limits every plugin, so its destinations must name it rather than \"*\""
+		]
+	},
+	{
+		"name": "a host rate limit for a host named beside any destination",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"*",
+						"MusicBrainz.org"
+					],
+					"rateLimits": {
+						"musicbrainz.org": {
+							"limit": "1/s",
+							"per": "host"
+						}
+					}
+				},
+				{
+					"permission": "hostRateLimits",
+					"required": false,
+					"reason": "MusicBrainz limits each server, not each plugin."
+				}
+			]
+		},
+		"problems": []
 	},
 	{
 		"name": "rate limits that do not say whose requests they count",
@@ -2100,8 +2196,8 @@
 			]
 		},
 		"problems": [
-			"permissions[0]: rateLimits: \"a.example\" needs \"per\": \"plugin\", \"user\", or \"global\"",
-			"permissions[0]: rateLimits: \"b.example\" needs \"per\": \"plugin\", \"user\", or \"global\"",
+			"permissions[0]: rateLimits: \"a.example\" needs \"per\": \"plugin\", \"user\", or \"host\"",
+			"permissions[0]: rateLimits: \"b.example\" needs \"per\": \"plugin\", \"user\", or \"host\"",
 			"permissions[0]: rateLimits: \"c.example\" needs a limit such as \"1/s\", \"60/min\", or \"1000/h\""
 		]
 	},
@@ -2150,6 +2246,31 @@
 		},
 		"problems": [
 			"permissions[0]: only network takes \"rateLimits\""
+		]
+	},
+	{
+		"name": "a rate limit for a host written with a trailing dot",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.3",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"*"
+					],
+					"rateLimits": {
+						"musicbrainz.org.": "1/s"
+					}
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: rateLimits: \"musicbrainz.org.\" is not a host name; each limit is for one host"
 		]
 	}
 ]

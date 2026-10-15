@@ -1,15 +1,16 @@
-//! How often each destination is asked (`requirements/plugins.md` §7). Requests to a host are
-//! counted in scopes, each paced apart from the rest:
+//! How often each destination is asked (`requirements/plugins.md` §7). Requests to a host wait
+//! in queues, each kept for one scope of requests there:
 //!
 //! - **A plugin's own**, unless its manifest says otherwise. No other plugin slows it.
 //! - **A user's**: a plugin's requests in runs for one user who connected it, for a service
 //!   that limits each account, so one user's runs do not use up another's.
-//! - **Global**: those of every plugin that declared the host's limit global and was granted
-//!   that, for a service that limits each address, which two plugins that each kept to it
-//!   alone would break together. The strictest pace any of them declared is kept to.
+//! - **The host's**: every plugin's, where a plugin allowed to has set a limit for a service
+//!   that limits the whole server. Every plugin not exempt from it waits here too.
 //!
-//! In each, requests keep to the declared pace, and a `429`, or a `503` with `Retry-After`,
-//! pauses that scope's requests to the host and no other's.
+//! A request goes at the latest turn of the queues it waits in, and each then keeps its own
+//! gap after it. A `429` or `503` pauses only the scope of the request it answered, and after a
+//! redirect, that scope where the request started too: as long as `Retry-After` asks, or for a
+//! random wait that doubles in reach with each one in a row.
 //!
 //! A request waits for its turn rather than failing, unless the turn is more than [`MAX_WAIT`]
 //! away, in which case it is refused with how long is left.
@@ -21,16 +22,17 @@ use std::time::{Duration, Instant, SystemTime};
 /// The longest a request waits for its turn before it is refused instead. A run has five
 /// minutes in all.
 pub const MAX_WAIT: Duration = Duration::from_secs(60);
-/// The pause after a `429` that does not say how long to wait.
-const DEFAULT_PAUSE: Duration = Duration::from_secs(30);
 /// The longest pause a service can ask for. One that asks for a day is believed for an hour,
 /// then asked again.
 const MAX_PAUSE: Duration = Duration::from_secs(60 * 60);
+/// The most the first pause without a `Retry-After` can be. Each in a row doubles it.
+const BASE_PAUSE: Duration = Duration::from_secs(1);
 
-/// Whose requests to a host are counted together.
+/// Whose requests to a host wait together.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Scope {
-    Global,
+    /// Every plugin's that is not exempt from the host's limit.
+    Host,
     Plugin(String),
     /// A plugin's, in runs for one user.
     User(String, i64),
@@ -38,58 +40,50 @@ pub enum Scope {
 
 #[derive(Default)]
 pub struct Limits {
-    destinations: Mutex<HashMap<(String, Scope), Destination>>,
+    queues: Mutex<HashMap<(String, Scope), Queue>>,
 }
 
-/// One scope's requests to one host.
-#[derive(Default)]
-struct Destination {
-    /// The gap each plugin counted here declared between requests. The widest is kept to.
-    declared: HashMap<String, Duration>,
+/// One scope's requests to one host. Kept only while it holds a request up or counts a pause
+/// that has not long passed.
+struct Queue {
     /// The earliest the next request may go.
-    next: Option<Instant>,
+    next: Instant,
+    /// The `429`s and `503`s in a row, which each make the next pause reach twice as far.
+    throttled: u32,
 }
 
 impl Limits {
-    /// When a request from `plugin` to `host`, counted in `scope`, may go, with that turn
-    /// taken, or how long until it may if that is more than [`MAX_WAIT`]. `declared` is the gap
-    /// its manifest asks for there, if any.
+    /// When a request to `host` may go, with its turn taken in each of `queues`, or how long
+    /// until it may if that is more than [`MAX_WAIT`]. Each queue is a scope and the gap it
+    /// keeps after a request. Hosts are lowercase, so each has one set of queues.
     pub fn turn(
         &self,
         host: &str,
-        scope: &Scope,
-        plugin: &str,
-        declared: Option<Duration>,
+        queues: &[(Scope, Duration)],
         now: Instant,
     ) -> Result<Instant, Duration> {
-        let key = (host.to_ascii_lowercase(), scope.clone());
-        let mut destinations = self.destinations.lock().expect("limits lock");
-        // Most hosts have no limit and no pause, and are never recorded.
-        if declared.is_none() && !destinations.contains_key(&key) {
-            return Ok(now);
-        }
-        let destination = destinations.entry(key.clone()).or_default();
-        match declared {
-            Some(gap) => destination.declared.insert(plugin.to_owned(), gap),
-            None => destination.declared.remove(plugin),
-        };
-        let start = destination.next.map_or(now, |next| next.max(now));
+        let mut kept = self.queues.lock().expect("limits lock");
+        let key = |scope: &Scope| (host.to_owned(), scope.clone());
+        let turns = queues.iter().filter_map(|(scope, _)| kept.get(&key(scope)));
+        let start = turns.map(|queue| queue.next).fold(now, Instant::max);
         if start > now + MAX_WAIT {
             return Err(start - now);
         }
-        let gap = destination.declared.values().max().copied().unwrap_or_default();
-        if destination.declared.is_empty() && start == now {
-            // Nothing declared and no pause left: forget it.
-            destinations.remove(&key);
-        } else {
-            destination.next = Some(start + gap);
+        for (scope, gap) in queues {
+            let queue = kept.entry(key(scope)).or_insert(Queue { next: now, throttled: 0 });
+            // From when it goes, so no queue thinks it went earlier than it did.
+            queue.next = start + *gap;
+            // Most hosts have no limit and no pause, and are never kept.
+            if queue.idle(now) {
+                kept.remove(&key(scope));
+            }
         }
         Ok(start)
     }
 
-    /// What `host` answered a request counted in `scope` with. A `429`, or a `503` that says
-    /// when to come back, pauses that scope's requests there. `clock` is the wall-clock time,
-    /// for a `Retry-After` given as a date.
+    /// What `host` answered a request in `scope` with. A `429` or `503` pauses that scope's
+    /// requests there; anything else ends its run of them. `clock` is the wall-clock time, for
+    /// a `Retry-After` given as a date. `host` is lowercase, as for [`Limits::turn`].
     pub fn answered(
         &self,
         host: &str,
@@ -99,18 +93,43 @@ impl Limits {
         now: Instant,
         clock: SystemTime,
     ) {
+        let key = (host.to_owned(), scope.clone());
+        let mut kept = self.queues.lock().expect("limits lock");
+        if !matches!(status, 429 | 503) {
+            if let Some(queue) = kept.get_mut(&key) {
+                queue.throttled = 0;
+                if queue.idle(now) {
+                    kept.remove(&key);
+                }
+            }
+            return;
+        }
+        // Throttles are rare, so forgetting every queue that is done with here costs little,
+        // and a run of them whose pause long passed starts again from none.
+        kept.retain(|_, queue| !queue.idle(now));
+        let queue = kept.entry(key).or_insert(Queue { next: now, throttled: 0 });
         let asked = retry_after.and_then(|value| parse_retry_after(value, clock));
-        let pause = match (status, asked) {
-            (429, asked) => asked.unwrap_or(DEFAULT_PAUSE),
-            (503, Some(asked)) => asked,
-            _ => return,
-        };
-        let until = now + pause.min(MAX_PAUSE);
-        let mut destinations = self.destinations.lock().expect("limits lock");
-        let destination =
-            destinations.entry((host.to_ascii_lowercase(), scope.clone())).or_default();
-        destination.next = Some(destination.next.map_or(until, |next| next.max(until)));
+        let until = now + pause(asked, queue.throttled, fastrand::f64());
+        queue.next = queue.next.max(until);
+        queue.throttled = queue.throttled.saturating_add(1);
     }
+}
+
+impl Queue {
+    /// Holding nothing up and counting no pause, so no different from not being kept. A run of
+    /// pauses is over once the last has long passed, though no answer since ended it.
+    fn idle(&self, now: Instant) -> bool {
+        self.next <= now && (self.throttled == 0 || self.next + MAX_PAUSE <= now)
+    }
+}
+
+/// How long a `429` or `503` pauses: as long as `asked` by `Retry-After`, up to [`MAX_PAUSE`].
+/// Without one, "full jitter": a random wait up to a reach that doubles with each of the
+/// `throttled` before it in a row, so plugins told together do not all come back together.
+/// `fraction` is the random draw, from 0 up to 1.
+fn pause(asked: Option<Duration>, throttled: u32, fraction: f64) -> Duration {
+    let reach = BASE_PAUSE.saturating_mul(2_u32.saturating_pow(throttled));
+    asked.unwrap_or_else(|| reach.min(MAX_PAUSE).mul_f64(fraction)).min(MAX_PAUSE)
 }
 
 /// `Retry-After` as a wait: whole seconds, or a date (RFC 9110 §10.2.3).
@@ -128,109 +147,189 @@ mod tests {
     use super::*;
 
     const SECOND: Duration = Duration::from_secs(1);
+    const HOST: &str = "musicbrainz.org";
 
     fn own(plugin: &str) -> Scope {
         Scope::Plugin(plugin.into())
     }
 
+    fn user(id: i64) -> Scope {
+        Scope::User("scrobbler".into(), id)
+    }
+
+    /// A request in `scope` alone, which keeps no gap.
+    fn alone(scope: Scope) -> [(Scope, Duration); 1] {
+        [(scope, Duration::ZERO)]
+    }
+
+    /// A request in `scope` that also waits in the host's queue, a second apart.
+    fn with_host(scope: Scope) -> [(Scope, Duration); 2] {
+        [(scope, Duration::ZERO), (Scope::Host, SECOND)]
+    }
+
+    /// The `429`s in a row counted for `scope`, if it is kept.
+    fn throttled(limits: &Limits, scope: Scope) -> Option<u32> {
+        let kept = limits.queues.lock().unwrap();
+        kept.get(&(HOST.into(), scope)).map(|queue| queue.throttled)
+    }
+
     #[test]
-    fn a_host_nobody_limits_is_never_held_up_or_recorded() {
+    fn a_host_nobody_limits_is_never_held_up_or_kept() {
         let (limits, now) = (Limits::default(), Instant::now());
         for _ in 0..3 {
-            assert_eq!(limits.turn("lrclib.net", &own("lyrics"), "lyrics", None, now), Ok(now));
+            assert_eq!(limits.turn("lrclib.net", &alone(own("lyrics")), now), Ok(now));
         }
-        assert!(limits.destinations.lock().unwrap().is_empty());
+        limits.answered("lrclib.net", &own("lyrics"), 200, None, now, SystemTime::now());
+        assert!(limits.queues.lock().unwrap().is_empty());
     }
 
     #[test]
     fn a_plugins_own_pace_holds_up_no_other_plugin() {
         let (limits, now) = (Limits::default(), Instant::now());
-        let (host, artwork) = ("musicbrainz.org", own("artwork"));
-        assert_eq!(limits.turn(host, &artwork, "artwork", Some(SECOND), now), Ok(now));
-        assert_eq!(limits.turn(host, &artwork, "artwork", Some(SECOND), now), Ok(now + SECOND));
-        assert_eq!(limits.turn(host, &own("biographies"), "biographies", None, now), Ok(now));
-        // Hosts are compared without case.
-        let host = "MusicBrainz.org";
-        assert_eq!(limits.turn(host, &artwork, "artwork", Some(SECOND), now), Ok(now + 2 * SECOND));
+        let artwork = [(own("artwork"), SECOND)];
+        assert_eq!(limits.turn(HOST, &artwork, now), Ok(now));
+        assert_eq!(limits.turn(HOST, &artwork, now), Ok(now + SECOND));
+        assert_eq!(limits.turn(HOST, &alone(own("biographies")), now), Ok(now));
     }
 
     #[test]
     fn each_user_is_paced_apart() {
         let (limits, now) = (Limits::default(), Instant::now());
-        let host = "api.listenbrainz.org";
-        let user = |id| Scope::User("scrobbler".into(), id);
-        assert_eq!(limits.turn(host, &user(1), "scrobbler", Some(SECOND), now), Ok(now));
-        assert_eq!(limits.turn(host, &user(2), "scrobbler", Some(SECOND), now), Ok(now));
-        assert_eq!(limits.turn(host, &user(1), "scrobbler", Some(SECOND), now), Ok(now + SECOND));
+        let paced = |id| [(user(id), SECOND)];
+        assert_eq!(limits.turn(HOST, &paced(1), now), Ok(now));
+        assert_eq!(limits.turn(HOST, &paced(2), now), Ok(now));
+        assert_eq!(limits.turn(HOST, &paced(1), now), Ok(now + SECOND));
     }
 
     #[test]
-    fn a_global_limit_keeps_to_the_strictest_pace_any_plugin_sharing_it_declared() {
+    fn a_host_limit_paces_plugins_that_declared_nothing_there() {
         let (limits, now) = (Limits::default(), Instant::now());
-        let (host, global) = ("api.example", Scope::Global);
-        let lenient = SECOND / 10;
-        assert_eq!(limits.turn(host, &global, "lenient", Some(lenient), now), Ok(now));
-        assert_eq!(limits.turn(host, &global, "strict", Some(2 * SECOND), now), Ok(now + lenient));
-        // Once the strict plugin has declared its pace, the lenient one keeps to it too.
-        assert_eq!(
-            limits.turn(host, &global, "lenient", Some(lenient), now),
-            Ok(now + lenient + 2 * SECOND)
-        );
-        // A plugin that does not share the limit is not held up by it.
-        assert_eq!(limits.turn(host, &own("apart"), "apart", Some(lenient), now), Ok(now));
+        assert_eq!(limits.turn(HOST, &with_host(own("artwork")), now), Ok(now));
+        assert_eq!(limits.turn(HOST, &with_host(own("biographies")), now), Ok(now + SECOND));
+        // The host's gap is the one given, which the run's grants say is the strictest.
+        let stricter = [(own("artwork"), Duration::ZERO), (Scope::Host, 5 * SECOND)];
+        assert_eq!(limits.turn(HOST, &stricter, now), Ok(now + 2 * SECOND));
+        assert_eq!(limits.turn(HOST, &with_host(own("artwork")), now), Ok(now + 7 * SECOND));
+        // A plugin exempt from it does not wait in the host's queue.
+        assert_eq!(limits.turn(HOST, &alone(own("exempt")), now), Ok(now));
     }
 
     #[test]
-    fn a_429_pauses_only_the_scope_it_was_counted_in() {
+    fn a_request_goes_at_the_latest_of_its_queues_and_each_keeps_its_gap_from_then() {
+        let (limits, now) = (Limits::default(), Instant::now());
+        // Its own queue is 3 s out, the host's free.
+        limits.turn(HOST, &[(own("artwork"), 3 * SECOND)], now).unwrap();
+        let both = [(own("artwork"), 3 * SECOND), (Scope::Host, SECOND)];
+        assert_eq!(limits.turn(HOST, &both, now), Ok(now + 3 * SECOND));
+        // The host's next turn is a second after the request went, not after now.
+        assert_eq!(limits.turn(HOST, &with_host(own("other")), now), Ok(now + 4 * SECOND));
+        assert_eq!(limits.turn(HOST, &both, now), Ok(now + 6 * SECOND));
+    }
+
+    #[test]
+    fn a_turn_too_far_away_is_refused_and_takes_nothing() {
+        let (limits, now) = (Limits::default(), Instant::now());
+        let slow = [(own("artwork"), 50 * SECOND), (Scope::Host, 70 * SECOND)];
+        assert_eq!(limits.turn(HOST, &slow, now), Ok(now));
+        assert_eq!(limits.turn(HOST, &slow, now), Err(70 * SECOND));
+        // The refused request took no turn in either queue.
+        assert_eq!(limits.turn(HOST, &[(own("artwork"), SECOND)], now), Ok(now + 50 * SECOND));
+        let later = now + 20 * SECOND;
+        assert_eq!(limits.turn(HOST, &with_host(own("other")), later), Ok(now + 70 * SECOND));
+    }
+
+    #[test]
+    fn a_429_pauses_only_the_scope_it_answered() {
         let (limits, now, clock) = (Limits::default(), Instant::now(), SystemTime::now());
-        limits.answered("api.example", &own("told"), 429, Some("5"), now, clock);
-        assert_eq!(
-            limits.turn("api.example", &own("told"), "told", None, now),
-            Ok(now + 5 * SECOND)
-        );
-        assert_eq!(limits.turn("api.example", &own("other"), "other", None, now), Ok(now));
-        assert_eq!(limits.turn("api.example", &Scope::Global, "other", None, now), Ok(now));
-        // Without a Retry-After, a 429 still pauses it.
-        limits.answered("quiet.example", &Scope::Global, 429, None, now, clock);
-        let turn = limits.turn("quiet.example", &Scope::Global, "other", None, now);
-        assert_eq!(turn, Ok(now + DEFAULT_PAUSE));
+        let paused = now + 5 * SECOND;
+        limits.answered(HOST, &own("told"), 429, Some("5"), now, clock);
+        assert_eq!(limits.turn(HOST, &alone(own("told")), now), Ok(paused));
+        assert_eq!(limits.turn(HOST, &alone(own("other")), now), Ok(now));
+        assert_eq!(limits.turn(HOST, &with_host(own("other")), now), Ok(now));
+
+        limits.answered(HOST, &user(1), 429, Some("5"), now, clock);
+        assert_eq!(limits.turn(HOST, &alone(user(1)), now), Ok(paused));
+        assert_eq!(limits.turn(HOST, &alone(user(2)), now), Ok(now));
+    }
+
+    #[test]
+    fn a_429_to_a_host_scoped_request_holds_up_every_plugin_the_limit_binds() {
+        let (limits, now, clock) = (Limits::default(), Instant::now(), SystemTime::now());
+        limits.answered(HOST, &Scope::Host, 429, Some("5"), now, clock);
+        // One that declared nothing there, but is bound by the host's limit.
+        assert_eq!(limits.turn(HOST, &with_host(own("other")), now), Ok(now + 5 * SECOND));
+        // One exempt from it.
+        assert_eq!(limits.turn(HOST, &alone(own("exempt")), now), Ok(now));
     }
 
     #[test]
     fn retry_after_may_be_a_date() {
         let (limits, now, clock) = (Limits::default(), Instant::now(), SystemTime::now());
         let at = httpdate::fmt_http_date(clock + 20 * SECOND);
-        limits.answered("api.example", &own("p"), 503, Some(&at), now, clock);
-        let turn = limits.turn("api.example", &own("p"), "p", None, now).unwrap();
+        limits.answered(HOST, &own("p"), 503, Some(&at), now, clock);
+        let turn = limits.turn(HOST, &alone(own("p")), now).unwrap();
         // A date is to the second.
         assert!((now + 19 * SECOND..=now + 20 * SECOND).contains(&turn));
     }
 
     #[test]
-    fn other_answers_pause_nothing() {
+    fn without_retry_after_each_pause_in_a_row_reaches_twice_as_far_until_one_succeeds() {
         let (limits, now, clock) = (Limits::default(), Instant::now(), SystemTime::now());
-        limits.answered("api.example", &own("p"), 503, None, now, clock);
-        limits.answered("api.example", &own("p"), 500, Some("30"), now, clock);
-        limits.answered("api.example", &own("p"), 200, Some("30"), now, clock);
-        assert_eq!(limits.turn("api.example", &own("p"), "p", None, now), Ok(now));
+        for (status, reach) in [(429, 1), (503, 2), (429, 4)] {
+            limits.answered(HOST, &own("p"), status, None, now, clock);
+            let turn = limits.turn(HOST, &alone(own("p")), now).unwrap();
+            assert!(turn <= now + reach * SECOND, "{reach}");
+        }
+        assert_eq!(throttled(&limits, own("p")), Some(3));
+        // Another answer ends the run, and an idle queue is forgotten.
+        limits.answered(HOST, &own("p"), 500, None, now + 5 * SECOND, clock);
+        assert_eq!(throttled(&limits, own("p")), None);
     }
 
     #[test]
-    fn a_long_pause_is_refused_rather_than_waited_for_and_capped() {
+    fn a_run_of_pauses_is_forgotten_once_its_pause_has_long_passed() {
         let (limits, now, clock) = (Limits::default(), Instant::now(), SystemTime::now());
-        limits.answered("api.example", &own("p"), 429, Some("86400"), now, clock);
-        assert_eq!(limits.turn("api.example", &own("p"), "p", None, now), Err(MAX_PAUSE));
-        // A refused request takes no turn, so the pause does not grow.
+        for _ in 0..5 {
+            limits.answered(HOST, &own("p"), 429, Some("1"), now, clock);
+        }
+        assert_eq!(throttled(&limits, own("p")), Some(5));
+        // No answer since ended the run, but its pause long passed: the next counts from none.
+        let later = now + SECOND + MAX_PAUSE;
+        limits.answered(HOST, &own("p"), 429, Some("1"), later, clock);
+        assert_eq!(throttled(&limits, own("p")), Some(1));
+    }
+
+    #[test]
+    fn a_throttle_forgets_every_queue_done_with() {
+        let (limits, now, clock) = (Limits::default(), Instant::now(), SystemTime::now());
+        for host in ["a.example", "b.example", "c.example"] {
+            limits.answered(host, &own("p"), 503, Some("1"), now, clock);
+        }
+        assert_eq!(limits.queues.lock().unwrap().len(), 3);
+        let later = now + SECOND + MAX_PAUSE;
+        limits.answered(HOST, &own("p"), 503, Some("1"), later, clock);
+        let kept = limits.queues.lock().unwrap();
+        assert_eq!(kept.keys().map(|(host, _)| host.as_str()).collect::<Vec<_>>(), [HOST]);
+    }
+
+    #[test]
+    fn a_pause_without_retry_after_is_a_random_part_of_its_reach() {
+        assert_eq!(pause(None, 0, 0.0), Duration::ZERO);
+        assert_eq!(pause(None, 0, 0.5), SECOND / 2);
+        assert_eq!(pause(None, 3, 0.5), 4 * SECOND);
+        // The reach stops growing at the longest pause.
+        assert_eq!(pause(None, 40, 0.5), MAX_PAUSE / 2);
+        // `Retry-After` is believed as it is, up to the longest pause.
+        assert_eq!(pause(Some(7 * SECOND), 3, 0.0), 7 * SECOND);
+        assert_eq!(pause(Some(MAX_PAUSE * 24), 0, 0.0), MAX_PAUSE);
+    }
+
+    #[test]
+    fn a_long_pause_is_refused_rather_than_waited_for() {
+        let (limits, now, clock) = (Limits::default(), Instant::now(), SystemTime::now());
+        limits.answered(HOST, &own("p"), 429, Some("86400"), now, clock);
+        assert_eq!(limits.turn(HOST, &alone(own("p")), now), Err(MAX_PAUSE));
         let later = now + MAX_PAUSE;
-        assert_eq!(limits.turn("api.example", &own("p"), "p", None, later), Ok(later));
-    }
-
-    #[test]
-    fn a_pause_that_has_passed_is_forgotten() {
-        let (limits, now, clock) = (Limits::default(), Instant::now(), SystemTime::now());
-        limits.answered("api.example", &own("p"), 429, Some("1"), now, clock);
-        let later = now + 2 * SECOND;
-        assert_eq!(limits.turn("api.example", &own("p"), "p", None, later), Ok(later));
-        assert!(limits.destinations.lock().unwrap().is_empty());
+        assert_eq!(limits.turn(HOST, &alone(own("p")), later), Ok(later));
     }
 }

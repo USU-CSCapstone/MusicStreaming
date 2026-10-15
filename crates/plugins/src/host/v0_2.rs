@@ -3,7 +3,8 @@
 //! each event goes to the plugin as 0.2 describes it.
 //!
 //! 0.2 differs in `http.send`'s error, which is a message there, in the words 0.3's error is
-//! described in, and in lacking `global-rate-limits`, which `granted` leaves out. Its records are the current ones under other names, copied field by field.
+//! described in, and in lacking `host-rate-limits`, which `granted` leaves out. Its records are
+//! the current ones under other names, copied field by field.
 
 use super::bindings::jewelcase::plugin as now;
 use super::bindings::v0_2::jewelcase::plugin as old;
@@ -99,7 +100,7 @@ fn permission(permission: now::host::Permission) -> Option<old::host::Permission
         P::ScanFinished => O::ScanFinished,
         P::Schedule => O::Schedule,
         P::Played => O::Played,
-        P::GlobalRateLimits => return None,
+        P::HostRateLimits => return None,
     })
 }
 
@@ -124,7 +125,7 @@ fn message(error: now::http::Error, url: &str) -> String {
         E::NotGranted => format!("{} was not granted", Permission::Network.title()),
         E::Refused(message) | E::Failed(message) => message,
         E::RateLimited(ms) => {
-            let host = super::http::host_of(url);
+            let host = crate::rules::host_of(url);
             format!("{host} cannot be asked again for {} s", ms.div_ceil(1000))
         }
         E::TimedOut => "the request timed out".into(),

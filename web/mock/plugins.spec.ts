@@ -174,6 +174,14 @@ describe('PluginStore', () => {
 		});
 	});
 
+	it('exempts only by one host name, as the server does', () => {
+		store.install(packed(), { kind: 'file' });
+		for (const host of ['musicbrainz.org.', '*', '']) {
+			expect(() => store.setExempt('lrclib-lyrics', host, true), host).toThrow(PluginError);
+		}
+		expect(() => store.setExempt('lrclib-lyrics', 'MusicBrainz.org', true)).not.toThrow();
+	});
+
 	it('persists to disk', () => {
 		store.install(packed(), { kind: 'file' });
 		grantAll();

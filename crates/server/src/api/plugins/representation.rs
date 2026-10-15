@@ -1,13 +1,14 @@
 //! The spec's `Plugin`: what an installed plugin is, what it asks for, and what it has been
 //! granted and where it is enabled, in every library on the server.
 
-use jewelcase_plugins::{Manifest, Permission, PermissionRequest};
+use jewelcase_plugins::{Api, Manifest, Permission, PermissionRequest, reaches};
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
 use super::super::Id;
 use super::super::sql::timestamp;
 use crate::plugins::grants;
+use crate::plugins::rate_limits::{self, HostLimit};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,7 +16,8 @@ pub struct Plugin {
     id: String,
     name: String,
     version: String,
-    api_version: String,
+    /// As the manifest gives it, such as `"0.3"`.
+    api_version: Api,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -32,6 +34,19 @@ pub struct Plugin {
     /// Whether it declares settings an admin can set.
     has_settings: bool,
     libraries: Vec<PluginLibrary>,
+    /// The limits in force for every plugin at the hosts it can reach.
+    host_limits: Vec<PluginHostLimit>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginHostLimit {
+    host: String,
+    /// The strictest any plugin set, such as `"1/s"`.
+    limit: String,
+    /// The plugins that set it.
+    set_by: Vec<String>,
+    exempt: bool,
 }
 
 #[derive(Serialize)]
@@ -92,8 +107,9 @@ const LIBRARIES: &str = concat!(
 pub fn all(conn: &Connection) -> rusqlite::Result<Vec<Plugin>> {
     let rows: Vec<Stored> =
         conn.prepare_cached(SELECT)?.query_map([], stored)?.collect::<rusqlite::Result<_>>()?;
+    let limits = rate_limits::in_force(conn)?;
     let mut plugins =
-        rows.into_iter().map(|r| view(conn, r)).collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.into_iter().map(|r| view(conn, r, &limits)).collect::<rusqlite::Result<Vec<_>>>()?;
     plugins.sort_by_key(|p| p.name.to_lowercase());
     Ok(plugins)
 }
@@ -103,7 +119,7 @@ pub fn get(conn: &Connection, id: &str) -> rusqlite::Result<Option<Plugin>> {
         .prepare_cached(&format!("{SELECT} WHERE id = ?1"))?
         .query_row([id], stored)
         .optional()?;
-    found.map(|r| view(conn, r)).transpose()
+    found.map(|r| view(conn, r, &rate_limits::in_force(conn)?)).transpose()
 }
 
 struct Stored {
@@ -127,7 +143,7 @@ fn stored(row: &Row) -> rusqlite::Result<Stored> {
     })
 }
 
-fn view(conn: &Connection, r: Stored) -> rusqlite::Result<Plugin> {
+fn view(conn: &Connection, r: Stored, limits: &[HostLimit]) -> rusqlite::Result<Plugin> {
     let plugin_wide: Vec<Permission> = conn
         .prepare_cached(
             "SELECT permission FROM plugin_grants WHERE plugin_id = ?1 ORDER BY permission",
@@ -165,6 +181,18 @@ fn view(conn: &Connection, r: Stored) -> rusqlite::Result<Plugin> {
             })
         })
         .collect::<rusqlite::Result<_>>()?;
+    let exemptions = rate_limits::exemptions(conn, &r.id)?;
+    let destinations = r.manifest.destinations();
+    let host_limits = limits
+        .iter()
+        .filter(|l| reaches(&l.host, destinations))
+        .map(|l| PluginHostLimit {
+            host: l.host.clone(),
+            limit: l.limit.clone(),
+            set_by: l.set_by.clone(),
+            exempt: exemptions.contains(&l.host),
+        })
+        .collect();
     let m = r.manifest;
     Ok(Plugin {
         id: r.id,
@@ -184,5 +212,6 @@ fn view(conn: &Connection, r: Stored) -> rusqlite::Result<Plugin> {
         has_settings: m.settings.as_ref().is_some_and(|s| !s.properties.is_empty()),
         granted: plugin_wide,
         libraries,
+        host_limits,
     })
 }

@@ -7,6 +7,7 @@ use jewelcase_plugins::settings::Schema;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Map, Value};
 
+use super::run::RunFor;
 use super::{PluginError, Plugins, grants};
 
 /// The level of every library.
@@ -127,7 +128,14 @@ impl Plugins {
         }
         let candidate = schema.with_defaults(&set);
         let outcome = self
-            .execute(&id, &manifest, level, None, permissions, candidate, Event::CheckSettings)
+            .execute(
+                &id,
+                &manifest,
+                RunFor { library: level, user: None },
+                permissions,
+                candidate,
+                Event::CheckSettings,
+            )
             .await?;
         if !outcome.ok {
             return Err(PluginError::SettingsInvalid(outcome.summary));

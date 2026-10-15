@@ -18,9 +18,11 @@ pub const SECTION: &str = "jewelcase:manifest";
 /// A version of the plugin contract (`wit/plugin.wit`). Every one a plugin may declare keeps
 /// loading, so a plugin written against an older one keeps working
 /// (`requirements/plugins.md` §1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Api {
+    #[serde(rename = "0.2")]
     V0_2,
+    #[serde(rename = "0.3")]
     V0_3,
 }
 
@@ -35,10 +37,6 @@ impl Api {
             Api::V0_2 => "0.2",
             Api::V0_3 => "0.3",
         }
-    }
-
-    pub fn from_name(name: &str) -> Option<Api> {
-        Api::ALL.into_iter().find(|api| api.name() == name)
     }
 }
 
@@ -66,9 +64,9 @@ pub enum Permission {
     /// A hook: run when a user who connected it finishes playing something. Needs
     /// listening-activity, library-read where it was played, and personal settings to connect.
     Played,
-    /// Its rate limits that say `"per": "global"` count every plugin's requests that do, so it
-    /// can slow other plugins and be slowed by them. Without it, they count its own.
-    GlobalRateLimits,
+    /// Its rate limits that say `"per": "host"` are kept to by every plugin's requests to that
+    /// host, so it can slow other plugins. Without it, they count its own.
+    HostRateLimits,
 }
 
 impl Permission {
@@ -82,7 +80,7 @@ impl Permission {
         Self::ScanFinished,
         Self::Schedule,
         Self::Played,
-        Self::GlobalRateLimits,
+        Self::HostRateLimits,
     ];
 
     /// Its name in manifests and the API, such as `libraryRead`.
@@ -97,7 +95,7 @@ impl Permission {
             Self::ScanFinished => "scanFinished",
             Self::Schedule => "schedule",
             Self::Played => "played",
-            Self::GlobalRateLimits => "globalRateLimits",
+            Self::HostRateLimits => "hostRateLimits",
         }
     }
 
@@ -129,7 +127,7 @@ impl Permission {
             Self::ScanFinished => "Run when a scan finishes",
             Self::Schedule => "Run on a schedule",
             Self::Played => "Run when a connected user plays something",
-            Self::GlobalRateLimits => "Share rate limits with other plugins",
+            Self::HostRateLimits => "Limit a service for every plugin",
         }
     }
 }
@@ -140,7 +138,8 @@ pub struct Manifest {
     pub id: String,
     pub name: String,
     pub version: String,
-    pub api_version: String,
+    /// The contract it was built against.
+    pub api_version: Api,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -181,7 +180,8 @@ impl Manifest {
         network.and_then(|r| r.destinations.as_deref()).unwrap_or_default()
     }
 
-    /// The rate limit its network request declares for each host that has one.
+    /// The rate limit its network request declares for each host that has one, the host
+    /// lowercase.
     pub fn rate_limits(&self) -> Vec<RateLimit> {
         let network = self.permissions.iter().find(|r| r.permission == Permission::Network);
         let limits = network.and_then(|r| r.rate_limits.as_ref()).into_iter().flatten();
@@ -190,7 +190,8 @@ impl Manifest {
                 Limit::Pace(pace) => (pace, Per::Plugin),
                 Limit::Counted { limit, per } => (limit, *per),
             };
-            Some(RateLimit { host: host.clone(), gap: rate_limit_gap(pace)?, per })
+            let gap = rate_limit_gap(pace)?;
+            Some(RateLimit { host: host.to_ascii_lowercase(), limit: pace.clone(), gap, per })
         };
         limits.filter_map(limit).collect()
     }
@@ -199,12 +200,6 @@ impl Manifest {
     pub fn every_minutes(&self) -> Option<u32> {
         let schedule = self.permissions.iter().find(|r| r.permission == Permission::Schedule);
         schedule.and_then(|r| r.every_minutes)
-    }
-
-    /// The contract it was built against. A stored manifest was validated on install, so its
-    /// version is always one the host knows.
-    pub fn api(&self) -> Api {
-        Api::from_name(&self.api_version).unwrap_or(Api::CURRENT)
     }
 
     pub fn required(&self) -> impl Iterator<Item = Permission> + '_ {
@@ -230,19 +225,19 @@ pub enum Per {
     /// The plugin's own in runs for one connected user, for a service that limits each
     /// account. A run for no user counts as the plugin's.
     User,
-    /// Every plugin's that declared it global, for a service that limits each address. Needs
-    /// [`Permission::GlobalRateLimits`]; without it, it counts the plugin's own.
-    Global,
+    /// Every plugin's, for a service that limits the whole server. Needs
+    /// [`Permission::HostRateLimits`]; without it, it counts the plugin's own.
+    Host,
 }
 
 impl Per {
-    pub const ALL: [Per; 3] = [Per::Plugin, Per::User, Per::Global];
+    pub const ALL: [Per; 3] = [Per::Plugin, Per::User, Per::Host];
 
     pub fn name(self) -> &'static str {
         match self {
             Per::Plugin => "plugin",
             Per::User => "user",
-            Per::Global => "global",
+            Per::Host => "host",
         }
     }
 }
@@ -250,7 +245,10 @@ impl Per {
 /// A rate limit a manifest declares, read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RateLimit {
+    /// Lowercase, however the manifest gives it.
     pub host: String,
+    /// As the manifest gives it, such as `"1/s"`.
+    pub limit: String,
     /// The gap kept between requests.
     pub gap: Duration,
     pub per: Per,
@@ -349,7 +347,7 @@ pub fn validate(manifest: &Value) -> Vec<String> {
             problems.push(r#""homepage" must be an http(s) URL"#.into());
         }
     }
-    if o.get("apiVersion").and_then(Value::as_str).and_then(Api::from_name).is_none() {
+    if !o.get("apiVersion").is_some_and(|v| Api::deserialize(v).is_ok()) {
         let known: Vec<_> = Api::ALL.iter().map(|api| format!(r#""{}""#, api.name())).collect();
         problems.push(format!(r#""apiVersion" must be one of {}"#, known.join(", ")));
     }
@@ -378,15 +376,16 @@ pub fn validate(manifest: &Value) -> Vec<String> {
         };
         problems.extend(validate_request(&at, r, &mut seen));
     }
-    // Sharing a limit is what the permission is for, and a limit is shared only with it.
-    let global = permissions.iter().filter_map(|r| r.get("rateLimits")?.as_object()).any(|l| {
-        l.values().any(|limit| limit.get("per").and_then(Value::as_str) == Some("global"))
-    });
-    let sharing = seen.contains(&Permission::GlobalRateLimits);
-    if global && !sharing {
-        problems.push(r#"a rate limit "per": "global" needs globalRateLimits as well"#.into());
-    } else if sharing && !global {
-        problems.push(r#"globalRateLimits needs a rate limit "per": "global""#.into());
+    // Limiting every plugin is what the permission is for, and only it allows that.
+    let host = permissions
+        .iter()
+        .filter_map(|r| r.get("rateLimits")?.as_object())
+        .any(|l| l.values().any(|limit| limit.get("per").and_then(Value::as_str) == Some("host")));
+    let granted = seen.contains(&Permission::HostRateLimits);
+    if host && !granted {
+        problems.push(r#"a rate limit "per": "host" needs hostRateLimits as well"#.into());
+    } else if granted && !host {
+        problems.push(r#"hostRateLimits needs a rate limit "per": "host""#.into());
     }
     // A library hook's event is about the library, which only reading it can make anything of.
     for hook in [Permission::TracksChanged, Permission::ScanFinished] {
@@ -471,26 +470,32 @@ fn validate_rate_limits(at: &str, limits: &Value, destinations: Option<&Value>) 
         )];
     };
     let hosts = destinations.and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    let listed = || hosts.iter().filter_map(Value::as_str);
     let mut problems = Vec::new();
     for (host, limit) in limits {
-        // Matched exactly against the host a request names, so `*` or a pattern never would be.
-        let named = !host.is_empty()
-            && host.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.');
-        let listed = || {
-            let mut listed = hosts.iter().filter_map(Value::as_str);
-            listed.any(|d| d == "*" || d.eq_ignore_ascii_case(host))
-        };
-        if !named {
-            problems.push(format!(
-                r#"{at}: rateLimits: "{host}" is not a host name; each limit is for one host"#
-            ));
-        } else if !listed() {
-            problems.push(format!(r#"{at}: rateLimits: "{host}" is not one of its destinations"#));
+        // Hosts are compared without case, so two keys that differ only in case would be one.
+        let earlier = limits.keys().take_while(|key| *key != host);
+        if let Some(same) = earlier.into_iter().find(|key| key.eq_ignore_ascii_case(host)) {
+            problems.push(format!(r#"{at}: rateLimits: "{host}" is the same host as "{same}""#));
+            continue;
         }
         let (pace, per) = match limit {
             Value::Object(o) => (o.get("limit"), o.get("per")),
             _ => (Some(limit), None),
         };
+        let named = listed().any(|d| d.eq_ignore_ascii_case(host));
+        if !is_host_name(host) {
+            problems.push(format!(
+                r#"{at}: rateLimits: "{host}" is not a host name; each limit is for one host"#
+            ));
+        } else if !named && !listed().any(|d| d == "*") {
+            problems.push(format!(r#"{at}: rateLimits: "{host}" is not one of its destinations"#));
+        } else if !named && per.and_then(Value::as_str) == Some("host") {
+            // A limit on every plugin is one the admin approves by name.
+            problems.push(format!(
+                r#"{at}: rateLimits: "{host}" limits every plugin, so its destinations must name it rather than "*""#
+            ));
+        }
         if !pace.and_then(Value::as_str).is_some_and(|pace| rate_limit_gap(pace).is_some()) {
             problems.push(format!(
                 r#"{at}: rateLimits: "{host}" needs a limit such as "1/s", "60/min", or "1000/h""#
@@ -499,11 +504,18 @@ fn validate_rate_limits(at: &str, limits: &Value, destinations: Option<&Value>) 
         let known = |per: &str| Per::ALL.iter().any(|p| p.name() == per);
         if limit.is_object() && !per.and_then(Value::as_str).is_some_and(known) {
             problems.push(format!(
-                r#"{at}: rateLimits: "{host}" needs "per": "plugin", "user", or "global""#
+                r#"{at}: rateLimits: "{host}" needs "per": "plugin", "user", or "host""#
             ));
         }
     }
     problems
+}
+
+/// Whether `host` is one host name, as a rate limit or an exemption from one names it. It is
+/// matched exactly against the host a request names, so `*` or a pattern never would be.
+pub fn is_host_name(host: &str) -> bool {
+    let allowed = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'.';
+    !host.is_empty() && !host.ends_with('.') && host.bytes().all(allowed)
 }
 
 fn non_empty(value: Option<&Value>) -> bool {
@@ -588,21 +600,23 @@ mod tests {
             "id": "p", "name": "P", "version": "1", "apiVersion": "0.3",
             "permissions": [{"permission": "network", "required": true, "reason": "r",
                 "destinations": ["a.example", "b.example", "c.example"],
-                "rateLimits": {"a.example": "2/s", "b.example": {"limit": "1/s", "per": "user"},
-                    "c.example": {"limit": "60/min", "per": "global"}}}]
+                "rateLimits": {"A.Example": "2/s", "b.example": {"limit": "1/s", "per": "user"},
+                    "c.example": {"limit": "60/min", "per": "host"}}}]
         }))
         .unwrap();
-        let limit = |host: &str, ms, per| RateLimit {
+        let limit = |host: &str, limit: &str, ms, per| RateLimit {
             host: host.into(),
+            limit: limit.into(),
             gap: Duration::from_millis(ms),
             per,
         };
+        // Hosts come lowercase, however the manifest gives them.
         assert_eq!(
             manifest.rate_limits(),
             [
-                limit("a.example", 500, Per::Plugin),
-                limit("b.example", 1000, Per::User),
-                limit("c.example", 1000, Per::Global),
+                limit("a.example", "2/s", 500, Per::Plugin),
+                limit("b.example", "1/s", 1000, Per::User),
+                limit("c.example", "60/min", 1000, Per::Host),
             ]
         );
     }

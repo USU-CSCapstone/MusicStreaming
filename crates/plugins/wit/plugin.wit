@@ -1,10 +1,10 @@
 package jewelcase:plugin@0.3.0;
 
 /// The plugin contract (design/plugins.md §7). 0.3 gave `http.send` an error a plugin can act
-/// on, and added `global-rate-limits`; plugins built against 0.2 still load (`0.2/`). Every import checks its permission in the
-/// host. Imports stay linked even when their permission was declined, so a plugin with an
-/// optional permission still loads; the call answers an error instead, and `granted` lets a
-/// plugin adapt up front.
+/// on, and added `host-rate-limits`; plugins built against 0.2 still load (`0.2/`). Every
+/// import checks its permission in the host. Imports stay linked even when their permission
+/// was declined, so a plugin with an optional permission still loads; the call answers an
+/// error instead, and `granted` lets a plugin adapt up front.
 
 interface host {
   /// What a plugin can ask for (requirements/plugins.md §4.1).
@@ -25,9 +25,9 @@ interface host {
     /// A hook: run when a user who connected the plugin finishes playing something
     /// (`events.played`).
     played,
-    /// Its rate limits that say `"per": "global"` are shared with other plugins. Without it,
-    /// they count only its own requests.
-    global-rate-limits,
+    /// Its rate limits that say `"per": "host"` are kept to by every plugin's requests to that
+    /// host. Without it, they count only its own requests.
+    host-rate-limits,
   }
 
   /// What this run may use.

@@ -220,6 +220,10 @@ export const setPluginPermissions = (f: Fetch, id: string, grants: PermissionGra
 export const setPluginEnabled = (f: Fetch, id: string, libraryId: string, enabled: boolean) =>
 	send<Plugin>(f, 'PUT', `${plugin(id)}/libraries/${encodeURIComponent(libraryId)}`, { enabled });
 
+/** Exempts it from, or holds it to, the limit for every plugin at `host`. */
+export const setPluginExempt = (f: Fetch, id: string, host: string, exempt: boolean) =>
+	send<void>(f, exempt ? 'PUT' : 'DELETE', `${plugin(id)}/exemptions/${encodeURIComponent(host)}`);
+
 export const uninstallPlugin = (f: Fetch, id: string) => send<void>(f, 'DELETE', plugin(id));
 
 /** Its settings at one level: a library's own, or with no library, the server-wide ones. */
