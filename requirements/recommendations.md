@@ -36,7 +36,7 @@ This is what makes recommendations work on a real collection:
 
 - **It needs no tags.** Most libraries are badly tagged for genre ([`tags.md` §8](tags.md#8-absence)), and a system that depended on genre would fail on exactly the collections that need help most.
 - **It needs no history.** A track imported an hour ago is as reachable as one played a thousand times. This is the answer to a new user, a new library, and the long tail of owned-but-unheard music.
-- **Its absence degrades, never breaks.** Analysis runs behind scanning and takes days at full scale ([`performance.md` §5](performance.md#5-scanning--analysis-budgets)); until a track has it, that track is recommended on listening data alone.
+- **Its absence degrades, never breaks.** Analysis runs behind scanning and takes far longer than indexing ([`performance.md` §5](performance.md#5-scanning--analysis)); until a track has it, that track is recommended on listening data alone.
 
 ### 2.2 How the User Listens
 
@@ -113,7 +113,7 @@ The surface that matters most in a large owned collection, built on what [`analy
 - **Nothing recently played is recommended back.**
 - **Every recommendation explains itself** — "because you listened to", "similar to", "you have not heard this in two years". Without any way to like or hide ([`analytics.md` §7](analytics.md#7-no-explicit-signals-in-v1)), an explanation is the only thing that makes a bad recommendation legible instead of arbitrary.
 - **Recommendations are actionable in place** — playable, queueable, addable to a playlist ([`conventions.md` §2](conventions.md#2-actions)).
-- **They are fast.** Recommendation surfaces meet the same interaction budgets as anything else ([`performance.md` §3](performance.md#3-interaction-budgets)); computing them is the server's problem, not the user's wait.
+- **They are fast.** Recommendation surfaces are as instant as anything else ([`performance.md` §3](performance.md#3-interactions)); computing them is the server's problem, not the user's wait.
 
 ---
 
@@ -131,7 +131,7 @@ The surface that matters most in a large owned collection, built on what [`analy
 ## 10. Offline
 
 - **Endless play works offline.** A queue that ends offline continues from downloaded tracks ([`offline.md` §6](offline.md#6-what-works-offline)), because queue behavior is deterministic on either side of the connectivity boundary ([`general.md` §3.5](general.md#35-offline-parity)).
-- **Enough similarity data travels with the catalog** to make that choice on the device — sized like the rest of the offline catalog, in the same footprint budget ([`offline.md` §1.1](offline.md#11-footprint), [`performance.md` §6](performance.md#6-client-footprint)).
+- **Enough similarity data travels with the catalog** to make that choice on the device — sized like the rest of the offline catalog, within the same footprint ([`offline.md` §1.1](offline.md#11-footprint), [`performance.md` §6](performance.md#6-client-footprint)).
 - **Generated mixes sync and remain readable offline**, playing whichever of their tracks are downloaded ([`offline.md` §6](offline.md#6-what-works-offline)).
 - **Radio offline draws on downloaded tracks**, and says so where the choice is visibly narrower.
 - **New recommendations are computed on the server.** Offline surfaces the last ones synced rather than nothing.

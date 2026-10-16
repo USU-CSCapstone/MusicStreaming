@@ -22,8 +22,8 @@ The scanner reads and never writes. When something is ambiguous or unavailable i
   - a description of **how it sounds** — tempo, key, energy, sonic character — which is what lets recommendations reach music never played and never tagged ([`recommendations.md` §2.1](recommendations.md#21-how-the-music-sounds));
   - its **waveform**, which the client draws as the progress bar so a listener can see the shape of a track and scrub to a point in it ([`playback.md` §3](playback.md#3-the-waveform)).
 
-  **All three come out of one decode.** Decoding is nearly the entire cost of analysis, so any result that needs the audio is derived in that pass or not at all — adding a second pass would multiply the most expensive work in the system ([`performance.md` §5](performance.md#5-scanning--analysis-budgets)).
-- **Analysis is background work and never blocks a library.** Results are stored in Jewelcase's own data, never written to the library, and tracks not yet analyzed are simply less well served rather than unavailable. Its cost and priority are budgeted in [`performance.md` §5](performance.md#5-scanning--analysis-budgets).
+  **All three come out of one decode.** Decoding is nearly the entire cost of analysis, so any result that needs the audio is derived in that pass or not at all — adding a second pass would multiply the most expensive work in the system ([`performance.md` §5](performance.md#5-scanning--analysis)).
+- **Analysis is background work and never blocks a library.** Results are stored in Jewelcase's own data, never written to the library, and tracks not yet analyzed are simply less well served rather than unavailable. Its cost and priority are set out in [`performance.md` §5](performance.md#5-scanning--analysis).
 
 ---
 

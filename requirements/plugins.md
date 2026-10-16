@@ -49,7 +49,7 @@ What keeps this open rather than merely long:
 
 ### 2.2 Results Compose, They Do Not Block
 
-- **Core results never wait on plugin results.** A search returns the library's matches within its own budget ([`performance.md` §3](performance.md#3-interaction-budgets)); external sections fill in as their sources answer.
+- **Core results never wait on plugin results.** A search returns the library's matches as fast as it would without plugins ([`performance.md` §3](performance.md#3-interactions)); external sections fill in as their sources answer.
 - **A slow plugin delays only its own contribution.** Its section shows that it is still working; nothing else on the screen is affected, and no other plugin is held up behind it.
 - **Every plugin call is bounded.** A plugin that never answers is dropped and its section says so. **The user always gets an answer, even when a plugin does not.**
 - **Background plugin work yields to listeners** ([`performance.md` §7](performance.md#7-under-saturation)). Enrichment surrenders resources to playback, always.

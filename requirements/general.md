@@ -55,7 +55,7 @@ Music a plugin merely *surfaces* rather than places is not library content and i
 ### 3.3 The Host Is the Limiter
 No fixed caps on library size, concurrent listeners, or throughput. Where a limit exists it is a direct function of CPU, memory, disk, or bandwidth, and adding hardware yields proportionally better performance.
 
-The figures the project verifies and publishes are benchmarks, not ceilings ([`performance.md` §1](performance.md#1-verification-hardware)–[§2](performance.md#2-no-ceilings)).
+What the project measures and publishes describes what was measured, never a ceiling ([`performance.md` §2](performance.md#2-no-ceilings)).
 
 ### 3.4 Optimistic by Default
 User actions apply to the local UI immediately and confirm asynchronously. Where the server disagrees, the client reconciles and — if the reconciliation is user-visible — explains what happened.

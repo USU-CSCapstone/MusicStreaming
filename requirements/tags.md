@@ -74,7 +74,7 @@ Anticipated but not built: **mood**, from the standard mood field; **personal la
 - **A tag has a page** — the artists, albums, and tracks carrying it, browsable and playable like any other collection.
 - **Filters compose.** Genre with year, genre with listening data, or several tags at once, narrowing or widening as the user chooses.
 - **A filtered view is not a playlist** ([`playlists.md`](playlists.md) Overview). It leaves nothing behind.
-- **Filtering stays instant at full scale** ([`performance.md` §3](performance.md#3-interaction-budgets)).
+- **Filtering stays instant at full scale** ([`performance.md` §3](performance.md#3-interactions)).
 
 ---
 

@@ -1,7 +1,7 @@
 # Scanning Design
 
 ## Overview
-How music on disk becomes rows in the index and, later, analysis results. This file turns [`requirements/scanning.md`](../requirements/scanning.md) into a pipeline, a crate, and a set of library choices, within the budgets of [`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis-budgets). It builds on [`general.md`](general.md); where it conflicts with [`requirements/`](../requirements/), the requirements win.
+How music on disk becomes rows in the index and, later, analysis results. This file turns [`requirements/scanning.md`](../requirements/scanning.md) into a pipeline, a crate, and a set of library choices, within the goals of [`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis). It builds on [`general.md`](general.md); where it conflicts with [`requirements/`](../requirements/), the requirements win.
 
 The one thing this design exists to get right: **incremental cost is proportional to change, and nothing that touches audio samples runs on the indexing path.**
 
@@ -39,9 +39,9 @@ Every file that reaches the scanner passes through the same stages, and every st
 | 7. Reconcile | index rows under scope | missing marks | one range query per scope |
 | 8. Analyze | whole file, via ffmpeg | loudness, features, waveform | **never on this path** |
 
-- **Stage 2 is the whole incremental story.** Path, size, and mtime unchanged means the file is done without being opened, unless a lyrics file has appeared beside a track that had none, or gone from one that had it. That check reads the directory listing discovery already holds, so it adds no I/O. Ten changed files cost ten opens; the other 499,990 cost one `stat` and one lookup each. A failure here is the failure mode [`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis-budgets) names: a library that grows more expensive to keep current.
+- **Stage 2 is the whole incremental story.** Path, size, and mtime unchanged means the file is done without being opened, unless a lyrics file has appeared beside a track that had none, or gone from one that had it. That check reads the directory listing discovery already holds, so it adds no I/O. Ten changed files cost ten opens; the other 499,990 cost one `stat` and one lookup each. A failure here is the failure mode [`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis) names: a library that grows more expensive to keep current.
 - **Stage 3 reads headers, never bodies.** Tags and technical properties live in the first and last kilobytes of a file. Nothing before stage 8 reads audio frames.
-- **Stage 8 is a different queue on a different pool.** Indexing is what users wait for; analysis is not. Coupling them would turn a one-hour cold scan into a three-day one.
+- **Stage 8 is a different queue on a different pool.** Indexing is what users wait for; analysis is not. Coupling them would make a cold scan wait on days of analysis.
 
 ---
 
@@ -109,7 +109,7 @@ Until it is, stage 4 keys on path: a file at a new path is a new track, and a fi
 
 - `identify(&FileFacts, &Store) -> Identity` takes everything stages 1–3 learned (path, size, mtime, device and inode, `TagSet`, `AudioProperties`, and the byte ranges of the tag regions, which any content fingerprint will need to skip) and returns new, moved-from, retagged, or audio-replaced.
 - Nothing outside the stage reads paths to decide identity. The reconcile stage asks the store for "tracks under this scope not seen in this scan", not "tracks whose path is missing".
-- The budget the eventual design must meet: whatever it reads per new file has to fit the one-hour cold scan, which rules out hashing whole files at 500,000 tracks.
+- The constraint the eventual design must meet: whatever it reads per new file has to keep a cold scan of a large library fast, which rules out hashing whole files at 500,000 tracks.
 
 ---
 
@@ -179,7 +179,7 @@ The `ffmpeg` crate exposes three operations behind one pool:
 | `decode_pcm(path)` | `ffmpeg -nostdin -v error -i <path> -map 0:a:0 -vn -f f32le -c:a pcm_f32le pipe:1` | analysis |
 | `transcode(path, target)` | as the playback design specifies | playback |
 
-- **Every invocation is read-only against the library.** No output path is ever under a root; `-nostdin` is always set; there is no `-y`. The music mount is read-only regardless ([`general.md` §2](general.md#2-system-shape)), so this is belt and braces, not the only defense.
+- **Every invocation is read-only against the library.** No output path is ever under a root; `-nostdin` is always set; there is no `-y`. The music mount is usually writable, for plugins ([`general.md` §2](general.md#2-system-shape)), so this rule is the defense.
 - **Startup verifies the binary.** The server runs `ffmpeg -decoders` once, checks that every decoder the format list requires is present, and exposes the result in server info and library health ([`requirements/deployment.md` §7](../requirements/deployment.md#7-observability)). A missing decoder is one startup message, not ten thousand scan problems at 3 a.m. Missing ffmpeg entirely is fatal at startup, in the spirit of "bad configuration fails loudly" ([`requirements/deployment.md` §1](../requirements/deployment.md#1-what-the-user-provides)).
 - **Exit status and stderr map to problem kinds.** A nonzero exit with a decoder error is `corruptAudio`; an unknown codec is `unsupportedEncoding`; a kill on timeout is its own group. Stderr becomes the problem's detail.
 
@@ -187,7 +187,7 @@ The `ffmpeg` crate exposes three operations behind one pool:
 
 ## 12. Analysis
 
-**One decode, three consumers** ([`requirements/scanning.md` §1](../requirements/scanning.md#1-supported-formats), [`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis-budgets)).
+**One decode, three consumers** ([`requirements/scanning.md` §1](../requirements/scanning.md#1-supported-formats), [`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis)).
 
 `decode_pcm` streams interleaved 32-bit float at the file's native sample rate and channel layout, which the probe supplies so the raw stream can be interpreted. The scanner reads that stream once, in blocks, and feeds every block to three sinks:
 
@@ -229,8 +229,8 @@ The job runs on the indexing pool at the lowest priority, writes only to a dupli
 ## 15. Verification
 
 - **Golden corpus** ([§4](#4-tags)) — identical logical metadata in every format yields identical `TagSet`s; run on every build and on every lofty or ffmpeg upgrade.
-- **Generated library** — the `bench/` generator emits a library at full scale for each verification machine with realistic tag variety, sidecars at every level, and a fraction of deliberately corrupt files. Cold scan, ten-file incremental, and copied-in-album latency are measured against [`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis-budgets) at p95 and p99.
-- **Store conformance** — the nine pipeline scenarios run as one suite against every `Store`: the in-memory store in the scanner crate, SQLite in the server. Store-only cost on a development laptop, in release: inserting 50,000 synthetic tracks with all derived data took 11 s, looking each up 0.19 s, and a touch-only rescan 0.9 s, which extrapolates to roughly two minutes, two seconds, and nine seconds at 500,000, against the one-hour budget. The verification machines decide, but the store is not where the hour goes.
+- **Generated library** — the `bench/` generator emits a large library with realistic tag variety, sidecars at every level, and a fraction of deliberately corrupt files. Cold scan, ten-file incremental, and copied-in-album latency are measured against [`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis) at p95 and p99.
+- **Store conformance** — the nine pipeline scenarios run as one suite against every `Store`: the in-memory store in the scanner crate, SQLite in the server. Store-only cost on a development laptop, in release: inserting 50,000 synthetic tracks with all derived data took 11 s, looking each up 0.19 s, and a touch-only rescan 0.9 s, which extrapolates to roughly two minutes, two seconds, and nine seconds at 500,000. Measurements on low-power hardware decide, but the store is not where a cold scan's time goes.
 - **Fault injection** — a root unmounted mid-scan leaves the index intact and the scan suspended; a hung ffmpeg is killed within its timeout and recorded; a kill of the server mid-scan resumes from the cursor with no duplicate rows and no missed files.
 - **Isolation** — a scan of one library never reads a path under another library's root and never writes a row outside its library ([`requirements/general.md` §3.6](../requirements/general.md#36-libraries-are-the-isolation-boundary)).
 - **Read-only** — the whole suite runs against a read-only mount and passes.
@@ -242,4 +242,4 @@ The job runs on the indexing pool at the lowest priority, writes only to a dupli
 1. **Track identity** ([§6](#6-track-identity)) — open decision 3 in [`general.md` §11](general.md#11-open-decisions). This design fixes the stage's interface and budget, not its algorithm.
 2. **Waveform bin count and shaping function** — the playback design's, constrained here to be derived from stored peak and RMS bins with no second decode.
 3. **Feature extractor** — the recommendations design's, constrained here to consume the shared block stream.
-4. **Analysis pool sizes and the governor threshold** — defaults above are starting points; the benchmarks on both verification machines decide the shipped values.
+4. **Analysis pool sizes and the governor threshold** — defaults above are starting points; benchmarks on low-power hardware decide the shipped values.

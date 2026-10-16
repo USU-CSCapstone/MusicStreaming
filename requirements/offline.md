@@ -26,12 +26,12 @@ The catalog is small enough to carry entirely; imagery and audio are not, and do
 - **It costs proportionally.** Bringing a device current after ten new tracks costs what ten tracks cost, not what the library costs.
 
 ### 1.1 Footprint
-The device footprint is **bounded well below what the music itself would cost** — even at the 500,000-track target, comparable to a handful of downloaded songs ([`performance.md` §6](performance.md#6-client-footprint)).
+The device footprint is **bounded well below what the music itself would cost** — even for a library of hundreds of thousands of tracks, comparable to a handful of downloaded songs ([`performance.md` §6](performance.md#6-client-footprint)).
 
 - **A visual stand-in for every album and artist**, a few bytes each, enough to render a recognizable, correctly coloured placeholder. A whole library's worth costs about as much as one photograph.
 - **Full-resolution imagery is cached as it is seen**, within a bounded cache, and is always present for downloads ([§2](#2-a-download-is-complete)).
 - **Lyrics arrive with downloads**, on demand otherwise — too large to carry wholesale, and of no use without the audio. **Downloaded lyrics are indexed and searchable on the device**, so a user who has downloaded everything can search lyrics offline exactly as they would online ([`search.md` §2.1](search.md#21-one-search-two-places-to-run-it)).
-- **Waveforms travel the same way as lyrics** ([`playback.md` §3](playback.md#3-the-waveform)): bundled with a download, fetched on demand for a streamed track, cached once seen. They are per-track data useful only while that track is playing, and at 500,000 tracks would cost more than the whole catalog budget — so they are never pre-synced wholesale. **Every downloaded track carries its waveform**, so offline playback looks identical to online.
+- **Waveforms travel the same way as lyrics** ([`playback.md` §3](playback.md#3-the-waveform)): bundled with a download, fetched on demand for a streamed track, cached once seen. They are per-track data useful only while that track is playing, and for a whole large library would cost more than the rest of the catalog — so they are never pre-synced wholesale. **Every downloaded track carries its waveform**, so offline playback looks identical to online.
 - **Similarity data rides along with the catalog**, compact enough to be part of it rather than a second index, so endless play keeps working offline ([`recommendations.md` §10](recommendations.md#10-offline)).
 
 Imagery a user has seen or downloaded is real; the rest is a deliberate placeholder ([`conventions.md` §5](conventions.md#5-imagery)), never a blank grid.
@@ -74,7 +74,7 @@ Quality is set per device, separately for unmetered connections, metered connect
 - **One preference overrides all of it** — *never stream a track that is downloaded* — for users who would rather spend no bandwidth than gain quality. The choice is made once, not per track.
 - **The defaults are already bandwidth-safe.** A metered quality at or below the download quality means the local copy always wins on cellular, unconfigured. A track downloaded at original quality can never be beaten by a stream, so it always plays locally.
 - **Falling back always favours playing something.** A stream that degrades reverts to the local copy rather than stalling; an unreadable local copy reverts to streaming and repairs itself; a track still downloading streams rather than making the user wait.
-- **Local playback costs the server nothing**, consuming no concurrent stream ([`performance.md` §1](performance.md#1-verification-hardware)).
+- **Local playback costs the server nothing**, taking none of its streaming capacity ([`performance.md` §7](performance.md#7-under-saturation)).
 - **The source is invisible downstream.** Plays, history, statistics, and remote control behave identically either way ([`analytics.md`](analytics.md), [`realtime.md`](realtime.md)).
 
 ---
