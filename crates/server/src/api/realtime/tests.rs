@@ -12,6 +12,8 @@ use super::super::testing::{
 };
 use super::{Hub, ServerMessage};
 
+mod revoked;
+
 const PASSWORD: &str = "correct horse battery staple";
 
 /// The next message other than the state every connection of the account is sent on
@@ -75,13 +77,20 @@ async fn a_device_connects_says_hello_and_answers_pings() {
 }
 
 #[tokio::test]
-async fn a_connection_needs_a_token() {
-    let (_temp, _db, app) = app("");
+async fn a_connection_needs_an_active_accounts_token() {
+    let (temp, _db, app) = app("");
+    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    add_user(&conn, 2, "user");
+    add_device(&conn, 2, 2, "suspended");
+    conn.execute("UPDATE users SET status = 'suspended' WHERE id = 2", []).unwrap();
     let address = serve(app).await;
     let refused = connect(address, &[]).await.unwrap_err();
     assert_eq!(status(refused), StatusCode::UNAUTHORIZED);
-    let refused = connect(address, &[("authorization", "Bearer wrong")]).await.unwrap_err();
-    assert_eq!(status(refused), StatusCode::UNAUTHORIZED);
+    for token in ["wrong", "suspended"] {
+        let bearer = format!("Bearer {token}");
+        let refused = connect(address, &[("authorization", &bearer)]).await.unwrap_err();
+        assert_eq!(status(refused), StatusCode::UNAUTHORIZED, "{token}");
+    }
 }
 
 #[tokio::test]
