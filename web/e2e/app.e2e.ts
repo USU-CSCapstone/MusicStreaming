@@ -99,7 +99,7 @@ test('a search played from is offered again when the box is empty, and can be re
 	await page.goto('/albums');
 	const box = page.getByRole('searchbox', { name: 'Search the library' }).first();
 	await box.pressSequentially('remix');
-	await page.getByRole('button', { name: 'Signal Remix' }).click();
+	await page.getByRole('button', { name: 'Signal Remix', exact: true }).click();
 	await expect
 		.poll(() => searches.map((s) => [s.query, s.selected]))
 		.toEqual([['remix', { type: 'track', id: '43' }]]);
