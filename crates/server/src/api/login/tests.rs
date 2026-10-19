@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use axum::Router;
@@ -40,7 +40,7 @@ async fn login(
     });
     let request = Request::post("/api/v1/auth/login")
         .header(header::CONTENT_TYPE, "application/json")
-        .extension(ConnectInfo(format!("{peer}:4000").parse::<SocketAddr>().unwrap()))
+        .extension(ConnectInfo(SocketAddr::new(peer.parse::<IpAddr>().unwrap(), 4000)))
         .body(Body::from(body.to_string()))
         .unwrap();
     let (status, headers, body) = respond(app.clone(), request).await;
@@ -186,6 +186,19 @@ async fn a_sweep_from_one_origin_is_limited() {
     }
     assert_eq!(login(&app, "203.0.113.5", "sam", PASSWORD).await.0, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(login(&app, "198.51.100.7", "sam", PASSWORD).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn an_ipv6_sweep_is_limited_across_its_64() {
+    let (_temp, _db, app) = server().await;
+    for i in 0..20 {
+        let peer = format!("2001:db8:1:2::{i:x}");
+        let (status, _, _) = login(&app, &peer, &format!("user{i}"), "wrong").await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    let next = login(&app, "2001:db8:1:2:ffff:ffff:ffff:ffff", "sam", PASSWORD).await;
+    assert_eq!(next.0, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(login(&app, "2001:db8:1:3::1", "sam", PASSWORD).await.0, StatusCode::OK);
 }
 
 #[tokio::test]

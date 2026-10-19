@@ -38,19 +38,18 @@ pub async fn login(
     session::check_username(&username)?;
     device.validate()?;
 
-    let origin = origin.to_string();
     let attempt = state
         .db
         .write(move |tx| {
             let now = now_ms();
-            let wait = limits::wait_ms(tx, &username, &origin, now)?;
+            let wait = limits::wait_ms(tx, &username, origin, now)?;
             if wait > 0 {
                 // Not recorded: a write per refusal would let anyone keep the disk busy.
                 return Ok(Err(wait));
             }
             let account = account(tx, &username)?;
             let user = account.as_ref().map(|(id, _, _)| *id);
-            let id = limits::record(tx, &username, user, &origin, now)?;
+            let id = limits::record(tx, &username, user, origin, now)?;
             Ok(Ok((id, account)))
         })
         .await?;

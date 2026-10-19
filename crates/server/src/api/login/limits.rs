@@ -6,6 +6,8 @@
 //! limited exactly like a real one. A success clears the account's failures but not the
 //! origin's, so a sweep cannot reset its own count by signing into an account it holds.
 
+use std::net::{IpAddr, Ipv6Addr};
+
 use rusqlite::{Connection, params};
 
 /// Failures further back than this do not count.
@@ -21,7 +23,12 @@ const ACCOUNT_FREE: i64 = 5;
 const ORIGIN_FREE: i64 = 20;
 
 /// Milliseconds until `username` may try again from `origin`, or 0 if it may now.
-pub fn wait_ms(conn: &Connection, username: &str, origin: &str, now: i64) -> rusqlite::Result<i64> {
+pub fn wait_ms(
+    conn: &Connection,
+    username: &str,
+    origin: IpAddr,
+    now: i64,
+) -> rusqlite::Result<i64> {
     let since = now - WINDOW_MS;
     let account = conn
         .prepare_cached(
@@ -35,7 +42,7 @@ pub fn wait_ms(conn: &Connection, username: &str, origin: &str, now: i64) -> rus
             "SELECT count(*), max(at) FROM login_attempts \
              WHERE origin = ?1 AND succeeded = 0 AND at > ?2",
         )?
-        .query_row(params![origin, since], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        .query_row(params![origin_key(origin), since], |row| Ok((row.get(0)?, row.get(1)?)))?;
     Ok(wait(account, ACCOUNT_FREE, now).max(wait(origin, ORIGIN_FREE, now)))
 }
 
@@ -45,18 +52,28 @@ pub fn record(
     conn: &Connection,
     username: &str,
     user: Option<i64>,
-    origin: &str,
+    origin: IpAddr,
     now: i64,
 ) -> rusqlite::Result<i64> {
     conn.prepare_cached(
         "INSERT INTO login_attempts (at, username_attempted, user_id, origin, succeeded) \
          VALUES (?1, ?2, ?3, ?4, 0) RETURNING id",
     )?
-    .query_row(params![now, username, user, origin], |row| row.get(0))
+    .query_row(params![now, username, user, origin_key(origin)], |row| row.get(0))
 }
 
 pub fn succeeded(conn: &Connection, attempt: i64) -> rusqlite::Result<()> {
     conn.execute("UPDATE login_attempts SET succeeded = 1 WHERE id = ?1", [attempt]).map(drop)
+}
+
+/// What an origin's attempts are counted and stored under: an IPv4 address as itself, an
+/// IPv4-mapped IPv6 address as that IPv4 address, and any other IPv6 address as its /64, such
+/// as `2001:db8:1:2::/64`, since one client usually holds a whole /64.
+fn origin_key(origin: IpAddr) -> String {
+    match origin.to_canonical() {
+        IpAddr::V4(ip) => ip.to_string(),
+        IpAddr::V6(ip) => format!("{}/64", Ipv6Addr::from_bits(ip.to_bits() & (u128::MAX << 64))),
+    }
 }
 
 /// The wait after `failures`, the latest at `latest`: none for the first `free`, then 1 s,
@@ -83,5 +100,15 @@ mod tests {
     fn a_wait_runs_from_the_latest_failure() {
         assert_eq!(wait((6, Some(10_000)), 5, 10_500), 1500);
         assert_eq!(wait((6, Some(10_000)), 5, 12_000), 0);
+    }
+
+    #[test]
+    fn ipv6_origins_count_by_their_64() {
+        let key = |origin: &str| origin_key(origin.parse().unwrap());
+        assert_eq!(key("203.0.113.5"), "203.0.113.5");
+        assert_eq!(key("::ffff:203.0.113.5"), "203.0.113.5");
+        assert_eq!(key("2001:db8:1:2:3:4:5:6"), "2001:db8:1:2::/64");
+        assert_eq!(key("2001:db8:1:2::"), "2001:db8:1:2::/64");
+        assert_eq!(key("2001:db8:1:3::1"), "2001:db8:1:3::/64");
     }
 }
