@@ -9,6 +9,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::ConnectInfo;
+use axum::http::header::REFERRER_POLICY;
 use axum::routing::{get, post};
 use futures_util::stream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -16,6 +17,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep, timeout};
+use tower_http::services::ServeDir;
 
 use super::{BODY_READ_TIMEOUT, DRAIN_TIMEOUT, HEADER_READ_TIMEOUT, serve};
 
@@ -96,6 +98,39 @@ async fn handlers_are_told_the_client_address() {
     let response = response(stream).await;
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert!(response.ends_with(&format!("\r\n\r\n{client}")), "{response}");
+}
+
+// On real time: paused time could pass the 1 s limit while a file is read.
+#[tokio::test]
+async fn every_response_says_how_a_browser_may_use_it() {
+    let web = tempfile::tempdir().unwrap();
+    std::fs::write(web.path().join("robots.txt"), "robots").unwrap();
+    let app = routes()
+        .route("/own", get(|| async { ([(REFERRER_POLICY, "no-referrer")], "own") }))
+        .fallback_service(ServeDir::new(web.path()));
+    let (address, _stop, _server) = start(app).await;
+    let get = |path: &str| {
+        let request = format!("GET {path} HTTP/1.1\r\nHost: jewelcase\r\n\r\n");
+        async move { response(send(address, request.as_bytes()).await).await }
+    };
+    // A handler's answer, a file's, and a file's that is not there.
+    for (path, status) in
+        [("/", "200 OK"), ("/robots.txt", "200 OK"), ("/missing", "404 Not Found")]
+    {
+        let response = get(path).await;
+        assert!(response.starts_with(&format!("HTTP/1.1 {status}\r\n")), "{response}");
+        for header in [
+            "x-content-type-options: nosniff",
+            "content-security-policy: frame-ancestors 'self'",
+            "referrer-policy: same-origin",
+        ] {
+            assert!(response.contains(&format!("\r\n{header}\r\n")), "{path}: {response}");
+        }
+    }
+    // A handler may set its own.
+    let response = get("/own").await;
+    assert!(response.contains("\r\nreferrer-policy: no-referrer\r\n"), "{response}");
+    assert!(!response.contains("same-origin"), "{response}");
 }
 
 // On real time: paused time can jump past the 1 s limit while the kernel moves a megabyte.

@@ -2,6 +2,9 @@
 //! nothing, or stops partway through a request's header or body, loses its connection, so it
 //! cannot hold a file descriptor for long. The shutdown waits for requests in progress only up
 //! to a deadline.
+//!
+//! Every response tells a browser to take it as the type it says, to show it framed only by
+//! the server's own pages, and to tell other sites nothing of the page that linked to them.
 
 use std::io::ErrorKind;
 use std::net::SocketAddr;
@@ -10,8 +13,10 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::ConnectInfo;
-use axum::http::HeaderValue;
-use axum::http::header::CONNECTION;
+use axum::http::header::{
+    CONNECTION, CONTENT_SECURITY_POLICY, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS,
+};
+use axum::http::{HeaderName, HeaderValue};
 use hyper::server::conn::http1;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::service::TowerToHyperService;
@@ -45,12 +50,20 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(8);
 /// so that connection stays open until [`HEADER_READ_TIMEOUT`] passes with no next request. A
 /// connection upgraded to a WebSocket belongs to its handler, so it is not waited for.
 pub async fn serve(listener: TcpListener, app: Router, shutdown: impl Future<Output = ()>) {
-    // Not hyper's `keep_alive(false)`: that sets `Connection: close` on a WebSocket's `101`
-    // too, which then fails to upgrade.
-    let close = HeaderValue::from_static("close");
+    // Each is set only on a response whose handler has not set its own.
+    let header = |name: HeaderName, value: &'static str| {
+        SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value))
+    };
     let app = app
         .layer(RequestBodyTimeoutLayer::new(BODY_READ_TIMEOUT))
-        .layer(SetResponseHeaderLayer::if_not_present(CONNECTION, close));
+        // Not hyper's `keep_alive(false)`: that sets `Connection: close` on a WebSocket's `101`
+        // too, which then fails to upgrade.
+        .layer(header(CONNECTION, "close"))
+        .layer((
+            header(X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            header(CONTENT_SECURITY_POLICY, "frame-ancestors 'self'"),
+            header(REFERRER_POLICY, "same-origin"),
+        ));
     let mut http = http1::Builder::new();
     http.timer(TokioTimer::new()).header_read_timeout(HEADER_READ_TIMEOUT);
     let (stop, stopping) = watch::channel(());
