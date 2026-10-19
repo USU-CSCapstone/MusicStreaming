@@ -6162,7 +6162,7 @@ export interface operations {
                  *     (`requirements/artists.md` §3.3, `requirements/analytics.md` §4). An artist's top
                  *     tracks are `artistId` with `sort=top`.
                  */
-                sort?: "name" | "artist" | "album" | "dateAdded" | "playCount" | "lastPlayed" | "releaseDate" | "top";
+                sort?: "name" | "artist" | "album" | "dateAdded" | "playCount" | "lastPlayed" | "releaseDate" | "duration" | "top";
                 order?: components["parameters"]["Order"];
                 /** @description Only tracks on this album. */
                 albumId?: string;

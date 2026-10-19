@@ -37,6 +37,7 @@ enum TrackSort {
     Album,
     DateAdded,
     ReleaseDate,
+    Duration,
     // `playCount`, `lastPlayed`, and `top` wait for listening history, and answer `422` until
     // then.
 }
@@ -76,6 +77,11 @@ impl TrackSort {
                     "t.id",
                 ],
                 unknown: Unknown::Null,
+            },
+            TrackSort::Duration => &Sort {
+                label: "tracks.duration",
+                columns: &["t.duration_us", "t.id"],
+                unknown: Unknown::Never,
             },
         }
     }

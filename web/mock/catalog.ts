@@ -322,7 +322,8 @@ export class Catalog {
 			artist: ['t.artist_sort_key', 't.sort_key', 't.id'],
 			album: albumOrder,
 			dateAdded: ['t.added_at', 't.id'],
-			releaseDate: ['t.release_date', ...albumOrder]
+			releaseDate: ['t.release_date', ...albumOrder],
+			duration: ['t.duration_us', 't.id']
 		};
 		// top, playCount, and lastPlayed need listening data; album order stands in.
 		const sort = sorts[q.get('sort') ?? 'name'] ?? albumOrder;
