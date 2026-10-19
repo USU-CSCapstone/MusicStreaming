@@ -18,7 +18,7 @@ use lofty::tag::{ItemKey, Tag, TagType};
 use crate::governor::Governor;
 use crate::queue::Scanner;
 use crate::scan::{ScanContext, ScanOptions, run_scan};
-use crate::store::{MemoryStore, Store};
+use crate::store::{FeedEntry, MemoryStore, Store};
 use crate::types::*;
 
 // ───────────────────────────── Inspection ─────────────────────────────
@@ -49,8 +49,12 @@ pub trait InspectStore: Store {
     fn inspect_tracks(&self, library: &LibraryId) -> Vec<InspectTrack>;
     fn inspect_problems(&self, library: &LibraryId) -> Vec<Problem>;
     fn inspect_scans(&self, library: &LibraryId) -> Vec<Scan>;
-    /// Number of live change-feed rows. Only compared before and after.
-    fn feed_len(&self, library: &LibraryId) -> usize;
+    /// The change feed's head: the position of its latest entry, or zero when it is
+    /// empty. Every entry written raises it, so an unchanged head means nothing was
+    /// written, even to a feed that keeps one entry per item.
+    fn feed_head(&self, library: &LibraryId) -> i64;
+    /// The tracks named by feed entries after position `head`, oldest first.
+    fn feed_tracks_after(&self, library: &LibraryId, head: i64) -> Vec<TrackId>;
     /// The placeholder stored for the image with content `hash`.
     fn inspect_placeholder(&self, library: &LibraryId, hash: &[u8]) -> Option<Vec<u8>>;
 }
@@ -91,8 +95,22 @@ impl InspectStore for MemoryStore {
         self.scans(library)
     }
 
-    fn feed_len(&self, library: &LibraryId) -> usize {
-        self.feed(library).len()
+    fn feed_head(&self, library: &LibraryId) -> i64 {
+        // The memory feed only appends, so its length is its head.
+        i64::try_from(self.feed(library).len()).unwrap()
+    }
+
+    fn feed_tracks_after(&self, library: &LibraryId, head: i64) -> Vec<TrackId> {
+        self.feed(library)
+            .into_iter()
+            .skip(usize::try_from(head).unwrap())
+            .map(|entry| match entry {
+                FeedEntry::Added(id)
+                | FeedEntry::Updated(id)
+                | FeedEntry::Missing(id)
+                | FeedEntry::Returned(id) => id,
+            })
+            .collect()
     }
 }
 
@@ -246,8 +264,12 @@ pub fn cold_scan_then_incremental_is_all_unchanged<S: InspectStore>(make: Factor
     assert!(!utero.has_artwork, "no cover anywhere above In Utero");
     assert!(utero.has_biography, "biography inherited from the artist folder");
 
-    let feed_after_first = store.feed_len(&lib.id);
-    assert!(feed_after_first >= 5, "at least one feed row per track");
+    let mut announced = store.feed_tracks_after(&lib.id, 0);
+    announced.sort_unstable();
+    let mut ids: Vec<TrackId> = tracks.iter().map(|t| t.id).collect();
+    ids.sort_unstable();
+    assert_eq!(announced, ids, "one feed entry per track");
+    let head_after_first = store.feed_head(&lib.id);
 
     // Second scan: nothing opened, nothing changed.
     let second = scan_library(&store, &lib);
@@ -257,8 +279,8 @@ pub fn cold_scan_then_incremental_is_all_unchanged<S: InspectStore>(make: Factor
     assert_eq!(second.progress.added + second.progress.updated, 0);
     assert_eq!(second.progress.missing, 0);
     assert_eq!(
-        store.feed_len(&lib.id),
-        feed_after_first,
+        store.feed_head(&lib.id),
+        head_after_first,
         "an unchanged scan must not touch the feed"
     );
 }
@@ -327,6 +349,7 @@ pub fn missing_then_returned<S: InspectStore>(make: Factory<S>) {
     let p = root.join("A/X/02 - Track 2.wav");
     let bytes = fs::read(&p).unwrap();
     let meta = fs::metadata(&p).unwrap();
+    let head_before_missing = store.feed_head(&lib.id);
     fs::remove_file(&p).unwrap();
 
     let scan = scan_library(&store, &lib);
@@ -336,7 +359,12 @@ pub fn missing_then_returned<S: InspectStore>(make: Factory<S>) {
     assert_eq!(missing.len(), 1);
     assert!(missing[0].path.ends_with("02 - Track 2.wav"));
     let id = missing[0].id;
-    let feed_before_return = store.feed_len(&lib.id);
+    assert_eq!(
+        store.feed_tracks_after(&lib.id, head_before_missing),
+        vec![id],
+        "the loss is announced"
+    );
+    let head_before_return = store.feed_head(&lib.id);
 
     // The file comes back byte-identical with its old mtime: reconnects.
     fs::write(&p, &bytes).unwrap();
@@ -347,7 +375,12 @@ pub fn missing_then_returned<S: InspectStore>(make: Factory<S>) {
     let t = store.inspect_tracks(&lib.id).into_iter().find(|t| t.path == p).unwrap();
     assert!(!t.missing);
     assert_eq!(t.id, id);
-    assert!(store.feed_len(&lib.id) >= feed_before_return, "the return is announced");
+    assert_eq!(
+        store.feed_tracks_after(&lib.id, head_before_return),
+        vec![id],
+        "the return is announced"
+    );
+    assert!(store.feed_head(&lib.id) > head_before_return, "the head moves past the return");
 }
 
 pub fn unavailable_root_suspends_and_touches_nothing<S: InspectStore>(make: Factory<S>) {

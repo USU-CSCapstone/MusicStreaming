@@ -195,17 +195,34 @@ impl InspectStore for SqliteStore {
         self.scans(library.parse().unwrap()).unwrap()
     }
 
-    fn feed_len(&self, library: &LibraryId) -> usize {
+    fn feed_head(&self, library: &LibraryId) -> i64 {
         let lib: i64 = library.parse().unwrap();
         self.db()
             .read_blocking(move |conn| {
                 conn.query_row(
-                    "SELECT COUNT(*) FROM library_changes WHERE library_id = ?1",
+                    "SELECT ifnull(max(seq), 0) FROM library_changes WHERE library_id = ?1",
                     [lib],
-                    |r| r.get::<_, i64>(0),
+                    |r| r.get(0),
                 )
             })
-            .unwrap() as usize
+            .unwrap()
+    }
+
+    fn feed_tracks_after(&self, library: &LibraryId, head: i64) -> Vec<TrackId> {
+        let lib: i64 = library.parse().unwrap();
+        self.db()
+            .read_blocking(move |conn| {
+                conn.prepare(
+                    "SELECT entity_id FROM library_changes \
+                     WHERE library_id = ?1 AND entity_type = 'track' AND seq > ?2 ORDER BY seq",
+                )?
+                .query_map([lib, head], |r| r.get::<_, i64>(0))?
+                .collect::<Result<Vec<_>>>()
+            })
+            .unwrap()
+            .into_iter()
+            .map(|id| TrackId::try_from(id).unwrap())
+            .collect()
     }
 }
 
@@ -762,7 +779,7 @@ fn another_librarys_track_is_left_alone() {
         .unwrap();
     assert_eq!(unchanged, (5, false, None));
     assert_eq!(count(&store, "SELECT COUNT(*) FROM track_waveforms"), 1);
-    assert_eq!(store.feed_len(&other), 0);
+    assert_eq!(store.feed_head(&other), 0);
 }
 
 /// The cold-scan budget, store side only (`design/scanning.md` §15,
