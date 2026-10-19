@@ -213,6 +213,34 @@ async fn album_order_is_disc_then_number_with_unnumbered_tracks_last() {
 }
 
 #[tokio::test]
+async fn duration_order_breaks_ties_by_id() {
+    let (_temp, db, app) = app("");
+    db.write(|tx| {
+        fixture(tx)?;
+        tx.execute_batch(
+            "UPDATE tracks SET duration_us = CASE id
+                 WHEN 1001 THEN 259000000 WHEN 1002 THEN 182000000 WHEN 1003 THEN 23000000
+                 WHEN 1004 THEN 182000000 WHEN 1005 THEN 251000000 ELSE duration_us END;",
+        )
+    })
+    .await
+    .unwrap();
+    let base = "/api/v1/libraries/1/tracks?sort=duration";
+    for limit in [1, 2, 100] {
+        assert_eq!(
+            page_through(&app, base, limit, "title").await,
+            json!(["untitled", "Her Majesty", "Something", "Bonus", "Idioteque", "Come Together"]),
+            "limit {limit}"
+        );
+        assert_eq!(
+            page_through(&app, &format!("{base}&order=desc"), limit, "title").await,
+            json!(["Come Together", "Idioteque", "Bonus", "Something", "Her Majesty", "untitled"]),
+            "limit {limit}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn filters_by_artist_credit() {
     let (_temp, app) = app_with_fixture().await;
     let base = "/api/v1/libraries/1/tracks?sort=album";
@@ -327,7 +355,6 @@ async fn bad_parameters_are_validation_problems() {
     for query in [
         "limit=1001".to_owned(),
         "sort=top".to_owned(),
-        "sort=duration".to_owned(),
         "genre=30".to_owned(),
         format!("sort=releaseDate&cursor={album_cursor}"),
         format!("cursor={album_cursor}"),
@@ -367,7 +394,7 @@ async fn every_sort_reads_from_an_index() {
                     (SELECT sort_key FROM albums WHERE id = 1 + i % 2000),
                     1 + i % 2, CASE WHEN i % 13 = 0 THEN NULL ELSE i % 12 END,
                     CASE WHEN i % 6 = 0 THEN NULL ELSE printf('%04d', 1950 + i % 75) END,
-                    'flac', 'flac', 1, 44100, 2, 1, i, 0
+                    'flac', 'flac', 1, 44100, 2, (i * 7919) % 600000000, i, 0
              FROM n;
              ANALYZE;",
         )
@@ -381,6 +408,7 @@ async fn every_sort_reads_from_an_index() {
             TrackSort::Album,
             TrackSort::DateAdded,
             TrackSort::ReleaseDate,
+            TrackSort::Duration,
         ] {
             let source = source(1, None, None, ArtistCredit::Any);
             page::assert_indexed(conn, &source, sort.sort())?;
