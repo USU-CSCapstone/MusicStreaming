@@ -7,7 +7,8 @@
 use std::path::{Path, PathBuf};
 
 use jewelcase_plugins::{
-    Album, Api, Artist, Event, Grants, Host, Library, Permission, Playing, Track,
+    Album, Api, Artist, Event, Grants, Host, Library, Outcome, Permission, Play, PlayEnd, Playing,
+    Track,
 };
 
 /// The packed plugin. Panics, saying how to build it, when it is not built.
@@ -80,23 +81,28 @@ fn a_0_3_plugin_passes_only_the_0_3_install_check() {
     assert!(host.check(&bytes, Api::V0_2).is_err(), "0.2 has no playing event to hand it");
 }
 
-#[tokio::test]
-async fn a_start_reaches_the_plugin_as_playing() {
+/// User 1's grants of `permissions` to the plugin in library 1, with their token set.
+fn grants(permissions: &[Permission]) -> Grants {
     let mut grants = Grants {
         plugin: "listenbrainz".into(),
         library: 1,
         user: Some(1),
-        permissions: vec![Permission::LibraryRead, Permission::Playing],
+        permissions: permissions.to_vec(),
         destinations: vec!["api.listenbrainz.org".into()],
         rate_limits: Vec::new(),
         host_limits: Vec::new(),
         settings: Default::default(),
     };
     grants.settings.insert("token".into(), "a-token".into());
-    let track = Track {
+    grants
+}
+
+/// A track by `artists`, 200 s long.
+fn track(artists: &[&str]) -> Track {
+    Track {
         id: 1,
         title: "Signal".into(),
-        artists: vec!["Aurora Lane".into()],
+        artists: artists.iter().map(|a| a.to_string()).collect(),
         album: Some("Signal".into()),
         duration_ms: 200_000,
         album_id: 3,
@@ -107,10 +113,45 @@ async fn a_start_reaches_the_plugin_as_playing() {
         has_lyrics: false,
         root: 7,
         path: "Signal.flac".into(),
-    };
-    let event = Event::Playing(Playing { track, started_at: 1_790_942_400_000 });
-    let outcome = Host::new().unwrap().run(plugin(), Api::V0_3, grants, Empty, event).await;
+    }
+}
+
+/// Runs the plugin for user 1, granted `permissions`, on `event`.
+async fn run(permissions: &[Permission], event: Event) -> Outcome {
+    Host::new().unwrap().run(plugin(), Api::V0_3, grants(permissions), Empty, event).await
+}
+
+#[tokio::test]
+async fn a_start_reaches_the_plugin_as_playing() {
+    let event = Event::Playing(Playing { track: track(&["Aurora Lane"]), started_at: 1 });
+    let outcome = run(&[Permission::LibraryRead, Permission::Playing], event).await;
     // It got as far as sending it, which the network it was not granted refused.
     assert!(!outcome.ok);
     assert_eq!(outcome.summary, "the plugin reported an error: Network access was not granted");
+}
+
+#[tokio::test]
+async fn a_start_with_no_artist_is_not_sent() {
+    let event = Event::Playing(Playing { track: track(&[" "]), started_at: 1 });
+    let outcome = run(&[Permission::LibraryRead, Permission::Playing], event).await;
+    assert!(outcome.ok, "{}", outcome.summary);
+    assert_eq!(outcome.summary, "Nothing shown: the track has no usable title or artist.");
+}
+
+#[tokio::test]
+async fn plays_with_no_artist_are_counted_and_not_sent() {
+    let play = |artists: &[&str], listen_time_ms| Play {
+        track: track(artists),
+        started_at: 1_790_942_400_000,
+        listen_time_ms,
+        end: PlayEnd::Finished,
+    };
+    let plays = vec![play(&[], 200_000), play(&[""], 200_000), play(&["Aurora Lane"], 1_000)];
+    let outcome = run(&[Permission::LibraryRead, Permission::Played], Event::Played(plays)).await;
+    // Nothing was left to send, so the network it was not granted was never asked.
+    assert!(outcome.ok, "{}", outcome.summary);
+    assert_eq!(
+        outcome.summary,
+        "Sent 0 listens; 1 plays were too short to count, 2 had no usable title or artist."
+    );
 }

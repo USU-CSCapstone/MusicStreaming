@@ -5,9 +5,13 @@ own ListenBrainz token has their plays sent to their account as they end, once h
 track or four minutes was heard, as ListenBrainz asks. Where an admin also approves the
 optional `playing` hook, what they start is shown on their profile as playing now; that is
 never sent late, so one ListenBrainz turns away is not sent again. The token is checked with
-ListenBrainz as it is saved. A play ListenBrainz turns away is kept and sent again later. Its contract is
-[`crates/plugins/wit/plugin.wit`](../../crates/plugins/wit/plugin.wit), and `manifest.json`
-is what the Plugins page shows.
+ListenBrainz as it is saved. A play that can't be sent now, because ListenBrainz can't be
+reached, refuses the token, or asks to wait, is kept and sent again later. One it would refuse
+for good is left out and counted in the run's summary: a play with no title or artist, or one
+ListenBrainz turns away as invalid. ListenBrainz refuses a whole batch for one invalid play, so
+a refused batch is split in halves and sent again until only the plays it refuses are left out.
+Its contract is [`crates/plugins/wit/plugin.wit`](../../crates/plugins/wit/plugin.wit), and
+`manifest.json` is what the Plugins page shows.
 
 ```sh
 ./build.sh      # target/listenbrainz.wasm, with the manifest packed in (needs Node)

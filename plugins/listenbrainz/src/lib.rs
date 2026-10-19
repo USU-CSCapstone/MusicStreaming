@@ -5,7 +5,7 @@ pub mod listens;
 
 #[cfg(target_arch = "wasm32")]
 mod plugin {
-    use crate::listens::{self, Listen};
+    use crate::listens::{self, Delivery, Listen};
 
     wit_bindgen::generate!({ path: "../../crates/plugins/wit", world: "plugin" });
 
@@ -67,29 +67,32 @@ mod plugin {
         }
     }
 
+    /// Sends the plays that count as listens, leaving out those ListenBrainz would refuse, and
+    /// answers the run's summary. An error keeps the plays, to be delivered again.
     fn submit(plays: &[Play], token: &str) -> Result<String, String> {
-        let listens: Vec<Listen> = plays
+        let mut listens: Vec<Listen> = plays
             .iter()
             .filter(|p| listens::counts(p.track.duration_ms, p.listen_time_ms))
             .map(|p| listen(&p.track, p.started_at, p.listen_time_ms))
             .collect();
         let short = plays.len() - listens.len();
-        for batch in listens.chunks(listens::MAX_PER_SUBMISSION) {
+        listens.retain(listens::sendable);
+        let unnamed = plays.len() - short - listens.len();
+        let rejected = listens::submit(&listens, |batch| {
             let body = listens::submission(batch).to_string().into_bytes();
-            let (status, answer) = send(http::Method::Post, listens::SUBMIT_URL, token, body)?;
-            if status != 200 {
-                // Failing keeps the plays, so they are sent again once it works.
-                return Err(format!("ListenBrainz answered {status}: {}", answer.trim()));
-            }
-        }
-        Ok(format!("Sent {} listens; {short} plays were too short to count.", listens.len()))
+            send(http::Method::Post, listens::SUBMIT_URL, token, body)
+        })?;
+        Ok(Delivery { plays: plays.len(), short, unnamed, rejected }.summary())
     }
 
-    /// Tells ListenBrainz what is playing now. A failure is reported and not made up later:
-    /// the host never delivers a start late.
+    /// Tells ListenBrainz what is playing now, unless the track has no title or artist it would
+    /// take. A failure is reported and not made up later: the host never delivers a start late.
     fn announce(now: &Playing, token: &str) -> Result<String, String> {
-        let body = listens::playing_now(&listen(&now.track, now.started_at, 0));
-        let body = body.to_string().into_bytes();
+        let playing = listen(&now.track, now.started_at, 0);
+        if !listens::sendable(&playing) {
+            return Ok("Nothing shown: the track has no usable title or artist.".into());
+        }
+        let body = listens::playing_now(&playing).to_string().into_bytes();
         let (status, answer) = send(http::Method::Post, listens::SUBMIT_URL, token, body)?;
         if status != 200 {
             return Err(format!("ListenBrainz answered {status}: {}", answer.trim()));
