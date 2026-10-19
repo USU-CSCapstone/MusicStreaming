@@ -51,6 +51,7 @@ Every edit is immediate in the interface and reconciled afterward ([`general.md`
 - **Add and remove in bulk.** Selecting many tracks and adding or removing them is one action, and it either fully succeeds or fully fails — never half-applied.
 - **Reorder by dragging**, one track or many.
 - **Move non-contiguous selections together.** A user can select tracks scattered through a playlist — the 2nd, the 7th, the 12th — and move all of them to one new position in a single action, preserving their relative order. Selections do not have to be adjacent.
+- **Reordering happens in the playlist's own order.** While the playlist is shown sorted ([`conventions.md` §4.1](conventions.md#41-track-lists)), moving tracks is unavailable and the interface says why: a drop between two rows of a sort names no position in the arrangement. Removing and adding still work.
 - **Add from anywhere.** Any track, album, artist, or playlist encountered anywhere in the app can be added to a playlist, including to a new one created in the moment.
 - **Totals stay correct instantly.** After any edit, track count, duration, and artwork reflect the change immediately, with no visible refresh.
 - **Removals are recoverable.** Removing tracks, or deleting a playlist, can be undone — deleting a hundred-track playlist by mistake must not be final.
@@ -112,5 +113,6 @@ Note the deliberate asymmetry: Jewelcase **writes** playlist files on export but
 
 Beyond [`conventions.md`](conventions.md):
 
-- **Play and queue actions use the playlist's current order**, not a stored snapshot of it.
+- **Play and queue actions use the playlist's current order**, not a stored snapshot of it — sorted, when the playlist is shown sorted ([`conventions.md` §4.1](conventions.md#41-track-lists)).
+- **Date added is when the track was added to this playlist**, not to the library, and is a sort only playlists offer. It is the playlist's own history; when a file was scanned says nothing about it.
 - **Download is a standing instruction**, covering tracks added later while the download remains active ([`offline.md` §3](offline.md#3-what-can-be-downloaded)).
