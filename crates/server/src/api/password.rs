@@ -124,7 +124,8 @@ mod tests {
         let long = "correct horse battery staple ".repeat(10_000);
         let start = Instant::now();
         assert!(check_strength(&long, &[]).is_ok());
-        assert!(start.elapsed() < Duration::from_secs(1), "{:?}", start.elapsed());
+        // Well under a second when idle; the margin is for a loaded machine.
+        assert!(start.elapsed() < Duration::from_secs(10), "{:?}", start.elapsed());
     }
 
     #[tokio::test]

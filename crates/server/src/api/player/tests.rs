@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Body;
@@ -334,6 +334,12 @@ async fn one_accounts_place_failing_to_save_keeps_no_one_elses_from_saving() {
     assert_eq!(restarted(&db).await["positionMs"], json!(1000));
 }
 
+/// The furthest a report of playing from 1000 ms, sent at `reported`, can have got by now. The
+/// server subtracts whole-millisecond wall-clock times, which can count one more than has passed.
+fn furthest(reported: Instant) -> u64 {
+    1001 + u64::try_from(reported.elapsed().as_millis()).unwrap()
+}
+
 /// The next playback state `socket` is sent with `status`.
 async fn state_with(socket: &mut Socket, status: &str) -> Value {
     loop {
@@ -350,13 +356,14 @@ async fn losing_the_playing_connection_stops_playback_where_it_got_to() {
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
     next_of(&mut phone, "player").await; // As it was on connecting: stopped at nothing.
+    let reported = Instant::now();
     report(&mut desk, "1", "playing", json!({ "start": true })).await;
     desk.close(None).await.unwrap();
 
     let state = state_with(&mut phone, "stopped").await;
     assert_eq!((&state["activeDeviceId"], &state["trackId"]), (&json!(null), &json!("1")));
     let position = state["positionMs"].as_u64().unwrap();
-    assert!((1000..2000).contains(&position), "as far as it played: {position}");
+    assert!((1000..=furthest(reported)).contains(&position), "as far as it played: {position}");
     assert_eq!(player(&app, TOKEN).await, state);
 
     // Any device can carry on from there.
@@ -370,13 +377,15 @@ async fn a_connection_that_drops_played_until_it_dropped() {
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
     next_of(&mut phone, "player").await; // As it was on connecting: stopped at nothing.
+    let reported = Instant::now();
     report(&mut desk, "1", "playing", json!({ "start": true })).await;
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
     // Gone without a close frame, as when the network changes under it.
     drop(desk);
 
     let position = state_with(&mut phone, "stopped").await["positionMs"].as_u64().unwrap();
-    assert!((1500..2500).contains(&position), "not rewound to its last report: {position}");
+    let played = 1500..=furthest(reported);
+    assert!(played.contains(&position), "not rewound to its last report: {position}");
 }
 
 #[tokio::test]

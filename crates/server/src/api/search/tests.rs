@@ -1,10 +1,8 @@
-use std::time::Duration;
-
 use axum::Router;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use super::super::testing::{catalog, json, send};
+use super::super::testing::{catalog, eventually, json, send};
 use super::*;
 use crate::db::testing::{Track, library};
 
@@ -115,15 +113,12 @@ async fn the_index_follows_the_library() {
     .await
     .unwrap();
     // The search that notices the change answers from the old index while a new one builds.
-    for _ in 0..100 {
+    let body = eventually("the index catches up", async || {
         let (_, body) = json(&app, uri).await;
-        if body["sections"] != json!([]) {
-            assert_eq!(sections(&body), [("tracks".to_owned(), vec!["1007".to_owned()])]);
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("the index never caught up");
+        (body["sections"] != json!([])).then_some(body)
+    })
+    .await;
+    assert_eq!(sections(&body), [("tracks".to_owned(), vec!["1007".to_owned()])]);
 }
 
 #[tokio::test]

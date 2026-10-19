@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -148,6 +149,22 @@ pub async fn send_json(
 pub async fn json(app: &Router, uri: &str) -> (StatusCode, Value) {
     let (status, _, body) = send(app.clone(), "GET", uri).await;
     (status, serde_json::from_slice(&body).unwrap())
+}
+
+/// Polls `check` every 10 ms until it returns a value, panicking with `what` after 30 seconds:
+/// long enough for background work on a loaded machine, so only work that never happens fails.
+pub async fn eventually<T>(what: &str, mut check: impl AsyncFnMut() -> Option<T>) -> T {
+    let polled = async {
+        loop {
+            if let Some(found) = check().await {
+                return found;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(30), polled)
+        .await
+        .unwrap_or_else(|_| panic!("{what}: timed out after 30 s"))
 }
 
 /// `field` of every item in the list at `uri`, read a page of `limit` at a time.

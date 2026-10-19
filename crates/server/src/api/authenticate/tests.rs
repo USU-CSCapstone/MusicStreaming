@@ -1,11 +1,9 @@
-use std::time::Duration;
-
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use serde_json::{Value, json};
 
 use super::super::testing::{
-    add_device, app, app_before_setup, app_with_tracks, respond, send_json,
+    add_device, app, app_before_setup, app_with_tracks, eventually, respond, send_json,
 };
 use crate::db::testing::User;
 
@@ -170,13 +168,8 @@ async fn use_refreshes_when_a_device_was_last_seen() {
         StatusCode::OK
     );
     // The refresh happens beside the request, so it may land a moment later.
-    for _ in 0..100 {
-        if last_seen().await.unwrap() > 0 {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("last_seen_at was not refreshed");
+    eventually("last_seen_at refreshed", async || (last_seen().await.unwrap() > 0).then_some(()))
+        .await;
 }
 
 #[tokio::test]

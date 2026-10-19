@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use jewelcase_core::Format;
 use lofty::config::WriteOptions;
@@ -825,6 +825,8 @@ pub fn root_directory_reconciles_only_its_own_files<S: InspectStore>(make: Facto
     assert_eq!(live, [root.join("A/X/01 - Track 1.wav")]);
 }
 
+/// A scan interrupted mid-way resumes from its cursor when the scanner starts, and work that a
+/// queued scan already covers joins it instead of queuing again.
 pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
@@ -852,28 +854,45 @@ pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory
     store.update_scan(&interrupted_row);
 
     let governor = Arc::new(Governor::new());
-    let scanner = Scanner::start(store.clone(), lib.clone(), governor, ScanOptions::default());
+    let scanner =
+        Scanner::start(store.clone(), lib.clone(), governor.clone(), ScanOptions::default());
     scanner.wait_idle();
     let scans = store.inspect_scans(&lib.id);
     let resumed = scans.iter().find(|s| s.id == interrupted_row.id).unwrap();
     assert_eq!(resumed.state, ScanState::Completed);
     assert_eq!(resumed.progress.files_seen, 4, "{:?}", resumed.progress);
 
+    // A scan of "C", parked by the paused governor, holds what is requested after it in the queue.
+    governor.pause();
+    let held = scanner
+        .request(Trigger::Manual, vec![Scope::folder(&root, root.join("C"), Depth::Subtree)]);
+    wait_until_running(&scanner, held);
     let a = scanner
         .request(Trigger::Manual, vec![Scope::folder(&root, root.join("A"), Depth::Subtree)]);
     let b = scanner
         .request(Trigger::Manual, vec![Scope::folder(&root, root.join("A/X"), Depth::Directory)]);
     let all = scanner.scan_library(Trigger::Scheduled);
     let again = scanner.scan_library(Trigger::Manual);
-    assert_eq!(a, b, "a covered scope joins the existing scan");
+    assert_eq!(a, b, "a covered scope joins the queued scan");
     assert_eq!(all, again);
+    governor.resume();
     scanner.wait_idle();
     let final_scans = store.inspect_scans(&lib.id);
-    let a_scan = final_scans.iter().find(|s| s.id == a).unwrap();
-    assert!(matches!(a_scan.state, ScanState::Completed | ScanState::Cancelled));
-    assert_eq!(final_scans.iter().find(|s| s.id == all).unwrap().state, ScanState::Completed);
+    let state = |id| final_scans.iter().find(|s| s.id == id).unwrap().state;
+    assert_eq!(state(held), ScanState::Completed);
+    assert_eq!(state(a), ScanState::Cancelled, "the library scan replaced it");
+    assert_eq!(state(all), ScanState::Completed);
     assert_eq!(live(store.as_ref(), &lib).len(), 6);
     scanner.shutdown();
+}
+
+/// Blocks until `scanner` is running the scan `id`, failing the test after 30 seconds.
+fn wait_until_running(scanner: &Scanner, id: ScanId) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while scanner.running().map(|scan| scan.id) != Some(id) {
+        assert!(Instant::now() < deadline, "scan {id} never started");
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 
 /// Generate one `#[test]` per scenario against a store factory.

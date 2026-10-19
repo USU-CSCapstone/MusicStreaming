@@ -8,7 +8,7 @@ use tokio_tungstenite::tungstenite::{Error, Message};
 use super::super::session::COOKIE;
 use super::super::testing::socket::{Socket, connect, connect_with, next, next_of, serve};
 use super::super::testing::{
-    TOKEN, add_device, add_user, app, app_before_setup, json, respond, send, send_json,
+    TOKEN, add_device, add_user, app, app_before_setup, eventually, json, respond, send, send_json,
 };
 use super::{Hub, ServerMessage};
 use crate::db::testing::User;
@@ -67,14 +67,11 @@ async fn a_device_connects_says_hello_and_answers_pings() {
     socket.close(None).await.unwrap();
     while socket.next().await.is_some() {}
     // The server lets go of the connection just after it closes.
-    for _ in 0..100 {
+    eventually("disconnected after closing", async || {
         let (_, devices) = json(&app, "/api/v1/me/devices").await;
-        if devices["items"][0]["connected"] == json!(false) {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    panic!("still connected after closing");
+        (devices["items"][0]["connected"] == json!(false)).then_some(())
+    })
+    .await;
 }
 
 #[tokio::test]
