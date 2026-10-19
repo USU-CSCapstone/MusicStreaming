@@ -63,6 +63,11 @@ export function str(v: unknown): string | null {
 	return v === null || v === undefined ? null : String(v);
 }
 
+/** A sort key, stored as the UTF-8 bytes the scanner built it from. */
+export function sortKey(v: unknown): string {
+	return v instanceof Uint8Array ? new TextDecoder().decode(v) : String(v ?? '');
+}
+
 export function iso(ms: unknown): string {
 	return new Date(Number(ms)).toISOString();
 }

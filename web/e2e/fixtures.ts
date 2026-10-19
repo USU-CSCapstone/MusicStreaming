@@ -63,7 +63,8 @@ const track = (id: string, title: string, disc: number, n: number): TrackSummary
 	durationUs: 2_000_000,
 	explicit: false,
 	audio: { codec: 'pcm', lossless: true },
-	availability: 'available'
+	availability: 'available',
+	sortKeys: { title: title.toLowerCase(), artist: 'aurora lane', album: 'signal' }
 });
 
 export const tracks = [

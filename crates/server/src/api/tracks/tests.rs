@@ -275,6 +275,7 @@ async fn summaries_and_full_tracks() {
         "genres": [{ "id": "30", "name": "Rock" }], "explicit": true,
         "audio": { "codec": "flac", "lossless": true }, "availability": "available",
         "addedAt": "1970-01-01T00:00:01.001Z",
+        "sortKeys": { "title": "come together", "artist": "beatles", "album": "abbey road" },
     });
     let (_, page) = json(&app, "/api/v1/libraries/1/tracks?albumId=101&sort=album").await;
     assert_eq!(page["items"][0], summary);
@@ -299,6 +300,7 @@ async fn summaries_and_full_tracks() {
     assert_eq!(untagged["album"]["title"], Value::Null);
     assert_eq!(untagged["loudness"], Value::Null);
     assert_eq!(untagged["identifiers"], json!({ "isrc": null }));
+    assert_eq!(untagged["sortKeys"], json!({ "title": "untitled", "artist": "", "album": "" }));
 }
 
 #[tokio::test]

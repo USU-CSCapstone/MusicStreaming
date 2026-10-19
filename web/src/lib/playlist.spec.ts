@@ -12,7 +12,8 @@ const track = (n: number): TrackSummary => ({
 	durationUs: n * 1_000_000,
 	explicit: false,
 	audio: { codec: 'flac', lossless: true },
-	availability: 'available'
+	availability: 'available',
+	sortKeys: { title: `track ${n}`, artist: '', album: 'album' }
 });
 const item = (n: number): PlaylistItem => ({
 	track: track(n),
