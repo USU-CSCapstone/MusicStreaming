@@ -6,6 +6,7 @@
 //! same trait.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -65,6 +66,11 @@ impl Batch {
 #[error("store: {0}")]
 pub struct StoreError(pub String);
 
+/// The file a background decode opens, or why it cannot be. A store over real files refuses one
+/// reached through a symlink ([`crate::confine`]); [`MemoryStore`] hands back each path as
+/// recorded.
+pub type FileToDecode = io::Result<PathBuf>;
+
 /// Everything the scanner needs from persistence. Implementations are
 /// synchronous; the scanner calls them from its own blocking threads.
 pub trait Store: Send + Sync {
@@ -85,22 +91,22 @@ pub trait Store: Send + Sync {
     fn mark_missing_unseen(&self, library: &LibraryId, scope: &Scope, scan_id: ScanId) -> usize;
 
     // --- analysis ---
-    /// Tracks lacking results at `analyzer_version`, most useful first.
+    /// Tracks lacking results at `analyzer_version`, most useful first, each with its file.
     fn next_unanalyzed(
         &self,
         library: &LibraryId,
         analyzer_version: u32,
         limit: usize,
-    ) -> Vec<(TrackId, PathBuf)>;
+    ) -> Vec<(TrackId, FileToDecode)>;
     fn store_analysis(&self, library: &LibraryId, track_id: TrackId, result: AnalysisResult);
 
     // --- placeholders ---
-    /// Images with no placeholder yet, by content hash, with a file to decode each from.
+    /// Images with no placeholder yet, by content hash, each with a file to decode it from.
     fn next_without_placeholder(
         &self,
         library: &LibraryId,
         limit: usize,
-    ) -> Vec<(Vec<u8>, PathBuf)>;
+    ) -> Vec<(Vec<u8>, FileToDecode)>;
     /// Stores the placeholder of the image with content `hash`. Empty means it could not be
     /// decoded, so it is not tried again until its content changes.
     fn store_placeholder(&self, library: &LibraryId, hash: &[u8], placeholder: Vec<u8>);
@@ -327,7 +333,7 @@ impl Store for MemoryStore {
         library: &LibraryId,
         analyzer_version: u32,
         limit: usize,
-    ) -> Vec<(TrackId, PathBuf)> {
+    ) -> Vec<(TrackId, FileToDecode)> {
         let inner = self.inner.lock().unwrap();
         let Some(lib) = inner.libraries.get(library) else {
             return Vec::new();
@@ -338,7 +344,7 @@ impl Store for MemoryStore {
                 !t.missing
                     && t.analysis.as_ref().is_none_or(|a| a.analyzer_version < analyzer_version)
             })
-            .map(|(id, t)| (*id, t.record.path.clone()))
+            .map(|(id, t)| (*id, Ok(t.record.path.clone())))
             .take(limit)
             .collect()
     }
@@ -355,7 +361,7 @@ impl Store for MemoryStore {
         &self,
         library: &LibraryId,
         limit: usize,
-    ) -> Vec<(Vec<u8>, PathBuf)> {
+    ) -> Vec<(Vec<u8>, FileToDecode)> {
         let inner = self.inner.lock().unwrap();
         let Some(lib) = inner.libraries.get(library) else {
             return Vec::new();
@@ -373,7 +379,7 @@ impl Store for MemoryStore {
                 artwork.into_iter().chain(artist)
             })
             .filter(|(hash, _)| !lib.placeholders.contains_key(*hash) && seen.insert(*hash))
-            .map(|(hash, path)| (hash.clone(), path.clone()))
+            .map(|(hash, path)| (hash.clone(), Ok(path.clone())))
             .take(limit)
             .collect()
     }

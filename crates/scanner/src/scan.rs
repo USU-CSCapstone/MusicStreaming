@@ -5,6 +5,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use jewelcase_core::sort::sort_key;
 
+use crate::confine::without_links;
 use crate::discover::{
     Candidate, Directory, RootUnavailable, Walk, WalkItem, check_root, compile_excludes,
 };
@@ -95,6 +96,21 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
         // What the store has actually seen, to fall back to if a flush fails.
         let mut persisted = (scan.cursor.clone(), scan.progress.clone());
 
+        // A scope reached through a symlink below the root, as the watcher or a plugin may
+        // name one, is skipped whole: nothing is walked and nothing reconciled. One that no
+        // longer exists is walked, so what was under it is marked missing.
+        if scope.path.exists()
+            && let Err(error) = without_links(&scope.root, &scope.path)
+        {
+            batch.problems.push(problems::from_io(&scope.path, &error));
+            scan.progress.problems += 1;
+            scan.cursor = Some(Cursor { scope_index: scope_index + 1, after_directory: None });
+            if !flush(ctx, scan, &mut batch, &mut persisted) {
+                return;
+            }
+            continue;
+        }
+
         let walk = Walk::new(&scope, &excludes, resume_after.as_deref());
         for item in walk {
             ctx.governor.wait_if_paused();
@@ -179,6 +195,8 @@ fn flush(
     true
 }
 
+/// Runs every audio candidate in `dir` through stages 2 to 5 into `batch`, and records a
+/// problem for each symlink the walk skipped.
 fn process_directory(
     ctx: &ScanContext<'_>,
     scan: &mut Scan,
@@ -187,6 +205,10 @@ fn process_directory(
     sidecars: &mut SidecarResolver,
     batch: &mut Batch,
 ) {
+    for link in &dir.skipped_links {
+        scan.progress.problems += 1;
+        batch.problems.push(problems::from_io(&link.path, &link.error));
+    }
     sidecars.offer_listing(&dir.path, &dir.files);
     let mut resolved = None;
 

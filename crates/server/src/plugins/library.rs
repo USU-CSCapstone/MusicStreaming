@@ -7,7 +7,7 @@ use std::sync::Arc;
 use jewelcase_plugins::{Album, Artist, Library, Track};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use crate::db::{Database, DbError};
+use crate::db::{Database, DbError, libraries};
 
 pub struct RunLibrary {
     db: Arc<Database>,
@@ -220,13 +220,8 @@ impl Library for RunLibrary {
 
     async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
         self.read(|conn, library| {
-            conn.prepare_cached(
-                "SELECT id, path FROM library_roots WHERE library_id = ?1 AND removed_at IS NULL",
-            )?
-            .query_map([library], |row| {
-                Ok((row.get::<_, i64>(0)? as u64, PathBuf::from(row.get::<_, String>(1)?)))
-            })?
-            .collect()
+            let roots = libraries::roots(conn, library)?;
+            Ok(roots.into_iter().map(|root| (root.id as u64, root.path)).collect())
         })
         .await
     }

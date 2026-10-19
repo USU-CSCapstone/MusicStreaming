@@ -11,6 +11,8 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::Semaphore;
 
+use crate::db::libraries::LibraryFile;
+
 /// A resize that takes longer than this is killed: the image is broken or the host is stuck.
 /// Since it may be the host, a timeout is not remembered the way a failure is.
 const RENDER_TIMEOUT: Duration = Duration::from_secs(30);
@@ -33,9 +35,14 @@ impl Images {
         Images { cache, ffmpeg, renders: Semaphore::new(cores), next_temp: AtomicU64::new(0) }
     }
 
-    /// The resized copy of the image with content `hash` at `size`, from the file at `source`,
-    /// resizing it first if it is not cached yet.
-    pub async fn resized(&self, hash: &[u8], size: u32, source: &Path) -> anyhow::Result<PathBuf> {
+    /// The resized copy of the image with content `hash` at `size`, from the file `source`,
+    /// resizing it first if it is not cached yet. A source reached through a symlink is refused.
+    pub async fn resized(
+        &self,
+        hash: &[u8],
+        size: u32,
+        source: LibraryFile,
+    ) -> anyhow::Result<PathBuf> {
         anyhow::ensure!(!hash.is_empty(), "the image has no content hash");
         let hex: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
         // Split by the first byte, so no one directory holds every image.
@@ -50,10 +57,11 @@ impl Images {
         if made(&path, &failed).await? {
             return Ok(path);
         }
-        // A missing file is not a broken image: its drive may be back soon.
-        anyhow::ensure!(tokio::fs::try_exists(source).await?, "the image's file is missing");
+        // Checked now, since a file can become a symlink after the scan saw it. A missing file is
+        // not a broken image, since its drive may be back soon, so neither failure is remembered.
+        let source = tokio::task::spawn_blocking(move || source.resolve()).await??;
         tokio::fs::create_dir_all(&dir).await?;
-        let output = self.render(size, source).await?;
+        let output = self.render(size, &source).await?;
         if !output.status.success() || output.stdout.is_empty() {
             // Only an ffmpeg that ran to the end and refused the file is remembered. One killed by
             // a signal, such as the kernel reclaiming memory, may succeed next time.

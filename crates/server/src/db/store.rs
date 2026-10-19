@@ -13,7 +13,7 @@ mod scans;
 mod tracks;
 mod upsert;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use jewelcase_scanner::store::{Batch, IndexedFile, Store, StoreError};
@@ -115,7 +115,7 @@ impl Store for SqliteStore {
         library: &LibraryId,
         analyzer_version: u32,
         limit: usize,
-    ) -> Vec<(TrackId, PathBuf)> {
+    ) -> Vec<(TrackId, FileToDecode)> {
         let Some(lib) = Self::lib(library) else {
             return Vec::new();
         };
@@ -134,7 +134,7 @@ impl Store for SqliteStore {
         &self,
         library: &LibraryId,
         limit: usize,
-    ) -> Vec<(Vec<u8>, PathBuf)> {
+    ) -> Vec<(Vec<u8>, FileToDecode)> {
         let Some(lib) = Self::lib(library) else {
             return Vec::new();
         };

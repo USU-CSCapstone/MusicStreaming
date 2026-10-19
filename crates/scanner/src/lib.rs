@@ -9,8 +9,10 @@
 //! [`queue`] coalesces triggers into scans, [`triggers`] feeds the queue from
 //! the filesystem watcher and the schedule, [`governor`] pauses everything
 //! when listeners need the host, and [`analysis`] is the one decode pass.
+//! [`confine`] refuses paths through symlinks, which are never followed.
 
 pub mod analysis;
+pub mod confine;
 pub mod discover;
 pub mod duplicates;
 pub mod governor;
@@ -30,5 +32,5 @@ pub mod types;
 
 pub use governor::Governor;
 pub use queue::Scanner;
-pub use store::{Batch, IndexedFile, IndexedLyrics, MemoryStore, Store, StoreError};
+pub use store::{Batch, FileToDecode, IndexedFile, IndexedLyrics, MemoryStore, Store, StoreError};
 pub use types::*;

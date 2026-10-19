@@ -41,12 +41,18 @@ impl Placeholders {
     pub fn run_once(&self, library: &LibraryId, limit: usize) -> usize {
         let images = self.store.next_without_placeholder(library, limit);
         for (hash, path) in &images {
-            let placeholder = self.placeholder(path).unwrap_or_else(|error| {
-                // Stored empty, so a broken image is not decoded on every pass. New content
-                // is a new image, which gets a new try.
-                tracing::warn!(path = %path.display(), %error, "cannot make an image placeholder");
-                Vec::new()
-            });
+            // Stored empty, so a broken image is not decoded on every pass. New content is a
+            // new image, which gets a new try.
+            let placeholder = match path {
+                Ok(path) => self.placeholder(path).unwrap_or_else(|error| {
+                    tracing::warn!(path = %path.display(), %error, "cannot make an image placeholder");
+                    Vec::new()
+                }),
+                Err(error) => {
+                    tracing::warn!(%error, "cannot open an image to make its placeholder");
+                    Vec::new()
+                }
+            };
             self.store.store_placeholder(library, hash, placeholder);
         }
         images.len()

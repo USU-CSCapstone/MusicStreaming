@@ -8,7 +8,8 @@ use crate::db::testing::{Image, library};
 
 /// Library 1 holds image 1, a 300×200 `cover.png`; image 2, a 64×64 picture embedded in
 /// `song.mp3`; image 3, a `broken.png` that is not an image; and image 5, recorded with no
-/// content hash. Library 2 holds image 4.
+/// content hash; and image 6, a `linked.png` that links to library 2's cover. Library 2 holds
+/// image 4.
 async fn app_with_images() -> (tempfile::TempDir, Router) {
     let (temp, db, app) = app("");
     let (music, other) = (temp.path().join("music"), temp.path().join("other"));
@@ -40,6 +41,7 @@ async fn app_with_images() -> (tempfile::TempDir, Router) {
     ]);
     std::fs::write(music.join("broken.png"), b"not an image").unwrap();
     std::fs::copy(cover, other.join("cover.png")).unwrap();
+    std::os::unix::fs::symlink(other.join("cover.png"), music.join("linked.png")).unwrap();
     db.write(move |tx| {
         library(tx, 1, "Music", music)?;
         library(tx, 2, "Other", other)?;
@@ -48,7 +50,8 @@ async fn app_with_images() -> (tempfile::TempDir, Router) {
         Image::new(2, 1, "song.mp3").insert(tx)?;
         Image { hash: vec![3], ..Image::new(3, 1, "broken.png") }.insert(tx)?;
         Image::new(4, 2, "cover.png").insert(tx)?;
-        Image { hash: Vec::new(), ..Image::new(5, 1, "cover.png") }.insert(tx)
+        Image { hash: Vec::new(), ..Image::new(5, 1, "cover.png") }.insert(tx)?;
+        Image { hash: vec![6], ..Image::new(6, 1, "linked.png") }.insert(tx)
     })
     .await
     .unwrap();
@@ -156,4 +159,12 @@ async fn a_missing_file_is_tried_again() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     std::fs::rename(&spare, &cover).unwrap();
     assert_eq!(dimensions(&app, uri).await, (64, 43));
+}
+
+#[tokio::test]
+async fn a_link_out_of_the_library_is_not_rendered() {
+    let (temp, app) = app_with_images().await;
+    let (status, _, _) = send(app, "GET", "/api/v1/libraries/1/images/6").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(!temp.path().join("cache/06").exists(), "nothing rendered or remembered");
 }

@@ -130,10 +130,21 @@ impl Analyzer {
     }
 
     /// Analyze up to `limit` tracks that need it. Returns what happened;
-    /// zero analyzed and zero failed means the queue is empty.
+    /// zero analyzed and zero failed means the queue is empty. A track whose
+    /// file cannot be opened or analyzed gets a failed result, so it is not
+    /// retried every pass.
     pub fn run_once(&self, library: &LibraryId, limit: usize) -> RunReport {
         let mut report = RunReport::default();
         for (track_id, path) in self.store.next_unanalyzed(library, ANALYZER_VERSION, limit) {
+            let path = match path {
+                Ok(path) => path,
+                Err(error) => {
+                    tracing::warn!(track_id, %error, "analysis skipped: the file cannot be opened");
+                    self.store.store_analysis(library, track_id, failed_placeholder());
+                    report.failed += 1;
+                    continue;
+                }
+            };
             match self.analyze_file(&path) {
                 Ok(result) => {
                     self.store.store_analysis(library, track_id, result);

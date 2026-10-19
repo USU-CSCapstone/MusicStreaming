@@ -3,7 +3,6 @@
 
 mod cache;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -18,7 +17,7 @@ pub use cache::Images;
 
 use super::extract::{Path, Query};
 use super::{Code, Id, Problem};
-use crate::db::Database;
+use crate::db::{Database, libraries};
 
 /// The sizes images are resized to, as the longest edge in pixels. A request rounds up to the
 /// next one, so a handful of cached copies serves every display.
@@ -42,23 +41,25 @@ pub async fn get(
         _ => None,
     }
     .ok_or_else(|| Problem::invalid("size must be from 16 to 4096"))?;
-    let (hash, root, path) = db
+    let (hash, source) = db
         .read(move |conn| {
-            conn.prepare_cached(
-                "SELECT i.hash, r.path, i.path \
-                 FROM images i JOIN library_roots r ON r.id = i.root_id \
-                 WHERE i.library_id = ?1 AND i.id = ?2",
-            )?
-            .query_row([library, image], |row| {
-                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
-            })
-            .optional()
+            let row = conn
+                .prepare_cached(
+                    "SELECT hash, root_id, path FROM images WHERE library_id = ?1 AND id = ?2",
+                )?
+                .query_row([library, image], |row| {
+                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?))
+                })
+                .optional()?;
+            let Some((hash, root, path)) = row else {
+                return Ok(None);
+            };
+            Ok(libraries::file(conn, library, root, &path)?.map(|file| (hash, file)))
         })
         .await?
         .ok_or_else(Problem::not_found)?;
 
-    let source = PathBuf::from(root).join(path);
-    let resized = images.resized(&hash, size, &source).await.map_err(|error| {
+    let resized = images.resized(&hash, size, source).await.map_err(|error| {
         // The cause stays in the log: it names a path on the host.
         tracing::warn!(%error, image, "cannot resize an image");
         Problem::new(Code::Internal)

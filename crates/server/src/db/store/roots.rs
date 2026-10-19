@@ -27,10 +27,16 @@ impl Roots {
         self.0.read().unwrap().get(&library)?.iter().find(|r| r.path == root).map(|r| r.id)
     }
 
+    /// The absolute path of `rel` under root `root_id` of `library`, if it is one of its active
+    /// roots. Symlinks are not checked.
     pub fn absolute(&self, library: i64, root_id: i64, rel: &str) -> Option<PathBuf> {
+        Some(join(&self.root(library, root_id)?, rel))
+    }
+
+    /// The path of root `root_id` of `library`, if it is one of its active roots.
+    pub fn root(&self, library: i64, root_id: i64) -> Option<PathBuf> {
         let roots = self.0.read().unwrap();
-        let root = roots.get(&library)?.iter().find(|r| r.id == root_id)?;
-        Some(join(&root.path, rel))
+        roots.get(&library)?.iter().find(|r| r.id == root_id).map(|r| r.path.clone())
     }
 }
 

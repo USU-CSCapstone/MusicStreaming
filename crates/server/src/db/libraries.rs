@@ -1,8 +1,10 @@
-//! Library rows and their roots, as the scanner needs them.
+//! Library rows and their roots, as the scanner needs them, and where a library's files are.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 use jewelcase_scanner::LibraryConfig;
+use jewelcase_scanner::confine::without_links;
 use rusqlite::Error::FromSqlConversionFailure;
 use rusqlite::types::Type;
 use rusqlite::{Connection, Result, params};
@@ -66,6 +68,7 @@ pub fn all(conn: &Connection) -> Result<Vec<LibraryRow>> {
     Ok(out)
 }
 
+/// The library's active roots: every path into the library is resolved against these.
 pub fn roots(conn: &Connection, library_id: i64) -> Result<Vec<Root>> {
     let mut stmt = conn.prepare_cached(
         "SELECT id, path FROM library_roots WHERE library_id = ?1 AND removed_at IS NULL ORDER BY path",
@@ -74,6 +77,33 @@ pub fn roots(conn: &Connection, library_id: i64) -> Result<Vec<Root>> {
         Ok(Root { id: r.get(0)?, path: PathBuf::from(r.get::<_, String>(1)?) })
     })?;
     rows.collect()
+}
+
+/// A track's or image's file where its row places it: under one of its library's active roots,
+/// and refused before it is opened if a symlink leads there (`requirements/scanning.md` §5).
+pub struct LibraryFile {
+    root: PathBuf,
+    path: PathBuf,
+}
+
+impl LibraryFile {
+    /// The file's real path. `NotFound` when it is missing or reached through a symlink. Touches
+    /// the filesystem, so call it off the async threads and the database's.
+    pub fn resolve(&self) -> io::Result<PathBuf> {
+        without_links(&self.root, &self.path)
+    }
+}
+
+/// The file at `rel` under root `root_id` of `library`, or `None` when that root is not one of
+/// the library's active roots.
+pub fn file(
+    conn: &Connection,
+    library: i64,
+    root_id: i64,
+    rel: &str,
+) -> Result<Option<LibraryFile>> {
+    let root = roots(conn, library)?.into_iter().find(|r| r.id == root_id);
+    Ok(root.map(|root| LibraryFile { path: root.path.join(rel), root: root.path }))
 }
 
 /// Create a library with its roots, and return its id: `id` if given (for tests and imports),

@@ -4,8 +4,7 @@
 //! original cannot answer, a lower quality or a codec the client cannot play, needs a transcode,
 //! and answers `422` until transcoding is built.
 
-use std::io::ErrorKind;
-use std::path::PathBuf;
+use std::io;
 use std::sync::Arc;
 
 use axum::Json;
@@ -20,7 +19,7 @@ use tower_http::services::ServeFile;
 use super::extract::{Path, Query};
 use super::tracks::{LOUDNESS, Loudness, loudness};
 use super::{Code, Id, Problem};
-use crate::db::Database;
+use crate::db::{Database, libraries};
 
 /// The one variant there is: the file as it is on disk.
 const ORIGINAL: &str = "original";
@@ -137,33 +136,32 @@ pub async fn audio(
     if query.variant != ORIGINAL {
         return Err(Problem::not_found());
     }
-    let (root, path, container) = db
+    let (file, container) = db
         .read(move |conn| {
-            conn.prepare_cached(
-                "SELECT r.path, t.path, t.container \
-                 FROM tracks t JOIN library_roots r ON r.id = t.root_id \
-                 WHERE t.library_id = ?1 AND t.id = ?2 AND t.missing_since IS NULL",
-            )?
-            .query_row([library, track], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
-            })
-            .optional()
+            let row = conn
+                .prepare_cached(
+                    "SELECT root_id, path, container FROM tracks \
+                     WHERE library_id = ?1 AND id = ?2 AND missing_since IS NULL",
+                )?
+                .query_row([library, track], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+                })
+                .optional()?;
+            let Some((root, path, container)) = row else {
+                return Ok(None);
+            };
+            Ok(libraries::file(conn, library, root, &path)?.map(|file| (file, container)))
         })
         .await?
         .ok_or_else(Problem::not_found)?;
 
+    // Checked on every request, since a file can become a symlink after the scan saw it.
+    let path = tokio::task::spawn_blocking(move || file.resolve())
+        .await
+        .map_err(|_| Problem::new(Code::Internal))?
+        .map_err(unreadable)?;
     // ServeFile answers ranges, `HEAD`, and the conditional headers, streaming from disk.
-    let response = ServeFile::new(PathBuf::from(root).join(path)).try_call(request).await.map_err(
-        |error| match error.kind() {
-            // The file has gone since the last scan saw it.
-            ErrorKind::NotFound => Problem::not_found(),
-            _ => {
-                // The cause stays in the log: it names a path on the host.
-                tracing::error!(%error, "cannot read a track's file");
-                Problem::new(Code::Internal)
-            }
-        },
-    )?;
+    let response = ServeFile::new(path).try_call(request).await.map_err(unreadable)?;
     let mut response = response.map(Body::new);
     // ServeFile guesses the type from the extension; the probe read it from the content.
     if response.status().is_success() {
@@ -172,6 +170,17 @@ pub async fn audio(
             .insert(header::CONTENT_TYPE, HeaderValue::from_static(mime(&container)));
     }
     Ok(response)
+}
+
+/// The answer for a track's file that cannot be read. One gone since the last scan saw it, or
+/// reached through a symlink, is not found. Otherwise the cause stays in the log, since it
+/// names a path on the host.
+fn unreadable(error: io::Error) -> Problem {
+    if error.kind() == io::ErrorKind::NotFound {
+        return Problem::not_found();
+    }
+    tracing::error!(%error, "cannot read a track's file");
+    Problem::new(Code::Internal)
 }
 
 /// The media type for a container, named as `Format::container_name` names it.

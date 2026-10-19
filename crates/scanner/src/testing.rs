@@ -440,6 +440,65 @@ pub fn bad_file_is_a_problem_that_clears<S: InspectStore>(make: Factory<S>) {
     assert!(store.inspect_problems(&lib.id).is_empty());
 }
 
+pub fn a_symlink_is_a_problem<S: InspectStore>(make: Factory<S>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    make_album(&root, "A", "X", 1);
+    let outside = tmp.path().join("outside.wav");
+    write_small_wav(&outside);
+    let link = root.join("A/X/linked.wav");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let store = make(&root);
+    let lib = library(&root);
+
+    let scan = scan_library(&store, &lib);
+    assert_eq!(scan.progress.added, 1, "only the regular file");
+    assert_eq!(scan.progress.problems, 1);
+    let problems = store.inspect_problems(&lib.id);
+    assert_eq!(problems.len(), 1);
+    assert_eq!(problems[0].path, link);
+    assert_eq!(problems[0].detail, "symlinks are not followed");
+}
+
+pub fn a_scope_through_a_folder_link_walks_nothing<S: InspectStore>(make: Factory<S>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    make_album(&root, "A", "X", 1);
+    // Another library's folder, linked into this one, as the watcher or a plugin may name it.
+    make_album(&tmp.path().join("other"), "B", "Y", 1);
+    let link = root.join("linked");
+    std::os::unix::fs::symlink(tmp.path().join("other/B"), &link).unwrap();
+    let store = make(&root);
+    let lib = library(&root);
+
+    let scope = Scope::folder(&root, &link, Depth::Subtree);
+    let scan = scan_once(&store, &lib, Trigger::Watch, vec![scope]);
+    assert_eq!(scan.progress.files_seen, 0);
+    assert_eq!(scan.progress.problems, 1);
+    let problems = store.inspect_problems(&lib.id);
+    assert_eq!(problems.len(), 1);
+    assert_eq!(problems[0].path, link);
+    assert!(live(&store, &lib).is_empty());
+}
+
+pub fn a_scope_naming_a_deleted_folder_reconciles<S: InspectStore>(make: Factory<S>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    make_album(&root, "A", "X", 2);
+    make_album(&root, "B", "Y", 1);
+    let store = make(&root);
+    let lib = library(&root);
+    scan_library(&store, &lib);
+    fs::remove_dir_all(root.join("A/X")).unwrap();
+
+    let scope = Scope::folder(&root, root.join("A/X"), Depth::Subtree);
+    let scan = scan_once(&store, &lib, Trigger::Watch, vec![scope]);
+    assert_eq!(scan.progress.missing, 2);
+    assert_eq!(live(&store, &lib).len(), 1);
+    let problems = store.inspect_problems(&lib.id);
+    assert!(!problems.iter().any(|p| p.detail == "symlinks are not followed"), "{problems:?}");
+}
+
 pub fn untagged_file_is_named_after_itself<S: InspectStore>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
@@ -574,7 +633,13 @@ pub fn placeholders_fill_once_per_image<S: InspectStore + 'static>(make: Factory
     let pending = store.next_without_placeholder(&lib.id, 10);
     assert_eq!(pending.len(), 2, "one per distinct image: {pending:?}");
     let red =
-        pending.iter().find(|(_, path)| *path == cover).map(|(hash, _)| hash.clone()).unwrap();
+        // Compared by its end: a store may hand back the real path, which differs from `cover`
+        // when the temporary directory is reached through a link.
+        pending
+            .iter()
+            .find(|(_, path)| path.as_ref().unwrap().ends_with("A/X/cover.png"))
+            .map(|(hash, _)| hash.clone())
+            .unwrap();
     let broken = pending.iter().find(|(hash, _)| *hash != red).unwrap().0.clone();
 
     let ffmpeg = jewelcase_ffmpeg::Ffmpeg::new(jewelcase_ffmpeg::Config::default());
@@ -734,6 +799,18 @@ macro_rules! store_suite {
         #[test]
         fn bad_file_is_a_problem_that_clears() {
             $crate::testing::bad_file_is_a_problem_that_clears($make);
+        }
+        #[test]
+        fn a_symlink_is_a_problem() {
+            $crate::testing::a_symlink_is_a_problem($make);
+        }
+        #[test]
+        fn a_scope_through_a_folder_link_walks_nothing() {
+            $crate::testing::a_scope_through_a_folder_link_walks_nothing($make);
+        }
+        #[test]
+        fn a_scope_naming_a_deleted_folder_reconciles() {
+            $crate::testing::a_scope_naming_a_deleted_folder_reconciles($make);
         }
         #[test]
         fn untagged_file_is_named_after_itself() {

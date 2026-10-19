@@ -6,6 +6,7 @@ use tower::ServiceExt;
 
 use super::super::testing::{app, owner_request, send};
 use super::*;
+use crate::db::libraries;
 use crate::db::testing::{Album, Track, library};
 
 const AUDIO: &[u8] = b"0123456789";
@@ -162,4 +163,60 @@ async fn only_the_callers_library_is_reachable() {
         assert_eq!(content_type.as_deref(), Some("application/problem+json"), "{uri}");
         assert_eq!(json(&body)["code"], "not_found", "{uri}");
     }
+}
+
+#[tokio::test]
+async fn a_file_reached_through_a_link_is_not_served() {
+    use std::os::unix::fs::symlink;
+    let (temp, db, app) = app("");
+    let dir = |name| temp.path().join(name);
+    // Library 1's root is itself reached through a link, which is allowed.
+    let (stored, music, more, other) = (dir("stored"), dir("music"), dir("more"), dir("other"));
+    for dir in [&stored, &more, &other] {
+        std::fs::create_dir(dir).unwrap();
+    }
+    symlink(&stored, &music).unwrap();
+    std::fs::write(music.join("a.m4a"), AUDIO).unwrap();
+    std::fs::write(more.join("b.m4a"), AUDIO).unwrap();
+    std::fs::write(other.join("c.m4a"), b"library two").unwrap();
+    std::fs::write(temp.path().join("secret.txt"), b"no library").unwrap();
+    // Links to library 1's second root and into library 2.
+    symlink(more.join("b.m4a"), music.join("second-root.m4a")).unwrap();
+    symlink(other.join("c.m4a"), music.join("cross.m4a")).unwrap();
+    db.write(move |tx| {
+        library(tx, 1, "Music", music)?;
+        library(tx, 2, "Other", other)?;
+        Album::new(101, 1).insert(tx)?;
+        for (id, path) in [(1, "a.m4a"), (2, "second-root.m4a"), (3, "cross.m4a")] {
+            Track { path: path.into(), container: "mp4", ..Track::new(id, 1, 101) }.insert(tx)?;
+        }
+        // Added after the tracks, which go on the library's only root.
+        libraries::add_root(tx, 1, &more).map(drop)
+    })
+    .await
+    .unwrap();
+    let uri = |id| format!("/api/v1/libraries/1/tracks/{id}/audio?variant=original");
+    let (status, _, body) = send(app.clone(), "GET", &uri(1)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, AUDIO);
+
+    // Track 1 replaced by a link out of the library after the scan saw it.
+    let a = temp.path().join("music/a.m4a");
+    std::fs::remove_file(&a).unwrap();
+    symlink(temp.path().join("secret.txt"), &a).unwrap();
+    for id in [1, 2, 3] {
+        let (status, _, body) = send(app.clone(), "GET", &uri(id)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "track {id}");
+        assert_eq!(json(&body)["code"], "not_found", "track {id}");
+    }
+}
+
+#[tokio::test]
+async fn a_removed_root_is_not_served() {
+    let (temp, app) = app_with_fixture().await;
+    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    conn.execute("UPDATE library_roots SET removed_at = 1 WHERE library_id = 1", []).unwrap();
+    let (status, _, _) =
+        send(app, "GET", "/api/v1/libraries/1/tracks/1/audio?variant=original").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

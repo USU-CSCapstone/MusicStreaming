@@ -1,45 +1,34 @@
 //! The background jobs' queues and results: loudness and waveform analysis, and image
 //! placeholders. Each queue is the rows still without a result.
 
-use std::path::PathBuf;
-
-use jewelcase_scanner::{AnalysisResult, TrackId};
+use jewelcase_scanner::confine::without_links;
+use jewelcase_scanner::{AnalysisResult, FileToDecode, TrackId};
 use rusqlite::{OptionalExtension, params};
 
 use super::SqliteStore;
+use super::roots::{Roots, join};
 use crate::db::catalog;
 use crate::db::feed::{self, Entity, Op};
 use crate::db::{DbError, now_ms};
 
+/// Tracks of `lib` without results at `analyzer_version`, newest first, each with its file.
 pub fn next_unanalyzed(
     store: &SqliteStore,
     lib: i64,
     analyzer_version: u32,
     limit: usize,
-) -> Result<Vec<(TrackId, PathBuf)>, DbError> {
-    let roots = store.roots.clone();
-    store.db.read_blocking(move |conn| {
-        let mut stmt = conn.prepare_cached(
+) -> Result<Vec<(TrackId, FileToDecode)>, DbError> {
+    let found = store.db.read_blocking(move |conn| {
+        conn.prepare_cached(
             "SELECT id, root_id, path FROM tracks WHERE library_id = ?1 AND missing_since IS NULL \
              AND (analyzer_version IS NULL OR analyzer_version < ?2) ORDER BY added_at DESC, id LIMIT ?3",
-        )?;
-        let rows =
-            stmt.query_map(params![lib, analyzer_version as i64, limit as i64], |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, String>(2)?,
-                ))
-            })?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (id, root_id, rel) = row?;
-            if let Some(path) = roots.absolute(lib, root_id, &rel) {
-                out.push((id as u64, path));
-            }
-        }
-        Ok(out)
-    })
+        )?
+        .query_map(params![lib, analyzer_version as i64, limit as i64], |r| {
+            Ok((r.get::<_, i64>(0)? as TrackId, r.get(1)?, r.get(2)?))
+        })?
+        .collect()
+    })?;
+    Ok(files(&store.roots, lib, found))
 }
 
 pub fn store_analysis(
@@ -84,29 +73,35 @@ pub fn store_analysis(
     })
 }
 
+/// Images of `lib` without a placeholder, by content hash, each with its file.
 pub fn next_without_placeholder(
     store: &SqliteStore,
     lib: i64,
     limit: usize,
-) -> Result<Vec<(Vec<u8>, PathBuf)>, DbError> {
-    let roots = store.roots.clone();
-    store.db.read_blocking(move |conn| {
-        let mut stmt = conn.prepare_cached(
+) -> Result<Vec<(Vec<u8>, FileToDecode)>, DbError> {
+    let found = store.db.read_blocking(move |conn| {
+        conn.prepare_cached(
             "SELECT hash, root_id, path FROM images \
              WHERE library_id = ?1 AND placeholder IS NULL LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![lib, limit as i64], |r| {
-            Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?))
-        })?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (hash, root_id, rel) = row?;
-            if let Some(path) = roots.absolute(lib, root_id, &rel) {
-                out.push((hash, path));
-            }
-        }
-        Ok(out)
-    })
+        )?
+        .query_map(params![lib, limit as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect()
+    })?;
+    Ok(files(&store.roots, lib, found))
+}
+
+/// Each of `found`, a key with a root ID and a path relative to it, with its file: refused when
+/// reached through a symlink, since a decode opens it long after the scan saw it. A row whose
+/// root is no longer active is left out.
+fn files<K>(roots: &Roots, lib: i64, found: Vec<(K, i64, String)>) -> Vec<(K, FileToDecode)> {
+    found
+        .into_iter()
+        .filter_map(|(key, root_id, rel)| {
+            let root = roots.root(lib, root_id)?;
+            let file = without_links(&root, &join(&root, &rel));
+            Some((key, file))
+        })
+        .collect()
 }
 
 pub fn store_placeholder(

@@ -5,6 +5,9 @@
 //! last directory finished". Each yielded directory carries its audio
 //! candidates (extension-filtered, stat'ed) and its full filename list, which
 //! the sidecar resolver reuses so no directory is listed twice.
+//!
+//! Symlinks are never followed ([`crate::confine`]), so the walk needs no loop
+//! detection. Each link it lists is reported as a problem instead, unless excluded.
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -16,6 +19,7 @@ use std::path::{Path, PathBuf};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use jewelcase_core::Format;
 
+use crate::confine::not_followed;
 use crate::types::{Depth, Scope, system_time_ms};
 
 /// An audio candidate: passed the extension filter, not yet opened.
@@ -27,16 +31,18 @@ pub struct Candidate {
 }
 
 /// One directory's listing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Directory {
     pub path: PathBuf,
     pub candidates: Vec<Candidate>,
     /// Every regular file's name, sorted. For sidecar and lyrics lookup.
     pub files: BTreeSet<OsString>,
+    /// The symlinks in it, which the walk does not follow.
+    pub skipped_links: Vec<WalkError>,
 }
 
-/// A directory that could not be listed. Reported as a problem on the
-/// directory path; the walk continues.
+/// A directory that could not be listed, or a symlink the walk does not
+/// follow. Reported as a problem on its path; the walk continues.
 #[derive(Debug)]
 pub struct WalkError {
     pub path: PathBuf,
@@ -164,6 +170,7 @@ impl Iterator for Walk<'_> {
             let mut subdirs = Vec::new();
             let mut files = BTreeSet::new();
             let mut candidates = Vec::new();
+            let mut skipped_links = Vec::new();
             for entry in entries {
                 let Ok(entry) = entry else { continue };
                 let path = entry.path();
@@ -173,16 +180,12 @@ impl Iterator for Walk<'_> {
                     if self.scope.depth == Depth::Subtree && !self.excluded(&path) {
                         subdirs.push(path);
                     }
-                } else if file_type.is_file() || file_type.is_symlink() {
-                    // Follow symlinked files by stat'ing the target.
-                    let meta = if file_type.is_symlink() {
-                        match fs::metadata(&path) {
-                            Ok(m) if m.is_file() => m,
-                            _ => continue,
-                        }
-                    } else {
-                        meta
-                    };
+                } else if file_type.is_symlink() {
+                    // Excluded content is never indexed, so its links are not reported.
+                    if !self.excluded(&path) {
+                        skipped_links.push(WalkError { path, error: not_followed() });
+                    }
+                } else if file_type.is_file() {
                     files.insert(entry.file_name());
                     if is_candidate(&path) && !self.excluded(&path) {
                         candidates.push(Candidate {
@@ -202,7 +205,12 @@ impl Iterator for Walk<'_> {
                 continue;
             }
             candidates.sort_by(|a, b| a.path.cmp(&b.path));
-            return Some(WalkItem::Directory(Directory { path: dir, candidates, files }));
+            return Some(WalkItem::Directory(Directory {
+                path: dir,
+                candidates,
+                files,
+                skipped_links,
+            }));
         }
     }
 }
@@ -294,6 +302,89 @@ mod tests {
         let scope = Scope::folder(root, root.join("a"), Depth::Directory);
         let none = compile_excludes(&[]).unwrap();
         assert_eq!(dirs(&scope, &none, None), vec![root.join("a")]);
+    }
+
+    /// Every directory a walk of `scope` lists.
+    fn listings(scope: &Scope, excludes: &GlobSet) -> Vec<Directory> {
+        Walk::new(scope, excludes, None)
+            .filter_map(|i| match i {
+                WalkItem::Directory(d) => Some(d),
+                WalkItem::Error(_) => None,
+            })
+            .collect()
+    }
+
+    /// The links each listed directory skipped, sorted.
+    fn skipped(listed: &[Directory]) -> Vec<Vec<PathBuf>> {
+        listed
+            .iter()
+            .map(|d| {
+                let mut paths: Vec<PathBuf> =
+                    d.skipped_links.iter().map(|s| s.path.clone()).collect();
+                paths.sort();
+                paths
+            })
+            .collect()
+    }
+
+    #[test]
+    fn links_are_skipped() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let (music, more) = (tmp.path().join("music"), tmp.path().join("more"));
+        touch(&music.join("A/01.flac"));
+        touch(&more.join("B/02.flac"));
+        touch(&tmp.path().join("other/C/03.flac"));
+        touch(&tmp.path().join("secret.txt"));
+        // Within the root, to another root of the library, to another library, out of every
+        // library, and a loop back to the root.
+        symlink(music.join("A/01.flac"), music.join("A/same-root.flac")).unwrap();
+        symlink(more.join("B/02.flac"), music.join("A/other-root.flac")).unwrap();
+        symlink(tmp.path().join("other/C/03.flac"), music.join("A/other-library.flac")).unwrap();
+        symlink(tmp.path().join("secret.txt"), music.join("A/01.lrc")).unwrap();
+        symlink(&music, music.join("loop")).unwrap();
+
+        let listed = listings(&Scope::root(&music), &compile_excludes(&[]).unwrap());
+        let paths: Vec<&Path> = listed.iter().map(|d| d.path.as_path()).collect();
+        assert_eq!(paths, [music.as_path(), &music.join("A")], "the loop is not descended");
+        assert_eq!(listed[1].candidates.len(), 1);
+        assert_eq!(listed[1].files, BTreeSet::from([OsString::from("01.flac")]));
+        let a = |name| music.join("A").join(name);
+        assert_eq!(
+            skipped(&listed),
+            [
+                vec![music.join("loop")],
+                vec![
+                    a("01.lrc"),
+                    a("other-library.flac"),
+                    a("other-root.flac"),
+                    a("same-root.flac")
+                ]
+            ]
+        );
+    }
+
+    #[test]
+    fn a_root_reached_through_a_link_is_walked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (real, music) = (tmp.path().join("real"), tmp.path().join("music"));
+        touch(&real.join("A/01.flac"));
+        std::os::unix::fs::symlink(&real, &music).unwrap();
+        let listed = listings(&Scope::root(&music), &compile_excludes(&[]).unwrap());
+        assert_eq!(listed[1].candidates[0].path, music.join("A/01.flac"));
+    }
+
+    #[test]
+    fn an_excluded_link_is_not_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("music");
+        touch(&root.join("a/1.flac"));
+        touch(&tmp.path().join("secret.flac"));
+        std::os::unix::fs::symlink(tmp.path().join("secret.flac"), root.join("a/skip.flac"))
+            .unwrap();
+        let listed =
+            listings(&Scope::root(&root), &compile_excludes(&["a/skip.flac".into()]).unwrap());
+        assert!(skipped(&listed).iter().all(Vec::is_empty));
     }
 
     #[test]

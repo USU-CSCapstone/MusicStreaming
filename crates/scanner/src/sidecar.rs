@@ -3,9 +3,10 @@
 //!
 //! The filenames are a public contract plugins write against. They are
 //! constants here and nowhere else. Resolution is per directory and memoized
-//! for the life of a scan; the walk never escapes the library root. Sidecar
-//! files are read here, once per directory: image headers and hashes for the
-//! `images` table, biography text, and lyric files per track.
+//! for the life of a scan; the upward walk stops at the scan's root, and a
+//! symlinked sidecar is never read ([`crate::confine`]). Sidecar files are
+//! read here, once per directory: image headers and hashes for the `images`
+//! table, biography text, and lyric files per track.
 
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
@@ -152,8 +153,10 @@ impl SidecarResolver {
     }
 }
 
+/// The whole file at `path`, if it is a non-empty regular file, not a symlink, no larger than
+/// [`MAX_SIDECAR_BYTES`].
 fn read_bytes(path: &Path) -> Option<Vec<u8>> {
-    let meta = fs::metadata(path).ok()?;
+    let meta = fs::symlink_metadata(path).ok()?;
     if !meta.is_file() || meta.len() == 0 || meta.len() > MAX_SIDECAR_BYTES {
         return None;
     }
@@ -272,6 +275,27 @@ mod tests {
         let b = SidecarResolver::lyrics_for(&dir.join("02 - Other.flac"), &files).unwrap();
         assert!(!b.lyrics.synced);
         assert_eq!(SidecarResolver::lyrics_for(&dir.join("03.flac"), &files), None);
+    }
+
+    #[test]
+    fn symlinked_sidecars_are_not_read() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("lib");
+        touch(&root.join("A/01.flac"), b"x");
+        touch(&root.join("bio.txt"), b"A band.");
+        touch(&root.join("words.lrc"), b"[00:01.00]words");
+        touch(&root.join("cover.png"), PNG);
+        symlink(root.join("bio.txt"), root.join("A/artist.txt")).unwrap();
+        symlink(root.join("words.lrc"), root.join("A/01.lrc")).unwrap();
+        symlink(root.join("cover.png"), root.join("A/cover.png")).unwrap();
+        let files: BTreeSet<OsString> = ["01.flac", "01.lrc"].map(OsString::from).into();
+
+        let mut r = SidecarResolver::new(&root);
+        let found = r.resolve(&root.join("A"));
+        assert_eq!(found.biography, None);
+        assert_eq!(found.cover.unwrap().path, root.join("cover.png"), "the real one above");
+        assert_eq!(SidecarResolver::lyrics_for(&root.join("A/01.flac"), &files), None);
     }
 
     #[test]

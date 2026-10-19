@@ -96,6 +96,7 @@ Both time-synchronized and plain-text lyrics are read ([`tracks.md` §5](tracks.
 - **Scans are interruptible and resumable**, surviving restarts without starting over.
 - **Scanning yields to listening.** Under contention, serving listeners wins.
 - **Progress is visible** — what is being scanned, how far along, what it found, what it had trouble with.
+- **Symlinks are never followed.** A symlinked file or folder in a library is reported as a problem, and nothing behind it is indexed, read, or served — a link could otherwise lead outside the library's roots and breach the isolation boundary ([`general.md` §3.6](general.md#36-libraries-are-the-isolation-boundary)). A library's root may itself be reached through a link.
 
 ---
 
