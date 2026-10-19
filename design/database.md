@@ -87,6 +87,8 @@ Sorting by play count pages through `personal_stats` first, then continues throu
 
 **Every connection must enable `PRAGMA foreign_keys = ON`.** SQLite leaves foreign keys off by default, and §2 depends on them.
 
+Migrations are the exception: they run with foreign keys off, because rebuilding a parent table with them on deletes or clears every reference to it. Each migration commits only if `PRAGMA foreign_key_check` finds no broken reference anywhere in the database. A rebuild creates the new table, copies the rows, drops the old one and renames the new one into place, then recreates the old table's indexes and the triggers that write into it.
+
 **Foreign keys on large tables are indexed.** Deleting a parent row checks every table referencing it, and an unindexed child column means a full scan per deleted row — deleting 200 images took 1.25 s scanning albums and artists, and 1 ms with `image_id` indexed. Small account tables skip the index, since scanning dozens of rows costs nothing.
 
 ---
