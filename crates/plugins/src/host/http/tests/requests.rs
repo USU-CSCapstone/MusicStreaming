@@ -39,11 +39,11 @@ async fn needs_the_network_and_an_approved_destination() {
 }
 
 #[tokio::test]
-async fn a_chain_of_five_redirects_is_refused() {
+async fn a_chain_of_six_redirects_is_refused() {
     let (port, hits) = server().await;
     let mut run = run();
-    assert_eq!(body(&mut run, port, "/hops/4").await, "hello");
-    let failed = run.send(get(format!("http://127.0.0.1:{port}/hops/5"))).await.unwrap_err();
+    assert_eq!(body(&mut run, port, "/hops/5").await, "hello");
+    let failed = run.send(get(format!("http://127.0.0.1:{port}/hops/6"))).await.unwrap_err();
     assert!(matches!(failed, Error::Failed(_)), "{failed:?}");
     assert_eq!(hits.lock().unwrap()["/hops/0"], 1, "the end of the chain is never asked");
 }

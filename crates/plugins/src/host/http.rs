@@ -36,7 +36,8 @@ impl<L: Library> Run<L> {
         }
         let destinations = self.grants.destinations.clone();
         let redirects = reqwest::redirect::Policy::custom(move |attempt| {
-            if attempt.previous().len() >= MAX_REDIRECTS {
+            // The first of `previous` is where the request started, not a redirect.
+            if attempt.previous().len() > MAX_REDIRECTS {
                 return attempt.error("it redirected too many times");
             }
             match rules::allowed(attempt.url().as_str(), &destinations) {
