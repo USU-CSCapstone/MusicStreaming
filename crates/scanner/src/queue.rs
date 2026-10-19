@@ -137,6 +137,13 @@ impl Scanner {
         self.inner.library.read().unwrap().roots.iter().find(|r| path.starts_with(r)).cloned()
     }
 
+    /// Whether the index holds a track not yet missing, or a problem, under `folder`, which
+    /// may no longer exist.
+    pub fn indexes_under(&self, folder: &std::path::Path) -> bool {
+        let library = self.inner.library.read().unwrap().id.clone();
+        self.inner.store.indexes_under(&library, folder)
+    }
+
     /// Replace the library configuration and reconcile
     /// (`requirements/scanning.md` §7).
     pub fn reconfigure(&self, library: LibraryConfig) -> ScanId {
@@ -235,16 +242,24 @@ fn worker(inner: Arc<Inner>) {
     }
 }
 
-/// Drop scopes covered by other scopes in the same request.
+/// Drop scopes covered by other scopes in the same request, returning the rest sorted by root
+/// and path.
 fn coalesce_scopes(mut scopes: Vec<Scope>) -> Vec<Scope> {
-    scopes.dedup();
+    // Paths order by component, so everything a Subtree scope covers sorts directly after it,
+    // with a Subtree scope placed before a Directory scope at the same path. Whatever covers a
+    // scope is therefore the last one kept before it.
+    scopes.sort_by(|a, b| {
+        (&a.root, &a.path, a.depth != Depth::Subtree).cmp(&(
+            &b.root,
+            &b.path,
+            b.depth != Depth::Subtree,
+        ))
+    });
     let mut out: Vec<Scope> = Vec::new();
     for s in scopes {
-        if out.iter().any(|o| o.covers(&s)) {
-            continue;
+        if !out.last().is_some_and(|last| last.covers(&s)) {
+            out.push(s);
         }
-        out.retain(|o| !s.covers(o));
-        out.push(s);
     }
     out
 }
@@ -266,6 +281,33 @@ mod tests {
             vec![a.clone(), c.clone()]
         );
         assert_eq!(coalesce_scopes(vec![a, c, all.clone()]), vec![all]);
+    }
+
+    /// Sorting keeps a Subtree scope next to all it covers: a sibling such as `a b`, which sorts
+    /// between `a` and `a/b` as text, a Directory scope at the same path, and another root.
+    #[test]
+    fn scopes_coalesce_in_any_order() {
+        let (m, n) = (PathBuf::from("/m"), PathBuf::from("/n"));
+        let scope = |root: &PathBuf, path: &str, depth| Scope::folder(root, path, depth);
+        let a = scope(&m, "/m/a", Depth::Subtree);
+        let a_dir = scope(&m, "/m/a", Depth::Directory);
+        let a_b = scope(&m, "/m/a/b", Depth::Subtree);
+        let sibling = scope(&m, "/m/a b", Depth::Directory);
+        let other_root = scope(&n, "/n/a/b", Depth::Directory);
+        let c = scope(&m, "/m/c", Depth::Directory);
+        assert_eq!(
+            coalesce_scopes(vec![
+                c.clone(),
+                a_b.clone(),
+                sibling.clone(),
+                other_root.clone(),
+                a_dir.clone(),
+                a.clone(),
+                c.clone(),
+                a_b
+            ]),
+            [a, sibling, c, other_root]
+        );
     }
 
     #[test]

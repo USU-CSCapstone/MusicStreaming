@@ -89,10 +89,11 @@ impl Scope {
         }
     }
 
-    /// Whether `path` is a file this scope visits.
+    /// Whether `path` is a file this scope visits: one under its folder, or for a Directory
+    /// scope directly in it. The folder itself is not one.
     pub fn contains_file(&self, path: &Path) -> bool {
         match self.depth {
-            Depth::Subtree => path.starts_with(&self.path),
+            Depth::Subtree => path != self.path && path.starts_with(&self.path),
             Depth::Directory => path.parent() == Some(self.path.as_path()),
         }
     }

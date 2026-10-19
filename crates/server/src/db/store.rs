@@ -116,6 +116,21 @@ impl Store for SqliteStore {
         logged("mark_missing_unseen", marked, 0)
     }
 
+    fn indexes_under(&self, library: &LibraryId, folder: &Path) -> bool {
+        let Some(lib) = Self::lib(library) else {
+            return false;
+        };
+        // On an error the watcher scans the folder anyway, which costs only a walk.
+        logged("indexes_under", tracks::indexes_under(self, lib, folder), true)
+    }
+
+    fn problems_under(&self, library: &LibraryId, scope: &Scope) -> Vec<PathBuf> {
+        let Some(lib) = Self::lib(library) else {
+            return Vec::new();
+        };
+        logged("problems_under", problems::under(self, lib, scope), Vec::new())
+    }
+
     fn next_unanalyzed(
         &self,
         library: &LibraryId,

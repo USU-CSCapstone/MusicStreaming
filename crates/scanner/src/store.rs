@@ -45,7 +45,9 @@ pub struct Batch {
     /// Missing tracks whose files are back unchanged: clear the mark and touch.
     pub returned: Vec<TrackId>,
     pub problems: Vec<Problem>,
-    /// Paths that scanned successfully: clear any problems recorded for them.
+    /// Paths that scanned or listed successfully, or no longer exist: clear any problems
+    /// recorded for them. Applied before `problems`, so a path in both keeps the problem this
+    /// batch records.
     pub cleared: Vec<PathBuf>,
     /// Paths a background job has just opened: clear a problem saying they could not be
     /// ([`crate::problems::UNOPENED`]), and leave any other.
@@ -61,8 +63,10 @@ impl Batch {
         self.upserts.len() + self.touched.len() + self.returned.len() + self.problems.len()
     }
 
+    /// Whether applying the batch would change nothing. Paths to clear or mark opened count,
+    /// though not toward [`Batch::len`], which sizes a batch by the tracks and problems it writes.
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.len() == 0 && self.cleared.is_empty() && self.opened.is_empty()
     }
 }
 
@@ -122,6 +126,11 @@ pub trait Store: Send + Sync {
         scan_id: ScanId,
         unreadable: &[PathBuf],
     ) -> usize;
+    /// The paths with a recorded problem that `scope` reaches: under it, or for a Directory
+    /// scope directly in it ([`Scope::contains_file`]).
+    fn problems_under(&self, library: &LibraryId, scope: &Scope) -> Vec<PathBuf>;
+    /// Whether a track not yet missing, or a problem, lies under `folder`, at any depth.
+    fn indexes_under(&self, library: &LibraryId, folder: &Path) -> bool;
 
     // --- analysis ---
     /// Tracks lacking results at `analyzer_version`, most useful first, each with its file.
@@ -372,6 +381,24 @@ impl Store for MemoryStore {
             }
         }
         count
+    }
+
+    fn problems_under(&self, library: &LibraryId, scope: &Scope) -> Vec<PathBuf> {
+        let inner = self.inner.lock().unwrap();
+        let Some(lib) = inner.libraries.get(library) else {
+            return Vec::new();
+        };
+        lib.problems.keys().filter(|path| scope.contains_file(path)).cloned().collect()
+    }
+
+    fn indexes_under(&self, library: &LibraryId, folder: &Path) -> bool {
+        let inner = self.inner.lock().unwrap();
+        let Some(lib) = inner.libraries.get(library) else {
+            return false;
+        };
+        let under = |path: &Path| path != folder && path.starts_with(folder);
+        lib.tracks.values().any(|t| !t.missing && under(&t.record.path))
+            || lib.problems.keys().any(|path| under(path))
     }
 
     fn next_unanalyzed(

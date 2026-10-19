@@ -49,6 +49,15 @@ pub fn relative(root: &Path, path: &Path) -> String {
         .join("/")
 }
 
+/// The bounds of the relative paths under the folder `rel`, for `path >= lower AND path < upper`,
+/// or `None` for the root, under which every path lies. Under BINARY collation the paths that
+/// start with `{rel}/` are exactly those from it up to `{rel}0`, `0` being the character after
+/// `/`: a range on the `(root_id, path)` indexes, with no pattern characters in folder names to
+/// widen or narrow it.
+pub fn bounds_under(rel: &str) -> Option<[String; 2]> {
+    (!rel.is_empty()).then(|| [format!("{rel}/"), format!("{rel}0")])
+}
+
 pub fn join(root: &Path, rel: &str) -> PathBuf {
     if rel.is_empty() { root.to_path_buf() } else { root.join(rel) }
 }

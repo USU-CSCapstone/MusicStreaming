@@ -38,6 +38,12 @@ impl<F: Fn() + Send + Sync> Store for Hooked<F> {
     ) -> usize {
         self.inner.mark_missing_unseen(library, scope, scan_id, unreadable)
     }
+    fn problems_under(&self, library: &LibraryId, scope: &Scope) -> Vec<PathBuf> {
+        self.inner.problems_under(library, scope)
+    }
+    fn indexes_under(&self, library: &LibraryId, folder: &Path) -> bool {
+        self.inner.indexes_under(library, folder)
+    }
     fn next_unanalyzed(
         &self,
         library: &LibraryId,

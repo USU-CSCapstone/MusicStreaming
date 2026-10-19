@@ -77,7 +77,7 @@ CREATE TABLE scan_problem_groups (
     UNIQUE (library_id, id)
 ) STRICT;
 
--- One row per path with a problem; cleared when the path scans cleanly.
+-- One row per path with a problem; cleared when the path scans or lists cleanly, or is gone.
 CREATE TABLE scan_problems (
     library_id INTEGER NOT NULL,
     group_id   INTEGER NOT NULL,

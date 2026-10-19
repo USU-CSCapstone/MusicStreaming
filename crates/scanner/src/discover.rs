@@ -11,7 +11,8 @@
 //!
 //! A directory or entry the walk cannot read is reported too, and remembered in
 //! [`Walk::unreadable`] so reconcile leaves what is indexed under it alone. One that no
-//! longer exists is gone rather than unreadable.
+//! longer exists is gone rather than unreadable, and lists as empty without a problem, so
+//! reconcile marks what was under it missing.
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -188,10 +189,11 @@ impl Iterator for Walk<'_> {
             }
             let entries = match fs::read_dir(&dir) {
                 Ok(e) => e,
+                // A folder deleted or renamed away, or a scope's start that is now a file, holds
+                // nothing.
+                Err(error) if gone(&error) => continue,
                 Err(error) => {
-                    if !gone(&error) {
-                        self.unreadable.push(dir.clone());
-                    }
+                    self.unreadable.push(dir.clone());
                     return Some(WalkItem::Error(WalkError { path: dir, error }));
                 }
             };
@@ -261,9 +263,10 @@ impl Iterator for Walk<'_> {
     }
 }
 
-/// Whether `error` says the path no longer exists, which makes it gone rather than unreadable.
-fn gone(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::NotFound
+/// Whether `error` says the path does not exist, which makes it gone rather than unreadable:
+/// nothing is there, or a file stands where a folder on its way would be.
+pub fn gone(error: &io::Error) -> bool {
+    matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory)
 }
 
 /// The extension filter (`design/scanning.md` §3): the only test a file

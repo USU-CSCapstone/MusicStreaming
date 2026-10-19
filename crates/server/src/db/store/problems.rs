@@ -1,13 +1,47 @@
 //! Scan problems: one row per path, grouped by kind, root, and normalized detail with a count
 //! (`design/database.md` §8, `design/scanning.md` §13).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use jewelcase_scanner::problems::{UNOPENED, group_key};
-use jewelcase_scanner::{Problem, ProblemKind, system_time_ms};
-use rusqlite::{OptionalExtension, Result, Transaction, params};
+use jewelcase_scanner::{Problem, ProblemKind, Scope, system_time_ms};
+use rusqlite::{Connection, OptionalExtension, Result, ToSql, Transaction, params};
 
-use super::roots::Roots;
+use super::SqliteStore;
+use super::roots::{Roots, bounds_under, join, relative};
+use crate::db::DbError;
+
+/// The absolute paths with a recorded problem that `scope` reaches ([`Scope::contains_file`]).
+pub fn under(store: &SqliteStore, lib: i64, scope: &Scope) -> Result<Vec<PathBuf>, DbError> {
+    let Some(root_id) = store.roots.root_by_path(lib, &scope.root) else {
+        return Ok(Vec::new());
+    };
+    let rel = relative(&scope.root, &scope.path);
+    let scope = scope.clone();
+    store.db.read_blocking(move |conn| {
+        let select = "SELECT path FROM scan_problems WHERE root_id = ?1";
+        // A Directory scope reaches less deep than the range, so the scope filters the rows.
+        let paths = match bounds_under(&rel) {
+            None => texts(conn, select, params![root_id])?,
+            Some([lower, upper]) => texts(
+                conn,
+                &format!("{select} AND path >= ?2 AND path < ?3"),
+                params![root_id, lower, upper],
+            )?,
+        };
+        Ok(paths
+            .iter()
+            .map(|path| join(&scope.root, path))
+            .filter(|p| scope.contains_file(p))
+            .collect())
+    })
+}
+
+/// Runs `sql` with `args` bound and returns its one text column.
+fn texts(conn: &Connection, sql: &str, args: &[&dyn ToSql]) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(sql)?;
+    stmt.query_map(args, |r| r.get(0))?.collect()
+}
 
 pub fn record_problem(
     roots: &Roots,

@@ -687,9 +687,8 @@ fn problems_group_by_kind_and_clear() {
     assert_eq!(scalar::<i64>(&store, "SELECT count FROM scan_problem_groups"), Some(1));
     std::fs::remove_file(root.join("a/two.flac")).unwrap();
     testing::scan_library(&store, &lib);
-    // A vanished problem file is not "cleared" by a scan, and stays until it
-    // is: that is a purge-policy question, so here we only check nothing broke.
-    assert_eq!(count(&store, "SELECT COUNT(*) FROM scan_problem_groups"), 1);
+    // A deleted file takes its problem with it, and the emptied group goes.
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM scan_problem_groups"), 0);
 }
 
 #[test]

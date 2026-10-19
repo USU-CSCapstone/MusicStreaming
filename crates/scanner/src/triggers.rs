@@ -13,8 +13,10 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use notify::event::RemoveKind;
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 
+use crate::discover::gone;
 use crate::queue::Scanner;
 use crate::sidecar::is_sidecar_name;
 use crate::types::{Depth, Scope, Trigger};
@@ -92,17 +94,17 @@ fn debounce_loop(
                     rescan_all = true;
                 }
                 for path in event.paths {
-                    let Some((dir, depth)) = classify(&event.kind, &path) else {
-                        continue;
-                    };
-                    pending
-                        .entry(dir)
-                        .and_modify(|p| {
-                            if depth == Depth::Subtree {
-                                p.depth = Depth::Subtree;
-                            }
-                        })
-                        .or_insert(Pending { depth, first_seen: Instant::now() });
+                    let indexed = |path: &Path| scanner.indexes_under(path);
+                    for (dir, depth) in classify(&event.kind, &path, indexed) {
+                        pending
+                            .entry(dir)
+                            .and_modify(|p| {
+                                if depth == Depth::Subtree {
+                                    p.depth = Depth::Subtree;
+                                }
+                            })
+                            .or_insert(Pending { depth, first_seen: Instant::now() });
+                    }
                 }
             }
             Ok(Err(e)) => {
@@ -144,27 +146,42 @@ fn debounce_loop(
     }
 }
 
-/// Which directory a changed path dirties, and how deep. A sidecar-named
-/// file widens to the subtree, since anything below may have inherited from
-/// it; a directory event does too, since its contents are unknown. A link to
-/// a folder is a change to its parent's listing, never a scope through it.
-fn classify(kind: &EventKind, path: &Path) -> Option<(PathBuf, Depth)> {
+/// Which scopes a changed path dirties, each a folder and how deep. A changed file dirties its
+/// folder, or the folder's subtree for a sidecar-named file, since anything below may have
+/// inherited from it. A folder dirties its own subtree, since its contents are unknown. A path
+/// that no longer exists dirties its folder, and its own subtree too when it was a folder: one
+/// the event says was removed, or, for any other event such as a rename, one under which
+/// `indexed` says the index holds something. A link to a folder is a change to its parent's
+/// listing, never a scope through it.
+fn classify(
+    kind: &EventKind,
+    path: &Path,
+    indexed: impl FnOnce(&Path) -> bool,
+) -> Vec<(PathBuf, Depth)> {
     if matches!(kind, EventKind::Access(_)) {
-        return None;
+        return Vec::new();
     }
-    let name = path.file_name()?;
-    let is_dir_event = fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir())
-        || matches!(kind, EventKind::Remove(notify::event::RemoveKind::Folder));
-    if is_dir_event {
-        // A directory created, removed, or renamed: its parent's listing and
-        // its own subtree changed.
-        return Some((path.to_path_buf(), Depth::Subtree));
+    let (Some(name), Some(parent)) = (path.file_name(), path.parent()) else {
+        return Vec::new();
+    };
+    let depth = if is_sidecar_name(name) { Depth::Subtree } else { Depth::Directory };
+    let folder = (parent.to_path_buf(), depth);
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => vec![(path.to_path_buf(), Depth::Subtree)],
+        Err(error) if gone(&error) => {
+            let was_folder = match kind {
+                EventKind::Remove(RemoveKind::File) => false,
+                EventKind::Remove(RemoveKind::Folder) => true,
+                _ => indexed(path),
+            };
+            if was_folder {
+                vec![(path.to_path_buf(), Depth::Subtree), folder]
+            } else {
+                vec![folder]
+            }
+        }
+        _ => vec![folder],
     }
-    let dir = path.parent()?.to_path_buf();
-    if is_sidecar_name(name) {
-        return Some((dir, Depth::Subtree));
-    }
-    Some((dir, Depth::Directory))
 }
 
 /// Periodic reconciliation: the safety net for network mounts.
@@ -204,18 +221,163 @@ impl Schedule {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::{MemoryStore, Store};
+    use crate::testing::{library, make_album, scan_library, scan_once};
     use notify::event::{CreateKind, ModifyKind};
 
     #[test]
     fn sidecars_widen_to_subtree() {
-        let (dir, depth) =
-            classify(&EventKind::Create(CreateKind::File), Path::new("/m/a/cover.jpg")).unwrap();
-        assert_eq!(dir, PathBuf::from("/m/a"));
-        assert_eq!(depth, Depth::Subtree);
-        let (dir, depth) =
-            classify(&EventKind::Modify(ModifyKind::Any), Path::new("/m/a/01.flac")).unwrap();
-        assert_eq!(dir, PathBuf::from("/m/a"));
-        assert_eq!(depth, Depth::Directory);
+        let tmp = tempfile::tempdir().unwrap();
+        let (cover, track) = (tmp.path().join("cover.jpg"), tmp.path().join("01.flac"));
+        fs::write(&cover, b"x").unwrap();
+        fs::write(&track, b"x").unwrap();
+        let dir = tmp.path().to_path_buf();
+        let create = EventKind::Create(CreateKind::File);
+        assert_eq!(classify(&create, &cover, unasked), [(dir.clone(), Depth::Subtree)]);
+        let modify = EventKind::Modify(ModifyKind::Any);
+        assert_eq!(classify(&modify, &track, unasked), [(dir, Depth::Directory)]);
+    }
+
+    /// The `indexed` argument for a `classify` call on a path that exists, which must never ask
+    /// what the index holds: it panics.
+    fn unasked(path: &Path) -> bool {
+        panic!("asked what is indexed under {}", path.display())
+    }
+
+    /// The scopes `classify` makes of `events` against what `store` holds under `root`.
+    fn scopes(
+        store: &MemoryStore,
+        root: &Path,
+        events: &[(EventKind, Vec<PathBuf>)],
+    ) -> Vec<Scope> {
+        let mut scopes: Vec<Scope> = events
+            .iter()
+            .flat_map(|(kind, paths)| {
+                paths
+                    .iter()
+                    .flat_map(|path| classify(kind, path, |p| store.indexes_under(&"1".into(), p)))
+            })
+            .map(|(dir, depth)| Scope::folder(root, dir, depth))
+            .collect();
+        scopes.sort_by(|a, b| a.path.cmp(&b.path));
+        scopes.dedup();
+        scopes
+    }
+
+    /// Runs the scopes `classify` makes of `events` as one watcher scan of `root`'s library.
+    fn scan_events(store: &MemoryStore, root: &Path, events: &[(EventKind, Vec<PathBuf>)]) {
+        let scopes = scopes(store, root, events);
+        scan_once(store, &library(root), Trigger::Watch, scopes);
+    }
+
+    /// Each track's path, and whether it is missing, sorted by path.
+    fn indexed(store: &MemoryStore) -> Vec<(PathBuf, bool)> {
+        let mut tracks: Vec<(PathBuf, bool)> =
+            store.tracks(&"1".into()).into_iter().map(|t| (t.record.path, t.missing)).collect();
+        tracks.sort();
+        tracks
+    }
+
+    /// A folder renamed, with the events a Linux watcher reports for `mv A B`.
+    #[test]
+    fn a_renamed_folder_moves_its_tracks() {
+        use notify::event::RenameMode;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("lib");
+        make_album(&root, "Artist", "A", 2);
+        let store = MemoryStore::new();
+        scan_library(&store, &library(&root));
+        let (a, b) = (root.join("Artist/A"), root.join("Artist/B"));
+        fs::rename(&a, &b).unwrap();
+
+        let name = |mode| EventKind::Modify(ModifyKind::Name(mode));
+        scan_events(
+            &store,
+            &root,
+            &[
+                (name(RenameMode::From), vec![a.clone()]),
+                (name(RenameMode::To), vec![b.clone()]),
+                (name(RenameMode::Both), vec![a.clone(), b.clone()]),
+            ],
+        );
+        let track = |dir: &Path, n: u32| dir.join(format!("{n:02} - Track {n}.wav"));
+        assert_eq!(
+            indexed(&store),
+            [
+                (track(&a, 1), true),
+                (track(&a, 2), true),
+                (track(&b, 1), false),
+                (track(&b, 2), false)
+            ]
+        );
+    }
+
+    /// A file renamed is a change to its folder only, as nothing is indexed under its old path.
+    #[test]
+    fn a_renamed_file_dirties_only_its_folder() {
+        use notify::event::RenameMode;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("lib");
+        make_album(&root, "Artist", "A", 1);
+        let store = MemoryStore::new();
+        scan_library(&store, &library(&root));
+        let a = root.join("Artist/A");
+        let (old, new) = (a.join("01 - Track 1.wav"), a.join("renamed.wav"));
+        fs::rename(&old, &new).unwrap();
+
+        let name = |mode| EventKind::Modify(ModifyKind::Name(mode));
+        let events =
+            [(name(RenameMode::From), vec![old.clone()]), (name(RenameMode::To), vec![new])];
+        assert_eq!(scopes(&store, &root, &events), [Scope::folder(&root, &a, Depth::Directory)]);
+    }
+
+    /// A file deleted, then a folder deleted, with the events a Linux watcher reports for `rm`
+    /// and `rm -r`.
+    #[test]
+    fn deleted_files_and_folders_go_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("lib");
+        make_album(&root, "Artist", "A", 2);
+        make_album(&root, "Artist", "D", 2);
+        let store = MemoryStore::new();
+        scan_library(&store, &library(&root));
+        let (a, d) = (root.join("Artist/A"), root.join("Artist/D"));
+        let track = |dir: &Path, n: u32| dir.join(format!("{n:02} - Track {n}.wav"));
+
+        fs::remove_file(track(&a, 1)).unwrap();
+        let removed = EventKind::Remove(RemoveKind::File);
+        assert_eq!(classify(&removed, &track(&a, 1), unasked), [(a.clone(), Depth::Directory)]);
+        scan_events(&store, &root, &[(removed, vec![track(&a, 1)])]);
+        assert_eq!(
+            indexed(&store),
+            [
+                (track(&a, 1), true),
+                (track(&a, 2), false),
+                (track(&d, 1), false),
+                (track(&d, 2), false)
+            ]
+        );
+
+        fs::remove_dir_all(&d).unwrap();
+        scan_events(
+            &store,
+            &root,
+            &[
+                (EventKind::Remove(RemoveKind::File), vec![track(&d, 1)]),
+                (EventKind::Remove(RemoveKind::File), vec![track(&d, 2)]),
+                (EventKind::Remove(RemoveKind::Folder), vec![d.clone()]),
+            ],
+        );
+        assert_eq!(
+            indexed(&store),
+            [
+                (track(&a, 1), true),
+                (track(&a, 2), false),
+                (track(&d, 1), true),
+                (track(&d, 2), true)
+            ]
+        );
+        assert_eq!(store.problems(&"1".into()), []);
     }
 
     #[test]
@@ -251,7 +413,10 @@ mod tests {
         fs::create_dir(&real).unwrap();
         std::os::unix::fs::symlink(&real, &link).unwrap();
         let create = EventKind::Create(CreateKind::Any);
-        assert_eq!(classify(&create, &real), Some((real.clone(), Depth::Subtree)));
-        assert_eq!(classify(&create, &link), Some((tmp.path().to_path_buf(), Depth::Directory)));
+        assert_eq!(classify(&create, &real, unasked), [(real.clone(), Depth::Subtree)]);
+        assert_eq!(
+            classify(&create, &link, unasked),
+            [(tmp.path().to_path_buf(), Depth::Directory)]
+        );
     }
 }

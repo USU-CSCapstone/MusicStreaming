@@ -1,5 +1,6 @@
 //! Tracks as the scanner sees them: looking a file up, applying a batch, marking what a scan did
-//! not see as missing, and the candidates for duplicate detection.
+//! not see as missing, whether anything is indexed under a folder, and the candidates for
+//! duplicate detection.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -10,7 +11,7 @@ use rusqlite::{Connection, OptionalExtension, Result, ToSql, params};
 
 use super::SqliteStore;
 use super::problems::{clear_problem, clear_unopened, record_problem};
-use super::roots::relative;
+use super::roots::{bounds_under, relative};
 use super::upsert::upsert_track;
 use crate::db::catalog::{self, Touched};
 use crate::db::feed::{self, Entity, Op};
@@ -105,30 +106,27 @@ pub fn mark_missing_unseen(
         let unseen = "SELECT id, path FROM tracks WHERE root_id = ?1 AND missing_since IS NULL \
                       AND (last_seen_scan_id IS NULL OR last_seen_scan_id <> ?2)";
         let scan_id = scan_id as i64;
-        let unseen_rows = if rel.is_empty() {
-            let sql = match depth {
-                Depth::Subtree => unseen.to_owned(),
-                Depth::Directory => format!("{unseen} AND instr(path, '/') = 0"),
-            };
-            unseen_tracks(tx, &sql, params![root_id, scan_id])?
-        } else {
-            // Under BINARY collation the paths that start with `{rel}/` are exactly those from it
-            // up to `{rel}0`, `0` being the character after `/`: a range on `tracks_file`, with no
-            // pattern characters in folder names to widen or narrow it. The Directory term measures
-            // the prefix with SQL `length`, which counts characters as `substr` does; a byte length
-            // would skip past the start of the remainder on non-ASCII folder names.
-            let sql = match depth {
-                Depth::Subtree => format!("{unseen} AND path >= ?3 AND path < ?4"),
-                Depth::Directory => format!(
-                    "{unseen} AND path >= ?3 AND path < ?4 \
-                     AND instr(substr(path, length(?3) + 1), '/') = 0"
-                ),
-            };
-            unseen_tracks(
-                tx,
-                &sql,
-                params![root_id, scan_id, format!("{rel}/"), format!("{rel}0")],
-            )?
+        let unseen_rows = match bounds_under(&rel) {
+            None => {
+                let sql = match depth {
+                    Depth::Subtree => unseen.to_owned(),
+                    Depth::Directory => format!("{unseen} AND instr(path, '/') = 0"),
+                };
+                unseen_tracks(tx, &sql, params![root_id, scan_id])?
+            }
+            Some([lower, upper]) => {
+                // The Directory term measures the prefix with SQL `length`, which counts
+                // characters as `substr` does; a byte length would skip past the start of the
+                // remainder on non-ASCII folder names.
+                let sql = match depth {
+                    Depth::Subtree => format!("{unseen} AND path >= ?3 AND path < ?4"),
+                    Depth::Directory => format!(
+                        "{unseen} AND path >= ?3 AND path < ?4 \
+                         AND instr(substr(path, length(?3) + 1), '/') = 0"
+                    ),
+                };
+                unseen_tracks(tx, &sql, params![root_id, scan_id, lower, upper])?
+            }
         };
         // The unseen rows are already in hand, so the paths the scan could not read are matched
         // here rather than in SQL.
@@ -148,6 +146,32 @@ pub fn mark_missing_unseen(
         }
         catalog::recompute(tx, lib, &mut touched, now)?;
         Ok(ids.len())
+    })
+}
+
+/// Whether a track not yet missing, or a problem, lies under `folder`, at any depth.
+pub fn indexes_under(store: &SqliteStore, lib: i64, folder: &Path) -> Result<bool, DbError> {
+    let Some((root_id, rel)) = store.roots.locate(lib, folder) else {
+        return Ok(false);
+    };
+    store.db.read_blocking(move |conn| {
+        let tracks = "SELECT 1 FROM tracks WHERE root_id = ?1 AND missing_since IS NULL";
+        let problems = "SELECT 1 FROM scan_problems WHERE root_id = ?1";
+        match bounds_under(&rel) {
+            None => conn.query_row(
+                &format!("SELECT EXISTS ({tracks}) OR EXISTS ({problems})"),
+                params![root_id],
+                |r| r.get(0),
+            ),
+            Some([lower, upper]) => conn.query_row(
+                &format!(
+                    "SELECT EXISTS ({tracks} AND path >= ?2 AND path < ?3) \
+                     OR EXISTS ({problems} AND path >= ?2 AND path < ?3)"
+                ),
+                params![root_id, lower, upper],
+                |r| r.get(0),
+            ),
+        }
     })
 }
 

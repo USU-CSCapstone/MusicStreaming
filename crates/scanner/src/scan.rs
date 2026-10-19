@@ -1,5 +1,6 @@
 //! The pipeline over one scan (`design/scanning.md` §2, §7, §8).
 
+use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
@@ -8,7 +9,7 @@ use jewelcase_core::sort::sort_key;
 
 use crate::confine::without_links;
 use crate::discover::{
-    Candidate, Directory, RootUnavailable, Walk, WalkItem, check_root, compile_excludes,
+    Candidate, Directory, RootUnavailable, Walk, WalkItem, check_root, compile_excludes, gone,
 };
 use crate::governor::Governor;
 use crate::identity::{self, FileFacts, Identity};
@@ -139,7 +140,8 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
         }
 
         // Stage 7: reconcile. Only after a complete, uncancelled walk of a root that still
-        // answers, and never under what the walk could not read.
+        // answers, and never under what the walk could not read. Problems at paths that no
+        // longer exist go too.
         if !root_answers(&scope.root) {
             suspended = true;
             continue;
@@ -147,8 +149,16 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
         let missing =
             ctx.store.mark_missing_unseen(&ctx.library.id, &scope, scan.id, walk.unreadable());
         scan.progress.missing += missing as u64;
+        batch.cleared = ctx
+            .store
+            .problems_under(&ctx.library.id, &scope)
+            .into_iter()
+            .filter(|path| fs::symlink_metadata(path).is_err_and(|error| gone(&error)))
+            .collect();
         scan.cursor = Some(Cursor { scope_index: scope_index + 1, after_directory: None });
-        ctx.store.update_scan(scan);
+        if !flush(ctx, scan, &mut batch, &mut persisted) {
+            return;
+        }
     }
 
     scan.state = if ctx.cancel.load(Ordering::SeqCst) {
@@ -206,8 +216,9 @@ fn flush(
     true
 }
 
-/// Runs every audio candidate in `dir` through stages 2 to 5 into `batch`, and records a
-/// problem for each symlink the walk skipped and each entry it could not read.
+/// Runs every audio candidate in `dir` through stages 2 to 5 into `batch`, clears any problem
+/// on `dir` itself, since it listed, and records a problem for each symlink the walk skipped
+/// and each entry it could not read.
 fn process_directory(
     ctx: &ScanContext<'_>,
     scan: &mut Scan,
@@ -216,6 +227,7 @@ fn process_directory(
     sidecars: &mut SidecarResolver,
     batch: &mut Batch,
 ) {
+    batch.cleared.push(dir.path.clone());
     for failure in dir.skipped_links.iter().chain(&dir.unreadable) {
         scan.progress.problems += 1;
         batch.problems.push(problems::from_io(&failure.path, &failure.error));
