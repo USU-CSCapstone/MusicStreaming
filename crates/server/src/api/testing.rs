@@ -102,6 +102,16 @@ pub async fn app_with_tracks_at(base_path: &str) -> (tempfile::TempDir, Arc<Data
     (temp, db, app)
 }
 
+/// Runs ffmpeg with `args` to make a test file. Panics if ffmpeg is missing or fails.
+pub fn ffmpeg(args: &[&str]) {
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-nostdin", "-loglevel", "error"])
+        .args(args)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
 /// A request logged in as the owner, to add headers and a body to.
 pub fn owner_request(method: &str, uri: &str) -> request::Builder {
     Request::builder()

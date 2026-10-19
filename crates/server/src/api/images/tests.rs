@@ -3,18 +3,8 @@ use axum::http::StatusCode;
 use jewelcase_scanner::image::describe;
 use serde_json::Value;
 
-use super::super::testing::{app, owner_request, send};
+use super::super::testing::{app, ffmpeg, owner_request, send};
 use crate::db::libraries;
-
-/// Runs ffmpeg to make a test file.
-fn ffmpeg(args: &[&str]) {
-    let status = std::process::Command::new("ffmpeg")
-        .args(["-nostdin", "-loglevel", "error"])
-        .args(args)
-        .status()
-        .unwrap();
-    assert!(status.success());
-}
 
 /// Library 1 holds image 1, a 300×200 `cover.png`; image 2, a 64×64 picture embedded in
 /// `song.mp3`; image 3, a `broken.png` that is not an image; and image 5, recorded with no

@@ -10,6 +10,8 @@ mod connections;
 mod credit;
 pub mod cursor;
 mod devices;
+#[cfg(test)]
+mod end_to_end;
 mod extract;
 mod id;
 mod images;
