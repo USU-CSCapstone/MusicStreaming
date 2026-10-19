@@ -44,9 +44,18 @@ Consistency is the requirement: an entity offers the same actions everywhere, so
 ## 4. Sorting & Browsing
 
 - Sort by **sort tags where tagged** (`ARTISTSORT`, `ALBUMSORT`, `ALBUMARTISTSORT`), otherwise by display name with **leading articles stripped** — "The Beatles" files under B.
-- Entities without a sortable value sort last, in a stable order that does not change between visits.
+- Entities without a sortable value sort last in either direction, in a stable order that does not change between visits.
 - Browsing supports sorting by name, date added, and play count at minimum, plus filtering by genre and availability.
 - Sorting, filtering, and browsing stay instant at full library scale ([`performance.md`](performance.md)).
+
+### 4.1 Track Lists
+
+- **Every list of tracks sorts the same way** — the library, an album, an artist, a playlist, search results — by **title, artist, album, release year, and duration**. Playlists add **date added** ([`playlists.md` §10](playlists.md#10-playlist-specific-behavior)). One set of sorts everywhere, so it is learned once (§2).
+- **The sorts live in a header that stays in view as the list scrolls.** Long lists are where sorting matters, and a header that scrolls away sends the user back to the top to change it. Where the columns do not fit, the same sorts are one control away, never absent ([`general.md` §4](general.md#4-target-platforms)).
+- **One control, three states: ascending, descending, then unsorted.** Unsorted is the list's natural order — a playlist's arrangement, an album's discs and track numbers ([`albums.md` §4](albums.md#4-track-listing--completeness)), search's relevance, the library's most recently added. It is always one step away, because that order carries meaning a sort hides.
+- **Sorting is a view, never an edit.** Sorting a playlist leaves its order exactly as arranged ([`playlists.md` §3](playlists.md#3-contents)). A sort that quietly rewrites a playlist destroys work the user cannot get back.
+- **A sorted list plays in the order shown.** What the user sees next is what plays next, from a row or from the list's Play action.
+- **A list already on the device sorts there, at once, in exactly the order the server would give it** ([`general.md` §3.5](general.md#35-offline-parity)). Waiting on the network to reorder rows already shown would make the commonest sort the slowest, and a client that orders by its own locale would disagree with itself across devices.
 
 ---
 
