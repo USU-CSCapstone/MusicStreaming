@@ -164,4 +164,4 @@ fn source(library: i64, album: Option<&str>, artist: Option<&str>, credit: Artis
 }
 
 #[cfg(test)]
-pub(super) mod tests;
+mod tests;

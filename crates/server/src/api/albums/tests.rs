@@ -1,76 +1,14 @@
-use std::path::Path;
-
 use axum::http::StatusCode;
-use rusqlite::Transaction;
 use serde_json::{Value, json};
 
-use super::super::testing::{app, json, page_through};
+use super::super::testing::{app, catalog, json, page_through};
 use super::*;
 use crate::api::page;
-use crate::db::libraries;
 use crate::db::testing::{Album, library, scattered_key};
-
-/// Library 1 holds, by name: "Abbey Road" (1969), "Kid A" (2000), "Nevermind" (no date),
-/// and the unknown album (no title, no date); library 2 holds one album of its own.
-fn fixture(tx: &Transaction) -> rusqlite::Result<()> {
-    libraries::create(tx, Some(1), "Music", &[Path::new("/music")], &[])?;
-    libraries::create(tx, Some(2), "Other", &[Path::new("/other")], &[])?;
-    tx.execute_batch(
-        "INSERT INTO artists (id, library_id, name, name_key, sort_key, added_at, updated_at) VALUES
-             (10, 1, 'The Beatles', 'the beatles', CAST('beatles' AS BLOB), 0, 0),
-             (11, 1, 'Radiohead', 'radiohead', CAST('radiohead' AS BLOB), 0, 0),
-             (12, 1, 'Nirvana', 'nirvana', CAST('nirvana' AS BLOB), 0, 0),
-             (13, 1, NULL, '', x'', 0, 0),
-             (20, 2, 'Elsewhere', 'elsewhere', CAST('elsewhere' AS BLOB), 0, 0);
-         INSERT INTO albums (id, library_id, title, title_key, artists_key, sort_key,
-                             artist_sort_key, release_date, disc_total, disc_count, track_count,
-                             available_track_count, duration_us, labels, added_at, updated_at) VALUES
-             (101, 1, 'Abbey Road', 'abbey road', 'the beatles', CAST('abbey road' AS BLOB),
-              CAST('beatles' AS BLOB), '1969-09-26', 1, 1, 17, 17, 2830000000, '[\"Apple\"]', 1000, 0),
-             (102, 1, 'Kid A', 'kid a', 'radiohead', CAST('kid a' AS BLOB),
-              CAST('radiohead' AS BLOB), '2000', NULL, 1, 10, 0, 2980000000, '[]', 4000, 0),
-             (103, 1, 'Nevermind', 'nevermind', 'nirvana', CAST('nevermind' AS BLOB),
-              CAST('nirvana' AS BLOB), NULL, NULL, 1, 12, 12, 2940000000, '[]', 2000, 0),
-             (104, 1, NULL, '', '', x'', x'', NULL, NULL, 1, 3, 3, 600000000, '[]', 3000, 0),
-             (201, 2, 'Elsewhere', 'elsewhere', 'elsewhere', CAST('elsewhere' AS BLOB),
-              CAST('elsewhere' AS BLOB), '2010', NULL, 1, 1, 1, 1, '[]', 0, 0);
-         INSERT INTO album_artists (library_id, album_id, position, artist_id) VALUES
-             (1, 101, 0, 10), (1, 102, 0, 11), (1, 103, 0, 12), (1, 104, 0, 13), (2, 201, 0, 20);
-         INSERT INTO album_discs (library_id, album_id, disc_number, track_count, track_total) VALUES
-             (1, 101, 1, 17, 17), (1, 104, 0, 3, NULL);
-         INSERT INTO tags (id, library_id, type, name, name_key, sort_key) VALUES
-             (30, 1, 'genre', 'Rock', 'rock', CAST('rock' AS BLOB));
-         INSERT INTO album_tags (library_id, album_id, tag_id) VALUES (1, 101, 30);
-         UPDATE libraries SET album_count = 4 WHERE id = 1;",
-    )?;
-    // Radiohead also plays on a track of Abbey Road, so it appears there without owning it.
-    let root: i64 =
-        tx.query_row("SELECT id FROM library_roots WHERE library_id = 1", [], |r| r.get(0))?;
-    tx.execute(
-        "INSERT INTO tracks (id, library_id, album_id, root_id, path, file_size, file_mtime,
-                             title, sort_key, artist_sort_key, album_sort_key, codec, container,
-                             lossless, sample_rate_hz, channels, duration_us, added_at, updated_at)
-         VALUES (1001, 1, 101, ?1, 'a.flac', 1, 1, 'Something', x'', x'', x'', 'flac', 'flac',
-                 1, 44100, 2, 1, 0, 0)",
-        [root],
-    )?;
-    tx.execute(
-        "INSERT INTO track_artists (library_id, track_id, position, artist_id)
-         VALUES (1, 1001, 0, 10), (1, 1001, 1, 11)",
-        [],
-    )?;
-    Ok(())
-}
-
-async fn app_with_fixture() -> (tempfile::TempDir, axum::Router) {
-    let (temp, db, app) = app("");
-    db.write(fixture).await.unwrap();
-    (temp, app)
-}
 
 #[tokio::test]
 async fn pages_through_every_sort_with_unknowns_last() {
-    let (_temp, app) = app_with_fixture().await;
+    let (_temp, _db, app) = catalog::app().await;
     let base = "/api/v1/libraries/1/albums";
     for limit in [1, 2, 100] {
         assert_eq!(
@@ -108,7 +46,7 @@ async fn pages_through_every_sort_with_unknowns_last() {
 
 #[tokio::test]
 async fn filters_by_artist_credit() {
-    let (_temp, app) = app_with_fixture().await;
+    let (_temp, _db, app) = catalog::app().await;
     let base = "/api/v1/libraries/1/albums";
     for (query, expected, total) in [
         ("artistId=11&artistCredit=owned", json!(["Kid A"]), 1),
@@ -128,7 +66,7 @@ async fn filters_by_artist_credit() {
 
 #[tokio::test]
 async fn gets_an_album_with_its_discs() {
-    let (_temp, app) = app_with_fixture().await;
+    let (_temp, _db, app) = catalog::app().await;
     let (status, album) = json(&app, "/api/v1/libraries/1/albums/101").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
@@ -155,7 +93,7 @@ async fn gets_an_album_with_its_discs() {
 
 #[tokio::test]
 async fn another_librarys_album_is_not_found() {
-    let (_temp, app) = app_with_fixture().await;
+    let (_temp, _db, app) = catalog::app().await;
     for uri in [
         "/api/v1/libraries/1/albums/201",
         "/api/v1/libraries/3/albums/101",
@@ -169,7 +107,7 @@ async fn another_librarys_album_is_not_found() {
 
 #[tokio::test]
 async fn bad_parameters_are_validation_problems() {
-    let (_temp, app) = app_with_fixture().await;
+    let (_temp, _db, app) = catalog::app().await;
     let base = "/api/v1/libraries/1/albums";
     let (_, page) = json(&app, &format!("{base}?limit=1")).await;
     let name_cursor = page["nextCursor"].as_str().unwrap().to_owned();

@@ -17,6 +17,7 @@ use crate::db::Database;
 use crate::db::testing::{Album, Device, Track, User, library};
 use crate::plugins::Plugins;
 
+pub mod catalog;
 pub mod player;
 pub mod socket;
 

@@ -1,27 +1,17 @@
-use std::path::Path;
 use std::time::Duration;
 
 use axum::Router;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use super::super::testing::{app, json, send};
+use super::super::testing::{catalog, json, send};
 use super::*;
-use crate::db::libraries;
-use crate::db::testing::Track;
+use crate::db::testing::{Track, library};
 
-/// The tracks fixture (`tracks::tests::fixture`), with library 2's track counted, and an
-/// empty library 3.
-async fn app_with_fixture() -> (tempfile::TempDir, Arc<Database>, Router) {
-    let (temp, db, app) = app("");
-    db.write(|tx| {
-        tracks::tests::fixture(tx)?;
-        tx.execute("UPDATE libraries SET track_count = 1 WHERE id = 2", [])?;
-        libraries::create(tx, Some(3), "Empty", &[Path::new("/empty")], &[])?;
-        Ok(())
-    })
-    .await
-    .unwrap();
+/// [`catalog::app`], plus an empty library 3.
+async fn app_with_catalog() -> (tempfile::TempDir, Arc<Database>, Router) {
+    let (temp, db, app) = catalog::app().await;
+    db.write(|tx| library(tx, 3, "Empty", "/empty")).await.unwrap();
     (temp, db, app)
 }
 
@@ -53,7 +43,7 @@ fn sections(body: &Value) -> Vec<(String, Vec<String>)> {
 
 #[tokio::test]
 async fn results_look_like_the_browse_lists() {
-    let (_temp, _db, app) = app_with_fixture().await;
+    let (_temp, _db, app) = app_with_catalog().await;
     let (status, body) = json(&app, "/api/v1/libraries/1/search?q=beatles").await;
     assert_eq!(status, StatusCode::OK);
     let artist = listed(&app, "artists", "10").await;
@@ -78,7 +68,7 @@ async fn results_look_like_the_browse_lists() {
 
 #[tokio::test]
 async fn sections_follow_the_core_and_the_filters() {
-    let (_temp, _db, app) = app_with_fixture().await;
+    let (_temp, _db, app) = app_with_catalog().await;
     let (_, body) = json(&app, "/api/v1/libraries/1/search?q=kid").await;
     assert_eq!(sections(&body), [("albums".to_owned(), vec!["102".to_owned()])]);
     let (_, body) = json(&app, "/api/v1/libraries/1/search?q=kid&types=tracks,playlists").await;
@@ -98,7 +88,7 @@ async fn sections_follow_the_core_and_the_filters() {
 
 #[tokio::test]
 async fn only_the_callers_library_is_searched() {
-    let (_temp, _db, app) = app_with_fixture().await;
+    let (_temp, _db, app) = app_with_catalog().await;
     let (_, body) = json(&app, "/api/v1/libraries/1/search?q=elsewhere").await;
     assert_eq!(body["sections"], json!([]));
     assert_eq!(body["libraryEmpty"], false);
@@ -109,7 +99,7 @@ async fn only_the_callers_library_is_searched() {
 
 #[tokio::test]
 async fn the_index_follows_the_library() {
-    let (_temp, db, app) = app_with_fixture().await;
+    let (_temp, db, app) = app_with_catalog().await;
     let uri = "/api/v1/libraries/1/search?q=octopus";
     let (_, body) = json(&app, uri).await;
     assert_eq!(body["sections"], json!([]));
@@ -138,7 +128,7 @@ async fn the_index_follows_the_library() {
 
 #[tokio::test]
 async fn problems() {
-    let (_temp, _db, app) = app_with_fixture().await;
+    let (_temp, _db, app) = app_with_catalog().await;
     for (uri, status) in [
         ("/api/v1/libraries/9/search?q=a", StatusCode::NOT_FOUND),
         ("/api/v1/libraries/1/search", StatusCode::UNPROCESSABLE_ENTITY),
