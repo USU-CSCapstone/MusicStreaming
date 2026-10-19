@@ -182,7 +182,7 @@ The `ffmpeg` crate exposes three operations behind one pool:
 
 - **Every invocation is read-only against the library.** No output path is ever under a root; `-nostdin` is always set; there is no `-y`. The music mount is usually writable, for plugins ([`general.md` §2](general.md#2-system-shape)), so this rule is the defense.
 - **Startup verifies the binary.** The server runs `ffmpeg -decoders` once, checks that every decoder the format list requires is present, and exposes the result in server info and library health ([`requirements/deployment.md` §7](../requirements/deployment.md#7-observability)). A missing decoder is one startup message, not ten thousand scan problems at 3 a.m. Missing ffmpeg entirely is fatal at startup, in the spirit of "bad configuration fails loudly" ([`requirements/deployment.md` §1](../requirements/deployment.md#1-what-the-user-provides)).
-- **Exit status and stderr map to problem kinds.** A nonzero exit with a decoder error is `corruptAudio`; an unknown codec is `unsupportedEncoding`; a kill on timeout is its own group. Stderr becomes the problem's detail.
+- **Exit status and stderr map to problem kinds.** A nonzero exit with a decoder error is `corruptAudio`; an unknown codec is `unsupportedEncoding`; a kill on timeout is its own group. Stderr is drained while the child runs, so a decoder that logs an error per damaged frame never blocks on a full pipe, and its last 4 KiB becomes the problem's detail.
 
 ---
 

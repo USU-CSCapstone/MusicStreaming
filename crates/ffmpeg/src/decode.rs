@@ -2,10 +2,12 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
 
+use crate::stderr::tail;
 use crate::{Config, Error, ProbeInfo, Registry};
 
 /// A running decode. Read frames with [`PcmStream::read_frames`]; dropping the
@@ -14,7 +16,9 @@ use crate::{Config, Error, ProbeInfo, Registry};
 pub struct PcmStream {
     child: Child,
     stdout: ChildStdout,
-    stderr: Option<ChildStderr>,
+    /// The thread draining the child's stderr, which yields its last bytes. `None` once
+    /// [`PcmStream::finish`] has joined it.
+    stderr: Option<JoinHandle<std::io::Result<Vec<u8>>>>,
     registry: Arc<Registry>,
     stalled: Arc<AtomicBool>,
     stall_timeout: std::time::Duration,
@@ -23,6 +27,8 @@ pub struct PcmStream {
     finished: bool,
 }
 
+/// Start the decode and register the child with the pool. Blocks while the pool is full. Fails
+/// if ffmpeg can't be spawned or the thread draining its stderr can't start.
 pub(crate) fn decode_pcm(
     config: &Config,
     registry: &Arc<Registry>,
@@ -40,19 +46,22 @@ pub(crate) fn decode_pcm(
         .spawn()
         .map_err(|e| Error::Spawn { binary: config.ffmpeg.clone(), source: e })?;
     let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take();
+    let stderr = child.stderr.take().expect("piped stderr");
     let stalled = registry.register(child.id());
-    Ok(PcmStream {
+    let mut stream = PcmStream {
         child,
         stdout,
-        stderr,
+        stderr: None,
         registry: registry.clone(),
         stalled,
         stall_timeout: config.stall_timeout,
         channels: info.channels as usize,
         buf: Vec::new(),
         finished: false,
-    })
+    };
+    // Built first so that if the drain thread can't start, dropping `stream` kills the child.
+    stream.stderr = Some(tail(stderr)?);
+    Ok(stream)
 }
 
 impl PcmStream {
@@ -89,19 +98,19 @@ impl PcmStream {
         Ok(whole / frame_bytes)
     }
 
-    /// Wait for the child and turn its exit into a result. Called at EOF.
+    /// Wait for the child and its stderr drain, and turn its exit into a result. Called at EOF.
     fn finish(&mut self) -> Result<usize, Error> {
         let status = self.child.wait()?;
         self.registry.unregister(self.child.id());
+        let drain = self.stderr.take().expect("finish runs once, at EOF");
+        let stderr = drain.join().expect("stderr drain panicked");
         if self.stalled.load(Ordering::SeqCst) {
             return Err(Error::Stalled(self.stall_timeout));
         }
+        let stderr = stderr?;
         if !status.success() {
-            let mut stderr = String::new();
-            if let Some(mut err) = self.stderr.take() {
-                let _ = err.read_to_string(&mut stderr);
-            }
-            return Err(Error::Failed { status: status.code(), stderr: stderr.trim().to_owned() });
+            let stderr = String::from_utf8_lossy(&stderr).trim().to_owned();
+            return Err(Error::Failed { status: status.code(), stderr });
         }
         Ok(0)
     }

@@ -14,6 +14,7 @@ mod error;
 mod image;
 mod probe;
 mod registry;
+mod stderr;
 
 use std::path::PathBuf;
 use std::process::Command;
