@@ -12,7 +12,12 @@ const resolve = (items: Playable[]) =>
 	});
 const track = (id: string): Playable => ({ type: 'track', id });
 const apply = (items: string[], ops: PlaylistOp[]) => applyOps(items, ops, resolve);
-const invert = (items: string[], ops: PlaylistOp[]) => invertOps(items, ops, resolve, track);
+const invert = (items: string[], ops: PlaylistOp[]) => invertOps(items, ops, resolve, track).ops;
+/** `items` after `ops`, then after their undo. */
+const roundTrip = (items: string[], ops: PlaylistOp[]) => {
+	const undo = invertOps(items, ops, resolve, track);
+	return applyOps(apply(items, ops), undo.ops, undo.resolve);
+};
 
 const abc = ['a', 'b', 'c'];
 const twelve = 'abcdefghijkl'.split('');
@@ -138,7 +143,7 @@ describe('applyOps', () => {
 
 describe('invertOps', () => {
 	const undoes = (items: string[], ops: PlaylistOp[]) =>
-		expect(apply(apply(items, ops), invert(items, ops))).toEqual(items);
+		expect(roundTrip(items, ops)).toEqual(items);
 
 	it('removes what an add added', () => {
 		const ops: PlaylistOp[] = [{ op: 'add', items: [{ type: 'album', id: 'z' }], at: 1 }];
@@ -160,11 +165,19 @@ describe('invertOps', () => {
 		undoes(twelve, ops);
 	});
 
-	it('moves a scattered selection back with single-track moves', () => {
-		const ops: PlaylistOp[] = [{ op: 'move', positions: [1, 6, 11], at: 4 }];
-		const undo = invert(twelve, ops);
-		expect(undo.every((op) => op.op === 'move' && op.positions.length === 1)).toBe(true);
+	it('moves a scattered selection back a run at a time, leaving one already in place', () => {
+		const ops: PlaylistOp[] = [{ op: 'move', positions: [1, 2, 5, 9, 10], at: 3 }];
+		expect(invert(twelve, ops)).toEqual([
+			{ op: 'move', positions: [3, 4], at: 1 },
+			{ op: 'move', positions: [6, 7], at: 9 }
+		]);
 		undoes(twelve, ops);
+	});
+
+	it('moves a run back in one move', () => {
+		expect(invert(twelve, [{ op: 'move', positions: [2, 3, 4], at: 6 }])).toEqual([
+			{ op: 'move', positions: [6, 7, 8], at: 2 }
+		]);
 	});
 
 	it('undoes a move that changed nothing with nothing', () => {
@@ -183,6 +196,24 @@ describe('invertOps', () => {
 		const items = ['a', 'b', 'a', 'c', 'a'];
 		undoes(items, [{ op: 'move', positions: [0, 4], at: 1 }]);
 		undoes(items, [{ op: 'remove', positions: [2] }]);
+	});
+
+	it('brings back the very items removed, not others like them', () => {
+		const items = [{ id: 'a' }, { id: 'b' }, { id: 'a' }];
+		const ops: PlaylistOp[] = [{ op: 'remove', positions: [1, 2] }];
+		const undo = invertOps(
+			items,
+			ops,
+			() => [],
+			(item) => track(item.id)
+		);
+		const back = applyOps(
+			applyOps(items, ops, () => []),
+			undo.ops,
+			undo.resolve
+		);
+		expect(back).toHaveLength(3);
+		back.forEach((item, i) => expect(item).toBe(items[i]));
 	});
 
 	it('undoes any edit exactly', () => {
@@ -217,9 +248,7 @@ describe('invertOps', () => {
 				ops.push(op);
 				items = apply(items, [op]);
 			}
-			expect(apply(items, invert(original, ops)), JSON.stringify({ original, ops })).toEqual(
-				original
-			);
+			expect(roundTrip(original, ops), JSON.stringify({ original, ops })).toEqual(original);
 		}
 	});
 });

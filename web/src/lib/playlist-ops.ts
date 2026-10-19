@@ -7,8 +7,14 @@
 
 import type { Playable, PlaylistOp } from './api/types';
 
-/** An add's items as playlist items: albums, artists, and playlists expand to their tracks in order. */
+/**
+ * An add's items as playlist items: albums, artists, and playlists expand to their tracks in
+ * order. It is given the add's own `items`, never a copy.
+ */
 export type Resolve<T> = (items: Playable[]) => T[];
+
+/** An edit's undo: the ops that reverse it, and the items its adds bring back. */
+export type Inverse<T> = { ops: PlaylistOp[]; resolve: Resolve<T> };
 
 /**
  * `items` after `ops`, each applied to the playlist as the ones before it left it. A
@@ -27,24 +33,38 @@ export function applyOps<T>(
 /**
  * The ops that turn the playlist `ops` make from `items` back into `items`, sent as one
  * further edit (`api/openapi.yaml`, `editPlaylist`). A removal comes back as adds at the old
- * positions, named by `toPlayable`; a move comes back as single-item moves.
+ * positions, named by `toPlayable`; a move comes back as a move per run of the items moved.
+ * Applied with the `resolve` returned alongside them, those adds bring back the very items
+ * removed.
  */
 export function invertOps<T>(
 	items: readonly T[],
 	ops: readonly PlaylistOp[],
 	resolve: Resolve<T>,
 	toPlayable: (item: T) => Playable
-): PlaylistOp[] {
-	// Slots give every item an identity, so a track held twice is still two items.
-	type Slot = { item: T };
-	let list: Slot[] = items.map((item) => ({ item }));
+): Inverse<T> {
+	let list = [...items];
+	// Each add's items, by the array it names them with, so nothing is looked up.
+	const removed = new Map<readonly Playable[], T[]>();
+	const restore = (back: T[]) => {
+		const named = back.map(toPlayable);
+		removed.set(named, back);
+		return named;
+	};
 	const undo: PlaylistOp[][] = [];
 	for (const op of ops) {
-		const next = applyOp(list, op, (added) => resolve(added).map((item) => ({ item })));
-		undo.push(invertOp(list, next, op, (slot) => toPlayable(slot.item)));
+		const next = applyOp(list, op, resolve);
+		undo.push(invertOp(list, next, op, restore));
 		list = next;
 	}
-	return undo.reverse().flat();
+	return {
+		ops: undo.reverse().flat(),
+		resolve: (added) => {
+			const back = removed.get(added);
+			if (!back) throw new Error('Undo brings back only what was removed.');
+			return back;
+		}
+	};
 }
 
 function applyOp<T>(list: readonly T[], op: PlaylistOp, resolve: Resolve<T>): T[] {
@@ -74,7 +94,7 @@ function invertOp<T>(
 	before: readonly T[],
 	after: readonly T[],
 	op: PlaylistOp,
-	toPlayable: (item: T) => Playable
+	restore: (removed: T[]) => Playable[]
 ): PlaylistOp[] {
 	switch (op.op) {
 		case 'add': {
@@ -88,24 +108,30 @@ function invertOp<T>(
 			// place by the time it is added, so its old position is right again.
 			const ops: PlaylistOp[] = [];
 			for (const run of runs(selection(op.positions, before.length))) {
-				ops.push({ op: 'add', at: run[0], items: run.map((i) => toPlayable(before[i])) });
+				ops.push({ op: 'add', at: run[0], items: restore(run.map((i) => before[i])) });
 			}
 			return ops;
 		}
 		case 'move': {
-			// In playlist order, put each moved item straight after the one it followed before.
-			// That one is either unmoved or already back, and nothing later lands between them.
-			const ops: PlaylistOp[] = [];
-			let list = [...after];
-			for (const p of selection(op.positions, before.length)) {
-				const item = before[p];
-				const from = list.indexOf(item);
-				const rest = list.toSpliced(from, 1);
-				const to = p === 0 ? 0 : rest.indexOf(before[p - 1]) + 1;
-				if (from !== to) ops.push({ op: 'move', positions: [from], at: to });
-				list = rest.toSpliced(to, 0, item);
+			// The moved items sit together from `op.at` in playlist order, so a run of them is still
+			// a run. Runs going left go back in playlist order, then runs going right last first.
+			// Either way the runs before a run are just ahead of it, and only what preceded it lies
+			// ahead of its old start: it moves from `op.at` plus their length straight back there.
+			const left: PlaylistOp[] = [];
+			const right: PlaylistOp[] = [];
+			let ahead = 0;
+			for (const run of runs(selection(op.positions, before.length))) {
+				const from = op.at + ahead;
+				const back: PlaylistOp = {
+					op: 'move',
+					positions: range(from, from + run.length),
+					at: run[0]
+				};
+				if (run[0] < from) left.push(back);
+				else if (run[0] > from) right.push(back);
+				ahead += run.length;
 			}
-			return ops;
+			return [...left, ...right.reverse()];
 		}
 	}
 }
