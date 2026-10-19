@@ -1,8 +1,8 @@
 //! Tracks as the scanner sees them: looking a file up, applying a batch, marking what a scan did
 //! not see as missing, and the candidates for duplicate detection.
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use jewelcase_scanner::store::{Batch, IndexedFile, IndexedLyrics};
 use jewelcase_scanner::{Depth, DuplicateCandidate, ScanId, Scope};
@@ -81,29 +81,33 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<(), DbError>
     })
 }
 
-/// Marks the tracks in `scope` that scan `scan_id` did not see as missing, and returns how many.
+/// Marks the tracks in `scope` that scan `scan_id` did not see as missing, other than those at
+/// or under a path in `unreadable`, and returns how many.
 pub fn mark_missing_unseen(
     store: &SqliteStore,
     lib: i64,
     scope: &Scope,
     scan_id: ScanId,
+    unreadable: &[PathBuf],
 ) -> Result<usize, DbError> {
     let Some(root_id) = store.roots.root_by_path(lib, &scope.root) else {
         return Ok(0);
     };
     let rel = relative(&scope.root, &scope.path);
+    let unreadable: HashSet<PathBuf> =
+        unreadable.iter().map(|u| relative(&scope.root, u).into()).collect();
     let depth = scope.depth;
     store.db.write_blocking(move |tx| {
         let now = now_ms();
-        let unseen = "SELECT id FROM tracks WHERE root_id = ?1 AND missing_since IS NULL \
+        let unseen = "SELECT id, path FROM tracks WHERE root_id = ?1 AND missing_since IS NULL \
                       AND (last_seen_scan_id IS NULL OR last_seen_scan_id <> ?2)";
         let scan_id = scan_id as i64;
-        let ids = if rel.is_empty() {
+        let unseen_rows = if rel.is_empty() {
             let sql = match depth {
                 Depth::Subtree => unseen.to_owned(),
                 Depth::Directory => format!("{unseen} AND instr(path, '/') = 0"),
             };
-            unseen_ids(tx, &sql, params![root_id, scan_id])?
+            unseen_tracks(tx, &sql, params![root_id, scan_id])?
         } else {
             // Under BINARY collation the paths that start with `{rel}/` are exactly those from it
             // up to `{rel}0`, `0` being the character after `/`: a range on `tracks_file`, with no
@@ -117,8 +121,19 @@ pub fn mark_missing_unseen(
                      AND instr(substr(path, length(?3) + 1), '/') = 0"
                 ),
             };
-            unseen_ids(tx, &sql, params![root_id, scan_id, format!("{rel}/"), format!("{rel}0")])?
+            unseen_tracks(
+                tx,
+                &sql,
+                params![root_id, scan_id, format!("{rel}/"), format!("{rel}0")],
+            )?
         };
+        // The unseen rows are already in hand, so the paths the scan could not read are matched
+        // here rather than in SQL.
+        let ids: Vec<i64> = unseen_rows
+            .into_iter()
+            .filter(|(_, path)| !Path::new(path).ancestors().any(|a| unreadable.contains(a)))
+            .map(|(id, _)| id)
+            .collect();
         let mut touched = Touched::default();
         for id in &ids {
             tx.execute(
@@ -133,10 +148,10 @@ pub fn mark_missing_unseen(
     })
 }
 
-/// Runs `sql` with `args` bound and returns the ids in its first column.
-fn unseen_ids(conn: &Connection, sql: &str, args: &[&dyn ToSql]) -> Result<Vec<i64>> {
+/// Runs `sql` with `args` bound and returns its rows as ids and root-relative paths.
+fn unseen_tracks(conn: &Connection, sql: &str, args: &[&dyn ToSql]) -> Result<Vec<(i64, String)>> {
     let mut stmt = conn.prepare(sql)?;
-    stmt.query_map(args, |r| r.get(0))?.collect()
+    stmt.query_map(args, |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
 }
 
 pub fn duplicate_candidates(

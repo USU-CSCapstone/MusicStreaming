@@ -97,7 +97,7 @@ Migrations are the exception: they run with foreign keys off, because rebuilding
 
 **Scans and their problems are library administration, so they live in `0001_libraries.sql` beside the library they belong to.** A `scans` row mirrors the API's `Scan` object, including the resume cursor the scanner writes at every batch (`design/scanning.md` §9). Problems are two tables: `scan_problem_groups`, one row per distinct `(kind, root, normalized detail)` with a count, and `scan_problems`, one row per path, deleted when the path next scans cleanly (`design/scanning.md` §13).
 
-**Reconciliation is a column, not a set.** `tracks.last_seen_scan_id` is set on every file a scan touched, changed or not, so "what did this scan not see" is one `UPDATE`, and a scan that resumes from its cursor after a crash needs no memory of what it saw before (`design/scanning.md` §7–§8).
+**Reconciliation is a column, not a set.** `tracks.last_seen_scan_id` is set on every file a scan touched, changed or not, so "what did this scan not see" is one range `SELECT` over the scope, and a scan that resumes from its cursor after a crash needs no memory of what it saw before (`design/scanning.md` §7–§8). The unseen rows are then filtered in Rust against the paths the walk could not read, and each one left is marked missing with its own `UPDATE` and feed entry.
 
 **Identity inputs are nullable until identity is settled.** `tracks.fingerprint` stays `NULL` while the scanner keys on path (`design/scanning.md` §6). `images.placeholder` is `NULL` until the placeholder job decodes the file into a ThumbHash, and empty when it cannot; the scanner fills format, dimensions, and hash from the header.
 

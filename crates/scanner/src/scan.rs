@@ -1,5 +1,6 @@
 //! The pipeline over one scan (`design/scanning.md` §2, §7, §8).
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -70,17 +71,7 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
         }
         let scope = scan.scopes[scope_index].clone();
 
-        // Storage unavailable: suspend and touch nothing under this root
-        // (`requirements/scanning.md` §7, `design/scanning.md` §8).
-        if let Err(why) = check_root(&scope.root) {
-            match why {
-                RootUnavailable::Inaccessible(e) => {
-                    tracing::warn!(root = %scope.root.display(), error = %e, "root unavailable; suspending")
-                }
-                RootUnavailable::Empty => {
-                    tracing::warn!(root = %scope.root.display(), "root listed empty; treating as unavailable")
-                }
-            }
+        if !root_answers(&scope.root) {
             suspended = true;
             continue;
         }
@@ -111,8 +102,8 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
             continue;
         }
 
-        let walk = Walk::new(&scope, &excludes, resume_after.as_deref());
-        for item in walk {
+        let mut walk = Walk::new(&scope, &excludes, resume_after.as_deref());
+        for item in walk.by_ref() {
             ctx.governor.wait_if_paused();
             if ctx.cancel.load(Ordering::SeqCst) {
                 cancelled = true;
@@ -147,9 +138,14 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
             break;
         }
 
-        // Stage 7: reconcile. Only after a complete, uncancelled walk of a
-        // root that answered.
-        let missing = ctx.store.mark_missing_unseen(&ctx.library.id, &scope, scan.id);
+        // Stage 7: reconcile. Only after a complete, uncancelled walk of a root that still
+        // answers, and never under what the walk could not read.
+        if !root_answers(&scope.root) {
+            suspended = true;
+            continue;
+        }
+        let missing =
+            ctx.store.mark_missing_unseen(&ctx.library.id, &scope, scan.id, walk.unreadable());
         scan.progress.missing += missing as u64;
         scan.cursor = Some(Cursor { scope_index: scope_index + 1, after_directory: None });
         ctx.store.update_scan(scan);
@@ -165,6 +161,21 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
     scan.finished_at = Some(SystemTime::now());
     scan.progress.current_path = None;
     ctx.store.update_scan(scan);
+}
+
+/// Whether `root` is available, logging why not. Nothing under a root that is not may be
+/// touched (`requirements/scanning.md` §7, `design/scanning.md` §8).
+fn root_answers(root: &Path) -> bool {
+    match check_root(root) {
+        Ok(()) => return true,
+        Err(RootUnavailable::Inaccessible(e)) => {
+            tracing::warn!(root = %root.display(), error = %e, "root unavailable; suspending")
+        }
+        Err(RootUnavailable::Empty) => {
+            tracing::warn!(root = %root.display(), "root listed empty; treating as unavailable")
+        }
+    }
+    false
 }
 
 /// Persist the batch and the scan row. On a store failure the scan suspends
@@ -196,7 +207,7 @@ fn flush(
 }
 
 /// Runs every audio candidate in `dir` through stages 2 to 5 into `batch`, and records a
-/// problem for each symlink the walk skipped.
+/// problem for each symlink the walk skipped and each entry it could not read.
 fn process_directory(
     ctx: &ScanContext<'_>,
     scan: &mut Scan,
@@ -205,9 +216,9 @@ fn process_directory(
     sidecars: &mut SidecarResolver,
     batch: &mut Batch,
 ) {
-    for link in &dir.skipped_links {
+    for failure in dir.skipped_links.iter().chain(&dir.unreadable) {
         scan.progress.problems += 1;
-        batch.problems.push(problems::from_io(&link.path, &link.error));
+        batch.problems.push(problems::from_io(&failure.path, &failure.error));
     }
     sidecars.offer_listing(&dir.path, &dir.files);
     let mut resolved = None;
@@ -349,3 +360,6 @@ fn process_file(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

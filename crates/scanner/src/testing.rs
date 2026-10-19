@@ -499,6 +499,53 @@ pub fn a_scope_naming_a_deleted_folder_reconciles<S: InspectStore>(make: Factory
     assert!(!problems.iter().any(|p| p.detail == "symlinks are not followed"), "{problems:?}");
 }
 
+/// A folder that cannot be listed, and one whose entries cannot be read, keep their tracks
+/// and record problems, while reconcile still runs everywhere else (`requirements/scanning.md`
+/// §7). Skipped, saying so, where permissions do not stop this user reading, as for root.
+pub fn an_unreadable_folder_keeps_its_tracks<S: InspectStore>(make: Factory<S>) {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    make_album(&root, "A", "X", 1);
+    make_album(&root, "B", "Y", 2);
+    // A sibling whose name extends B/Y's, which a text prefix would wrongly match.
+    make_album(&root, "B", "Yz", 2);
+    make_album(&root, "C", "Z", 2);
+    let store = make(&root);
+    let lib = library(&root);
+    scan_library(&store, &lib);
+    fs::remove_file(root.join("A/X/01 - Track 1.wav")).unwrap();
+    fs::remove_file(root.join("B/Yz/01 - Track 1.wav")).unwrap();
+
+    let set_mode = |folder: &str, mode| {
+        fs::set_permissions(root.join(folder), fs::Permissions::from_mode(mode)).unwrap()
+    };
+    // B/Y cannot be listed; C/Z lists its names, but none of them can be read.
+    set_mode("B/Y", 0o000);
+    set_mode("C/Z", 0o400);
+    if fs::read_dir(root.join("B/Y")).is_ok() {
+        set_mode("B/Y", 0o755);
+        set_mode("C/Z", 0o755);
+        eprintln!("skipped: permissions do not stop this user reading a folder (running as root?)");
+        return;
+    }
+    let scan = scan_library(&store, &lib);
+    set_mode("B/Y", 0o755);
+    set_mode("C/Z", 0o755);
+
+    assert_eq!(scan.state, ScanState::Completed);
+    assert_eq!(scan.progress.missing, 2, "only the deleted files");
+    assert_eq!(live(&store, &lib).len(), 5);
+    let mut problems: Vec<(PathBuf, ProblemKind)> =
+        store.inspect_problems(&lib.id).into_iter().map(|p| (p.path, p.kind)).collect();
+    problems.sort_by(|a, b| a.0.cmp(&b.0));
+    let denied = |path: &str| (root.join(path), ProblemKind::PermissionDenied);
+    assert_eq!(
+        problems,
+        [denied("B/Y"), denied("C/Z/01 - Track 1.wav"), denied("C/Z/02 - Track 2.wav")]
+    );
+}
+
 pub fn untagged_file_is_named_after_itself<S: InspectStore>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
@@ -881,6 +928,10 @@ macro_rules! store_suite {
         #[test]
         fn a_scope_naming_a_deleted_folder_reconciles() {
             $crate::testing::a_scope_naming_a_deleted_folder_reconciles($make);
+        }
+        #[test]
+        fn an_unreadable_folder_keeps_its_tracks() {
+            $crate::testing::an_unreadable_folder_keeps_its_tracks($make);
         }
         #[test]
         fn untagged_file_is_named_after_itself() {

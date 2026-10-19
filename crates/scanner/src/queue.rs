@@ -41,8 +41,9 @@ pub struct Scanner {
 
 impl Scanner {
     /// Start the worker. Interrupted scans from a previous process are
-    /// re-queued with their cursors so nothing is re-walked
-    /// (`design/scanning.md` §9).
+    /// re-queued with their cursors, so they continue where they stopped
+    /// instead of walking from the start. Folders that could not be read before the
+    /// cursor are not remembered (`design/scanning.md` §9).
     pub fn start(
         store: Arc<dyn Store>,
         library: LibraryConfig,

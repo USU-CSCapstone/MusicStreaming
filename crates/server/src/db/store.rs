@@ -13,7 +13,7 @@ mod scans;
 mod tracks;
 mod upsert;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use jewelcase_scanner::store::{Batch, IndexedFile, Store, StoreError};
@@ -102,11 +102,17 @@ impl Store for SqliteStore {
         })
     }
 
-    fn mark_missing_unseen(&self, library: &LibraryId, scope: &Scope, scan_id: ScanId) -> usize {
+    fn mark_missing_unseen(
+        &self,
+        library: &LibraryId,
+        scope: &Scope,
+        scan_id: ScanId,
+        unreadable: &[PathBuf],
+    ) -> usize {
         let Some(lib) = Self::lib(library) else {
             return 0;
         };
-        let marked = tracks::mark_missing_unseen(self, lib, scope, scan_id);
+        let marked = tracks::mark_missing_unseen(self, lib, scope, scan_id, unreadable);
         logged("mark_missing_unseen", marked, 0)
     }
 

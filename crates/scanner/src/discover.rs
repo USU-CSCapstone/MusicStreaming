@@ -8,6 +8,10 @@
 //!
 //! Symlinks are never followed ([`crate::confine`]), so the walk needs no loop
 //! detection. Each link it lists is reported as a problem instead, unless excluded.
+//!
+//! A directory or entry the walk cannot read is reported too, and remembered in
+//! [`Walk::unreadable`] so reconcile leaves what is indexed under it alone. One that no
+//! longer exists is gone rather than unreadable.
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -39,10 +43,14 @@ pub struct Directory {
     pub files: BTreeSet<OsString>,
     /// The symlinks in it, which the walk does not follow.
     pub skipped_links: Vec<WalkError>,
+    /// Its entries that could not be read. A failure partway through the listing is
+    /// reported on the directory itself.
+    pub unreadable: Vec<WalkError>,
 }
 
-/// A directory that could not be listed, or a symlink the walk does not
-/// follow. Reported as a problem on its path; the walk continues.
+/// A directory that could not be listed, an entry that could not be read, or a
+/// symlink the walk does not follow. Reported as a problem on its path; the walk
+/// continues.
 #[derive(Debug)]
 pub struct WalkError {
     pub path: PathBuf,
@@ -98,15 +106,30 @@ pub struct Walk<'a> {
     resume_after: Option<&'a Path>,
     /// Directories still to visit, most recently pushed first (depth-first).
     stack: Vec<PathBuf>,
+    /// Paths that failed to read and still exist, as far as the walk can tell.
+    unreadable: Vec<PathBuf>,
 }
 
 impl<'a> Walk<'a> {
+    /// A walk starting at `scope.path` that leaves out what `excludes` matches.
     pub fn new(
         scope: &'a Scope,
         excludes: &'a GlobSet,
         resume_after: Option<&'a Path>,
     ) -> Walk<'a> {
-        Walk { scope, excludes, resume_after, stack: vec![scope.path.clone()] }
+        Walk {
+            scope,
+            excludes,
+            resume_after,
+            stack: vec![scope.path.clone()],
+            unreadable: Vec::new(),
+        }
+    }
+
+    /// The directories and entries this walk could not read so far. Whatever is under them
+    /// may still be there, so reconcile must not mark it missing.
+    pub fn unreadable(&self) -> &[PathBuf] {
+        &self.unreadable
     }
 
     fn relative(&self, path: &Path) -> PathBuf {
@@ -165,16 +188,36 @@ impl Iterator for Walk<'_> {
             }
             let entries = match fs::read_dir(&dir) {
                 Ok(e) => e,
-                Err(error) => return Some(WalkItem::Error(WalkError { path: dir, error })),
+                Err(error) => {
+                    if !gone(&error) {
+                        self.unreadable.push(dir.clone());
+                    }
+                    return Some(WalkItem::Error(WalkError { path: dir, error }));
+                }
             };
             let mut subdirs = Vec::new();
             let mut files = BTreeSet::new();
             let mut candidates = Vec::new();
             let mut skipped_links = Vec::new();
+            let mut unreadable = Vec::new();
             for entry in entries {
-                let Ok(entry) = entry else { continue };
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        unreadable.push(WalkError { path: dir.clone(), error });
+                        continue;
+                    }
+                };
                 let path = entry.path();
-                let Ok(meta) = entry.metadata() else { continue };
+                let meta = match entry.metadata() {
+                    Ok(meta) => meta,
+                    Err(error) => {
+                        if !self.excluded(&path) {
+                            unreadable.push(WalkError { path, error });
+                        }
+                        continue;
+                    }
+                };
                 let file_type = meta.file_type();
                 if file_type.is_dir() {
                     if self.scope.depth == Depth::Subtree && !self.excluded(&path) {
@@ -196,6 +239,8 @@ impl Iterator for Walk<'_> {
                     }
                 }
             }
+            unreadable.retain(|e| !gone(&e.error));
+            self.unreadable.extend(unreadable.iter().map(|e| e.path.clone()));
             // Depth-first in sorted order: push children reversed.
             subdirs.sort_by(|a, b| compare_components(a, b));
             for sub in subdirs.into_iter().rev() {
@@ -210,9 +255,15 @@ impl Iterator for Walk<'_> {
                 candidates,
                 files,
                 skipped_links,
+                unreadable,
             }));
         }
     }
+}
+
+/// Whether `error` says the path no longer exists, which makes it gone rather than unreadable.
+fn gone(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::NotFound
 }
 
 /// The extension filter (`design/scanning.md` §3): the only test a file

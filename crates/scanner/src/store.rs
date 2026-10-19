@@ -87,8 +87,15 @@ pub trait Store: Send + Sync {
     /// An error means nothing in the batch was persisted.
     fn apply(&self, library: &LibraryId, batch: Batch) -> Result<(), StoreError>;
     /// Mark every non-missing track under `scope` whose `last_seen_scan` is
-    /// not `scan_id` as missing. Returns how many.
-    fn mark_missing_unseen(&self, library: &LibraryId, scope: &Scope, scan_id: ScanId) -> usize;
+    /// not `scan_id` as missing, except those at or under a path in
+    /// `unreadable`, which the scan could not read. Returns how many.
+    fn mark_missing_unseen(
+        &self,
+        library: &LibraryId,
+        scope: &Scope,
+        scan_id: ScanId,
+        unreadable: &[PathBuf],
+    ) -> usize;
 
     // --- analysis ---
     /// Tracks lacking results at `analyzer_version`, most useful first, each with its file.
@@ -309,16 +316,24 @@ impl Store for MemoryStore {
         Ok(())
     }
 
-    fn mark_missing_unseen(&self, library: &LibraryId, scope: &Scope, scan_id: ScanId) -> usize {
+    fn mark_missing_unseen(
+        &self,
+        library: &LibraryId,
+        scope: &Scope,
+        scan_id: ScanId,
+        unreadable: &[PathBuf],
+    ) -> usize {
         let mut inner = self.inner.lock().unwrap();
         let Some(lib) = inner.libraries.get_mut(library) else {
             return 0;
         };
+        let unreadable: HashSet<&Path> = unreadable.iter().map(PathBuf::as_path).collect();
         let mut count = 0;
         for (id, t) in lib.tracks.iter_mut() {
             if !t.missing
                 && t.record.last_seen_scan != scan_id
                 && scope.contains_file(&t.record.path)
+                && !t.record.path.ancestors().any(|a| unreadable.contains(a))
             {
                 t.missing = true;
                 lib.feed.push(FeedEntry::Missing(*id));
