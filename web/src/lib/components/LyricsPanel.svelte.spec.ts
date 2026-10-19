@@ -26,7 +26,8 @@ const track = {
 	durationUs: 193_000_000,
 	explicit: false,
 	audio: { codec: 'mp3', lossless: false },
-	availability: 'available'
+	availability: 'available',
+	sortKeys: { title: 'brain stew', artist: 'green day', album: 'insomniac' }
 } as TrackSummary;
 
 function open(l: Lyrics) {

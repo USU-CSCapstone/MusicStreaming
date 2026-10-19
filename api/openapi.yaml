@@ -4659,7 +4659,7 @@ components:
       allOf:
         - $ref: '#/components/schemas/TrackBase'
         - type: object
-          required: [audio, explicit]
+          required: [audio, explicit, sortKeys]
           properties:
             album: { $ref: '#/components/schemas/AlbumRef' }
             explicit: { type: boolean }
@@ -4671,10 +4671,27 @@ components:
               allOf:
                 - $ref: '#/components/schemas/AudioSummary'
             addedAt: { type: string, format: date-time }
+            sortKeys: { $ref: '#/components/schemas/TrackSortKeys' }
             personal:
               description: The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed.
               allOf:
                 - $ref: '#/components/schemas/Personal'
+
+    TrackSortKeys:
+      type: object
+      description: |
+        What the server orders tracks by for `name`, `artist`, and `album` (`requirements/conventions.md`
+        §4): a tagged sort value where there is one, otherwise the display name with a leading article
+        stripped, case-folded. A client sorting a list it holds compares these by Unicode code point,
+        never by locale, and so orders it as the server would. An empty key is no value, which sorts
+        last.
+      required: [title, artist, album]
+      properties:
+        title: { type: string }
+        artist:
+          type: string
+          description: The primary artist's.
+        album: { type: string }
 
     AudioSummary:
       type: object

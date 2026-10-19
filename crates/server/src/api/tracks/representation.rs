@@ -29,6 +29,16 @@ pub struct TrackSummary<A = AudioSummary> {
     audio: A,
     availability: &'static str,
     added_at: String,
+    sort_keys: TrackSortKeys,
+}
+
+/// The spec's `TrackSortKeys`: what the server orders tracks by, so a client sorting a list it
+/// holds orders it the same way (`requirements/conventions.md` §4).
+#[derive(Clone, Serialize)]
+pub struct TrackSortKeys {
+    title: String,
+    artist: String,
+    album: String,
 }
 
 /// The spec's `Track`.
@@ -120,6 +130,9 @@ pub const SELECT: &[&str] = &[
     "(SELECT image_id FROM albums WHERE albums.id = t.album_id)",
     artists_json!("album", "t.album_id"),
     placeholder!("(SELECT image_id FROM albums WHERE albums.id = t.album_id)"),
+    "t.sort_key",
+    "t.artist_sort_key",
+    "t.album_sort_key",
 ];
 
 /// A track as lists show it, from a row of [`SELECT`].
@@ -190,5 +203,17 @@ fn summary<A>(row: &Row, audio: A) -> rusqlite::Result<TrackSummary<A>> {
         audio,
         availability: if row.get(10)? { "available" } else { "missing" },
         added_at: row.get(11)?,
+        sort_keys: TrackSortKeys {
+            title: key(row, 18)?,
+            artist: key(row, 19)?,
+            album: key(row, 20)?,
+        },
+    })
+}
+
+/// A sort key, stored as the UTF-8 bytes `jewelcase_core::sort` built it from.
+fn key(row: &Row, index: usize) -> rusqlite::Result<String> {
+    String::from_utf8(row.get(index)?).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Blob, e.into())
     })
 }

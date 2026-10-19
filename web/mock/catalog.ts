@@ -13,7 +13,7 @@ import type {
 	Page,
 	TrackSummary
 } from '../src/lib/api/types.ts';
-import { type Db, type Row, id, iso, num, numOrNull, str, toKey } from './db.ts';
+import { type Db, type Row, id, iso, num, numOrNull, sortKey, str, toKey } from './db.ts';
 
 /** A filter ID as a key; an ID that cannot exist matches nothing rather than erroring. */
 function keyOrNone(s: string): bigint {
@@ -275,7 +275,12 @@ export class Catalog {
 			explicit: num(row.explicit) === 1,
 			audio: { codec: String(row.codec), lossless: num(row.lossless) === 1 },
 			availability: row.missing_since === null ? 'available' : 'missing',
-			addedAt: iso(row.added_at)
+			addedAt: iso(row.added_at),
+			sortKeys: {
+				title: sortKey(row.sort_key),
+				artist: sortKey(row.artist_sort_key),
+				album: sortKey(row.album_sort_key)
+			}
 		};
 	}
 

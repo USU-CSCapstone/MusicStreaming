@@ -3437,8 +3437,22 @@ export interface components {
             audio: components["schemas"]["AudioSummary"];
             /** Format: date-time */
             addedAt?: string;
+            sortKeys: components["schemas"]["TrackSortKeys"];
             /** @description The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed. */
             personal?: components["schemas"]["Personal"];
+        };
+        /**
+         * @description What the server orders tracks by for `name`, `artist`, and `album` (`requirements/conventions.md`
+         *     §4): a tagged sort value where there is one, otherwise the display name with a leading article
+         *     stripped, case-folded. A client sorting a list it holds compares these by Unicode code point,
+         *     never by locale, and so orders it as the server would. An empty key is no value, which sorts
+         *     last.
+         */
+        TrackSortKeys: {
+            title: string;
+            /** @description The primary artist's. */
+            artist: string;
+            album: string;
         };
         AudioSummary: {
             codec: string;
