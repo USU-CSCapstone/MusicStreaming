@@ -2,6 +2,9 @@
 resolver = "3"
 members = ["crates/*"]
 
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
 # Password hashing is deliberately slow; unoptimized, one hash takes about half a second, which
 # makes tests and a debug server's logins crawl.
 [profile.dev.package.argon2]

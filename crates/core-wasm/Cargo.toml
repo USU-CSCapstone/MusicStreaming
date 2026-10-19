@@ -9,3 +9,6 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 jewelcase-core = { version = "0.1.0", path = "../core" }
 wasm-bindgen = "0.2.128"
+
+[lints]
+workspace = true

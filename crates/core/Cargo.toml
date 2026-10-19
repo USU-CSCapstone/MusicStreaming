@@ -6,3 +6,6 @@ edition = "2024"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 unicode-normalization = "0.1.25"
+
+[lints]
+workspace = true

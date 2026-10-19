@@ -31,3 +31,6 @@ tower = { version = "0.5.3", features = ["util"] }
 lofty = "0.25"
 tokio-tungstenite = "0.29"
 jewelcase-scanner = { version = "0.1.0", path = "../scanner", features = ["testing"] }
+
+[lints]
+workspace = true

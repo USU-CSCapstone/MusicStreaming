@@ -27,3 +27,6 @@ testing = ["dep:hound", "dep:tempfile"]
 tempfile = "3"
 hound = "3"
 jewelcase-scanner = { path = ".", features = ["testing"] }
+
+[lints]
+workspace = true
