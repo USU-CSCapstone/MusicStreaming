@@ -768,10 +768,12 @@ fn another_librarys_track_is_left_alone() {
 /// The cold-scan budget, store side only (`design/scanning.md` §15,
 /// `requirements/performance.md` §5): does persisting a large library and
 /// looking every file up fit inside an hour? Run with
-/// `cargo test --release -p jewelcase-server budget -- --ignored --nocapture`.
+/// `cargo test --release -p jewelcase-server benchmark_cold_scan -- --ignored --nocapture`.
+/// `BUDGET_TRACKS` sets the library size (default 50,000); each time is also printed scaled
+/// to 500,000 tracks.
 #[test]
-#[ignore]
-fn budget_store_only() {
+#[ignore = "benchmark"]
+fn benchmark_cold_scan_store_only() {
     use std::time::Instant;
     let tracks: usize =
         std::env::var("BUDGET_TRACKS").ok().and_then(|v| v.parse().ok()).unwrap_or(50_000);

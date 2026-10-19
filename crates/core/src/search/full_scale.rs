@@ -3,10 +3,10 @@ use super::*;
 
 /// Build and query times at the full-scale target: 500,000 tracks, 50,000 albums, and
 /// 20,000 artists named from a Zipf-distributed vocabulary. Run with
-/// `cargo test --release -p jewelcase-core search::tests::full_scale -- --ignored --nocapture`.
+/// `cargo test --release -p jewelcase-core benchmark_full_scale -- --ignored --nocapture`.
 #[test]
-#[ignore]
-fn full_scale() {
+#[ignore = "benchmark"]
+fn benchmark_full_scale() {
     // A deterministic generator, so every run measures the same library.
     let mut seed: u64 = 0x2545_F491_4F6C_DD1D;
     let mut next = move || {

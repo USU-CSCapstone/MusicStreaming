@@ -10,10 +10,10 @@ use crate::db::libraries;
 /// What a browse page costs at the Pi's library size (`requirements/performance.md` §1, §3):
 /// 100,000 tracks on 10,000 albums by 5,000 artists, each track with one or two artists and a
 /// genre, through the router so serializing counts too. Run with
-/// `cargo test --release -p jewelcase-server list_pages -- --ignored --nocapture`.
+/// `cargo test --release -p jewelcase-server benchmark_list_pages -- --ignored --nocapture`.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore]
-async fn list_pages() {
+#[ignore = "benchmark"]
+async fn benchmark_list_pages() {
     let (_temp, db, app) = app("");
     db.write(|tx| {
         libraries::create(tx, Some(1), "Music", &[Path::new("/music")], &[])?;

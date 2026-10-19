@@ -19,5 +19,5 @@ Then, with the server running:
 2. On **Account**, connect ListenBrainz with the token from listenbrainz.org/settings.
 3. Play something through to the end; it appears on your ListenBrainz profile within seconds.
 
-The server's own tests run this plugin against ListenBrainz once it is built:
-`cargo test -p jewelcase-server real_scrobbler -- --ignored`.
+The server's own tests run this plugin once it is built:
+`cargo test -p jewelcase-server delivers_plays_to_a_real_scrobbler -- --ignored`.

@@ -637,25 +637,27 @@ async fn delivers_changes_to_a_real_plugin() {
     panic!("the change was not delivered");
 }
 
-/// The whole path with the real ListenBrainz plugin and the real service: a token it does not
-/// accept is refused as it is entered, and a play reaches the plugin, which ListenBrainz turns
-/// away, so it is kept to send again without disabling the plugin.
+/// The whole path with the real ListenBrainz plugin and no network granted: checking user 7's
+/// token and delivering their play both reach the plugin and are refused when it tries to send,
+/// and the play is kept for user 7 to send again.
 #[tokio::test]
-#[ignore = "needs plugins/listenbrainz/build.sh and the network"]
+#[ignore = "needs plugins/listenbrainz/build.sh"]
 async fn delivers_plays_to_a_real_scrobbler() {
+    const REFUSED: &str = "the plugin reported an error: Network access was not granted";
     let (temp, db) = database().await;
     db.write(|tx| tx.execute_batch("DELETE FROM plugins")).await.unwrap();
     let plugins = Arc::new(Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new()));
     let file =
         concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/listenbrainz/target/listenbrainz.wasm");
     let id = plugins.install(std::fs::read(file).unwrap(), None).await.unwrap();
-    let plugin_wide = vec![Permission::ListeningActivity, Permission::Network, Permission::Played];
+    let plugin_wide = vec![Permission::ListeningActivity, Permission::Played];
     let per_library = vec![(1, vec![Permission::LibraryRead])];
     plugins.set_grants(id.clone(), plugin_wide, per_library).await.unwrap();
-    plugins.set_enabled(id.clone(), 1, true).await.unwrap();
+    // The network is required, so enabling is refused; enable it as the database allows.
     db.write(|tx| {
         tx.execute_batch(
-            "INSERT INTO users (id, username, display_name, role, password, created_at, updated_at)
+            "INSERT INTO plugin_libraries (plugin_id, library_id, enabled) VALUES ('listenbrainz', 1, 1);
+             INSERT INTO users (id, username, display_name, role, password, created_at, updated_at)
              VALUES (7, 'seven', 'Seven', 'user', '', 0, 0);
              INSERT INTO library_access VALUES (7, 1, 0);",
         )
@@ -663,19 +665,17 @@ async fn delivers_plays_to_a_real_scrobbler() {
     .await
     .unwrap();
 
-    let token = serde_json::json!({ "token": "not-a-real-token" });
+    let token = serde_json::json!({ "token": "a-token" });
     let refused = plugins.save_personal(id.clone(), 7, false, token.as_object().unwrap().clone());
     match refused.await {
-        Err(super::super::PluginError::SettingsInvalid(why)) => {
-            assert!(why.contains("ListenBrainz did not accept this token"), "{why}")
-        }
+        Err(super::super::PluginError::SettingsInvalid(why)) => assert_eq!(why, REFUSED),
         other => panic!("{other:?}"),
     }
 
     // Connected as if it had been accepted, then a play long enough to count.
     db.write(|tx| {
         tx.execute_batch(
-            r#"INSERT INTO plugin_user_settings VALUES ('listenbrainz', 7, '{"token":"not-a-real-token"}', 0)"#,
+            r#"INSERT INTO plugin_user_settings VALUES ('listenbrainz', 7, '{"token":"a-token"}', 0)"#,
         )
     })
     .await
@@ -690,7 +690,7 @@ async fn delivers_plays_to_a_real_scrobbler() {
         })
         .await;
         if let Some(summary) = summary {
-            assert!(summary.contains("ListenBrainz answered 401"), "{summary}");
+            assert_eq!(summary, REFUSED);
             let (failures, user): (i64, i64) = run(&db, |conn| {
                 conn.query_row("SELECT failures, user_id FROM plugin_cursors", [], |row| {
                     Ok((row.get(0)?, row.get(1)?))
