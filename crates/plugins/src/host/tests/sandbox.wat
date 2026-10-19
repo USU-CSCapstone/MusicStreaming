@@ -4,6 +4,10 @@
 ;; - `scheduled` waits 500 ms in a host call, does a little work, and answers "done";
 ;; - `searches-forgotten` does the same, but waits 10 minutes, past the host's time limit;
 ;; - `check-settings` grows its memory by 64 MiB, past the host's limit, and traps if refused;
+;; - `scan-finished` grows a table by a million elements, past the host's limit, and traps if
+;;   refused;
+;; - `played` subscribes to the clock 10,000 times without letting go, filling the host's
+;;   resource table, and answers "done" if it was not stopped;
 ;; - any other event answers "done".
 (component $plugin
   (import "wasi:io/poll@0.2.0" (instance $poll
@@ -90,12 +94,13 @@
     (import "wasi" "subscribe-duration" (func $subscribe (param i64) (result i32)))
     (import "wasi" "block" (func $block (param i32)))
     (memory (export "memory") 1)
+    (table $refs 1 funcref)
     ;; The answer at 8: `ok`, then a pointer to 32 and a length of 4; and at 32, its string.
     (data (i32.const 8) "\00\00\00\00\20\00\00\00\04\00\00\00")
     (data (i32.const 32) "done")
 
-    ;; For the events these tests send, the host allocates only the event, once per run, so it
-    ;; always goes at 64.
+    ;; For the events these tests send, the host allocates only the event, once per run, and at
+    ;; most an empty list, which takes no room, so each always goes at 64.
     (func (export "realloc") (param i32 i32 i32 i32) (result i32)
       (i32.const 64))
 
@@ -107,13 +112,26 @@
         (block $grow
           (block $wait
             (block $linger
-              (block $spin
-                ;; By the event's case: run, tracks-changed, scan-finished, scheduled,
-                ;; check-settings, played, playing, searched, searches-forgotten, and any other.
-                (br_table $spin $answer $answer $wait $grow $answer $answer $answer $linger $answer
-                  (i32.load8_u (local.get $event))))
-              ;; run
-              (loop $forever (br $forever)))
+              (block $hoard
+                (block $grow-table
+                  (block $spin
+                    ;; By the event's case: run, tracks-changed, scan-finished, scheduled,
+                    ;; check-settings, played, playing, searched, searches-forgotten, and any
+                    ;; other.
+                    (br_table $spin $answer $grow-table $wait $grow $hoard $answer $answer $linger
+                      $answer (i32.load8_u (local.get $event))))
+                  ;; run
+                  (loop $forever (br $forever)))
+                ;; scan-finished
+                (if (i32.eq (table.grow $refs (ref.null func) (i32.const 1_000_000)) (i32.const -1))
+                  (then unreachable))
+                (br $answer))
+              ;; played: each subscription holds two entries, the deadline and its pollable.
+              (loop $more
+                (drop (call $subscribe (i64.const 0)))
+                (local.set $work (i32.add (local.get $work) (i32.const 1)))
+                (br_if $more (i32.lt_u (local.get $work) (i32.const 10_000))))
+              (br $answer))
             ;; searches-forgotten
             (local.set $nanos (i64.const 600_000_000_000)))
           ;; scheduled and searches-forgotten

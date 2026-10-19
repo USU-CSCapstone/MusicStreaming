@@ -68,7 +68,22 @@ const CPU_BUDGET: u64 = 60_000;
 /// Wall-clock time for a whole run, waiting included, which bounds a plugin waiting on a slow
 /// service.
 const WALL_BUDGET: Duration = Duration::from_secs(300);
+/// How large a run's linear memory may grow, and separately its wasm GC heap, which `MEMORIES`
+/// does not count: about 128 MiB a run, before its tables and host-side state.
 const MEMORY_LIMIT: usize = 64 << 20;
+/// Linear memories a run may create. The bundled plugins and a JavaScript one built with
+/// componentize-js 0.23 each have one; a composed component, with one per part, is refused.
+const MEMORIES: usize = 1;
+/// Tables a run may create in all. The bundled plugins and that JavaScript one each have 2.
+const TABLES: usize = 10;
+/// Core instances a run may create in all. The bundled plugins have 3, and that JavaScript one 4.
+const INSTANCES: usize = 20;
+/// Elements any one table may hold. The most measured is 8,989, in that JavaScript plugin built
+/// ahead of time, and ten full tables of 8-byte elements come to 8 MB.
+const TABLE_ELEMENTS: usize = 100_000;
+/// Entries a run's WASI resource table may hold at once; a clock's pollable takes two. Handles
+/// to resources the plugin defines itself are not counted here or by any other cap.
+const RESOURCES: usize = 10_000;
 /// Log lines kept from one run, so a chatty plugin cannot fill the host's memory.
 const LOG_LINES: usize = 1000;
 
@@ -203,11 +218,13 @@ impl Host {
         Ok(Host { engine, compiled: Mutex::default(), network: Arc::default(), budget: CPU_BUDGET })
     }
 
-    /// Refuses a component that could never run here: one that does not compile, or does not
-    /// fit the contract version `api` its manifest declares.
+    /// Refuses a component that could never run here: one that does not compile, instantiates
+    /// core modules it imports, needs more memories, tables, or table elements than a run may
+    /// create, or does not fit the contract version `api` its manifest declares.
     pub fn check(&self, bytes: &[u8], api: Api) -> Result<(), String> {
         let component =
             Component::new(&self.engine, bytes).map_err(|e| e.root_cause().to_string())?;
+        fits(&component)?;
         self.pre::<Refused>(&component, api).map(drop)
     }
 
@@ -258,10 +275,32 @@ impl Host {
                 };
             }
         };
+        let mut store = self.store(grants, library);
+        let result = call(&pre, &mut store, &event).await;
+        // The store owned the run's state while the plugin ran; what it logged and saved is
+        // read back from it.
+        let run = store.into_data();
+        let (ok, summary) = match result {
+            Ok(summary) => (true, summary),
+            Err(error) => (false, error),
+        };
+        Outcome { ok, summary, log: run.log, written: run.written, touched: run.touched }
+    }
+
+    /// A fresh store for one run over `library` with `grants`, with its caps and compute budget.
+    fn store<L: Library>(&self, grants: Grants, library: L) -> Store<Run<L>> {
+        let mut table = ResourceTable::new();
+        table.set_max_capacity(RESOURCES);
         let run = Run {
             wasi: WasiCtx::builder().build(),
-            table: ResourceTable::new(),
-            limits: StoreLimitsBuilder::new().memory_size(MEMORY_LIMIT).build(),
+            table,
+            limits: StoreLimitsBuilder::new()
+                .memory_size(MEMORY_LIMIT)
+                .memories(MEMORIES)
+                .tables(TABLES)
+                .table_elements(TABLE_ELEMENTS)
+                .instances(INSTANCES)
+                .build(),
             ticks: 0,
             grants,
             library,
@@ -273,6 +312,8 @@ impl Host {
             touched: Vec::new(),
         };
         let mut store = Store::new(&self.engine, run);
+        // Memories, tables, and instances are counted across the whole store, so the caps bound
+        // every instance in a component together; sizes are capped for each memory and table.
         store.limiter(|run| &mut run.limits);
         // Each deadline is one tick after the callback last ran, and is only checked while the
         // plugin's code runs, so a wait in a host call, however long, costs one tick.
@@ -286,15 +327,7 @@ impl Host {
             Ok(UpdateDeadline::Yield(1))
         });
         store.set_epoch_deadline(1);
-        let result = call(&pre, &mut store, &event).await;
-        // The store owned the run's state while the plugin ran; what it logged and saved is
-        // read back from it.
-        let run = store.into_data();
-        let (ok, summary) = match result {
-            Ok(summary) => (true, summary),
-            Err(error) => (false, error),
-        };
-        Outcome { ok, summary, log: run.log, written: run.written, touched: run.touched }
+        store
     }
 
     /// The component linked against the bindings of contract version `api`.
@@ -316,6 +349,27 @@ impl Host {
             Api::V0_3 => Pre::Current(PluginPre::new(pre).map_err(unfit)?),
         })
     }
+}
+
+/// Refuses a component whose core modules, all instantiated, would need more memories, tables,
+/// or table elements than a run's store allows, so it is refused at install rather than on
+/// every run.
+fn fits(component: &Component) -> Result<(), String> {
+    let needs = component
+        .resources_required()
+        .ok_or("the plugin instantiates core modules it imports, which a run cannot give it")?;
+    if needs.num_memories as usize > MEMORIES {
+        return Err(format!("the plugin has {} memories, and may have one", needs.num_memories));
+    }
+    if needs.num_tables as usize > TABLES {
+        return Err(format!("the plugin has {} tables, and may have {TABLES}", needs.num_tables));
+    }
+    if let Some(elements) = needs.max_initial_table_size.filter(|&n| n > TABLE_ELEMENTS as u64) {
+        return Err(format!(
+            "the plugin has a table of {elements} elements, past {TABLE_ELEMENTS}"
+        ));
+    }
+    Ok(())
 }
 
 /// A component linked and ready to instantiate, by the contract it was built against.

@@ -11,6 +11,13 @@ The output is what an admin uploads on the Plugins page or links to. Packing aga
 the manifest rather than adding a second one, and a file that would not install is never
 written. The error says what to fix.
 
+## The component
+
+A plugin is one component with **one linear memory**, which may grow to 64 MiB. Rust through
+wit-bindgen for `wasm32-wasip2`, and JavaScript through componentize-js, each build one. A
+component composed from several, as wac or wasm-compose make, brings a memory for each part and
+is refused at install. The other caps a run keeps to are in `design/plugins.md` §7.
+
 ## The manifest
 
 ```json
