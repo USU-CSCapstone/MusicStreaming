@@ -25,7 +25,7 @@ Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`ex
 | `state` | `get`, `set`, `delete` | — (per plugin and library) | 512 B keys, 1 MB values |
 | `settings` | `get` | — | Library value, else server-wide value, else the default, plus the connected user's personal settings |
 
-The limits on every run are 64 MiB of memory, 60 s of compute, and 5 minutes of wall clock.
+The limits on every run are 64 MiB of memory, about 60 s of compute (counted in epoch ticks, [`plugins.md` §7](plugins.md#7-running-plugins)), and 5 minutes of wall clock.
 
 **`http.send` keeps to a declared pace and shares a cache** ([`plugins.md` §7](plugins.md#7-running-plugins)). A network request declares `rateLimits` per destination, each counting the plugin's own requests, its runs for each user apart, or, with `hostRateLimits`, every plugin's requests to that host, at the strictest any plugin in force declared, except those an admin exempted. A `429` or `503` pauses only the scope of the request it answered, for as long as `Retry-After` asks or with exponential backoff and full jitter. A GET is answered from a fresh reply already fetched by a run that sees the same (the same library and user, and the same grant or not of `libraryRead`, `listeningActivity`, and `searchActivity`) for the same URL and headers, and a stale one is checked with its `ETag` or `Last-Modified`.
 

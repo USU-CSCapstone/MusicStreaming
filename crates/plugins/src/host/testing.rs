@@ -1,10 +1,9 @@
-//! What the host's tests share: a library held in memory, and a run over it built without a
-//! plugin, so a test calls the host imports directly.
+//! What the host's tests share: a library held in memory, a plugin's grants, and a run over it
+//! built without a plugin, so a test calls the host imports directly.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
 use wasmtime::StoreLimitsBuilder;
 use wasmtime::component::ResourceTable;
@@ -133,24 +132,29 @@ pub fn artist(id: u64) -> Artist {
     }
 }
 
-/// A run of plugin `test` in library 1 over `library`, granted `permissions`, with 127.0.0.1
-/// its only destination, for no user, with no rate limits or settings, and a network of its own.
+/// The grants of plugin `test` in library 1: `permissions`, with 127.0.0.1 its only
+/// destination, for no user, with no rate limits or settings.
+pub fn grants(permissions: &[Permission]) -> Grants {
+    Grants {
+        plugin: "test".into(),
+        library: 1,
+        user: None,
+        permissions: permissions.to_vec(),
+        destinations: vec!["127.0.0.1".into()],
+        rate_limits: Vec::new(),
+        host_limits: Vec::new(),
+        settings: Default::default(),
+    }
+}
+
+/// A run over `library` with `grants(permissions)`, and a network of its own.
 pub fn run(library: Memory, permissions: &[Permission]) -> Run<Memory> {
     Run {
         wasi: WasiCtx::builder().build(),
         table: ResourceTable::new(),
         limits: StoreLimitsBuilder::new().build(),
-        deadline: Instant::now(),
-        grants: Grants {
-            plugin: "test".into(),
-            library: 1,
-            user: None,
-            permissions: permissions.to_vec(),
-            destinations: vec!["127.0.0.1".into()],
-            rate_limits: Vec::new(),
-            host_limits: Vec::new(),
-            settings: Default::default(),
-        },
+        ticks: 0,
+        grants: grants(permissions),
         library,
         client: None,
         network: Arc::default(),

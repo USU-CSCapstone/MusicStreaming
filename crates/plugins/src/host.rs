@@ -13,7 +13,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
@@ -26,6 +26,8 @@ mod http;
 mod library;
 #[cfg(test)]
 mod testing;
+#[cfg(test)]
+mod tests;
 mod v0_2;
 
 mod bindings {
@@ -57,10 +59,14 @@ pub use bindings::jewelcase::plugin::events::{
 };
 pub use bindings::jewelcase::plugin::library::{Album, Artist, Track};
 
-/// Compute a plugin may spend in one run, counted while its code runs.
-const CPU_BUDGET: Duration = Duration::from_secs(60);
-/// Wall-clock time for a whole run. Epoch deadlines stop while the host awaits a network
-/// reply, so this is what bounds a plugin waiting on a slow service.
+/// How often the epoch advances, and so how often a running plugin is checked. A tick is a sleep
+/// that runs a little long, at about 1.05 ms.
+const TICK: Duration = Duration::from_millis(1);
+/// Compute a plugin may spend in one run, in ticks: about 63 s. Ticks count only while its code
+/// runs, but each host call it waits on costs one however long it takes, so this is approximate.
+const CPU_BUDGET: u64 = 60_000;
+/// Wall-clock time for a whole run, waiting included, which bounds a plugin waiting on a slow
+/// service.
 const WALL_BUDGET: Duration = Duration::from_secs(300);
 const MEMORY_LIMIT: usize = 64 << 20;
 /// Log lines kept from one run, so a chatty plugin cannot fill the host's memory.
@@ -172,11 +178,13 @@ pub struct Host {
     compiled: Mutex<HashMap<PathBuf, (SystemTime, Component)>>,
     /// What every run's requests share: each destination's pace, and replies to reuse.
     network: Arc<Network>,
+    /// The ticks of compute each run may spend: `CPU_BUDGET`, or fewer in tests.
+    budget: u64,
 }
 
 impl Host {
-    /// The engine, and a thread ticking its epoch so deadlines are checked every millisecond.
-    /// The thread ends with the engine.
+    /// The engine, and a thread advancing its epoch every `TICK`. The thread ends with the
+    /// engine. Fails if either cannot be started.
     pub fn new() -> Result<Host, String> {
         let mut config = Config::new();
         config.epoch_interruption(true);
@@ -188,11 +196,11 @@ impl Host {
                 while let Some(engine) = weak.upgrade() {
                     engine.increment_epoch();
                     drop(engine);
-                    thread::sleep(Duration::from_millis(1));
+                    thread::sleep(TICK);
                 }
             })
             .map_err(|e| e.to_string())?;
-        Ok(Host { engine, compiled: Mutex::default(), network: Arc::default() })
+        Ok(Host { engine, compiled: Mutex::default(), network: Arc::default(), budget: CPU_BUDGET })
     }
 
     /// Refuses a component that could never run here: one that does not compile, or does not
@@ -254,7 +262,7 @@ impl Host {
             wasi: WasiCtx::builder().build(),
             table: ResourceTable::new(),
             limits: StoreLimitsBuilder::new().memory_size(MEMORY_LIMIT).build(),
-            deadline: Instant::now() + CPU_BUDGET,
+            ticks: 0,
             grants,
             library,
             client: None,
@@ -266,8 +274,13 @@ impl Host {
         };
         let mut store = Store::new(&self.engine, run);
         store.limiter(|run| &mut run.limits);
-        store.epoch_deadline_callback(|ctx| {
-            if Instant::now() >= ctx.data().deadline {
+        // Each deadline is one tick after the callback last ran, and is only checked while the
+        // plugin's code runs, so a wait in a host call, however long, costs one tick.
+        let budget = self.budget;
+        store.epoch_deadline_callback(move |mut ctx| {
+            let run = ctx.data_mut();
+            run.ticks += 1;
+            if run.ticks >= budget {
                 return Err(wasmtime::Error::msg("the plugin ran past its compute budget"));
             }
             Ok(UpdateDeadline::Yield(1))
@@ -400,7 +413,8 @@ pub struct Run<L> {
     wasi: WasiCtx,
     table: ResourceTable,
     limits: StoreLimits,
-    deadline: Instant,
+    /// The ticks of compute it has spent.
+    ticks: u64,
     grants: Grants,
     library: L,
     /// Made on the first request, so a plugin that never uses the network costs no client.
