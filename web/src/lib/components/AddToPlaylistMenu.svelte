@@ -9,6 +9,7 @@
 	import { addTracks, alreadyIn, describe, playables } from '$lib/adding.svelte';
 	import { deleted } from '$lib/deletions.svelte';
 	import { plural } from '$lib/format';
+	import { Paged } from '$lib/paged.svelte';
 	import { toast } from '$lib/toast.svelte';
 	import Icon from './Icon.svelte';
 	import PlaylistDetailsDialog, { type PlaylistDetails } from './PlaylistDetailsDialog.svelte';
@@ -30,7 +31,7 @@
 		| { kind: 'create' }
 		| { kind: 'confirm'; playlist: Playlist; repeated: TrackSummary[] };
 	let step = $state<Step>({ kind: 'menu' });
-	let playlists = $state<Playlist[] | null>(null);
+	let playlists = $state<Paged<Playlist> | null>(null);
 	let failed = $state('');
 	let menu = $state<HTMLElement>();
 	let place = $state({ top: 0, left: 0 });
@@ -38,21 +39,26 @@
 	const libraryId = $derived(page.data.library?.id ?? '');
 	const uid = $props.id();
 	const confirmId = `already-${uid}`;
-	const shown = $derived(playlists?.filter((p) => !deleted.has(p.id)) ?? []);
+	const shown = $derived(playlists?.items.filter((p) => !deleted.has(p.id)) ?? []);
 
 	onMount(() => {
 		void position();
 		items()[0]?.focus();
 		void load();
-		// It belongs beside what opened it, so it goes when that scrolls away.
-		const scrolled = () => step.kind === 'menu' && onclose();
+		// It belongs beside what opened it, so it goes when that scrolls away, but not when its
+		// own list scrolls.
+		const scrolled = (e: Event) => {
+			if (step.kind === 'menu' && !menu?.contains(e.target as Node)) onclose();
+		};
 		addEventListener('scroll', scrolled, true);
 		return () => removeEventListener('scroll', scrolled, true);
 	});
 
 	async function load() {
 		try {
-			playlists = (await listPlaylists(fetch, libraryId, { limit: 200 })).items;
+			// Every playlist, a page at a time as the list scrolls.
+			const first = await listPlaylists(fetch, libraryId);
+			playlists = new Paged(first, (cursor) => listPlaylists(fetch, libraryId, { cursor }));
 		} catch (e) {
 			failed = e instanceof Error ? e.message : String(e);
 		}
@@ -160,6 +166,9 @@
 					<span class="count muted">{plural(playlist.trackCount, 'song')}</span>
 				</button>
 			{/each}
+			{#if playlists}
+				<div {@attach (el) => playlists?.sentinel(el, el.parentElement)} aria-hidden="true"></div>
+			{/if}
 		</div>
 		{#if playlists === null && !failed}
 			<p class="state muted">Loading your playlists…</p>
@@ -235,6 +244,8 @@
 		flex-direction: column;
 		max-height: min(320px, 50vh);
 		overflow-y: auto;
+		/* Its end does not scroll the page behind, which would close it. */
+		overscroll-behavior: contain;
 	}
 
 	.menu button {

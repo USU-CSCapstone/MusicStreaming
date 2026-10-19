@@ -438,6 +438,28 @@ test.describe('adding to a playlist', () => {
 		await expect(titles(page)).toHaveText(['Signal Part 2', 'Signal Remix', 'Signal Remix']);
 	});
 
+	test('scrolls through every playlist, a page at a time, staying open', async ({ page }) => {
+		// More than a page of them.
+		const playlists = Array.from({ length: 150 }, (_, i) => ({
+			...roadTrip,
+			id: `pl-${i}`,
+			title: `Playlist ${i + 1}`
+		}));
+		await serveLibrary(page, { playlists });
+		await page.goto(`/albums/${album.id}`);
+		await more(page, 'Signal Part 1').click();
+		const menu = page.getByRole('menu');
+		const items = menu.getByRole('menuitem');
+		await expect(items).toHaveCount(101);
+
+		await items.nth(2).hover();
+		await page.mouse.wheel(0, 10_000);
+		await expect(items).toHaveCount(151);
+		// Its end reached, it still holds the scroll.
+		await page.mouse.wheel(0, 10_000);
+		await expect(menu).toBeVisible();
+	});
+
 	test('works from the keyboard', async ({ page }) => {
 		await serveLibrary(page, { playlists: [signalMix, roadTrip] });
 		await page.goto(`/albums/${album.id}`);
