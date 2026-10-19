@@ -556,6 +556,76 @@ pub fn folder_scope_reconciles_only_inside_itself<S: InspectStore>(make: Factory
     assert_eq!(scan.progress.missing, 1);
 }
 
+/// A Subtree scope on a non-ASCII folder, which is longer in bytes than in characters,
+/// reconciles only inside that folder. `Björk 1 (Live)` sorts just before `Björk 1/` and
+/// `Björk 10` just after it, so neither range bound can move by one character unnoticed.
+pub fn non_ascii_subtree_reconciles_only_inside_itself<S: InspectStore>(make: Factory<S>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    make_album(&root, "Björk 1", "Début", 2);
+    make_album(&root, "Björk 1 (Live)", "X", 1);
+    make_album(&root, "Björk 10", "X", 1);
+    let store = make(&root);
+    let lib = library(&root);
+    scan_library(&store, &lib);
+
+    for path in ["Björk 1/Début", "Björk 1 (Live)/X", "Björk 10/X"] {
+        fs::remove_file(root.join(path).join("01 - Track 1.wav")).unwrap();
+    }
+    let scope = Scope::folder(&root, root.join("Björk 1"), Depth::Subtree);
+    let scan = scan_once(&store, &lib, Trigger::Watch, vec![scope]);
+    assert_eq!(scan.progress.missing, 1);
+    let live: Vec<PathBuf> = live(&store, &lib).into_iter().map(|t| t.path).collect();
+    assert_eq!(
+        live,
+        [
+            root.join("Björk 1/Début/02 - Track 2.wav"),
+            root.join("Björk 1 (Live)/X/01 - Track 1.wav"),
+            root.join("Björk 10/X/01 - Track 1.wav"),
+        ]
+    );
+}
+
+/// A Directory scope under a non-ASCII folder reconciles its own files and none in the folder
+/// below it, whose one-character name the folder's extra bytes would otherwise skip past.
+pub fn non_ascii_directory_reconciles_only_itself<S: InspectStore>(make: Factory<S>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    make_album(&root, "Björk", "Début", 2);
+    make_album(&root, "Björk/Début", "1", 1);
+    let store = make(&root);
+    let lib = library(&root);
+    scan_library(&store, &lib);
+
+    fs::remove_file(root.join("Björk/Début/01 - Track 1.wav")).unwrap();
+    let scope = Scope::folder(&root, root.join("Björk/Début"), Depth::Directory);
+    let scan = scan_once(&store, &lib, Trigger::Watch, vec![scope]);
+    assert_eq!(scan.progress.missing, 1);
+    let live: Vec<PathBuf> = live(&store, &lib).into_iter().map(|t| t.path).collect();
+    assert_eq!(
+        live,
+        [root.join("Björk/Début/02 - Track 2.wav"), root.join("Björk/Début/1/01 - Track 1.wav")]
+    );
+}
+
+/// A Directory scope on the root reconciles the root's own files and none in its folders.
+pub fn root_directory_reconciles_only_its_own_files<S: InspectStore>(make: Factory<S>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    write_small_wav(&root.join("loose.wav"));
+    make_album(&root, "A", "X", 1);
+    let store = make(&root);
+    let lib = library(&root);
+    scan_library(&store, &lib);
+
+    fs::remove_file(root.join("loose.wav")).unwrap();
+    let scope = Scope::folder(&root, &root, Depth::Directory);
+    let scan = scan_once(&store, &lib, Trigger::Watch, vec![scope]);
+    assert_eq!(scan.progress.missing, 1);
+    let live: Vec<PathBuf> = live(&store, &lib).into_iter().map(|t| t.path).collect();
+    assert_eq!(live, [root.join("A/X/01 - Track 1.wav")]);
+}
+
 pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
@@ -823,6 +893,18 @@ macro_rules! store_suite {
         #[test]
         fn folder_scope_reconciles_only_inside_itself() {
             $crate::testing::folder_scope_reconciles_only_inside_itself($make);
+        }
+        #[test]
+        fn non_ascii_subtree_reconciles_only_inside_itself() {
+            $crate::testing::non_ascii_subtree_reconciles_only_inside_itself($make);
+        }
+        #[test]
+        fn non_ascii_directory_reconciles_only_itself() {
+            $crate::testing::non_ascii_directory_reconciles_only_itself($make);
+        }
+        #[test]
+        fn root_directory_reconciles_only_its_own_files() {
+            $crate::testing::root_directory_reconciles_only_its_own_files($make);
         }
         #[test]
         fn queue_runs_resumes_and_coalesces() {

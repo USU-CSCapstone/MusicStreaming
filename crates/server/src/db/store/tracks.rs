@@ -6,7 +6,7 @@ use std::path::Path;
 
 use jewelcase_scanner::store::{Batch, IndexedFile, IndexedLyrics};
 use jewelcase_scanner::{Depth, DuplicateCandidate, ScanId, Scope};
-use rusqlite::{Connection, OptionalExtension, Result, params};
+use rusqlite::{Connection, OptionalExtension, Result, ToSql, params};
 
 use super::SqliteStore;
 use super::problems::{clear_problem, record_problem};
@@ -95,24 +95,29 @@ pub fn mark_missing_unseen(
     let depth = scope.depth;
     store.db.write_blocking(move |tx| {
         let now = now_ms();
-        // Scope clause without GLOB, so pattern characters in folder
-        // names cannot widen or narrow it.
-        let prefix = if rel.is_empty() { String::new() } else { format!("{rel}/") };
-        let clause = match depth {
-            Depth::Subtree => "substr(path, 1, ?3) = ?4",
-            Depth::Directory => "substr(path, 1, ?3) = ?4 AND instr(substr(path, ?3 + 1), '/') = 0",
-        };
-        let sql = format!(
-            "SELECT id FROM tracks WHERE root_id = ?1 AND missing_since IS NULL \
-             AND (last_seen_scan_id IS NULL OR last_seen_scan_id <> ?2) AND {clause}"
-        );
-        let ids: Vec<i64> = {
-            let mut stmt = tx.prepare(&sql)?;
-            let rows = stmt
-                .query_map(params![root_id, scan_id as i64, prefix.len() as i64, prefix], |r| {
-                    r.get(0)
-                })?;
-            rows.collect::<std::result::Result<_, _>>()?
+        let unseen = "SELECT id FROM tracks WHERE root_id = ?1 AND missing_since IS NULL \
+                      AND (last_seen_scan_id IS NULL OR last_seen_scan_id <> ?2)";
+        let scan_id = scan_id as i64;
+        let ids = if rel.is_empty() {
+            let sql = match depth {
+                Depth::Subtree => unseen.to_owned(),
+                Depth::Directory => format!("{unseen} AND instr(path, '/') = 0"),
+            };
+            unseen_ids(tx, &sql, params![root_id, scan_id])?
+        } else {
+            // Under BINARY collation the paths that start with `{rel}/` are exactly those from it
+            // up to `{rel}0`, `0` being the character after `/`: a range on `tracks_file`, with no
+            // pattern characters in folder names to widen or narrow it. The Directory term measures
+            // the prefix with SQL `length`, which counts characters as `substr` does; a byte length
+            // would skip past the start of the remainder on non-ASCII folder names.
+            let sql = match depth {
+                Depth::Subtree => format!("{unseen} AND path >= ?3 AND path < ?4"),
+                Depth::Directory => format!(
+                    "{unseen} AND path >= ?3 AND path < ?4 \
+                     AND instr(substr(path, length(?3) + 1), '/') = 0"
+                ),
+            };
+            unseen_ids(tx, &sql, params![root_id, scan_id, format!("{rel}/"), format!("{rel}0")])?
         };
         let mut touched = Touched::default();
         for id in &ids {
@@ -126,6 +131,12 @@ pub fn mark_missing_unseen(
         catalog::recompute(tx, lib, &mut touched, now)?;
         Ok(ids.len())
     })
+}
+
+/// Runs `sql` with `args` bound and returns the ids in its first column.
+fn unseen_ids(conn: &Connection, sql: &str, args: &[&dyn ToSql]) -> Result<Vec<i64>> {
+    let mut stmt = conn.prepare(sql)?;
+    stmt.query_map(args, |r| r.get(0))?.collect()
 }
 
 pub fn duplicate_candidates(
