@@ -24,6 +24,8 @@ use crate::network::Network;
 
 mod http;
 mod library;
+#[cfg(test)]
+mod testing;
 mod v0_2;
 
 mod bindings {

@@ -162,3 +162,6 @@ impl<L: Library> state::Host for Run<L> {
         self.library.state_delete(key).await
     }
 }
+
+#[cfg(test)]
+mod tests;
