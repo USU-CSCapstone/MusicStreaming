@@ -94,19 +94,13 @@ export class EditablePlaylist {
 		if (change.title !== undefined) undo.title = before.playlist.title;
 		if (change.description !== undefined) undo.description = before.playlist.description;
 		if (change.pinned !== undefined) undo.pinned = before.playlist.pinned;
-		const inverse = ops ? invertOps(before.items, ops, resolve, toPlayable) : [];
-		if (inverse.length) undo.ops = inverse;
+		const inverse = ops ? invertOps(before.items, ops, resolve, toPlayable) : { ops: [], resolve };
+		if (inverse.ops.length) undo.ops = inverse.ops;
 		const after = this.items;
 		return () => {
 			if (this.items !== after || Object.keys(undo).length === 0) return;
-			// What comes back is what went: the same items, found among those before.
-			this.#edit(undo, (added) =>
-				added.map((p) => {
-					const item = before.items.find((i) => same(toPlayable(i), p));
-					if (!item) throw new Error('Undo brings back only what was there.');
-					return item;
-				})
-			);
+			// What comes back is what went: the same items, with the same dates added.
+			this.#edit(undo, inverse.resolve);
 		};
 	}
 
@@ -224,9 +218,6 @@ function toPlayable(item: PlaylistItem): Playable {
 	if (item.track) return { type: 'track', id: item.track.id };
 	return { type: 'external', sourceId: item.external!.source!, externalId: item.external!.id };
 }
-
-// Both sides come from `toPlayable`, so their keys are in the same order.
-const same = (a: Playable, b: Playable) => JSON.stringify(a) === JSON.stringify(b);
 
 /** Whether `e` is the server out of reach or overloaded, rather than refusing the edit. */
 function unreachable(e: unknown): boolean {
