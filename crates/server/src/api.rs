@@ -74,6 +74,29 @@ struct AppState {
     prefix: Arc<str>,
 }
 
+impl AppState {
+    /// The state of an API mounted at `prefix`, before any search index is built, setup is
+    /// seen done, or a realtime connection opens.
+    fn new(
+        db: Arc<Database>,
+        images: Images,
+        plugins: Arc<Plugins>,
+        players: Arc<Players>,
+        prefix: &str,
+    ) -> AppState {
+        AppState {
+            db,
+            images: Arc::new(images),
+            indexes: Arc::default(),
+            setup: Arc::default(),
+            plugins,
+            hub: Arc::default(),
+            players,
+            prefix: prefix.into(),
+        }
+    }
+}
+
 impl FromRef<AppState> for Arc<Database> {
     fn from_ref(state: &AppState) -> Arc<Database> {
         state.db.clone()
@@ -119,16 +142,7 @@ pub fn router(
     players: Arc<Players>,
 ) -> Router {
     let prefix = format!("{base_path}/api/v1");
-    let state = AppState {
-        db,
-        images: Arc::new(images),
-        indexes: Arc::default(),
-        setup: Arc::default(),
-        plugins,
-        hub: Arc::default(),
-        players,
-        prefix: prefix.as_str().into(),
-    };
+    let state = AppState::new(db, images, plugins, players, &prefix);
     // These answer `401` without a token.
     let signed_in = Router::new()
         .route("/auth/logout", post(session::logout))

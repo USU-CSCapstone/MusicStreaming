@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::Arc;
 
 use axum::Router;
@@ -13,10 +12,12 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 use super::session::token_hash;
-use super::{Images, router};
-use crate::db::{Database, libraries};
+use super::{AppState, Images, router};
+use crate::db::Database;
+use crate::db::testing::{Album, Device, Track, User, library};
 use crate::plugins::Plugins;
 
+pub mod player;
 pub mod socket;
 
 /// The owner's token in [`app`], which [`send`] and the helpers built on it log in with.
@@ -28,34 +29,21 @@ pub fn app(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
     let (temp, db, app) = app_before_setup(base_path);
     // Its own connection: tests call this inside the runtime, where `write_blocking` cannot wait.
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
-    conn.execute(
-        "INSERT INTO users (id, username, display_name, role, password, created_at, updated_at) \
-         VALUES (1, 'owner', 'Owner', 'owner', '', 0, 0)",
-        [],
-    )
-    .unwrap();
+    let owner =
+        User { username: "owner".into(), display_name: "Owner".into(), ..User::new(1, "owner") };
+    owner.insert(&conn).unwrap();
     add_device(&conn, 1, 1, TOKEN);
     (temp, db, app)
 }
 
 /// Adds account `id` with `role`, named after it, such as `user2`.
-pub fn add_user(conn: &rusqlite::Connection, id: i64, role: &str) {
-    conn.execute(
-        "INSERT INTO users (id, username, display_name, role, password, created_at, updated_at) \
-         VALUES (?1, 'user' || ?1, 'User ' || ?1, ?2, '', 0, 0)",
-        rusqlite::params![id, role],
-    )
-    .unwrap();
+pub fn add_user(conn: &rusqlite::Connection, id: i64, role: &'static str) {
+    User::new(id, role).insert(conn).unwrap();
 }
 
 /// Logs `user` in on a new device `id` with `token`, last seen at the epoch.
 pub fn add_device(conn: &rusqlite::Connection, user: i64, id: i64, token: &str) {
-    conn.execute(
-        "INSERT INTO devices (id, user_id, name, type, token_hash, created_at, last_seen_at) \
-         VALUES (?1, ?2, 'Test', 'desktop', ?3, 0, 0)",
-        rusqlite::params![id, user, token_hash(token)],
-    )
-    .unwrap();
+    Device::new(user, id, token_hash(token)).insert(conn).unwrap();
 }
 
 /// The API over a fresh database, as a new server first starts: with no owner.
@@ -71,8 +59,15 @@ pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, R
     (temp, db, app)
 }
 
-/// [`app`] with library 1 holding tracks 1 and 2, and library 2 holding track 3, each on
-/// an album of its own library and with no lyrics or waveform.
+/// What the API's handlers share, over `db` in `temp`, mounted at the root.
+pub fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
+    let images = Images::new(temp.path().join("cache"), "ffmpeg".into());
+    let plugins = Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new());
+    AppState::new(db, images, Arc::new(plugins), Arc::default(), "/api/v1")
+}
+
+/// [`app`] with library 1 holding tracks 1 and 2, and library 2 holding track 3, each called
+/// `A`, on an album of its own library, and with no lyrics or waveform.
 pub async fn app_with_tracks() -> (tempfile::TempDir, Arc<Database>, Router) {
     app_with_tracks_at("").await
 }
@@ -81,21 +76,15 @@ pub async fn app_with_tracks() -> (tempfile::TempDir, Arc<Database>, Router) {
 pub async fn app_with_tracks_at(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
     let (temp, db, app) = app(base_path);
     db.write(|tx| {
-        libraries::create(tx, Some(1), "Music", &[Path::new("/music")], &[])?;
-        libraries::create(tx, Some(2), "Other", &[Path::new("/other")], &[])?;
-        tx.execute_batch(
-            "INSERT INTO albums (id, library_id, title_key, artists_key, sort_key,
-                                 artist_sort_key, added_at, updated_at)
-             VALUES (101, 1, 'a', '', x'61', x'', 0, 0), (201, 2, 'a', '', x'61', x'', 0, 0);
-             WITH t (id, library_id, album_id) AS (VALUES (1, 1, 101), (2, 1, 101), (3, 2, 201))
-             INSERT INTO tracks (id, library_id, album_id, root_id, path, file_size, file_mtime,
-                                 title, sort_key, artist_sort_key, album_sort_key, codec,
-                                 container, lossless, sample_rate_hz, channels, duration_us,
-                                 added_at, updated_at)
-             SELECT t.id, t.library_id, t.album_id, r.id, t.id || '.flac', 10, 0, 'A', x'61',
-                    x'', x'61', 'flac', 'flac', 1, 44100, 2, 1000000, 0, 0
-             FROM t JOIN library_roots r ON r.library_id = t.library_id;",
-        )
+        library(tx, 1, "Music", "/music")?;
+        library(tx, 2, "Other", "/other")?;
+        Album::new(101, 1).insert(tx)?;
+        Album::new(201, 2).insert(tx)?;
+        for (id, library, album) in [(1, 1, 101), (2, 1, 101), (3, 2, 201)] {
+            let track = Track::new(id, library, album);
+            Track { title: "A".into(), sort_key: b"a".to_vec(), ..track }.insert(tx)?;
+        }
+        Ok(())
     })
     .await
     .unwrap();

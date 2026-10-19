@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 use super::super::testing::{add_device, add_user, app_with_tracks, owner_request, respond};
 use crate::db::Database;
+use crate::db::testing::access;
 
 const PLAY: &str = "5f0c6a52-3b7e-4d43-9a8e-0d1c2b3a4f5e";
 
@@ -76,7 +77,7 @@ async fn a_play_out_of_reach_is_left_out_and_someone_elses_is_never_changed() {
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 2, "user-token");
-    conn.execute("INSERT INTO library_access VALUES (2, 1, 0)", []).unwrap();
+    access(&conn, 2, 1).unwrap();
     let as_user = || {
         Request::builder()
             .method("POST")

@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::super::testing::{app_before_setup, respond, send_json};
 use crate::db::Database;
+use crate::db::testing::User;
 
 const PASSWORD: &str = "correct horse battery staple";
 
@@ -79,12 +80,11 @@ async fn logs_in_on_a_new_device() {
 async fn every_refusal_is_the_same() {
     let (_temp, db, app) = server().await;
     db.write(|tx| {
-        tx.execute(
-            "INSERT INTO users (id, username, display_name, role, status, password, created_at, \
-             updated_at) SELECT 2, 'away', 'Away', 'user', 'suspended', password, 0, 0 \
-             FROM users WHERE username = 'sam'",
-            [],
-        )
+        let password =
+            tx.query_row("SELECT password FROM users WHERE username = 'sam'", [], |r| r.get(0))?;
+        let away =
+            User { username: "away".into(), status: "suspended", password, ..User::new(2, "user") };
+        away.insert(tx)
     })
     .await
     .unwrap();

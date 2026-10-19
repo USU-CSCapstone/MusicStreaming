@@ -8,6 +8,7 @@ use super::super::testing::{app, json, page_through};
 use super::*;
 use crate::api::page;
 use crate::db::libraries;
+use crate::db::testing::{Album, library, scattered_key};
 
 /// Library 1 holds, by name: "Abbey Road" (1969), "Kid A" (2000), "Nevermind" (no date),
 /// and the unknown album (no title, no date); library 2 holds one album of its own.
@@ -193,22 +194,22 @@ async fn bad_parameters_are_validation_problems() {
 async fn every_sort_reads_from_an_index() {
     let (_temp, db, _app) = app("");
     db.write(|tx| {
-        libraries::create(tx, Some(1), "Music", &[], &[])?;
+        library(tx, 1, "Music", "/music")?;
         // 20,000 albums: 5 per artist, a sixth undated, a few with unknown names.
-        tx.execute_batch(
-            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
-             INSERT INTO albums (id, library_id, title, title_key, artists_key, sort_key,
-                                 artist_sort_key, release_date, duration_us, added_at, updated_at)
-             SELECT i, 1, 'Album ' || i, 'album ' || i, 'k' || i,
-                    CASE WHEN i % 1000 = 0 THEN x''
-                         ELSE CAST(printf('album %08x', abs(random()) % 4294967296) AS BLOB) END,
-                    CASE WHEN i % 997 = 0 THEN x''
-                         ELSE CAST(printf('artist %05d', i % 4000) AS BLOB) END,
-                    CASE WHEN i % 6 = 0 THEN NULL ELSE printf('%04d', 1950 + i % 75) END,
-                    (i % 3000) * 1000000, i, 0
-             FROM n;
-             ANALYZE;",
-        )
+        for i in 1..=20_000 {
+            let artist_key = format!("artist {:05}", i % 4000).into_bytes();
+            let album = Album {
+                title: Some(format!("Album {i}")),
+                sort_key: if i % 1000 == 0 { Vec::new() } else { scattered_key("album", i) },
+                artist_sort_key: if i % 997 == 0 { Vec::new() } else { artist_key },
+                release_date: (i % 6 != 0).then(|| format!("{:04}", 1950 + i % 75)),
+                duration_us: (i % 3000) * 1_000_000,
+                added_at: i,
+                ..Album::new(i, 1)
+            };
+            album.insert(tx)?;
+        }
+        tx.execute_batch("ANALYZE")
     })
     .await
     .unwrap();

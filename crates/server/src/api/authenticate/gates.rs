@@ -8,6 +8,7 @@ use axum::http::{HeaderMap, Request, StatusCode, header};
 use serde_json::{Value, json};
 
 use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks_at, respond};
+use crate::db::testing::{Artist, Image, access};
 
 /// Every route behind [`super::require`], as a method and a path under the API prefix with
 /// sample IDs. Paths under a library name library 2 and something [`server`] puts in it, so a
@@ -73,15 +74,13 @@ async fn server(base: &str) -> (tempfile::TempDir, Router) {
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 2, "user-token");
-    conn.execute_batch(
-        "INSERT INTO library_access (user_id, library_id, granted_at) VALUES (2, 1, 0);
-         INSERT INTO artists (id, library_id, name, name_key, sort_key, added_at, updated_at)
-         VALUES (20, 2, 'Elsewhere', 'elsewhere', x'65', 0, 0);
-         INSERT INTO images (id, library_id, hash, format, width, height, root_id, path, embedded)
-         SELECT 20, 2, x'20', 'png', 1, 1, id, 'cover.png', 0 FROM library_roots
-         WHERE library_id = 2;
-         INSERT INTO recent_searches (id, user_id, library_id, query, folded, searched_at)
-         VALUES (20, 2, 2, 'a', 'a', unixepoch() * 1000);",
+    access(&conn, 2, 1).unwrap();
+    Artist::new(20, 2, "Elsewhere").insert(&conn).unwrap();
+    Image::new(20, 2, "cover.png").insert(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO recent_searches (id, user_id, library_id, query, folded, searched_at) \
+         VALUES (20, 2, 2, 'a', 'a', unixepoch() * 1000)",
+        [],
     )
     .unwrap();
     add_user(&conn, 3, "admin");

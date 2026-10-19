@@ -1,19 +1,17 @@
-use std::path::Path;
-
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use serde_json::{Value, json};
 
 use super::super::testing::{add_device, add_user, app, respond};
-use crate::db::libraries;
+use crate::db::testing::{access, library};
 
 /// A scrobbler enabled in library 1, which user 2 reaches and user 3 does not, each logged in
 /// with a token named after them.
 async fn setup() -> (tempfile::TempDir, axum::Router) {
     let (temp, db, app) = app("");
     db.write(|tx| {
-        libraries::create(tx, Some(1), "Music", &[Path::new("/music")], &[])?;
-        libraries::create(tx, Some(2), "Other", &[Path::new("/other")], &[])?;
+        library(tx, 1, "Music", "/music")?;
+        library(tx, 2, "Other", "/other")?;
         tx.execute_batch(
             r#"INSERT INTO plugins (id, manifest, installed_at, updated_at) VALUES ('scrobbler', '{"id":"scrobbler","name":"Scrobbler","version":"1","apiVersion":"0.2","permissions":[],"personalSettings":{"properties":{"token":{"type":"string","writeOnly":true},"user":{"type":"string"}}}}', 0, 0);
                INSERT INTO plugin_libraries (plugin_id, library_id, enabled) VALUES ('scrobbler', 1, 1);"#,
@@ -26,9 +24,11 @@ async fn setup() -> (tempfile::TempDir, axum::Router) {
         add_user(&conn, user, "user");
         add_device(&conn, user, user, &format!("token-{user}"));
     }
-    conn.execute_batch(
-        r#"INSERT INTO library_access VALUES (2, 1, 0), (3, 2, 0);
-           INSERT INTO plugin_user_settings VALUES ('scrobbler', 2, '{"token":"t","user":"two"}', 0);"#,
+    access(&conn, 2, 1).unwrap();
+    access(&conn, 3, 2).unwrap();
+    conn.execute(
+        r#"INSERT INTO plugin_user_settings VALUES ('scrobbler', 2, '{"token":"t","user":"two"}', 0)"#,
+        [],
     )
     .unwrap();
     (temp, app)

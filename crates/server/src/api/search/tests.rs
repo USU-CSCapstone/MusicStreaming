@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use super::super::testing::{app, json, send};
 use super::*;
 use crate::db::libraries;
+use crate::db::testing::Track;
 
 /// The tracks fixture (`tracks::tests::fixture`), with library 2's track counted, and an
 /// empty library 3.
@@ -113,15 +114,12 @@ async fn the_index_follows_the_library() {
     let (_, body) = json(&app, uri).await;
     assert_eq!(body["sections"], json!([]));
     db.write(|tx| {
-        tx.execute_batch(
-            "INSERT INTO tracks (id, library_id, album_id, root_id, path, file_size, file_mtime,
-                                 title, sort_key, artist_sort_key, album_sort_key, codec,
-                                 container, lossless, sample_rate_hz, channels, duration_us,
-                                 added_at, updated_at)
-             SELECT 1007, 1, 101, root_id, 'o.flac', 1, 0, 'Octopus''s Garden', x'6f', x'',
-                    x'', 'flac', 'flac', 1, 44100, 2, 1, 0, 0 FROM tracks WHERE id = 1001;
-             INSERT INTO library_changes (library_id, entity_type, entity_id, op, at)
-             VALUES (1, 'track', 1007, 'upsert', 0);",
+        let title = "Octopus's Garden".into();
+        Track { title, sort_key: b"o".to_vec(), ..Track::new(1007, 1, 101) }.insert(tx)?;
+        tx.execute(
+            "INSERT INTO library_changes (library_id, entity_type, entity_id, op, at)
+             VALUES (1, 'track', 1007, 'upsert', 0)",
+            [],
         )
     })
     .await

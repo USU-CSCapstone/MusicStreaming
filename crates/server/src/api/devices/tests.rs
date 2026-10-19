@@ -1,22 +1,26 @@
 use axum::http::StatusCode;
 use serde_json::json;
 
+use super::super::session::token_hash;
 use super::super::testing::{add_device, add_user, app, json};
+use crate::db::testing::Device;
 
 #[tokio::test]
 async fn lists_the_callers_signed_in_devices_most_recently_seen_first() {
     let (temp, _db, app) = app("");
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
-    add_device(&conn, 1, 2, "phone");
-    add_device(&conn, 1, 3, "logged-out");
+    let phone = Device {
+        name: "Phone",
+        kind: "phone",
+        platform: Some("Android"),
+        last_seen_at: 4_102_444_800_000,
+        ..Device::new(1, 2, token_hash("phone"))
+    };
+    phone.insert(&conn).unwrap();
+    let logged_out = Device { token_hash: None, ..Device::new(1, 3, token_hash("logged-out")) };
+    logged_out.insert(&conn).unwrap();
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 4, "someone-else");
-    conn.execute_batch(
-        "UPDATE devices SET name = 'Phone', type = 'phone', platform = 'Android', \
-             last_seen_at = 4102444800000 WHERE id = 2;
-         UPDATE devices SET token_hash = NULL, revoked_reason = 'credentials_changed' WHERE id = 3;",
-    )
-    .unwrap();
 
     let (status, list) = json(&app, "/api/v1/me/devices").await;
     assert_eq!(status, StatusCode::OK);

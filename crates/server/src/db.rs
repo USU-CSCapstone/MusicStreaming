@@ -14,6 +14,8 @@ pub mod libraries;
 pub mod migrations;
 pub mod store;
 #[cfg(test)]
+pub mod testing;
+#[cfg(test)]
 mod tests_store;
 
 use std::num::NonZeroUsize;

@@ -89,6 +89,7 @@ mod tests {
 
     use super::super::testing::{add_device, add_user, app, app_with_tracks, respond, send};
     use crate::db::libraries;
+    use crate::db::testing::access;
 
     #[tokio::test]
     async fn lists_and_gets_libraries() {
@@ -145,7 +146,7 @@ mod tests {
             add_user(&conn, id, role);
             add_device(&conn, id, id, &format!("token-{id}"));
         }
-        conn.execute("INSERT INTO library_access VALUES (2, 2, 0)", []).unwrap();
+        access(&conn, 2, 2).unwrap();
 
         let ids = |token: &'static str| {
             let app = app.clone();

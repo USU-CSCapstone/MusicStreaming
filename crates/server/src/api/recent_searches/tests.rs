@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use super::super::testing::{add_device, add_user, app_with_tracks, json, owner_request, respond};
 use super::{KEPT, WINDOW_MS};
 use crate::db::Database;
+use crate::db::testing::access;
 
 const URI: &str = "/api/v1/libraries/1/recent-searches";
 
@@ -114,7 +115,7 @@ async fn one_can_be_removed_or_all_cleared_and_never_anyone_elses() {
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 2, "user-token");
-    conn.execute("INSERT INTO library_access VALUES (2, 1, 0)", []).unwrap();
+    access(&conn, 2, 1).unwrap();
     let theirs = format!("{URI}/{}", first["id"].as_str().unwrap());
     let as_them = axum::http::Request::builder()
         .method("DELETE")

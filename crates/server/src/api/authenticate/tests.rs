@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use super::super::testing::{
     add_device, app, app_before_setup, app_with_tracks, respond, send_json,
 };
+use crate::db::testing::User;
 
 /// A request with these headers, and its status, headers, and JSON body, if any.
 async fn call(
@@ -115,12 +116,7 @@ async fn logging_out_removes_the_device_and_its_token() {
 async fn a_suspended_account_is_unauthenticated() {
     let (temp, _db, app) = app("");
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
-    conn.execute(
-        "INSERT INTO users (id, username, display_name, role, status, password, created_at, \
-         updated_at) VALUES (2, 'listener', 'Listener', 'user', 'suspended', '', 0, 0)",
-        [],
-    )
-    .unwrap();
+    User { status: "suspended", ..User::new(2, "user") }.insert(&conn).unwrap();
     add_device(&conn, 2, 2, "listener-token");
     let (status, _, problem) =
         call(&app, "GET", "/api/v1/me", &[("authorization", "Bearer listener-token")]).await;

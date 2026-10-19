@@ -6,7 +6,7 @@ use tower::ServiceExt;
 
 use super::super::testing::{app, owner_request, send};
 use super::*;
-use crate::db::libraries;
+use crate::db::testing::{Album, Track, library};
 
 const AUDIO: &[u8] = b"0123456789";
 
@@ -20,25 +20,27 @@ async fn app_with_fixture() -> (tempfile::TempDir, Router) {
         std::fs::write(dir.join("a.m4a"), AUDIO).unwrap();
     }
     db.write(move |tx| {
-        libraries::create(tx, Some(1), "Music", &[&music], &[])?;
-        libraries::create(tx, Some(2), "Other", &[&other], &[])?;
-        tx.execute_batch(
-            "INSERT INTO albums (id, library_id, title_key, artists_key, sort_key,
-                                 artist_sort_key, loudness_lufs, peak_dbtp, added_at, updated_at)
-             VALUES (101, 1, 'a', '', x'61', x'', -9.5, -0.25, 0, 0),
-                    (201, 2, 'a', '', x'61', x'', NULL, NULL, 0, 0);
-             WITH t (id, library_id, album_id, path, missing_since) AS (VALUES
-                 (1, 1, 101, 'a.m4a', NULL), (2, 1, 101, 'b.m4a', 5), (3, 2, 201, 'a.m4a', NULL))
-             INSERT INTO tracks (id, library_id, album_id, root_id, path, file_size, file_mtime,
-                                 title, sort_key, artist_sort_key, album_sort_key, missing_since,
-                                 codec, container, lossless, sample_rate_hz, bit_depth,
-                                 channels, duration_us, loudness_lufs, peak_dbtp, added_at,
-                                 updated_at)
-             SELECT t.id, t.library_id, t.album_id, r.id, t.path, 10, 0, 'A', x'61', x'',
-                    x'61', t.missing_since, 'aac', 'mp4', 0, 44100, NULL, 2, 1000000, -10.5,
-                    -0.5, 0, 0
-             FROM t JOIN library_roots r ON r.library_id = t.library_id;",
-        )
+        library(tx, 1, "Music", music)?;
+        library(tx, 2, "Other", other)?;
+        Album { loudness_lufs: Some(-9.5), peak_dbtp: Some(-0.25), ..Album::new(101, 1) }
+            .insert(tx)?;
+        Album::new(201, 2).insert(tx)?;
+        for (id, library, album, path, missing_since) in
+            [(1, 1, 101, "a.m4a", None), (2, 1, 101, "b.m4a", Some(5)), (3, 2, 201, "a.m4a", None)]
+        {
+            let track = Track {
+                path: path.into(),
+                missing_since,
+                codec: "aac",
+                container: "mp4",
+                lossless: false,
+                loudness_lufs: Some(-10.5),
+                peak_dbtp: Some(-0.5),
+                ..Track::new(id, library, album)
+            };
+            track.insert(tx)?;
+        }
+        Ok(())
     })
     .await
     .unwrap();

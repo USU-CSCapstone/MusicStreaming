@@ -8,6 +8,7 @@ use super::super::testing::{app, json, page_through};
 use super::*;
 use crate::api::page;
 use crate::db::libraries;
+use crate::db::testing::{Album, Image, Track, library, scattered_key};
 
 /// Library 1: "Abbey Road" by The Beatles with discs 1 and 2, one disc-1 track unnumbered,
 /// and one track missing; "Kid A" by Radiohead with a track The Beatles feature on; and
@@ -310,15 +311,11 @@ async fn images_carry_their_placeholders() {
         fixture(tx)?;
         // Abbey Road's cover has a placeholder; The Beatles' photo could not be decoded, which
         // the placeholder job records as empty.
+        Image { placeholder: Some(vec![0x00, 0xff, 0x10]), ..Image::new(40, 1, "cover.jpg") }
+            .insert(tx)?;
+        Image { placeholder: Some(Vec::new()), ..Image::new(41, 1, "artist.jpg") }.insert(tx)?;
         tx.execute_batch(
-            "INSERT INTO images (id, library_id, hash, format, width, height, placeholder, root_id,
-                                 path, embedded)
-             SELECT 40, 1, x'01', 'jpeg', 1, 1, x'00ff10', id, 'cover.jpg', 0
-             FROM library_roots WHERE library_id = 1
-             UNION ALL
-             SELECT 41, 1, x'02', 'jpeg', 1, 1, x'', id, 'artist.jpg', 0
-             FROM library_roots WHERE library_id = 1;
-             UPDATE albums SET image_id = 40 WHERE id = 101;
+            "UPDATE albums SET image_id = 40 WHERE id = 101;
              UPDATE artists SET image_id = 41 WHERE id = 10;",
         )
     })
@@ -371,35 +368,31 @@ async fn bad_parameters_are_validation_problems() {
 async fn every_sort_reads_from_an_index() {
     let (_temp, db, _app) = app("");
     db.write(|tx| {
-        libraries::create(tx, Some(1), "Music", &[Path::new("/music")], &[])?;
+        library(tx, 1, "Music", "/music")?;
         // 20,000 tracks on 2,000 albums: a sixth undated, some unnumbered, a few with
         // unknown names.
-        tx.execute_batch(
-            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000)
-             INSERT INTO albums (id, library_id, title, title_key, artists_key, sort_key,
-                                 artist_sort_key, added_at, updated_at)
-             SELECT i, 1, 'Album ' || i, 'album ' || i, 'k' || i,
-                    CASE WHEN i % 200 = 0 THEN x''
-                         ELSE CAST(printf('album %08x', abs(random()) % 4294967296) AS BLOB) END,
-                    x'', i, 0
-             FROM n;
-             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
-             INSERT INTO tracks (id, library_id, album_id, root_id, path, file_size, file_mtime,
-                                 title, sort_key, artist_sort_key, album_sort_key, disc_number,
-                                 track_number, release_date, codec, container, lossless,
-                                 sample_rate_hz, channels, duration_us, added_at, updated_at)
-             SELECT i, 1, 1 + i % 2000, (SELECT id FROM library_roots), 'p' || i, 1, 0,
-                    'Track ' || i,
-                    CAST(printf('track %08x', abs(random()) % 4294967296) AS BLOB),
-                    CASE WHEN i % 997 = 0 THEN x''
-                         ELSE CAST(printf('artist %05d', i % 3000) AS BLOB) END,
-                    (SELECT sort_key FROM albums WHERE id = 1 + i % 2000),
-                    1 + i % 2, CASE WHEN i % 13 = 0 THEN NULL ELSE i % 12 END,
-                    CASE WHEN i % 6 = 0 THEN NULL ELSE printf('%04d', 1950 + i % 75) END,
-                    'flac', 'flac', 1, 44100, 2, (i * 7919) % 600000000, i, 0
-             FROM n;
-             ANALYZE;",
-        )
+        let album_key = |i| if i % 200 == 0 { Vec::new() } else { scattered_key("album", i) };
+        for i in 1..=2000 {
+            Album { sort_key: album_key(i), added_at: i, ..Album::new(i, 1) }.insert(tx)?;
+        }
+        for i in 1..=20_000 {
+            let album = 1 + i % 2000;
+            let artist_key = format!("artist {:05}", i % 3000).into_bytes();
+            let track = Track {
+                path: format!("p{i}"),
+                sort_key: scattered_key("track", i),
+                artist_sort_key: if i % 997 == 0 { Vec::new() } else { artist_key },
+                album_sort_key: album_key(album),
+                disc_number: 1 + i % 2,
+                track_number: (i % 13 != 0).then_some(i % 12),
+                release_date: (i % 6 != 0).then(|| format!("{:04}", 1950 + i % 75)),
+                duration_us: (i * 7919) % 600_000_000,
+                added_at: i,
+                ..Track::new(i, 1, album)
+            };
+            track.insert(tx)?;
+        }
+        tx.execute_batch("ANALYZE")
     })
     .await
     .unwrap();

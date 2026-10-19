@@ -10,10 +10,12 @@ use tokio_tungstenite::tungstenite::Message;
 
 use super::super::authenticate::Caller;
 use super::super::realtime::Hub;
+use super::super::testing::player::progress_report;
 use super::super::testing::socket::{Socket, connect_with, next, next_of, serve};
 use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, respond};
 use super::{Id, Players};
 use crate::db::Database;
+use crate::db::testing::access;
 
 /// [`app_with_tracks`], served, with the owner also on device 2 as `phone`, and user 2, who
 /// reaches only library 1, on device 3 as `user2`.
@@ -23,21 +25,18 @@ async fn setup() -> (tempfile::TempDir, Router, SocketAddr) {
     add_device(&conn, 1, 2, "phone");
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 3, "user2");
-    conn.execute("INSERT INTO library_access VALUES (2, 1, 0)", []).unwrap();
+    access(&conn, 2, 1).unwrap();
     let address = serve(app.clone()).await;
     (temp, app, address)
 }
 
-/// Reports from `device` over `socket` that track 1 in library 1 is at `status`, changed by
-/// `changes`, and returns once the server has handled it: a connection handles its messages
-/// in order, so that is when the ping sent after it is answered.
-async fn report(socket: &mut Socket, device: &str, status: &str, changes: Value) {
-    let mut report = json!({
-        "deviceId": device, "itemId": "item-1", "libraryId": "1", "trackId": "1",
-        "status": status, "positionMs": 1000,
-    });
-    report.as_object_mut().unwrap().extend(changes.as_object().unwrap().clone());
-    let progress = json!({ "type": "progress", "report": report });
+/// Reports from `device` over `socket` that track 1 in library 1 is at `status` 1000 ms in,
+/// changed by `changes`, and returns once the server has handled it: a connection handles its
+/// messages in order, so that is when the ping sent after it is answered.
+async fn report(socket: &mut Socket, device: &str, status: &str, mut changes: Value) {
+    changes.as_object_mut().unwrap().entry("positionMs").or_insert(json!(1000));
+    let progress =
+        json!({ "type": "progress", "report": progress_report(device, status, changes) });
     socket.send(Message::text(progress.to_string())).await.unwrap();
     socket.send(Message::text(r#"{"type":"ping"}"#)).await.unwrap();
     next_of(socket, "pong").await;
@@ -84,10 +83,8 @@ async fn playback_state_reaches_every_connection_of_the_account() {
         );
     }
 
-    let report = json!({ "type": "progress", "report": {
-        "deviceId": "1", "itemId": "item-1", "libraryId": "1", "trackId": "2",
-        "status": "playing", "positionMs": 500, "start": true,
-    } });
+    let changes = json!({ "trackId": "2", "positionMs": 500, "start": true });
+    let report = json!({ "type": "progress", "report": progress_report("1", "playing", changes) });
     desk.send(Message::text(report.to_string())).await.unwrap();
     for socket in [&mut phone, &mut desk] {
         let state = &next_of(socket, "player").await["state"];
@@ -207,10 +204,8 @@ async fn a_refused_report_is_answered_with_the_current_state() {
     let mut desk = connect_with(address, TOKEN).await;
     next_of(&mut desk, "player").await;
     // Not through `report`, whose wait for a pong would skip the answer if it came first.
-    let refused = json!({ "type": "progress", "report": {
-        "deviceId": "1", "itemId": "item-1", "libraryId": "1", "trackId": "1",
-        "status": "playing", "positionMs": 0,
-    } });
+    let refused = progress_report("1", "playing", json!({}));
+    let refused = json!({ "type": "progress", "report": refused });
     desk.send(Message::text(refused.to_string())).await.unwrap();
     let state = next_of(&mut desk, "player").await;
     assert_eq!(state["state"]["status"], json!("stopped"));
@@ -219,10 +214,8 @@ async fn a_refused_report_is_answered_with_the_current_state() {
 /// Reports to `players` from connection 7 of device 1 of the owner that track `track` is at
 /// `status` and `position_ms`.
 fn report_to(players: &Players, status: &str, track: i64, position_ms: u32) {
-    let report = serde_json::from_value(json!({
-        "deviceId": "1", "itemId": "item-1", "libraryId": "1", "trackId": track.to_string(),
-        "status": status, "positionMs": position_ms, "start": true,
-    }));
+    let changes = json!({ "trackId": track.to_string(), "positionMs": position_ms, "start": true });
+    let report = serde_json::from_value(progress_report("1", status, changes));
     let caller = Caller { user: 1, device: 1, admin: true };
     players.report(&Hub::default(), caller, 7, report.unwrap(), Id(1), Id(track)).unwrap();
 }
@@ -309,9 +302,9 @@ async fn a_saved_place_out_of_reach_is_not_resumed() {
     let (temp, db, _app) = app_with_tracks().await;
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
     add_user(&conn, 2, "user");
+    access(&conn, 2, 1).unwrap();
     conn.execute_batch(
-        "INSERT INTO library_access VALUES (2, 1, 0);
-         INSERT INTO player_states VALUES (2, 'item-1', 1, 1, 0), (1, 'item-1', 1, 99, 0);",
+        "INSERT INTO player_states VALUES (2, 'item-1', 1, 1, 0), (1, 'item-1', 1, 99, 0);",
     )
     .unwrap();
     let players = Players::load(&db).await.unwrap();
@@ -330,10 +323,11 @@ async fn one_accounts_place_failing_to_save_keeps_no_one_elses_from_saving() {
     let players = Players::default();
     report_to(&players, "paused", 1, 1000);
     let caller = Caller { user: 2, device: 2, admin: false };
-    let report = serde_json::from_value(json!({
-        "deviceId": "2", "itemId": "item-1", "libraryId": "9", "trackId": "1",
-        "status": "paused", "positionMs": 0, "start": true,
-    }));
+    let report = serde_json::from_value(progress_report(
+        "2",
+        "paused",
+        json!({ "libraryId": "9", "start": true }),
+    ));
     // A library deleted after the report was taken.
     players.report(&Hub::default(), caller, 8, report.unwrap(), Id(9), Id(1)).unwrap();
     players.save(&db).await;

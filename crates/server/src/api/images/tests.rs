@@ -4,7 +4,7 @@ use jewelcase_scanner::image::describe;
 use serde_json::Value;
 
 use super::super::testing::{app, ffmpeg, owner_request, send};
-use crate::db::libraries;
+use crate::db::testing::{Image, library};
 
 /// Library 1 holds image 1, a 300×200 `cover.png`; image 2, a 64×64 picture embedded in
 /// `song.mp3`; image 3, a `broken.png` that is not an image; and image 5, recorded with no
@@ -41,18 +41,14 @@ async fn app_with_images() -> (tempfile::TempDir, Router) {
     std::fs::write(music.join("broken.png"), b"not an image").unwrap();
     std::fs::copy(cover, other.join("cover.png")).unwrap();
     db.write(move |tx| {
-        libraries::create(tx, Some(1), "Music", &[&music], &[])?;
-        libraries::create(tx, Some(2), "Other", &[&other], &[])?;
-        tx.execute_batch(
-            "WITH i (id, library_id, hash, path, embedded) AS (VALUES
-                 (1, 1, x'01', 'cover.png', 0), (2, 1, x'02', 'song.mp3', 1),
-                 (3, 1, x'03', 'broken.png', 0), (4, 2, x'04', 'cover.png', 0),
-                 (5, 1, x'', 'cover.png', 0))
-             INSERT INTO images (id, library_id, hash, format, width, height, root_id, path,
-                                 embedded)
-             SELECT i.id, i.library_id, i.hash, 'png', 1, 1, r.id, i.path, i.embedded
-             FROM i JOIN library_roots r ON r.library_id = i.library_id;",
-        )
+        library(tx, 1, "Music", music)?;
+        library(tx, 2, "Other", other)?;
+        // The cache names each rendering after its image's hash, such as `01/01-128.jpg`.
+        Image { hash: vec![1], ..Image::new(1, 1, "cover.png") }.insert(tx)?;
+        Image::new(2, 1, "song.mp3").insert(tx)?;
+        Image { hash: vec![3], ..Image::new(3, 1, "broken.png") }.insert(tx)?;
+        Image::new(4, 2, "cover.png").insert(tx)?;
+        Image { hash: Vec::new(), ..Image::new(5, 1, "cover.png") }.insert(tx)
     })
     .await
     .unwrap();

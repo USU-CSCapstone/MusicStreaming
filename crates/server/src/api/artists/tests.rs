@@ -8,6 +8,7 @@ use super::super::testing::{app, json, page_through};
 use super::*;
 use crate::api::page;
 use crate::db::libraries;
+use crate::db::testing::{Artist, library, scattered_key};
 
 /// Library 1 holds Radiohead, The Beatles (with a photo, biography, and genre), Nirvana,
 /// and the unknown artist; library 2 holds one artist of its own.
@@ -142,18 +143,14 @@ async fn bad_parameters_are_validation_problems() {
 async fn every_sort_reads_from_an_index() {
     let (_temp, db, _app) = app("");
     db.write(|tx| {
-        libraries::create(tx, Some(1), "Music", &[], &[])?;
+        library(tx, 1, "Music", "/music")?;
         // 20,000 artists, a few with unknown names.
-        tx.execute_batch(
-            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
-             INSERT INTO artists (id, library_id, name, name_key, sort_key, added_at, updated_at)
-             SELECT i, 1, 'Artist ' || i, 'artist ' || i,
-                    CASE WHEN i % 1000 = 0 THEN x''
-                         ELSE CAST(printf('artist %08x', abs(random()) % 4294967296) AS BLOB) END,
-                    i, 0
-             FROM n;
-             ANALYZE;",
-        )
+        for i in 1..=20_000 {
+            let artist = Artist::new(i, 1, &format!("Artist {i}"));
+            let sort_key = if i % 1000 == 0 { Vec::new() } else { scattered_key("artist", i) };
+            Artist { sort_key, added_at: i, ..artist }.insert(tx)?;
+        }
+        tx.execute_batch("ANALYZE")
     })
     .await
     .unwrap();

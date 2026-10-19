@@ -11,6 +11,7 @@ use super::super::testing::{
     TOKEN, add_device, add_user, app, app_before_setup, json, respond, send, send_json,
 };
 use super::{Hub, ServerMessage};
+use crate::db::testing::User;
 
 mod revoked;
 
@@ -80,9 +81,8 @@ async fn a_device_connects_says_hello_and_answers_pings() {
 async fn a_connection_needs_an_active_accounts_token() {
     let (temp, _db, app) = app("");
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
-    add_user(&conn, 2, "user");
+    User { status: "suspended", ..User::new(2, "user") }.insert(&conn).unwrap();
     add_device(&conn, 2, 2, "suspended");
-    conn.execute("UPDATE users SET status = 'suspended' WHERE id = 2", []).unwrap();
     let address = serve(app).await;
     let refused = connect(address, &[]).await.unwrap_err();
     assert_eq!(status(refused), StatusCode::UNAUTHORIZED);
