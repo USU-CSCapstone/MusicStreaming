@@ -185,12 +185,22 @@ mod tests {
         }
         fs::write(temp.path().join("secret"), b"host file").unwrap();
         std::os::unix::fs::symlink(temp.path(), root.join("escape")).unwrap();
-        assert!(write(&root, "escape/planted", b"x", false).is_err());
+        // Refused before its folders are made, so nothing appears outside.
+        assert!(write(&root, "escape/new/planted", b"x", false).is_err());
         assert!(read(&root, "escape/secret", 0, 10).is_err());
         // A link that leads back inside the library is simply a path within it.
         assert_eq!(read(&root, "escape/music/Album/01.flac", 0, 5).unwrap(), b"audio");
         assert!(list(&root, "escape").is_err());
-        assert!(!temp.path().join("planted").exists());
+        assert!(delete(&root, "escape/secret").is_err());
+        assert!(rename(&root, "escape/secret", "Album/stolen").is_err());
+        assert!(rename(&root, "Album/01.flac", "escape/new/moved").is_err());
+        std::os::unix::fs::symlink(temp.path().join("secret"), root.join("linked")).unwrap();
+        assert!(write(&root, "linked", b"x", true).is_err());
+        assert!(root.join("linked").is_symlink(), "the link is not replaced");
+        assert_eq!(fs::read(temp.path().join("secret")).unwrap(), b"host file");
+        assert!(root.join("Album/01.flac").is_file(), "a refused rename leaves its source");
+        assert!(!root.join("Album/stolen").exists(), "a refused rename makes nothing");
+        assert!(!temp.path().join("new").exists(), "nothing is made outside the library");
     }
 
     #[test]
