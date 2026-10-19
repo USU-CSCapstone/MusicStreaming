@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::{Config, Error, Registry};
+use crate::{Config, Error, Registry, input};
 
 /// Decoded pixels: `width × height` of them, row by row, four bytes each (RGBA).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,24 +15,21 @@ pub struct Rgba {
     pub pixels: Vec<u8>,
 }
 
+/// Decodes the image at `path` to fit `max_side`; see [`crate::Ffmpeg::decode_image`].
 pub(crate) fn decode_image(
     config: &Config,
     registry: &Arc<Registry>,
     path: &Path,
     max_side: u32,
 ) -> Result<Rgba, Error> {
-    // `file:` keeps a path from being read as another protocol, and the `min` keeps a small
-    // image from being enlarged. An embedded image's path is its track file, and ffmpeg reads
-    // the attached picture from that the same way.
-    let mut input = std::ffi::OsString::from("file:");
-    input.push(path);
+    // The `min` keeps a small image from being enlarged.
     let scale = format!(
         "scale='min(iw,{max_side})':'min(ih,{max_side})':force_original_aspect_ratio=decrease"
     );
     registry.acquire();
     let child = Command::new(&config.ffmpeg)
-        .args(["-nostdin", "-hide_banner", "-v", "error", "-i"])
-        .arg(input)
+        .args(["-nostdin", "-hide_banner", "-v", "error"])
+        .args(input(path))
         .args(["-map", "0:v:0", "-frames:v", "1", "-vf", &scale])
         // PAM states its own size, so the output needs no guess at how ffmpeg rounded.
         .args(["-f", "image2pipe", "-c:v", "pam", "-pix_fmt", "rgba", "pipe:1"])

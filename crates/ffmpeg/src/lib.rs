@@ -3,7 +3,7 @@
 //! Never linked as a library: a decoder crash on a corrupt file is a problem
 //! record, a hang is a timeout kill, and yielding to listeners is a signal.
 //! Every invocation is read-only against the library — no output paths, no
-//! `-y`, always `-nostdin`.
+//! `-y`, always `-nostdin`, and the input always opened through [`input()`].
 //!
 //! The API is synchronous. Callers run it from blocking pools; decoding is
 //! stream I/O and the analysis that consumes it is CPU work, neither of which
@@ -12,6 +12,7 @@
 mod decode;
 mod error;
 mod image;
+mod input;
 mod probe;
 mod registry;
 mod stderr;
@@ -26,6 +27,7 @@ use jewelcase_core::Format;
 pub use decode::PcmStream;
 pub use error::Error;
 pub use image::Rgba;
+pub use input::input;
 pub use probe::ProbeInfo;
 pub use registry::Registry;
 

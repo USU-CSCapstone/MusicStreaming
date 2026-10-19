@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
 use crate::stderr::tail;
-use crate::{Config, Error, ProbeInfo, Registry};
+use crate::{Config, Error, ProbeInfo, Registry, input};
 
 /// A running decode. Read frames with [`PcmStream::read_frames`]; dropping the
 /// stream kills the child. Samples are interleaved `f32` at the file's native
@@ -37,8 +37,8 @@ pub(crate) fn decode_pcm(
 ) -> Result<PcmStream, Error> {
     registry.acquire();
     let mut child = Command::new(&config.ffmpeg)
-        .args(["-nostdin", "-hide_banner", "-v", "error", "-i"])
-        .arg(path)
+        .args(["-nostdin", "-hide_banner", "-v", "error"])
+        .args(input(path))
         .args(["-map", "0:a:0", "-vn", "-sn", "-dn", "-f", "f32le", "-c:a", "pcm_f32le", "pipe:1"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

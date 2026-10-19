@@ -91,15 +91,12 @@ impl Images {
     /// Resizes the image at `source` to fit `size`, as JPEG. An embedded image's source is its
     /// track file, and ffmpeg reads the attached picture from that the same way.
     async fn render(&self, size: u32, source: &Path) -> anyhow::Result<Output> {
-        // `file:` keeps ffmpeg from reading any path as another protocol, and the `min` keeps
-        // it from enlarging an image smaller than the size.
-        let mut input = std::ffi::OsString::from("file:");
-        input.push(source);
+        // The `min` keeps ffmpeg from enlarging an image smaller than the size.
         let scale =
             format!("scale='min(iw,{size})':'min(ih,{size})':force_original_aspect_ratio=decrease");
         let child = Command::new(&self.ffmpeg)
-            .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-i"])
-            .arg(input)
+            .args(["-nostdin", "-hide_banner", "-loglevel", "error"])
+            .args(jewelcase_ffmpeg::input(source))
             .args(["-map", "0:v:0", "-frames:v", "1", "-vf", &scale])
             .args(["-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "3", "pipe:1"])
             .stdin(Stdio::null())

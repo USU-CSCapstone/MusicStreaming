@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::{Config, Error, Registry};
+use crate::{Config, Error, Registry, input};
 
 /// The first audio stream's properties.
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +48,7 @@ struct FormatInfo {
     duration: Option<String>,
 }
 
+/// Reads the first audio stream's properties; see [`crate::Ffmpeg::probe`].
 pub(crate) fn probe(
     config: &Config,
     registry: &Arc<Registry>,
@@ -56,7 +57,7 @@ pub(crate) fn probe(
     registry.acquire();
     let child = Command::new(&config.ffprobe)
         .args(["-v", "error", "-print_format", "json", "-show_streams", "-show_format"])
-        .arg(path)
+        .args(input(path))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

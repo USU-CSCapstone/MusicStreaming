@@ -8,8 +8,8 @@ use crate::db::testing::{Image, library};
 
 /// Library 1 holds image 1, a 300×200 `cover.png`; image 2, a 64×64 picture embedded in
 /// `song.mp3`; image 3, a `broken.png` that is not an image; and image 5, recorded with no
-/// content hash; and image 6, a `linked.png` that links to library 2's cover. Library 2 holds
-/// image 4.
+/// content hash; image 6, a `linked.png` that links to library 2's cover; and image 7, a
+/// `huge.png` that only its test writes. Library 2 holds image 4.
 async fn app_with_images() -> (tempfile::TempDir, Router) {
     let (temp, db, app) = app("");
     let (music, other) = (temp.path().join("music"), temp.path().join("other"));
@@ -51,7 +51,8 @@ async fn app_with_images() -> (tempfile::TempDir, Router) {
         Image { hash: vec![3], ..Image::new(3, 1, "broken.png") }.insert(tx)?;
         Image::new(4, 2, "cover.png").insert(tx)?;
         Image { hash: Vec::new(), ..Image::new(5, 1, "cover.png") }.insert(tx)?;
-        Image { hash: vec![6], ..Image::new(6, 1, "linked.png") }.insert(tx)
+        Image { hash: vec![6], ..Image::new(6, 1, "linked.png") }.insert(tx)?;
+        Image { hash: vec![7], ..Image::new(7, 1, "huge.png") }.insert(tx)
     })
     .await
     .unwrap();
@@ -147,6 +148,28 @@ async fn a_broken_image_is_not_tried_again() {
     std::fs::copy(music.join("cover.png"), music.join("broken.png")).unwrap();
     let (status, _, _) = send(app, "GET", uri).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn an_image_past_the_pixel_cap_is_refused_and_not_tried_again() {
+    let (temp, app) = app_with_images().await;
+    // One row more than 8192², the cap; one bit a pixel keeps it quick to write.
+    let huge = temp.path().join("music/huge.png");
+    let huge = huge.to_str().unwrap();
+    ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "color=black:s=8192x8193",
+        "-frames:v",
+        "1",
+        "-pix_fmt",
+        "monob",
+        huge,
+    ]);
+    let (status, _, _) = send(app, "GET", "/api/v1/libraries/1/images/7").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(temp.path().join("cache/07/07-512.failed").exists());
 }
 
 #[tokio::test]
