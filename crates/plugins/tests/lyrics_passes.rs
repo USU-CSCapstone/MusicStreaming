@@ -1,0 +1,148 @@
+//! The lyrics plugin's pass through the library and the misses it remembers, kept in its state
+//! from one run to the next. Every lookup is refused before it leaves, as a failure, so no test
+//! here reaches the network.
+//!
+//! Needs the packed plugin: run `plugins/lrclib-lyrics/build.sh` first.
+
+mod common;
+
+use std::path::PathBuf;
+
+use common::{State, Tracks, grants, plugin, track};
+use jewelcase_plugins::{Api, Event, Grants, Host, Outcome, Permission, TracksChanged};
+
+/// The reason a miss is stored with when nothing was found.
+const NOTHING: u8 = 0;
+/// The reason a miss is stored with when lyrics were found but adding files was not granted.
+const UNSAVED: u8 = 1;
+/// The reason a miss is stored with when only plain lyrics were found and synced ones are wanted.
+const PLAIN_ONLY: u8 = 2;
+
+/// A library of tracks `ids`, without lyrics, and empty state.
+fn library(ids: impl IntoIterator<Item = u64>) -> Tracks {
+    let tracks = ids.into_iter().map(|id| track(id, &format!("Track {id}"))).collect();
+    Tracks { root: PathBuf::new(), tracks, state: State::default(), fail_after: None }
+}
+
+/// Grants under which every lookup is refused before it leaves, as a failure.
+fn offline() -> Grants {
+    grants(&[Permission::LibraryRead, Permission::Network], &["example.invalid"])
+}
+
+/// Runs the plugin on `library` with `grants`, on `event`.
+async fn run(library: &Tracks, grants: Grants, event: Event) -> Outcome {
+    Host::new().unwrap().run(plugin(), Api::V0_2, grants, library.clone(), event).await
+}
+
+/// Runs the plugin on `library` with [`offline`] grants, on `event`.
+async fn run_offline(library: &Tracks, event: Event) -> Outcome {
+    run(library, offline(), event).await
+}
+
+/// The IDs of the tracks a run looked up, from the line it logged for each, whose title is
+/// `Track {id}` (see [`library`]).
+fn looked_up(outcome: &Outcome) -> Vec<u64> {
+    let id = |line: &String| line.split(' ').nth(2).unwrap().parse().unwrap();
+    outcome.log.iter().map(id).collect()
+}
+
+/// What the plugin keeps under `key`, as the number it stores first: the cursor's track, or when
+/// a miss is due.
+fn kept(library: &Tracks, key: &str) -> Option<u64> {
+    let state = library.state.lock().unwrap();
+    state.get(key).map(|bytes| u64::from_le_bytes(bytes[..8].try_into().unwrap()))
+}
+
+/// Records a miss on track `id`, due again at `at`, for reason `why`.
+fn miss(library: &Tracks, id: u64, at: u64, why: u8) {
+    let mut value = at.to_le_bytes().to_vec();
+    value.push(why);
+    library.state.lock().unwrap().insert(format!("miss/{id}"), value);
+}
+
+#[tokio::test]
+async fn misses_are_looked_up_again_only_once_due() {
+    let mut library = library(1..=4);
+    library.tracks[3].has_lyrics = true;
+    miss(&library, 1, 0, NOTHING);
+    miss(&library, 2, u64::MAX, NOTHING);
+
+    for event in [Event::Run, Event::Scheduled] {
+        let outcome = run_offline(&library, event).await;
+        assert_eq!(looked_up(&outcome), [1, 3], "all but a miss not due yet, and lyrics");
+        assert!(outcome.summary.contains("1 already had lyrics"), "{}", outcome.summary);
+        assert!(!outcome.summary.contains("more to do"), "{}", outcome.summary);
+    }
+    let misses = (kept(&library, "miss/1"), kept(&library, "miss/2"), kept(&library, "miss/3"));
+    assert_eq!(misses, (Some(0), Some(u64::MAX), None), "a failed lookup changes nothing");
+    assert_eq!(kept(&library, "cursor"), None, "the end: the next run starts over");
+}
+
+#[tokio::test]
+async fn a_run_stops_after_ten_thousand_checks_and_the_next_carries_on() {
+    let library = library(1..=10_002);
+    (1..=10_000).for_each(|id| miss(&library, id, u64::MAX, NOTHING));
+    miss(&library, 10_001, 0, NOTHING);
+
+    let first = run_offline(&library, Event::Run).await;
+    assert!(first.log.is_empty(), "{:?}", first.log);
+    assert!(first.summary.ends_with("carries on from there next time."), "{}", first.summary);
+    assert_eq!(kept(&library, "cursor"), Some(10_000));
+
+    // The schedule carries on the same pass.
+    let second = run_offline(&library, Event::Scheduled).await;
+    assert_eq!(looked_up(&second), [10_001, 10_002]);
+    assert_eq!(kept(&library, "cursor"), None);
+
+    let third = run_offline(&library, Event::Run).await;
+    assert!(third.log.is_empty(), "starts over: {:?}", third.log);
+    assert_eq!(kept(&library, "cursor"), Some(10_000));
+}
+
+#[tokio::test]
+async fn a_change_settles_or_keeps_a_miss_and_a_removal_forgets_it() {
+    let mut library = library([5, 6]);
+    library.tracks[0].has_lyrics = true;
+    for id in [5, 6, 9] {
+        miss(&library, id, 0, NOTHING);
+    }
+    let changes = TracksChanged { changed: vec![5, 6], removed: vec![9] };
+    let outcome = run_offline(&library, Event::TracksChanged(changes)).await;
+    assert!(outcome.ok, "{}", outcome.summary);
+    assert_eq!(kept(&library, "miss/5"), None, "it has lyrics now");
+    assert_eq!(kept(&library, "miss/6"), Some(0), "its lookup failed");
+    assert_eq!(kept(&library, "miss/9"), None, "it left the library");
+}
+
+#[tokio::test]
+async fn a_miss_is_looked_up_again_once_its_reason_is_gone() {
+    let library = library(1..=3);
+    miss(&library, 1, u64::MAX, NOTHING);
+    miss(&library, 2, u64::MAX, UNSAVED);
+    miss(&library, 3, u64::MAX, PLAIN_ONLY);
+    // Synced lyrics only, and adding files granted or not.
+    let synced_only = |adding: &[Permission]| {
+        let mut grants = offline();
+        grants.permissions.extend_from_slice(adding);
+        grants.settings.insert("syncedOnly".into(), true.into());
+        grants
+    };
+
+    let unchanged = run(&library, synced_only(&[]), Event::Run).await;
+    assert_eq!(looked_up(&unchanged), Vec::<u64>::new(), "no reason has gone");
+
+    let can_write = run(&library, synced_only(&[Permission::LibraryAdd]), Event::Run).await;
+    assert_eq!(looked_up(&can_write), [2], "it may add files now");
+
+    let plain_wanted = run_offline(&library, Event::Run).await;
+    assert_eq!(looked_up(&plain_wanted), [3], "plain lyrics are wanted now");
+}
+
+#[tokio::test]
+async fn a_run_cut_short_keeps_its_place_after_each_lookup() {
+    let library = Tracks { fail_after: Some(500), ..library(1..=501) };
+    let outcome = run_offline(&library, Event::Run).await;
+    assert!(!outcome.ok, "{}", outcome.summary);
+    assert_eq!(looked_up(&outcome).len(), 500);
+    assert_eq!(kept(&library, "cursor"), Some(500));
+}
