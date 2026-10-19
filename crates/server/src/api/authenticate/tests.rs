@@ -33,15 +33,46 @@ async fn a_bearer_token_or_the_cookie_identifies_the_caller() {
     let (_temp, _db, app) = app("");
     let owner = json!({ "id": "1", "username": "owner", "displayName": "Owner", "role": "owner",
                         "hasAvatar": false });
-    for header in
-        [("authorization", BEARER), ("authorization", "bearer owner-token"), ("cookie", COOKIE)]
-    {
+    for header in [
+        ("authorization", BEARER),
+        ("authorization", "bearer owner-token"),
+        ("authorization", "Bearer  owner-token"),
+        ("cookie", COOKIE),
+    ] {
         let (status, _, me) = call(&app, "GET", "/api/v1/me", &[header]).await;
         assert_eq!((status, &me), (StatusCode::OK, &owner), "{header:?}");
     }
     // A bearer token wins, so a stale cookie beside it does not matter.
     let headers = [("authorization", BEARER), ("cookie", "jewelcase_session=stale")];
     assert_eq!(call(&app, "GET", "/api/v1/me", &headers).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn another_authorization_scheme_leaves_the_cookie_to_identify_the_caller() {
+    // What a browser sends on its own behind a basic-auth or SSO proxy.
+    let (_temp, _db, app) = app("");
+    // A proxy's header need not be visible ASCII.
+    for proxy in ["Basic dXNlcjpwYXNz", "Negotiate", "Digest username=\"Jürgen\""] {
+        let headers = [("authorization", proxy), ("cookie", COOKIE)];
+        assert_eq!(call(&app, "GET", "/api/v1/me", &headers).await.0, StatusCode::OK, "{proxy}");
+        // It is still a cookie request, so a write without the client header is refused.
+        let (status, _, _) = call(&app, "POST", "/api/v1/auth/logout", &headers).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{proxy}");
+    }
+}
+
+#[tokio::test]
+async fn a_bad_bearer_token_is_refused_beside_a_good_cookie() {
+    let (_temp, _db, app) = app("");
+    for bearer in ["Bearer stale", "Bearer\tstale", "Bearer", "bearer "] {
+        let headers = [("authorization", bearer), ("cookie", COOKIE)];
+        let (status, _, problem) = call(&app, "GET", "/api/v1/me", &headers).await;
+        assert_eq!(
+            (status, &problem["code"]),
+            (StatusCode::UNAUTHORIZED, &json!("unauthenticated")),
+            "{bearer}"
+        );
+    }
 }
 
 #[tokio::test]

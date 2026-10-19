@@ -59,10 +59,11 @@ pub async fn require(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let Some((token, from_cookie)) = token(request.headers()) else {
+    let Some(token) = token(request.headers()) else {
         return unauthenticated();
     };
-    let hash = token_hash(token);
+    let (Token::Bearer(secret) | Token::Cookie(secret)) = token;
+    let hash = token_hash(secret);
     let library = library(params);
     let found = match state.db.read(move |conn| device(conn, &hash, library)).await {
         Ok(found) => found,
@@ -72,7 +73,10 @@ pub async fn require(
         return unauthenticated();
     };
     // Checked once the token is known to be good, so a bad one is always `401`.
-    if from_cookie && !request.method().is_safe() && !request.headers().contains_key(CLIENT) {
+    if matches!(token, Token::Cookie(_))
+        && !request.method().is_safe()
+        && !request.headers().contains_key(CLIENT)
+    {
         return Problem::new(Code::Forbidden)
             .detail("A write authenticated by cookie must send X-Jewelcase-Client.")
             .into_response();
@@ -107,17 +111,28 @@ pub async fn require(
     next.run(request).await
 }
 
-/// The request's token, and whether it came from the cookie. A bearer token wins over a cookie.
-fn token(headers: &HeaderMap) -> Option<(&str, bool)> {
+/// A request's token, by where it came from.
+enum Token<'a> {
+    Bearer(&'a str),
+    Cookie(&'a str),
+}
+
+/// The request's token. A bearer token wins over the cookie, so a bad one is refused even beside
+/// a good cookie. An `Authorization` header with any other scheme, or none, is a proxy's in front
+/// of the server (basic auth or SSO), and leaves the cookie to identify the caller.
+fn token(headers: &HeaderMap) -> Option<Token<'_>> {
     if let Some(authorization) = headers.get(header::AUTHORIZATION) {
-        let (scheme, token) = authorization.to_str().ok()?.split_once(' ')?;
-        return scheme.eq_ignore_ascii_case("bearer").then_some((token.trim(), false));
+        // Read as bytes: a proxy's credentials need not be text.
+        let mut parts = authorization.as_bytes().splitn(2, |byte| matches!(byte, b' ' | b'\t'));
+        if parts.next().is_some_and(|scheme| scheme.eq_ignore_ascii_case(b"bearer")) {
+            let token = std::str::from_utf8(parts.next().unwrap_or_default()).ok()?;
+            return Some(Token::Bearer(token.trim()));
+        }
     }
     let cookies = headers.get_all(header::COOKIE).into_iter();
     let mut pairs =
         cookies.filter_map(|value| value.to_str().ok()).flat_map(|value| value.split(';'));
-    let token = pairs.find_map(|pair| pair.trim().strip_prefix(COOKIE)?.strip_prefix('='))?;
-    Some((token, true))
+    pairs.find_map(|pair| pair.trim().strip_prefix(COOKIE)?.strip_prefix('=')).map(Token::Cookie)
 }
 
 /// The library the path names, if any. One it names badly is `-1`, which no library is.
