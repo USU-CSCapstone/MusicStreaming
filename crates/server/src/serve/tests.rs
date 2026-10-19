@@ -1,0 +1,191 @@
+//! Most of these run on paused time: whenever every task waits, the clock jumps to the next
+//! timer.
+
+use std::convert::Infallible;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::Router;
+use axum::body::{Body, Bytes};
+use axum::extract::ConnectInfo;
+use axum::routing::{get, post};
+use futures_util::stream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Notify;
+use tokio::task::JoinHandle;
+use tokio::time::{Instant, sleep, timeout};
+
+use super::{BODY_READ_TIMEOUT, DRAIN_TIMEOUT, HEADER_READ_TIMEOUT, serve};
+
+const PART_OF_A_HEADER: &[u8] = b"GET / HTTP/1.1\r\nHost: jewelcase\r\n";
+
+/// Routes where `/` answers with the client's address and `/echo` with the body it was sent.
+fn routes() -> Router {
+    Router::new()
+        .route(
+            "/",
+            get(|ConnectInfo(peer): ConnectInfo<SocketAddr>| async move { peer.to_string() }),
+        )
+        .route("/echo", post(|body: String| async move { body }))
+}
+
+/// Serves `app`, and returns its address, a way to stop it, and its task.
+async fn start(app: Router) -> (SocketAddr, Arc<Notify>, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let stop = Arc::new(Notify::new());
+    let stopped = stop.clone();
+    let server = tokio::spawn(serve(listener, app, async move { stopped.notified().await }));
+    (address, stop, server)
+}
+
+/// Connects to `address` and sends `request`.
+async fn send(address: SocketAddr, request: &[u8]) -> TcpStream {
+    let mut stream = TcpStream::connect(address).await.unwrap();
+    stream.write_all(request).await.unwrap();
+    stream
+}
+
+/// Everything the server sends on `stream`, which it must close within a second: sooner than
+/// any of its timeouts.
+async fn response(mut stream: TcpStream) -> String {
+    let mut response = String::new();
+    timeout(Duration::from_secs(1), stream.read_to_string(&mut response)).await.unwrap().unwrap();
+    response
+}
+
+/// Waits for the server to close `stream`, sending nothing more, and fails if it stays open
+/// for twice the header timeout.
+async fn closed(mut stream: TcpStream) {
+    let mut rest = Vec::new();
+    timeout(HEADER_READ_TIMEOUT * 2, stream.read_to_end(&mut rest)).await.unwrap().unwrap();
+    assert_eq!(String::from_utf8_lossy(&rest), "");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_connection_that_sends_part_of_a_header_is_closed_after_the_timeout() {
+    let (address, _stop, _server) = start(routes()).await;
+    let opened = Instant::now();
+    closed(send(address, PART_OF_A_HEADER).await).await;
+    assert!(opened.elapsed() >= HEADER_READ_TIMEOUT, "{:?}", opened.elapsed());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_connection_that_sends_nothing_is_closed_after_the_timeout() {
+    let (address, _stop, _server) = start(routes()).await;
+    let opened = Instant::now();
+    closed(send(address, b"").await).await;
+    assert!(opened.elapsed() >= HEADER_READ_TIMEOUT, "{:?}", opened.elapsed());
+}
+
+#[tokio::test(start_paused = true)]
+async fn each_connection_closes_after_its_response() {
+    let (address, _stop, _server) = start(routes()).await;
+    let response = response(send(address, b"GET / HTTP/1.1\r\nHost: jewelcase\r\n\r\n").await);
+    assert!(response.await.starts_with("HTTP/1.1 200 OK\r\n"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn handlers_are_told_the_client_address() {
+    let (address, _stop, _server) = start(routes()).await;
+    let request = b"GET / HTTP/1.1\r\nHost: jewelcase\r\nConnection: close\r\n\r\n";
+    let stream = send(address, request).await;
+    let client = stream.local_addr().unwrap();
+    let response = response(stream).await;
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    assert!(response.ends_with(&format!("\r\n\r\n{client}")), "{response}");
+}
+
+// On real time: paused time can jump past the 1 s limit while the kernel moves a megabyte.
+#[tokio::test]
+async fn a_streamed_response_arrives_in_full() {
+    let chunks =
+        || stream::iter((0..64).map(|_| Ok::<_, Infallible>(Bytes::from(vec![7; 16_384]))));
+    let app = Router::new().route("/", get(move || async move { Body::from_stream(chunks()) }));
+    let (address, _stop, _server) = start(app).await;
+    let mut stream = send(address, b"GET / HTTP/1.1\r\nHost: jewelcase\r\n\r\n").await;
+    let mut response = Vec::new();
+    timeout(Duration::from_secs(1), stream.read_to_end(&mut response)).await.unwrap().unwrap();
+    assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
+    // The chunked framing is text, so every byte 7 is the body's.
+    assert_eq!(response.iter().filter(|&&byte| byte == 7).count(), 64 * 16_384);
+}
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_closes_a_connection_that_has_sent_nothing_at_once() {
+    let (address, stop, server) = start(routes()).await;
+    let stream = send(address, b"").await;
+    // Lets the server accept it.
+    sleep(Duration::from_secs(1)).await;
+    stop.notify_one();
+    timeout(Duration::from_secs(1), server).await.unwrap().unwrap();
+    closed(stream).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_waits_for_part_of_a_header_only_until_the_timeout() {
+    let (address, stop, server) = start(routes()).await;
+    let opened = Instant::now();
+    let stream = send(address, PART_OF_A_HEADER).await;
+    sleep(Duration::from_secs(1)).await;
+    stop.notify_one();
+    timeout(HEADER_READ_TIMEOUT, server).await.unwrap().unwrap();
+    assert!(opened.elapsed() <= HEADER_READ_TIMEOUT, "{:?}", opened.elapsed());
+    closed(stream).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_body_that_stops_arriving_times_out() {
+    let (address, _stop, _server) = start(routes()).await;
+    let request = b"POST /echo HTTP/1.1\r\nHost: jewelcase\r\nContent-Length: 10\r\n\r\nabc";
+    let sent = Instant::now();
+    let mut stream = send(address, request).await;
+    let mut response = String::new();
+    let read = stream.read_to_string(&mut response);
+    timeout(BODY_READ_TIMEOUT * 2, read).await.unwrap().unwrap();
+    assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"), "{response}");
+    assert!(sent.elapsed() >= BODY_READ_TIMEOUT, "{:?}", sent.elapsed());
+}
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_waits_for_a_trickling_body_only_until_the_drain_timeout() {
+    let (address, stop, server) = start(routes()).await;
+    let request = b"POST /echo HTTP/1.1\r\nHost: jewelcase\r\nContent-Length: 1000\r\n\r\n";
+    let mut stream = send(address, request).await;
+    // One byte every few seconds: never long enough apart for the body to time out.
+    tokio::spawn(async move {
+        while stream.write_all(b"a").await.is_ok() {
+            sleep(Duration::from_secs(3)).await;
+        }
+    });
+    sleep(Duration::from_secs(1)).await;
+    let stopping = Instant::now();
+    stop.notify_one();
+    timeout(DRAIN_TIMEOUT + Duration::from_secs(1), server).await.unwrap().unwrap();
+    assert!(stopping.elapsed() >= DRAIN_TIMEOUT, "{:?}", stopping.elapsed());
+}
+
+#[tokio::test(start_paused = true)]
+async fn shutdown_waits_for_a_request_in_progress() {
+    let answer = Arc::new(Notify::new());
+    let answered = answer.clone();
+    let app = Router::new().route(
+        "/",
+        get(move || async move {
+            answered.notified().await;
+            "done"
+        }),
+    );
+    let (address, stop, mut server) = start(app).await;
+    let stream = send(address, b"GET / HTTP/1.1\r\nHost: jewelcase\r\n\r\n").await;
+    sleep(Duration::from_secs(1)).await;
+    stop.notify_one();
+    timeout(DRAIN_TIMEOUT - Duration::from_secs(1), &mut server).await.unwrap_err();
+    answer.notify_one();
+    timeout(Duration::from_secs(1), server).await.unwrap().unwrap();
+    let response = response(stream).await;
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
+    assert!(response.ends_with("\r\n\r\ndone"), "{response}");
+}

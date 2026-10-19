@@ -4,6 +4,7 @@ mod data_dir;
 mod db;
 mod plugins;
 mod scanning;
+mod serve;
 mod web;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -76,11 +77,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     } else {
         app = app.merge(web::router(web));
     }
-    // Sign-in limits need the client's address (`api::origin`).
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("server failed")?;
+    serve::serve(listener, app, shutdown_signal()).await;
     // Where everyone was, as the server stops: not just as of the last periodic save.
     saving.abort();
     let _ = saving.await;

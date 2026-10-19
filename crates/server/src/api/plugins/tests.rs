@@ -1,8 +1,10 @@
+use std::io;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::http::{Request, StatusCode, header};
+use futures_util::stream;
 use serde_json::{Value, json};
 
 use super::super::testing::{app_with_tracks, respond};
@@ -75,6 +77,43 @@ async fn a_file_that_is_not_a_plugin_is_refused_and_nothing_is_kept() {
     assert!(!temp.path().join("plugins").exists());
     let (_, list) = call(&app, ADMIN, "GET", "/api/v1/admin/plugins", None).await;
     assert_eq!(list["items"].as_array().unwrap().len(), 1, "only the one installed before");
+}
+
+/// Uploads `chunks` as a plugin file, and returns the status and Problem.
+async fn upload(app: &Router, chunks: Vec<io::Result<Bytes>>) -> (StatusCode, Value) {
+    let request = Request::post("/api/v1/admin/plugins")
+        .header(header::AUTHORIZATION, ADMIN)
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .body(Body::from_stream(stream::iter(chunks)))
+        .unwrap();
+    let (status, _, body) = respond(app.clone(), request).await;
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+#[tokio::test]
+async fn a_file_over_the_limit_is_refused_as_too_big() {
+    let (_temp, _db, app) = server().await;
+    let megabyte = Bytes::from(vec![0; 1 << 20]);
+    let chunks = (0..=jewelcase_plugins::MAX_SIZE >> 20).map(|_| Ok(megabyte.clone())).collect();
+    let (status, problem) = upload(&app, chunks).await;
+    assert_eq!(
+        (status, &problem["code"]),
+        (StatusCode::UNPROCESSABLE_ENTITY, &json!("plugin_invalid"))
+    );
+    assert_eq!(problem["detail"], "The file is over 50 MB.");
+}
+
+#[tokio::test]
+async fn an_upload_that_breaks_off_is_not_called_too_big() {
+    let (_temp, _db, app) = server().await;
+    // What the server's body timeout makes of an upload that stalls.
+    let stalled = io::Error::new(io::ErrorKind::TimedOut, "stalled");
+    let (status, problem) = upload(&app, vec![Ok(Bytes::from("\0asm")), Err(stalled)]).await;
+    assert_eq!(
+        (status, &problem["code"]),
+        (StatusCode::UNPROCESSABLE_ENTITY, &json!("validation_failed"))
+    );
+    assert_eq!(problem["detail"], "The upload did not arrive in full.");
 }
 
 #[tokio::test]

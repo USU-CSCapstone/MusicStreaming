@@ -9,7 +9,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::extract::rejection::BytesRejection;
+use axum::extract::rejection::{BytesRejection, FailedToBufferBody};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use jewelcase_plugins::Permission;
@@ -44,16 +44,22 @@ struct FromUrl {
     url: String,
 }
 
-/// From an uploaded file, or from `{ "url" }` as JSON. Installed disabled everywhere.
+/// From an uploaded file, or from `{ "url" }` as JSON. Installed disabled everywhere. A file over
+/// the route's body limit is `plugin_invalid`; an upload that breaks off or stalls is
+/// `validation_failed`.
 pub async fn install(
     State(db): State<Arc<Database>>,
     State(plugins): State<Arc<Plugins>>,
     headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Response, Problem> {
-    // The only way to exceed the route's body limit is a file over the size a plugin may be.
-    let body =
-        body.map_err(|_| Problem::new(Code::PluginInvalid).detail("The file is over 50 MB."))?;
+    let body = body.map_err(|rejection| match rejection {
+        // The route's body limit is the size a plugin may be.
+        BytesRejection::FailedToBufferBody(FailedToBufferBody::LengthLimitError(_)) => {
+            Problem::new(Code::PluginInvalid).detail("The file is over 50 MB.")
+        }
+        _ => Problem::invalid("The upload did not arrive in full."),
+    })?;
     let json = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())

@@ -18,7 +18,7 @@ pub type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub async fn serve(app: axum::Router) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    tokio::spawn(crate::serve::serve(listener, app, std::future::pending()));
     address
 }
 
