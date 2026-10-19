@@ -4,21 +4,25 @@ use serde_json::{Value, json};
 
 use super::super::testing::{add_device, add_user, app, respond};
 use crate::db::testing::{access, library};
+use crate::plugins::testing::{connect, enable, install, manifest, plugins};
 
-/// A scrobbler enabled in library 1, which user 2 reaches and user 3 does not, each logged in
-/// with a token named after them.
+/// A scrobbler enabled in library 1, which user 2 reaches and has connected and user 3 does
+/// not reach, each logged in with a token named after them.
 async fn setup() -> (tempfile::TempDir, axum::Router) {
     let (temp, db, app) = app("");
     db.write(|tx| {
         library(tx, 1, "Music", "/music")?;
-        library(tx, 2, "Other", "/other")?;
-        tx.execute_batch(
-            r#"INSERT INTO plugins (id, manifest, installed_at, updated_at) VALUES ('scrobbler', '{"id":"scrobbler","name":"Scrobbler","version":"1","apiVersion":"0.2","permissions":[],"personalSettings":{"properties":{"token":{"type":"string","writeOnly":true},"user":{"type":"string"}}}}', 0, 0);
-               INSERT INTO plugin_libraries (plugin_id, library_id, enabled) VALUES ('scrobbler', 1, 1);"#,
-        )
+        library(tx, 2, "Other", "/other")
     })
     .await
     .unwrap();
+    let mut scrobbler = manifest("scrobbler", &[]);
+    scrobbler["name"] = json!("Scrobbler");
+    scrobbler["personalSettings"] = json!({ "properties": {
+        "token": { "type": "string", "writeOnly": true }, "user": { "type": "string" }
+    } });
+    install(&db, scrobbler).await;
+    enable(&plugins(&temp, &db), "scrobbler", true).await;
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
     for user in [2, 3] {
         add_user(&conn, user, "user");
@@ -26,11 +30,7 @@ async fn setup() -> (tempfile::TempDir, axum::Router) {
     }
     access(&conn, 2, 1).unwrap();
     access(&conn, 3, 2).unwrap();
-    conn.execute(
-        r#"INSERT INTO plugin_user_settings VALUES ('scrobbler', 2, '{"token":"t","user":"two"}', 0)"#,
-        [],
-    )
-    .unwrap();
+    connect(&db, "scrobbler", 2, json!({ "token": "t", "user": "two" }), 0).await;
     (temp, app)
 }
 

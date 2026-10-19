@@ -1,23 +1,29 @@
-use std::collections::HashMap;
-
 use serde_json::{Map, Value, json};
 
-use super::super::testing::database;
+use super::super::testing::{connect, database, enable, install, manifest, plugins};
 use super::super::{PluginError, Plugins};
 use super::{connectable, disconnect, values};
 use crate::db::Database;
+use crate::db::testing::{User, access};
 
-/// `p` has personal settings and is enabled in library 1, which user 7 reaches and user 8
-/// does not.
-async fn scrobbler(db: &Database) {
+/// `scrobbler`, which users connect with a token, and `lyrics`, which they set nothing for, are
+/// both enabled in library 1, which user 7 reaches and user 8 does not.
+async fn scrobbler(plugins: &Plugins, db: &Database) {
+    let mut scrobbler = manifest("scrobbler", &[]);
+    scrobbler["name"] = json!("Scrobbler");
+    scrobbler["personalSettings"] = json!({
+        "properties": { "token": { "type": "string", "writeOnly": true }, "user": { "type": "string" } },
+        "required": ["token"]
+    });
+    install(db, scrobbler).await;
+    install(db, manifest("lyrics", &[])).await;
+    enable(plugins, "scrobbler", true).await;
+    enable(plugins, "lyrics", true).await;
     db.write(|tx| {
-        tx.execute_batch(
-            r#"UPDATE plugins SET manifest = '{"id":"p","name":"Scrobbler","version":"1","apiVersion":"0.2","permissions":[],"personalSettings":{"properties":{"token":{"type":"string","writeOnly":true},"user":{"type":"string"}},"required":["token"]}}';
-               INSERT INTO plugin_libraries (plugin_id, library_id, enabled) VALUES ('p', 1, 1);
-               INSERT INTO users (id, username, display_name, role, password, created_at, updated_at)
-               VALUES (7, 'seven', 'Seven', 'user', '', 0, 0), (8, 'eight', 'Eight', 'user', '', 0, 0);
-               INSERT INTO library_access VALUES (7, 1, 0), (8, 2, 0);"#,
-        )
+        User::new(7, "user").insert(tx)?;
+        User::new(8, "user").insert(tx)?;
+        access(tx, 7, 1)?;
+        access(tx, 8, 2)
     })
     .await
     .unwrap();
@@ -30,32 +36,26 @@ async fn listed(db: &Database, user: i64, admin: bool) -> Vec<(String, bool)> {
 
 #[tokio::test]
 async fn a_plugin_is_offered_to_those_who_reach_a_library_it_is_enabled_in() {
-    let (_temp, db) = database().await;
-    scrobbler(&db).await;
-    assert_eq!(listed(&db, 7, false).await, [("Scrobbler".to_owned(), false)]);
+    let (temp, db) = database().await;
+    let plugins = plugins(&temp, &db);
+    scrobbler(&plugins, &db).await;
+    let scrobbler = [("Scrobbler".to_owned(), false)];
+    assert_eq!(listed(&db, 7, false).await, scrobbler, "not lyrics, with nothing to set");
     assert!(listed(&db, 8, false).await.is_empty(), "not in a library they reach");
-    assert_eq!(listed(&db, 8, true).await.len(), 1, "an admin reaches every library");
+    assert_eq!(listed(&db, 8, true).await, scrobbler, "an admin reaches every library");
 
-    db.write(|tx| tx.execute_batch("UPDATE plugin_libraries SET enabled = 0")).await.unwrap();
+    enable(&plugins, "scrobbler", false).await;
     assert!(listed(&db, 7, false).await.is_empty(), "not while it is disabled");
-    db.write(|tx| {
-        tx.execute_batch(
-            r#"UPDATE plugin_libraries SET enabled = 1; UPDATE plugins SET manifest = '{"name":"Lyrics"}'"#,
-        )
-    })
-    .await
-    .unwrap();
-    assert!(listed(&db, 7, false).await.is_empty(), "nothing for a user to set");
 }
 
 #[tokio::test]
 async fn settings_are_checked_before_the_plugin_is_asked() {
     let (temp, db) = database().await;
-    scrobbler(&db).await;
-    let plugins = Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new());
+    let plugins = plugins(&temp, &db);
+    scrobbler(&plugins, &db).await;
     let save = |user: i64, entered: Value| {
         let entered: Map<String, Value> = entered.as_object().unwrap().clone();
-        plugins.save_personal("p".into(), user, false, entered)
+        plugins.save_personal("scrobbler".into(), user, false, entered)
     };
     let refused = |result: Result<(), PluginError>| match result {
         Err(PluginError::SettingsInvalid(why)) => why,
@@ -68,18 +68,14 @@ async fn settings_are_checked_before_the_plugin_is_asked() {
 
 #[tokio::test]
 async fn disconnecting_forgets_what_was_set() {
-    let (_temp, db) = database().await;
-    scrobbler(&db).await;
-    db.write(|tx| {
-        tx.execute_batch(r#"INSERT INTO plugin_user_settings VALUES ('p', 7, '{"token":"t"}', 0)"#)
-    })
-    .await
-    .unwrap();
+    let (temp, db) = database().await;
+    scrobbler(&plugins(&temp, &db), &db).await;
+    connect(&db, "scrobbler", 7, json!({ "token": "t" }), 0).await;
     assert_eq!(listed(&db, 7, false).await, [("Scrobbler".to_owned(), true)]);
-    let stored = db.read(|conn| values(conn, "p", 7)).await.unwrap();
+    let stored = db.read(|conn| values(conn, "scrobbler", 7)).await.unwrap();
     assert_eq!(Value::Object(stored), json!({ "token": "t" }));
 
-    db.write(|tx| disconnect(tx, "p", 7)).await.unwrap();
+    db.write(|tx| disconnect(tx, "scrobbler", 7)).await.unwrap();
     assert_eq!(listed(&db, 7, false).await, [("Scrobbler".to_owned(), false)]);
-    assert!(db.read(|conn| values(conn, "p", 7)).await.unwrap().is_empty());
+    assert!(db.read(|conn| values(conn, "scrobbler", 7)).await.unwrap().is_empty());
 }

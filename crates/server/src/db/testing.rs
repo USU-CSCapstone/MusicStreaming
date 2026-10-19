@@ -11,7 +11,7 @@ use super::libraries;
 
 mod catalog;
 
-pub use catalog::{Album, Artist, Image, Track, scattered_key};
+pub use catalog::{Album, Artist, Image, Track, album_artist, scattered_key, track_artist};
 
 /// Adds library `id` called `name`, with its one root at `root`.
 pub fn library(conn: &Connection, id: i64, name: &str, root: impl AsRef<Path>) -> Result<()> {

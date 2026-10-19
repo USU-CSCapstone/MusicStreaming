@@ -1,12 +1,17 @@
+use std::sync::Arc;
+
 use axum::Router;
 use axum::body::Body;
 use axum::http::{StatusCode, header};
+use jewelcase_plugins::Permission::{LibraryRead, SearchActivity, Searched};
 use serde_json::{Value, json};
 
 use super::super::testing::{add_device, add_user, app_with_tracks, json, owner_request, respond};
 use super::{KEPT, WINDOW_MS};
 use crate::db::Database;
 use crate::db::testing::access;
+use crate::plugins::personal::set_search_sharing;
+use crate::plugins::testing::{connect, enable, grant, install, manifest, plugins};
 
 const URI: &str = "/api/v1/libraries/1/recent-searches";
 
@@ -148,6 +153,20 @@ async fn a_search_is_kept_per_library() {
     assert_eq!((status, &other["items"]), (StatusCode::OK, &json!([])));
 }
 
+/// Shares the owner's searches with `plugin`, which is allowed them, enabled in library 1, and
+/// connected by the owner.
+async fn share_with_a_plugin(temp: &tempfile::TempDir, db: &Arc<Database>) {
+    let mut searcher = manifest("plugin", &[LibraryRead, SearchActivity, Searched]);
+    searcher["personalSettings"] = json!({ "properties": { "token": { "type": "string" } } });
+    install(db, searcher).await;
+    let plugins = plugins(temp, db);
+    grant(&plugins, "plugin", &[SearchActivity, Searched], &[LibraryRead]).await;
+    enable(&plugins, "plugin", true).await;
+    connect(db, "plugin", 1, json!({}), 0).await;
+    let shared = db.write(|tx| set_search_sharing(tx, "plugin", 1, true, true)).await.unwrap();
+    assert!(shared.is_ok());
+}
+
 /// The events noted for the `searched` hook: each kind and search.
 async fn events(db: &Database) -> Vec<(String, Option<i64>)> {
     db.read(|conn| {
@@ -161,7 +180,7 @@ async fn events(db: &Database) -> Vec<(String, Option<i64>)> {
 
 #[tokio::test]
 async fn what_was_found_is_kept_and_noted_only_for_a_user_who_shares() {
-    let (_temp, db, app) = app_with_tracks().await;
+    let (temp, db, app) = app_with_tracks().await;
     let (_, first) = record(&app, json!({ "query": "a" })).await;
     let found: i64 = db
         .read(|conn| conn.query_row("SELECT found_tracks FROM recent_searches", [], |r| r.get(0)))
@@ -170,9 +189,7 @@ async fn what_was_found_is_kept_and_noted_only_for_a_user_who_shares() {
     assert_eq!(found, 2, "both of library 1's tracks are called A");
     assert!(events(&db).await.is_empty(), "the owner shares with no plugin");
 
-    db.write(|tx| tx.execute("INSERT INTO plugin_search_sharing VALUES ('p', 1, 0)", []))
-        .await
-        .unwrap();
+    share_with_a_plugin(&temp, &db).await;
     let (_, second) = record(&app, json!({ "query": "b" })).await;
     let id = |search: &Value| search["id"].as_str().unwrap().parse::<i64>().unwrap();
     // Replaced by the same words: not a removal, so nothing to forget.

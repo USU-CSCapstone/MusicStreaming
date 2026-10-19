@@ -1,44 +1,132 @@
-//! A small catalog for the plugins' tests.
+//! What the plugins' tests share: a small catalog, plugins installed with real manifests and
+//! granted and enabled as an admin does it, and the steps only a running plugin can take.
 
-use std::path::Path;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::db::{Database, libraries};
+use jewelcase_plugins::{Api, Manifest, Permission, manifest};
+use rusqlite::params;
+use serde_json::{Value, json};
 
-/// Library 1 holds tracks 11, 12, and 13 (13 missing since a scan) on album 101 by artist 201;
-/// library 2 holds track 21. The plugin `p` is installed.
+use super::Plugins;
+use crate::db::Database;
+use crate::db::testing::{Album, Artist, Track, album_artist, library, track_artist};
+
+/// Library 1 holds tracks 11, 12, and 13 (13 missing since a scan) on album 101, "Signal", by
+/// artist 301, Aurora Lane, who is credited on track 11; and album 102, "Empty", with no tracks.
+/// Library 2 holds track 21 on album 201. Nothing is installed.
 pub async fn database() -> (tempfile::TempDir, Arc<Database>) {
     let temp = tempfile::tempdir().unwrap();
     let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
     db.write(|tx| {
-        libraries::create(tx, Some(1), "Music", &[Path::new("/music")], &[])?;
-        libraries::create(tx, Some(2), "Other", &[Path::new("/other")], &[])?;
-        tx.execute_batch(
-            "INSERT INTO albums (id, library_id, title, title_key, artists_key, sort_key,
-                                 artist_sort_key, track_count, added_at, updated_at)
-             VALUES (101, 1, 'Signal', 'a', '', x'61', x'', 2, 0, 0),
-                    (102, 1, 'Empty', 'b', '', x'62', x'', 0, 0, 0),
-                    (201, 2, 'Elsewhere', 'a', '', x'61', x'', 1, 0, 0);
-             INSERT INTO artists (id, library_id, name, name_key, sort_key, album_count,
-                                  track_count, added_at, updated_at)
-             VALUES (301, 1, 'Aurora Lane', 'aurora lane', x'61', 1, 2, 0, 0);
-             INSERT INTO album_artists VALUES (1, 101, 0, 301);
-             WITH t (id, library_id, album_id, missing) AS
-                 (VALUES (11, 1, 101, NULL), (12, 1, 101, NULL), (13, 1, 101, 5), (21, 2, 201, NULL))
-             INSERT INTO tracks (id, library_id, album_id, root_id, path, file_size, file_mtime,
-                                 missing_since, title, sort_key, artist_sort_key, album_sort_key,
-                                 track_number, codec, container, lossless, sample_rate_hz,
-                                 channels, duration_us, added_at, updated_at)
-             SELECT t.id, t.library_id, t.album_id, r.id, 'Signal/' || t.id || '.flac', 10, 0,
-                    t.missing, 'Track ' || t.id, x'61', x'', x'61', t.id % 10, 'flac', 'flac', 1,
-                    44100, 2, 180000000, 0, 0
-             FROM t JOIN library_roots r ON r.library_id = t.library_id;
-             INSERT INTO track_artists (library_id, track_id, position, artist_id, artist_name)
-             VALUES (1, 11, 0, 301, 'Aurora Lane');
-             INSERT INTO plugins (id, manifest, installed_at, updated_at) VALUES ('p', '{}', 0, 0);",
-        )
+        library(tx, 1, "Music", "/music")?;
+        library(tx, 2, "Other", "/other")?;
+        let album = |id, library, title: &str, track_count| Album {
+            title: Some(title.to_owned()),
+            track_count,
+            ..Album::new(id, library)
+        };
+        album(101, 1, "Signal", 2).insert(tx)?;
+        album(102, 1, "Empty", 0).insert(tx)?;
+        album(201, 2, "Elsewhere", 1).insert(tx)?;
+        let artist = Artist::new(301, 1, "Aurora Lane");
+        Artist { album_count: 1, track_count: 2, ..artist }.insert(tx)?;
+        album_artist(tx, 1, 101, 301)?;
+        for (id, library, album, missing_since) in
+            [(11, 1, 101, None), (12, 1, 101, None), (13, 1, 101, Some(5)), (21, 2, 201, None)]
+        {
+            Track {
+                path: format!("Signal/{id}.flac"),
+                missing_since,
+                track_number: Some(id % 10),
+                duration_us: 180_000_000,
+                ..Track::new(id, library, album)
+            }
+            .insert(tx)?;
+        }
+        track_artist(tx, 1, 11, 0, 301, "Aurora Lane")
     })
     .await
     .unwrap();
     (temp, db)
+}
+
+/// The plugins over `db`, keeping their files in `temp`, with no scanners.
+pub fn plugins(temp: &tempfile::TempDir, db: &Arc<Database>) -> Arc<Plugins> {
+    Arc::new(Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new()))
+}
+
+/// A manifest for plugin `id`, named after it and built against the current contract, that
+/// asks for each of `permissions` and requires none of them.
+pub fn manifest(id: &str, permissions: &[Permission]) -> Value {
+    let requests: Vec<Value> = permissions
+        .iter()
+        .map(|p| json!({ "permission": p.name(), "required": false, "reason": "r" }))
+        .collect();
+    json!({
+        "id": id, "name": id, "version": "1", "apiVersion": Api::CURRENT.name(),
+        "permissions": requests
+    })
+}
+
+/// Installs the plugin `manifest` describes as [`Plugins::install`] leaves it once its file
+/// checks out: disabled everywhere, with nothing granted. Panics on a manifest the server would
+/// refuse.
+pub async fn install(db: &Database, manifest: Value) {
+    let problems = manifest::validate(&manifest);
+    assert!(problems.is_empty(), "{problems:?}");
+    let manifest: Manifest = serde_json::from_value(manifest).unwrap();
+    db.write(move |tx| {
+        tx.execute(
+            "INSERT INTO plugins (id, manifest, installed_at, updated_at) VALUES (?1, ?2, 0, 0)",
+            params![manifest.id, serde_json::to_string(&manifest).unwrap()],
+        )
+    })
+    .await
+    .unwrap();
+}
+
+/// Grants `id` exactly `plugin_wide` for itself and `in_library` in library 1, as the admin
+/// does.
+pub async fn grant(
+    plugins: &Plugins,
+    id: &str,
+    plugin_wide: &[Permission],
+    in_library: &[Permission],
+) {
+    let per_library = vec![(1, in_library.to_vec())];
+    plugins.set_grants(id.into(), plugin_wide.to_vec(), per_library).await.unwrap();
+}
+
+/// Enables or disables `id` in library 1, as the admin does.
+pub async fn enable(plugins: &Plugins, id: &str, enabled: bool) {
+    plugins.set_enabled(id.into(), 1, enabled).await.unwrap();
+}
+
+/// Enables `id` in library 1 without the permissions it requires, which the admin cannot do.
+/// For the tests of a real plugin, which keep it off the network by never granting that.
+pub async fn enable_ungranted(db: &Database, id: &'static str) {
+    db.write(move |tx| {
+        tx.execute(
+            "INSERT INTO plugin_libraries (plugin_id, library_id, enabled) VALUES (?1, 1, 1)",
+            [id],
+        )
+    })
+    .await
+    .unwrap();
+}
+
+/// Connects `user` to `id` with `settings` at `at`, as saving them does once the plugin accepts
+/// them. Only a running plugin can accept them, and the tests' plugins cannot reach the
+/// services they check against.
+pub async fn connect(db: &Database, id: &'static str, user: i64, settings: Value, at: i64) {
+    db.write(move |tx| {
+        tx.execute(
+            "INSERT INTO plugin_user_settings (plugin_id, user_id, settings, connected_at) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![id, user, settings.to_string(), at],
+        )
+    })
+    .await
+    .unwrap();
 }

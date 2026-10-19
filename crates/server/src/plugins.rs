@@ -13,7 +13,7 @@ pub mod rate_limits;
 mod run;
 pub mod settings;
 #[cfg(test)]
-mod testing;
+pub mod testing;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;

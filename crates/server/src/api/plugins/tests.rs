@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use serde_json::{Value, json};
 
 use super::super::testing::{app_with_tracks, respond};
+use crate::db::Database;
+use crate::plugins::testing::{enable_ungranted, install};
 
 const ADMIN: &str = "Bearer owner-token";
 
@@ -28,9 +32,8 @@ async fn call(
 
 /// Libraries 1 and 2, with `lrclib-lyrics` installed as a row: what a successful install
 /// leaves, without needing a compiled component.
-async fn server() -> (tempfile::TempDir, Router) {
-    let (temp, _db, app) = app_with_tracks().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+async fn server() -> (tempfile::TempDir, Arc<Database>, Router) {
+    let (temp, db, app) = app_with_tracks().await;
     let manifest = json!({
         "id": "lrclib-lyrics", "name": "LRCLIB Lyrics", "version": "0.1.0", "apiVersion": "0.2",
         "permissions": [
@@ -48,19 +51,15 @@ async fn server() -> (tempfile::TempDir, Router) {
             "required": ["apiKey"]
         }
     });
-    conn.execute(
-        "INSERT INTO plugins (id, manifest, installed_at, updated_at) VALUES ('lrclib-lyrics', ?1, 0, 0)",
-        [manifest.to_string()],
-    )
-    .unwrap();
-    (temp, app)
+    install(&db, manifest).await;
+    (temp, db, app)
 }
 
 const PLUGIN: &str = "/api/v1/admin/plugins/lrclib-lyrics";
 
 #[tokio::test]
 async fn a_file_that_is_not_a_plugin_is_refused_and_nothing_is_kept() {
-    let (temp, app) = server().await;
+    let (temp, _db, app) = server().await;
     let request = Request::post("/api/v1/admin/plugins")
         .header(header::AUTHORIZATION, ADMIN)
         .header(header::CONTENT_TYPE, "application/octet-stream")
@@ -80,7 +79,7 @@ async fn a_file_that_is_not_a_plugin_is_refused_and_nothing_is_kept() {
 
 #[tokio::test]
 async fn is_installed_disabled_everywhere_with_nothing_granted() {
-    let (_temp, app) = server().await;
+    let (_temp, _db, app) = server().await;
     let (status, plugin) = call(&app, ADMIN, "GET", PLUGIN, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(plugin["source"], json!({ "kind": "file" }));
@@ -100,7 +99,7 @@ async fn is_installed_disabled_everywhere_with_nothing_granted() {
 
 #[tokio::test]
 async fn cannot_be_enabled_until_its_required_permissions_are_granted() {
-    let (_temp, app) = server().await;
+    let (_temp, _db, app) = server().await;
     let enable = |library: &str| format!("{PLUGIN}/libraries/{library}");
     let (status, problem) =
         call(&app, ADMIN, "PUT", &enable("1"), Some(json!({ "enabled": true }))).await;
@@ -132,22 +131,11 @@ async fn cannot_be_enabled_until_its_required_permissions_are_granted() {
     );
 }
 
-/// Installs `manifest` as a row, as `server` installs its plugin.
-fn install(temp: &tempfile::TempDir, manifest: Value) {
-    rusqlite::Connection::open(temp.path().join("jewelcase.db"))
-        .unwrap()
-        .execute(
-            "INSERT INTO plugins (id, manifest, installed_at, updated_at) VALUES (?1, ?2, 0, 0)",
-            [manifest["id"].as_str().unwrap(), &manifest.to_string()],
-        )
-        .unwrap();
-}
-
 #[tokio::test]
 async fn a_limit_for_every_plugin_is_granted_like_any_other_permission_and_shown_where_it_binds() {
-    let (temp, app) = server().await;
+    let (_temp, db, app) = server().await;
     install(
-        &temp,
+        &db,
         json!({
             "id": "artwork", "name": "Artwork", "version": "1.0.0", "apiVersion": "0.3",
             "permissions": [
@@ -158,15 +146,17 @@ async fn a_limit_for_every_plugin_is_granted_like_any_other_permission_and_shown
                   "reason": "MusicBrainz limits each server, not each plugin." }
             ]
         }),
-    );
+    )
+    .await;
     install(
-        &temp,
+        &db,
         json!({
             "id": "anywhere", "name": "Anywhere", "version": "1.0.0", "apiVersion": "0.3",
             "permissions": [{ "permission": "network", "required": true, "reason": "To look.",
                               "destinations": ["*"] }]
         }),
-    );
+    )
+    .await;
     let artwork = "/api/v1/admin/plugins/artwork";
     let grants = json!({ "granted": ["network", "hostRateLimits"], "libraries": [] });
     let (status, plugin) =
@@ -190,9 +180,9 @@ async fn a_limit_for_every_plugin_is_granted_like_any_other_permission_and_shown
 
 #[tokio::test]
 async fn an_admin_exempts_a_plugin_from_limits_for_every_plugin_one_host_at_a_time() {
-    let (temp, app) = server().await;
+    let (_temp, db, app) = server().await;
     install(
-        &temp,
+        &db,
         json!({
             "id": "setter", "name": "Setter", "version": "1.0.0", "apiVersion": "0.3",
             "permissions": [
@@ -202,7 +192,8 @@ async fn an_admin_exempts_a_plugin_from_limits_for_every_plugin_one_host_at_a_ti
                 { "permission": "hostRateLimits", "required": true, "reason": "To share." }
             ]
         }),
-    );
+    )
+    .await;
     let setter = "/api/v1/admin/plugins/setter";
     let grants = Some(json!({ "granted": ["network", "hostRateLimits"], "libraries": [] }));
     call(&app, ADMIN, "PUT", &format!("{setter}/permissions"), grants).await;
@@ -240,7 +231,7 @@ async fn an_admin_exempts_a_plugin_from_limits_for_every_plugin_one_host_at_a_ti
 
 #[tokio::test]
 async fn revoking_a_required_permission_disables_it_at_once() {
-    let (_temp, app) = server().await;
+    let (_temp, _db, app) = server().await;
     let all = json!({ "granted": ["network"], "libraries": [{ "libraryId": "1", "granted": ["libraryRead"] }] });
     call(&app, ADMIN, "PUT", &format!("{PLUGIN}/permissions"), Some(all)).await;
     call(&app, ADMIN, "PUT", &format!("{PLUGIN}/libraries/1"), Some(json!({ "enabled": true })))
@@ -257,7 +248,7 @@ async fn revoking_a_required_permission_disables_it_at_once() {
 
 #[tokio::test]
 async fn uninstalling_keeps_its_grants_for_a_reinstall() {
-    let (temp, app) = server().await;
+    let (temp, _db, app) = server().await;
     let grants = json!({ "granted": ["network"], "libraries": [{ "libraryId": "2", "granted": ["libraryAdd"] }] });
     call(&app, ADMIN, "PUT", &format!("{PLUGIN}/permissions"), Some(grants)).await;
     assert_eq!(call(&app, ADMIN, "DELETE", PLUGIN, None).await.0, StatusCode::NO_CONTENT);
@@ -276,7 +267,7 @@ async fn uninstalling_keeps_its_grants_for_a_reinstall() {
 
 #[tokio::test]
 async fn a_run_needs_a_library_it_is_enabled_in() {
-    let (_temp, app) = server().await;
+    let (_temp, _db, app) = server().await;
     let (status, result) = call(&app, ADMIN, "POST", &format!("{PLUGIN}/run"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
@@ -291,10 +282,11 @@ async fn a_run_needs_a_library_it_is_enabled_in() {
 }
 
 /// The whole path with a real plugin: install the file, grant, enable, and run. It reaches no
-/// network: the run is granted reading and writing, but not the network the plugin requires.
+/// network: it is granted reading, and enabled without the network it requires, as only the
+/// database allows.
 #[tokio::test]
 async fn installs_and_runs_a_real_plugin() {
-    let (temp, _db, app) = app_with_tracks().await;
+    let (temp, db, app) = app_with_tracks().await;
     let file = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm"
@@ -314,20 +306,12 @@ async fn installs_and_runs_a_real_plugin() {
         .unwrap();
     assert_eq!(respond(app.clone(), request).await.0, StatusCode::CONFLICT, "installed twice");
 
-    let grants = json!({ "granted": ["network"], "libraries": [{ "libraryId": "1", "granted": ["libraryRead"] }] });
-    call(&app, ADMIN, "PUT", &format!("{PLUGIN}/permissions"), Some(grants)).await;
-    let (status, _) = call(
-        &app,
-        ADMIN,
-        "PUT",
-        &format!("{PLUGIN}/libraries/1"),
-        Some(json!({ "enabled": true })),
-    )
-    .await;
+    let grants =
+        json!({ "granted": [], "libraries": [{ "libraryId": "1", "granted": ["libraryRead"] }] });
+    let (status, _) =
+        call(&app, ADMIN, "PUT", &format!("{PLUGIN}/permissions"), Some(grants)).await;
     assert_eq!(status, StatusCode::OK);
-    // Revoke the network behind its back, as the database allows but the API would not.
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
-    conn.execute("DELETE FROM plugin_grants", []).unwrap();
+    enable_ungranted(&db, "lrclib-lyrics").await;
     let (status, result) = call(&app, ADMIN, "POST", &format!("{PLUGIN}/run"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(result["ok"], false, "{result}");
@@ -355,7 +339,7 @@ const SETTINGS: &str = "/api/v1/admin/plugins/lrclib-lyrics/settings";
 
 #[tokio::test]
 async fn settings_show_values_but_never_secrets() {
-    let (temp, app) = server().await;
+    let (temp, _db, app) = server().await;
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
     conn.execute(
         r#"INSERT INTO plugin_settings VALUES ('lrclib-lyrics', 0, '{"apiKey":"s3cret","limit":4}')"#,
@@ -387,7 +371,7 @@ async fn settings_show_values_but_never_secrets() {
 
 #[tokio::test]
 async fn settings_are_checked_before_the_plugin_sees_them() {
-    let (_temp, app) = server().await;
+    let (_temp, _db, app) = server().await;
     for (body, detail) in [
         (
             json!({ "limit": 2.5, "mode": "slow" }),
