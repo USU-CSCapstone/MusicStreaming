@@ -2,17 +2,22 @@
 //! No test here reaches the network: each one grants too little for a request to leave.
 //!
 //! The plugin is built against the 0.2 contract, so these also show that a 0.2 plugin still
-//! runs. Needs the packed plugin, so these are ignored until it is built:
-//!
-//!     plugins/lrclib-lyrics/build.sh && cargo test -p jewelcase-plugins -- --ignored
+//! runs. Needs the packed plugin: run `plugins/lrclib-lyrics/build.sh` first.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use jewelcase_plugins::{Album, Api, Artist, Event, Grants, Host, Library, Permission, Track};
 
-const PLUGIN: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm");
+/// The packed plugin. Panics, saying how to build it, when it is not built.
+fn plugin() -> &'static Path {
+    let path = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm"
+    ));
+    assert!(path.is_file(), "run plugins/lrclib-lyrics/build.sh first");
+    path
+}
 
 /// A library with one root, holding these tracks' files, and the plugin's state in memory.
 struct Tracks {
@@ -115,13 +120,12 @@ fn grants(permissions: &[Permission], destinations: &[&str]) -> Grants {
 }
 
 #[tokio::test]
-#[ignore = "needs plugins/lrclib-lyrics/build.sh"]
 async fn a_missing_required_permission_stops_it_before_it_starts() {
     let dir = tempfile::tempdir().unwrap();
     let outcome = Host::new()
         .unwrap()
         .run(
-            Path::new(PLUGIN),
+            plugin(),
             Api::V0_2,
             grants(&[Permission::LibraryRead], &[]),
             library(dir.path()),
@@ -134,7 +138,6 @@ async fn a_missing_required_permission_stops_it_before_it_starts() {
 }
 
 #[tokio::test]
-#[ignore = "needs plugins/lrclib-lyrics/build.sh"]
 async fn the_network_reaches_only_approved_destinations() {
     let dir = tempfile::tempdir().unwrap();
     let permissions = [Permission::LibraryRead, Permission::Network, Permission::LibraryAdd];
@@ -142,7 +145,7 @@ async fn the_network_reaches_only_approved_destinations() {
     let outcome = Host::new()
         .unwrap()
         .run(
-            Path::new(PLUGIN),
+            plugin(),
             Api::V0_2,
             grants(&permissions, &["example.invalid"]),
             library(dir.path()),
@@ -162,10 +165,9 @@ async fn the_network_reaches_only_approved_destinations() {
 }
 
 #[test]
-#[ignore = "needs plugins/lrclib-lyrics/build.sh"]
 fn a_real_plugin_passes_the_install_check() {
     let host = Host::new().unwrap();
-    let bytes = std::fs::read(PLUGIN).unwrap();
+    let bytes = std::fs::read(plugin()).unwrap();
     host.check(&bytes, Api::V0_2).unwrap();
     // It is built against 0.2, whose `http.send` answers a message, so it does not fit 0.3.
     assert!(host.check(&bytes, Api::V0_3).is_err());

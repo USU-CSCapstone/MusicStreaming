@@ -602,7 +602,6 @@ async fn sharing_is_turned_on_only_by_a_connected_user_of_a_plugin_allowed_searc
 /// `tracks-changed`. It is granted everything but the network it requires, so it reports that
 /// rather than reaching lrclib.net, and the failure is recorded to retry.
 #[tokio::test]
-#[ignore = "needs plugins/lrclib-lyrics/build.sh"]
 async fn delivers_changes_to_a_real_plugin() {
     let (temp, db) = database().await;
     db.write(|tx| tx.execute_batch("DELETE FROM plugins")).await.unwrap();
@@ -611,7 +610,10 @@ async fn delivers_changes_to_a_real_plugin() {
         env!("CARGO_MANIFEST_DIR"),
         "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm"
     );
-    let id = plugins.install(std::fs::read(file).unwrap(), None).await.unwrap();
+    let id = plugins
+        .install(std::fs::read(file).expect("run plugins/lrclib-lyrics/build.sh first"), None)
+        .await
+        .unwrap();
     let granted = vec![Permission::LibraryRead, Permission::TracksChanged];
     plugins.set_grants(id.clone(), Vec::new(), vec![(1, granted)]).await.unwrap();
     // The network is required, so enabling is refused; enable it as the database allows.
@@ -641,7 +643,6 @@ async fn delivers_changes_to_a_real_plugin() {
 /// token and delivering their play both reach the plugin and are refused when it tries to send,
 /// and the play is kept for user 7 to send again.
 #[tokio::test]
-#[ignore = "needs plugins/listenbrainz/build.sh"]
 async fn delivers_plays_to_a_real_scrobbler() {
     const REFUSED: &str = "the plugin reported an error: Network access was not granted";
     let (temp, db) = database().await;
@@ -649,7 +650,10 @@ async fn delivers_plays_to_a_real_scrobbler() {
     let plugins = Arc::new(Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new()));
     let file =
         concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/listenbrainz/target/listenbrainz.wasm");
-    let id = plugins.install(std::fs::read(file).unwrap(), None).await.unwrap();
+    let id = plugins
+        .install(std::fs::read(file).expect("run plugins/listenbrainz/build.sh first"), None)
+        .await
+        .unwrap();
     let plugin_wide = vec![Permission::ListeningActivity, Permission::Played];
     let per_library = vec![(1, vec![Permission::LibraryRead])];
     plugins.set_grants(id.clone(), plugin_wide, per_library).await.unwrap();

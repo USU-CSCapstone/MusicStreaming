@@ -2,9 +2,7 @@
 //! real host. No test here reaches the network: none grants it, so a request is refused before
 //! it leaves.
 //!
-//! Needs the packed plugin, so these are ignored until it is built:
-//!
-//!     plugins/listenbrainz/build.sh && cargo test -p jewelcase-plugins -- --ignored
+//! Needs the packed plugin: run `plugins/listenbrainz/build.sh` first.
 
 use std::path::{Path, PathBuf};
 
@@ -12,8 +10,15 @@ use jewelcase_plugins::{
     Album, Api, Artist, Event, Grants, Host, Library, Permission, Playing, Track,
 };
 
-const PLUGIN: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/listenbrainz/target/listenbrainz.wasm");
+/// The packed plugin. Panics, saying how to build it, when it is not built.
+fn plugin() -> &'static Path {
+    let path = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../plugins/listenbrainz/target/listenbrainz.wasm"
+    ));
+    assert!(path.is_file(), "run plugins/listenbrainz/build.sh first");
+    path
+}
 
 /// A library with nothing in it: the event carries all the plugin needs.
 struct Empty;
@@ -69,15 +74,13 @@ impl Library for Empty {
 }
 
 #[test]
-#[ignore = "needs plugins/listenbrainz/build.sh"]
 fn a_0_3_plugin_passes_only_the_0_3_install_check() {
-    let (host, bytes) = (Host::new().unwrap(), std::fs::read(PLUGIN).unwrap());
+    let (host, bytes) = (Host::new().unwrap(), std::fs::read(plugin()).unwrap());
     host.check(&bytes, Api::V0_3).unwrap();
     assert!(host.check(&bytes, Api::V0_2).is_err(), "0.2 has no playing event to hand it");
 }
 
 #[tokio::test]
-#[ignore = "needs plugins/listenbrainz/build.sh"]
 async fn a_start_reaches_the_plugin_as_playing() {
     let mut grants = Grants {
         plugin: "listenbrainz".into(),
@@ -106,8 +109,7 @@ async fn a_start_reaches_the_plugin_as_playing() {
         path: "Signal.flac".into(),
     };
     let event = Event::Playing(Playing { track, started_at: 1_790_942_400_000 });
-    let outcome =
-        Host::new().unwrap().run(Path::new(PLUGIN), Api::V0_3, grants, Empty, event).await;
+    let outcome = Host::new().unwrap().run(plugin(), Api::V0_3, grants, Empty, event).await;
     // It got as far as sending it, which the network it was not granted refused.
     assert!(!outcome.ok);
     assert_eq!(outcome.summary, "the plugin reported an error: Network access was not granted");

@@ -34,7 +34,8 @@ it, and the containers never write to your checkout. The server's API is also on
 http://localhost:8080.
 
 Tests and checks run on your machine as usual: `cargo test` and `cargo clippy` at the root, and
-`pnpm test` and `pnpm check` in `web/`. Running `pnpm dev` there on its own serves the web app
+`pnpm test` and `pnpm check` in `web/`. Some Rust tests run the bundled plugins, so build them
+first with `plugins/lrclib-lyrics/build.sh && plugins/listenbrainz/build.sh`, then run `cargo test`. Running `pnpm dev` there on its own serves the web app
 against a mock of the API instead.
 
 # Prototype

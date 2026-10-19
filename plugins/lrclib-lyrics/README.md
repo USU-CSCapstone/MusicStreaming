@@ -17,5 +17,4 @@ Then, with the server running:
 3. Play a song and open **Lyrics** in the player.
 
 Saving needs the music mounted writable, as the development `compose.yaml` mounts it.
-The host's own tests run this plugin once it is built:
-`cargo test -p jewelcase-plugins -- --ignored`.
+The workspace tests run this plugin, so build it before `cargo test --workspace`.

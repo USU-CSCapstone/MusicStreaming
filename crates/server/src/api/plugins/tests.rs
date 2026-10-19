@@ -293,24 +293,24 @@ async fn a_run_needs_a_library_it_is_enabled_in() {
 /// The whole path with a real plugin: install the file, grant, enable, and run. It reaches no
 /// network: the run is granted reading and writing, but not the network the plugin requires.
 #[tokio::test]
-#[ignore = "needs plugins/lrclib-lyrics/build.sh"]
 async fn installs_and_runs_a_real_plugin() {
     let (temp, _db, app) = app_with_tracks().await;
     let file = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm"
     );
+    let bytes = std::fs::read(file).expect("run plugins/lrclib-lyrics/build.sh first");
     let request = Request::post("/api/v1/admin/plugins")
         .header(header::AUTHORIZATION, ADMIN)
         .header(header::CONTENT_TYPE, "application/octet-stream")
-        .body(Body::from(std::fs::read(file).unwrap()))
+        .body(Body::from(bytes.clone()))
         .unwrap();
     let (status, _, body) = respond(app.clone(), request).await;
     assert_eq!(status, StatusCode::CREATED, "{}", String::from_utf8_lossy(&body));
     assert!(temp.path().join("plugins/lrclib-lyrics.wasm").is_file());
     let request = Request::post("/api/v1/admin/plugins")
         .header(header::AUTHORIZATION, ADMIN)
-        .body(Body::from(std::fs::read(file).unwrap()))
+        .body(Body::from(bytes))
         .unwrap();
     assert_eq!(respond(app.clone(), request).await.0, StatusCode::CONFLICT, "installed twice");
 
