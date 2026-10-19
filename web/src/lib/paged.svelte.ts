@@ -35,9 +35,10 @@ export class Paged<T> {
 
 	/**
 	 * An attachment for an element at the end of the list: loads pages while it is near
-	 * the viewport, so a page too short to fill the screen still leads to the next.
+	 * the viewport, so a page too short to fill the screen still leads to the next. A list
+	 * that scrolls inside an element of its own passes that element as `root`.
 	 */
-	sentinel = (el: Element) => {
+	sentinel = (el: Element, root: Element | null = null) => {
 		let visible = false;
 		let pumping = false;
 		const pump = async () => {
@@ -56,7 +57,7 @@ export class Paged<T> {
 				visible = entries.some((e) => e.isIntersecting);
 				void pump();
 			},
-			{ rootMargin: '800px' }
+			{ root, rootMargin: '800px' }
 		);
 		observer.observe(el);
 		return () => observer.disconnect();
