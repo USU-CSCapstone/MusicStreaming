@@ -34,6 +34,7 @@ The core stack and system architecture. Subsystem designs build on this file and
   ├── state/   # database, custom artwork, plugin data — back this up
   └── cache/   # transcodes, resized images, indexes — rebuilt on demand
   ```
+  The server creates `state/` readable by its own user only, and refuses to start when the data directory and a library's root are the same directory or one holds the other.
 - **Work is prioritized:** playing streams, then interactive requests, then background work (scanning, analysis, images, plugin jobs). New streams are refused when the host cannot take them without harming existing ones ([`requirements/performance.md` §7](../requirements/performance.md#7-under-saturation)).
 
 ---

@@ -137,3 +137,24 @@ pub fn add_root(conn: &Connection, library_id: i64, path: &Path) -> Result<i64> 
         |r| r.get(0),
     )
 }
+
+/// Whether `a` and `b` are the same directory, or one is inside the other. It compares whole
+/// components and reads nothing from disk, so both should be canonical.
+pub fn overlap(a: &Path, b: &Path) -> bool {
+    a.starts_with(b) || b.starts_with(a)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn directories_overlap_when_one_holds_the_other() {
+        let overlap = |a: &str, b: &str| overlap(Path::new(a), Path::new(b));
+        assert!(overlap("/srv/music", "/srv/music"));
+        assert!(overlap("/srv/music", "/srv/music/.jewelcase"));
+        assert!(overlap("/srv/music/.jewelcase", "/srv/music"));
+        assert!(!overlap("/srv/music", "/srv/jewelcase"));
+        assert!(!overlap("/srv/music", "/srv/music2"));
+    }
+}

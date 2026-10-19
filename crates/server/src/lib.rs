@@ -8,7 +8,7 @@ mod serve;
 mod web;
 
 use std::net::{Ipv4Addr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -17,14 +17,15 @@ use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 use crate::config::Config;
-use crate::data_dir::DataDir;
+use crate::data_dir::{DataDir, apart};
 use crate::db::{Database, libraries};
 use crate::plugins::Plugins;
 use crate::scanning::Scanning;
 
 /// Runs the server until shutdown_signal resolves, then finishes in-flight requests.
 pub async fn run(config: Config) -> anyhow::Result<()> {
-    let data_dir = DataDir::open(&config.data_dir)
+    let music = config.music.as_deref().and_then(resolve_music);
+    let data_dir = DataDir::open(&config.data_dir, music.as_deref())
         .with_context(|| format!("cannot use the data directory set by {}", config::DATA_DIR))?;
     info!(
         data_dir = %data_dir.root().display(),
@@ -38,6 +39,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     if let Some(music) = &config.music {
         create_first_library(&db, music).await?;
     }
+    roots_apart(&db, &data_dir).await?;
 
     let ffmpeg = Ffmpeg::new(FfmpegConfig::default());
     let caps = ffmpeg.verify().context("ffmpeg is required and could not be run")?;
@@ -88,6 +90,20 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Canonicalizes `JEWELCASE_MUSIC` so it can be checked against the data directory before
+/// anything is written there. Returns `None` with a warning when it cannot be resolved: storage
+/// not mounted yet stops nothing once libraries exist (`requirements/libraries.md` §2), and on a
+/// first start [`create_first_library`] fails instead.
+fn resolve_music(music: &Path) -> Option<PathBuf> {
+    match music.canonicalize() {
+        Ok(music) => Some(music),
+        Err(error) => {
+            warn!(%error, setting = config::MUSIC, "cannot resolve the music directory");
+            None
+        }
+    }
+}
+
 /// Creates a library from `JEWELCASE_MUSIC` on first start, when there are none yet
 /// (`requirements/deployment.md` §2).
 async fn create_first_library(db: &Database, music: &Path) -> anyhow::Result<()> {
@@ -100,6 +116,16 @@ async fn create_first_library(db: &Database, music: &Path) -> anyhow::Result<()>
     let path = music.clone();
     let id = db.write(move |tx| libraries::create(tx, None, "Music", &[&path], &[])).await?;
     info!(library = id, path = %music.display(), "created library");
+    Ok(())
+}
+
+/// Fails when any library's root and the data directory overlap.
+async fn roots_apart(db: &Database, data_dir: &DataDir) -> anyhow::Result<()> {
+    for library in db.read(libraries::all).await? {
+        for root in &library.roots {
+            apart(data_dir.root(), &root.path)?;
+        }
+    }
     Ok(())
 }
 
@@ -119,4 +145,68 @@ async fn shutdown_signal() {
         () = terminate => {}
     }
     info!("shutting down");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::time::Duration;
+
+    use tokio::time::timeout;
+
+    use super::*;
+    use crate::db::testing;
+
+    /// How long `run` gets to refuse: a server that does not stop has started serving.
+    const REFUSED: Duration = Duration::from_secs(10);
+
+    /// A server configured with `data_dir` and `music`, on any free port.
+    fn config(data_dir: &Path, music: Option<&Path>) -> Config {
+        let music = music.map(Path::to_owned);
+        Config { data_dir: data_dir.to_owned(), music, port: 0, ..Config::default() }
+    }
+
+    #[tokio::test]
+    async fn a_data_directory_inside_the_music_stops_the_server_having_written_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let music = temp.path().canonicalize().unwrap();
+        let refused = timeout(REFUSED, run(config(&music.join("data"), Some(&music)))).await;
+        let error = refused.unwrap().unwrap_err();
+        assert!(format!("{error:#}").contains("overlap"), "{error:#}");
+        assert_eq!(fs::read_dir(music.join("data")).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_library_root_holding_the_data_directory_stops_the_server() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        {
+            let data_dir = DataDir::open(&data, None).unwrap();
+            let db = Database::open(&data_dir.state().join("jewelcase.db")).unwrap();
+            let music = temp.path().canonicalize().unwrap();
+            db.write(move |tx| testing::library(tx, 1, "Music", &music)).await.unwrap();
+        }
+        // Music not mounted yet is passed over, so the server still gets to the stored roots.
+        let unmounted = temp.path().join("unmounted");
+        for music in [None, Some(unmounted.as_path())] {
+            let error = timeout(REFUSED, run(config(&data, music))).await.unwrap().unwrap_err();
+            assert!(format!("{error:#}").contains("overlap"), "{music:?}: {error:#}");
+        }
+    }
+
+    #[test]
+    fn music_not_there_yet_is_not_checked() {
+        let temp = tempfile::tempdir().unwrap();
+        assert_eq!(resolve_music(temp.path()), Some(temp.path().canonicalize().unwrap()));
+        assert_eq!(resolve_music(&temp.path().join("unmounted")), None);
+    }
+
+    #[tokio::test]
+    async fn a_first_start_needs_the_music_there() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = DataDir::open(&temp.path().join("data"), None).unwrap();
+        let db = Database::open(&data_dir.state().join("jewelcase.db")).unwrap();
+        let error = create_first_library(&db, &temp.path().join("unmounted")).await.unwrap_err();
+        assert!(format!("{error:#}").contains(config::MUSIC), "{error:#}");
+    }
 }
