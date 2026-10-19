@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jewelcase_plugins::Permission;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use super::super::Plugins;
 use super::super::testing::database;
@@ -598,6 +598,32 @@ async fn sharing_is_turned_on_only_by_a_connected_user_of_a_plugin_allowed_searc
     assert_eq!(stopped, 1, "one request to forget, in the one library it serves");
 }
 
+/// Waits for the one delivery under way to finish, and returns its run's summary and the
+/// failures and user its cursor records. A delivery records its cursor last, after the run's
+/// summary, so both are in place once the cursor is. The deadline only bounds a hang: plugins
+/// compile and run slowly on a busy machine.
+async fn delivered(db: &Database) -> (Option<String>, i64, i64) {
+    let recorded = async {
+        loop {
+            let found = run(db, |conn| {
+                conn.query_row(
+                    "SELECT l.last_run_summary, c.failures, c.user_id FROM plugin_cursors c \
+                     JOIN plugin_libraries l USING (plugin_id, library_id)",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()
+            })
+            .await;
+            match found {
+                Some(found) => return found,
+                None => tokio::time::sleep(Duration::from_millis(20)).await,
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(30), recorded).await.expect("delivered within 30 s")
+}
+
 /// The whole path with the real lyrics plugin: a change in the feed reaches its `handle` as
 /// `tracks-changed`. It is granted everything but the network it requires, so it reports that
 /// rather than reaching lrclib.net, and the failure is recorded to retry.
@@ -621,22 +647,8 @@ async fn delivers_changes_to_a_real_plugin() {
     changes(&db, "(1, 'track', 11, 'upsert', 0)").await;
 
     plugins.dispatch().await;
-    for _ in 0..200 {
-        let summary: Option<String> = run(&db, |conn| {
-            conn.query_row("SELECT last_run_summary FROM plugin_libraries", [], |row| row.get(0))
-        })
-        .await;
-        if let Some(summary) = summary {
-            assert_eq!(
-                summary,
-                "the plugin reported an error: needs permission to use the network"
-            );
-            assert_eq!(cursor(&db).await.1, 1, "one failure, to retry");
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("the change was not delivered");
+    let refused = "the plugin reported an error: needs permission to use the network";
+    assert_eq!(delivered(&db).await, (Some(refused.to_owned()), 1, 0), "one failure, to retry");
 }
 
 /// The whole path with the real ListenBrainz plugin and no network granted: checking user 7's
@@ -688,23 +700,6 @@ async fn delivers_plays_to_a_real_scrobbler() {
     db.write(|tx| tx.execute_batch("UPDATE plays SET listen_time_ms = 180000")).await.unwrap();
 
     plugins.dispatch().await;
-    for _ in 0..500 {
-        let summary: Option<String> = run(&db, |conn| {
-            conn.query_row("SELECT last_run_summary FROM plugin_libraries", [], |row| row.get(0))
-        })
-        .await;
-        if let Some(summary) = summary {
-            assert_eq!(summary, REFUSED);
-            let (failures, user): (i64, i64) = run(&db, |conn| {
-                conn.query_row("SELECT failures, user_id FROM plugin_cursors", [], |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                })
-            })
-            .await;
-            assert_eq!((failures, user), (1, 7), "kept for user 7 to send again");
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("the play was not delivered");
+    let kept = (Some(REFUSED.to_owned()), 1, 7);
+    assert_eq!(delivered(&db).await, kept, "kept for user 7 to send again");
 }
