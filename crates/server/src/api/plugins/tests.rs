@@ -3,7 +3,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use serde_json::{Value, json};
 
-use super::super::testing::{add_device, add_user, app_with_tracks, respond};
+use super::super::testing::{app_with_tracks, respond};
 
 const ADMIN: &str = "Bearer owner-token";
 
@@ -57,38 +57,6 @@ async fn server() -> (tempfile::TempDir, Router) {
 }
 
 const PLUGIN: &str = "/api/v1/admin/plugins/lrclib-lyrics";
-
-#[tokio::test]
-async fn only_admins_administer_plugins() {
-    let (temp, app) = server().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
-    add_user(&conn, 2, "user");
-    add_device(&conn, 2, 2, "user-token");
-    for (method, uri) in [
-        ("GET", "/api/v1/admin/plugins"),
-        ("POST", "/api/v1/admin/plugins"),
-        ("GET", PLUGIN),
-        ("DELETE", PLUGIN),
-        ("PUT", "/api/v1/admin/plugins/lrclib-lyrics/permissions"),
-        ("PUT", "/api/v1/admin/plugins/lrclib-lyrics/exemptions/lrclib.net"),
-        ("DELETE", "/api/v1/admin/plugins/lrclib-lyrics/exemptions/lrclib.net"),
-        ("PUT", "/api/v1/admin/plugins/lrclib-lyrics/libraries/1"),
-        ("POST", "/api/v1/admin/plugins/lrclib-lyrics/run"),
-    ] {
-        let (status, problem) = call(&app, "Bearer user-token", method, uri, Some(json!({}))).await;
-        assert_eq!(
-            (status, &problem["code"]),
-            (StatusCode::FORBIDDEN, &json!("forbidden")),
-            "{method} {uri}"
-        );
-        assert_eq!(
-            call(&app, "", method, uri, None).await.0,
-            StatusCode::UNAUTHORIZED,
-            "{method} {uri}"
-        );
-    }
-    assert_eq!(call(&app, ADMIN, "GET", "/api/v1/admin/plugins", None).await.0, StatusCode::OK);
-}
 
 #[tokio::test]
 async fn a_file_that_is_not_a_plugin_is_refused_and_nothing_is_kept() {

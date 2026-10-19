@@ -168,4 +168,6 @@ pub fn unauthenticated() -> Response {
 }
 
 #[cfg(test)]
+mod gates;
+#[cfg(test)]
 mod tests;

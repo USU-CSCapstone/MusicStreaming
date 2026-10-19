@@ -74,7 +74,12 @@ pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, R
 /// [`app`] with library 1 holding tracks 1 and 2, and library 2 holding track 3, each on
 /// an album of its own library and with no lyrics or waveform.
 pub async fn app_with_tracks() -> (tempfile::TempDir, Arc<Database>, Router) {
-    let (temp, db, app) = app("");
+    app_with_tracks_at("").await
+}
+
+/// [`app_with_tracks`] mounted under `base_path`.
+pub async fn app_with_tracks_at(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
+    let (temp, db, app) = app(base_path);
     db.write(|tx| {
         libraries::create(tx, Some(1), "Music", &[Path::new("/music")], &[])?;
         libraries::create(tx, Some(2), "Other", &[Path::new("/other")], &[])?;
