@@ -110,7 +110,7 @@ impl PcmStream {
         let stderr = stderr?;
         if !status.success() {
             let stderr = String::from_utf8_lossy(&stderr).trim().to_owned();
-            return Err(Error::Failed { status: status.code(), stderr });
+            return Err(Error::exited(status, stderr));
         }
         Ok(0)
     }

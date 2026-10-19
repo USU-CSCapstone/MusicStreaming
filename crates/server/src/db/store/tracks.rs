@@ -9,7 +9,7 @@ use jewelcase_scanner::{Depth, DuplicateCandidate, ScanId, Scope};
 use rusqlite::{Connection, OptionalExtension, Result, ToSql, params};
 
 use super::SqliteStore;
-use super::problems::{clear_problem, record_problem};
+use super::problems::{clear_problem, clear_unopened, record_problem};
 use super::roots::relative;
 use super::upsert::upsert_track;
 use crate::db::catalog::{self, Touched};
@@ -73,6 +73,9 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<(), DbError>
         }
         for path in &batch.cleared {
             clear_problem(&roots, tx, lib, path)?;
+        }
+        for path in &batch.opened {
+            clear_unopened(&roots, tx, lib, path)?;
         }
         for problem in &batch.problems {
             record_problem(&roots, tx, lib, problem)?;

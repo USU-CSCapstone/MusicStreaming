@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use jewelcase_ffmpeg::Ffmpeg;
 
-use crate::store::Store;
+use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport};
+use crate::store::{FileToDecode, Store};
 use crate::types::LibraryId;
 
 /// ThumbHash encodes at most 100 pixels a side, and gains nothing from more.
@@ -23,11 +24,19 @@ const MAX_SIDE: u32 = 100;
 pub struct Placeholders {
     ffmpeg: Ffmpeg,
     store: Arc<dyn Store>,
+    retries: Retries,
 }
 
 impl Placeholders {
+    /// Makes placeholders with `ffmpeg` and stores them in `store`.
     pub fn new(ffmpeg: Ffmpeg, store: Arc<dyn Store>) -> Placeholders {
-        Placeholders { ffmpeg, store }
+        Placeholders { ffmpeg, store, retries: Retries::new(RETRY_AFTER) }
+    }
+
+    /// Skips an image whose file cannot be opened for `retry_after`, rather than an hour.
+    pub fn with_retry_after(mut self, retry_after: Duration) -> Placeholders {
+        self.retries = Retries::new(retry_after);
+        self
     }
 
     /// The placeholder for the image at `path`, or the picture attached to an audio file.
@@ -36,29 +45,22 @@ impl Placeholders {
         Ok(thumbhash::rgba_to_thumb_hash(image.width, image.height, &image.pixels))
     }
 
-    /// Fills up to `limit` placeholders, and returns how many images it tried; zero means none
-    /// are left.
-    pub fn run_once(&self, library: &LibraryId, limit: usize) -> usize {
-        let images = self.store.next_without_placeholder(library, limit);
-        for (hash, path) in &images {
-            // Stored empty, so a broken image is not decoded on every pass. New content is a
-            // new image, which gets a new try.
-            let placeholder = match path {
-                Ok(path) => self.placeholder(path).unwrap_or_else(|error| {
-                    tracing::warn!(path = %path.display(), %error, "cannot make an image placeholder");
-                    Vec::new()
-                }),
-                Err(error) => {
-                    tracing::warn!(%error, "cannot open an image to make its placeholder");
-                    Vec::new()
-                }
-            };
-            self.store.store_placeholder(library, hash, placeholder);
-        }
-        images.len()
+    /// Fills up to `limit` placeholders, skipping images whose files are waiting to be tried
+    /// again. A failure is handled as [`crate::jobs`] describes; a verdict is stored empty, and
+    /// new content is a new image, which gets a new try.
+    pub fn run_once(&self, library: &LibraryId, limit: usize) -> RunReport {
+        let queue = self.store.next_without_placeholder(library, self.retries.fetch(limit));
+        let decode = |file: &FileToDecode| {
+            let path = file.open().map_err(Failure::Open)?;
+            self.placeholder(&path).map_err(|error| Failure::from_ffmpeg(&file.path, &error))
+        };
+        let keep = |hash: Vec<u8>, placeholder: Option<Vec<u8>>| {
+            self.store.store_placeholder(library, &hash, placeholder.unwrap_or_default());
+        };
+        self.retries.pass(self.store.as_ref(), library, queue, limit, decode, keep)
     }
 
-    /// Runs in the background until stopped, sleeping when idle.
+    /// Runs in the background until stopped, sleeping when idle or backing off.
     pub fn start(self: Arc<Self>, library: LibraryId, idle_sleep: Duration) -> PlaceholderWorker {
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
@@ -66,7 +68,7 @@ impl Placeholders {
             .name("scanner-placeholders".into())
             .spawn(move || {
                 while !stopping.load(Ordering::SeqCst) {
-                    if self.run_once(&library, 32) == 0 {
+                    if self.run_once(&library, 32).idle() {
                         // Woken early by `stop`.
                         std::thread::park_timeout(idle_sleep);
                     }

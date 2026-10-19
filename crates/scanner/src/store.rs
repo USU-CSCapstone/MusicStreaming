@@ -6,10 +6,13 @@
 //! same trait.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::confine::{not_a_file, without_links};
+use crate::problems::UNOPENED;
 use crate::types::*;
 
 /// What the store already knows about a path. Enough for the skip check.
@@ -44,6 +47,9 @@ pub struct Batch {
     pub problems: Vec<Problem>,
     /// Paths that scanned successfully: clear any problems recorded for them.
     pub cleared: Vec<PathBuf>,
+    /// Paths a background job has just opened: clear a problem saying they could not be
+    /// ([`crate::problems::UNOPENED`]), and leave any other.
+    pub opened: Vec<PathBuf>,
 }
 
 impl Batch {
@@ -66,10 +72,30 @@ impl Batch {
 #[error("store: {0}")]
 pub struct StoreError(pub String);
 
-/// The file a background decode opens, or why it cannot be. A store over real files refuses one
-/// reached through a symlink ([`crate::confine`]); [`MemoryStore`] hands back each path as
-/// recorded.
-pub type FileToDecode = io::Result<PathBuf>;
+/// A file a background job decodes, as the store recorded it. A job reaches it only through
+/// [`FileToDecode::open`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileToDecode {
+    /// The library root the file lies under.
+    pub root: PathBuf,
+    /// The file's path, under `root`.
+    pub path: PathBuf,
+}
+
+impl FileToDecode {
+    /// The real path to decode, once the file opens. Refused when a symlink sits below the root
+    /// or the file is not a regular one ([`crate::confine`]), and an error when the file is gone,
+    /// out of reach, or not permitted.
+    pub fn open(&self) -> io::Result<PathBuf> {
+        let real = without_links(&self.root, &self.path)?;
+        if !fs::metadata(&real)?.is_file() {
+            return Err(not_a_file());
+        }
+        // Unlike a stat, an open fails on a file that may not be read, and NFS revalidates it.
+        File::open(&real)?;
+        Ok(real)
+    }
+}
 
 /// Everything the scanner needs from persistence. Implementations are
 /// synchronous; the scanner calls them from its own blocking threads.
@@ -310,6 +336,11 @@ impl Store for MemoryStore {
         for path in batch.cleared {
             lib.problems.remove(&path);
         }
+        for path in batch.opened {
+            if lib.problems.get(&path).is_some_and(|p| UNOPENED.contains(&p.kind)) {
+                lib.problems.remove(&path);
+            }
+        }
         for problem in batch.problems {
             lib.problems.insert(problem.path.clone(), problem);
         }
@@ -359,7 +390,9 @@ impl Store for MemoryStore {
                 !t.missing
                     && t.analysis.as_ref().is_none_or(|a| a.analyzer_version < analyzer_version)
             })
-            .map(|(id, t)| (*id, Ok(t.record.path.clone())))
+            .map(|(id, t)| {
+                (*id, FileToDecode { root: t.record.root.clone(), path: t.record.path.clone() })
+            })
             .take(limit)
             .collect()
     }
@@ -391,10 +424,12 @@ impl Store for MemoryStore {
                 });
                 let artist =
                     t.record.artist_image.as_ref().map(|image| (&image.info.hash, &image.path));
-                artwork.into_iter().chain(artist)
+                artwork.into_iter().chain(artist).map(|(hash, path)| (hash, &t.record.root, path))
             })
-            .filter(|(hash, _)| !lib.placeholders.contains_key(*hash) && seen.insert(*hash))
-            .map(|(hash, path)| (hash.clone(), Ok(path.clone())))
+            .filter(|(hash, ..)| !lib.placeholders.contains_key(*hash) && seen.insert(*hash))
+            .map(|(hash, root, path)| {
+                (hash.clone(), FileToDecode { root: root.clone(), path: path.clone() })
+            })
             .take(limit)
             .collect()
     }

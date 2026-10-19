@@ -50,10 +50,8 @@ pub(crate) fn decode_image(
         return Err(Error::Stalled(config.stall_timeout));
     }
     if !out.status.success() {
-        return Err(Error::Failed {
-            status: out.status.code(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        });
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        return Err(Error::exited(out.status, stderr));
     }
     parse_pam(&out.stdout)
         .filter(|image| image.width <= max_side as usize && image.height <= max_side as usize)

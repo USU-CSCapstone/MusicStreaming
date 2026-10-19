@@ -1,4 +1,6 @@
+use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
+use std::process::ExitStatus;
 
 /// Why an ffmpeg invocation failed. Variants map onto scan problem kinds in
 /// the scanner (`design/scanning.md` §11).
@@ -13,6 +15,9 @@ pub enum Error {
     /// The process exited nonzero. `stderr` is what it said.
     #[error("ffmpeg exited with status {status:?}: {stderr}")]
     Failed { status: Option<i32>, stderr: String },
+    /// The process was killed by a signal: from outside, or by a crash.
+    #[error("ffmpeg was killed by signal {signal}: {stderr}")]
+    Killed { signal: i32, stderr: String },
     /// Killed by the watchdog after producing nothing for the stall timeout.
     #[error("ffmpeg produced no output for {0:?} and was killed")]
     Stalled(std::time::Duration),
@@ -27,6 +32,14 @@ pub enum Error {
 }
 
 impl Error {
+    /// The error for a process that ended unsuccessfully with `status`, having said `stderr`.
+    pub(crate) fn exited(status: ExitStatus, stderr: String) -> Error {
+        match status.signal() {
+            Some(signal) => Error::Killed { signal, stderr },
+            None => Error::Failed { status: status.code(), stderr },
+        }
+    }
+
     /// Whether stderr indicates a decoder is missing rather than a broken file.
     pub fn is_unsupported_encoding(&self) -> bool {
         match self {
@@ -39,5 +52,20 @@ impl Error {
             }
             _ => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_signal_is_kept_apart_from_an_exit_code() {
+        // Raw wait statuses: a kill by SIGKILL, and an exit with code 1.
+        let killed = Error::exited(ExitStatus::from_raw(9), String::new());
+        assert!(matches!(killed, Error::Killed { signal: 9, .. }), "{killed:?}");
+        assert!(killed.to_string().starts_with("ffmpeg was killed by signal 9"));
+        let failed = Error::exited(ExitStatus::from_raw(1 << 8), String::new());
+        assert!(matches!(failed, Error::Failed { status: Some(1), .. }), "{failed:?}");
     }
 }

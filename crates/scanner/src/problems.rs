@@ -7,6 +7,9 @@ use std::time::SystemTime;
 use crate::tags::ReadError;
 use crate::types::{Problem, ProblemKind};
 
+/// The kinds a background job records for a file it could not open, which an open clears.
+pub const UNOPENED: [ProblemKind; 2] = [ProblemKind::Unreadable, ProblemKind::PermissionDenied];
+
 pub fn from_read_error(path: &Path, e: &ReadError) -> Problem {
     let (kind, detail) = match e {
         ReadError::Io(io) => (io_kind(io), io.to_string()),
@@ -26,12 +29,13 @@ pub fn from_io(path: &Path, e: &io::Error) -> Problem {
     }
 }
 
+/// The problem an ffmpeg error decoding the file at `path` records.
 pub fn from_ffmpeg(path: &Path, e: &jewelcase_ffmpeg::Error) -> Problem {
     use jewelcase_ffmpeg::Error as F;
     let kind = match e {
         F::Stalled(_) => ProblemKind::Stalled,
         F::Failed { .. } if e.is_unsupported_encoding() => ProblemKind::UnsupportedEncoding,
-        F::Failed { .. } | F::NoAudioStream | F::Probe(_) | F::Image(_) => {
+        F::Failed { .. } | F::Killed { .. } | F::NoAudioStream | F::Probe(_) | F::Image(_) => {
             ProblemKind::CorruptAudio
         }
         F::Spawn { .. } => ProblemKind::Unreadable,

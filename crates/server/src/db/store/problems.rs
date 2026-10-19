@@ -3,8 +3,8 @@
 
 use std::path::Path;
 
-use jewelcase_scanner::problems::group_key;
-use jewelcase_scanner::{Problem, system_time_ms};
+use jewelcase_scanner::problems::{UNOPENED, group_key};
+use jewelcase_scanner::{Problem, ProblemKind, system_time_ms};
 use rusqlite::{OptionalExtension, Result, Transaction, params};
 
 use super::roots::Roots;
@@ -66,21 +66,47 @@ pub fn record_problem(
     Ok(())
 }
 
+/// Clears any problem recorded at `path`, if it lies under one of `lib`'s roots.
 pub fn clear_problem(roots: &Roots, tx: &Transaction<'_>, lib: i64, path: &Path) -> Result<()> {
     let Some((root_id, rel)) = roots.locate(lib, path) else {
         return Ok(());
     };
-    clear_problem_rel(tx, root_id, &rel)
-}
-
-fn clear_problem_rel(tx: &Transaction<'_>, root_id: i64, rel: &str) -> Result<()> {
-    let group: Option<i64> = tx
+    let group = tx
         .query_row(
             "SELECT group_id FROM scan_problems WHERE root_id = ?1 AND path = ?2",
             params![root_id, rel],
             |r| r.get(0),
         )
         .optional()?;
+    clear_problem_rel(tx, root_id, &rel, group)
+}
+
+/// Clears the problem at `path` if it says the file could not be opened ([`UNOPENED`]), now
+/// that a background job has opened it.
+pub fn clear_unopened(roots: &Roots, tx: &Transaction<'_>, lib: i64, path: &Path) -> Result<()> {
+    let Some((root_id, rel)) = roots.locate(lib, path) else {
+        return Ok(());
+    };
+    let [unreadable, denied] = UNOPENED.map(ProblemKind::as_str);
+    let group = tx
+        .query_row(
+            "SELECT p.group_id FROM scan_problems p JOIN scan_problem_groups g ON g.id = p.group_id \
+             WHERE p.root_id = ?1 AND p.path = ?2 AND g.kind IN (?3, ?4)",
+            params![root_id, rel, unreadable, denied],
+            |r| r.get(0),
+        )
+        .optional()?;
+    clear_problem_rel(tx, root_id, &rel, group)
+}
+
+/// Deletes the problem at `rel` under `root_id` when `group`, the group it is in, is `Some`, and
+/// recounts that group.
+fn clear_problem_rel(
+    tx: &Transaction<'_>,
+    root_id: i64,
+    rel: &str,
+    group: Option<i64>,
+) -> Result<()> {
     if let Some(group_id) = group {
         tx.execute(
             "DELETE FROM scan_problems WHERE root_id = ?1 AND path = ?2",

@@ -94,10 +94,10 @@ fn queue_drains_and_broken_files_do_not_repeat() {
     let governor = Arc::new(Governor::new());
     let analyzer = Analyzer::new(ffmpeg, store.clone(), governor);
     let first = analyzer.run_once(&lib.id, 10);
-    assert_eq!(first.analyzed + first.failed, indexed);
-    assert!(first.analyzed >= 1);
+    assert_eq!(first.done + first.failed, indexed);
+    assert!(first.done >= 1);
     let second = analyzer.run_once(&lib.id, 10);
-    assert_eq!(second.analyzed + second.failed, 0, "nothing left to do");
+    assert_eq!(second.done + second.failed, 0, "nothing left to do");
     let ok = store.tracks(&lib.id).into_iter().find(|t| t.record.path.ends_with("ok.wav")).unwrap();
     assert!(ok.analysis.unwrap().integrated_lufs.is_some());
 }

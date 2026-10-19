@@ -71,10 +71,8 @@ pub(crate) fn probe(
         return Err(Error::Stalled(config.stall_timeout));
     }
     if !out.status.success() {
-        return Err(Error::Failed {
-            status: out.status.code(),
-            stderr: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
-        });
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+        return Err(Error::exited(out.status, stderr));
     }
     let parsed: Output =
         serde_json::from_slice(&out.stdout).map_err(|e| Error::Probe(e.to_string()))?;

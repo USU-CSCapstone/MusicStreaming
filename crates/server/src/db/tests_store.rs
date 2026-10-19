@@ -717,8 +717,8 @@ fn analysis_results_reach_tracks_albums_and_waveforms() {
         Arc::new(Governor::new()),
     );
     let report = analyzer.run_once(&lib.id, 10);
-    assert_eq!(report.analyzed, 1);
-    assert_eq!(analyzer.run_once(&lib.id, 10).analyzed, 0, "nothing left");
+    assert_eq!(report.done, 1);
+    assert_eq!(analyzer.run_once(&lib.id, 10).done, 0, "nothing left");
     let lufs: f64 = scalar(&store, "SELECT loudness_lufs FROM tracks").unwrap();
     assert!((lufs - -6.7).abs() < 1.0, "{lufs}");
     assert_eq!(
@@ -729,68 +729,6 @@ fn analysis_results_reach_tracks_albums_and_waveforms() {
     assert!((album_lufs - lufs).abs() < 0.01, "a one-track album is as loud as its track");
     let blob: Vec<u8> = scalar(&store, "SELECT data FROM track_waveforms").unwrap();
     assert_eq!(Waveform::from_blob(&blob).unwrap().peaks.len(), 512);
-}
-
-#[test]
-fn a_decode_never_opens_a_file_through_a_link() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    testing::make_album(&root, "A", "X", 2);
-    let store = make(&root);
-    let lib = testing::library(&root);
-    testing::scan_library(&store, &lib);
-    // After the scan, one file becomes a link to a file still inside the library.
-    let (one, two) = (root.join("A/X/01 - Track 1.wav"), root.join("A/X/02 - Track 2.wav"));
-    let moved = root.join("elsewhere.wav");
-    std::fs::rename(&one, &moved).unwrap();
-    std::os::unix::fs::symlink(&moved, &one).unwrap();
-    let paths: Vec<_> = store
-        .next_unanalyzed(&lib.id, 1, 10)
-        .into_iter()
-        .map(|(_, path)| path.map_err(|error| error.kind()))
-        .collect();
-    assert_eq!(paths.len(), 2, "{paths:?}");
-    assert!(paths.contains(&Ok(two.canonicalize().unwrap())), "{paths:?}");
-    assert!(paths.contains(&Err(std::io::ErrorKind::NotFound)), "{paths:?}");
-}
-
-#[test]
-fn a_file_that_cannot_be_opened_is_failed_once() {
-    use std::os::unix::fs::symlink;
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    testing::make_album(&root, "A", "X", 1);
-    let cover = root.join("A/X/cover.png");
-    let made = std::process::Command::new("ffmpeg")
-        .args(["-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=red:s=8x8"])
-        .args(["-frames:v", "1"])
-        .arg(&cover)
-        .status()
-        .unwrap();
-    assert!(made.success());
-    let store = Arc::new(make(&root));
-    let lib = testing::library(&root);
-    testing::scan_library(store.as_ref(), &lib);
-    // After the scan, the track and its cover become links out of the library.
-    for file in [root.join("A/X/01 - Track 1.wav"), cover] {
-        let outside = tmp.path().join(file.file_name().unwrap());
-        std::fs::rename(&file, &outside).unwrap();
-        symlink(&outside, &file).unwrap();
-    }
-    let ffmpeg = jewelcase_ffmpeg::Ffmpeg::new(jewelcase_ffmpeg::Config::default());
-
-    let analyzer = jewelcase_scanner::analysis::Analyzer::new(
-        ffmpeg.clone(),
-        store.clone(),
-        Arc::new(Governor::new()),
-    );
-    let report = analyzer.run_once(&lib.id, 10);
-    assert_eq!((report.analyzed, report.failed), (0, 1));
-    assert_eq!(analyzer.run_once(&lib.id, 10), Default::default(), "not tried again");
-
-    let placeholders = jewelcase_scanner::placeholders::Placeholders::new(ffmpeg, store.clone());
-    assert_eq!(placeholders.run_once(&lib.id, 10), 1);
-    assert_eq!(placeholders.run_once(&lib.id, 10), 0, "not tried again");
 }
 
 #[test]

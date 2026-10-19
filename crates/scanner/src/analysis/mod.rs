@@ -11,14 +11,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use ebur128::{EbuR128, Mode};
 use jewelcase_ffmpeg::{Ffmpeg, ProbeInfo};
 
 use crate::governor::Governor;
-use crate::problems;
-use crate::store::Store;
+use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport};
+use crate::store::{FileToDecode, Store};
 use crate::types::*;
 use waveform::WaveformBuilder;
 
@@ -58,18 +58,28 @@ pub struct Analyzer {
     governor: Arc<Governor>,
     features: Option<Arc<dyn FeatureExtractor>>,
     waveform_bins: usize,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct RunReport {
-    pub analyzed: usize,
-    pub failed: usize,
+    retries: Retries,
 }
 
 impl Analyzer {
+    /// Analyzes with `ffmpeg` into `store`, pausing whenever `governor` does; attaches ffmpeg's
+    /// processes to `governor` so a pause stops decodes too.
     pub fn new(ffmpeg: Ffmpeg, store: Arc<dyn Store>, governor: Arc<Governor>) -> Analyzer {
         governor.attach_ffmpeg(ffmpeg.registry().clone());
-        Analyzer { ffmpeg, store, governor, features: None, waveform_bins: DEFAULT_WAVEFORM_BINS }
+        Analyzer {
+            ffmpeg,
+            store,
+            governor,
+            features: None,
+            waveform_bins: DEFAULT_WAVEFORM_BINS,
+            retries: Retries::new(RETRY_AFTER),
+        }
+    }
+
+    /// Skips a track whose file cannot be opened for `retry_after`, rather than an hour.
+    pub fn with_retry_after(mut self, retry_after: Duration) -> Analyzer {
+        self.retries = Retries::new(retry_after);
+        self
     }
 
     pub fn with_features(mut self, extractor: Arc<dyn FeatureExtractor>) -> Analyzer {
@@ -129,47 +139,35 @@ impl Analyzer {
         })
     }
 
-    /// Analyze up to `limit` tracks that need it. Returns what happened;
-    /// zero analyzed and zero failed means the queue is empty. A track whose
-    /// file cannot be opened or analyzed gets a failed result, so it is not
-    /// retried every pass.
+    /// Analyze up to `limit` tracks that need it, skipping those whose files are waiting to be
+    /// tried again. A failure is handled as [`crate::jobs`] describes.
     pub fn run_once(&self, library: &LibraryId, limit: usize) -> RunReport {
-        let mut report = RunReport::default();
-        for (track_id, path) in self.store.next_unanalyzed(library, ANALYZER_VERSION, limit) {
-            let path = match path {
-                Ok(path) => path,
-                Err(error) => {
-                    tracing::warn!(track_id, %error, "analysis skipped: the file cannot be opened");
-                    self.store.store_analysis(library, track_id, failed_placeholder());
-                    report.failed += 1;
-                    continue;
-                }
-            };
-            match self.analyze_file(&path) {
-                Ok(result) => {
-                    self.store.store_analysis(library, track_id, result);
-                    report.analyzed += 1;
-                }
-                Err(AnalysisError::Ffmpeg(e)) => {
-                    let problem = problems::from_ffmpeg(&path, &e);
-                    tracing::warn!(path = %path.display(), kind = ?problem.kind, "analysis failed: {}", problem.detail);
-                    // Record a placeholder so the track is not retried every
-                    // pass; a later scan of the file clears it by re-upserting.
-                    self.store.store_analysis(library, track_id, failed_placeholder());
-                    report.failed += 1;
-                }
-                Err(e) => {
-                    tracing::warn!(path = %path.display(), error = %e, "analysis failed");
-                    self.store.store_analysis(library, track_id, failed_placeholder());
-                    report.failed += 1;
-                }
-            }
-        }
-        report
+        let fetch = self.retries.fetch(limit);
+        let queue = self.store.next_unanalyzed(library, ANALYZER_VERSION, fetch);
+        let keep = |track_id, result: Option<AnalysisResult>| {
+            let result = result.unwrap_or_else(failed_result);
+            self.store.store_analysis(library, track_id, result);
+        };
+        let store = self.store.as_ref();
+        self.retries.pass(store, library, queue, limit, |file| self.analyze(file), keep)
     }
 
-    /// Run in the background until stopped, sleeping when idle. One track at a time, so a stop
-    /// waits for one track at most.
+    /// Analyze `file`, if it opens.
+    fn analyze(&self, file: &FileToDecode) -> Result<AnalysisResult, Failure> {
+        let path = file.open().map_err(Failure::Open)?;
+        self.analyze_file(&path).map_err(|error| match error {
+            AnalysisError::Ffmpeg(error) => Failure::from_ffmpeg(&file.path, &error),
+            AnalysisError::Meter(error) => Failure::Content(Problem {
+                path: file.path.clone(),
+                kind: ProblemKind::UnsupportedEncoding,
+                detail: error.to_string(),
+                seen_at: SystemTime::now(),
+            }),
+        })
+    }
+
+    /// Run in the background until stopped, sleeping when idle or backing off. One track at a
+    /// time, so a stop waits for one track at most.
     pub fn start(self: Arc<Self>, library: LibraryId, idle_sleep: Duration) -> AnalysisWorker {
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = stop.clone();
@@ -177,8 +175,7 @@ impl Analyzer {
             .name("scanner-analysis".into())
             .spawn(move || {
                 while !stop2.load(Ordering::SeqCst) {
-                    let report = self.run_once(&library, 1);
-                    if report.analyzed == 0 && report.failed == 0 {
+                    if self.run_once(&library, 1).idle() {
                         // Woken early by `stop`.
                         std::thread::park_timeout(idle_sleep);
                     }
@@ -189,9 +186,8 @@ impl Analyzer {
     }
 }
 
-/// An empty result at the current version, so a permanently broken file is
-/// not decoded on every pass.
-fn failed_placeholder() -> AnalysisResult {
+/// An empty result at the current version, so a file judged broken is not decoded on every pass.
+fn failed_result() -> AnalysisResult {
     AnalysisResult {
         analyzer_version: ANALYZER_VERSION,
         integrated_lufs: None,

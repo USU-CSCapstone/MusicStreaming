@@ -95,7 +95,7 @@ fn main() {
         let report = analyzer.run_once(&library.id, usize::MAX);
         println!(
             "analysis: {} ok, {} failed in {:.2?}",
-            report.analyzed,
+            report.done,
             report.failed,
             started.elapsed()
         );

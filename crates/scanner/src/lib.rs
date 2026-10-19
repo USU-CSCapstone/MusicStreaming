@@ -9,6 +9,7 @@
 //! [`queue`] coalesces triggers into scans, [`triggers`] feeds the queue from
 //! the filesystem watcher and the schedule, [`governor`] pauses everything
 //! when listeners need the host, and [`analysis`] is the one decode pass.
+//! [`jobs`] is what analysis and placeholders make of a file they could not decode.
 //! [`confine`] refuses paths through symlinks, which are never followed.
 
 pub mod analysis;
@@ -18,6 +19,7 @@ pub mod duplicates;
 pub mod governor;
 pub mod identity;
 pub mod image;
+pub mod jobs;
 pub mod placeholders;
 pub mod problems;
 pub mod queue;

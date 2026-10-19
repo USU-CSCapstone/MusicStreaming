@@ -1,7 +1,6 @@
 //! The background jobs' queues and results: loudness and waveform analysis, and image
 //! placeholders. Each queue is the rows still without a result.
 
-use jewelcase_scanner::confine::without_links;
 use jewelcase_scanner::{AnalysisResult, FileToDecode, TrackId};
 use rusqlite::{OptionalExtension, params};
 
@@ -90,16 +89,15 @@ pub fn next_without_placeholder(
     Ok(files(&store.roots, lib, found))
 }
 
-/// Each of `found`, a key with a root ID and a path relative to it, with its file: refused when
-/// reached through a symlink, since a decode opens it long after the scan saw it. A row whose
+/// Each of `found`, a key with a root ID and a path relative to it, with its file. A row whose
 /// root is no longer active is left out.
 fn files<K>(roots: &Roots, lib: i64, found: Vec<(K, i64, String)>) -> Vec<(K, FileToDecode)> {
     found
         .into_iter()
         .filter_map(|(key, root_id, rel)| {
             let root = roots.root(lib, root_id)?;
-            let file = without_links(&root, &join(&root, &rel));
-            Some((key, file))
+            let path = join(&root, &rel);
+            Some((key, FileToDecode { root, path }))
         })
         .collect()
 }

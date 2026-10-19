@@ -22,6 +22,9 @@ use crate::scan::{ScanContext, ScanOptions, run_scan};
 use crate::store::{FeedEntry, MemoryStore, Store};
 use crate::types::*;
 
+mod jobs;
+pub use jobs::*;
+
 // ───────────────────────────── Inspection ─────────────────────────────
 
 /// A store-agnostic view of one indexed track, for assertions.
@@ -749,21 +752,15 @@ pub fn placeholders_fill_once_per_image<S: InspectStore + 'static>(make: Factory
 
     let pending = store.next_without_placeholder(&lib.id, 10);
     assert_eq!(pending.len(), 2, "one per distinct image: {pending:?}");
-    let red =
-        // Compared by its end: a store may hand back the real path, which differs from `cover`
-        // when the temporary directory is reached through a link.
-        pending
-            .iter()
-            .find(|(_, path)| path.as_ref().unwrap().ends_with("A/X/cover.png"))
-            .map(|(hash, _)| hash.clone())
-            .unwrap();
+    let red = pending.iter().find(|(_, file)| file.path == cover).unwrap().0.clone();
     let broken = pending.iter().find(|(hash, _)| *hash != red).unwrap().0.clone();
 
     let ffmpeg = jewelcase_ffmpeg::Ffmpeg::new(jewelcase_ffmpeg::Config::default());
     let placeholders = crate::placeholders::Placeholders::new(ffmpeg, store.clone());
-    assert_eq!(placeholders.run_once(&lib.id, 10), 2);
+    let report = placeholders.run_once(&lib.id, 10);
+    assert_eq!((report.done, report.failed), (1, 1));
     assert!(store.next_without_placeholder(&lib.id, 10).is_empty());
-    assert_eq!(placeholders.run_once(&lib.id, 10), 0, "a broken image is not retried");
+    assert!(placeholders.run_once(&lib.id, 10).idle(), "a broken image is not retried");
 
     let hash = store.inspect_placeholder(&lib.id, &red).unwrap();
     assert!(hash.len() < 40, "a few bytes: {}", hash.len());
@@ -964,6 +961,46 @@ macro_rules! store_suite {
         #[test]
         fn placeholders_fill_once_per_image() {
             $crate::testing::placeholders_fill_once_per_image($make);
+        }
+        #[test]
+        fn a_missing_file_waits_until_it_returns() {
+            $crate::testing::a_missing_file_waits_until_it_returns($make);
+        }
+        #[test]
+        fn a_file_not_permitted_waits_until_it_is() {
+            $crate::testing::a_file_not_permitted_waits_until_it_is($make);
+        }
+        #[test]
+        fn an_unopenable_file_does_not_starve_the_next() {
+            $crate::testing::an_unopenable_file_does_not_starve_the_next($make);
+        }
+        #[test]
+        fn opening_a_file_clears_only_unopened_problems() {
+            $crate::testing::opening_a_file_clears_only_unopened_problems($make);
+        }
+        #[test]
+        fn a_cover_moved_away_waits_until_it_returns() {
+            $crate::testing::a_cover_moved_away_waits_until_it_returns($make);
+        }
+        #[test]
+        fn a_pipe_is_judged_without_blocking() {
+            $crate::testing::a_pipe_is_judged_without_blocking($make);
+        }
+        #[test]
+        fn a_decoder_that_cannot_start_backs_off() {
+            $crate::testing::a_decoder_that_cannot_start_backs_off($make);
+        }
+        #[test]
+        fn a_root_going_away_pauses_without_writing() {
+            $crate::testing::a_root_going_away_pauses_without_writing($make);
+        }
+        #[test]
+        fn a_file_that_always_fails_does_not_block_the_next() {
+            $crate::testing::a_file_that_always_fails_does_not_block_the_next($make);
+        }
+        #[test]
+        fn a_link_is_judged_once() {
+            $crate::testing::a_link_is_judged_once($make);
         }
         #[test]
         fn copy_is_a_second_track() {

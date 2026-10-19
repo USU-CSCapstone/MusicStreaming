@@ -37,8 +37,6 @@ impl Scanning {
     pub fn start(db: &Arc<Database>, ffmpeg: &Ffmpeg) -> anyhow::Result<Scanning> {
         let store = Arc::new(SqliteStore::new(db.clone()).context("cannot initialise the store")?);
         let governor = Arc::new(Governor::new());
-        let analyzer = Arc::new(Analyzer::new(ffmpeg.clone(), store.clone(), governor.clone()));
-        let placeholders = Arc::new(Placeholders::new(ffmpeg.clone(), store.clone()));
 
         let libs = db.read_blocking(libraries::all)?;
         if libs.is_empty() {
@@ -73,9 +71,12 @@ impl Scanning {
                 scanner,
                 watcher,
                 schedule,
-                analysis: analyzer.clone().start(config.id.clone(), Duration::from_secs(30)),
+                // One of each per library, since each remembers its library's failures.
+                analysis: Arc::new(Analyzer::new(ffmpeg.clone(), store.clone(), governor.clone()))
+                    .start(config.id.clone(), Duration::from_secs(30)),
                 // Soon after a scan finds an image, since clients draw its placeholder at once.
-                placeholders: placeholders.clone().start(config.id, Duration::from_secs(5)),
+                placeholders: Arc::new(Placeholders::new(ffmpeg.clone(), store.clone()))
+                    .start(config.id, Duration::from_secs(5)),
             });
         }
         Ok(Scanning { governor, libraries: running })
