@@ -327,6 +327,19 @@ test.describe('dragging', () => {
 	});
 });
 
+test('scrolling past the end of a long playlist leaves the app where it is', async ({ page }) => {
+	await page.setViewportSize({ width: 1280, height: 600 });
+	await serveLibrary(page, { playlists: [longMix] });
+	await page.goto(`/playlists/${longMix.id}`);
+	await expect(page.locator('.track').first()).toBeVisible();
+	await page.locator('main').evaluate((m) => (m.scrollTop = m.scrollHeight));
+	await page.mouse.move(640, 300);
+	await page.mouse.wheel(0, 2000);
+	// Nothing in the list reaches past the window, so there is nothing more to scroll to.
+	expect(await page.evaluate(() => document.scrollingElement!.scrollHeight)).toBe(600);
+	expect(await page.evaluate(() => document.scrollingElement!.scrollTop)).toBe(0);
+});
+
 test.describe('adding to a playlist', () => {
 	const titles = (page: Page) => page.locator('.track .title');
 	const more = (page: Page, title: string) =>
