@@ -9,6 +9,8 @@
 	import SearchBox, { settler } from '$lib/components/SearchBox.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
 	import type { Selected } from '$lib/recent';
+	import { currentSort, showSorted } from '$lib/sort-url';
+	import { FIELDS, sortTracks } from '$lib/sorting';
 	import ViewToggle from '$lib/components/ViewToggle.svelte';
 
 	let { data } = $props();
@@ -29,6 +31,17 @@
 	}
 
 	const sections = $derived(data.results?.sections ?? []);
+	// Songs come in match order; sorted, they play as shown (`requirements/conventions.md` §4.1).
+	const sort = $derived(currentSort(FIELDS));
+	const songs = $derived.by(() => {
+		const found = sections.find((s) => s.type === 'tracks')?.items ?? [];
+		return [
+			...sortTracks(
+				found.flatMap((r) => (r.track ? [r.track] : [])),
+				sort
+			)
+		];
+	});
 
 	// A search is kept once it settles (`$lib/recent`): the user opens or plays one of its
 	// results, submits it in the box, or leaves it after it has stood a moment.
@@ -97,7 +110,9 @@
 			</header>
 			{#if section.type === 'tracks'}
 				<TrackList
-					tracks={section.items.flatMap((r) => (r.track ? [r.track] : []))}
+					tracks={songs}
+					{sort}
+					onsort={showSorted}
 					context={{ type: 'search', query: data.q ?? '', section: 'tracks' }}
 					onplay={(track) => settler.settle({ type: 'track', id: track.id })}
 				/>
