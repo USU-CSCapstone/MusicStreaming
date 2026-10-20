@@ -12,7 +12,7 @@
 //! accents, replaces the earlier entry, so it moves to the top under a new ID.
 //!
 //! For a user who shares their searches with a plugin, each one recorded, and each one they
-//! remove, is noted for the `searched` hook (`0018_plugin_searched.sql`). Only explicit removal
+//! remove, is noted for the `searched` hook (`0005_activity.sql`). Only explicit removal
 //! asks a plugin to forget: a search replaced by the same words, pushed out by newer ones, or
 //! aged out of the window does not (`requirements/search.md` §6).
 

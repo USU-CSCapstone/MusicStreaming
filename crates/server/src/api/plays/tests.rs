@@ -45,6 +45,15 @@ async fn plays(db: &Database) -> Vec<(String, i64, i64, i64, Option<String>)> {
     .unwrap()
 }
 
+/// The number of rows in `table`.
+async fn count(db: &Database, table: &'static str) -> i64 {
+    db.read(move |conn| {
+        conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0))
+    })
+    .await
+    .unwrap()
+}
+
 #[tokio::test]
 async fn a_play_is_recorded_once_and_keeps_its_most_listened_and_its_end() {
     let (_temp, db, app) = app_with_tracks().await;
@@ -64,11 +73,20 @@ async fn a_play_is_recorded_once_and_keeps_its_most_listened_and_its_end() {
     );
     let reports = json!([report("1", 31_000, json!("skipped"))]);
     assert_eq!(report_as_owner(&app, reports).await, StatusCode::NO_CONTENT);
-    let ends: i64 = db
-        .read(|conn| conn.query_row("SELECT count(*) FROM play_ends", [], |row| row.get(0)))
-        .await
-        .unwrap();
-    assert_eq!(ends, 1, "it ended once, for the played hook, however often it is reported");
+    assert_eq!(
+        count(&db, "play_ends").await,
+        1,
+        "it ended once, for the played hook, however often it is reported"
+    );
+}
+
+#[tokio::test]
+async fn a_play_first_reported_already_ended_ends_once_and_never_starts() {
+    let (_temp, db, app) = app_with_tracks().await;
+    let reports = json!([report("1", 30_000, json!("finished"))]);
+    assert_eq!(report_as_owner(&app, reports).await, StatusCode::NO_CONTENT);
+    assert_eq!(count(&db, "play_ends").await, 1, "the played hook hears of it");
+    assert_eq!(count(&db, "play_starts").await, 0, "it was never playing as far as we knew");
 }
 
 #[tokio::test]

@@ -21,6 +21,9 @@ CREATE TABLE library_changes (
 
 CREATE INDEX library_changes_feed ON library_changes (library_id, seq);
 CREATE UNIQUE INDEX library_changes_entity ON library_changes (library_id, entity_type, entity_id);
+-- The tracksChanged, albumsChanged and artistsChanged hooks each read only their own kind of
+-- change, so a hook that has caught up must not step over every newer change of another kind.
+CREATE INDEX library_changes_kind ON library_changes (library_id, entity_type, seq);
 
 -- The account feed. Entity types grow as the personal sections of the API are built.
 CREATE TABLE account_changes (

@@ -132,7 +132,8 @@ CREATE TABLE tracks (
     root_id         INTEGER NOT NULL,
     path            TEXT    NOT NULL,
     file_size       INTEGER NOT NULL,
-    -- The file's mtime, for detecting changes without reading the whole file (requirements/scanning.md §3.3).
+    -- The file's mtime, for detecting changes without opening the file (requirements/scanning.md §5,
+    -- design/scanning.md §2).
     file_mtime      INTEGER NOT NULL,
     missing_since   INTEGER,
     -- The scan that last saw this file on disk. Reconciliation marks missing whatever a completed
@@ -185,6 +186,8 @@ CREATE INDEX tracks_by_album_order ON tracks (album_id, disc_number, ifnull(trac
 CREATE INDEX tracks_by_album ON tracks (library_id, album_sort_key, album_id, disc_number, ifnull(track_number, 9223372036854775807), id);
 CREATE INDEX tracks_by_added ON tracks (library_id, added_at, id);
 CREATE INDEX tracks_by_release ON tracks (library_id, release_date, album_sort_key, album_id, disc_number, ifnull(track_number, 9223372036854775807), id);
+-- Browsing tracks by duration (requirements/conventions.md §4), as albums_by_duration does albums
+CREATE INDEX tracks_by_duration ON tracks (library_id, duration_us, id);
 CREATE INDEX tracks_by_fingerprint ON tracks (library_id, fingerprint);
 CREATE INDEX tracks_missing ON tracks (library_id, missing_since) WHERE missing_since IS NOT NULL;
 CREATE INDEX tracks_unanalyzed ON tracks (library_id, analyzer_version, id) WHERE missing_since IS NULL;

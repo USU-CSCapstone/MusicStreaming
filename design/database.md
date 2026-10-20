@@ -1,7 +1,7 @@
 # Database Design
 
 ## Overview
-The SQLite schema behind `api/openapi.yaml`, through the Browse section. Migrations are plain SQL in `crates/server/migrations/`, applied in order at startup (`design/general.md` §2). Personal sections of the API — plays, playlists, queues, downloads — and admin state are added as they are built (§9).
+The SQLite schema behind `api/openapi.yaml`. Migrations are plain SQL in `crates/server/migrations/`, applied in order at startup (`design/general.md` §2). There is one file per domain, so each table's whole definition is in one place: libraries and scanning, accounts, the catalog, the change feeds, listening and searching activity, and plugins. Sections of the API not yet built add their tables as they are (§9).
 
 ---
 
@@ -24,6 +24,8 @@ The SQLite schema behind `api/openapi.yaml`, through the Browse section. Migrati
 ## 2. Isolation by Construction
 
 **Every content table carries `library_id`, and every link between content rows is a composite foreign key on `(library_id, id)`.** A track can only reference an album, root, or artist in its own library, and a link across libraries fails at insert (`requirements/general.md` §3.6). Deleting a library cascades through everything it holds, and removes nothing outside it.
+
+**A composite foreign key cannot use `ON DELETE SET NULL`**, because it would clear `library_id` too, which is `NOT NULL`. So the links to an image, an album, or a root (`artists.image_id`, `albums.image_id`, `tracks.album_id`, `tracks.root_id`, `images.root_id`) take no action on delete, and such a row cannot be deleted while anything still refers to it. Deletes run in dependency order: an album goes only once no track is left on it, and anything that deletes images must delete only those nothing refers to (nothing deletes images yet).
 
 ---
 
@@ -105,7 +107,9 @@ Migrations are the exception: they run with foreign keys off, because rebuilding
 
 ## 9. Not Yet Modelled
 
-Plays and listening history — including the completion-weighted score behind `sort=top`, which belongs in `personal_stats` with an index like `personal_stats_by_plays` — playlists, queues, mixes, downloads, recent searches, the job queue, plugins, external sources, and the audit log. Each arrives with its section of the API, and adds its entity types to the account feed's `CHECK`.
+Playlists, queues, mixes, downloads, the job queue, external sources, and the audit log, and the completion-weighted score behind `sort=top`, which belongs in `personal_stats` with an index like `personal_stats_by_plays`. Each arrives with its section of the API, and adds its entity types to the account feed's `CHECK`.
+
+**Until the first release, migration files are edited in place.** There is no compatibility to keep, so a data directory made with an older development schema must be recreated. From the release on, schema changes are only ever added as new numbered migrations.
 
 ---
 

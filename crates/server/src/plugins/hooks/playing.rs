@@ -1,5 +1,5 @@
 //! What a `playing` hook delivers: the newest play a user who connected the plugin has started
-//! in a library, from the feed of play starts (`0016_plugin_playing.sql`).
+//! in a library, from the feed of play starts (`0005_activity.sql`).
 //!
 //! "Now playing" that arrives late is wrong rather than late, so unlike every other hook this
 //! one never catches up. A start is delivered only while it is under [`FRESH_MS`] old and still

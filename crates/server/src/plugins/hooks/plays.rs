@@ -1,5 +1,5 @@
 //! The plays a `played` hook delivers: those each user who connected the plugin has ended,
-//! from the feed of play ends (`0013_plugin_played.sql`).
+//! from the feed of play ends (`0005_activity.sql`).
 
 use jewelcase_plugins::{Play, PlayEnd};
 use rusqlite::{Connection, OptionalExtension, params};

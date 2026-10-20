@@ -5,13 +5,13 @@
 //! (`0004_feeds.sql`), which records every track, album, and artist added, changed, or removed
 //! in the same transaction as the change, each hook only its own kind; `scanFinished`
 //! reads finished scans; `schedule` runs at the interval the plugin asks for; `played` reads
-//! the plays each user who connected the plugin has ended (`0013_plugin_played.sql`), and
-//! `playing` those they have just started (`0016_plugin_playing.sql`). For each hook, each
-//! plugin and library pair keeps its own position (`plugin_cursors`), and in `played` and
-//! `playing` each user too, which moves only once the plugin has handled what came before it.
+//! the plays each user who connected the plugin has ended, and `playing` those they have just
+//! started (`0005_activity.sql`). For each hook, each plugin and library pair keeps its own
+//! position (`plugin_cursors`), and in `played` and `playing` each user too, which moves only
+//! once the plugin has handled what came before it.
 //! `playing` alone never catches up: what was playing a while ago is no longer news. `searched`
 //! reads the searches of users who share them with the plugin, and those they ask it to forget
-//! (`0018_plugin_searched.sql`), with a position per user as well.
+//! (`0005_activity.sql`), with a position per user as well.
 //! A failure is retried later from the same place, so nothing is lost to a crash, a restart,
 //! or a service that was briefly down. One that keeps failing is disabled in that library, and
 //! the admin is told why (§11), except in `played`: one user's failing account must not stop

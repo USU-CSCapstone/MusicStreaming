@@ -1,6 +1,6 @@
 //! What a `searched` hook delivers: the searches a user who shares them with the plugin settled
 //! on in a library, and the ones they asked it to forget, from the feed of search events
-//! (`0018_plugin_searched.sql`, `requirements/search.md` §6).
+//! (`0005_activity.sql`, `requirements/search.md` §6).
 //!
 //! One event is one kind of thing, so a forget always reaches the plugin after the search it
 //! names. A search removed before it was delivered is never sent: the feed names searches, and

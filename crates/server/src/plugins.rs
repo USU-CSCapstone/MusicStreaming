@@ -1,7 +1,7 @@
 //! Plugins on this server (`requirements/plugins.md`): installing and removing them, what the
 //! admin grants them, and running one with exactly those grants.
 //!
-//! What is installed and granted lives in the database (`0005_plugins.sql`); each plugin's
+//! What is installed and granted lives in the database (`0006_plugins.sql`); each plugin's
 //! code is `state/plugins/<id>.wasm`. Plugin code runs on its own executor, never on the
 //! threads serving requests (`design/plugins.md` §2).
 

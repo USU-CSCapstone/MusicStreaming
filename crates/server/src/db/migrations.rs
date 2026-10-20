@@ -122,12 +122,34 @@ mod tests {
               ALTER TABLE parent_new RENAME TO parent;",
     };
 
+    /// The tables that foreign keys refer to but that don't exist, as `child -> parent`.
+    fn missing_parents(conn: &Connection) -> Vec<String> {
+        conn.prepare(
+            "SELECT DISTINCT t.name || ' -> ' || f.\"table\"
+             FROM sqlite_schema AS t, pragma_foreign_key_list(t.name) AS f
+             WHERE t.type = 'table'
+               AND f.\"table\" COLLATE NOCASE
+                   NOT IN (SELECT name FROM sqlite_schema WHERE type = 'table')",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+    }
+
     #[test]
     fn applies_everything_to_a_new_database_once() {
         let mut conn = configured();
+        assert!(foreign_keys(&conn), "migrates the way the server does, with foreign keys on");
         assert_eq!(migrate(&mut conn, MIGRATIONS).unwrap(), MIGRATIONS.len());
         assert_eq!(version(&conn).unwrap(), MIGRATIONS.len());
-        assert!(table_exists(&conn, "tracks"));
+        assert!(foreign_keys(&conn), "foreign keys are back on");
+        assert!(table_exists(&conn, "plugin_cursors"), "the last migration ran");
+
+        // On empty tables, foreign_key_check misses a reference to a table that doesn't exist,
+        // so that is looked for directly. It does fail on a reference to columns that aren't a key.
+        assert_eq!(missing_parents(&conn), Vec::<String>::new());
         let broken = conn.prepare("PRAGMA foreign_key_check").unwrap().exists([]).unwrap();
         assert!(!broken, "every reference resolves");
         let integrity: String =
@@ -186,44 +208,6 @@ mod tests {
         conn.pragma_update(None, "foreign_keys", false).unwrap();
         migrate(&mut conn, &[PARENT_AND_CHILD]).unwrap();
         assert!(!foreign_keys(&conn));
-    }
-
-    #[test]
-    fn a_plugin_granted_write_access_keeps_both_halves_of_it() {
-        let mut conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "foreign_keys", true).unwrap();
-        let split = MIGRATIONS.iter().position(|m| m.name == "0006_plugin_write_split").unwrap();
-        migrate(&mut conn, &MIGRATIONS[..split]).unwrap();
-        conn.execute_batch(
-            r#"INSERT INTO libraries (id, name, created_at, updated_at) VALUES (1, 'Music', 0, 0);
-               INSERT INTO plugins (id, manifest, installed_at, updated_at) VALUES ('lyrics',
-                 '{"id":"lyrics","permissions":[{"permission":"libraryWrite","required":false}]}', 0, 0);
-               INSERT INTO plugin_library_grants VALUES ('lyrics', 1, 'libraryRead'),
-                 ('lyrics', 1, 'libraryWrite'), ('gone', 1, 'libraryRead');"#,
-        )
-        .unwrap();
-
-        migrate(&mut conn, MIGRATIONS).unwrap();
-        let grants: Vec<(String, String)> = conn
-            .prepare("SELECT plugin_id, permission FROM plugin_library_grants ORDER BY 1, 2")
-            .unwrap()
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
-            .unwrap();
-        let expected = [
-            ("gone", "libraryRead"),
-            ("lyrics", "libraryAdd"),
-            ("lyrics", "libraryChange"),
-            ("lyrics", "libraryRead"),
-        ];
-        assert_eq!(grants, expected.map(|(p, g)| (p.to_owned(), g.to_owned())));
-        let manifest: String =
-            conn.query_row("SELECT manifest FROM plugins", [], |row| row.get(0)).unwrap();
-        assert!(manifest.contains(r#""permission":"libraryAdd""#), "{manifest}");
-        let refused =
-            conn.execute("INSERT INTO plugin_library_grants VALUES ('x', 1, 'libraryWrite')", []);
-        assert!(refused.is_err(), "the old name is gone");
     }
 
     #[test]
