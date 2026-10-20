@@ -92,8 +92,10 @@
 	}
 
 	main {
+		/* Named so what sticks to the top of the page can cover it (TrackList's header). */
+		--page-top: var(--space-5);
 		overflow-y: auto;
-		padding: var(--space-5) var(--space-6) var(--space-6);
+		padding: var(--page-top) var(--space-6) var(--space-6);
 	}
 
 	.player {
@@ -120,7 +122,8 @@
 		}
 
 		main {
-			padding: var(--space-4);
+			--page-top: var(--space-4);
+			padding: var(--page-top) var(--space-4) var(--space-4);
 		}
 
 		.tabs {

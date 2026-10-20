@@ -113,6 +113,12 @@
 		],
 		upload: [
 			['path', { d: 'M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3' }]
+		],
+		up: [['path', { d: 'M12 19V5M5.5 11.5 12 5l6.5 6.5' }]],
+		down: [['path', { d: 'M12 5v14M5.5 12.5 12 19l6.5-6.5' }]],
+		clock: [
+			['circle', { cx: 12, cy: 12, r: 9 }],
+			['path', { d: 'M12 7v5l3 2' }]
 		]
 	} satisfies Record<string, Shape[]>;
 
