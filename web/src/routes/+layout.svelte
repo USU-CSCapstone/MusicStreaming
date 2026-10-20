@@ -94,6 +94,10 @@
 	main {
 		/* Named so what sticks to the top of the page can cover it (TrackList's header). */
 		--page-top: var(--space-5);
+		/* What is positioned inside the page stays inside what scrolls. Without this, a
+		   visually hidden live region at the end of a long list sits that far down the
+		   window, and the whole app scrolls past the end of the list. */
+		position: relative;
 		overflow-y: auto;
 		padding: var(--page-top) var(--space-6) var(--space-6);
 	}
