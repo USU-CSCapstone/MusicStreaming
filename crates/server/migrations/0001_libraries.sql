@@ -14,10 +14,7 @@ CREATE TABLE libraries (
     album_count           INTEGER NOT NULL DEFAULT 0,
     artist_count          INTEGER NOT NULL DEFAULT 0,
     duration_us           INTEGER NOT NULL DEFAULT 0,
-    -- Oldest library-feed position still answerable; older cursors resync (see 0004).
-    feed_horizon          INTEGER NOT NULL DEFAULT 0,
-    created_at            INTEGER NOT NULL,
-    updated_at            INTEGER NOT NULL
+    created_at            INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE library_roots (

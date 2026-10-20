@@ -53,8 +53,8 @@ impl User {
     /// Adds the account.
     pub fn insert(&self, conn: &Connection) -> Result<()> {
         conn.execute(
-            "INSERT INTO users (id, username, display_name, role, status, password, created_at, \
-             updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 0)",
+            "INSERT INTO users (id, username, display_name, role, status, password, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
             params![
                 self.id,
                 self.username,

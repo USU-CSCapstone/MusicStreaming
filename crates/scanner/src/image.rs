@@ -1,4 +1,4 @@
-//! Image header facts for the `images` table: hash, format, dimensions.
+//! Image header facts for the `images` table: hash and dimensions.
 //! Reads headers only; the placeholder is the placeholder job's (`placeholders.rs`).
 
 use serde::{Deserialize, Serialize};
@@ -9,8 +9,6 @@ use sha2::{Digest, Sha256};
 pub struct ImageInfo {
     /// SHA-256 of the bytes.
     pub hash: Vec<u8>,
-    /// `png`, `jpeg`, `webp`, `gif`, `avif`, ...
-    pub format: String,
     pub width: u32,
     pub height: u32,
 }
@@ -19,9 +17,8 @@ pub struct ImageInfo {
 /// which case the file is ignored as artwork rather than reported.
 pub fn describe(bytes: &[u8]) -> Option<ImageInfo> {
     let size = imagesize::blob_size(bytes).ok()?;
-    let format = format!("{:?}", imagesize::image_type(bytes).ok()?).to_ascii_lowercase();
     let hash = Sha256::digest(bytes).to_vec();
-    Some(ImageInfo { hash, format, width: size.width as u32, height: size.height as u32 })
+    Some(ImageInfo { hash, width: size.width as u32, height: size.height as u32 })
 }
 
 #[cfg(test)]
@@ -41,7 +38,6 @@ mod tests {
     fn describes_png_and_rejects_text() {
         let info = describe(PNG).unwrap();
         assert_eq!((info.width, info.height), (1, 1));
-        assert_eq!(info.format, "png");
         assert_eq!(info.hash.len(), 32);
         assert!(describe(b"not an image").is_none());
     }

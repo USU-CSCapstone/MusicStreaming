@@ -104,9 +104,8 @@ pub async fn complete(
             }
             let now = now_ms();
             let user = tx.query_row(
-                "INSERT INTO users (id, username, display_name, role, password, created_at, \
-                 updated_at) VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, 'owner', ?3, ?4, ?4) \
-                 RETURNING id",
+                "INSERT INTO users (id, username, display_name, role, password, created_at) \
+                 VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, 'owner', ?3, ?4) RETURNING id",
                 params![username, display_name, password, now],
                 |row| row.get(0),
             )?;

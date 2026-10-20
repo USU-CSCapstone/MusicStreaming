@@ -64,8 +64,9 @@ async fn dimensions(app: &Router, uri: &str) -> (u32, u32) {
     let (status, content_type, body) = send(app.clone(), "GET", uri).await;
     assert_eq!(status, StatusCode::OK, "{uri}");
     assert_eq!(content_type.as_deref(), Some("image/jpeg"), "{uri}");
+    // JPEG's start-of-image marker, then the next marker.
+    assert!(body.starts_with(&[0xFF, 0xD8, 0xFF]), "{uri}");
     let info = describe(&body).unwrap();
-    assert_eq!(info.format, "jpeg", "{uri}");
     (info.width, info.height)
 }
 

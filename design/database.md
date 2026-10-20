@@ -66,7 +66,7 @@ The displayed name — `artists.name`, `albums.title`, `tags.name` — is the sp
 
 - **A change row names the entity, never its contents.** Catching up reads each changed entity's current representation, so the feed and the data cannot disagree.
 - **Coalesced on write.** Recording a change deletes that entity's earlier row, so each entity has at most one row, carrying its latest position. "Everything after cursor N" is then already the net effect.
-- **Tombstones age out.** Deletions leave one row. Dropping those older than the retention window advances `feed_horizon`, and older cursors answer `410`.
+- **Tombstones age out.** Deletions leave one row. Dropping those older than the retention window advances the feed's horizon, and older cursors answer `410`. Neither the aging out nor the horizon is built yet; each feed gains its horizon column with them.
 - **Written in the same transaction** as the change itself.
 
 ---
@@ -101,13 +101,13 @@ Migrations are the exception: they run with foreign keys off, because rebuilding
 
 **Reconciliation is a column, not a set.** `tracks.last_seen_scan_id` is set on every file a scan touched, changed or not, so "what did this scan not see" is one range `SELECT` over the scope, and a scan that resumes from its cursor after a crash needs no memory of what it saw before (`design/scanning.md` §7–§8). The unseen rows are then filtered in Rust against the paths the walk could not read, and each one left is marked missing with its own `UPDATE` and feed entry.
 
-**Identity inputs are nullable until identity is settled.** `tracks.fingerprint` stays `NULL` while the scanner keys on path (`design/scanning.md` §6). `images.placeholder` is `NULL` until the placeholder job decodes the file into a ThumbHash, and empty when it cannot; the scanner fills format, dimensions, and hash from the header.
+**Tracks carry no content fingerprint yet.** The scanner keys on path until track identity is settled, and the fingerprint column arrives with that design (`design/scanning.md` §6). `images.placeholder` is `NULL` until the placeholder job decodes the file into a ThumbHash, and empty when it cannot; the scanner fills the dimensions and hash from the header.
 
 ---
 
 ## 9. Not Yet Modelled
 
-Playlists, queues, mixes, downloads, the job queue, external sources, and the audit log, and the completion-weighted score behind `sort=top`, which belongs in `personal_stats` with an index like `personal_stats_by_plays`. Each arrives with its section of the API, and adds its entity types to the account feed's `CHECK`.
+Playlists, queues, mixes, downloads, the job queue, external sources, the audit log, user settings, invites, password resets, and the completion-weighted score behind `sort=top`, which belongs in `personal_stats` with an index like `personal_stats_by_plays`. Each arrives with its section of the API, and adds its entity types to the account feed's `CHECK`.
 
 **Until the first release, migration files are edited in place.** There is no compatibility to keep, so a data directory made with an older development schema must be recreated. From the release on, schema changes are only ever added as new numbered migrations.
 

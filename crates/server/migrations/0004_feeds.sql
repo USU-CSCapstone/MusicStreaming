@@ -6,9 +6,7 @@
 --
 -- Coalescing happens on write: recording a change first deletes the entity's earlier row, so
 -- each entity has at most one — its latest. "Everything after cursor N" is then already the
--- net effect (requirements/realtime.md §6). Deleted entities leave one tombstone row, dropped
--- once older than the retention horizon; the feed's horizon then moves past it and older
--- cursors answer 410.
+-- net effect (requirements/realtime.md §6). Deleted entities leave one tombstone row.
 
 CREATE TABLE library_changes (
     seq         INTEGER PRIMARY KEY AUTOINCREMENT,

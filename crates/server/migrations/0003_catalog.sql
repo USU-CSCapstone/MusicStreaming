@@ -11,7 +11,6 @@ CREATE TABLE images (
     id          INTEGER PRIMARY KEY,
     library_id  INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
     hash        BLOB    NOT NULL,
-    format      TEXT    NOT NULL,
     width       INTEGER NOT NULL,
     height      INTEGER NOT NULL,
     -- A ThumbHash, filled by the placeholder job after a decode; NULL until then, and empty
@@ -19,8 +18,6 @@ CREATE TABLE images (
     placeholder BLOB,
     root_id     INTEGER NOT NULL,
     path        TEXT    NOT NULL,
-    -- Whether the image is embedded in a track file
-    embedded    INTEGER NOT NULL CHECK (embedded IN (0, 1)),
     UNIQUE (library_id, hash),
     UNIQUE (library_id, id),
     FOREIGN KEY (library_id, root_id) REFERENCES library_roots (library_id, id)
@@ -46,7 +43,6 @@ CREATE TABLE artists (
     appearance_count INTEGER NOT NULL DEFAULT 0,
     available_track_count INTEGER NOT NULL DEFAULT 0,
     added_at         INTEGER NOT NULL,
-    updated_at       INTEGER NOT NULL,
     UNIQUE (library_id, name_key),
     UNIQUE (library_id, id),
     FOREIGN KEY (library_id, image_id) REFERENCES images (library_id, id)
@@ -82,7 +78,6 @@ CREATE TABLE albums (
     loudness_lufs         REAL,
     peak_dbtp             REAL,
     added_at              INTEGER NOT NULL,
-    updated_at            INTEGER NOT NULL,
     UNIQUE (library_id, title_key, artists_key),
     UNIQUE (library_id, id),
     FOREIGN KEY (library_id, image_id) REFERENCES images (library_id, id)
@@ -126,9 +121,6 @@ CREATE TABLE tracks (
     album_id        INTEGER NOT NULL,
     -- The album's title as written in this file
     album_title     TEXT,
-    -- A content fingerprint of the audio (requirements/scanning.md §6). NULL until track identity
-    -- is settled (design/scanning.md §6); the scanner keys on path meanwhile.
-    fingerprint     BLOB,
     root_id         INTEGER NOT NULL,
     path            TEXT    NOT NULL,
     file_size       INTEGER NOT NULL,
@@ -166,12 +158,10 @@ CREATE TABLE tracks (
     duration_us     INTEGER NOT NULL,
     loudness_lufs   REAL,
     peak_dbtp       REAL,
-    analyzed_at     INTEGER,
     -- Which analyzer produced the results; tracks below the current version are reprocessed in
     -- the background (design/scanning.md §12)
     analyzer_version INTEGER,
     added_at        INTEGER NOT NULL,
-    updated_at      INTEGER NOT NULL,
     UNIQUE (library_id, id),
     FOREIGN KEY (library_id, album_id) REFERENCES albums (library_id, id),
     FOREIGN KEY (library_id, root_id) REFERENCES library_roots (library_id, id)
@@ -188,7 +178,6 @@ CREATE INDEX tracks_by_added ON tracks (library_id, added_at, id);
 CREATE INDEX tracks_by_release ON tracks (library_id, release_date, album_sort_key, album_id, disc_number, ifnull(track_number, 9223372036854775807), id);
 -- Browsing tracks by duration (requirements/conventions.md §4), as albums_by_duration does albums
 CREATE INDEX tracks_by_duration ON tracks (library_id, duration_us, id);
-CREATE INDEX tracks_by_fingerprint ON tracks (library_id, fingerprint);
 CREATE INDEX tracks_missing ON tracks (library_id, missing_since) WHERE missing_since IS NOT NULL;
 CREATE INDEX tracks_unanalyzed ON tracks (library_id, analyzer_version, id) WHERE missing_since IS NULL;
 

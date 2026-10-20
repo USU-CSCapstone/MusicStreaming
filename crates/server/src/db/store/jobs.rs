@@ -30,6 +30,8 @@ pub fn next_unanalyzed(
     Ok(files(&store.roots, lib, found))
 }
 
+/// Saves `result`'s loudness and waveform on the track, refreshes its album's loudness, and
+/// records both in the feed. Does nothing when the track is not in `lib`.
 pub fn store_analysis(
     store: &SqliteStore,
     lib: i64,
@@ -42,13 +44,12 @@ pub fn store_analysis(
         // No row means the track is not in this library, so nothing else may change.
         let Some(album_id) = tx
             .query_row(
-                "UPDATE tracks SET loudness_lufs = ?2, peak_dbtp = ?3, analyzed_at = ?4, analyzer_version = ?5 \
-                 WHERE id = ?1 AND library_id = ?6 RETURNING album_id",
+                "UPDATE tracks SET loudness_lufs = ?2, peak_dbtp = ?3, analyzer_version = ?4 \
+                 WHERE id = ?1 AND library_id = ?5 RETURNING album_id",
                 params![
                     id,
                     result.integrated_lufs,
                     result.true_peak_dbtp,
-                    now,
                     result.analyzer_version as i64,
                     lib
                 ],

@@ -57,7 +57,7 @@ impl InspectStore for SqliteStore {
         let mut stmt = conn
             .prepare(
                 "SELECT t.id, t.root_id, t.path, t.missing_since IS NOT NULL, t.title, t.album_title, t.sort_key, \
-                 t.artist_sort_key, t.codec, t.container, t.channels, t.sample_rate_hz, t.analyzed_at IS NOT NULL, \
+                 t.artist_sort_key, t.codec, t.container, t.channels, t.sample_rate_hz, t.analyzer_version IS NOT NULL, \
                  (SELECT image_id FROM albums a WHERE a.id = t.album_id) IS NOT NULL, \
                  EXISTS (SELECT 1 FROM track_artists ta JOIN artists ar ON ar.id = ta.artist_id \
                          WHERE ta.track_id = t.id AND ar.biography IS NOT NULL), \
@@ -645,8 +645,15 @@ fn lyrics_and_artwork_land_in_their_tables() {
         &[(ItemKey::TrackTitle, "1"), (ItemKey::TrackArtist, "A"), (ItemKey::AlbumTitle, "X")],
     );
     std::fs::write(root.join("a/01.lrc"), "[00:01.00]first\n[00:02.50]second").unwrap();
-    std::fs::write(root.join("a/cover.png"), testing::PNG).unwrap();
-    std::fs::write(root.join("a/artist.png"), testing::PNG).unwrap();
+    // Not square, so a width and height stored the wrong way round show.
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=red:s=2x1"])
+        .args(["-frames:v", "1"])
+        .arg(root.join("a/cover.png"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+    std::fs::copy(root.join("a/cover.png"), root.join("a/artist.png")).unwrap();
     std::fs::write(root.join("a/artist.txt"), "A biography.").unwrap();
     let store = make(&root);
     let lib = testing::library(&root);
@@ -661,7 +668,10 @@ fn lyrics_and_artwork_land_in_their_tables() {
         1,
         "cover and artist image are the same bytes: one row"
     );
-    assert_eq!(scalar::<String>(&store, "SELECT format FROM images"), Some("png".into()));
+    assert_eq!(
+        scalar::<String>(&store, "SELECT width || 'x' || height FROM images"),
+        Some("2x1".into())
+    );
     assert!(scalar::<i64>(&store, "SELECT image_id FROM albums").is_some());
     assert!(scalar::<i64>(&store, "SELECT image_id FROM artists WHERE name = 'A'").is_some());
     assert_eq!(

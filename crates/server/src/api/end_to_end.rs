@@ -104,8 +104,10 @@ async fn a_scanned_album_reads_back_through_the_api() {
         send(app.clone(), "GET", &format!("{base}/images/{image}")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(content_type.as_deref(), Some("image/jpeg"));
+    // JPEG's start-of-image marker, then the next marker.
+    assert!(body.starts_with(&[0xFF, 0xD8, 0xFF]));
     let info = describe(&body).unwrap();
-    assert_eq!((info.format.as_str(), info.width, info.height), ("jpeg", 300, 200));
+    assert_eq!((info.width, info.height), (300, 200));
 
     let (status, content_type, body) =
         send(app.clone(), "GET", &format!("{base}/tracks/{track}/audio?variant=original")).await;

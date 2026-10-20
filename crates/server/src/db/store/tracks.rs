@@ -46,6 +46,8 @@ pub fn lookup(store: &SqliteStore, lib: i64, path: &Path) -> Result<Option<Index
     })
 }
 
+/// Writes `batch` in one transaction: its tracks, returned files, problems, and the derived data
+/// they touch.
 pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<(), DbError> {
     let roots = store.roots.clone();
     store.db.write_blocking(move |tx| {
@@ -63,9 +65,9 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<(), DbError>
         for id in &batch.returned {
             let id = *id as i64;
             let changed = tx.execute(
-                "UPDATE tracks SET missing_since = NULL, updated_at = ?2 \
-                 WHERE id = ?1 AND library_id = ?3 AND missing_since IS NOT NULL",
-                params![id, now, lib],
+                "UPDATE tracks SET missing_since = NULL \
+                 WHERE id = ?1 AND library_id = ?2 AND missing_since IS NOT NULL",
+                params![id, lib],
             )?;
             if changed > 0 {
                 touched.track(tx, id)?;
@@ -137,10 +139,7 @@ pub fn mark_missing_unseen(
             .collect();
         let mut touched = Touched::default();
         for id in &ids {
-            tx.execute(
-                "UPDATE tracks SET missing_since = ?2, updated_at = ?2 WHERE id = ?1",
-                params![id, now],
-            )?;
+            tx.execute("UPDATE tracks SET missing_since = ?2 WHERE id = ?1", params![id, now])?;
             touched.track(tx, *id)?;
             feed::record(tx, lib, Entity::Track, *id, Op::Upsert, now)?;
         }

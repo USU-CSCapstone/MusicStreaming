@@ -117,8 +117,8 @@ pub fn create(
     excludes: &[String],
 ) -> Result<i64> {
     let id = conn.query_row(
-        "INSERT INTO libraries (id, name, excludes, created_at, updated_at) \
-         VALUES (coalesce(?1, random() & 0x7FFFFFFFFFFFFFFF), ?2, ?3, ?4, ?4) RETURNING id",
+        "INSERT INTO libraries (id, name, excludes, created_at) \
+         VALUES (coalesce(?1, random() & 0x7FFFFFFFFFFFFFFF), ?2, ?3, ?4) RETURNING id",
         params![id, name, serde_json::to_string(excludes).unwrap(), now_ms()],
         |r| r.get(0),
     )?;

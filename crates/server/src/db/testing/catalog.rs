@@ -27,7 +27,7 @@ impl Artist {
     pub fn insert(&self, conn: &Connection) -> Result<()> {
         conn.prepare_cached(
             "INSERT INTO artists (id, library_id, name, name_key, sort_key, album_count, \
-             track_count, added_at, updated_at) VALUES (?1, ?2, ?3, ?1, ?4, ?5, ?6, ?7, 0)",
+             track_count, added_at) VALUES (?1, ?2, ?3, ?1, ?4, ?5, ?6, ?7)",
         )?
         .execute(params![
             self.id,
@@ -113,8 +113,8 @@ impl Album {
         conn.prepare_cached(
             "INSERT INTO albums (id, library_id, title, title_key, artists_key, sort_key, \
              artist_sort_key, release_date, track_count, available_track_count, disc_count, \
-             duration_us, loudness_lufs, peak_dbtp, added_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?1, '', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0)",
+             duration_us, loudness_lufs, peak_dbtp, added_at) \
+             VALUES (?1, ?2, ?3, ?1, '', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )?
         .execute(params![
             self.id,
@@ -196,10 +196,10 @@ impl Track {
             "INSERT INTO tracks (id, library_id, album_id, root_id, path, file_size, file_mtime, \
              missing_since, title, sort_key, artist_sort_key, album_sort_key, disc_number, \
              track_number, release_date, codec, container, lossless, sample_rate_hz, bit_depth, \
-             channels, duration_us, loudness_lufs, peak_dbtp, added_at, updated_at) \
+             channels, duration_us, loudness_lufs, peak_dbtp, added_at) \
              VALUES (?1, ?2, ?3, (SELECT id FROM library_roots WHERE library_id = ?2), ?4, ?5, 0, \
                      ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 44100, ?17, 2, ?18, ?19, \
-                     ?20, ?21, 0)",
+                     ?20, ?21)",
         )?
         .execute(params![
             self.id,
@@ -248,10 +248,8 @@ impl Image {
     /// Adds the image.
     pub fn insert(&self, conn: &Connection) -> Result<()> {
         conn.execute(
-            "INSERT INTO images (id, library_id, hash, format, width, height, placeholder, \
-             root_id, path, embedded) \
-             VALUES (?1, ?2, ?3, 'png', 1, 1, ?4, \
-                     (SELECT id FROM library_roots WHERE library_id = ?2), ?5, 0)",
+            "INSERT INTO images (id, library_id, hash, width, height, placeholder, root_id, path) \
+             VALUES (?1, ?2, ?3, 1, 1, ?4, (SELECT id FROM library_roots WHERE library_id = ?2), ?5)",
             params![self.id, self.library, self.hash, self.placeholder, self.path],
         )
         .map(drop)

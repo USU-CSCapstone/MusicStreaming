@@ -271,7 +271,7 @@ mod tests {
     }
 
     const INSERT_LIBRARY: &str =
-        "INSERT INTO libraries (id, name, created_at, updated_at) VALUES (?1, 'Music', 0, 0)";
+        "INSERT INTO libraries (id, name, created_at) VALUES (?1, 'Music', 0)";
 
     #[tokio::test]
     async fn reads_see_committed_writes() {

@@ -12,6 +12,9 @@ use super::roots::{Roots, relative};
 use crate::db::catalog::Touched;
 use crate::db::feed::{self, Entity, Op};
 
+/// Writes `rec` as a track of `lib` seen by `scan_id`, with its credits, genres, lyrics,
+/// artwork, and artist biography, records it in the feed at `now`, and adds what it points at
+/// to `touched`. A file under an unknown root is skipped.
 pub fn upsert_track(
     roots: &Roots,
     tx: &Transaction<'_>,
@@ -86,12 +89,12 @@ pub fn upsert_track(
 
     // A new track (no id yet) gets a random one.
     let id: i64 = tx.query_row(
-            "INSERT INTO tracks (id, library_id, album_id, album_title, fingerprint, root_id, path, file_size, file_mtime, \
+            "INSERT INTO tracks (id, library_id, album_id, album_title, root_id, path, file_size, file_mtime, \
              missing_since, last_seen_scan_id, title, sort_key, artist_sort_key, album_sort_key, disc_number, track_number, \
              track_total, disc_total, release_date, explicit, compilation, release_type, isrc, identifiers, lyrics_kind, \
-             codec, container, lossless, bitrate_kbps, sample_rate_hz, bit_depth, channels, duration_us, added_at, updated_at) \
-             VALUES (coalesce(?1, random() & 0x7FFFFFFFFFFFFFFF), ?2, ?3, ?4, NULL, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, \
-             ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?33) \
+             codec, container, lossless, bitrate_kbps, sample_rate_hz, bit_depth, channels, duration_us, added_at) \
+             VALUES (coalesce(?1, random() & 0x7FFFFFFFFFFFFFFF), ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, \
+             ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33) \
              ON CONFLICT (id) DO UPDATE SET album_id = excluded.album_id, album_title = excluded.album_title, \
              root_id = excluded.root_id, path = excluded.path, file_size = excluded.file_size, file_mtime = excluded.file_mtime, \
              missing_since = NULL, last_seen_scan_id = excluded.last_seen_scan_id, title = excluded.title, \
@@ -102,7 +105,7 @@ pub fn upsert_track(
              identifiers = excluded.identifiers, lyrics_kind = excluded.lyrics_kind, codec = excluded.codec, \
              container = excluded.container, lossless = excluded.lossless, bitrate_kbps = excluded.bitrate_kbps, \
              sample_rate_hz = excluded.sample_rate_hz, bit_depth = excluded.bit_depth, channels = excluded.channels, \
-             duration_us = excluded.duration_us, updated_at = excluded.updated_at \
+             duration_us = excluded.duration_us \
              RETURNING id",
             params![
                 rec.id.map(|id| id as i64),
@@ -182,14 +185,14 @@ pub fn upsert_track(
             )?;
     }
 
-    // Artwork: an images row per distinct source; the album keeps the
+    // Artwork: one images row per distinct content hash; the album keeps the
     // first it is given (`requirements/scanning.md` §3.1).
     if let Some(art) = &rec.artwork {
-        let (img_path, embedded) = match &art.source {
-            ArtworkSource::Embedded => (rel.clone(), true),
-            ArtworkSource::Sidecar(p) => (relative(&rec.root, p), false),
+        let img_path = match &art.source {
+            ArtworkSource::Embedded => rel.clone(),
+            ArtworkSource::Sidecar(p) => relative(&rec.root, p),
         };
-        let image_id = upsert_image(tx, lib, root_id, &img_path, embedded, &art.info)?;
+        let image_id = upsert_image(tx, lib, root_id, &img_path, &art.info)?;
         tx.execute(
             "UPDATE albums SET image_id = ?2 WHERE id = ?1 AND image_id IS NULL",
             params![album_id, image_id],
@@ -198,8 +201,7 @@ pub fn upsert_track(
     let artist_targets: &[i64] =
         if album_credits.iter().any(|c| c.is_some()) { &album_artist_ids } else { &artist_ids };
     if let Some(img) = &rec.artist_image {
-        let image_id =
-            upsert_image(tx, lib, root_id, &relative(&rec.root, &img.path), false, &img.info)?;
+        let image_id = upsert_image(tx, lib, root_id, &relative(&rec.root, &img.path), &img.info)?;
         for artist_id in artist_targets {
             tx.execute(
                     "UPDATE artists SET image_id = ?2 WHERE id = ?1 AND image_id IS NULL AND name IS NOT NULL",

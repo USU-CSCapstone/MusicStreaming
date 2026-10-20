@@ -45,6 +45,9 @@ impl Touched {
     }
 }
 
+/// Recomputes what `touched` names, then the library's totals, and records each change in the
+/// feed at `now`. Album links and artists add what they bring in to `touched`; an empty
+/// `touched` changes nothing.
 pub fn recompute(tx: &Transaction<'_>, lib: i64, touched: &mut Touched, now: i64) -> Result<()> {
     if touched.albums.is_empty() && touched.artists.is_empty() && touched.tags.is_empty() {
         return Ok(());
@@ -71,9 +74,9 @@ pub fn recompute(tx: &Transaction<'_>, lib: i64, touched: &mut Touched, now: i64
          track_count = (SELECT COUNT(*) FROM tracks WHERE library_id = ?1), \
          album_count = (SELECT COUNT(*) FROM albums WHERE library_id = ?1), \
          artist_count = (SELECT COUNT(*) FROM artists WHERE library_id = ?1), \
-         duration_us = (SELECT COALESCE(SUM(duration_us), 0) FROM tracks WHERE library_id = ?1), \
-         updated_at = ?2 WHERE id = ?1",
-        params![lib, now],
+         duration_us = (SELECT COALESCE(SUM(duration_us), 0) FROM tracks WHERE library_id = ?1) \
+         WHERE id = ?1",
+        [lib],
     )?;
     feed::record(tx, lib, Entity::Library, lib, Op::Upsert, now)?;
     Ok(())
@@ -136,6 +139,7 @@ fn most_used(tx: &Transaction<'_>, sql: &str, id: i64) -> Result<Option<String>>
     tx.query_row(sql, [id], |r| r.get::<_, String>(0)).optional()
 }
 
+/// The album's resolved fields and counts from its tracks, or its deletion when none is left.
 fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i64) -> Result<()> {
     let (count, available, duration, disc_total, track_total, disc_count, any_compilation): (
         i64,
@@ -195,7 +199,7 @@ fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i64) -> Resu
     tx.execute(
         "UPDATE albums SET title = ?2, sort_key = COALESCE(?3, sort_key), artist_sort_key = COALESCE(?4, artist_sort_key), \
          type = ?5, release_date = ?6, disc_total = ?7, track_total = ?8, disc_count = ?9, track_count = ?10, \
-         available_track_count = ?11, duration_us = ?12, updated_at = ?13 WHERE id = ?1",
+         available_track_count = ?11, duration_us = ?12 WHERE id = ?1",
         params![
             album,
             title,
@@ -208,8 +212,7 @@ fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i64) -> Resu
             disc_count,
             count,
             available,
-            duration,
-            now
+            duration
         ],
     )?;
     recompute_album_loudness(tx, album)?;
@@ -278,6 +281,8 @@ pub fn recompute_album_loudness(tx: &Transaction<'_>, album: i64) -> Result<()> 
     Ok(())
 }
 
+/// The artist's displayed name, sort key, counts, and genres from its credits, or its deletion
+/// when nothing credits it. Its old and new genres join `touched.tags`.
 fn recompute_artist(
     tx: &Transaction<'_>,
     lib: i64,
@@ -358,8 +363,8 @@ fn recompute_artist(
 
     tx.execute(
         "UPDATE artists SET name = ?2, sort_key = ?3, album_count = ?4, track_count = ?5, appearance_count = ?6, \
-         available_track_count = ?7, updated_at = ?8 WHERE id = ?1",
-        params![artist, name, sort_key, album_count, track_count, appearances, available, now],
+         available_track_count = ?7 WHERE id = ?1",
+        params![artist, name, sort_key, album_count, track_count, appearances, available],
     )?;
     feed::record(tx, lib, Entity::Artist, artist, Op::Upsert, now)?;
     Ok(())
