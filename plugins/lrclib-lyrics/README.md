@@ -14,6 +14,7 @@ Its contract is [`crates/plugins/wit/plugin.wit`](../../crates/plugins/wit/plugi
 `manifest.json` is what the Plugins page shows.
 
 ```sh
+rustup target add wasm32-wasip2   # once
 ./build.sh      # target/lrclib-lyrics.wasm, with the manifest packed in (needs Node)
 cargo test      # the LRCLIB logic, natively
 ```
