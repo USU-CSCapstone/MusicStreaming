@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { listAlbums, listTracks } from '$lib/api/client';
 	import { artistTracks, collection } from '$lib/adding.svelte';
 	import { albumCard } from '$lib/cards';
@@ -10,6 +11,10 @@
 	import { artistName, plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
 	import { player } from '$lib/player.svelte';
+	import { currentSort, showSorted } from '$lib/sort-url';
+	import { FIELDS } from '$lib/sorting';
+	import { toast } from '$lib/toast.svelte';
+	import { _songOrder as songOrder } from './+page';
 
 	let { data } = $props();
 
@@ -26,9 +31,28 @@
 			})
 		)
 	);
+	const sort = $derived(currentSort(FIELDS));
+	// The songs as the page loaded them, until another sort fetches its own first page here,
+	// leaving the rest of the page as it is. Another artist starts over from what loads.
+	let songs = $derived({ order: data.songs, first: data.tracks });
+	$effect(() => {
+		const order = songOrder(sort);
+		const shown = untrack(() => songs.order);
+		if (order.sort === shown.sort && order.order === shown.order) return;
+		let current = true;
+		listTracks(fetch, data.lib, { artistId: artist.id, ...order }).then(
+			(first) => {
+				if (current) songs = { order, first };
+			},
+			(e) => toast(`Couldn’t sort songs. ${e instanceof Error ? e.message : ''}`.trim())
+		);
+		return () => {
+			current = false;
+		};
+	});
 	const tracks = $derived(
-		new Paged(data.tracks, (cursor) =>
-			listTracks(fetch, data.lib, { artistId: artist.id, sort: 'album', cursor })
+		new Paged(songs.first, (cursor) =>
+			listTracks(fetch, data.lib, { artistId: artist.id, ...songs.order, cursor })
 		)
 	);
 	// Every song the artist is credited on, as the server expands an artist, which the page
@@ -92,7 +116,13 @@
 
 <section>
 	<header><h2>Songs</h2></header>
-	<TrackList tracks={tracks.items} sentinel={tracks.sentinel} {context} />
+	<TrackList
+		tracks={tracks.items}
+		sentinel={tracks.sentinel}
+		{sort}
+		onsort={showSorted}
+		{context}
+	/>
 </section>
 
 <style>
