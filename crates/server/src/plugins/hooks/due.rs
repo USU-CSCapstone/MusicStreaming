@@ -83,7 +83,7 @@ pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
         "SELECT p.plugin_id, p.library_id, {} WHERE {READY} AND {} AND {} AND {} \
          AND EXISTS (SELECT 1 FROM play_ends e WHERE e.library_id = p.library_id \
                      AND e.user_id = s.user_id AND e.seq > coalesce(c.position, 0) \
-                     AND e.at >= s.connected_at)",
+                     AND e.ended_at >= s.connected_at)",
         position(true),
         granted_to_plugin("played"),
         granted_to_plugin("listeningActivity"),
@@ -114,7 +114,7 @@ pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
          WHERE {READY} AND {} \
          AND EXISTS (SELECT 1 FROM search_events e WHERE e.library_id = p.library_id \
                      AND e.user_id = u.user_id AND e.seq > coalesce(c.position, 0) \
-                     AND ((e.kind <> 'stopped' AND e.at >= ss.shared_at AND {} AND {}) \
+                     AND ((e.kind <> 'stopped' AND e.created_at >= ss.shared_at AND {} AND {}) \
                           OR (e.kind = 'stopped' AND e.plugin_id = p.plugin_id)))",
         granted_to_plugin("searched"),
         granted_to_plugin("searchActivity"),

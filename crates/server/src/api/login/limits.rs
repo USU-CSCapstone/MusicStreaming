@@ -32,15 +32,16 @@ pub fn wait_ms(
     let since = now - WINDOW_MS;
     let account = conn
         .prepare_cached(
-            "SELECT count(*), max(at) FROM login_attempts WHERE username_attempted = ?1 \
-             AND succeeded = 0 AND at > coalesce((SELECT max(at) FROM login_attempts \
-             WHERE username_attempted = ?1 AND succeeded = 1 AND at > ?2), ?2)",
+            "SELECT count(*), max(attempted_at) FROM login_attempts \
+             WHERE username_attempted = ?1 AND succeeded = 0 AND attempted_at > coalesce( \
+             (SELECT max(attempted_at) FROM login_attempts \
+              WHERE username_attempted = ?1 AND succeeded = 1 AND attempted_at > ?2), ?2)",
         )?
         .query_row(params![username, since], |row| Ok((row.get(0)?, row.get(1)?)))?;
     let origin = conn
         .prepare_cached(
-            "SELECT count(*), max(at) FROM login_attempts \
-             WHERE origin = ?1 AND succeeded = 0 AND at > ?2",
+            "SELECT count(*), max(attempted_at) FROM login_attempts \
+             WHERE origin = ?1 AND succeeded = 0 AND attempted_at > ?2",
         )?
         .query_row(params![origin_key(origin), since], |row| Ok((row.get(0)?, row.get(1)?)))?;
     Ok(wait(account, ACCOUNT_FREE, now).max(wait(origin, ORIGIN_FREE, now)))
@@ -56,7 +57,8 @@ pub fn record(
     now: i64,
 ) -> rusqlite::Result<i64> {
     conn.prepare_cached(
-        "INSERT INTO login_attempts (at, username_attempted, user_id, origin, succeeded) \
+        "INSERT INTO login_attempts \
+         (attempted_at, username_attempted, user_id, origin, succeeded) \
          VALUES (?1, ?2, ?3, ?4, 0) RETURNING id",
     )?
     .query_row(params![now, username, user, origin_key(origin)], |row| row.get(0))

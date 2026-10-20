@@ -24,7 +24,7 @@ pub fn plays(
         .query_row(params![plugin, user], |row| row.get(0))
         .optional()?;
     let Some(connected_at) = connected_at else { return Ok((position, Vec::new())) };
-    let after = "e.library_id = ?1 AND e.user_id = ?2 AND e.seq > ?3 AND e.at >= ?4";
+    let after = "e.library_id = ?1 AND e.user_id = ?2 AND e.seq > ?3 AND e.ended_at >= ?4";
     let last: Option<i64> = conn
         .prepare_cached(&format!(
             "SELECT max(seq) FROM (SELECT e.seq FROM play_ends e WHERE {after} \

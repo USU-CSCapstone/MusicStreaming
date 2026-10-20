@@ -19,7 +19,7 @@ pub const FRESH_MS: i64 = 60_000;
 pub fn deliverable(library: &str, user: &str, position: &str) -> String {
     format!(
         "st.library_id = {library} AND st.user_id = {user} AND st.seq > {position} \
-         AND pl.ended IS NULL AND st.at >= max(s.connected_at, ?1 - {FRESH_MS})"
+         AND pl.ended IS NULL AND st.reported_at >= max(s.connected_at, ?1 - {FRESH_MS})"
     )
 }
 

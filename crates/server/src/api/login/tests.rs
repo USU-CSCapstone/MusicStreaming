@@ -49,7 +49,11 @@ async fn login(
 
 /// Moves every recorded attempt `ms` into the past, as if that much time had gone by.
 async fn wait(db: &Database, ms: i64) {
-    db.write(move |tx| tx.execute("UPDATE login_attempts SET at = at - ?1", [ms])).await.unwrap();
+    db.write(move |tx| {
+        tx.execute("UPDATE login_attempts SET attempted_at = attempted_at - ?1", [ms])
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]

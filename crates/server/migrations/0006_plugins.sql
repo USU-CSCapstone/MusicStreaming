@@ -116,7 +116,7 @@ CREATE TABLE plugin_user_settings (
     PRIMARY KEY (plugin_id, user_id)
 ) STRICT, WITHOUT ROWID;
 
-CREATE INDEX plugin_user_settings_user ON plugin_user_settings (user_id);
+CREATE INDEX plugin_user_settings_by_user ON plugin_user_settings (user_id);
 
 -- Who shares their searches with which plugin, and since when (requirements/search.md §6). Off
 -- unless a row is here, and only a connected user can turn it on.

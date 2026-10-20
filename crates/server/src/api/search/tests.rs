@@ -105,7 +105,7 @@ async fn the_index_follows_the_library() {
         let title = "Octopus's Garden".into();
         Track { title, sort_key: b"o".to_vec(), ..Track::new(1007, 1, 101) }.insert(tx)?;
         tx.execute(
-            "INSERT INTO library_changes (library_id, entity_type, entity_id, op, at)
+            "INSERT INTO library_changes (library_id, entity_type, entity_id, op, changed_at)
              VALUES (1, 'track', 1007, 'upsert', 0)",
             [],
         )

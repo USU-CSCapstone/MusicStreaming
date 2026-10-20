@@ -94,7 +94,7 @@ fn row(row: &Row) -> rusqlite::Result<RecentSearch> {
 /// hook noted about searches as old.
 fn sweep(tx: &Transaction, now: i64) -> rusqlite::Result<()> {
     tx.execute("DELETE FROM recent_searches WHERE searched_at < ?1", [now - WINDOW_MS])?;
-    tx.execute("DELETE FROM search_events WHERE at < ?1", [now - WINDOW_MS])?;
+    tx.execute("DELETE FROM search_events WHERE created_at < ?1", [now - WINDOW_MS])?;
     Ok(())
 }
 
@@ -109,7 +109,7 @@ fn note(
     now: i64,
 ) -> rusqlite::Result<()> {
     tx.execute(
-        "INSERT INTO search_events (user_id, library_id, kind, search_id, at) \
+        "INSERT INTO search_events (user_id, library_id, kind, search_id, created_at) \
          SELECT ?1, ?2, ?3, ?4, ?5 \
          WHERE EXISTS (SELECT 1 FROM plugin_search_sharing WHERE user_id = ?1)",
         params![user, library, kind, search, now],

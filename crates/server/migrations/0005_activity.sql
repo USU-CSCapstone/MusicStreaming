@@ -24,8 +24,8 @@ CREATE TABLE plays (
     updated_at     INTEGER NOT NULL
 ) STRICT;
 
-CREATE INDEX plays_user ON plays (user_id, started_at);
-CREATE INDEX plays_device ON plays (device_id);
+CREATE INDEX plays_by_user ON plays (user_id, started_at);
+CREATE INDEX plays_by_device ON plays (device_id);
 
 -- Every play that has ended, in the order it ended, for the played hook (requirements/plugins.md
 -- §8). A play is reported many times, and only the first report with an end puts it here, so
@@ -35,48 +35,48 @@ CREATE TABLE play_ends (
     play_id    TEXT    NOT NULL REFERENCES plays (id) ON DELETE CASCADE,
     user_id    INTEGER NOT NULL,
     library_id INTEGER NOT NULL,
-    at         INTEGER NOT NULL
+    ended_at   INTEGER NOT NULL
 ) STRICT;
 
 CREATE INDEX play_ends_feed ON play_ends (library_id, user_id, seq);
-CREATE INDEX play_ends_play ON play_ends (play_id);
+CREATE INDEX play_ends_by_play ON play_ends (play_id);
 
 CREATE TRIGGER plays_end_at_once AFTER INSERT ON plays WHEN NEW.ended IS NOT NULL
 BEGIN
-    INSERT INTO play_ends (play_id, user_id, library_id, at)
+    INSERT INTO play_ends (play_id, user_id, library_id, ended_at)
     VALUES (NEW.id, NEW.user_id, NEW.library_id, NEW.updated_at);
 END;
 
 CREATE TRIGGER plays_end AFTER UPDATE OF ended ON plays
 WHEN OLD.ended IS NULL AND NEW.ended IS NOT NULL
 BEGIN
-    INSERT INTO play_ends (play_id, user_id, library_id, at)
+    INSERT INTO play_ends (play_id, user_id, library_id, ended_at)
     VALUES (NEW.id, NEW.user_id, NEW.library_id, NEW.updated_at);
 END;
 
 -- Every play reported before it ended, in the order the server first heard of it, for the
--- playing hook (design/hooks.md §1.1). `at` is the server's time of that first report, since
--- a device's own clock, and a device catching up after being offline, could make any play look
--- current. A play first reported already ended was never playing as far as anyone here knew,
--- and is not a start.
+-- playing hook (design/hooks.md §1.1). `reported_at` is the server's time of that first report,
+-- since a device's own clock, and a device catching up after being offline, could make any play
+-- look current. A play first reported already ended was never playing as far as anyone here
+-- knew, and is not a start.
 CREATE TABLE play_starts (
-    seq        INTEGER PRIMARY KEY AUTOINCREMENT,
-    play_id    TEXT    NOT NULL REFERENCES plays (id) ON DELETE CASCADE,
-    user_id    INTEGER NOT NULL,
-    library_id INTEGER NOT NULL,
-    at         INTEGER NOT NULL
+    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+    play_id     TEXT    NOT NULL REFERENCES plays (id) ON DELETE CASCADE,
+    user_id     INTEGER NOT NULL,
+    library_id  INTEGER NOT NULL,
+    reported_at INTEGER NOT NULL
 ) STRICT;
 
 CREATE INDEX play_starts_feed ON play_starts (library_id, user_id, seq);
-CREATE INDEX play_starts_play ON play_starts (play_id);
+CREATE INDEX play_starts_by_play ON play_starts (play_id);
 
 -- Nothing here is delivered late, so a start an hour old is of no use to anyone: each new one
 -- clears those, and the table stays small.
 CREATE TRIGGER plays_start AFTER INSERT ON plays WHEN NEW.ended IS NULL
 BEGIN
-    INSERT INTO play_starts (play_id, user_id, library_id, at)
+    INSERT INTO play_starts (play_id, user_id, library_id, reported_at)
     VALUES (NEW.id, NEW.user_id, NEW.library_id, NEW.updated_at);
-    DELETE FROM play_starts WHERE at < NEW.updated_at - 3600000;
+    DELETE FROM play_starts WHERE reported_at < NEW.updated_at - 3600000;
 END;
 
 -- ───────────────────────────── Player ─────────────────────────────
@@ -123,7 +123,7 @@ CREATE TABLE recent_searches (
 ) STRICT;
 
 CREATE UNIQUE INDEX recent_searches_query ON recent_searches (user_id, library_id, folded);
-CREATE INDEX recent_searches_newest ON recent_searches (user_id, library_id, searched_at);
+CREATE INDEX recent_searches_by_user ON recent_searches (user_id, library_id, searched_at);
 -- For sweeping away everyone's searches once they age out of the window.
 CREATE INDEX recent_searches_age ON recent_searches (searched_at);
 
@@ -140,10 +140,10 @@ CREATE TABLE search_events (
     kind       TEXT    NOT NULL CHECK (kind IN ('searched', 'forgotten', 'stopped')),
     search_id  INTEGER,
     plugin_id  TEXT,
-    at         INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
     CHECK ((kind = 'stopped') = (search_id IS NULL)),
     CHECK ((kind = 'stopped') = (plugin_id IS NOT NULL))
 ) STRICT;
 
 CREATE INDEX search_events_feed ON search_events (library_id, user_id, seq);
-CREATE INDEX search_events_age ON search_events (at);
+CREATE INDEX search_events_age ON search_events (created_at);

@@ -56,7 +56,7 @@ CREATE TABLE scans (
     finished_at     INTEGER
 ) STRICT;
 
-CREATE INDEX scans_by_library ON scans (library_id, created_at, id);
+CREATE INDEX scans_by_created ON scans (library_id, created_at, id);
 CREATE INDEX scans_unfinished ON scans (library_id, id) WHERE state IN ('queued', 'running');
 
 -- Problems grouped so a systemic issue reads as one row (requirements/scanning.md §10).

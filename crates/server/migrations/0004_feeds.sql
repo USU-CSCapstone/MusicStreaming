@@ -14,14 +14,14 @@ CREATE TABLE library_changes (
     entity_type TEXT    NOT NULL CHECK (entity_type IN ('library', 'track', 'album', 'artist', 'tag')),
     entity_id   INTEGER NOT NULL,
     op          TEXT    NOT NULL CHECK (op IN ('upsert', 'delete')),
-    at          INTEGER NOT NULL
+    changed_at  INTEGER NOT NULL
 ) STRICT;
 
 CREATE INDEX library_changes_feed ON library_changes (library_id, seq);
 CREATE UNIQUE INDEX library_changes_entity ON library_changes (library_id, entity_type, entity_id);
 -- The tracksChanged, albumsChanged and artistsChanged hooks each read only their own kind of
 -- change, so a hook that has caught up must not step over every newer change of another kind.
-CREATE INDEX library_changes_kind ON library_changes (library_id, entity_type, seq);
+CREATE INDEX library_changes_kind_feed ON library_changes (library_id, entity_type, seq);
 
 -- The account feed. Entity types grow as the personal sections of the API are built.
 CREATE TABLE account_changes (
@@ -30,7 +30,7 @@ CREATE TABLE account_changes (
     entity_type TEXT    NOT NULL CHECK (entity_type IN ('library', 'user', 'accountSettings', 'device', 'personal')),
     entity_id   INTEGER NOT NULL,
     op          TEXT    NOT NULL CHECK (op IN ('upsert', 'delete')),
-    at          INTEGER NOT NULL
+    changed_at  INTEGER NOT NULL
 ) STRICT;
 
 CREATE INDEX account_changes_feed ON account_changes (user_id, seq);

@@ -28,7 +28,7 @@ async fn searched(db: &Database, id: i64, user: i64, query: &'static str, at: i6
             rusqlite::params![id, user, query, at, tracks],
         )?;
         tx.execute(
-            "INSERT INTO search_events (user_id, library_id, kind, search_id, at) \
+            "INSERT INTO search_events (user_id, library_id, kind, search_id, created_at) \
              VALUES (?1, 1, 'searched', ?2, ?3)",
             rusqlite::params![user, id, at],
         )
@@ -42,7 +42,7 @@ async fn forgot(db: &Database, id: i64, at: i64) {
     db.write(move |tx| {
         tx.execute("DELETE FROM recent_searches WHERE id = ?1", [id])?;
         tx.execute(
-            "INSERT INTO search_events (user_id, library_id, kind, search_id, at) \
+            "INSERT INTO search_events (user_id, library_id, kind, search_id, created_at) \
              VALUES (7, 1, 'forgotten', ?1, ?2)",
             rusqlite::params![id, at],
         )

@@ -64,7 +64,7 @@ async fn an_event_names_at_most_a_hundred_changes() {
     db.write(|tx| {
         tx.execute_batch(
             "WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 250)
-             INSERT INTO library_changes (library_id, entity_type, entity_id, op, at)
+             INSERT INTO library_changes (library_id, entity_type, entity_id, op, changed_at)
              SELECT 1, 'track', 1000 + i, 'upsert', 0 FROM n",
         )
     })

@@ -93,11 +93,11 @@ fn one(received: Vec<Received>, user: i64) -> Event {
     }
 }
 
-/// Adds `rows` to the library change feed, each `(library, entity type, entity, op, at)`.
+/// Adds `rows` to the library change feed, each `(library, entity type, entity, op, changed at)`.
 async fn changes(db: &Database, rows: &'static str) {
     db.write(move |tx| {
         tx.execute_batch(&format!(
-            "INSERT INTO library_changes (library_id, entity_type, entity_id, op, at) VALUES {rows}"
+            "INSERT INTO library_changes (library_id, entity_type, entity_id, op, changed_at) VALUES {rows}"
         ))
     })
     .await

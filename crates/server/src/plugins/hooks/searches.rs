@@ -15,7 +15,8 @@ use super::BATCH;
 /// `?3`, as `e`: their searches and forgets while they share with it since `?5`, and stops
 /// meant for it. `?5` is null while they do not share.
 pub const FOR_PLUGIN: &str = "e.library_id = ?1 AND e.user_id = ?2 AND e.seq > ?3 \
-     AND ((e.kind <> 'stopped' AND e.at >= ?5) OR (e.kind = 'stopped' AND e.plugin_id = ?4))";
+     AND ((e.kind <> 'stopped' AND e.created_at >= ?5) \
+          OR (e.kind = 'stopped' AND e.plugin_id = ?4))";
 
 /// What `plugin` is to be told next of `user`'s searches in `library`, after `position`: the
 /// position after it, and the event, if any of it is still worth sending.

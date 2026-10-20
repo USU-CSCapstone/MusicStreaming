@@ -38,12 +38,12 @@ CREATE TABLE devices (
     CHECK ((token_hash IS NULL) = (revoked_reason IS NOT NULL))
 ) STRICT;
 
-CREATE INDEX devices_user ON devices (user_id);
+CREATE INDEX devices_by_user ON devices (user_id);
 
 -- Every attempt, for admins (requirements/users.md §3.1).
 CREATE TABLE login_attempts (
     id                 INTEGER PRIMARY KEY,
-    at                 INTEGER NOT NULL,
+    attempted_at       INTEGER NOT NULL,
     username_attempted TEXT    NOT NULL COLLATE NOCASE,
     user_id            INTEGER REFERENCES users (id) ON DELETE SET NULL,
     origin             TEXT    NOT NULL,
@@ -51,5 +51,5 @@ CREATE TABLE login_attempts (
 ) STRICT;
 
 -- Per-account limits count by the name tried, so unknown usernames lock out exactly as real ones do.
-CREATE INDEX login_attempts_username ON login_attempts (username_attempted, at);
-CREATE INDEX login_attempts_origin ON login_attempts (origin, at);
+CREATE INDEX login_attempts_by_username ON login_attempts (username_attempted, attempted_at);
+CREATE INDEX login_attempts_by_origin ON login_attempts (origin, attempted_at);

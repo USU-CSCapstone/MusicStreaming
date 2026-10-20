@@ -133,7 +133,7 @@ fn stop_sharing(conn: &Connection, id: &str, user: i64) -> rusqlite::Result<()> 
     )?;
     if stopped > 0 {
         conn.execute(
-            "INSERT INTO search_events (user_id, library_id, kind, plugin_id, at) \
+            "INSERT INTO search_events (user_id, library_id, kind, plugin_id, created_at) \
              SELECT ?2, library_id, 'stopped', ?1, ?3 FROM plugin_libraries WHERE plugin_id = ?1",
             params![id, user, now_ms()],
         )?;

@@ -41,7 +41,7 @@ pub fn record(
     now: i64,
 ) -> Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO library_changes (library_id, entity_type, entity_id, op, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT OR REPLACE INTO library_changes (library_id, entity_type, entity_id, op, changed_at) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
             library_id,
             entity.as_str(),
