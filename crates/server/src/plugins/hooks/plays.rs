@@ -35,8 +35,9 @@ pub fn plays(
     let plays = conn
         .prepare_cached(&format!(
             "{TRACK_COLUMNS}, p.started_at, p.listen_time_ms, p.ended FROM play_ends e \
-             JOIN plays p ON p.id = e.play_id JOIN tracks t ON t.id = p.track_id \
-             JOIN albums al ON al.id = t.album_id WHERE {after} AND e.seq <= ?5 ORDER BY e.seq"
+             JOIN plays p ON p.user_id = e.user_id AND p.id = e.play_id \
+             JOIN tracks t ON t.id = p.track_id JOIN albums al ON al.id = t.album_id \
+             WHERE {after} AND e.seq <= ?5 ORDER BY e.seq"
         ))?
         .query_map(params![library, user, position, connected_at, next], |row| {
             let end = match row.get_ref(15)?.as_str()? {

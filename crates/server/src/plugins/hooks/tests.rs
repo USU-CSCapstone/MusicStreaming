@@ -105,6 +105,25 @@ fn one(received: Vec<Received>, user: i64) -> Event {
     }
 }
 
+/// Each delivery in `received` as its user and the tracks its event names, in user order.
+/// Panics on an event that is neither played nor playing.
+fn tracks_by_user(received: Vec<Received>) -> Vec<(i64, Vec<u64>)> {
+    let mut tracks: Vec<_> = received
+        .into_iter()
+        .map(|delivery| {
+            let tracks = match delivery.event {
+                Some(Event::Played(plays)) => plays.iter().map(|p| p.track.id).collect(),
+                Some(Event::Playing(now)) => vec![now.track.id],
+                None => Vec::new(),
+                Some(other) => panic!("not a listening event: {other:?}"),
+            };
+            (delivery.user, tracks)
+        })
+        .collect();
+    tracks.sort();
+    tracks
+}
+
 /// Adds `rows` to the library change feed, each `(library, entity type, entity, op, changed at)`.
 async fn changes(db: &Database, rows: &'static str) {
     db.write(move |tx| {
@@ -142,10 +161,26 @@ async fn play(db: &Database, id: &'static str, user: i64, track: i64, at: i64, e
              VALUES (?1, ?2, 1, ?3, ?4, 0, '{}', 'context', ?4)",
             rusqlite::params![id, user, track, at],
         )?;
-        let ended = "UPDATE plays SET ended = ?2, listen_time_ms = 30000 WHERE id = ?1";
-        tx.execute(ended, rusqlite::params![id, end])?;
+        let ended =
+            "UPDATE plays SET ended = ?2, listen_time_ms = 30000 WHERE user_id = ?3 AND id = ?1";
+        tx.execute(ended, rusqlite::params![id, end, user])?;
         // Reported again: it ended once.
-        tx.execute(ended, rusqlite::params![id, end])
+        tx.execute(ended, rusqlite::params![id, end, user])
+    })
+    .await
+    .unwrap();
+}
+
+/// User `user` starts track `track` in library 1 as play `id`, first reported at `at`, and has
+/// not finished it.
+async fn start(db: &Database, id: &'static str, user: i64, track: i64, at: i64) {
+    db.write(move |tx| {
+        tx.execute(
+            "INSERT INTO plays (id, user_id, library_id, track_id, started_at, listen_time_ms, \
+                                context, origin, updated_at) \
+             VALUES (?1, ?2, 1, ?3, ?4, 0, '{}', 'context', ?4)",
+            rusqlite::params![id, user, track, at],
+        )
     })
     .await
     .unwrap();

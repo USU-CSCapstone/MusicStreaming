@@ -21,6 +21,8 @@ The SQLite schema behind `api/openapi.yaml`. Migrations are plain SQL in `crates
 
 **Why random IDs.** Sequential IDs are shared across libraries, so a user who sees track 1000 and then track 1003 learns that tracks 1001 and 1002 exist somewhere they cannot reach. That breaks "inaccessible is indistinguishable from nonexistent" (`requirements/users.md` §10). Random 64-bit IDs stay as compact as sequential ones for the catalog on device, and reveal nothing. Internal-only tables, such as `login_attempts` and the feeds, keep ordinary sequential rowids.
 
+**An ID a client chooses is keyed with its user.** A play keeps the `playId` its device chose, so it is counted once however often it is reported (`requirements/analytics.md` §6), and any other user can choose the same one, by chance or on purpose. So `plays` is keyed by `(user_id, id)`, `play_ends` and `play_starts` refer to a play by both, and one user's report never reaches another's play.
+
 ---
 
 ## 2. Isolation by Construction

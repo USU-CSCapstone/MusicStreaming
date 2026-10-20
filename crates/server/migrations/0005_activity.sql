@@ -7,8 +7,9 @@
 -- (requirements/analytics.md §1). A device reports a play when it starts and again as it
 -- goes, under the ID it chose, so a play is recorded once however often it is reported (§6).
 CREATE TABLE plays (
-    -- The client's `playId`.
-    id             TEXT    PRIMARY KEY,
+    -- The client's `playId`. Any device can choose any ID, so it names a play only among its
+    -- user's own, and one user's report can never reach another's play.
+    id             TEXT    NOT NULL,
     user_id        INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     -- Kept when the device is forgotten: the play still happened.
     device_id      INTEGER REFERENCES devices (id) ON DELETE SET NULL,
@@ -21,7 +22,8 @@ CREATE TABLE plays (
     context        TEXT    NOT NULL CHECK (json_valid(context)),
     origin         TEXT    NOT NULL CHECK (origin IN ('manual', 'context', 'automatic')),
     reason         TEXT    CHECK (json_valid(reason)),
-    updated_at     INTEGER NOT NULL
+    updated_at     INTEGER NOT NULL,
+    PRIMARY KEY (user_id, id)
 ) STRICT;
 
 CREATE INDEX plays_by_user ON plays (user_id, started_at);
@@ -32,14 +34,15 @@ CREATE INDEX plays_by_device ON plays (device_id);
 -- each is delivered once (analytics.md §6).
 CREATE TABLE play_ends (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
-    play_id    TEXT    NOT NULL REFERENCES plays (id) ON DELETE CASCADE,
+    play_id    TEXT    NOT NULL,
     user_id    INTEGER NOT NULL,
     library_id INTEGER NOT NULL,
-    ended_at   INTEGER NOT NULL
+    ended_at   INTEGER NOT NULL,
+    FOREIGN KEY (user_id, play_id) REFERENCES plays (user_id, id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE INDEX play_ends_feed ON play_ends (library_id, user_id, seq);
-CREATE INDEX play_ends_by_play ON play_ends (play_id);
+CREATE INDEX play_ends_by_play ON play_ends (user_id, play_id);
 
 CREATE TRIGGER plays_end_at_once AFTER INSERT ON plays WHEN NEW.ended IS NOT NULL
 BEGIN
@@ -61,14 +64,15 @@ END;
 -- knew, and is not a start.
 CREATE TABLE play_starts (
     seq         INTEGER PRIMARY KEY AUTOINCREMENT,
-    play_id     TEXT    NOT NULL REFERENCES plays (id) ON DELETE CASCADE,
+    play_id     TEXT    NOT NULL,
     user_id     INTEGER NOT NULL,
     library_id  INTEGER NOT NULL,
-    reported_at INTEGER NOT NULL
+    reported_at INTEGER NOT NULL,
+    FOREIGN KEY (user_id, play_id) REFERENCES plays (user_id, id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE INDEX play_starts_feed ON play_starts (library_id, user_id, seq);
-CREATE INDEX play_starts_by_play ON play_starts (play_id);
+CREATE INDEX play_starts_by_play ON play_starts (user_id, play_id);
 CREATE INDEX play_starts_age ON play_starts (reported_at);
 
 -- Nothing here is delivered late, so a start an hour old is of no use to anyone: each new one

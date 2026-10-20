@@ -140,7 +140,8 @@ pub(super) fn is_uuid(text: &str) -> bool {
 }
 
 /// Records `plays` for `caller`, unless one's `startedAt` is not a date and time: then it
-/// records nothing and answers that. A report for someone else's play changes nothing.
+/// records nothing and answers that. A `playId` names a play among the caller's own, so
+/// another user's play under the same ID is a different play and never changes.
 fn save(tx: &Transaction, caller: Caller, plays: &[Play]) -> rusqlite::Result<Option<String>> {
     // SQLite reads the time, offset and all, and answers `NULL` for anything it cannot.
     let mut parse = tx.prepare_cached("SELECT CAST(unixepoch(?1, 'subsec') * 1000 AS INTEGER)")?;
@@ -157,10 +158,9 @@ fn save(tx: &Transaction, caller: Caller, plays: &[Play]) -> rusqlite::Result<Op
          SELECT ?1, ?2, ?3, t.library_id, t.id, ?6, ?7, ?8, ?9, ?10, ?11, ?12 FROM tracks t \
          WHERE t.id = ?5 AND t.library_id = ?4 AND (?13 OR EXISTS \
                (SELECT 1 FROM library_access WHERE user_id = ?2 AND library_id = ?4)) \
-         ON CONFLICT (id) DO UPDATE SET \
+         ON CONFLICT (user_id, id) DO UPDATE SET \
              listen_time_ms = max(listen_time_ms, excluded.listen_time_ms), \
-             ended = coalesce(excluded.ended, ended), updated_at = excluded.updated_at \
-         WHERE user_id = excluded.user_id",
+             ended = coalesce(excluded.ended, ended), updated_at = excluded.updated_at",
     )?;
     let now = now_ms();
     for (play, started_at) in plays.iter().zip(started) {

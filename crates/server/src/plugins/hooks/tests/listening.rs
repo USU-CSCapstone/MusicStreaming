@@ -4,12 +4,13 @@
 use jewelcase_plugins::Event;
 use jewelcase_plugins::Permission::{ListeningActivity, Played, Playing};
 use jewelcase_plugins::PlayEnd::{Finished, Skipped};
+use serde_json::json;
 
 use super::super::due::event;
 use super::super::playing::FRESH_MS;
 use super::super::{Due, Hook, MAX_FAILURES};
-use super::{HANDLED, HOUR, connected, deliver, one, play, setup};
-use crate::db::Database;
+use super::{HANDLED, HOUR, connected, deliver, one, play, setup, start, tracks_by_user};
+use crate::plugins::testing::connect;
 
 #[tokio::test]
 async fn plays_reach_a_plugin_only_for_users_who_connected_it_and_only_since() {
@@ -27,6 +28,17 @@ async fn plays_reach_a_plugin_only_for_users_who_connected_it_and_only_since() {
     assert_eq!(summary, [(11, 200, 30_000, Finished), (12, 220, 30_000, Skipped)], "only theirs");
     assert_eq!(plays[0].track.artists, ["Aurora Lane"]);
     assert!(deliver(&db, 0, HANDLED).await.is_empty(), "each play is delivered once");
+}
+
+#[tokio::test]
+async fn two_users_plays_under_one_id_each_reach_only_their_own_user() {
+    let (_temp, db, plugins) = setup().await;
+    connected(&plugins, &db, &[ListeningActivity, Played]).await;
+    connect(&db, "plugin", 8, json!({}), 100).await;
+    play(&db, "same", 7, 11, 200, "finished").await;
+    play(&db, "same", 8, 12, 210, "skipped").await;
+    let delivered = tracks_by_user(deliver(&db, 0, HANDLED).await);
+    assert_eq!(delivered, [(7, vec![11]), (8, vec![12])], "each their own play, and only it");
 }
 
 #[tokio::test]
@@ -53,21 +65,6 @@ async fn plays_and_starts_need_listening_activity_as_well_as_the_hook() {
     assert!(deliver(&db, 1000, HANDLED).await.is_empty());
 }
 
-/// User `user` starts track `track` in library 1 as play `id`, first reported at `at`, and has
-/// not finished it.
-async fn start(db: &Database, id: &'static str, user: i64, track: i64, at: i64) {
-    db.write(move |tx| {
-        tx.execute(
-            "INSERT INTO plays (id, user_id, library_id, track_id, started_at, listen_time_ms, \
-                                context, origin, updated_at) \
-             VALUES (?1, ?2, 1, ?3, ?4, 0, '{}', 'context', ?4)",
-            rusqlite::params![id, user, track, at],
-        )
-    })
-    .await
-    .unwrap();
-}
-
 /// The track and start time `event` announces as playing.
 fn now_playing(event: Event) -> (u64, u64) {
     let Event::Playing(now) = event else { panic!("not playing: {event:?}") };
@@ -90,6 +87,47 @@ async fn only_the_newest_start_reaches_a_user_who_connected_it() {
 }
 
 #[tokio::test]
+async fn two_users_starts_under_one_id_each_reach_only_their_own_user() {
+    let (_temp, db, plugins) = setup().await;
+    connected(&plugins, &db, &[ListeningActivity, Playing]).await;
+    connect(&db, "plugin", 8, json!({}), 100).await;
+    start(&db, "same", 7, 11, 200).await;
+    start(&db, "same", 8, 12, 210).await;
+    let delivered = tracks_by_user(deliver(&db, 1000, HANDLED).await);
+    assert_eq!(delivered, [(7, vec![11]), (8, vec![12])], "each their own track");
+
+    start(&db, "next", 7, 11, 300).await;
+    play(&db, "next", 8, 12, 310, "finished").await;
+    let delivered = tracks_by_user(deliver(&db, 1000, HANDLED).await);
+    assert_eq!(delivered, [(7, vec![11])], "the other user's play under the ID has ended");
+}
+
+#[tokio::test]
+async fn a_deleted_users_plays_take_their_starts_and_ends_and_no_one_elses() {
+    let (_temp, db, plugins) = setup().await;
+    connected(&plugins, &db, &[]).await;
+    // User 7's play was reported playing before it ended, so it has a start as well as an end.
+    play(&db, "same", 7, 11, 200, "finished").await;
+    start(&db, "same", 8, 12, 210).await;
+    let left = db
+        .write(|tx| {
+            tx.execute("DELETE FROM users WHERE id = 7", [])?;
+            let rows = |sql: &str| -> rusqlite::Result<Vec<(i64, String)>> {
+                tx.prepare(sql)?.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect()
+            };
+            Ok((
+                rows("SELECT user_id, id FROM plays")?,
+                rows("SELECT user_id, play_id FROM play_starts")?,
+                rows("SELECT user_id, play_id FROM play_ends")?,
+            ))
+        })
+        .await
+        .unwrap();
+    let theirs = vec![(8, "same".to_owned())];
+    assert_eq!(left, (theirs.clone(), theirs, Vec::new()));
+}
+
+#[tokio::test]
 async fn a_start_that_ended_or_went_stale_is_never_delivered() {
     let (_temp, db, plugins) = setup().await;
     connected(&plugins, &db, &[ListeningActivity, Playing]).await;
@@ -101,9 +139,11 @@ async fn a_start_that_ended_or_went_stale_is_never_delivered() {
 
     let later = 300 + 2 * FRESH_MS;
     start(&db, "c", 7, 11, later).await;
-    db.write(|tx| tx.execute_batch("UPDATE plays SET ended = 'skipped' WHERE id = 'c'"))
-        .await
-        .unwrap();
+    db.write(|tx| {
+        tx.execute_batch("UPDATE plays SET ended = 'skipped' WHERE id = 'c' AND user_id = 7")
+    })
+    .await
+    .unwrap();
     assert!(deliver(&db, later, HANDLED).await.is_empty(), "skipped before it could be announced");
     // Found due just before it ended, it is read as nothing to deliver.
     let gone = Due {

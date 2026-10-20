@@ -106,7 +106,8 @@ pub(super) fn queries() -> [(Hook, String); 8] {
     // For each user who connected it, a play they started in the library that is still fresh.
     let playing = format!(
         "SELECT p.plugin_id, p.library_id, {} WHERE {READY} AND {} AND {} AND {} \
-         AND EXISTS (SELECT 1 FROM play_starts st JOIN plays pl ON pl.id = st.play_id WHERE {})",
+         AND EXISTS (SELECT 1 FROM play_starts st \
+                     JOIN plays pl ON pl.user_id = st.user_id AND pl.id = st.play_id WHERE {})",
         position(true),
         granted("playing"),
         granted("listeningActivity"),
