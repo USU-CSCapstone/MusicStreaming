@@ -17,6 +17,7 @@
 	import Artwork from './Artwork.svelte';
 	import AddToPlaylistMenu from './AddToPlaylistMenu.svelte';
 	import Icon from './Icon.svelte';
+	import SortMenu from './SortMenu.svelte';
 
 	let {
 		tracks,
@@ -463,6 +464,12 @@
 	<!-- The list's own width, not the window's, decides its columns: the sidebar and the
 	     page's padding take some of the window. -->
 	<div class="list" class:album={isAlbum} class:dated={added}>
+		{#if onsort}
+			<!-- Where the headings don't fit, the same sorts are one button away. -->
+			<div class="sorter">
+				<SortMenu fields={columns} {labels} {sort} onchoose={sortBy} />
+			</div>
+		{/if}
 		<!-- Stays in view as the list scrolls, so changing the sort never means going back to
 		     the top (`requirements/conventions.md` §4.1). -->
 		<div class="row head" role="group" aria-label="Sort songs">
@@ -683,7 +690,7 @@
 		min-height: 52px;
 	}
 
-	/* Only where every column has its heading; narrower lists keep today's rows. */
+	/* Only where every column has its heading; narrower lists sort from a menu instead. */
 	.head {
 		display: none;
 		position: sticky;
@@ -702,6 +709,12 @@
 	.heading {
 		display: flex;
 		min-width: 0;
+	}
+
+	.sorter {
+		display: flex;
+		justify-content: flex-end;
+		margin-bottom: var(--space-2);
 	}
 
 	.heading.end {
@@ -813,6 +826,10 @@
 
 		.head {
 			display: grid;
+		}
+
+		.sorter {
+			display: none;
 		}
 	}
 
