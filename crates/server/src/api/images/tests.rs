@@ -7,7 +7,7 @@ use super::super::testing::{app, ffmpeg, owner_request, send};
 use crate::db::testing::{Image, library};
 
 /// Library 1 holds image 1, a 300×200 `cover.png`; image 2, a 64×64 picture embedded in
-/// `song.mp3`; image 3, a `broken.png` that is not an image; and image 5, recorded with no
+/// `song.mp3`; image 3, a `broken.gif` that is not an image; and image 5, recorded with no
 /// content hash; image 6, a `linked.png` that links to library 2's cover; and image 7, a
 /// `huge.png` that only its test writes. Library 2 holds image 4.
 async fn app_with_images() -> (tempfile::TempDir, Router) {
@@ -39,7 +39,7 @@ async fn app_with_images() -> (tempfile::TempDir, Router) {
         "attached_pic",
         song.to_str().unwrap(),
     ]);
-    std::fs::write(music.join("broken.png"), b"not an image").unwrap();
+    std::fs::write(music.join("broken.gif"), b"not an image").unwrap();
     std::fs::copy(cover, other.join("cover.png")).unwrap();
     std::os::unix::fs::symlink(other.join("cover.png"), music.join("linked.png")).unwrap();
     db.write(move |tx| {
@@ -48,7 +48,7 @@ async fn app_with_images() -> (tempfile::TempDir, Router) {
         // The cache names each rendering after its image's hash, such as `01/01-128.jpg`.
         Image { hash: vec![1], ..Image::new(1, 1, "cover.png") }.insert(tx)?;
         Image::new(2, 1, "song.mp3").insert(tx)?;
-        Image { hash: vec![3], ..Image::new(3, 1, "broken.png") }.insert(tx)?;
+        Image { hash: vec![3], ..Image::new(3, 1, "broken.gif") }.insert(tx)?;
         Image::new(4, 2, "cover.png").insert(tx)?;
         Image { hash: Vec::new(), ..Image::new(5, 1, "cover.png") }.insert(tx)?;
         Image { hash: vec![6], ..Image::new(6, 1, "linked.png") }.insert(tx)?;
@@ -106,7 +106,7 @@ async fn is_cacheable_by_the_client_only() {
 
 #[tokio::test]
 async fn problems() {
-    let (_temp, app) = app_with_images().await;
+    let (temp, app) = app_with_images().await;
     for (uri, status, code) in [
         // Image 4 in library 1, image 1 in library 2, and one that does not exist.
         ("/api/v1/libraries/1/images/4", StatusCode::NOT_FOUND, "not_found"),
@@ -127,14 +127,58 @@ async fn problems() {
             StatusCode::UNPROCESSABLE_ENTITY,
             "validation_failed",
         ),
+        // ffmpeg's refusal names the file; it stays in the log.
         ("/api/v1/libraries/1/images/3", StatusCode::INTERNAL_SERVER_ERROR, "internal"),
         ("/api/v1/libraries/1/images/5", StatusCode::INTERNAL_SERVER_ERROR, "internal"),
     ] {
         let (actual, _, body) = send(app.clone(), "GET", uri).await;
         assert_eq!(actual, status, "{uri}");
+        let text = String::from_utf8_lossy(&body);
+        assert!(!text.contains(temp.path().to_str().unwrap()), "{uri}: {text}");
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["code"], code, "{uri}");
     }
+}
+
+#[tokio::test]
+async fn an_unreadable_image_is_an_internal_problem_that_names_no_path() {
+    use std::os::unix::fs::PermissionsExt;
+    let (temp, app) = app_with_images().await;
+    let cover = temp.path().join("music/cover.png");
+    std::fs::set_permissions(&cover, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(&cover).is_ok() {
+        eprintln!("skipping: permissions do not apply to this user");
+        return;
+    }
+    let uri = "/api/v1/libraries/1/images/1?size=64";
+    let (status, _, body) = send(app.clone(), "GET", uri).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let body = String::from_utf8(body).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["code"], "internal");
+    assert!(!body.contains(temp.path().to_str().unwrap()), "{body}");
+    // Not remembered as broken: readable again, it renders.
+    std::fs::set_permissions(&cover, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(dimensions(&app, uri).await, (64, 43));
+}
+
+#[tokio::test]
+async fn a_pipe_is_refused_without_waiting_for_a_writer() {
+    let (temp, app) = app_with_images().await;
+    let cover = temp.path().join("music/cover.png");
+    std::fs::remove_file(&cover).unwrap();
+    assert!(std::process::Command::new("mkfifo").arg(&cover).status().unwrap().success());
+    let request = send(app, "GET", "/api/v1/libraries/1/images/1?size=64");
+    let answered = tokio::time::timeout(std::time::Duration::from_secs(5), request).await;
+    if answered.is_err() {
+        // Opening the pipe to write lets go of a reader stuck on it, so the test can end. It is
+        // opened on a thread of its own, since no reader may be left to let it go.
+        let pipe = cover.clone();
+        std::thread::spawn(move || std::fs::OpenOptions::new().write(true).open(pipe).unwrap());
+    }
+    let (status, _, _) = answered.expect("answered without waiting on the pipe");
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(!temp.path().join("cache/01/01-64.failed").exists(), "not remembered as broken");
+    std::fs::remove_file(&cover).unwrap();
 }
 
 #[tokio::test]
@@ -146,7 +190,7 @@ async fn a_broken_image_is_not_tried_again() {
     assert!(temp.path().join("cache/03/03-512.failed").exists());
     // Readable now, but its content hash says it is the same broken image, so ffmpeg is not run.
     let music = temp.path().join("music");
-    std::fs::copy(music.join("cover.png"), music.join("broken.png")).unwrap();
+    std::fs::copy(music.join("cover.png"), music.join("broken.gif")).unwrap();
     let (status, _, _) = send(app, "GET", uri).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }

@@ -3,8 +3,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use jewelcase_scanner::LibraryConfig;
 use jewelcase_scanner::confine::without_links;
+use jewelcase_scanner::{FileToDecode, LibraryConfig};
 use rusqlite::Error::FromSqlConversionFailure;
 use rusqlite::types::Type;
 use rusqlite::{Connection, Result, params};
@@ -91,6 +91,14 @@ impl LibraryFile {
     /// the filesystem, so call it off the async threads and the database's.
     pub fn resolve(&self) -> io::Result<PathBuf> {
         without_links(&self.root, &self.path)
+    }
+
+    /// The file's real path, once it opens, refused as [`FileToDecode::open`] refuses it: an
+    /// error when it is missing, reached through a symlink, not a regular file, or may not be
+    /// read.
+    /// Touches the filesystem, so call it off the async threads and the database's.
+    pub fn open(self) -> io::Result<PathBuf> {
+        FileToDecode { root: self.root, path: self.path }.open()
     }
 }
 

@@ -36,7 +36,8 @@ impl Images {
     }
 
     /// The resized copy of the image with content `hash` at `size`, from the file `source`,
-    /// resizing it first if it is not cached yet. A source reached through a symlink is refused.
+    /// resizing it first if it is not cached yet. A source reached through a symlink, or that is
+    /// not a regular file, is refused.
     pub async fn resized(
         &self,
         hash: &[u8],
@@ -57,9 +58,10 @@ impl Images {
         if made(&path, &failed).await? {
             return Ok(path);
         }
-        // Checked now, since a file can become a symlink after the scan saw it. A missing file is
-        // not a broken image, since its drive may be back soon, so neither failure is remembered.
-        let source = tokio::task::spawn_blocking(move || source.resolve()).await??;
+        // Checked at render time, since a file can become a symlink after the scan saw it. A file
+        // that is missing, may not be read, or is not a regular one is not a broken image, and
+        // may be readable again soon, so none of these failures is remembered.
+        let source = tokio::task::spawn_blocking(move || source.open()).await??;
         tokio::fs::create_dir_all(&dir).await?;
         let output = self.render(size, &source).await?;
         if !output.status.success() || output.stdout.is_empty() {
