@@ -11,7 +11,7 @@ Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`ex
 
 ## 1. Built Imports
 
-**Seven interfaces, all in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.3`.** A plugin built against `0.2` still loads: the host links it against [`wit/0.2`](../crates/plugins/wit/0.2/plugin.wit), whose seven interfaces lack what 0.3 added, such as new permissions, events, and `library` functions (§1.1), and whose imports pass each call on to the current ones ([`host/v0_2.rs`](../crates/plugins/src/host/v0_2.rs)). Every import checks its own permission in the host. Every import stays linked when its permission is declined and answers an error instead, so optional permissions work ([`plugins.md` §7](plugins.md#7-running-plugins)). WASI is linked with nothing granted: no preopens, sockets, or inherited stdio.
+**Seven interfaces, all in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.1`.** Every import checks its own permission in the host. Every import stays linked when its permission is declined and answers an error instead, so optional permissions work ([`plugins.md` §7](plugins.md#7-running-plugins)). WASI is linked with nothing granted: no preopens, sockets, or inherited stdio.
 
 | Interface | Functions | Needs | Limits |
 |---|---|---|---|
@@ -29,11 +29,11 @@ The limits on every run are 64 MiB of memory, about 60 s of compute (counted in 
 
 **`http.send` keeps to a declared pace and shares a cache** ([`plugins.md` §7](plugins.md#7-running-plugins)). A network request declares `rateLimits` per destination, each counting the plugin's own requests, its runs for each user apart, or, with `hostRateLimits`, every plugin's requests to that host, at the strictest any plugin in force declared, except those an admin exempted. A `429` or `503` pauses only the scope of the request it answered, for as long as `Retry-After` asks or with exponential backoff and full jitter. A GET is answered from a fresh reply already fetched by a run that sees the same (the same library and user, and the same grant or not of `libraryRead`, `listeningActivity`, and `searchActivity`) for the same URL and headers, and a stale one is checked with its `ETag` or `Last-Modified`.
 
-**`http.send` says why a request has no response, so a plugin can act on it.** Since `0.3` its error is a variant: `not-granted`; `refused`, not sent, with a message (a URL, destination, header, or body the host will not send); `rate-limited`, not sent, with how many milliseconds until the destination may be asked again; `timed-out`; and `failed`, sent but with no reply to give, with a message. A `0.2` plugin gets the same failures as messages, in the words it always did.
+**`http.send` says why a request has no response, so a plugin can act on it.** Its error is a variant: `not-granted`; `refused`, not sent, with a message (a URL, destination, header, or body the host will not send); `rate-limited`, not sent, with how many milliseconds until the destination may be asked again; `timed-out`; and `failed`, sent but with no reply to give, with a message.
 
 ### 1.1 Albums and Artists
 
-**Reading albums and artists by ID, and what they already have**, for artwork and biography plugins: they hear of albums and artists changing ([`hooks.md` §1.3](hooks.md#13-albums-changed-and-artists-changed)), and need to read just those, find where they are, and know whether anything is missing. All since 0.3; a 0.2 plugin sees neither the functions nor the new fields.
+**Reading albums and artists by ID, and what they already have**, for artwork and biography plugins: they hear of albums and artists changing ([`hooks.md` §1.3](hooks.md#13-albums-changed-and-artists-changed)), and need to read just those, find where they are, and know whether anything is missing.
 
 - **`get-albums(ids)` and `get-artists(ids)`** read up to 500 in the order asked for, leaving out any not in the run's library, as `get-tracks` does.
 - **`album-tracks(album-id)`** gives an album's present tracks by disc and number. Their paths are where the album is, and so where a `cover.*` belongs ([`requirements/scanning.md` §3.1](../requirements/scanning.md#31-album-art)).

@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 
 use super::testing::{self, Memory};
 use super::{CPU_BUDGET, Event, Host, Outcome, ScanFinished};
-use crate::manifest::Api;
 
 mod limits;
 
@@ -23,7 +22,7 @@ async fn run(budget: u64, event: Event) -> (Outcome, Duration) {
     host.compiled(file).await.expect("fixture compiles");
     let started = Instant::now();
     let grants = testing::grants(&[]);
-    let outcome = host.run(file, Api::V0_3, grants, Memory::default(), event).await;
+    let outcome = host.run(file, grants, Memory::default(), event).await;
     (outcome, started.elapsed())
 }
 

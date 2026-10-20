@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use super::super::testing::{app_with_tracks, respond};
 use crate::db::Database;
-use crate::plugins::testing::{enable_ungranted, install};
+use crate::plugins::testing::{enable_ungranted, install, manifest};
 
 const ADMIN: &str = "Bearer owner-token";
 
@@ -36,24 +36,23 @@ async fn call(
 /// leaves, without needing a compiled component.
 async fn server() -> (tempfile::TempDir, Arc<Database>, Router) {
     let (temp, db, app) = app_with_tracks().await;
-    let manifest = json!({
-        "id": "lrclib-lyrics", "name": "LRCLIB Lyrics", "version": "0.1.0", "apiVersion": "0.2",
-        "permissions": [
-            { "permission": "libraryRead", "required": true, "reason": "To find tracks." },
-            { "permission": "network", "required": true, "reason": "To fetch lyrics.",
-              "destinations": ["lrclib.net"] },
-            { "permission": "libraryAdd", "required": false, "reason": "To save .lrc files." }
-        ],
-        "settings": {
-            "properties": {
-                "apiKey": { "type": "string", "title": "API key", "writeOnly": true },
-                "mode": { "type": "string", "enum": ["fast", "careful"], "default": "fast" },
-                "limit": { "type": "integer", "title": "Limit" }
-            },
-            "required": ["apiKey"]
-        }
+    let mut lyrics = manifest("lrclib-lyrics", &[]);
+    lyrics["name"] = json!("LRCLIB Lyrics");
+    lyrics["permissions"] = json!([
+        { "permission": "libraryRead", "required": true, "reason": "To find tracks." },
+        { "permission": "network", "required": true, "reason": "To fetch lyrics.",
+          "destinations": ["lrclib.net"] },
+        { "permission": "libraryAdd", "required": false, "reason": "To save .lrc files." }
+    ]);
+    lyrics["settings"] = json!({
+        "properties": {
+            "apiKey": { "type": "string", "title": "API key", "writeOnly": true },
+            "mode": { "type": "string", "enum": ["fast", "careful"], "default": "fast" },
+            "limit": { "type": "integer", "title": "Limit" }
+        },
+        "required": ["apiKey"]
     });
-    install(&db, manifest).await;
+    install(&db, lyrics).await;
     (temp, db, app)
 }
 
@@ -173,29 +172,19 @@ async fn cannot_be_enabled_until_its_required_permissions_are_granted() {
 #[tokio::test]
 async fn a_limit_for_every_plugin_is_granted_like_any_other_permission_and_shown_where_it_binds() {
     let (_temp, db, app) = server().await;
-    install(
-        &db,
-        json!({
-            "id": "artwork", "name": "Artwork", "version": "1.0.0", "apiVersion": "0.3",
-            "permissions": [
-                { "permission": "network", "required": true, "reason": "To fetch artwork.",
-                  "destinations": ["musicbrainz.org"],
-                  "rateLimits": { "musicbrainz.org": { "limit": "1/s", "per": "host" } } },
-                { "permission": "hostRateLimits", "required": false,
-                  "reason": "MusicBrainz limits each server, not each plugin." }
-            ]
-        }),
-    )
-    .await;
-    install(
-        &db,
-        json!({
-            "id": "anywhere", "name": "Anywhere", "version": "1.0.0", "apiVersion": "0.3",
-            "permissions": [{ "permission": "network", "required": true, "reason": "To look.",
-                              "destinations": ["*"] }]
-        }),
-    )
-    .await;
+    let mut artwork = manifest("artwork", &[]);
+    artwork["permissions"] = json!([
+        { "permission": "network", "required": true, "reason": "To fetch artwork.",
+          "destinations": ["musicbrainz.org"],
+          "rateLimits": { "musicbrainz.org": { "limit": "1/s", "per": "host" } } },
+        { "permission": "hostRateLimits", "required": false,
+          "reason": "MusicBrainz limits each server, not each plugin." }
+    ]);
+    install(&db, artwork).await;
+    let mut anywhere = manifest("anywhere", &[]);
+    anywhere["permissions"] = json!([{ "permission": "network", "required": true,
+                                       "reason": "To look.", "destinations": ["*"] }]);
+    install(&db, anywhere).await;
     let artwork = "/api/v1/admin/plugins/artwork";
     let grants = json!({ "granted": ["network", "hostRateLimits"], "libraries": [] });
     let (status, plugin) =
@@ -220,19 +209,14 @@ async fn a_limit_for_every_plugin_is_granted_like_any_other_permission_and_shown
 #[tokio::test]
 async fn an_admin_exempts_a_plugin_from_limits_for_every_plugin_one_host_at_a_time() {
     let (_temp, db, app) = server().await;
-    install(
-        &db,
-        json!({
-            "id": "setter", "name": "Setter", "version": "1.0.0", "apiVersion": "0.3",
-            "permissions": [
-                { "permission": "network", "required": true, "reason": "To look.",
-                  "destinations": ["lrclib.net"],
-                  "rateLimits": { "lrclib.net": { "limit": "1/s", "per": "host" } } },
-                { "permission": "hostRateLimits", "required": true, "reason": "To share." }
-            ]
-        }),
-    )
-    .await;
+    let mut plugin = manifest("setter", &[]);
+    plugin["permissions"] = json!([
+        { "permission": "network", "required": true, "reason": "To look.",
+          "destinations": ["lrclib.net"],
+          "rateLimits": { "lrclib.net": { "limit": "1/s", "per": "host" } } },
+        { "permission": "hostRateLimits", "required": true, "reason": "To share." }
+    ]);
+    install(&db, plugin).await;
     let setter = "/api/v1/admin/plugins/setter";
     let grants = Some(json!({ "granted": ["network", "hostRateLimits"], "libraries": [] }));
     call(&app, ADMIN, "PUT", &format!("{setter}/permissions"), grants).await;

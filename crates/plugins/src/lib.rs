@@ -18,5 +18,5 @@ pub use host::{
     Album, AlbumsChanged, Artist, ArtistsChanged, Event, Found, Grants, Host, Library, Outcome,
     Play, PlayEnd, Playing, ResultKind, ScanFinished, Search, Selected, Track, TracksChanged,
 };
-pub use manifest::{Api, InvalidPlugin, Manifest, Per, Permission, PermissionRequest, RateLimit};
+pub use manifest::{InvalidPlugin, Manifest, Per, Permission, PermissionRequest, RateLimit};
 pub use rules::reaches;

@@ -1,7 +1,7 @@
 //! The spec's `Plugin`: what an installed plugin is, what it asks for, and what it has been
 //! granted and where it is enabled, in every library on the server.
 
-use jewelcase_plugins::{Api, Manifest, Permission, PermissionRequest, reaches};
+use jewelcase_plugins::{Manifest, Permission, PermissionRequest, reaches};
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
@@ -16,8 +16,8 @@ pub struct Plugin {
     id: String,
     name: String,
     version: String,
-    /// As the manifest gives it, such as `"0.3"`.
-    api_version: Api,
+    /// The contract it was built against, as the manifest gives it: `"0.1"`.
+    api_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

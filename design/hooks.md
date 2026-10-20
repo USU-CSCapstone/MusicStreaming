@@ -11,17 +11,17 @@ Its companions are [`imports.md`](imports.md), covering what a plugin can call, 
 
 ## 1. Built Hooks
 
-**Eight hooks are built, each approved like a permission** ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)). The dispatcher is `crates/server/src/plugins/hooks.rs`, and the contract is [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.3`. Plugins built against `0.2` still load, without the hooks 0.3 added ([`plugins.md` §6](plugins.md#6-packaging)).
+**Eight hooks are built, each approved like a permission** ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)). The dispatcher is `crates/server/src/plugins/hooks.rs`, and the contract is [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.1`.
 
 | Hook (manifest / WIT) | Delivers | Granted | Also needs |
 |---|---|---|---|
 | `tracksChanged` / `tracks-changed` | Track IDs changed or removed since the last delivery, up to 100 per event | Per library | `libraryRead` |
-| `albumsChanged` / `albums-changed`, `artistsChanged` / `artists-changed` | Album or artist IDs changed or removed since the last delivery, up to 100 per event ([§1.3](#13-albums-changed-and-artists-changed)) | Per library | `libraryRead`, `apiVersion` 0.3 |
+| `albumsChanged` / `albums-changed`, `artistsChanged` / `artists-changed` | Album or artist IDs changed or removed since the last delivery, up to 100 per event ([§1.3](#13-albums-changed-and-artists-changed)) | Per library | `libraryRead` |
 | `scanFinished` / `scan-finished` | The summed counts of every scan that finished since the last delivery | Per library | `libraryRead` |
 | `schedule` / `scheduled` | Nothing. The interval named by `everyMinutes` (at least 5) came round. | Per plugin | — |
 | `played` / `played` | Plays one connected user ended in this library, oldest first, up to 100, each with its track | Per plugin | `libraryRead`, `listeningActivity`, `personalSettings` |
-| `playing` / `playing` | The newest play one connected user started in this library, while it is still playing and under a minute old ([§1.1](#11-playing)) | Per plugin | As `played`, and `apiVersion` 0.3 |
-| `searched` / `searched`, `searches-forgotten` | Searches one user who shares them settled on in this library, up to 100, or those they asked it to forget ([§1.2](#12-searched)) | Per plugin | `libraryRead`, `searchActivity`, `personalSettings`, `apiVersion` 0.3 |
+| `playing` / `playing` | The newest play one connected user started in this library, while it is still playing and under a minute old ([§1.1](#11-playing)) | Per plugin | As `played` |
+| `searched` / `searched`, `searches-forgotten` | Searches one user who shares them settled on in this library, up to 100, or those they asked it to forget ([§1.2](#12-searched)) | Per plugin | `libraryRead`, `searchActivity`, `personalSettings` |
 
 Two more events need no approval, because nothing happens without someone asking:
 
@@ -41,7 +41,7 @@ All eight hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-r
 - **Delivers** `playing { track, started-at }`: the newest play one connected user started in this library. The run sees that user's personal settings, as in `played`.
 - **Where starts come from.** A trigger on `plays` records each play first reported before it ended as a start in `play_events`, the outbox it shares with `played`'s ends (`crates/server/migrations/0005_activity.sql`). It is timed by the server's clock at that first report, never the device's. A device catching up after being offline reports its plays already ended, so they are never announced as playing. Each new play clears starts over an hour old. Each hook reads only its own kind of event, so neither steps over the other's.
 - **Not replayed.** "Now playing" from an hour ago is wrong, not late. A start is due only while it is under a minute old and its play has not ended, and the newest passes over every start before it. A failed delivery backs off as any hook's does, so by the retry that start is stale and only a newer one goes. This is the one exception to reliable delivery in [§2](#2-rules-every-hook-follows), and the reason is recorded here so it is not "fixed".
-- **Needs** the same grants as `played`: `libraryRead`, `listeningActivity`, and `personalSettings` to connect. It also needs `apiVersion` 0.3, the first contract with a `playing` event.
+- **Needs** the same grants as `played`: `libraryRead`, `listeningActivity`, and `personalSettings` to connect.
 - **Latency.** Up to the dispatcher's 5-second poll. A wake from the plays endpoint would remove that; it is not built, because that endpoint knows nothing of plugins.
 - **Cost.** One run per track started per connected user, which the warm instance in [`plugins.md` §2](plugins.md#2-execution-model) makes cheap. It is not cheap until that instance exists.
 
@@ -57,7 +57,7 @@ All eight hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-r
 - **Where they come from.** For a user who shares with any plugin, recording or removing a recent search writes a row to `search_events` (`crates/server/migrations/0005_activity.sql`). The row names the search and keeps what it found; its words live only in `recent_searches`, so one removed before it was delivered is never sent at all. A search recorded at the moment its user turns sharing on may be left out. A search replaced by the same words, pushed out by newer ones, or aged out of the 30-day window sends no forget, so a wishlist is not emptied each month. A removed search the plugin was never sent may still be named in a forget, which it can ignore.
 - **Stopping reaches the plugin even after disconnecting.** Turning sharing off, or disconnecting while it is on, writes a `stopped` row for each library the plugin serves, delivered to that plugin alone. It needs only the hook, since it carries nothing but the request to forget.
 - **Delivered as `played` is**: a position per user, failures retried at most hourly, and never disabling the plugin for everyone else. The feed ages out with recent searches, so a plugin unable to take delivery for 30 days misses what it was due (§5, question 3).
-- **Needs** `searchActivity`, `libraryRead`, and `personalSettings` to connect, and `apiVersion` 0.3. Search history is personal data of its own kind, which `listeningActivity` does not cover ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)).
+- **Needs** `searchActivity`, `libraryRead`, and `personalSettings` to connect. Search history is personal data of its own kind, which `listeningActivity` does not cover ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)).
 - **No plugin surface shows one user's searches to another.** That is the account boundary ([`requirements/plugins.md` §11](../requirements/plugins.md#11-isolation--boundaries)), and it rules out a plugin that reports "what everyone searched for" to the admin.
 - **Searches a device answers offline** ([`requirements/search.md` §2](../requirements/search.md#2-where-search-runs)) are to be delivered once they reach the server, so a plugin sees the same person offline as on. Recent searches do not sync from devices yet, so there are none to deliver.
 - **Not the same as answering searches.** An external source answers queries through the `source` export ([`exports.md` §3.1](exports.md#31-external-content-source)), which is called as the user types and returns results. This hook is called afterwards and returns nothing.
@@ -70,7 +70,7 @@ All eight hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-r
 - **What counts as a change** is whatever the library change feed records (`crates/server/src/db/catalog.rs`). An album is recorded as it is recomputed when its tracks change, when its artwork's placeholder changes, and when its loudness is analysed; an artist as it is refreshed when its tracks change, and when its image changes. A plugin may be told of an album whose title it already has.
 - **Read from what exists.** The change feed records `album` and `artist` rows (`crates/server/migrations/0004_feeds.sql`). Each hook reads only its own kind, with a position of its own that starts at zero, so a plugin new to a library first hears of every album or artist in it. `tracksChanged` reads only tracks the same way, so an album changing never wakes a track hook.
 - **Two hooks, not one `libraryChanged`.** A plugin hears only about what it asked for, and the admin sees "run when albums change" rather than a vaguer grant. The cost is two names in the manifest rather than one.
-- **Needs** `libraryRead`, granted per library, and `apiVersion` 0.3.
+- **Needs** `libraryRead`, granted per library.
 - **Read what changed by ID** with `get-albums` and `get-artists`, and where an album is with `album-tracks` ([`imports.md` §1.1](imports.md#11-albums-and-artists)).
 
 ---

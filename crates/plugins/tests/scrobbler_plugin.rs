@@ -1,14 +1,12 @@
-//! The ListenBrainz plugin (`plugins/listenbrainz`), built against the 0.3 contract, run by the
-//! real host. No test here reaches the network: none grants it, so a request is refused before
-//! it leaves.
+//! The ListenBrainz plugin (`plugins/listenbrainz`), run by the real host. No test here reaches
+//! the network: none grants it, so a request is refused before it leaves.
 //!
 //! Needs the packed plugin: run `plugins/listenbrainz/build.sh` first.
 
 use std::path::{Path, PathBuf};
 
 use jewelcase_plugins::{
-    Album, Api, Artist, Event, Grants, Host, Library, Outcome, Permission, Play, PlayEnd, Playing,
-    Track,
+    Album, Artist, Event, Grants, Host, Library, Outcome, Permission, Play, PlayEnd, Playing, Track,
 };
 
 /// The packed plugin. Panics, saying how to build it, when it is not built.
@@ -75,10 +73,9 @@ impl Library for Empty {
 }
 
 #[test]
-fn a_0_3_plugin_passes_only_the_0_3_install_check() {
+fn a_real_plugin_passes_the_install_check() {
     let (host, bytes) = (Host::new().unwrap(), std::fs::read(plugin()).unwrap());
-    host.check(&bytes, Api::V0_3).unwrap();
-    assert!(host.check(&bytes, Api::V0_2).is_err(), "0.2 has no playing event to hand it");
+    host.check(&bytes).unwrap();
 }
 
 /// User 1's grants of `permissions` to the plugin in library 1, with their token set.
@@ -118,7 +115,7 @@ fn track(artists: &[&str]) -> Track {
 
 /// Runs the plugin for user 1, granted `permissions`, on `event`.
 async fn run(permissions: &[Permission], event: Event) -> Outcome {
-    Host::new().unwrap().run(plugin(), Api::V0_3, grants(permissions), Empty, event).await
+    Host::new().unwrap().run(plugin(), grants(permissions), Empty, event).await
 }
 
 #[tokio::test]

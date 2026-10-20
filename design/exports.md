@@ -11,7 +11,7 @@ Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`im
 
 ## 1. The Built Export
 
-**One function: `handle(event) -> result<string, string>`** in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.3`. Every run goes through it: a hook ([`hooks.md` §1](hooks.md#1-built-hooks)), **Run now**, or a settings check. It returns a one-line summary on success or a reason on failure, which admins see with the run.
+**One function: `handle(event) -> result<string, string>`** in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.1`. Every run goes through it: a hook ([`hooks.md` §1](hooks.md#1-built-hooks)), **Run now**, or a settings check. It returns a one-line summary on success or a reason on failure, which admins see with the run.
 
 This covers everything a plugin does in the background. It covers none of what a plugin does while someone waits, because nothing in the contract is called on a user's behalf and answered back to them. [`requirements/plugins.md` §9](../requirements/plugins.md#9-extending-the-interface) and [§10](../requirements/plugins.md#10-external-content-sources) need exactly that.
 
@@ -139,7 +139,7 @@ record outcome {
 The base world keeps every import.
 
 - **A plugin that fills several roles is built against a world that includes several.** The host reads which exports a component has at install. That is a fact about the component, as imports will be ([`plugins.md` §6](plugins.md#6-packaging)). The manifest does not declare roles.
-- **A later version adds the role worlds and keeps earlier ones linking.** A plugin written against `0.2` or `0.3` must keep working ([`requirements/plugins.md` §1](../requirements/plugins.md#1-an-open-surface)). The host links each until it is retired by a documented deprecation, as it links `0.2` beside `0.3` now ([`imports.md` §1](imports.md#1-built-imports)).
+- **A later version adds the role worlds and keeps earlier ones linking.** A plugin written against `0.1` must keep working ([`requirements/plugins.md` §1](../requirements/plugins.md#1-an-open-surface)). The host links each released version until it is retired by a documented deprecation ([`plugins.md` §6](plugins.md#6-packaging)).
 - **`source` and `ui` are called on hot paths, which background runs never were.** They depend on work [`plugins.md` §7](plugins.md#7-running-plugins) lists as not done:
   - one warm instance per plugin and library, rather than a fresh instance per run;
   - a small pool per busy plugin, since one instance serializes its calls ([`plugins.md` §8](plugins.md#8-open-questions) #5);

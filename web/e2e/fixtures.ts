@@ -191,7 +191,7 @@ export const pluginManifest: PluginManifest = {
 	id: 'lrclib-lyrics',
 	name: 'LRCLIB Lyrics',
 	version: '0.1.0',
-	apiVersion: '0.2',
+	apiVersion: '0.1',
 	description: 'Fetches synced lyrics for tracks that have none.',
 	settings: {
 		properties: {

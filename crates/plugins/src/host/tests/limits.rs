@@ -5,7 +5,6 @@ use wasmtime::component::{Component, Linker};
 
 use super::super::testing::{self, Memory};
 use super::super::{Host, INSTANCES, TABLE_ELEMENTS, TABLES};
-use crate::manifest::Api;
 
 /// A component that instantiates the core module `module` `count` times.
 fn component(module: &str, count: usize) -> String {
@@ -28,7 +27,7 @@ async fn instantiate(module: &str, count: usize) -> Result<(), String> {
 /// plugin world, so the check always refuses them; what matters is why.
 fn refused_at_install(wat: &str) -> String {
     let host = Host::new().expect("host");
-    host.check(wat.as_bytes(), Api::V0_3).expect_err("refused")
+    host.check(wat.as_bytes()).expect_err("refused")
 }
 
 #[tokio::test]
@@ -76,4 +75,20 @@ fn a_component_that_imports_a_core_module_is_refused_at_install() {
     let wat = r#"(component (import "m" (core module $m)) (core instance (instantiate $m)))"#;
     let refused = refused_at_install(wat);
     assert!(refused.contains("imports"), "{refused}");
+}
+
+#[test]
+fn a_component_built_against_another_contract_is_refused_at_install() {
+    let importing = |version: &str| {
+        let host = format!("jewelcase:plugin/host@{version}");
+        let wat = format!(
+            r#"(component (import "{host}" (instance (export "log" (func (param "message" string))))))"#
+        );
+        (host, refused_at_install(&wat))
+    };
+    let (host, refused) = importing("0.3.0");
+    assert!(refused.contains(&host), "{refused}");
+    // Against this contract the same import links, and only the missing export is refused.
+    let (host, refused) = importing("0.1.0");
+    assert!(!refused.contains(&host) && refused.contains("handle"), "{refused}");
 }

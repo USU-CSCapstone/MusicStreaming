@@ -11,7 +11,7 @@ function plugin(overrides: Partial<Plugin> = {}): Plugin {
 		id: 'lrclib-lyrics',
 		name: 'LRCLIB Lyrics',
 		version: '0.1.0',
-		apiVersion: '0.2',
+		apiVersion: '0.1',
 		source: { kind: 'file' },
 		installedAt: '2026-09-29T00:00:00Z',
 		permissions: [

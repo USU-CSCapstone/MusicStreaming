@@ -85,8 +85,8 @@ async fn a_manifest_that_cannot_be_read_is_left_out_rather_than_stopping_every_r
     let plugins = plugins(&temp, &db);
     setter(&plugins, &db, "strict", &[("musicbrainz.org", "1/s")]).await;
     setter(&plugins, &db, "broken", &[("api.example", "1/s")]).await;
-    // Written by a version of the server that knew a contract this one does not.
-    let broken = "UPDATE plugins SET manifest = json_set(manifest, '$.apiVersion', '9.9') \
+    // Kept in a form this server cannot read, such as one with no permissions.
+    let broken = "UPDATE plugins SET manifest = json_remove(manifest, '$.permissions') \
                   WHERE id = 'broken'";
     db.write(move |tx| tx.execute(broken, [])).await.unwrap();
     assert_eq!(listed(&db).await, [limit("musicbrainz.org", "1/s", &["strict"])]);

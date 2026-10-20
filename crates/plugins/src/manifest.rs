@@ -15,30 +15,8 @@ use crate::settings::{self, Schema};
 
 pub const SECTION: &str = "jewelcase:manifest";
 
-/// A version of the plugin contract (`wit/plugin.wit`). Every one a plugin may declare keeps
-/// loading, so a plugin written against an older one keeps working
-/// (`requirements/plugins.md` §1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum Api {
-    #[serde(rename = "0.2")]
-    V0_2,
-    #[serde(rename = "0.3")]
-    V0_3,
-}
-
-impl Api {
-    /// Oldest first; the last is current.
-    pub const ALL: [Api; 2] = [Api::V0_2, Api::V0_3];
-    pub const CURRENT: Api = Api::V0_3;
-
-    /// As a manifest's `apiVersion` gives it, such as `0.3`.
-    pub fn name(self) -> &'static str {
-        match self {
-            Api::V0_2 => "0.2",
-            Api::V0_3 => "0.3",
-        }
-    }
-}
+/// The version of the plugin contract (`wit/plugin.wit`) a manifest's `apiVersion` must give.
+pub const API_VERSION: &str = "0.1";
 
 /// The shortest interval a schedule may ask for.
 pub const MIN_EVERY_MINUTES: u64 = 5;
@@ -65,18 +43,16 @@ pub enum Permission {
     /// listening-activity, library-read where it was played, and personal settings to connect.
     Played,
     /// A hook: run when a user who connected it starts playing something. Needs what `Played`
-    /// does. Since 0.3.
+    /// does.
     Playing,
-    /// The searches of users who turned on sharing them with it. Since 0.3.
+    /// The searches of users who turned on sharing them with it.
     SearchActivity,
     /// A hook: run when a user who shares their searches settles on one, or asks for some to be
     /// forgotten. Needs search-activity, library-read, and personal settings to connect.
-    /// Since 0.3.
     Searched,
-    /// A hook: run when albums are added, changed, or removed. Needs library-read too. Since 0.3.
+    /// A hook: run when albums are added, changed, or removed. Needs library-read too.
     AlbumsChanged,
     /// A hook: run when artists are added, changed, or removed. Needs library-read too.
-    /// Since 0.3.
     ArtistsChanged,
     /// Its rate limits that say `"per": "host"` are kept to by every plugin's requests to that
     /// host, so it can slow other plugins. Without it, they count its own.
@@ -161,18 +137,6 @@ impl Permission {
             Self::HostRateLimits => "Limit a service for every plugin",
         }
     }
-
-    /// The contract version that added it. A manifest declaring an older one cannot ask for it.
-    pub fn since(self) -> Api {
-        match self {
-            Self::Playing
-            | Self::SearchActivity
-            | Self::Searched
-            | Self::AlbumsChanged
-            | Self::ArtistsChanged => Api::V0_3,
-            _ => Api::V0_2,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -181,8 +145,8 @@ pub struct Manifest {
     pub id: String,
     pub name: String,
     pub version: String,
-    /// The contract it was built against.
-    pub api_version: Api,
+    /// The contract it was built against: [`API_VERSION`].
+    pub api_version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -390,10 +354,8 @@ pub fn validate(manifest: &Value) -> Vec<String> {
             problems.push(r#""homepage" must be an http(s) URL"#.into());
         }
     }
-    let api = o.get("apiVersion").and_then(|v| Api::deserialize(v).ok());
-    if api.is_none() {
-        let known: Vec<_> = Api::ALL.iter().map(|api| format!(r#""{}""#, api.name())).collect();
-        problems.push(format!(r#""apiVersion" must be one of {}"#, known.join(", ")));
+    if o.get("apiVersion").and_then(Value::as_str) != Some(API_VERSION) {
+        problems.push(format!(r#""apiVersion" must be "{API_VERSION}""#));
     }
     for key in ["settings", "personalSettings"] {
         if let Some(declared) = o.get(key) {
@@ -418,7 +380,7 @@ pub fn validate(manifest: &Value) -> Vec<String> {
             problems.push(format!("{at} must be an object"));
             continue;
         };
-        problems.extend(validate_request(&at, r, api, &mut seen));
+        problems.extend(validate_request(&at, r, &mut seen));
     }
     // Limiting every plugin is what the permission is for, and only it allows that.
     let host = permissions
@@ -465,12 +427,9 @@ pub fn validate(manifest: &Value) -> Vec<String> {
     problems
 }
 
-fn validate_request(
-    at: &str,
-    r: &Map<String, Value>,
-    api: Option<Api>,
-    seen: &mut Vec<Permission>,
-) -> Vec<String> {
+/// The problems with permission request `r`, found at `at` in the manifest. Adds its permission
+/// to `seen`, so a later request for the same one is reported.
+fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>) -> Vec<String> {
     let Some(permission) =
         r.get("permission").and_then(Value::as_str).and_then(Permission::from_name)
     else {
@@ -483,11 +442,6 @@ fn validate_request(
         problems.push(format!("{at}: {} is requested twice", permission.name()));
     }
     seen.push(permission);
-    if api.is_some_and(|api| api < permission.since()) {
-        let since = permission.since().name();
-        problems
-            .push(format!(r#"{at}: {} needs "apiVersion" {since} or later"#, permission.name()));
-    }
     if !r.get("required").is_some_and(Value::is_boolean) {
         problems.push(format!(r#"{at}: "required" must be true or false"#));
     }
@@ -634,17 +588,32 @@ mod tests {
         let cases: Vec<Case> =
             serde_json::from_str(include_str!("../manifest-cases.json")).unwrap();
         assert!(cases.len() > 10);
-        for case in cases {
+        for mut case in cases {
+            // A case leaves out `apiVersion` unless it is what the case is about.
+            if let Some(manifest) = case.manifest.as_object_mut() {
+                manifest.entry("apiVersion").or_insert(API_VERSION.into());
+            }
             assert_eq!(validate(&case.manifest), case.problems, "{}", case.name);
         }
     }
 
+    /// The shared cases are given `apiVersion` when they leave it out, so leaving it out is
+    /// tested here.
+    #[test]
+    fn a_manifest_without_an_api_version_is_refused() {
+        let mut manifest = serde_json::json!({"id": "ab", "name": "A", "version": "1",
+            "apiVersion": API_VERSION, "permissions": []});
+        assert_eq!(validate(&manifest), Vec::<String>::new());
+        manifest.as_object_mut().unwrap().remove("apiVersion");
+        assert_eq!(validate(&manifest), [r#""apiVersion" must be "0.1""#]);
+    }
+
     #[test]
     fn reads_the_manifest_a_component_carries() {
-        let manifest = r#"{"id": "lrclib-lyrics", "name": "LRCLIB Lyrics", "version": "0.1.0",
-            "apiVersion": "0.2", "permissions": [{"permission": "network", "required": true,
-            "reason": "To fetch lyrics.", "destinations": ["lrclib.net"]}]}"#;
-        let read = read(&with_section(SECTION, manifest.as_bytes())).unwrap();
+        let manifest = serde_json::json!({"id": "lrclib-lyrics", "name": "LRCLIB Lyrics",
+            "version": "0.1.0", "apiVersion": API_VERSION, "permissions": [{"permission": "network",
+            "required": true, "reason": "To fetch lyrics.", "destinations": ["lrclib.net"]}]});
+        let read = read(&with_section(SECTION, manifest.to_string().as_bytes())).unwrap();
         assert_eq!(read.id, "lrclib-lyrics");
         assert_eq!(read.destinations(), ["lrclib.net"]);
         assert_eq!(read.required().collect::<Vec<_>>(), [Permission::Network]);
@@ -665,7 +634,7 @@ mod tests {
     #[test]
     fn rate_limits_say_whose_requests_they_count() {
         let manifest: Manifest = serde_json::from_value(serde_json::json!({
-            "id": "p", "name": "P", "version": "1", "apiVersion": "0.3",
+            "id": "p", "name": "P", "version": "1", "apiVersion": API_VERSION,
             "permissions": [{"permission": "network", "required": true, "reason": "r",
                 "destinations": ["a.example", "b.example", "c.example"],
                 "rateLimits": {"A.Example": "2/s", "b.example": {"limit": "1/s", "per": "user"},

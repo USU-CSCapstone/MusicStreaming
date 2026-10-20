@@ -6555,7 +6555,7 @@ components:
         id: { type: string }
         name: { type: string }
         version: { type: string }
-        apiVersion: { type: string }
+        apiVersion: { type: string, const: '0.1' }
         description: { type: string }
         author: { type: string }
         homepage: { type: string, format: uri }
@@ -6643,17 +6643,16 @@ components:
         once per plugin. Hooks, which decide when a plugin runs, are requested and granted the
         same way (`requirements/plugins.md` §8): `tracksChanged` runs it, per library, as tracks
         are added, changed, or removed, and `scanFinished` when a scan of the library finishes;
-        `albumsChanged` and `artistsChanged` run it, per library, as albums or artists do (API
-        version 0.3 or later). All four need `libraryRead` there too. `schedule` runs it at the interval its request names,
+        `albumsChanged` and `artistsChanged` run it, per library, as albums or artists do. All
+        four need `libraryRead` there too. `schedule` runs it at the interval its request names,
         in every library it is enabled in. `played` runs it, granted once per plugin, as each
         user who connected it (`listMyPlugins`) finishes playing something; it needs
         `listeningActivity`, and `libraryRead` in the library played from. `playing` runs it the
         same way as each of them starts something, while it is still playing; it needs what
-        `played` does, and a plugin built against API version 0.3 or later. `searchActivity`,
-        granted once per plugin, is the searches of users who turn on sharing them with it
-        (`setMySearchSharing`); the `searched` hook runs it as each of them settles on a search
-        or removes one, and needs `searchActivity`, `libraryRead`, and API version 0.3 or later
-        (`requirements/search.md` §6).
+        `played` does. `searchActivity`, granted once per plugin, is the searches of users who
+        turn on sharing them with it (`setMySearchSharing`); the `searched` hook runs it as each
+        of them settles on a search or removes one, and needs `searchActivity` and
+        `libraryRead` (`requirements/search.md` §6).
         `hostRateLimits`, granted once per plugin, makes its rate limits that say
         `"per": "host"` ones every plugin's requests to that host keep to, so it can slow the
         others; without it, they count only its own requests.

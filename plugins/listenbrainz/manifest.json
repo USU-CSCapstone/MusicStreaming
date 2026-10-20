@@ -2,7 +2,7 @@
 	"id": "listenbrainz",
 	"name": "ListenBrainz",
 	"version": "0.2.0",
-	"apiVersion": "0.3",
+	"apiVersion": "0.1",
 	"description": "Sends what you play to your own ListenBrainz account.",
 	"author": "Jewelcase examples",
 	"homepage": "https://listenbrainz.org",

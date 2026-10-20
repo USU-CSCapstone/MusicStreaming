@@ -51,7 +51,7 @@ export type PluginManifest = {
 	id: string;
 	name: string;
 	version: string;
-	apiVersion: string;
+	apiVersion: Plugin['apiVersion'];
 	description?: string;
 	author?: string;
 	homepage?: string;

@@ -1,9 +1,6 @@
-package jewelcase:plugin@0.3.0;
+package jewelcase:plugin@0.1.0;
 
-/// The plugin contract (design/plugins.md §7). 0.3 gave `http.send` an error a plugin can act
-/// on, and added `host-rate-limits`, search activity, the `playing`, `searched`,
-/// `albums-changed`, and `artists-changed` hooks, and reading albums and artists by ID; plugins
-/// built against 0.2 still load (`0.2/`). Every import checks its permission in the host.
+/// The plugin contract (design/plugins.md §7). Every import checks its permission in the host.
 /// Imports stay linked even when their permission was declined, so a plugin with an optional
 /// permission still loads; the call answers an error instead, and `granted` lets a plugin adapt
 /// up front.

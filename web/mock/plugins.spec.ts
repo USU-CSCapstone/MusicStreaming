@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { PluginManifest } from '../src/lib/api/plugins';
-import { readManifest, validateManifest, withManifest } from '../../tools/plugin-pack/manifest.mjs';
+import {
+	API_VERSION,
+	readManifest,
+	validateManifest,
+	withManifest
+} from '../../tools/plugin-pack/manifest.mjs';
 import { PluginError, PluginStore, adminRoute } from './plugins';
 
 /** The smallest valid component: the header, and nothing in it. */
@@ -13,7 +18,7 @@ const manifest: PluginManifest = {
 	id: 'lrclib-lyrics',
 	name: 'LRCLIB Lyrics',
 	version: '0.1.0',
-	apiVersion: '0.2',
+	apiVersion: '0.1',
 	permissions: [
 		{ permission: 'libraryRead', required: true, reason: 'To find tracks without lyrics.' },
 		{
@@ -44,7 +49,11 @@ describe('manifest validation', () => {
 	);
 
 	it.each(cases.map((c) => [c.name, c] as const))('agrees with the server: %s', (_, c) => {
-		expect(validateManifest(c.manifest)).toEqual(c.problems);
+		// A case leaves out `apiVersion` unless it is what the case is about.
+		const m = c.manifest;
+		const isObject = typeof m === 'object' && m !== null && !Array.isArray(m);
+		const manifest = isObject && !('apiVersion' in m) ? { ...m, apiVersion: API_VERSION } : m;
+		expect(validateManifest(manifest)).toEqual(c.problems);
 	});
 });
 

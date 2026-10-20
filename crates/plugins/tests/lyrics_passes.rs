@@ -9,7 +9,7 @@ mod common;
 use std::path::PathBuf;
 
 use common::{State, Tracks, grants, plugin, track};
-use jewelcase_plugins::{Api, Event, Grants, Host, Outcome, Permission, TracksChanged};
+use jewelcase_plugins::{Event, Grants, Host, Outcome, Permission, TracksChanged};
 
 /// The reason a miss is stored with when nothing was found.
 const NOTHING: u8 = 0;
@@ -31,7 +31,7 @@ fn offline() -> Grants {
 
 /// Runs the plugin on `library` with `grants`, on `event`.
 async fn run(library: &Tracks, grants: Grants, event: Event) -> Outcome {
-    Host::new().unwrap().run(plugin(), Api::V0_2, grants, library.clone(), event).await
+    Host::new().unwrap().run(plugin(), grants, library.clone(), event).await
 }
 
 /// Runs the plugin on `library` with [`offline`] grants, on `event`.

@@ -5,9 +5,8 @@
 // held to `crates/plugins/manifest-cases.json`.
 
 export const SECTION = 'jewelcase:manifest';
-/** Contract versions a plugin may be built against, oldest first; the last is current. */
-export const API_VERSIONS = ['0.2', '0.3'];
-export const API_VERSION = API_VERSIONS[API_VERSIONS.length - 1];
+/** The version of the plugin contract a manifest's `apiVersion` must give. */
+export const API_VERSION = '0.1';
 
 /** Permissions a plugin can ask for (requirements/plugins.md §4.1). */
 export const PERMISSIONS = [
@@ -33,15 +32,6 @@ export const PERMISSIONS = [
 	// Setting a rate limit, "per": "host", that every plugin's requests to a host keep to.
 	'hostRateLimits'
 ];
-
-/** The contract version that added each permission, where it is later than the first. */
-const SINCE = {
-	playing: '0.3',
-	searchActivity: '0.3',
-	searched: '0.3',
-	albumsChanged: '0.3',
-	artistsChanged: '0.3'
-};
 
 /** Whose requests a rate limit counts: the plugin's, one user's runs of it, or every plugin's. */
 const PER = ['plugin', 'user', 'host'];
@@ -173,10 +163,7 @@ export function validateManifest(m) {
 	if (o.homepage !== undefined && !/^https?:\/\//.test(typeof o.homepage === 'string' ? o.homepage : '')) {
 		problems.push('"homepage" must be an http(s) URL');
 	}
-	const api = API_VERSIONS.indexOf(/** @type {string} */ (o.apiVersion));
-	if (api < 0) {
-		problems.push(`"apiVersion" must be one of ${API_VERSIONS.map((v) => `"${v}"`).join(', ')}`);
-	}
+	if (o.apiVersion !== API_VERSION) problems.push(`"apiVersion" must be "${API_VERSION}"`);
 	for (const key of ['settings', 'personalSettings']) {
 		if (o[key] !== undefined) problems.push(...validateSettings(key, o[key]));
 	}
@@ -204,10 +191,6 @@ export function validateManifest(m) {
 		}
 		if (seen.has(r.permission)) problems.push(`${at}: ${r.permission} is requested twice`);
 		seen.add(r.permission);
-		const since = SINCE[/** @type {keyof typeof SINCE} */ (r.permission)];
-		if (since && api >= 0 && api < API_VERSIONS.indexOf(since)) {
-			problems.push(`${at}: ${r.permission} needs "apiVersion" ${since} or later`);
-		}
 		if (typeof r.required !== 'boolean') problems.push(`${at}: "required" must be true or false`);
 		if (typeof r.reason !== 'string' || !r.reason.trim()) {
 			problems.push(`${at}: every permission needs a "reason" shown to the admin`);

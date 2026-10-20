@@ -25,7 +25,7 @@ is refused at install. The other caps a run keeps to are in `design/plugins.md` 
   "id": "lrclib-lyrics",
   "name": "LRCLIB Lyrics",
   "version": "0.1.0",
-  "apiVersion": "0.3",
+  "apiVersion": "0.1",
   "description": "Fetches synced lyrics for tracks that have none.",
   "author": "You",
   "permissions": [
@@ -39,8 +39,8 @@ is refused at install. The other caps a run keeps to are in `design/plugins.md` 
 | Field | |
 |---|---|
 | `id` | Lowercase letters, digits, and hyphens. Stays the same across versions. |
-| `apiVersion` | `0.3`, the current contract ([`crates/plugins/wit/plugin.wit`](../../crates/plugins/wit/plugin.wit)), or `0.2`, which still installs without what 0.3 added. `0.3` gives `http.send` an error a plugin can act on, such as `rate-limited` with how long to wait (`design/imports.md` §1). |
-| `permissions` | Any of `libraryRead`, `libraryAdd`, `libraryChange`, `network`, `listeningActivity`, `hostRateLimits` (`requirements/plugins.md` §4.1), and, since 0.3, `searchActivity`; and the hooks `tracksChanged`, `scanFinished`, `schedule`, `played`, and, since 0.3, `playing`, `searched`, `albumsChanged`, and `artistsChanged` (`design/plugins.md` §7, `design/hooks.md`). Each needs a `reason`, which the admin sees. Mark as `required` only what the plugin cannot work without; an admin can decline the rest. |
+| `apiVersion` | `"0.1"`, the contract ([`crates/plugins/wit/plugin.wit`](../../crates/plugins/wit/plugin.wit)). |
+| `permissions` | Any of `libraryRead`, `libraryAdd`, `libraryChange`, `network`, `listeningActivity`, `searchActivity`, `hostRateLimits` (`requirements/plugins.md` §4.1); and the hooks `tracksChanged`, `scanFinished`, `schedule`, `played`, `playing`, `searched`, `albumsChanged`, and `artistsChanged` (`design/plugins.md` §7, `design/hooks.md`). Each needs a `reason`, which the admin sees. Mark as `required` only what the plugin cannot work without; an admin can decline the rest. |
 | `destinations` | For `network` only: the host names it talks to, or `["*"]` for any. |
 | `rateLimits` | For `network` only, optional: the most often each destination may be asked, as `{ "musicbrainz.org": "1/s" }`, per `s`, `min`, or `h`. Each key is one host name from `destinations`, or any host if they are `["*"]`; no wildcards. `"1/s"` counts only this plugin's requests; `{ "limit": "1/s", "per": "user" }` counts its runs for each connected user apart, for a service that limits each account; `"per": "host"` is kept to by every plugin's requests to that host, for one that limits the whole server; it needs `hostRateLimits` and a host named in `destinations`, not reached through `*` (`design/plugins.md` §7). |
 | `everyMinutes` | For `schedule` only: how often it runs, at least 5. |
@@ -51,4 +51,5 @@ The server validates on install with its own reader in [`crates/plugins`](../../
 which is the authority. `manifest.mjs` validates the same way, for authors, the web mock, and its
 tests, and both are held to [`manifest-cases.json`](../../crates/plugins/manifest-cases.json).
 Change one, and the cases, together: add a case as `{ "name", "manifest" }` and run
-`node tools/plugin-pack/cases.mjs` to record what this module says about each.
+`node tools/plugin-pack/cases.mjs` to record what this module says about each. A case's manifest
+leaves out `apiVersion`, which each test adds, unless the case is about it.

@@ -27,7 +27,7 @@ mod plugin {
     use crate::progress::{self, Saving, Seen};
     use pass::PAGE;
 
-    wit_bindgen::generate!({ path: "../../crates/plugins/wit/0.2", world: "plugin" });
+    wit_bindgen::generate!({ path: "../../crates/plugins/wit", world: "plugin" });
 
     use jewelcase::plugin::files::{self, WriteMode};
     use jewelcase::plugin::host::{self, Permission};
@@ -48,6 +48,7 @@ mod plugin {
         failed: u32,
     }
 
+    /// GETs `url`, giving the reply's status and body, or why there is no reply.
     fn fetch(url: &str) -> Result<(u16, String), String> {
         let request = http::Request {
             method: http::Method::Get,
@@ -55,7 +56,20 @@ mod plugin {
             headers: Vec::new(),
             body: Vec::new(),
         };
-        http::send(&request).map(|r| (r.status, String::from_utf8_lossy(&r.body).into_owned()))
+        let reply = http::send(&request).map_err(why)?;
+        Ok((reply.status, String::from_utf8_lossy(&reply.body).into_owned()))
+    }
+
+    /// Why a request has no reply, as the run's log says it.
+    fn why(error: http::Error) -> String {
+        match error {
+            http::Error::NotGranted => "Network access was not granted".into(),
+            http::Error::Refused(why) | http::Error::Failed(why) => why,
+            http::Error::RateLimited(ms) => {
+                format!("lrclib.net cannot be asked again for {} s", ms.div_ceil(1000))
+            }
+            http::Error::TimedOut => "the request timed out".into(),
+        }
     }
 
     fn lookup(t: &library::Track) -> Result<Found, String> {
@@ -121,8 +135,15 @@ mod plugin {
                     changes.removed.into_iter().try_for_each(pass::forget)?;
                     return Ok(summary(&n, can_write));
                 }
-                // It does not ask to hear about scans or plays, and settings were answered above.
-                Event::ScanFinished(_) | Event::CheckSettings | Event::Played(_) => {
+                // It asks to hear of no other event, and settings were answered above.
+                Event::ScanFinished(_)
+                | Event::CheckSettings
+                | Event::Played(_)
+                | Event::Playing(_)
+                | Event::Searched(_)
+                | Event::SearchesForgotten(_)
+                | Event::AlbumsChanged(_)
+                | Event::ArtistsChanged(_) => {
                     return Ok("Nothing to do.".into());
                 }
             };

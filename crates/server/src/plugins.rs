@@ -126,10 +126,10 @@ impl Plugins {
             return Err(PluginError::Invalid("The file is over 50 MB.".into()));
         }
         let manifest = jewelcase_plugins::manifest::read(&bytes)?;
-        let (host, api) = (self.host()?, manifest.api_version);
+        let host = self.host()?;
         // Compiling is CPU-bound: 10 ms for a Rust plugin, about a second for JavaScript.
         let (bytes, checked) = tokio::task::spawn_blocking(move || {
-            let checked = host.check(&bytes, api);
+            let checked = host.check(&bytes);
             (bytes, checked)
         })
         .await

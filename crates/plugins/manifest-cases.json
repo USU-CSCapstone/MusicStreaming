@@ -5,7 +5,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -43,7 +42,6 @@
 			"id": "ab",
 			"name": "A",
 			"version": "1",
-			"apiVersion": "0.2",
 			"permissions": []
 		},
 		"problems": []
@@ -54,7 +52,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -93,7 +90,6 @@
 			"id": "Bad ID",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -133,7 +129,6 @@
 			"id": "a",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -173,7 +168,6 @@
 			"id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -213,7 +207,6 @@
 			"id": "-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -252,7 +245,6 @@
 		"manifest": {
 			"id": "lrclib-lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -292,7 +284,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "  ",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -332,7 +323,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": 5,
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -372,7 +362,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "",
 			"homepage": "https://lrclib.net",
@@ -412,7 +401,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "ftp://example.com",
@@ -452,7 +440,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": [
@@ -494,7 +481,7 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.1",
+			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -525,7 +512,20 @@
 			]
 		},
 		"problems": [
-			"\"apiVersion\" must be one of \"0.2\", \"0.3\""
+			"\"apiVersion\" must be \"0.1\""
+		]
+	},
+	{
+		"name": "a numeric API version",
+		"manifest": {
+			"id": "ab",
+			"name": "A",
+			"version": "1",
+			"apiVersion": 0.1,
+			"permissions": []
+		},
+		"problems": [
+			"\"apiVersion\" must be \"0.1\""
 		]
 	},
 	{
@@ -534,7 +534,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net"
@@ -549,7 +548,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -571,7 +569,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -593,7 +590,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -615,7 +611,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -636,7 +631,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -663,7 +657,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -685,7 +678,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -707,7 +699,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -729,7 +720,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -755,7 +745,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -780,7 +769,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -805,7 +793,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -827,7 +814,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -848,7 +834,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -870,7 +855,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -893,7 +877,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -916,7 +899,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -942,7 +924,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -964,7 +945,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1033,7 +1013,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1074,7 +1053,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1117,7 +1095,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1168,7 +1145,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1215,7 +1191,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1260,7 +1235,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1310,7 +1284,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1361,7 +1334,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1409,7 +1381,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1462,7 +1433,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1528,7 +1498,7 @@
 			"\"id\" must be lowercase letters, digits, and hyphens (2–64 characters)",
 			"\"name\" must be a non-empty string",
 			"\"version\" must be a non-empty string",
-			"\"apiVersion\" must be one of \"0.2\", \"0.3\"",
+			"\"apiVersion\" must be \"0.1\"",
 			"permissions[0]: unknown permission \"everything\"",
 			"permissions[1]: every permission needs a \"reason\" shown to the admin",
 			"permissions[1]: network needs \"destinations\", host names or [\"*\"] for any"
@@ -1540,7 +1510,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1621,7 +1590,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1707,7 +1675,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1780,7 +1747,6 @@
 			"id": "lrclib-lyrics",
 			"name": "LRCLIB Lyrics",
 			"version": "0.1.0",
-			"apiVersion": "0.2",
 			"description": "Finds lyrics.",
 			"author": "Jewelcase",
 			"homepage": "https://lrclib.net",
@@ -1835,7 +1801,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.2",
 			"permissions": [
 				{
 					"permission": "network",
@@ -1860,7 +1825,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.2",
 			"permissions": [
 				{
 					"permission": "network",
@@ -1883,7 +1847,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.2",
 			"permissions": [
 				{
 					"permission": "network",
@@ -1910,7 +1873,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.2",
 			"permissions": [
 				{
 					"permission": "network",
@@ -1940,7 +1902,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.2",
 			"permissions": [
 				{
 					"permission": "network",
@@ -1974,7 +1935,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.2",
 			"permissions": [
 				{
 					"permission": "network",
@@ -2001,7 +1961,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.3",
 			"permissions": [
 				{
 					"permission": "network",
@@ -2044,7 +2003,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.3",
 			"permissions": [
 				{
 					"permission": "network",
@@ -2072,7 +2030,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.3",
 			"permissions": [
 				{
 					"permission": "network",
@@ -2102,7 +2059,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.3",
 			"permissions": [
 				{
 					"permission": "network",
@@ -2139,7 +2095,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.3",
 			"permissions": [
 				{
 					"permission": "network",
@@ -2171,7 +2126,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.3",
 			"permissions": [
 				{
 					"permission": "network",
@@ -2207,7 +2161,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.2",
 			"permissions": [
 				{
 					"permission": "network",
@@ -2232,7 +2185,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.2",
 			"permissions": [
 				{
 					"permission": "libraryRead",
@@ -2254,7 +2206,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.3",
 			"permissions": [
 				{
 					"permission": "network",
@@ -2274,12 +2225,12 @@
 		]
 	},
 	{
-		"name": "the current API version",
+		"name": "the API version, given",
 		"manifest": {
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.3",
+			"apiVersion": "0.1",
 			"permissions": []
 		},
 		"problems": []
@@ -2290,7 +2241,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.3",
 			"permissions": [
 				{
 					"permission": "libraryRead",
@@ -2328,7 +2278,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.3",
 			"permissions": [
 				{
 					"permission": "playing",
@@ -2344,52 +2293,11 @@
 		]
 	},
 	{
-		"name": "a playing hook on the API version before it",
-		"manifest": {
-			"id": "x-plugin",
-			"name": "X",
-			"version": "1.0.0",
-			"apiVersion": "0.2",
-			"permissions": [
-				{
-					"permission": "libraryRead",
-					"required": true,
-					"reason": "Because."
-				},
-				{
-					"permission": "listeningActivity",
-					"required": true,
-					"reason": "Because."
-				},
-				{
-					"permission": "playing",
-					"required": true,
-					"reason": "Because."
-				}
-			],
-			"personalSettings": {
-				"properties": {
-					"token": {
-						"type": "string",
-						"writeOnly": true
-					}
-				},
-				"required": [
-					"token"
-				]
-			}
-		},
-		"problems": [
-			"permissions[2]: playing needs \"apiVersion\" 0.3 or later"
-		]
-	},
-	{
 		"name": "a searched hook",
 		"manifest": {
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.3",
 			"permissions": [
 				{
 					"permission": "libraryRead",
@@ -2427,7 +2335,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.3",
 			"permissions": [
 				{
 					"permission": "searched",
@@ -2443,31 +2350,11 @@
 		]
 	},
 	{
-		"name": "search activity on the API version before it",
-		"manifest": {
-			"id": "x-plugin",
-			"name": "X",
-			"version": "1.0.0",
-			"apiVersion": "0.2",
-			"permissions": [
-				{
-					"permission": "searchActivity",
-					"required": true,
-					"reason": "Because."
-				}
-			]
-		},
-		"problems": [
-			"permissions[0]: searchActivity needs \"apiVersion\" 0.3 or later"
-		]
-	},
-	{
 		"name": "album and artist hooks with the permission their events need",
 		"manifest": {
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.3",
 			"permissions": [
 				{
 					"permission": "libraryRead",
@@ -2494,7 +2381,6 @@
 			"id": "x-plugin",
 			"name": "X",
 			"version": "1.0.0",
-			"apiVersion": "0.3",
 			"permissions": [
 				{
 					"permission": "albumsChanged",
@@ -2511,30 +2397,6 @@
 		"problems": [
 			"albumsChanged needs libraryRead as well",
 			"artistsChanged needs libraryRead as well"
-		]
-	},
-	{
-		"name": "an album hook on the API version before it",
-		"manifest": {
-			"id": "x-plugin",
-			"name": "X",
-			"version": "1.0.0",
-			"apiVersion": "0.2",
-			"permissions": [
-				{
-					"permission": "libraryRead",
-					"required": true,
-					"reason": "Because."
-				},
-				{
-					"permission": "albumsChanged",
-					"required": true,
-					"reason": "Because."
-				}
-			]
-		},
-		"problems": [
-			"permissions[1]: albumsChanged needs \"apiVersion\" 0.3 or later"
 		]
 	}
 ]

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use jewelcase_plugins::{Api, Manifest, Permission, manifest};
+use jewelcase_plugins::{Manifest, Permission, manifest};
 use serde_json::{Value, json};
 
 use super::{Plugins, personal};
@@ -57,15 +57,15 @@ pub fn plugins(temp: &tempfile::TempDir, db: &Arc<Database>) -> Arc<Plugins> {
     Arc::new(Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new()))
 }
 
-/// A manifest for plugin `id`, named after it and built against the current contract, that
-/// asks for each of `permissions` and requires none of them.
+/// A manifest for plugin `id`, named after it and built against the contract, that asks for
+/// each of `permissions` and requires none of them.
 pub fn manifest(id: &str, permissions: &[Permission]) -> Value {
     let requests: Vec<Value> = permissions
         .iter()
         .map(|p| json!({ "permission": p.name(), "required": false, "reason": "r" }))
         .collect();
     json!({
-        "id": id, "name": id, "version": "1", "apiVersion": Api::CURRENT.name(),
+        "id": id, "name": id, "version": "1", "apiVersion": manifest::API_VERSION,
         "permissions": requests
     })
 }
