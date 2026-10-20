@@ -17,6 +17,7 @@ import type {
 	SetupRequest,
 	TrackSummary
 } from '../src/lib/api/types';
+import { type SortField, sortTracks } from '../src/lib/sorting';
 import { withManifest } from '../../tools/plugin-pack/manifest.mjs';
 import {
 	type Generated,
@@ -53,9 +54,16 @@ export const album: AlbumSummary = {
 	availability: 'available'
 };
 
-const track = (id: string, title: string, disc: number, n: number): TrackSummary => ({
+const track = (
+	id: string,
+	title: string,
+	disc: number,
+	n: number,
+	addedAt: string
+): TrackSummary => ({
 	id,
 	title,
+	addedAt,
 	artists: [artist],
 	album: { id: album.id, title: album.title, artists: [artist], image: null },
 	discNumber: disc,
@@ -67,11 +75,31 @@ const track = (id: string, title: string, disc: number, n: number): TrackSummary
 	sortKeys: { title: title.toLowerCase(), artist: 'aurora lane', album: 'signal' }
 });
 
+// Added out of title order, so newest first is an order of its own.
 export const tracks = [
-	track('41', 'Signal Part 1', 1, 1),
-	track('42', 'Signal Part 2', 1, 2),
-	track('43', 'Signal Remix', 2, 1)
+	track('41', 'Signal Part 1', 1, 1, '2026-01-01T00:00:00.000Z'),
+	track('42', 'Signal Part 2', 1, 2, '2026-01-03T00:00:00.000Z'),
+	track('43', 'Signal Remix', 2, 1, '2026-01-02T00:00:00.000Z')
 ];
+
+/** The library's tracks as `listTracks` would sort them: `sort` and `order` from `query`. */
+function sortedAsAsked(query: URLSearchParams): TrackSummary[] {
+	const desc = query.get('order') === 'desc';
+	const sort = query.get('sort') ?? 'name';
+	if (sort === 'dateAdded') {
+		const oldest = tracks.toSorted((a, b) => a.addedAt!.localeCompare(b.addedAt!));
+		return desc ? oldest.toReversed() : oldest;
+	}
+	// The server's own order is tested on the server; this stands in for it with the client's.
+	const fields: Record<string, SortField> = {
+		name: 'title',
+		artist: 'artist',
+		album: 'album',
+		releaseDate: 'year',
+		duration: 'duration'
+	};
+	return [...sortTracks(tracks, { field: fields[sort] ?? 'album', order: desc ? 'desc' : 'asc' })];
+}
 
 /** A playlist of the whole album, for tests that need one to start with. */
 export const signalMix: Generated = {
@@ -368,7 +396,7 @@ export async function serveLibrary(
 				]
 			});
 		}
-		if (path === `${lib}/tracks`) return json(pageOf(tracks));
+		if (path === `${lib}/tracks`) return json(pageOf(sortedAsAsked(url.searchParams)));
 		if (path === `${lib}/artists`) {
 			return json(pageOf([{ ...artist, image: null, albumCount: 1, trackCount: 3 }]));
 		}
