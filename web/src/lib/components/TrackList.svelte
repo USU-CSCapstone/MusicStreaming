@@ -62,9 +62,14 @@
 		editable?: boolean;
 		/** Removes the rows at these indexes, in order. */
 		onremove?: (indexes: number[]) => void;
-		/** Makes `moves` as one edit, by dragging or Alt+↑/↓. */
+		/**
+		 * Makes `moves` as one edit, by dragging or Alt+↑/↓. Not while sorted: a place between
+		 * two rows of a sort is no place in the list's own order (`requirements/playlists.md` §4).
+		 */
 		onmove?: (moves: RowMove[]) => void;
 	} = $props();
+
+	const movable = $derived(onmove !== undefined && sort === null);
 
 	const selected = new SvelteSet<number>();
 	/** Where a Shift-click range starts: the row last clicked on its own. */
@@ -206,10 +211,10 @@
 					selected.add(i);
 					anchor = i;
 				}
-				if (onmove) arm(i, row, e.pointerId, at);
+				if (movable) arm(i, row, e.pointerId, at);
 			}, LONG_PRESS_MS);
 			press = { timer, ...at };
-		} else if (onmove && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+		} else if (movable && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
 			arm(i, row, e.pointerId, at);
 		}
 	}
@@ -364,7 +369,8 @@
 			selected.size > 0
 		) {
 			e.preventDefault();
-			step(e.key === 'ArrowUp' ? -1 : 1);
+			if (movable) step(e.key === 'ArrowUp' ? -1 : 1);
+			else moved = 'The list is sorted, so songs can’t be moved';
 		}
 	}
 
@@ -502,7 +508,7 @@
 		<ol
 			class="tracks"
 			class:editable
-			class:reorderable={editable && onmove}
+			class:reorderable={editable && movable}
 			class:dragging={drag?.started}
 			bind:this={listEl}
 			{@attach holdTouch}

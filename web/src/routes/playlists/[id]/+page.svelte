@@ -14,6 +14,8 @@
 	import { toast } from '$lib/toast.svelte';
 	import { player } from '$lib/player.svelte';
 	import { EditablePlaylist, rowMoveOps } from '$lib/playlist.svelte';
+	import { currentSort, showSorted } from '$lib/sort-url';
+	import { PLAYLIST_FIELDS, sortRows } from '$lib/sorting';
 
 	let { data } = $props();
 
@@ -28,11 +30,25 @@
 	});
 	const playlist = $derived(list.playlist);
 	// External tracks from plugins are not shown yet (`requirements/plugins.md` §10), so a row's
-	// index is not always its position in the playlist: `positions` maps one to the other.
+	// index is not always its position in the playlist: each row carries its own.
 	const rows = $derived(
-		list.items.flatMap((item, position) => (item.track ? [{ track: item.track, position }] : []))
+		list.items.flatMap((item, position) =>
+			item.track ? [{ track: item.track, position, addedAt: item.addedAt ?? '' }] : []
+		)
 	);
 	const tracks = $derived(rows.map((r) => r.track));
+	// Sorting shows the playlist in another order and leaves its own as arranged; it plays as
+	// shown (`requirements/conventions.md` §4.1, `requirements/playlists.md` §10).
+	const sort = $derived(currentSort(PLAYLIST_FIELDS));
+	const shown = $derived(
+		sortRows(
+			rows,
+			sort,
+			(r) => r.track,
+			(r) => r.addedAt
+		)
+	);
+	const shownTracks = $derived(shown.map((r) => r.track));
 	const context = $derived({ type: 'playlist', id: playlist.id } as const);
 	// This whole playlist, into another. Its songs here leave out external tracks, which only
 	// matters when skipping songs already there.
@@ -53,7 +69,7 @@
 	/** Removals can be undone (`requirements/playlists.md` §4). */
 	function removeRows(indexes: number[]) {
 		const undo = list.edit({
-			ops: [{ op: 'remove', positions: indexes.map((i) => rows[i].position) }]
+			ops: [{ op: 'remove', positions: indexes.map((i) => shown[i].position) }]
 		});
 		toast(`Removed ${plural(indexes.length, 'song')}`, { action: { label: 'Undo', run: undo } });
 	}
@@ -78,7 +94,7 @@
 	image={playlist.image}
 	seed={playlist.id}
 	icon="playlist"
-	onplay={tracks.length ? () => player.play(tracks, 0, context) : undefined}
+	onplay={tracks.length ? () => player.play(shownTracks, 0, context) : undefined}
 >
 	{#if playlist.description}<span>{playlist.description}</span>{/if}
 	<span>{plural(playlist.trackCount, 'song')} · {formatLength(playlist.durationUs)}</span>
@@ -113,7 +129,10 @@
 </DetailHeader>
 
 <TrackList
-	{tracks}
+	tracks={shownTracks}
+	added={shown.map((r) => r.addedAt)}
+	{sort}
+	onsort={showSorted}
 	empty="This playlist is empty."
 	{context}
 	editable
