@@ -11,11 +11,8 @@ use crate::{Config, Error, Registry, input};
 /// The first audio stream's properties.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProbeInfo {
-    pub codec_name: String,
     pub sample_rate: u32,
     pub channels: u32,
-    /// ffmpeg's layout name (`stereo`, `5.1`, ...) when known.
-    pub channel_layout: Option<String>,
     pub duration_secs: Option<f64>,
 }
 
@@ -36,10 +33,8 @@ struct Output {
 #[derive(Deserialize)]
 struct Stream {
     codec_type: Option<String>,
-    codec_name: Option<String>,
     sample_rate: Option<String>,
     channels: Option<u32>,
-    channel_layout: Option<String>,
     duration: Option<String>,
 }
 
@@ -69,7 +64,7 @@ pub(crate) fn probe(
     registry.unregister(pid);
     let out = out?;
     if stalled.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err(Error::Stalled(config.stall_timeout));
+        return Err(Error::Stalled);
     }
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
@@ -97,11 +92,5 @@ pub(crate) fn probe(
         .or(parsed.format.and_then(|f| f.duration))
         .and_then(|d| d.parse::<f64>().ok())
         .filter(|d| d.is_finite() && *d >= 0.0);
-    Ok(ProbeInfo {
-        codec_name: stream.codec_name.unwrap_or_default(),
-        sample_rate,
-        channels,
-        channel_layout: stream.channel_layout,
-        duration_secs,
-    })
+    Ok(ProbeInfo { sample_rate, channels, duration_secs })
 }

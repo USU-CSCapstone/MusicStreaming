@@ -1,25 +1,17 @@
 //! The PCM decode against a fake `ffmpeg` that floods stderr.
 
 use std::path::Path;
-use std::time::Duration;
 
 use jewelcase_ffmpeg::{Config, Error, Ffmpeg, ProbeInfo};
 
-/// Decode `path` with `tests/fake-ffmpeg.sh` to the end, returning the frames read. The stall
-/// timeout is short, so a decode blocked on its stderr fails within a few seconds.
+/// Decode `path` with `tests/fake-ffmpeg.sh` to the end, returning the frames read. A decode
+/// blocked on its stderr is killed as stalled, and fails.
 fn decode(path: &str) -> Result<usize, Error> {
     let ffmpeg = Ffmpeg::new(Config {
         ffmpeg: Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake-ffmpeg.sh"),
-        stall_timeout: Duration::from_secs(2),
         ..Config::default()
     });
-    let info = ProbeInfo {
-        codec_name: "flac".into(),
-        sample_rate: 44_100,
-        channels: 2,
-        channel_layout: None,
-        duration_secs: None,
-    };
+    let info = ProbeInfo { sample_rate: 44_100, channels: 2, duration_secs: None };
     let mut stream = ffmpeg.decode_pcm(Path::new(path), &info)?;
     let mut block = Vec::new();
     let mut frames = 0;

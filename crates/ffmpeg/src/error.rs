@@ -2,6 +2,8 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 
+use crate::registry::STALL_TIMEOUT;
+
 /// Why an ffmpeg invocation failed. Variants map onto scan problem kinds in
 /// the scanner (`design/scanning.md` §11).
 #[derive(Debug, thiserror::Error)]
@@ -18,9 +20,10 @@ pub enum Error {
     /// The process was killed by a signal: from outside, or by a crash.
     #[error("ffmpeg was killed by signal {signal}: {stderr}")]
     Killed { signal: i32, stderr: String },
-    /// Killed by the watchdog after producing nothing for the stall timeout.
-    #[error("ffmpeg produced no output for {0:?} and was killed")]
-    Stalled(std::time::Duration),
+    /// Killed by the watchdog: a PCM decode that produced nothing for `STALL_TIMEOUT`, or a
+    /// probe or image decode that ran that long.
+    #[error("ffmpeg stalled for {STALL_TIMEOUT:?} and was killed")]
+    Stalled,
     #[error("ffprobe output could not be parsed: {0}")]
     Probe(String),
     #[error("image output could not be parsed: {0}")]

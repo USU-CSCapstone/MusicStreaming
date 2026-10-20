@@ -21,7 +21,6 @@ pub struct PcmStream {
     stderr: Option<JoinHandle<std::io::Result<Vec<u8>>>>,
     registry: Arc<Registry>,
     stalled: Arc<AtomicBool>,
-    stall_timeout: std::time::Duration,
     channels: usize,
     buf: Vec<u8>,
     finished: bool,
@@ -54,7 +53,6 @@ pub(crate) fn decode_pcm(
         stderr: None,
         registry: registry.clone(),
         stalled,
-        stall_timeout: config.stall_timeout,
         channels: info.channels as usize,
         buf: Vec::new(),
         finished: false,
@@ -105,7 +103,7 @@ impl PcmStream {
         let drain = self.stderr.take().expect("finish runs once, at EOF");
         let stderr = drain.join().expect("stderr drain panicked");
         if self.stalled.load(Ordering::SeqCst) {
-            return Err(Error::Stalled(self.stall_timeout));
+            return Err(Error::Stalled);
         }
         let stderr = stderr?;
         if !status.success() {
@@ -113,10 +111,6 @@ impl PcmStream {
             return Err(Error::exited(status, stderr));
         }
         Ok(0)
-    }
-
-    pub fn channels(&self) -> usize {
-        self.channels
     }
 }
 

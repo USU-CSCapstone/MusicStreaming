@@ -8,6 +8,15 @@ use std::time::{Duration, Instant};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 
+/// How long a child may go without progress before the watchdog kills it. A PCM decode makes
+/// progress with every read of its output; a probe or an image decode records none, so for them
+/// this bounds the whole run.
+pub(crate) const STALL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The most children the pool admits at once: a target rather than a hard bound (see
+/// `Registry::acquire`).
+const MAX_PROCESSES: usize = 2;
+
 struct Entry {
     last_progress: Instant,
     /// Set when the watchdog killed it, so the reader can report a stall
@@ -26,17 +35,15 @@ pub struct Registry {
     state: Mutex<State>,
     /// Signalled when a slot frees or the pool is resumed.
     slot_free: Condvar,
-    stall_timeout: Duration,
-    max_processes: usize,
 }
 
 impl Registry {
-    pub(crate) fn start(stall_timeout: Duration, max_processes: usize) -> Arc<Registry> {
+    /// Create an empty pool and start its watchdog thread, which checks for stalls every second
+    /// until the registry is dropped.
+    pub(crate) fn start() -> Arc<Registry> {
         let registry = Arc::new(Registry {
             state: Mutex::new(State { children: HashMap::new(), paused: false }),
             slot_free: Condvar::new(),
-            stall_timeout,
-            max_processes: max_processes.max(1),
         });
         let weak = Arc::downgrade(&registry);
         std::thread::Builder::new()
@@ -55,7 +62,7 @@ impl Registry {
     /// Block until a pool slot is free and the pool is not paused, then take it.
     pub(crate) fn acquire(&self) {
         let mut state = self.state.lock().unwrap();
-        while state.paused || state.children.len() >= self.max_processes {
+        while state.paused || state.children.len() >= MAX_PROCESSES {
             state = self.slot_free.wait(state).unwrap();
         }
         // The slot is claimed by inserting the child in `register`; between
@@ -95,7 +102,7 @@ impl Registry {
         }
         let now = Instant::now();
         for (pid, entry) in &state.children {
-            if now.duration_since(entry.last_progress) > self.stall_timeout {
+            if now.duration_since(entry.last_progress) > STALL_TIMEOUT {
                 tracing::warn!(pid, "ffmpeg stalled; killing");
                 entry.stalled.store(true, Ordering::SeqCst);
                 let _ = kill(Pid::from_raw(*pid as i32), Signal::SIGKILL);
@@ -125,13 +132,5 @@ impl Registry {
         }
         drop(state);
         self.slot_free.notify_all();
-    }
-
-    pub fn is_paused(&self) -> bool {
-        self.state.lock().unwrap().paused
-    }
-
-    pub fn running(&self) -> usize {
-        self.state.lock().unwrap().children.len()
     }
 }

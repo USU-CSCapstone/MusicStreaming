@@ -33,7 +33,7 @@ pub fn from_io(path: &Path, e: &io::Error) -> Problem {
 pub fn from_ffmpeg(path: &Path, e: &jewelcase_ffmpeg::Error) -> Problem {
     use jewelcase_ffmpeg::Error as F;
     let kind = match e {
-        F::Stalled(_) => ProblemKind::Stalled,
+        F::Stalled => ProblemKind::Stalled,
         F::Failed { .. } if e.is_unsupported_encoding() => ProblemKind::UnsupportedEncoding,
         F::Failed { .. } | F::Killed { .. } | F::NoAudioStream | F::Probe(_) | F::Image(_) => {
             ProblemKind::CorruptAudio

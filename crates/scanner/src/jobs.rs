@@ -68,7 +68,7 @@ impl Failure {
         use jewelcase_ffmpeg::Error as F;
         match error {
             F::Spawn { .. } => Failure::Host,
-            F::Stalled(_) | F::Io(_) | F::Killed { .. } => {
+            F::Stalled | F::Io(_) | F::Killed { .. } => {
                 Failure::Attempt(problems::from_ffmpeg(path, error))
             }
             F::Failed { .. } | F::Probe(_) | F::Image(_) | F::NoAudioStream => {

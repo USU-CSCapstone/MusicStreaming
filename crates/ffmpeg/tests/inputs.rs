@@ -6,15 +6,8 @@ use std::net::TcpListener;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Once;
-use std::time::Duration;
 
 use jewelcase_ffmpeg::{Config, Error, Ffmpeg};
-
-/// A handle on the real binaries whose stall timeout is short, so a child left waiting on a
-/// network peer fails within a few seconds.
-fn ffmpeg() -> Ffmpeg {
-    Ffmpeg::new(Config { stall_timeout: Duration::from_secs(2), ..Config::default() })
-}
 
 /// Runs the real ffmpeg with `args`, writing over its output, and asserts it succeeded.
 fn run(args: &[&str]) {
@@ -38,7 +31,7 @@ fn track(path: &str, size: &str) {
 
 /// Probes and decodes the track at `path` to the end, returning the frames decoded.
 fn decode(path: &Path) -> Result<usize, Error> {
-    let ffmpeg = ffmpeg();
+    let ffmpeg = Ffmpeg::new(Config::default());
     let info = ffmpeg.probe(path)?;
     let mut stream = ffmpeg.decode_pcm(path, &info)?;
     let (mut block, mut frames) = (Vec::new(), 0);
@@ -53,7 +46,7 @@ fn decode(path: &Path) -> Result<usize, Error> {
 
 /// The size of the picture at `path` once decoded to fit 8×8, or why it couldn't be.
 fn picture(path: &Path) -> Result<(usize, usize), Error> {
-    ffmpeg().decode_image(path, 8).map(|rgba| (rgba.width, rgba.height))
+    Ffmpeg::new(Config::default()).decode_image(path, 8).map(|rgba| (rgba.width, rgba.height))
 }
 
 /// Asserts that `result` is ffmpeg's refusal of a picture past the pixel cap.

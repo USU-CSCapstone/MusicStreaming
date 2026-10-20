@@ -20,7 +20,6 @@ mod stderr;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration;
 
 use jewelcase_core::Format;
 
@@ -31,26 +30,17 @@ pub use input::input;
 pub use probe::ProbeInfo;
 pub use registry::Registry;
 
-/// Where the binaries are and how patient to be with them.
+/// Where the binaries are. Tests point them at stand-ins.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub ffmpeg: PathBuf,
     pub ffprobe: PathBuf,
-    /// A child that produces no output for this long is killed.
-    pub stall_timeout: Duration,
-    /// Upper bound on concurrently running children (analysis and transcodes
-    /// together). The pool is the only place this number lives.
-    pub max_processes: usize,
 }
 
 impl Default for Config {
+    /// The binaries found on `PATH`.
     fn default() -> Self {
-        Config {
-            ffmpeg: PathBuf::from("ffmpeg"),
-            ffprobe: PathBuf::from("ffprobe"),
-            stall_timeout: Duration::from_secs(30),
-            max_processes: 2,
-        }
+        Config { ffmpeg: PathBuf::from("ffmpeg"), ffprobe: PathBuf::from("ffprobe") }
     }
 }
 
@@ -58,8 +48,6 @@ impl Default for Config {
 #[derive(Debug, Clone)]
 pub struct Capabilities {
     pub version: String,
-    /// Decoders present, from `ffmpeg -decoders`.
-    pub decoders: Vec<String>,
     /// Formats whose decoder is missing. Empty means every supported format
     /// can be analyzed.
     pub missing: Vec<Format>,
@@ -76,10 +64,10 @@ impl Ffmpeg {
     /// Create the handle and start the watchdog thread. Does not touch the
     /// binaries; call [`Ffmpeg::verify`] for that.
     pub fn new(config: Config) -> Ffmpeg {
-        let registry = Registry::start(config.stall_timeout, config.max_processes);
-        Ffmpeg { config: Arc::new(config), registry }
+        Ffmpeg { config: Arc::new(config), registry: Registry::start() }
     }
 
+    /// Where this handle finds the binaries.
     pub fn config(&self) -> &Config {
         &self.config
     }
@@ -119,7 +107,8 @@ impl Ffmpeg {
                 stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
             });
         }
-        let decoders = parse_decoders(&String::from_utf8_lossy(&out.stdout));
+        let table = String::from_utf8_lossy(&out.stdout);
+        let decoders = parse_decoders(&table);
 
         // ffprobe must exist too; analysis setup needs it.
         Command::new(&self.config.ffprobe)
@@ -127,22 +116,20 @@ impl Ffmpeg {
             .output()
             .map_err(|e| Error::Spawn { binary: self.config.ffprobe.clone(), source: e })?;
 
-        let mut missing = Vec::new();
-        for format in Format::ALL {
-            if !decoders.iter().any(|d| d == format.ffmpeg_decoder()) {
-                missing.push(format);
-            }
-        }
+        let missing = Format::ALL
+            .into_iter()
+            .filter(|format| !decoders.contains(&format.ffmpeg_decoder()))
+            .collect();
         // WAV and AIFF may carry wider PCM; check the rest of the family.
         for pcm in ["pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_s24be"] {
-            if !decoders.iter().any(|d| d == pcm) {
+            if !decoders.contains(&pcm) {
                 tracing::warn!(
                     decoder = pcm,
                     "ffmpeg lacks a PCM decoder some WAV/AIFF files need"
                 );
             }
         }
-        Ok(Capabilities { version, decoders, missing })
+        Ok(Capabilities { version, missing })
     }
 
     /// Read stream properties needed to interpret a raw PCM decode.
@@ -167,30 +154,23 @@ impl Ffmpeg {
     // pool and registry. Deliberately absent until that design exists.
 }
 
-/// Parse the decoder table printed by `ffmpeg -decoders`.
+/// The audio decoders named in the table printed by `ffmpeg -decoders`.
 ///
-/// Lines look like ` A....D flac                 FLAC (Free Lossless Audio Codec)`.
-/// Only audio decoders (flag column starting with `A`) are kept.
-fn parse_decoders(table: &str) -> Vec<String> {
-    let mut seen_separator = false;
-    let mut out = Vec::new();
-    for line in table.lines() {
-        let trimmed = line.trim_start();
-        if !seen_separator {
-            if trimmed.starts_with("------") {
-                seen_separator = true;
-            }
-            continue;
-        }
-        let mut cols = trimmed.split_whitespace();
-        let (Some(flags), Some(name)) = (cols.next(), cols.next()) else {
-            continue;
-        };
-        if flags.starts_with('A') {
-            out.push(name.to_owned());
-        }
-    }
-    out
+/// The rows after the `------` separator look like
+/// ` A....D flac                 FLAC (Free Lossless Audio Codec)`. Only audio decoders (flag
+/// column starting with `A`) are kept.
+fn parse_decoders(table: &str) -> Vec<&str> {
+    table
+        .lines()
+        .map(str::trim_start)
+        .skip_while(|line| !line.starts_with("------"))
+        .skip(1)
+        .filter_map(|line| {
+            let mut cols = line.split_whitespace();
+            let (flags, name) = (cols.next()?, cols.next()?);
+            flags.starts_with('A').then_some(name)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -199,7 +179,7 @@ mod tests {
 
     #[test]
     fn parses_decoder_table() {
-        let table = "Decoders:\n V..... = Video\n ------\n V....D h264  H.264\n A....D flac  FLAC\n AF...D alac  ALAC\n";
-        assert_eq!(parse_decoders(table), vec!["flac", "alac"]);
+        let table = "Decoders:\n V..... = Video\n A..... = Audio\n ------\n V....D h264  H.264\n A....D flac  FLAC\n AF...D alac  ALAC\n";
+        assert_eq!(parse_decoders(table), ["flac", "alac"]);
     }
 }

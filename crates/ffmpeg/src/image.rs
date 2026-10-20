@@ -44,7 +44,7 @@ pub(crate) fn decode_image(
     registry.unregister(pid);
     let out = out?;
     if stalled.load(Ordering::SeqCst) {
-        return Err(Error::Stalled(config.stall_timeout));
+        return Err(Error::Stalled);
     }
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
