@@ -1,5 +1,5 @@
 import { type Page, expect, test } from '@playwright/test';
-import { album, serveLibrary, signalMix } from './fixtures';
+import { album, artist, serveLibrary, signalMix } from './fixtures';
 
 // Sorting track lists (`requirements/conventions.md` §4.1).
 
@@ -130,4 +130,77 @@ test('search results sort without searching again', async ({ page }) => {
 	await heading(page, 'Title, sorted descending').click();
 	await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
 	expect(searches).toBe(1);
+});
+
+test.describe('songs, which the server sorts', () => {
+	test.beforeEach(async ({ page }) => {
+		await page.setViewportSize({ width: 1280, height: 700 });
+	});
+
+	test('the library opens newest first, and a heading steps through its sorts', async ({
+		page
+	}) => {
+		await serveLibrary(page);
+		await page.goto('/songs');
+		const newest = ['Signal Part 2', 'Signal Remix', 'Signal Part 1'];
+		await expect(titles(page)).toHaveText(newest);
+		await expect(page.getByRole('button', { name: /sorted/ })).toHaveCount(0);
+
+		await heading(page, 'Title').click();
+		await expect(page).toHaveURL(/\?sort=title&order=asc$/);
+		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+		await heading(page, 'Title, sorted ascending').click();
+		await expect(titles(page)).toHaveText(['Signal Remix', 'Signal Part 2', 'Signal Part 1']);
+
+		// A reload asks the server for the same order.
+		await page.reload();
+		await expect(titles(page)).toHaveText(['Signal Remix', 'Signal Part 2', 'Signal Part 1']);
+
+		await heading(page, 'Title, sorted descending').click();
+		await expect(page).not.toHaveURL(/sort=/);
+		await expect(titles(page)).toHaveText(newest);
+	});
+
+	test('sorts from a menu where the headings do not fit', async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 700 });
+		await serveLibrary(page);
+		await page.goto('/songs');
+		await expect(titles(page)).toHaveText(['Signal Part 2', 'Signal Remix', 'Signal Part 1']);
+
+		await page.getByRole('button', { name: 'Sort', exact: true }).click();
+		await page.getByRole('menuitemradio', { name: 'Title' }).click();
+		await expect(page).toHaveURL(/\?sort=title&order=asc$/);
+		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+		await expect(page.getByRole('button', { name: 'Sort, by title ascending' })).toBeFocused();
+	});
+
+	test("an artist's songs sort without loading the rest of the page again", async ({ page }) => {
+		await serveLibrary(page);
+		const asked: string[] = [];
+		page.on('request', (r) => {
+			const path = new URL(r.url()).pathname;
+			if (/\/api\/v1\/libraries\/[^/]+\/(artists|albums|tracks)/.test(path)) asked.push(path);
+		});
+		await page.goto(`/artists/${artist.id}`);
+		const songs = page
+			.locator('section')
+			.filter({ has: page.getByRole('heading', { name: 'Songs' }) });
+		// Unsorted, an artist's songs are in album order.
+		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
+		asked.length = 0;
+
+		await songs.getByRole('button', { name: 'Title', exact: true }).click();
+		await songs.getByRole('button', { name: 'Title, sorted ascending' }).click();
+		await expect(titles(page)).toHaveText(['Signal Remix', 'Signal Part 2', 'Signal Part 1']);
+		expect(asked.every((path) => path.endsWith('/tracks'))).toBe(true);
+		expect(asked).toHaveLength(2);
+
+		await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
+		await expect(playing(page)).toHaveText('Signal Remix');
+
+		// A link to the sorted songs opens sorted.
+		await page.goto(`/artists/${artist.id}?sort=title&order=desc`);
+		await expect(titles(page)).toHaveText(['Signal Remix', 'Signal Part 2', 'Signal Part 1']);
+		await expect(songs.getByRole('button', { name: 'Title, sorted descending' })).toBeVisible();
+	});
 });
