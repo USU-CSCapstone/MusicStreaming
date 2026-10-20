@@ -12,6 +12,15 @@ export function readSort(params: URLSearchParams, fields: readonly SortField[]):
 	return { field: field as SortField, order: params.get('order') === 'desc' ? 'desc' : 'asc' };
 }
 
+/**
+ * This page's sort, among the ones its list offers. A page sorts its own rows by it and hands
+ * TrackList the result, so a row, the page's Play button, and the queue all have one order
+ * (`requirements/conventions.md` §4.1). Read in a `$derived`, it follows the URL.
+ */
+export function currentSort(fields: readonly SortField[]): TrackSort {
+	return readSort(page.url.searchParams, fields);
+}
+
 /** `url` with `sort` in place of the sort it had, and everything else as it was. */
 export function withSort(url: URL, sort: TrackSort): URL {
 	const next = new URL(url);
