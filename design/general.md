@@ -45,7 +45,7 @@ One crate holds every rule that must behave identically on the server and a devi
 
 - Domain model and identifiers
 - Normalization and sort keys ([`requirements/conventions.md` §4](../requirements/conventions.md#4-sorting--browsing))
-- Search matching, ranking, and the on-device index format
+- What search covers, its matching and ranking, and the on-device index format
 - Queue operations and shuffle ([`requirements/queue.md`](../requirements/queue.md))
 - Similarity scoring for offline endless play ([`requirements/recommendations.md` §10](../requirements/recommendations.md#10-offline))
 

@@ -42,12 +42,30 @@ impl Kind {
     pub const ALL: [Kind; 3] = [Kind::Track, Kind::Album, Kind::Artist];
 }
 
-/// A thing to find by its name.
+/// A thing to find by its name. The constructors are the rule for what is searched, so the
+/// server and a device index the same corpus (`requirements/search.md` §2.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document {
-    pub kind: Kind,
-    pub id: i64,
-    pub name: String,
+    kind: Kind,
+    id: i64,
+    name: String,
+}
+
+impl Document {
+    /// A track, by its title.
+    pub fn from_track(id: i64, title: String) -> Document {
+        Document { kind: Kind::Track, id, name: title }
+    }
+
+    /// An album, by its title. The unknown album, which has none, is not searched.
+    pub fn from_album(id: i64, title: Option<String>) -> Option<Document> {
+        title.map(|name| Document { kind: Kind::Album, id, name })
+    }
+
+    /// An artist, by their name. The unknown artist, who has none, is not searched.
+    pub fn from_artist(id: i64, name: Option<String>) -> Option<Document> {
+        name.map(|name| Document { kind: Kind::Artist, id, name })
+    }
 }
 
 /// One kind's matches, best first.

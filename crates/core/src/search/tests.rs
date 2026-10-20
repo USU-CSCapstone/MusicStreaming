@@ -37,6 +37,18 @@ fn top(index: &Index, query: &str) -> Option<i64> {
 }
 
 #[test]
+fn tracks_titled_albums_and_named_artists_are_searched() {
+    assert_eq!(Document::from_track(1, "Blue".into()), doc(Kind::Track, 1, "Blue"));
+    assert_eq!(Document::from_album(2, Some("Blue".into())), Some(doc(Kind::Album, 2, "Blue")));
+    assert_eq!(
+        Document::from_artist(3, Some("Weezer".into())),
+        Some(doc(Kind::Artist, 3, "Weezer"))
+    );
+    assert_eq!(Document::from_album(4, None), None);
+    assert_eq!(Document::from_artist(5, None), None);
+}
+
+#[test]
 fn typos_do_not_get_in_the_way() {
     let index = library();
     assert_eq!(top(&index, "tylor sweft"), Some(1), "missing and wrong letters");

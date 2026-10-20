@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use jewelcase_core::{Document, Index, Kind};
+use jewelcase_core::{Document, Index};
 use rusqlite::Connection;
 
 use crate::db::{Database, DbError};
@@ -93,24 +93,9 @@ async fn build(db: &Database, library: i64) -> Result<Built, DbError> {
     let started = Instant::now();
     let (position, documents) = db
         .read(move |conn| {
-            // The position first: a change landing between the two reads makes the index look
-            // older than it is, so the next search rebuilds it again, never the reverse.
+            // One snapshot, so the position is exactly the one the documents reflect.
             let position = feed_position(conn, library)?;
-            let documents = conn
-                .prepare_cached(
-                    "SELECT 0, id, title FROM tracks WHERE library_id = ?1 \
-                     UNION ALL SELECT 1, id, title FROM albums WHERE library_id = ?1 AND title IS NOT NULL \
-                     UNION ALL SELECT 2, id, name FROM artists WHERE library_id = ?1 AND name IS NOT NULL",
-                )?
-                .query_map([library], |row| {
-                    Ok(Document {
-                        kind: Kind::ALL[usize::from(row.get::<_, u8>(0)?)],
-                        id: row.get(1)?,
-                        name: row.get(2)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok((position, documents))
+            Ok((position, documents(conn, library)?))
         })
         .await?;
     // A second of CPU at full scale, so off the async workers.
@@ -118,6 +103,30 @@ async fn build(db: &Database, library: i64) -> Result<Built, DbError> {
         .await
         .expect("building a search index does not panic");
     Ok(Built { index: Arc::new(index), position, ready: Instant::now(), took: started.elapsed() })
+}
+
+/// The library's tracks, albums and artists, as the core's rule makes them documents.
+fn documents(conn: &Connection, library: i64) -> rusqlite::Result<Vec<Document>> {
+    let mut documents = Vec::new();
+    let mut tracks = conn.prepare_cached("SELECT id, title FROM tracks WHERE library_id = ?1")?;
+    for track in
+        tracks.query_map([library], |row| Ok(Document::from_track(row.get(0)?, row.get(1)?)))?
+    {
+        documents.push(track?);
+    }
+    let mut albums = conn.prepare_cached("SELECT id, title FROM albums WHERE library_id = ?1")?;
+    for album in
+        albums.query_map([library], |row| Ok(Document::from_album(row.get(0)?, row.get(1)?)))?
+    {
+        documents.extend(album?);
+    }
+    let mut artists = conn.prepare_cached("SELECT id, name FROM artists WHERE library_id = ?1")?;
+    for artist in
+        artists.query_map([library], |row| Ok(Document::from_artist(row.get(0)?, row.get(1)?)))?
+    {
+        documents.extend(artist?);
+    }
+    Ok(documents)
 }
 
 pub fn feed_position(conn: &Connection, library: i64) -> rusqlite::Result<i64> {
