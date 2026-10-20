@@ -102,8 +102,7 @@ impl Plugins {
                     let Some(manifest) = grants::manifest(conn, &id)? else { return Ok(None) };
                     let (own, server) =
                         (self::level(conn, &id, level)?, self::level(conn, &id, SERVER)?);
-                    // At the server level, only what is granted to the plugin itself: there is
-                    // no library 0 to have grants in.
+                    // At the server level, only what is granted to the plugin itself.
                     let permissions = grants::granted(conn, &id, level)?;
                     Ok(Some((manifest, own, server, permissions)))
                 })

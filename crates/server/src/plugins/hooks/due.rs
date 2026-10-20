@@ -29,19 +29,11 @@ fn position(per_user: bool) -> String {
     )
 }
 
-/// Granted to the pair's plugin itself.
-fn granted_to_plugin(permission: &str) -> String {
+/// Granted to the pair's plugin, in the pair's library or to the plugin itself (library 0).
+fn granted(permission: &str) -> String {
     format!(
         "EXISTS (SELECT 1 FROM plugin_grants g WHERE g.plugin_id = p.plugin_id \
-         AND g.permission = '{permission}')"
-    )
-}
-
-/// Granted in the library, by the pair's plugin.
-fn granted_here(permission: &str) -> String {
-    format!(
-        "EXISTS (SELECT 1 FROM plugin_library_grants g WHERE g.plugin_id = p.plugin_id \
-         AND g.library_id = p.library_id AND g.permission = '{permission}')"
+         AND g.library_id IN (0, p.library_id) AND g.permission = '{permission}')"
     )
 }
 
@@ -78,8 +70,8 @@ pub(super) fn queries() -> [(Hook, String); 8] {
              AND EXISTS (SELECT 1 FROM library_changes f \
                          WHERE f.library_id = p.library_id AND f.entity_type = '{entity}' \
                          AND f.seq > coalesce(c.position, 0))",
-            granted_here(hook),
-            granted_here("libraryRead"),
+            granted(hook),
+            granted("libraryRead"),
         )
     };
     // Only scans finished before now, so one finishing this millisecond is never skipped.
@@ -88,8 +80,8 @@ pub(super) fn queries() -> [(Hook, String); 8] {
          AND EXISTS (SELECT 1 FROM scans s WHERE s.library_id = p.library_id \
                      AND s.state = 'completed' AND s.finished_at > coalesce(c.position, 0) \
                      AND s.finished_at < ?1)",
-        granted_here("scanFinished"),
-        granted_here("libraryRead"),
+        granted("scanFinished"),
+        granted("libraryRead"),
     );
     // At once if it has never run; after that at the interval from its manifest.
     let schedules = format!(
@@ -98,7 +90,7 @@ pub(super) fn queries() -> [(Hook, String); 8] {
               (SELECT json_extract(r.value, '$.everyMinutes') \
                FROM plugins pl, json_each(pl.manifest, '$.permissions') r \
                WHERE pl.id = p.plugin_id AND json_extract(r.value, '$.permission') = 'schedule') <= ?1)",
-        granted_to_plugin("schedule"),
+        granted("schedule"),
     );
     // For each user who connected it, plays they ended in the library since they did.
     let played = format!(
@@ -107,18 +99,18 @@ pub(super) fn queries() -> [(Hook, String); 8] {
                      AND e.user_id = s.user_id AND e.seq > coalesce(c.position, 0) \
                      AND e.ended_at >= s.connected_at)",
         position(true),
-        granted_to_plugin("played"),
-        granted_to_plugin("listeningActivity"),
-        granted_here("libraryRead"),
+        granted("played"),
+        granted("listeningActivity"),
+        granted("libraryRead"),
     );
     // For each user who connected it, a play they started in the library that is still fresh.
     let playing = format!(
         "SELECT p.plugin_id, p.library_id, {} WHERE {READY} AND {} AND {} AND {} \
          AND EXISTS (SELECT 1 FROM play_starts st JOIN plays pl ON pl.id = st.play_id WHERE {})",
         position(true),
-        granted_to_plugin("playing"),
-        granted_to_plugin("listeningActivity"),
-        granted_here("libraryRead"),
+        granted("playing"),
+        granted("listeningActivity"),
+        granted("libraryRead"),
         deliverable("p.library_id", "s.user_id", "coalesce(c.position, 0)"),
     );
     // For each user who shares their searches with it, what they searched or removed since; and
@@ -138,9 +130,9 @@ pub(super) fn queries() -> [(Hook, String); 8] {
                      AND e.user_id = u.user_id AND e.seq > coalesce(c.position, 0) \
                      AND ((e.kind <> 'stopped' AND e.created_at >= ss.shared_at AND {} AND {}) \
                           OR (e.kind = 'stopped' AND e.plugin_id = p.plugin_id)))",
-        granted_to_plugin("searched"),
-        granted_to_plugin("searchActivity"),
-        granted_here("libraryRead"),
+        granted("searched"),
+        granted("searchActivity"),
+        granted("libraryRead"),
     );
     [
         (Hook::TracksChanged, changes("tracksChanged", "track")),

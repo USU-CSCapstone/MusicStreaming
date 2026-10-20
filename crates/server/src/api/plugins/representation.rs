@@ -146,7 +146,8 @@ fn stored(row: &Row) -> rusqlite::Result<Stored> {
 fn view(conn: &Connection, r: Stored, limits: &[HostLimit]) -> rusqlite::Result<Plugin> {
     let plugin_wide: Vec<Permission> = conn
         .prepare_cached(
-            "SELECT permission FROM plugin_grants WHERE plugin_id = ?1 ORDER BY permission",
+            "SELECT permission FROM plugin_grants WHERE plugin_id = ?1 AND library_id = 0 \
+             ORDER BY permission",
         )?
         .query_map([&r.id], |row| grants::permission(row.get(0)?))?
         .collect::<rusqlite::Result<_>>()?;

@@ -19,11 +19,11 @@ pub fn manifest(conn: &Connection, id: &str) -> rusqlite::Result<Option<Manifest
         .transpose()
 }
 
-/// Everything granted to `id` for `library`: its library permissions there, and its own.
+/// Everything granted to `id` for `library`: its library permissions there, and its own, which
+/// are kept as library 0. For library 0, only its own.
 pub fn granted(conn: &Connection, id: &str, library: i64) -> rusqlite::Result<Vec<Permission>> {
     conn.prepare_cached(
-        "SELECT permission FROM plugin_grants WHERE plugin_id = ?1 UNION \
-         SELECT permission FROM plugin_library_grants WHERE plugin_id = ?1 AND library_id = ?2",
+        "SELECT permission FROM plugin_grants WHERE plugin_id = ?1 AND library_id IN (0, ?2)",
     )?
     .query_map(params![id, library], |row| permission(row.get::<_, String>(0)?))?
     .collect()
@@ -46,22 +46,24 @@ pub fn set(
     let requested = |p: &Permission, library: bool| {
         p.per_library() == library && manifest.permissions.iter().any(|r| r.permission == *p)
     };
-    conn.execute("DELETE FROM plugin_grants WHERE plugin_id = ?1", [id])?;
+    conn.execute("DELETE FROM plugin_grants WHERE plugin_id = ?1 AND library_id = 0", [id])?;
     for p in plugin_wide.iter().filter(|p| requested(p, false)) {
         conn.execute(
-            "INSERT OR IGNORE INTO plugin_grants (plugin_id, permission) VALUES (?1, ?2)",
+            "INSERT OR IGNORE INTO plugin_grants (plugin_id, library_id, permission) \
+             VALUES (?1, 0, ?2)",
             params![id, p.name()],
         )?;
     }
-    for (library, permissions) in per_library {
+    // Library 0 holds the plugin's own grants, so it is never replaced as a library.
+    for (library, permissions) in per_library.iter().filter(|(library, _)| *library != 0) {
         conn.execute(
-            "DELETE FROM plugin_library_grants WHERE plugin_id = ?1 AND library_id = ?2",
+            "DELETE FROM plugin_grants WHERE plugin_id = ?1 AND library_id = ?2",
             params![id, library],
         )?;
         for p in permissions.iter().filter(|p| requested(p, true)) {
             // A library that does not exist is skipped, as the spec's IDs select and never add.
             conn.execute(
-                "INSERT OR IGNORE INTO plugin_library_grants (plugin_id, library_id, permission) \
+                "INSERT OR IGNORE INTO plugin_grants (plugin_id, library_id, permission) \
                  SELECT ?1, id, ?3 FROM libraries WHERE id = ?2",
                 params![id, library, p.name()],
             )?;
@@ -112,15 +114,11 @@ pub fn set_enabled(
 pub fn keep_requested(conn: &Connection, manifest: &Manifest) -> rusqlite::Result<()> {
     let requested: Vec<&str> = manifest.permissions.iter().map(|r| r.permission.name()).collect();
     let requested = serde_json::to_string(&requested).expect("strings serialize");
-    for table in ["plugin_grants", "plugin_library_grants"] {
-        conn.execute(
-            &format!(
-                "DELETE FROM {table} WHERE plugin_id = ?1 \
-                 AND permission NOT IN (SELECT value FROM json_each(?2))"
-            ),
-            params![manifest.id, requested],
-        )?;
-    }
+    conn.execute(
+        "DELETE FROM plugin_grants WHERE plugin_id = ?1 \
+         AND permission NOT IN (SELECT value FROM json_each(?2))",
+        params![manifest.id, requested],
+    )?;
     Ok(())
 }
 
@@ -136,3 +134,6 @@ fn invalid_json(column: usize, error: impl std::fmt::Display) -> rusqlite::Error
         error.to_string().into(),
     )
 }
+
+#[cfg(test)]
+mod tests;

@@ -17,20 +17,19 @@ CREATE TABLE plugins (
 
 -- ───────────────────────────── Grants ─────────────────────────────
 
--- The permissions granted per plugin (§4.1). A hook is requested and approved exactly as a
--- permission is (§8), so the hooks granted per plugin are here too.
+-- The permissions granted per plugin (§4.1), in each library and to the plugin itself. A hook
+-- is requested and approved exactly as a permission is (§8), so the hooks granted are here too.
+-- Write access is two permissions, granted separately: adding files, and changing or deleting
+-- them. Names are checked in Rust, which reads every manifest and grant, so a new permission or
+-- hook needs no migration.
 CREATE TABLE plugin_grants (
-    plugin_id  TEXT NOT NULL,
-    permission TEXT NOT NULL CHECK (permission IN ('network', 'listeningActivity', 'schedule', 'played', 'playing', 'searchActivity', 'searched', 'hostRateLimits')),
-    PRIMARY KEY (plugin_id, permission)
-) STRICT, WITHOUT ROWID;
-
--- The permissions and hooks granted per library. Write access is two permissions, granted
--- separately: adding files, and changing or deleting them.
-CREATE TABLE plugin_library_grants (
     plugin_id  TEXT    NOT NULL,
-    library_id INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
-    permission TEXT    NOT NULL CHECK (permission IN ('libraryRead', 'libraryAdd', 'libraryChange', 'tracksChanged', 'scanFinished', 'albumsChanged', 'artistsChanged')),
+    -- The library a per-library permission is granted in, or zero for a permission granted to
+    -- the plugin itself, which holds in every library.
+    library_id INTEGER NOT NULL DEFAULT 0,
+    permission TEXT    NOT NULL,
+    -- The request the admin approved, as the manifest gave it; null where none is recorded.
+    approved   TEXT    CHECK (json_valid(approved) AND json_type(approved) = 'object'),
     PRIMARY KEY (plugin_id, library_id, permission)
 ) STRICT, WITHOUT ROWID;
 
@@ -74,7 +73,7 @@ CREATE TABLE plugin_state (
 CREATE TABLE plugin_cursors (
     plugin_id  TEXT    NOT NULL REFERENCES plugins (id) ON DELETE CASCADE,
     library_id INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
-    hook       TEXT    NOT NULL CHECK (hook IN ('tracksChanged', 'scanFinished', 'schedule', 'played', 'playing', 'searched', 'albumsChanged', 'artistsChanged')),
+    hook       TEXT    NOT NULL,
     -- played, playing, and searched keep a position per user, so one user's failures never
     -- hold up another's. Every other hook has user 0.
     user_id    INTEGER NOT NULL DEFAULT 0,
@@ -102,6 +101,15 @@ CREATE TABLE plugin_settings (
     settings   TEXT    NOT NULL CHECK (json_valid(settings) AND json_type(settings) = 'object'),
     PRIMARY KEY (plugin_id, library_id)
 ) STRICT, WITHOUT ROWID;
+
+-- Grants and settings keep what applies in every library as library 0, which no library has,
+-- so they cannot reference `libraries` and a library's rows are deleted here instead. Recreate
+-- this trigger whenever `libraries` is rebuilt.
+CREATE TRIGGER libraries_delete_plugin_rows AFTER DELETE ON libraries
+BEGIN
+    DELETE FROM plugin_grants WHERE library_id = OLD.id;
+    DELETE FROM plugin_settings WHERE library_id = OLD.id;
+END;
 
 -- What each user sets for a plugin that acts for them, such as their own account on a
 -- scrobbling service (§4.1, §6). Having them is being connected: a plugin receives a user's

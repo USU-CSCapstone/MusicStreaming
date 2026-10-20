@@ -15,6 +15,7 @@ The SQLite schema behind `api/openapi.yaml`. Migrations are plain SQL in `crates
 | **Booleans** | `INTEGER` with `CHECK (x IN (0, 1))`. |
 | **Indexes** | Partial and unique indexes, feeds (ending in `seq`, named `_feed`) and sweeps (`_age`) are named for their purpose: `tracks_missing`, `tracks_file`, `library_changes_feed`, `search_events_age`. Every other index is `<table>_by_<key>`, leaving out a leading `library_id`: `tracks_by_added`, `plays_by_user`. |
 | **Tables** | `STRICT`, so a column holds only its declared type. Link tables are `WITHOUT ROWID`. |
+| **Names** | A closed set of names is `CHECK`ed, such as `scans.trigger`. Plugin permission and hook names are not: they grow with the plugin contract, and Rust checks them (`design/plugins.md` §6). |
 | **JSON** | Only for values never queried by field: settings, exclude patterns, labels, pass-through identifiers. Always `CHECK`ed as valid and of the right shape. |
 | **Secrets** | Tokens and codes are stored as SHA-256 hashes, passwords as PHC strings. Nothing secret is stored readably. |
 
@@ -25,6 +26,8 @@ The SQLite schema behind `api/openapi.yaml`. Migrations are plain SQL in `crates
 ## 2. Isolation by Construction
 
 **Every content table carries `library_id`, and every link between content rows is a composite foreign key on `(library_id, id)`.** A track can only reference an album, root, or artist in its own library, and a link across libraries fails at insert (`requirements/general.md` §3.6). Deleting a library cascades through everything it holds, and removes nothing outside it.
+
+**`plugin_grants` and `plugin_settings` keep what applies to a plugin everywhere as library 0**, which no library can have, since `libraries.id` is `CHECK`ed above zero. So neither can reference `libraries`, and a trigger on `libraries` deletes a library's rows in both with it.
 
 **A composite foreign key cannot use `ON DELETE SET NULL`**, because it would clear `library_id` too, which is `NOT NULL`. So the links to an image, an album, or a root (`artists.image_id`, `albums.image_id`, `tracks.album_id`, `tracks.root_id`, `images.root_id`) take no action on delete, and such a row cannot be deleted while anything still refers to it. Deletes run in dependency order: an album goes only once no track is left on it, and anything that deletes images must delete only those nothing refers to (nothing deletes images yet).
 
@@ -90,7 +93,7 @@ Sorting by play count pages through `personal_stats` first, then continues throu
 
 **Every connection must enable `PRAGMA foreign_keys = ON`.** SQLite leaves foreign keys off by default, and §2 depends on them.
 
-Migrations are the exception: they run with foreign keys off, because rebuilding a parent table with them on deletes or clears every reference to it. Each migration commits only if `PRAGMA foreign_key_check` finds no broken reference anywhere in the database. A rebuild creates the new table, copies the rows, drops the old one and renames the new one into place, then recreates the old table's indexes and the triggers that write into it.
+Migrations are the exception: they run with foreign keys off, because rebuilding a parent table with them on deletes or clears every reference to it. Each migration commits only if `PRAGMA foreign_key_check` finds no broken reference anywhere in the database. A rebuild creates the new table, copies the rows, drops the old one and renames the new one into place, then recreates the old table's indexes, the triggers on it, and the triggers that write into it.
 
 **Foreign keys on large tables are indexed.** Deleting a parent row checks every table referencing it, and an unindexed child column means a full scan per deleted row — deleting 200 images took 1.25 s scanning albums and artists, and 1 ms with `image_id` indexed. Small account tables skip the index, since scanning dozens of rows costs nothing.
 

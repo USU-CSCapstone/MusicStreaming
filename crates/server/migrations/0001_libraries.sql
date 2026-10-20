@@ -1,7 +1,8 @@
 -- Libraries and their root folders (requirements/libraries.md §1–§3).
 
 CREATE TABLE libraries (
-    id                    INTEGER PRIMARY KEY,
+    -- Above zero: plugin tables use 0 for every library (0006_plugins.sql).
+    id                    INTEGER PRIMARY KEY CHECK (id > 0),
     name                  TEXT    NOT NULL,
     -- Patterns to exclude from scanning, relative to the roots
     excludes              TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(excludes) AND json_type(excludes) = 'array'),

@@ -286,6 +286,19 @@ async fn revoking_a_required_permission_disables_it_at_once() {
 }
 
 #[tokio::test]
+async fn naming_library_0_leaves_the_plugins_own_grants() {
+    let (_temp, _db, app) = server().await;
+    let path = format!("{PLUGIN}/permissions");
+    let all = json!({ "granted": ["network"], "libraries": [{ "libraryId": "1", "granted": ["libraryRead"] }] });
+    call(&app, ADMIN, "PUT", &path, Some(all)).await;
+    let zero = json!({ "granted": ["network"], "libraries": [{ "libraryId": "0", "granted": ["libraryRead"] }] });
+    let (status, plugin) = call(&app, ADMIN, "PUT", &path, Some(zero)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(plugin["granted"], json!(["network"]));
+    assert_eq!(plugin["libraries"][0]["granted"], json!(["libraryRead"]));
+}
+
+#[tokio::test]
 async fn uninstalling_keeps_its_grants_for_a_reinstall() {
     let (temp, _db, app) = server().await;
     let grants = json!({ "granted": ["network"], "libraries": [{ "libraryId": "2", "granted": ["libraryAdd"] }] });
@@ -294,13 +307,8 @@ async fn uninstalling_keeps_its_grants_for_a_reinstall() {
     assert_eq!(call(&app, ADMIN, "GET", PLUGIN, None).await.0, StatusCode::NOT_FOUND);
     assert_eq!(call(&app, ADMIN, "DELETE", PLUGIN, None).await.0, StatusCode::NOT_FOUND);
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
-    let kept: i64 = conn
-        .query_row(
-            "SELECT (SELECT count(*) FROM plugin_grants) + (SELECT count(*) FROM plugin_library_grants)",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
+    let kept: i64 =
+        conn.query_row("SELECT count(*) FROM plugin_grants", [], |row| row.get(0)).unwrap();
     assert_eq!(kept, 2);
 }
 

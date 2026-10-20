@@ -1,7 +1,9 @@
 //! The change hooks, `tracksChanged`, `albumsChanged`, and `artistsChanged`, and how a delivery
 //! that fails is tried again.
 
-use jewelcase_plugins::Permission::{AlbumsChanged, ArtistsChanged, LibraryRead, TracksChanged};
+use jewelcase_plugins::Permission::{
+    AlbumsChanged, ArtistsChanged, LibraryRead, Schedule, TracksChanged,
+};
 use jewelcase_plugins::{Event, Permission};
 
 use super::super::{BACKOFF_MS, Hook, MAX_FAILURES};
@@ -40,6 +42,19 @@ async fn changes_reach_a_plugin_only_while_it_is_enabled_with_both_grants() {
     let ours = [(Hook::TracksChanged, 1, vec![11], vec![])];
     assert_eq!(named(deliver(&db, 0, HANDLED).await), ours, "only its own library");
     assert!(deliver(&db, 0, HANDLED).await.is_empty(), "each change is delivered once");
+}
+
+#[tokio::test]
+async fn a_hook_is_due_only_where_it_is_granted_and_a_plugin_wide_one_everywhere() {
+    let (_temp, db, plugins) = setup().await;
+    plugins.set_enabled("plugin".into(), 2, true).await.unwrap();
+    grant(&plugins, "plugin", &[Schedule], &[LibraryRead, TracksChanged]).await;
+    changes(&db, "(1, 'track', 11, 'upsert', 0), (2, 'track', 21, 'upsert', 0)").await;
+    let mut due: Vec<_> =
+        deliver(&db, 0, HANDLED).await.into_iter().map(|r| (r.hook, r.library)).collect();
+    due.sort_by_key(|&(hook, library)| (hook.name(), library));
+    let expected = [(Hook::Schedule, 1), (Hook::Schedule, 2), (Hook::TracksChanged, 1)];
+    assert_eq!(due, expected, "library 1's grants are not library 2's");
 }
 
 #[tokio::test]
