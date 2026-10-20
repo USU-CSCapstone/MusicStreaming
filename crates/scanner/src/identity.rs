@@ -9,10 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
-use jewelcase_core::{AudioProperties, TagSet};
-
 use crate::store::{IndexedFile, Store};
 use crate::types::{LibraryId, TrackId};
+use crate::{AudioProperties, TagSet};
 
 /// Everything known about a file before identity is decided.
 #[derive(Debug, Clone)]

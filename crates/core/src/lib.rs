@@ -4,15 +4,12 @@
 //! here (`design/general.md` §3). The crate is pure: no I/O, no clock, no
 //! platform APIs. Callers pass in what it needs.
 
-pub mod audio;
-pub mod fold;
-pub mod format;
-pub mod lrc;
-pub mod multi_value;
-pub mod search;
-pub mod sort;
-pub mod tags;
+mod fold;
+mod format;
+mod search;
+mod sort;
 
-pub use audio::AudioProperties;
+pub use fold::{artists_key, name_key, tag_key};
 pub use format::Format;
-pub use tags::{Lyrics, PartialDate, TagSet};
+pub use search::{Document, Index, Kind, Section, words};
+pub use sort::sort_key;

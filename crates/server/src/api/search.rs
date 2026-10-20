@@ -1,4 +1,4 @@
-//! Search: `search` (`api/openapi.yaml`), over the core's index (`jewelcase_core::search`),
+//! Search: `search` (`api/openapi.yaml`), over the core's index (`jewelcase_core::Index`),
 //! which each library keeps in memory (`indexes`).
 
 mod indexes;
@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use jewelcase_core::search::{Kind, Section as Found};
+use jewelcase_core::{Kind, Section as Found};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 

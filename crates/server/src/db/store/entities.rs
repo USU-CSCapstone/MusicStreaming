@@ -1,7 +1,7 @@
 //! The artists, albums, tags, and images a track points at, found by their identity keys or
 //! created (`design/database.md` §3).
 
-use jewelcase_core::{fold, sort};
+use jewelcase_core::{name_key, sort_key, tag_key};
 use jewelcase_scanner::ImageInfo;
 use rusqlite::{OptionalExtension, Result, Transaction, params};
 
@@ -16,7 +16,7 @@ pub fn find_or_create_artist(
     name: Option<&str>,
     now: i64,
 ) -> Result<i64> {
-    let key = name.map(fold::name_key).unwrap_or_default();
+    let key = name.map(name_key).unwrap_or_default();
     if let Some(id) = tx
         .query_row(
             "SELECT id FROM artists WHERE library_id = ?1 AND name_key = ?2",
@@ -27,7 +27,7 @@ pub fn find_or_create_artist(
     {
         return Ok(id);
     }
-    let sort_key = sort::sort_key(name.unwrap_or(""), None);
+    let sort_key = sort_key(name.unwrap_or(""), None);
     tx.query_row(
         "INSERT INTO artists (id, library_id, name, name_key, sort_key, added_at) \
          VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, ?5) RETURNING id",
@@ -47,7 +47,7 @@ pub fn find_or_create_album(
     artist_sort_key: &str,
     now: i64,
 ) -> Result<i64> {
-    let title_key = title.map(fold::name_key).unwrap_or_default();
+    let title_key = title.map(name_key).unwrap_or_default();
     if let Some(id) = tx
         .query_row(
             "SELECT id FROM albums WHERE library_id = ?1 AND title_key = ?2 AND artists_key = ?3",
@@ -66,8 +66,9 @@ pub fn find_or_create_album(
     )
 }
 
+/// The genre of `lib` whose tag key `name` folds to, added if new.
 pub fn find_or_create_tag(tx: &Transaction<'_>, lib: i64, name: &str) -> Result<i64> {
-    let key = fold::tag_key(name);
+    let key = tag_key(name);
     if let Some(id) = tx
         .query_row(
             "SELECT id FROM tags WHERE library_id = ?1 AND type = 'genre' AND name_key = ?2",
@@ -78,7 +79,7 @@ pub fn find_or_create_tag(tx: &Transaction<'_>, lib: i64, name: &str) -> Result<
     {
         return Ok(id);
     }
-    let sort_key = sort::sort_key(name, None);
+    let sort_key = sort_key(name, None);
     tx.query_row(
         "INSERT INTO tags (id, library_id, type, name, name_key, sort_key) \
          VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, 'genre', ?2, ?3, ?4) RETURNING id",

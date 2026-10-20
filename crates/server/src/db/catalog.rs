@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-use jewelcase_core::sort;
+use jewelcase_core::sort_key;
 use rusqlite::{OptionalExtension, Result, Transaction, params};
 
 use super::feed::{self, Entity, Op};
@@ -274,7 +274,7 @@ fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i64) -> Resu
     // The tagged sort value where this artist is the primary credit, else derived from the name.
     let sort_key = tagged_sort
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| sort::sort_key(name.as_deref().unwrap_or(""), None).into_bytes());
+        .unwrap_or_else(|| sort_key(name.as_deref().unwrap_or(""), None).into_bytes());
     tx.execute(
         "UPDATE artists SET name = ?2, sort_key = ?3 WHERE id = ?1",
         params![artist, name, sort_key],
@@ -304,7 +304,7 @@ fn refresh_tag(tx: &Transaction<'_>, lib: i64, tag: i64, now: i64) -> Result<()>
     let name = name.unwrap_or_default();
     tx.execute(
         "UPDATE tags SET name = ?2, sort_key = ?3 WHERE id = ?1",
-        params![tag, name, sort::sort_key(&name, None).into_bytes()],
+        params![tag, name, sort_key(&name, None).into_bytes()],
     )?;
     feed::record(tx, lib, Entity::Tag, tag, Op::Upsert, now)
 }

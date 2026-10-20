@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use jewelcase_core::lrc::SyncedLine;
+use jewelcase_scanner::lrc::SyncedLine;
 use rusqlite::OptionalExtension;
 use rusqlite::types::Type;
 use serde::Serialize;

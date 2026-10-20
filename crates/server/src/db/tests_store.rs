@@ -846,7 +846,7 @@ fn record(root: &Path, i: usize) -> TrackRecord {
         path,
         size: 30_000_000 + i as u64,
         mtime_ms: 1_700_000_000_000 + i as u64,
-        tags: jewelcase_core::TagSet {
+        tags: TagSet {
             title: Some(format!("Track {i}")),
             artists: vec![artist.clone()],
             album: Some(album),
@@ -854,10 +854,10 @@ fn record(root: &Path, i: usize) -> TrackRecord {
             track_number: Some((i % 10 + 1) as u32),
             track_total: Some(10),
             genres: vec![format!("Genre {}", i % 3)],
-            release_date: jewelcase_core::PartialDate::parse("1999"),
+            release_date: PartialDate::parse("1999"),
             ..Default::default()
         },
-        properties: jewelcase_core::AudioProperties {
+        properties: AudioProperties {
             format: Format::Flac,
             duration_ms: 240_000,
             sample_rate: Some(44_100),

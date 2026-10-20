@@ -3,10 +3,10 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use jewelcase_core::{AudioProperties, Lyrics, TagSet};
 use serde::{Deserialize, Serialize};
 
 pub use crate::image::ImageInfo;
+use crate::{AudioProperties, Lyrics, TagSet};
 
 pub type LibraryId = String;
 pub type TrackId = u64;

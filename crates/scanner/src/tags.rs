@@ -9,8 +9,7 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
-use jewelcase_core::multi_value;
-use jewelcase_core::{AudioProperties, Format, Lyrics, PartialDate, TagSet};
+use jewelcase_core::Format;
 use lofty::config::ParseOptions;
 use lofty::error::{FileParseError, UnknownFormatError, UnsupportedTagError};
 use lofty::file::{AudioFile, FileType, TaggedFile, TaggedFileExt};
@@ -18,6 +17,8 @@ use lofty::mp4::{Mp4Codec, Mp4File};
 use lofty::picture::PictureType;
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, Tag, TagType};
+
+use crate::{AudioProperties, Lyrics, PartialDate, TagSet, multi_value};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {

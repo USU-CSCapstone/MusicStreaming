@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use axum::Router;
-use jewelcase_core::sort::sort_key;
+use jewelcase_core::sort_key;
 use rusqlite::{Result, Transaction};
 
 use crate::db::Database;

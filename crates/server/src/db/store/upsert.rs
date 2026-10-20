@@ -1,7 +1,7 @@
 //! Writing one scanned file: its track row, credits, genres, lyrics, and artwork, in the batch's
 //! transaction.
 
-use jewelcase_core::fold;
+use jewelcase_core::artists_key;
 use jewelcase_scanner::{ArtworkSource, TrackRecord};
 use rusqlite::{OptionalExtension, Result, Transaction, params};
 
@@ -59,7 +59,7 @@ pub fn upsert_track(
     for name in &album_credits {
         album_artist_ids.push(find_or_create_artist(tx, lib, *name, now)?);
     }
-    let artists_key = fold::artists_key(album_credits.iter().map(|n| n.unwrap_or("")));
+    let artists_key = artists_key(album_credits.iter().map(|n| n.unwrap_or("")));
     let album_id = find_or_create_album(
         tx,
         lib,
@@ -188,7 +188,7 @@ pub fn upsert_track(
     tx.execute("DELETE FROM track_lyrics WHERE track_id = ?1", [id])?;
     if let Some(l) = lyrics {
         let synced = if l.synced {
-            let lines = jewelcase_core::lrc::parse(&l.text);
+            let lines = jewelcase_scanner::lrc::parse(&l.text);
             if lines.is_empty() { None } else { Some(serde_json::to_string(&lines).unwrap()) }
         } else {
             None

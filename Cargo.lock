@@ -1442,14 +1442,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jewelcase-core-wasm"
-version = "0.1.0"
-dependencies = [
- "jewelcase-core",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "jewelcase-ffmpeg"
 version = "0.1.0"
 dependencies = [

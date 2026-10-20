@@ -8,8 +8,8 @@ mod common;
 use std::path::Path;
 
 use common::*;
-use jewelcase_core::{Format, Lyrics, PartialDate, TagSet};
-use jewelcase_scanner::tags;
+use jewelcase_core::Format;
+use jewelcase_scanner::{Lyrics, PartialDate, TagSet, tags};
 use lofty::config::WriteOptions;
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::*;

@@ -13,10 +13,8 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use jewelcase_core::Lyrics;
-
-use crate::image;
 use crate::types::{Biography, SidecarImage, SidecarLyrics};
+use crate::{Lyrics, image};
 
 /// `cover.*` — album art (`requirements/scanning.md` §3.1).
 pub const COVER_STEM: &str = "cover";

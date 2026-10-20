@@ -1,6 +1,6 @@
 //! Catalog rows for tests: artists, albums, tracks, and images.
 
-use jewelcase_core::sort::sort_key;
+use jewelcase_core::sort_key;
 use rusqlite::{Connection, Result, params};
 
 /// An artist, added at `added_at`.

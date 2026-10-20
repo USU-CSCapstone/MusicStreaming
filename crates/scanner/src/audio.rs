@@ -1,8 +1,7 @@
 //! Technical audio properties (`requirements/tracks.md` §4).
 
+use jewelcase_core::Format;
 use serde::{Deserialize, Serialize};
-
-use crate::Format;
 
 /// What a track's audio actually is. Every field comes from the file's
 /// headers, read by the scanner; nothing here is inferred.

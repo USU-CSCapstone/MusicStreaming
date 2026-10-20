@@ -11,14 +11,14 @@ The one thing this design exists to get right: **incremental cost is proportiona
 
 ```
 crates/
-├── core/        # TagSet, AudioProperties, Format, sort keys — pure
+├── core/        # Format, sort keys, name folding, search — pure
 ├── ffmpeg/      # subprocess wrapper: probe, decode, transcode, process pool
 ├── scanner/     # this design
 └── server/      # SQLite store, admin API, wires the three together
 ```
 
-- **The scanner is its own crate, not part of the core.** The core is pure by rule ([`general.md` §3](general.md#3-shared-core)); scanning is nothing but I/O. The scanner *calls* the core for normalization and sort keys, so a track's sort position is fixed at scan time and never recomputed by a client.
-- **The domain types it produces live in the core.** `TagSet`, `AudioProperties`, and `Format` are what clients receive, so they are shared, and the WebAssembly build carries them at no cost.
+- **The scanner is its own crate, not part of the core.** The core is pure by rule ([`general.md` §3](general.md#3-shared-core)); scanning is nothing but I/O. The scanner calls the core only for sort keys, so a track's sort position is fixed at scan time and never recomputed by a client, and uses its `Format`. The server's store, not the scanner, calls the core's name folding when it finds or creates artists, albums, and tags.
+- **Its types and ingestion rules live in the scanner.** `TagSet`, `AudioProperties`, multi-value splitting, and LRC parsing are ingestion rules: the server stores and serves their results, and no device reads a tag or parses LRC. `Format` lives in the core, since ffmpeg checks its decoders against the same list.
 - **Persistence is a trait the server implements.** The scanner speaks to a `Store` with a handful of batch operations (upsert tracks, mark missing, record problems, append feed entries) and never opens SQLite itself. This keeps scanner tests on an in-memory store and keeps SQLite specifics in one crate.
 - **ffmpeg is a separate crate because two consumers need it.** Analysis decodes with it; playback transcodes with it ([`requirements/playback.md` §1](../requirements/playback.md#1-delivery)). One process pool with one priority policy is the only way the governor ([§10](#10-priority-and-pacing)) can see every ffmpeg process at once.
 

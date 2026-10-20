@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
-use jewelcase_core::sort::sort_key;
+use jewelcase_core::sort_key;
 
 use crate::confine::without_links;
 use crate::discover::{

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use jewelcase_core::search::{Document, Index, Kind};
+use jewelcase_core::{Document, Index, Kind};
 use rusqlite::Connection;
 
 use crate::db::{Database, DbError};

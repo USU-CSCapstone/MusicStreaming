@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use jewelcase_core::sort;
+use jewelcase_core::sort_key;
 use rusqlite::types::Value;
 use rusqlite::{Connection, Result};
 
@@ -139,7 +139,7 @@ pub fn check(store: &SqliteStore, step: &str) {
                     Value::Text(name) => name.clone(),
                     _ => String::new(),
                 };
-                row[2] = Value::Blob(sort::sort_key(&name, None).into_bytes());
+                row[2] = Value::Blob(sort_key(&name, None).into_bytes());
             }
         }
         assert_eq!(stored, scratch, "{what} after {step}");

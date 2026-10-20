@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use jewelcase_core::PartialDate;
 use jewelcase_scanner::*;
 
 use super::recompute::{assert_fed, check, snapshot};
