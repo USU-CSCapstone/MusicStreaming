@@ -24,14 +24,15 @@ async fn searched(db: &Database, id: i64, user: i64, query: &'static str, at: i6
     db.write(move |tx| {
         tx.execute(
             "INSERT INTO recent_searches (id, user_id, library_id, query, folded, searched_at, \
-                                          found_tracks, selected_type, selected_id) \
-             VALUES (?1, ?2, 1, ?3, ?3, ?4, ?5, 'track', 11)",
-            rusqlite::params![id, user, query, at, tracks],
+                                          selected_type, selected_id) \
+             VALUES (?1, ?2, 1, ?3, ?3, ?4, 'track', 11)",
+            rusqlite::params![id, user, query, at],
         )?;
         tx.execute(
-            "INSERT INTO search_events (user_id, library_id, kind, search_id, created_at) \
-             VALUES (?1, 1, 'searched', ?2, ?3)",
-            rusqlite::params![user, id, at],
+            "INSERT INTO search_events (user_id, library_id, kind, search_id, found_tracks, \
+                                        found_albums, found_artists, created_at) \
+             VALUES (?1, 1, 'searched', ?2, ?3, 0, 0, ?4)",
+            rusqlite::params![user, id, tracks, at],
         )
     })
     .await
@@ -82,6 +83,7 @@ async fn a_removed_search_is_never_sent_and_a_forget_follows_what_it_names() {
         panic!("not searches")
     };
     assert_eq!(found.iter().map(|s| s.id).collect::<Vec<_>>(), [2], "removed before it was sent");
+    assert_eq!(found[0].found.tracks, 1, "what it found, as its event noted");
     let forgotten = one(deliver(&db, 0, HANDLED).await, 7);
     assert!(
         matches!(forgotten, Event::SearchesForgotten(Some(ref ids)) if ids == &[3]),

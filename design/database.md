@@ -21,7 +21,7 @@ The SQLite schema behind `api/openapi.yaml`. Migrations are plain SQL in `crates
 
 **Why random IDs.** Sequential IDs are shared across libraries, so a user who sees track 1000 and then track 1003 learns that tracks 1001 and 1002 exist somewhere they cannot reach. That breaks "inaccessible is indistinguishable from nonexistent" (`requirements/users.md` §10). Random 64-bit IDs stay as compact as sequential ones for the catalog on device, and reveal nothing. Internal-only tables, such as `login_attempts` and the feeds, keep ordinary sequential rowids.
 
-**An ID a client chooses is keyed with its user.** A play keeps the `playId` its device chose, so it is counted once however often it is reported (`requirements/analytics.md` §6), and any other user can choose the same one, by chance or on purpose. So `plays` is keyed by `(user_id, id)`, `play_ends` and `play_starts` refer to a play by both, and one user's report never reaches another's play.
+**An ID a client chooses is keyed with its user.** A play keeps the `playId` its device chose, so it is counted once however often it is reported (`requirements/analytics.md` §6), and any other user can choose the same one, by chance or on purpose. So `plays` is keyed by `(user_id, id)`, `play_events` refers to a play by both, and one user's report never reaches another's play.
 
 **A signed-out device keeps its token hash.** `devices.revoked_reason` marks it signed out, so a request with its token is answered `401 session_revoked` with the reason, which tells the device whether to keep its downloads (`requirements/offline.md` §9). Its row is deleted only by the device's own `logout` or with its account. Every sign-in makes a new random token, so a revoked one never authenticates again, and a suspended account's tokens, signed out or not, answer as unknown ones do (`requirements/users.md` §10).
 
@@ -83,9 +83,12 @@ The displayed name — `artists.name`, `albums.title`, `tags.name` — is the sp
 
 ## 6. Personal Data
 
-**`personal_stats` holds the `personal` object for every entity type**: play count and last played, per user. It is derived from plays and can be rebuilt from them (`requirements/analytics.md` §2). `entity_id` deliberately has no foreign key, because statistics survive their tracks being purged (`requirements/analytics.md` §8).
+**Listening statistics are read from `plays`**, never stored as a separate truth that could drift from them (`requirements/analytics.md` §2). None is served yet; each arrives with its section of the API, with whatever index it needs.
 
-Sorting by play count pages through `personal_stats` first, then continues through unplayed items by name.
+**Hooks that act for one user read their domain's outbox** (`design/general.md` §4), written by the same transaction as the activity:
+
+- `play_events` holds each play's start and end, for `playing` and `played`, with a `kind` and one sequence. The feed index `play_events_feed` is keyed `(library_id, user_id, kind, seq)`, so each hook's due check and batch read one range of its own kind, as `library_changes_kind_feed` does for the change hooks. A position caught up on ends never steps over later starts, nor the reverse, though ends pile up when a device catches up after being offline. Stale starts are swept on each new play through `play_events_started_age`, a partial index on starts alone, so the sweep never reads an end.
+- `search_events` names each search or forget, and keeps what a search found. Rows are written only for a user who shares their searches, and only then is the search index asked to count, so no one else's search pays for it.
 
 **A user's connection to a plugin is one row of `plugin_connections`**, keyed by plugin and user and the same in every library: their personal settings, when they connected, and `searches_shared_at`, null until they share their searches with it. Sharing is a column of the connection rather than a table of its own, so it can never exist without one, and disconnecting deletes both. Settings are kept as entered, secrets included, because the plugin needs them; the API never returns the secrets (`design/plugins.md` §7). A connection goes with its user. It is keyed by the plugin's ID rather than referencing `plugins`, so it outlives an uninstall, as grants and settings do (`0006_plugins.sql`).
 
@@ -121,7 +124,7 @@ Migrations are the exception: they run with foreign keys off, because rebuilding
 
 ## 9. Not Yet Modelled
 
-Playlists, queues, mixes, downloads, the job queue, external sources, the audit log, user settings, invites, password resets, and the completion-weighted score behind `sort=top`, which belongs in `personal_stats` with an index like `personal_stats_by_plays`. Each arrives with its section of the API, and adds its entity types to the account feed's `CHECK`.
+Playlists, queues, mixes, downloads, the job queue, external sources, the audit log, user settings, invites, password resets, the account change feed, and the completion-weighted score behind `sort=top`. Each arrives with its section of the API.
 
 **Until the first release, migration files are edited in place.** There is no compatibility to keep, so a data directory made with an older development schema must be recreated. From the release on, schema changes are only ever added as new numbered migrations.
 

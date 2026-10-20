@@ -1,5 +1,5 @@
 //! The plays a `played` hook delivers: those each user who connected the plugin has ended,
-//! from the feed of play ends (`0005_activity.sql`).
+//! from the ends in the feed of play events (`0005_activity.sql`).
 
 use jewelcase_plugins::{Play, PlayEnd};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -24,17 +24,18 @@ pub fn plays(
         .query_row(params![plugin, user], |row| row.get(0))
         .optional()?;
     let Some(connected_at) = connected_at else { return Ok((position, Vec::new())) };
-    let after = "e.library_id = ?1 AND e.user_id = ?2 AND e.seq > ?3 AND e.ended_at >= ?4";
+    let after = "e.library_id = ?1 AND e.user_id = ?2 AND e.kind = 'ended' AND e.seq > ?3 \
+                 AND e.reported_at >= ?4";
     let last: Option<i64> = conn
         .prepare_cached(&format!(
-            "SELECT max(seq) FROM (SELECT e.seq FROM play_ends e WHERE {after} \
+            "SELECT max(seq) FROM (SELECT e.seq FROM play_events e WHERE {after} \
              ORDER BY e.seq LIMIT ?5)"
         ))?
         .query_row(params![library, user, position, connected_at, BATCH], |row| row.get(0))?;
     let Some(next) = last else { return Ok((position, Vec::new())) };
     let plays = conn
         .prepare_cached(&format!(
-            "{TRACK_COLUMNS}, p.started_at, p.listen_time_ms, p.ended FROM play_ends e \
+            "{TRACK_COLUMNS}, p.started_at, p.listen_time_ms, p.ended FROM play_events e \
              JOIN plays p ON p.user_id = e.user_id AND p.id = e.play_id \
              JOIN tracks t ON t.id = p.track_id JOIN albums al ON al.id = t.album_id \
              WHERE {after} AND e.seq <= ?5 ORDER BY e.seq"

@@ -1,5 +1,5 @@
 //! What a `playing` hook delivers: the newest play a user who connected the plugin has started
-//! in a library, from the feed of play starts (`0005_activity.sql`).
+//! in a library, from the starts in the feed of play events (`0005_activity.sql`).
 //!
 //! "Now playing" that arrives late is wrong rather than late, so unlike every other hook this
 //! one never catches up. A start is delivered only while it is under [`FRESH_MS`] old and still
@@ -13,13 +13,14 @@ use super::super::library::{TRACK_COLUMNS, track};
 /// How long after the server first hears of a play it is still worth announcing.
 pub const FRESH_MS: i64 = 60_000;
 
-/// The condition, in SQL, for a start `st` of play `pl` to be delivered: by `user` in `library`
-/// after `position`, each an SQL expression; since they connected, as `s.connected_at` says;
-/// under [`FRESH_MS`] old at the time `?1`; and still playing.
+/// The condition, in SQL, for a play event `st` of play `pl` to be delivered: a start by `user`
+/// in `library` after `position`, each an SQL expression; since they connected, as
+/// `s.connected_at` says; under [`FRESH_MS`] old at the time `?1`; and still playing.
 pub fn deliverable(library: &str, user: &str, position: &str) -> String {
     format!(
-        "st.library_id = {library} AND st.user_id = {user} AND st.seq > {position} \
-         AND pl.ended IS NULL AND st.reported_at >= max(s.connected_at, ?1 - {FRESH_MS})"
+        "st.library_id = {library} AND st.user_id = {user} AND st.kind = 'started' \
+         AND st.seq > {position} AND pl.ended IS NULL \
+         AND st.reported_at >= max(s.connected_at, ?1 - {FRESH_MS})"
     )
 }
 
@@ -35,7 +36,7 @@ pub fn playing(
 ) -> rusqlite::Result<Option<(i64, Playing)>> {
     let deliverable = deliverable("?2", "?3", "?4");
     conn.prepare_cached(&format!(
-        "{TRACK_COLUMNS}, pl.started_at, st.seq FROM play_starts st \
+        "{TRACK_COLUMNS}, pl.started_at, st.seq FROM play_events st \
          JOIN plays pl ON pl.user_id = st.user_id AND pl.id = st.play_id \
          JOIN tracks t ON t.id = pl.track_id JOIN albums al ON al.id = t.album_id \
          JOIN plugin_connections s ON s.plugin_id = ?5 AND s.user_id = st.user_id \

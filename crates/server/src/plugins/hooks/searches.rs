@@ -4,7 +4,7 @@
 //!
 //! One event is one kind of thing, so a forget always reaches the plugin after the search it
 //! names. A search removed before it was delivered is never sent: the feed names searches, and
-//! their words live only in `recent_searches`.
+//! their words live only in `recent_searches`. What a search found is kept on its event.
 
 use jewelcase_plugins::{Event, Found, ResultKind, Search, Selected};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -50,41 +50,48 @@ pub fn searches(
     let kind = first.clone();
     let run: Vec<_> = rows.iter().take_while(|(_, k, _)| *k == kind).collect();
     let next = run.last().map_or(position, |(seq, ..)| *seq);
-    let ids = run.iter().filter_map(|(_, _, search)| *search);
     let event = match kind.as_str() {
         "searched" => {
-            let found = ids
-                .map(|id| search(conn, user, library, id))
+            let found = run
+                .iter()
+                .map(|(seq, ..)| search(conn, *seq))
                 .filter_map(Result::transpose)
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             (!found.is_empty()).then_some(Event::Searched(found))
         }
-        "forgotten" => Some(Event::SearchesForgotten(Some(ids.map(|id| id as u64).collect()))),
+        "forgotten" => {
+            let ids = run.iter().filter_map(|(_, _, search)| search.map(|id| id as u64));
+            Some(Event::SearchesForgotten(Some(ids.collect())))
+        }
         _ => Some(Event::SearchesForgotten(None)),
     };
     Ok((next, event))
 }
 
-/// `user`'s search `id` in `library`, if it is still there.
-fn search(conn: &Connection, user: i64, library: i64, id: i64) -> rusqlite::Result<Option<Search>> {
+/// The search that the `searched` event `seq` names, with what it found, if the search is still
+/// among its user's recent searches in the event's library.
+fn search(conn: &Connection, seq: i64) -> rusqlite::Result<Option<Search>> {
     conn.prepare_cached(
-        "SELECT query, found_tracks, found_albums, found_artists, selected_type, selected_id, \
-                searched_at FROM recent_searches WHERE id = ?1 AND user_id = ?2 AND library_id = ?3",
+        "SELECT r.id, r.query, e.found_tracks, e.found_albums, e.found_artists, r.selected_type, \
+                r.selected_id, r.searched_at FROM search_events e \
+         JOIN recent_searches r \
+              ON r.id = e.search_id AND r.user_id = e.user_id AND r.library_id = e.library_id \
+         WHERE e.seq = ?1",
     )?
-    .query_row(params![id, user, library], |row| {
-        let kind = match row.get::<_, Option<String>>(4)?.as_deref() {
+    .query_row([seq], |row| {
+        let kind = match row.get::<_, Option<String>>(5)?.as_deref() {
             Some("track") => Some(ResultKind::Track),
             Some("album") => Some(ResultKind::Album),
             Some("artist") => Some(ResultKind::Artist),
             _ => None,
         };
-        let selected_id: Option<i64> = row.get(5)?;
+        let selected_id: Option<i64> = row.get(6)?;
         Ok(Search {
-            id: id as u64,
-            query: row.get(0)?,
-            found: Found { tracks: row.get(1)?, albums: row.get(2)?, artists: row.get(3)? },
+            id: row.get::<_, i64>(0)? as u64,
+            query: row.get(1)?,
+            found: Found { tracks: row.get(2)?, albums: row.get(3)?, artists: row.get(4)? },
             selected: kind.zip(selected_id).map(|(kind, id)| Selected { kind, id: id as u64 }),
-            searched_at: row.get::<_, i64>(6)? as u64,
+            searched_at: row.get::<_, i64>(7)? as u64,
         })
     })
     .optional()

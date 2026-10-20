@@ -9,7 +9,7 @@ use serde_json::json;
 use super::super::due::event;
 use super::super::playing::FRESH_MS;
 use super::super::{Due, Hook, MAX_FAILURES};
-use super::{HANDLED, HOUR, connected, deliver, one, play, setup, start, tracks_by_user};
+use super::{HANDLED, HOUR, connected, deliver, one, plan, play, setup, start, tracks_by_user};
 use crate::plugins::personal::disconnect;
 use crate::plugins::testing::connect;
 
@@ -29,6 +29,8 @@ async fn plays_reach_a_plugin_only_for_users_who_connected_it_and_only_since() {
     assert_eq!(summary, [(11, 200, 30_000, Finished), (12, 220, 30_000, Skipped)], "only theirs");
     assert_eq!(plays[0].track.artists, ["Aurora Lane"]);
     assert!(deliver(&db, 0, HANDLED).await.is_empty(), "each play is delivered once");
+    start(&db, "d", 7, 11, 300).await;
+    assert!(deliver(&db, 1000, HANDLED).await.is_empty(), "still playing, so not played yet");
 }
 
 #[tokio::test]
@@ -147,8 +149,8 @@ async fn a_deleted_users_plays_take_their_starts_and_ends_and_no_one_elses() {
             };
             Ok((
                 rows("SELECT user_id, id FROM plays")?,
-                rows("SELECT user_id, play_id FROM play_starts")?,
-                rows("SELECT user_id, play_id FROM play_ends")?,
+                rows("SELECT user_id, play_id FROM play_events WHERE kind = 'started'")?,
+                rows("SELECT user_id, play_id FROM play_events WHERE kind = 'ended'")?,
             ))
         })
         .await
@@ -193,28 +195,31 @@ async fn a_start_that_ended_or_went_stale_is_never_delivered() {
 }
 
 #[tokio::test]
-async fn starts_an_hour_old_are_cleared_away() {
+async fn starts_an_hour_old_are_cleared_away_and_ends_are_kept() {
     let (_temp, db, plugins) = setup().await;
     connected(&plugins, &db, &[ListeningActivity, Playing]).await;
+    play(&db, "ended", 7, 11, 0, "finished").await;
     start(&db, "old", 7, 11, 0).await;
     start(&db, "new", 7, 12, HOUR + 1).await;
-    let kept: Vec<String> = db
+    let kept: Vec<(String, String)> = db
         .read(|conn| {
-            conn.prepare("SELECT play_id FROM play_starts")?
-                .query_map([], |row| row.get(0))?
+            conn.prepare("SELECT play_id, kind FROM play_events ORDER BY seq")?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
                 .collect()
         })
         .await
         .unwrap();
-    assert_eq!(kept, ["new"]);
+    let kept: Vec<_> = kept.iter().map(|(play, kind)| (play.as_str(), kind.as_str())).collect();
+    assert_eq!(kept, [("ended", "ended"), ("new", "started")], "the end is still to be delivered");
 }
 
-/// The sweep mirrors the `plays_start` trigger's in `0005_activity.sql`, which runs on every
-/// new start: it reaches the old starts through `play_starts_age` rather than reading them all.
+/// The sweep mirrors the `plays_first_report` trigger's in `0005_activity.sql`, which runs on
+/// every new play: it reaches the old starts through `play_events_started_age`, which holds
+/// starts alone, rather than reading every event.
 #[tokio::test]
 async fn clearing_old_starts_reads_only_them() {
     let (_temp, db, _plugins) = setup().await;
-    let sweep = "DELETE FROM play_starts WHERE reported_at < ?1 - 3600000";
+    let sweep = "DELETE FROM play_events WHERE kind = 'started' AND reported_at < ?1 - 3600000";
     let steps: Vec<String> = db
         .read(move |conn| {
             conn.prepare(&format!("EXPLAIN QUERY PLAN {sweep}"))?
@@ -225,6 +230,31 @@ async fn clearing_old_starts_reads_only_them() {
         .unwrap();
     // Covering or not is the planner's choice, which depends on the version and statistics.
     let [step] = steps.as_slice() else { panic!("{steps:#?}") };
-    assert!(step.starts_with("SEARCH play_starts USING"), "{step}");
-    assert!(step.ends_with("INDEX play_starts_age (reported_at<?)"), "{step}");
+    assert!(step.starts_with("SEARCH play_events USING"), "{step}");
+    assert!(step.ends_with("INDEX play_events_started_age (reported_at<?)"), "{step}");
+    let index: String = db
+        .read(|conn| {
+            conn.query_row(
+                "SELECT sql FROM sqlite_master WHERE name = 'play_events_started_age'",
+                [],
+                |row| row.get(0),
+            )
+        })
+        .await
+        .unwrap();
+    assert!(index.ends_with("WHERE kind = 'started'"), "it holds no end: {index}");
+}
+
+/// Each listening hook finds itself due from its own kind of play event alone, so one that has
+/// caught up never steps over the other's: the ends a device reports as it catches up after
+/// being offline, or the starts of someone listening.
+#[tokio::test]
+async fn each_listening_hook_reads_only_its_own_kind_of_play_event() {
+    let (_temp, db, _plugins) = setup().await;
+    let feed = "USING INDEX play_events_feed (library_id=? AND user_id=? AND kind=? AND seq>?)";
+    for (hook, event) in [(Hook::Played, "SEARCH e "), (Hook::Playing, "SEARCH st ")] {
+        let steps = plan(&db, hook).await;
+        let reads = |step: &String| step.starts_with(event) && step.ends_with(feed);
+        assert!(steps.iter().any(reads), "{hook:?}: {steps:#?}");
+    }
 }

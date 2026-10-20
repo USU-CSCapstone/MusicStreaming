@@ -36,8 +36,10 @@ async fn noted(db: &Database, library: i64, search: i64, kept: bool, at: i64) {
             )?;
         }
         tx.execute(
-            "INSERT INTO search_events (user_id, library_id, kind, search_id, created_at) \
-             VALUES (7, ?1, iif(?3, 'searched', 'forgotten'), ?2, ?4)",
+            "INSERT INTO search_events (user_id, library_id, kind, search_id, found_tracks, \
+                                        found_albums, found_artists, created_at) \
+             VALUES (7, ?1, iif(?3, 'searched', 'forgotten'), ?2, iif(?3, 1, NULL), \
+                     iif(?3, 0, NULL), iif(?3, 0, NULL), ?4)",
             rusqlite::params![library, search, kept, at],
         )
     })

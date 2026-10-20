@@ -1,5 +1,6 @@
--- Listening and searching: plays and their outboxes for the played and playing hooks, where
--- each account's playback was, recent searches, and the searched hook's outbox.
+-- Listening and searching: plays and the played and playing hooks' outbox, where each account's
+-- playback was, recent searches, and the searched hook's outbox. Each hook reads its own
+-- domain's outbox (design/general.md §4).
 
 -- ───────────────────────────── Plays ─────────────────────────────
 
@@ -29,59 +30,44 @@ CREATE TABLE plays (
 CREATE INDEX plays_by_user ON plays (user_id, started_at);
 CREATE INDEX plays_by_device ON plays (device_id);
 
--- Every play that has ended, in the order it ended, for the played hook (requirements/plugins.md
--- §8). A play is reported many times, and only the first report with an end puts it here, so
--- each is delivered once (analytics.md §6).
-CREATE TABLE play_ends (
-    seq        INTEGER PRIMARY KEY AUTOINCREMENT,
-    play_id    TEXT    NOT NULL,
-    user_id    INTEGER NOT NULL,
-    library_id INTEGER NOT NULL,
-    ended_at   INTEGER NOT NULL,
+-- What the played and playing hooks deliver, in the order the server heard it: each play that
+-- ended, for played (requirements/plugins.md §8), and each play reported before it ended, for
+-- playing (design/hooks.md §1.1). A play is reported many times, and only the first report with
+-- an end adds its end, so each is delivered once (analytics.md §6). A play first reported
+-- already ended was never playing as far as anyone here knew, and has no start. `reported_at`
+-- is when the server heard the start or the end, since a device's own clock, and a device
+-- catching up after being offline, could make any play look current.
+CREATE TABLE play_events (
+    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+    play_id     TEXT    NOT NULL,
+    user_id     INTEGER NOT NULL,
+    library_id  INTEGER NOT NULL,
+    kind        TEXT    NOT NULL CHECK (kind IN ('started', 'ended')),
+    reported_at INTEGER NOT NULL,
     FOREIGN KEY (user_id, play_id) REFERENCES plays (user_id, id) ON DELETE CASCADE
 ) STRICT;
 
-CREATE INDEX play_ends_feed ON play_ends (library_id, user_id, seq);
-CREATE INDEX play_ends_by_play ON play_ends (user_id, play_id);
+-- Each hook reads only its own kind, so one that has caught up never steps over the other's:
+-- ends pile up as a device that was offline catches up, and starts as someone listens.
+CREATE INDEX play_events_feed ON play_events (library_id, user_id, kind, seq);
+CREATE INDEX play_events_by_play ON play_events (user_id, play_id);
+CREATE INDEX play_events_started_age ON play_events (reported_at) WHERE kind = 'started';
 
-CREATE TRIGGER plays_end_at_once AFTER INSERT ON plays WHEN NEW.ended IS NOT NULL
+-- Nothing is announced as playing late, so a start an hour old is of no use to anyone: each new
+-- play clears those, and the starts stay few.
+CREATE TRIGGER plays_first_report AFTER INSERT ON plays
 BEGIN
-    INSERT INTO play_ends (play_id, user_id, library_id, ended_at)
-    VALUES (NEW.id, NEW.user_id, NEW.library_id, NEW.updated_at);
+    INSERT INTO play_events (play_id, user_id, library_id, kind, reported_at)
+    VALUES (NEW.id, NEW.user_id, NEW.library_id, iif(NEW.ended IS NULL, 'started', 'ended'),
+            NEW.updated_at);
+    DELETE FROM play_events WHERE kind = 'started' AND reported_at < NEW.updated_at - 3600000;
 END;
 
 CREATE TRIGGER plays_end AFTER UPDATE OF ended ON plays
 WHEN OLD.ended IS NULL AND NEW.ended IS NOT NULL
 BEGIN
-    INSERT INTO play_ends (play_id, user_id, library_id, ended_at)
-    VALUES (NEW.id, NEW.user_id, NEW.library_id, NEW.updated_at);
-END;
-
--- Every play reported before it ended, in the order the server first heard of it, for the
--- playing hook (design/hooks.md §1.1). `reported_at` is the server's time of that first report,
--- since a device's own clock, and a device catching up after being offline, could make any play
--- look current. A play first reported already ended was never playing as far as anyone here
--- knew, and is not a start.
-CREATE TABLE play_starts (
-    seq         INTEGER PRIMARY KEY AUTOINCREMENT,
-    play_id     TEXT    NOT NULL,
-    user_id     INTEGER NOT NULL,
-    library_id  INTEGER NOT NULL,
-    reported_at INTEGER NOT NULL,
-    FOREIGN KEY (user_id, play_id) REFERENCES plays (user_id, id) ON DELETE CASCADE
-) STRICT;
-
-CREATE INDEX play_starts_feed ON play_starts (library_id, user_id, seq);
-CREATE INDEX play_starts_by_play ON play_starts (user_id, play_id);
-CREATE INDEX play_starts_age ON play_starts (reported_at);
-
--- Nothing here is delivered late, so a start an hour old is of no use to anyone: each new one
--- clears those, and the table stays small.
-CREATE TRIGGER plays_start AFTER INSERT ON plays WHEN NEW.ended IS NULL
-BEGIN
-    INSERT INTO play_starts (play_id, user_id, library_id, reported_at)
-    VALUES (NEW.id, NEW.user_id, NEW.library_id, NEW.updated_at);
-    DELETE FROM play_starts WHERE reported_at < NEW.updated_at - 3600000;
+    INSERT INTO play_events (play_id, user_id, library_id, kind, reported_at)
+    VALUES (NEW.id, NEW.user_id, NEW.library_id, 'ended', NEW.updated_at);
 END;
 
 -- ───────────────────────────── Player ─────────────────────────────
@@ -119,11 +105,6 @@ CREATE TABLE recent_searches (
     selected_type TEXT    CHECK (selected_type IN ('track', 'album', 'artist')),
     selected_id   INTEGER,
     searched_at   INTEGER NOT NULL,
-    -- How many of the user's own tracks, albums, and artists the search matched, counted as it
-    -- was recorded. A search that found nothing is what a wishlist is made of.
-    found_tracks  INTEGER NOT NULL DEFAULT 0,
-    found_albums  INTEGER NOT NULL DEFAULT 0,
-    found_artists INTEGER NOT NULL DEFAULT 0,
     CHECK ((selected_type IS NULL) = (selected_id IS NULL))
 ) STRICT;
 
@@ -139,15 +120,23 @@ CREATE INDEX recent_searches_age ON recent_searches (searched_at);
 -- written when they turn sharing off, goes to that plugin alone, asking it to forget everything
 -- it was sent. Rows age out with recent searches.
 CREATE TABLE search_events (
-    seq        INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-    library_id INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
-    kind       TEXT    NOT NULL CHECK (kind IN ('searched', 'forgotten', 'stopped')),
-    search_id  INTEGER,
-    plugin_id  TEXT,
-    created_at INTEGER NOT NULL,
+    seq           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    library_id    INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
+    kind          TEXT    NOT NULL CHECK (kind IN ('searched', 'forgotten', 'stopped')),
+    search_id     INTEGER,
+    plugin_id     TEXT,
+    -- For a search, how many of the user's own tracks, albums, and artists it matched, counted
+    -- as it was recorded. A search that found nothing is what a wishlist is made of.
+    found_tracks  INTEGER,
+    found_albums  INTEGER,
+    found_artists INTEGER,
+    created_at    INTEGER NOT NULL,
     CHECK ((kind = 'stopped') = (search_id IS NULL)),
-    CHECK ((kind = 'stopped') = (plugin_id IS NOT NULL))
+    CHECK ((kind = 'stopped') = (plugin_id IS NOT NULL)),
+    CHECK (kind <> 'searched'
+           OR (found_tracks IS NOT NULL AND found_albums IS NOT NULL AND found_artists IS NOT NULL)),
+    CHECK (kind = 'searched' OR coalesce(found_tracks, found_albums, found_artists) IS NULL)
 ) STRICT;
 
 CREATE INDEX search_events_feed ON search_events (library_id, user_id, seq);

@@ -79,8 +79,8 @@ CREATE TABLE plugin_cursors (
     user_id    INTEGER NOT NULL DEFAULT 0,
     -- tracksChanged, albumsChanged, artistsChanged: the last `library_changes.seq` of their
     -- kind delivered. scanFinished: when the last scan delivered finished. schedule: when it
-    -- last ran. played: the last `play_ends.seq` delivered. playing: the last
-    -- `play_starts.seq` delivered, or passed over as stale. searched: the last
+    -- last ran. played: the last `play_events.seq` of an end delivered. playing: the last
+    -- `play_events.seq` of a start delivered, or passed over as stale. searched: the last
     -- `search_events.seq` delivered. Zero is before everything, so a plugin new to a library
     -- works through all of it.
     position   INTEGER NOT NULL DEFAULT 0,

@@ -11,8 +11,9 @@
 //! leaves it after it has stood a moment. Searching the same words again, ignoring case and
 //! accents, replaces the earlier entry, so it moves to the top under a new ID.
 //!
-//! For a user who shares their searches with a plugin, each one recorded, and each one they
-//! remove, is noted for the `searched` hook (`0005_activity.sql`). Only explicit removal
+//! For a user who shares their searches with a plugin, each one recorded, with how much it found,
+//! and each one they remove, is noted for the `searched` hook (`0005_activity.sql`). Nothing else
+//! reads what a search found, so it is counted only for such a user. Only explicit removal
 //! asks a plugin to forget: a search replaced by the same words, pushed out by newer ones, or
 //! aged out of the window does not (`requirements/search.md` §6).
 
@@ -98,22 +99,39 @@ fn sweep(tx: &Transaction, now: i64) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Notes that `user` recorded or removed `search`, for the plugins they share their searches
-/// with; nothing if they share with none.
+/// Whether user `?1` shares their searches with any plugin.
+const SHARES: &str = "EXISTS (SELECT 1 FROM plugin_connections \
+                      WHERE user_id = ?1 AND searches_shared_at IS NOT NULL)";
+
+/// What a user did with one of their recent searches, as the `searched` hook is told it.
+enum Noted {
+    /// Recorded it, and it found this many tracks, albums, and artists.
+    Searched([i64; 3]),
+    /// Removed it.
+    Forgotten,
+}
+
+/// Notes what `user` did with `search`, for the plugins they share their searches with; nothing
+/// if they share with none.
 fn note(
     tx: &Transaction,
     user: i64,
     library: i64,
-    kind: &str,
     search: i64,
+    noted: Noted,
     now: i64,
 ) -> rusqlite::Result<()> {
+    let (kind, [tracks, albums, artists]) = match noted {
+        Noted::Searched(found) => ("searched", found.map(Some)),
+        Noted::Forgotten => ("forgotten", [None; 3]),
+    };
     tx.execute(
-        "INSERT INTO search_events (user_id, library_id, kind, search_id, created_at) \
-         SELECT ?1, ?2, ?3, ?4, ?5 \
-         WHERE EXISTS (SELECT 1 FROM plugin_connections \
-                       WHERE user_id = ?1 AND searches_shared_at IS NOT NULL)",
-        params![user, library, kind, search, now],
+        &format!(
+            "INSERT INTO search_events (user_id, library_id, kind, search_id, found_tracks, \
+                                        found_albums, found_artists, created_at) \
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8 WHERE {SHARES}"
+        ),
+        params![user, library, kind, search, tracks, albums, artists, now],
     )?;
     Ok(())
 }
@@ -164,9 +182,17 @@ pub async fn record(
             Some((*kind, *table, id))
         }
     };
-    let [tracks, albums, artists] = totals(&db, &indexes, library, &query).await?;
-    let found = [tracks, albums, artists].map(|n| n as i64);
     let user = caller.user;
+    // Only the `searched` hook reads what a search found, so it is counted only for a user who
+    // shares their searches.
+    let shares = db
+        .read(move |conn| conn.query_row(&format!("SELECT {SHARES}"), [user], |row| row.get(0)))
+        .await?;
+    let found = if shares {
+        Some(totals(&db, &indexes, library, &query).await?.map(|n| n as i64))
+    } else {
+        None
+    };
     let recorded = db
         .write(move |tx| {
             if let Some((_, table, id)) = selected
@@ -183,13 +209,16 @@ pub async fn record(
             let (kind, id) = selected.map(|(kind, _, id)| (kind, id)).unzip();
             let id: i64 = tx.query_row(
                 "INSERT INTO recent_searches (user_id, library_id, query, folded, selected_type, \
-                                              selected_id, searched_at, found_tracks, \
-                                              found_albums, found_artists) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id",
-                params![user, library, query, folded, kind, id, now, found[0], found[1], found[2]],
+                                              selected_id, searched_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id",
+                params![user, library, query, folded, kind, id, now],
                 |row| row.get(0),
             )?;
-            note(tx, user, library, "searched", id, now)?;
+            // Someone who shared nothing when it was counted is not sent it, even if they have
+            // turned sharing on since.
+            if let Some(found) = found {
+                note(tx, user, library, id, Noted::Searched(found), now)?;
+            }
             // Only the newest are kept.
             tx.execute(
                 "DELETE FROM recent_searches WHERE user_id = ?1 AND library_id = ?2 AND id NOT IN \
@@ -225,7 +254,7 @@ pub async fn delete(
                 params![search, user, library],
             )?;
             if deleted > 0 {
-                note(tx, user, library, "forgotten", search, now)?;
+                note(tx, user, library, search, Noted::Forgotten, now)?;
             }
             Ok(deleted)
         })
@@ -253,7 +282,7 @@ pub async fn clear(
             .query_map(params![user, library], |row| row.get(0))?
             .collect::<rusqlite::Result<_>>()?;
         for search in cleared {
-            note(tx, user, library, "forgotten", search, now)?;
+            note(tx, user, library, search, Noted::Forgotten, now)?;
         }
         Ok(())
     })

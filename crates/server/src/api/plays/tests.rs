@@ -45,10 +45,10 @@ async fn plays(db: &Database) -> Vec<(String, i64, i64, i64, Option<String>)> {
     .unwrap()
 }
 
-/// The number of rows in `table`.
-async fn count(db: &Database, table: &'static str) -> i64 {
+/// The number of play events of `kind`, `started` or `ended`, for the playing and played hooks.
+async fn events(db: &Database, kind: &'static str) -> i64 {
     db.read(move |conn| {
-        conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0))
+        conn.query_row("SELECT count(*) FROM play_events WHERE kind = ?1", [kind], |row| row.get(0))
     })
     .await
     .unwrap()
@@ -74,7 +74,7 @@ async fn a_play_is_recorded_once_and_keeps_its_most_listened_and_its_end() {
     let reports = json!([report("1", 31_000, json!("skipped"))]);
     assert_eq!(report_as_owner(&app, reports).await, StatusCode::NO_CONTENT);
     assert_eq!(
-        count(&db, "play_ends").await,
+        events(&db, "ended").await,
         1,
         "it ended once, for the played hook, however often it is reported"
     );
@@ -85,8 +85,8 @@ async fn a_play_first_reported_already_ended_ends_once_and_never_starts() {
     let (_temp, db, app) = app_with_tracks().await;
     let reports = json!([report("1", 30_000, json!("finished"))]);
     assert_eq!(report_as_owner(&app, reports).await, StatusCode::NO_CONTENT);
-    assert_eq!(count(&db, "play_ends").await, 1, "the played hook hears of it");
-    assert_eq!(count(&db, "play_starts").await, 0, "it was never playing as far as we knew");
+    assert_eq!(events(&db, "ended").await, 1, "the played hook hears of it");
+    assert_eq!(events(&db, "started").await, 0, "it was never playing as far as we knew");
 }
 
 /// Adds user 2, who reaches library 1 and is logged in on device 2 as `user-token`.
@@ -129,7 +129,7 @@ async fn two_users_plays_under_one_id_are_each_their_own() {
     // The users whose plays ended, in the order they did.
     let ended = || {
         db.read(|conn| {
-            conn.prepare("SELECT user_id FROM play_ends ORDER BY seq")?
+            conn.prepare("SELECT user_id FROM play_events WHERE kind = 'ended' ORDER BY seq")?
                 .query_map([], |row| row.get(0))?
                 .collect::<rusqlite::Result<Vec<i64>>>()
         })

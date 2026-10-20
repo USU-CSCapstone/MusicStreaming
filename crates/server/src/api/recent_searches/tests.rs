@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::super::testing::{add_device, add_user, app_with_tracks, json, owner_request, respond};
 use super::{KEPT, WINDOW_MS};
 use crate::db::Database;
-use crate::db::testing::access;
+use crate::db::testing::{Artist, Track, access};
 use crate::plugins::personal::set_search_sharing;
 use crate::plugins::testing::{connect, enable, grant, install, manifest, plugins};
 
@@ -167,19 +167,33 @@ async fn share_with_a_plugin(temp: &tempfile::TempDir, db: &Arc<Database>) {
     assert!(shared.is_ok());
 }
 
-/// The events noted for the `searched` hook: each kind and search.
-async fn events(db: &Database) -> Vec<(String, Option<i64>)> {
+/// What a search found: its tracks, albums, and artists.
+type Found = (i64, i64, i64);
+
+/// The events noted for the `searched` hook: each kind and search, and what a search found.
+async fn events(db: &Database) -> Vec<(String, Option<i64>, Option<Found>)> {
     db.read(|conn| {
-        conn.prepare("SELECT kind, search_id FROM search_events ORDER BY seq")?
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .collect()
+        conn.prepare(
+            "SELECT kind, search_id, found_tracks, found_albums, found_artists FROM search_events \
+             ORDER BY seq",
+        )?
+        .query_map([], |row| {
+            let found: (Option<i64>, Option<i64>, Option<i64>) =
+                (row.get(2)?, row.get(3)?, row.get(4)?);
+            let found = match found {
+                (Some(tracks), Some(albums), Some(artists)) => Some((tracks, albums, artists)),
+                _ => None,
+            };
+            Ok((row.get(0)?, row.get(1)?, found))
+        })?
+        .collect()
     })
     .await
     .unwrap()
 }
 
 #[tokio::test]
-async fn what_was_found_is_kept_and_noted_only_for_a_user_who_shares() {
+async fn what_was_found_is_noted_only_for_a_user_who_shares() {
     let (temp, db, app) = app_with_tracks().await;
     connect(&db, "other", 1, json!({}), 0).await;
     // Another user shares with a plugin, which says nothing of the owner.
@@ -195,22 +209,21 @@ async fn what_was_found_is_kept_and_noted_only_for_a_user_who_shares() {
     })
     .await
     .unwrap();
-    let (_, first) = record(&app, json!({ "query": "a" })).await;
-    let found: i64 = db
-        .read(|conn| conn.query_row("SELECT found_tracks FROM recent_searches", [], |r| r.get(0)))
-        .await
-        .unwrap();
-    assert_eq!(found, 2, "both of library 1's tracks are called A");
+    let (_, first) = record(&app, json!({ "query": "b" })).await;
+    let (_, removed) = record(&app, json!({ "query": "c" })).await;
+    let removed = format!("{URI}/{}", removed["id"].as_str().unwrap());
+    assert_eq!(send(&app, "DELETE", &removed).await, StatusCode::NO_CONTENT);
     assert!(
         events(&db).await.is_empty(),
         "the owner is connected, but shares with no plugin, though another user does"
     );
 
     share_with_a_plugin(&temp, &db).await;
-    let (_, second) = record(&app, json!({ "query": "b" })).await;
+    db.write(|tx| Artist::new(301, 1, "A").insert(tx)).await.unwrap();
+    let (_, second) = record(&app, json!({ "query": "a" })).await;
     let id = |search: &Value| search["id"].as_str().unwrap().parse::<i64>().unwrap();
     // Replaced by the same words: not a removal, so nothing to forget.
-    let (_, again) = record(&app, json!({ "query": "B" })).await;
+    let (_, again) = record(&app, json!({ "query": "A" })).await;
     assert_eq!(
         send(&app, "DELETE", &format!("{URI}/{}", id(&first))).await,
         StatusCode::NO_CONTENT
@@ -219,10 +232,54 @@ async fn what_was_found_is_kept_and_noted_only_for_a_user_who_shares() {
     assert_eq!(
         events(&db).await,
         [
-            ("searched".into(), Some(id(&second))),
-            ("searched".into(), Some(id(&again))),
-            ("forgotten".into(), Some(id(&first))),
-            ("forgotten".into(), Some(id(&again))),
-        ]
+            ("searched".into(), Some(id(&second)), Some((2, 0, 1))),
+            ("searched".into(), Some(id(&again)), Some((2, 0, 1))),
+            ("forgotten".into(), Some(id(&first)), None),
+            ("forgotten".into(), Some(id(&again)), None),
+        ],
+        "both of library 1's tracks and its one artist are called A, and its album is untitled"
     );
+}
+
+#[tokio::test]
+async fn only_a_noted_search_keeps_what_it_found_and_keeps_all_of_it() {
+    let (_temp, db, _app) = app_with_tracks().await;
+    let insert = |found: &'static str| {
+        let db = db.clone();
+        async move {
+            db.write(move |tx| {
+                tx.execute(
+                    &format!(
+                        "INSERT INTO search_events (user_id, library_id, kind, search_id, \
+                                                    found_tracks, found_albums, found_artists, \
+                                                    created_at) VALUES (1, 1, {found}, 0)"
+                    ),
+                    [],
+                )
+            })
+            .await
+        }
+    };
+    assert!(insert("'searched', 5, 1, 1, 1").await.is_ok(), "a search, with all three counts");
+    assert!(insert("'searched', 5, 1, NULL, 1").await.is_err(), "a search missing a count");
+    assert!(insert("'forgotten', 5, 0, NULL, NULL").await.is_err(), "a forget with a count");
+}
+
+/// Library 1's search index is built the first time anything searches it, and rebuilt only once
+/// the library's change feed moves. Adding a track here leaves the feed where it was, so an
+/// index built while the owner's search was recorded would never be rebuilt, and the search that
+/// follows would miss the track.
+#[tokio::test]
+async fn a_search_is_not_counted_for_a_user_who_shares_nothing() {
+    let (_temp, db, app) = app_with_tracks().await;
+    let (status, recorded) = record(&app, json!({ "query": "a" })).await;
+    assert_eq!(status, StatusCode::CREATED, "{recorded}");
+    db.write(|tx| {
+        Track { title: "A".into(), sort_key: b"a".to_vec(), ..Track::new(4, 1, 101) }.insert(tx)
+    })
+    .await
+    .unwrap();
+    let (status, found) = json(&app, "/api/v1/libraries/1/search?q=a&types=tracks").await;
+    assert_eq!(status, StatusCode::OK, "{found}");
+    assert_eq!(found["sections"][0]["total"], 3, "this search built the index, not the one before");
 }

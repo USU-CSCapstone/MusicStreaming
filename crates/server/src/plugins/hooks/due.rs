@@ -95,9 +95,9 @@ pub(super) fn queries() -> [(Hook, String); 8] {
     // For each user who connected it, plays they ended in the library since they did.
     let played = format!(
         "SELECT p.plugin_id, p.library_id, {} WHERE {READY} AND {} AND {} AND {} \
-         AND EXISTS (SELECT 1 FROM play_ends e WHERE e.library_id = p.library_id \
-                     AND e.user_id = s.user_id AND e.seq > coalesce(c.position, 0) \
-                     AND e.ended_at >= s.connected_at)",
+         AND EXISTS (SELECT 1 FROM play_events e WHERE e.library_id = p.library_id \
+                     AND e.user_id = s.user_id AND e.kind = 'ended' \
+                     AND e.seq > coalesce(c.position, 0) AND e.reported_at >= s.connected_at)",
         position(true),
         granted("played"),
         granted("listeningActivity"),
@@ -106,7 +106,7 @@ pub(super) fn queries() -> [(Hook, String); 8] {
     // For each user who connected it, a play they started in the library that is still fresh.
     let playing = format!(
         "SELECT p.plugin_id, p.library_id, {} WHERE {READY} AND {} AND {} AND {} \
-         AND EXISTS (SELECT 1 FROM play_starts st \
+         AND EXISTS (SELECT 1 FROM play_events st \
                      JOIN plays pl ON pl.user_id = st.user_id AND pl.id = st.play_id WHERE {})",
         position(true),
         granted("playing"),
