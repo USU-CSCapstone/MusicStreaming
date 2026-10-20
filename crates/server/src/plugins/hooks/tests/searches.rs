@@ -8,7 +8,7 @@ use super::{HANDLED, Hook, connected, deliver, one, plan, setup};
 use crate::db::{Database, now_ms};
 use crate::plugins::Plugins;
 use crate::plugins::personal::{SharingRefused, disconnect, set_search_sharing};
-use crate::plugins::testing::{connect, grant};
+use crate::plugins::testing::{connect, grant, install, manifest};
 
 /// `plugin` granted the searched hook and what it needs, and connected by user 7, who shares their
 /// searches with it from now; user 8 shares nothing. Returns a time since they began sharing.
@@ -116,6 +116,7 @@ async fn stopping_asks_the_plugin_to_forget_everything_even_once_disconnected() 
 async fn sharing_with_another_plugin_or_by_another_user_shares_nothing() {
     let (_temp, db, plugins) = setup().await;
     connected(&plugins, &db, &[SearchActivity, Searched]).await;
+    install(&db, manifest("other", &[])).await;
     // Both shared since the start; `other` is found first by a lookup that forgets the plugin.
     connect(&db, "other", 7, json!({}), 0).await;
     connect(&db, "plugin", 8, json!({}), 0).await;

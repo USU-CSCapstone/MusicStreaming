@@ -11,7 +11,7 @@ use super::super::playing::FRESH_MS;
 use super::super::{Due, Hook, MAX_FAILURES};
 use super::{HANDLED, HOUR, connected, deliver, one, plan, play, setup, start, tracks_by_user};
 use crate::plugins::personal::disconnect;
-use crate::plugins::testing::connect;
+use crate::plugins::testing::{connect, install, manifest};
 
 #[tokio::test]
 async fn plays_reach_a_plugin_only_for_users_who_connected_it_and_only_since() {
@@ -48,6 +48,7 @@ async fn two_users_plays_under_one_id_each_reach_only_their_own_user() {
 async fn a_connection_to_another_plugin_sends_this_one_nothing() {
     let (_temp, db, plugins) = setup().await;
     connected(&plugins, &db, &[ListeningActivity, Played, Playing]).await;
+    install(&db, manifest("other", &[])).await;
     // Connected since the start, and found first by a lookup that forgets the plugin.
     for user in [7, 8] {
         connect(&db, "other", user, json!({}), 0).await;

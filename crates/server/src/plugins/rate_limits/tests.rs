@@ -120,3 +120,31 @@ async fn a_run_keeps_to_every_limit_but_those_its_plugin_is_exempt_from() {
     let missing = plugins.remove_exemption("nothing".into(), "api.example".into()).await;
     assert!(matches!(missing, Err(PluginError::NotFound)));
 }
+
+#[tokio::test]
+async fn an_exemption_outlives_a_reinstall_only_with_its_network_request_unchanged() {
+    let (temp, db) = database().await;
+    let plugins = plugins(&temp, &db);
+    // Another plugin's network grant keeps nothing of this one's.
+    setter(&plugins, &db, "other", &[("other.example", "1/s")]).await;
+    setter(&plugins, &db, "plugin", &[("musicbrainz.org", "1/s")]).await;
+    let asked: serde_json::Value = db
+        .read(|conn| {
+            conn.query_row("SELECT manifest FROM plugins WHERE id = 'plugin'", [], |row| row.get(0))
+        })
+        .await
+        .map(|json: String| serde_json::from_str(&json).unwrap())
+        .unwrap();
+    let mut wider = asked.clone();
+    wider["permissions"][0]["destinations"] = json!(["musicbrainz.org", "other.example"]);
+    let mut faster = asked.clone();
+    faster["permissions"][0]["rateLimits"]["musicbrainz.org"]["limit"] = json!("2/s");
+    for (manifest, kept) in [(asked, true), (wider, false), (faster, false)] {
+        grant(&plugins, "plugin", &[Network, HostRateLimits], &[]).await;
+        plugins.add_exemption("plugin".into(), "api.example".into()).await.unwrap();
+        plugins.uninstall("plugin".into()).await.unwrap();
+        install(&db, manifest.clone()).await;
+        let exempt = db.read(|conn| exemptions(conn, "plugin")).await.unwrap();
+        assert_eq!(exempt.len(), usize::from(kept), "{manifest}");
+    }
+}

@@ -19,9 +19,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use jewelcase_plugins::{Host, InvalidPlugin, Permission};
+use jewelcase_plugins::{Host, InvalidPlugin, Manifest, Permission};
 use jewelcase_scanner::Scanner;
-use rusqlite::params;
+use rusqlite::{Connection, params};
 use tokio::runtime::Runtime;
 
 use crate::db::{Database, DbError, now_ms};
@@ -113,9 +113,10 @@ impl Plugins {
         self.install(bytes, Some(url)).await
     }
 
-    /// Installs the plugin in `bytes`, disabled in every library and with any grants it held
-    /// before (`requirements/plugins.md` §5), and returns its ID. A file that could never run
-    /// here is refused.
+    /// Installs the plugin in `bytes`, disabled in every library and with the grants it held
+    /// before for requests it makes again unchanged (`requirements/plugins.md` §4.2, §5), and
+    /// returns its ID. A file that could never run here, or a plugin installed already, is
+    /// refused.
     pub async fn install(
         &self,
         bytes: Vec<u8>,
@@ -144,17 +145,9 @@ impl Plugins {
         let installed = self
             .db
             .write(move |tx| {
-                let json = serde_json::to_string(&manifest).expect("a manifest serializes");
-                let now = now_ms();
-                let inserted = tx.execute(
-                    "INSERT INTO plugins (id, manifest, source_url, installed_at, updated_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?4) ON CONFLICT (id) DO NOTHING",
-                    params![manifest.id, json, source_url, now],
-                )?;
-                if inserted == 0 {
+                if !add(tx, &manifest, source_url.as_deref())? {
                     return Ok(false);
                 }
-                grants::keep_requested(tx, &manifest)?;
                 // Put in place within the transaction, so a row never names a missing file.
                 std::fs::rename(&staged, &target)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
@@ -169,12 +162,22 @@ impl Plugins {
         Ok(id)
     }
 
-    /// Uninstalls `id`. Files it wrote stay, and so do its grants, for a reinstall
-    /// (`requirements/plugins.md` §5).
+    /// Uninstalls `id`. Files it wrote stay, and so do its grants and settings, for a reinstall
+    /// (`requirements/plugins.md` §5). Its users' connections go with it, and so do the requests
+    /// to forget their searches meant for it, so after a reinstall, which starts every position
+    /// over, users connect again and nothing from before is sent twice.
     pub async fn uninstall(&self, id: String) -> Result<(), PluginError> {
         let path = self.path(&id);
-        let removed =
-            self.db.write(move |tx| tx.execute("DELETE FROM plugins WHERE id = ?1", [id])).await?;
+        let removed = self
+            .db
+            .write(move |tx| {
+                tx.execute(
+                    "DELETE FROM search_events WHERE kind = 'stopped' AND plugin_id = ?1",
+                    [&id],
+                )?;
+                tx.execute("DELETE FROM plugins WHERE id = ?1", [&id])
+            })
+            .await?;
         if removed == 0 {
             return Err(PluginError::NotFound);
         }
@@ -233,6 +236,24 @@ impl Drop for Plugins {
             runtime.shutdown_background();
         }
     }
+}
+
+/// Records `manifest`'s plugin as installed from `source_url`, keeping only the grants it held
+/// before whose requests it makes again unchanged ([`grants::keep_requested`]). False, changing
+/// nothing, if a plugin with its ID is installed: the row is never replaced, so what goes with
+/// it, such as its users' connections, goes only on a real uninstall.
+fn add(conn: &Connection, manifest: &Manifest, source_url: Option<&str>) -> rusqlite::Result<bool> {
+    let json = serde_json::to_string(manifest).expect("a manifest serializes");
+    let inserted = conn.execute(
+        "INSERT INTO plugins (id, manifest, source_url, installed_at) \
+         VALUES (?1, ?2, ?3, ?4) ON CONFLICT (id) DO NOTHING",
+        params![manifest.id, json, source_url, now_ms()],
+    )?;
+    if inserted == 0 {
+        return Ok(false);
+    }
+    grants::keep_requested(conn, manifest)?;
+    Ok(true)
 }
 
 #[cfg(test)]

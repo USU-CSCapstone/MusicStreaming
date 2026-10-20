@@ -2911,7 +2911,8 @@ export interface paths {
         /**
          * Install a plugin
          * @description From an uploaded file or a URL; no restart (`requirements/plugins.md` §5). Installed
-         *     disabled for every library. Settings from a previous install are restored.
+         *     disabled for every library. Settings from a previous install are restored, and grants
+         *     only for requests made again unchanged.
          */
         post: operations["adminInstallPlugin"];
         delete?: never;
@@ -2935,7 +2936,9 @@ export interface paths {
         post?: never;
         /**
          * Uninstall a plugin
-         * @description Files it wrote stay; content it sourced disappears. Its settings are kept for a reinstall.
+         * @description Files it wrote stay; content it sourced disappears. Its settings, and grants for requests
+         *     a reinstall makes again unchanged, are kept; users' connections to it are not, so they
+         *     connect again.
          */
         delete: operations["adminUninstallPlugin"];
         options?: never;
@@ -4706,8 +4709,6 @@ export interface components {
             };
             /** Format: date-time */
             installedAt: string;
-            /** Format: date-time */
-            updatedAt?: string;
             /** @description What it asks for, from its manifest. */
             permissions: components["schemas"]["PermissionRequest"][];
             /** @description Plugin-wide permissions granted. Library permissions are per library, below. */

@@ -126,7 +126,7 @@ CREATE INDEX recent_searches_age ON recent_searches (searched_at);
 -- than holding them: a search's words live only in `recent_searches`, so one deleted there is
 -- never sent. `searched` and `forgotten` go to every plugin the user shares with; `stopped`,
 -- written when they turn sharing off, goes to that plugin alone, asking it to forget everything
--- it was sent. Rows age out with recent searches.
+-- it was sent, and is deleted when that plugin is uninstalled. Rows age out with recent searches.
 CREATE TABLE search_events (
     seq           INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id       INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,

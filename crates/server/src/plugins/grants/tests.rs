@@ -3,13 +3,12 @@
 
 use std::sync::Arc;
 
-use jewelcase_plugins::Manifest;
 use jewelcase_plugins::Permission::{self, LibraryAdd, LibraryRead, Network, Schedule};
 use serde_json::{Value, json};
 
 use super::super::Plugins;
 use super::super::testing::{database, install, manifest, plugins};
-use super::{granted, keep_requested};
+use super::granted;
 use crate::db::Database;
 use crate::db::testing::library;
 
@@ -105,11 +104,50 @@ async fn a_deleted_librarys_grants_and_settings_go_with_it() {
     assert_eq!(settings, [0], "only the settings of every library are left");
 }
 
+/// The manifest of [`setup`]'s `plugin`, asking for the network only at `destinations`, at most
+/// once a second at `lrclib.net`, for a reason that JSON must escape.
+fn reaching(destinations: &[&str]) -> Value {
+    let mut manifest = asking(&[Network, Schedule, LibraryRead, LibraryAdd]);
+    manifest["permissions"][0]["destinations"] = json!(destinations);
+    manifest["permissions"][0]["reason"] = json!("To fetch \"synced\" lyrics\n— für \\ dich.");
+    manifest["permissions"][0]["rateLimits"] = json!({ "lrclib.net": "1/s" });
+    manifest
+}
+
+/// Uninstalls `plugin` and installs it again as `manifest` describes.
+async fn reinstall(db: &Database, plugins: &Plugins, manifest: Value) {
+    plugins.uninstall("plugin".into()).await.unwrap();
+    install(db, manifest).await;
+}
+
 #[tokio::test]
 async fn a_reinstall_keeps_only_the_grants_it_asks_for_again() {
     let (_temp, db, plugins) = setup().await;
     set(&plugins, &[Network, Schedule], &[(1, &[LibraryRead, LibraryAdd])]).await;
-    let asks: Manifest = serde_json::from_value(asking(&[Schedule, LibraryAdd])).unwrap();
-    db.write(move |tx| keep_requested(tx, &asks)).await.unwrap();
+    reinstall(&db, &plugins, asking(&[Schedule, LibraryAdd])).await;
     assert_eq!(held(&db, 1).await, ["libraryAdd", "schedule"]);
+}
+
+#[tokio::test]
+async fn a_reinstall_keeps_a_grant_only_for_the_same_request() {
+    let (temp, db) = database().await;
+    install(&db, reaching(&["lrclib.net"])).await;
+    let plugins = plugins(&temp, &db);
+    set(&plugins, &[Network, Schedule], &[(1, &[LibraryRead, LibraryAdd])]).await;
+    reinstall(&db, &plugins, reaching(&["lrclib.net"])).await;
+    let all = ["libraryAdd", "libraryRead", "network", "schedule"];
+    assert_eq!(held(&db, 1).await, all, "each asked for exactly as approved");
+
+    let mut changed = reaching(&["lrclib.net"]);
+    changed["permissions"][0]["rateLimits"] = json!({ "lrclib.net": "2/s" });
+    changed["permissions"][3]["required"] = json!(true);
+    reinstall(&db, &plugins, changed.clone()).await;
+    assert_eq!(held(&db, 1).await, ["libraryRead", "schedule"], "another limit, or now required");
+
+    set(&plugins, &[Network, Schedule], &[(1, &[LibraryRead, LibraryAdd])]).await;
+    changed["permissions"][0]["destinations"] = json!(["*"]);
+    changed["permissions"][1]["everyMinutes"] = json!(5);
+    changed["permissions"][2]["reason"] = json!("To read your tags.");
+    reinstall(&db, &plugins, changed).await;
+    assert_eq!(held(&db, 1).await, ["libraryAdd"], "any host, more often, or for another reason");
 }

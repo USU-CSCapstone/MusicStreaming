@@ -226,3 +226,16 @@ async fn what_a_user_set_is_read_only_for_that_plugin_and_that_user() {
         assert_eq!(Value::Object(stored), expected, "{id} for user {user}");
     }
 }
+
+#[tokio::test]
+async fn connecting_to_a_plugin_no_longer_installed_connects_nothing() {
+    let (temp, db) = database().await;
+    scrobbler(&plugins(&temp, &db), &db).await;
+    let connected = db.write(|tx| super::connect(tx, "gone", 7, "{}", 0)).await.unwrap();
+    assert!(!connected);
+    let count: i64 = db
+        .read(|conn| conn.query_row("SELECT count(*) FROM plugin_connections", [], |r| r.get(0)))
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}

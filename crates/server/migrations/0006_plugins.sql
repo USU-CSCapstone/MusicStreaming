@@ -1,9 +1,9 @@
 -- Installed plugins, what the admin granted them, where they are enabled, and what they keep
 -- (requirements/plugins.md). Each plugin's code is `state/plugins/<id>.wasm`.
 --
--- Grants, settings, exemptions, and users' connections outlive an uninstall, so a reinstall
--- needs no re-approval and keeps its configuration (§5): they are keyed by the plugin's id, not
--- its row. What belongs to an installation goes with it.
+-- Grants, settings, and exemptions outlive an uninstall, so a reinstall needs no re-approval and
+-- keeps its configuration (§5): they are keyed by the plugin's id, not its row. What belongs to
+-- an installation goes with it, users' connections included.
 
 CREATE TABLE plugins (
     id           TEXT    PRIMARY KEY,
@@ -11,8 +11,7 @@ CREATE TABLE plugins (
     manifest     TEXT    NOT NULL CHECK (json_valid(manifest)),
     -- Where it was installed from; null for an uploaded file.
     source_url   TEXT,
-    installed_at INTEGER NOT NULL,
-    updated_at   INTEGER NOT NULL
+    installed_at INTEGER NOT NULL
 ) STRICT;
 
 -- ───────────────────────────── Grants ─────────────────────────────
@@ -28,13 +27,14 @@ CREATE TABLE plugin_grants (
     -- the plugin itself, which holds in every library.
     library_id INTEGER NOT NULL DEFAULT 0,
     permission TEXT    NOT NULL,
-    -- The request the admin approved, as the manifest gave it; null where none is recorded.
-    approved   TEXT    CHECK (json_valid(approved) AND json_type(approved) = 'object'),
+    -- The manifest's request the admin approved, in the server's canonical JSON. A reinstall
+    -- keeps the grant only if its manifest makes exactly this request again.
+    approved   TEXT    NOT NULL CHECK (json_valid(approved) AND json_type(approved) = 'object'),
     PRIMARY KEY (plugin_id, library_id, permission)
 ) STRICT, WITHOUT ROWID;
 
 -- The hosts whose limits for every plugin an admin exempted a plugin from, lowercase
--- (`hostRateLimits`, design/plugins.md §7).
+-- (`hostRateLimits`, design/plugins.md §7). A reinstall keeps them only with its `network` grant.
 CREATE TABLE plugin_rate_limit_exemptions (
     plugin_id TEXT NOT NULL,
     host      TEXT NOT NULL,
@@ -114,9 +114,10 @@ END;
 -- Each user's connection to a plugin that acts for them, such as with their own account on a
 -- scrobbling service (§4.1, §6), the same in every library. Having a row is being connected,
 -- and a plugin receives a user's listening only once they have connected it. They go with the
--- user.
+-- user, and with the plugin: after a reinstall users connect again, so nothing they did before is
+-- sent twice.
 CREATE TABLE plugin_connections (
-    plugin_id          TEXT    NOT NULL,
+    plugin_id          TEXT    NOT NULL REFERENCES plugins (id) ON DELETE CASCADE,
     user_id            INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     -- Their personal settings, secrets included, which the API never returns.
     settings           TEXT    NOT NULL CHECK (json_valid(settings) AND json_type(settings) = 'object'),

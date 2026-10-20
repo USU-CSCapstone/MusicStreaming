@@ -26,7 +26,6 @@ pub struct Plugin {
     homepage: Option<String>,
     source: Source,
     installed_at: String,
-    updated_at: String,
     /// What it asks for.
     permissions: Vec<PermissionRequest>,
     /// Plugin-wide permissions granted.
@@ -79,13 +78,8 @@ struct LastRun {
     summary: String,
 }
 
-const SELECT: &str = concat!(
-    "SELECT id, manifest, source_url, ",
-    timestamp!("installed_at"),
-    ", ",
-    timestamp!("updated_at"),
-    " FROM plugins"
-);
+const SELECT: &str =
+    concat!("SELECT id, manifest, source_url, ", timestamp!("installed_at"), " FROM plugins");
 
 /// A library, and the plugin's standing in it if it was ever enabled or disabled there.
 struct LibraryRow {
@@ -127,7 +121,6 @@ struct Stored {
     manifest: Manifest,
     source_url: Option<String>,
     installed_at: String,
-    updated_at: String,
 }
 
 fn stored(row: &Row) -> rusqlite::Result<Stored> {
@@ -139,7 +132,6 @@ fn stored(row: &Row) -> rusqlite::Result<Stored> {
         })?,
         source_url: row.get(2)?,
         installed_at: row.get(3)?,
-        updated_at: row.get(4)?,
     })
 }
 
@@ -208,7 +200,6 @@ fn view(conn: &Connection, r: Stored, limits: &[HostLimit]) -> rusqlite::Result<
             None => Source { kind: "file", url: None },
         },
         installed_at: r.installed_at,
-        updated_at: r.updated_at,
         permissions: m.permissions,
         has_settings: m.settings.as_ref().is_some_and(|s| !s.properties.is_empty()),
         granted: plugin_wide,

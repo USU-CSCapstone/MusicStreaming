@@ -128,7 +128,7 @@ That is the trade, made knowingly when write access is granted, library by libra
 - **Disabling is immediate and complete.** A disabled plugin runs nothing, sees nothing, and reaches nothing.
 - **Uninstalling leaves the library alone.** Files a plugin wrote are ordinary files and stay; content it merely *sourced* disappears with it ([§10](#10-external-content-sources)).
 - **Updates are the admin's choice**, never automatic — code that may hold write access must not change underneath a running server. An update never widens its own access ([§4.2](#42-asking-and-approving)).
-- **Configuration and granted permissions survive a reinstall**, so removing a plugin to fix something does not mean setting it up again.
+- **Configuration and granted permissions survive a reinstall**, so removing a plugin to fix something does not mean setting it up again. A grant survives only for a request made again unchanged, and a changed one is asked again ([§4.2](#42-asking-and-approving)); users connect again.
 
 ---
 

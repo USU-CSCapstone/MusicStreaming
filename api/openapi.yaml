@@ -3559,7 +3559,8 @@ paths:
       summary: Install a plugin
       description: |
         From an uploaded file or a URL; no restart (`requirements/plugins.md` §5). Installed
-        disabled for every library. Settings from a previous install are restored.
+        disabled for every library. Settings from a previous install are restored, and grants
+        only for requests made again unchanged.
       operationId: adminInstallPlugin
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -3615,7 +3616,10 @@ paths:
     delete:
       tags: [Admin]
       summary: Uninstall a plugin
-      description: Files it wrote stay; content it sourced disappears. Its settings are kept for a reinstall.
+      description: |
+        Files it wrote stay; content it sourced disappears. Its settings, and grants for requests
+        a reinstall makes again unchanged, are kept; users' connections to it are not, so they
+        connect again.
       operationId: adminUninstallPlugin
       responses:
         '204': { description: Uninstalled. }
@@ -6564,7 +6568,6 @@ components:
               enum: [file, url]
             url: { type: string, format: uri }
         installedAt: { type: string, format: date-time }
-        updatedAt: { type: string, format: date-time }
         permissions:
           type: array
           description: What it asks for, from its manifest.

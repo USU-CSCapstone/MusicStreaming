@@ -218,27 +218,28 @@ impl Plugins {
             return Err(PluginError::SettingsInvalid(outcome.summary));
         }
         let json = Value::Object(values).to_string();
-        self.db.write(move |tx| connect(tx, &id, user, &json, now_ms())).await?;
-        Ok(())
+        let connected = self.db.write(move |tx| connect(tx, &id, user, &json, now_ms())).await?;
+        connected.then_some(()).ok_or(PluginError::NotFound)
     }
 }
 
 /// Connects `user` to `id` at `at` with `settings`, a JSON object, or replaces the settings they
-/// connected it with, keeping when they connected and whether they share their searches.
+/// connected it with, keeping when they connected and whether they share their searches. False,
+/// connecting nothing, if `id` is not installed, such as when it was uninstalled meanwhile.
 pub(super) fn connect(
     conn: &Connection,
     id: &str,
     user: i64,
     settings: &str,
     at: i64,
-) -> rusqlite::Result<()> {
-    conn.execute(
+) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
         "INSERT INTO plugin_connections (plugin_id, user_id, settings, connected_at) \
-         VALUES (?1, ?2, ?3, ?4) \
+         SELECT id, ?2, ?3, ?4 FROM plugins WHERE id = ?1 \
          ON CONFLICT (plugin_id, user_id) DO UPDATE SET settings = excluded.settings",
         params![id, user, settings, at],
     )?;
-    Ok(())
+    Ok(changed > 0)
 }
 
 /// Disconnects `user` from `id`: it stops being sent their searches, their settings are

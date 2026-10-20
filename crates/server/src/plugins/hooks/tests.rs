@@ -17,6 +17,7 @@ mod changes;
 mod libraries;
 mod listening;
 mod real;
+mod reinstall;
 mod scans;
 mod searches;
 

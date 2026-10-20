@@ -195,6 +195,7 @@ async fn events(db: &Database) -> Vec<(String, Option<i64>, Option<Found>)> {
 #[tokio::test]
 async fn what_was_found_is_noted_only_for_a_user_who_shares() {
     let (temp, db, app) = app_with_tracks().await;
+    install(&db, manifest("other", &[])).await;
     connect(&db, "other", 1, json!({}), 0).await;
     // Another user shares with a plugin, which says nothing of the owner.
     db.write(|tx| {

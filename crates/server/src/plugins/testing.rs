@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use jewelcase_plugins::{Api, Manifest, Permission, manifest};
-use rusqlite::params;
 use serde_json::{Value, json};
 
 use super::{Plugins, personal};
@@ -74,20 +73,14 @@ pub fn manifest(id: &str, permissions: &[Permission]) -> Value {
 }
 
 /// Installs the plugin `manifest` describes as [`Plugins::install`] leaves it once its file
-/// checks out: disabled everywhere, with nothing granted. Panics on a manifest the server would
-/// refuse.
+/// checks out: disabled everywhere, with only the grants it held before whose requests it makes
+/// again unchanged.
+/// Panics on a manifest the server would refuse, or one installed already.
 pub async fn install(db: &Database, manifest: Value) {
     let problems = manifest::validate(&manifest);
     assert!(problems.is_empty(), "{problems:?}");
     let manifest: Manifest = serde_json::from_value(manifest).unwrap();
-    db.write(move |tx| {
-        tx.execute(
-            "INSERT INTO plugins (id, manifest, installed_at, updated_at) VALUES (?1, ?2, 0, 0)",
-            params![manifest.id, serde_json::to_string(&manifest).unwrap()],
-        )
-    })
-    .await
-    .unwrap();
+    assert!(db.write(move |tx| super::add(tx, &manifest, None)).await.unwrap(), "installed");
 }
 
 /// Grants `id` exactly `plugin_wide` for itself and `in_library` in library 1, as the admin
@@ -120,9 +113,10 @@ pub async fn enable_ungranted(db: &Database, id: &'static str) {
     .unwrap();
 }
 
-/// Connects `user` to `id` with `settings` at `at`, as saving them does once the plugin accepts
-/// them. Only a running plugin can accept them, and the tests' plugins cannot reach the
-/// services they check against.
+/// Connects `user` to `id`, which must be installed, with `settings` at `at`, as saving them
+/// does once the plugin accepts them. Only a running plugin can accept them, and the tests'
+/// plugins cannot reach the services they check against.
 pub async fn connect(db: &Database, id: &'static str, user: i64, settings: Value, at: i64) {
-    db.write(move |tx| personal::connect(tx, id, user, &settings.to_string(), at)).await.unwrap();
+    let connected = db.write(move |tx| personal::connect(tx, id, user, &settings.to_string(), at));
+    assert!(connected.await.unwrap(), "{id} is installed");
 }
