@@ -52,6 +52,8 @@ The scanner is the only writer of content (`requirements/general.md` §3.2), so 
 
 The displayed name — `artists.name`, `albums.title`, `tags.name` — is the spelling most files use, so it follows the collection. Each track records how its file writes every name: `track_artists.artist_name`, `track_album_artists.artist_name`, `tracks.album_title`, and `track_tags.tag_name`. The scanner recounts from these whenever tracks change, without rereading files, and breaks ties by the spelling's bytes so a tie never flips the name between scans.
 
+**Library totals add up the albums.** Every track belongs to exactly one album (an unknown album for its album artists when its file names none), and an album's track count and duration include its missing tracks. So the library's `track_count` and `duration_us` are sums over its albums: in the same transaction the scanner first recomputes the albums a batch touched, and the rest are already current. That reads the library's albums rather than its tracks: about 5 ms warm and 35 ms cold at 500k tracks, against 60–80 ms warm and several hundred cold for summing the tracks. `album_count` and `artist_count` count rows.
+
 **Per-file tags stay on the track.** Spellings, `tracks.track_total`, and `disc_total` keep what each file says, and resolution happens once, into `album_discs` and `albums`. When tags disagree, the resolution rule lives in one place.
 
 ---

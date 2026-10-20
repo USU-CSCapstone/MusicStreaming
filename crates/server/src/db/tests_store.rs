@@ -231,6 +231,8 @@ mod suite {
     jewelcase_scanner::store_suite!(super::make);
 }
 
+mod totals;
+
 // ───────────────────────────── Derived rules ─────────────────────────────
 
 fn count(store: &SqliteStore, sql: &'static str) -> i64 {

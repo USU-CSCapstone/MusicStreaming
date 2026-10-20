@@ -3,7 +3,7 @@
 //! Recomputed for the entities a batch touched, never for the library.
 //! Order matters: album links first (they decide who is an album artist),
 //! then artists, then albums (whose artist sort key reads artists), then
-//! tags, then library totals.
+//! tags, then library totals (summed from the albums).
 
 use std::collections::HashSet;
 
@@ -74,13 +74,14 @@ pub fn recompute(tx: &Transaction<'_>, lib: i64, touched: &mut Touched, now: i64
     for tag in touched.tags.clone() {
         recompute_tag(tx, lib, tag, now)?;
     }
-    // 5. The library.
+    // 5. The library. Every track is on exactly one album, and an album counts its missing
+    // tracks too. Every album's counts are current once step 3 has run, so they add up to the
+    // library's tracks.
     tx.execute(
-        "UPDATE libraries SET \
-         track_count = (SELECT COUNT(*) FROM tracks WHERE library_id = ?1), \
-         album_count = (SELECT COUNT(*) FROM albums WHERE library_id = ?1), \
-         artist_count = (SELECT COUNT(*) FROM artists WHERE library_id = ?1), \
-         duration_us = (SELECT COALESCE(SUM(duration_us), 0) FROM tracks WHERE library_id = ?1) \
+        "UPDATE libraries SET (track_count, album_count, duration_us) = \
+         (SELECT COALESCE(SUM(track_count), 0), COUNT(*), COALESCE(SUM(duration_us), 0) \
+          FROM albums WHERE library_id = ?1), \
+         artist_count = (SELECT COUNT(*) FROM artists WHERE library_id = ?1) \
          WHERE id = ?1",
         [lib],
     )?;
