@@ -12,6 +12,7 @@
 	import { player } from '$lib/player.svelte';
 	import { songs } from '$lib/adding.svelte';
 	import { applyOps } from '$lib/playlist-ops';
+	import { nextSort, type SortField, type TrackSort } from '$lib/sorting';
 	import ArtistLinks from './ArtistLinks.svelte';
 	import Artwork from './Artwork.svelte';
 	import AddToPlaylistMenu from './AddToPlaylistMenu.svelte';
@@ -21,6 +22,8 @@
 		tracks,
 		variant = 'default',
 		added,
+		sort = null,
+		onsort,
 		sentinel,
 		empty = 'No songs.',
 		context = { type: 'library' },
@@ -37,6 +40,13 @@
 		 * playlists have one (`requirements/playlists.md` §10).
 		 */
 		added?: readonly string[];
+		/** The order `tracks` are in, which the header marks. */
+		sort?: TrackSort;
+		/**
+		 * Asks for the list in another order, from a click on a column's heading
+		 * (`requirements/conventions.md` §4.1). Without it the headings only label the columns.
+		 */
+		onsort?: (sort: TrackSort) => void;
 		sentinel?: (el: Element) => () => void;
 		empty?: string;
 		/** Where the tracks are from, which each play records. */
@@ -361,6 +371,37 @@
 	// Multi-disc albums are presented as discs (`requirements/albums.md` §4).
 	const multiDisc = $derived(isAlbum && new Set(tracks.map((t) => t.discNumber)).size > 1);
 
+	const labels: Record<SortField, string> = {
+		title: 'Title',
+		artist: 'Artist',
+		album: 'Album',
+		year: 'Year',
+		added: 'Date added',
+		duration: 'Duration'
+	};
+	/** The columns this list shows, each of which it sorts by. */
+	const columns = $derived<SortField[]>(
+		isAlbum
+			? ['title', 'artist', 'duration']
+			: ['title', 'artist', 'album', 'year', ...(added ? ['added' as const] : []), 'duration']
+	);
+	/** What the last click on a heading did, for screen readers. */
+	let sorted = $state('');
+
+	function sortBy(field: SortField) {
+		const next = nextSort(sort, field);
+		onsort?.(next);
+		sorted = next
+			? `Sorted by ${labels[field].toLowerCase()}, ${next.order === 'asc' ? 'ascending' : 'descending'}`
+			: 'Unsorted';
+	}
+
+	/** A heading's name says how the list is sorted by it, if it is. */
+	function sortLabel(field: SortField): string {
+		if (sort?.field !== field) return labels[field];
+		return `${labels[field]}, sorted ${sort.order === 'asc' ? 'ascending' : 'descending'}`;
+	}
+
 	function play(i: number) {
 		if (tracks[i].availability !== 'available') return;
 		player.play(tracks, i, context);
@@ -421,11 +462,37 @@
 {:else}
 	<!-- The list's own width, not the window's, decides its columns: the sidebar and the
 	     page's padding take some of the window. -->
-	<div class="list">
+	<div class="list" class:album={isAlbum} class:dated={added}>
+		<!-- Stays in view as the list scrolls, so changing the sort never means going back to
+		     the top (`requirements/conventions.md` §4.1). -->
+		<div class="row head" role="group" aria-label="Sort songs">
+			<span class="heading" style:grid-area="num" aria-hidden="true">#</span>
+			{#each columns as field (field)}
+				{@const order = sort?.field === field ? sort.order : null}
+				<span class="heading" class:end={field === 'duration'} style:grid-area={field}>
+					{#if onsort}
+						<button
+							type="button"
+							class="sort"
+							class:active={order}
+							aria-label={sortLabel(field)}
+							title="Sort by {labels[field].toLowerCase()}"
+							onclick={() => sortBy(field)}
+						>
+							{#if field === 'duration'}<Icon name="clock" size={15} />{:else}{labels[field]}{/if}
+							{#if order}<Icon name={order === 'asc' ? 'up' : 'down'} size={13} />{/if}
+						</button>
+					{:else if field === 'duration'}
+						<span role="img" aria-label="Duration"><Icon name="clock" size={15} /></span>
+					{:else}
+						{labels[field]}
+					{/if}
+				</span>
+			{/each}
+		</div>
+		<span class="visually-hidden" aria-live="polite">{sorted}</span>
 		<ol
 			class="tracks"
-			class:album={isAlbum}
-			class:dated={added}
 			class:editable
 			class:reorderable={editable && onmove}
 			class:dragging={drag?.started}
@@ -444,7 +511,7 @@
 			     keyboard path. -->
 				<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
 				<li
-					class="track"
+					class="row track"
 					class:current
 					class:missing
 					class:selected={selected.has(i)}
@@ -585,9 +652,9 @@
 		padding: 0;
 	}
 
-	/* Each cell has an area, so the artists move between the title's second line and a column
-	   of their own without being drawn twice. */
-	.track {
+	/* Rows and the header share their columns. Each cell has an area, so the artists move
+	   between the title's second line and a column of their own without being drawn twice. */
+	.row {
 		display: grid;
 		grid-template-columns: 32px 40px minmax(0, 3fr) minmax(0, 2fr) 56px 36px;
 		grid-template-areas:
@@ -595,18 +662,74 @@
 			'num thumb artist album duration more';
 		align-items: center;
 		column-gap: var(--space-3);
+		padding-inline: var(--space-3);
+	}
+
+	.album .row {
+		grid-template-columns: 32px minmax(0, 1fr) 56px 36px;
+		grid-template-areas:
+			'num title duration more'
+			'num artist duration more';
+	}
+
+	.track {
 		min-height: 56px;
-		padding: var(--space-1) var(--space-3);
+		padding-block: var(--space-1);
 		border-radius: var(--radius-m);
 		cursor: pointer;
 	}
 
 	.album .track {
-		grid-template-columns: 32px minmax(0, 1fr) 56px 36px;
-		grid-template-areas:
-			'num title duration more'
-			'num artist duration more';
 		min-height: 52px;
+	}
+
+	/* Only where every column has its heading; narrower lists keep today's rows. */
+	.head {
+		display: none;
+		position: sticky;
+		/* Flush with the top of what scrolls: at 0 it would stop below the page's top padding,
+		   with rows showing through above it. */
+		top: calc(-1 * var(--page-top, 0px));
+		z-index: 3;
+		margin-bottom: var(--space-2);
+		padding-block: var(--space-2);
+		border-bottom: 1px solid var(--border);
+		background: var(--bg);
+		font-size: 13px;
+		color: var(--text-muted);
+	}
+
+	.heading {
+		display: flex;
+		min-width: 0;
+	}
+
+	.heading.end {
+		justify-content: flex-end;
+	}
+
+	.sort {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-1);
+		min-width: 0;
+		padding: 0;
+		border: 0;
+		border-radius: 4px;
+		background: none;
+		color: inherit;
+		font: inherit;
+		cursor: pointer;
+	}
+
+	.sort:hover,
+	.sort.active {
+		color: var(--text);
+	}
+
+	.sort:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
 	}
 
 	.num {
@@ -655,21 +778,21 @@
 
 	/* Wide enough for every column: the artists get their own, and year and date added show. */
 	@container tracks (min-width: 880px) {
-		.track {
+		.row {
 			grid-template-columns:
 				32px 40px minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr)
 				48px 56px 36px;
 			grid-template-areas: 'num thumb title artist album year duration more';
 		}
 
-		.dated .track {
+		.dated .row {
 			grid-template-columns:
 				32px 40px minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr)
 				48px 104px 56px 36px;
 			grid-template-areas: 'num thumb title artist album year added duration more';
 		}
 
-		.album .track {
+		.album .row {
 			grid-template-columns: 32px minmax(0, 3fr) minmax(0, 2fr) 56px 36px;
 			grid-template-areas: 'num title artist duration more';
 		}
@@ -686,6 +809,10 @@
 		.year,
 		.added {
 			display: block;
+		}
+
+		.head {
+			display: grid;
 		}
 	}
 
@@ -967,12 +1094,12 @@
 	}
 
 	@media (max-width: 767px) {
-		.track {
+		.row {
 			grid-template-columns: 40px minmax(0, 1fr) 48px 36px;
 			grid-template-areas:
 				'thumb title duration more'
 				'thumb artist duration more';
-			padding: var(--space-1) var(--space-2);
+			padding-inline: var(--space-2);
 		}
 
 		.track .num,
@@ -980,7 +1107,7 @@
 			display: none;
 		}
 
-		.album .track {
+		.album .row {
 			grid-template-columns: 28px minmax(0, 1fr) 48px 36px;
 			grid-template-areas:
 				'num title duration more'
