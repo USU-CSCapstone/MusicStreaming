@@ -9,7 +9,9 @@ export type SortOrder = 'asc' | 'desc';
 /** `null` is unsorted: the list's own order. */
 export type TrackSort = { field: SortField; order: SortOrder } | null;
 
-/** What every track list sorts by. */
+// What each kind of list sorts by, in the order its columns show.
+
+/** Every track list. */
 export const FIELDS = [
 	'title',
 	'artist',
@@ -18,7 +20,16 @@ export const FIELDS = [
 	'duration'
 ] as const satisfies SortField[];
 /** Playlists add when each track was added to them (`requirements/playlists.md` §10). */
-export const PLAYLIST_FIELDS = [...FIELDS, 'added'] as const satisfies SortField[];
+export const PLAYLIST_FIELDS = [
+	'title',
+	'artist',
+	'album',
+	'year',
+	'added',
+	'duration'
+] as const satisfies SortField[];
+/** An album's own tracks share an album and, nearly always, a year. */
+export const ALBUM_FIELDS = ['title', 'artist', 'duration'] as const satisfies SortField[];
 
 /** One click on a column: ascending, then descending, then unsorted. Another column starts over. */
 export function nextSort(sort: TrackSort, field: SortField): TrackSort {
