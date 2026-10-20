@@ -111,26 +111,22 @@ BEGIN
     DELETE FROM plugin_settings WHERE library_id = OLD.id;
 END;
 
--- What each user sets for a plugin that acts for them, such as their own account on a
--- scrobbling service (§4.1, §6). Having them is being connected: a plugin receives a user's
--- listening only once they have connected it. They go with the user.
-CREATE TABLE plugin_user_settings (
-    plugin_id    TEXT    NOT NULL,
-    user_id      INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-    settings     TEXT    NOT NULL CHECK (json_valid(settings) AND json_type(settings) = 'object'),
+-- Each user's connection to a plugin that acts for them, such as with their own account on a
+-- scrobbling service (§4.1, §6), the same in every library. Having a row is being connected,
+-- and a plugin receives a user's listening only once they have connected it. They go with the
+-- user.
+CREATE TABLE plugin_connections (
+    plugin_id          TEXT    NOT NULL,
+    user_id            INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    -- Their personal settings, secrets included, which the API never returns.
+    settings           TEXT    NOT NULL CHECK (json_valid(settings) AND json_type(settings) = 'object'),
     -- Listening from before this is never delivered: connecting is not a request to send
     -- everything ever played.
-    connected_at INTEGER NOT NULL,
+    connected_at       INTEGER NOT NULL,
+    -- Since when they share their searches with it, in every library (requirements/search.md
+    -- §6); null until they turn that on. Sharing is part of the connection, so it ends with it.
+    searches_shared_at INTEGER,
     PRIMARY KEY (plugin_id, user_id)
 ) STRICT, WITHOUT ROWID;
 
-CREATE INDEX plugin_user_settings_by_user ON plugin_user_settings (user_id);
-
--- Who shares their searches with which plugin, and since when (requirements/search.md §6). Off
--- unless a row is here, and only a connected user can turn it on.
-CREATE TABLE plugin_search_sharing (
-    plugin_id TEXT    NOT NULL,
-    user_id   INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-    shared_at INTEGER NOT NULL,
-    PRIMARY KEY (plugin_id, user_id)
-) STRICT, WITHOUT ROWID;
+CREATE INDEX plugin_connections_by_user ON plugin_connections (user_id);

@@ -19,7 +19,7 @@ use super::{BATCH, Due, Hook};
 /// pairs it with each user who connected the plugin, as `s`; otherwise the user is 0.
 fn position(per_user: bool) -> String {
     let (users, user) = match per_user {
-        true => ("JOIN plugin_user_settings s ON s.plugin_id = p.plugin_id", "s.user_id"),
+        true => ("JOIN plugin_connections s ON s.plugin_id = p.plugin_id", "s.user_id"),
         false => ("", "0"),
     };
     format!(
@@ -119,17 +119,17 @@ pub(super) fn queries() -> [(Hook, String); 8] {
     let searched = format!(
         "SELECT p.plugin_id, p.library_id, coalesce(c.position, 0), coalesce(c.failures, 0), \
                 u.user_id FROM plugin_libraries p \
-         JOIN (SELECT plugin_id, user_id FROM plugin_search_sharing \
+         JOIN (SELECT plugin_id, user_id FROM plugin_connections \
+               WHERE searches_shared_at IS NOT NULL \
                UNION SELECT plugin_id, user_id FROM search_events WHERE kind = 'stopped') u \
               ON u.plugin_id = p.plugin_id \
-         LEFT JOIN plugin_search_sharing ss \
-              ON ss.plugin_id = p.plugin_id AND ss.user_id = u.user_id \
+         LEFT JOIN plugin_connections s ON s.plugin_id = p.plugin_id AND s.user_id = u.user_id \
          LEFT JOIN plugin_cursors c ON c.plugin_id = p.plugin_id \
               AND c.library_id = p.library_id AND c.hook = ?2 AND c.user_id = u.user_id \
          WHERE {READY} AND {} \
          AND EXISTS (SELECT 1 FROM search_events e WHERE e.library_id = p.library_id \
                      AND e.user_id = u.user_id AND e.seq > coalesce(c.position, 0) \
-                     AND ((e.kind <> 'stopped' AND e.created_at >= ss.shared_at AND {} AND {}) \
+                     AND ((e.kind <> 'stopped' AND e.created_at >= s.searches_shared_at AND {} AND {}) \
                           OR (e.kind = 'stopped' AND e.plugin_id = p.plugin_id)))",
         granted("searched"),
         granted("searchActivity"),

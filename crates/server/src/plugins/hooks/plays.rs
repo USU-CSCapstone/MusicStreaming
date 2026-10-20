@@ -19,7 +19,7 @@ pub fn plays(
 ) -> rusqlite::Result<(i64, Vec<Play>)> {
     let connected_at: Option<i64> = conn
         .prepare_cached(
-            "SELECT connected_at FROM plugin_user_settings WHERE plugin_id = ?1 AND user_id = ?2",
+            "SELECT connected_at FROM plugin_connections WHERE plugin_id = ?1 AND user_id = ?2",
         )?
         .query_row(params![plugin, user], |row| row.get(0))
         .optional()?;

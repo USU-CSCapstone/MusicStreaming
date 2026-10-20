@@ -85,6 +85,8 @@ The displayed name — `artists.name`, `albums.title`, `tags.name` — is the sp
 
 Sorting by play count pages through `personal_stats` first, then continues through unplayed items by name.
 
+**A user's connection to a plugin is one row of `plugin_connections`**, keyed by plugin and user and the same in every library: their personal settings, when they connected, and `searches_shared_at`, null until they share their searches with it. Sharing is a column of the connection rather than a table of its own, so it can never exist without one, and disconnecting deletes both. Settings are kept as entered, secrets included, because the plugin needs them; the API never returns the secrets (`design/plugins.md` §7). A connection goes with its user. It is keyed by the plugin's ID rather than referencing `plugins`, so it outlives an uninstall, as grants and settings do (`0006_plugins.sql`).
+
 ---
 
 ## 7. State and Cache

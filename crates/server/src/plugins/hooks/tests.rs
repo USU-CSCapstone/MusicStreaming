@@ -14,6 +14,7 @@ use crate::plugins::Plugins;
 use crate::plugins::testing::{connect, database, enable, grant, install, manifest, plugins};
 
 mod changes;
+mod libraries;
 mod listening;
 mod real;
 mod scans;

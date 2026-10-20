@@ -8,7 +8,7 @@ use jewelcase_plugins::{Api, Manifest, Permission, manifest};
 use rusqlite::params;
 use serde_json::{Value, json};
 
-use super::Plugins;
+use super::{Plugins, personal};
 use crate::db::Database;
 use crate::db::testing::{Album, Artist, Track, album_artist, library, track_artist};
 
@@ -124,13 +124,5 @@ pub async fn enable_ungranted(db: &Database, id: &'static str) {
 /// them. Only a running plugin can accept them, and the tests' plugins cannot reach the
 /// services they check against.
 pub async fn connect(db: &Database, id: &'static str, user: i64, settings: Value, at: i64) {
-    db.write(move |tx| {
-        tx.execute(
-            "INSERT INTO plugin_user_settings (plugin_id, user_id, settings, connected_at) \
-             VALUES (?1, ?2, ?3, ?4)",
-            params![id, user, settings.to_string(), at],
-        )
-    })
-    .await
-    .unwrap();
+    db.write(move |tx| personal::connect(tx, id, user, &settings.to_string(), at)).await.unwrap();
 }

@@ -27,12 +27,15 @@ pub fn searches(
     user: i64,
     position: i64,
 ) -> rusqlite::Result<(i64, Option<Event>)> {
+    // Null while they do not share, and when they are not connected at all.
     let shared_at: Option<i64> = conn
         .prepare_cached(
-            "SELECT shared_at FROM plugin_search_sharing WHERE plugin_id = ?1 AND user_id = ?2",
+            "SELECT searches_shared_at FROM plugin_connections \
+             WHERE plugin_id = ?1 AND user_id = ?2",
         )?
         .query_row(params![plugin, user], |row| row.get(0))
-        .optional()?;
+        .optional()?
+        .flatten();
     let rows: Vec<(i64, String, Option<i64>)> = conn
         .prepare_cached(&format!(
             "SELECT e.seq, e.kind, e.search_id FROM search_events e WHERE {FOR_PLUGIN} \

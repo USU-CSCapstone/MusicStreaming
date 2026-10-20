@@ -181,13 +181,30 @@ async fn events(db: &Database) -> Vec<(String, Option<i64>)> {
 #[tokio::test]
 async fn what_was_found_is_kept_and_noted_only_for_a_user_who_shares() {
     let (temp, db, app) = app_with_tracks().await;
+    connect(&db, "other", 1, json!({}), 0).await;
+    // Another user shares with a plugin, which says nothing of the owner.
+    db.write(|tx| {
+        add_user(tx, 2, "user");
+        Ok(())
+    })
+    .await
+    .unwrap();
+    connect(&db, "other", 2, json!({}), 0).await;
+    db.write(|tx| {
+        tx.execute("UPDATE plugin_connections SET searches_shared_at = 0 WHERE user_id = 2", [])
+    })
+    .await
+    .unwrap();
     let (_, first) = record(&app, json!({ "query": "a" })).await;
     let found: i64 = db
         .read(|conn| conn.query_row("SELECT found_tracks FROM recent_searches", [], |r| r.get(0)))
         .await
         .unwrap();
     assert_eq!(found, 2, "both of library 1's tracks are called A");
-    assert!(events(&db).await.is_empty(), "the owner shares with no plugin");
+    assert!(
+        events(&db).await.is_empty(),
+        "the owner is connected, but shares with no plugin, though another user does"
+    );
 
     share_with_a_plugin(&temp, &db).await;
     let (_, second) = record(&app, json!({ "query": "b" })).await;

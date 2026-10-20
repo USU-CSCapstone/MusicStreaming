@@ -2,12 +2,13 @@
 
 use jewelcase_plugins::Event;
 use jewelcase_plugins::Permission::{LibraryRead, SearchActivity, Searched};
+use serde_json::json;
 
 use super::{HANDLED, Hook, connected, deliver, one, plan, setup};
 use crate::db::{Database, now_ms};
 use crate::plugins::Plugins;
 use crate::plugins::personal::{SharingRefused, disconnect, set_search_sharing};
-use crate::plugins::testing::grant;
+use crate::plugins::testing::{connect, grant};
 
 /// `plugin` granted the searched hook and what it needs, and connected by user 7, who shares their
 /// searches with it from now; user 8 shares nothing. Returns a time since they began sharing.
@@ -94,19 +95,49 @@ async fn stopping_asks_the_plugin_to_forget_everything_even_once_disconnected() 
     let since = sharing(&plugins, &db).await;
     searched(&db, 2, 7, "kept", since, 1).await;
     db.write(|tx| disconnect(tx, "plugin", 7)).await.unwrap();
-    let shared: i64 = db
+    let connections: i64 = db
         .read(|conn| {
-            conn.query_row("SELECT count(*) FROM plugin_search_sharing", [], |row| row.get(0))
+            conn.query_row("SELECT count(*) FROM plugin_connections", [], |row| row.get(0))
         })
         .await
         .unwrap();
-    assert_eq!(shared, 0, "disconnecting stops sharing");
+    assert_eq!(connections, 0, "disconnecting forgets the connection and its sharing");
 
     let told = one(deliver(&db, 0, HANDLED).await, 7);
     assert!(
         matches!(told, Event::SearchesForgotten(None)),
         "told, though no longer connected, to forget everything, and not sent the search: {told:?}"
     );
+}
+
+#[tokio::test]
+async fn sharing_with_another_plugin_or_by_another_user_shares_nothing() {
+    let (_temp, db, plugins) = setup().await;
+    connected(&plugins, &db, &[SearchActivity, Searched]).await;
+    // Both shared since the start; `other` is found first by a lookup that forgets the plugin.
+    connect(&db, "other", 7, json!({}), 0).await;
+    connect(&db, "plugin", 8, json!({}), 0).await;
+    db.write(|tx| {
+        tx.execute(
+            "UPDATE plugin_connections SET searches_shared_at = 0 \
+             WHERE plugin_id = 'other' OR user_id = 8",
+            [],
+        )
+    })
+    .await
+    .unwrap();
+    searched(&db, 1, 7, "shared elsewhere", 200, 1).await;
+    assert!(deliver(&db, 0, HANDLED).await.is_empty(), "connected, but not sharing with it");
+
+    let shared = db.write(|tx| set_search_sharing(tx, "plugin", 7, false, true)).await.unwrap();
+    assert!(shared.is_ok());
+    let since = now_ms();
+    assert!(deliver(&db, 0, HANDLED).await.is_empty(), "searched before they shared with it");
+    searched(&db, 2, 7, "shared", since, 1).await;
+    let Event::Searched(found) = one(deliver(&db, 0, HANDLED).await, 7) else {
+        panic!("not searches")
+    };
+    assert_eq!(found.iter().map(|s| s.id).collect::<Vec<_>>(), [2]);
 }
 
 #[tokio::test]
@@ -140,7 +171,13 @@ async fn sharing_is_turned_on_only_by_a_connected_user_of_a_plugin_allowed_searc
     );
     grant(&plugins, "plugin", &[SearchActivity, Searched], &[LibraryRead]).await;
     assert!(set(7, true).await.is_ok());
-    assert!(set(7, true).await.is_ok(), "turning it on twice keeps when it was first turned on");
+    let since = "SELECT searches_shared_at FROM plugin_connections";
+    db.write(|tx| tx.execute("UPDATE plugin_connections SET searches_shared_at = 5", []))
+        .await
+        .unwrap();
+    assert!(set(7, true).await.is_ok());
+    let kept: i64 = db.read(move |conn| conn.query_row(since, [], |row| row.get(0))).await.unwrap();
+    assert_eq!(kept, 5, "turning it on twice keeps when it was first turned on");
     assert!(set(7, false).await.is_ok());
     let stopped: i64 = db
         .read(|conn| {

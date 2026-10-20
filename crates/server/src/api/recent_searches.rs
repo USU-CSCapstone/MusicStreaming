@@ -111,7 +111,8 @@ fn note(
     tx.execute(
         "INSERT INTO search_events (user_id, library_id, kind, search_id, created_at) \
          SELECT ?1, ?2, ?3, ?4, ?5 \
-         WHERE EXISTS (SELECT 1 FROM plugin_search_sharing WHERE user_id = ?1)",
+         WHERE EXISTS (SELECT 1 FROM plugin_connections \
+                       WHERE user_id = ?1 AND searches_shared_at IS NOT NULL)",
         params![user, library, kind, search, now],
     )?;
     Ok(())

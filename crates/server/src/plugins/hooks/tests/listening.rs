@@ -10,6 +10,7 @@ use super::super::due::event;
 use super::super::playing::FRESH_MS;
 use super::super::{Due, Hook, MAX_FAILURES};
 use super::{HANDLED, HOUR, connected, deliver, one, play, setup, start, tracks_by_user};
+use crate::plugins::personal::disconnect;
 use crate::plugins::testing::connect;
 
 #[tokio::test]
@@ -39,6 +40,35 @@ async fn two_users_plays_under_one_id_each_reach_only_their_own_user() {
     play(&db, "same", 8, 12, 210, "skipped").await;
     let delivered = tracks_by_user(deliver(&db, 0, HANDLED).await);
     assert_eq!(delivered, [(7, vec![11]), (8, vec![12])], "each their own play, and only it");
+}
+
+#[tokio::test]
+async fn a_connection_to_another_plugin_sends_this_one_nothing() {
+    let (_temp, db, plugins) = setup().await;
+    connected(&plugins, &db, &[ListeningActivity, Played, Playing]).await;
+    // Connected since the start, and found first by a lookup that forgets the plugin.
+    for user in [7, 8] {
+        connect(&db, "other", user, json!({}), 0).await;
+    }
+    play(&db, "early", 7, 11, 50, "finished").await;
+    play(&db, "theirs", 8, 12, 200, "finished").await;
+    start(&db, "playing", 8, 11, 210).await;
+    play(&db, "later", 7, 12, 220, "finished").await;
+    let Event::Played(plays) = one(deliver(&db, 1000, HANDLED).await, 7) else {
+        panic!("not plays")
+    };
+    let started: Vec<_> = plays.iter().map(|p| p.started_at).collect();
+    assert_eq!(started, [220], "only since they connected this one");
+
+    // Found due just before they disconnected it, so only the other connection is left.
+    start(&db, "now", 7, 11, 1000).await;
+    db.write(|tx| disconnect(tx, "plugin", 7)).await.unwrap();
+    for hook in [Hook::Played, Hook::Playing] {
+        let due =
+            Due { hook, plugin: "plugin".into(), library: 1, position: 0, failures: 0, user: 7 };
+        let (_, nothing) = db.read(move |conn| event(conn, &due, 1000)).await.unwrap();
+        assert!(nothing.is_none(), "{hook:?} after disconnecting: {nothing:?}");
+    }
 }
 
 #[tokio::test]

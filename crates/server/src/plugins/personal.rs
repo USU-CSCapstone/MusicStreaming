@@ -43,11 +43,10 @@ pub fn connectable(
     conn.prepare_cached(&format!(
         "SELECT p.id, json_extract(p.manifest, '$.name') AS name, \
                 json_extract(p.manifest, '$.description'), \
-                EXISTS (SELECT 1 FROM plugin_user_settings s \
-                        WHERE s.plugin_id = p.id AND s.user_id = :user), \
-                EXISTS (SELECT 1 FROM plugin_search_sharing s \
-                        WHERE s.plugin_id = p.id AND s.user_id = :user) \
-         FROM plugins p WHERE json_extract(p.manifest, '$.personalSettings') IS NOT NULL \
+                c.user_id IS NOT NULL, c.searches_shared_at IS NOT NULL \
+         FROM plugins p \
+         LEFT JOIN plugin_connections c ON c.plugin_id = p.id AND c.user_id = :user \
+         WHERE json_extract(p.manifest, '$.personalSettings') IS NOT NULL \
               AND {REACHED} ORDER BY name, p.id"
     ))?
     .query_map(named_params! { ":user": user, ":admin": admin }, |row| {
@@ -106,7 +105,7 @@ pub fn set_search_sharing(
         return Ok(Ok(()));
     }
     let connected = conn
-        .prepare_cached("SELECT 1 FROM plugin_user_settings WHERE plugin_id = ?1 AND user_id = ?2")?
+        .prepare_cached("SELECT 1 FROM plugin_connections WHERE plugin_id = ?1 AND user_id = ?2")?
         .query_row(params![id, user], |_| Ok(()))
         .optional()?
         .is_some();
@@ -117,8 +116,8 @@ pub fn set_search_sharing(
         return Ok(Err(SharingRefused::SearchesNotAllowed));
     }
     conn.execute(
-        "INSERT INTO plugin_search_sharing (plugin_id, user_id, shared_at) VALUES (?1, ?2, ?3) \
-         ON CONFLICT (plugin_id, user_id) DO NOTHING",
+        "UPDATE plugin_connections SET searches_shared_at = ?3 \
+         WHERE plugin_id = ?1 AND user_id = ?2 AND searches_shared_at IS NULL",
         params![id, user, now_ms()],
     )?;
     Ok(Ok(()))
@@ -128,7 +127,8 @@ pub fn set_search_sharing(
 /// library it serves.
 fn stop_sharing(conn: &Connection, id: &str, user: i64) -> rusqlite::Result<()> {
     let stopped = conn.execute(
-        "DELETE FROM plugin_search_sharing WHERE plugin_id = ?1 AND user_id = ?2",
+        "UPDATE plugin_connections SET searches_shared_at = NULL \
+         WHERE plugin_id = ?1 AND user_id = ?2 AND searches_shared_at IS NOT NULL",
         params![id, user],
     )?;
     if stopped > 0 {
@@ -161,7 +161,7 @@ pub fn manifest(
 pub fn values(conn: &Connection, id: &str, user: i64) -> rusqlite::Result<Map<String, Value>> {
     let json: Option<String> = conn
         .prepare_cached(
-            "SELECT settings FROM plugin_user_settings WHERE plugin_id = ?1 AND user_id = ?2",
+            "SELECT settings FROM plugin_connections WHERE plugin_id = ?1 AND user_id = ?2",
         )?
         .query_row(params![id, user], |row| row.get(0))
         .optional()?;
@@ -218,28 +218,38 @@ impl Plugins {
             return Err(PluginError::SettingsInvalid(outcome.summary));
         }
         let json = Value::Object(values).to_string();
-        self.db
-            .write(move |tx| {
-                tx.execute(
-                    "INSERT INTO plugin_user_settings (plugin_id, user_id, settings, connected_at) \
-                     VALUES (?1, ?2, ?3, ?4) \
-                     ON CONFLICT (plugin_id, user_id) DO UPDATE SET settings = excluded.settings",
-                    params![id, user, json, now_ms()],
-                )
-            })
-            .await?;
+        self.db.write(move |tx| connect(tx, &id, user, &json, now_ms())).await?;
         Ok(())
     }
 }
 
-/// Disconnects `user` from `id`: their settings are forgotten, it no longer acts for them, and
-/// it stops being sent their searches.
-pub fn disconnect(conn: &Connection, id: &str, user: i64) -> rusqlite::Result<()> {
+/// Connects `user` to `id` at `at` with `settings`, a JSON object, or replaces the settings they
+/// connected it with, keeping when they connected and whether they share their searches.
+pub(super) fn connect(
+    conn: &Connection,
+    id: &str,
+    user: i64,
+    settings: &str,
+    at: i64,
+) -> rusqlite::Result<()> {
     conn.execute(
-        "DELETE FROM plugin_user_settings WHERE plugin_id = ?1 AND user_id = ?2",
+        "INSERT INTO plugin_connections (plugin_id, user_id, settings, connected_at) \
+         VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT (plugin_id, user_id) DO UPDATE SET settings = excluded.settings",
+        params![id, user, settings, at],
+    )?;
+    Ok(())
+}
+
+/// Disconnects `user` from `id`: it stops being sent their searches, their settings are
+/// forgotten, and it no longer acts for them.
+pub fn disconnect(conn: &Connection, id: &str, user: i64) -> rusqlite::Result<()> {
+    stop_sharing(conn, id, user)?;
+    conn.execute(
+        "DELETE FROM plugin_connections WHERE plugin_id = ?1 AND user_id = ?2",
         params![id, user],
     )?;
-    stop_sharing(conn, id, user)
+    Ok(())
 }
 
 #[cfg(test)]

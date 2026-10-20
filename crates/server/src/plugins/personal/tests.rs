@@ -1,8 +1,9 @@
+use jewelcase_plugins::Permission::{LibraryRead, SearchActivity, Searched};
 use serde_json::{Map, Value, json};
 
-use super::super::testing::{connect, database, enable, install, manifest, plugins};
+use super::super::testing::{connect, database, enable, grant, install, manifest, plugins};
 use super::super::{PluginError, Plugins};
-use super::{connectable, disconnect, values};
+use super::{SharingRefused, connectable, disconnect, set_search_sharing, values};
 use crate::db::Database;
 use crate::db::testing::{User, access};
 
@@ -78,4 +79,150 @@ async fn disconnecting_forgets_what_was_set() {
     db.write(|tx| disconnect(tx, "scrobbler", 7)).await.unwrap();
     assert_eq!(listed(&db, 7, false).await, [("Scrobbler".to_owned(), false)]);
     assert!(db.read(|conn| values(conn, "scrobbler", 7)).await.unwrap().is_empty());
+}
+
+/// `first` and `second`, which users connect with a token and may share their searches with, each
+/// enabled in libraries 1 and 2; users 7 and 8 reach library 1.
+async fn sharers(plugins: &Plugins, db: &Database) {
+    for id in ["first", "second"] {
+        let mut sharer = manifest(id, &[LibraryRead, SearchActivity, Searched]);
+        sharer["personalSettings"] = json!({ "properties": { "token": { "type": "string" } } });
+        install(db, sharer).await;
+        grant(plugins, id, &[SearchActivity, Searched], &[LibraryRead]).await;
+        for library in [1, 2] {
+            plugins.set_enabled(id.into(), library, true).await.unwrap();
+        }
+    }
+    db.write(|tx| {
+        for user in [7, 8] {
+            User::new(user, "user").insert(tx)?;
+            access(tx, user, 1)?;
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+/// Each plugin `user` can connect, by ID: whether they connected it, and whether they share
+/// their searches with it.
+async fn connections(db: &Database, user: i64) -> Vec<(String, bool, bool)> {
+    let found = db.read(move |conn| connectable(conn, user, false)).await.unwrap();
+    found.into_iter().map(|c| (c.id, c.connected, c.shares_searches)).collect()
+}
+
+/// Turns sharing `user`'s searches with `id` on or off, as that user rather than an admin.
+async fn share(db: &Database, id: &'static str, user: i64, on: bool) -> Result<(), SharingRefused> {
+    db.write(move |tx| set_search_sharing(tx, id, user, false, on)).await.unwrap()
+}
+
+/// Every request to forget written, as (user, library, plugin).
+async fn stopped(db: &Database) -> Vec<(i64, i64, String)> {
+    db.read(|conn| {
+        conn.prepare(
+            "SELECT user_id, library_id, plugin_id FROM search_events WHERE kind = 'stopped' \
+             ORDER BY seq",
+        )?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect()
+    })
+    .await
+    .unwrap()
+}
+
+/// A row of [`connections`].
+fn row(id: &str, connected: bool, shares: bool) -> (String, bool, bool) {
+    (id.to_owned(), connected, shares)
+}
+
+#[tokio::test]
+async fn connecting_shares_nothing_and_sharing_needs_a_connection() {
+    let (temp, db) = database().await;
+    sharers(&plugins(&temp, &db), &db).await;
+    assert!(matches!(share(&db, "first", 7, true).await, Err(SharingRefused::Unconnected)));
+    let nothing = [row("first", false, false), row("second", false, false)];
+    assert_eq!(connections(&db, 7).await, nothing, "no sharing without settings");
+
+    connect(&db, "first", 7, json!({ "token": "t" }), 100).await;
+    assert_eq!(connections(&db, 7).await, [row("first", true, false), row("second", false, false)]);
+    db.write(|tx| disconnect(tx, "first", 7)).await.unwrap();
+    assert_eq!(connections(&db, 7).await, nothing);
+    assert!(stopped(&db).await.is_empty(), "nothing to forget when they never shared");
+}
+
+#[tokio::test]
+async fn sharing_is_per_user_and_per_plugin_and_holds_in_every_library() {
+    let (temp, db) = database().await;
+    sharers(&plugins(&temp, &db), &db).await;
+    for (id, user) in [("first", 7), ("second", 7), ("first", 8), ("second", 8)] {
+        connect(&db, id, user, json!({ "token": "t" }), 100).await;
+    }
+    assert!(share(&db, "first", 7, true).await.is_ok());
+    assert_eq!(connections(&db, 7).await, [row("first", true, true), row("second", true, false)]);
+    assert_eq!(connections(&db, 8).await, [row("first", true, false), row("second", true, false)]);
+
+    assert!(share(&db, "second", 7, true).await.is_ok());
+    assert!(share(&db, "first", 8, true).await.is_ok());
+    assert!(share(&db, "first", 7, false).await.is_ok());
+    assert_eq!(connections(&db, 7).await, [row("first", true, false), row("second", true, true)]);
+    assert_eq!(connections(&db, 8).await, [row("first", true, true), row("second", true, false)]);
+    let forget = vec![(7, 1, "first".to_owned()), (7, 2, "first".to_owned())];
+    assert_eq!(stopped(&db).await, forget, "asked to forget in each library it serves");
+    assert!(share(&db, "first", 7, false).await.is_ok());
+    assert_eq!(stopped(&db).await, forget, "once");
+}
+
+#[tokio::test]
+async fn disconnecting_while_sharing_stops_sharing_and_asks_to_forget() {
+    let (temp, db) = database().await;
+    sharers(&plugins(&temp, &db), &db).await;
+    for user in [7, 8] {
+        connect(&db, "first", user, json!({ "token": "t" }), 100).await;
+        assert!(share(&db, "first", user, true).await.is_ok());
+    }
+    db.write(|tx| disconnect(tx, "first", 7)).await.unwrap();
+    assert_eq!(
+        connections(&db, 7).await,
+        [row("first", false, false), row("second", false, false)]
+    );
+    assert!(db.read(|conn| values(conn, "first", 7)).await.unwrap().is_empty());
+    assert_eq!(stopped(&db).await, [(7, 1, "first".to_owned()), (7, 2, "first".to_owned())]);
+    assert_eq!(connections(&db, 8).await, [row("first", true, true), row("second", false, false)]);
+}
+
+#[tokio::test]
+async fn saving_settings_again_keeps_when_they_connected_and_their_sharing() {
+    let (temp, db) = database().await;
+    sharers(&plugins(&temp, &db), &db).await;
+    connect(&db, "first", 7, json!({ "token": "t" }), 100).await;
+    assert!(share(&db, "first", 7, true).await.is_ok());
+    connect(&db, "first", 7, json!({ "token": "u" }), 500).await;
+    let stored = db.read(|conn| values(conn, "first", 7)).await.unwrap();
+    assert_eq!(Value::Object(stored), json!({ "token": "u" }));
+    assert_eq!(connections(&db, 7).await[0], row("first", true, true));
+    let connected_at: i64 = db
+        .read(|conn| {
+            conn.query_row("SELECT connected_at FROM plugin_connections", [], |row| row.get(0))
+        })
+        .await
+        .unwrap();
+    assert_eq!(connected_at, 100, "listening from before stays unsent");
+}
+
+#[tokio::test]
+async fn what_a_user_set_is_read_only_for_that_plugin_and_that_user() {
+    let (temp, db) = database().await;
+    sharers(&plugins(&temp, &db), &db).await;
+    for (id, user) in [("first", 7), ("second", 7), ("first", 8)] {
+        connect(&db, id, user, json!({ "token": format!("{id} {user}") }), 100).await;
+    }
+    for (id, user, expected) in [
+        ("first", 7, json!({ "token": "first 7" })),
+        ("second", 7, json!({ "token": "second 7" })),
+        ("first", 8, json!({ "token": "first 8" })),
+        ("second", 8, json!({})),
+    ] {
+        let stored = db.read(move |conn| values(conn, id, user)).await.unwrap();
+        assert_eq!(Value::Object(stored), expected, "{id} for user {user}");
+    }
 }

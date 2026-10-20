@@ -38,7 +38,7 @@ pub fn playing(
         "{TRACK_COLUMNS}, pl.started_at, st.seq FROM play_starts st \
          JOIN plays pl ON pl.user_id = st.user_id AND pl.id = st.play_id \
          JOIN tracks t ON t.id = pl.track_id JOIN albums al ON al.id = t.album_id \
-         JOIN plugin_user_settings s ON s.plugin_id = ?5 AND s.user_id = st.user_id \
+         JOIN plugin_connections s ON s.plugin_id = ?5 AND s.user_id = st.user_id \
          WHERE {deliverable} ORDER BY st.seq DESC LIMIT 1"
     ))?
     .query_row(params![now, library, user, position, plugin], |row| {
