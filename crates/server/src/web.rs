@@ -39,6 +39,8 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    use jewelcase_ffmpeg::{Config, Ffmpeg};
+
     use crate::api::{self, Images};
     use crate::db::Database;
     use crate::plugins::Plugins;
@@ -52,7 +54,7 @@ mod tests {
         std::fs::write(web.join("robots.txt"), "robots").unwrap();
         std::fs::write(web.join("_app/immutable/entry.abc.js"), "js").unwrap();
         let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
-        let images = Images::new(temp.path().join("cache"), "ffmpeg".into());
+        let images = Images::new(temp.path().join("cache"), Ffmpeg::new(Config::default()));
         let plugins = Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new());
         let app =
             api::router("", db, images, Arc::new(plugins), Arc::default()).merge(router(&web));

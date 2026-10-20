@@ -3,7 +3,7 @@
 //! Never linked as a library: a decoder crash on a corrupt file is a problem
 //! record, a hang is a timeout kill, and yielding to listeners is a signal.
 //! Every invocation is read-only against the library — no output paths, no
-//! `-y`, always `-nostdin`, and the input always opened through [`input()`].
+//! `-y`, always `-nostdin`, and the input always opened through `input()`.
 //!
 //! The API is synchronous. Callers run it from blocking pools; decoding is
 //! stream I/O and the analysis that consumes it is CPU work, neither of which
@@ -17,7 +17,7 @@ mod probe;
 mod registry;
 mod stderr;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
@@ -26,7 +26,7 @@ use jewelcase_core::Format;
 pub use decode::PcmStream;
 pub use error::Error;
 pub use image::Rgba;
-pub use input::input;
+use input::input;
 pub use probe::ProbeInfo;
 pub use registry::Registry;
 
@@ -65,11 +65,6 @@ impl Ffmpeg {
     /// binaries; call [`Ffmpeg::verify`] for that.
     pub fn new(config: Config) -> Ffmpeg {
         Ffmpeg { config: Arc::new(config), registry: Registry::start() }
-    }
-
-    /// Where this handle finds the binaries.
-    pub fn config(&self) -> &Config {
-        &self.config
     }
 
     /// The shared process registry, for the governor to pause and resume.
@@ -133,22 +128,29 @@ impl Ffmpeg {
     }
 
     /// Read stream properties needed to interpret a raw PCM decode.
-    pub fn probe(&self, path: &std::path::Path) -> Result<ProbeInfo, Error> {
+    pub fn probe(&self, path: &Path) -> Result<ProbeInfo, Error> {
         probe::probe(&self.config, &self.registry, path)
     }
 
     /// Start decoding `path` to interleaved 32-bit float PCM in the sample rate
     /// and channel layout `info` reports, which hold for the whole stream.
     /// Blocks while the pool is full.
-    pub fn decode_pcm(&self, path: &std::path::Path, info: &ProbeInfo) -> Result<PcmStream, Error> {
+    pub fn decode_pcm(&self, path: &Path, info: &ProbeInfo) -> Result<PcmStream, Error> {
         decode::decode_pcm(&self.config, &self.registry, path, info)
     }
 
     /// Decode the image at `path`, or the picture attached to an audio file, scaled to fit
     /// `max_side` pixels. For small previews: the whole image is held in memory. Blocks while
     /// the pool is full.
-    pub fn decode_image(&self, path: &std::path::Path, max_side: u32) -> Result<Rgba, Error> {
+    pub fn decode_image(&self, path: &Path, max_side: u32) -> Result<Rgba, Error> {
         image::decode_image(&self.config, &self.registry, path, max_side)
+    }
+
+    /// The command that scales the image at `path`, or the picture attached to an audio file, to
+    /// fit `max_side` pixels and writes it to standard output as JPEG, for serving. The caller
+    /// spawns it outside the pool, so a request never waits behind analysis.
+    pub fn resize_command(&self, path: &Path, max_side: u32) -> Command {
+        image::command(&self.config, path, max_side, image::JPEG)
     }
 
     // `transcode` is the playback design's to specify; it will share this

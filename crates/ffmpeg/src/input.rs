@@ -19,7 +19,7 @@ const MAX_PIXELS: u32 = 8192 * 8192;
 /// an audio file's attached picture, which ffprobe and an audio decode read too while they look
 /// at the streams: there the picture is skipped and the audio still decodes, while an image
 /// decode exits with an error.
-pub fn input(path: &Path) -> [OsString; 6] {
+pub(crate) fn input(path: &Path) -> [OsString; 6] {
     let mut file = OsString::from("file:");
     file.push(path);
     let max_pixels = MAX_PIXELS.to_string().into();

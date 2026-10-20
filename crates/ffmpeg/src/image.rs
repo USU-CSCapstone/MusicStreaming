@@ -1,4 +1,5 @@
-//! Decoding an image to a few pixels, for placeholders.
+//! Decoding an image scaled to fit a size: to a few pixels for placeholders, or to JPEG for the
+//! server's artwork.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -15,6 +16,35 @@ pub struct Rgba {
     pub pixels: Vec<u8>,
 }
 
+/// PAM of RGBA pixels. PAM states its own size, so the output needs no guess at how ffmpeg
+/// rounded.
+const PAM: [&str; 4] = ["-c:v", "pam", "-pix_fmt", "rgba"];
+
+/// JPEG, at a quality that suits artwork.
+pub(crate) const JPEG: [&str; 4] = ["-c:v", "mjpeg", "-q:v", "3"];
+
+/// The command that decodes the image at `path`, or the picture attached to an audio file,
+/// scales it to fit `max_side` without enlarging it, and writes it to its piped standard output,
+/// encoded by `codec` ([`JPEG`] or the PAM [`decode_image`] reads). Its standard error is piped
+/// too, and it reads no input.
+pub(crate) fn command(config: &Config, path: &Path, max_side: u32, codec: [&str; 4]) -> Command {
+    // The `min` keeps a small image from being enlarged.
+    let scale = format!(
+        "scale='min(iw,{max_side})':'min(ih,{max_side})':force_original_aspect_ratio=decrease"
+    );
+    let mut command = Command::new(&config.ffmpeg);
+    command
+        .args(["-nostdin", "-hide_banner", "-v", "error"])
+        .args(input(path))
+        .args(["-map", "0:v:0", "-frames:v", "1", "-vf", &scale, "-f", "image2pipe"])
+        .args(codec)
+        .arg("pipe:1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
 /// Decodes the image at `path` to fit `max_side`; see [`crate::Ffmpeg::decode_image`].
 pub(crate) fn decode_image(
     config: &Config,
@@ -22,20 +52,8 @@ pub(crate) fn decode_image(
     path: &Path,
     max_side: u32,
 ) -> Result<Rgba, Error> {
-    // The `min` keeps a small image from being enlarged.
-    let scale = format!(
-        "scale='min(iw,{max_side})':'min(ih,{max_side})':force_original_aspect_ratio=decrease"
-    );
     registry.acquire();
-    let child = Command::new(&config.ffmpeg)
-        .args(["-nostdin", "-hide_banner", "-v", "error"])
-        .args(input(path))
-        .args(["-map", "0:v:0", "-frames:v", "1", "-vf", &scale])
-        // PAM states its own size, so the output needs no guess at how ffmpeg rounded.
-        .args(["-f", "image2pipe", "-c:v", "pam", "-pix_fmt", "rgba", "pipe:1"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let child = command(config, path, max_side, PAM)
         .spawn()
         .map_err(|e| Error::Spawn { binary: config.ffmpeg.clone(), source: e })?;
     let pid = child.id();

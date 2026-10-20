@@ -4,10 +4,11 @@
 //! again on every request; changed content has a new hash, and gets a new try.
 
 use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
+use std::process::Output;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use jewelcase_ffmpeg::Ffmpeg;
 use tokio::process::Command;
 use tokio::sync::Semaphore;
 
@@ -20,7 +21,7 @@ const RENDER_TIMEOUT: Duration = Duration::from_secs(30);
 /// Where resized images go and how to make them.
 pub struct Images {
     cache: PathBuf,
-    ffmpeg: PathBuf,
+    ffmpeg: Ffmpeg,
     /// Bounds the resizes running at once. Artwork is an interactive request, so it has its own
     /// bound instead of queueing behind analysis in the ffmpeg pool, which the governor pauses
     /// while listeners play (`design/general.md` §2).
@@ -30,7 +31,8 @@ pub struct Images {
 }
 
 impl Images {
-    pub fn new(cache: PathBuf, ffmpeg: PathBuf) -> Images {
+    /// Resizes into `cache` with `ffmpeg`, as many images at once as the host has cores.
+    pub fn new(cache: PathBuf, ffmpeg: Ffmpeg) -> Images {
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
         Images { cache, ffmpeg, renders: Semaphore::new(cores), next_temp: AtomicU64::new(0) }
     }
@@ -93,17 +95,7 @@ impl Images {
     /// Resizes the image at `source` to fit `size`, as JPEG. An embedded image's source is its
     /// track file, and ffmpeg reads the attached picture from that the same way.
     async fn render(&self, size: u32, source: &Path) -> anyhow::Result<Output> {
-        // The `min` keeps ffmpeg from enlarging an image smaller than the size.
-        let scale =
-            format!("scale='min(iw,{size})':'min(ih,{size})':force_original_aspect_ratio=decrease");
-        let child = Command::new(&self.ffmpeg)
-            .args(["-nostdin", "-hide_banner", "-loglevel", "error"])
-            .args(jewelcase_ffmpeg::input(source))
-            .args(["-map", "0:v:0", "-frames:v", "1", "-vf", &scale])
-            .args(["-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "3", "pipe:1"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+        let child = Command::from(self.ffmpeg.resize_command(source, size))
             // A timed-out render drops the child, and dropping it kills the process.
             .kill_on_drop(true)
             .spawn()?;

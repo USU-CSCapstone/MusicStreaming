@@ -7,9 +7,9 @@ use super::super::testing::{app, ffmpeg, owner_request, send};
 use crate::db::testing::{Image, library};
 
 /// Library 1 holds image 1, a 300×200 `cover.png`; image 2, a 64×64 picture embedded in
-/// `song.mp3`; image 3, a `broken.gif` that is not an image; and image 5, recorded with no
-/// content hash; image 6, a `linked.png` that links to library 2's cover; and image 7, a
-/// `huge.png` that only its test writes. Library 2 holds image 4.
+/// `song.mp3`; image 3, a `broken.gif` that is not an image; image 5, recorded with no
+/// content hash; image 6, a `linked.png` that links to library 2's cover; and images 7 and 8, a
+/// `huge.png` and an `animated.gif` that only their tests write. Library 2 holds image 4.
 async fn app_with_images() -> (tempfile::TempDir, Router) {
     let (temp, db, app) = app("");
     let (music, other) = (temp.path().join("music"), temp.path().join("other"));
@@ -52,20 +52,23 @@ async fn app_with_images() -> (tempfile::TempDir, Router) {
         Image::new(4, 2, "cover.png").insert(tx)?;
         Image { hash: Vec::new(), ..Image::new(5, 1, "cover.png") }.insert(tx)?;
         Image { hash: vec![6], ..Image::new(6, 1, "linked.png") }.insert(tx)?;
-        Image { hash: vec![7], ..Image::new(7, 1, "huge.png") }.insert(tx)
+        Image { hash: vec![7], ..Image::new(7, 1, "huge.png") }.insert(tx)?;
+        Image { hash: vec![8], ..Image::new(8, 1, "animated.gif") }.insert(tx)
     })
     .await
     .unwrap();
     (temp, app)
 }
 
-/// Fetches an image and returns its dimensions.
+/// Fetches an image, which must be one JPEG, and returns its dimensions.
 async fn dimensions(app: &Router, uri: &str) -> (u32, u32) {
     let (status, content_type, body) = send(app.clone(), "GET", uri).await;
     assert_eq!(status, StatusCode::OK, "{uri}");
     assert_eq!(content_type.as_deref(), Some("image/jpeg"), "{uri}");
     // JPEG's start-of-image marker, then the next marker.
     assert!(body.starts_with(&[0xFF, 0xD8, 0xFF]), "{uri}");
+    let starts = body.windows(3).filter(|bytes| bytes == &[0xFF, 0xD8, 0xFF]).count();
+    assert_eq!(starts, 1, "{uri} holds {starts} JPEGs");
     let info = describe(&body).unwrap();
     (info.width, info.height)
 }
@@ -215,6 +218,15 @@ async fn an_image_past_the_pixel_cap_is_refused_and_not_tried_again() {
     let (status, _, _) = send(app, "GET", "/api/v1/libraries/1/images/7").await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(temp.path().join("cache/07/07-512.failed").exists());
+}
+
+#[tokio::test]
+async fn an_animated_image_is_its_first_frame() {
+    let (temp, app) = app_with_images().await;
+    // Two frames, a tenth of a second each.
+    let animated = temp.path().join("music/animated.gif");
+    ffmpeg(&["-f", "lavfi", "-i", "color=red:s=32x32:d=0.2:r=10", animated.to_str().unwrap()]);
+    assert_eq!(dimensions(&app, "/api/v1/libraries/1/images/8?size=64").await, (32, 32));
 }
 
 #[tokio::test]
