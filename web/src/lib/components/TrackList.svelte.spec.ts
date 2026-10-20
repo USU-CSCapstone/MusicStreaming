@@ -185,3 +185,34 @@ describe('TrackList.svelte sort menu', () => {
 		await expect.element(sortButton('Sort')).not.toBeInTheDocument();
 	});
 });
+
+describe('TrackList.svelte reordering', () => {
+	beforeEach(async () => {
+		await page.viewport(1280, 800);
+	});
+
+	it('moves rows in the list’s own order', async () => {
+		const onmove = vi.fn();
+		render(TrackList, { tracks, editable: true, onmove, onsort: () => {} });
+		await page.getByText('Signal Part 1').click();
+		await userEvent.keyboard('{Alt>}{ArrowDown}{/Alt}');
+		expect(onmove).toHaveBeenCalledWith([{ indexes: [0], to: 1 }]);
+	});
+
+	it('moves nothing while sorted, and says why', async () => {
+		const onmove = vi.fn();
+		render(TrackList, {
+			tracks,
+			editable: true,
+			onmove,
+			sort: { field: 'title', order: 'desc' },
+			onsort: () => {}
+		});
+		await page.getByText('Signal Part 1').click();
+		await userEvent.keyboard('{Alt>}{ArrowDown}{/Alt}');
+		expect(onmove).not.toHaveBeenCalled();
+		await expect
+			.element(page.getByText('The list is sorted, so songs can’t be moved'))
+			.toBeInTheDocument();
+	});
+});
