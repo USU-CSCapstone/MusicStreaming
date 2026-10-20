@@ -64,7 +64,10 @@ pub fn resume(
 /// Remembers what looking up track `id` at `now` came to.
 pub fn note(id: u64, seen: Seen, now: u64) -> Result<(), String> {
     match seen {
-        Seen::Missed(why) => state::set(&progress::miss_key(id), &Miss::new(now, why).encode()),
+        Seen::Missed(why) => {
+            let miss = Miss::new(now, why).encode();
+            state::set(&progress::miss_key(id), &miss).map_err(String::from)
+        }
         Seen::Settled => forget(id),
         Seen::Failed => Ok(()),
     }
@@ -74,7 +77,7 @@ pub fn note(id: u64, seen: Seen, now: u64) -> Result<(), String> {
 pub fn forget(id: u64) -> Result<(), String> {
     let key = progress::miss_key(id);
     match state::get(&key)? {
-        Some(_) => state::delete(&key),
+        Some(_) => state::delete(&key).map_err(String::from),
         None => Ok(()),
     }
 }

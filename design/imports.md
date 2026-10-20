@@ -11,14 +11,14 @@ Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`ex
 
 ## 1. Built Imports
 
-**Seven interfaces, all in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.1`.** Every import checks its own permission in the host. Every import stays linked when its permission is declined and answers an error instead, so optional permissions work ([`plugins.md` §7](plugins.md#7-running-plugins)). WASI is linked with nothing granted: no preopens, sockets, or inherited stdio.
+**Seven interfaces, all in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.1`.** Every import checks its own permission in the host. Every import stays linked when its permission is declined and answers `not-granted` instead, so optional permissions work ([`plugins.md` §7](plugins.md#7-running-plugins)). `host.granted` names the permissions these imports check, and not the hooks: a hook's grant is whether its event arrives. WASI is linked with nothing granted: no preopens, sockets, or inherited stdio.
 
 | Interface | Functions | Needs | Limits |
 |---|---|---|---|
 | `host` | `granted`, `log` | — | 1,000 log lines per run |
 | `library` | `tracks`, `get-tracks`, `albums`, `artists` | `libraryRead` | 500 per page; pages continue from the last ID |
 | `library` | `get-albums`, `get-artists`, `album-tracks`, `artist-albums` (§1.1) | `libraryRead` | 500 per list by ID; an album's tracks and an artist's albums whole |
-| `files` | `roots`, `list`, `read` | `libraryRead` (`roots`: any library permission) | 10,000 entries per list; 8 MB per read |
+| `files` | `roots`, `entries`, `read` | `libraryRead` (`roots`: any library permission) | 500 entries per call, continuing from the last name; 8 MB per read |
 | `files` | `write` (`create`) | `libraryAdd` | 32 MB, written whole or not at all |
 | `files` | `write` (`replace`), `rename`, `delete` | `libraryChange` | 32 MB; a folder is deleted only when empty |
 | `http` | `send` | `network`, to declared destinations only, redirects included | 16 MB bodies, 15 s per request, 5 redirects; a declared pace and a shared cache (below) |
@@ -29,7 +29,9 @@ The limits on every run are 64 MiB of memory, about 60 s of compute (counted in 
 
 **`http.send` keeps to a declared pace and shares a cache** ([`plugins.md` §7](plugins.md#7-running-plugins)). A network request declares `rateLimits` per destination, each counting the plugin's own requests, its runs for each user apart, or, with `hostRateLimits`, every plugin's requests to that host, at the strictest any plugin in force declared, except those an admin exempted. A `429` or `503` pauses only the scope of the request it answered, for as long as `Retry-After` asks or with exponential backoff and full jitter. A GET is answered from a fresh reply already fetched by a run that sees the same (the same library and user, and the same grant or not of `libraryRead`, `listeningActivity`, and `searchActivity`) for the same URL and headers, and a stale one is checked with its `ETag` or `Last-Modified`.
 
-**`http.send` says why a request has no response, so a plugin can act on it.** Its error is a variant: `not-granted`; `refused`, not sent, with a message (a URL, destination, header, or body the host will not send); `rate-limited`, not sent, with how many milliseconds until the destination may be asked again; `timed-out`; and `failed`, sent but with no reply to give, with a message.
+**Every import says why it did not do what it was asked, so a plugin can act on it.** The imports share one variant, `host.error`: `not-granted`; `refused`, not done and never done as asked, with a message (a path that leaves the library, a root not the library's, a state key or value past its limit, or a URL, destination, header, or body the host will not send); `failed`, tried without success, with a message (a file that does not exist or already exists, a library that could not be read, or a request sent with no reply to give); and, from `http.send` only, `rate-limited`, not sent, with how many milliseconds until the destination may be asked again, and `timed-out`. Only `failed`, `rate-limited`, and `timed-out` can go differently if asked again. The export's error stays a string ([`exports.md` §1](exports.md#1-the-built-export)).
+
+**`files.entries` pages a folder by name.** Each call gives up to 500 entries, those whose names come after the one it is given, in the order of the names' UTF-8 bytes; past the end it gives none. It reads the folder afresh each time, so a file added or removed between calls moves no other: each entry there throughout comes exactly once, and one added behind the last name is seen on the next pass. Each call reads every name in the folder to find its page, holding only a page of them, and reads the details of only the page's entries; so a page costs time in proportion to the whole folder, and a plugin walking a very large folder should keep the last name in `state` and carry on from it in its next run. An entry whose details cannot be read, other than one gone since it was listed, fails the call with its path, and keeps failing every page that reaches it until it can be read: it is never skipped in silence. A name that is not UTF-8 is left out, since a plugin could not name it back. Every call checks again that the folder is within the library, and a link inside it is listed as a link and never followed.
 
 ### 1.1 Albums and Artists
 
@@ -39,6 +41,7 @@ The limits on every run are 64 MiB of memory, about 60 s of compute (counted in 
 - **`album-tracks(album-id)`** gives an album's present tracks by disc and number. Their paths are where the album is, and so where a `cover.*` belongs ([`requirements/scanning.md` §3.1](../requirements/scanning.md#31-album-art)).
 - **`artist-albums(artist-id)`** gives the albums the artist is an album artist of, oldest first, and not those they only appear on ([`requirements/artists.md` §2](../requirements/artists.md#2-ownership-discography-vs-appearances)). An artist has no folder of their own: a plugin saving an `artist.*` or `artist.txt` chooses one from their albums' tracks, usually the folder above them, which the scanner finds by its upward walk ([`requirements/scanning.md` §3.2](../requirements/scanning.md#32-artist-images)).
 - **`album.has-artwork`, `artist.has-image`, and `artist.has-biography`** say whether the catalog already holds one, so a plugin fetches only what is missing.
+- **No counts.** An album carries no track count and an artist no album or track count: no plugin needs one, and one that does can count `album-tracks` or `artist-albums`.
 - **Whole lists, not pages.** An album's tracks and an artist's albums are bounded by what one album or artist holds. A compilation artist on thousands of albums is the large case, and still a few megabytes.
 
 ---
@@ -103,7 +106,7 @@ What remains:
 
 | Import | Why |
 |---|---|
-| `track-by-path(root, path)` | A plugin that just wrote a sidecar, or found a file through `files.list`, needs to know which track it belongs to. |
+| `track-by-path(root, path)` | A plugin that just wrote a sidecar, or found a file through `files.entries`, needs to know which track it belongs to. |
 | `tracks-by-identifier(kind, values)` | Matching by ISRC or MusicBrainz ID, which is what [`requirements/tracks.md` §6](../requirements/tracks.md#6-classification--identifiers) stores identifiers for. |
 | `search(query, limit)` | The core's own search over this library ([`requirements/search.md`](../requirements/search.md)). An external source, or a plugin mapping a ListenBrainz recommendation to an owned track, needs "which of my tracks is this", and should not have to build its own matcher. |
 | `artwork(album-id)` | The image bytes, for a plugin that checks resolution before fetching a better one ([`requirements/albums.md` §5](../requirements/albums.md#5-artwork)). |

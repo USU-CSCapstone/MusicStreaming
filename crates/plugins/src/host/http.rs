@@ -81,7 +81,7 @@ fn describe(error: reqwest::Error) -> String {
 
 impl<L: Library> http::Host for Run<L> {
     async fn send(&mut self, request: http::Request) -> Result<http::Response, http::Error> {
-        self.may(Permission::Network).map_err(|_| http::Error::NotGranted)?;
+        self.may(Permission::Network)?;
         let url = rules::allowed(&request.url, &self.grants.destinations)
             .map_err(http::Error::Refused)?;
         // Checked to have one. Parsed, so it is lowercase, and every spelling of a URL is one.

@@ -91,7 +91,7 @@ fn search(conn: &Connection, seq: i64) -> rusqlite::Result<Option<Search>> {
             query: row.get(1)?,
             found: Found { tracks: row.get(2)?, albums: row.get(3)?, artists: row.get(4)? },
             selected: kind.zip(selected_id).map(|(kind, id)| Selected { kind, id: id as u64 }),
-            searched_at: row.get::<_, i64>(7)? as u64,
+            searched_at_ms: row.get::<_, i64>(7)? as u64,
         })
     })
     .optional()

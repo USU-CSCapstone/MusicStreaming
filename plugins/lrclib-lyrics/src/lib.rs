@@ -30,7 +30,7 @@ mod plugin {
     wit_bindgen::generate!({ path: "../../crates/plugins/wit", world: "plugin" });
 
     use jewelcase::plugin::files::{self, WriteMode};
-    use jewelcase::plugin::host::{self, Permission};
+    use jewelcase::plugin::host::{self, Error, Permission};
     use jewelcase::plugin::settings;
     use jewelcase::plugin::{http, library};
 
@@ -56,19 +56,21 @@ mod plugin {
             headers: Vec::new(),
             body: Vec::new(),
         };
-        let reply = http::send(&request).map_err(why)?;
+        let reply = http::send(&request)?;
         Ok((reply.status, String::from_utf8_lossy(&reply.body).into_owned()))
     }
 
-    /// Why a request has no reply, as the run's log says it.
-    fn why(error: http::Error) -> String {
-        match error {
-            http::Error::NotGranted => "Network access was not granted".into(),
-            http::Error::Refused(why) | http::Error::Failed(why) => why,
-            http::Error::RateLimited(ms) => {
-                format!("lrclib.net cannot be asked again for {} s", ms.div_ceil(1000))
+    /// Why an import did not do what it was asked, as the run's log and summary say it.
+    impl From<Error> for String {
+        fn from(error: Error) -> String {
+            match error {
+                Error::NotGranted => "a permission it needs was not granted".into(),
+                Error::Refused(why) | Error::Failed(why) => why,
+                Error::RateLimited(ms) => {
+                    format!("the service cannot be asked again for {} s", ms.div_ceil(1000))
+                }
+                Error::TimedOut => "the request timed out".into(),
             }
-            http::Error::TimedOut => "the request timed out".into(),
         }
     }
 
@@ -210,7 +212,7 @@ mod plugin {
     fn save(t: &library::Track, synced: bool, text: &str) -> Result<(), String> {
         let contents = format!("{}\n", text.trim());
         let path = crate::lyrics_path(&t.path, synced);
-        files::write(t.root, &path, contents.as_bytes(), WriteMode::Create)
+        files::write(t.root, &path, contents.as_bytes(), WriteMode::Create).map_err(String::from)
     }
 
     fn summary(n: &Tally, saved: bool) -> String {

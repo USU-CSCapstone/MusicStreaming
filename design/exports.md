@@ -11,7 +11,7 @@ Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`im
 
 ## 1. The Built Export
 
-**One function: `handle(event) -> result<string, string>`** in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.1`. Every run goes through it: a hook ([`hooks.md` §1](hooks.md#1-built-hooks)), **Run now**, or a settings check. It returns a one-line summary on success or a reason on failure, which admins see with the run.
+**One function: `handle(event) -> result<string, string>`** in [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.1`. Every run goes through it: a hook ([`hooks.md` §1](hooks.md#1-built-hooks)), **Run now**, or a settings check. It returns a one-line summary on success or a reason on failure, which admins see with the run. The reason is a string, unlike the imports' typed `error` ([`imports.md` §1](imports.md#1-built-imports)): the host shows it and does not act on its kind.
 
 This covers everything a plugin does in the background. It covers none of what a plugin does while someone waits, because nothing in the contract is called on a user's behalf and answered back to them. [`requirements/plugins.md` §9](../requirements/plugins.md#9-extending-the-interface) and [§10](../requirements/plugins.md#10-external-content-sources) need exactly that.
 

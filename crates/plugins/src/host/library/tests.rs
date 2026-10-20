@@ -1,11 +1,13 @@
 use std::fs;
 use std::path::Path;
 
-use super::super::Run;
-use super::super::bindings::jewelcase::plugin::{files, http, library, state};
+use super::super::bindings::jewelcase::plugin::{files, host, http, library, state};
 use super::super::testing::{self, Memory, album, artist, track};
+use super::super::{Error, Library, Run};
 use crate::files::MAX_READ;
 use crate::manifest::Permission::{self, *};
+
+mod errors;
 
 /// Every import a permission gates, the permissions any one of which lets it through, and how
 /// many paths it hands the scanner when it does.
@@ -19,7 +21,7 @@ const GATED: [(&str, &[Permission], usize); 16] = [
     ("library.album-tracks", &[LibraryRead], 0),
     ("library.artist-albums", &[LibraryRead], 0),
     ("files.roots", &[LibraryRead, LibraryAdd, LibraryChange], 0),
-    ("files.list", &[LibraryRead], 0),
+    ("files.entries", &[LibraryRead], 0),
     ("files.read", &[LibraryRead], 0),
     ("files.write create", &[LibraryAdd], 1),
     ("files.write replace", &[LibraryChange], 1),
@@ -44,25 +46,26 @@ fn library(dir: &Path) -> Memory {
 }
 
 /// What an import answered, as far as its permission goes.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Answer {
     Passed,
     NotGranted,
     Failed(String),
 }
 
-/// Sorts what a `library` or `files` import answered.
-fn answer<T>(result: Result<T, String>) -> Answer {
+/// Sorts what an import answered. `http.send` asks for a destination the run does not approve,
+/// so nothing leaves: being refused for that is getting past its permission, and is `Passed`.
+fn answer<T>(result: Result<T, Error>) -> Answer {
     match result {
         Ok(_) => Answer::Passed,
-        Err(why) if why.ends_with(" was not granted") => Answer::NotGranted,
-        Err(why) => Answer::Failed(why),
+        Err(Error::Refused(why)) if why.contains("is not one of this plugin's") => Answer::Passed,
+        Err(Error::NotGranted) => Answer::NotGranted,
+        Err(other) => Answer::Failed(format!("{other:?}")),
     }
 }
 
-/// Calls `import` on `run`. `http.send` asks for a destination the run does not approve, so
-/// nothing leaves: being refused for that is getting past its permission, and answers `Passed`.
-async fn call(run: &mut Run<Memory>, import: &str) -> Answer {
+/// Calls `import` on `run`, sorting its answer with [`answer`].
+async fn call<L: Library>(run: &mut Run<L>, import: &str) -> Answer {
     match import {
         "library.tracks" => answer(library::Host::tracks(run, None, 10).await),
         "library.get-tracks" => answer(library::Host::get_tracks(run, vec![1]).await),
@@ -73,7 +76,7 @@ async fn call(run: &mut Run<Memory>, import: &str) -> Answer {
         "library.album-tracks" => answer(library::Host::album_tracks(run, 1).await),
         "library.artist-albums" => answer(library::Host::artist_albums(run, 1).await),
         "files.roots" => answer(files::Host::roots(run).await),
-        "files.list" => answer(files::Host::list(run, 1, String::new()).await),
+        "files.entries" => answer(files::Host::entries(run, 1, String::new(), None).await),
         "files.read" => answer(files::Host::read(run, 1, "read".into(), 0, 1).await),
         "files.write create" => answer(
             files::Host::write(run, 1, "added".into(), b"x".to_vec(), files::WriteMode::Create)
@@ -94,11 +97,7 @@ async fn call(run: &mut Run<Memory>, import: &str) -> Answer {
                 headers: Vec::new(),
                 body: Vec::new(),
             };
-            match http::Host::send(run, request).await {
-                Err(http::Error::NotGranted) => Answer::NotGranted,
-                Err(http::Error::Refused(why)) if why.contains("not one of") => Answer::Passed,
-                other => Answer::Failed(format!("{other:?}")),
-            }
+            answer(http::Host::send(run, request).await)
         }
         _ => panic!("no import {import}"),
     }
@@ -165,11 +164,14 @@ async fn state_needs_no_permission_and_keeps_keys_and_values_small() {
     assert_eq!(state::Host::get(run, longest).await.unwrap(), Some(largest));
 
     let too_large = state::Host::set(run, "large".into(), vec![0; (1 << 20) + 1]).await;
-    assert!(too_large.is_err());
+    assert!(matches!(too_large, Err(Error::Refused(_))), "{too_large:?}");
     for key in [String::new(), "k".repeat(513)] {
-        assert!(state::Host::set(run, key.clone(), Vec::new()).await.is_err(), "{key:?}");
-        assert!(state::Host::get(run, key.clone()).await.is_err(), "{key:?}");
-        assert!(state::Host::delete(run, key.clone()).await.is_err(), "{key:?}");
+        let set = state::Host::set(run, key.clone(), Vec::new()).await;
+        assert!(matches!(set, Err(Error::Refused(_))), "{key:?}: {set:?}");
+        let got = state::Host::get(run, key.clone()).await;
+        assert!(matches!(got, Err(Error::Refused(_))), "{key:?}: {got:?}");
+        let deleted = state::Host::delete(run, key.clone()).await;
+        assert!(matches!(deleted, Err(Error::Refused(_))), "{key:?}: {deleted:?}");
     }
     assert_eq!(run.library.state.keys().collect::<Vec<_>>(), ["k".repeat(512).as_str()]);
 }
@@ -182,4 +184,36 @@ async fn a_read_answers_at_most_8_mb() {
     let run = &mut testing::run(memory, &[LibraryRead]);
     let read = files::Host::read(run, 1, "large".into(), 0, u32::MAX).await.unwrap();
     assert_eq!(read.len(), 8 << 20);
+}
+
+#[tokio::test]
+async fn entries_continue_after_the_name_asked_for() {
+    let dir = tempfile::tempdir().unwrap();
+    for n in 0..=500 {
+        fs::write(dir.path().join(format!("{n:03}")), b"").unwrap();
+    }
+    let memory = Memory { root: dir.path().to_path_buf(), ..Memory::default() };
+    let run = &mut testing::run(memory, &[LibraryRead]);
+    let first = files::Host::entries(run, 1, String::new(), None).await.unwrap();
+    assert_eq!((first.len(), first[0].name.as_str()), (500, "000"));
+    let after = Some(first[499].name.clone());
+    let rest = files::Host::entries(run, 1, String::new(), after).await.unwrap();
+    let rest: Vec<_> = rest.into_iter().map(|e| e.name).collect();
+    assert_eq!(rest, ["500"]);
+}
+
+#[tokio::test]
+async fn granted_names_what_a_plugin_reaches_and_no_hook() {
+    let run = &mut testing::run(Memory::default(), &Permission::ALL);
+    use host::Permission as Reached;
+    let reached = [
+        Reached::LibraryRead,
+        Reached::LibraryAdd,
+        Reached::LibraryChange,
+        Reached::Network,
+        Reached::ListeningActivity,
+        Reached::SearchActivity,
+        Reached::HostRateLimits,
+    ];
+    assert_eq!(host::Host::granted(run).await, reached);
 }

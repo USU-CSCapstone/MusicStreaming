@@ -25,7 +25,7 @@ async fn plays_reach_a_plugin_only_for_users_who_connected_it_and_only_since() {
     play(&db, "c", 7, 12, 220, "skipped").await;
     let Event::Played(plays) = one(deliver(&db, 0, HANDLED).await, 7) else { panic!("not plays") };
     let summary: Vec<_> =
-        plays.iter().map(|p| (p.track.id, p.started_at, p.listen_time_ms, p.end)).collect();
+        plays.iter().map(|p| (p.track.id, p.started_at_ms, p.listen_time_ms, p.end)).collect();
     assert_eq!(summary, [(11, 200, 30_000, Finished), (12, 220, 30_000, Skipped)], "only theirs");
     assert_eq!(plays[0].track.artists, ["Aurora Lane"]);
     assert!(deliver(&db, 0, HANDLED).await.is_empty(), "each play is delivered once");
@@ -60,7 +60,7 @@ async fn a_connection_to_another_plugin_sends_this_one_nothing() {
     let Event::Played(plays) = one(deliver(&db, 1000, HANDLED).await, 7) else {
         panic!("not plays")
     };
-    let started: Vec<_> = plays.iter().map(|p| p.started_at).collect();
+    let started: Vec<_> = plays.iter().map(|p| p.started_at_ms).collect();
     assert_eq!(started, [220], "only since they connected this one");
 
     // Found due just before they disconnected it, so only the other connection is left.
@@ -101,7 +101,7 @@ async fn plays_and_starts_need_listening_activity_as_well_as_the_hook() {
 /// The track and start time `event` announces as playing.
 fn now_playing(event: Event) -> (u64, u64) {
     let Event::Playing(now) = event else { panic!("not playing: {event:?}") };
-    (now.track.id, now.started_at)
+    (now.track.id, now.started_at_ms)
 }
 
 #[tokio::test]

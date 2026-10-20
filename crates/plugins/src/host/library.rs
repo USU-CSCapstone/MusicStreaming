@@ -1,8 +1,9 @@
 //! The imports that reach the library: its catalog (`library`), its folders (`files`), and the
-//! plugin's own state for it (`state`). Each checks its permission before anything else.
+//! plugin's own state for it (`state`). Each checks its permission before anything else. The
+//! library's own failures reach the plugin as `failed`, in its words.
 
 use super::bindings::jewelcase::plugin::{files, library, state};
-use super::{Album, Artist, Library, Run, Track};
+use super::{Album, Artist, Error, Library, Run, Track};
 use crate::files as library_files;
 use crate::manifest::Permission;
 
@@ -14,80 +15,77 @@ const MAX_KEY: usize = 512;
 const MAX_VALUE: usize = 1 << 20;
 
 impl<L: Library> library::Host for Run<L> {
-    async fn tracks(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Track>, String> {
+    async fn tracks(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Track>, Error> {
         self.may(Permission::LibraryRead)?;
-        self.library.tracks(after, limit.min(PAGE_LIMIT)).await
+        self.library.tracks(after, limit.min(PAGE_LIMIT)).await.map_err(Error::Failed)
     }
 
-    async fn get_tracks(&mut self, mut ids: Vec<u64>) -> Result<Vec<Track>, String> {
+    async fn get_tracks(&mut self, mut ids: Vec<u64>) -> Result<Vec<Track>, Error> {
         self.may(Permission::LibraryRead)?;
         ids.truncate(PAGE_LIMIT as usize);
-        self.library.get_tracks(ids).await
+        self.library.get_tracks(ids).await.map_err(Error::Failed)
     }
 
-    async fn albums(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Album>, String> {
+    async fn albums(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Album>, Error> {
         self.may(Permission::LibraryRead)?;
-        self.library.albums(after, limit.min(PAGE_LIMIT)).await
+        self.library.albums(after, limit.min(PAGE_LIMIT)).await.map_err(Error::Failed)
     }
 
-    async fn artists(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Artist>, String> {
+    async fn artists(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Artist>, Error> {
         self.may(Permission::LibraryRead)?;
-        self.library.artists(after, limit.min(PAGE_LIMIT)).await
+        self.library.artists(after, limit.min(PAGE_LIMIT)).await.map_err(Error::Failed)
     }
 
-    async fn get_albums(&mut self, mut ids: Vec<u64>) -> Result<Vec<Album>, String> {
-        self.may(Permission::LibraryRead)?;
-        ids.truncate(PAGE_LIMIT as usize);
-        self.library.get_albums(ids).await
-    }
-
-    async fn get_artists(&mut self, mut ids: Vec<u64>) -> Result<Vec<Artist>, String> {
+    async fn get_albums(&mut self, mut ids: Vec<u64>) -> Result<Vec<Album>, Error> {
         self.may(Permission::LibraryRead)?;
         ids.truncate(PAGE_LIMIT as usize);
-        self.library.get_artists(ids).await
+        self.library.get_albums(ids).await.map_err(Error::Failed)
     }
 
-    async fn album_tracks(&mut self, album: u64) -> Result<Vec<Track>, String> {
+    async fn get_artists(&mut self, mut ids: Vec<u64>) -> Result<Vec<Artist>, Error> {
         self.may(Permission::LibraryRead)?;
-        self.library.album_tracks(album).await
+        ids.truncate(PAGE_LIMIT as usize);
+        self.library.get_artists(ids).await.map_err(Error::Failed)
     }
 
-    async fn artist_albums(&mut self, artist: u64) -> Result<Vec<Album>, String> {
+    async fn album_tracks(&mut self, album: u64) -> Result<Vec<Track>, Error> {
         self.may(Permission::LibraryRead)?;
-        self.library.artist_albums(artist).await
+        self.library.album_tracks(album).await.map_err(Error::Failed)
+    }
+
+    async fn artist_albums(&mut self, artist: u64) -> Result<Vec<Album>, Error> {
+        self.may(Permission::LibraryRead)?;
+        self.library.artist_albums(artist).await.map_err(Error::Failed)
     }
 }
 
 /// Runs file work off the plugin runtime's thread, so one plugin's disk waits hold up no other.
 async fn blocking<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
-    tokio::task::spawn_blocking(work).await.map_err(|_| "the file operation failed".to_owned())?
+    work: impl FnOnce() -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
+    let joined = tokio::task::spawn_blocking(work).await;
+    joined.map_err(|_| Error::Failed("the file operation failed".into()))?
 }
 
 impl<L: Library> files::Host for Run<L> {
-    async fn roots(&mut self) -> Result<Vec<u64>, String> {
+    async fn roots(&mut self) -> Result<Vec<u64>, Error> {
         let file_permissions =
             [Permission::LibraryRead, Permission::LibraryAdd, Permission::LibraryChange];
         if !file_permissions.iter().any(|p| self.grants.permissions.contains(p)) {
-            return Err(format!("{} was not granted", Permission::LibraryRead.title()));
+            return Err(Error::NotGranted);
         }
         Ok(Run::roots(self).await?.iter().map(|(id, _)| *id).collect())
     }
 
-    async fn list(&mut self, root: u64, folder: String) -> Result<Vec<files::Entry>, String> {
+    async fn entries(
+        &mut self,
+        root: u64,
+        folder: String,
+        after: Option<String>,
+    ) -> Result<Vec<files::Entry>, Error> {
         self.may(Permission::LibraryRead)?;
         let root = self.root(root).await?;
-        let entries = blocking(move || library_files::list(&root, &folder)).await?;
-        Ok(entries
-            .into_iter()
-            .map(|e| files::Entry {
-                name: e.name,
-                directory: e.directory,
-                size: e.size,
-                modified_ms: e.modified_ms,
-            })
-            .collect())
+        blocking(move || library_files::entries(&root, &folder, after.as_deref())).await
     }
 
     async fn read(
@@ -96,7 +94,7 @@ impl<L: Library> files::Host for Run<L> {
         path: String,
         offset: u64,
         length: u32,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<Vec<u8>, Error> {
         self.may(Permission::LibraryRead)?;
         let root = self.root(root).await?;
         blocking(move || library_files::read(&root, &path, offset, length)).await
@@ -108,7 +106,7 @@ impl<L: Library> files::Host for Run<L> {
         path: String,
         contents: Vec<u8>,
         mode: files::WriteMode,
-    ) -> Result<(), String> {
+    ) -> Result<(), Error> {
         let replace = matches!(mode, files::WriteMode::Replace);
         self.may(if replace { Permission::LibraryChange } else { Permission::LibraryAdd })?;
         let root = self.root(root).await?;
@@ -119,15 +117,15 @@ impl<L: Library> files::Host for Run<L> {
         Ok(())
     }
 
-    async fn rename(&mut self, root: u64, from: String, to: String) -> Result<(), String> {
+    async fn rename(&mut self, root: u64, path: String, to: String) -> Result<(), Error> {
         self.may(Permission::LibraryChange)?;
         let root = self.root(root).await?;
-        let (from, to) = blocking(move || library_files::rename(&root, &from, &to)).await?;
+        let (from, to) = blocking(move || library_files::rename(&root, &path, &to)).await?;
         self.touched.extend([from, to]);
         Ok(())
     }
 
-    async fn delete(&mut self, root: u64, path: String) -> Result<(), String> {
+    async fn delete(&mut self, root: u64, path: String) -> Result<(), Error> {
         self.may(Permission::LibraryChange)?;
         let root = self.root(root).await?;
         let deleted = blocking(move || library_files::delete(&root, &path)).await?;
@@ -136,30 +134,31 @@ impl<L: Library> files::Host for Run<L> {
     }
 }
 
-fn check_key(key: &str) -> Result<(), String> {
+/// Refuses a key that is empty or longer than [`MAX_KEY`].
+fn check_key(key: &str) -> Result<(), Error> {
     if key.is_empty() || key.len() > MAX_KEY {
-        return Err(format!("a key is 1 to {MAX_KEY} bytes"));
+        return Err(Error::Refused(format!("a key is 1 to {MAX_KEY} bytes")));
     }
     Ok(())
 }
 
 impl<L: Library> state::Host for Run<L> {
-    async fn get(&mut self, key: String) -> Result<Option<Vec<u8>>, String> {
+    async fn get(&mut self, key: String) -> Result<Option<Vec<u8>>, Error> {
         check_key(&key)?;
-        self.library.state_get(key).await
+        self.library.state_get(key).await.map_err(Error::Failed)
     }
 
-    async fn set(&mut self, key: String, value: Vec<u8>) -> Result<(), String> {
+    async fn set(&mut self, key: String, value: Vec<u8>) -> Result<(), Error> {
         check_key(&key)?;
         if value.len() > MAX_VALUE {
-            return Err(format!("a value is at most {} MB", MAX_VALUE >> 20));
+            return Err(Error::Refused(format!("a value is at most {} MB", MAX_VALUE >> 20)));
         }
-        self.library.state_set(key, value).await
+        self.library.state_set(key, value).await.map_err(Error::Failed)
     }
 
-    async fn delete(&mut self, key: String) -> Result<(), String> {
+    async fn delete(&mut self, key: String) -> Result<(), Error> {
         check_key(&key)?;
-        self.library.state_delete(key).await
+        self.library.state_delete(key).await.map_err(Error::Failed)
     }
 }
 

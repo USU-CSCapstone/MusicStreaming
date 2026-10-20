@@ -43,8 +43,8 @@ pub fn playing(
          WHERE {deliverable} ORDER BY st.seq DESC LIMIT 1"
     ))?
     .query_row(params![now, library, user, position, plugin], |row| {
-        let started_at = row.get::<_, i64>(13)? as u64;
-        Ok((row.get(14)?, Playing { track: track(row)?, started_at }))
+        let started_at_ms = row.get::<_, i64>(13)? as u64;
+        Ok((row.get(14)?, Playing { track: track(row)?, started_at_ms }))
     })
     .optional()
 }

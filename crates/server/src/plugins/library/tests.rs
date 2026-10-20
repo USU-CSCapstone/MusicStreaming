@@ -39,10 +39,7 @@ async fn pages_albums_and_artists_with_music() {
     let mut library = RunLibrary::new(db, "plugin", 1);
     let albums = library.albums(None, 10).await.unwrap();
     assert_eq!(ids(&albums, |a| a.id), [101], "not the empty album, nor another library's");
-    assert_eq!(
-        (albums[0].artists.as_slice(), albums[0].track_count),
-        (["Aurora Lane".to_owned()].as_slice(), 2)
-    );
+    assert_eq!(albums[0].artists, ["Aurora Lane"]);
     let artists = library.artists(None, 10).await.unwrap();
     assert_eq!(
         (ids(&artists, |a| a.id), artists[0].name.as_deref()),

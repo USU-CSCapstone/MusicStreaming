@@ -2,7 +2,7 @@
 //! run, and host imports that each check their own permission.
 //!
 //! Imports stay linked when their permission is declined, so a plugin with an optional one
-//! still loads: the call answers "… was not granted", and `granted` lets it adapt up front.
+//! still loads: the call answers `not-granted`, and `granted` lets it adapt up front.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -38,10 +38,10 @@ use bindings::jewelcase::plugin::host;
 use bindings::{Plugin, PluginPre};
 
 pub use bindings::jewelcase::plugin::events::{
-    AlbumsChanged, ArtistsChanged, Event, Found, Play, PlayEnd, Playing, ResultKind, ScanFinished,
-    Search, Selected, TracksChanged,
+    Changes, Event, Found, Play, PlayEnd, Playing, ResultKind, ScanFinished, Search, Selected,
 };
 pub use bindings::jewelcase::plugin::library::{Album, Artist, Track};
+pub(crate) use bindings::jewelcase::plugin::{files::Entry, host::Error};
 
 /// How often the epoch advances, and so how often a running plugin is checked. A tick is a sleep
 /// that runs a little long, at about 1.05 ms.
@@ -437,28 +437,26 @@ pub struct Run<L> {
 }
 
 impl<L: Library> Run<L> {
-    fn may(&self, permission: Permission) -> Result<(), String> {
-        if self.grants.permissions.contains(&permission) {
-            Ok(())
-        } else {
-            Err(format!("{} was not granted", permission.title()))
-        }
+    /// Refuses as `not-granted` unless this run holds `permission`.
+    fn may(&self, permission: Permission) -> Result<(), Error> {
+        if self.grants.permissions.contains(&permission) { Ok(()) } else { Err(Error::NotGranted) }
     }
 
-    async fn roots(&mut self) -> Result<&[(u64, PathBuf)], String> {
+    /// The library's roots, read on first use. Failing to read them is a `failed`.
+    async fn roots(&mut self) -> Result<&[(u64, PathBuf)], Error> {
         if self.roots.is_none() {
-            self.roots = Some(self.library.roots().await?);
+            self.roots = Some(self.library.roots().await.map_err(Error::Failed)?);
         }
         Ok(self.roots.as_deref().unwrap_or_default())
     }
 
-    /// Where root `id` is on this host.
-    async fn root(&mut self, id: u64) -> Result<PathBuf, String> {
+    /// Where root `id` is on this host. An ID not among the library's roots is `refused`.
+    async fn root(&mut self, id: u64) -> Result<PathBuf, Error> {
         let roots = self.roots().await?;
         let found = roots.iter().find(|(root, _)| *root == id);
         found
             .map(|(_, path)| path.clone())
-            .ok_or_else(|| format!("{id} is not one of this library's roots"))
+            .ok_or_else(|| Error::Refused(format!("{id} is not one of this library's roots")))
     }
 }
 
@@ -468,23 +466,24 @@ impl<L: Library> WasiView for Run<L> {
     }
 }
 
-fn wit(permission: Permission) -> host::Permission {
+/// The permission as `host.granted` names it, or none for a hook, which a plugin is not told of.
+fn wit(permission: Permission) -> Option<host::Permission> {
     match permission {
-        Permission::LibraryRead => host::Permission::LibraryRead,
-        Permission::LibraryAdd => host::Permission::LibraryAdd,
-        Permission::LibraryChange => host::Permission::LibraryChange,
-        Permission::Network => host::Permission::Network,
-        Permission::ListeningActivity => host::Permission::ListeningActivity,
-        Permission::TracksChanged => host::Permission::TracksChanged,
-        Permission::ScanFinished => host::Permission::ScanFinished,
-        Permission::Schedule => host::Permission::Schedule,
-        Permission::Played => host::Permission::Played,
-        Permission::Playing => host::Permission::Playing,
-        Permission::SearchActivity => host::Permission::SearchActivity,
-        Permission::Searched => host::Permission::Searched,
-        Permission::AlbumsChanged => host::Permission::AlbumsChanged,
-        Permission::ArtistsChanged => host::Permission::ArtistsChanged,
-        Permission::HostRateLimits => host::Permission::HostRateLimits,
+        Permission::LibraryRead => Some(host::Permission::LibraryRead),
+        Permission::LibraryAdd => Some(host::Permission::LibraryAdd),
+        Permission::LibraryChange => Some(host::Permission::LibraryChange),
+        Permission::Network => Some(host::Permission::Network),
+        Permission::ListeningActivity => Some(host::Permission::ListeningActivity),
+        Permission::SearchActivity => Some(host::Permission::SearchActivity),
+        Permission::HostRateLimits => Some(host::Permission::HostRateLimits),
+        Permission::TracksChanged
+        | Permission::ScanFinished
+        | Permission::Schedule
+        | Permission::Played
+        | Permission::Playing
+        | Permission::Searched
+        | Permission::AlbumsChanged
+        | Permission::ArtistsChanged => None,
     }
 }
 
@@ -505,7 +504,7 @@ impl<L: Library> bindings::jewelcase::plugin::events::Host for Run<L> {}
 
 impl<L: Library> host::Host for Run<L> {
     async fn granted(&mut self) -> Vec<host::Permission> {
-        self.grants.permissions.iter().copied().map(wit).collect()
+        self.grants.permissions.iter().copied().filter_map(wit).collect()
     }
 
     async fn log(&mut self, message: String) {

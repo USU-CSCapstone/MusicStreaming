@@ -6,20 +6,23 @@ use jewelcase_plugins::Permission::{
 };
 use jewelcase_plugins::{Event, Permission};
 
+use super::super::due::batch;
 use super::super::{BACKOFF_MS, Hook, MAX_FAILURES};
 use super::{HANDLED, HOUR, Received, changes, deliver, setup};
 use crate::plugins::testing::{enable, grant};
 
-/// Each event's hook and library, and the IDs it names as changed and removed.
+/// Each event's hook and library, and the IDs it names as changed and removed. Panics unless
+/// each event is the one its hook delivers, since every kind carries the same record.
 fn named(received: Vec<Received>) -> Vec<(Hook, i64, Vec<u64>, Vec<u64>)> {
     let named = |r: Received| {
-        let (changed, removed) = match r.event {
-            Some(Event::TracksChanged(e)) => (e.changed, e.removed),
-            Some(Event::AlbumsChanged(e)) => (e.changed, e.removed),
-            Some(Event::ArtistsChanged(e)) => (e.changed, e.removed),
+        let (case, changes) = match r.event {
+            Some(Event::TracksChanged(changes)) => (Hook::TracksChanged, changes),
+            Some(Event::AlbumsChanged(changes)) => (Hook::AlbumsChanged, changes),
+            Some(Event::ArtistsChanged(changes)) => (Hook::ArtistsChanged, changes),
             other => panic!("not a change: {other:?}"),
         };
-        (r.hook, r.library, changed, removed)
+        assert_eq!(case, r.hook, "the event is the one its hook delivers");
+        (r.hook, r.library, changes.changed, changes.removed)
     };
     received.into_iter().map(named).collect()
 }
@@ -70,6 +73,17 @@ async fn an_event_names_the_tracks_changed_and_removed() {
     let tracks = [(Hook::TracksChanged, 1, vec![11], vec![12])];
     assert_eq!(named(deliver(&db, 0, HANDLED).await), tracks);
     assert!(deliver(&db, 0, HANDLED).await.is_empty(), "nothing further in library 1");
+}
+
+/// A batch read past the last change holds nothing to deliver, and leaves the position where it
+/// was.
+#[tokio::test]
+async fn past_the_last_change_there_is_no_batch() {
+    let (_temp, db, _plugins) = setup().await;
+    changes(&db, "(1, 'track', 11, 'upsert', 0)").await;
+    let (position, found) = db.read(|conn| batch(conn, 1, 1_000, "track")).await.unwrap();
+    assert_eq!(position, 1_000);
+    assert!(found.is_none(), "{found:?}");
 }
 
 #[tokio::test]

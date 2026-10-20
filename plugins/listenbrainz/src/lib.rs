@@ -73,7 +73,7 @@ mod plugin {
         let mut listens: Vec<Listen> = plays
             .iter()
             .filter(|p| listens::counts(p.track.duration_ms, p.listen_time_ms))
-            .map(|p| listen(&p.track, p.started_at, p.listen_time_ms))
+            .map(|p| listen(&p.track, p.started_at_ms, p.listen_time_ms))
             .collect();
         let short = plays.len() - listens.len();
         listens.retain(listens::sendable);
@@ -88,7 +88,7 @@ mod plugin {
     /// Tells ListenBrainz what is playing now, unless the track has no title or artist it would
     /// take. A failure is reported and not made up later: the host never delivers a start late.
     fn announce(now: &Playing, token: &str) -> Result<String, String> {
-        let playing = listen(&now.track, now.started_at, 0);
+        let playing = listen(&now.track, now.started_at_ms, 0);
         if !listens::sendable(&playing) {
             return Ok("Nothing shown: the track has no usable title or artist.".into());
         }

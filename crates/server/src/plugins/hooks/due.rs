@@ -7,7 +7,7 @@
 //! searches by a user who shares them with it. Each user has a position of their own in
 //! `played`, `playing`, and `searched`.
 
-use jewelcase_plugins::{AlbumsChanged, ArtistsChanged, Event, ScanFinished, TracksChanged};
+use jewelcase_plugins::{Changes, Event, ScanFinished};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::playing::{deliverable, playing};
@@ -152,19 +152,16 @@ pub(super) fn queries() -> [(Hook, String); 8] {
 pub fn event(conn: &Connection, due: &Due, now: i64) -> rusqlite::Result<(i64, Option<Event>)> {
     Ok(match due.hook {
         Hook::TracksChanged => {
-            let (next, c) = batch(conn, due.library, due.position, "track")?;
-            let event = TracksChanged { changed: c.changed, removed: c.removed };
-            (next, (!c.empty).then_some(Event::TracksChanged(event)))
+            let (next, changes) = batch(conn, due.library, due.position, "track")?;
+            (next, changes.map(Event::TracksChanged))
         }
         Hook::AlbumsChanged => {
-            let (next, c) = batch(conn, due.library, due.position, "album")?;
-            let event = AlbumsChanged { changed: c.changed, removed: c.removed };
-            (next, (!c.empty).then_some(Event::AlbumsChanged(event)))
+            let (next, changes) = batch(conn, due.library, due.position, "album")?;
+            (next, changes.map(Event::AlbumsChanged))
         }
         Hook::ArtistsChanged => {
-            let (next, c) = batch(conn, due.library, due.position, "artist")?;
-            let event = ArtistsChanged { changed: c.changed, removed: c.removed };
-            (next, (!c.empty).then_some(Event::ArtistsChanged(event)))
+            let (next, changes) = batch(conn, due.library, due.position, "artist")?;
+            (next, changes.map(Event::ArtistsChanged))
         }
         Hook::ScanFinished => match scans(conn, due.library, due.position, now)? {
             Some((next, totals)) => (next, Some(Event::ScanFinished(totals))),
@@ -186,21 +183,14 @@ pub fn event(conn: &Connection, due: &Due, now: i64) -> rusqlite::Result<(i64, O
     })
 }
 
-/// Entities of one kind added or changed, and removed.
-pub struct Changes {
-    pub changed: Vec<u64>,
-    pub removed: Vec<u64>,
-    pub empty: bool,
-}
-
 /// The next batch of changes to `library`'s entities of type `entity` (`track`, `album`, or
-/// `artist`) after `position`: the position after it, and the IDs it names.
+/// `artist`) after `position`: the position after it, and the IDs it names, if there are any.
 pub fn batch(
     conn: &Connection,
     library: i64,
     position: i64,
     entity: &str,
-) -> rusqlite::Result<(i64, Changes)> {
+) -> rusqlite::Result<(i64, Option<Changes>)> {
     let rows: Vec<(i64, i64, String)> = conn
         .prepare_cached(
             "SELECT seq, entity_id, op FROM library_changes \
@@ -210,15 +200,15 @@ pub fn batch(
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })?
         .collect::<rusqlite::Result<_>>()?;
-    let next = rows.last().map_or(position, |(seq, ..)| *seq);
-    let mut changes = Changes { changed: Vec::new(), removed: Vec::new(), empty: rows.is_empty() };
+    let Some(&(next, ..)) = rows.last() else { return Ok((position, None)) };
+    let mut changes = Changes { changed: Vec::new(), removed: Vec::new() };
     for (_, id, op) in rows {
         match op.as_str() {
             "delete" => changes.removed.push(id as u64),
             _ => changes.changed.push(id as u64),
         }
     }
-    Ok((next, changes))
+    Ok((next, Some(changes)))
 }
 
 /// The scans of `library` completed after `position` and before now, added together, and

@@ -115,21 +115,13 @@ pub fn album(id: u64) -> Album {
         title: Some(format!("Album {id}")),
         artists: vec!["Aurora Lane".into()],
         release_date: None,
-        track_count: 1,
         has_artwork: false,
     }
 }
 
 /// Artist `id`, named `Artist {id}`.
 pub fn artist(id: u64) -> Artist {
-    Artist {
-        id,
-        name: Some(format!("Artist {id}")),
-        album_count: 1,
-        track_count: 1,
-        has_image: false,
-        has_biography: false,
-    }
+    Artist { id, name: Some(format!("Artist {id}")), has_image: false, has_biography: false }
 }
 
 /// The grants of plugin `test` in library 1: `permissions`, with 127.0.0.1 its only
@@ -148,7 +140,7 @@ pub fn grants(permissions: &[Permission]) -> Grants {
 }
 
 /// A run over `library` with `grants(permissions)`, and a network of its own.
-pub fn run(library: Memory, permissions: &[Permission]) -> Run<Memory> {
+pub fn run<L: Library>(library: L, permissions: &[Permission]) -> Run<L> {
     Run {
         wasi: WasiCtx::builder().build(),
         table: ResourceTable::new(),

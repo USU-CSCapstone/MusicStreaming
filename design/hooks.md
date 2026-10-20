@@ -11,11 +11,11 @@ Its companions are [`imports.md`](imports.md), covering what a plugin can call, 
 
 ## 1. Built Hooks
 
-**Eight hooks are built, each approved like a permission** ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)). The dispatcher is `crates/server/src/plugins/hooks.rs`, and the contract is [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.1`.
+**Eight hooks are built, each approved like a permission** ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)). The dispatcher is `crates/server/src/plugins/hooks.rs`, and the contract is [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.1`. A plugin learns a hook was granted only by its event arriving: `host.granted` names the permissions its imports check, and no hook, so a new hook never changes that type.
 
 | Hook (manifest / WIT) | Delivers | Granted | Also needs |
 |---|---|---|---|
-| `tracksChanged` / `tracks-changed` | Track IDs changed or removed since the last delivery, up to 100 per event | Per library | `libraryRead` |
+| `tracksChanged` / `tracks-changed` | Track IDs changed or removed since the last delivery, up to 100 per event, in a `changes` record | Per library | `libraryRead` |
 | `albumsChanged` / `albums-changed`, `artistsChanged` / `artists-changed` | Album or artist IDs changed or removed since the last delivery, up to 100 per event ([§1.3](#13-albums-changed-and-artists-changed)) | Per library | `libraryRead` |
 | `scanFinished` / `scan-finished` | The summed counts of every scan that finished since the last delivery | Per library | `libraryRead` |
 | `schedule` / `scheduled` | Nothing. The interval named by `everyMinutes` (at least 5) came round. | Per plugin | — |
@@ -38,7 +38,7 @@ All eight hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-r
 
 **Run when a connected user starts a track.** ListenBrainz's `playing_now` and Last.fm's `updateNowPlaying` both need the start. `played` only arrives once the play has ended. [`plugins/listenbrainz`](../plugins/listenbrainz/) uses it, as an optional permission, to show what is playing now.
 
-- **Delivers** `playing { track, started-at }`: the newest play one connected user started in this library. The run sees that user's personal settings, as in `played`.
+- **Delivers** `playing { track, started-at-ms }`: the newest play one connected user started in this library. The run sees that user's personal settings, as in `played`.
 - **Where starts come from.** A trigger on `plays` records each play first reported before it ended as a start in `play_events`, the outbox it shares with `played`'s ends (`crates/server/migrations/0005_activity.sql`). It is timed by the server's clock at that first report, never the device's. A device catching up after being offline reports its plays already ended, so they are never announced as playing. Each new play clears starts over an hour old. Each hook reads only its own kind of event, so neither steps over the other's.
 - **Not replayed.** "Now playing" from an hour ago is wrong, not late. A start is due only while it is under a minute old and its play has not ended, and the newest passes over every start before it. A failed delivery backs off as any hook's does, so by the retry that start is stale and only a newer one goes. This is the one exception to reliable delivery in [§2](#2-rules-every-hook-follows), and the reason is recorded here so it is not "fixed".
 - **Needs** the same grants as `played`: `libraryRead`, `listeningActivity`, and `personalSettings` to connect.
@@ -66,7 +66,7 @@ All eight hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-r
 
 **Run when albums or artists are added, changed, or removed.** Artwork and biography plugins think in albums and artists ([`requirements/scanning.md` §3](../requirements/scanning.md#3-sidecar-content)), and need not rebuild them from track IDs.
 
-- **Delivers** `albums-changed` or `artists-changed`: up to 100 IDs changed or removed, as `tracksChanged` delivers track IDs.
+- **Delivers** `albums-changed` or `artists-changed`: up to 100 IDs changed or removed, in the same `changes` record `tracksChanged` delivers track IDs in.
 - **What counts as a change** is whatever the library change feed records (`crates/server/src/db/catalog.rs`). An album is recorded as it is recomputed when its tracks change, when its artwork's placeholder changes, and when its loudness is analysed; an artist as it is refreshed when its tracks change, and when its image changes. A plugin may be told of an album whose title it already has.
 - **Read from what exists.** The change feed records `album` and `artist` rows (`crates/server/migrations/0004_feeds.sql`). Each hook reads only its own kind, with a position of its own that starts at zero, so a plugin new to a library first hears of every album or artist in it. `tracksChanged` reads only tracks the same way, so an album changing never wakes a track hook.
 - **Two hooks, not one `libraryChanged`.** A plugin hears only about what it asked for, and the admin sees "run when albums change" rather than a vaguer grant. The cost is two names in the manifest rather than one.

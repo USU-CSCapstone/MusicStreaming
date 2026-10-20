@@ -120,7 +120,7 @@ async fn run(permissions: &[Permission], event: Event) -> Outcome {
 
 #[tokio::test]
 async fn a_start_reaches_the_plugin_as_playing() {
-    let event = Event::Playing(Playing { track: track(&["Aurora Lane"]), started_at: 1 });
+    let event = Event::Playing(Playing { track: track(&["Aurora Lane"]), started_at_ms: 1 });
     let outcome = run(&[Permission::LibraryRead, Permission::Playing], event).await;
     // It got as far as sending it, which the network it was not granted refused.
     assert!(!outcome.ok);
@@ -129,7 +129,7 @@ async fn a_start_reaches_the_plugin_as_playing() {
 
 #[tokio::test]
 async fn a_start_with_no_artist_is_not_sent() {
-    let event = Event::Playing(Playing { track: track(&[" "]), started_at: 1 });
+    let event = Event::Playing(Playing { track: track(&[" "]), started_at_ms: 1 });
     let outcome = run(&[Permission::LibraryRead, Permission::Playing], event).await;
     assert!(outcome.ok, "{}", outcome.summary);
     assert_eq!(outcome.summary, "Nothing shown: the track has no usable title or artist.");
@@ -139,7 +139,7 @@ async fn a_start_with_no_artist_is_not_sent() {
 async fn plays_with_no_artist_are_counted_and_not_sent() {
     let play = |artists: &[&str], listen_time_ms| Play {
         track: track(artists),
-        started_at: 1_790_942_400_000,
+        started_at_ms: 1_790_942_400_000,
         listen_time_ms,
         end: PlayEnd::Finished,
     };

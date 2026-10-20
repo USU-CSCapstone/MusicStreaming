@@ -9,7 +9,7 @@ mod common;
 use std::path::PathBuf;
 
 use common::{State, Tracks, grants, plugin, track};
-use jewelcase_plugins::{Event, Grants, Host, Outcome, Permission, TracksChanged};
+use jewelcase_plugins::{Changes, Event, Grants, Host, Outcome, Permission};
 
 /// The reason a miss is stored with when nothing was found.
 const NOTHING: u8 = 0;
@@ -106,7 +106,7 @@ async fn a_change_settles_or_keeps_a_miss_and_a_removal_forgets_it() {
     for id in [5, 6, 9] {
         miss(&library, id, 0, NOTHING);
     }
-    let changes = TracksChanged { changed: vec![5, 6], removed: vec![9] };
+    let changes = Changes { changed: vec![5, 6], removed: vec![9] };
     let outcome = run_offline(&library, Event::TracksChanged(changes)).await;
     assert!(outcome.ok, "{}", outcome.summary);
     assert_eq!(kept(&library, "miss/5"), None, "it has lyrics now");
@@ -142,7 +142,9 @@ async fn a_miss_is_looked_up_again_once_its_reason_is_gone() {
 async fn a_run_cut_short_keeps_its_place_after_each_lookup() {
     let library = Tracks { fail_after: Some(500), ..library(1..=501) };
     let outcome = run_offline(&library, Event::Run).await;
-    assert!(!outcome.ok, "{}", outcome.summary);
+    // The library's failure reaches the plugin as `failed`, in the library's words.
+    let failed = "the plugin reported an error: the library could not be read";
+    assert_eq!(outcome.summary, failed);
     assert_eq!(looked_up(&outcome).len(), 500);
     assert_eq!(kept(&library, "cursor"), Some(500));
 }

@@ -81,7 +81,7 @@ const ALBUM_COLUMNS: &str = "SELECT al.id, al.title, \
      (SELECT json_group_array(name) FROM (SELECT ar.name FROM album_artists aa \
       JOIN artists ar ON ar.id = aa.artist_id WHERE aa.album_id = al.id AND ar.name IS NOT NULL \
       ORDER BY aa.position)), \
-     al.release_date, al.track_count, al.image_id IS NOT NULL";
+     al.release_date, al.image_id IS NOT NULL";
 
 fn album(row: &Row) -> rusqlite::Result<Album> {
     Ok(Album {
@@ -89,23 +89,20 @@ fn album(row: &Row) -> rusqlite::Result<Album> {
         title: row.get(1)?,
         artists: names(row, 2)?,
         release_date: row.get(3)?,
-        track_count: row.get(4)?,
-        has_artwork: row.get(5)?,
+        has_artwork: row.get(4)?,
     })
 }
 
 /// An artist's columns, as `ar`. Only one with music is shown.
-const ARTIST_COLUMNS: &str = "SELECT ar.id, ar.name, ar.album_count, ar.track_count, \
-     ar.image_id IS NOT NULL, coalesce(ar.biography, '') <> ''";
+const ARTIST_COLUMNS: &str =
+    "SELECT ar.id, ar.name, ar.image_id IS NOT NULL, coalesce(ar.biography, '') <> ''";
 
 fn artist(row: &Row) -> rusqlite::Result<Artist> {
     Ok(Artist {
         id: row.get::<_, i64>(0)? as u64,
         name: row.get(1)?,
-        album_count: row.get(2)?,
-        track_count: row.get(3)?,
-        has_image: row.get(4)?,
-        has_biography: row.get(5)?,
+        has_image: row.get(2)?,
+        has_biography: row.get(3)?,
     })
 }
 

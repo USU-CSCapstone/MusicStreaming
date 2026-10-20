@@ -48,7 +48,7 @@ pub fn plays(
             };
             Ok(Play {
                 track: track(row)?,
-                started_at: row.get::<_, i64>(13)? as u64,
+                started_at_ms: row.get::<_, i64>(13)? as u64,
                 listen_time_ms: row.get::<_, i64>(14)? as u64,
                 end,
             })

@@ -6,7 +6,9 @@ package jewelcase:plugin@0.1.0;
 /// up front.
 
 interface host {
-  /// What a plugin can ask for (requirements/plugins.md §4.1).
+  /// What a plugin can be granted that it reaches through these imports
+  /// (requirements/plugins.md §4.1). The hooks that run it are granted too, but are not listed:
+  /// a hook's grant is whether its event arrives.
   enum permission {
     library-read,
     /// Creating files that do not exist yet.
@@ -15,30 +17,28 @@ interface host {
     library-change,
     network,
     listening-activity,
-    /// A hook: run when tracks are added, changed, or removed (`events.tracks-changed`).
-    tracks-changed,
-    /// A hook: run when a scan of the library finishes (`events.scan-finished`).
-    scan-finished,
-    /// A hook: run at the interval the manifest asks for (`events.scheduled`).
-    schedule,
-    /// A hook: run when a user who connected the plugin finishes playing something
-    /// (`events.played`).
-    played,
-    /// A hook: run when a user who connected the plugin starts playing something
-    /// (`events.playing`).
-    playing,
     /// The searches of users who turned on sharing them with the plugin.
     search-activity,
-    /// A hook: run when a user who shares their searches settles on one, or asks for some to
-    /// be forgotten (`events.searched`, `events.searches-forgotten`).
-    searched,
-    /// A hook: run when albums are added, changed, or removed (`events.albums-changed`).
-    albums-changed,
-    /// A hook: run when artists are added, changed, or removed (`events.artists-changed`).
-    artists-changed,
     /// Its rate limits that say `"per": "host"` are kept to by every plugin's requests to that
     /// host. Without it, they count only its own requests.
     host-rate-limits,
+  }
+
+  /// Why an import did not do what it was asked.
+  variant error {
+    /// The permission it needs was not granted for this run.
+    not-granted,
+    /// Not done, as the message says, and asking again the same way never will be: such as a
+    /// path that leaves the library, or a value over its limit.
+    refused(string),
+    /// Tried, and it did not work, as the message says: such as a file that does not exist, or
+    /// a library that could not be read. Asking again later may work.
+    failed(string),
+    /// `http.send` only: not sent, because its destination cannot be asked again for this many
+    /// milliseconds. Ask again after that long.
+    rate-limited(u64),
+    /// `http.send` only: sent, but no reply came in time.
+    timed-out,
   }
 
   /// What this run may use.
@@ -51,6 +51,8 @@ interface host {
 /// function needs library-read. A page, or a list asked for by ID, holds at most 500; an album's
 /// tracks and an artist's albums come whole.
 interface library {
+  use host.{error};
+
   record track {
     id: u64,
     title: string,
@@ -76,7 +78,6 @@ interface library {
     title: option<string>,
     artists: list<string>,
     release-date: option<string>,
-    track-count: u32,
     /// Whether it has artwork, embedded or a `cover.*` beside its tracks or above them
     /// (requirements/scanning.md §3.1).
     has-artwork: bool,
@@ -86,8 +87,6 @@ interface library {
     id: u64,
     /// None for the artist of untagged files.
     name: option<string>,
-    album-count: u32,
-    track-count: u32,
     /// Whether it has an image, from an `artist.*` (requirements/scanning.md §3.2).
     has-image: bool,
     /// Whether it has a biography, from an `artist.txt` (requirements/scanning.md §3.3).
@@ -95,29 +94,31 @@ interface library {
   }
 
   /// Tracks in ID order after `after`, or from the first; empty past the end.
-  tracks: func(after: option<u64>, limit: u32) -> result<list<track>, string>;
+  tracks: func(after: option<u64>, limit: u32) -> result<list<track>, error>;
   /// These tracks, in the order asked for, leaving out any not in this library.
-  get-tracks: func(ids: list<u64>) -> result<list<track>, string>;
+  get-tracks: func(ids: list<u64>) -> result<list<track>, error>;
   /// Albums in ID order after `after`, or from the first; empty past the end.
-  albums: func(after: option<u64>, limit: u32) -> result<list<album>, string>;
+  albums: func(after: option<u64>, limit: u32) -> result<list<album>, error>;
   /// Artists in ID order after `after`, or from the first; empty past the end.
-  artists: func(after: option<u64>, limit: u32) -> result<list<artist>, string>;
+  artists: func(after: option<u64>, limit: u32) -> result<list<artist>, error>;
   /// These albums, in the order asked for, leaving out any not in this library.
-  get-albums: func(ids: list<u64>) -> result<list<album>, string>;
+  get-albums: func(ids: list<u64>) -> result<list<album>, error>;
   /// These artists, in the order asked for, leaving out any not in this library.
-  get-artists: func(ids: list<u64>) -> result<list<artist>, string>;
+  get-artists: func(ids: list<u64>) -> result<list<artist>, error>;
   /// The album's tracks, by disc and number; empty for an album not in this library. Where they
   /// are is where its `cover.*` belongs.
-  album-tracks: func(album-id: u64) -> result<list<track>, string>;
+  album-tracks: func(album-id: u64) -> result<list<track>, error>;
   /// The albums the artist is credited on as an album artist, oldest first, leaving out those
   /// they only appear on (requirements/artists.md §2); empty for an artist not in this library.
-  artist-albums: func(artist-id: u64) -> result<list<album>, string>;
+  artist-albums: func(artist-id: u64) -> result<list<album>, error>;
 }
 
 /// The library's own folders (requirements/plugins.md §3). A path is relative to one of its
 /// roots, with `/` between names, and never leaves that root. Whatever a plugin writes, the
 /// scanner reads in, exactly as if a person had put it there.
 interface files {
+  use host.{error};
+
   record entry {
     name: string,
     directory: bool,
@@ -133,21 +134,26 @@ interface files {
   }
 
   /// The library's roots. Needs library-read, library-add, or library-change.
-  roots: func() -> result<list<u64>, string>;
-  /// Needs library-read. What a folder holds; `""` is the root itself.
-  %list: func(root: u64, folder: string) -> result<list<entry>, string>;
+  roots: func() -> result<list<u64>, error>;
+  /// Needs library-read. What a folder holds, by name, 500 at a time: those whose names sort
+  /// after `after`, or from the first; empty past the end. `""` is the root itself. Names sort
+  /// by their UTF-8 bytes, so a folder changing between pages moves no other entry: each one
+  /// there throughout comes once.
+  entries: func(root: u64, folder: string, after: option<string>) -> result<list<entry>, error>;
   /// Needs library-read. Up to `length` bytes from `offset`; fewer at the end of the file.
-  read: func(root: u64, path: string, offset: u64, length: u32) -> result<list<u8>, string>;
+  read: func(root: u64, path: string, offset: u64, length: u32) -> result<list<u8>, error>;
   /// Writes a whole file, making the folders it is in. It appears whole or not at all.
-  write: func(root: u64, path: string, contents: list<u8>, mode: write-mode) -> result<_, string>;
-  /// Needs library-change. Moves a file or folder to a path that does not exist yet.
-  rename: func(root: u64, %from: string, to: string) -> result<_, string>;
+  write: func(root: u64, path: string, contents: list<u8>, mode: write-mode) -> result<_, error>;
+  /// Needs library-change. Moves a file or folder to `to`, a path that does not exist yet.
+  rename: func(root: u64, path: string, to: string) -> result<_, error>;
   /// Needs library-change. Removes a file, or a folder that is empty.
-  delete: func(root: u64, path: string) -> result<_, string>;
+  delete: func(root: u64, path: string) -> result<_, error>;
 }
 
 /// Needs network, and only reaches the destinations the manifest declared, redirects included.
 interface http {
+  use host.{error};
+
   enum method { get, head, post, put, patch, delete }
 
   record request {
@@ -164,34 +170,24 @@ interface http {
     body: list<u8>,
   }
 
-  /// Why a request has no response.
-  variant error {
-    /// The network permission was not granted.
-    not-granted,
-    /// Not sent, as the message says: not an http(s) URL, a destination the manifest does not
-    /// name, a header the host sets, or a body over 16 MB.
-    refused(string),
-    /// Not sent: its destination cannot be asked again for this many milliseconds, because it
-    /// asked to be left alone or every plugin's requests to it have used their pace for now.
-    /// Ask again after that long.
-    rate-limited(u64),
-    /// Sent, but no reply came within 15 s.
-    timed-out,
-    /// Sent, but with no reply to give, as the message says: the connection failed, a redirect
-    /// led somewhere not approved or too many times, or the reply was over 16 MB.
-    failed(string),
-  }
-
+  /// Refused when not sent, as the message says: not an http(s) URL, a destination the manifest
+  /// does not name, a header the host sets, or a body over 16 MB. Rate-limited when its
+  /// destination asked to be left alone, or every plugin's requests to it have used their pace
+  /// for now. Timed out when sent but no reply came within 15 s. Failed when sent but with no
+  /// reply to give, as the message says: the connection failed, a redirect led somewhere not
+  /// approved or too many times, or the reply was over 16 MB.
   send: func(request: request) -> result<response, error>;
 }
 
 /// The plugin's own storage for this library, kept between runs, so nothing learned is
 /// fetched twice (requirements/plugins.md §2.1). Needs no permission. It goes when the plugin
-/// is uninstalled.
+/// is uninstalled. A key is 1 to 512 bytes, and a value at most 1 MB.
 interface state {
-  get: func(key: string) -> result<option<list<u8>>, string>;
-  set: func(key: string, value: list<u8>) -> result<_, string>;
-  delete: func(key: string) -> result<_, string>;
+  use host.{error};
+
+  get: func(key: string) -> result<option<list<u8>>, error>;
+  set: func(key: string, value: list<u8>) -> result<_, error>;
+  delete: func(key: string) -> result<_, error>;
 }
 
 /// What an admin set for the plugin, as its manifest declares (requirements/plugins.md §6):
@@ -210,24 +206,10 @@ interface settings {
 interface events {
   use library.{track};
 
-  /// Tracks added, changed, or removed since the last one, in batches. `changed` holds IDs to
-  /// read with `library.get-tracks`; `removed` holds IDs no longer in the library.
-  record tracks-changed {
-    changed: list<u64>,
-    removed: list<u64>,
-  }
-
-  /// Albums added, changed, or removed since the last one, in batches, as `tracks-changed`
-  /// gives tracks. An album changes when anything it shows does: its title, artists, artwork,
-  /// or the tracks on it.
-  record albums-changed {
-    changed: list<u64>,
-    removed: list<u64>,
-  }
-
-  /// Artists added, changed, or removed since the last one, in batches, as `tracks-changed`
-  /// gives tracks.
-  record artists-changed {
+  /// Tracks, albums, or artists added, changed, or removed since the last one, in batches.
+  /// `changed` holds IDs to read with `library.get-tracks`, `get-albums`, or `get-artists`;
+  /// `removed` holds IDs no longer in the library.
+  record changes {
     changed: list<u64>,
     removed: list<u64>,
   }
@@ -257,7 +239,7 @@ interface events {
   record play {
     track: track,
     /// When it started, in milliseconds since the Unix epoch.
-    started-at: u64,
+    started-at-ms: u64,
     /// The audio actually heard. Pausing adds nothing; replaying part of it adds that again.
     listen-time-ms: u64,
     end: play-end,
@@ -269,7 +251,7 @@ interface events {
   record playing {
     track: track,
     /// When it started, in milliseconds since the Unix epoch, as the device reported it.
-    started-at: u64,
+    started-at-ms: u64,
   }
 
   /// A kind of result a search returns.
@@ -298,13 +280,14 @@ interface events {
     found: found,
     selected: option<selected>,
     /// When it was searched, in milliseconds since the Unix epoch.
-    searched-at: u64,
+    searched-at-ms: u64,
   }
 
   variant event {
     /// An admin pressed Run now: do the plugin's whole job for this library.
     run,
-    tracks-changed(tracks-changed),
+    /// Tracks added, changed, or removed.
+    tracks-changed(changes),
     scan-finished(scan-finished),
     /// The schedule came round.
     scheduled,
@@ -325,8 +308,11 @@ interface events {
     /// sharing, so forget every search of theirs from this library. What was already sent on
     /// is not the host's to recall (requirements/users.md §7).
     searches-forgotten(option<list<u64>>),
-    albums-changed(albums-changed),
-    artists-changed(artists-changed),
+    /// Albums added, changed, or removed. An album changes when anything it shows does: its
+    /// title, artists, artwork, or the tracks on it.
+    albums-changed(changes),
+    /// Artists added, changed, or removed.
+    artists-changed(changes),
   }
 }
 
