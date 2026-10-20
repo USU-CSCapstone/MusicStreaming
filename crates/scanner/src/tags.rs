@@ -14,6 +14,7 @@ use lofty::config::ParseOptions;
 use lofty::error::{FileParseError, UnknownFormatError, UnsupportedTagError};
 use lofty::file::{AudioFile, FileType, TaggedFile, TaggedFileExt};
 use lofty::mp4::{Mp4Codec, Mp4File};
+use lofty::mpeg::{Layer, MpegFile};
 use lofty::picture::PictureType;
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, Tag, TagType};
@@ -60,25 +61,29 @@ pub fn read(path: &Path, file_size: u64) -> Result<ReadResult, ReadError> {
         };
         (mp4.into(), format)
     } else {
-        let tagged = Probe::new(&mut file)
-            .options(options)
-            .guess_file_type()
-            .map_err(ReadError::Io)?
-            .read()
-            .map_err(map_parse_error)?;
-        let format = match tagged.file_type() {
-            FileType::Flac => Format::Flac,
-            FileType::Mpeg => Format::Mp3,
-            FileType::Aac => Format::Aac,
-            FileType::Vorbis => Format::Vorbis,
-            FileType::Opus => Format::Opus,
-            FileType::Wav => Format::Wav,
-            FileType::Aiff => Format::Aiff,
-            // MP4 without an `ftyp` sniff hit; lofty found it anyway.
-            FileType::Mp4 => Format::Aac,
-            other => return Err(ReadError::Unsupported(format!("{other:?}"))),
-        };
-        (tagged, format)
+        let probe = Probe::new(&mut file).options(options).guess_file_type()?;
+        if probe.file_type() == Some(FileType::Mpeg) {
+            // Layers I and II share MP3's frame sync, so only the frame header tells them apart.
+            let mpeg = MpegFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
+            match mpeg.properties().layer() {
+                Layer::Layer3 => (mpeg.into(), Format::Mp3),
+                other => return Err(ReadError::Unsupported(format!("MPEG {other:?}"))),
+            }
+        } else {
+            let tagged = probe.read().map_err(map_parse_error)?;
+            let format = match tagged.file_type() {
+                FileType::Flac => Format::Flac,
+                FileType::Aac => Format::Aac,
+                FileType::Vorbis => Format::Vorbis,
+                FileType::Opus => Format::Opus,
+                FileType::Wav => Format::Wav,
+                FileType::Aiff => Format::Aiff,
+                // MP4 without an `ftyp` sniff hit; lofty found it anyway.
+                FileType::Mp4 => Format::Aac,
+                other => return Err(ReadError::Unsupported(format!("{other:?}"))),
+            };
+            (tagged, format)
+        }
     };
 
     let props = tagged.properties();

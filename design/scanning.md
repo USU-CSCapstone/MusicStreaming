@@ -51,7 +51,7 @@ Every file that reaches the scanner passes through the same stages, and every st
 **Format knowledge is quarantined in two places** — `probe`, which maps a file to a `Format`, and the tag mapper ([§4](#4-tags)). Nothing downstream knows what an ID3 frame or an MP4 atom is.
 
 - **Extension is the first filter and costs nothing.** Discovery drops every path whose extension is not in the supported set before opening it. This is what makes "unsupported files are ignored, not flagged" ([`requirements/scanning.md` §1](../requirements/scanning.md#1-supported-formats)) free: documents, images, and archives are never touched.
-- **Content confirms.** For files that pass the extension filter, the probe reads the magic bytes. A `.mp3` that is really a FLAC is read as FLAC; a `.flac` that is a text file is a `corruptAudio` problem, not a crash.
+- **Content confirms.** For files that pass the extension filter, the probe reads the magic bytes. A `.mp3` that is really a FLAC is read as FLAC; a `.flac` that is a text file is a `corruptAudio` problem, not a crash. MPEG audio is MP3 only when its frames are Layer III; a Layer I or II file named like MP3 is an `unsupportedEncoding` problem, and `.mp2` is not a candidate extension.
 - **Two libraries cover the eight formats:**
 
 | Format | Tags and properties | Decode |

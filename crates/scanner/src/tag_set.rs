@@ -148,6 +148,8 @@ mod tests {
         );
         assert_eq!(PartialDate::parse("unknown"), None);
         assert_eq!(PartialDate::parse("1991-13"), None);
+        assert_eq!(PartialDate::parse("2001-00"), None);
+        assert_eq!(PartialDate::parse("2001-01-00"), None);
     }
 
     #[test]

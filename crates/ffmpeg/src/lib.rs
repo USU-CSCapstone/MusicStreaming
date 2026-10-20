@@ -134,7 +134,7 @@ impl Ffmpeg {
             }
         }
         // WAV and AIFF may carry wider PCM; check the rest of the family.
-        for pcm in ["pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_s16be", "pcm_s24be"] {
+        for pcm in ["pcm_s24le", "pcm_s32le", "pcm_f32le", "pcm_s24be"] {
             if !decoders.iter().any(|d| d == pcm) {
                 tracing::warn!(
                     decoder = pcm,

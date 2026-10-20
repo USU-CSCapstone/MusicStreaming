@@ -40,8 +40,8 @@ impl Format {
     /// `.ogg` is Vorbis or Opus, `.aac` may be ADTS or raw), so the probe
     /// settles the format from content, not from this list.
     pub const EXTENSIONS: &'static [&'static str] = &[
-        "flac", "m4a", "m4b", "mp4", "wav", "wave", "aif", "aiff", "aifc", "mp3", "mp2", "aac",
-        "ogg", "oga", "opus",
+        "flac", "m4a", "m4b", "mp4", "wav", "wave", "aif", "aiff", "aifc", "mp3", "aac", "ogg",
+        "oga", "opus",
     ];
 
     /// Whether a lowercase extension may be a supported format.
@@ -54,8 +54,9 @@ impl Format {
         match self {
             Format::Flac => "flac",
             Format::Alac => "alac",
-            // PCM decoders are per sample width; `verify` checks the common ones.
-            Format::Wav | Format::Aiff => "pcm_s16le",
+            // PCM decoders are per sample width and byte order; `verify` checks the common ones.
+            Format::Wav => "pcm_s16le",
+            Format::Aiff => "pcm_s16be",
             Format::Mp3 => "mp3",
             Format::Aac => "aac",
             Format::Vorbis => "vorbis",
@@ -117,6 +118,17 @@ mod tests {
     fn wma_is_not_a_candidate() {
         assert!(!Format::extension_is_candidate("wma"));
         assert!(!Format::extension_is_candidate("asf"));
+    }
+
+    #[test]
+    fn mpeg_layer_ii_is_not_a_candidate() {
+        assert!(!Format::extension_is_candidate("mp2"));
+    }
+
+    #[test]
+    fn aiff_is_big_endian() {
+        assert_eq!(Format::Aiff.ffmpeg_decoder(), "pcm_s16be");
+        assert_eq!(Format::Wav.ffmpeg_decoder(), "pcm_s16le");
     }
 
     #[test]

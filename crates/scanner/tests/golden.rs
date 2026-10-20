@@ -1,5 +1,6 @@
 //! The golden corpus (`design/scanning.md` §4, §15): one logical album in
-//! every supported format must read back as byte-identical `TagSet`s.
+//! every supported format must read back as byte-identical `TagSet`s, and
+//! content, not the extension, decides the format (§3).
 //!
 //! Needs ffmpeg on PATH to produce the encoded files; skips otherwise.
 
@@ -144,6 +145,25 @@ fn every_format_reads_the_same_tagset() {
         assert!(got.properties.sample_rate.is_some(), "{name}");
     }
     assert!(failures.is_empty(), "golden corpus diverged:\n{}", failures.join("\n"));
+}
+
+#[test]
+fn mpeg_layer_ii_named_mp3_is_unsupported() {
+    if !ffmpeg_available() {
+        eprintln!("skipping Layer II: ffmpeg not on PATH");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let wav = tmp.path().join("src.wav");
+    write_small_wav(&wav);
+    let path = tmp.path().join("disguised.mp3");
+    encode(&wav, &path, &["-c:a", "mp2", "-f", "mp2"]);
+
+    let size = std::fs::metadata(&path).unwrap().len();
+    match tags::read(&path, size) {
+        Err(tags::ReadError::Unsupported(detail)) => assert!(detail.contains("Layer2"), "{detail}"),
+        other => panic!("Layer II read as {other:?}"),
+    }
 }
 
 #[test]
