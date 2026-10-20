@@ -47,7 +47,29 @@ fn granted_here(permission: &str) -> String {
 
 const READY: &str = "p.enabled AND (c.retry_at IS NULL OR c.retry_at <= ?1)";
 
+/// Every pair a hook is due for at `now`, with its position, failures and user.
 pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
+    let mut due = Vec::new();
+    for (hook, sql) in queries() {
+        let mut statement = conn.prepare_cached(&sql)?;
+        let pairs = statement.query_map(params![now, hook.name()], |row| {
+            Ok(Due {
+                hook,
+                plugin: row.get(0)?,
+                library: row.get(1)?,
+                position: row.get(2)?,
+                failures: row.get(3)?,
+                user: row.get(4)?,
+            })
+        })?;
+        due.extend(pairs.collect::<rusqlite::Result<Vec<_>>>()?);
+    }
+    Ok(due)
+}
+
+/// Each hook's query for the pairs it is due for, given the time as `?1` and the hook's name
+/// as `?2`: the plugin, the library, the position, the failures, and the user.
+pub(super) fn queries() -> [(Hook, String); 8] {
     let pair = position(false);
     // Changes of one kind of entity in the library, for the hook that asked for them.
     let changes = |hook: &str, entity: &str| {
@@ -120,8 +142,7 @@ pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
         granted_to_plugin("searchActivity"),
         granted_here("libraryRead"),
     );
-    let mut due = Vec::new();
-    for (hook, sql) in [
+    [
         (Hook::TracksChanged, changes("tracksChanged", "track")),
         (Hook::AlbumsChanged, changes("albumsChanged", "album")),
         (Hook::ArtistsChanged, changes("artistsChanged", "artist")),
@@ -130,21 +151,7 @@ pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
         (Hook::Played, played),
         (Hook::Playing, playing),
         (Hook::Searched, searched),
-    ] {
-        let mut statement = conn.prepare_cached(&sql)?;
-        let pairs = statement.query_map(params![now, hook.name()], |row| {
-            Ok(Due {
-                hook,
-                plugin: row.get(0)?,
-                library: row.get(1)?,
-                position: row.get(2)?,
-                failures: row.get(3)?,
-                user: row.get(4)?,
-            })
-        })?;
-        due.extend(pairs.collect::<rusqlite::Result<Vec<_>>>()?);
-    }
-    Ok(due)
+    ]
 }
 
 /// What `due` delivers: the position once it is handled, and its event. No event means

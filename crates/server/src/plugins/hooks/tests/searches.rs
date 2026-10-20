@@ -3,7 +3,7 @@
 use jewelcase_plugins::Event;
 use jewelcase_plugins::Permission::{LibraryRead, SearchActivity, Searched};
 
-use super::{HANDLED, connected, deliver, one, setup};
+use super::{HANDLED, Hook, connected, deliver, one, plan, setup};
 use crate::db::{Database, now_ms};
 use crate::plugins::Plugins;
 use crate::plugins::personal::{SharingRefused, disconnect, set_search_sharing};
@@ -151,4 +151,15 @@ async fn sharing_is_turned_on_only_by_a_connected_user_of_a_plugin_allowed_searc
         .await
         .unwrap();
     assert_eq!(stopped, 1, "one request to forget, in the one library it serves");
+}
+
+/// Who stopped sharing is read from the few `stopped` events alone, not by sorting every
+/// search event, which the hook's due check would otherwise do every few seconds.
+#[tokio::test]
+async fn who_stopped_sharing_is_read_from_the_stopped_events_index() {
+    let (_temp, db, _plugins) = setup().await;
+    let steps = plan(&db, Hook::Searched).await;
+    let stopped = "SCAN search_events USING COVERING INDEX search_events_stopped";
+    assert!(steps.iter().any(|step| step == stopped), "{steps:#?}");
+    assert!(!steps.iter().any(|step| step.contains("TEMP B-TREE")), "{steps:#?}");
 }

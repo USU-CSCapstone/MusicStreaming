@@ -3,7 +3,7 @@
 use jewelcase_plugins::Event;
 use jewelcase_plugins::Permission::{LibraryRead, ScanFinished, Schedule};
 
-use super::{HANDLED, HOUR, deliver, one, setup};
+use super::{HANDLED, HOUR, Hook, deliver, one, plan, setup};
 use crate::plugins::testing::grant;
 
 #[tokio::test]
@@ -47,6 +47,17 @@ async fn a_finished_scan_is_delivered_once_with_its_counts_added_up() {
     };
     assert_eq!(late.added, 7, "only the scan it had not seen");
     assert!(deliver(&db, 1000, HANDLED).await.is_empty());
+}
+
+/// Scans are kept for months, mostly finished, so finding the hook due reads only the
+/// library's completed scans after its position.
+#[tokio::test]
+async fn a_finished_scan_is_found_from_the_completed_scans_index() {
+    let (_temp, db, _plugins) = setup().await;
+    let steps = plan(&db, Hook::ScanFinished).await;
+    let completed = "SEARCH s EXISTS USING COVERING INDEX scans_completed \
+                     (library_id=? AND finished_at>? AND finished_at<?)";
+    assert!(steps.iter().any(|step| step == completed), "{steps:#?}");
 }
 
 #[tokio::test]

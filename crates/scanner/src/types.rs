@@ -316,6 +316,21 @@ pub struct AnalysisResult {
     pub features: Option<Vec<u8>>,
 }
 
+impl AnalysisResult {
+    /// A result from analyzer `version` that measured nothing: no loudness, no peak, no
+    /// waveform bins, and no features.
+    pub fn empty(version: u32) -> AnalysisResult {
+        AnalysisResult {
+            analyzer_version: version,
+            integrated_lufs: None,
+            loudness_range_lu: None,
+            true_peak_dbtp: None,
+            waveform: Waveform { peaks: Vec::new(), rms: Vec::new() },
+            features: None,
+        }
+    }
+}
+
 /// Peak and RMS per bin, quantized to 0..=255, over a mono downmix. The
 /// honest measurement; legibility shaping happens at render time
 /// (`requirements/playback.md` §3).

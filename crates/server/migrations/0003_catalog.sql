@@ -158,9 +158,9 @@ CREATE TABLE tracks (
     duration_us     INTEGER NOT NULL,
     loudness_lufs   REAL,
     peak_dbtp       REAL,
-    -- Which analyzer produced the results; tracks below the current version are reprocessed in
-    -- the background (design/scanning.md §12)
-    analyzer_version INTEGER,
+    -- Which analyzer produced the results, 0 until one has; tracks below the current version are
+    -- reprocessed in the background (design/scanning.md §12)
+    analyzer_version INTEGER NOT NULL DEFAULT 0,
     added_at        INTEGER NOT NULL,
     UNIQUE (library_id, id),
     FOREIGN KEY (library_id, album_id) REFERENCES albums (library_id, id),
@@ -179,7 +179,10 @@ CREATE INDEX tracks_by_release ON tracks (library_id, release_date, album_sort_k
 -- Browsing tracks by duration (requirements/conventions.md §4), as albums_by_duration does albums
 CREATE INDEX tracks_by_duration ON tracks (library_id, duration_us, id);
 CREATE INDEX tracks_missing ON tracks (library_id, missing_since) WHERE missing_since IS NOT NULL;
-CREATE INDEX tracks_unanalyzed ON tracks (library_id, analyzer_version, id) WHERE missing_since IS NULL;
+-- The analysis queue in the order it is worked: tracks never analyzed before those an older
+-- analyzer did, and newest first within each, so a pick reads the head of one range and sorts
+-- nothing.
+CREATE INDEX tracks_unanalyzed ON tracks (library_id, analyzer_version, added_at DESC, id) WHERE missing_since IS NULL;
 
 CREATE TABLE track_artists (
     library_id INTEGER NOT NULL,

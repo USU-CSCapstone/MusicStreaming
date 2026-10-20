@@ -69,6 +69,7 @@ CREATE TABLE play_starts (
 
 CREATE INDEX play_starts_feed ON play_starts (library_id, user_id, seq);
 CREATE INDEX play_starts_by_play ON play_starts (play_id);
+CREATE INDEX play_starts_age ON play_starts (reported_at);
 
 -- Nothing here is delivered late, so a start an hour old is of no use to anyone: each new one
 -- clears those, and the table stays small.
@@ -147,3 +148,5 @@ CREATE TABLE search_events (
 
 CREATE INDEX search_events_feed ON search_events (library_id, user_id, seq);
 CREATE INDEX search_events_age ON search_events (created_at);
+-- Who has stopped sharing with which plugin, which the searched hook must still tell.
+CREATE INDEX search_events_stopped ON search_events (plugin_id, user_id) WHERE kind = 'stopped';

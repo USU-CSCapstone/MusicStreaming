@@ -188,14 +188,7 @@ impl Analyzer {
 
 /// An empty result at the current version, so a file judged broken is not decoded on every pass.
 fn failed_result() -> AnalysisResult {
-    AnalysisResult {
-        analyzer_version: ANALYZER_VERSION,
-        integrated_lufs: None,
-        loudness_range_lu: None,
-        true_peak_dbtp: None,
-        waveform: Waveform { peaks: Vec::new(), rms: Vec::new() },
-        features: None,
-    }
+    AnalysisResult::empty(ANALYZER_VERSION)
 }
 
 pub struct AnalysisWorker {

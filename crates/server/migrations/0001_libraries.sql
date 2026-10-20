@@ -58,6 +58,8 @@ CREATE TABLE scans (
 
 CREATE INDEX scans_by_created ON scans (library_id, created_at, id);
 CREATE INDEX scans_unfinished ON scans (library_id, id) WHERE state IN ('queued', 'running');
+-- The scans the scanFinished hook delivers, in the order they finished.
+CREATE INDEX scans_completed ON scans (library_id, finished_at) WHERE state = 'completed';
 
 -- Problems grouped so a systemic issue reads as one row (requirements/scanning.md §10).
 CREATE TABLE scan_problem_groups (

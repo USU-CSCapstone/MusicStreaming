@@ -138,3 +138,23 @@ async fn starts_an_hour_old_are_cleared_away() {
         .unwrap();
     assert_eq!(kept, ["new"]);
 }
+
+/// The sweep mirrors the `plays_start` trigger's in `0005_activity.sql`, which runs on every
+/// new start: it reaches the old starts through `play_starts_age` rather than reading them all.
+#[tokio::test]
+async fn clearing_old_starts_reads_only_them() {
+    let (_temp, db, _plugins) = setup().await;
+    let sweep = "DELETE FROM play_starts WHERE reported_at < ?1 - 3600000";
+    let steps: Vec<String> = db
+        .read(move |conn| {
+            conn.prepare(&format!("EXPLAIN QUERY PLAN {sweep}"))?
+                .query_map([0], |row| row.get(3))?
+                .collect()
+        })
+        .await
+        .unwrap();
+    // Covering or not is the planner's choice, which depends on the version and statistics.
+    let [step] = steps.as_slice() else { panic!("{steps:#?}") };
+    assert!(step.starts_with("SEARCH play_starts USING"), "{step}");
+    assert!(step.ends_with("INDEX play_starts_age (reported_at<?)"), "{step}");
+}

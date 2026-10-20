@@ -15,7 +15,7 @@ use crate::governor::Governor;
 use crate::jobs::RunReport;
 use crate::placeholders::Placeholders;
 use crate::store::Batch;
-use crate::types::{LibraryId, Problem, ProblemKind};
+use crate::types::{AnalysisResult, LibraryId, Problem, ProblemKind};
 
 /// An analyzer over `store` that runs ffmpeg with `config`.
 fn analyzer<S: InspectStore + 'static>(store: &Arc<S>, config: Config) -> Analyzer {
@@ -157,6 +157,17 @@ pub fn a_file_that_always_fails_does_not_block_the_next<S: InspectStore + 'stati
     let problems = store.inspect_problems(&lib.id);
     assert_eq!(problems.iter().map(|p| &p.path).collect::<Vec<_>>(), [&killed]);
     assert!(problems[0].detail.starts_with("ffmpeg was killed by signal 9"), "{problems:?}");
+}
+
+/// A track never analyzed is at version 0, and results from an older analyzer leave a track in
+/// the queue for a newer one (`design/scanning.md` §12).
+pub fn an_older_analyzers_results_are_redone<S: InspectStore>(make: Factory<S>) {
+    let (_tmp, store, lib, _) = album(make);
+    let queued = |version| store.next_unanalyzed(&lib, version, 10).len();
+    assert_eq!((queued(0), queued(1)), (0, 2), "nothing is below version 0");
+    let track = store.next_unanalyzed(&lib, 1, 1)[0].0;
+    store.store_analysis(&lib, track, AnalysisResult::empty(1));
+    assert_eq!((queued(1), queued(2)), (1, 2), "version 1's result is redone for version 2");
 }
 
 /// A file that cannot be opened, first in the queue, does not hold up a pass of one once it

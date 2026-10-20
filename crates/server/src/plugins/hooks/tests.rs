@@ -6,7 +6,7 @@ use std::sync::Arc;
 use jewelcase_plugins::{Event, Permission};
 use serde_json::json;
 
-use super::due::{all, event};
+use super::due::{all, event, queries};
 use super::{Hook, record};
 use crate::db::Database;
 use crate::db::testing::{User, access};
@@ -80,6 +80,18 @@ async fn deliver(db: &Database, now: i64, answer: Result<(), &'static str>) -> V
             received.push(Received { hook, library, user, event });
         }
         Ok(received)
+    })
+    .await
+    .unwrap()
+}
+
+/// The steps of the plan for the query that finds `hook` due, which runs every few seconds.
+async fn plan(db: &Database, hook: Hook) -> Vec<String> {
+    let (_, sql) = queries().into_iter().find(|(h, _)| *h == hook).unwrap();
+    db.read(move |conn| {
+        conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?
+            .query_map(rusqlite::params![0, hook.name()], |row| row.get(3))?
+            .collect()
     })
     .await
     .unwrap()

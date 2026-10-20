@@ -133,7 +133,8 @@ pub trait Store: Send + Sync {
     fn indexes_under(&self, library: &LibraryId, folder: &Path) -> bool;
 
     // --- analysis ---
-    /// Tracks lacking results at `analyzer_version`, most useful first, each with its file.
+    /// Tracks whose results come from an analyzer older than `analyzer_version`, most useful
+    /// first, each with its file. A track never analyzed is at version 0.
     fn next_unanalyzed(
         &self,
         library: &LibraryId,
@@ -415,7 +416,7 @@ impl Store for MemoryStore {
             .iter()
             .filter(|(_, t)| {
                 !t.missing
-                    && t.analysis.as_ref().is_none_or(|a| a.analyzer_version < analyzer_version)
+                    && t.analysis.as_ref().map_or(0, |a| a.analyzer_version) < analyzer_version
             })
             .map(|(id, t)| {
                 (*id, FileToDecode { root: t.record.root.clone(), path: t.record.path.clone() })

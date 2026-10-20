@@ -10,7 +10,14 @@ use crate::db::catalog;
 use crate::db::feed::{self, Entity, Op};
 use crate::db::{DbError, now_ms};
 
-/// Tracks of `lib` without results at `analyzer_version`, newest first, each with its file.
+/// The analysis queue: library `?1`'s tracks analyzed below version `?2`, at most `?3` of them,
+/// in the order of `tracks_unanalyzed`, so each pick reads the head of one index range.
+const UNANALYZED: &str = "SELECT id, root_id, path FROM tracks \
+     WHERE library_id = ?1 AND missing_since IS NULL AND analyzer_version < ?2 \
+     ORDER BY analyzer_version, added_at DESC, id LIMIT ?3";
+
+/// Tracks of `lib` analyzed below `analyzer_version`, each with its file: those never analyzed
+/// (version 0) before those an older analyzer did, and newest first within each.
 pub fn next_unanalyzed(
     store: &SqliteStore,
     lib: i64,
@@ -18,14 +25,11 @@ pub fn next_unanalyzed(
     limit: usize,
 ) -> Result<Vec<(TrackId, FileToDecode)>, DbError> {
     let found = store.db.read_blocking(move |conn| {
-        conn.prepare_cached(
-            "SELECT id, root_id, path FROM tracks WHERE library_id = ?1 AND missing_since IS NULL \
-             AND (analyzer_version IS NULL OR analyzer_version < ?2) ORDER BY added_at DESC, id LIMIT ?3",
-        )?
-        .query_map(params![lib, analyzer_version as i64, limit as i64], |r| {
-            Ok((r.get::<_, i64>(0)? as TrackId, r.get(1)?, r.get(2)?))
-        })?
-        .collect()
+        conn.prepare_cached(UNANALYZED)?
+            .query_map(params![lib, analyzer_version as i64, limit as i64], |r| {
+                Ok((r.get::<_, i64>(0)? as TrackId, r.get(1)?, r.get(2)?))
+            })?
+            .collect()
     })?;
     Ok(files(&store.roots, lib, found))
 }
@@ -141,3 +145,6 @@ pub fn store_placeholder(
         Ok(())
     })
 }
+
+#[cfg(test)]
+mod tests;

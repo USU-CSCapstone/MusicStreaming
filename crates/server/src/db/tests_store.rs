@@ -58,7 +58,7 @@ impl InspectStore for SqliteStore {
         let mut stmt = conn
             .prepare(
                 "SELECT t.id, t.root_id, t.path, t.missing_since IS NOT NULL, t.title, t.album_title, t.sort_key, \
-                 t.artist_sort_key, t.codec, t.container, t.channels, t.sample_rate_hz, t.analyzer_version IS NOT NULL, \
+                 t.artist_sort_key, t.codec, t.container, t.channels, t.sample_rate_hz, t.analyzer_version > 0, \
                  (SELECT image_id FROM albums a WHERE a.id = t.album_id) IS NOT NULL, \
                  EXISTS (SELECT 1 FROM track_artists ta JOIN artists ar ON ar.id = ta.artist_id \
                          WHERE ta.track_id = t.id AND ar.biography IS NOT NULL), \
@@ -767,15 +767,8 @@ fn another_librarys_track_is_left_alone() {
     let mut batch = Batch::new(999);
     batch.returned.push(track);
     store.apply(&other, batch).unwrap();
-    let result = AnalysisResult {
-        analyzer_version: 1,
-        integrated_lufs: Some(-9.0),
-        loudness_range_lu: None,
-        true_peak_dbtp: None,
-        // No peaks: the path that deletes a waveform.
-        waveform: Waveform { peaks: Vec::new(), rms: Vec::new() },
-        features: None,
-    };
+    // No peaks: the path that deletes a waveform.
+    let result = AnalysisResult { integrated_lufs: Some(-9.0), ..AnalysisResult::empty(1) };
     store.store_analysis(&other, track, result);
     // A placeholder made in library 2 for content only library 1 has an image of.
     store.db().write_blocking(|tx| Image::new(1, 1, "A/X/cover.png").insert(tx)).unwrap();
@@ -787,11 +780,11 @@ fn another_librarys_track_is_left_alone() {
         .db()
         .read_blocking(move |conn| {
             conn.query_row(row, [], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, bool>(1)?, r.get::<_, Option<i64>>(2)?))
+                Ok((r.get::<_, i64>(0)?, r.get::<_, bool>(1)?, r.get::<_, i64>(2)?))
             })
         })
         .unwrap();
-    assert_eq!(unchanged, (5, false, None));
+    assert_eq!(unchanged, (5, false, 0));
     assert_eq!(count(&store, "SELECT COUNT(*) FROM track_waveforms"), 1);
     assert_eq!(
         count(&store, "SELECT COUNT(*) FROM images WHERE id = 1 AND placeholder IS NULL"),

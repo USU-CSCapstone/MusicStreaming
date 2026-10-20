@@ -1163,6 +1163,10 @@ macro_rules! store_suite {
             $crate::testing::a_file_not_permitted_waits_until_it_is($make);
         }
         #[test]
+        fn an_older_analyzers_results_are_redone() {
+            $crate::testing::an_older_analyzers_results_are_redone($make);
+        }
+        #[test]
         fn an_unopenable_file_does_not_starve_the_next() {
             $crate::testing::an_unopenable_file_does_not_starve_the_next($make);
         }

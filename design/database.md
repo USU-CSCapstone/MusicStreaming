@@ -102,6 +102,8 @@ Migrations are the exception: they run with foreign keys off, because rebuilding
 
 **Reconciliation is a column, not a set.** `tracks.last_seen_scan_id` is set on every file a scan touched, changed or not, so "what did this scan not see" is one range `SELECT` over the scope, and a scan that resumes from its cursor after a crash needs no memory of what it saw before (`design/scanning.md` §7–§8). The unseen rows are then filtered in Rust against the paths the walk could not read, and each one left is marked missing with its own `UPDATE` and feed entry.
 
+**The analysis queue is the start of one index.** `tracks.analyzer_version` is the version of the analyzer whose results a track holds: 0 until it is analyzed, never `NULL`. The queue is then `analyzer_version < current`, and a new analyzer version needs no rewrite of any row. `tracks_unanalyzed` holds the tracks not missing in the order the queue is worked, `(library_id, analyzer_version, added_at DESC, id)`: tracks never analyzed before those an older analyzer did, and the newest first within each (`design/scanning.md` §12). A pick reads the first rows of one range and sorts nothing. At 500k tracks it takes under 0.1 ms however much is analyzed, where sorting the library by `added_at` takes 300–550 ms once half of it is, and as long for the idle poll once all of it is.
+
 **Tracks carry no content fingerprint yet.** The scanner keys on path until track identity is settled, and the fingerprint column arrives with that design (`design/scanning.md` §6). `images.placeholder` is `NULL` until the placeholder job decodes the file into a ThumbHash, and empty when it cannot; the scanner fills the dimensions and hash from the header.
 
 ---
