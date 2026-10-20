@@ -1,20 +1,15 @@
 //! How inputs are opened, against the real ffmpeg: names that look like options or URLs, and
 //! pictures past the pixel cap.
 
+mod common;
+
 use std::io::ErrorKind;
 use std::net::TcpListener;
 use std::path::Path;
-use std::process::Command;
 use std::sync::Once;
 
+use common::run;
 use jewelcase_ffmpeg::{Config, Error, Ffmpeg};
-
-/// Runs the real ffmpeg with `args`, writing over its output, and asserts it succeeded.
-fn run(args: &[&str]) {
-    let status =
-        Command::new("ffmpeg").args(["-nostdin", "-v", "error", "-y"]).args(args).status().unwrap();
-    assert!(status.success(), "ffmpeg {args:?}");
-}
 
 /// Writes a one-second MP3 at `path`, named as a file whatever it looks like, with an attached
 /// picture of `size` (`<width>x<height>`). The picture has one bit a pixel, so even a huge one is
@@ -29,19 +24,20 @@ fn track(path: &str, size: &str) {
     run(&[&sound[..], &picture, &mapping, &output].concat());
 }
 
-/// Probes and decodes the track at `path` to the end, returning the frames decoded.
+/// Probes and decodes the track at `path` to the end, returning the frames decoded. Panics if
+/// the decode is not over after 10,000 reads, far more than a one-second track needs.
 fn decode(path: &Path) -> Result<usize, Error> {
     let ffmpeg = Ffmpeg::new(Config::default());
     let info = ffmpeg.probe(path)?;
     let mut stream = ffmpeg.decode_pcm(path, &info)?;
     let (mut block, mut frames) = (Vec::new(), 0);
-    loop {
+    for _ in 0..10_000 {
         match stream.read_frames(&mut block, 4096)? {
-            0 => break,
+            0 => return Ok(frames),
             n => frames += n,
         }
     }
-    Ok(frames)
+    panic!("the decode of {path:?} did not end");
 }
 
 /// The size of the picture at `path` once decoded to fit 8×8, or why it couldn't be.

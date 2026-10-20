@@ -179,8 +179,8 @@ The `ffmpeg` crate exposes three operations behind one pool:
 
 | Operation | Invocation (illustrative) | Used by |
 |---|---|---|
-| `probe(path)` | `ffprobe -v error -print_format json -show_streams -show_format -max_pixels 67108864 -protocol_whitelist file -i file:<path>` | analysis setup — the sample rate and channel count that interpret the PCM stream, and the duration ([§12](#12-analysis)) |
-| `decode_pcm(path)` | `ffmpeg -nostdin -v error -max_pixels 67108864 -protocol_whitelist file -i file:<path> -map 0:a:0 -vn -f f32le -c:a pcm_f32le pipe:1` | analysis |
+| `probe(path)` | `ffprobe -v error -print_format json -show_streams -show_format -max_pixels 67108864 -protocol_whitelist file -i file:<path>` | analysis setup — the sample rate and channel layout that interpret the PCM stream, and the duration ([§12](#12-analysis)) |
+| `decode_pcm(path)` | `ffmpeg -nostdin -v error -max_pixels 67108864 -protocol_whitelist file -i file:<path> -map 0:a:0 -vn -ch_layout <layout> -ar <rate> -f f32le -c:a pcm_f32le pipe:1` | analysis |
 | `transcode(path, target)` | as the playback design specifies | playback |
 
 - **Every invocation is read-only against the library.** No output path is ever under a root; `-nostdin` is always set; there is no `-y`. The music mount is usually writable, for plugins ([`general.md` §2](general.md#2-system-shape)), so this rule is the defense.
@@ -195,7 +195,7 @@ The `ffmpeg` crate exposes three operations behind one pool:
 
 **One decode, three consumers** ([`requirements/scanning.md` §1](../requirements/scanning.md#1-supported-formats), [`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis)).
 
-`decode_pcm` streams interleaved 32-bit float at the file's native sample rate and channel layout, which the probe supplies so the raw stream can be interpreted. The scanner reads that stream once, in blocks, and feeds every block to three sinks:
+`decode_pcm` streams interleaved 32-bit float at the file's native sample rate and channel layout, which the probe supplies so the raw stream can be interpreted. The decode is held to the probe's shape: `-ar` and `-ch_layout`, or `-ac` for a stream that names no layout, make ffmpeg convert any part of the file in another shape (a mono intro joined to a stereo MP3, say) rather than hand back samples the probe would misread. The layout is named rather than counted because ffmpeg reads a bare count as its default layout and would remix quad or 6.0 into it. The scanner reads that stream once, in blocks, and feeds every block to three sinks:
 
 - **Loudness** — an EBU R128 meter (the `ebur128` crate) over the full channel layout, yielding integrated loudness and true peak. Measured at native rate and layout, so multi-channel and high-resolution files are measured as what they are ([`requirements/tracks.md` §4](../requirements/tracks.md#4-audio-properties)). Album loudness is aggregated by the store from the album's tracks, not by a second decode.
 - **Waveform** — a mono downmix bucketed into a fixed number of peak and RMS bins per track. The shaping that makes a compressed master and an orchestral recording both legible ([`requirements/playback.md` §3](../requirements/playback.md#3-the-waveform)) is applied at render time from these bins, deterministically, so the stored data is the honest measurement and the client cannot invent structure. The bin count and shaping function are the playback design's to fix.

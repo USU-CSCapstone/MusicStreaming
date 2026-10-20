@@ -13,6 +13,9 @@ use crate::{Config, Error, Registry, input};
 pub struct ProbeInfo {
     pub sample_rate: u32,
     pub channels: u32,
+    /// The channel layout as ffmpeg names it, such as `5.1(side)`, or `None` when the stream
+    /// names none and only the channel count is known.
+    pub channel_layout: Option<String>,
     pub duration_secs: Option<f64>,
 }
 
@@ -35,6 +38,7 @@ struct Stream {
     codec_type: Option<String>,
     sample_rate: Option<String>,
     channels: Option<u32>,
+    channel_layout: Option<String>,
     duration: Option<String>,
 }
 
@@ -92,5 +96,5 @@ pub(crate) fn probe(
         .or(parsed.format.and_then(|f| f.duration))
         .and_then(|d| d.parse::<f64>().ok())
         .filter(|d| d.is_finite() && *d >= 0.0);
-    Ok(ProbeInfo { sample_rate, channels, duration_secs })
+    Ok(ProbeInfo { sample_rate, channels, channel_layout: stream.channel_layout, duration_secs })
 }

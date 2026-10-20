@@ -137,8 +137,9 @@ impl Ffmpeg {
         probe::probe(&self.config, &self.registry, path)
     }
 
-    /// Start decoding `path` to interleaved 32-bit float PCM at native sample
-    /// rate and channel layout. Blocks while the pool is full.
+    /// Start decoding `path` to interleaved 32-bit float PCM in the sample rate
+    /// and channel layout `info` reports, which hold for the whole stream.
+    /// Blocks while the pool is full.
     pub fn decode_pcm(&self, path: &std::path::Path, info: &ProbeInfo) -> Result<PcmStream, Error> {
         decode::decode_pcm(&self.config, &self.registry, path, info)
     }
