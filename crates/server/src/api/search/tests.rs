@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use super::super::testing::{catalog, eventually, json, send};
 use super::*;
-use crate::db::testing::{Track, library};
+use crate::db::testing::{Album, Artist, Track, library};
 
 /// [`catalog::app`], plus an empty library 3.
 async fn app_with_catalog() -> (tempfile::TempDir, Arc<Database>, Router) {
@@ -93,6 +93,58 @@ async fn only_the_callers_library_is_searched() {
     let (_, body) = json(&app, "/api/v1/libraries/3/search?q=elsewhere").await;
     assert_eq!(body["sections"], json!([]));
     assert_eq!(body["libraryEmpty"], true, "no music yet, not no match");
+}
+
+#[tokio::test]
+async fn a_name_in_both_libraries_is_counted_once_in_each() {
+    let (_temp, db, app) = app_with_catalog().await;
+    // Library 1 gets a track, an album, and an artist named as library 2's are.
+    db.write(|tx| {
+        let title = "Elsewhere".to_owned();
+        Track { title: title.clone(), ..Track::new(1007, 1, 101) }.insert(tx)?;
+        Album { title: Some(title), ..Album::new(105, 1) }.insert(tx)?;
+        Artist::new(14, 1, "Elsewhere").insert(tx)
+    })
+    .await
+    .unwrap();
+    let ids = |id: &str| vec![id.to_owned()];
+    for (library, track, album, artist) in [(1, "1007", "105", "14"), (2, "2001", "201", "20")] {
+        let uri = format!(
+            "/api/v1/libraries/{library}/search?q=elsewhere&types=tracks,albums,artists&sectionLimit=1"
+        );
+        let (_, body) = json(&app, &uri).await;
+        let expected = [
+            ("tracks".to_owned(), ids(track)),
+            ("albums".to_owned(), ids(album)),
+            ("artists".to_owned(), ids(artist)),
+        ];
+        assert_eq!(sections(&body), expected, "library {library}");
+        for section in body["sections"].as_array().unwrap() {
+            assert_eq!(section["total"], 1, "library {library}: {section}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn what_is_gone_since_the_index_was_built_is_left_out() {
+    let (_temp, db, app) = app_with_catalog().await;
+    let uri = "/api/v1/libraries/1/search?q=untitled";
+    let (_, body) = json(&app, uri).await;
+    assert_eq!(sections(&body), [("tracks".to_owned(), vec!["1006".to_owned()])]);
+    db.write(|tx| {
+        tx.execute_batch(
+            "DELETE FROM track_artists WHERE track_id = 1006;
+             DELETE FROM tracks WHERE id = 1006;
+             INSERT INTO library_changes (library_id, entity_type, entity_id, op, changed_at)
+             VALUES (1, 'track', 1006, 'delete', 0);",
+        )
+    })
+    .await
+    .unwrap();
+    // The search that notices the change answers from the index that still names the track.
+    let (status, body) = json(&app, uri).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!((&body["sections"], &body["top"]), (&json!([]), &Value::Null));
 }
 
 #[tokio::test]

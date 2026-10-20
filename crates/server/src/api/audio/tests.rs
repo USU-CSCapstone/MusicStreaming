@@ -166,6 +166,25 @@ async fn only_the_callers_library_is_reachable() {
 }
 
 #[tokio::test]
+async fn an_unreadable_file_is_an_internal_problem_that_names_no_path() {
+    use std::os::unix::fs::PermissionsExt;
+    let (temp, app) = app_with_fixture().await;
+    let file = temp.path().join("music/a.m4a");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(&file).is_ok() {
+        eprintln!("skipping: permissions do not apply to this user");
+        return;
+    }
+    let uri = "/api/v1/libraries/1/tracks/1/audio?variant=original";
+    let (status, content_type, body) = send(app, "GET", uri).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(content_type.as_deref(), Some("application/problem+json"));
+    let body = String::from_utf8(body).unwrap();
+    assert_eq!(json(body.as_bytes())["code"], "internal");
+    assert!(!body.contains(temp.path().to_str().unwrap()), "{body}");
+}
+
+#[tokio::test]
 async fn a_file_reached_through_a_link_is_not_served() {
     use std::os::unix::fs::symlink;
     let (temp, db, app) = app("");

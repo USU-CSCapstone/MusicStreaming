@@ -14,7 +14,7 @@ use crate::db::testing::{Album, Artist, Track, album_artist, library, track_arti
 
 /// Library 1 holds tracks 11, 12, and 13 (13 missing since a scan) on album 101, "Signal", by
 /// artist 301, Aurora Lane, who is credited on track 11; and album 102, "Empty", with no tracks.
-/// Library 2 holds track 21 on album 201. Nothing is installed.
+/// Library 2 holds track 21 on album 201, by artist 401, Far Shore. Nothing is installed.
 pub async fn database() -> (tempfile::TempDir, Arc<Database>) {
     let temp = tempfile::tempdir().unwrap();
     let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
@@ -32,6 +32,9 @@ pub async fn database() -> (tempfile::TempDir, Arc<Database>) {
         let artist = Artist::new(301, 1, "Aurora Lane");
         Artist { album_count: 1, track_count: 2, ..artist }.insert(tx)?;
         album_artist(tx, 1, 101, 301)?;
+        let artist = Artist::new(401, 2, "Far Shore");
+        Artist { album_count: 1, track_count: 1, ..artist }.insert(tx)?;
+        album_artist(tx, 2, 201, 401)?;
         for (id, library, album, missing_since) in
             [(11, 1, 101, None), (12, 1, 101, None), (13, 1, 101, Some(5)), (21, 2, 201, None)]
         {
@@ -44,7 +47,8 @@ pub async fn database() -> (tempfile::TempDir, Arc<Database>) {
             }
             .insert(tx)?;
         }
-        track_artist(tx, 1, 11, 0, 301, "Aurora Lane")
+        track_artist(tx, 1, 11, 0, 301, "Aurora Lane")?;
+        track_artist(tx, 2, 21, 0, 401, "Far Shore")
     })
     .await
     .unwrap();

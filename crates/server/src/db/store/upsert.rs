@@ -3,7 +3,7 @@
 
 use jewelcase_core::fold;
 use jewelcase_scanner::{ArtworkSource, TrackRecord};
-use rusqlite::{Result, Transaction, params};
+use rusqlite::{OptionalExtension, Result, Transaction, params};
 
 use super::entities::{
     find_or_create_album, find_or_create_artist, find_or_create_tag, upsert_image,
@@ -13,8 +13,9 @@ use crate::db::catalog::Touched;
 use crate::db::feed::{self, Entity, Op};
 
 /// Writes `rec` as a track of `lib` seen by `scan_id`, with its credits, genres, lyrics,
-/// artwork, and artist biography, records it in the feed at `now`, and adds what it points at
-/// to `touched`. A file under an unknown root is skipped.
+/// artwork, and artist biography, records it in the feed at `now`, and adds the albums, artists
+/// and tags it pointed at before and after to `touched`. A record under a root `lib` doesn't
+/// have, or one naming another library's track, is logged and skipped.
 pub fn upsert_track(
     roots: &Roots,
     tx: &Transaction<'_>,
@@ -31,7 +32,7 @@ pub fn upsert_track(
     let rel = relative(&rec.root, &rec.path);
     if let Some(id) = rec.id {
         // Whatever it pointed at before may now be orphaned.
-        touched.track(tx, id as i64)?;
+        touched.track(tx, lib, id as i64)?;
     }
 
     // Artists: the unknown artist (key "") when a file names none.
@@ -69,6 +70,11 @@ pub fn upsert_track(
         now,
     )?;
 
+    // Touched even if the track is skipped below, so an album or artist made only for it is
+    // removed again.
+    touched.albums.insert(album_id);
+    touched.artists.extend(artist_ids.iter().chain(&album_artist_ids));
+
     let identifiers = {
         let mut m = serde_json::Map::new();
         if let Some(v) = &rec.tags.musicbrainz_recording_id {
@@ -87,8 +93,9 @@ pub fn upsert_track(
     };
     let format = rec.properties.format;
 
-    // A new track (no id yet) gets a random one.
-    let id: i64 = tx.query_row(
+    // A new track (no id yet) gets a random one. An id of another library's track is never
+    // taken over: the update matches no row, and the record is skipped.
+    let Some(id) = tx.query_row(
             "INSERT INTO tracks (id, library_id, album_id, album_title, root_id, path, file_size, file_mtime, \
              missing_since, last_seen_scan_id, title, sort_key, artist_sort_key, album_sort_key, disc_number, track_number, \
              track_total, disc_total, release_date, explicit, compilation, release_type, isrc, identifiers, lyrics_kind, \
@@ -106,6 +113,7 @@ pub fn upsert_track(
              container = excluded.container, lossless = excluded.lossless, bitrate_kbps = excluded.bitrate_kbps, \
              sample_rate_hz = excluded.sample_rate_hz, bit_depth = excluded.bit_depth, channels = excluded.channels, \
              duration_us = excluded.duration_us \
+             WHERE tracks.library_id = excluded.library_id \
              RETURNING id",
             params![
                 rec.id.map(|id| id as i64),
@@ -142,8 +150,11 @@ pub fn upsert_track(
                 (rec.properties.duration_ms * 1000) as i64,
                 now,
             ],
-            |r| r.get(0),
-        )?;
+            |r| r.get::<_, i64>(0),
+        ).optional()? else {
+        tracing::error!(path = %rec.path.display(), "track of another library; skipped");
+        return Ok(());
+    };
 
     // Links: replace wholesale.
     tx.execute("DELETE FROM track_artists WHERE track_id = ?1", [id])?;
@@ -218,8 +229,6 @@ pub fn upsert_track(
         }
     }
 
-    touched.albums.insert(album_id);
-    touched.artists.extend(artist_ids.iter().chain(&album_artist_ids));
     feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)?;
     Ok(())
 }

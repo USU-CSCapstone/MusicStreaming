@@ -51,3 +51,30 @@ impl<T: DeserializeOwned> FromSql for Json<T> {
             .map_err(|error| FromSqlError::Other(Box::new(error)))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::by_ids;
+    use crate::db::Database;
+    use crate::db::testing::{Album, library};
+
+    #[test]
+    fn by_ids_reads_only_the_librarys_rows_in_the_order_asked() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("jewelcase.db")).unwrap();
+        db.write_blocking(|tx| {
+            library(tx, 1, "Music", "/music")?;
+            library(tx, 2, "Other", "/other")?;
+            Album::new(101, 1).insert(tx)?;
+            Album::new(102, 1).insert(tx)?;
+            Album::new(201, 2).insert(tx)
+        })
+        .unwrap();
+        let found: Vec<i64> = db
+            .read_blocking(|conn| {
+                by_ids(conn, &["al.id"], "albums al", 1, &[102, 201, 999, 101], |row| row.get(0))
+            })
+            .unwrap();
+        assert_eq!(found, [102, 101]);
+    }
+}

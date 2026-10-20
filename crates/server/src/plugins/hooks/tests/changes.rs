@@ -89,7 +89,8 @@ async fn album_and_artist_hooks_hear_only_their_own_kind_in_their_own_library() 
     changes(
         &db,
         "(1, 'album', 101, 'upsert', 0), (1, 'artist', 301, 'upsert', 0), \
-         (1, 'album', 102, 'delete', 0), (2, 'album', 201, 'upsert', 0)",
+         (1, 'album', 102, 'delete', 0), (2, 'album', 201, 'upsert', 0), \
+         (2, 'artist', 401, 'upsert', 0)",
     )
     .await;
     let albums = [(Hook::AlbumsChanged, 1, vec![101], vec![102])];

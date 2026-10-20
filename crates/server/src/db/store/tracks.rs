@@ -70,7 +70,7 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<(), DbError>
                 params![id, lib],
             )?;
             if changed > 0 {
-                touched.track(tx, id)?;
+                touched.track(tx, lib, id)?;
                 feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)?;
             }
         }
@@ -140,7 +140,7 @@ pub fn mark_missing_unseen(
         let mut touched = Touched::default();
         for id in &ids {
             tx.execute("UPDATE tracks SET missing_since = ?2 WHERE id = ?1", params![id, now])?;
-            touched.track(tx, *id)?;
+            touched.track(tx, lib, *id)?;
             feed::record(tx, lib, Entity::Track, *id, Op::Upsert, now)?;
         }
         catalog::recompute(tx, lib, &mut touched, now)?;

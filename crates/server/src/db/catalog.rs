@@ -21,24 +21,30 @@ pub struct Touched {
 }
 
 impl Touched {
-    /// Everything a track currently points at.
-    pub fn track(&mut self, tx: &Transaction<'_>, track_id: i64) -> Result<()> {
+    /// Everything track `track_id` of library `lib` currently points at; nothing if the track is
+    /// another library's.
+    pub fn track(&mut self, tx: &Transaction<'_>, lib: i64, track_id: i64) -> Result<()> {
         if let Some(album) = tx
-            .query_row("SELECT album_id FROM tracks WHERE id = ?1", [track_id], |r| {
-                r.get::<_, i64>(0)
-            })
+            .query_row(
+                "SELECT album_id FROM tracks WHERE id = ?1 AND library_id = ?2",
+                [track_id, lib],
+                |r| r.get::<_, i64>(0),
+            )
             .optional()?
         {
             self.albums.insert(album);
         }
         let mut stmt = tx.prepare_cached(
-            "SELECT artist_id FROM track_artists WHERE track_id = ?1 UNION SELECT artist_id FROM track_album_artists WHERE track_id = ?1",
+            "SELECT artist_id FROM track_artists WHERE track_id = ?1 AND library_id = ?2 \
+             UNION SELECT artist_id FROM track_album_artists WHERE track_id = ?1 AND library_id = ?2",
         )?;
-        for id in stmt.query_map([track_id], |r| r.get::<_, i64>(0))? {
+        for id in stmt.query_map([track_id, lib], |r| r.get::<_, i64>(0))? {
             self.artists.insert(id?);
         }
-        let mut stmt = tx.prepare_cached("SELECT tag_id FROM track_tags WHERE track_id = ?1")?;
-        for id in stmt.query_map([track_id], |r| r.get::<_, i64>(0))? {
+        let mut stmt = tx.prepare_cached(
+            "SELECT tag_id FROM track_tags WHERE track_id = ?1 AND library_id = ?2",
+        )?;
+        for id in stmt.query_map([track_id, lib], |r| r.get::<_, i64>(0))? {
             self.tags.insert(id?);
         }
         Ok(())

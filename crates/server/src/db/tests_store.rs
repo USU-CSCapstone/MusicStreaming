@@ -13,6 +13,7 @@ use rusqlite::{OptionalExtension, Result};
 use super::Database;
 use super::libraries;
 use super::store::SqliteStore;
+use super::testing::Image;
 
 /// The suite's library has id "1"; its database lives beside the root.
 fn make(root: &Path) -> SqliteStore {
@@ -776,6 +777,10 @@ fn another_librarys_track_is_left_alone() {
         features: None,
     };
     store.store_analysis(&other, track, result);
+    // A placeholder made in library 2 for content only library 1 has an image of.
+    store.db().write_blocking(|tx| Image::new(1, 1, "A/X/cover.png").insert(tx)).unwrap();
+    let hash = 1_i64.to_be_bytes();
+    store.store_placeholder(&other, &hash, vec![1, 2, 3]);
 
     let row = "SELECT missing_since, last_seen_scan_id = 999, analyzer_version FROM tracks";
     let unchanged = store
@@ -788,7 +793,94 @@ fn another_librarys_track_is_left_alone() {
         .unwrap();
     assert_eq!(unchanged, (5, false, None));
     assert_eq!(count(&store, "SELECT COUNT(*) FROM track_waveforms"), 1);
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM images WHERE id = 1 AND placeholder IS NULL"),
+        1
+    );
     assert_eq!(store.feed_head(&other), 0);
+}
+
+#[test]
+fn an_upsert_naming_another_librarys_track_is_skipped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    std::fs::create_dir_all(&root).unwrap();
+    let store = make(&root);
+    let lib = testing::library(&root);
+    // A track with an artist, an album artist, and a genre.
+    store.apply(&lib.id, Batch { upserts: vec![record(&root, 0)], ..Batch::new(1) }).unwrap();
+    let other_root = tmp.path().join("other");
+    let created = other_root.clone();
+    store
+        .db()
+        .write_blocking(move |tx| libraries::create(tx, Some(2), "Other", &[&created], &[]))
+        .unwrap();
+    store.refresh_roots().unwrap();
+    let (before, head) = (store.inspect_tracks(&lib.id), store.feed_head(&lib.id));
+
+    // A record for a file under library 2's root that carries library 1's track ID.
+    let other: LibraryId = "2".into();
+    let mut batch = Batch::new(999);
+    batch.upserts.push(TrackRecord { id: Some(before[0].id), ..record(&other_root, 0) });
+    store.apply(&other, batch).unwrap();
+
+    assert_eq!(store.inspect_tracks(&lib.id), before);
+    assert_eq!(store.feed_head(&lib.id), head);
+    assert!(store.inspect_tracks(&other).is_empty());
+    let made = "SELECT (SELECT COUNT(*) FROM albums WHERE library_id = 2) \
+                + (SELECT COUNT(*) FROM artists WHERE library_id = 2)";
+    assert_eq!(count(&store, made), 0, "nothing made for it is left behind");
+    let named = "SELECT COUNT(*) FROM library_changes c WHERE c.library_id = 2 AND ( \
+                 (c.entity_type = 'artist' AND c.entity_id IN (SELECT id FROM artists WHERE library_id = 1)) \
+                 OR (c.entity_type = 'tag' AND c.entity_id IN (SELECT id FROM tags WHERE library_id = 1)) \
+                 OR (c.entity_type = 'album' AND c.entity_id IN (SELECT id FROM albums WHERE library_id = 1)))";
+    assert_eq!(count(&store, named), 0, "library 2's feed names nothing of library 1's");
+}
+
+/// Synthetic record `i` under `root`, as the scanner makes for a new file: ten tracks to an
+/// album, ten albums to an artist, and three genres.
+fn record(root: &Path, i: usize) -> TrackRecord {
+    let artist = format!("Artist {}", i / 100);
+    let album = format!("Album {}", i / 10);
+    let path = root.join(format!("{artist}/{album}/{:02} - Track {i}.flac", i % 10 + 1));
+    TrackRecord {
+        id: None,
+        root: root.to_path_buf(),
+        path,
+        size: 30_000_000 + i as u64,
+        mtime_ms: 1_700_000_000_000 + i as u64,
+        tags: jewelcase_core::TagSet {
+            title: Some(format!("Track {i}")),
+            artists: vec![artist.clone()],
+            album: Some(album),
+            album_artists: vec![artist],
+            track_number: Some((i % 10 + 1) as u32),
+            track_total: Some(10),
+            genres: vec![format!("Genre {}", i % 3)],
+            release_date: jewelcase_core::PartialDate::parse("1999"),
+            ..Default::default()
+        },
+        properties: jewelcase_core::AudioProperties {
+            format: Format::Flac,
+            duration_ms: 240_000,
+            sample_rate: Some(44_100),
+            bit_depth: Some(16),
+            channels: Some(2),
+            bitrate_kbps: Some(900),
+            file_size: 30_000_000,
+        },
+        artwork: None,
+        artist_image: None,
+        artist_biography: None,
+        lyrics_sidecar: None,
+        sort: SortKeys {
+            title: format!("track {i}"),
+            artist: format!("artist {}", i / 100),
+            album: format!("album {}", i / 10),
+            album_artist: format!("artist {}", i / 100),
+        },
+        last_seen_scan: 1,
+    }
 }
 
 /// The cold-scan budget, store side only (`design/scanning.md` §15,
@@ -809,50 +901,7 @@ fn benchmark_cold_scan_store_only() {
     let store = make(&root);
     let lib = testing::library(&root);
 
-    // Synthetic records: 10 tracks per album, 10 albums per artist, 3 genres.
-    let synth = |i: usize| -> TrackRecord {
-        let artist = format!("Artist {}", i / 100);
-        let album = format!("Album {}", i / 10);
-        let path = root.join(format!("{artist}/{album}/{:02} - Track {i}.flac", i % 10 + 1));
-        TrackRecord {
-            id: None,
-            root: root.clone(),
-            path,
-            size: 30_000_000 + i as u64,
-            mtime_ms: 1_700_000_000_000 + i as u64,
-            tags: jewelcase_core::TagSet {
-                title: Some(format!("Track {i}")),
-                artists: vec![artist.clone()],
-                album: Some(album),
-                album_artists: vec![artist],
-                track_number: Some((i % 10 + 1) as u32),
-                track_total: Some(10),
-                genres: vec![format!("Genre {}", i % 3)],
-                release_date: jewelcase_core::PartialDate::parse("1999"),
-                ..Default::default()
-            },
-            properties: jewelcase_core::AudioProperties {
-                format: Format::Flac,
-                duration_ms: 240_000,
-                sample_rate: Some(44_100),
-                bit_depth: Some(16),
-                channels: Some(2),
-                bitrate_kbps: Some(900),
-                file_size: 30_000_000,
-            },
-            artwork: None,
-            artist_image: None,
-            artist_biography: None,
-            lyrics_sidecar: None,
-            sort: SortKeys {
-                title: format!("track {i}"),
-                artist: format!("artist {}", i / 100),
-                album: format!("album {}", i / 10),
-                album_artist: format!("artist {}", i / 100),
-            },
-            last_seen_scan: 1,
-        }
-    };
+    let synth = |i: usize| record(&root, i);
 
     let scan_id = store.create_scan(&Scan {
         id: 0,

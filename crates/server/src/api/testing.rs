@@ -1,6 +1,6 @@
 //! Helpers for the API's tests: a server over a fresh database, and requests to it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -167,10 +167,13 @@ pub async fn eventually<T>(what: &str, mut check: impl AsyncFnMut() -> Option<T>
         .unwrap_or_else(|_| panic!("{what}: timed out after 30 s"))
 }
 
-/// `field` of every item in the list at `uri`, read a page of `limit` at a time.
+/// `field` of every item in the list at `uri`, read a page of `limit` at a time. Panics unless
+/// every page but the last is full and carries a cursor not seen before, the last carries none,
+/// and only an empty list has an empty page.
 pub async fn page_through(app: &Router, uri: &str, limit: u32, field: &str) -> Value {
     let mut values = Vec::new();
     let mut cursor: Option<String> = None;
+    let mut seen = HashSet::new();
     loop {
         let separator = if uri.contains('?') { '&' } else { '?' };
         let mut page_uri = format!("{uri}{separator}limit={limit}");
@@ -180,11 +183,18 @@ pub async fn page_through(app: &Router, uri: &str, limit: u32, field: &str) -> V
         let (status, page) = json(app, &page_uri).await;
         assert_eq!(status, StatusCode::OK, "{page}");
         let items = page["items"].as_array().unwrap();
-        assert!(items.len() <= limit as usize);
+        assert!(cursor.is_none() || !items.is_empty(), "a cursor led to an empty page: {page_uri}");
         values.extend(items.iter().map(|item| item[field].clone()));
         match page["nextCursor"].as_str() {
-            Some(next) => cursor = Some(next.to_owned()),
-            None => return values.into(),
+            Some(next) => {
+                assert_eq!(items.len(), limit as usize, "a short page has a cursor: {page_uri}");
+                assert!(seen.insert(next.to_owned()), "a cursor came round again: {page_uri}");
+                cursor = Some(next.to_owned());
+            }
+            None => {
+                assert!(items.len() <= limit as usize, "{page_uri}");
+                return values.into();
+            }
         }
     }
 }

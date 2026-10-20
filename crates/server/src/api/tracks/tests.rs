@@ -72,6 +72,48 @@ async fn duration_order_breaks_ties_by_id() {
 }
 
 #[tokio::test]
+async fn rows_alike_in_every_sort_column_page_by_id() {
+    let (_temp, db, app) = app("");
+    db.write(|tx| {
+        library(tx, 1, "Music", "/music")?;
+        Album::new(1, 1).insert(tx)?;
+        // Tracks 1 to 4 share every sort value; 5 to 7 share having none to sort by.
+        for id in 1..=7 {
+            let known = |value: &str| if id <= 4 { value.as_bytes().to_vec() } else { Vec::new() };
+            Track {
+                sort_key: known("intro"),
+                artist_sort_key: known("artist"),
+                album_sort_key: known("album"),
+                release_date: (id <= 4).then(|| "2000".into()),
+                ..Track::new(id, 1, 1)
+            }
+            .insert(tx)?;
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let up = json!(["1", "2", "3", "4", "5", "6", "7"]);
+    // Rows with no value to sort by come last in both orders; every track was added at once.
+    let (down, newest) =
+        (json!(["4", "3", "2", "1", "7", "6", "5"]), json!(["7", "6", "5", "4", "3", "2", "1"]));
+    for limit in [1, 2, 3, 7] {
+        for (sort, down) in [
+            ("name", &down),
+            ("artist", &down),
+            ("album", &down),
+            ("releaseDate", &down),
+            ("dateAdded", &newest),
+        ] {
+            let uri = format!("/api/v1/libraries/1/tracks?sort={sort}");
+            assert_eq!(page_through(&app, &uri, limit, "id").await, up, "{sort}, limit {limit}");
+            let uri = format!("{uri}&order=desc");
+            assert_eq!(page_through(&app, &uri, limit, "id").await, *down, "{sort}, limit {limit}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn filters_by_artist_credit() {
     let (_temp, _db, app) = catalog::app().await;
     let base = "/api/v1/libraries/1/tracks?sort=album";
@@ -137,12 +179,14 @@ async fn summaries_and_full_tracks() {
 #[tokio::test]
 async fn images_carry_their_placeholders() {
     let (_temp, db, app) = catalog::app().await;
-    // Abbey Road's cover has a placeholder; the catalog's photo of The Beatles could not be
-    // decoded, which the placeholder job records as empty.
+    // Abbey Road's cover and the photo of The Beatles each have a placeholder of their own.
     db.write(|tx| {
         Image { placeholder: Some(vec![0x00, 0xff, 0x10]), ..Image::new(41, 1, "cover.jpg") }
             .insert(tx)?;
-        tx.execute("UPDATE albums SET image_id = 41 WHERE id = 101", []).map(drop)
+        tx.execute_batch(
+            "UPDATE albums SET image_id = 41 WHERE id = 101;
+             UPDATE images SET placeholder = x'102030' WHERE id = 40;",
+        )
     })
     .await
     .unwrap();
@@ -152,7 +196,7 @@ async fn images_carry_their_placeholders() {
     let (_, album) = json(&app, "/api/v1/libraries/1/albums/101").await;
     assert_eq!(album["image"], cover);
     let (_, artist) = json(&app, "/api/v1/libraries/1/artists/10").await;
-    assert_eq!(artist["image"], json!({ "id": "40", "placeholder": "" }));
+    assert_eq!(artist["image"], json!({ "id": "40", "placeholder": "ECAw" }));
 }
 
 #[tokio::test]

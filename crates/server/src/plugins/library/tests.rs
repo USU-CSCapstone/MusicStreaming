@@ -46,7 +46,8 @@ async fn pages_albums_and_artists_with_music() {
     let artists = library.artists(None, 10).await.unwrap();
     assert_eq!(
         (ids(&artists, |a| a.id), artists[0].name.as_deref()),
-        (vec![301], Some("Aurora Lane"))
+        (vec![301], Some("Aurora Lane")),
+        "not another library's"
     );
 }
 
@@ -68,8 +69,8 @@ async fn gets_albums_and_artists_by_id_with_what_they_have() {
     assert!(albums[0].has_artwork);
     assert!(!library.albums(None, 10).await.unwrap().is_empty());
 
-    let artists = library.get_artists(vec![999, 301]).await.unwrap();
-    assert_eq!(ids(&artists, |a| a.id), [301]);
+    let artists = library.get_artists(vec![401, 999, 301]).await.unwrap();
+    assert_eq!(ids(&artists, |a| a.id), [301], "not another library's");
     assert_eq!((artists[0].has_image, artists[0].has_biography), (false, true));
 }
 
@@ -90,6 +91,7 @@ async fn reads_an_albums_tracks_and_an_artists_albums() {
 
     assert_eq!(ids(&library.artist_albums(301).await.unwrap(), |a| a.id), [101]);
     assert!(library.artist_albums(302).await.unwrap().is_empty(), "an appearance only");
+    assert!(library.artist_albums(401).await.unwrap().is_empty(), "another library's");
 }
 
 #[tokio::test]
