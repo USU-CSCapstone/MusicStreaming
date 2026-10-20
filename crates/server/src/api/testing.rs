@@ -48,6 +48,18 @@ pub fn add_device(conn: &rusqlite::Connection, user: i64, id: i64, token: &str) 
     Device::new(user, id, token_hash(token)).insert(conn).unwrap();
 }
 
+/// Adds device `id` of `user` with `token`, signed out for `reason`, the spec's name for it.
+pub fn add_signed_out_device(
+    conn: &rusqlite::Connection,
+    user: i64,
+    id: i64,
+    token: &str,
+    reason: &'static str,
+) {
+    let device = Device::new(user, id, token_hash(token));
+    Device { revoked_reason: Some(reason), ..device }.insert(conn).unwrap();
+}
+
 /// The API over a fresh database, as a new server first starts: with no owner.
 pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
     let temp = tempfile::tempdir().unwrap();

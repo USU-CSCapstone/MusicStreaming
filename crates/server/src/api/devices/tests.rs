@@ -2,7 +2,7 @@ use axum::http::StatusCode;
 use serde_json::json;
 
 use super::super::session::token_hash;
-use super::super::testing::{add_device, add_user, app, json};
+use super::super::testing::{add_device, add_signed_out_device, add_user, app, json};
 use crate::db::testing::Device;
 
 #[tokio::test]
@@ -17,8 +17,7 @@ async fn lists_the_callers_signed_in_devices_most_recently_seen_first() {
         ..Device::new(1, 2, token_hash("phone"))
     };
     phone.insert(&conn).unwrap();
-    let logged_out = Device { token_hash: None, ..Device::new(1, 3, token_hash("logged-out")) };
-    logged_out.insert(&conn).unwrap();
+    add_signed_out_device(&conn, 1, 3, "signed-out", "credentials_changed");
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 4, "someone-else");
 

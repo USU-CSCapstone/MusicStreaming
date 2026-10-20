@@ -2,8 +2,8 @@
 //! sends music to (`requirements/realtime.md` §1), so the account's realtime connections are
 //! sent it again whenever it changes.
 //!
-//! A device logged out with `credentials_changed` keeps its row so it can log back in as
-//! itself, but it is not signed in, so it is not listed.
+//! A device signed out by anything but its own `logout` keeps its row and token hash, so its
+//! next request is told why. It is not signed in, so it is not listed.
 
 use std::sync::Arc;
 
@@ -71,7 +71,7 @@ pub fn get(conn: &Connection, id: i64) -> rusqlite::Result<Device> {
 /// `user`'s signed-in devices, most recently seen first, none of them `connected` yet.
 fn signed_in(conn: &Connection, user: i64) -> rusqlite::Result<Vec<Device>> {
     conn.prepare_cached(&format!(
-        "{SELECT} WHERE user_id = ?1 AND token_hash IS NOT NULL ORDER BY last_seen_at DESC, id"
+        "{SELECT} WHERE user_id = ?1 AND revoked_reason IS NULL ORDER BY last_seen_at DESC, id"
     ))?
     .query_map([user], device)?
     .collect()

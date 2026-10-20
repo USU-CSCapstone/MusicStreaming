@@ -75,9 +75,10 @@ pub struct Device {
     pub name: &'static str,
     pub kind: &'static str,
     pub platform: Option<&'static str>,
-    /// What is stored in place of its token; `None` is a device signed out because its
-    /// account's credentials changed.
-    pub token_hash: Option<[u8; 32]>,
+    /// What is stored in place of its token.
+    pub token_hash: [u8; 32],
+    /// Why it was signed out, as `devices.revoked_reason` stores it; `None` while signed in.
+    pub revoked_reason: Option<&'static str>,
     pub last_seen_at: i64,
 }
 
@@ -91,14 +92,14 @@ impl Device {
             name: "Test",
             kind: "desktop",
             platform: None,
-            token_hash: Some(token_hash),
+            token_hash,
+            revoked_reason: None,
             last_seen_at: 0,
         }
     }
 
     /// Adds the device.
     pub fn insert(&self, conn: &Connection) -> Result<()> {
-        let revoked = self.token_hash.is_none().then_some("credentials_changed");
         conn.execute(
             "INSERT INTO devices (id, user_id, name, type, platform, token_hash, revoked_reason, \
              created_at, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
@@ -109,7 +110,7 @@ impl Device {
                 self.kind,
                 self.platform,
                 self.token_hash,
-                revoked,
+                self.revoked_reason,
                 self.last_seen_at
             ],
         )

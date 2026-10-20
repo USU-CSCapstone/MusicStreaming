@@ -8,6 +8,7 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
+use super::realtime::Revoked;
 use crate::db::DbError;
 
 /// The spec's `Problem.code`: what went wrong, for clients to act on. Only the codes some
@@ -16,6 +17,7 @@ use crate::db::DbError;
 #[serde(rename_all = "snake_case")]
 pub enum Code {
     Unauthenticated,
+    SessionRevoked,
     InvalidCredentials,
     RateLimited,
     Forbidden,
@@ -36,7 +38,9 @@ impl Code {
     /// The status the spec pairs with each code.
     pub fn status(self) -> StatusCode {
         match self {
-            Self::Unauthenticated | Self::InvalidCredentials => StatusCode::UNAUTHORIZED,
+            Self::Unauthenticated | Self::SessionRevoked | Self::InvalidCredentials => {
+                StatusCode::UNAUTHORIZED
+            }
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
@@ -64,6 +68,9 @@ pub struct Problem {
     code: Code,
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
+    /// Why the device was signed out, with `session_revoked`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<Revoked>,
 }
 
 impl Problem {
@@ -77,6 +84,7 @@ impl Problem {
             status: status.as_u16(),
             code,
             detail: None,
+            reason: None,
         }
     }
 
@@ -93,6 +101,11 @@ impl Problem {
     pub fn detail(mut self, detail: impl Into<String>) -> Problem {
         self.detail = Some(detail.into());
         self
+    }
+
+    /// A `401 session_revoked`: the device was signed out, for `reason`.
+    pub fn revoked(reason: Revoked) -> Problem {
+        Problem { reason: Some(reason), ..Problem::new(Code::SessionRevoked) }
     }
 
     /// Its explanation, if it has one.

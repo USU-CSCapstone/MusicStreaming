@@ -23,6 +23,8 @@ The SQLite schema behind `api/openapi.yaml`. Migrations are plain SQL in `crates
 
 **An ID a client chooses is keyed with its user.** A play keeps the `playId` its device chose, so it is counted once however often it is reported (`requirements/analytics.md` §6), and any other user can choose the same one, by chance or on purpose. So `plays` is keyed by `(user_id, id)`, `play_ends` and `play_starts` refer to a play by both, and one user's report never reaches another's play.
 
+**A signed-out device keeps its token hash.** `devices.revoked_reason` marks it signed out, so a request with its token is answered `401 session_revoked` with the reason, which tells the device whether to keep its downloads (`requirements/offline.md` §9). Its row is deleted only by the device's own `logout` or with its account. Every sign-in makes a new random token, so a revoked one never authenticates again, and a suspended account's tokens, signed out or not, answer as unknown ones do (`requirements/users.md` §10).
+
 ---
 
 ## 2. Isolation by Construction

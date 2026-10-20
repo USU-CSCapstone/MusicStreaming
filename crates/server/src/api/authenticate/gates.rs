@@ -15,7 +15,7 @@ use crate::db::testing::{Artist, Image, access};
 /// handler reached past the gate would answer differently than for a library that does not exist.
 /// `search`, `playback` and `audio` leave out their required query, so there a handler reached
 /// past the gate answers `422`.
-const ROUTES: &[(&str, &str)] = &[
+pub(super) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/auth/logout"),
     ("GET", "/me"),
     ("GET", "/me/devices"),

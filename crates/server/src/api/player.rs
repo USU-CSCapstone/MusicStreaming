@@ -260,7 +260,7 @@ pub async fn apply(
         conn.prepare_cached(
             "SELECT EXISTS (SELECT 1 FROM devices d JOIN users u ON u.id = d.user_id \
              JOIN tracks t ON t.id = ?2 AND t.library_id = ?1 \
-             WHERE d.id = ?3 AND d.token_hash IS NOT NULL AND u.status = 'active' AND \
+             WHERE d.id = ?3 AND d.revoked_reason IS NULL AND u.status = 'active' AND \
              (u.role <> 'user' OR EXISTS \
               (SELECT 1 FROM library_access WHERE user_id = u.id AND library_id = ?1)))",
         )?

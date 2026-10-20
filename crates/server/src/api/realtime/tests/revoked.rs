@@ -1,18 +1,25 @@
-//! A connection the hub has closed acts for no one, whatever its client sent before it heard.
+//! A signed-out device: refused as it connects and told why, not signed in once joined, and a
+//! connection the hub has closed acts for no one, whatever its client sent before it heard.
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use axum::Json;
 use axum::extract::State;
 use axum::extract::ws::Message;
+use axum::http::StatusCode;
+use axum::{Json, Router};
+use rusqlite::types::{FromSql, ValueRef};
 use serde_json::{Value, json};
+use tokio_tungstenite::tungstenite::Error;
 
 use super::super::super::AppState;
 use super::super::super::authenticate::Caller;
 use super::super::super::player;
 use super::super::super::testing::player::{command_id, progress_report};
-use super::super::super::testing::{app_with_tracks, state};
-use super::super::{Presence, Revoked, handle};
+use super::super::super::testing::socket::{connect, serve};
+use super::super::super::testing::{add_signed_out_device, app, app_with_tracks, state};
+use super::super::{Presence, Revoked, handle, signed_in};
+use crate::db::Database;
 
 const OWNER: Caller = Caller { user: 1, device: 1, admin: true };
 
@@ -68,4 +75,43 @@ async fn a_revoked_connection_acts_for_no_one() {
     }
     assert_eq!(queued(&mut other).await, Vec::<Message>::new(), "no state, result or command");
     assert_eq!(playback(&state).await, before);
+}
+
+/// [`app`] with the owner also on device 2, with token `revoked`, signed out when the
+/// account's credentials changed.
+fn with_signed_out_device() -> (tempfile::TempDir, Arc<Database>, Router) {
+    let (temp, db, app) = app("");
+    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    add_signed_out_device(&conn, 1, 2, "revoked", "credentials_changed");
+    (temp, db, app)
+}
+
+#[tokio::test]
+async fn a_signed_out_device_is_refused_as_it_connects_and_told_why() {
+    let (_temp, _db, app) = with_signed_out_device();
+    let address = serve(app).await;
+    let refused = connect(address, &[("authorization", "Bearer revoked")]).await.unwrap_err();
+    let Error::Http(response) = refused else { panic!("{refused}") };
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let problem: Value = serde_json::from_slice(response.body().as_deref().unwrap()).unwrap();
+    assert_eq!(
+        (&problem["code"], &problem["reason"]),
+        (&json!("session_revoked"), &json!("credentials_changed"))
+    );
+}
+
+#[tokio::test]
+async fn a_signed_out_device_is_not_signed_in_once_joined() {
+    let (_temp, db, _app) = with_signed_out_device();
+    assert!(signed_in(&db, 1).await.unwrap(), "the owner's other device");
+    assert!(!signed_in(&db, 2).await.unwrap());
+}
+
+#[test]
+fn a_stored_reason_reads_by_its_spec_name() {
+    let read = |name: &[u8]| Revoked::column_result(ValueRef::Text(name));
+    assert!(matches!(read(b"credentials_changed"), Ok(Revoked::CredentialsChanged)));
+    assert!(matches!(read(b"logged_out"), Ok(Revoked::LoggedOut)));
+    let unknown = read(b"unknown").unwrap_err().to_string();
+    assert!(unknown.contains("unknown variant"), "{unknown}");
 }

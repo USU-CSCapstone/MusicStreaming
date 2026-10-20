@@ -31,11 +31,12 @@ CREATE TABLE devices (
     name           TEXT    NOT NULL,
     type           TEXT    NOT NULL CHECK (type IN ('phone', 'tablet', 'desktop', 'tv')),
     platform       TEXT,
-    token_hash     BLOB    UNIQUE,
-    revoked_reason TEXT    CHECK (revoked_reason IN ('credentials_changed')),
+    token_hash     BLOB    NOT NULL UNIQUE,
+    -- Set when anything but the device's own logout signs it out. It keeps its token hash, so its
+    -- next request is told why, which tells it whether to keep its downloads (requirements/offline.md §9).
+    revoked_reason TEXT    CHECK (revoked_reason IN ('credentials_changed', 'logged_out')),
     created_at     INTEGER NOT NULL,
-    last_seen_at   INTEGER NOT NULL,
-    CHECK ((token_hash IS NULL) = (revoked_reason IS NOT NULL))
+    last_seen_at   INTEGER NOT NULL
 ) STRICT;
 
 CREATE INDEX devices_by_user ON devices (user_id);

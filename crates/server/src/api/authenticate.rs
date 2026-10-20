@@ -5,6 +5,10 @@
 //! session cookie. A browser sends that cookie by itself, so a cookie-authenticated write must
 //! also carry `X-Jewelcase-Client`, which a page on another site cannot add without asking.
 //!
+//! A device signed out by anything but its own `logout` keeps its token hash, so a request
+//! with that token answers `401 session_revoked` with the reason, which tells the device
+//! whether to keep its downloads (`requirements/offline.md` §9).
+//!
 //! A library the caller cannot reach answers `404` for everything under it, exactly as one that
 //! does not exist (`requirements/users.md` §10). Admins and the owner reach every library;
 //! anyone else only those granted to them (§5). Handlers below `/libraries/{library_id}` can
@@ -20,6 +24,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use rusqlite::{Connection, OptionalExtension};
 
+use super::realtime::Revoked;
 use super::session::{COOKIE, token_hash};
 use super::{AppState, Code, Id, Problem};
 use crate::db::now_ms;
@@ -50,8 +55,9 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 }
 
 /// Answers `401 unauthenticated` unless the request carries the token of a device whose
-/// account is active, `403` if it is under `/admin` and the account is not an admin, and `404`
-/// if its path names a library that account cannot reach.
+/// account is active, `401 session_revoked` if that device is signed out, `403` if it is under
+/// `/admin` and the account is not an admin, and `404` if its path names a library that account
+/// cannot reach.
 /// Otherwise it passes the [`Caller`] on to the handler.
 pub async fn require(
     State(state): State<AppState>,
@@ -69,9 +75,12 @@ pub async fn require(
         Ok(found) => found,
         Err(error) => return Problem::from(error).into_response(),
     };
-    let Some(Found { caller, last_seen_at, reaches_library }) = found else {
+    let Some(Found { caller, last_seen_at, reaches_library, revoked }) = found else {
         return unauthenticated();
     };
+    if let Some(reason) = revoked {
+        return challenge(Problem::revoked(reason));
+    }
     // Checked once the token is known to be good, so a bad one is always `401`.
     if matches!(token, Token::Cookie(_))
         && !request.method().is_safe()
@@ -147,11 +156,14 @@ struct Found {
     last_seen_at: i64,
     /// Whether the caller reaches the library the path names; true if it names none.
     reaches_library: bool,
+    /// Why the device was signed out, if it was.
+    revoked: Option<Revoked>,
 }
 
-/// The caller behind `hash`, if it is a token of an active account, and whether it reaches
-/// `library`. A suspended account's tokens answer exactly as unknown ones do
-/// (`requirements/users.md` §10).
+/// The caller behind `hash`, if it is a token of an active account, whether it reaches
+/// `library`, and whether its device is signed out. A suspended account's tokens answer exactly
+/// as unknown ones do, whether or not their devices are signed out (`requirements/users.md`
+/// §10).
 fn device(
     conn: &Connection,
     hash: &[u8; 32],
@@ -162,7 +174,7 @@ fn device(
              WHEN ?2 IS NULL THEN 1 \
              WHEN u.role <> 'user' THEN EXISTS (SELECT 1 FROM libraries WHERE id = ?2) \
              ELSE EXISTS (SELECT 1 FROM library_access WHERE user_id = u.id AND library_id = ?2) \
-         END \
+         END, d.revoked_reason \
          FROM devices d JOIN users u ON u.id = d.user_id \
          WHERE d.token_hash = ?1 AND u.status = 'active'",
     )?
@@ -171,18 +183,26 @@ fn device(
             caller: Caller { device: row.get(0)?, user: row.get(1)?, admin: row.get(3)? },
             last_seen_at: row.get(2)?,
             reaches_library: row.get(4)?,
+            revoked: row.get(5)?,
         })
     })
     .optional()
 }
 
-/// A `401`, with the challenge RFC 9110 asks every `401` to name.
+/// A `401 unauthenticated`.
 pub fn unauthenticated() -> Response {
+    challenge(Problem::new(Code::Unauthenticated))
+}
+
+/// `problem`, which must be a `401`, with the challenge RFC 9110 asks every `401` to name.
+fn challenge(problem: Problem) -> Response {
     let challenge = [(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"))];
-    (challenge, Problem::new(Code::Unauthenticated)).into_response()
+    (challenge, problem).into_response()
 }
 
 #[cfg(test)]
 mod gates;
+#[cfg(test)]
+mod revoked;
 #[cfg(test)]
 mod tests;

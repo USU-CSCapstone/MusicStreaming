@@ -23,6 +23,9 @@ use axum::http::uri::Authority;
 use axum::http::{HeaderMap, header};
 use axum::response::Response;
 use rusqlite::OptionalExtension;
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ValueRef};
+use serde::de::IntoDeserializer;
+use serde::de::value::StrDeserializer;
 use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, interval_at, timeout};
 
@@ -94,11 +97,23 @@ pub enum ServerMessage {
     },
 }
 
-/// Why a device was signed out: the spec's `sessionRevoked` `reason`.
-#[derive(Clone, Copy, Serialize)]
+/// Why a device was signed out: the spec's `reason` in `sessionRevoked` and in a
+/// `session_revoked` Problem.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Revoked {
+    /// The account's credentials changed: the device keeps its downloads.
+    CredentialsChanged,
+    /// Signed out: the device removes its downloads.
     LoggedOut,
+}
+
+/// Read from `devices.revoked_reason`, which holds the names it is sent with.
+impl FromSql for Revoked {
+    fn column_result(value: ValueRef) -> FromSqlResult<Revoked> {
+        let name: StrDeserializer<serde::de::value::Error> = value.as_str()?.into_deserializer();
+        Revoked::deserialize(name).map_err(|error| FromSqlError::Other(Box::new(error)))
+    }
 }
 
 /// `openRealtime`: upgrades to a WebSocket for the calling device.
@@ -120,12 +135,12 @@ pub async fn open(
         .on_upgrade(move |socket| serve(socket, state, caller)))
 }
 
-/// Whether `device` still has a token, and its account may still sign in.
+/// Whether `device` is still signed in, and its account may still sign in.
 async fn signed_in(db: &Database, device: i64) -> Result<bool, Problem> {
     let found = db.read(move |conn| {
         conn.query_row(
             "SELECT 1 FROM devices d JOIN users u ON u.id = d.user_id \
-             WHERE d.id = ?1 AND d.token_hash IS NOT NULL AND u.status = 'active'",
+             WHERE d.id = ?1 AND d.revoked_reason IS NULL AND u.status = 'active'",
             [device],
             |_| Ok(()),
         )

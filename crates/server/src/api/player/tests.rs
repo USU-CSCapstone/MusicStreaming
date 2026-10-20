@@ -193,7 +193,8 @@ async fn a_report_is_checked_against_the_account_as_it_is_now() {
     // Signed out by a path that does not close its connections.
     let mut phone = connect_with(address, "phone").await;
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
-    conn.execute("DELETE FROM devices WHERE id = 2", []).unwrap();
+    let revoke = "UPDATE devices SET revoked_reason = 'credentials_changed' WHERE id = 2";
+    conn.execute(revoke, []).unwrap();
     report(&mut phone, "2", "playing", json!({ "start": true })).await;
     assert_eq!(player(&app, TOKEN).await["activeDeviceId"], json!("1"));
 }
