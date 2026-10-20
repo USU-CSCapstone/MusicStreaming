@@ -33,6 +33,13 @@ export function releaseYear(date: string | null | undefined): string | null {
 	return date ? date.slice(0, 4) : null;
 }
 
+const dates = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
+
+/** A day in the viewer's own calendar and time zone, such as "Mar 1, 2026", from an ISO timestamp. */
+export function formatDate(iso: string): string {
+	return dates.format(new Date(iso));
+}
+
 export function plural(n: number, one: string, many = `${one}s`): string {
 	return `${n.toLocaleString()} ${n === 1 ? one : many}`;
 }

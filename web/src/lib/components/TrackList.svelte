@@ -8,7 +8,7 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
 	import type { PlayContext, TrackSummary } from '$lib/api/types';
-	import { albumTitle, formatDuration, plural } from '$lib/format';
+	import { albumTitle, formatDate, formatDuration, plural, releaseYear } from '$lib/format';
 	import { player } from '$lib/player.svelte';
 	import { songs } from '$lib/adding.svelte';
 	import { applyOps } from '$lib/playlist-ops';
@@ -20,6 +20,7 @@
 	let {
 		tracks,
 		variant = 'default',
+		added,
 		sentinel,
 		empty = 'No songs.',
 		context = { type: 'library' },
@@ -29,8 +30,13 @@
 		onmove
 	}: {
 		tracks: TrackSummary[];
-		/** `album`: track numbers and disc headings, no album column or artwork. */
+		/** `album`: track numbers and disc headings, no album or year column, and no artwork. */
 		variant?: 'default' | 'album';
+		/**
+		 * When each row was added to the playlist, by index, for a Date added column. Only
+		 * playlists have one (`requirements/playlists.md` §10).
+		 */
+		added?: readonly string[];
 		sentinel?: (el: Element) => () => void;
 		empty?: string;
 		/** Where the tracks are from, which each play records. */
@@ -413,100 +419,108 @@
 {#if tracks.length === 0}
 	<p class="empty muted">{empty}</p>
 {:else}
-	<ol
-		class="tracks"
-		class:album={isAlbum}
-		class:editable
-		class:reorderable={editable && onmove}
-		class:dragging={drag?.started}
-		bind:this={listEl}
-		{@attach holdTouch}
-		ondragstart={(e) => onmove && e.preventDefault()}
-	>
-		<!-- Keyed by position: a playlist may hold the same track twice. -->
-		{#each tracks as track, i (i)}
-			{#if multiDisc && (i === 0 || tracks[i - 1].discNumber !== track.discNumber)}
-				<li class="disc">Disc {track.discNumber ?? '—'}</li>
-			{/if}
-			{@const current = player.current?.id === track.id}
-			{@const missing = track.availability === 'missing'}
-			<!-- Clicking anywhere on the row is a pointer convenience; the title button is the
-			     keyboard path. -->
-			<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-			<li
-				class="track"
-				class:current
-				class:missing
-				class:selected={selected.has(i)}
-				class:dragged={drag?.started && drag.indexes.includes(i)}
-				onclick={(e) => rowClick(e, i)}
-				ondblclick={(e) => editable && !(e.target as Element).closest('a, .more') && play(i)}
-				onpointerdown={(e) => pointerDown(e, i)}
-				onpointermove={pointerMove}
-				onpointerup={pointerUp}
-				onpointercancel={pointerCancel}
-				oncontextmenu={(e) => (press || longPressed) && e.preventDefault()}
-			>
-				<span class="num tabular">
-					{#if current && player.playing}
-						<span class="eq" aria-label="Playing"><i></i><i></i><i></i></span>
-					{:else}
-						<span class="n">{isAlbum ? (track.trackNumber ?? '–') : i + 1}</span>
-						<span class="play-icon"><Icon name="play" size={14} /></span>
-					{/if}
-				</span>
-				{#if !isAlbum}
-					<span class="thumb">
-						<Artwork image={track.album.image} seed={track.album.id} size={40} />
-					</span>
+	<!-- The list's own width, not the window's, decides its columns: the sidebar and the
+	     page's padding take some of the window. -->
+	<div class="list">
+		<ol
+			class="tracks"
+			class:album={isAlbum}
+			class:dated={added}
+			class:editable
+			class:reorderable={editable && onmove}
+			class:dragging={drag?.started}
+			bind:this={listEl}
+			{@attach holdTouch}
+			ondragstart={(e) => onmove && e.preventDefault()}
+		>
+			<!-- Keyed by position: a playlist may hold the same track twice. -->
+			{#each tracks as track, i (i)}
+				{#if multiDisc && (i === 0 || tracks[i - 1].discNumber !== track.discNumber)}
+					<li class="disc">Disc {track.discNumber ?? '—'}</li>
 				{/if}
-				<span class="main">
-					<!-- A pointer's click on the title selects when rows do; Enter (detail 0) plays.
+				{@const current = player.current?.id === track.id}
+				{@const missing = track.availability === 'missing'}
+				<!-- Clicking anywhere on the row is a pointer convenience; the title button is the
+			     keyboard path. -->
+				<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+				<li
+					class="track"
+					class:current
+					class:missing
+					class:selected={selected.has(i)}
+					class:dragged={drag?.started && drag.indexes.includes(i)}
+					onclick={(e) => rowClick(e, i)}
+					ondblclick={(e) => editable && !(e.target as Element).closest('a, .more') && play(i)}
+					onpointerdown={(e) => pointerDown(e, i)}
+					onpointermove={pointerMove}
+					onpointerup={pointerUp}
+					onpointercancel={pointerCancel}
+					oncontextmenu={(e) => (press || longPressed) && e.preventDefault()}
+				>
+					<span class="num tabular">
+						{#if current && player.playing}
+							<span class="eq" aria-label="Playing"><i></i><i></i><i></i></span>
+						{:else}
+							<span class="n">{isAlbum ? (track.trackNumber ?? '–') : i + 1}</span>
+							<span class="play-icon"><Icon name="play" size={14} /></span>
+						{/if}
+					</span>
+					{#if !isAlbum}
+						<span class="thumb">
+							<Artwork image={track.album.image} seed={track.album.id} size={40} />
+						</span>
+					{/if}
+					<span class="title-col">
+						<!-- A pointer's click on the title selects when rows do; Enter (detail 0) plays.
 					     A missing track can still be selected, to remove it. -->
+						<button
+							type="button"
+							class="title"
+							disabled={missing && !editable}
+							aria-describedby={selected.has(i) ? hintId : undefined}
+							onclick={(e) => {
+								if (!editable || e.detail === 0) play(i);
+							}}
+							onkeydown={(e) => titleKey(e, i)}
+							onkeyup={(e) => titleKey(e, i)}
+						>
+							{track.title}
+						</button>
+						{#if missing}<span class="badge">Unavailable</span>{/if}
+					</span>
+					<!-- Under the title where there is no room for its own column. -->
+					<span class="artist-col muted"><ArtistLinks artists={track.artists} /></span>
+					{#if !isAlbum}
+						<span class="album-col muted">
+							<a href={resolve('/albums/[id]', { id: track.album.id })}
+								>{albumTitle(track.album.title)}</a
+							>
+						</span>
+						<span class="year muted tabular">{releaseYear(track.releaseDate) ?? ''}</span>
+					{/if}
+					{#if added}
+						<span class="added muted tabular">{added[i] ? formatDate(added[i]) : ''}</span>
+					{/if}
+					<span class="duration muted tabular">{formatDuration(track.durationUs)}</span>
 					<button
 						type="button"
-						class="title"
-						disabled={missing && !editable}
-						aria-describedby={selected.has(i) ? hintId : undefined}
-						onclick={(e) => {
-							if (!editable || e.detail === 0) play(i);
-						}}
-						onkeydown={(e) => titleKey(e, i)}
-						onkeyup={(e) => titleKey(e, i)}
+						class="more"
+						class:open={adding?.from === i}
+						aria-expanded={adding?.from === i}
+						aria-label="Add {track.title} to a playlist"
+						title="Add to playlist"
+						aria-haspopup="menu"
+						onclick={(e) => more(e, i)}
 					>
-						{track.title}
+						<Icon name="more" size={18} />
 					</button>
-					<span class="sub muted">
-						{#if missing}<span class="badge">Unavailable</span>{/if}
-						<ArtistLinks artists={track.artists} />
-					</span>
-				</span>
-				{#if !isAlbum}
-					<span class="album-col muted">
-						<a href={resolve('/albums/[id]', { id: track.album.id })}
-							>{albumTitle(track.album.title)}</a
-						>
-					</span>
-				{/if}
-				<span class="duration muted tabular">{formatDuration(track.durationUs)}</span>
-				<button
-					type="button"
-					class="more"
-					class:open={adding?.from === i}
-					aria-expanded={adding?.from === i}
-					aria-label="Add {track.title} to a playlist"
-					title="Add to playlist"
-					aria-haspopup="menu"
-					onclick={(e) => more(e, i)}
-				>
-					<Icon name="more" size={18} />
-				</button>
-			</li>
-		{/each}
-		{#if drag?.started && drag.gap !== null}
-			<li class="drop" style:top="{drag.line}px" aria-hidden="true"></li>
-		{/if}
-	</ol>
+				</li>
+			{/each}
+			{#if drag?.started && drag.gap !== null}
+				<li class="drop" style:top="{drag.line}px" aria-hidden="true"></li>
+			{/if}
+		</ol>
+	</div>
 	{#if drag?.started}
 		<div class="ghost" style:left="{drag.x + 14}px" style:top="{drag.y + 14}px" aria-hidden="true">
 			{plural(drag.indexes.length, 'song')}
@@ -561,17 +575,26 @@
 {/if}
 
 <style>
+	.list {
+		container: tracks / inline-size;
+	}
+
 	.tracks {
 		list-style: none;
 		margin: 0;
 		padding: 0;
 	}
 
+	/* Each cell has an area, so the artists move between the title's second line and a column
+	   of their own without being drawn twice. */
 	.track {
 		display: grid;
 		grid-template-columns: 32px 40px minmax(0, 3fr) minmax(0, 2fr) 56px 36px;
+		grid-template-areas:
+			'num thumb title album duration more'
+			'num thumb artist album duration more';
 		align-items: center;
-		gap: var(--space-3);
+		column-gap: var(--space-3);
 		min-height: 56px;
 		padding: var(--space-1) var(--space-3);
 		border-radius: var(--radius-m);
@@ -580,7 +603,90 @@
 
 	.album .track {
 		grid-template-columns: 32px minmax(0, 1fr) 56px 36px;
+		grid-template-areas:
+			'num title duration more'
+			'num artist duration more';
 		min-height: 52px;
+	}
+
+	.num {
+		grid-area: num;
+	}
+
+	.thumb {
+		grid-area: thumb;
+	}
+
+	.title-col {
+		grid-area: title;
+		align-self: end;
+	}
+
+	.artist-col {
+		grid-area: artist;
+		align-self: start;
+		font-size: 13px;
+	}
+
+	.album-col {
+		grid-area: album;
+	}
+
+	.year {
+		grid-area: year;
+	}
+
+	.added {
+		grid-area: added;
+	}
+
+	.duration {
+		grid-area: duration;
+	}
+
+	.more {
+		grid-area: more;
+	}
+
+	.year,
+	.added {
+		display: none;
+	}
+
+	/* Wide enough for every column: the artists get their own, and year and date added show. */
+	@container tracks (min-width: 880px) {
+		.track {
+			grid-template-columns:
+				32px 40px minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr)
+				48px 56px 36px;
+			grid-template-areas: 'num thumb title artist album year duration more';
+		}
+
+		.dated .track {
+			grid-template-columns:
+				32px 40px minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr)
+				48px 104px 56px 36px;
+			grid-template-areas: 'num thumb title artist album year added duration more';
+		}
+
+		.album .track {
+			grid-template-columns: 32px minmax(0, 3fr) minmax(0, 2fr) 56px 36px;
+			grid-template-areas: 'num title artist duration more';
+		}
+
+		.title-col,
+		.artist-col {
+			align-self: center;
+		}
+
+		.artist-col {
+			font-size: inherit;
+		}
+
+		.year,
+		.added {
+			display: block;
+		}
 	}
 
 	.more {
@@ -756,14 +862,16 @@
 		color: var(--text);
 	}
 
-	.main {
+	.title-col {
 		display: flex;
-		flex-direction: column;
+		align-items: center;
+		gap: var(--space-2);
 		min-width: 0;
 	}
 
 	.title {
 		all: unset;
+		min-width: 0;
 		font-weight: 500;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -777,11 +885,9 @@
 		border-radius: 2px;
 	}
 
-	.sub {
+	.artist-col {
 		display: flex;
-		gap: var(--space-2);
 		min-width: 0;
-		font-size: 13px;
 	}
 
 	.badge {
@@ -793,7 +899,8 @@
 		line-height: 18px;
 	}
 
-	.album-col {
+	.album-col,
+	.added {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -862,6 +969,9 @@
 	@media (max-width: 767px) {
 		.track {
 			grid-template-columns: 40px minmax(0, 1fr) 48px 36px;
+			grid-template-areas:
+				'thumb title duration more'
+				'thumb artist duration more';
 			padding: var(--space-1) var(--space-2);
 		}
 
@@ -872,6 +982,9 @@
 
 		.album .track {
 			grid-template-columns: 28px minmax(0, 1fr) 48px 36px;
+			grid-template-areas:
+				'num title duration more'
+				'num artist duration more';
 		}
 
 		.album .track .num {
