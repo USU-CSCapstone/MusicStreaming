@@ -16,7 +16,7 @@ The SQLite schema behind `api/openapi.yaml`. Migrations are plain SQL in `crates
 | **Indexes** | Partial and unique indexes, feeds (ending in `seq`, named `_feed`) and sweeps (`_age`) are named for their purpose: `tracks_missing`, `tracks_file`, `library_changes_feed`, `search_events_age`. Every other index is `<table>_by_<key>`, leaving out a leading `library_id`: `tracks_by_added`, `plays_by_user`. |
 | **Tables** | `STRICT`, so a column holds only its declared type. Link tables are `WITHOUT ROWID`. |
 | **Names** | A closed set of names is `CHECK`ed, such as `scans.trigger`. Plugin permission and hook names are not: they grow with the plugin contract, and Rust checks them (`design/plugins.md` §6). |
-| **JSON** | Only for values never queried by field: settings, exclude patterns, labels, pass-through identifiers. Always `CHECK`ed as valid and of the right shape. |
+| **JSON** | Only for values never queried by field: settings, exclude patterns, labels, pass-through identifiers, a play's artists. Always `CHECK`ed as valid and of the right shape. |
 | **Secrets** | Tokens and codes are stored as SHA-256 hashes, passwords as PHC strings. Nothing secret is stored readably. |
 
 **Why random IDs.** Sequential IDs are shared across libraries, so a user who sees track 1000 and then track 1003 learns that tracks 1001 and 1002 exist somewhere they cannot reach. That breaks "inaccessible is indistinguishable from nonexistent" (`requirements/users.md` §10). Random 64-bit IDs stay as compact as sequential ones for the catalog on device, and reveal nothing. Internal-only tables, such as `login_attempts` and the feeds, keep ordinary sequential rowids.
@@ -84,6 +84,8 @@ The displayed name — `artists.name`, `albums.title`, `tags.name` — is the sp
 ## 6. Personal Data
 
 **Listening statistics are read from `plays`**, never stored as a separate truth that could drift from them (`requirements/analytics.md` §2). None is served yet; each arrives with its section of the API, with whatever index it needs.
+
+**A play keeps a snapshot of its track**, so its history outlives the track (`requirements/analytics.md` §8, `requirements/scanning.md` §8.1). History reads the live track while it exists, through `LEFT JOIN tracks ON tracks.id = p.track_id AND tracks.library_id = p.library_id`, which also gives `trackId: null` once the track is purged; the snapshot is the fallback for then. `plays.title`, `artists` and `album` hold the track's title, its artists' names in credit order, and its album's title, as the catalog names them; the unknown artist and album have no name, so they are left out of `artists` and leave `album` `NULL`. The `INSERT … SELECT` that records a report reads them from the track it already checks. A later report of the play refreshes them, which improves "last known" only for the few plays reported again after a retag, but costs nothing, since the row is rewritten anyway. A report that names another track than the play's changes nothing of it. Once the track is purged no report finds it, so the play keeps the last names it had. `plays.track_id` has no foreign key, so a purge never deletes a play, and random IDs (§1) make it vanishingly unlikely that a purged track's ID is ever another track's.
 
 **Hooks that act for one user read their domain's outbox** (`design/general.md` §4), written by the same transaction as the activity:
 

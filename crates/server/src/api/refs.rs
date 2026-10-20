@@ -49,23 +49,55 @@ macro_rules! placeholder {
 }
 pub(crate) use placeholder;
 
-/// SQL for the artists credited on an `album` or a `track` whose ID is the SQL `$id`, as JSON
-/// that reads as `Vec<Credit>`, in credit order. Part of the row, so a page is one query.
-macro_rules! artists_json {
-    ($owner:literal, $id:literal) => {
+/// SQL for a JSON array of the SQL `$value`, read from each artist `credited` on an `album` or a
+/// `track` whose ID is the SQL `$id`, in credit order. `$and` is SQL appended to the `WHERE`
+/// clause, starting with ` AND`, or empty.
+macro_rules! credits_json {
+    ($value:literal, $owner:literal, $id:literal, $and:literal) => {
         concat!(
-            "(SELECT json_group_array(json_array(CAST(credited.id AS TEXT), credited.name) \
-             ORDER BY credit.position) FROM ",
+            "(SELECT json_group_array(",
+            $value,
+            " ORDER BY credit.position) FROM ",
             $owner,
             "_artists credit JOIN artists credited ON credited.id = credit.artist_id WHERE credit.",
             $owner,
             "_id = ",
             $id,
+            $and,
             ")"
         )
     };
 }
+pub(crate) use credits_json;
+
+/// SQL for the artists credited on an `album` or a `track` whose ID is the SQL `$id`, as JSON
+/// that reads as `Vec<Credit>`, in credit order. Part of the row, so a page is one query.
+macro_rules! artists_json {
+    ($owner:literal, $id:literal) => {
+        $crate::api::refs::credits_json!(
+            "json_array(CAST(credited.id AS TEXT), credited.name)",
+            $owner,
+            $id,
+            ""
+        )
+    };
+}
 pub(crate) use artists_json;
+
+/// SQL for the names of the artists credited on an `album` or a `track` whose ID is the SQL
+/// `$id`, as a JSON array of strings in credit order. The unknown artist has no name, and is
+/// left out.
+macro_rules! artist_names_json {
+    ($owner:literal, $id:literal) => {
+        $crate::api::refs::credits_json!(
+            "credited.name",
+            $owner,
+            $id,
+            " AND credited.name IS NOT NULL"
+        )
+    };
+}
+pub(crate) use artist_names_json;
 
 /// SQL for the genres of an `album`, an `artist`, or a `track` whose ID is the SQL `$id`, as
 /// JSON that reads as `Vec<TagRef>`, in name order.

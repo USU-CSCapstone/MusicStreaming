@@ -15,7 +15,15 @@ CREATE TABLE plays (
     -- Kept when the device is forgotten: the play still happened.
     device_id      INTEGER REFERENCES devices (id) ON DELETE SET NULL,
     library_id     INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
+    -- No foreign key: a purged track leaves its plays, which keep the snapshot below.
     track_id       INTEGER NOT NULL,
+    -- The track as the play's latest report found it, which history shows in place of the
+    -- live track once the track is purged (requirements/analytics.md §8): its title, its
+    -- artists' names in credit order as a JSON array without the unknown artist, and its
+    -- album's title, NULL for the unknown album.
+    title          TEXT    NOT NULL,
+    artists        TEXT    NOT NULL CHECK (json_valid(artists) AND json_type(artists) = 'array'),
+    album          TEXT,
     started_at     INTEGER NOT NULL,
     listen_time_ms INTEGER NOT NULL CHECK (listen_time_ms >= 0),
     -- NULL while it is still playing.

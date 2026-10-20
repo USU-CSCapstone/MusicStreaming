@@ -7,6 +7,8 @@ use super::super::testing::{add_device, add_user, app_with_tracks, owner_request
 use crate::db::Database;
 use crate::db::testing::access;
 
+mod snapshot;
+
 const PLAY: &str = "5f0c6a52-3b7e-4d43-9a8e-0d1c2b3a4f5e";
 
 fn report(track: &str, listened: u32, end: Value) -> Value {

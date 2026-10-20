@@ -15,9 +15,10 @@ use crate::plugins::personal::set_search_sharing;
 async fn played(db: &Database, library: i64, track: i64, at: i64) {
     db.write(move |tx| {
         tx.execute(
-            "INSERT INTO plays (id, user_id, library_id, track_id, started_at, listen_time_ms, \
-                                context, origin, updated_at, ended) \
-             VALUES ('play ' || ?2, 7, ?1, ?2, ?3, 30000, '{}', 'context', ?3, 'finished')",
+            "INSERT INTO plays (id, user_id, library_id, track_id, title, artists, started_at, \
+                                listen_time_ms, context, origin, updated_at, ended) \
+             VALUES ('play ' || ?2, 7, ?1, ?2, 'A', '[]', ?3, 30000, '{}', 'context', ?3, \
+                     'finished')",
             rusqlite::params![library, track, at],
         )
     })
