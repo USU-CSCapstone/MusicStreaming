@@ -6,11 +6,17 @@
 	import TrackList from '$lib/components/TrackList.svelte';
 	import { albumTitle, formatLength, plural, releaseYear } from '$lib/format';
 	import { player } from '$lib/player.svelte';
+	import { currentSort, showSorted } from '$lib/sort-url';
+	import { ALBUM_FIELDS, sortTracks } from '$lib/sorting';
 
 	let { data } = $props();
 
 	const album = $derived(data.album);
 	const context = $derived({ type: 'album', id: album.id } as const);
+	// Unsorted is disc then track order (`requirements/albums.md` §4); sorted, it plays as shown
+	// (`requirements/conventions.md` §4.1).
+	const sort = $derived(currentSort(ALBUM_FIELDS));
+	const shown = $derived([...sortTracks(data.tracks, sort)]);
 	// The whole album, as the server expands it: every track, in disc then track order.
 	const adding = $derived(
 		collection(
@@ -47,7 +53,7 @@
 	image={album.image}
 	seed={album.id}
 	icon="album"
-	onplay={data.tracks.length ? () => player.play(data.tracks, 0, context) : undefined}
+	onplay={data.tracks.length ? () => player.play(shown, 0, context) : undefined}
 >
 	<span class="artists"><ArtistLinks artists={album.artists} /></span>
 	<span>
@@ -59,7 +65,7 @@
 	{/snippet}
 </DetailHeader>
 
-<TrackList tracks={data.tracks} variant="album" {context} />
+<TrackList tracks={shown} variant="album" {sort} onsort={showSorted} {context} />
 
 <style>
 	.artists {

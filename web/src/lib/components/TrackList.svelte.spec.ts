@@ -216,3 +216,29 @@ describe('TrackList.svelte reordering', () => {
 			.toBeInTheDocument();
 	});
 });
+
+describe('TrackList.svelte on an album', () => {
+	const discs = [
+		{ ...track('1', 'Signal Part 1'), discNumber: 1 },
+		{ ...track('2', 'Signal Part 2'), discNumber: 1 },
+		{ ...track('3', 'Signal Remix'), discNumber: 2, trackNumber: 1 }
+	];
+
+	it('heads each disc in disc order', async () => {
+		render(TrackList, { tracks: discs, variant: 'album', onsort: () => {} });
+		await expect.element(page.getByText('Disc 1')).toBeVisible();
+		await expect.element(page.getByText('Disc 2')).toBeVisible();
+	});
+
+	it('runs together when sorted', async () => {
+		render(TrackList, {
+			tracks: discs.toReversed(),
+			variant: 'album',
+			sort: { field: 'title', order: 'desc' },
+			onsort: () => {}
+		});
+		await expect.element(page.getByText('Signal Remix')).toBeVisible();
+		await expect.element(page.getByText('Disc 1')).not.toBeInTheDocument();
+		await expect.element(page.getByText('Disc 2')).not.toBeInTheDocument();
+	});
+});

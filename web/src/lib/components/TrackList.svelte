@@ -12,7 +12,14 @@
 	import { player } from '$lib/player.svelte';
 	import { songs } from '$lib/adding.svelte';
 	import { applyOps } from '$lib/playlist-ops';
-	import { nextSort, type SortField, type TrackSort } from '$lib/sorting';
+	import {
+		ALBUM_FIELDS,
+		FIELDS,
+		nextSort,
+		PLAYLIST_FIELDS,
+		type SortField,
+		type TrackSort
+	} from '$lib/sorting';
 	import ArtistLinks from './ArtistLinks.svelte';
 	import Artwork from './Artwork.svelte';
 	import AddToPlaylistMenu from './AddToPlaylistMenu.svelte';
@@ -34,7 +41,10 @@
 		onmove
 	}: {
 		tracks: TrackSummary[];
-		/** `album`: track numbers and disc headings, no album or year column, and no artwork. */
+		/**
+		 * `album`: track numbers and, unsorted, disc headings; no album or year column, and no
+		 * artwork.
+		 */
 		variant?: 'default' | 'album';
 		/**
 		 * When each row was added to the playlist, by index, for a Date added column. Only
@@ -375,8 +385,11 @@
 	}
 
 	const isAlbum = $derived(variant === 'album');
-	// Multi-disc albums are presented as discs (`requirements/albums.md` §4).
-	const multiDisc = $derived(isAlbum && new Set(tracks.map((t) => t.discNumber)).size > 1);
+	// Multi-disc albums are presented as discs (`requirements/albums.md` §4). Sorted, the
+	// tracks are one run: a disc's heading would stand over songs from either disc.
+	const multiDisc = $derived(
+		isAlbum && sort === null && new Set(tracks.map((t) => t.discNumber)).size > 1
+	);
 
 	const labels: Record<SortField, string> = {
 		title: 'Title',
@@ -387,10 +400,8 @@
 		duration: 'Duration'
 	};
 	/** The columns this list shows, each of which it sorts by. */
-	const columns = $derived<SortField[]>(
-		isAlbum
-			? ['title', 'artist', 'duration']
-			: ['title', 'artist', 'album', 'year', ...(added ? ['added' as const] : []), 'duration']
+	const columns: readonly SortField[] = $derived(
+		isAlbum ? ALBUM_FIELDS : added ? PLAYLIST_FIELDS : FIELDS
 	);
 	/** What the last click on a heading did, for screen readers. */
 	let sorted = $state('');

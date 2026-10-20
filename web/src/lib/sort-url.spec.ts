@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { goto } from '$app/navigation';
 import { currentSort, readSort, showSorted, withSort } from './sort-url';
-import { FIELDS, PLAYLIST_FIELDS } from './sorting';
+import { ALBUM_FIELDS, FIELDS, PLAYLIST_FIELDS } from './sorting';
 
 const at = vi.hoisted(() => ({ url: new URL('https://jewelcase.test/songs') }));
 vi.mock('$app/state', () => ({ page: at }));
@@ -31,6 +31,8 @@ describe('readSort', () => {
 			field: 'added',
 			order: 'asc'
 		});
+		// An album's own tracks share their album.
+		expect(readSort(params('sort=album'), ALBUM_FIELDS)).toBeNull();
 	});
 });
 
