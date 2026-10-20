@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { albumTitle, artistName, formatDuration, formatLength, releaseYear } from './format';
+import {
+	albumTitle,
+	artistName,
+	formatDate,
+	formatDuration,
+	formatLength,
+	releaseYear
+} from './format';
 
 describe('formatDuration', () => {
 	it('formats minutes and seconds from microseconds', () => {
@@ -22,6 +29,17 @@ describe('formatLength', () => {
 		expect(formatLength(125_000_000)).toBe('2 min');
 		expect(formatLength(60 * 60_000_000)).toBe('1 hr');
 		expect(formatLength(65 * 60_000_000)).toBe('1 hr 5 min');
+	});
+});
+
+describe('formatDate', () => {
+	it('shows the day, not the time', () => {
+		const iso = '2026-03-01T12:00:00.000Z';
+		const date = formatDate(iso);
+		// The day it was in the viewer's own time zone.
+		expect(date).toBe(new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium' }));
+		expect(date).toMatch(/2026/);
+		expect(date).not.toMatch(/:/);
 	});
 });
 
