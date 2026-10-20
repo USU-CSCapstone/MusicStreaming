@@ -4,11 +4,12 @@
 	import TrackList from '$lib/components/TrackList.svelte';
 	import { plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
+	import { showSorted } from '$lib/sort-url';
 
 	let { data } = $props();
 
 	const tracks = $derived(
-		new Paged(data.tracks, (cursor) => listTracks(fetch, data.lib, { sort: 'name', cursor }))
+		new Paged(data.tracks, (cursor) => listTracks(fetch, data.lib, { ...data.query, cursor }))
 	);
 </script>
 
@@ -19,5 +20,7 @@
 <TrackList
 	tracks={tracks.items}
 	sentinel={tracks.sentinel}
+	sort={data.sort}
+	onsort={showSorted}
 	empty="No songs yet. They appear here as the library is scanned."
 />
