@@ -1,4 +1,4 @@
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import type { TrackSummary } from '$lib/api/types';
@@ -82,5 +82,81 @@ describe('TrackList.svelte header', () => {
 		await expect.element(page.getByText('Signal Part 1')).toBeVisible();
 		// Hidden, so out of reach by role.
 		await expect.element(page.getByText('Title', { exact: true })).not.toBeVisible();
+	});
+
+	it('leaves the menu to narrow lists', async () => {
+		render(TrackList, { tracks, onsort: () => {} });
+		await expect.element(heading('Title')).toBeVisible();
+		await expect.element(page.getByText('Sort', { exact: true })).not.toBeVisible();
+	});
+});
+
+describe('TrackList.svelte sort menu', () => {
+	const sortButton = (name: string) => page.getByRole('button', { name, exact: true });
+	const item = (name: string) => page.getByRole('menuitemradio', { name: new RegExp(`^${name}`) });
+
+	beforeEach(async () => {
+		await page.viewport(400, 800);
+	});
+
+	it('steps the sort as the headings do', async () => {
+		const onsort = vi.fn<(sort: TrackSort) => void>();
+		const list = render(TrackList, { tracks, onsort });
+
+		await sortButton('Sort').click();
+		await expect.element(item('Duration')).toBeVisible();
+		await item('Artist').click();
+		expect(onsort).toHaveBeenLastCalledWith({ field: 'artist', order: 'asc' });
+		await expect.element(page.getByRole('menu')).not.toBeInTheDocument();
+
+		await list.rerender({ sort: { field: 'artist', order: 'asc' } });
+		await sortButton('Sort, by artist ascending').click();
+		await expect.element(item('Artist')).toHaveAttribute('aria-checked', 'true');
+		await expect.element(item('Title')).toHaveAttribute('aria-checked', 'false');
+		await item('Artist').click();
+		expect(onsort).toHaveBeenLastCalledWith({ field: 'artist', order: 'desc' });
+
+		await list.rerender({ sort: { field: 'artist', order: 'desc' } });
+		await sortButton('Sort, by artist descending').click();
+		await item('Artist').click();
+		expect(onsort).toHaveBeenLastCalledWith(null);
+	});
+
+	it('offers date added on a playlist, and only its own columns on an album', async () => {
+		const added = ['2026-01-01T00:00:00.000Z', '2026-02-01T00:00:00.000Z'];
+		const playlist = render(TrackList, { tracks, added, onsort: () => {} });
+		await sortButton('Sort').click();
+		await expect.element(item('Date added')).toBeVisible();
+		await userEvent.keyboard('{Escape}');
+		playlist.unmount();
+
+		render(TrackList, { tracks, variant: 'album', onsort: () => {} });
+		await sortButton('Sort').click();
+		expect(
+			page
+				.getByRole('menuitemradio')
+				.elements()
+				.map((e) => e.textContent?.trim())
+		).toEqual(['Title', 'Artist', 'Duration']);
+	});
+
+	it('works from the keyboard, and gives focus back on close', async () => {
+		const onsort = vi.fn();
+		render(TrackList, { tracks, sort: { field: 'year', order: 'asc' }, onsort });
+		await sortButton('Sort, by year ascending').click();
+		// Focus starts on the sort in use.
+		await expect.element(item('Year')).toHaveFocus();
+		await userEvent.keyboard('{ArrowDown}');
+		await expect.element(item('Duration')).toHaveFocus();
+		await userEvent.keyboard('{Escape}');
+		await expect.element(page.getByRole('menu')).not.toBeInTheDocument();
+		await expect.element(sortButton('Sort, by year ascending')).toHaveFocus();
+		expect(onsort).not.toHaveBeenCalled();
+	});
+
+	it('is not offered on a list that does not sort', async () => {
+		render(TrackList, { tracks });
+		await expect.element(page.getByText('Signal Part 1')).toBeVisible();
+		await expect.element(sortButton('Sort')).not.toBeInTheDocument();
 	});
 });
