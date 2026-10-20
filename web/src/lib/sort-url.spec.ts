@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { readSort, withSort } from './sort-url';
+import { describe, expect, it, vi } from 'vitest';
+import { goto } from '$app/navigation';
+import { currentSort, readSort, showSorted, withSort } from './sort-url';
 import { FIELDS, PLAYLIST_FIELDS } from './sorting';
+
+const at = vi.hoisted(() => ({ url: new URL('https://jewelcase.test/songs') }));
+vi.mock('$app/state', () => ({ page: at }));
+vi.mock('$app/navigation', () => ({ goto: vi.fn(async () => {}) }));
 
 const params = (query: string) => new URLSearchParams(query);
 
@@ -46,5 +51,22 @@ describe('withSort', () => {
 	it('takes the sort out when unsorted', () => {
 		const sorted = withSort(url, { field: 'album', order: 'asc' });
 		expect(withSort(sorted, null).href).toBe(url.href);
+	});
+});
+
+describe("this page's sort", () => {
+	it('is what the URL holds, among the sorts the list offers', () => {
+		at.url = new URL('https://jewelcase.test/playlists/7?sort=added&order=desc');
+		expect(currentSort(PLAYLIST_FIELDS)).toEqual({ field: 'added', order: 'desc' });
+		expect(currentSort(FIELDS)).toBeNull();
+	});
+
+	it('changes in place: the same history entry, focus, and scroll', async () => {
+		at.url = new URL('https://jewelcase.test/search?q=signal');
+		await showSorted({ field: 'artist', order: 'asc' });
+		expect(goto).toHaveBeenLastCalledWith(
+			new URL('https://jewelcase.test/search?q=signal&sort=artist&order=asc'),
+			{ replaceState: true, keepFocus: true, noScroll: true }
+		);
 	});
 });
