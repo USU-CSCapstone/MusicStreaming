@@ -162,20 +162,23 @@ pub fn upsert_track(
     tx.execute("DELETE FROM track_tags WHERE track_id = ?1", [id])?;
     for (pos, (artist_id, name)) in artist_ids.iter().zip(&credits).enumerate() {
         tx.execute(
-                "INSERT OR IGNORE INTO track_artists (library_id, track_id, position, artist_id, artist_name) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO track_artists (library_id, track_id, position, artist_id, artist_name) VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT DO NOTHING",
                 params![lib, id, pos as i64, artist_id, name.map(str::trim)],
             )?;
     }
     for (pos, (artist_id, name)) in album_artist_ids.iter().zip(&album_credits).enumerate() {
         tx.execute(
-                "INSERT OR IGNORE INTO track_album_artists (library_id, track_id, position, artist_id, artist_name) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO track_album_artists (library_id, track_id, position, artist_id, artist_name) VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT DO NOTHING",
                 params![lib, id, pos as i64, artist_id, name.map(str::trim)],
             )?;
     }
     for genre in &rec.tags.genres {
         let tag_id = find_or_create_tag(tx, lib, genre)?;
         tx.execute(
-                "INSERT OR IGNORE INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES (?1, ?2, ?3, ?4) \
+                 ON CONFLICT DO NOTHING",
                 params![lib, id, tag_id, genre.trim()],
             )?;
         touched.tags.insert(tag_id);

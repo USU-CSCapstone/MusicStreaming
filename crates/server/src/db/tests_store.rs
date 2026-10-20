@@ -231,6 +231,8 @@ mod suite {
     jewelcase_scanner::store_suite!(super::make);
 }
 
+mod derived;
+mod recompute;
 mod totals;
 
 // ───────────────────────────── Derived rules ─────────────────────────────

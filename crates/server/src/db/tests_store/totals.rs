@@ -1,4 +1,4 @@
-//! Library totals, which are summed over albums, against what a scan of the tracks gives.
+//! Library totals, which triggers keep, against what a scan of the tracks gives.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

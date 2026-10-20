@@ -48,7 +48,6 @@ async fn benchmark_list_pages() {
              SELECT 100000 + i, 1, 'genre', 'Genre ' || i, 'genre ' || i, CAST('genre ' || i AS BLOB) FROM n;
              INSERT INTO album_artists (library_id, album_id, position, artist_id)
              SELECT 1, id, 0, 1 + (id % 5000) FROM albums;
-             INSERT INTO album_tags (library_id, album_id, tag_id) SELECT 1, id, 100001 + (id % 50) FROM albums;
              INSERT INTO album_discs (library_id, album_id, disc_number, track_count, track_total)
              SELECT 1, id, 1, 10, 10 FROM albums;
              INSERT INTO track_artists (library_id, track_id, position, artist_id)

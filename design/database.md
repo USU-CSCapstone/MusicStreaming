@@ -39,7 +39,7 @@ The SQLite schema behind `api/openapi.yaml`. Migrations are plain SQL in `crates
 
 ## 3. Derived Data the Scanner Maintains
 
-The scanner is the only writer of content (`requirements/general.md` §3.2), so it keeps derived values current in the same transaction as the change that affects them. Reads, which dominate, never recompute them.
+The scanner is the only writer of content (`requirements/general.md` §3.2), so derived values are kept current in the same transaction as the change that affects them. Reads, which dominate, never recompute them.
 
 | Derived | Stored on |
 |---|---|
@@ -54,9 +54,11 @@ The scanner is the only writer of content (`requirements/general.md` §3.2), so 
 
 **Identity is a folded key; the displayed name is the most-used spelling.** Each artist credit is split on semicolons, trimmed of outer whitespace, and Unicode case-folded into `artists.name_key`, which decides identity. The folding happens in the server, because SQLite's `NOCASE` covers ASCII letters only. Albums follow the same rule: `title_key` is the title trimmed and case-folded, `artists_key` is the album artists' `name_key`s sorted and joined with `;`, and the two together are unique. Tags fold case and spacing into `tags.name_key` (`requirements/tags.md` §4).
 
-The displayed name — `artists.name`, `albums.title`, `tags.name` — is the spelling most files use, so it follows the collection. Each track records how its file writes every name: `track_artists.artist_name`, `track_album_artists.artist_name`, `tracks.album_title`, and `track_tags.tag_name`. The scanner recounts from these whenever tracks change, without rereading files, and breaks ties by the spelling's bytes so a tie never flips the name between scans.
+The displayed name — `artists.name`, `albums.title`, `tags.name` — is the spelling most files use, so it follows the collection. Each track records how its file writes every name: `track_artists.artist_name`, `track_album_artists.artist_name`, `tracks.album_title`, and `track_tags.tag_name`. Names come from these without rereading files, and ties break by the spelling's bytes so a tie never flips the name between scans.
 
-**Library totals add up the albums.** Every track belongs to exactly one album (an unknown album for its album artists when its file names none), and an album's track count and duration include its missing tracks. So the library's `track_count` and `duration_us` are sums over its albums: in the same transaction the scanner first recomputes the albums a batch touched, and the rest are already current. That reads the library's albums rather than its tracks: about 5 ms warm and 35 ms cold at 500k tracks, against 60–80 ms warm and several hundred cold for summing the tracks. `album_count` and `artist_count` count rows.
+**Counts follow each change by ±1.** Triggers on tracks and their links (`0007_catalog_counts.sql`) keep every count that one change moves by one: the library's tracks, albums, artists and duration; an artist's tracks, available tracks (which follow `missing_since`), albums and appearances (which follow the album's artists); a tag's tracks, albums and artists. `album_tags` and `artist_tags` count the tracks that bring each genre, so a row goes with the last of them. Spellings are counted the same way, in `artist_spellings`, `tag_spellings`, and `artist_sort_keys` (the sort keys of the tracks crediting the artist first), and the scanner reads the top of each for the artists and tags a batch touched, since only the shared core can make a sort key from a name. So a batch's derived work is proportional to the rows it changes, however many tracks the artists and tags it touches hold. A track's artist credits and genres are deleted before the track, since the counts they feed read it, and an artist or tag is deleted when no credit or genre names it, never because a count reached zero.
+
+**Albums are resolved from their tracks.** A disc or track total is a maximum, the release date and title are the most-used values, and the album artists are its lowest-id track's, none of which ±1 can keep. So the scanner recomputes each album a batch touched from that album's tracks, which costs the album's size, and leaves album artists already in place alone so their counts don't churn.
 
 **Per-file tags stay on the track.** Spellings, `tracks.track_total`, and `disc_total` keep what each file says, and resolution happens once, into `album_discs` and `albums`. When tags disagree, the resolution rule lives in one place.
 
@@ -134,5 +136,4 @@ Playlists, queues, mixes, downloads, the job queue, external sources, the audit 
 
 ## 10. Open Questions
 
-1. **Denormalization.** §3 trades scanner complexity for read speed. Computing counts on read is simpler, but costs a query per row on every browse page.
-2. **Tracks with no disc tag** are stored as disc `0` and shown as `null` in the API.
+1. **Tracks with no disc tag** are stored as disc `0` and shown as `null` in the API.

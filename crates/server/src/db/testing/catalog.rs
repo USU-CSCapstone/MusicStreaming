@@ -9,35 +9,25 @@ pub struct Artist {
     pub library: i64,
     pub name: Option<String>,
     pub sort_key: Vec<u8>,
-    pub album_count: i64,
-    pub track_count: i64,
     pub added_at: i64,
 }
 
 impl Artist {
-    /// Artist `id` of `library` called `name`, sorted as the scanner would sort it, with no
-    /// albums or tracks counted.
+    /// Artist `id` of `library` called `name`, sorted as the scanner would sort it. Its counts
+    /// follow the credits a test adds.
     pub fn new(id: i64, library: i64, name: &str) -> Artist {
         let sort_key = sort_key(name, None).into_bytes();
         let name = Some(name.to_owned());
-        Artist { id, library, name, sort_key, album_count: 0, track_count: 0, added_at: 0 }
+        Artist { id, library, name, sort_key, added_at: 0 }
     }
 
     /// Adds the artist, with its ID as its name key so no two collide.
     pub fn insert(&self, conn: &Connection) -> Result<()> {
         conn.prepare_cached(
-            "INSERT INTO artists (id, library_id, name, name_key, sort_key, album_count, \
-             track_count, added_at) VALUES (?1, ?2, ?3, ?1, ?4, ?5, ?6, ?7)",
+            "INSERT INTO artists (id, library_id, name, name_key, sort_key, added_at) \
+             VALUES (?1, ?2, ?3, ?1, ?4, ?5)",
         )?
-        .execute(params![
-            self.id,
-            self.library,
-            self.name,
-            self.sort_key,
-            self.album_count,
-            self.track_count,
-            self.added_at
-        ])
+        .execute(params![self.id, self.library, self.name, self.sort_key, self.added_at])
         .map(drop)
     }
 }

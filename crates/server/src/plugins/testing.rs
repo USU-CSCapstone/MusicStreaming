@@ -28,11 +28,9 @@ pub async fn database() -> (tempfile::TempDir, Arc<Database>) {
         album(101, 1, "Signal", 2).insert(tx)?;
         album(102, 1, "Empty", 0).insert(tx)?;
         album(201, 2, "Elsewhere", 1).insert(tx)?;
-        let artist = Artist::new(301, 1, "Aurora Lane");
-        Artist { album_count: 1, track_count: 2, ..artist }.insert(tx)?;
+        Artist::new(301, 1, "Aurora Lane").insert(tx)?;
         album_artist(tx, 1, 101, 301)?;
-        let artist = Artist::new(401, 2, "Far Shore");
-        Artist { album_count: 1, track_count: 1, ..artist }.insert(tx)?;
+        Artist::new(401, 2, "Far Shore").insert(tx)?;
         album_artist(tx, 2, 201, 401)?;
         for (id, library, album, missing_since) in
             [(11, 1, 101, None), (12, 1, 101, None), (13, 1, 101, Some(5)), (21, 2, 201, None)]

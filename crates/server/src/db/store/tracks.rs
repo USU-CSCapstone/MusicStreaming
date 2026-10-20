@@ -83,7 +83,7 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<(), DbError>
         for problem in &batch.problems {
             record_problem(&roots, tx, lib, problem)?;
         }
-        catalog::recompute(tx, lib, &mut touched, now)
+        catalog::recompute(tx, lib, &touched, now)
     })
 }
 
@@ -143,7 +143,7 @@ pub fn mark_missing_unseen(
             touched.track(tx, lib, *id)?;
             feed::record(tx, lib, Entity::Track, *id, Op::Upsert, now)?;
         }
-        catalog::recompute(tx, lib, &mut touched, now)?;
+        catalog::recompute(tx, lib, &touched, now)?;
         Ok(ids.len())
     })
 }

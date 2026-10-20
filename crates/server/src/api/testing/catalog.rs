@@ -32,9 +32,10 @@ pub async fn app() -> (tempfile::TempDir, Arc<Database>, Router) {
 ///   disc, number, or date). Each track was added at its ID in milliseconds.
 ///
 /// Library 2, "Other", holds an artist, an album, and a track of its own, each called
-/// "Elsewhere". Counts are set by hand: the albums' as for whole albums, of which the catalog
-/// holds only some tracks; The Beatles' as asserted; the other artists' as zero; and the
-/// libraries' to match these rows. Abbey Road's discs list only disc 1.
+/// "Elsewhere". Some counts are set by hand: the albums' as for whole albums, of which the
+/// catalog holds only some tracks, and The Beatles' as asserted, with Pop, which none of these
+/// tracks carries. The other artists', the tags' and the libraries' follow these rows. Abbey
+/// Road's discs list only disc 1.
 fn insert(tx: &Transaction) -> Result<()> {
     library(tx, 1, "Music", "/music")?;
     library(tx, 2, "Other", "/other")?;
@@ -127,9 +128,8 @@ fn insert(tx: &Transaction) -> Result<()> {
            INSERT INTO tags (id, library_id, type, name, name_key, sort_key) VALUES
                (30, 1, 'genre', 'Rock', 'rock', CAST('rock' AS BLOB)),
                (31, 1, 'genre', 'Pop', 'pop', CAST('pop' AS BLOB));
-           INSERT INTO artist_tags (library_id, artist_id, tag_id) VALUES (1, 10, 30), (1, 10, 31);
-           INSERT INTO album_tags (library_id, album_id, tag_id) VALUES (1, 101, 30);
            INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES (1, 1001, 30, 'rock');
+           INSERT INTO artist_tags (library_id, artist_id, tag_id, track_count) VALUES (1, 10, 31, 1);
            UPDATE artists SET image_id = 40, biography = 'Four lads from Liverpool.',
                               album_count = 2, track_count = 30, appearance_count = 1
                WHERE id = 10;

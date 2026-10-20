@@ -1,9 +1,9 @@
 //! Derived data the scanner maintains (`design/database.md` §3).
 //!
-//! Recomputed for the entities a batch touched, never for the library.
-//! Order matters: album links first (they decide who is an album artist),
-//! then artists, then albums (whose artist sort key reads artists), then
-//! tags, then library totals (summed from the albums).
+//! Counts and spellings follow each change by trigger (`0007_catalog_counts.sql`). What is left
+//! runs for the entities a batch touched, never for the library: album links first (they decide
+//! who is an album artist), then artists, then albums (whose artist sort key reads artists),
+//! then tags.
 
 use std::collections::HashSet;
 
@@ -51,92 +51,53 @@ impl Touched {
     }
 }
 
-/// Recomputes what `touched` names, then the library's totals, and records each change in the
-/// feed at `now`. Album links and artists add what they bring in to `touched`; an empty
-/// `touched` changes nothing.
-pub fn recompute(tx: &Transaction<'_>, lib: i64, touched: &mut Touched, now: i64) -> Result<()> {
+/// Brings what `touched` names up to date and records each change, and the library's, in the
+/// feed at `now`. An empty `touched` changes nothing. `touched` needs only what the changed
+/// tracks pointed at before and after, since every album, artist and tag a change reaches is one
+/// of those.
+pub fn recompute(tx: &Transaction<'_>, lib: i64, touched: &Touched, now: i64) -> Result<()> {
     if touched.albums.is_empty() && touched.artists.is_empty() && touched.tags.is_empty() {
         return Ok(());
     }
-    // 1. Album links. Old and new album artists and tags become touched.
-    for album in touched.albums.clone() {
-        refresh_album_links(tx, lib, album, touched)?;
+    for &album in &touched.albums {
+        refresh_album_links(tx, lib, album)?;
     }
-    // 2. Artists.
-    for artist in touched.artists.clone() {
-        recompute_artist(tx, lib, artist, touched, now)?;
+    for &artist in &touched.artists {
+        refresh_artist(tx, lib, artist, now)?;
     }
-    // 3. Albums.
-    for album in touched.albums.clone() {
+    for &album in &touched.albums {
         recompute_album(tx, lib, album, now)?;
     }
-    // 4. Tags.
-    for tag in touched.tags.clone() {
-        recompute_tag(tx, lib, tag, now)?;
+    for &tag in &touched.tags {
+        refresh_tag(tx, lib, tag, now)?;
     }
-    // 5. The library. Every track is on exactly one album, and an album counts its missing
-    // tracks too. Every album's counts are current once step 3 has run, so they add up to the
-    // library's tracks.
-    tx.execute(
-        "UPDATE libraries SET (track_count, album_count, duration_us) = \
-         (SELECT COALESCE(SUM(track_count), 0), COUNT(*), COALESCE(SUM(duration_us), 0) \
-          FROM albums WHERE library_id = ?1), \
-         artist_count = (SELECT COUNT(*) FROM artists WHERE library_id = ?1) \
-         WHERE id = ?1",
-        [lib],
-    )?;
-    feed::record(tx, lib, Entity::Library, lib, Op::Upsert, now)?;
-    Ok(())
+    feed::record(tx, lib, Entity::Library, lib, Op::Upsert, now)
 }
 
-/// `album_artists`, `album_discs`, and `album_tags` from the album's tracks.
-fn refresh_album_links(
-    tx: &Transaction<'_>,
-    lib: i64,
-    album: i64,
-    touched: &mut Touched,
-) -> Result<()> {
-    // Previous album artists and tags may lose this album.
-    let mut stmt = tx.prepare_cached("SELECT artist_id FROM album_artists WHERE album_id = ?1")?;
-    for id in stmt.query_map([album], |r| r.get::<_, i64>(0))? {
-        touched.artists.insert(id?);
-    }
-    let mut stmt = tx.prepare_cached("SELECT tag_id FROM album_tags WHERE album_id = ?1")?;
-    for id in stmt.query_map([album], |r| r.get::<_, i64>(0))? {
-        touched.tags.insert(id?);
-    }
-
-    tx.execute("DELETE FROM album_artists WHERE album_id = ?1", [album])?;
-    tx.execute("DELETE FROM album_discs WHERE album_id = ?1", [album])?;
-    tx.execute("DELETE FROM album_tags WHERE album_id = ?1", [album])?;
-
-    // Every track of an album shares its artists_key, so any one track's
-    // album-artist credits are the album's. The lowest id is deterministic.
+/// `album_artists` and `album_discs` from the album's tracks. Album artists already in place
+/// are left alone, so the counts their triggers keep don't churn.
+fn refresh_album_links(tx: &Transaction<'_>, lib: i64, album: i64) -> Result<()> {
+    // Every track of an album shares its artists_key, so any one track's album-artist credits
+    // are the album's. The lowest id is deterministic.
     tx.execute(
-        "INSERT OR IGNORE INTO album_artists (library_id, album_id, position, artist_id) \
+        "DELETE FROM album_artists WHERE album_id = ?1 AND (position, artist_id) NOT IN \
+         (SELECT position, artist_id FROM track_album_artists \
+          WHERE track_id = (SELECT MIN(id) FROM tracks WHERE album_id = ?1))",
+        [album],
+    )?;
+    tx.execute(
+        "INSERT INTO album_artists (library_id, album_id, position, artist_id) \
          SELECT ?1, ?2, position, artist_id FROM track_album_artists \
-         WHERE track_id = (SELECT MIN(id) FROM tracks WHERE album_id = ?2) ORDER BY position",
+         WHERE track_id = (SELECT MIN(id) FROM tracks WHERE album_id = ?2) ORDER BY position \
+         ON CONFLICT DO NOTHING",
         params![lib, album],
     )?;
+    tx.execute("DELETE FROM album_discs WHERE album_id = ?1", [album])?;
     tx.execute(
         "INSERT INTO album_discs (library_id, album_id, disc_number, track_count, track_total) \
          SELECT ?1, ?2, disc_number, COUNT(*), MAX(track_total) FROM tracks WHERE album_id = ?2 GROUP BY disc_number",
         params![lib, album],
     )?;
-    tx.execute(
-        "INSERT OR IGNORE INTO album_tags (library_id, album_id, tag_id) \
-         SELECT DISTINCT ?1, ?2, tt.tag_id FROM track_tags tt JOIN tracks t ON t.id = tt.track_id WHERE t.album_id = ?2",
-        params![lib, album],
-    )?;
-
-    let mut stmt = tx.prepare_cached("SELECT artist_id FROM album_artists WHERE album_id = ?1")?;
-    for id in stmt.query_map([album], |r| r.get::<_, i64>(0))? {
-        touched.artists.insert(id?);
-    }
-    let mut stmt = tx.prepare_cached("SELECT tag_id FROM album_tags WHERE album_id = ?1")?;
-    for id in stmt.query_map([album], |r| r.get::<_, i64>(0))? {
-        touched.tags.insert(id?);
-    }
     Ok(())
 }
 
@@ -288,119 +249,64 @@ pub fn recompute_album_loudness(tx: &Transaction<'_>, album: i64) -> Result<()> 
     Ok(())
 }
 
-/// The artist's displayed name, sort key, counts, and genres from its credits, or its deletion
-/// when nothing credits it. Its old and new genres join `touched.tags`.
-fn recompute_artist(
-    tx: &Transaction<'_>,
-    lib: i64,
-    artist: i64,
-    touched: &mut Touched,
-    now: i64,
-) -> Result<()> {
-    let (track_count, available): (i64, i64) = tx.query_row(
-        "SELECT COUNT(DISTINCT ta.track_id), COALESCE(SUM(t.missing_since IS NULL), 0) \
-         FROM track_artists ta JOIN tracks t ON t.id = ta.track_id WHERE ta.artist_id = ?1",
-        [artist],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
-    let album_count: i64 =
-        tx.query_row("SELECT COUNT(*) FROM album_artists WHERE artist_id = ?1", [artist], |r| {
-            r.get(0)
-        })?;
-    let credited_as_album_artist: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM track_album_artists WHERE artist_id = ?1",
-        [artist],
-        |r| r.get(0),
-    )?;
-    if track_count == 0 && album_count == 0 && credited_as_album_artist == 0 {
-        // Previous tags of this artist may lose their artist count.
-        let mut stmt = tx.prepare_cached("SELECT tag_id FROM artist_tags WHERE artist_id = ?1")?;
-        for id in stmt.query_map([artist], |r| r.get::<_, i64>(0))? {
-            touched.tags.insert(id?);
-        }
-        tx.execute("DELETE FROM artists WHERE id = ?1", [artist])?;
-        feed::record(tx, lib, Entity::Artist, artist, Op::Delete, now)?;
-        return Ok(());
-    }
-
-    let name = most_used(
-        tx,
-        "SELECT artist_name FROM (SELECT artist_name FROM track_artists WHERE artist_id = ?1 \
-         UNION ALL SELECT artist_name FROM track_album_artists WHERE artist_id = ?1) \
-         WHERE artist_name IS NOT NULL GROUP BY artist_name ORDER BY COUNT(*) DESC, artist_name ASC LIMIT 1",
-        artist,
-    )?;
-    // Appearances: credited on a track whose album does not list them
-    // (`requirements/artists.md` §2).
-    let appearances: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM track_artists ta JOIN tracks t ON t.id = ta.track_id WHERE ta.artist_id = ?1 \
-         AND NOT EXISTS (SELECT 1 FROM album_artists aa WHERE aa.album_id = t.album_id AND aa.artist_id = ta.artist_id)",
-        [artist],
-        |r| r.get(0),
-    )?;
-    // Sort key: the tagged sort value where this artist is the primary
-    // credit, else derived from the name.
-    let tagged_sort: Option<Vec<u8>> = tx
+/// The artist's displayed name and sort key from the spellings and sort keys its credits count,
+/// or its deletion when no track credits it. Whether one does is read from the credits
+/// themselves, so a wrong count can never delete a credited artist.
+fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i64) -> Result<()> {
+    let Some((credited, name, tagged_sort)) = tx
         .query_row(
-            "SELECT t.artist_sort_key FROM track_artists ta JOIN tracks t ON t.id = ta.track_id \
-             WHERE ta.artist_id = ?1 AND ta.position = 0 GROUP BY t.artist_sort_key \
-             ORDER BY COUNT(*) DESC, t.artist_sort_key ASC LIMIT 1",
+            "SELECT EXISTS (SELECT 1 FROM track_artists WHERE artist_id = ?1) \
+                 OR EXISTS (SELECT 1 FROM track_album_artists WHERE artist_id = ?1), \
+             (SELECT name FROM artist_spellings WHERE artist_id = ?1 ORDER BY uses DESC, name LIMIT 1), \
+             (SELECT sort_key FROM artist_sort_keys WHERE artist_id = ?1 ORDER BY uses DESC, sort_key LIMIT 1) \
+             FROM artists WHERE id = ?1",
             [artist],
-            |r| r.get(0),
+            |r| Ok((r.get::<_, bool>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<Vec<u8>>>(2)?)),
         )
-        .optional()?;
+        .optional()?
+    else {
+        return Ok(());
+    };
+    if !credited {
+        tx.execute("DELETE FROM artists WHERE id = ?1", [artist])?;
+        return feed::record(tx, lib, Entity::Artist, artist, Op::Delete, now);
+    }
+    // The tagged sort value where this artist is the primary credit, else derived from the name.
     let sort_key = tagged_sort
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| sort::sort_key(name.as_deref().unwrap_or(""), None).into_bytes());
-
-    let mut stmt = tx.prepare_cached("SELECT tag_id FROM artist_tags WHERE artist_id = ?1")?;
-    for id in stmt.query_map([artist], |r| r.get::<_, i64>(0))? {
-        touched.tags.insert(id?);
-    }
-    tx.execute("DELETE FROM artist_tags WHERE artist_id = ?1", [artist])?;
     tx.execute(
-        "INSERT OR IGNORE INTO artist_tags (library_id, artist_id, tag_id) \
-         SELECT DISTINCT ?1, ?2, tt.tag_id FROM track_tags tt JOIN track_artists ta ON ta.track_id = tt.track_id WHERE ta.artist_id = ?2",
-        params![lib, artist],
+        "UPDATE artists SET name = ?2, sort_key = ?3 WHERE id = ?1",
+        params![artist, name, sort_key],
     )?;
-    let mut stmt = tx.prepare_cached("SELECT tag_id FROM artist_tags WHERE artist_id = ?1")?;
-    for id in stmt.query_map([artist], |r| r.get::<_, i64>(0))? {
-        touched.tags.insert(id?);
-    }
-
-    tx.execute(
-        "UPDATE artists SET name = ?2, sort_key = ?3, album_count = ?4, track_count = ?5, appearance_count = ?6, \
-         available_track_count = ?7 WHERE id = ?1",
-        params![artist, name, sort_key, album_count, track_count, appearances, available],
-    )?;
-    feed::record(tx, lib, Entity::Artist, artist, Op::Upsert, now)?;
-    Ok(())
+    feed::record(tx, lib, Entity::Artist, artist, Op::Upsert, now)
 }
 
-fn recompute_tag(tx: &Transaction<'_>, lib: i64, tag: i64, now: i64) -> Result<()> {
-    let track_count: i64 =
-        tx.query_row("SELECT COUNT(*) FROM track_tags WHERE tag_id = ?1", [tag], |r| r.get(0))?;
-    if track_count == 0 {
-        tx.execute("DELETE FROM tags WHERE id = ?1", [tag])?;
-        feed::record(tx, lib, Entity::Tag, tag, Op::Delete, now)?;
+/// The tag's displayed name and sort key from the spellings its tracks count, or its deletion
+/// when no track carries it. Whether one does is read from the tracks' genres, not the count.
+fn refresh_tag(tx: &Transaction<'_>, lib: i64, tag: i64, now: i64) -> Result<()> {
+    let Some((carried, name)) = tx
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM track_tags WHERE tag_id = ?1), \
+             (SELECT name FROM tag_spellings WHERE tag_id = ?1 ORDER BY uses DESC, name LIMIT 1) \
+             FROM tags WHERE id = ?1",
+            [tag],
+            |r| Ok((r.get::<_, bool>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .optional()?
+    else {
         return Ok(());
+    };
+    if !carried {
+        tx.execute("DELETE FROM tags WHERE id = ?1", [tag])?;
+        return feed::record(tx, lib, Entity::Tag, tag, Op::Delete, now);
     }
-    let name = most_used(
-        tx,
-        "SELECT tag_name FROM track_tags WHERE tag_id = ?1 GROUP BY tag_name ORDER BY COUNT(*) DESC, tag_name ASC LIMIT 1",
-        tag,
-    )?
-    .unwrap_or_default();
-    let album_count: i64 =
-        tx.query_row("SELECT COUNT(*) FROM album_tags WHERE tag_id = ?1", [tag], |r| r.get(0))?;
-    let artist_count: i64 =
-        tx.query_row("SELECT COUNT(*) FROM artist_tags WHERE tag_id = ?1", [tag], |r| r.get(0))?;
+    let name = name.unwrap_or_default();
     tx.execute(
-        "UPDATE tags SET name = ?2, sort_key = ?3, track_count = ?4, album_count = ?5, artist_count = ?6 WHERE id = ?1",
-        params![tag, name, sort::sort_key(&name, None).into_bytes(), track_count, album_count, artist_count],
+        "UPDATE tags SET name = ?2, sort_key = ?3 WHERE id = ?1",
+        params![tag, name, sort::sort_key(&name, None).into_bytes()],
     )?;
-    feed::record(tx, lib, Entity::Tag, tag, Op::Upsert, now)?;
-    Ok(())
+    feed::record(tx, lib, Entity::Tag, tag, Op::Upsert, now)
 }
 
 #[cfg(test)]

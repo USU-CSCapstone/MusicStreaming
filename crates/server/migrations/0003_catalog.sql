@@ -31,7 +31,7 @@ CREATE INDEX images_without_placeholder ON images (library_id) WHERE placeholder
 CREATE TABLE artists (
     id               INTEGER PRIMARY KEY,
     library_id       INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
-    -- NULL is the unknown artist. Otherwise the most-used spelling of tracks.artist_name
+    -- NULL is the unknown artist. Otherwise the most-used spelling in artist_spellings
     name             TEXT,
     -- Name split from the tag on semicolons, trimmed of outer whitespace, and Unicode case-folded
     name_key         TEXT    NOT NULL,
@@ -239,7 +239,7 @@ CREATE TABLE tags (
     id           INTEGER PRIMARY KEY,
     library_id   INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
     type         TEXT    NOT NULL CHECK (type IN ('genre')),
-    -- The most-used spelling of track_tags.tag_name
+    -- The most-used spelling in tag_spellings
     name         TEXT    NOT NULL,
     -- Folded for case and spacing only (requirements/tags.md §4)
     name_key     TEXT    NOT NULL,
@@ -267,10 +267,14 @@ CREATE TABLE track_tags (
 
 CREATE INDEX track_tags_by_tag ON track_tags (tag_id, track_id);
 
+-- An album's genres are its tracks' (requirements/tags.md §6), and an artist's are their
+-- credited tracks'. Each row counts the tracks that bring the genre, so it goes with the last
+-- of them (0007_catalog_counts.sql).
 CREATE TABLE album_tags (
-    library_id INTEGER NOT NULL,
-    album_id   INTEGER NOT NULL,
-    tag_id     INTEGER NOT NULL,
+    library_id  INTEGER NOT NULL,
+    album_id    INTEGER NOT NULL,
+    tag_id      INTEGER NOT NULL,
+    track_count INTEGER NOT NULL,
     PRIMARY KEY (album_id, tag_id),
     FOREIGN KEY (library_id, album_id) REFERENCES albums (library_id, id) ON DELETE CASCADE,
     FOREIGN KEY (library_id, tag_id) REFERENCES tags (library_id, id) ON DELETE CASCADE
@@ -279,9 +283,10 @@ CREATE TABLE album_tags (
 CREATE INDEX album_tags_by_tag ON album_tags (tag_id, album_id);
 
 CREATE TABLE artist_tags (
-    library_id INTEGER NOT NULL,
-    artist_id  INTEGER NOT NULL,
-    tag_id     INTEGER NOT NULL,
+    library_id  INTEGER NOT NULL,
+    artist_id   INTEGER NOT NULL,
+    tag_id      INTEGER NOT NULL,
+    track_count INTEGER NOT NULL,
     PRIMARY KEY (artist_id, tag_id),
     FOREIGN KEY (library_id, artist_id) REFERENCES artists (library_id, id) ON DELETE CASCADE,
     FOREIGN KEY (library_id, tag_id) REFERENCES tags (library_id, id) ON DELETE CASCADE

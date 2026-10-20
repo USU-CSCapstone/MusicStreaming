@@ -79,7 +79,7 @@ async fn reads_an_albums_tracks_and_an_artists_albums() {
     let (_temp, db) = database().await;
     // An artist who only appears on a track, and owns no album (`requirements/artists.md` §2).
     db.write(|tx| {
-        Artist { track_count: 1, ..Artist::new(302, 1, "Guest") }.insert(tx)?;
+        Artist::new(302, 1, "Guest").insert(tx)?;
         track_artist(tx, 1, 12, 1, 302, "Guest")
     })
     .await
