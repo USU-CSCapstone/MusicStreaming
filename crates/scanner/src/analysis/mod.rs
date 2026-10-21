@@ -1,9 +1,9 @@
 //! Stage 8: the one decode pass (`requirements/scanning.md` §1,
 //! `design/scanning.md` §12).
 //!
-//! ffmpeg streams PCM once; three sinks consume every block: the loudness
-//! meter, the waveform builder, and the feature extractor. Adding a result
-//! that needs the audio means adding a sink here, never a second decode.
+//! ffmpeg streams PCM once; two sinks consume every block: the loudness
+//! meter and the waveform builder. Adding a result that needs the audio
+//! means adding a sink here, never a second decode.
 
 pub mod waveform;
 
@@ -32,17 +32,6 @@ pub const DEFAULT_WAVEFORM_BINS: usize = 512;
 /// Frames per block handed to the sinks.
 const BLOCK_FRAMES: usize = 8192;
 
-/// The recommendations design's extractor plugs in here. It receives the
-/// mono downmix of every block, in order, and returns an opaque descriptor.
-pub trait FeatureExtractor: Send + Sync {
-    fn begin(&self, sample_rate: u32) -> Box<dyn FeatureSink>;
-}
-
-pub trait FeatureSink: Send {
-    fn push_mono(&mut self, mono: &[f32]);
-    fn finish(self: Box<Self>) -> Option<Vec<u8>>;
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum AnalysisError {
     #[error(transparent)]
@@ -56,7 +45,6 @@ pub struct Analyzer {
     ffmpeg: Ffmpeg,
     store: Arc<dyn Store>,
     governor: Arc<Governor>,
-    features: Option<Arc<dyn FeatureExtractor>>,
     waveform_bins: usize,
     retries: Retries,
 }
@@ -70,7 +58,6 @@ impl Analyzer {
             ffmpeg,
             store,
             governor,
-            features: None,
             waveform_bins: DEFAULT_WAVEFORM_BINS,
             retries: Retries::new(RETRY_AFTER),
         }
@@ -82,11 +69,8 @@ impl Analyzer {
         self
     }
 
-    pub fn with_features(mut self, extractor: Arc<dyn FeatureExtractor>) -> Analyzer {
-        self.features = Some(extractor);
-        self
-    }
-
+    /// Builds waveforms of `bins` peak and RMS bins, at least one, rather than
+    /// [`DEFAULT_WAVEFORM_BINS`].
     pub fn with_waveform_bins(mut self, bins: usize) -> Analyzer {
         self.waveform_bins = bins.max(1);
         self
@@ -98,10 +82,8 @@ impl Analyzer {
         let mut stream = self.ffmpeg.decode_pcm(path, &info)?;
         let channels = info.channels as usize;
 
-        let mut meter =
-            EbuR128::new(info.channels, info.sample_rate, Mode::I | Mode::LRA | Mode::TRUE_PEAK)?;
+        let mut meter = EbuR128::new(info.channels, info.sample_rate, Mode::I | Mode::TRUE_PEAK)?;
         let mut waveform = WaveformBuilder::new(self.waveform_bins, info.estimated_frames());
-        let mut features = self.features.as_ref().map(|f| f.begin(info.sample_rate));
 
         let mut block: Vec<f32> = Vec::with_capacity(BLOCK_FRAMES * channels);
         let mut mono: Vec<f32> = Vec::with_capacity(BLOCK_FRAMES);
@@ -114,13 +96,9 @@ impl Analyzer {
             meter.add_frames_f32(&block)?;
             downmix(&block, channels, &mut mono);
             waveform.push_mono(&mono);
-            if let Some(f) = features.as_mut() {
-                f.push_mono(&mono);
-            }
         }
 
         let integrated = meter.loudness_global().ok().filter(|l| l.is_finite() && *l > -100.0);
-        let range = meter.loudness_range().ok().filter(|l| l.is_finite());
         let mut peak: f64 = 0.0;
         for ch in 0..info.channels {
             if let Ok(p) = meter.true_peak(ch) {
@@ -132,10 +110,8 @@ impl Analyzer {
         Ok(AnalysisResult {
             analyzer_version: ANALYZER_VERSION,
             integrated_lufs: integrated,
-            loudness_range_lu: range,
             true_peak_dbtp,
             waveform: waveform.finish(),
-            features: features.and_then(|f| f.finish()),
         })
     }
 

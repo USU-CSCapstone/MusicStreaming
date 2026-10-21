@@ -307,26 +307,20 @@ pub struct AnalysisResult {
     pub analyzer_version: u32,
     /// Integrated loudness, LUFS. `None` for silence.
     pub integrated_lufs: Option<f64>,
-    /// Loudness range, LU.
-    pub loudness_range_lu: Option<f64>,
     /// True peak across channels, dBTP.
     pub true_peak_dbtp: Option<f64>,
     pub waveform: Waveform,
-    /// Opaque sonic descriptor from the feature extractor, if one is installed.
-    pub features: Option<Vec<u8>>,
 }
 
 impl AnalysisResult {
-    /// A result from analyzer `version` that measured nothing: no loudness, no peak, no
-    /// waveform bins, and no features.
+    /// A result from analyzer `version` that measured nothing: no loudness, no peak, and no
+    /// waveform bins.
     pub fn empty(version: u32) -> AnalysisResult {
         AnalysisResult {
             analyzer_version: version,
             integrated_lufs: None,
-            loudness_range_lu: None,
             true_peak_dbtp: None,
             waveform: Waveform { peaks: Vec::new(), rms: Vec::new() },
-            features: None,
         }
     }
 }
@@ -363,33 +357,6 @@ impl Waveform {
         }
         Some(Waveform { peaks: blob[3..3 + n].to_vec(), rms: blob[3 + n..3 + 2 * n].to_vec() })
     }
-}
-
-/// One track's tag-derived facts, for duplicate detection.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DuplicateCandidate {
-    pub track_id: TrackId,
-    pub path: PathBuf,
-    pub title: Option<String>,
-    pub artists: Vec<String>,
-    pub album: Option<String>,
-    pub album_artists: Vec<String>,
-    pub track_number: Option<u32>,
-    pub disc_number: Option<u32>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum DuplicateReason {
-    MatchingTags,
-    MatchingContent,
-    AlbumUnderTwoPaths,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DuplicateGroup {
-    pub reason: DuplicateReason,
-    pub tracks: Vec<(TrackId, PathBuf)>,
 }
 
 /// Milliseconds since the Unix epoch, saturating at zero for older clocks.

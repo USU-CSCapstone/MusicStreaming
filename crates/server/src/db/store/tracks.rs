@@ -1,12 +1,11 @@
 //! Tracks as the scanner sees them: looking a file up, applying a batch, marking what a scan did
-//! not see as missing, whether anything is indexed under a folder, and the candidates for
-//! duplicate detection.
+//! not see as missing, and whether anything is indexed under a folder.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use jewelcase_scanner::store::{Batch, IndexedFile, IndexedLyrics};
-use jewelcase_scanner::{Depth, DuplicateCandidate, ScanId, Scope};
+use jewelcase_scanner::{Depth, ScanId, Scope};
 use rusqlite::{Connection, OptionalExtension, Result, ToSql, params};
 
 use super::SqliteStore;
@@ -178,63 +177,4 @@ pub fn indexes_under(store: &SqliteStore, lib: i64, folder: &Path) -> Result<boo
 fn unseen_tracks(conn: &Connection, sql: &str, args: &[&dyn ToSql]) -> Result<Vec<(i64, String)>> {
     let mut stmt = conn.prepare(sql)?;
     stmt.query_map(args, |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
-}
-
-pub fn duplicate_candidates(
-    store: &SqliteStore,
-    lib: i64,
-) -> Result<Vec<DuplicateCandidate>, DbError> {
-    let roots = store.roots.clone();
-    store.db.read_blocking(move |conn| {
-        let mut artists = credited_names(conn, "track_artists", lib)?;
-        let mut album_artists = credited_names(conn, "track_album_artists", lib)?;
-        let mut stmt = conn.prepare(
-            "SELECT id, root_id, path, title, album_title, track_number, disc_number FROM tracks \
-             WHERE library_id = ?1 AND missing_since IS NULL",
-        )?;
-        let rows = stmt.query_map([lib], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, Option<String>>(4)?,
-                r.get::<_, Option<i64>>(5)?,
-                r.get::<_, i64>(6)?,
-            ))
-        })?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (id, root_id, rel, title, album, track_number, disc) = row?;
-            let Some(path) = roots.absolute(lib, root_id, &rel) else {
-                continue;
-            };
-            out.push(DuplicateCandidate {
-                track_id: id as u64,
-                path,
-                title: Some(title),
-                artists: artists.remove(&id).unwrap_or_default(),
-                album,
-                album_artists: album_artists.remove(&id).unwrap_or_default(),
-                track_number: track_number.map(|n| n as u32),
-                disc_number: if disc == 0 { None } else { Some(disc as u32) },
-            });
-        }
-        Ok(out)
-    })
-}
-
-/// Each track's credited names in `table`, `track_artists` or `track_album_artists`, in credit
-/// order. The table's key is that order, so reading it needs no sort.
-fn credited_names(conn: &Connection, table: &str, lib: i64) -> Result<HashMap<i64, Vec<String>>> {
-    let mut names: HashMap<i64, Vec<String>> = HashMap::new();
-    let mut stmt = conn.prepare(&format!(
-        "SELECT track_id, artist_name FROM {table} \
-         WHERE library_id = ?1 AND artist_name IS NOT NULL ORDER BY track_id, position"
-    ))?;
-    for row in stmt.query_map([lib], |r| Ok((r.get(0)?, r.get(1)?)))? {
-        let (track, name) = row?;
-        names.entry(track).or_default().push(name);
-    }
-    Ok(names)
 }

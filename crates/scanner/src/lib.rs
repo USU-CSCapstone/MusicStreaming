@@ -21,7 +21,6 @@ pub mod analysis;
 mod audio;
 pub mod confine;
 pub mod discover;
-pub mod duplicates;
 pub mod governor;
 pub mod identity;
 pub mod image;

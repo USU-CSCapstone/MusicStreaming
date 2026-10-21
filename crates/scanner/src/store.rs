@@ -153,9 +153,6 @@ pub trait Store: Send + Sync {
     /// Stores the placeholder of the image with content `hash`. Empty means it could not be
     /// decoded, so it is not tried again until its content changes.
     fn store_placeholder(&self, library: &LibraryId, hash: &[u8], placeholder: Vec<u8>);
-
-    // --- duplicates ---
-    fn duplicate_candidates(&self, library: &LibraryId) -> Vec<DuplicateCandidate>;
 }
 
 // ---------------------------------------------------------------------------
@@ -467,26 +464,5 @@ impl Store for MemoryStore {
         if let Some(lib) = inner.libraries.get_mut(library) {
             lib.placeholders.insert(hash.to_vec(), placeholder);
         }
-    }
-
-    fn duplicate_candidates(&self, library: &LibraryId) -> Vec<DuplicateCandidate> {
-        let inner = self.inner.lock().unwrap();
-        let Some(lib) = inner.libraries.get(library) else {
-            return Vec::new();
-        };
-        lib.tracks
-            .iter()
-            .filter(|(_, t)| !t.missing)
-            .map(|(id, t)| DuplicateCandidate {
-                track_id: *id,
-                path: t.record.path.clone(),
-                title: t.record.tags.title.clone(),
-                artists: t.record.tags.artists.clone(),
-                album: t.record.tags.album.clone(),
-                album_artists: t.record.tags.album_artists.clone(),
-                track_number: t.record.tags.track_number,
-                disc_number: t.record.tags.disc_number,
-            })
-            .collect()
     }
 }

@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 
 use jewelcase_ffmpeg::{Config, Ffmpeg};
 use jewelcase_scanner::analysis::Analyzer;
-use jewelcase_scanner::duplicates::find_duplicates;
 use jewelcase_scanner::scan::ScanOptions;
 use jewelcase_scanner::triggers::FsWatcher;
 use jewelcase_scanner::*;
@@ -72,11 +71,6 @@ fn main() {
         for p in problems.iter().take(10) {
             println!("  {:?} {}: {}", p.kind, p.path.display(), p.detail);
         }
-    }
-
-    let dups = find_duplicates(store.as_ref(), &library.id);
-    if !dups.is_empty() {
-        println!("{} likely duplicate groups", dups.len());
     }
 
     if analyze {

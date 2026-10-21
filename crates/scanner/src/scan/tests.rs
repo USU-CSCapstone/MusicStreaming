@@ -73,9 +73,6 @@ where
     fn store_placeholder(&self, library: &LibraryId, hash: &[u8], placeholder: Vec<u8>) {
         self.inner.store_placeholder(library, hash, placeholder)
     }
-    fn duplicate_candidates(&self, library: &LibraryId) -> Vec<DuplicateCandidate> {
-        self.inner.duplicate_candidates(library)
-    }
 }
 
 /// Runs a new scan of the whole library against `store`, flushing whenever the batch holds

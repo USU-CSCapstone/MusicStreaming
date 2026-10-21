@@ -37,7 +37,7 @@ Every file that reaches the scanner passes through the same stages, and every st
 | 5. Sidecars | directory cache | artwork, artist image, biography, lyrics refs | amortized to per-directory |
 | 6. Persist | — | store batch + feed entries | amortized to per-batch |
 | 7. Reconcile | index rows under scope | missing marks | one range query per scope |
-| 8. Analyze | whole file, via ffmpeg | loudness, features, waveform | **never on this path** |
+| 8. Analyze | whole file, via ffmpeg | loudness, waveform | **never on this path** |
 
 - **Stage 2 is the whole incremental story.** Path, size, and mtime unchanged means the file is done without being opened, unless a lyrics file has appeared beside a track that had none, or gone from one that had it. That check reads the directory listing discovery already holds, so it adds no I/O. Ten changed files cost ten opens; the other 499,990 cost one `stat` and one lookup each. A failure here is the failure mode [`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis) names: a library that grows more expensive to keep current.
 - **Symlinks are never followed** ([`requirements/scanning.md` §5](../requirements/scanning.md#5-behavior)). Stage 1 skips every symlink it lists, file or folder, without resolving it, and records a problem on it; the walk therefore needs no loop detection, and a symlink costs nothing to skip. The sidecar reader skips a symlinked sidecar. The watcher does not follow folder links either, and a scope reached through a link below its root, from the watcher or a plugin, is skipped whole with a problem. A file can become a link after the scan saw it, so before the server serves, resizes, or decodes a file it requires the file's real path to equal its root's real path joined with the stored relative path: a root reached through a link is allowed, a link anywhere below it is not found. **Known flaw:** a file swapped for a link between that check and the open can still be read; to be handled later.
@@ -198,13 +198,13 @@ The crate also builds the command for the server's artwork resize, `resize_comma
 
 ## 12. Analysis
 
-**One decode, three consumers** ([`requirements/scanning.md` §1](../requirements/scanning.md#1-supported-formats), [`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis)).
+**One decode, every consumer** ([`requirements/scanning.md` §1](../requirements/scanning.md#1-supported-formats), [`requirements/performance.md` §5](../requirements/performance.md#5-scanning--analysis)).
 
-`decode_pcm` streams interleaved 32-bit float at the file's native sample rate and channel layout, which the probe supplies so the raw stream can be interpreted. The decode is held to the probe's shape: `-ar` and `-ch_layout`, or `-ac` for a stream that names no layout, make ffmpeg convert any part of the file in another shape (a mono intro joined to a stereo MP3, say) rather than hand back samples the probe would misread. The layout is named rather than counted because ffmpeg reads a bare count as its default layout and would remix quad or 6.0 into it. The scanner reads that stream once, in blocks, and feeds every block to three sinks:
+`decode_pcm` streams interleaved 32-bit float at the file's native sample rate and channel layout, which the probe supplies so the raw stream can be interpreted. The decode is held to the probe's shape: `-ar` and `-ch_layout`, or `-ac` for a stream that names no layout, make ffmpeg convert any part of the file in another shape (a mono intro joined to a stereo MP3, say) rather than hand back samples the probe would misread. The layout is named rather than counted because ffmpeg reads a bare count as its default layout and would remix quad or 6.0 into it. The scanner reads that stream once, in blocks, and feeds every block to each sink:
 
 - **Loudness** — an EBU R128 meter (the `ebur128` crate) over the full channel layout, yielding integrated loudness and true peak. Measured at native rate and layout, so multi-channel and high-resolution files are measured as what they are ([`requirements/tracks.md` §4](../requirements/tracks.md#4-audio-properties)). Album loudness is aggregated by the store from the album's tracks, not by a second decode.
 - **Waveform** — a mono downmix bucketed into a fixed number of peak and RMS bins per track. The shaping that makes a compressed master and an orchestral recording both legible ([`requirements/playback.md` §3](../requirements/playback.md#3-the-waveform)) is applied at render time from these bins, deterministically, so the stored data is the honest measurement and the client cannot invent structure. The bin count and shaping function are the playback design's to fix.
-- **Features** — tempo, key, energy, and a compact sonic descriptor over a mono, downsampled copy of the same blocks ([`requirements/recommendations.md` §2.1](../requirements/recommendations.md#21-how-the-music-sounds)). The extractor is the recommendations design's choice; the scanner's contract is only that it consumes the same block stream and adds no second pass.
+- **Features** — not built yet: tempo, key, energy, and a compact sonic descriptor over a mono, downsampled copy of the same blocks ([`requirements/recommendations.md` §2.1](../requirements/recommendations.md#21-how-the-music-sounds)). The extractor and its storage are the recommendations design's choice; the scanner's contract is only that it becomes a third sink on the same block stream and adds no second pass.
 
 Storage and scheduling:
 
@@ -230,13 +230,13 @@ Storage and scheduling:
 
 ## 14. Duplicates
 
-**A background job over the index, never part of a scan** ([`requirements/scanning.md` §9](../requirements/scanning.md#9-duplicates)).
+**Not built yet.** It will be a background job over the index, never part of a scan ([`requirements/scanning.md` §9](../requirements/scanning.md#9-duplicates)).
 
 - **Matching tags** — same title, artists, album, and track number; a store query.
-- **One album under two paths** — same album identity spanning two directories; a store query.
+- **One album under two paths** — same album identity spanning two directories, where those directories are not the discs of one album (`CD1`, `CD2`); a store query.
 - **Matching content** — awaits track identity ([§6](#6-track-identity)); whatever fingerprint identity adopts, duplicates by content is an equality query on it.
 
-The job runs on the indexing pool at the lowest priority, writes only to a duplicates table, and never touches a track row. The report is the API's `DuplicateGroup`.
+The job will run on the indexing pool at the lowest priority, write only to a duplicates table, and never touch a track row. The report is the API's `DuplicateGroup`.
 
 ---
 

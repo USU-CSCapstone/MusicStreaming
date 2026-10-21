@@ -6,24 +6,8 @@ use std::sync::Arc;
 
 use common::*;
 use jewelcase_ffmpeg::{Config, Ffmpeg};
-use jewelcase_scanner::analysis::{ANALYZER_VERSION, Analyzer, FeatureExtractor, FeatureSink};
+use jewelcase_scanner::analysis::{ANALYZER_VERSION, Analyzer};
 use jewelcase_scanner::*;
-
-struct CountingExtractor;
-struct CountingSink(u64);
-impl FeatureExtractor for CountingExtractor {
-    fn begin(&self, _sample_rate: u32) -> Box<dyn FeatureSink> {
-        Box::new(CountingSink(0))
-    }
-}
-impl FeatureSink for CountingSink {
-    fn push_mono(&mut self, mono: &[f32]) {
-        self.0 += mono.len() as u64;
-    }
-    fn finish(self: Box<Self>) -> Option<Vec<u8>> {
-        Some(self.0.to_le_bytes().to_vec())
-    }
-}
 
 #[test]
 fn sine_measures_as_expected() {
@@ -47,8 +31,7 @@ fn sine_measures_as_expected() {
 
     let store = shared(MemoryStore::new());
     let governor = Arc::new(Governor::new());
-    let analyzer =
-        Analyzer::new(ffmpeg, store.clone(), governor).with_features(Arc::new(CountingExtractor));
+    let analyzer = Analyzer::new(ffmpeg, store.clone(), governor);
 
     for path in [&wav, &flac] {
         let r = analyzer.analyze_file(path).expect("analyze");
@@ -64,9 +47,6 @@ fn sine_measures_as_expected() {
         // RMS of a sine is peak / sqrt(2).
         let rms = r.waveform.rms[256] as f64 / 255.0;
         assert!((rms - 0.5 / 2f64.sqrt()).abs() < 0.02, "rms {rms}");
-        // The feature sink saw every frame once.
-        let frames = u64::from_le_bytes(r.features.unwrap().try_into().unwrap());
-        assert!((frames as i64 - 3 * 44_100).abs() < 4_096, "frames {frames}");
         assert_eq!(r.analyzer_version, ANALYZER_VERSION);
     }
 }

@@ -169,11 +169,4 @@ impl Store for SqliteStore {
             logged("store_placeholder", stored, ());
         }
     }
-
-    fn duplicate_candidates(&self, library: &LibraryId) -> Vec<DuplicateCandidate> {
-        let Some(lib) = Self::lib(library) else {
-            return Vec::new();
-        };
-        logged("duplicate_candidates", tracks::duplicate_candidates(self, lib), Vec::new())
-    }
 }
