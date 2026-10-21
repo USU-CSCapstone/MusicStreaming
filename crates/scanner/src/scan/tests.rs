@@ -266,6 +266,7 @@ fn sidecars_are_read_once_per_directory() {
 }
 
 mod checkpoints;
+mod excludes;
 mod panics;
 mod resume;
 mod unlistable;

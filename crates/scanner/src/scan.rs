@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::confine::without_links;
 use crate::discover::{
-    Directory, RootUnavailable, Walk, WalkItem, check_root, compile_excludes, gone,
+    Directory, RootUnavailable, Walk, WalkItem, check_root, compile_excludes, excluded_scope, gone,
 };
 use crate::governor::Governor;
 use crate::problems;
@@ -83,11 +83,13 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
 
 /// [`run_scan`] without the panic guard, flushing through `writer`.
 fn scan_scopes(ctx: &ScanContext<'_>, scan: &mut Scan, writer: &mut Writer) {
+    // Leaving out a pattern that does not compile would index what the admin meant to exclude.
     let excludes = match compile_excludes(&ctx.library.excludes) {
         Ok(e) => e,
         Err(e) => {
-            tracing::error!(error = %e, "invalid exclude pattern; scanning with none");
-            compile_excludes(&[]).expect("empty globset")
+            tracing::error!(scan = scan.id, error = %e, "invalid exclude pattern; suspending scan");
+            writer.suspend(ctx, scan);
+            return;
         }
     };
 
@@ -122,9 +124,12 @@ fn scan_scopes(ctx: &ScanContext<'_>, scan: &mut Scan, writer: &mut Writer) {
         let mut sidecars = SidecarResolver::new(&scope.root);
 
         // A scope reached through a symlink below the root, as the watcher or a plugin may
-        // name one, is skipped whole: nothing is walked and nothing reconciled. One that no
-        // longer exists is walked, so what was under it is marked missing.
+        // name one, is skipped whole with a problem: nothing is walked and nothing reconciled.
+        // One that no longer exists, or lies in an excluded folder, goes on to a walk that lists
+        // nothing, so reconcile marks what was indexed under it missing. Excluded content is
+        // never reported, so a link in an excluded folder is not either.
         if scope.path.exists()
+            && !excluded_scope(&scope, &excludes)
             && let Err(error) = without_links(&scope.root, &scope.path)
         {
             writer.batch.problems.push(problems::from_io(&scope.path, &error));

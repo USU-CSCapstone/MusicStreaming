@@ -73,6 +73,16 @@ pub fn compile_excludes(patterns: &[String]) -> Result<GlobSet, globset::Error> 
     b.build()
 }
 
+/// Whether `scope` lies in an excluded folder: its own folder, or one between it and its root,
+/// matches `excludes`. Nothing in such a scope is indexed. The root itself is never matched, as
+/// the walk never matches it.
+pub fn excluded_scope(scope: &Scope, excludes: &GlobSet) -> bool {
+    let Ok(relative) = scope.path.strip_prefix(&scope.root) else {
+        return false;
+    };
+    relative.ancestors().any(|dir| !dir.as_os_str().is_empty() && excludes.is_match(dir))
+}
+
 /// Why a root is unusable right now (`requirements/scanning.md` §7).
 #[derive(Debug)]
 pub enum RootUnavailable {
@@ -112,19 +122,17 @@ pub struct Walk<'a> {
 }
 
 impl<'a> Walk<'a> {
-    /// A walk starting at `scope.path` that leaves out what `excludes` matches.
+    /// A walk starting at `scope.path` that leaves out what `excludes` matches. A scope in an
+    /// excluded folder ([`excluded_scope`]) lists nothing, so reconcile treats what is indexed in
+    /// it as missing, as a walk of its root does.
     pub fn new(
         scope: &'a Scope,
         excludes: &'a GlobSet,
         resume_after: Option<&'a Path>,
     ) -> Walk<'a> {
-        Walk {
-            scope,
-            excludes,
-            resume_after,
-            stack: vec![scope.path.clone()],
-            unreadable: Vec::new(),
-        }
+        let stack =
+            if excluded_scope(scope, excludes) { Vec::new() } else { vec![scope.path.clone()] };
+        Walk { scope, excludes, resume_after, stack, unreadable: Vec::new() }
     }
 
     /// The directories and entries this walk could not read so far. Whatever is under them
@@ -345,6 +353,27 @@ mod tests {
         assert_eq!(keep.candidates.len(), 1);
         assert!(keep.candidates[0].path.ends_with("1.flac"));
         assert!(keep.files.contains(&OsString::from("cover.jpg")));
+    }
+
+    /// A scope at or under a folder the excludes match lists nothing, even when no pattern
+    /// matches the scope's own path, while a walk of the root lists the rest and leaves that
+    /// folder out.
+    #[test]
+    fn a_scope_in_an_excluded_folder_lists_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        touch(&root.join("keep/1.flac"));
+        touch(&root.join("backup/x/2.flac"));
+        let ex = compile_excludes(&["backup".into()]).unwrap();
+        let backup = |depth| Scope::folder(root, root.join("backup"), depth);
+        let inside = |depth| Scope::folder(root, root.join("backup/x"), depth);
+        for scope in [backup(Depth::Subtree), inside(Depth::Subtree), inside(Depth::Directory)] {
+            assert_eq!(dirs(&scope, &ex, None), Vec::<PathBuf>::new(), "{scope:?}");
+        }
+        assert_eq!(dirs(&Scope::root(root), &ex, None), [root.to_path_buf(), root.join("keep")]);
+        // The root's own relative path is empty, and the walk never matches it.
+        let empty = compile_excludes(&["".into()]).unwrap();
+        assert_eq!(dirs(&backup(Depth::Directory), &empty, None), vec![root.join("backup")]);
     }
 
     #[test]
