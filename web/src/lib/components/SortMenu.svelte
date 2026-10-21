@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The sorts of a list too narrow for its column headings, one button away
 	// (`requirements/conventions.md` §4.1). It looks and works as AddToPlaylistMenu does.
-	import { tick } from 'svelte';
+	import { flushSync, tick } from 'svelte';
 	import type { SortField, SortOrder, TrackSort } from '$lib/sorting';
 	import Icon from './Icon.svelte';
 
@@ -57,16 +57,22 @@
 
 	const items = () => [...(menu?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? [])];
 
-	/** Arrow keys move between items, and Escape or Tab closes, as in any menu. */
+	/** Arrow keys move between items, Escape closes, and Tab closes and moves on, as in any menu. */
 	function onkeydown(e: KeyboardEvent) {
 		const all = items();
 		const at = all.indexOf(document.activeElement as HTMLElement);
 		const go = (i: number) => all[(i + all.length) % all.length]?.focus();
+		if (e.key === 'Tab') {
+			// Gone before the browser moves focus on from the button, so it moves past the menu
+			// rather than back into it, and the press isn't spent on closing.
+			flushSync(close);
+			return;
+		}
 		if (e.key === 'ArrowDown') go(at + 1);
 		else if (e.key === 'ArrowUp') go(at - 1);
 		else if (e.key === 'Home') go(0);
 		else if (e.key === 'End') go(all.length - 1);
-		else if (e.key === 'Escape' || e.key === 'Tab') close();
+		else if (e.key === 'Escape') close();
 		else return;
 		e.preventDefault();
 		e.stopPropagation();

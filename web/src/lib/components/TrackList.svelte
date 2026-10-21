@@ -465,7 +465,8 @@
 	     page's padding take some of the window. -->
 	<div class="list" class:album={isAlbum} class:dated={added}>
 		{#if onsort}
-			<!-- Where the headings don't fit, the same sorts are one button away. -->
+			<!-- Where the headings don't fit, the same sorts are one button away, which stays in
+			     view as the header does. -->
 			<div class="sorter">
 				<SortMenu fields={columns} {labels} {sort} onchoose={sortBy} />
 			</div>
@@ -711,10 +712,16 @@
 		min-width: 0;
 	}
 
+	/* Stays in view as the header does. */
 	.sorter {
 		display: flex;
 		justify-content: flex-end;
+		position: sticky;
+		top: calc(-1 * var(--page-top, 0px));
+		z-index: 3;
 		margin-bottom: var(--space-2);
+		padding-block: var(--space-2);
+		background: var(--bg);
 	}
 
 	.heading.end {
