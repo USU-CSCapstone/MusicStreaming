@@ -10,9 +10,9 @@ use crate::lrclib::Found;
 /// what kept it from being saved changes first.
 pub const RETRY_AFTER_S: u64 = 30 * 24 * 60 * 60;
 
-/// How long into a run the pass stops starting lookups. A lookup is at most two requests, each
-/// waiting up to 60 s for its turn and 15 s for a reply, so a run that starts one just before
-/// this still ends inside its five minutes (`design/plugins.md` §7).
+/// How long into a run it stops starting lookups, in the pass or for a change. A lookup is at
+/// most two requests, each waiting up to 60 s for its turn and 15 s for a reply, so a run that
+/// starts one just before this still ends inside its five minutes (`design/plugins.md` §7).
 pub const TIME_PER_RUN: Duration = Duration::from_secs(120);
 
 /// The most tracks without lyrics one run checks for a recorded miss. Each check is a host call,
@@ -22,6 +22,12 @@ pub const CHECKS_PER_RUN: u32 = 10_000;
 
 /// The key the pass keeps its place under: the ID of the last track it finished with.
 pub const CURSOR: &str = "cursor";
+
+/// The key the tracks a change had no time for are kept under, for the pass to look up first.
+pub const NEXT: &str = "next";
+
+/// The most tracks kept under [`NEXT`]. Any past it are still found by the pass in its turn.
+pub const MAX_NEXT: usize = 1000;
 
 /// What this run saves: whether it was granted adding files, and whether only synced lyrics
 /// are wanted.
@@ -136,6 +142,19 @@ pub fn decode(bytes: &[u8]) -> Result<u64, String> {
     <[u8; 8]>::try_from(bytes)
         .map(u64::from_le_bytes)
         .map_err(|_| format!("a stored number is {} bytes, not 8", bytes.len()))
+}
+
+/// Track IDs, as they are stored: each [`encode`]d, one after another.
+pub fn encode_ids(ids: &[u64]) -> Vec<u8> {
+    ids.iter().flat_map(|id| id.to_le_bytes()).collect()
+}
+
+/// Track IDs [`encode_ids`] stored.
+pub fn decode_ids(bytes: &[u8]) -> Result<Vec<u64>, String> {
+    let (ids, []) = bytes.as_chunks::<8>() else {
+        return Err(format!("stored track IDs are {} bytes, not a multiple of 8", bytes.len()));
+    };
+    Ok(ids.iter().copied().map(u64::from_le_bytes).collect())
 }
 
 #[cfg(test)]

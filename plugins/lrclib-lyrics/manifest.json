@@ -21,8 +21,9 @@
 		{
 			"permission": "network",
 			"required": true,
-			"reason": "To look up lyrics.",
-			"destinations": ["lrclib.net"]
+			"reason": "To look up lyrics on lrclib.net, at most 45 times a minute.",
+			"destinations": ["lrclib.net"],
+			"rateLimits": { "lrclib.net": "45/min" }
 		},
 		{ "permission": "libraryAdd", "required": false, "reason": "To save .lrc files beside your tracks." },
 		{ "permission": "tracksChanged", "required": false, "reason": "To look up lyrics for tracks as they are added." },

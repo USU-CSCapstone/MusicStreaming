@@ -42,8 +42,8 @@ async fn delivered(db: &Database) -> (Option<String>, i64, i64) {
     tokio::time::timeout(Duration::from_secs(30), recorded).await.expect("delivered within 30 s")
 }
 
-/// The real lyrics plugin hears of a change in the feed as `tracks-changed`, reports that it
-/// needs the network, and the failure is recorded to retry.
+/// The real lyrics plugin hears of a change in the feed as `tracks-changed`, finds it can't
+/// look the track up without the network, and the failure is recorded to retry.
 #[tokio::test]
 async fn delivers_changes_to_a_real_plugin() {
     let (temp, db) = database().await;
@@ -61,7 +61,7 @@ async fn delivers_changes_to_a_real_plugin() {
     changes(&db, "(1, 'track', 11, 'upsert', 0)").await;
 
     plugins.dispatch().await;
-    let refused = "the plugin reported an error: needs permission to use the network";
+    let refused = "the plugin reported an error: a permission it needs was not granted";
     assert_eq!(delivered(&db).await, (Some(refused.to_owned()), 1, 0), "one failure, to retry");
 }
 

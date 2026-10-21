@@ -15,15 +15,18 @@ use super::plays::plays;
 use super::searches::searches;
 use super::{BATCH, Due, Hook};
 
-/// The pair's position in the hook `?2`, its failures, and the user it is for. `per_user`
-/// pairs it with each user who connected the plugin, as `s`; otherwise the user is 0.
+/// The pair's position in the hook `?2`, its failures, outages and outage start, and the user
+/// it is for. `per_user` pairs it with each user who connected the plugin, as `s`; otherwise the
+/// user is 0.
 fn position(per_user: bool) -> String {
     let (users, user) = match per_user {
         true => ("JOIN plugin_connections s ON s.plugin_id = p.plugin_id", "s.user_id"),
         false => ("", "0"),
     };
     format!(
-        "coalesce(c.position, 0), coalesce(c.failures, 0), {user} FROM plugin_libraries p {users} \
+        "coalesce(c.position, 0), coalesce(c.failures, 0), coalesce(c.outages, 0), c.outage_since, \
+         {user} \
+         FROM plugin_libraries p {users} \
          LEFT JOIN plugin_cursors c ON c.plugin_id = p.plugin_id \
               AND c.library_id = p.library_id AND c.hook = ?2 AND c.user_id = {user}"
     )
@@ -39,7 +42,8 @@ fn granted(permission: &str) -> String {
 
 const READY: &str = "p.enabled AND (c.retry_at IS NULL OR c.retry_at <= ?1)";
 
-/// Every pair a hook is due for at `now`, with its position, failures and user.
+/// Every pair a hook is due for at `now`, with its position, failures, outages, outage start
+/// and user.
 pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
     let mut due = Vec::new();
     for (hook, sql) in queries() {
@@ -51,7 +55,9 @@ pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
                 library: row.get(1)?,
                 position: row.get(2)?,
                 failures: row.get(3)?,
-                user: row.get(4)?,
+                outages: row.get(4)?,
+                outage_since: row.get(5)?,
+                user: row.get(6)?,
             })
         })?;
         due.extend(pairs.collect::<rusqlite::Result<Vec<_>>>()?);
@@ -60,7 +66,8 @@ pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
 }
 
 /// Each hook's query for the pairs it is due for, given the time as `?1` and the hook's name
-/// as `?2`: the plugin, the library, the position, the failures, and the user.
+/// as `?2`: the plugin, the library, the position, the failures, the outages, when they began,
+/// and the user.
 pub(super) fn queries() -> [(Hook, String); 8] {
     let pair = position(false);
     // Changes of one kind of entity in the library, for the hook that asked for them.
@@ -118,7 +125,7 @@ pub(super) fn queries() -> [(Hook, String); 8] {
     // for each who stopped, the request to forget, which needs only the hook.
     let searched = format!(
         "SELECT p.plugin_id, p.library_id, coalesce(c.position, 0), coalesce(c.failures, 0), \
-                u.user_id FROM plugin_libraries p \
+                coalesce(c.outages, 0), c.outage_since, u.user_id FROM plugin_libraries p \
          JOIN (SELECT plugin_id, user_id FROM plugin_connections \
                WHERE searches_shared_at IS NOT NULL \
                UNION SELECT plugin_id, user_id FROM search_events WHERE kind = 'stopped') u \

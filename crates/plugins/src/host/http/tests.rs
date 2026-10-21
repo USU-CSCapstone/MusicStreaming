@@ -31,6 +31,8 @@ type Hits = Arc<Mutex<HashMap<String, usize>>>;
 /// - `/busy` with `429 Too Many Requests` for two minutes, and `/sent-on` with a redirect to
 ///   `/busy` on `localhost`;
 /// - `/hops/n` with a redirect to `/hops/n-1`, and `/hops/0` with `hello`;
+/// - `/down` with `500 Internal Server Error`, and `/none` with `404 Not Found`;
+/// - `/slow` with nothing, holding the connection open;
 /// - anything else with `hello`.
 async fn server() -> (u16, Hits) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -38,12 +40,17 @@ async fn server() -> (u16, Hits) {
     let hits = Hits::default();
     let counted = hits.clone();
     tokio::spawn(async move {
+        let mut held = Vec::new();
         loop {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = [0; 1024];
             let read = socket.read(&mut request).await.unwrap();
             let request = String::from_utf8_lossy(&request[..read]).to_ascii_lowercase();
             let path = request.split(' ').nth(1).unwrap().to_owned();
+            if path == "/slow" {
+                held.push(socket);
+                continue;
+            }
             let hit = {
                 let mut hits = counted.lock().unwrap();
                 let hit = hits.entry(path.clone()).or_default();
@@ -81,6 +88,8 @@ async fn server() -> (u16, Hits) {
                 ),
                 "/busy" => "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\nContent-Length: 0\r\n\r\n"
                     .to_owned(),
+                "/down" => "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n".to_owned(),
+                "/none" => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_owned(),
                 hops if hops.starts_with("/hops/") => match hops["/hops/".len()..].parse::<u32>().unwrap() {
                     0 => ok("", "hello"),
                     n => format!(

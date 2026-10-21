@@ -148,3 +148,19 @@ async fn a_run_cut_short_keeps_its_place_after_each_lookup() {
     assert_eq!(looked_up(&outcome).len(), 500);
     assert_eq!(kept(&library, "cursor"), Some(500));
 }
+
+#[tokio::test]
+async fn a_run_looks_up_first_the_tracks_a_change_had_no_time_for() {
+    let library = library(1..=3);
+    let left = |ids: &[u64]| ids.iter().flat_map(|id| id.to_le_bytes()).collect::<Vec<_>>();
+    library.state.lock().unwrap().insert("next".into(), left(&[3, 1]));
+    let outcome = run_offline(&library, Event::Run).await;
+    // Failed lookups record no miss, so the pass looks them up again in its turn.
+    assert_eq!(looked_up(&outcome), [3, 1, 1, 2, 3]);
+    assert!(!library.state.lock().unwrap().contains_key("next"), "each is dropped once looked up");
+
+    library.state.lock().unwrap().insert("next".into(), left(&[3]));
+    let changes = Changes { changed: vec![2], removed: vec![] };
+    let outcome = run_offline(&library, Event::TracksChanged(changes)).await;
+    assert_eq!(looked_up(&outcome), [3, 2], "a change looks them up first too");
+}

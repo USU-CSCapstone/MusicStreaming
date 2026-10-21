@@ -7,9 +7,17 @@ It looks up each track as it is added. **Run now**, and the schedule each hour, 
 through the library from where the last run stopped, looking up each track without lyrics. A
 track it saved nothing for, because lrclib.net had nothing, only plain lyrics when synced ones
 are asked for, or adding files wasn't granted, is looked up again a month later, or sooner once
-adding files is granted or plain lyrics are wanted again, the next time the pass reaches it. One
-whose lookup failed is tried again on the next way round. A run stops starting lookups two
-minutes in, so it ends inside its time limit however large the library is.
+adding files is granted or plain lyrics are wanted again, the next time the pass reaches it. Only
+LRCLIB's `404` counts as having nothing. When it can't be asked now, because it asks to wait,
+answers `429` or a `5xx`, doesn't answer in time, or can't be reached, the run stops there with
+an error and records nothing for that track: the pass looks it up first next time, and a change
+is delivered again. The server counts that as an outage, which disables the plugin only once it
+has lasted 72 hours. One whose lookup failed any other way is tried again on the next way round.
+A run stops starting lookups two minutes in, so it ends inside its time limit however large the
+library is; the added tracks it had no time for are looked up first by the next run. Its
+manifest keeps it to 45 requests a minute, the allowance lrclib.net gives a client that doesn't
+identify itself with a homepage link or email ([its docs](https://lrclib.net/docs), Rate
+Limiting); the host doesn't send one yet.
 Its contract is [`crates/plugins/wit/plugin.wit`](../../crates/plugins/wit/plugin.wit), and
 `manifest.json` is what the Plugins page shows.
 

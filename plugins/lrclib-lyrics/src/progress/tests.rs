@@ -49,8 +49,18 @@ fn tracks_never_missed_are_wanted() {
 }
 
 #[test]
-fn the_cursor_and_misses_are_kept_apart() {
+fn the_cursor_the_next_tracks_and_misses_are_kept_apart() {
     assert_ne!(CURSOR, miss_key(1));
+    assert_ne!(NEXT, miss_key(1));
+    assert_ne!(CURSOR, NEXT);
+}
+
+#[test]
+fn track_ids_round_trip_and_a_bad_length_is_an_error() {
+    assert_eq!(decode_ids(&encode_ids(&[3, u64::MAX, 1])), Ok(vec![3, u64::MAX, 1]));
+    assert_eq!(decode_ids(&[]), Ok(vec![]));
+    let error = "stored track IDs are 9 bytes, not a multiple of 8";
+    assert_eq!(decode_ids(&[0; 9]).unwrap_err(), error);
 }
 
 #[test]

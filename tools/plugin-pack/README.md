@@ -31,7 +31,13 @@ is refused at install. The other caps a run keeps to are in `design/plugins.md` 
   "author": "You",
   "permissions": [
     { "permission": "libraryRead", "required": true, "reason": "To find tracks without lyrics." },
-    { "permission": "network", "required": true, "reason": "To fetch lyrics.", "destinations": ["lrclib.net"] },
+    {
+      "permission": "network",
+      "required": true,
+      "reason": "To fetch lyrics.",
+      "destinations": ["lrclib.net"],
+      "rateLimits": { "lrclib.net": "45/min" }
+    },
     { "permission": "libraryAdd", "required": false, "reason": "To save .lrc files beside tracks." }
   ]
 }

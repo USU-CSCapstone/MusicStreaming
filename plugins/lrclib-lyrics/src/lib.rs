@@ -1,7 +1,9 @@
 //! A lyrics plugin: finds synced lyrics on LRCLIB for tracks that have none and saves
 //! them beside the audio, where the scanner picks them up.
 
+pub mod failure;
 pub mod lrclib;
+pub mod pass;
 pub mod progress;
 
 /// Where lyrics for the track at `path` go: beside it, with the scanner's name for them,
@@ -19,13 +21,15 @@ pub fn lyrics_path(path: &str, synced: bool) -> String {
 
 #[cfg(target_arch = "wasm32")]
 mod plugin {
-    mod pass;
+    mod imports;
 
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+    use crate::failure::{Failure, ImportError};
     use crate::lrclib::{self, Found, Query};
-    use crate::progress::{self, Saving, Seen};
-    use pass::PAGE;
+    use crate::pass;
+    use crate::progress::{self, Saving, Seen, TIME_PER_RUN};
+    use imports::Imports;
 
     wit_bindgen::generate!({ path: "../../crates/plugins/wit", world: "plugin" });
 
@@ -49,32 +53,39 @@ mod plugin {
     }
 
     /// GETs `url`, giving the reply's status and body, or why there is no reply.
-    fn fetch(url: &str) -> Result<(u16, String), String> {
+    fn fetch(url: &str) -> Result<(u16, String), Failure> {
         let request = http::Request {
             method: http::Method::Get,
             url: url.to_owned(),
             headers: Vec::new(),
             body: Vec::new(),
         };
-        let reply = http::send(&request)?;
+        let reply = http::send(&request).map_err(|e| Failure::from(ImportError::from(e)))?;
         Ok((reply.status, String::from_utf8_lossy(&reply.body).into_owned()))
+    }
+
+    /// The contract's error as [`ImportError`], which says what each comes to.
+    impl From<Error> for ImportError {
+        fn from(error: Error) -> ImportError {
+            match error {
+                Error::NotGranted => ImportError::NotGranted,
+                Error::Refused(why) => ImportError::Refused(why),
+                Error::Failed(why) => ImportError::Failed(why),
+                Error::RateLimited(ms) => ImportError::RateLimited(ms),
+                Error::TimedOut => ImportError::TimedOut,
+            }
+        }
     }
 
     /// Why an import did not do what it was asked, as the run's log and summary say it.
     impl From<Error> for String {
         fn from(error: Error) -> String {
-            match error {
-                Error::NotGranted => "a permission it needs was not granted".into(),
-                Error::Refused(why) | Error::Failed(why) => why,
-                Error::RateLimited(ms) => {
-                    format!("the service cannot be asked again for {} s", ms.div_ceil(1000))
-                }
-                Error::TimedOut => "the request timed out".into(),
-            }
+            ImportError::from(error).to_string()
         }
     }
 
-    fn lookup(t: &library::Track) -> Result<Found, String> {
+    /// Asks LRCLIB for `t`'s lyrics: the exact match, then a search unless that had synced ones.
+    fn lookup(t: &library::Track) -> Result<Found, Failure> {
         let q = Query {
             title: &t.title,
             artist: t.artists.first().map(String::as_str).unwrap_or(""),
@@ -97,81 +108,67 @@ mod plugin {
     }
 
     impl Guest for Plugin {
+        /// Runs the pass through the library on **Run now** and the schedule, and looks up the
+        /// tracks a `tracks-changed` event names. It asks to hear of no other event, and has no
+        /// settings to check.
         fn handle(event: Event) -> Result<String, String> {
-            // Before the permissions: settings are checked before anything is granted, and it
-            // has nothing to check them against.
-            if let Event::CheckSettings = event {
-                return Ok("Nothing to check.".into());
-            }
-            let granted = host::granted();
-            for (p, what) in [
-                (Permission::LibraryRead, "read the library"),
-                (Permission::Network, "use the network"),
-            ] {
-                if !granted.contains(&p) {
-                    return Err(format!("needs permission to {what}"));
-                }
-            }
             // Without access to add files it still looks everything up, and reports what it
             // would save.
-            let can_write = granted.contains(&Permission::LibraryAdd);
-            let synced_only = matches!(settings::get("syncedOnly"), Some(settings::Value::Flag(true)));
+            let can_write = host::granted().contains(&Permission::LibraryAdd);
+            let synced_only =
+                matches!(settings::get("syncedOnly"), Some(settings::Value::Flag(true)));
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_err(|e| format!("the clock is before 1970: {e}"))?
                 .as_secs();
             let mut n = Tally::default();
             let saving = Saving { can_write, synced_only };
-            let mut look = |t: &library::Track| visit(t, saving, &mut n);
-            let walked = match event {
-                // The library a part at a time, from where the last run stopped: every track
-                // without lyrics, except misses not due yet.
-                Event::Run | Event::Scheduled => pass::resume(now, saving, &mut look)?,
+            let look = |t: &library::Track| visit(t, saving, &mut n);
+            let deadline = Instant::now() + TIME_PER_RUN;
+            let more = match event {
+                // What a change had no time for, then the library a part at a time, from where
+                // the last run stopped: every track without lyrics, except misses not due yet.
+                Event::Run | Event::Scheduled => {
+                    let walked = pass::resume(&mut Imports, now, saving, deadline, look)?;
+                    n.had_lyrics += walked.had_lyrics;
+                    if walked.finished {
+                        String::new()
+                    } else {
+                        " There is more to do: it carries on from there next time.".into()
+                    }
+                }
                 // The tracks that were added or changed, which is every track at first.
                 Event::TracksChanged(changes) => {
-                    for ids in changes.changed.chunks(PAGE as usize) {
-                        for t in library::get_tracks(ids)? {
-                            pass::note(t.id, look(&t), now)?;
-                        }
+                    let (changed, removed) = (&changes.changed, &changes.removed);
+                    match pass::changed(&mut Imports, changed, removed, now, deadline, look)? {
+                        0 => String::new(),
+                        left => format!(
+                            " It ran out of time with {left} to go, which the next run looks up first."
+                        ),
                     }
-                    changes.removed.into_iter().try_for_each(pass::forget)?;
-                    return Ok(summary(&n, can_write));
                 }
-                // It asks to hear of no other event, and settings were answered above.
-                Event::ScanFinished(_)
-                | Event::CheckSettings
-                | Event::Played(_)
-                | Event::Playing(_)
-                | Event::Searched(_)
-                | Event::SearchesForgotten(_)
-                | Event::AlbumsChanged(_)
-                | Event::ArtistsChanged(_) => {
-                    return Ok("Nothing to do.".into());
-                }
+                _ => return Ok("Nothing to do.".into()),
             };
-            n.had_lyrics += walked.had_lyrics;
-            let mut s = summary(&n, can_write);
-            if !walked.finished {
-                s.push_str(" There is more to do: it carries on from there next time.");
-            }
-            Ok(s)
+            Ok(summary(&n, can_write) + &more)
         }
     }
 
-    /// Looks up lyrics for `t` if it has none, saves them if it can, and says what it saw.
-    fn visit(t: &library::Track, saving: Saving, n: &mut Tally) -> Seen {
+    /// Looks up lyrics for `t` if it has none, saves them if it can, and says what it saw. An
+    /// error is a lookup that can't be answered now, which stops the run.
+    fn visit(t: &library::Track, saving: Saving, n: &mut Tally) -> Result<Seen, String> {
         let name = format!("{} — {}", t.title, t.artists.join(", "));
         if t.has_lyrics {
             n.had_lyrics += 1;
-            return Seen::Settled;
+            return Ok(Seen::Settled);
         }
         n.checked += 1;
         let found = match lookup(t) {
             Ok(found) => found,
-            Err(e) => {
+            Err(Failure::Unavailable(why)) => return Err(why),
+            Err(Failure::Failed(why)) => {
                 n.failed += 1;
-                host::log(&format!("✗ {name}: {e}"));
-                return Seen::Failed;
+                host::log(&format!("✗ {name}: {why}"));
+                return Ok(Seen::Failed);
             }
         };
         let seen = progress::seen(&found, saving);
@@ -180,18 +177,18 @@ mod plugin {
             Found::Plain(_) if saving.synced_only => {
                 n.plain_only += 1;
                 host::log(&format!("· {name}: only plain lyrics, skipped"));
-                return seen;
+                return Ok(seen);
             }
             Found::Plain(s) => (false, s),
             Found::Instrumental => {
                 n.instrumental += 1;
                 host::log(&format!("♪ {name}: instrumental"));
-                return seen;
+                return Ok(seen);
             }
             Found::Nothing => {
                 n.missing += 1;
                 host::log(&format!("· {name}: not found"));
-                return seen;
+                return Ok(seen);
             }
         };
         let kind = if synced { "synced" } else { "plain" };
@@ -200,12 +197,16 @@ mod plugin {
         } else if let Err(e) = save(t, synced, &text) {
             n.failed += 1;
             host::log(&format!("✗ {name}: could not save: {e}"));
-            return Seen::Failed;
+            return Ok(Seen::Failed);
         } else {
             host::log(&format!("✓ {name}: saved {kind} lyrics"));
         }
-        if synced { n.synced += 1 } else { n.plain += 1 }
-        seen
+        if synced {
+            n.synced += 1
+        } else {
+            n.plain += 1
+        }
+        Ok(seen)
     }
 
     /// Saves lyrics beside the track as a new file: lyrics already there are never replaced.

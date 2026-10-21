@@ -4,9 +4,11 @@
 //! Needs the packed plugin: run `plugins/listenbrainz/build.sh` first.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use jewelcase_plugins::{
-    Album, Artist, Event, Grants, Host, Library, Outcome, Permission, Play, PlayEnd, Playing, Track,
+    Album, Artist, Event, Grants, Host, Library, Outcome, Per, Permission, Play, PlayEnd, Playing,
+    Track, manifest,
 };
 
 /// The packed plugin. Panics, saying how to build it, when it is not built.
@@ -76,6 +78,17 @@ impl Library for Empty {
 fn a_real_plugin_passes_the_install_check() {
     let (host, bytes) = (Host::new().unwrap(), std::fs::read(plugin()).unwrap());
     host.check(&bytes).unwrap();
+}
+
+/// The packed manifest installs, and paces each connected user's requests apart at the one call
+/// a second ListenBrainz asks of each client application, halves of a refused batch included.
+#[test]
+fn it_asks_listenbrainz_at_most_once_a_second_for_each_user() {
+    let manifest = manifest::read(&std::fs::read(plugin()).unwrap()).unwrap();
+    let limits = manifest.rate_limits();
+    let limits: Vec<_> = limits.iter().map(|l| (l.host.as_str(), l.gap, l.per)).collect();
+    assert_eq!(limits, [("api.listenbrainz.org", Duration::from_secs(1), Per::User)]);
+    assert_eq!(manifest.version, "0.1.0");
 }
 
 /// User 1's grants of `permissions` to the plugin in library 1, with their token set.

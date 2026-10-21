@@ -9,6 +9,7 @@ use super::testing::{self, Memory};
 use super::{CPU_BUDGET, Event, Host, Outcome, ScanFinished};
 
 mod limits;
+mod lyrics;
 
 /// The ticks of compute most runs here may spend, about 100 ms: well short of the fixture's
 /// 500 ms wait.

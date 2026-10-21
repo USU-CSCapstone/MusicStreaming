@@ -7,7 +7,7 @@ use jewelcase_plugins::{Event, Permission};
 use serde_json::json;
 
 use super::due::{all, event, queries};
-use super::{Hook, record};
+use super::{Hook, Ran, record};
 use crate::db::Database;
 use crate::db::testing::{User, access};
 use crate::plugins::Plugins;
@@ -16,6 +16,7 @@ use crate::plugins::testing::{connect, database, enable, grant, install, manifes
 mod changes;
 mod libraries;
 mod listening;
+mod outages;
 mod real;
 mod reinstall;
 mod scans;
@@ -68,16 +69,26 @@ async fn setup() -> (tempfile::TempDir, Arc<Database>, Arc<Plugins>) {
 }
 
 /// Delivers every hook due at `now` to a stand-in plugin that answers each event with
-/// `answer`, and returns each delivery. This is [`Plugins::deliver`] with the plugin left out: a
-/// delivery with nothing for the plugin moves on without reaching it, but is still returned, so
-/// a hook found due with nothing to send shows.
+/// `answer`, where an error is a failure of the plugin's own ([`Ran::Failed`]), and returns each
+/// delivery.
 async fn deliver(db: &Database, now: i64, answer: Result<(), &'static str>) -> Vec<Received> {
+    match answer {
+        Ok(()) => ran(db, now, Ran::Handled, "").await,
+        Err(why) => ran(db, now, Ran::Failed, why).await,
+    }
+}
+
+/// Delivers every hook due at `now` to a stand-in plugin whose run goes as `how`, saying
+/// `summary`, and returns each delivery. This is [`Plugins::deliver`] with the plugin left out:
+/// a delivery with nothing for the plugin moves on without reaching it, but is still returned,
+/// so a hook found due with nothing to send shows.
+async fn ran(db: &Database, now: i64, how: Ran, summary: &'static str) -> Vec<Received> {
     db.write(move |tx| {
         let mut received = Vec::new();
         for due in all(tx, now)? {
             let (next, event) = event(tx, &due, now)?;
-            let summary = answer.err().unwrap_or_default();
-            record(tx, &due, next, answer.is_ok() || event.is_none(), summary, now)?;
+            let how = if event.is_none() { Ran::Handled } else { how };
+            record(tx, &due, next, how, summary, now)?;
             let (hook, library, user) = (due.hook, due.library, due.user);
             received.push(Received { hook, library, user, event });
         }

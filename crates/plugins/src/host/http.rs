@@ -17,7 +17,8 @@ use crate::network::cache::{self, Key, Lookup, Reply, Visible};
 use crate::network::limits::Scope;
 use crate::rules;
 
-const TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a request waits for its reply once sent, unless a run says otherwise.
+pub(super) const TIMEOUT: Duration = Duration::from_secs(15);
 /// The largest request or reply body. Either is held in the plugin's memory whole.
 const MAX_BODY: usize = 16 << 20;
 const MAX_REDIRECTS: usize = 5;
@@ -113,6 +114,7 @@ impl<L: Library> http::Host for Run<L> {
         let turn = self.network.limits.turn(&host, &self.queues(&host), Instant::now());
         // Rounded up, so a plugin that waits that long finds its turn has come.
         let turn = turn.map_err(|wait| {
+            self.outage = true;
             let ms = wait.as_micros().div_ceil(1000);
             http::Error::RateLimited(u64::try_from(ms).unwrap_or(u64::MAX))
         })?;
@@ -128,10 +130,20 @@ impl<L: Library> http::Host for Run<L> {
             builder = builder.body(request.body);
         }
         // The wait for a turn is not the service's slowness, so only the request is timed.
-        let reply = tokio::time::timeout(TIMEOUT, fetch(builder))
-            .await
-            .map_err(|_| http::Error::TimedOut)?
-            .map_err(http::Error::Failed)?;
+        let reply = match tokio::time::timeout(self.timeout, fetch(builder)).await {
+            Ok(Ok(reply)) => reply,
+            Ok(Err(NoReply { why, unreachable })) => {
+                self.outage |= unreachable;
+                return Err(http::Error::Failed(why));
+            }
+            Err(_) => {
+                self.outage = true;
+                return Err(http::Error::TimedOut);
+            }
+        };
+        // A service that answers it is too busy or failing is as out of reach as one that
+        // does not answer.
+        self.outage |= matches!(reply.status, 429 | 500..=599);
         let (now, clock) = (Instant::now(), SystemTime::now());
         let retry_after = reply.header("retry-after");
         // Redirects have been followed, so the answer is from where the last one led.
@@ -225,9 +237,29 @@ impl<L: Library> Run<L> {
     }
 }
 
+/// Why a request has no reply, and whether that is because its service could not be reached
+/// at all: any failure before a connection was made, such as no address for it, a refused
+/// connection, no route to it, the 10 s connect timeout, or a failed TLS handshake. Each is
+/// treated as an outage, so a lasting DNS or TLS problem disables the plugin only after the
+/// 72 hours an outage may last, not after five failures.
+struct NoReply {
+    why: String,
+    unreachable: bool,
+}
+
+impl From<String> for NoReply {
+    /// A failure after the service was reached, such as a reply cut short.
+    fn from(why: String) -> NoReply {
+        NoReply { why, unreachable: false }
+    }
+}
+
 /// Sends the request and reads the whole reply.
-async fn fetch(builder: reqwest::RequestBuilder) -> Result<Reply, String> {
-    let mut res = builder.send().await.map_err(|e| format!("request failed: {}", describe(e)))?;
+async fn fetch(builder: reqwest::RequestBuilder) -> Result<Reply, NoReply> {
+    let mut res = builder.send().await.map_err(|e| NoReply {
+        unreachable: e.is_connect(),
+        why: format!("request failed: {}", describe(e)),
+    })?;
     let status = res.status().as_u16();
     let url = res.url().to_string();
     // Names come lowercase from the HTTP library.
@@ -242,7 +274,7 @@ async fn fetch(builder: reqwest::RequestBuilder) -> Result<Reply, String> {
     {
         body.extend_from_slice(&chunk);
         if body.len() > MAX_BODY {
-            return Err(format!("the reply is over {} MB", MAX_BODY >> 20));
+            return Err(format!("the reply is over {} MB", MAX_BODY >> 20).into());
         }
     }
     Ok(Reply { status, headers, body: Arc::new(body), url })

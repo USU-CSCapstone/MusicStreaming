@@ -84,9 +84,14 @@ CREATE TABLE plugin_cursors (
     -- `search_events.seq` delivered. Zero is before everything, so a plugin new to a library
     -- works through all of it.
     position   INTEGER NOT NULL DEFAULT 0,
-    -- Failures in a row, and when to try again after the latest.
-    failures   INTEGER NOT NULL DEFAULT 0,
-    retry_at   INTEGER,
+    -- Failures in a row, and when to try again after the latest. `outages` are the failures
+    -- after the plugin found a service out of reach, and `failures` the rest; the two together
+    -- set the backoff. `outage_since` is when the outages since the last success or other
+    -- failure began, so an outage that has lasted too long can be told apart.
+    failures     INTEGER NOT NULL DEFAULT 0,
+    outages      INTEGER NOT NULL DEFAULT 0,
+    outage_since INTEGER,
+    retry_at     INTEGER,
     PRIMARY KEY (plugin_id, library_id, hook, user_id)
 ) STRICT, WITHOUT ROWID;
 

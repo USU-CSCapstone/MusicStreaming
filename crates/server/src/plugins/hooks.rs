@@ -38,6 +38,9 @@ const POLL: Duration = Duration::from_secs(5);
 const BATCH: i64 = 100;
 /// Failures in a row before a plugin is disabled in a library.
 const MAX_FAILURES: i64 = 5;
+/// How long a plugin may fail to reach its service, with no other failure between, before it
+/// is disabled in a library.
+const MAX_OUTAGE_MS: i64 = 72 * 60 * 60_000;
 /// The wait after the first failure, doubling after each until [`MAX_BACKOFF_MS`].
 const BACKOFF_MS: i64 = 60_000;
 const MAX_BACKOFF_MS: i64 = 60 * 60_000;
@@ -77,8 +80,35 @@ struct Due {
     library: i64,
     position: i64,
     failures: i64,
+    outages: i64,
+    /// When the outages since the last other failure or success began, if there are any.
+    outage_since: Option<i64>,
     /// The user it acts for, in `played`, `playing`, and `searched`; otherwise 0.
     user: i64,
+}
+
+/// How a delivery went, for its position and retries.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Ran {
+    /// Handled, or nothing to hand the plugin, so the position moves on.
+    Handled,
+    /// Failed, so it is tried again later, and counts toward disabling the plugin.
+    Failed,
+    /// Failed after the plugin found a service out of reach (`Outcome::outage`), so it is tried
+    /// again later. It disables the plugin only once the outage has lasted [`MAX_OUTAGE_MS`].
+    Unreachable,
+}
+
+impl Ran {
+    /// How a run went, given whether it ended `ok` and whether it found a service out of reach
+    /// on the way: one that succeeded is handled, even after a request that had to wait.
+    fn of(ok: bool, outage: bool) -> Ran {
+        match (ok, outage) {
+            (true, _) => Ran::Handled,
+            (false, true) => Ran::Unreachable,
+            (false, false) => Ran::Failed,
+        }
+    }
 }
 
 impl Plugins {
@@ -124,7 +154,16 @@ impl Plugins {
             .db
             .read(move |conn| {
                 let plugin_id = plugin.clone();
-                let at = Due { hook, plugin: plugin_id, library, position, failures: 0, user };
+                let at = Due {
+                    hook,
+                    plugin: plugin_id,
+                    library,
+                    position,
+                    failures: 0,
+                    outages: 0,
+                    outage_since: None,
+                    user,
+                };
                 let event = due::event(conn, &at, now_ms())?;
                 Ok((
                     event,
@@ -139,61 +178,81 @@ impl Plugins {
             Err(error) => return tracing::error!(%error, "cannot read hook events"),
         };
         // Nothing for the plugin, such as a start that went stale, moves the position on.
-        let (succeeded, summary) = match event {
-            None => (true, String::new()),
+        let (ran, summary) = match event {
+            None => (Ran::Handled, String::new()),
             Some(event) => {
                 let run_for = RunFor { library, user: (due.user != 0).then_some(due.user) };
                 match self.run_in(&due.plugin, &manifest, run_for, permissions, event).await {
-                    Ok((outcome, _)) => (outcome.ok, outcome.summary),
-                    Err(error) => (false, error.to_string()),
+                    Ok((outcome, _)) => (Ran::of(outcome.ok, outcome.outage), outcome.summary),
+                    Err(error) => (Ran::Failed, error.to_string()),
                 }
             }
         };
         let recorded =
-            self.db.write(move |tx| record(tx, &due, next, succeeded, &summary, now_ms())).await;
+            self.db.write(move |tx| record(tx, &due, next, ran, &summary, now_ms())).await;
         if let Err(error) = recorded {
             tracing::error!(%error, "cannot record a hook delivery");
         }
     }
 }
 
-/// Moves the position on to `next` after a success. After a failure it keeps the position and
-/// waits longer each time before trying again, and disables the plugin in the library once
-/// it has failed [`MAX_FAILURES`] times in a row, unless it is acting for one user.
+/// Moves the position on to `next` once the delivery is handled. After a failure it keeps the
+/// position and waits longer each time before trying again. Unless it is acting for one user, it
+/// disables the plugin in the library once it has failed [`MAX_FAILURES`] times in a row, not
+/// counting outages ([`Ran::Unreachable`]), or once it has failed to reach its service for
+/// [`MAX_OUTAGE_MS`] with no other failure between: a failure of its own shows the service was
+/// reached, or that the plugin is at fault, so it ends the outage.
 fn record(
     conn: &Connection,
     due: &Due,
     next: i64,
-    succeeded: bool,
+    ran: Ran,
     summary: &str,
     now: i64,
 ) -> rusqlite::Result<()> {
     let (plugin, library, hook, user) = (&due.plugin, due.library, due.hook.name(), due.user);
-    if succeeded {
-        conn.execute(
-            "INSERT INTO plugin_cursors (plugin_id, library_id, hook, user_id, position) \
-             VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (plugin_id, library_id, hook, user_id) \
-             DO UPDATE SET position = excluded.position, failures = 0, retry_at = NULL",
-            params![plugin, library, hook, user, next],
-        )?;
-        return Ok(());
-    }
-    let failures = due.failures + 1;
-    let backoff = (BACKOFF_MS << (failures - 1).min(10)).min(MAX_BACKOFF_MS);
+    let (failures, outages, outage_since) = match ran {
+        Ran::Handled => {
+            conn.execute(
+                "INSERT INTO plugin_cursors (plugin_id, library_id, hook, user_id, position) \
+                 VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (plugin_id, library_id, hook, user_id) \
+                 DO UPDATE SET position = excluded.position, failures = 0, outages = 0, \
+                 outage_since = NULL, retry_at = NULL",
+                params![plugin, library, hook, user, next],
+            )?;
+            return Ok(());
+        }
+        Ran::Failed => (due.failures + 1, due.outages, None),
+        Ran::Unreachable => (due.failures, due.outages + 1, Some(due.outage_since.unwrap_or(now))),
+    };
+    let tries = failures + outages;
+    let backoff = (BACKOFF_MS << (tries - 1).min(10)).min(MAX_BACKOFF_MS);
     conn.execute(
-        "INSERT INTO plugin_cursors (plugin_id, library_id, hook, user_id, failures, retry_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT (plugin_id, library_id, hook, user_id) \
-         DO UPDATE SET failures = excluded.failures, retry_at = excluded.retry_at",
-        params![plugin, library, hook, user, failures, now + backoff],
+        "INSERT INTO plugin_cursors \
+             (plugin_id, library_id, hook, user_id, failures, outages, outage_since, retry_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+         ON CONFLICT (plugin_id, library_id, hook, user_id) \
+         DO UPDATE SET failures = excluded.failures, outages = excluded.outages, \
+         outage_since = excluded.outage_since, retry_at = excluded.retry_at",
+        params![plugin, library, hook, user, failures, outages, outage_since, now + backoff],
     )?;
-    if failures >= MAX_FAILURES && user == 0 {
-        let reason = format!("Stopped after failing {failures} times in a row: {summary}");
+    let stopped = match (ran, outage_since) {
+        (Ran::Failed, _) if failures >= MAX_FAILURES => {
+            format!("Stopped after failing {failures} times in a row: {summary}")
+        }
+        (Ran::Unreachable, Some(since)) if now - since >= MAX_OUTAGE_MS => {
+            let hours = MAX_OUTAGE_MS / (60 * 60_000);
+            format!("Stopped after it could not reach its service for {hours} hours: {summary}")
+        }
+        _ => return Ok(()),
+    };
+    if user == 0 {
         conn.execute(
             "UPDATE plugin_libraries SET enabled = 0, disabled_reason = ?3 \
              WHERE plugin_id = ?1 AND library_id = ?2",
-            params![plugin, library, reason],
+            params![plugin, library, stopped],
         )?;
-        tracing::warn!(plugin, library, hook, "disabled a plugin that kept failing");
+        tracing::warn!(plugin, library, hook, reason = stopped, "disabled a plugin");
     }
     Ok(())
 }

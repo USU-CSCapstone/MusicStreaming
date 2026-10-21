@@ -67,8 +67,16 @@ async fn a_connection_to_another_plugin_sends_this_one_nothing() {
     start(&db, "now", 7, 11, 1000).await;
     db.write(|tx| disconnect(tx, "plugin", 7)).await.unwrap();
     for hook in [Hook::Played, Hook::Playing] {
-        let due =
-            Due { hook, plugin: "plugin".into(), library: 1, position: 0, failures: 0, user: 7 };
+        let due = Due {
+            hook,
+            plugin: "plugin".into(),
+            library: 1,
+            position: 0,
+            failures: 0,
+            outages: 0,
+            outage_since: None,
+            user: 7,
+        };
         let (_, nothing) = db.read(move |conn| event(conn, &due, 1000)).await.unwrap();
         assert!(nothing.is_none(), "{hook:?} after disconnecting: {nothing:?}");
     }
@@ -185,6 +193,8 @@ async fn a_start_that_ended_or_went_stale_is_never_delivered() {
         library: 1,
         position: 0,
         failures: 0,
+        outages: 0,
+        outage_since: None,
         user: 7,
     };
     let (position, nothing) = db.read(move |conn| event(conn, &gone, later)).await.unwrap();

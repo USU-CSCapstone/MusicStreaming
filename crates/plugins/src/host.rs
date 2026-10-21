@@ -168,6 +168,11 @@ pub struct Outcome {
     pub written: usize,
     /// Every path it created, replaced, moved, or deleted, for the scanner to look at again.
     pub touched: Vec<PathBuf>,
+    /// Whether a request found its service out of reach: held back as `rate-limited`,
+    /// `timed-out`, unable to connect, or answered `429` or a `5xx`. A run that failed after one
+    /// may have failed only for that, so the server retries it without counting it among the
+    /// plugin's own failures.
+    pub outage: bool,
 }
 
 pub struct Host {
@@ -255,6 +260,7 @@ impl Host {
                     log: Vec::new(),
                     written: 0,
                     touched: Vec::new(),
+                    outage: false,
                 };
             }
         };
@@ -267,7 +273,8 @@ impl Host {
             Ok(summary) => (true, summary),
             Err(error) => (false, error),
         };
-        Outcome { ok, summary, log: run.log, written: run.written, touched: run.touched }
+        let (log, written, touched, outage) = (run.log, run.written, run.touched, run.outage);
+        Outcome { ok, summary, log, written, touched, outage }
     }
 
     /// A fresh store for one run over `library` with `grants`, with its caps and compute budget.
@@ -293,6 +300,8 @@ impl Host {
             log: Vec::new(),
             written: 0,
             touched: Vec::new(),
+            outage: false,
+            timeout: http::TIMEOUT,
         };
         let mut store = Store::new(&self.engine, run);
         // Memories, tables, and instances are counted across the whole store, so the caps bound
@@ -434,6 +443,10 @@ pub struct Run<L> {
     log: Vec<String>,
     written: usize,
     touched: Vec<PathBuf>,
+    /// Whether a request found its service out of reach ([`Outcome::outage`]).
+    outage: bool,
+    /// How long a request waits for its reply once sent.
+    timeout: Duration,
 }
 
 impl<L: Library> Run<L> {

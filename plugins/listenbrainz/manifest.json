@@ -1,7 +1,7 @@
 {
 	"id": "listenbrainz",
 	"name": "ListenBrainz",
-	"version": "0.2.0",
+	"version": "0.1.0",
 	"apiVersion": "0.1",
 	"description": "Sends what you play to your own ListenBrainz account.",
 	"author": "Jewelcase examples",
@@ -23,8 +23,9 @@
 		{
 			"permission": "network",
 			"required": true,
-			"reason": "To reach ListenBrainz.",
-			"destinations": ["api.listenbrainz.org"]
+			"reason": "To reach ListenBrainz, at most once a second for each user.",
+			"destinations": ["api.listenbrainz.org"],
+			"rateLimits": { "api.listenbrainz.org": { "limit": "1/s", "per": "user" } }
 		},
 		{ "permission": "played", "required": true, "reason": "To send each play as it ends." },
 		{ "permission": "playing", "required": false, "reason": "To show what you are playing now on your ListenBrainz profile." }

@@ -3,6 +3,8 @@
 
 use serde::Deserialize;
 
+use crate::failure::Failure;
+
 pub const API: &str = "https://lrclib.net/api";
 
 /// How far a match's length may be from the track's and still be the same recording.
@@ -74,22 +76,26 @@ pub fn search_url(q: &Query) -> String {
     )
 }
 
-/// `/get`: a record, or none for LRCLIB's 404.
-pub fn parse_get(status: u16, body: &str) -> Result<Option<Record>, String> {
+/// `/get`: a record, or none for LRCLIB's `404`, the only answer that means it has none.
+pub fn parse_get(status: u16, body: &str) -> Result<Option<Record>, Failure> {
     match status {
-        200 => serde_json::from_str(body)
-            .map(Some)
-            .map_err(|e| format!("unreadable reply: {e}")),
+        200 => read(body).map(Some),
         404 => Ok(None),
-        s => Err(format!("LRCLIB answered {s}")),
+        s => Err(Failure::answered(s)),
     }
 }
 
-pub fn parse_search(status: u16, body: &str) -> Result<Vec<Record>, String> {
+/// `/search`: the records that matched, which may be none.
+pub fn parse_search(status: u16, body: &str) -> Result<Vec<Record>, Failure> {
     match status {
-        200 => serde_json::from_str(body).map_err(|e| format!("unreadable reply: {e}")),
-        s => Err(format!("LRCLIB answered {s}")),
+        200 => read(body),
+        s => Err(Failure::answered(s)),
     }
+}
+
+/// A `200` reply's JSON body.
+fn read<T: serde::de::DeserializeOwned>(body: &str) -> Result<T, Failure> {
+    serde_json::from_str(body).map_err(|e| Failure::Failed(format!("unreadable reply: {e}")))
 }
 
 fn nonempty(s: &Option<String>) -> Option<&str> {
@@ -168,8 +174,21 @@ mod tests {
         let r = parse_get(200, body).unwrap().unwrap();
         assert_eq!(r.synced_lyrics.as_deref(), Some("[00:01.00]a"));
         assert!(parse_get(404, r#"{"statusCode":404}"#).unwrap().is_none());
-        assert!(parse_get(500, "").is_err());
         assert_eq!(parse_search(200, "[]").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn only_a_404_means_lrclib_has_nothing() {
+        for status in [429, 500, 503] {
+            let unavailable = Failure::Unavailable(format!("LRCLIB answered {status}"));
+            assert_eq!(parse_get(status, "").unwrap_err(), unavailable);
+            assert_eq!(parse_search(status, "").unwrap_err(), unavailable);
+        }
+        let failed = Failure::Failed("LRCLIB answered 400".into());
+        assert_eq!(parse_get(400, "").unwrap_err(), failed);
+        assert_eq!(parse_search(404, "").unwrap_err(), Failure::answered(404));
+        let unreadable = parse_get(200, "<html>").unwrap_err();
+        assert!(matches!(unreadable, Failure::Failed(ref why) if why.starts_with("unreadable")));
     }
 
     #[test]

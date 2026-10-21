@@ -154,5 +154,7 @@ pub fn run<L: Library>(library: L, permissions: &[Permission]) -> Run<L> {
         log: Vec::new(),
         written: 0,
         touched: Vec::new(),
+        outage: false,
+        timeout: super::http::TIMEOUT,
     }
 }
