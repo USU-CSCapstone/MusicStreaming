@@ -1,14 +1,9 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { PluginManifest } from '../src/lib/api/plugins';
-import {
-	API_VERSION,
-	readManifest,
-	validateManifest,
-	withManifest
-} from '../../tools/plugin-pack/manifest.mjs';
+import { readManifest, withManifest } from '../../tools/plugin-pack/manifest.mjs';
 import { PluginError, PluginStore, adminRoute } from './plugins';
 
 /** The smallest valid component: the header, and nothing in it. */
@@ -42,21 +37,6 @@ function invalid(bytes: Uint8Array): string {
 	throw new Error('expected the file to be rejected');
 }
 
-describe('manifest validation', () => {
-	// The server's `crates/plugins` is held to the same cases, so the two cannot drift apart.
-	const cases: { name: string; manifest: unknown; problems: string[] }[] = JSON.parse(
-		readFileSync(join(import.meta.dirname, '../../crates/plugins/manifest-cases.json'), 'utf8')
-	);
-
-	it.each(cases.map((c) => [c.name, c] as const))('agrees with the server: %s', (_, c) => {
-		// A case leaves out `apiVersion` unless it is what the case is about.
-		const m = c.manifest;
-		const isObject = typeof m === 'object' && m !== null && !Array.isArray(m);
-		const manifest = isObject && !('apiVersion' in m) ? { ...m, apiVersion: API_VERSION } : m;
-		expect(validateManifest(manifest)).toEqual(c.problems);
-	});
-});
-
 describe('plugin files', () => {
 	it('round-trips a manifest', () => {
 		expect(readManifest(packed())).toEqual(manifest);
@@ -82,31 +62,28 @@ describe('plugin files', () => {
 		expect(invalid(bytes)).toMatch(/not valid JSON/);
 	});
 
-	it('names what is wrong with an invalid manifest', () => {
-		const bad = {
-			...manifest,
-			id: 'Bad ID',
-			permissions: [
-				{ permission: 'everything', required: true, reason: 'x' },
-				{ permission: 'network', required: true, reason: '' }
-			]
-		};
-		expect(() => packed(bad)).toThrow(
-			/"id".*unknown permission "everything".*needs a "reason".*destinations/
-		);
+	it('leaves checking what a manifest says to the server', () => {
+		const bad = { ...manifest, id: 'Bad ID', permissions: [{ permission: 'everything' }] };
+		expect(readManifest(packed(bad))).toEqual(bad);
+		for (const m of [[manifest], null, 'x']) {
+			expect(invalid(packed(m)), JSON.stringify(m)).toMatch(/not a JSON object/);
+		}
 	});
 });
 
 describe('PluginStore', () => {
+	// The store lives one level inside `root`, so a file written beside it stays in `root`.
+	let root: string;
 	let dir: string;
 	let store: PluginStore;
 	const LIB = '11';
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), 'jc-plugins-'));
+		root = mkdtempSync(join(tmpdir(), 'jc-plugins-'));
+		dir = join(root, 'store');
 		store = new PluginStore(dir, () => [LIB]);
 	});
-	afterEach(() => rmSync(dir, { recursive: true, force: true }));
+	afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 	const grantAll = () =>
 		store.setPermissions('lrclib-lyrics', {
@@ -125,6 +102,37 @@ describe('PluginStore', () => {
 				missingRequired: ['libraryRead', 'network']
 			})
 		]);
+	});
+
+	it('reads a manifest without a permissions list as asking for none', () => {
+		expect(
+			store.install(packed({ ...manifest, permissions: undefined }), { kind: 'file' }).libraries[0]
+				.missingRequired
+		).toEqual([]);
+	});
+
+	/** Installs `m`, packed into a component, through the admin route. */
+	const install = (m: unknown) =>
+		adminRoute(store, 'POST', '/admin/plugins', 'application/octet-stream', packed(m));
+
+	it('refuses a manifest it could not store or list, writing nothing outside its directory', async () => {
+		for (const m of [
+			{ ...manifest, id: '../escaped' },
+			{ ...manifest, id: 'a/../escaped' },
+			{ ...manifest, id: 12 },
+			{ ...manifest, name: 1 },
+			{ ...manifest, permissions: 'all' }
+		]) {
+			expect(await install(m), JSON.stringify(m)).toMatchObject({
+				status: 422,
+				body: { code: 'plugin_invalid' }
+			});
+		}
+		expect(existsSync(join(root, 'escaped.wasm'))).toBe(false);
+	});
+
+	it('installs a plugin whose id is also a name on the object prototype', async () => {
+		expect((await install({ ...manifest, id: 'constructor' }))?.status).toBe(201);
 	});
 
 	it('refuses a second install of the same plugin', () => {
@@ -185,10 +193,21 @@ describe('PluginStore', () => {
 
 	it('exempts only by one host name, as the server does', () => {
 		store.install(packed(), { kind: 'file' });
-		for (const host of ['musicbrainz.org.', '*', '']) {
+		const refused = [
+			'musicbrainz.org.',
+			'*',
+			'',
+			'https://musicbrainz.org',
+			'musicbrainz.org:443',
+			'127.1',
+			'\u212A.com' // The Kelvin sign, which the URL parser reads as k.
+		];
+		for (const host of refused) {
 			expect(() => store.setExempt('lrclib-lyrics', host, true), host).toThrow(PluginError);
 		}
-		expect(() => store.setExempt('lrclib-lyrics', 'MusicBrainz.org', true)).not.toThrow();
+		for (const host of ['MusicBrainz.org', 'MUSICBRAINZ.ORG']) {
+			expect(() => store.setExempt('lrclib-lyrics', host, true), host).not.toThrow();
+		}
 	});
 
 	it('persists to disk', () => {
@@ -230,6 +249,9 @@ describe('PluginStore', () => {
 		).toEqual({ status: 204 });
 		expect(
 			(await adminRoute(store, 'GET', '/admin/plugins/nope', '', new Uint8Array()))?.status
+		).toBe(404);
+		expect(
+			(await adminRoute(store, 'DELETE', '/admin/plugins/__proto__', '', new Uint8Array()))?.status
 		).toBe(404);
 	});
 

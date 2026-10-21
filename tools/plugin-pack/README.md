@@ -8,8 +8,9 @@ node tools/plugin-pack/pack.mjs plugin.wasm manifest.json -o my-plugin.wasm
 ```
 
 The output is what an admin uploads on the Plugins page or links to. Packing again replaces
-the manifest rather than adding a second one, and a file that would not install is never
-written. The error says what to fix.
+the manifest rather than adding a second one. Pack checks only that the manifest is a JSON
+object: the server checks everything else when the plugin is installed, and its error says what
+to fix.
 
 ## The component
 
@@ -50,9 +51,7 @@ is refused at install. The other caps a run keeps to are in `design/plugins.md` 
 No other key is allowed, at any level: a misspelt one, such as `rateLimit`, is refused rather
 than ignored.
 
-The server validates on install with its own reader in [`crates/plugins`](../../crates/plugins/),
-which is the authority. `manifest.mjs` validates the same way, for authors, the web mock, and its
-tests, and both are held to [`manifest-cases.json`](../../crates/plugins/manifest-cases.json).
-Change one, and the cases, together: add a case as `{ "name", "manifest" }` and run
-`node tools/plugin-pack/cases.mjs` to record what this module says about each. A case's manifest
-leaves out `apiVersion`, which each test adds, unless the case is about it.
+The server validates on install with its reader in [`crates/plugins`](../../crates/plugins/),
+the only one. A new rule gets a case in
+[`manifest-cases.json`](../../crates/plugins/manifest-cases.json): a `name`, the `manifest`, and
+the `problems` the server should find in it, in order.

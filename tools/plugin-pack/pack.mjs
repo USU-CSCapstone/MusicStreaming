@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Embeds a manifest into a plugin component, producing the one file an admin installs.
+// Embeds a manifest into a plugin component, producing the one file an admin installs. It checks
+// only that the manifest is a JSON object; the server checks what it says, at install.
 //
 //     node tools/plugin-pack/pack.mjs plugin.wasm manifest.json -o plugin.jc.wasm
 
@@ -18,9 +19,10 @@ if (!wasmPath || !manifestPath || !out) {
 try {
 	const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 	const packed = withManifest(new Uint8Array(await readFile(wasmPath)), manifest);
-	readManifest(packed); // Round-trip, so a file that would not install is never written.
+	readManifest(packed); // Refuses a manifest that is not a JSON object.
 	await writeFile(out, packed);
-	console.log(`${out}: ${manifest.name} ${manifest.version}, ${(packed.length / 1e3).toFixed(0)} KB`);
+	const named = [manifest.name, manifest.version].filter((s) => typeof s === 'string').join(' ');
+	console.log(`${out}: ${named ? `${named}, ` : ''}${(packed.length / 1e3).toFixed(0)} KB`);
 } catch (e) {
 	console.error(e instanceof PluginFileError || e instanceof SyntaxError ? e.message : e);
 	process.exit(1);

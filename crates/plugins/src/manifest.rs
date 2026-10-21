@@ -1,8 +1,9 @@
 //! The manifest a plugin file carries (`design/plugins.md` §6): UTF-8 JSON in a top-level
 //! custom section named `jewelcase:manifest` of a WebAssembly component.
 //!
-//! This is the authority on what installs. `tools/plugin-pack` validates the same way for
-//! authors, and both are held to `manifest-cases.json`, so they cannot drift apart.
+//! This is the only validator: `tools/plugin-pack` checks only that a manifest is a JSON object,
+//! so an author learns what else is wrong at install. `validate` is tested against the cases in
+//! `manifest-cases.json`.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -293,7 +294,8 @@ pub fn rate_limit_gap(limit: &str) -> Option<Duration> {
         "h" => 60 * 60,
         _ => return None,
     };
-    // Digits only, as the pack tool reads them: no sign, no leading zero, and no more than nine.
+    // `parse` alone would take a sign or leading zeros. Refusing a leading zero refuses `0` too,
+    // and nine digits always fit a `u32`.
     let digits = count.bytes().all(|b| b.is_ascii_digit()) && !count.starts_with('0');
     if !digits || count.is_empty() || count.len() > 9 {
         return None;
@@ -454,9 +456,10 @@ fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>
     let Some(permission) =
         r.get("permission").and_then(Value::as_str).and_then(Permission::from_name)
     else {
-        // As JSON.stringify shows it, so the pack tool words it the same.
-        let shown = r.get("permission").map_or("undefined".to_owned(), Value::to_string);
-        return vec![format!("{at}: unknown permission {shown}")];
+        return vec![match r.get("permission") {
+            Some(shown) => format!("{at}: unknown permission {shown}"),
+            None => format!(r#"{at}: "permission" is missing"#),
+        }];
     };
     let mut problems = unknown_keys(at, r, &REQUEST_KEYS);
     if seen.contains(&permission) {
@@ -620,8 +623,10 @@ mod tests {
         }
     }
 
+    /// Each case in `manifest-cases.json` is a manifest and every problem `validate` finds in
+    /// it, in order. A new rule gets a case there.
     #[test]
-    fn agrees_with_the_pack_tool_on_every_shared_case() {
+    fn finds_the_problems_each_case_lists() {
         #[derive(Deserialize)]
         struct Case {
             name: String,
@@ -631,24 +636,9 @@ mod tests {
         let cases: Vec<Case> =
             serde_json::from_str(include_str!("../manifest-cases.json")).unwrap();
         assert!(cases.len() > 10);
-        for mut case in cases {
-            // A case leaves out `apiVersion` unless it is what the case is about.
-            if let Some(manifest) = case.manifest.as_object_mut() {
-                manifest.entry("apiVersion").or_insert(API_VERSION.into());
-            }
+        for case in cases {
             assert_eq!(validate(&case.manifest), case.problems, "{}", case.name);
         }
-    }
-
-    /// The shared cases are given `apiVersion` when they leave it out, so leaving it out is
-    /// tested here.
-    #[test]
-    fn a_manifest_without_an_api_version_is_refused() {
-        let mut manifest = serde_json::json!({"id": "ab", "name": "A", "version": "1",
-            "apiVersion": API_VERSION, "permissions": []});
-        assert_eq!(validate(&manifest), Vec::<String>::new());
-        manifest.as_object_mut().unwrap().remove("apiVersion");
-        assert_eq!(validate(&manifest), [r#""apiVersion" must be "0.1""#]);
     }
 
     /// Every key validation allows, at every level, is one the typed form reads and writes back,

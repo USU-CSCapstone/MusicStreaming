@@ -15,7 +15,7 @@ import {
 	type PluginSettings,
 	type SettingSchema
 } from '../src/lib/api/plugins.ts';
-import { PluginFileError, isHostName, readManifest } from '../../tools/plugin-pack/manifest.mjs';
+import { PluginFileError, readManifest } from '../../tools/plugin-pack/manifest.mjs';
 
 const LIBRARY_PERMISSIONS: PermissionName[] = [
 	'libraryRead',
@@ -27,6 +27,8 @@ const LIBRARY_PERMISSIONS: PermissionName[] = [
 	'artistsChanged'
 ];
 const MAX_BYTES = 50 * 1024 * 1024;
+/** The server's rule for a plugin id, which the mock names its file by. */
+const ID = /^[a-z0-9][a-z0-9-]{1,63}$/;
 
 type Record_ = {
 	manifest: PluginManifest;
@@ -126,10 +128,12 @@ export class PluginStore {
 		};
 	}
 
+	/** The plugin installed under `id`, or a 404 `PluginError`. */
 	#get(index: Index, id: string): Record_ {
-		const r = index.plugins[id];
-		if (!r) throw new PluginError(404, 'not_found', 'No such plugin.');
-		return r;
+		// Own keys only, so an id such as `__proto__` is not found on the prototype.
+		if (!Object.hasOwn(index.plugins, id))
+			throw new PluginError(404, 'not_found', 'No such plugin.');
+		return index.plugins[id];
 	}
 
 	list(): Plugin[] {
@@ -150,16 +154,34 @@ export class PluginStore {
 		let manifest: PluginManifest;
 		try {
 			manifest = readManifest(bytes) as PluginManifest;
+			// The server refuses a manifest without a permissions list; the mock reads it as empty.
+			manifest.permissions ??= [];
 		} catch (e) {
 			if (e instanceof PluginFileError) throw new PluginError(422, 'plugin_invalid', e.message);
 			throw e;
 		}
+		// The rest is the server's to check; the mock needs only what it stores and lists by.
+		const { id, name, permissions } = manifest;
+		if (
+			typeof id !== 'string' ||
+			!ID.test(id) ||
+			typeof name !== 'string' ||
+			!Array.isArray(permissions)
+		) {
+			throw new PluginError(
+				422,
+				'plugin_invalid',
+				'The manifest needs an "id" of lowercase letters, digits, and hyphens, a "name", and a "permissions" list.'
+			);
+		}
 		const index = this.#index();
-		if (index.plugins[manifest.id]) {
+		if (Object.hasOwn(index.plugins, manifest.id)) {
 			throw new PluginError(409, 'plugin_exists', `${manifest.name} is already installed.`);
 		}
 		const requested = new Set(manifest.permissions.map((p) => p.permission));
-		const kept = index.retained[manifest.id];
+		const kept = Object.hasOwn(index.retained, manifest.id)
+			? index.retained[manifest.id]
+			: undefined;
 		const libraries: Record_['libraries'] = {};
 		for (const [libraryId, granted] of Object.entries(kept?.libraries ?? {})) {
 			libraries[libraryId] = {
@@ -363,6 +385,23 @@ function inForce(index: Index): { host: string; limit: string; setBy: string[] }
 function gap(limit: string): number {
 	const [count, unit] = limit.split('/');
 	return ({ s: 1, min: 60, h: 3600 }[unit] ?? 1) / Number(count);
+}
+
+/** `s` with ASCII capitals lowercase and nothing else changed, as the server compares hosts. */
+const asciiLower = (s: string) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+
+/**
+ * Whether `host` is one host name, as the server's `is_host_name` reads it: one the URL parser
+ * gives back unchanged but for ASCII case. So a pattern, a URL, a port, a trailing dot, an IPv4
+ * shorthand such as `127.1`, IPv6 outside brackets, or an IDN not in punycode never is.
+ */
+function isHostName(host: string): boolean {
+	try {
+		const parsed = new URL(`http://${host}/`).hostname;
+		return asciiLower(parsed) === asciiLower(host) && !host.includes('*') && !host.endsWith('.');
+	} catch {
+		return false;
+	}
 }
 
 /** The settings a manifest declares, or none. */

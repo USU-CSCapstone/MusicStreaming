@@ -91,8 +91,7 @@ impl Setting {
     }
 }
 
-/// Every problem with the settings a manifest declares under `key`, in the words the pack tool
-/// uses too.
+/// Every problem with the settings a manifest declares under `key`, in words an admin can act on.
 pub fn validate(key: &str, settings: &Value) -> Vec<String> {
     let invalid = || vec![format!(r#""{key}" must be an object with "properties""#)];
     let Some(schema) = settings.as_object() else { return invalid() };

@@ -1,92 +1,12 @@
-// The plugin file format (design/plugins.md, Packaging): one WebAssembly component
-// whose manifest is a top-level custom section named `jewelcase:manifest`, holding
-// UTF-8 JSON. The server's `crates/plugins` is the authority on what installs; this
-// module validates the same way for authors, the web mock, and its tests, and both are
-// held to `crates/plugins/manifest-cases.json`.
+// The plugin file format (design/plugins.md §6): one WebAssembly component whose manifest is a
+// top-level custom section named `jewelcase:manifest`, holding UTF-8 JSON. Nothing here checks
+// what the manifest says: the server's `crates/plugins` does that, at install.
 
-export const SECTION = 'jewelcase:manifest';
-/** The version of the plugin contract a manifest's `apiVersion` must give. */
-export const API_VERSION = '0.1';
-
-/** Permissions a plugin can ask for (requirements/plugins.md §4.1). */
-export const PERMISSIONS = [
-	'libraryRead',
-	'libraryAdd',
-	'libraryChange',
-	'network',
-	'listeningActivity',
-	// Hooks, approved like permissions: when tracks are added, changed, or removed; when a scan
-	// finishes; and at an interval.
-	'tracksChanged',
-	'scanFinished',
-	'schedule',
-	// When a user who connected it finishes playing something, and when they start.
-	'played',
-	'playing',
-	// The searches of users who share them with it, and running when they settle on one.
-	'searchActivity',
-	'searched',
-	// When albums, or artists, are added, changed, or removed.
-	'albumsChanged',
-	'artistsChanged',
-	// Setting a rate limit, "per": "host", that every plugin's requests to a host keep to.
-	'hostRateLimits'
-];
-
-/** Whose requests a rate limit counts: the plugin's, one user's runs of it, or every plugin's. */
-const PER = ['plugin', 'user', 'host'];
-
-/** The shortest interval a schedule may ask for. */
-export const MIN_EVERY_MINUTES = 5;
-
-/** The keys a manifest may give at its top level. */
-const KEYS = [
-	'id',
-	'name',
-	'version',
-	'apiVersion',
-	'description',
-	'author',
-	'homepage',
-	'permissions',
-	'settings',
-	'personalSettings'
-];
-/** The keys a permission request may give. */
-const REQUEST_KEYS = ['permission', 'required', 'reason', 'destinations', 'rateLimits', 'everyMinutes'];
-/** The keys a rate limit given as an object may give. */
-const LIMIT_KEYS = ['limit', 'per'];
-/** The keys settings may give. */
-const SCHEMA_KEYS = ['properties', 'required'];
-/** The keys each setting may give. */
-const SETTING_KEYS = ['type', 'title', 'description', 'enum', 'default', 'writeOnly'];
-
-/** A rate limit for a destination: up to nine digits, no leading zero, per second, minute, or hour. */
-const RATE_LIMIT = /^[1-9][0-9]{0,8}\/(s|min|h)$/;
-/** `s` with ASCII capitals lowercase and nothing else changed, as the server compares hosts. */
-const asciiLower = (/** @type {string} */ s) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
-
-/**
- * Whether `host` is one host, as a destination, a rate limit, or an exemption from one names it:
- * one the URL parser gives back unchanged but for ASCII case, as the server's `is_host_name`
- * reads it. So a pattern, a URL, a port, a trailing dot, an IPv4 shorthand such as `127.1`, IPv6
- * outside brackets, or an IDN not in punycode never is.
- * @param {string} host
- * @returns {boolean}
- */
-export function isHostName(host) {
-	try {
-		const parsed = new URL(`http://${host}/`).hostname;
-		return asciiLower(parsed) === asciiLower(host) && !host.includes('*') && !host.endsWith('.');
-	} catch {
-		return false;
-	}
-}
+const SECTION = 'jewelcase:manifest';
 
 const MAGIC = [0x00, 0x61, 0x73, 0x6d];
 /** Component-model binaries: version 0x0d, layer 1. A core module is version 1, layer 0. */
 const COMPONENT_VERSION = [0x0d, 0x00, 0x01, 0x00];
-const ID = /^[a-z0-9][a-z0-9-]{1,63}$/;
 
 export class PluginFileError extends Error {}
 
@@ -125,7 +45,7 @@ function encodeLeb(n) {
  * @param {Uint8Array} bytes
  * @returns {{ id: number, start: number, end: number, name?: string, payload?: Uint8Array }[]}
  */
-export function sections(bytes) {
+function sections(bytes) {
 	if (bytes.length < 8 || MAGIC.some((b, i) => bytes[i] !== b)) {
 		throw new PluginFileError('This is not a WebAssembly file.');
 	}
@@ -155,7 +75,7 @@ export function sections(bytes) {
 }
 
 /**
- * The manifest a plugin file carries, validated.
+ * The manifest a plugin file carries, refused only when it is not a JSON object.
  * @param {Uint8Array} bytes
  * @returns {Record<string, unknown>}
  */
@@ -173,256 +93,10 @@ export function readManifest(bytes) {
 	} catch {
 		throw new PluginFileError('The manifest is not valid JSON.');
 	}
-	const problems = validateManifest(manifest);
-	if (problems.length) throw new PluginFileError(`The manifest is invalid: ${problems.join('; ')}.`);
+	if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+		throw new PluginFileError('The manifest is not a JSON object.');
+	}
 	return manifest;
-}
-
-/**
- * Every problem with a manifest, in words an admin can act on. Empty when it is valid.
- * @param {unknown} m
- * @returns {string[]}
- */
-export function validateManifest(m) {
-	if (typeof m !== 'object' || m === null || Array.isArray(m)) return ['it must be a JSON object'];
-	const o = /** @type {Record<string, unknown>} */ (m);
-	const problems = unknownKeys('', o, KEYS);
-	const text = (/** @type {string} */ key, required = true) => {
-		const v = o[key];
-		if (v === undefined && !required) return;
-		if (typeof v !== 'string' || !v.trim()) problems.push(`"${key}" must be a non-empty string`);
-	};
-	if (typeof o.id !== 'string' || !ID.test(o.id)) {
-		problems.push('"id" must be lowercase letters, digits, and hyphens (2–64 characters)');
-	}
-	text('name');
-	text('version');
-	text('description', false);
-	text('author', false);
-	if (o.homepage !== undefined && !/^https?:\/\//.test(typeof o.homepage === 'string' ? o.homepage : '')) {
-		problems.push('"homepage" must be an http(s) URL');
-	}
-	if (o.apiVersion !== API_VERSION) problems.push(`"apiVersion" must be "${API_VERSION}"`);
-	for (const key of ['settings', 'personalSettings']) {
-		if (o[key] !== undefined) problems.push(...validateSettings(key, o[key]));
-	}
-	// A run sees both under one set of names.
-	const names = (/** @type {string} */ key) => /** @type {any} */ (o[key])?.properties;
-	const [admin, personal] = [names('settings'), names('personalSettings')];
-	if (isObject(admin) && isObject(personal)) {
-		for (const name of Object.keys(personal).sort()) {
-			if (Object.hasOwn(admin, name)) problems.push(`personalSettings: "${name}" is also one of "settings"`);
-		}
-	}
-	if (!Array.isArray(o.permissions)) {
-		problems.push('"permissions" must be a list (empty if it needs none)');
-		return problems;
-	}
-	const seen = new Set();
-	o.permissions.forEach((p, i) => {
-		const at = `permissions[${i}]`;
-		if (typeof p !== 'object' || p === null || Array.isArray(p)) {
-			return problems.push(`${at} must be an object`);
-		}
-		const r = /** @type {Record<string, unknown>} */ (p);
-		if (!PERMISSIONS.includes(/** @type {string} */ (r.permission))) {
-			return problems.push(`${at}: unknown permission ${JSON.stringify(r.permission)}`);
-		}
-		problems.push(...unknownKeys(at, r, REQUEST_KEYS));
-		if (seen.has(r.permission)) problems.push(`${at}: ${r.permission} is requested twice`);
-		seen.add(r.permission);
-		if (typeof r.required !== 'boolean') problems.push(`${at}: "required" must be true or false`);
-		if (typeof r.reason !== 'string' || !r.reason.trim()) {
-			problems.push(`${at}: every permission needs a "reason" shown to the admin`);
-		}
-		if (r.permission === 'network') {
-			const d = r.destinations;
-			if (!Array.isArray(d) || d.length === 0 || d.some((x) => typeof x !== 'string' || !x)) {
-				problems.push(`${at}: network needs "destinations", host names or ["*"] for any`);
-			} else {
-				for (const h of d.filter((h) => h !== '*' && !isHostName(h))) {
-					problems.push(`${at}: destinations: "${h}" is not a host name`);
-				}
-			}
-		} else if (r.destinations !== undefined) {
-			problems.push(`${at}: only network takes "destinations"`);
-		}
-		if (r.rateLimits !== undefined) {
-			if (r.permission === 'network') problems.push(...validateRateLimits(at, r.rateLimits, r.destinations));
-			else problems.push(`${at}: only network takes "rateLimits"`);
-		}
-		if (r.permission === 'schedule') {
-			const m = r.everyMinutes;
-			if (!Number.isInteger(m) || /** @type {number} */ (m) < MIN_EVERY_MINUTES || /** @type {number} */ (m) > 4294967295) {
-				problems.push(
-					`${at}: schedule needs "everyMinutes", a whole number of minutes, at least ${MIN_EVERY_MINUTES}`
-				);
-			}
-		} else if (r.everyMinutes !== undefined) {
-			problems.push(`${at}: only schedule takes "everyMinutes"`);
-		}
-	});
-	// Limiting every plugin is what the permission is for, and only it allows that.
-	const host = o.permissions.some(
-		(r) =>
-			isObject(r) &&
-			isObject(r.rateLimits) &&
-			Object.values(r.rateLimits).some((limit) => isObject(limit) && limit.per === 'host')
-	);
-	if (host && !seen.has('hostRateLimits')) {
-		problems.push('a rate limit "per": "host" needs hostRateLimits as well');
-	} else if (seen.has('hostRateLimits') && !host) {
-		problems.push('hostRateLimits needs a rate limit "per": "host"');
-	}
-	// A library hook's event is about the library, which only reading it can make anything of.
-	for (const hook of ['tracksChanged', 'scanFinished', 'albumsChanged', 'artistsChanged']) {
-		if (seen.has(hook) && !seen.has('libraryRead')) {
-			problems.push(`${hook} needs libraryRead as well`);
-		}
-	}
-	// Their events are plays of a library's tracks or searches of it, by the users who connected it.
-	const hooks = { played: 'listeningActivity', playing: 'listeningActivity', searched: 'searchActivity' };
-	for (const [hook, activity] of Object.entries(hooks).filter(([h]) => seen.has(h))) {
-		for (const needed of ['libraryRead', activity]) {
-			if (!seen.has(needed)) problems.push(`${hook} needs ${needed} as well`);
-		}
-		if (o.personalSettings === undefined) {
-			problems.push(`${hook} needs "personalSettings", which users connect it with`);
-		}
-	}
-	return problems;
-}
-
-/**
- * Every problem with a network request's rate limits, in the same words as the server's
- * `crates/plugins/src/manifest.rs`.
- * @param {string} at
- * @param {unknown} limits
- * @param {unknown} destinations
- * @returns {string[]}
- */
-function validateRateLimits(at, limits, destinations) {
-	if (!isObject(limits)) return [`${at}: "rateLimits" must map destinations to limits such as "1/s"`];
-	const hosts = Array.isArray(destinations) ? destinations.filter((d) => typeof d === 'string') : [];
-	const problems = [];
-	const entries = /** @type {Record<string, unknown>} */ (limits);
-	// Sorted, as the server's map of them is.
-	const keys = Object.keys(entries).sort();
-	for (const [i, host] of keys.entries()) {
-		// Hosts are compared without case, so two keys that differ only in case would be one.
-		const same = keys.slice(0, i).find((key) => asciiLower(key) === asciiLower(host));
-		if (same !== undefined) {
-			problems.push(`${at}: rateLimits: "${host}" is the same host as "${same}"`);
-			continue;
-		}
-		const limit = entries[host];
-		const counted = isObject(limit) ? /** @type {Record<string, unknown>} */ (limit) : undefined;
-		const pace = counted ? counted.limit : limit;
-		const named = hosts.some((d) => asciiLower(d) === asciiLower(host));
-		// Matched exactly against the host a request names, so `*` or a pattern never would be.
-		if (!isHostName(host)) {
-			problems.push(`${at}: rateLimits: "${host}" is not a host name; each limit is for one host`);
-		} else if (!named && !hosts.includes('*')) {
-			problems.push(`${at}: rateLimits: "${host}" is not one of its destinations`);
-		} else if (!named && counted?.per === 'host') {
-			// A limit on every plugin is one the admin approves by name.
-			problems.push(
-				`${at}: rateLimits: "${host}" limits every plugin, so its destinations must name it rather than "*"`
-			);
-		}
-		if (typeof pace !== 'string' || !RATE_LIMIT.test(pace)) {
-			problems.push(`${at}: rateLimits: "${host}" needs a limit such as "1/s", "60/min", or "1000/h"`);
-		}
-		if (counted && !PER.includes(/** @type {string} */ (counted.per))) {
-			problems.push(`${at}: rateLimits: "${host}" needs "per": "plugin", "user", or "host"`);
-		}
-		if (counted) problems.push(...unknownKeys(`${at}: rateLimits: "${host}"`, counted, LIMIT_KEYS));
-	}
-	return problems;
-}
-
-const KINDS = {
-	string: { accepts: (/** @type {unknown} */ v) => typeof v === 'string', described: 'text' },
-	number: { accepts: (/** @type {unknown} */ v) => typeof v === 'number', described: 'a number' },
-	integer: { accepts: (/** @type {unknown} */ v) => Number.isInteger(v), described: 'a whole number' },
-	boolean: { accepts: (/** @type {unknown} */ v) => typeof v === 'boolean', described: 'true or false' }
-};
-
-/**
- * A problem for each key of `o` that is not one of `known`, found at `at` in the manifest (empty
- * for its top level), sorted as the server's map of them is.
- * @param {string} at
- * @param {Record<string, unknown>} o
- * @param {string[]} known
- * @returns {string[]}
- */
-function unknownKeys(at, o, known) {
-	const prefix = at ? `${at}: ` : '';
-	return Object.keys(o)
-		.filter((key) => !known.includes(key))
-		.sort()
-		.map((key) => `${prefix}unknown key "${key}"`);
-}
-
-/** @param {unknown} v */
-const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
-
-/**
- * Every problem with the settings a manifest declares under `key`: a small part of JSON Schema,
- * in the same words as the server's `crates/plugins/src/settings.rs`.
- * @param {string} key
- * @param {unknown} settings
- * @returns {string[]}
- */
-function validateSettings(key, settings) {
-	const props = /** @type {Record<string, unknown>} */ (settings)?.properties;
-	if (typeof settings !== 'object' || settings === null || !isObject(props)) {
-		return [`"${key}" must be an object with "properties"`];
-	}
-	const properties = /** @type {Record<string, unknown>} */ (props);
-	const problems = unknownKeys(key, /** @type {Record<string, unknown>} */ (settings), SCHEMA_KEYS);
-	// Sorted, as the server's map of them is.
-	for (const name of Object.keys(properties).sort()) {
-		if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name)) {
-			problems.push(`${key}: "${name}" is not a setting name (letters, digits, and _, starting with a letter)`);
-			continue;
-		}
-		const at = `${key}.${name}`;
-		const s = /** @type {Record<string, unknown>} */ (properties[name]);
-		if (typeof s !== 'object' || s === null || Array.isArray(s)) {
-			problems.push(`${at} must be an object`);
-			continue;
-		}
-		problems.push(...unknownKeys(at, s, SETTING_KEYS));
-		const kind = KINDS[/** @type {keyof typeof KINDS} */ (s.type)];
-		if (typeof s.type !== 'string' || !Object.hasOwn(KINDS, s.type)) {
-			problems.push(`${at}: "type" must be string, number, integer, or boolean`);
-			continue;
-		}
-		for (const key of ['title', 'description']) {
-			const v = s[key];
-			if (v !== undefined && !(typeof v === 'string' && v.trim())) {
-				problems.push(`${at}: "${key}" must be a non-empty string`);
-			}
-		}
-		if (s.writeOnly !== undefined && typeof s.writeOnly !== 'boolean') {
-			problems.push(`${at}: "writeOnly" must be true or false`);
-		}
-		const choices = Array.isArray(s.enum) && s.enum.length && s.enum.every(kind.accepts) ? s.enum : undefined;
-		if (s.enum !== undefined && !choices) {
-			problems.push(`${at}: "enum" must be a non-empty list of ${s.type} values`);
-		}
-		if (s.default !== undefined && !kind.accepts(s.default)) {
-			problems.push(`${at}: "default" must be ${kind.described}`);
-		} else if (s.default !== undefined && choices && !choices.includes(s.default)) {
-			problems.push(`${at}: "default" must be one of "enum"`);
-		}
-	}
-	const required = /** @type {Record<string, unknown>} */ (settings).required;
-	if (required !== undefined && !(Array.isArray(required) && required.every((n) => typeof n === 'string' && Object.hasOwn(properties, n)))) {
-		problems.push(`${key}: "required" must be a list of its settings' names`);
-	}
-	return problems;
 }
 
 /**
@@ -432,8 +106,6 @@ function validateSettings(key, settings) {
  * @returns {Uint8Array}
  */
 export function withManifest(bytes, manifest) {
-	const problems = validateManifest(manifest);
-	if (problems.length) throw new PluginFileError(`The manifest is invalid: ${problems.join('; ')}.`);
 	const kept = sections(bytes).filter((s) => s.name !== SECTION);
 	const name = new TextEncoder().encode(SECTION);
 	const payload = new TextEncoder().encode(JSON.stringify(manifest));
