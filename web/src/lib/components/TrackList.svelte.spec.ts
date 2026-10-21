@@ -154,6 +154,31 @@ describe('TrackList.svelte sort menu', () => {
 		expect(onsort).not.toHaveBeenCalled();
 	});
 
+	it('closes on Tab, and the same press moves on past it', async () => {
+		render(TrackList, { tracks, onsort: () => {} });
+		await sortButton('Sort').click();
+		await expect.element(item('Title')).toHaveFocus();
+		await userEvent.keyboard('{Tab}');
+		await expect.element(page.getByRole('menu')).not.toBeInTheDocument();
+		await expect.element(sortButton('Signal Part 1')).toHaveFocus();
+
+		await sortButton('Sort').click();
+		await userEvent.keyboard('{Shift>}{Tab}{/Shift}');
+		await expect.element(page.getByRole('menu')).not.toBeInTheDocument();
+		await expect.element(sortButton('Sort')).not.toHaveFocus();
+	});
+
+	it('stays in view as the list scrolls', async () => {
+		const many = Array.from({ length: 60 }, (_, k) => track(String(k + 1), `Song ${k + 1}`));
+		render(TrackList, { tracks: many, onsort: () => {} });
+		await expect.element(sortButton('Sort')).toBeVisible();
+		scrollTo(0, 2000);
+		await expect.poll(() => scrollY).toBeGreaterThan(1000);
+		const { top } = sortButton('Sort').element().getBoundingClientRect();
+		expect(top).toBeGreaterThanOrEqual(0);
+		expect(top).toBeLessThan(40);
+	});
+
 	it('is not offered on a list that does not sort', async () => {
 		render(TrackList, { tracks });
 		await expect.element(page.getByText('Signal Part 1')).toBeVisible();
