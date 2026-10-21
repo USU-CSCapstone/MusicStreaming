@@ -68,13 +68,13 @@ impl Plugins {
                 .run_in(&id, &manifest, RunFor { library, user: None }, permissions, Event::Run)
                 .await?;
             result.scanning |= scanning;
-            result.ok &= outcome.ok;
+            result.ok &= outcome.result.is_ok();
             result.saved += outcome.written;
-            result.log.extend(outcome.log);
             if !result.summary.is_empty() {
                 result.summary.push(' ');
             }
-            result.summary.push_str(&outcome.summary);
+            result.summary.push_str(&outcome.summary());
+            result.log.extend(outcome.log);
         }
         Ok(result)
     }
@@ -108,7 +108,7 @@ impl Plugins {
             .await?;
         let outcome = self.execute(id, manifest, run_for, permissions, settings, event).await?;
         let scanning = self.scan(library, &outcome.touched).await;
-        let (plugin, ok, summary) = (id.to_owned(), outcome.ok, outcome.summary.clone());
+        let (plugin, ok, summary) = (id.to_owned(), outcome.result.is_ok(), outcome.summary());
         self.db
             .write(move |tx| {
                 tx.execute(

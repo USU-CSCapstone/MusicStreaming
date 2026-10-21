@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use common::{State, Tracks, grants, plugin, track};
-use jewelcase_plugins::{Changes, Event, Host, Per, Permission, manifest};
+use jewelcase_plugins::{Changes, Event, Host, Per, Permission, RunError, manifest};
 
 /// Two tracks without lyrics, with their audio files in `dir`.
 fn library(dir: &Path) -> Tracks {
@@ -26,14 +26,13 @@ fn library(dir: &Path) -> Tracks {
 #[tokio::test]
 async fn a_lookup_that_cannot_be_answered_now_ends_the_run_with_an_error() {
     let dir = tempfile::tempdir().unwrap();
-    let not_granted = "the plugin reported an error: a permission it needs was not granted";
+    let not_granted = || RunError::Reported("a permission it needs was not granted".into());
     let changes = || Changes { changed: vec![1, 2], removed: vec![] };
     for event in [Event::Run, Event::Scheduled, Event::TracksChanged(changes())] {
         let library = library(dir.path());
         let grants = grants(&[Permission::LibraryRead, Permission::LibraryAdd], &["lrclib.net"]);
         let outcome = Host::new(None).unwrap().run(plugin(), grants, library.clone(), event).await;
-        assert!(!outcome.ok);
-        assert_eq!(outcome.summary, not_granted);
+        assert_eq!(outcome.result, Err(not_granted()));
         assert!(outcome.log.is_empty(), "{:?}", outcome.log);
         assert!(outcome.touched.is_empty());
         assert!(library.state.lock().unwrap().is_empty(), "no place moved on, no miss");
@@ -60,7 +59,7 @@ async fn the_network_reaches_only_approved_destinations() {
         .unwrap()
         .run(plugin(), grants(&permissions, &["example.invalid"]), library(dir.path()), Event::Run)
         .await;
-    assert!(outcome.ok, "{}", outcome.summary);
+    assert!(outcome.result.is_ok(), "{}", outcome.summary());
     assert_eq!(outcome.log.len(), 2, "{:?}", outcome.log);
     for line in &outcome.log {
         assert!(

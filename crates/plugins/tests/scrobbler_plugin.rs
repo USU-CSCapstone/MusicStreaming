@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use jewelcase_plugins::{
     Album, Artist, Event, Grants, Host, Library, Outcome, Per, Permission, Play, PlayEnd, Playing,
-    Track, manifest,
+    RunError, Track, manifest,
 };
 
 /// The packed plugin. Panics, saying how to build it, when it is not built.
@@ -136,16 +136,16 @@ async fn a_start_reaches_the_plugin_as_playing() {
     let event = Event::Playing(Playing { track: track(&["Aurora Lane"]), started_at_ms: 1 });
     let outcome = run(&[Permission::LibraryRead, Permission::Playing], event).await;
     // It got as far as sending it, which the network it was not granted refused.
-    assert!(!outcome.ok);
-    assert_eq!(outcome.summary, "the plugin reported an error: Network access was not granted");
+    let refused = RunError::Reported("Network access was not granted".into());
+    assert_eq!(outcome.result, Err(refused));
 }
 
 #[tokio::test]
 async fn a_start_with_no_artist_is_not_sent() {
     let event = Event::Playing(Playing { track: track(&[" "]), started_at_ms: 1 });
     let outcome = run(&[Permission::LibraryRead, Permission::Playing], event).await;
-    assert!(outcome.ok, "{}", outcome.summary);
-    assert_eq!(outcome.summary, "Nothing shown: the track has no usable title or artist.");
+    let shown = "Nothing shown: the track has no usable title or artist.";
+    assert_eq!(outcome.result, Ok(shown.to_owned()));
 }
 
 #[tokio::test]
@@ -159,9 +159,6 @@ async fn plays_with_no_artist_are_counted_and_not_sent() {
     let plays = vec![play(&[], 200_000), play(&[""], 200_000), play(&["Aurora Lane"], 1_000)];
     let outcome = run(&[Permission::LibraryRead, Permission::Played], Event::Played(plays)).await;
     // Nothing was left to send, so the network it was not granted was never asked.
-    assert!(outcome.ok, "{}", outcome.summary);
-    assert_eq!(
-        outcome.summary,
-        "Sent 0 listens; 1 plays were too short to count, 2 had no usable title or artist."
-    );
+    let sent = "Sent 0 listens; 1 plays were too short to count, 2 had no usable title or artist.";
+    assert_eq!(outcome.result, Ok(sent.to_owned()));
 }

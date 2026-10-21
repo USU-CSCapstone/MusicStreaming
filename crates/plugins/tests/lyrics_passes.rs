@@ -9,7 +9,7 @@ mod common;
 use std::path::PathBuf;
 
 use common::{State, Tracks, grants, plugin, track};
-use jewelcase_plugins::{Changes, Event, Grants, Host, Outcome, Permission};
+use jewelcase_plugins::{Changes, Event, Grants, Host, Outcome, Permission, RunError};
 
 /// The reason a miss is stored with when nothing was found.
 const NOTHING: u8 = 0;
@@ -70,8 +70,9 @@ async fn misses_are_looked_up_again_only_once_due() {
     for event in [Event::Run, Event::Scheduled] {
         let outcome = run_offline(&library, event).await;
         assert_eq!(looked_up(&outcome), [1, 3], "all but a miss not due yet, and lyrics");
-        assert!(outcome.summary.contains("1 already had lyrics"), "{}", outcome.summary);
-        assert!(!outcome.summary.contains("more to do"), "{}", outcome.summary);
+        let summary = outcome.summary();
+        assert!(summary.contains("1 already had lyrics"), "{summary}");
+        assert!(!summary.contains("more to do"), "{summary}");
     }
     let misses = (kept(&library, "miss/1"), kept(&library, "miss/2"), kept(&library, "miss/3"));
     assert_eq!(misses, (Some(0), Some(u64::MAX), None), "a failed lookup changes nothing");
@@ -86,7 +87,8 @@ async fn a_run_stops_after_ten_thousand_checks_and_the_next_carries_on() {
 
     let first = run_offline(&library, Event::Run).await;
     assert!(first.log.is_empty(), "{:?}", first.log);
-    assert!(first.summary.ends_with("carries on from there next time."), "{}", first.summary);
+    let summary = first.result.expect("ran");
+    assert!(summary.ends_with("carries on from there next time."), "{summary}");
     assert_eq!(kept(&library, "cursor"), Some(10_000));
 
     // The schedule carries on the same pass.
@@ -108,7 +110,7 @@ async fn a_change_settles_or_keeps_a_miss_and_a_removal_forgets_it() {
     }
     let changes = Changes { changed: vec![5, 6], removed: vec![9] };
     let outcome = run_offline(&library, Event::TracksChanged(changes)).await;
-    assert!(outcome.ok, "{}", outcome.summary);
+    assert!(outcome.result.is_ok(), "{}", outcome.summary());
     assert_eq!(kept(&library, "miss/5"), None, "it has lyrics now");
     assert_eq!(kept(&library, "miss/6"), Some(0), "its lookup failed");
     assert_eq!(kept(&library, "miss/9"), None, "it left the library");
@@ -143,8 +145,8 @@ async fn a_run_cut_short_keeps_its_place_after_each_lookup() {
     let library = Tracks { fail_after: Some(500), ..library(1..=501) };
     let outcome = run_offline(&library, Event::Run).await;
     // The library's failure reaches the plugin as `failed`, in the library's words.
-    let failed = "the plugin reported an error: the library could not be read";
-    assert_eq!(outcome.summary, failed);
+    let failed = RunError::Reported("the library could not be read".into());
+    assert_eq!(outcome.result, Err(failed));
     assert_eq!(looked_up(&outcome).len(), 500);
     assert_eq!(kept(&library, "cursor"), Some(500));
 }

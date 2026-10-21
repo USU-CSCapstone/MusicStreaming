@@ -30,20 +30,19 @@ impl Host {
 
     /// Plugin `id`, installed at `file`, compiled: kept from its install or an earlier run, or
     /// else compiled now, once however many runs ask at the same time. A compile that fails is
-    /// not kept, so the next run tries again.
-    pub(super) async fn compiled(&self, id: &str, file: &Path) -> Result<Component, String> {
+    /// not kept, so the next run tries again. The file is read here and compiled from its bytes,
+    /// so no error names where it is: a failure to load reaches admins as the run's summary,
+    /// which carries no storage path.
+    pub(super) async fn compiled(&self, id: &str, file: &Path) -> wasmtime::Result<Component> {
         let cell =
             self.compiled.lock().expect("cache lock").entry(id.to_owned()).or_default().clone();
         let compile = || async {
             // Compiling is CPU-bound, up to a second for a JavaScript plugin that the disk
             // cache does not have.
             let (engine, file) = (self.engine.clone(), file.to_path_buf());
-            tokio::task::spawn_blocking(move || Component::from_file(&engine, file))
-                .await
-                .map_err(|e| e.to_string())?
-                .map_err(|e| e.root_cause().to_string())
+            tokio::task::spawn_blocking(move || Component::new(&engine, std::fs::read(file)?))
+                .await?
         };
-        let component = cell.get_or_try_init(compile).await;
-        component.cloned().map_err(|e| format!("the plugin could not be loaded: {e}"))
+        cell.get_or_try_init(compile).await.cloned()
     }
 }

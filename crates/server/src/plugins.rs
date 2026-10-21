@@ -65,7 +65,7 @@ pub struct Plugins {
     /// Each library's scanner, to pick up what a plugin saves.
     scanners: HashMap<i64, Scanner>,
     /// Started on first use, so a server that never runs a plugin pays nothing for them.
-    host: OnceLock<Result<Arc<Host>, String>>,
+    host: OnceLock<anyhow::Result<Arc<Host>>>,
     runtime: OnceLock<Result<Runtime, String>>,
     /// The plugin, library, hook, and user of each delivery under way, so each has one at a
     /// time.
@@ -96,9 +96,9 @@ impl Plugins {
     /// The plugin host, started on first use. A host that could not start is logged and
     /// answered as an internal error, every time it is asked for.
     fn host(&self) -> Result<Arc<Host>, PluginError> {
-        let host = self.host.get_or_init(|| Host::new(self.compiled.as_deref()).map(Arc::new));
-        host.clone().map_err(|error| {
-            tracing::error!(%error, "cannot start the plugin host");
+        let host = self.host.get_or_init(|| Ok(Arc::new(Host::new(self.compiled.as_deref())?)));
+        host.as_ref().map(Arc::clone).map_err(|error| {
+            tracing::error!(error = %format_args!("{error:#}"), "cannot start the plugin host");
             PluginError::Internal("Plugins cannot run on this server.".into())
         })
     }
@@ -152,7 +152,7 @@ impl Plugins {
         .await
         .map_err(|e| PluginError::Internal(e.to_string()))?;
         let component = checked
-            .map_err(|e| PluginError::Invalid(format!("This plugin cannot run here: {e}.")))?;
+            .map_err(|e| PluginError::Invalid(format!("This plugin cannot run here: {e:#}.")))?;
 
         std::fs::create_dir_all(&self.dir).map_err(internal)?;
         let part = self.dir.join(format!("{}.{}.part", manifest.id, std::process::id()));

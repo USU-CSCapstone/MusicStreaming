@@ -4,7 +4,7 @@
 use wasmtime::component::{Component, Linker};
 
 use super::super::testing::{self, Memory};
-use super::super::{Host, INSTANCES, TABLE_ELEMENTS, TABLES};
+use super::super::{Event, Host, INSTANCES, RunError, TABLE_ELEMENTS, TABLES};
 
 /// A component that instantiates the core module `module` `count` times.
 fn component(module: &str, count: usize) -> String {
@@ -23,11 +23,12 @@ async fn instantiate(module: &str, count: usize) -> Result<(), String> {
     instantiated.map(drop).map_err(|e| e.root_cause().to_string())
 }
 
-/// Why the check at install refuses the component in `wat`. None of these components fit the
-/// plugin world, so the check always refuses them; what matters is why.
+/// Why the check at install refuses the component in `wat`, with every cause in its chain. None
+/// of these components fit the plugin world, so the check always refuses them; what matters is
+/// why.
 fn refused_at_install(wat: &str) -> String {
     let host = Host::new(None).expect("host");
-    host.check(wat.as_bytes()).expect_err("refused")
+    format!("{:#}", host.check(wat.as_bytes()).expect_err("refused"))
 }
 
 #[tokio::test]
@@ -68,6 +69,27 @@ async fn instances_past_the_cap_are_refused() {
     assert_eq!(instantiate("", INSTANCES).await, Ok(()));
     let refused = instantiate("", INSTANCES + 1).await.expect_err("too many instances");
     assert!(refused.contains("instance count too high"), "{refused}");
+}
+
+/// A plugin that needs more core instances than a run may create crashes as it starts: the
+/// sandbox fixture, with that many more instances of an empty module.
+#[tokio::test]
+async fn a_plugin_past_the_instance_cap_crashes_when_run() {
+    let empty = "(core instance (instantiate $empty))".repeat(INSTANCES);
+    let wasi = format!("(core module $empty) {empty} (core instance $wasi");
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("test.wat");
+    std::fs::write(&file, include_str!("sandbox.wat").replace("(core instance $wasi", &wasi))
+        .unwrap();
+    let host = Host::new(None).expect("host");
+    let event = Event::Searched(Vec::new());
+    let outcome = host.run(&file, testing::grants(&[]), Memory::default(), event).await;
+    let crashed = |why: &str| why.contains("instance count too high");
+    assert!(
+        matches!(&outcome.result, Err(RunError::Crashed(why)) if crashed(why)),
+        "{}",
+        outcome.summary()
+    );
 }
 
 #[test]

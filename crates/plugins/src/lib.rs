@@ -16,7 +16,7 @@ pub mod settings;
 pub use download::{MAX_SIZE, download};
 pub use host::{
     Album, Artist, Changes, Event, Found, Grants, Host, Library, Outcome, Play, PlayEnd, Playing,
-    ResultKind, ScanFinished, Search, Selected, Track,
+    ResultKind, RunError, ScanFinished, Search, Selected, Track,
 };
 pub use manifest::{InvalidPlugin, Manifest, Per, Permission, PermissionRequest, RateLimit};
 pub use rules::reaches;

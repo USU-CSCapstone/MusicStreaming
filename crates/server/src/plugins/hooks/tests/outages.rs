@@ -3,13 +3,15 @@
 //! lasts 72 hours, with no success or other failure between, disables it.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use jewelcase_plugins::Permission::{LibraryRead, TracksChanged};
+use rusqlite::OptionalExtension;
 
 use super::super::{BACKOFF_MS, Hook, MAX_FAILURES, Ran};
 use super::{HOUR, Received, changes, ran, setup};
 use crate::db::Database;
-use crate::plugins::testing::grant;
+use crate::plugins::testing::{grant, plugins};
 
 const TIMED_OUT: &str = "the request timed out";
 const REFUSED: &str = "LRCLIB answered 400";
@@ -54,6 +56,27 @@ fn a_run_that_succeeded_is_handled_whatever_it_met_on_the_way() {
     assert_eq!(Ran::of(true, true), Ran::Handled, "a success after a request that had to wait");
     assert_eq!(Ran::of(false, true), Ran::Unreachable);
     assert_eq!(Ran::of(false, false), Ran::Failed);
+}
+
+/// A plugin that cannot be loaded, here one installed without its file, reached no service, so
+/// a delivery to it is a failure of its own and no outage. The deadline only bounds a hang.
+#[tokio::test]
+async fn a_plugin_that_cannot_be_loaded_fails_without_an_outage() {
+    let (temp, db) = changed().await;
+    plugins(&temp, &db).dispatch().await;
+    let sql = "SELECT failures, outages FROM plugin_cursors";
+    let recorded = async {
+        loop {
+            let counts = |row: &rusqlite::Row| Ok((row.get(0)?, row.get(1)?));
+            let found = db.read(move |conn| conn.query_row(sql, [], counts).optional());
+            match found.await.unwrap() {
+                Some(counts) => return counts,
+                None => tokio::time::sleep(Duration::from_millis(20)).await,
+            }
+        }
+    };
+    let counts: (i64, i64) = tokio::time::timeout(Duration::from_secs(30), recorded).await.unwrap();
+    assert_eq!(counts, (1, 0));
 }
 
 #[tokio::test]

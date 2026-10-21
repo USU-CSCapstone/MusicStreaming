@@ -100,10 +100,10 @@ enum Ran {
 }
 
 impl Ran {
-    /// How a run went, given whether it ended `ok` and whether it found a service out of reach
+    /// How a run went, given whether it succeeded and whether it found a service out of reach
     /// on the way: one that succeeded is handled, even after a request that had to wait.
-    fn of(ok: bool, outage: bool) -> Ran {
-        match (ok, outage) {
+    fn of(succeeded: bool, outage: bool) -> Ran {
+        match (succeeded, outage) {
             (true, _) => Ran::Handled,
             (false, true) => Ran::Unreachable,
             (false, false) => Ran::Failed,
@@ -183,7 +183,9 @@ impl Plugins {
             Some(event) => {
                 let run_for = RunFor { library, user: (due.user != 0).then_some(due.user) };
                 match self.run_in(&due.plugin, &manifest, run_for, permissions, event).await {
-                    Ok((outcome, _)) => (Ran::of(outcome.ok, outcome.outage), outcome.summary),
+                    Ok((outcome, _)) => {
+                        (Ran::of(outcome.result.is_ok(), outcome.outage), outcome.summary())
+                    }
                     Err(error) => (Ran::Failed, error.to_string()),
                 }
             }

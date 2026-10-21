@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::testing::{self, Memory};
-use super::{CPU_BUDGET, Event, Host, Outcome, ScanFinished};
+use super::{CPU_BUDGET, Event, Host, Outcome, RunError, ScanFinished};
 
 mod compiled;
 mod limits;
@@ -31,16 +31,15 @@ async fn run(budget: u64, event: Event) -> (Outcome, Duration) {
 #[tokio::test]
 async fn a_run_that_waits_past_its_budget_in_a_host_call_still_finishes() {
     let (outcome, took) = run(BUDGET, Event::Scheduled).await;
-    assert!(outcome.ok, "{}", outcome.summary);
-    assert_eq!(outcome.summary, "done");
+    assert_eq!(outcome.result, Ok("done".to_owned()));
     assert!(took >= Duration::from_millis(500), "it waited {took:?}");
 }
 
 #[tokio::test]
 async fn a_spin_traps_at_its_compute_budget() {
     let (outcome, took) = run(BUDGET, Event::Run).await;
-    assert!(!outcome.ok);
-    assert!(outcome.summary.contains("ran past its compute budget"), "{}", outcome.summary);
+    assert_eq!(outcome.result, Err(RunError::OutOfCompute));
+    assert_eq!(outcome.summary(), "the plugin ran past its compute budget");
     // A tick lasts at least 1 ms, so the budget cannot run out sooner than that allows.
     assert!(took >= Duration::from_millis(BUDGET * 9 / 10), "it stopped after {took:?}");
     assert!(took < Duration::from_secs(1), "it stopped after {took:?}");
@@ -51,15 +50,20 @@ async fn a_spin_traps_at_its_compute_budget() {
 #[tokio::test(start_paused = true)]
 async fn a_run_that_waits_past_the_time_limit_is_stopped() {
     let (outcome, _) = run(BUDGET, Event::SearchesForgotten(None)).await;
-    assert!(!outcome.ok);
-    assert!(outcome.summary.contains("time limit"), "{}", outcome.summary);
+    assert_eq!(outcome.result, Err(RunError::OutOfTime));
+    assert_eq!(outcome.summary(), "the plugin ran past its 300 s time limit");
+}
+
+/// Whether `outcome` is a crash whose message contains `why`.
+fn crashed(outcome: &Outcome, why: &str) -> bool {
+    matches!(&outcome.result, Err(RunError::Crashed(message)) if message.contains(why))
 }
 
 #[tokio::test]
 async fn growing_memory_past_the_limit_is_refused() {
     let (outcome, _) = run(BUDGET, Event::CheckSettings).await;
-    assert!(!outcome.ok);
-    assert!(outcome.summary.contains("unreachable"), "{}", outcome.summary);
+    assert!(crashed(&outcome, "unreachable"), "{}", outcome.summary());
+    assert!(outcome.summary().starts_with("the plugin crashed: "), "{}", outcome.summary());
 }
 
 #[tokio::test]
@@ -67,8 +71,7 @@ async fn growing_a_table_past_the_limit_is_refused() {
     let counts =
         ScanFinished { files_seen: 0, added: 0, updated: 0, moved: 0, missing: 0, problems: 0 };
     let (outcome, _) = run(BUDGET, Event::ScanFinished(counts)).await;
-    assert!(!outcome.ok);
-    assert!(outcome.summary.contains("unreachable"), "{}", outcome.summary);
+    assert!(crashed(&outcome, "unreachable"), "{}", outcome.summary());
 }
 
 /// With the whole budget, so that only the cap, not the time its thousands of host calls take,
@@ -76,6 +79,5 @@ async fn growing_a_table_past_the_limit_is_refused() {
 #[tokio::test]
 async fn filling_the_resource_table_is_refused() {
     let (outcome, _) = run(CPU_BUDGET, Event::Played(Vec::new())).await;
-    assert!(!outcome.ok);
-    assert!(outcome.summary.contains("resource table has no free keys"), "{}", outcome.summary);
+    assert!(crashed(&outcome, "resource table has no free keys"), "{}", outcome.summary());
 }

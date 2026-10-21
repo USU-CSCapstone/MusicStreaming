@@ -11,8 +11,8 @@ use serde_json::json;
 use super::{changes, play};
 use crate::db::Database;
 use crate::db::testing::{User, access};
-use crate::plugins::PluginError;
 use crate::plugins::testing::{connect, database, enable_ungranted, grant, plugins};
+use crate::plugins::{PluginError, Plugins};
 
 /// Waits for the one delivery under way to finish, and returns its run's summary and the
 /// failures and user its cursor records. A delivery records its cursor last, after the run's
@@ -42,12 +42,12 @@ async fn delivered(db: &Database) -> (Option<String>, i64, i64) {
     tokio::time::timeout(Duration::from_secs(30), recorded).await.expect("delivered within 30 s")
 }
 
-/// The real lyrics plugin hears of a change in the feed as `tracks-changed`, finds it can't
-/// look the track up without the network, and the failure is recorded to retry.
-#[tokio::test]
-async fn delivers_changes_to_a_real_plugin() {
-    let (temp, db) = database().await;
-    let plugins = plugins(&temp, &db);
+/// What the real lyrics plugin answers a change without the network.
+const LOOKUP_REFUSED: &str = "the plugin reported an error: a permission it needs was not granted";
+
+/// The real lyrics plugin installed, granted `tracksChanged` and enabled in library 1 without
+/// the network, with a change in the feed for it.
+async fn lyrics(plugins: &Plugins, db: &Database) {
     let file = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm"
@@ -56,13 +56,48 @@ async fn delivers_changes_to_a_real_plugin() {
         .install(std::fs::read(file).expect("run plugins/lrclib-lyrics/build.sh first"), None)
         .await
         .unwrap();
-    grant(&plugins, &id, &[], &[LibraryRead, TracksChanged]).await;
-    enable_ungranted(&db, "lrclib-lyrics").await;
-    changes(&db, "(1, 'track', 11, 'upsert', 0)").await;
+    grant(plugins, &id, &[], &[LibraryRead, TracksChanged]).await;
+    enable_ungranted(db, "lrclib-lyrics").await;
+    changes(db, "(1, 'track', 11, 'upsert', 0)").await;
+}
+
+/// The real lyrics plugin hears of a change in the feed as `tracks-changed`, finds it can't
+/// look the track up without the network, and the failure is recorded to retry.
+#[tokio::test]
+async fn delivers_changes_to_a_real_plugin() {
+    let (temp, db) = database().await;
+    let plugins = plugins(&temp, &db);
+    lyrics(&plugins, &db).await;
 
     plugins.dispatch().await;
-    let refused = "the plugin reported an error: a permission it needs was not granted";
-    assert_eq!(delivered(&db).await, (Some(refused.to_owned()), 1, 0), "one failure, to retry");
+    let refused = Some(LOOKUP_REFUSED.to_owned());
+    assert_eq!(delivered(&db).await, (refused, 1, 0), "one failure, to retry");
+}
+
+/// A fifth failure in a row disables the real plugin in the library, with its run's summary as
+/// the reason. The deadline only bounds a hang.
+#[tokio::test]
+async fn a_fifth_failure_in_a_row_disables_a_real_plugin_with_why() {
+    let (temp, db) = database().await;
+    let plugins = plugins(&temp, &db);
+    lyrics(&plugins, &db).await;
+    let failed = "INSERT INTO plugin_cursors (plugin_id, library_id, hook, failures) \
+                  VALUES ('lrclib-lyrics', 1, 'tracksChanged', 4)";
+    db.write(move |tx| tx.execute_batch(failed)).await.unwrap();
+
+    plugins.dispatch().await;
+    let sql = "SELECT disabled_reason FROM plugin_libraries WHERE disabled_reason IS NOT NULL";
+    let disabled = async {
+        loop {
+            let reason = db.read(|conn| conn.query_row(sql, [], |row| row.get(0)).optional());
+            match reason.await.unwrap() {
+                Some(reason) => return reason,
+                None => tokio::time::sleep(Duration::from_millis(20)).await,
+            }
+        }
+    };
+    let reason: String = tokio::time::timeout(Duration::from_secs(30), disabled).await.unwrap();
+    assert_eq!(reason, format!("Stopped after failing 5 times in a row: {LOOKUP_REFUSED}"));
 }
 
 /// The real ListenBrainz plugin: checking user 7's token and delivering their play both reach

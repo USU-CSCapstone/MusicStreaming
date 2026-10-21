@@ -13,6 +13,7 @@ use std::time::Duration;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{
     Cache, CacheConfig, Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline,
+    bail, ensure,
 };
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
@@ -22,6 +23,7 @@ use crate::network::Network;
 mod compiled;
 mod http;
 mod library;
+mod outcome;
 #[cfg(test)]
 mod testing;
 #[cfg(test)]
@@ -44,6 +46,7 @@ pub use bindings::jewelcase::plugin::events::{
 };
 pub use bindings::jewelcase::plugin::library::{Album, Artist, Track};
 pub(crate) use bindings::jewelcase::plugin::{files::Entry, host::Error};
+pub use outcome::{Outcome, RunError};
 
 /// How often the epoch advances, and so how often a running plugin is checked. A tick is a sleep
 /// that runs a little long, at about 1.05 ms.
@@ -51,7 +54,7 @@ const TICK: Duration = Duration::from_millis(1);
 /// Compute a plugin may spend in one run, in ticks: about 63 s. Ticks count only while its code
 /// runs, but each host call it waits on costs one however long it takes, so this is approximate.
 const CPU_BUDGET: u64 = 60_000;
-/// Wall-clock time for a whole run, waiting included, which bounds a plugin waiting on a slow
+/// Wall-clock time for handling an event, waiting included, which bounds a plugin waiting on a slow
 /// service.
 const WALL_BUDGET: Duration = Duration::from_secs(300);
 /// How large a run's linear memory may grow, and separately its wasm GC heap, which `MEMORIES`
@@ -161,22 +164,6 @@ pub struct Grants {
     pub settings: serde_json::Map<String, serde_json::Value>,
 }
 
-/// How a run went, in the plugin's own words where it gave them.
-pub struct Outcome {
-    pub ok: bool,
-    pub summary: String,
-    pub log: Vec<String>,
-    /// How many files it wrote.
-    pub written: usize,
-    /// Every path it created, replaced, moved, or deleted, for the scanner to look at again.
-    pub touched: Vec<PathBuf>,
-    /// Whether a request found its service out of reach: held back as `rate-limited`,
-    /// `timed-out`, unable to connect, or answered `429` or a `5xx`. A run that failed after one
-    /// may have failed only for that, so the server retries it without counting it among the
-    /// plugin's own failures.
-    pub outage: bool,
-}
-
 pub struct Host {
     engine: Engine,
     /// Each installed plugin compiled once, by ID.
@@ -192,36 +179,33 @@ impl Host {
     /// engine. With `cache`, an absolute directory for wasmtime's alone that no other user can
     /// write, compiled code is kept there too, so a restart loads it rather than compiling
     /// again. Fails if the engine, the thread, or the cache cannot be started.
-    pub fn new(cache: Option<&Path>) -> Result<Host, String> {
+    pub fn new(cache: Option<&Path>) -> wasmtime::Result<Host> {
         let mut config = Config::new();
         config.epoch_interruption(true);
         if let Some(directory) = cache {
             let mut settings = CacheConfig::new();
             settings.with_directory(directory);
-            config.cache(Some(Cache::new(settings).map_err(|e| format!("{e:?}"))?));
+            config.cache(Some(Cache::new(settings)?));
         }
-        let engine = Engine::new(&config).map_err(|e| format!("{e:?}"))?;
+        let engine = Engine::new(&config)?;
         let weak = engine.weak();
-        thread::Builder::new()
-            .name("plugin-epoch".into())
-            .spawn(move || {
-                while let Some(engine) = weak.upgrade() {
-                    engine.increment_epoch();
-                    drop(engine);
-                    thread::sleep(TICK);
-                }
-            })
-            .map_err(|e| e.to_string())?;
+        thread::Builder::new().name("plugin-epoch".into()).spawn(move || {
+            while let Some(engine) = weak.upgrade() {
+                engine.increment_epoch();
+                drop(engine);
+                thread::sleep(TICK);
+            }
+        })?;
         Ok(Host { engine, compiled: Mutex::default(), network: Arc::default(), budget: CPU_BUDGET })
     }
 
     /// Refuses a component that could never run here: one that does not compile, instantiates
     /// core modules it imports, needs more memories, tables, or table elements than a run may
     /// create, or does not fit the contract. Answers the component compiled, for
-    /// [`Host::installed`] once it is installed.
-    pub fn check(&self, bytes: &[u8]) -> Result<Component, String> {
-        let component =
-            Component::new(&self.engine, bytes).map_err(|e| e.root_cause().to_string())?;
+    /// [`Host::installed`] once it is installed. Only a refusal's whole chain of causes (`{:#}`)
+    /// is sure to say why, as with one from linking (`pre`).
+    pub fn check(&self, bytes: &[u8]) -> wasmtime::Result<Component> {
+        let component = Component::new(&self.engine, bytes)?;
         fits(&component)?;
         self.pre::<Refused>(&component).map(|_| component)
     }
@@ -235,32 +219,27 @@ impl Host {
         library: L,
         event: Event,
     ) -> Outcome {
-        let compiled = self.compiled(&grants.plugin, file).await;
-        let loaded = compiled.and_then(|component| self.pre::<L>(&component));
-        let pre = match loaded {
+        let pre = match self.load::<L>(&grants.plugin, file).await {
             Ok(pre) => pre,
-            Err(summary) => {
-                return Outcome {
-                    ok: false,
-                    summary,
-                    log: Vec::new(),
-                    written: 0,
-                    touched: Vec::new(),
-                    outage: false,
-                };
+            Err(error) => {
+                let (log, touched) = (Vec::new(), Vec::new());
+                return Outcome { result: Err(error), log, written: 0, touched, outage: false };
             }
         };
         let mut store = self.store(grants, library);
         let result = call(&pre, &mut store, &event).await;
         // The store owned the run's state while the plugin ran; what it logged and saved is
         // read back from it.
-        let run = store.into_data();
-        let (ok, summary) = match result {
-            Ok(summary) => (true, summary),
-            Err(error) => (false, error),
-        };
-        let (log, written, touched, outage) = (run.log, run.written, run.touched, run.outage);
-        Outcome { ok, summary, log, written, touched, outage }
+        let Run { log, written, touched, outage, .. } = store.into_data();
+        Outcome { result, log, written, touched, outage }
+    }
+
+    /// Plugin `id`, installed at `file`, compiled and linked for a run over an `L`. One that
+    /// cannot be is `Unloadable`, with every cause in its chain (`pre` says why).
+    async fn load<L: Library>(&self, id: &str, file: &Path) -> Result<PluginPre<Run<L>>, RunError> {
+        let component = self.compiled(id, file).await;
+        let pre = component.and_then(|component| self.pre(&component));
+        pre.map_err(|e| RunError::Unloadable(format!("{e:#}")))
     }
 
     /// A fresh store for one run over `library` with `grants`, with its caps and compute budget.
@@ -300,7 +279,7 @@ impl Host {
             let run = ctx.data_mut();
             run.ticks += 1;
             if run.ticks >= budget {
-                return Err(wasmtime::Error::msg("the plugin ran past its compute budget"));
+                return Err(RunError::OutOfCompute.into());
             }
             Ok(UpdateDeadline::Yield(1))
         });
@@ -308,53 +287,45 @@ impl Host {
         store
     }
 
-    /// The component linked against the contract's bindings, ready to instantiate.
-    fn pre<L: Library>(&self, component: &Component) -> Result<PluginPre<Run<L>>, String> {
+    /// The component linked against the contract's bindings, ready to instantiate. An import it
+    /// cannot be given is named only in the whole chain of the error's causes: the root cause
+    /// says just "implementation is missing".
+    fn pre<L: Library>(&self, component: &Component) -> wasmtime::Result<PluginPre<Run<L>>> {
         let mut linker = Linker::new(&self.engine);
         // WASI with nothing granted: no files, sockets, or environment. Only the imports below.
-        wasmtime_wasi::p2::add_to_linker_async(&mut linker).map_err(|e| format!("{e:?}"))?;
-        Plugin::add_to_linker::<Run<L>, HasSelf<Run<L>>>(&mut linker, |run| run)
-            .map_err(|e| format!("{e:?}"))?;
-        // The whole chain, so a refused import is named, not only "implementation is missing".
-        let pre = linker.instantiate_pre(component).map_err(|e| format!("{e:#}"))?;
-        PluginPre::new(pre).map_err(|e| e.root_cause().to_string())
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+        Plugin::add_to_linker::<Run<L>, HasSelf<Run<L>>>(&mut linker, |run| run)?;
+        PluginPre::new(linker.instantiate_pre(component)?)
     }
 }
 
 /// Refuses a component whose core modules, all instantiated, would need more memories, tables,
 /// or table elements than a run's store allows, so it is refused at install rather than on
 /// every run.
-fn fits(component: &Component) -> Result<(), String> {
-    let needs = component
-        .resources_required()
-        .ok_or("the plugin instantiates core modules it imports, which a run cannot give it")?;
-    if needs.num_memories as usize > MEMORIES {
-        return Err(format!("the plugin has {} memories, and may have one", needs.num_memories));
-    }
-    if needs.num_tables as usize > TABLES {
-        return Err(format!("the plugin has {} tables, and may have {TABLES}", needs.num_tables));
-    }
+fn fits(component: &Component) -> wasmtime::Result<()> {
+    let Some(needs) = component.resources_required() else {
+        bail!("the plugin instantiates core modules it imports, which a run cannot give it");
+    };
+    let (memories, tables) = (needs.num_memories as usize, needs.num_tables as usize);
+    ensure!(memories <= MEMORIES, "the plugin has {memories} memories, and may have one");
+    ensure!(tables <= TABLES, "the plugin has {tables} tables, and may have {TABLES}");
     if let Some(elements) = needs.max_initial_table_size.filter(|&n| n > TABLE_ELEMENTS as u64) {
-        return Err(format!(
-            "the plugin has a table of {elements} elements, past {TABLE_ELEMENTS}"
-        ));
+        bail!("the plugin has a table of {elements} elements, past {TABLE_ELEMENTS}");
     }
     Ok(())
 }
 
-/// Instantiates the plugin and has it handle `event`, within the wall-clock budget.
+/// Instantiates the plugin and has it handle `event` within the wall-clock budget, answering
+/// its summary or why the run failed.
 async fn call<L: Library>(
     pre: &PluginPre<Run<L>>,
     store: &mut Store<Run<L>>,
     event: &Event,
-) -> Result<String, String> {
-    let plugin = pre.instantiate_async(&mut *store).await.map_err(|e| format!("{e:?}"))?;
-    match tokio::time::timeout(WALL_BUDGET, plugin.call_handle(&mut *store, event)).await {
-        Err(_) => Err(format!("the plugin ran past its {} s time limit", WALL_BUDGET.as_secs())),
-        Ok(Err(trap)) => Err(format!("the plugin crashed: {}", trap.root_cause())),
-        Ok(Ok(Err(reported))) => Err(format!("the plugin reported an error: {reported}")),
-        Ok(Ok(Ok(summary))) => Ok(summary),
-    }
+) -> Result<String, RunError> {
+    let plugin = pre.instantiate_async(&mut *store).await.map_err(RunError::trapped)?;
+    let handled = tokio::time::timeout(WALL_BUDGET, plugin.call_handle(&mut *store, event)).await;
+    let answered = handled.map_err(|_| RunError::OutOfTime)?;
+    answered.map_err(RunError::trapped)?.map_err(RunError::Reported)
 }
 
 /// A library nothing can be read from, for linking a component to check it.

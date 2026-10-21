@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::{Instant, SystemTime};
 
 use super::super::testing::{self, Memory};
-use super::super::{Event, Grants, Host, Outcome};
+use super::super::{Event, Grants, Host, Outcome, RunError};
 use crate::manifest::Permission;
 use crate::network::cache::{Key, Reply, Visible};
 use crate::network::limits::Scope;
@@ -39,12 +39,13 @@ async fn a_lookup_refused_as_rate_limited_ends_the_run_as_an_outage() {
     let (now, clock) = (Instant::now(), SystemTime::now());
     host.network.limits.answered("lrclib.net", &plugin, 429, Some("3600"), now, clock);
     let outcome = run(&host).await;
-    assert!(!outcome.ok && outcome.outage, "{}", outcome.summary);
+    assert!(outcome.outage, "{}", outcome.summary());
+    let Err(RunError::Reported(why)) = &outcome.result else { panic!("{}", outcome.summary()) };
     // The pause less however long the run took to reach the request.
-    let paused = "the plugin reported an error: the service cannot be asked again for ";
-    let seconds = outcome.summary.strip_prefix(paused).and_then(|rest| rest.strip_suffix(" s"));
-    let seconds: u64 = seconds.and_then(|s| s.parse().ok()).expect(&outcome.summary);
-    assert!((1..=3600).contains(&seconds), "{}", outcome.summary);
+    let paused = "the service cannot be asked again for ";
+    let seconds = why.strip_prefix(paused).and_then(|rest| rest.strip_suffix(" s"));
+    let seconds: u64 = seconds.and_then(|s| s.parse().ok()).expect(why);
+    assert!((1..=3600).contains(&seconds), "{why}");
 }
 
 /// A reply kept from a redirect to a host the plugin may not reach fails its lookup as `failed`,
@@ -70,6 +71,7 @@ async fn a_lookup_that_failed_ends_the_run() {
     };
     host.network.cache.store(key, reply, Instant::now(), SystemTime::now());
     let outcome = run(&host).await;
-    assert!(!outcome.ok && !outcome.outage, "{}", outcome.summary);
-    assert!(outcome.summary.contains("redirected elsewhere"), "{}", outcome.summary);
+    assert!(!outcome.outage, "{}", outcome.summary());
+    let Err(RunError::Reported(why)) = &outcome.result else { panic!("{}", outcome.summary()) };
+    assert!(why.contains("redirected elsewhere"), "{why}");
 }

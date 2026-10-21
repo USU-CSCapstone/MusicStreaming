@@ -214,9 +214,7 @@ impl Plugins {
                 Event::CheckSettings,
             )
             .await?;
-        if !outcome.ok {
-            return Err(PluginError::SettingsInvalid(outcome.summary));
-        }
+        outcome.result.map_err(|error| PluginError::SettingsInvalid(error.to_string()))?;
         let json = Value::Object(values).to_string();
         let connected = self.db.write(move |tx| connect(tx, &id, user, &json, now_ms())).await?;
         connected.then_some(()).ok_or(PluginError::NotFound)
