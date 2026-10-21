@@ -59,7 +59,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     // The scanner calls the database with blocking calls, so it starts outside the async runtime.
     let scanning = {
         let db = db.clone();
-        tokio::task::spawn_blocking(move || Scanning::start(&db, &ffmpeg)).await??
+        let started = tokio::task::spawn_blocking(move || Scanning::start(&db, &ffmpeg)).await?;
+        started.context("cannot start the libraries' background work")?
     };
 
     let images = api::Images::new(data_dir.cache().join("images"), ffmpeg_config);

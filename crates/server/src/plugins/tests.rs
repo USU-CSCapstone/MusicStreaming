@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use jewelcase_plugins::Permission::LibraryRead;
-use jewelcase_scanner::{ScanOptions, Scanner};
+use jewelcase_scanner::Scanner;
 
 use super::testing::{database, enable, grant, install, manifest, plugins};
 use super::{PluginError, Plugins};
@@ -22,9 +22,9 @@ async fn saved_files_are_scanned_without_blocking_the_runtime() {
     let config = db.read(libraries::all).await.unwrap()[0].config();
     // Started outside the runtime, as `run` starts every scanner.
     let store_db = db.clone();
-    let scanner = tokio::task::spawn_blocking(move || {
+    let (scanner, thread) = tokio::task::spawn_blocking(move || {
         let store = Arc::new(SqliteStore::new(store_db).unwrap());
-        Scanner::start(store, config, ScanOptions::default())
+        Scanner::start(store, config).unwrap()
     })
     .await
     .unwrap();
@@ -43,7 +43,7 @@ async fn saved_files_are_scanned_without_blocking_the_runtime() {
         !plugins.scan(1, &[Path::new("/elsewhere/x.lrc").to_path_buf()]).await,
         "outside its roots"
     );
-    tokio::task::spawn_blocking(move || scanner.shutdown()).await.unwrap();
+    tokio::task::spawn_blocking(move || drop(thread)).await.unwrap();
 }
 
 /// Run now answers a run that failed as failed, with why, and records it so for the admin: here

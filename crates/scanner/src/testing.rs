@@ -905,7 +905,7 @@ pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory
     store.update_scan(&interrupted_row).unwrap();
 
     let parked = Parked::new(store.clone());
-    let scanner = Scanner::start(parked.clone(), lib.clone(), ScanOptions::default());
+    let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
     scanner.wait_idle();
     let scans = store.inspect_scans(lib.id);
     let resumed = scans.iter().find(|s| s.id == interrupted_row.id).unwrap();
@@ -954,7 +954,7 @@ pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory
     assert_eq!(state(a), ScanState::Cancelled, "the library scan replaced it");
     assert_eq!(state(all), ScanState::Completed);
     assert_eq!(live(store.as_ref(), &lib).len(), 6);
-    scanner.shutdown();
+    drop(thread);
 }
 
 /// Blocks until `condition` holds for `scanner`, failing the test with `what` after 30 seconds.
@@ -1002,7 +1002,7 @@ pub fn a_resumed_scan_takes_no_new_work<S: InspectStore + 'static>(make: Factory
 
     let parked = Parked::new(store.clone());
     parked.hold();
-    let scanner = Scanner::start(parked.clone(), lib.clone(), ScanOptions::default());
+    let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
     wait_until(&scanner, "no resumed scan started", |scanner| scanner.running().is_some());
     let [waiting] = scanner.queued().try_into().unwrap();
     let added = root.join("A/X/02 - Added.wav");
@@ -1011,7 +1011,7 @@ pub fn a_resumed_scan_takes_no_new_work<S: InspectStore + 'static>(make: Factory
     assert_ne!(startup, waiting.id, "the startup scan does not join a resumed scan");
     parked.release();
     scanner.wait_idle();
-    scanner.shutdown();
+    drop(thread);
 
     assert!(live(store.as_ref(), &lib).iter().any(|t| t.path == added));
     let scans = store.inspect_scans(lib.id);
@@ -1033,7 +1033,7 @@ pub fn a_reconfigure_during_a_scan_applies_its_excludes<S: InspectStore + 'stati
     let store: Arc<S> = Arc::new(make(&root));
     let lib = library(&root);
     let parked = Parked::new(store.clone());
-    let scanner = Scanner::start(parked.clone(), lib.clone(), ScanOptions::default());
+    let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
     scanner.scan_library(Trigger::Initial).unwrap();
     scanner.wait_idle();
     parked.hold();
@@ -1045,7 +1045,7 @@ pub fn a_reconfigure_during_a_scan_applies_its_excludes<S: InspectStore + 'stati
     assert_ne!(reconfigured, running, "a scan that has started takes no new work");
     parked.release();
     scanner.wait_idle();
-    scanner.shutdown();
+    drop(thread);
 
     let tracks = store.inspect_tracks(excluding.id);
     let missing = |path: &str| tracks.iter().find(|t| t.path == root.join(path)).unwrap().missing;

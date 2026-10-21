@@ -95,8 +95,9 @@ fn folders_that_appear_later_are_watched() {
     fs::create_dir_all(&locked).unwrap();
     fs::create_dir_all(tmp.path().join("outside/a/b")).unwrap();
     let was_locked = lock(&locked);
-    let (scanner, store) = scanner(&root);
-    let watcher = FsWatcher::spawn(scanner.clone(), vec![root.clone()], watched, timing(None));
+    let (scanner, thread, store) = scanner(&root);
+    let watcher =
+        FsWatcher::spawn(scanner.clone(), vec![root.clone()], watched, timing(None)).unwrap();
     let mut last = seen(&store, &root, &root, 0);
     if was_locked {
         unlock(&locked);
@@ -106,8 +107,8 @@ fn folders_that_appear_later_are_watched() {
     last = seen(&store, &root, &root.join("new"), last);
     fs::rename(tmp.path().join("outside/a"), root.join("a")).unwrap();
     seen(&store, &root, &root.join("a/b"), last);
-    watcher.stop();
-    scanner.shutdown();
+    drop(watcher);
+    drop(thread);
 }
 
 /// A change of permissions, as `chmod -R` makes, walks nothing again but folders that could not
@@ -125,8 +126,9 @@ fn a_change_of_permissions_tries_only_unreadable_folders() {
     let calls = Arc::new(AtomicUsize::new(0));
     let counted = calls.clone();
     let watch = move |root: &Path, events: &Events| FailsAt::counted(root, events, &counted);
-    let (scanner, store) = scanner(&root);
-    let watcher = FsWatcher::spawn(scanner.clone(), vec![root.clone()], watch, timing(None));
+    let (scanner, thread, store) = scanner(&root);
+    let watcher =
+        FsWatcher::spawn(scanner.clone(), vec![root.clone()], watch, timing(None)).unwrap();
     let calls = || calls.load(Ordering::SeqCst);
     // Each `seen` follows the changes before it, as a watch delivers events in order.
     let mut last = seen(&store, &root, &root, 0);
@@ -157,8 +159,8 @@ fn a_change_of_permissions_tries_only_unreadable_folders() {
         seen(&store, &root, &root, last);
         assert_eq!(calls(), before, "a folder made readable was tried again");
     }
-    watcher.stop();
-    scanner.shutdown();
+    drop(watcher);
+    drop(thread);
 }
 
 /// A folder made once the OS limit on watches is reached cannot be watched, so the library is
@@ -168,7 +170,7 @@ fn reaching_the_limit_later_starts_the_fallback_schedule() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
     let new = root.join("new");
-    let (scanner, _) = scanner(&root);
+    let (scanner, thread, _) = scanner(&root);
     let tries = Cell::new(0);
     let limit_at_new = |root: &Path, events: &Events| {
         tries.set(tries.get() + 1);
@@ -184,8 +186,8 @@ fn reaching_the_limit_later_starts_the_fallback_schedule() {
     assert!(roots.fallback.is_some());
     roots.check(start + 2 * MAX_BACKOFF);
     assert_eq!(tries.get(), 1, "a root the limit stopped was watched afresh");
-    roots.stop();
-    scanner.shutdown();
+    drop(roots);
+    drop(thread);
 }
 
 /// A folder made later that cannot be watched, short of the OS limit, leaves the library not
@@ -195,7 +197,7 @@ fn a_folder_that_fails_later_has_its_root_watched_afresh() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
     let new = root.join("new");
-    let (scanner, store) = scanner(&root);
+    let (scanner, thread, store) = scanner(&root);
     let tries = Cell::new(0);
     // The first watch fails at the new folder; a fresh one fails nowhere.
     let fails_once = |root: &Path, events: &Events| {
@@ -215,6 +217,6 @@ fn a_folder_that_fails_later_has_its_root_watched_afresh() {
     assert!(roots.fallback.is_none(), "the fallback schedule outlived the fresh watch");
     let scopes: Vec<Vec<Scope>> = scans(&store).into_iter().map(|scan| scan.scopes).collect();
     assert_eq!(scopes, [vec![Scope::root(root.clone())]]);
-    roots.stop();
-    scanner.shutdown();
+    drop(roots);
+    drop(thread);
 }

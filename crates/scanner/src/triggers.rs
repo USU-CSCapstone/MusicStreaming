@@ -7,13 +7,12 @@
 mod roots;
 
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+use std::{fs, io};
 
 use globset::GlobSet;
 use notify::event::RemoveKind;
@@ -24,15 +23,17 @@ use crate::queue::Scanner;
 use crate::scan::Trigger;
 use crate::scope::{Depth, Scope};
 use crate::sidecar::is_sidecar_name;
+use crate::worker::Worker;
 use roots::{Events, RootWatch, Roots};
 
 /// How often the watcher checks that each root is still the directory it watches.
 const CHECK_ROOTS: Duration = Duration::from_secs(10);
 
-/// How long [`FsWatcher::stop`] waits for the watcher's thread to finish.
+/// How long dropping an [`FsWatcher`] waits for the watcher's thread to finish.
 const STOP_WAIT: Duration = Duration::from_secs(1);
 
-/// Live filesystem watching with per-directory debouncing.
+/// Live filesystem watching with per-directory debouncing, until it is dropped.
+#[must_use = "dropping it stops the watcher"]
 pub struct FsWatcher {
     stop: Arc<AtomicBool>,
     /// Disconnected once the watcher's thread has finished.
@@ -55,12 +56,13 @@ impl FsWatcher {
     /// before the watches are set up. What the library's excludes match as this starts is not
     /// watched. Changes are grouped by directory over `debounce` and enqueued as one scope each.
     /// While part of the library is not watched, it is scanned every `fallback`, when given.
+    /// Fails if the thread cannot be started.
     pub fn start(
         scanner: Scanner,
         roots: &[PathBuf],
         debounce: Duration,
         fallback: Option<Duration>,
-    ) -> FsWatcher {
+    ) -> io::Result<FsWatcher> {
         let timing = Timing { debounce, check: CHECK_ROOTS, fallback };
         // Every scan suspends on a pattern that does not compile, so watching the folders it
         // meant to leave out indexes none of them.
@@ -75,31 +77,35 @@ impl FsWatcher {
 
     /// [`FsWatcher::start`], setting each root's watch up with `watch`, which tests replace to
     /// control what the watch finds.
-    fn spawn<W>(scanner: Scanner, roots: Vec<PathBuf>, watch: W, timing: Timing) -> FsWatcher
+    fn spawn<W>(
+        scanner: Scanner,
+        roots: Vec<PathBuf>,
+        watch: W,
+        timing: Timing,
+    ) -> io::Result<FsWatcher>
     where
         W: Fn(&Path, &Events) -> RootWatch + Send + 'static,
     {
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = stop.clone();
         let (done, finished) = mpsc::channel();
-        std::thread::Builder::new()
-            .name("scanner-watch".into())
-            .spawn(move || {
-                let (tx, rx) = mpsc::channel();
-                let roots = Roots::start(scanner.clone(), &roots, tx, watch, &timing);
-                debounce_loop(scanner, roots, rx, stop2, timing.debounce);
-                drop(done);
-            })
-            .expect("spawn watcher thread");
-        FsWatcher { stop, finished }
+        std::thread::Builder::new().name("scanner-watch".into()).spawn(move || {
+            let (tx, rx) = mpsc::channel();
+            let roots = Roots::start(scanner.clone(), &roots, tx, watch, &timing);
+            debounce_loop(scanner, roots, rx, stop2, timing.debounce);
+            drop(done);
+        })?;
+        Ok(FsWatcher { stop, finished })
     }
+}
 
+impl Drop for FsWatcher {
     /// Stops the watcher, waiting up to [`STOP_WAIT`] for its thread, so the scanner it holds
     /// is let go before the process ends. A thread still setting a watch up, or held by a root
     /// that does not answer, as a hard-mounted share that has gone away, is left to finish
     /// alone: all it can still do is queue a scan, which a stopped scanner keeps for its next
     /// start.
-    pub fn stop(self) {
+    fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Err(RecvTimeoutError::Timeout) = self.finished.recv_timeout(STOP_WAIT) {
             tracing::warn!("the watcher is busy, so it is left to stop on its own");
@@ -107,11 +113,13 @@ impl FsWatcher {
     }
 }
 
-/// A watcher that sends every event to `tx`.
+/// A watcher that sends every event to `tx`, until the watcher's thread has finished with them.
 fn watcher(tx: mpsc::Sender<notify::Result<notify::Event>>) -> notify::Result<RecommendedWatcher> {
     RecommendedWatcher::new(
         move |res| {
-            let _ = tx.send(res);
+            if tx.send(res).is_err() {
+                tracing::debug!("the watcher has stopped, so an event is dropped");
+            }
         },
         Config::default(),
     )
@@ -194,7 +202,6 @@ fn debounce_loop<W: Fn(&Path, &Events) -> RootWatch>(
             scanner.request(Trigger::Watch, scopes);
         }
     }
-    roots.stop();
 }
 
 /// Which scopes a changed path dirties, each a folder and how deep. A changed file dirties its
@@ -235,38 +242,14 @@ fn classify(
     }
 }
 
-/// Periodic reconciliation: the safety net for network mounts.
-pub struct Schedule {
-    stop: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
-}
-
-impl Schedule {
-    pub fn start(scanner: Scanner, interval: Duration) -> Schedule {
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop2 = stop.clone();
-        let thread = std::thread::Builder::new()
-            .name("scanner-schedule".into())
-            .spawn(move || {
-                let mut next = Instant::now() + interval;
-                while !stop2.load(Ordering::SeqCst) {
-                    std::thread::sleep(Duration::from_millis(250));
-                    if Instant::now() >= next {
-                        scanner.scan_library(Trigger::Scheduled);
-                        next = Instant::now() + interval;
-                    }
-                }
-            })
-            .expect("spawn schedule thread");
-        Schedule { stop, thread: Some(thread) }
-    }
-
-    pub fn stop(mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
+/// The schedule, periodic reconciliation that is the safety net for network mounts: scans
+/// `scanner`'s library every `interval`, until the worker is dropped.
+pub fn scan_every(scanner: Scanner, interval: Duration) -> io::Result<Worker> {
+    Worker::spawn("scanner-schedule", move |stop| {
+        while !stop.wait(interval) {
+            scanner.scan_library(Trigger::Scheduled);
         }
-    }
+    })
 }
 
 #[cfg(test)]

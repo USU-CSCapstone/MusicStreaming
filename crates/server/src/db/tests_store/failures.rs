@@ -85,7 +85,7 @@ fn a_scan_the_store_cannot_record_is_not_queued() {
     let lib = testing::library(&root);
     let parked = testing::Parked::new(store.clone());
     parked.hold();
-    let scanner = Scanner::start(parked.clone(), lib.clone(), ScanOptions::default());
+    let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
     scanner.scan_library(Trigger::Manual).unwrap();
     testing::wait_until(&scanner, "no scan started", |scanner| scanner.running().is_some());
     let folder = scanner.scan_folder(Trigger::Watch, &root.join("A")).unwrap();
@@ -97,7 +97,7 @@ fn a_scan_the_store_cannot_record_is_not_queued() {
     heal(&store);
     parked.release();
     scanner.wait_idle();
-    scanner.shutdown();
+    drop(thread);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM scans WHERE state = 'completed'"), 2);
 }
 

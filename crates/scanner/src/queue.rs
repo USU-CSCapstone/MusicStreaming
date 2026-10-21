@@ -13,14 +13,13 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
-use std::thread::JoinHandle;
-use std::time::Instant;
 
 use crate::library::LibraryConfig;
-use crate::scan::{Scan, ScanContext, ScanId, ScanOptions, ScanState, Trigger, run_scan};
+use crate::scan::{Scan, ScanId, ScanOptions, Trigger};
 use crate::scope::{Depth, Scope};
 use crate::store::Store;
 use retry::Retry;
+pub use worker::ScannerThread;
 
 mod request;
 #[cfg(test)]
@@ -28,6 +27,7 @@ mod retries;
 mod retry;
 #[cfg(test)]
 mod scan_rows;
+mod worker;
 
 struct Queue {
     queued: VecDeque<Scan>,
@@ -54,53 +54,14 @@ struct Inner {
     shutdown: AtomicBool,
 }
 
-/// Handle to one library's scanner. Cloneable; the worker thread lives as
-/// long as any handle does and is joined by [`Scanner::shutdown`].
+/// Handle to one library's scanner, for queuing and inspecting its scans. Cloneable; its thread
+/// runs until the [`ScannerThread`] that [`Scanner::start`] returns with it is dropped.
 #[derive(Clone)]
 pub struct Scanner {
     inner: Arc<Inner>,
-    worker: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl Scanner {
-    /// Start the worker. Interrupted scans from a previous process are
-    /// re-queued with their cursors, so they continue where they stopped
-    /// instead of walking from the start. Folders that could not be read before the
-    /// cursor are not remembered (`design/scanning.md` §9). If the store cannot list them, none
-    /// is resumed now; their rows stay as they are for the next start.
-    pub fn start(store: Arc<dyn Store>, library: LibraryConfig, options: ScanOptions) -> Scanner {
-        let interrupted = store.interrupted_scans(library.id).unwrap_or_else(|error| {
-            tracing::error!(library = library.id, %error, "interrupted scans not resumed");
-            Vec::new()
-        });
-        let inner = Arc::new(Inner {
-            store,
-            library: RwLock::new(library),
-            options,
-            queue: Mutex::new(Queue {
-                queued: VecDeque::new(),
-                running: None,
-                retry: Retry::new(),
-            }),
-            wake: Condvar::new(),
-            cancel_running: AtomicBool::new(false),
-            shutdown: AtomicBool::new(false),
-        });
-        {
-            let mut q = inner.queue.lock().unwrap();
-            for mut scan in interrupted {
-                scan.state = ScanState::Queued;
-                q.queued.push_back(scan);
-            }
-        }
-        let worker_inner = inner.clone();
-        let handle = std::thread::Builder::new()
-            .name("scanner".into())
-            .spawn(move || worker(worker_inner))
-            .expect("spawn scanner worker");
-        Scanner { inner, worker: Arc::new(Mutex::new(Some(handle))) }
-    }
-
     /// Enqueue work. Returns the id of the scan that will do it: a queued scan
     /// that has not started and already covers it, or a new one, never the
     /// running scan or a resumed one. A new scan cancels the queued scans it
@@ -210,100 +171,13 @@ impl Scanner {
         }
     }
 
-    /// Ask the worker to stop without waiting for it. The running scan stops after the file in
-    /// hand and stays running at its last flushed cursor, and queued scans stay queued, so the
-    /// next [`Scanner::start`] resumes them as it would after a crash.
-    pub(crate) fn stop(&self) {
-        let queue = self.inner.queue.lock().unwrap();
-        self.inner.shutdown.store(true, Ordering::SeqCst);
-        drop(queue);
-        self.inner.wake.notify_all();
-    }
-
-    /// [`Scanner::stop`], then wait for the worker to finish.
-    pub fn shutdown(&self) {
-        self.stop();
-        if let Some(h) = self.worker.lock().unwrap().take() {
-            let _ = h.join();
-        }
-    }
-
     /// Shortens the wait of the work waiting to be retried to `wait` from now, after which the
     /// worker queues it, and returns whether any waits.
     #[cfg(feature = "testing")]
     pub fn retry_in(&self, wait: std::time::Duration) -> bool {
-        let waits = self.inner.queue.lock().unwrap().retry.hurry(Instant::now() + wait);
+        let waits = self.inner.queue.lock().unwrap().retry.hurry(std::time::Instant::now() + wait);
         self.inner.wake.notify_all();
         waits
-    }
-}
-
-/// Runs the library's scans one at a time, and queues the work waiting to be retried once it is
-/// due, until a shutdown.
-fn worker(inner: Arc<Inner>) {
-    loop {
-        let mut scan = {
-            let mut q = inner.queue.lock().unwrap();
-            loop {
-                if inner.shutdown.load(Ordering::SeqCst) {
-                    return;
-                }
-                if let Some((trigger, mut scopes)) = q.retry.take_due(Instant::now()) {
-                    drop(q);
-                    // A reconfiguration may have removed a root since the work was left undone.
-                    let library = inner.library.read().unwrap();
-                    scopes.retain(|scope| library.roots.contains(&scope.root));
-                    drop(library);
-                    if scopes.is_empty() {
-                        tracing::debug!(
-                            ?trigger,
-                            "work left undone not retried; its roots have left the library"
-                        );
-                    } else {
-                        inner.request(trigger, scopes);
-                    }
-                    q = inner.queue.lock().unwrap();
-                    continue;
-                }
-                if let Some(mut s) = q.queued.pop_front() {
-                    // Running from the moment it leaves the queue, under the same lock, so a
-                    // request, cancel, or idle check always finds it in one place or the other.
-                    s.state = ScanState::Running;
-                    inner.cancel_running.store(false, Ordering::SeqCst);
-                    q.retry.started(&s);
-                    q.running = Some(s.clone());
-                    break s;
-                }
-                q = match q.retry.due() {
-                    Some(due) => {
-                        let wait = due.saturating_duration_since(Instant::now());
-                        inner.wake.wait_timeout(q, wait).unwrap().0
-                    }
-                    None => inner.wake.wait(q).unwrap(),
-                };
-            }
-        };
-        let library = inner.library.read().unwrap().clone();
-        let ctx = ScanContext {
-            store: inner.store.as_ref(),
-            library: &library,
-            cancel: &inner.cancel_running,
-            shutdown: &inner.shutdown,
-            options: &inner.options,
-        };
-        tracing::info!(scan = scan.id, trigger = ?scan.trigger, scopes = scan.scopes.len(), "scan starting");
-        let undone = run_scan(&ctx, &mut scan);
-        if scan.state == ScanState::Running {
-            tracing::info!(scan = scan.id, progress = ?scan.progress, "scan stopped for shutdown");
-        } else {
-            tracing::info!(scan = scan.id, state = ?scan.state, progress = ?scan.progress, "scan finished");
-        }
-        {
-            let mut q = inner.queue.lock().unwrap();
-            q.running = None;
-            q.retry.ended(&scan, undone, Instant::now());
-        }
-        inner.wake.notify_all();
     }
 }
 

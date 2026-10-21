@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::*;
+use crate::scan::ScanState;
 use crate::store::MemoryStore;
 use crate::testing::{library, make_album, wait_until};
 
@@ -21,9 +22,9 @@ fn nas_gone(tmp: &Path) -> (LibraryConfig, PathBuf, PathBuf) {
     (LibraryConfig { roots: vec![nas.clone(), kept.clone()], ..library(&kept) }, nas, away)
 }
 
-/// A scanner of `lib` over `store`.
-fn scanner(store: &Arc<MemoryStore>, lib: &LibraryConfig) -> Scanner {
-    Scanner::start(store.clone(), lib.clone(), ScanOptions::default())
+/// A scanner of `lib` over `store`, and the owner of its thread.
+fn scanner(store: &Arc<MemoryStore>, lib: &LibraryConfig) -> (Scanner, ScannerThread) {
+    Scanner::start(store.clone(), lib.clone()).unwrap()
 }
 
 /// Shortens the wait of the work `scanner` holds to retry to `wait`, and waits for the scan the
@@ -43,13 +44,13 @@ fn a_root_that_did_not_answer_is_retried() {
     let tmp = tempfile::tempdir().unwrap();
     let (lib, nas, away) = nas_gone(tmp.path());
     let store = Arc::new(MemoryStore::new());
-    let scanner = scanner(&store, &lib);
+    let (scanner, thread) = scanner(&store, &lib);
     let suspended = scanner.scan_library(Trigger::Initial).unwrap();
     scanner.wait_idle();
 
     fs::rename(&away, &nas).unwrap();
     retried(&scanner, &store, Duration::from_millis(100));
-    scanner.shutdown();
+    drop(thread);
     let [first, retry] = store.scans(lib.id).try_into().unwrap();
     assert_eq!((first.id, first.state), (suspended, ScanState::Suspended));
     assert_eq!((retry.trigger, retry.state), (Trigger::Initial, ScanState::Completed));
@@ -65,12 +66,12 @@ fn a_pattern_that_does_not_compile_is_not_retried() {
     make_album(&root, "A", "X", 1);
     let lib = LibraryConfig { excludes: vec!["[".into()], ..library(&root) };
     let store = Arc::new(MemoryStore::new());
-    let scanner = scanner(&store, &lib);
+    let (scanner, thread) = scanner(&store, &lib);
     scanner.scan_library(Trigger::Manual).unwrap();
     scanner.wait_idle();
 
     assert!(!scanner.retry_in(Duration::ZERO));
-    scanner.shutdown();
+    drop(thread);
     let [row] = store.scans(lib.id).try_into().unwrap();
     assert_eq!(row.state, ScanState::Suspended);
 }
@@ -82,7 +83,7 @@ fn a_scan_covering_the_waiting_work_takes_it_over() {
     let tmp = tempfile::tempdir().unwrap();
     let (lib, nas, away) = nas_gone(tmp.path());
     let store = Arc::new(MemoryStore::new());
-    let scanner = scanner(&store, &lib);
+    let (scanner, thread) = scanner(&store, &lib);
     scanner.scan_library(Trigger::Initial).unwrap();
     scanner.wait_idle();
 
@@ -90,7 +91,7 @@ fn a_scan_covering_the_waiting_work_takes_it_over() {
     let scheduled = scanner.scan_library(Trigger::Scheduled).unwrap();
     scanner.wait_idle();
     assert!(!scanner.retry_in(Duration::ZERO));
-    scanner.shutdown();
+    drop(thread);
     let row = store.scans(lib.id).into_iter().find(|s| s.id == scheduled).unwrap();
     assert_eq!(row.state, ScanState::Completed);
 }
@@ -104,7 +105,7 @@ fn a_root_removed_from_the_library_is_not_retried() {
     let tmp = tempfile::tempdir().unwrap();
     let (lib, nas, _) = nas_gone(tmp.path());
     let store = Arc::new(MemoryStore::new());
-    let scanner = scanner(&store, &lib);
+    let (scanner, thread) = scanner(&store, &lib);
     scanner.scan_library(Trigger::Initial).unwrap();
     scanner.wait_idle();
 
@@ -116,7 +117,7 @@ fn a_root_removed_from_the_library_is_not_retried() {
     wait_until(&scanner, "the worker never took the work", taken);
     scanner.scan_library(Trigger::Manual).unwrap();
     scanner.wait_idle();
-    scanner.shutdown();
+    drop(thread);
     let rows = store.scans(lib.id);
     let in_nas = |scan: &Scan| scan.scopes.iter().any(|scope| scope.root == nas);
     assert_eq!(rows.iter().filter(|scan| in_nas(scan)).count(), 1, "{rows:?}");

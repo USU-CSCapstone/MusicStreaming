@@ -8,33 +8,36 @@ use std::time::Duration;
 use anyhow::Context;
 use jewelcase_ffmpeg::Ffmpeg;
 use jewelcase_scanner::{
-    AnalysisWorker, Analyzer, FsWatcher, PlaceholderWorker, Placeholders, ScanOptions, Scanner,
-    Schedule, Trigger,
+    Analyzer, FsWatcher, Placeholders, Scanner, ScannerThread, Trigger, Worker, scan_every,
 };
 use tracing::{info, warn};
 
 use crate::db::{Database, SqliteStore, libraries};
 
 /// How often a library without a schedule of its own is scanned while part of it is not watched.
-const FALLBACK_SCHEDULE: Duration = Duration::from_secs(24 * 60 * 60);
+const FALLBACK_SCHEDULE: Duration = Duration::from_hours(24);
 
 /// Everything running for every library, until [`Scanning::stop`].
 pub struct Scanning {
     libraries: Vec<Library>,
 }
 
+/// One library's scanner and everything running for it. Fields drop in the order declared, so
+/// they are declared in the order [`Scanning::stop`] stops them, and a library dropped whole, as
+/// when [`Scanning::start`] fails partway, stops the same way.
 struct Library {
     id: i64,
     scanner: Scanner,
     watcher: Option<FsWatcher>,
-    schedule: Option<Schedule>,
-    analysis: AnalysisWorker,
-    placeholders: PlaceholderWorker,
+    schedule: Option<Worker>,
+    thread: ScannerThread,
+    analysis: Worker,
+    placeholders: Worker,
 }
 
 impl Scanning {
     /// Starts a scanner, its triggers, and the background jobs for every library. Blocks, so
-    /// call it outside the async runtime.
+    /// call it outside the async runtime. Fails if the store or a thread cannot be started.
     pub fn start(db: &Arc<Database>, ffmpeg: &Ffmpeg) -> anyhow::Result<Scanning> {
         let store = Arc::new(SqliteStore::new(db.clone()).context("cannot initialise the store")?);
 
@@ -46,26 +49,26 @@ impl Scanning {
         for lib in &libs {
             let config = lib.config();
             let fallback = lib.scan_interval_minutes.is_none().then_some(FALLBACK_SCHEDULE);
-            let scanner = Scanner::start(store.clone(), config.clone(), ScanOptions::default());
+            let (scanner, thread) = Scanner::start(store.clone(), config.clone())?;
             scanner.scan_library(startup_trigger(db, lib.id)?);
             let watcher = lib.watch.then(|| {
                 FsWatcher::start(scanner.clone(), &config.roots, Duration::from_secs(2), fallback)
             });
-            let schedule = lib.scan_interval_minutes.map(|m| {
-                Schedule::start(scanner.clone(), Duration::from_secs(m.max(1) as u64 * 60))
+            let schedule = lib.scan_interval_minutes.map(|minutes| {
+                scan_every(scanner.clone(), Duration::from_mins(minutes.unsigned_abs()))
             });
             info!(library = lib.id, name = %lib.name, roots = ?config.roots, "scanner started");
             running.push(Library {
                 id: lib.id,
                 scanner,
-                watcher,
-                schedule,
+                watcher: watcher.transpose()?,
+                schedule: schedule.transpose()?,
+                thread,
                 // One of each per library, since each remembers its library's failures.
                 analysis: Arc::new(Analyzer::new(ffmpeg.clone(), store.clone()))
-                    .start(config.id, Duration::from_secs(30)),
-                // Soon after a scan finds an image, since clients draw its placeholder at once.
+                    .start(config.id)?,
                 placeholders: Arc::new(Placeholders::new(ffmpeg.clone(), store.clone()))
-                    .start(config.id, Duration::from_secs(5)),
+                    .start(config.id)?,
             });
         }
         Ok(Scanning { libraries: running })
@@ -80,15 +83,13 @@ impl Scanning {
     /// is queued. Blocks, so call it outside the async runtime.
     pub fn stop(self) {
         for lib in self.libraries {
-            if let Some(watcher) = lib.watcher {
-                watcher.stop();
-            }
-            if let Some(schedule) = lib.schedule {
-                schedule.stop();
-            }
-            lib.scanner.shutdown();
-            lib.analysis.stop();
-            lib.placeholders.stop();
+            // Dropped one by one, not whole, so the order they stop in reads here and does not
+            // rest on `Library`'s declaration alone.
+            drop(lib.watcher);
+            drop(lib.schedule);
+            drop(lib.thread);
+            drop(lib.analysis);
+            drop(lib.placeholders);
         }
         info!("background work stopped");
     }

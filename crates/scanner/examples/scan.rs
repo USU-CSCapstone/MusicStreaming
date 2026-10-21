@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 use jewelcase_ffmpeg::{Config, Ffmpeg};
 use jewelcase_scanner::*;
 
-fn main() {
+/// Scans the folder named on the command line and prints what was found, then analyzes it and
+/// watches it as the flags ask.
+fn main() -> std::io::Result<()> {
     let mut args = std::env::args().skip(1);
     let Some(root) = args.next().map(PathBuf::from) else {
         eprintln!("usage: scan <root> [--analyze] [--watch]");
@@ -21,7 +23,7 @@ fn main() {
 
     let store = Arc::new(MemoryStore::new());
     let library = LibraryConfig { id: 1, roots: vec![root.clone()], excludes: Vec::new() };
-    let scanner = Scanner::start(store.clone(), library.clone(), ScanOptions::default());
+    let (scanner, thread) = Scanner::start(store.clone(), library.clone())?;
 
     let started = Instant::now();
     scanner.scan_library(Trigger::Initial);
@@ -102,8 +104,9 @@ fn main() {
 
     if watch {
         println!("watching {} (ctrl-c to stop)", root.display());
-        let watcher =
-            FsWatcher::start(scanner.clone(), &library.roots, Duration::from_secs(2), None);
+        // Watches until the process is stopped.
+        let _watcher =
+            FsWatcher::start(scanner.clone(), &library.roots, Duration::from_secs(2), None)?;
         let mut seen = store.scans(library.id).len();
         loop {
             std::thread::sleep(Duration::from_secs(1));
@@ -118,8 +121,8 @@ fn main() {
                 .filter(|s| s.state != ScanState::Queued && s.state != ScanState::Running)
                 .count()
                 .max(seen);
-            let _ = &watcher;
         }
     }
-    scanner.shutdown();
+    drop(thread);
+    Ok(())
 }

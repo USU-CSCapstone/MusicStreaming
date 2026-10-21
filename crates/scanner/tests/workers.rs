@@ -30,8 +30,7 @@ fn analysis_and_placeholder_threads_run_at_low_priority() {
     let store = Arc::new(MemoryStore::new());
     let analyzer = Arc::new(Analyzer::new(ffmpeg.clone(), store.clone()));
     let placeholders = Arc::new(Placeholders::new(ffmpeg, store));
-    let idle = Duration::from_secs(60);
-    let workers = (analyzer.start(1, idle), placeholders.start(1, idle));
+    let workers = (analyzer.start(1).unwrap(), placeholders.start(1).unwrap());
     for name in ["scanner-analysis", "scanner-placeholders"] {
         let lowered_soon = (0..500).any(|_| {
             std::thread::sleep(Duration::from_millis(10));
@@ -39,6 +38,5 @@ fn analysis_and_placeholder_threads_run_at_low_priority() {
         });
         assert!(lowered_soon, "{name}: {:?}, not [{lowered}]", nice_of(name));
     }
-    workers.0.stop();
-    workers.1.stop();
+    drop(workers);
 }

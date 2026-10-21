@@ -25,8 +25,8 @@ mod writer;
 
 pub use row::{Cursor, Scan, ScanId, ScanProgress, ScanState, Trigger};
 
-/// Tunables. Defaults are the design's starting points; benchmarks decide
-/// the shipped values.
+/// When a scan flushes its batch. The scanner always runs with the defaults, the design's
+/// starting points; tests choose others to flush at the points they check.
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
     /// Flush a batch at this many outcomes...

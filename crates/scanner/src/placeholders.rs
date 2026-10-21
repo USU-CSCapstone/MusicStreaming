@@ -5,20 +5,25 @@
 //! Filled in the background after a scan finds an image, the same way analysis follows it, and
 //! at the same low priority.
 
+use std::io;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::JoinHandle;
 use std::time::Duration;
 
 use jewelcase_ffmpeg::Ffmpeg;
 
-use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport};
+use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport, in_background};
 use crate::library::LibraryId;
 use crate::store::{FileToDecode, Store};
+use crate::worker::Worker;
 
 /// ThumbHash encodes at most 100 pixels a side, and gains nothing from more.
 const MAX_SIDE: u32 = 100;
+
+/// How long the background job waits after a pass that backed off or found nothing to do:
+/// briefly, so a placeholder follows soon after a scan finds its image, since clients draw it at
+/// once.
+const IDLE: Duration = Duration::from_secs(5);
 
 /// Fills placeholders for one library.
 pub struct Placeholders {
@@ -62,37 +67,9 @@ impl Placeholders {
         pass.unwrap_or_else(RunReport::store_failed)
     }
 
-    /// Runs in the background, at low priority, until stopped, sleeping when idle or backing off.
-    pub fn start(self: Arc<Self>, library: LibraryId, idle_sleep: Duration) -> PlaceholderWorker {
-        let stop = Arc::new(AtomicBool::new(false));
-        let stopping = stop.clone();
-        let thread = std::thread::Builder::new()
-            .name("scanner-placeholders".into())
-            .spawn(move || {
-                jewelcase_ffmpeg::lower_thread_priority();
-                while !stopping.load(Ordering::SeqCst) {
-                    if self.run_once(library, 32).idle() {
-                        // Woken early by `stop`.
-                        std::thread::park_timeout(idle_sleep);
-                    }
-                }
-            })
-            .expect("spawn placeholder thread");
-        PlaceholderWorker { stop, thread: Some(thread) }
-    }
-}
-
-pub struct PlaceholderWorker {
-    stop: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
-}
-
-impl PlaceholderWorker {
-    pub fn stop(mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Some(thread) = self.thread.take() {
-            thread.thread().unpark();
-            let _ = thread.join();
-        }
+    /// Runs in the background, at low priority, until the worker is dropped, waiting [`IDLE`]
+    /// when idle or backing off.
+    pub fn start(self: Arc<Self>, library: LibraryId) -> io::Result<Worker> {
+        in_background("scanner-placeholders", IDLE, move || self.run_once(library, 32))
     }
 }

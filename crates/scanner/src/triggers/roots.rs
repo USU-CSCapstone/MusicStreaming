@@ -11,19 +11,20 @@ use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
 use notify::ErrorKind;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
-use super::{Schedule, Timing};
+use super::{Timing, scan_every};
 use crate::queue::Scanner;
 use crate::scan::Trigger;
 use crate::scope::Scope;
+use crate::worker::Worker;
 pub(super) use watch::RootWatch;
 
 /// Where every root's watch sends its events.
 pub(super) type Events = Sender<notify::Result<notify::Event>>;
 
 /// The longest wait between fresh watches of a root.
-const MAX_BACKOFF: Duration = Duration::from_secs(60 * 60);
+const MAX_BACKOFF: Duration = Duration::from_hours(1);
 
 /// A root of the library and its watch.
 struct Root {
@@ -67,7 +68,7 @@ impl Root {
 }
 
 /// Every root of one library with its watch, and the fallback schedule while they are not all
-/// wholly watched.
+/// wholly watched. Dropping it ends the watches and the fallback schedule.
 pub(super) struct Roots<W> {
     scanner: Scanner,
     events: Events,
@@ -77,7 +78,7 @@ pub(super) struct Roots<W> {
     next_check: Instant,
     /// How often the library is scanned while not wholly watched; `None` when it has a schedule.
     fallback_every: Option<Duration>,
-    fallback: Option<Schedule>,
+    fallback: Option<Worker>,
 }
 
 impl<W: Fn(&Path, &Events) -> RootWatch> Roots<W> {
@@ -155,7 +156,7 @@ impl<W: Fn(&Path, &Events) -> RootWatch> Roots<W> {
     }
 
     /// Scans the library every `fallback_every` while any root is not wholly watched, and stops
-    /// once every root is.
+    /// once every root is. A fallback schedule that cannot start is tried again at the next check.
     fn fall_back(&mut self) {
         let Some(every) = self.fallback_every else {
             return;
@@ -165,26 +166,19 @@ impl<W: Fn(&Path, &Events) -> RootWatch> Roots<W> {
             return;
         }
         let roots: Vec<&Path> = self.roots.iter().map(|root| root.path.as_path()).collect();
-        match self.fallback.take() {
-            None => {
-                warn!(
-                    ?roots,
-                    ?every,
-                    "not every folder is watched, so the library is scanned on a schedule"
-                );
-                self.fallback = Some(Schedule::start(self.scanner.clone(), every));
-            }
-            Some(fallback) => {
-                info!(?roots, "every folder is watched again, so the fallback schedule stops");
-                fallback.stop();
-            }
+        if whole {
+            info!(?roots, "every folder is watched again, so the fallback schedule stops");
+            self.fallback = None;
+            return;
         }
-    }
-
-    /// Stops the fallback schedule. The watches end as they are dropped.
-    pub(super) fn stop(self) {
-        if let Some(fallback) = self.fallback {
-            fallback.stop();
+        warn!(
+            ?roots,
+            ?every,
+            "not every folder is watched, so the library is scanned on a schedule"
+        );
+        match scan_every(self.scanner.clone(), every) {
+            Ok(fallback) => self.fallback = Some(fallback),
+            Err(error) => error!(%error, "the fallback schedule cannot start"),
         }
     }
 }

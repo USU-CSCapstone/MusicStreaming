@@ -7,20 +7,20 @@
 
 pub mod waveform;
 
+use std::io;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::JoinHandle;
 use std::time::Duration;
 
 use ebur128::{EbuR128, Mode};
 use jewelcase_ffmpeg::{Ffmpeg, ProbeInfo};
 
 use crate::clock::now_ms;
-use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport};
+use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport, in_background};
 use crate::library::LibraryId;
 use crate::problems::{Problem, ProblemKind};
 use crate::store::{FileToDecode, Store};
+use crate::worker::Worker;
 use waveform::{Waveform, WaveformBuilder};
 
 /// Bumped whenever any sink's output changes; tracks below it are reprocessed
@@ -32,6 +32,9 @@ pub const DEFAULT_WAVEFORM_BINS: usize = 512;
 
 /// Frames per block handed to the sinks.
 const BLOCK_FRAMES: usize = 8192;
+
+/// How long the background analysis waits after a pass that backed off or found nothing to do.
+const IDLE: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
 pub enum AnalysisError {
@@ -162,45 +165,16 @@ impl Analyzer {
         })
     }
 
-    /// Run in the background, at low priority, until stopped, sleeping when idle or backing off.
-    /// One track at a time, so a stop waits for one track at most.
-    pub fn start(self: Arc<Self>, library: LibraryId, idle_sleep: Duration) -> AnalysisWorker {
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop2 = stop.clone();
-        let thread = std::thread::Builder::new()
-            .name("scanner-analysis".into())
-            .spawn(move || {
-                jewelcase_ffmpeg::lower_thread_priority();
-                while !stop2.load(Ordering::SeqCst) {
-                    if self.run_once(library, 1).idle() {
-                        // Woken early by `stop`.
-                        std::thread::park_timeout(idle_sleep);
-                    }
-                }
-            })
-            .expect("spawn analysis thread");
-        AnalysisWorker { stop, thread: Some(thread) }
+    /// Runs in the background, at low priority, until the worker is dropped, waiting [`IDLE`]
+    /// when idle or backing off. One track at a time, so a stop waits for one track at most.
+    pub fn start(self: Arc<Self>, library: LibraryId) -> io::Result<Worker> {
+        in_background("scanner-analysis", IDLE, move || self.run_once(library, 1))
     }
 }
 
 /// An empty result at the current version, so a file judged broken is not decoded on every pass.
 fn failed_result() -> AnalysisResult {
     AnalysisResult::empty(ANALYZER_VERSION)
-}
-
-pub struct AnalysisWorker {
-    stop: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
-}
-
-impl AnalysisWorker {
-    pub fn stop(mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Some(t) = self.thread.take() {
-            t.thread().unpark();
-            let _ = t.join();
-        }
-    }
 }
 
 /// Average the channels of an interleaved block into `mono`.

@@ -23,9 +23,10 @@ use crate::discover::check_root;
 use crate::library::LibraryId;
 use crate::problems::{self, Problem};
 use crate::store::{Batch, FileToDecode, Store, StoreError};
+use crate::worker::Worker;
 
 /// How long a file that cannot be opened is skipped before it is tried again.
-pub const RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
+pub const RETRY_AFTER: Duration = Duration::from_hours(1);
 
 /// What one pass of a background job did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -53,6 +54,23 @@ impl RunReport {
     pub fn idle(&self) -> bool {
         self.backed_off || self.done + self.failed == 0
     }
+}
+
+/// Runs `pass` on a thread of its own named `name`, at low priority, until the worker is dropped,
+/// waiting `idle` after each pass that backed off or did nothing ([`RunReport::idle`]).
+pub(crate) fn in_background<F>(name: &str, idle: Duration, mut pass: F) -> io::Result<Worker>
+where
+    F: FnMut() -> RunReport + Send + 'static,
+{
+    Worker::spawn(name, move |stop| {
+        jewelcase_ffmpeg::lower_thread_priority();
+        loop {
+            let wait = if pass().idle() { idle } else { Duration::ZERO };
+            if stop.wait(wait) {
+                break;
+            }
+        }
+    })
 }
 
 /// How a decode failed.
@@ -245,6 +263,8 @@ impl Retries {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::clock::now_ms;
@@ -260,6 +280,29 @@ mod tests {
         };
         let files = [file("a"), file("b")];
         (tmp, MemoryStore::new(), files)
+    }
+
+    /// A background job runs its next pass at once after a pass that did something, and waits
+    /// after one that found nothing to do.
+    #[test]
+    fn a_background_job_waits_only_when_idle() {
+        let long = Duration::from_secs(60);
+        let passes = Arc::new(AtomicUsize::new(0));
+        let counted = passes.clone();
+        let busy = RunReport { done: 1, ..RunReport::default() };
+        let worker = in_background("test-job", long, move || {
+            let pass = counted.fetch_add(1, Ordering::SeqCst);
+            if pass < 3 { busy.clone() } else { RunReport::default() }
+        })
+        .unwrap();
+        let deadline = Instant::now() + long / 4;
+        while passes.load(Ordering::SeqCst) < 4 {
+            assert!(Instant::now() < deadline, "{} passes", passes.load(Ordering::SeqCst));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(passes.load(Ordering::SeqCst), 4, "an idle pass was not followed by a wait");
+        drop(worker);
     }
 
     /// A stall decoding `file`: a failure that may pass.

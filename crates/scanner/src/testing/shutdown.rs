@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::{Factory, InspectStore, Parked, library, live, make_album, wait_until_running};
 use crate::clock::now_ms;
 use crate::queue::Scanner;
-use crate::scan::{Cursor, Scan, ScanOptions, ScanProgress, ScanState, Trigger};
+use crate::scan::{Cursor, Scan, ScanProgress, ScanState, Trigger};
 use crate::scope::{Depth, Scope};
 
 /// A shutdown stops the running scan without ending it: the row stays running at its cursor and
@@ -38,14 +38,14 @@ pub fn a_shutdown_leaves_its_scans_to_resume<S: InspectStore + 'static>(make: Fa
 
     let parked = Parked::new(store.clone());
     parked.hold();
-    let scanner = Scanner::start(parked.clone(), lib.clone(), ScanOptions::default());
+    let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
     wait_until_running(&scanner, interrupted.id);
     let queued = scanner
         .request(Trigger::Manual, vec![Scope::folder(&root, root.join("C"), Depth::Subtree)])
         .unwrap();
-    scanner.stop();
+    thread.stop();
     parked.release();
-    scanner.shutdown();
+    drop(thread);
 
     let scans = store.inspect_scans(lib.id);
     let row = |id| scans.iter().find(|s| s.id == id).unwrap();
@@ -54,9 +54,9 @@ pub fn a_shutdown_leaves_its_scans_to_resume<S: InspectStore + 'static>(make: Fa
     assert_eq!(stopped.finished_at, None);
     assert_eq!(row(queued).state, ScanState::Queued);
 
-    let restarted = Scanner::start(store.clone(), lib.clone(), ScanOptions::default());
+    let (restarted, restarted_thread) = Scanner::start(store.clone(), lib.clone()).unwrap();
     restarted.wait_idle();
-    restarted.shutdown();
+    drop(restarted_thread);
     let scans = store.inspect_scans(lib.id);
     let row = |id| scans.iter().find(|s| s.id == id).unwrap();
     let resumed = row(interrupted.id);
@@ -77,7 +77,7 @@ pub fn a_cancelled_scan_stays_cancelled<S: InspectStore + 'static>(make: Factory
     let store: Arc<S> = Arc::new(make(&root));
     let lib = library(&root);
     let parked = Parked::new(store.clone());
-    let scanner = Scanner::start(parked.clone(), lib.clone(), ScanOptions::default());
+    let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
 
     parked.hold();
     let cancelled = scanner.scan_library(Trigger::Manual).unwrap();
@@ -90,13 +90,13 @@ pub fn a_cancelled_scan_stays_cancelled<S: InspectStore + 'static>(make: Factory
     let then_shut_down = scanner.scan_library(Trigger::Manual).unwrap();
     wait_until_running(&scanner, then_shut_down);
     assert!(scanner.cancel(then_shut_down));
-    scanner.stop();
+    thread.stop();
     parked.release();
-    scanner.shutdown();
+    drop(thread);
 
-    let restarted = Scanner::start(store.clone(), lib.clone(), ScanOptions::default());
+    let (restarted, restarted_thread) = Scanner::start(store.clone(), lib.clone()).unwrap();
     restarted.wait_idle();
-    restarted.shutdown();
+    drop(restarted_thread);
     let scans = store.inspect_scans(lib.id);
     for id in [cancelled, then_shut_down] {
         let scan = scans.iter().find(|s| s.id == id).unwrap();

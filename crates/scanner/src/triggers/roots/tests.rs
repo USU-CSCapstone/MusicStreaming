@@ -5,7 +5,8 @@ use std::sync::{Arc, mpsc};
 use std::collections::BTreeSet;
 
 use super::*;
-use crate::scan::{Scan, ScanOptions};
+use crate::queue::ScannerThread;
+use crate::scan::Scan;
 use crate::store::MemoryStore;
 use crate::testing::library;
 use fakes::{FailsAt, limit_error, seen};
@@ -17,11 +18,11 @@ mod watcher;
 /// How long a test waits for what it expects before it fails.
 const PATIENCE: Duration = Duration::from_secs(10);
 
-/// A scanner of the library with its one root at `root`, and its store.
-fn scanner(root: &Path) -> (Scanner, Arc<MemoryStore>) {
+/// A scanner of the library with its one root at `root`, the owner of its thread, and its store.
+fn scanner(root: &Path) -> (Scanner, ScannerThread, Arc<MemoryStore>) {
     let store = Arc::new(MemoryStore::new());
-    let scanner = Scanner::start(store.clone(), library(root), ScanOptions::default());
-    (scanner, store)
+    let (scanner, thread) = Scanner::start(store.clone(), library(root)).unwrap();
+    (scanner, thread, store)
 }
 
 /// The library's scans in `store`.
@@ -85,17 +86,17 @@ fn a_watch_covers_the_whole_root_or_says_why_not() {
 fn a_library_not_wholly_watched_is_scanned_on_the_fallback_schedule() {
     let tmp = tempfile::tempdir().unwrap();
     let root = vec![tmp.path().to_path_buf()];
-    let (scanner, store) = scanner(tmp.path());
+    let (scanner, thread, store) = scanner(tmp.path());
     let start = |watch: fn(&Path, &Events) -> RootWatch, fallback| {
         Roots::start(scanner.clone(), &root, mpsc::channel().0, watch, &timing(fallback))
     };
     let every = Some(Duration::from_millis(20));
     let whole = start(watched, every);
     assert!(whole.fallback.is_none(), "a library wholly watched needs no fallback");
-    whole.stop();
+    drop(whole);
     let scheduled = start(limited, None);
     assert!(scheduled.fallback.is_none(), "a library with a schedule keeps to it");
-    scheduled.stop();
+    drop(scheduled);
 
     let partial = start(limited, every);
     let deadline = Instant::now() + PATIENCE;
@@ -103,20 +104,20 @@ fn a_library_not_wholly_watched_is_scanned_on_the_fallback_schedule() {
         assert!(Instant::now() < deadline, "no fallback scan");
         std::thread::sleep(Duration::from_millis(20));
     }
-    partial.stop();
-    // Stopping ends the fallback schedule, which would otherwise fire within 250 ms.
+    drop(partial);
+    // Dropping the roots ends the fallback schedule, which would otherwise scan every 20 ms.
     scanner.wait_idle();
     let stopped = scans(&store).len();
     std::thread::sleep(Duration::from_millis(600));
     assert_eq!(scans(&store).len(), stopped, "the fallback schedule outlived the stop");
-    scanner.shutdown();
+    drop(thread);
 }
 
 #[test]
 fn a_root_watched_afresh_is_scanned_and_one_whose_watch_fails_is_not() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
-    let (scanner, store) = scanner(&root);
+    let (scanner, thread, store) = scanner(&root);
     let roots_at = slice::from_ref(&root);
     let start = Instant::now();
     let mut roots =
@@ -125,7 +126,7 @@ fn a_root_watched_afresh_is_scanned_and_one_whose_watch_fails_is_not() {
     roots.check(start + Duration::from_millis(1500));
     let scopes: Vec<Vec<Scope>> = scans(&store).into_iter().map(|scan| scan.scopes).collect();
     assert_eq!(scopes, [vec![Scope::root(root.clone())]]);
-    roots.stop();
+    drop(roots);
     // So a later request cannot join that scan.
     scanner.wait_idle();
 
@@ -141,8 +142,8 @@ fn a_root_watched_afresh_is_scanned_and_one_whose_watch_fails_is_not() {
     roots.check(start + Duration::from_millis(1500));
     assert_eq!(tries.get(), 2);
     assert_eq!(scans(&store).len(), scanned, "a failed watch was scanned");
-    roots.stop();
-    scanner.shutdown();
+    drop(roots);
+    drop(thread);
 }
 
 /// A watch that fails is tried again after a wait that doubles each time, until it covers the
@@ -152,7 +153,7 @@ fn a_root_watched_afresh_is_scanned_and_one_whose_watch_fails_is_not() {
 fn a_failed_watch_is_tried_again_after_a_growing_wait() {
     let tmp = tempfile::tempdir().unwrap();
     let root = vec![tmp.path().to_path_buf()];
-    let (scanner, _) = scanner(tmp.path());
+    let (scanner, thread, _) = scanner(tmp.path());
     let tries = Cell::new(0);
     // Fails twice, then covers the root.
     let flaky = |root: &Path, _: &Events| {
@@ -171,7 +172,7 @@ fn a_failed_watch_is_tried_again_after_a_growing_wait() {
     assert_eq!(backoff(&roots), Duration::from_secs(8), "the wait was reset too soon");
     roots.check(start + Duration::from_secs(12));
     assert_eq!(backoff(&roots), seconds().check, "the wait outlived the failure");
-    roots.stop();
+    drop(roots);
 
     let limited_tries = Cell::new(0);
     let counted = |root: &Path, events: &Events| {
@@ -181,8 +182,8 @@ fn a_failed_watch_is_tried_again_after_a_growing_wait() {
     let mut roots = Roots::start(scanner.clone(), &root, mpsc::channel().0, counted, &seconds());
     roots.check(start + 2 * MAX_BACKOFF);
     assert_eq!(limited_tries.get(), 1, "a watch the OS limit stopped was tried again");
-    roots.stop();
-    scanner.shutdown();
+    drop(roots);
+    drop(thread);
 }
 
 /// A fresh watch that meets the OS limit, as it may while the watches it replaced are let go,
@@ -191,7 +192,7 @@ fn a_failed_watch_is_tried_again_after_a_growing_wait() {
 fn a_fresh_watch_that_meets_the_limit_is_tried_once_more() {
     let tmp = tempfile::tempdir().unwrap();
     let root = vec![tmp.path().to_path_buf()];
-    let (scanner, _) = scanner(tmp.path());
+    let (scanner, thread, _) = scanner(tmp.path());
     let tries = Cell::new(0);
     // Lost at once, then each fresh watch meets the limit.
     let limited_afresh = |root: &Path, events: &Events| {
@@ -209,15 +210,15 @@ fn a_fresh_watch_that_meets_the_limit_is_tried_once_more() {
         roots.check(start + n * 2 * MAX_BACKOFF);
     }
     assert_eq!(tries.get(), 3, "the limit was tried more than once more");
-    roots.stop();
-    scanner.shutdown();
+    drop(roots);
+    drop(thread);
 }
 
 #[test]
 fn the_wait_between_tries_stops_growing_at_its_cap() {
     let tmp = tempfile::tempdir().unwrap();
     let root = vec![tmp.path().to_path_buf()];
-    let (scanner, _) = scanner(tmp.path());
+    let (scanner, thread, _) = scanner(tmp.path());
     let failing = |root: &Path, _: &Events| fake(identity(root), Err(notify::Error::generic("no")));
     let start = Instant::now();
     let mut roots = Roots::start(scanner.clone(), &root, mpsc::channel().0, failing, &seconds());
@@ -225,8 +226,8 @@ fn the_wait_between_tries_stops_growing_at_its_cap() {
         roots.check(start + n * 2 * MAX_BACKOFF);
     }
     assert_eq!(backoff(&roots), MAX_BACKOFF);
-    roots.stop();
-    scanner.shutdown();
+    drop(roots);
+    drop(thread);
 }
 
 /// A root whose directory keeps changing, as a flapping mount would, is watched afresh and
@@ -235,7 +236,7 @@ fn the_wait_between_tries_stops_growing_at_its_cap() {
 fn a_flapping_root_is_scanned_less_and_less_often() {
     let tmp = tempfile::tempdir().unwrap();
     let root = vec![tmp.path().to_path_buf()];
-    let (scanner, store) = scanner(tmp.path());
+    let (scanner, thread, store) = scanner(tmp.path());
     let tries = Cell::new(0);
     let counted = |root: &Path, events: &Events| {
         tries.set(tries.get() + 1);
@@ -249,8 +250,8 @@ fn a_flapping_root_is_scanned_less_and_less_often() {
     // Watched at the start, then 1.5, 3.5, 7.5, 15.5 and 31.5 seconds after it.
     assert_eq!(tries.get(), 6);
     assert!(scans(&store).len() <= 5, "{} scans", scans(&store).len());
-    roots.stop();
-    scanner.shutdown();
+    drop(roots);
+    drop(thread);
 }
 
 /// Replaces the directory at `root` with a new one, as a share mounted over it would.
@@ -266,7 +267,7 @@ fn roots_are_checked_once_per_interval() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");
     fs::create_dir(&root).unwrap();
-    let (scanner, _) = scanner(&root);
+    let (scanner, thread, _) = scanner(&root);
     let tries = Cell::new(0);
     let counted = |root: &Path, _: &Events| {
         tries.set(tries.get() + 1);
@@ -281,8 +282,8 @@ fn roots_are_checked_once_per_interval() {
     assert_eq!(tries.get(), 1, "a root was checked twice in one interval");
     roots.check(start + Duration::from_millis(2500));
     assert_eq!(tries.get(), 2);
-    roots.stop();
-    scanner.shutdown();
+    drop(roots);
+    drop(thread);
 }
 
 /// A mount that comes and goes every other check is watched afresh, and scanned, only a few
@@ -294,7 +295,7 @@ fn a_root_that_comes_and_goes_is_scanned_only_a_few_times() {
     let (mounted, unmounted) = (tmp.path().join("mounted"), tmp.path().join("unmounted"));
     fs::create_dir(&root).unwrap();
     fs::create_dir(&unmounted).unwrap();
-    let (scanner, store) = scanner(&root);
+    let (scanner, thread, store) = scanner(&root);
     let tries = Cell::new(0);
     let counted = |root: &Path, _: &Events| {
         tries.set(tries.get() + 1);
@@ -314,8 +315,8 @@ fn a_root_that_comes_and_goes_is_scanned_only_a_few_times() {
         roots.check(start + Duration::from_millis(check * 1000 + 500));
     }
     assert!(tries.get() <= 6, "watched {} times", tries.get());
-    roots.stop();
+    drop(roots);
     scanner.wait_idle();
     assert!(scans(&store).len() <= 5, "{} scans", scans(&store).len());
-    scanner.shutdown();
+    drop(thread);
 }

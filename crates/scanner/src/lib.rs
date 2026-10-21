@@ -8,7 +8,8 @@
 //! resolves, `identity` classifies, `scan` runs the pipeline over a scope,
 //! `queue` coalesces triggers into scans, `triggers` feeds the queue from
 //! the filesystem watcher and the schedule, and `analysis` is the one decode pass.
-//! `jobs` is what analysis and placeholders make of a file they could not decode.
+//! `jobs` is what analysis and placeholders make of a file they could not decode, and `worker`
+//! runs each background thread until its owner drops it.
 //! `confine` refuses paths through symlinks, which are never followed.
 //! [`TagSet`] and [`AudioProperties`] are what `tags` reads from every file,
 //! and `lrc` turns synced lyrics into timed lines.
@@ -40,18 +41,19 @@ mod tags;
 pub mod testing;
 mod track;
 mod triggers;
+mod worker;
 
 pub use analysis::waveform::Waveform;
-pub use analysis::{ANALYZER_VERSION, AnalysisResult, AnalysisWorker, Analyzer};
+pub use analysis::{ANALYZER_VERSION, AnalysisResult, Analyzer};
 pub use audio::AudioProperties;
 pub use confine::without_links;
 pub use image::{ImageInfo, describe as describe_image};
 pub use jobs::RunReport;
 pub use library::{LibraryConfig, LibraryId};
 pub use lrc::{SyncedLine, parse as parse_lrc};
-pub use placeholders::{PlaceholderWorker, Placeholders};
+pub use placeholders::Placeholders;
 pub use problems::{Problem, ProblemKind, UNOPENED, group_key as problem_group_key};
-pub use queue::Scanner;
+pub use queue::{Scanner, ScannerThread};
 pub use scan::{
     Cursor, Scan, ScanContext, ScanId, ScanOptions, ScanProgress, ScanState, Trigger, run_scan,
 };
@@ -62,4 +64,5 @@ pub use store::{
 pub use tag_set::{Lyrics, PartialDate, TagSet};
 pub use tags::{ReadError, read as read_tags};
 pub use track::{ArtworkSource, SortKeys, TrackId, TrackRecord};
-pub use triggers::{FsWatcher, Schedule};
+pub use triggers::{FsWatcher, scan_every};
+pub use worker::{Stop, Worker};

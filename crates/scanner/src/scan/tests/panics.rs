@@ -68,7 +68,7 @@ fn a_panic_suspends_the_scan_and_the_worker_runs_the_next() {
         on_under: || Ok(()),
         on_scan_write: || Ok(()),
     });
-    let scanner = Scanner::start(store.clone(), lib.clone(), batches_of(1));
+    let (scanner, thread) = Scanner::start_with(store.clone(), lib.clone(), batches_of(1)).unwrap();
 
     let idle = "the scanner never went idle";
     let panicked = scanner.scan_library(Trigger::Manual).unwrap();
@@ -76,7 +76,7 @@ fn a_panic_suspends_the_scan_and_the_worker_runs_the_next() {
     assert!(!scanner.retry_in(Duration::ZERO), "a panic left work to retry");
     let next = scanner.scan_library(Trigger::Manual).unwrap();
     wait_until(&scanner, idle, Scanner::is_idle);
-    scanner.shutdown();
+    drop(thread);
 
     let [suspended, next_row] = store.inner.scans(lib.id).try_into().unwrap();
     assert_eq!((suspended.id, next_row.id), (panicked, next));
