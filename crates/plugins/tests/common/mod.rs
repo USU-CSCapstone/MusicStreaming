@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use jewelcase_plugins::{Album, Artist, Grants, Library, Permission, Track};
+use jewelcase_plugins::{Grants, Library, Permission, Track};
 
 /// The packed plugin. Panics, saying how to build it, when it is not built.
 pub fn plugin() -> &'static Path {
@@ -40,30 +40,6 @@ impl Library for Tracks {
 
     async fn get_tracks(&mut self, ids: Vec<u64>) -> Result<Vec<Track>, String> {
         Ok(ids.iter().filter_map(|id| self.tracks.iter().find(|t| t.id == *id).cloned()).collect())
-    }
-
-    async fn albums(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Album>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn artists(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Artist>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn get_albums(&mut self, _: Vec<u64>) -> Result<Vec<Album>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn get_artists(&mut self, _: Vec<u64>) -> Result<Vec<Artist>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn album_tracks(&mut self, album: u64) -> Result<Vec<Track>, String> {
-        Ok(self.tracks.iter().filter(|t| t.album_id == album).cloned().collect())
-    }
-
-    async fn artist_albums(&mut self, _: u64) -> Result<Vec<Album>, String> {
-        Ok(Vec::new())
     }
 
     async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {

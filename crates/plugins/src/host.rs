@@ -4,7 +4,7 @@
 //! Imports stay linked when their permission is declined, so a plugin with an optional one
 //! still loads: the call answers `not-granted`, and `granted` lets it adapt up front.
 
-use std::future::Future;
+use std::future::{Future, Ready, ready};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -78,72 +78,109 @@ const RESOURCES: usize = 10_000;
 const LOG_LINES: usize = 1000;
 
 /// The one library a run is for, as the host reads it, and the plugin's own state for it.
+///
+/// Every method defaults to answering "not available", which the plugin sees as `failed`, so a
+/// test's library implements only the methods it uses.
 pub trait Library: Send + 'static {
     /// Tracks in ID order after `after`, up to `limit`; empty past the end.
     fn tracks(
         &mut self,
-        after: Option<u64>,
-        limit: u32,
-    ) -> impl Future<Output = Result<Vec<Track>, String>> + Send;
+        _after: Option<u64>,
+        _limit: u32,
+    ) -> impl Future<Output = Result<Vec<Track>, String>> + Send {
+        not_available()
+    }
 
     /// These tracks, in this order, leaving out any not in the library.
     fn get_tracks(
         &mut self,
-        ids: Vec<u64>,
-    ) -> impl Future<Output = Result<Vec<Track>, String>> + Send;
+        _ids: Vec<u64>,
+    ) -> impl Future<Output = Result<Vec<Track>, String>> + Send {
+        not_available()
+    }
 
+    /// Albums in ID order after `after`, up to `limit`; empty past the end.
     fn albums(
         &mut self,
-        after: Option<u64>,
-        limit: u32,
-    ) -> impl Future<Output = Result<Vec<Album>, String>> + Send;
+        _after: Option<u64>,
+        _limit: u32,
+    ) -> impl Future<Output = Result<Vec<Album>, String>> + Send {
+        not_available()
+    }
 
+    /// Artists in ID order after `after`, up to `limit`; empty past the end.
     fn artists(
         &mut self,
-        after: Option<u64>,
-        limit: u32,
-    ) -> impl Future<Output = Result<Vec<Artist>, String>> + Send;
+        _after: Option<u64>,
+        _limit: u32,
+    ) -> impl Future<Output = Result<Vec<Artist>, String>> + Send {
+        not_available()
+    }
 
     /// These albums, in this order, leaving out any not in the library.
     fn get_albums(
         &mut self,
-        ids: Vec<u64>,
-    ) -> impl Future<Output = Result<Vec<Album>, String>> + Send;
+        _ids: Vec<u64>,
+    ) -> impl Future<Output = Result<Vec<Album>, String>> + Send {
+        not_available()
+    }
 
     /// These artists, in this order, leaving out any not in the library.
     fn get_artists(
         &mut self,
-        ids: Vec<u64>,
-    ) -> impl Future<Output = Result<Vec<Artist>, String>> + Send;
+        _ids: Vec<u64>,
+    ) -> impl Future<Output = Result<Vec<Artist>, String>> + Send {
+        not_available()
+    }
 
     /// The album's tracks, by disc and number; none for an album not in the library.
     fn album_tracks(
         &mut self,
-        album: u64,
-    ) -> impl Future<Output = Result<Vec<Track>, String>> + Send;
+        _album: u64,
+    ) -> impl Future<Output = Result<Vec<Track>, String>> + Send {
+        not_available()
+    }
 
     /// The albums the artist is an album artist of, oldest first; none for an artist not in the
     /// library.
     fn artist_albums(
         &mut self,
-        artist: u64,
-    ) -> impl Future<Output = Result<Vec<Album>, String>> + Send;
+        _artist: u64,
+    ) -> impl Future<Output = Result<Vec<Album>, String>> + Send {
+        not_available()
+    }
 
     /// The library's roots: the ID a plugin knows each by, and where it is on this host.
-    fn roots(&mut self) -> impl Future<Output = Result<Vec<(u64, PathBuf)>, String>> + Send;
+    fn roots(&mut self) -> impl Future<Output = Result<Vec<(u64, PathBuf)>, String>> + Send {
+        not_available()
+    }
 
+    /// The value the plugin keeps under `key`, if it keeps one.
     fn state_get(
         &mut self,
-        key: String,
-    ) -> impl Future<Output = Result<Option<Vec<u8>>, String>> + Send;
+        _key: String,
+    ) -> impl Future<Output = Result<Option<Vec<u8>>, String>> + Send {
+        not_available()
+    }
 
+    /// Keeps `value` under `key`, in place of any kept there before.
     fn state_set(
         &mut self,
-        key: String,
-        value: Vec<u8>,
-    ) -> impl Future<Output = Result<(), String>> + Send;
+        _key: String,
+        _value: Vec<u8>,
+    ) -> impl Future<Output = Result<(), String>> + Send {
+        not_available()
+    }
 
-    fn state_delete(&mut self, key: String) -> impl Future<Output = Result<(), String>> + Send;
+    /// Forgets the value under `key`, if there is one.
+    fn state_delete(&mut self, _key: String) -> impl Future<Output = Result<(), String>> + Send {
+        not_available()
+    }
+}
+
+/// What a [`Library`] method answers when the library does not provide it.
+fn not_available<T>() -> Ready<Result<T, String>> {
+    ready(Err("not available".into()))
 }
 
 /// What a run may use: the permissions granted for its library, the hosts its manifest names

@@ -3,12 +3,12 @@
 //!
 //! Needs the packed plugin: run `plugins/listenbrainz/build.sh` first.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use jewelcase_plugins::{
-    Album, Artist, Event, Grants, Host, Library, Outcome, Per, Permission, Play, PlayEnd, Playing,
-    RunError, Track, manifest,
+    Event, Grants, Host, Library, Outcome, Per, Permission, Play, PlayEnd, Playing, RunError,
+    Track, manifest,
 };
 
 /// The packed plugin. Panics, saying how to build it, when it is not built.
@@ -21,58 +21,10 @@ fn plugin() -> &'static Path {
     path
 }
 
-/// A library with nothing in it: the event carries all the plugin needs.
+/// A library that serves nothing: the event carries all the plugin needs.
 struct Empty;
 
-impl Library for Empty {
-    async fn tracks(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Track>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn get_tracks(&mut self, _: Vec<u64>) -> Result<Vec<Track>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn albums(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Album>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn artists(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Artist>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn get_albums(&mut self, _: Vec<u64>) -> Result<Vec<Album>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn get_artists(&mut self, _: Vec<u64>) -> Result<Vec<Artist>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn album_tracks(&mut self, _: u64) -> Result<Vec<Track>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn artist_albums(&mut self, _: u64) -> Result<Vec<Album>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
-        Ok(Vec::new())
-    }
-
-    async fn state_get(&mut self, _: String) -> Result<Option<Vec<u8>>, String> {
-        Ok(None)
-    }
-
-    async fn state_set(&mut self, _: String, _: Vec<u8>) -> Result<(), String> {
-        Ok(())
-    }
-
-    async fn state_delete(&mut self, _: String) -> Result<(), String> {
-        Ok(())
-    }
-}
+impl Library for Empty {}
 
 #[test]
 fn a_real_plugin_passes_the_install_check() {

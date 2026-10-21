@@ -127,6 +127,9 @@ fn names(row: &Row, index: usize) -> rusqlite::Result<Vec<String>> {
     })
 }
 
+// A method left out here would fall back to the trait's default and answer every plugin
+// `failed`, so clippy refuses one.
+#[deny(clippy::missing_trait_methods)]
 impl Library for RunLibrary {
     async fn tracks(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Track>, String> {
         let select = format!(
