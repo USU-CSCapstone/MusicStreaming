@@ -232,6 +232,7 @@ mod suite {
 }
 
 mod derived;
+mod reanalysis;
 mod recompute;
 mod totals;
 
@@ -737,9 +738,13 @@ fn another_librarys_track_is_left_alone() {
     let mut batch = Batch::new(999);
     batch.returned.push(track);
     store.apply(&other, batch).unwrap();
-    // No peaks: the path that deletes a waveform.
+    // No peaks: the path that deletes a waveform. The file is as picked, so only the library
+    // stops the write.
     let result = AnalysisResult { integrated_lufs: Some(-9.0), ..AnalysisResult::empty(1) };
-    store.store_analysis(&other, track, result);
+    let stamp = |sql| scalar::<i64>(&store, sql).unwrap() as u64;
+    let (size, mtime_ms) =
+        (stamp("SELECT file_size FROM tracks"), stamp("SELECT file_mtime FROM tracks"));
+    store.store_analysis(&other, PickedTrack { id: track, size, mtime_ms }, result);
     // A placeholder made in library 2 for content only library 1 has an image of.
     store.db().write_blocking(|tx| Image::new(1, 1, "A/X/cover.png").insert(tx)).unwrap();
     let hash = 1_i64.to_be_bytes();

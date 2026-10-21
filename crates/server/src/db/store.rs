@@ -136,7 +136,7 @@ impl Store for SqliteStore {
         library: &LibraryId,
         analyzer_version: u32,
         limit: usize,
-    ) -> Vec<(TrackId, FileToDecode)> {
+    ) -> Vec<(PickedTrack, FileToDecode)> {
         let Some(lib) = Self::lib(library) else {
             return Vec::new();
         };
@@ -144,9 +144,9 @@ impl Store for SqliteStore {
         logged("next_unanalyzed", next, Vec::new())
     }
 
-    fn store_analysis(&self, library: &LibraryId, track_id: TrackId, result: AnalysisResult) {
+    fn store_analysis(&self, library: &LibraryId, track: PickedTrack, result: AnalysisResult) {
         if let Some(lib) = Self::lib(library) {
-            let stored = jobs::store_analysis(self, lib, track_id, result);
+            let stored = jobs::store_analysis(self, lib, track, result);
             logged("store_analysis", stored, ());
         }
     }

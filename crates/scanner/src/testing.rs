@@ -23,8 +23,10 @@ use crate::store::{Batch, FeedEntry, MemoryStore, Store};
 use crate::types::*;
 
 mod jobs;
+mod reanalysis;
 mod shutdown;
 pub use jobs::*;
+pub use reanalysis::*;
 pub use shutdown::*;
 
 // ───────────────────────────── Inspection ─────────────────────────────
@@ -1175,6 +1177,18 @@ macro_rules! store_suite {
         #[test]
         fn lyrics_file_beside_an_unchanged_track() {
             $crate::testing::lyrics_file_beside_an_unchanged_track($make);
+        }
+        #[test]
+        fn a_changed_file_is_analyzed_again() {
+            $crate::testing::a_changed_file_is_analyzed_again($make);
+        }
+        #[test]
+        fn a_lyrics_file_alone_keeps_the_analysis() {
+            $crate::testing::a_lyrics_file_alone_keeps_the_analysis($make);
+        }
+        #[test]
+        fn a_result_for_replaced_audio_is_not_stored() {
+            $crate::testing::a_result_for_replaced_audio_is_not_stored($make);
         }
         #[test]
         fn missing_then_returned() {

@@ -120,9 +120,9 @@ impl Analyzer {
     pub fn run_once(&self, library: &LibraryId, limit: usize) -> RunReport {
         let fetch = self.retries.fetch(limit);
         let queue = self.store.next_unanalyzed(library, ANALYZER_VERSION, fetch);
-        let keep = |track_id, result: Option<AnalysisResult>| {
+        let keep = |track, result: Option<AnalysisResult>| {
             let result = result.unwrap_or_else(failed_result);
-            self.store.store_analysis(library, track_id, result);
+            self.store.store_analysis(library, track, result);
         };
         let store = self.store.as_ref();
         self.retries.pass(store, library, queue, limit, |file| self.analyze(file), keep)

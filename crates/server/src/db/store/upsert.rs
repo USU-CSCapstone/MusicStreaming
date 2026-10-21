@@ -14,8 +14,11 @@ use crate::db::feed::{self, Entity, Op};
 
 /// Writes `rec` as a track of `lib` seen by `scan_id`, with its credits, genres, lyrics,
 /// artwork, and artist biography, records it in the feed at `now`, and adds the albums, artists
-/// and tags it pointed at before and after to `touched`. A record under a root `lib` doesn't
-/// have, or one naming another library's track, is logged and skipped.
+/// and tags it pointed at before and after to `touched`. A track whose file's size or mtime
+/// changed loses its loudness, peak and waveform and goes back to analyzer version 0, which
+/// queues it for analysis again: neither says whether the audio or only the tags changed. A
+/// record under a root `lib` doesn't have, or one naming another library's track, is logged and
+/// skipped.
 pub fn upsert_track(
     roots: &Roots,
     tx: &Transaction<'_>,
@@ -94,15 +97,23 @@ pub fn upsert_track(
     let format = rec.properties.format;
 
     // A new track (no id yet) gets a random one. An id of another library's track is never
-    // taken over: the update matches no row, and the record is skipped.
-    let Some(id) = tx.query_row(
+    // taken over: the update matches no row, and the record is skipped. Column names on the
+    // right of the update's `=` are the row's values before it.
+    let Some((id, analyzer_version)) = tx.query_row(
             "INSERT INTO tracks (id, library_id, album_id, album_title, root_id, path, file_size, file_mtime, \
              missing_since, last_seen_scan_id, title, sort_key, artist_sort_key, album_sort_key, disc_number, track_number, \
              track_total, disc_total, release_date, explicit, compilation, release_type, isrc, identifiers, lyrics_kind, \
              codec, container, lossless, bitrate_kbps, sample_rate_hz, bit_depth, channels, duration_us, added_at) \
              VALUES (coalesce(?1, random() & 0x7FFFFFFFFFFFFFFF), ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, \
              ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33) \
-             ON CONFLICT (id) DO UPDATE SET album_id = excluded.album_id, album_title = excluded.album_title, \
+             ON CONFLICT (id) DO UPDATE SET \
+             analyzer_version = CASE WHEN file_size IS excluded.file_size AND file_mtime IS excluded.file_mtime \
+             THEN analyzer_version ELSE 0 END, \
+             loudness_lufs = CASE WHEN file_size IS excluded.file_size AND file_mtime IS excluded.file_mtime \
+             THEN loudness_lufs END, \
+             peak_dbtp = CASE WHEN file_size IS excluded.file_size AND file_mtime IS excluded.file_mtime \
+             THEN peak_dbtp END, \
+             album_id = excluded.album_id, album_title = excluded.album_title, \
              root_id = excluded.root_id, path = excluded.path, file_size = excluded.file_size, file_mtime = excluded.file_mtime, \
              missing_since = NULL, last_seen_scan_id = excluded.last_seen_scan_id, title = excluded.title, \
              sort_key = excluded.sort_key, artist_sort_key = excluded.artist_sort_key, album_sort_key = excluded.album_sort_key, \
@@ -114,7 +125,7 @@ pub fn upsert_track(
              sample_rate_hz = excluded.sample_rate_hz, bit_depth = excluded.bit_depth, channels = excluded.channels, \
              duration_us = excluded.duration_us \
              WHERE tracks.library_id = excluded.library_id \
-             RETURNING id",
+             RETURNING id, analyzer_version",
             params![
                 rec.id.map(|id| id as i64),
                 lib,
@@ -150,11 +161,15 @@ pub fn upsert_track(
                 (rec.properties.duration_ms * 1000) as i64,
                 now,
             ],
-            |r| r.get::<_, i64>(0),
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
         ).optional()? else {
         tracing::error!(path = %rec.path.display(), "track of another library; skipped");
         return Ok(());
     };
+    // A track at version 0 has no analysis to keep, its waveform included; a new track has none.
+    if rec.id.is_some() && analyzer_version == 0 {
+        tx.execute("DELETE FROM track_waveforms WHERE track_id = ?1", [id])?;
+    }
 
     // Links: replace wholesale.
     tx.execute("DELETE FROM track_artists WHERE track_id = ?1", [id])?;

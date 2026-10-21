@@ -76,6 +76,15 @@ impl Batch {
 #[error("store: {0}")]
 pub struct StoreError(pub String);
 
+/// A track the analysis queue handed out, with its file's size and mtime when it was picked,
+/// which [`Store::store_analysis`] checks before storing its result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PickedTrack {
+    pub id: TrackId,
+    pub size: u64,
+    pub mtime_ms: u64,
+}
+
 /// A file a background job decodes, as the store recorded it. A job reaches it only through
 /// [`FileToDecode::open`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,7 +123,8 @@ pub trait Store: Send + Sync {
     // --- files ---
     fn lookup(&self, library: &LibraryId, path: &Path) -> Option<IndexedFile>;
     /// Apply one batch atomically and append its net effect to the change feed.
-    /// An error means nothing in the batch was persisted.
+    /// An upserted track keeps its analysis only while its file's size and mtime
+    /// are unchanged. An error means nothing in the batch was persisted.
     fn apply(&self, library: &LibraryId, batch: Batch) -> Result<(), StoreError>;
     /// Mark every non-missing track under `scope` whose `last_seen_scan` is
     /// not `scan_id` as missing, except those at or under a path in
@@ -140,8 +150,10 @@ pub trait Store: Send + Sync {
         library: &LibraryId,
         analyzer_version: u32,
         limit: usize,
-    ) -> Vec<(TrackId, FileToDecode)>;
-    fn store_analysis(&self, library: &LibraryId, track_id: TrackId, result: AnalysisResult);
+    ) -> Vec<(PickedTrack, FileToDecode)>;
+    /// Stores `result` on `track`, its loudness and waveform together, unless its file's size or
+    /// mtime is no longer the one it was picked with.
+    fn store_analysis(&self, library: &LibraryId, track: PickedTrack, result: AnalysisResult);
 
     // --- placeholders ---
     /// Images with no placeholder yet, by content hash, each with a file to decode it from.
@@ -316,14 +328,20 @@ impl Store for MemoryStore {
                 }
             };
             record.id = Some(id);
-            let is_new = !lib.tracks.contains_key(&id);
+            let old = lib.tracks.remove(&id);
+            let is_new = old.is_none();
             // A record replacing the path of another track (identity is path
             // keyed for now) evicts the old path mapping.
-            if let Some(old) = lib.tracks.get(&id) {
+            if let Some(old) = &old {
                 lib.by_path.remove(&old.record.path);
             }
+            let analysis = old
+                .filter(|old| {
+                    old.record.size == record.size && old.record.mtime_ms == record.mtime_ms
+                })
+                .and_then(|old| old.analysis);
             lib.by_path.insert(record.path.clone(), id);
-            lib.tracks.insert(id, StoredTrack { record, missing: false, analysis: None });
+            lib.tracks.insert(id, StoredTrack { record, missing: false, analysis });
             lib.feed.push(if is_new { FeedEntry::Added(id) } else { FeedEntry::Updated(id) });
         }
         for id in batch.touched {
@@ -404,7 +422,7 @@ impl Store for MemoryStore {
         library: &LibraryId,
         analyzer_version: u32,
         limit: usize,
-    ) -> Vec<(TrackId, FileToDecode)> {
+    ) -> Vec<(PickedTrack, FileToDecode)> {
         let inner = self.inner.lock().unwrap();
         let Some(lib) = inner.libraries.get(library) else {
             return Vec::new();
@@ -415,16 +433,22 @@ impl Store for MemoryStore {
                 !t.missing
                     && t.analysis.as_ref().map_or(0, |a| a.analyzer_version) < analyzer_version
             })
-            .map(|(id, t)| {
-                (*id, FileToDecode { root: t.record.root.clone(), path: t.record.path.clone() })
+            .map(|(&id, t)| {
+                let (size, mtime_ms) = (t.record.size, t.record.mtime_ms);
+                let file =
+                    FileToDecode { root: t.record.root.clone(), path: t.record.path.clone() };
+                (PickedTrack { id, size, mtime_ms }, file)
             })
             .take(limit)
             .collect()
     }
 
-    fn store_analysis(&self, library: &LibraryId, track_id: TrackId, result: AnalysisResult) {
+    fn store_analysis(&self, library: &LibraryId, track: PickedTrack, result: AnalysisResult) {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(t) = inner.libraries.get_mut(library).and_then(|l| l.tracks.get_mut(&track_id))
+        let stored = inner.libraries.get_mut(library).and_then(|l| l.tracks.get_mut(&track.id));
+        if let Some(t) = stored
+            && t.record.size == track.size
+            && t.record.mtime_ms == track.mtime_ms
         {
             t.analysis = Some(result);
         }

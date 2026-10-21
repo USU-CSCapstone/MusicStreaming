@@ -47,7 +47,7 @@ fn never_analyzed_tracks_come_first_and_newest_first() {
         (6, 0, 60, true),
     ]);
     let queue = next_unanalyzed(&store, 1, 2, 10).unwrap();
-    let ids: Vec<_> = queue.iter().map(|(id, _)| *id).collect();
+    let ids: Vec<_> = queue.iter().map(|(track, _)| track.id).collect();
     assert_eq!(ids, [2, 1, 3, 4], "not the current version's, nor the missing one");
 }
 

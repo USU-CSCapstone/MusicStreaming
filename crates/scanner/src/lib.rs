@@ -43,6 +43,8 @@ pub mod types;
 pub use audio::AudioProperties;
 pub use governor::Governor;
 pub use queue::Scanner;
-pub use store::{Batch, FileToDecode, IndexedFile, IndexedLyrics, MemoryStore, Store, StoreError};
+pub use store::{
+    Batch, FileToDecode, IndexedFile, IndexedLyrics, MemoryStore, PickedTrack, Store, StoreError,
+};
 pub use tag_set::{Lyrics, PartialDate, TagSet};
 pub use types::*;

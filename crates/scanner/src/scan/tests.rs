@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 
 use super::*;
-use crate::store::{Batch, FileToDecode, IndexedFile, MemoryStore, StoreError};
+use crate::store::{Batch, FileToDecode, IndexedFile, MemoryStore, PickedTrack, StoreError};
 use crate::testing::{library, make_album, write_small_wav};
 
 /// A memory store that runs `on_apply` before applying each batch, failing the batch if it
@@ -57,11 +57,11 @@ where
         library: &LibraryId,
         analyzer_version: u32,
         limit: usize,
-    ) -> Vec<(TrackId, FileToDecode)> {
+    ) -> Vec<(PickedTrack, FileToDecode)> {
         self.inner.next_unanalyzed(library, analyzer_version, limit)
     }
-    fn store_analysis(&self, library: &LibraryId, track_id: TrackId, result: AnalysisResult) {
-        self.inner.store_analysis(library, track_id, result)
+    fn store_analysis(&self, library: &LibraryId, track: PickedTrack, result: AnalysisResult) {
+        self.inner.store_analysis(library, track, result)
     }
     fn next_without_placeholder(
         &self,

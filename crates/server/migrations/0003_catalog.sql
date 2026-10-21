@@ -158,8 +158,9 @@ CREATE TABLE tracks (
     duration_us     INTEGER NOT NULL,
     loudness_lufs   REAL,
     peak_dbtp       REAL,
-    -- Which analyzer produced the results, 0 until one has; tracks below the current version are
-    -- reprocessed in the background (design/scanning.md §12)
+    -- Which analyzer produced the results: 0 until one has, and again once a scan finds the
+    -- file's size or mtime changed. Tracks below the current version are reprocessed in the
+    -- background (design/scanning.md §12)
     analyzer_version INTEGER NOT NULL DEFAULT 0,
     added_at        INTEGER NOT NULL,
     UNIQUE (library_id, id),
