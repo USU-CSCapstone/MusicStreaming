@@ -7,8 +7,7 @@
 //! Layout follows the design: [`discover`] walks, [`tags`] reads, [`sidecar`]
 //! resolves, [`identity`] classifies, [`scan`] runs the pipeline over a scope,
 //! [`queue`] coalesces triggers into scans, [`triggers`] feeds the queue from
-//! the filesystem watcher and the schedule, [`governor`] pauses everything
-//! when listeners need the host, and [`analysis`] is the one decode pass.
+//! the filesystem watcher and the schedule, and [`analysis`] is the one decode pass.
 //! [`jobs`] is what analysis and placeholders make of a file they could not decode.
 //! [`confine`] refuses paths through symlinks, which are never followed.
 //! [`TagSet`] and [`AudioProperties`] are what [`tags`] reads from every file,
@@ -21,7 +20,6 @@ pub mod analysis;
 mod audio;
 pub mod confine;
 pub mod discover;
-pub mod governor;
 pub mod identity;
 pub mod image;
 pub mod jobs;
@@ -41,7 +39,6 @@ pub mod triggers;
 pub mod types;
 
 pub use audio::AudioProperties;
-pub use governor::Governor;
 pub use queue::Scanner;
 pub use store::{
     Batch, FileToDecode, IndexedFile, IndexedLyrics, MemoryStore, PickedTrack, Store, StoreError,

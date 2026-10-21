@@ -1,9 +1,14 @@
 //! ffmpeg as a child process (`design/scanning.md` §11).
 //!
 //! Never linked as a library: a decoder crash on a corrupt file is a problem
-//! record, a hang is a timeout kill, and yielding to listeners is a signal.
+//! record, and a hang is a timeout kill.
 //! Every invocation is read-only against the library — no output paths, no
 //! `-y`, always `-nostdin`, and the input always opened through `input()`.
+//!
+//! Background work (analysis and placeholders) runs through [`Ffmpeg`], whose pool kills a child
+//! that stalls. Interactive work, which a listener waits on, never joins that pool, so it never
+//! waits behind analysis for a slot: [`Config`] builds its commands, and the caller spawns them
+//! under its own bound and timeout.
 //!
 //! The API is synchronous. Callers run it from blocking pools; decoding is
 //! stream I/O and the analysis that consumes it is CPU work, neither of which
@@ -31,7 +36,7 @@ pub use image::Rgba;
 use input::input;
 pub use priority::lower_thread_priority;
 pub use probe::ProbeInfo;
-pub use registry::Registry;
+use registry::Registry;
 
 /// Where the binaries are. Tests point them at stand-ins.
 #[derive(Debug, Clone)]
@@ -47,6 +52,18 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    /// The command that scales the image at `path`, or the picture attached to an audio file, to
+    /// fit `max_side` pixels and writes it to standard output as JPEG, for serving. Interactive,
+    /// so the caller spawns it outside the pool.
+    pub fn resize_command(&self, path: &Path, max_side: u32) -> Command {
+        image::command(self, path, max_side, image::JPEG)
+    }
+
+    // `transcode` is the playback design's to specify; it is interactive too, so it will build a
+    // command here. Deliberately absent until that design exists.
+}
+
 /// What the installed ffmpeg can do, checked once at startup.
 #[derive(Debug, Clone)]
 pub struct Capabilities {
@@ -56,7 +73,9 @@ pub struct Capabilities {
     pub missing: Vec<Format>,
 }
 
-/// Handle to the ffmpeg installation and the shared process pool.
+/// Handle to the ffmpeg installation and the pool of background children, which a watchdog
+/// thread checks for stalls. Clones share the pool, so one handle bounds background ffmpeg
+/// across every library that uses it.
 #[derive(Clone)]
 pub struct Ffmpeg {
     config: Arc<Config>,
@@ -68,11 +87,6 @@ impl Ffmpeg {
     /// binaries; call [`Ffmpeg::verify`] for that.
     pub fn new(config: Config) -> Ffmpeg {
         Ffmpeg { config: Arc::new(config), registry: Registry::start() }
-    }
-
-    /// The shared process registry, for the governor to pause and resume.
-    pub fn registry(&self) -> &Arc<Registry> {
-        &self.registry
     }
 
     /// Run `ffmpeg -decoders` and check every required decoder is present.
@@ -130,34 +144,24 @@ impl Ffmpeg {
         Ok(Capabilities { version, missing })
     }
 
-    /// Read stream properties needed to interpret a raw PCM decode.
+    /// Read stream properties needed to interpret a raw PCM decode. Waits while the pool is full.
     pub fn probe(&self, path: &Path) -> Result<ProbeInfo, Error> {
         probe::probe(&self.config, &self.registry, path)
     }
 
     /// Start decoding `path` to interleaved 32-bit float PCM in the sample rate
-    /// and channel layout `info` reports, which hold for the whole stream.
-    /// Blocks while the pool is full.
+    /// and channel layout `info` reports, which hold for the whole stream. Waits while the pool
+    /// is full, and holds its place until the stream is dropped.
     pub fn decode_pcm(&self, path: &Path, info: &ProbeInfo) -> Result<PcmStream, Error> {
         decode::decode_pcm(&self.config, &self.registry, path, info)
     }
 
     /// Decode the image at `path`, or the picture attached to an audio file, scaled to fit
-    /// `max_side` pixels. For small previews: the whole image is held in memory. Blocks while
-    /// the pool is full.
+    /// `max_side` pixels. For small previews: the whole image is held in memory. Waits while the
+    /// pool is full.
     pub fn decode_image(&self, path: &Path, max_side: u32) -> Result<Rgba, Error> {
         image::decode_image(&self.config, &self.registry, path, max_side)
     }
-
-    /// The command that scales the image at `path`, or the picture attached to an audio file, to
-    /// fit `max_side` pixels and writes it to standard output as JPEG, for serving. The caller
-    /// spawns it outside the pool, so a request never waits behind analysis.
-    pub fn resize_command(&self, path: &Path, max_side: u32) -> Command {
-        image::command(&self.config, path, max_side, image::JPEG)
-    }
-
-    // `transcode` is the playback design's to specify; it will share this
-    // pool and registry. Deliberately absent until that design exists.
 }
 
 /// The audio decoders named in the table printed by `ffmpeg -decoders`.

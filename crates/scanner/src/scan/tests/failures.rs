@@ -96,8 +96,7 @@ fn a_folder_the_store_cannot_check_counts_as_indexed() {
         on_under: failing,
         on_scan_write: || Ok(()),
     };
-    let governor = Arc::new(Governor::new());
-    let scanner = Scanner::start(Arc::new(store), library(&root), governor, batches_of(1));
+    let scanner = Scanner::start(Arc::new(store), library(&root), batches_of(1));
     assert!(scanner.indexes_under(&root.join("A")));
     scanner.shutdown();
 }

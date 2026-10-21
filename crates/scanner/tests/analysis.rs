@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::sync::Arc;
-
 use common::*;
 use jewelcase_ffmpeg::{Config, Ffmpeg};
 use jewelcase_scanner::analysis::{ANALYZER_VERSION, Analyzer};
@@ -30,8 +28,7 @@ fn sine_measures_as_expected() {
     assert!(caps.missing.is_empty(), "missing decoders: {:?}", caps.missing);
 
     let store = shared(MemoryStore::new());
-    let governor = Arc::new(Governor::new());
-    let analyzer = Analyzer::new(ffmpeg, store.clone(), governor);
+    let analyzer = Analyzer::new(ffmpeg, store.clone());
 
     for path in [&wav, &flac] {
         let r = analyzer.analyze_file(path).expect("analyze");
@@ -71,8 +68,7 @@ fn queue_drains_and_broken_files_do_not_repeat() {
     assert!(indexed >= 1);
 
     let ffmpeg = Ffmpeg::new(Config::default());
-    let governor = Arc::new(Governor::new());
-    let analyzer = Analyzer::new(ffmpeg, store.clone(), governor);
+    let analyzer = Analyzer::new(ffmpeg, store.clone());
     let first = analyzer.run_once(lib.id, 10);
     assert_eq!(first.done + first.failed, indexed);
     assert!(first.done >= 1);
@@ -80,26 +76,4 @@ fn queue_drains_and_broken_files_do_not_repeat() {
     assert_eq!(second.done + second.failed, 0, "nothing left to do");
     let ok = store.tracks(lib.id).into_iter().find(|t| t.record.path.ends_with("ok.wav")).unwrap();
     assert!(ok.analysis.unwrap().integrated_lufs.is_some());
-}
-
-#[test]
-fn paused_governor_holds_analysis() {
-    if !ffmpeg_available() {
-        return;
-    }
-    let tmp = tempfile::tempdir().unwrap();
-    let wav = tmp.path().join("long.wav");
-    write_sine_wav(&wav, 440.0, 0.2, 2.0);
-    let ffmpeg = Ffmpeg::new(Config::default());
-    let governor = Arc::new(Governor::new());
-    let analyzer = Arc::new(Analyzer::new(ffmpeg, shared(MemoryStore::new()), governor.clone()));
-    governor.pause();
-    let a2 = analyzer.clone();
-    let w = wav.clone();
-    let handle = std::thread::spawn(move || a2.analyze_file(&w));
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    assert!(!handle.is_finished(), "analysis must not complete while paused");
-    governor.resume();
-    let result = handle.join().unwrap().expect("analysis after resume");
-    assert!(result.integrated_lufs.is_some());
 }

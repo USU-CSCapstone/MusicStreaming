@@ -8,6 +8,7 @@ use std::thread::JoinHandle;
 
 use rustix::process::Pid;
 
+use crate::registry::Slot;
 use crate::stderr::tail;
 use crate::{Error, Registry};
 
@@ -26,14 +27,17 @@ pub(crate) struct Pooled {
     registry: Arc<Registry>,
     stalled: Arc<AtomicBool>,
     reaped: bool,
+    /// Taken before the child is spawned and freed when this is dropped, after the child is
+    /// reaped: fields drop after [`Drop::drop`] runs.
+    _slot: Slot,
 }
 
 impl Pooled {
-    /// Wait for a pool slot, then spawn `command`, register the child and start draining its
-    /// standard error. `command` must pipe its standard output and standard error. Fails if the
-    /// child can't be spawned or the drain thread can't start.
+    /// Wait for a slot in the pool, then spawn `command`, register the child and start draining
+    /// its standard error. `command` must pipe its standard output and standard error. Fails if
+    /// the child can't be spawned or the drain thread can't start.
     pub(crate) fn spawn(registry: &Arc<Registry>, command: &mut Command) -> Result<Pooled, Error> {
-        registry.acquire();
+        let slot = registry.slot();
         let mut child = command
             .spawn()
             .map_err(|source| Error::Spawn { binary: command.get_program().into(), source })?;
@@ -49,6 +53,7 @@ impl Pooled {
             registry: registry.clone(),
             stalled,
             reaped: false,
+            _slot: slot,
         };
         // Built first so that if the drain thread can't start, dropping `pooled` kills the child.
         pooled.drain = Some(tail(stderr)?);

@@ -12,7 +12,7 @@ The one thing this design exists to get right: **incremental cost is proportiona
 ```
 crates/
 ├── core/        # Format, sort keys, name folding, search — pure
-├── ffmpeg/      # subprocess wrapper: probe, decode, transcode, process pool
+├── ffmpeg/      # subprocess wrapper: probe, decode, resize, transcode; background pool
 ├── scanner/     # this design
 └── server/      # SQLite store, admin API, wires the three together
 ```
@@ -20,7 +20,7 @@ crates/
 - **The scanner is its own crate, not part of the core.** The core is pure by rule ([`general.md` §3](general.md#3-shared-core)); scanning is nothing but I/O. The scanner calls the core only for sort keys, so a track's sort position is fixed at scan time and never recomputed by a client, and uses its `Format`. The server's store, not the scanner, calls the core's name folding when it finds or creates artists, albums, and tags.
 - **Its types and ingestion rules live in the scanner.** `TagSet`, `AudioProperties`, multi-value splitting, and LRC parsing are ingestion rules: the server stores and serves their results, and no device reads a tag or parses LRC. `Format` lives in the core, since ffmpeg checks its decoders against the same list.
 - **Persistence is a trait the server implements.** The scanner speaks to a `Store` with a handful of batch operations (upsert tracks, mark missing, record problems, append feed entries) and never opens SQLite itself. This keeps scanner tests on an in-memory store and keeps SQLite specifics in one crate.
-- **ffmpeg is a separate crate because two consumers need it.** Analysis decodes with it; playback transcodes with it ([`requirements/playback.md` §1](../requirements/playback.md#1-delivery)). One process pool with one priority policy is the only way the governor ([§10](#10-priority-and-pacing)) can see every ffmpeg process at once.
+- **ffmpeg is a separate crate because two consumers need it.** Analysis decodes with it; playback transcodes with it ([`requirements/playback.md` §1](../requirements/playback.md#1-delivery)). One crate puts the same input guards on every invocation ([§11](#11-ffmpeg)) and keeps the two kinds of work apart: background work runs in its pool, where a watchdog kills a child that stalls, and interactive work runs outside it, under its caller's own bound ([§10](#10-priority-and-pacing)).
 
 ---
 
@@ -168,10 +168,10 @@ Until it is, stage 4 keys on path: a file at a new path is a new track, and a fi
 **Scanning yields to listening** ([`requirements/scanning.md` §5](../requirements/scanning.md#5-behavior), [`general.md` §2](general.md#2-system-shape)).
 
 - **Indexing runs on a small dedicated blocking pool** — discovery, `stat`, and tag reading are synchronous I/O and never touch the async runtime's workers. Pool size defaults to one on the Pi and a few on the desktop; storage is the bottleneck either way.
-- **Analysis runs on a smaller pool still** — ffmpeg processes, one on the Pi, a few on the desktop ([§12](#12-analysis)).
-- **Background work runs at low priority.** The analysis and placeholder threads each lower their own priority by 10 nice steps when they start, and the ffmpeg children they spawn inherit it, since on Linux niceness belongs to a thread. Request handling and the artwork resize keep normal priority.
-- **A governor watches active streams and pauses both pools** when listening is at risk, analysis first. Pausing is `SIGSTOP` on ffmpeg children and a parked flag on the indexing pool; resuming is `SIGCONT` and unparking. An indexing thread checks the flag before each file. A paused decode resumes where it was rather than restarting, so yielding costs nothing but time. The threshold is derived from the saturation policy in [`requirements/performance.md` §7](../requirements/performance.md#7-under-saturation).
-- **Nothing here decides what a listener gets.** The governor only ever slows background work. If the host cannot serve a new stream, that refusal belongs to the playback design.
+- **Background ffmpeg has one bound for the whole host.** Each library has one analysis thread and one placeholder thread ([§12](#12-analysis)), each running one ffmpeg child at a time, and all of them share one pool, which runs at most two children at once; a thread that wants a third waits for a slot. Without it, every library could decode a 64-megapixel cover at once, at about 400 MB each. Two is a placeholder until the pool's size is decided ([§16](#16-open-decisions)).
+- **Background work runs at low priority.** The analysis and placeholder threads each lower their own priority by 10 nice steps when they start, and the ffmpeg children they spawn inherit it, since on Linux niceness belongs to a thread. Request handling, the artwork resize, and transcodes keep normal priority. A nice-10 task carries about a tenth of a nice-0 task's weight with the scheduler, so under contention listeners get most of the CPU and background work slows down without stopping: pinned to one core with four busy nice-0 processes, a nice-10 decode got about 5 to 10% of it. The stall watchdog counts the CPU time a child uses, so a child slowed this way is not taken for stalled ([§11](#11-ffmpeg)). Elsewhere than Linux, background threads keep their priority, since lowering it would lower the whole process.
+- **Nothing pauses.** Stopping ffmpeg with `SIGSTOP` would freeze a transcode mid-stream, so interactive work (the artwork resize, and transcodes) runs outside the background pool, and no signal but its own caller's ever reaches it.
+- **Nothing here decides what a listener gets.** If the host cannot serve a new stream, that refusal belongs to the playback design.
 
 ---
 
@@ -179,19 +179,21 @@ Until it is, stage 4 keys on path: a file at a new path is a new track, and a fi
 
 **ffmpeg runs as a child process, never linked as a library.**
 
-- **Isolation is the reason.** Corrupt files are routine in real collections. A decoder crash inside the server would violate "one bad file never aborts a scan" ([`requirements/scanning.md` §10](../requirements/scanning.md#10-problems)) and take listeners down with it. A child that dies is a problem record; a child that hangs is killed on a timeout; a child that must yield is stopped with a signal. None of that is available in-process.
+- **Isolation is the reason.** Corrupt files are routine in real collections. A decoder crash inside the server would violate "one bad file never aborts a scan" ([`requirements/scanning.md` §10](../requirements/scanning.md#10-problems)) and take listeners down with it. A child that dies is a problem record, and a child that hangs is killed. Neither is available in-process.
 - **Build simplicity is the second reason.** No `bindgen`, no cross-compiling libav for `arm64`, no linking questions. The container installs a pinned ffmpeg for both architectures.
 - **The cost is a spawn per file and a pipe of PCM.** Negligible for analysis, which is budgeted in days, and for transcodes, which are per stream.
 
-The `ffmpeg` crate exposes three operations behind one pool:
+The `ffmpeg` crate runs three background operations in one pool:
 
 | Operation | Invocation (illustrative) | Used by |
 |---|---|---|
 | `probe(path)` | `ffprobe -v error -print_format json -show_streams -show_format -max_pixels 67108864 -protocol_whitelist file -i file:<path>` | analysis setup — the sample rate and channel layout that interpret the PCM stream, and the duration ([§12](#12-analysis)) |
 | `decode_pcm(path)` | `ffmpeg -nostdin -v error -max_pixels 67108864 -protocol_whitelist file -i file:<path> -map 0:a:0 -vn -ch_layout <layout> -ar <rate> -f f32le -c:a pcm_f32le pipe:1` | analysis |
-| `transcode(path, target)` | as the playback design specifies | playback |
+| `decode_image(path, size)` | `ffmpeg -nostdin -v error -max_pixels 67108864 -protocol_whitelist file -i file:<path> -map 0:v:0 -frames:v 1 -vf scale=… -f image2pipe -c:v pam -pix_fmt rgba pipe:1` | placeholders — the image, or a track's attached picture, scaled to fit 100 pixels |
 
-The crate also builds the command for the server's artwork resize, `resize_command(path, size)`: `ffmpeg -nostdin -v error -max_pixels 67108864 -protocol_whitelist file -i file:<path> -map 0:v:0 -frames:v 1 -vf scale=… -f image2pipe -c:v mjpeg -q:v 3 pipe:1`, one JPEG behind the same input guards. The server spawns it itself, outside the pool and under its own bound, since a request must not wait behind analysis.
+Interactive work, which a listener waits on, runs outside the pool. The crate only builds its command, and the caller spawns it under its own bound and timeout, at normal priority, so a request never waits behind analysis. The server's artwork resize is `resize_command(path, size)`: `ffmpeg -nostdin -v error -max_pixels 67108864 -protocol_whitelist file -i file:<path> -map 0:v:0 -frames:v 1 -vf scale=… -f image2pipe -c:v mjpeg -q:v 3 pipe:1`, one JPEG behind the same input guards. `transcode(path, target)` will be built the same way, as the playback design specifies.
+
+- **A stall is measured in CPU time.** Once a second the watchdog adds to each pooled child's time without progress, and kills a child past 30 seconds. A PCM decode makes progress with every read of its output; a probe or an image decode makes none, so for them the 30 seconds bound the whole run. A child that is running or waiting for a CPU (state `R` in `/proc/<pid>/stat`), or whose CPU time rose, which covers a decoder whose own threads run while its main thread waits on them, adds the CPU time it got, at most the time that passed. Any other child is blocked, and adds the time that passed. A child blocked for good therefore dies after 30 seconds, and one spinning without output after 30 seconds of running, but one starved by busier work is not killed: at nice 10, pinned to one core with four busy nice-0 processes, a 3000² PNG decode that needs 0.4 s of CPU took 6 to 8 seconds, and a 6000² one that needs 1.5 s took 19 to 27, on a laptop several times faster than the Pi. Off Linux, where there is no `/proc`, the time that passes counts.
 
 - **Every invocation is read-only against the library.** No output path is ever under a root; `-nostdin` is always set; there is no `-y`. The music mount is usually writable, for plugins ([`general.md` §2](general.md#2-system-shape)), so this rule is the defense.
 - **Every input is a local file.** Each invocation names its input `file:<path>` with `-protocol_whitelist file`, so a path that starts with `-` or looks like a URL is still read as a file, and a container that names further inputs, such as an HLS playlist, can open only local files. A name containing `%d` may be read as an image sequence.
@@ -221,7 +223,7 @@ Storage and scheduling:
 - **Only a verdict on the file is stored.** That is a decoder's error on a file that still opens, a symlink refused (one leading nowhere included), anything but a regular file refused (a pipe would block the decoder forever), or a second failure in a row of a kind that may pass (a stall, a decoder killed by a signal), so one file cannot hold up the queue.
 - **A file that cannot be opened never gets a result.** Gone, out of reach, not permitted, or under a dropped sub-mount, it is recorded as an `unreadable` or `permissionDenied` problem and skipped for an hour while the queue moves on; the skip list is per job and library and in memory, so a restart tries again. Reachability is an open, not a stat: an open fails on a file that may not be read, and NFS revalidates it. Once the file opens, it is decoded as usual, and its problem is cleared, even one recorded before a restart.
 - **Everything else backs the worker off** with nothing recorded: an unavailable root, a decoder that cannot start, a first failure that may pass, or a store error, which leaves the file as it was, so a file whose problem could not be recorded does not wait out the hour. A NAS outage therefore never strips results from the tracks it hid. Placeholders follow the same rules.
-- **Each track is independent.** A kill, a timeout, or a governor pause affects exactly one track. The only state a job keeps across tracks is the skip list and the last file that failed, both in memory.
+- **Each track is independent.** A kill or a timeout affects exactly one track. The only state a job keeps across tracks is the skip list and the last file that failed, both in memory.
 
 ---
 
@@ -263,4 +265,4 @@ The job will run on the indexing pool at the lowest priority, write only to a du
 1. **Track identity** ([§6](#6-track-identity)) — open decision 3 in [`general.md` §11](general.md#11-open-decisions). This design fixes the stage's interface and budget, not its algorithm.
 2. **Waveform bin count and shaping function** — the playback design's, constrained here to be derived from stored peak and RMS bins with no second decode.
 3. **Feature extractor** — the recommendations design's, constrained here to consume the shared block stream.
-4. **Analysis pool sizes and the governor threshold** — defaults above are starting points; benchmarks on low-power hardware decide the shipped values.
+4. **Background pool size** — one pool for every library, at two children for now ([§10](#10-priority-and-pacing)); benchmarks on low-power hardware decide the shipped value.

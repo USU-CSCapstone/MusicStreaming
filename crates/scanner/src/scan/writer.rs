@@ -1,6 +1,5 @@
 //! The batch a scan fills, and the checkpoint before each directory and file where the batch is
-//! flushed, the scan parks for the governor, and the scan stops if asked (`design/scanning.md`
-//! §7, §9, §10).
+//! flushed and the scan stops if asked (`design/scanning.md` §7, §9).
 
 use std::time::{Instant, SystemTime};
 
@@ -38,12 +37,10 @@ impl Writer {
         }
     }
 
-    /// Called before each directory and each file. Parks while the governor is paused, flushes the
-    /// batch once it holds `batch_size` outcomes or has waited `batch_interval`, and then stops
-    /// the scan if the queue has asked. Short of those it costs an uncontended lock, a few atomic
-    /// loads and a clock read.
+    /// Called before each directory and each file. Flushes the batch once it holds `batch_size`
+    /// outcomes or has waited `batch_interval`, and then stops the scan if the queue has asked.
+    /// Short of those it costs a few atomic loads and a clock read.
     pub fn checkpoint(&mut self, ctx: &ScanContext<'_>, scan: &mut Scan) -> Result<(), Halt> {
-        ctx.governor.wait_if_paused();
         if self.batch.len() >= ctx.options.batch_size
             || self.last_flush.elapsed() >= ctx.options.batch_interval
         {

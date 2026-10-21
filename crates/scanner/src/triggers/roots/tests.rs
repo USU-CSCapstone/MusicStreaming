@@ -5,7 +5,6 @@ use std::sync::{Arc, mpsc};
 use std::collections::BTreeSet;
 
 use super::*;
-use crate::Governor;
 use crate::scan::ScanOptions;
 use crate::store::MemoryStore;
 use crate::testing::library;
@@ -22,8 +21,7 @@ const PATIENCE: Duration = Duration::from_secs(10);
 /// A scanner of the library with its one root at `root`, and its store.
 fn scanner(root: &Path) -> (Scanner, Arc<MemoryStore>) {
     let store = Arc::new(MemoryStore::new());
-    let governor = Arc::new(Governor::new());
-    let scanner = Scanner::start(store.clone(), library(root), governor, ScanOptions::default());
+    let scanner = Scanner::start(store.clone(), library(root), ScanOptions::default());
     (scanner, store)
 }
 

@@ -10,7 +10,6 @@ use crate::confine::without_links;
 use crate::discover::{
     Directory, RootUnavailable, Walk, WalkItem, check_root, compile_excludes, excluded_scope, gone,
 };
-use crate::governor::Governor;
 use crate::problems;
 use crate::sidecar::SidecarResolver;
 use crate::store::{Store, StoreError};
@@ -42,7 +41,6 @@ impl Default for ScanOptions {
 pub struct ScanContext<'a> {
     pub store: &'a dyn Store,
     pub library: &'a LibraryConfig,
-    pub governor: &'a Governor,
     /// Set by the queue to stop the scan after the file in hand and end it cancelled.
     pub cancel: &'a AtomicBool,
     /// Set by the queue to stop the scan at the same point but leave it running at its last

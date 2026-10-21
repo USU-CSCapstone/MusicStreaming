@@ -66,8 +66,7 @@ fn a_panic_suspends_the_scan_and_the_worker_runs_the_next() {
         on_under: || Ok(()),
         on_scan_write: || Ok(()),
     });
-    let scanner =
-        Scanner::start(store.clone(), lib.clone(), Arc::new(Governor::new()), batches_of(1));
+    let scanner = Scanner::start(store.clone(), lib.clone(), batches_of(1));
 
     let idle = "the scanner never went idle";
     let panicked = scanner.scan_library(Trigger::Manual).unwrap();

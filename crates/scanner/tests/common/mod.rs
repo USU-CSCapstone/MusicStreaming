@@ -64,7 +64,6 @@ pub fn scan_once(
     trigger: Trigger,
     scopes: Vec<Scope>,
 ) -> Scan {
-    let governor = Governor::new();
     let cancel = AtomicBool::new(false);
     let options = ScanOptions::default();
     let mut scan = Scan {
@@ -82,7 +81,6 @@ pub fn scan_once(
     let ctx = ScanContext {
         store,
         library: lib,
-        governor: &governor,
         cancel: &cancel,
         shutdown: &AtomicBool::new(false),
         options: &options,

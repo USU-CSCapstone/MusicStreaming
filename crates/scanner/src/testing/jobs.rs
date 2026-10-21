@@ -11,7 +11,6 @@ use jewelcase_ffmpeg::{Config, Ffmpeg};
 
 use super::{Factory, InspectStore, PNG, library, make_album, scan_library};
 use crate::analysis::{ANALYZER_VERSION, Analyzer};
-use crate::governor::Governor;
 use crate::jobs::RunReport;
 use crate::placeholders::Placeholders;
 use crate::store::Batch;
@@ -19,7 +18,7 @@ use crate::types::{AnalysisResult, LibraryId, Problem, ProblemKind};
 
 /// An analyzer over `store` that runs ffmpeg with `config`.
 fn analyzer<S: InspectStore + 'static>(store: &Arc<S>, config: Config) -> Analyzer {
-    Analyzer::new(Ffmpeg::new(config), store.clone(), Arc::new(Governor::new()))
+    Analyzer::new(Ffmpeg::new(config), store.clone())
 }
 
 /// Whether the track at `path` has an analysis result.

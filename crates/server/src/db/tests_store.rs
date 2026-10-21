@@ -683,11 +683,7 @@ fn analysis_results_reach_tracks_albums_and_waveforms() {
     let lib = testing::library(&root);
     testing::scan_library(store.as_ref(), &lib);
     let ffmpeg = jewelcase_ffmpeg::Ffmpeg::new(jewelcase_ffmpeg::Config::default());
-    let analyzer = jewelcase_scanner::analysis::Analyzer::new(
-        ffmpeg,
-        store.clone(),
-        Arc::new(Governor::new()),
-    );
+    let analyzer = jewelcase_scanner::analysis::Analyzer::new(ffmpeg, store.clone());
     let report = analyzer.run_once(lib.id, 10);
     assert_eq!(report.done, 1);
     assert_eq!(analyzer.run_once(lib.id, 10).done, 0, "nothing left");

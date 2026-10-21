@@ -16,7 +16,6 @@ use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use crate::governor::Governor;
 use crate::scan::{ScanContext, ScanOptions, run_scan};
 use crate::store::Store;
 use crate::types::*;
@@ -46,7 +45,6 @@ impl Queue {
 struct Inner {
     store: Arc<dyn Store>,
     library: RwLock<LibraryConfig>,
-    governor: Arc<Governor>,
     options: ScanOptions,
     queue: Mutex<Queue>,
     wake: Condvar,
@@ -69,12 +67,7 @@ impl Scanner {
     /// instead of walking from the start. Folders that could not be read before the
     /// cursor are not remembered (`design/scanning.md` §9). If the store cannot list them, none
     /// is resumed now; their rows stay as they are for the next start.
-    pub fn start(
-        store: Arc<dyn Store>,
-        library: LibraryConfig,
-        governor: Arc<Governor>,
-        options: ScanOptions,
-    ) -> Scanner {
+    pub fn start(store: Arc<dyn Store>, library: LibraryConfig, options: ScanOptions) -> Scanner {
         let interrupted = store.interrupted_scans(library.id).unwrap_or_else(|error| {
             tracing::error!(library = library.id, %error, "interrupted scans not resumed");
             Vec::new()
@@ -82,7 +75,6 @@ impl Scanner {
         let inner = Arc::new(Inner {
             store,
             library: RwLock::new(library),
-            governor,
             options,
             queue: Mutex::new(Queue {
                 queued: VecDeque::new(),
@@ -294,7 +286,6 @@ fn worker(inner: Arc<Inner>) {
         let ctx = ScanContext {
             store: inner.store.as_ref(),
             library: &library,
-            governor: &inner.governor,
             cancel: &inner.cancel_running,
             shutdown: &inner.shutdown,
             options: &inner.options,

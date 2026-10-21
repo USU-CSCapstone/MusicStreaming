@@ -41,7 +41,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     }
     roots_apart(&db, &data_dir).await?;
 
-    let ffmpeg = Ffmpeg::new(FfmpegConfig::default());
+    let ffmpeg_config = FfmpegConfig::default();
+    let ffmpeg = Ffmpeg::new(ffmpeg_config.clone());
     let caps = ffmpeg.verify().context("ffmpeg is required and could not be run")?;
     if caps.missing.is_empty() {
         info!(version = caps.version, "ffmpeg ok");
@@ -58,11 +59,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     // The scanner calls the database with blocking calls, so it starts outside the async runtime.
     let scanning = {
         let db = db.clone();
-        let ffmpeg = ffmpeg.clone();
         tokio::task::spawn_blocking(move || Scanning::start(&db, &ffmpeg)).await??
     };
 
-    let images = api::Images::new(data_dir.cache().join("images"), ffmpeg);
+    let images = api::Images::new(data_dir.cache().join("images"), ffmpeg_config);
     // A cache folder that fails the check costs only a compile per plugin after each restart,
     // so the server starts without it rather than refusing to.
     let compiled = match data_dir.private_cache("plugins") {

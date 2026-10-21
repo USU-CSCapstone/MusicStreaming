@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use jewelcase_scanner::Scanner;
 use jewelcase_scanner::scan::ScanOptions;
-use jewelcase_scanner::{Governor, Scanner};
 
 use super::Plugins;
 use crate::db::{Database, SqliteStore, libraries};
@@ -23,7 +23,7 @@ async fn saved_files_are_scanned_without_blocking_the_runtime() {
     let store_db = db.clone();
     let scanner = tokio::task::spawn_blocking(move || {
         let store = Arc::new(SqliteStore::new(store_db).unwrap());
-        Scanner::start(store, config, Arc::new(Governor::new()), ScanOptions::default())
+        Scanner::start(store, config, ScanOptions::default())
     })
     .await
     .unwrap();

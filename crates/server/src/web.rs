@@ -38,7 +38,7 @@ mod tests {
 
     use super::*;
 
-    use jewelcase_ffmpeg::{Config, Ffmpeg};
+    use jewelcase_ffmpeg::Config;
 
     use crate::api::{self, Images};
     use crate::db::Database;
@@ -53,7 +53,7 @@ mod tests {
         std::fs::write(web.join("robots.txt"), "robots").unwrap();
         std::fs::write(web.join("_app/immutable/entry.abc.js"), "js").unwrap();
         let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
-        let images = Images::new(temp.path().join("cache"), Ffmpeg::new(Config::default()));
+        let images = Images::new(temp.path().join("cache"), Config::default());
         let plugins = plugins(&temp, &db);
         let app = api::router("", db, images, plugins, Arc::default()).merge(router(&web));
         (temp, app)

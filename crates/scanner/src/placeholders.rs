@@ -2,8 +2,8 @@
 //! correctly coloured stand-in before the image itself arrives, or offline without it
 //! (`requirements/offline.md` §1.1). About 25 bytes each.
 //!
-//! Filled in the background after a scan finds an image, the same way analysis follows it.
-//! Decodes share the ffmpeg pool with analysis, so the governor pauses both.
+//! Filled in the background after a scan finds an image, the same way analysis follows it, and
+//! at the same low priority.
 
 use std::path::Path;
 use std::sync::Arc;

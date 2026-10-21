@@ -8,7 +8,7 @@ use std::process::Output;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use jewelcase_ffmpeg::Ffmpeg;
+use jewelcase_ffmpeg::Config;
 use tokio::process::Command;
 use tokio::sync::Semaphore;
 
@@ -21,18 +21,19 @@ const RENDER_TIMEOUT: Duration = Duration::from_secs(30);
 /// Where resized images go and how to make them.
 pub struct Images {
     cache: PathBuf,
-    ffmpeg: Ffmpeg,
-    /// Bounds the resizes running at once. Artwork is an interactive request, so it has its own
-    /// bound instead of queueing behind analysis in the ffmpeg pool, which the governor pauses
-    /// while listeners play (`design/general.md` §2).
+    ffmpeg: Config,
+    /// Bounds the resizes running at once. Artwork is an interactive request, so it runs outside
+    /// the pool of background ffmpeg children, at normal priority and under its own bound
+    /// (`design/scanning.md` §10).
     renders: Semaphore,
     /// Names each resize's temporary file uniquely.
     next_temp: AtomicU64,
 }
 
 impl Images {
-    /// Resizes into `cache` with `ffmpeg`, as many images at once as the host has cores.
-    pub fn new(cache: PathBuf, ffmpeg: Ffmpeg) -> Images {
+    /// Resizes into `cache` with the ffmpeg that `ffmpeg` names, as many images at once as the
+    /// host has cores.
+    pub fn new(cache: PathBuf, ffmpeg: Config) -> Images {
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
         Images { cache, ffmpeg, renders: Semaphore::new(cores), next_temp: AtomicU64::new(0) }
     }

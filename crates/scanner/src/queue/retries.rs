@@ -21,9 +21,9 @@ fn nas_gone(tmp: &Path) -> (LibraryConfig, PathBuf, PathBuf) {
     (LibraryConfig { roots: vec![nas.clone(), kept.clone()], ..library(&kept) }, nas, away)
 }
 
-/// A scanner of `lib` over `store`, never paused.
+/// A scanner of `lib` over `store`.
 fn scanner(store: &Arc<MemoryStore>, lib: &LibraryConfig) -> Scanner {
-    Scanner::start(store.clone(), lib.clone(), Arc::new(Governor::new()), ScanOptions::default())
+    Scanner::start(store.clone(), lib.clone(), ScanOptions::default())
 }
 
 /// Shortens the wait of the work `scanner` holds to retry to `wait`, and waits for the scan the

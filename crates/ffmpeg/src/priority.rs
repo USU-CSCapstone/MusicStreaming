@@ -1,6 +1,7 @@
 //! Background work at low priority (`requirements/performance.md` §5).
 
 /// How much background work is lowered, in nice steps.
+#[cfg(target_os = "linux")]
 const BACKGROUND_NICE: i32 = 10;
 
 /// Lower the calling thread's priority by 10 nice steps, for a thread that does only background
@@ -11,13 +12,21 @@ const BACKGROUND_NICE: i32 = 10;
 /// ffmpeg, inherits the lowered value. Call it only on a thread the caller owns, never on a
 /// pooled one such as tokio's `spawn_blocking`, whose later tasks would inherit it. A failure is
 /// logged, and the thread carries on at its priority.
+#[cfg(target_os = "linux")]
 pub fn lower_thread_priority() {
     if let Err(error) = rustix::process::nice(BACKGROUND_NICE) {
         tracing::warn!(%error, "could not lower a background thread's priority");
     }
 }
 
-#[cfg(test)]
+/// Does nothing off Linux, where niceness belongs to the whole process, so lowering it would
+/// lower request handling too.
+#[cfg(not(target_os = "linux"))]
+pub fn lower_thread_priority() {
+    tracing::debug!("background threads keep their priority off Linux");
+}
+
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use std::process::Command;
 

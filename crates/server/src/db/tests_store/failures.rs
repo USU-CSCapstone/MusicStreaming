@@ -77,8 +77,8 @@ fn a_scan_whose_row_the_store_cannot_save_ends_suspended() {
 }
 
 /// A scan the store cannot record is never queued under a made-up id, and the queued scan it
-/// would have replaced stays queued. The first scan is parked by the paused governor, so the
-/// second waits in the queue.
+/// would have replaced stays queued. The first scan is held by the store, so the second waits in
+/// the queue.
 #[test]
 fn a_scan_the_store_cannot_record_is_not_queued() {
     let tmp = tempfile::tempdir().unwrap();
@@ -86,10 +86,9 @@ fn a_scan_the_store_cannot_record_is_not_queued() {
     testing::make_album(&root, "A", "X", 1);
     let store = Arc::new(make(&root));
     let lib = testing::library(&root);
-    let governor = Arc::new(Governor::new());
-    governor.pause();
-    let scanner =
-        Scanner::start(store.clone(), lib.clone(), governor.clone(), ScanOptions::default());
+    let parked = testing::Parked::new(store.clone());
+    parked.hold();
+    let scanner = Scanner::start(parked.clone(), lib.clone(), ScanOptions::default());
     scanner.scan_library(Trigger::Manual).unwrap();
     testing::wait_until(&scanner, "no scan started", |scanner| scanner.running().is_some());
     let folder = scanner.scan_folder(Trigger::Watch, &root.join("A")).unwrap();
@@ -99,7 +98,7 @@ fn a_scan_the_store_cannot_record_is_not_queued() {
     let queued: Vec<ScanId> = scanner.queued().iter().map(|scan| scan.id).collect();
     assert_eq!(queued, [folder]);
     heal(&store);
-    governor.resume();
+    parked.release();
     scanner.wait_idle();
     scanner.shutdown();
     assert_eq!(count(&store, "SELECT COUNT(*) FROM scans WHERE state = 'completed'"), 2);
@@ -149,8 +148,7 @@ fn a_problem_the_store_cannot_record_leaves_the_file_untried() {
     let lib = testing::library(&root);
     testing::scan_library(store.as_ref(), &lib);
     fs::remove_file(root.join("A/X/01 - Track 1.wav")).unwrap();
-    let analyzer =
-        Analyzer::new(Ffmpeg::new(Config::default()), store.clone(), Arc::new(Governor::new()));
+    let analyzer = Analyzer::new(Ffmpeg::new(Config::default()), store.clone());
 
     fail(&store, "BEFORE INSERT ON scan_problems");
     assert_eq!(analyzer.run_once(lib.id, 10), RunReport { backed_off: true, ..Default::default() });
@@ -172,9 +170,8 @@ fn a_problem_the_store_cannot_clear_leaves_the_file_unanalyzed() {
     testing::scan_library(store.as_ref(), &lib);
     let (file, away) = (root.join("A/X/01 - Track 1.wav"), tmp.path().join("away.wav"));
     fs::rename(&file, &away).unwrap();
-    let analyzer =
-        Analyzer::new(Ffmpeg::new(Config::default()), store.clone(), Arc::new(Governor::new()))
-            .with_retry_after(Duration::ZERO);
+    let analyzer = Analyzer::new(Ffmpeg::new(Config::default()), store.clone())
+        .with_retry_after(Duration::ZERO);
     assert_eq!(analyzer.run_once(lib.id, 10), RunReport { skipped: 1, ..Default::default() });
     assert_eq!(store.inspect_problems(lib.id).len(), 1);
 

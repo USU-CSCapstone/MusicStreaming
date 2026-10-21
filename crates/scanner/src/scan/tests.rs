@@ -47,7 +47,6 @@ fn run(
     let ctx = ScanContext {
         store,
         library: lib,
-        governor: &Governor::new(),
         cancel: &stops.cancel,
         shutdown: &stops.shutdown,
         options,

@@ -1,7 +1,11 @@
+use std::cell::Cell;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::thread::sleep;
+
+use rustix::process::getpid;
+use rustix::time::{ClockId, clock_gettime};
 
 use super::*;
 use crate::{Config, Error, Ffmpeg, ProbeInfo};
@@ -14,7 +18,7 @@ fn lingering() -> Ffmpeg {
 
 /// The pids `registry` holds.
 fn registered(registry: &Registry) -> Vec<Pid> {
-    registry.state.lock().unwrap().children.keys().copied().collect()
+    registry.children.lock().unwrap().keys().copied().collect()
 }
 
 /// Waits up to 5 seconds for `done` to hold, and panics if it doesn't.
@@ -41,7 +45,7 @@ fn unregisters_before_reaping(run: impl FnOnce(Ffmpeg, PathBuf) + Send + 'static
     let dir = tempfile::tempdir().unwrap();
     let go = dir.path().join("go");
     let ffmpeg = lingering();
-    let registry = ffmpeg.registry().clone();
+    let registry = ffmpeg.registry.clone();
     let running = std::thread::spawn({
         let go = go.clone();
         move || run(ffmpeg, go)
@@ -77,27 +81,31 @@ fn a_decode_unregisters_its_child_before_reaping_it() {
 }
 
 #[test]
+fn an_image_decode_unregisters_its_child_before_reaping_it() {
+    unregisters_before_reaping(|ffmpeg, input| {
+        let error = ffmpeg.decode_image(&input, 8).unwrap_err();
+        assert!(matches!(error, Error::Image(_)), "{error:?}");
+    });
+}
+
+#[test]
 fn dropping_a_decode_kills_and_reaps_its_child() {
     let ffmpeg = lingering();
     let info =
         ProbeInfo { sample_rate: 8000, channels: 1, channel_layout: None, duration_secs: None };
     // The input never exists, so the script would run for about 7 seconds.
     let stream = ffmpeg.decode_pcm(Path::new("/nonexistent/input"), &info).unwrap();
-    let pid = registered(ffmpeg.registry())[0];
+    let pid = registered(&ffmpeg.registry)[0];
     let dropping = Instant::now();
     drop(stream);
     assert!(dropping.elapsed() < Duration::from_secs(2), "not killed");
-    assert!(registered(ffmpeg.registry()).is_empty());
+    assert!(registered(&ffmpeg.registry).is_empty());
     assert!(!Path::new(&format!("/proc/{}", pid.as_raw_pid())).exists(), "not reaped");
 }
 
-/// Makes the registered child `pid` look stalled, as if it had made no progress for longer than
-/// [`STALL_TIMEOUT`]. Returns the flag the watchdog sets when it kills it.
-fn stall(registry: &Registry, pid: Pid) -> Arc<AtomicBool> {
-    let mut state = registry.state.lock().unwrap();
-    let entry = state.children.get_mut(&pid).unwrap();
-    entry.last_progress -= STALL_TIMEOUT + Duration::from_secs(1);
-    entry.stalled.clone()
+/// A `sample` of a child that is blocked and has used no CPU time.
+fn blocked(_: Pid) -> io::Result<Sample> {
+    Ok(Sample { running: false, cpu: Duration::ZERO })
 }
 
 #[test]
@@ -106,41 +114,170 @@ fn a_decode_the_watchdog_kills_fails_as_stalled() {
     let info =
         ProbeInfo { sample_rate: 8000, channels: 1, channel_layout: None, duration_secs: None };
     let mut stream = ffmpeg.decode_pcm(Path::new("/nonexistent/input"), &info).unwrap();
-    let registry = ffmpeg.registry();
-    stall(registry, registered(registry)[0]);
-    registry.reap_stalled();
+    ffmpeg.registry.reap_stalled(STALL_TIMEOUT + CHECK_EVERY, blocked);
     let read = stream.read_frames(&mut Vec::new(), 1);
     assert!(matches!(read, Err(Error::Stalled)), "{read:?}");
 }
 
-/// A `sleep` child registered with a new registry. It ends by itself after 10 seconds, so a
-/// failed test leaves it behind for no longer.
-fn registered_sleep() -> (Arc<Registry>, Child, Pid) {
-    let registry = Registry::start();
-    let child = Command::new("sleep").arg("10").spawn().unwrap();
-    let pid = Pid::from_child(&child);
-    registry.register(pid);
-    (registry, child, pid)
+/// While two background children run, a third waits for a slot, and starts once one ends.
+#[test]
+fn a_third_child_waits_until_one_of_two_ends() {
+    let ffmpeg = lingering();
+    let info =
+        ProbeInfo { sample_rate: 8000, channels: 1, channel_layout: None, duration_secs: None };
+    let input = Path::new("/nonexistent/input");
+    let first = ffmpeg.decode_pcm(input, &info).unwrap();
+    let second = ffmpeg.decode_pcm(input, &info).unwrap();
+    let third = std::thread::spawn({
+        let (ffmpeg, info) = (ffmpeg.clone(), info.clone());
+        move || ffmpeg.decode_pcm(input, &info)
+    });
+    sleep(Duration::from_millis(300));
+    let two = registered(&ffmpeg.registry);
+    assert_eq!(two.len(), 2, "a third child started");
+    drop(first);
+    let started = || registered(&ffmpeg.registry).iter().any(|pid| !two.contains(pid));
+    wait_for("the third child to start", started);
+    drop((second, third.join().unwrap().unwrap()));
 }
 
+/// A child that cannot be spawned gives its slot back, so failures never fill the pool.
 #[test]
-fn pausing_stops_children_and_resuming_continues_them() {
-    let (registry, mut child, pid) = registered_sleep();
-    registry.pause_all();
-    wait_for("the child to stop", || state(pid) == 'T');
-    registry.resume_all();
-    wait_for("the child to continue", || state(pid) == 'S');
+fn a_failed_spawn_frees_its_slot() {
+    let missing = PathBuf::from("/nonexistent/ffprobe");
+    let ffmpeg = Ffmpeg::new(Config { ffmpeg: missing.clone(), ffprobe: missing });
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for _ in 0..=MAX_CHILDREN {
+            sender.send(ffmpeg.probe(Path::new("/nonexistent/input"))).unwrap();
+        }
+    });
+    for _ in 0..=MAX_CHILDREN {
+        let probed = receiver.recv_timeout(Duration::from_secs(5)).expect("waited for a slot");
+        assert!(matches!(probed, Err(Error::Spawn { .. })), "{probed:?}");
+    }
+}
+
+/// A `sleep` child registered with a new registry that has no watchdog thread, and the flag
+/// the watchdog sets if it kills it. It ends by itself after 10 seconds, so a failed test
+/// leaves it behind for no longer.
+fn registered_sleep() -> (Registry, Child, Pid, Arc<AtomicBool>) {
+    let registry = Registry::default();
+    let child = Command::new("sleep").arg("10").spawn().unwrap();
+    let pid = Pid::from_child(&child);
+    let stalled = registry.register(pid);
+    (registry, child, pid, stalled)
+}
+
+/// Unregisters the child `pid` and asserts it was killed as stalled.
+fn killed(registry: &Registry, mut child: Child, pid: Pid, stalled: &AtomicBool) {
     registry.unregister(pid);
+    assert_eq!(child.wait().unwrap().signal(), Some(9));
+    assert!(stalled.load(Ordering::SeqCst));
+}
+
+/// A child blocked for good, which uses no CPU time, is killed once that much time has passed.
+#[test]
+fn the_watchdog_kills_a_child_blocked_without_progress() {
+    let (registry, child, pid, stalled) = registered_sleep();
+    wait_for("the child to sleep", || state(pid) == 'S');
+    assert!(!sample(pid).unwrap().running);
+    // Takes in whatever CPU time the child used to start.
+    registry.reap_stalled(CHECK_EVERY, sample);
+    assert!(!stalled.load(Ordering::SeqCst));
+    registry.reap_stalled(STALL_TIMEOUT, sample);
+    killed(&registry, child, pid, &stalled);
+}
+
+/// A child that spins, or waits for a CPU to spin on, samples as running.
+#[test]
+fn samples_a_busy_child_as_running() {
+    // Counts for a few seconds, so a failed test leaves it behind for no longer.
+    let counting = "i=0; while [ $i -lt 3000000 ]; do i=$((i + 1)); done";
+    let mut child = Command::new("sh").args(["-c", counting]).spawn().unwrap();
+    let pid = Pid::from_child(&child);
+    wait_for("the child to sample as running", || sample(pid).unwrap().running);
     child.kill().unwrap();
     child.wait().unwrap();
 }
 
+/// A child that cannot be sampled counts as blocked.
 #[test]
-fn the_watchdog_kills_a_stalled_child() {
-    let (registry, mut child, pid) = registered_sleep();
-    let stalled = stall(&registry, pid);
-    registry.reap_stalled();
+fn the_watchdog_kills_a_child_it_cannot_sample_once_that_much_time_has_passed() {
+    let (registry, child, pid, stalled) = registered_sleep();
+    registry.reap_stalled(STALL_TIMEOUT + CHECK_EVERY, |_| Err(io::Error::other("no /proc")));
+    killed(&registry, child, pid, &stalled);
+}
+
+/// A child that gets only a sliver of the CPU because busier work has it is not stalled,
+/// however much time passes: neither while its main thread waits for a CPU and gets none, nor
+/// while its main thread waits on its other threads and they get a little.
+#[test]
+fn the_watchdog_spares_a_child_starved_of_the_cpu() {
+    let (registry, mut child, pid, stalled) = registered_sleep();
+    let (cpu, check) = (Cell::new(Duration::ZERO), Cell::new(0));
+    let starved = |_| {
+        check.set(check.get() + 1);
+        let running = check.get() % 2 == 0;
+        if !running {
+            cpu.set(cpu.get() + Duration::from_millis(10));
+        }
+        Ok(Sample { running, cpu: cpu.get() })
+    };
+    for _ in 0..100 {
+        registry.reap_stalled(CHECK_EVERY, starved);
+    }
     registry.unregister(pid);
-    assert_eq!(child.wait().unwrap().signal(), Some(9));
-    assert!(stalled.load(Ordering::SeqCst));
+    assert!(!stalled.load(Ordering::SeqCst), "killed as stalled");
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+/// A child that spins on the CPU without progress is killed once it has run that long since its
+/// last progress, though it spins on four threads and so uses four times as much CPU time.
+#[test]
+fn the_watchdog_kills_a_child_spinning_without_progress() {
+    let (registry, child, pid, stalled) = registered_sleep();
+    let cpu = Cell::new(Duration::ZERO);
+    let spinning = |_| {
+        cpu.set(cpu.get() + CHECK_EVERY * 4);
+        Ok(Sample { running: true, cpu: cpu.get() })
+    };
+    for _ in 0..20 {
+        registry.reap_stalled(CHECK_EVERY, spinning);
+    }
+    registry.progress(pid);
+    for _ in 0..STALL_TIMEOUT.as_secs() {
+        registry.reap_stalled(CHECK_EVERY, spinning);
+    }
+    assert!(!stalled.load(Ordering::SeqCst), "killed within the timeout of its progress");
+    registry.reap_stalled(CHECK_EVERY, spinning);
+    killed(&registry, child, pid, &stalled);
+}
+
+/// The CPU time sampled from `/proc` is the process's own, in seconds rather than clock ticks.
+#[test]
+fn samples_a_processs_cpu_time() {
+    let process_cpu = || {
+        let now = clock_gettime(ClockId::ProcessCPUTime);
+        Duration::new(now.tv_sec as u64, now.tv_nsec as u32)
+    };
+    let start = Instant::now();
+    // This process spins until it has used enough CPU time for a wrong unit to show.
+    while process_cpu() < Duration::from_millis(200) {
+        assert!(start.elapsed() < Duration::from_secs(10), "this process got no CPU time");
+    }
+    let before = process_cpu();
+    let sampled = sample(getpid()).unwrap().cpu;
+    let after = process_cpu();
+    // `/proc` rounds the user and system times down to a clock tick each.
+    let tick = Duration::from_secs(1) / rustix::param::clock_ticks_per_second() as u32;
+    assert!(before - tick * 2 <= sampled && sampled <= after, "{before:?} {sampled:?} {after:?}");
+}
+
+#[test]
+fn parses_the_state_and_cpu_ticks_past_a_name_with_spaces_and_parentheses() {
+    let stat = "42 (a) R (b) S 1 42 42 0 -1 4194304 100 0 0 0 7 5 3 2 20 0 1 0 123 4096 100\n";
+    assert_eq!(parse_stat(stat), Some(("S", 12)));
+    assert_eq!(parse_stat("42 (a) S 1 42"), None);
 }

@@ -24,9 +24,7 @@ fn main() {
 
     let store = Arc::new(MemoryStore::new());
     let library = LibraryConfig { id: 1, roots: vec![root.clone()], excludes: Vec::new() };
-    let governor = Arc::new(Governor::new());
-    let scanner =
-        Scanner::start(store.clone(), library.clone(), governor.clone(), ScanOptions::default());
+    let scanner = Scanner::start(store.clone(), library.clone(), ScanOptions::default());
 
     let started = Instant::now();
     scanner.scan_library(Trigger::Initial);
@@ -83,7 +81,7 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        let analyzer = Analyzer::new(ffmpeg, store.clone(), governor.clone());
+        let analyzer = Analyzer::new(ffmpeg, store.clone());
         let started = Instant::now();
         let report = analyzer.run_once(library.id, usize::MAX);
         println!(

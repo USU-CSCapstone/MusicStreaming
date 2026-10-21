@@ -11,7 +11,7 @@ use jewelcase_scanner::analysis::{AnalysisWorker, Analyzer};
 use jewelcase_scanner::placeholders::{PlaceholderWorker, Placeholders};
 use jewelcase_scanner::scan::ScanOptions;
 use jewelcase_scanner::triggers::{FsWatcher, Schedule};
-use jewelcase_scanner::{Governor, Scanner, Trigger};
+use jewelcase_scanner::{Scanner, Trigger};
 use tracing::{info, warn};
 
 use crate::db::{Database, SqliteStore, libraries};
@@ -21,7 +21,6 @@ const FALLBACK_SCHEDULE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Everything running for every library, until [`Scanning::stop`].
 pub struct Scanning {
-    governor: Arc<Governor>,
     libraries: Vec<Library>,
 }
 
@@ -39,7 +38,6 @@ impl Scanning {
     /// call it outside the async runtime.
     pub fn start(db: &Arc<Database>, ffmpeg: &Ffmpeg) -> anyhow::Result<Scanning> {
         let store = Arc::new(SqliteStore::new(db.clone()).context("cannot initialise the store")?);
-        let governor = Arc::new(Governor::new());
 
         let libs = db.read_blocking(libraries::all)?;
         if libs.is_empty() {
@@ -49,12 +47,7 @@ impl Scanning {
         for lib in &libs {
             let config = lib.config();
             let fallback = lib.scan_interval_minutes.is_none().then_some(FALLBACK_SCHEDULE);
-            let scanner = Scanner::start(
-                store.clone(),
-                config.clone(),
-                governor.clone(),
-                ScanOptions::default(),
-            );
+            let scanner = Scanner::start(store.clone(), config.clone(), ScanOptions::default());
             scanner.scan_library(startup_trigger(db, lib.id)?);
             let watcher = lib.watch.then(|| {
                 FsWatcher::start(scanner.clone(), &config.roots, Duration::from_secs(2), fallback)
@@ -69,14 +62,14 @@ impl Scanning {
                 watcher,
                 schedule,
                 // One of each per library, since each remembers its library's failures.
-                analysis: Arc::new(Analyzer::new(ffmpeg.clone(), store.clone(), governor.clone()))
+                analysis: Arc::new(Analyzer::new(ffmpeg.clone(), store.clone()))
                     .start(config.id, Duration::from_secs(30)),
                 // Soon after a scan finds an image, since clients draw its placeholder at once.
                 placeholders: Arc::new(Placeholders::new(ffmpeg.clone(), store.clone()))
                     .start(config.id, Duration::from_secs(5)),
             });
         }
-        Ok(Scanning { governor, libraries: running })
+        Ok(Scanning { libraries: running })
     }
 
     /// Each library's scanner, for queuing scans from elsewhere, such as of what a plugin saved.
@@ -87,8 +80,6 @@ impl Scanning {
     /// Stops everything, each once the work in hand is done: the triggers first, so nothing new
     /// is queued. Blocks, so call it outside the async runtime.
     pub fn stop(self) {
-        // A decode the governor has paused would never finish.
-        self.governor.resume();
         for lib in self.libraries {
             if let Some(watcher) = lib.watcher {
                 watcher.stop();

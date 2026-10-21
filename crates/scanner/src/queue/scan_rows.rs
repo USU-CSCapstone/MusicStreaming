@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::store::{MemoryStore, StoreError};
-use crate::testing::{Hooked, library, make_album, wait_until};
+use crate::testing::{Hooked, Parked, library, make_album, wait_until};
 
 /// How long a test waits for something another thread does.
 const BOUND: Duration = Duration::from_secs(10);
@@ -99,22 +99,21 @@ fn gated() -> (Arc<Gated>, Arc<Gate>) {
 }
 
 /// A scanner of the library at `root`, A/X and B/Y with one track each, over `store`, running a
-/// scan of A that the paused governor parks once its row says it runs, with a scan of B queued
-/// behind it. Returns the scanner, its governor, and the two scans' ids.
-fn parked(root: &Path, store: &Arc<Gated>) -> (Scanner, Arc<Governor>, ScanId, ScanId) {
+/// scan of A that is held once its row says it runs, with a scan of B queued behind it. Returns
+/// the scanner, the store that holds the scan, and the two scans' ids.
+fn parked(root: &Path, store: &Arc<Gated>) -> (Scanner, Arc<Parked>, ScanId, ScanId) {
     make_album(root, "A", "X", 1);
     make_album(root, "B", "Y", 1);
-    let governor = Arc::new(Governor::new());
-    governor.pause();
-    let scanner =
-        Scanner::start(store.clone(), library(root), governor.clone(), ScanOptions::default());
+    let parked = Parked::new(store.clone());
+    parked.hold();
+    let scanner = Scanner::start(parked.clone(), library(root), ScanOptions::default());
     let running = scanner.request(Trigger::Manual, folder(root, "A")).unwrap();
     let queued = scanner.request(Trigger::Manual, folder(root, "B")).unwrap();
     let saved_running = |_: &Scanner| {
         store.inner.scans(1).iter().any(|s| s.id == running && s.state == ScanState::Running)
     };
     wait_until(&scanner, "the scan of A never started", saved_running);
-    (scanner, governor, running, queued)
+    (scanner, parked, running, queued)
 }
 
 /// A scan of the folder `name` under `root`, and all below it.
@@ -151,7 +150,7 @@ fn the_queue_answers_while_a_scan_row_is_written() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     let (store, gate) = gated();
-    let (scanner, governor, running, queued) = parked(&root, &store);
+    let (scanner, parked, running, queued) = parked(&root, &store);
     gate.hold(1);
     let scopes = folder(&root, "C");
     let requesting = in_thread(&scanner, move |s| s.request(Trigger::Watch, scopes));
@@ -175,7 +174,7 @@ fn the_queue_answers_while_a_scan_row_is_written() {
     gate.release();
     let library = replacing.join().unwrap().unwrap();
 
-    governor.resume();
+    parked.release();
     scanner.wait_idle();
     scanner.shutdown();
     let states = [running, queued, requested, library].map(|id| state(&store, id));
@@ -191,7 +190,7 @@ fn requests_racing_for_the_same_work_queue_it_once() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     let (store, gate) = gated();
-    let (scanner, governor, _, _) = parked(&root, &store);
+    let (scanner, parked, _, _) = parked(&root, &store);
 
     gate.hold(1);
     let scopes = folder(&root, "C");
@@ -204,7 +203,7 @@ fn requests_racing_for_the_same_work_queue_it_once() {
     assert_eq!(queued.iter().filter(|s| s.scopes == folder(&root, "C")).count(), 1);
     let rows = store.inner.scans(1);
     assert_eq!(rows.iter().filter(|s| s.state == ScanState::Cancelled).count(), 1);
-    governor.resume();
+    parked.release();
     scanner.wait_idle();
     scanner.shutdown();
 }
@@ -215,13 +214,13 @@ fn a_request_joining_a_queued_scan_writes_no_row() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     let (store, _) = gated();
-    let (scanner, governor, _, queued) = parked(&root, &store);
+    let (scanner, parked, _, queued) = parked(&root, &store);
     let rows = store.inner.scans(1).len();
 
     let within = vec![Scope::folder(&root, root.join("B/Y"), Depth::Directory)];
     assert_eq!(scanner.request(Trigger::Watch, within), Some(queued));
     assert_eq!(store.inner.scans(1).len(), rows);
-    governor.resume();
+    parked.release();
     scanner.wait_idle();
     scanner.shutdown();
 }
@@ -234,12 +233,7 @@ fn a_request_the_store_cannot_record_is_retried() {
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
     let (store, gate) = gated();
-    let scanner = Scanner::start(
-        store.clone(),
-        library(&root),
-        Arc::new(Governor::new()),
-        ScanOptions::default(),
-    );
+    let scanner = Scanner::start(store.clone(), library(&root), ScanOptions::default());
 
     gate.fail(1);
     assert_eq!(scanner.scan_library(Trigger::Manual), None);
@@ -259,7 +253,7 @@ fn a_cancel_the_store_cannot_save_leaves_the_scan_queued_where_it_was() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     let (store, gate) = gated();
-    let (scanner, governor, running, queued) = parked(&root, &store);
+    let (scanner, parked, running, queued) = parked(&root, &store);
     let c = scanner.request(Trigger::Manual, folder(&root, "C")).unwrap();
     let d = scanner.request(Trigger::Manual, folder(&root, "D")).unwrap();
 
@@ -267,7 +261,7 @@ fn a_cancel_the_store_cannot_save_leaves_the_scan_queued_where_it_was() {
     assert!(!scanner.cancel(c));
     let ids: Vec<ScanId> = scanner.queued().iter().map(|s| s.id).collect();
     assert_eq!(ids, [queued, c, d]);
-    governor.resume();
+    parked.release();
     scanner.wait_idle();
     scanner.shutdown();
     let states = [running, queued, c, d].map(|id| state(&store, id));
@@ -281,7 +275,7 @@ fn a_scan_put_back_goes_after_what_is_still_ahead_of_it() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     let (store, gate) = gated();
-    let (scanner, governor, _, queued) = parked(&root, &store);
+    let (scanner, parked, _, queued) = parked(&root, &store);
     let c = scanner.request(Trigger::Manual, folder(&root, "C")).unwrap();
     let d = scanner.request(Trigger::Manual, folder(&root, "D")).unwrap();
 
@@ -294,7 +288,7 @@ fn a_scan_put_back_goes_after_what_is_still_ahead_of_it() {
     assert!(!cancelling.join().unwrap());
     let ids: Vec<ScanId> = scanner.queued().iter().map(|s| s.id).collect();
     assert_eq!(ids, [c, d]);
-    governor.resume();
+    parked.release();
     scanner.wait_idle();
     scanner.shutdown();
 }
@@ -306,13 +300,13 @@ fn a_scan_put_back_after_a_failed_cancel_runs() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     let (store, gate) = gated();
-    let (scanner, governor, running, queued) = parked(&root, &store);
+    let (scanner, parked, running, queued) = parked(&root, &store);
 
     gate.hold(1);
     gate.fail(1);
     let cancelling = in_thread(&scanner, move |s| s.cancel(queued));
     gate.wait_held();
-    governor.resume();
+    parked.release();
     let idle = |s: &Scanner| s.is_idle() && state(&store, running) == ScanState::Completed;
     wait_until(&scanner, "the running scan never ended", idle);
     gate.release();

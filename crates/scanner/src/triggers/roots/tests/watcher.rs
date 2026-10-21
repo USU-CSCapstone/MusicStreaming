@@ -122,8 +122,7 @@ fn what_the_library_excludes_is_not_watched() {
     fs::create_dir(&skip).unwrap();
     let store = Arc::new(MemoryStore::new());
     let library = LibraryConfig { excludes: vec!["skip".into()], ..library(&root) };
-    let governor = Arc::new(Governor::new());
-    let scanner = Scanner::start(store.clone(), library, governor, ScanOptions::default());
+    let scanner = Scanner::start(store.clone(), library, ScanOptions::default());
     let debounce = Duration::from_millis(20);
     let watcher = FsWatcher::start(scanner.clone(), slice::from_ref(&root), debounce, None);
     let watching = seen(&store, &root, &root, 0);
@@ -195,8 +194,7 @@ fn every_folder_is_watched_when_an_exclude_does_not_compile() {
     fs::create_dir(&sub).unwrap();
     let store = Arc::new(MemoryStore::new());
     let library = LibraryConfig { excludes: vec!["[".into()], ..library(&root) };
-    let governor = Arc::new(Governor::new());
-    let scanner = Scanner::start(store.clone(), library, governor, ScanOptions::default());
+    let scanner = Scanner::start(store.clone(), library, ScanOptions::default());
     let debounce = Duration::from_millis(20);
     let watcher = FsWatcher::start(scanner.clone(), slice::from_ref(&root), debounce, None);
     seen(&store, &root, &sub, 0);

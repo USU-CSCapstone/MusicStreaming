@@ -20,9 +20,8 @@ pub struct PcmStream {
     held: usize,
 }
 
-/// Start the decode in the shape `info` reports and register the child with the pool. Blocks
-/// while the pool is full or paused. Fails if ffmpeg can't be spawned or the thread draining its stderr
-/// can't start.
+/// Start the decode in the shape `info` reports and register the child with the pool. Fails if
+/// ffmpeg can't be spawned or the thread draining its stderr can't start.
 pub(crate) fn decode_pcm(
     config: &Config,
     registry: &Arc<Registry>,

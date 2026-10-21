@@ -16,7 +16,6 @@ use std::time::{Duration, SystemTime};
 use ebur128::{EbuR128, Mode};
 use jewelcase_ffmpeg::{Ffmpeg, ProbeInfo};
 
-use crate::governor::Governor;
 use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport};
 use crate::store::{FileToDecode, Store};
 use crate::types::*;
@@ -44,20 +43,16 @@ pub enum AnalysisError {
 pub struct Analyzer {
     ffmpeg: Ffmpeg,
     store: Arc<dyn Store>,
-    governor: Arc<Governor>,
     waveform_bins: usize,
     retries: Retries,
 }
 
 impl Analyzer {
-    /// Analyzes with `ffmpeg` into `store`, pausing whenever `governor` does; attaches ffmpeg's
-    /// processes to `governor` so a pause stops decodes too.
-    pub fn new(ffmpeg: Ffmpeg, store: Arc<dyn Store>, governor: Arc<Governor>) -> Analyzer {
-        governor.attach_ffmpeg(ffmpeg.registry().clone());
+    /// Analyzes with `ffmpeg` into `store`.
+    pub fn new(ffmpeg: Ffmpeg, store: Arc<dyn Store>) -> Analyzer {
         Analyzer {
             ffmpeg,
             store,
-            governor,
             waveform_bins: DEFAULT_WAVEFORM_BINS,
             retries: Retries::new(RETRY_AFTER),
         }
@@ -88,7 +83,6 @@ impl Analyzer {
         let mut block: Vec<f32> = Vec::with_capacity(BLOCK_FRAMES * channels);
         let mut mono: Vec<f32> = Vec::with_capacity(BLOCK_FRAMES);
         loop {
-            self.governor.wait_if_paused();
             let frames = stream.read_frames(&mut block, BLOCK_FRAMES)?;
             if frames == 0 {
                 break;

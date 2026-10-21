@@ -9,7 +9,7 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode, header, request};
-use jewelcase_ffmpeg::{Config, Ffmpeg};
+use jewelcase_ffmpeg::Config;
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -65,7 +65,7 @@ pub fn add_signed_out_device(
 pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
     let temp = tempfile::tempdir().unwrap();
     let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
-    let images = Images::new(temp.path().join("cache"), Ffmpeg::new(Config::default()));
+    let images = Images::new(temp.path().join("cache"), Config::default());
     // A client with a public address, unless a request carries its own `ConnectInfo`.
     let peer = SocketAddr::from(([203, 0, 113, 1], 50_000));
     let app = router(base_path, db.clone(), images, plugins(&temp, &db), Arc::default())
@@ -75,7 +75,7 @@ pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, R
 
 /// What the API's handlers share, over `db` in `temp`, mounted at the root.
 pub fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
-    let images = Images::new(temp.path().join("cache"), Ffmpeg::new(Config::default()));
+    let images = Images::new(temp.path().join("cache"), Config::default());
     let plugins = plugins(temp, &db);
     AppState::new(db, images, plugins, Arc::default(), "/api/v1")
 }
