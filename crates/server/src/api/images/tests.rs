@@ -1,6 +1,6 @@
 use axum::Router;
 use axum::http::StatusCode;
-use jewelcase_scanner::describe;
+use jewelcase_scanner::describe_image;
 use serde_json::Value;
 
 use super::super::testing::{app, ffmpeg, owner_request, send};
@@ -69,7 +69,7 @@ async fn dimensions(app: &Router, uri: &str) -> (u32, u32) {
     assert!(body.starts_with(&[0xFF, 0xD8, 0xFF]), "{uri}");
     let starts = body.windows(3).filter(|bytes| bytes == &[0xFF, 0xD8, 0xFF]).count();
     assert_eq!(starts, 1, "{uri} holds {starts} JPEGs");
-    let info = describe(&body).unwrap();
+    let info = describe_image(&body).unwrap();
     (info.width, info.height)
 }
 

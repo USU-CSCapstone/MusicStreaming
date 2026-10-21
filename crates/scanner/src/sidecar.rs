@@ -16,8 +16,6 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
 use crate::image::ImageInfo;
 use crate::{Lyrics, image};
 
@@ -38,24 +36,10 @@ pub const LYRICS_EXTENSIONS: &[&str] = &["lrc", "txt"];
 const MAX_SIDECAR_BYTES: u64 = 32 * 1024 * 1024;
 
 /// An `artist.*` sidecar image.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SidecarImage {
     pub path: PathBuf,
     pub info: ImageInfo,
-}
-
-/// An `artist.txt` sidecar.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Biography {
-    pub path: PathBuf,
-    pub text: String,
-}
-
-/// A lyrics sidecar, read (`requirements/scanning.md` §3.4).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SidecarLyrics {
-    pub path: PathBuf,
-    pub lyrics: Lyrics,
 }
 
 /// What resolved for one directory, after the upward walk.
@@ -63,7 +47,8 @@ pub struct SidecarLyrics {
 pub struct Sidecars {
     pub cover: Option<SidecarImage>,
     pub artist_image: Option<SidecarImage>,
-    pub biography: Option<Biography>,
+    /// The text of an `artist.txt`.
+    pub biography: Option<String>,
 }
 
 impl Sidecars {
@@ -86,9 +71,7 @@ impl Local {
         Sidecars {
             cover: self.cover.and_then(|path| read_image(&path)),
             artist_image: self.artist_image.and_then(|path| read_image(&path)),
-            biography: self
-                .biography
-                .and_then(|path| read_text(&path).map(|text| Biography { path, text })),
+            biography: self.biography.and_then(|path| read_text(&path)),
         }
     }
 }
@@ -192,10 +175,9 @@ impl SidecarResolver {
     }
 
     /// Lyrics for a track, read. An unreadable or empty file is no lyrics.
-    pub fn lyrics_for(audio: &Path, files: &BTreeSet<OsString>) -> Option<SidecarLyrics> {
+    pub fn lyrics_for(audio: &Path, files: &BTreeSet<OsString>) -> Option<Lyrics> {
         let path = Self::lyrics_path_for(audio, files)?;
-        let text = read_text(&path)?;
-        Some(SidecarLyrics { path, lyrics: Lyrics::from_text(text) })
+        read_text(&path).map(Lyrics::from_text)
     }
 }
 
@@ -286,7 +268,7 @@ mod tests {
         let album = r.resolve(&root.join("Artist/Album"));
         assert_eq!(album.cover.unwrap().path, root.join("Artist/Album/cover.jpg"));
         assert_eq!(album.artist_image.unwrap().path, root.join("Artist/artist.jpg"));
-        assert_eq!(album.biography.unwrap().text, "A band.");
+        assert_eq!(album.biography.unwrap(), "A band.");
 
         let other = r.resolve(&root.join("Artist/Other"));
         assert_eq!(other.cover.unwrap().path, root.join("cover.png"));
@@ -315,11 +297,14 @@ mod tests {
                 .iter()
                 .map(OsString::from)
                 .collect();
-        let a = SidecarResolver::lyrics_for(&dir.join("01 - Song.flac"), &files).unwrap();
-        assert!(a.lyrics.synced);
-        assert_eq!(a.path, dir.join("01 - Song.lrc"));
+        let song = dir.join("01 - Song.flac");
+        assert_eq!(
+            SidecarResolver::lyrics_path_for(&song, &files),
+            Some(dir.join("01 - Song.lrc"))
+        );
+        assert!(SidecarResolver::lyrics_for(&song, &files).unwrap().synced);
         let b = SidecarResolver::lyrics_for(&dir.join("02 - Other.flac"), &files).unwrap();
-        assert!(!b.lyrics.synced);
+        assert!(!b.synced);
         assert_eq!(SidecarResolver::lyrics_for(&dir.join("03.flac"), &files), None);
     }
 

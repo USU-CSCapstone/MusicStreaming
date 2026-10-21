@@ -1,9 +1,10 @@
 //! The batch a scan fills, and the checkpoint before each directory and file where the batch is
 //! flushed and the scan stops if asked (`design/scanning.md` §7, §9).
 
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use super::{Cursor, Scan, ScanContext, ScanProgress, ScanState};
+use crate::clock::now_ms;
 use crate::store::{Batch, StoreError};
 
 /// Why a scan leaves its walk early.
@@ -86,7 +87,7 @@ impl Writer {
         scan.progress = self.persisted.1.clone();
         scan.progress.current_path = None;
         scan.state = if ctx.cancelled() { ScanState::Cancelled } else { ScanState::Suspended };
-        scan.finished_at = Some(SystemTime::now());
+        scan.finished_at = Some(now_ms());
         if let Err(error) = ctx.store.update_scan(scan) {
             tracing::error!(scan = scan.id, %error, "scan row not saved as it ended");
         }

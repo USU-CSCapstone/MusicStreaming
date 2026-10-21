@@ -4,11 +4,9 @@
 use std::panic;
 
 use imagesize::{ImageResult, ImageSize};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageInfo {
     /// SHA-256 of the bytes.
     pub hash: Vec<u8>,

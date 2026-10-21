@@ -245,9 +245,9 @@ impl Retries {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::time::SystemTime;
 
     use super::*;
+    use crate::clock::now_ms;
     use crate::problems::ProblemKind;
     use crate::store::MemoryStore;
 
@@ -268,7 +268,7 @@ mod tests {
             path: file.path.clone(),
             kind: ProblemKind::Stalled,
             detail: "stalled".into(),
-            seen_at: SystemTime::now(),
+            seen_at: now_ms(),
         })
     }
 

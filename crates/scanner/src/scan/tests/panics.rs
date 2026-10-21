@@ -7,6 +7,7 @@ use std::sync::{Arc, Once};
 use lofty::resolve::register_custom_resolver;
 
 use super::*;
+use crate::clock::now_ms;
 use crate::problems::ProblemKind;
 use crate::queue::Scanner;
 use crate::testing::wait_until;
@@ -177,7 +178,7 @@ fn a_resumed_scan_that_panics_keeps_its_starting_cursor() {
     };
     let mut resumed = Scan {
         state: ScanState::Running,
-        started_at: Some(SystemTime::now()),
+        started_at: Some(now_ms()),
         progress: one_added(),
         cursor: after(&root, "A/X"),
         ..new_scan(&store, &lib)

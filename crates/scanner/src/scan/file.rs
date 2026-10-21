@@ -2,7 +2,7 @@
 
 use jewelcase_core::sort_key;
 
-use super::{Scan, ScanContext};
+use super::ScanContext;
 use crate::discover::{Candidate, Directory};
 use crate::identity::{self, Identity};
 use crate::problems::{self, Problem};
@@ -53,7 +53,6 @@ fn lyrics_file_changed(ix: &IndexedFile, candidate: &Candidate, dir: &Directory)
 /// Fails only when the store cannot look the file up.
 pub(super) fn process_file(
     ctx: &ScanContext<'_>,
-    scan: &Scan,
     scope: &Scope,
     dir: &Directory,
     candidate: &Candidate,
@@ -76,7 +75,7 @@ pub(super) fn process_file(
     }
 
     // Stage 3: read headers. A known file that cannot be read keeps its track, as a problem.
-    let read = match tags::read(&candidate.path, candidate.size) {
+    let read = match tags::read(&candidate.path) {
         Ok(r) => r,
         Err(e) => {
             let problem = problems::from_read_error(&candidate.path, &e);
@@ -137,7 +136,6 @@ pub(super) fn process_file(
         artist_biography: side.biography,
         lyrics_sidecar,
         sort,
-        last_seen_scan: scan.id,
     };
 
     Ok(match identity {

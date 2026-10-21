@@ -2,20 +2,16 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
 use crate::audio::AudioProperties;
 use crate::image::ImageInfo;
-use crate::scan::ScanId;
-use crate::sidecar::{Biography, SidecarImage, SidecarLyrics};
+use crate::sidecar::SidecarImage;
 use crate::{Lyrics, TagSet};
 
 /// A track's id, as the store assigns it.
 pub type TrackId = i64;
 
 /// Where a track's artwork was found (`requirements/scanning.md` §3.1).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArtworkSource {
     /// Inside the track file itself.
     Embedded,
@@ -24,15 +20,14 @@ pub enum ArtworkSource {
 }
 
 /// Artwork found for a track, with what the store needs for an `images` row.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Artwork {
     pub source: ArtworkSource,
     pub info: ImageInfo,
 }
 
 /// Sort keys computed by the core at scan time (`design/general.md` §3).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SortKeys {
     pub title: String,
     pub artist: String,
@@ -41,7 +36,7 @@ pub struct SortKeys {
 }
 
 /// Everything the scanner knows about one file, ready to persist.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackRecord {
     /// `Some` when updating an existing track, `None` for a new one.
     pub id: Option<TrackId>,
@@ -56,11 +51,11 @@ pub struct TrackRecord {
     /// Embedded art wins over a sidecar (`requirements/scanning.md` §3.1).
     pub artwork: Option<Artwork>,
     pub artist_image: Option<SidecarImage>,
-    pub artist_biography: Option<Biography>,
+    /// The text of an `artist.txt` sidecar.
+    pub artist_biography: Option<String>,
     /// Sidecar lyrics, only when the file has no embedded lyrics.
-    pub lyrics_sidecar: Option<SidecarLyrics>,
+    pub lyrics_sidecar: Option<Lyrics>,
     pub sort: SortKeys,
-    pub last_seen_scan: ScanId,
 }
 
 impl TrackRecord {
@@ -72,12 +67,7 @@ impl TrackRecord {
 
     /// Whichever lyrics apply: embedded first, then sidecar.
     pub fn lyrics(&self) -> Option<&Lyrics> {
-        self.tags.lyrics.as_ref().or(self.lyrics_sidecar.as_ref().map(|l| &l.lyrics))
-    }
-
-    /// Path relative to the root, as the store keeps it.
-    pub fn relative_path(&self) -> &Path {
-        self.path.strip_prefix(&self.root).unwrap_or(&self.path)
+        self.tags.lyrics.as_ref().or(self.lyrics_sidecar.as_ref())
     }
 }
 

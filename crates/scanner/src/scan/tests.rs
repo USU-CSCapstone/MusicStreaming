@@ -179,8 +179,7 @@ fn an_unchanged_file_reads_no_sidecars() {
     assert_eq!((scan.progress.added, scan.progress.updated), (1, 0), "{:?}", scan.progress);
     let tracks = store.inner.tracks(lib.id);
     let new = tracks.iter().find(|t| t.record.path == added).unwrap();
-    let text = new.record.artist_biography.as_ref().map(|b| b.text.as_str());
-    assert_eq!(text, Some("Read when needed."));
+    assert_eq!(new.record.artist_biography.as_deref(), Some("Read when needed."));
 }
 
 /// A directory's sidecars are read once per scan, however many folders below inherit them.
@@ -210,12 +209,8 @@ fn sidecars_are_read_once_per_directory() {
     let lib = library(&root);
     let scan = scan_flushing_often(&store, &lib);
     assert_eq!(scan.progress.added, 2, "{:?}", scan.progress);
-    let texts: Vec<_> = store
-        .inner
-        .tracks(lib.id)
-        .into_iter()
-        .map(|t| t.record.artist_biography.map(|b| b.text))
-        .collect();
+    let texts: Vec<_> =
+        store.inner.tracks(lib.id).into_iter().map(|t| t.record.artist_biography).collect();
     assert_eq!(texts, [Some("Version 0".to_owned()), Some("Version 0".to_owned())]);
 }
 

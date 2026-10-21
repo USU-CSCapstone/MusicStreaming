@@ -2,7 +2,6 @@
 //! resume cursor.
 
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -38,8 +37,7 @@ pub enum ScanState {
 }
 
 /// Mirrors the API's `Scan.progress`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScanProgress {
     pub files_seen: i64,
     pub files_processed: i64,
@@ -53,15 +51,17 @@ pub struct ScanProgress {
 
 /// A scan: one or more scopes run under one trigger, with persisted progress
 /// and a resume cursor.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scan {
     pub id: ScanId,
     pub library: LibraryId,
     pub trigger: Trigger,
     pub scopes: Vec<Scope>,
     pub state: ScanState,
-    pub started_at: Option<SystemTime>,
-    pub finished_at: Option<SystemTime>,
+    /// Milliseconds since the Unix epoch.
+    pub started_at: Option<i64>,
+    /// Milliseconds since the Unix epoch.
+    pub finished_at: Option<i64>,
     pub progress: ScanProgress,
     /// Index of the scope being worked, and the last directory fully
     /// persisted within it. Resume continues after this directory.
@@ -70,7 +70,7 @@ pub struct Scan {
 
 /// Where an interrupted scan resumes: the index of the scope being worked in [`Scan::scopes`],
 /// and the last directory fully persisted within it, if any.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cursor {
     pub scope_index: i64,
     pub after_directory: Option<PathBuf>,

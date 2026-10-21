@@ -3,10 +3,11 @@
 
 use std::path::{Path, PathBuf};
 
-use jewelcase_scanner::{Problem, ProblemKind, Scope, UNOPENED, group_key, system_time_ms};
+use jewelcase_scanner::{Problem, Scope, UNOPENED, problem_group_key};
 use rusqlite::{Connection, OptionalExtension, Result, ToSql, Transaction, params};
 
 use super::SqliteStore;
+use super::names::name;
 use super::roots::{Roots, bounds_under, join, relative};
 use crate::db::DbError;
 
@@ -55,14 +56,13 @@ pub fn record_problem(
     let Some(root_path) = roots.absolute(lib, root_id, "") else {
         return Ok(());
     };
-    let key = group_key(problem.kind, &root_path, &problem.detail);
-    let seen = system_time_ms(problem.seen_at) as i64;
+    let key = problem_group_key(problem.kind, &root_path, &problem.detail);
     let group_id: i64 = tx.query_row(
         "INSERT INTO scan_problem_groups (id, library_id, kind, group_key, summary, count, first_seen_at, last_seen_at) \
          VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, 0, ?5, ?5) \
          ON CONFLICT (library_id, group_key) DO UPDATE SET last_seen_at = MAX(last_seen_at, excluded.last_seen_at) \
          RETURNING id",
-        params![lib, problem.kind.as_str(), key, problem.detail, seen],
+        params![lib, name(problem.kind), key, problem.detail, problem.seen_at],
         |r| r.get(0),
     )?;
     let existing: Option<i64> = tx
@@ -76,7 +76,7 @@ pub fn record_problem(
         Some(old) if old == group_id => {
             tx.execute(
                     "UPDATE scan_problems SET detail = ?3, seen_at = ?4 WHERE root_id = ?1 AND path = ?2",
-                    params![root_id, rel, problem.detail, seen],
+                    params![root_id, rel, problem.detail, problem.seen_at],
                 )?;
         }
         _ => {
@@ -88,7 +88,7 @@ pub fn record_problem(
             )?;
             tx.execute(
                     "INSERT INTO scan_problems (library_id, group_id, root_id, path, detail, seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![lib, group_id, root_id, rel, problem.detail, seen],
+                    params![lib, group_id, root_id, rel, problem.detail, problem.seen_at],
                 )?;
             recount_group(tx, group_id)?;
             if let Some(old) = existing {
@@ -120,7 +120,7 @@ pub fn clear_unopened(roots: &Roots, tx: &Transaction<'_>, lib: i64, path: &Path
     let Some((root_id, rel)) = roots.locate(lib, path) else {
         return Ok(());
     };
-    let [unreadable, denied] = UNOPENED.map(ProblemKind::as_str);
+    let [unreadable, denied] = UNOPENED.map(name);
     let group = tx
         .query_row(
             "SELECT p.group_id FROM scan_problems p JOIN scan_problem_groups g ON g.id = p.group_id \

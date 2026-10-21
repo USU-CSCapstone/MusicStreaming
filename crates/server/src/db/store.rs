@@ -7,6 +7,7 @@
 
 mod entities;
 mod jobs;
+pub(super) mod names;
 mod problems;
 mod roots;
 mod scans;

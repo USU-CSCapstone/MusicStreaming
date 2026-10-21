@@ -6,9 +6,9 @@ use rusqlite::{OptionalExtension, params};
 
 use super::SqliteStore;
 use super::roots::{Roots, join};
-use crate::db::catalog;
 use crate::db::feed::{self, Entity, Op};
 use crate::db::{DbError, now_ms};
+use crate::db::{catalog, waveform};
 
 /// The analysis queue: library `?1`'s tracks analyzed below version `?2`, at most `?3` of them,
 /// in the order of `tracks_unanalyzed`, so each pick reads the head of one index range.
@@ -79,7 +79,7 @@ pub fn store_analysis(
         } else {
             tx.execute(
                 "INSERT OR REPLACE INTO track_waveforms (library_id, track_id, data) VALUES (?1, ?2, ?3)",
-                params![lib, id, result.waveform.to_blob()],
+                params![lib, id, waveform::encode(&result.waveform)],
             )?;
         }
         catalog::recompute_album_loudness(tx, album_id)?;

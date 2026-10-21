@@ -4,8 +4,9 @@ use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
+use crate::clock::now_ms;
 use crate::confine::without_links;
 use crate::discover::{
     Directory, RootUnavailable, Walk, WalkItem, check_root, compile_excludes, excluded_scope, gone,
@@ -143,7 +144,7 @@ fn scan_scopes(
 
     scan.state = ScanState::Running;
     if scan.started_at.is_none() {
-        scan.started_at = Some(SystemTime::now());
+        scan.started_at = Some(now_ms());
     }
     writer.save(ctx, scan)?;
 
@@ -242,7 +243,7 @@ fn scan_scopes(
     } else {
         ScanState::Completed
     };
-    scan.finished_at = Some(SystemTime::now());
+    scan.finished_at = Some(now_ms());
     scan.progress.current_path = None;
     writer.save(ctx, scan)
 }
@@ -317,7 +318,7 @@ fn process_directory(
             break;
         }
         seen += 1;
-        let processed = process_file(ctx, scan, scope, dir, candidate, sidecars, &mut resolved);
+        let processed = process_file(ctx, scope, dir, candidate, sidecars, &mut resolved);
         let outcome = match processed {
             Ok(outcome) => outcome,
             Err(error) => {

@@ -11,12 +11,12 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use ebur128::{EbuR128, Mode};
 use jewelcase_ffmpeg::{Ffmpeg, ProbeInfo};
-use serde::{Deserialize, Serialize};
 
+use crate::clock::now_ms;
 use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport};
 use crate::library::LibraryId;
 use crate::problems::{Problem, ProblemKind};
@@ -42,8 +42,7 @@ pub enum AnalysisError {
 }
 
 /// Result of analyzing one track (`design/scanning.md` §12).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AnalysisResult {
     pub analyzer_version: u32,
     /// Integrated loudness, LUFS. `None` for silence.
@@ -158,7 +157,7 @@ impl Analyzer {
                 path: file.path.clone(),
                 kind: ProblemKind::UnsupportedEncoding,
                 detail: error.to_string(),
-                seen_at: SystemTime::now(),
+                seen_at: now_ms(),
             }),
         })
     }

@@ -3,7 +3,7 @@
 
 use axum::Router;
 use axum::http::StatusCode;
-use jewelcase_scanner::describe;
+use jewelcase_scanner::describe_image;
 use jewelcase_scanner::testing::{library, make_album, scan_library};
 use serde_json::Value;
 
@@ -106,7 +106,7 @@ async fn a_scanned_album_reads_back_through_the_api() {
     assert_eq!(content_type.as_deref(), Some("image/jpeg"));
     // JPEG's start-of-image marker, then the next marker.
     assert!(body.starts_with(&[0xFF, 0xD8, 0xFF]));
-    let info = describe(&body).unwrap();
+    let info = describe_image(&body).unwrap();
     assert_eq!((info.width, info.height), (300, 200));
 
     let (status, content_type, body) =

@@ -2,10 +2,10 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
+use crate::clock::now_ms;
 use crate::tags::ReadError;
 
 /// Scan problem kinds, mirroring the API's `ScanProblemGroup.kind` plus the
@@ -21,43 +21,20 @@ pub enum ProblemKind {
     Stalled,
 }
 
-impl ProblemKind {
-    /// The API's and schema's spelling.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ProblemKind::Unreadable => "unreadable",
-            ProblemKind::PermissionDenied => "permissionDenied",
-            ProblemKind::MalformedTags => "malformedTags",
-            ProblemKind::UnsupportedEncoding => "unsupportedEncoding",
-            ProblemKind::CorruptAudio => "corruptAudio",
-            ProblemKind::Stalled => "stalled",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<ProblemKind> {
-        Some(match s {
-            "unreadable" => ProblemKind::Unreadable,
-            "permissionDenied" => ProblemKind::PermissionDenied,
-            "malformedTags" => ProblemKind::MalformedTags,
-            "unsupportedEncoding" => ProblemKind::UnsupportedEncoding,
-            "corruptAudio" => ProblemKind::CorruptAudio,
-            "stalled" => ProblemKind::Stalled,
-            _ => return None,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A problem with one file, as the store records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Problem {
     pub path: PathBuf,
     pub kind: ProblemKind,
     pub detail: String,
-    pub seen_at: SystemTime,
+    /// Milliseconds since the Unix epoch.
+    pub seen_at: i64,
 }
 
 /// The kinds a background job records for a file it could not open, which an open clears.
 pub const UNOPENED: [ProblemKind; 2] = [ProblemKind::Unreadable, ProblemKind::PermissionDenied];
 
+/// The problem a [`ReadError`] reading the file at `path` records.
 pub fn from_read_error(path: &Path, e: &ReadError) -> Problem {
     let (kind, detail) = match e {
         ReadError::Io(io) => (io_kind(io), io.to_string()),
@@ -65,16 +42,12 @@ pub fn from_read_error(path: &Path, e: &ReadError) -> Problem {
         ReadError::Unrecognized(d) => (ProblemKind::CorruptAudio, d.clone()),
         ReadError::Malformed(d) => (ProblemKind::MalformedTags, d.clone()),
     };
-    Problem { path: path.to_path_buf(), kind, detail, seen_at: SystemTime::now() }
+    Problem { path: path.to_path_buf(), kind, detail, seen_at: now_ms() }
 }
 
+/// The problem an I/O error on the file at `path` records.
 pub fn from_io(path: &Path, e: &io::Error) -> Problem {
-    Problem {
-        path: path.to_path_buf(),
-        kind: io_kind(e),
-        detail: e.to_string(),
-        seen_at: SystemTime::now(),
-    }
+    Problem { path: path.to_path_buf(), kind: io_kind(e), detail: e.to_string(), seen_at: now_ms() }
 }
 
 /// The problem an ffmpeg error decoding the file at `path` records.
@@ -89,7 +62,7 @@ pub fn from_ffmpeg(path: &Path, e: &jewelcase_ffmpeg::Error) -> Problem {
         F::Spawn { .. } => ProblemKind::Unreadable,
         F::Io(io) => io_kind(io),
     };
-    Problem { path: path.to_path_buf(), kind, detail: e.to_string(), seen_at: SystemTime::now() }
+    Problem { path: path.to_path_buf(), kind, detail: e.to_string(), seen_at: now_ms() }
 }
 
 fn io_kind(e: &io::Error) -> ProblemKind {

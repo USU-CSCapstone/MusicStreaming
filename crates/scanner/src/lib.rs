@@ -44,14 +44,13 @@ mod triggers;
 pub use analysis::waveform::Waveform;
 pub use analysis::{ANALYZER_VERSION, AnalysisResult, AnalysisWorker, Analyzer};
 pub use audio::AudioProperties;
-pub use clock::{now_ms, system_time_ms};
 pub use confine::without_links;
-pub use image::{ImageInfo, describe};
+pub use image::{ImageInfo, describe as describe_image};
 pub use jobs::RunReport;
 pub use library::{LibraryConfig, LibraryId};
-pub use lrc::{SyncedLine, parse};
+pub use lrc::{SyncedLine, parse as parse_lrc};
 pub use placeholders::{PlaceholderWorker, Placeholders};
-pub use problems::{Problem, ProblemKind, UNOPENED, group_key};
+pub use problems::{Problem, ProblemKind, UNOPENED, group_key as problem_group_key};
 pub use queue::Scanner;
 pub use scan::{
     Cursor, Scan, ScanContext, ScanId, ScanOptions, ScanProgress, ScanState, Trigger, run_scan,
@@ -61,6 +60,6 @@ pub use store::{
     Batch, FileToDecode, IndexedFile, IndexedLyrics, MemoryStore, PickedTrack, Store, StoreError,
 };
 pub use tag_set::{Lyrics, PartialDate, TagSet};
-pub use tags::{ReadError, read};
+pub use tags::{ReadError, read as read_tags};
 pub use track::{ArtworkSource, SortKeys, TrackId, TrackRecord};
 pub use triggers::{FsWatcher, Schedule};

@@ -3,12 +3,9 @@
 //! This is the single list. The scanner's extension filter, the probe, and the
 //! ffmpeg decoder check all derive from it; nothing else enumerates formats.
 
-use serde::{Deserialize, Serialize};
-
 /// One of the eight supported audio formats. WMA is deliberately absent
 /// (`requirements/scanning.md` §1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Format {
     Flac,
     Alac,

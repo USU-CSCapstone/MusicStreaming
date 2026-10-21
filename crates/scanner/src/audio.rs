@@ -1,12 +1,10 @@
 //! Technical audio properties (`requirements/tracks.md` §4).
 
 use jewelcase_core::Format;
-use serde::{Deserialize, Serialize};
 
 /// What a track's audio actually is. Every field comes from the file's
 /// headers, read by the scanner; nothing here is inferred.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioProperties {
     pub format: Format,
     /// Duration in milliseconds. Precise enough for gapless transitions and
@@ -17,5 +15,4 @@ pub struct AudioProperties {
     pub channels: Option<u8>,
     /// Audio bitrate in kbit/s where the container reports one.
     pub bitrate_kbps: Option<u32>,
-    pub file_size: u64,
 }

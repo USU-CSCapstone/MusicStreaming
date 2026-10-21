@@ -202,9 +202,12 @@ pub trait Store: Send + Sync {
 
 // ---------------------------------------------------------------------------
 
+/// A track as [`MemoryStore`] keeps it.
 #[derive(Debug, Clone)]
 pub struct StoredTrack {
     pub record: TrackRecord,
+    /// The last scan that saw its file.
+    pub last_seen_scan: ScanId,
     pub missing: bool,
     /// Whether its mtime is forgotten ([`Batch::changed_unread`]).
     pub mtime_unknown: bool,
@@ -356,7 +359,6 @@ impl Store for MemoryStore {
         let Inner { libraries, next_track, .. } = &mut *inner;
         let lib = libraries.entry(library).or_default();
         for mut record in batch.upserts {
-            record.last_seen_scan = batch.scan_id;
             let id = match record.id {
                 Some(id) => id,
                 None => {
@@ -378,18 +380,24 @@ impl Store for MemoryStore {
                 })
                 .and_then(|old| old.analysis);
             lib.by_path.insert(record.path.clone(), id);
-            let stored = StoredTrack { record, missing: false, mtime_unknown: false, analysis };
+            let stored = StoredTrack {
+                record,
+                last_seen_scan: batch.scan_id,
+                missing: false,
+                mtime_unknown: false,
+                analysis,
+            };
             lib.tracks.insert(id, stored);
             lib.feed.push(if is_new { FeedEntry::Added(id) } else { FeedEntry::Updated(id) });
         }
         for id in batch.touched {
             if let Some(t) = lib.tracks.get_mut(&id) {
-                t.record.last_seen_scan = batch.scan_id;
+                t.last_seen_scan = batch.scan_id;
             }
         }
         for &id in &batch.returned {
             if let Some(t) = lib.tracks.get_mut(&id) {
-                t.record.last_seen_scan = batch.scan_id;
+                t.last_seen_scan = batch.scan_id;
                 if t.missing {
                     t.missing = false;
                     lib.feed.push(FeedEntry::Returned(id));
@@ -437,7 +445,7 @@ impl Store for MemoryStore {
         let mut count = 0;
         for (id, t) in lib.tracks.iter_mut() {
             if !t.missing
-                && t.record.last_seen_scan != scan_id
+                && t.last_seen_scan != scan_id
                 && scope.contains_file(&t.record.path)
                 && !t.record.path.ancestors().any(|a| unreadable.contains(a))
             {

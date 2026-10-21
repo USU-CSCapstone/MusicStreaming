@@ -1,16 +1,14 @@
 //! Scans: what each one covers, how far it got, and where it resumes (`design/database.md` §8).
 
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
 
-use jewelcase_scanner::{Cursor, Scan, ScanId, ScanProgress, system_time_ms};
+use jewelcase_scanner::{Cursor, Scan, ScanId, ScanProgress};
 use rusqlite::Error::{FromSqlConversionFailure, ToSqlConversionFailure};
 use rusqlite::types::Type;
 use rusqlite::{Connection, Result, Row, Transaction, params};
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 
 use super::SqliteStore;
+use super::names::{name, parse};
 use crate::db::{DbError, now_ms};
 
 /// Records `scan` as a new scan of its library and returns its id.
@@ -91,8 +89,8 @@ fn save(tx: &Transaction, id: i64, scan: &Scan) -> Result<()> {
             progress.missing,
             progress.problems,
             path(progress.current_path.as_ref()),
-            time_to_ms(scan.started_at),
-            time_to_ms(scan.finished_at),
+            scan.started_at,
+            scan.finished_at,
         ],
     )?;
     Ok(())
@@ -152,52 +150,7 @@ fn scan(r: &Row) -> Result<Scan> {
             problems: r.get(13)?,
             current_path: r.get::<_, Option<String>>(14)?.map(PathBuf::from),
         },
-        started_at: ms_to_time(r.get(15)?),
-        finished_at: ms_to_time(r.get(16)?),
+        started_at: r.get(15)?,
+        finished_at: r.get(16)?,
     })
-}
-
-/// A trigger's or state's name as the API spells it, which is also what the schema's `CHECK`
-/// allows.
-fn name(value: impl Serialize) -> String {
-    match serde_json::to_value(value) {
-        Ok(serde_json::Value::String(name)) => name,
-        _ => unreachable!("a unit variant serializes as its name"),
-    }
-}
-
-/// The trigger or state named in column `index`.
-fn parse<T: DeserializeOwned>(row: &Row, index: usize) -> Result<T> {
-    serde_json::from_value(serde_json::Value::String(row.get(index)?))
-        .map_err(|error| FromSqlConversionFailure(index, Type::Text, Box::new(error)))
-}
-
-fn ms_to_time(ms: Option<i64>) -> Option<SystemTime> {
-    ms.map(|m| SystemTime::UNIX_EPOCH + Duration::from_millis(m.max(0) as u64))
-}
-
-fn time_to_ms(t: Option<SystemTime>) -> Option<i64> {
-    t.map(|t| system_time_ms(t) as i64)
-}
-
-#[cfg(test)]
-mod tests {
-    use jewelcase_scanner::{ScanState, Trigger};
-
-    use super::name;
-
-    /// The names `0001_libraries.sql` allows in `scans.trigger` and `scans.state`.
-    #[test]
-    fn every_name_is_one_the_schema_allows() {
-        use ScanState::*;
-        use Trigger::*;
-        assert_eq!(
-            [Initial, Watch, Scheduled, Manual, Reconfigure, Restore].map(name),
-            ["initial", "watch", "scheduled", "manual", "reconfigure", "restore"]
-        );
-        assert_eq!(
-            [Queued, Running, Completed, Cancelled, Suspended].map(name),
-            ["queued", "running", "completed", "cancelled", "suspended"]
-        );
-    }
 }

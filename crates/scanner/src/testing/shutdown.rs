@@ -2,9 +2,9 @@
 //! a scan for good (`design/scanning.md` §9).
 
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use super::{Factory, InspectStore, Parked, library, live, make_album, wait_until_running};
+use crate::clock::now_ms;
 use crate::queue::Scanner;
 use crate::scan::{Cursor, Scan, ScanOptions, ScanProgress, ScanState, Trigger};
 use crate::scope::{Depth, Scope};
@@ -28,7 +28,7 @@ pub fn a_shutdown_leaves_its_scans_to_resume<S: InspectStore + 'static>(make: Fa
         trigger: Trigger::Initial,
         scopes: vec![Scope::root(&root)],
         state: ScanState::Running,
-        started_at: Some(SystemTime::now()),
+        started_at: Some(now_ms()),
         finished_at: None,
         progress: ScanProgress::default(),
         cursor: cursor.clone(),

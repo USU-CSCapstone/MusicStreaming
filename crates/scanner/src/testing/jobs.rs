@@ -5,12 +5,13 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, mpsc};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use jewelcase_ffmpeg::{Config, Ffmpeg};
 
 use super::{Factory, InspectStore, PNG, library, make_album, scan_library};
 use crate::analysis::{ANALYZER_VERSION, AnalysisResult, Analyzer};
+use crate::clock::now_ms;
 use crate::jobs::RunReport;
 use crate::library::LibraryId;
 use crate::placeholders::Placeholders;
@@ -191,7 +192,7 @@ pub fn opening_a_file_clears_only_unopened_problems<S: InspectStore + 'static>(m
         path: path.to_path_buf(),
         kind,
         detail: "detail".into(),
-        seen_at: SystemTime::now(),
+        seen_at: now_ms(),
     };
     let problems =
         vec![problem(&file, ProblemKind::CorruptAudio), problem(&other, ProblemKind::Unreadable)];

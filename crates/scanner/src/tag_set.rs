@@ -4,10 +4,8 @@
 //! carrying the same logical metadata in ID3v2 and Vorbis comments yield
 //! equal `TagSet`s; that equality is what the golden-corpus test asserts.
 
-use serde::{Deserialize, Serialize};
-
 /// A date at whatever precision the tag carried (`requirements/tracks.md` §2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PartialDate {
     pub year: u16,
     pub month: Option<u8>,
@@ -50,8 +48,7 @@ impl std::fmt::Display for PartialDate {
 }
 
 /// Lyrics as read from the file or a sidecar (`requirements/tracks.md` §5).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Lyrics {
     pub text: String,
     /// True when the text carries LRC-style timestamps.
@@ -90,8 +87,7 @@ fn is_lrc_line(line: &str) -> bool {
 
 /// Everything Jewelcase reads from a file's tags. Every field is optional or
 /// empty by default; an untagged file is a valid `TagSet`.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TagSet {
     /// Track title. `None` means the scanner names the track after its file.
     pub title: Option<String>,

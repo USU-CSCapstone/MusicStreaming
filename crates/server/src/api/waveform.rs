@@ -8,13 +8,12 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use jewelcase_scanner::Waveform as Measured;
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 
 use super::extract::Path;
 use super::{Id, Problem};
-use crate::db::Database;
+use crate::db::{Database, waveform};
 
 /// The spec's `Waveform`.
 #[derive(Serialize)]
@@ -24,6 +23,8 @@ struct Waveform {
     data: String,
 }
 
+/// `getWaveform`: the track's shaped peaks, no content while it has no waveform this server
+/// reads, and not found when the library has no such track.
 pub async fn get(
     State(db): State<Arc<Database>>,
     Path((Id(library), Id(track))): Path<(Id, Id)>,
@@ -40,9 +41,7 @@ pub async fn get(
         })
         .await?;
     let blob = blob.ok_or_else(Problem::not_found)?;
-    // A blob from an analyzer version this server does not read counts as not analyzed: the
-    // analyzer reprocesses old versions in the background (`design/scanning.md` §12).
-    Ok(match blob.as_deref().and_then(Measured::from_blob) {
+    Ok(match blob.as_deref().and_then(waveform::decode) {
         Some(measured) => Json(shape(&measured.peaks)).into_response(),
         None => StatusCode::NO_CONTENT.into_response(),
     })
@@ -65,6 +64,7 @@ fn shape(peaks: &[u8]) -> Waveform {
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
+    use jewelcase_scanner::Waveform as Measured;
     use serde_json::{Value, json};
 
     use super::super::testing::{app_with_tracks, send};
@@ -74,7 +74,7 @@ mod tests {
     async fn serves_the_shaped_peaks() {
         let (_temp, db, app) = app_with_tracks().await;
         let measured = Measured { peaks: vec![0, 32, 64, 128], rms: vec![0, 16, 32, 64] };
-        let blob = measured.to_blob();
+        let blob = waveform::encode(&measured);
         db.write(move |tx| {
             tx.execute(
                 "INSERT INTO track_waveforms (library_id, track_id, data) VALUES (1, 1, ?1)",
@@ -101,7 +101,7 @@ mod tests {
     #[tokio::test]
     async fn not_yet_analyzed_is_no_content() {
         let (_temp, db, app) = app_with_tracks().await;
-        // Track 2 has a blob from an analyzer version this server does not read.
+        // Track 2 has a blob in a format version this server does not read.
         db.write(|tx| {
             tx.execute(
                 "INSERT INTO track_waveforms (library_id, track_id, data) VALUES (1, 2, x'09')",
@@ -122,7 +122,7 @@ mod tests {
     #[tokio::test]
     async fn only_the_callers_library_is_reachable() {
         let (_temp, db, app) = app_with_tracks().await;
-        let blob = Measured { peaks: vec![1], rms: vec![1] }.to_blob();
+        let blob = waveform::encode(&Measured { peaks: vec![1], rms: vec![1] });
         db.write(move |tx| {
             tx.execute(
                 "INSERT INTO track_waveforms (library_id, track_id, data) VALUES (2, 3, ?1)",

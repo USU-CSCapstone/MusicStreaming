@@ -89,7 +89,7 @@ fn an_invalid_pattern_suspends_and_leaves_the_store_untouched() {
     scan_flushing_often(&store, &library(&root));
     let tracks = || -> Vec<_> {
         let tracks = store.tracks(lib.id).into_iter();
-        tracks.map(|t| (t.record.path, t.missing, t.record.last_seen_scan)).collect()
+        tracks.map(|t| (t.record.path, t.missing, t.last_seen_scan)).collect()
     };
     let before = tracks();
 

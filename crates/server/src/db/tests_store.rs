@@ -13,7 +13,9 @@ use rusqlite::{OptionalExtension, Result};
 use super::Database;
 use super::libraries;
 use super::store::SqliteStore;
+use super::store::names::parse;
 use super::testing::Image;
+use super::waveform;
 
 /// The suite's library has id 1; its database lives beside the root.
 fn make(root: &Path) -> SqliteStore {
@@ -166,10 +168,9 @@ impl InspectStore for SqliteStore {
         stmt.query_map([lib], |r| {
             Ok(Problem {
                 path: roots[&r.get::<_, i64>(0)?].join(r.get::<_, String>(1)?),
-                kind: ProblemKind::parse(&r.get::<_, String>(2)?).unwrap(),
+                kind: parse(r, 2)?,
                 detail: r.get(3)?,
-                seen_at: std::time::UNIX_EPOCH
-                    + std::time::Duration::from_millis(r.get::<_, i64>(4)? as u64),
+                seen_at: r.get(4)?,
             })
         })
         .unwrap()
@@ -696,7 +697,7 @@ fn analysis_results_reach_tracks_albums_and_waveforms() {
     let album_lufs: f64 = scalar(&store, "SELECT loudness_lufs FROM albums").unwrap();
     assert!((album_lufs - lufs).abs() < 0.01, "a one-track album is as loud as its track");
     let blob: Vec<u8> = scalar(&store, "SELECT data FROM track_waveforms").unwrap();
-    assert_eq!(Waveform::from_blob(&blob).unwrap().peaks.len(), 512);
+    assert_eq!(waveform::decode(&blob).unwrap().peaks.len(), 512);
 }
 
 #[test]
@@ -823,7 +824,6 @@ fn record(root: &Path, i: usize) -> TrackRecord {
             bit_depth: Some(16),
             channels: Some(2),
             bitrate_kbps: Some(900),
-            file_size: 30_000_000,
         },
         artwork: None,
         artist_image: None,
@@ -835,7 +835,6 @@ fn record(root: &Path, i: usize) -> TrackRecord {
             album: format!("album {}", i / 10),
             album_artist: format!("artist {}", i / 100),
         },
-        last_seen_scan: 1,
     }
 }
 

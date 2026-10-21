@@ -16,6 +16,7 @@ use lofty::config::WriteOptions;
 use lofty::prelude::*;
 use lofty::tag::{ItemKey, Tag, TagType};
 
+use crate::clock::now_ms;
 use crate::library::{LibraryConfig, LibraryId};
 use crate::problems::{Problem, ProblemKind};
 use crate::queue::Scanner;
@@ -637,7 +638,7 @@ pub fn a_problem_on_a_present_file_stays<S: InspectStore>(make: Factory<S>) {
         path: track.clone(),
         kind: ProblemKind::CorruptAudio,
         detail: "decode failed".into(),
-        seen_at: std::time::SystemTime::UNIX_EPOCH,
+        seen_at: 0,
     });
     store.apply(lib.id, batch).unwrap();
 
@@ -848,6 +849,32 @@ pub fn root_directory_reconciles_only_its_own_files<S: InspectStore>(make: Facto
     assert_eq!(live, [root.join("A/X/01 - Track 1.wav")]);
 }
 
+/// A scan's start and finish times read back as they were saved.
+pub fn scan_times_read_back<S: InspectStore>(make: Factory<S>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    fs::create_dir_all(&root).unwrap();
+    let store = make(&root);
+    let lib = library(&root);
+    let mut scan = Scan {
+        id: 0,
+        library: lib.id,
+        trigger: Trigger::Manual,
+        scopes: vec![Scope::root(&root)],
+        state: ScanState::Running,
+        started_at: None,
+        finished_at: None,
+        progress: ScanProgress::default(),
+        cursor: None,
+    };
+    scan.id = store.create_scan(&scan).unwrap();
+    scan.started_at = Some(1_700_000_000_123);
+    scan.finished_at = Some(1_700_000_000_456);
+    store.update_scan(&scan).unwrap();
+    let [read] = store.interrupted_scans(lib.id).unwrap().try_into().unwrap();
+    assert_eq!((read.started_at, read.finished_at), (scan.started_at, scan.finished_at));
+}
+
 /// A scan interrupted mid-way resumes from its cursor when the scanner starts. Work that a
 /// queued scan already covers joins it instead of queuing again, while work the running scan
 /// covers queues behind it, since the walk may already have passed it.
@@ -868,7 +895,7 @@ pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory
         trigger: Trigger::Initial,
         scopes: vec![Scope::root(&root)],
         state: ScanState::Running,
-        started_at: Some(std::time::SystemTime::now()),
+        started_at: Some(now_ms()),
         finished_at: None,
         progress: ScanProgress::default(),
         cursor: Some(Cursor { scope_index: 0, after_directory: Some(root.join("A/X")) }),
@@ -964,7 +991,7 @@ pub fn a_resumed_scan_takes_no_new_work<S: InspectStore + 'static>(make: Factory
             trigger: Trigger::Initial,
             scopes: vec![Scope::root(&root)],
             state: ScanState::Running,
-            started_at: Some(std::time::SystemTime::now()),
+            started_at: Some(now_ms()),
             finished_at: None,
             progress: ScanProgress::default(),
             cursor: Some(Cursor { scope_index: 0, after_directory: Some(root.join("B/Y")) }),
@@ -1316,6 +1343,10 @@ macro_rules! store_suite {
         #[test]
         fn root_directory_reconciles_only_its_own_files() {
             $crate::testing::root_directory_reconciles_only_its_own_files($make);
+        }
+        #[test]
+        fn scan_times_read_back() {
+            $crate::testing::scan_times_read_back($make);
         }
         #[test]
         fn queue_runs_resumes_and_coalesces() {

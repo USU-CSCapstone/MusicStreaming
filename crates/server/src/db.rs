@@ -17,6 +17,7 @@ pub mod store;
 pub mod testing;
 #[cfg(test)]
 mod tests_store;
+pub mod waveform;
 
 use std::num::NonZeroUsize;
 use std::panic::{self, AssertUnwindSafe};
@@ -24,7 +25,7 @@ use std::path::Path;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, bail};
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
@@ -245,8 +246,10 @@ fn spawn(name: &str, body: impl FnOnce() + Send + 'static) -> anyhow::Result<Joi
         .with_context(|| format!("cannot start the {name} thread"))
 }
 
+/// The current wall-clock time in milliseconds since the Unix epoch, as the schema keeps times.
 pub fn now_ms() -> i64 {
-    jewelcase_scanner::now_ms() as i64
+    let since_epoch = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH);
+    since_epoch.map_or(0, |elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
 }
 
 /// Waits for the database threads when dropped.

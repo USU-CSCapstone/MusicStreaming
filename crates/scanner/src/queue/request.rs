@@ -2,9 +2,10 @@
 //! (`design/scanning.md` §9).
 
 use std::collections::VecDeque;
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use super::{Inner, coalesce_scopes};
+use crate::clock::now_ms;
 use crate::scan::{Scan, ScanId, ScanProgress, ScanState, Trigger};
 use crate::scope::Scope;
 
@@ -70,11 +71,8 @@ impl Inner {
     /// could. A row that cannot be saved is logged and stays queued in the store, so the next
     /// start runs the scan even if the caller drops it.
     pub(super) fn cancelled(&self, scan: &Scan) -> bool {
-        let ended = Scan {
-            state: ScanState::Cancelled,
-            finished_at: Some(SystemTime::now()),
-            ..scan.clone()
-        };
+        let ended =
+            Scan { state: ScanState::Cancelled, finished_at: Some(now_ms()), ..scan.clone() };
         let saved = self.store.update_scan(&ended);
         if let Err(error) = &saved {
             tracing::error!(scan = scan.id, %error, "cancelled scan not saved");

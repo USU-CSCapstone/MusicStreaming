@@ -203,7 +203,7 @@ pub fn upsert_track(
     tx.execute("DELETE FROM track_lyrics WHERE track_id = ?1", [id])?;
     if let Some(l) = lyrics {
         let synced = if l.synced {
-            let lines = jewelcase_scanner::parse(&l.text);
+            let lines = jewelcase_scanner::parse_lrc(&l.text);
             if lines.is_empty() { None } else { Some(serde_json::to_string(&lines).unwrap()) }
         } else {
             None
@@ -242,7 +242,7 @@ pub fn upsert_track(
         for artist_id in artist_targets {
             tx.execute(
                     "UPDATE artists SET biography = ?2 WHERE id = ?1 AND biography IS NULL AND name IS NOT NULL",
-                    params![artist_id, bio.text],
+                    params![artist_id, bio],
                 )?;
         }
     }
