@@ -108,8 +108,8 @@ fn main() {
 
     if watch {
         println!("watching {} (ctrl-c to stop)", root.display());
-        let watcher = FsWatcher::start(scanner.clone(), &library.roots, Duration::from_secs(2))
-            .expect("watch");
+        let watcher =
+            FsWatcher::start(scanner.clone(), &library.roots, Duration::from_secs(2), None);
         let mut seen = store.scans(&library.id).len();
         loop {
             std::thread::sleep(Duration::from_secs(1));

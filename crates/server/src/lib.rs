@@ -49,18 +49,18 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         warn!(version = caps.version, missing = ?caps.missing, "ffmpeg lacks decoders; those formats will not be analyzed");
     }
 
+    let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.port));
+    let listener = TcpListener::bind(address)
+        .await
+        .with_context(|| format!("cannot listen on port {}", config.port))?;
+    info!(%address, "listening");
+
     // The scanner calls the database with blocking calls, so it starts outside the async runtime.
     let scanning = {
         let db = db.clone();
         let ffmpeg = ffmpeg.clone();
         tokio::task::spawn_blocking(move || Scanning::start(&db, &ffmpeg)).await??
     };
-
-    let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.port));
-    let listener = TcpListener::bind(address)
-        .await
-        .with_context(|| format!("cannot listen on port {}", config.port))?;
-    info!(%address, "listening");
 
     let images = api::Images::new(data_dir.cache().join("images"), ffmpeg);
     let plugins =
