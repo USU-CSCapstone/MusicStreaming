@@ -79,6 +79,16 @@ pub fn roots(conn: &Connection, library_id: i64) -> Result<Vec<Root>> {
     rows.collect()
 }
 
+/// Whether a scan of the library has completed. Until one has, its next library scan is its
+/// first.
+pub fn scanned(conn: &Connection, library_id: i64) -> Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM scans WHERE library_id = ?1 AND state = 'completed')",
+        [library_id],
+        |r| r.get(0),
+    )
+}
+
 /// A track's or image's file where its row places it: under one of its library's active roots,
 /// and refused before it is opened if a symlink leads there (`requirements/scanning.md` §5).
 pub struct LibraryFile {

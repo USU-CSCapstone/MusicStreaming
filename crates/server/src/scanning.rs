@@ -51,7 +51,7 @@ impl Scanning {
                 governor.clone(),
                 ScanOptions::default(),
             );
-            scanner.scan_library(Trigger::Initial);
+            scanner.scan_library(startup_trigger(db, lib.id)?);
             let watcher = lib
                 .watch
                 .then(|| FsWatcher::start(scanner.clone(), &config.roots, Duration::from_secs(2)))
@@ -104,5 +104,62 @@ impl Scanning {
             lib.placeholders.stop();
         }
         info!("background work stopped");
+    }
+}
+
+/// The trigger of a library's scan at startup, which catches what changed while the server was
+/// down: `Scheduled`, or `Initial` until a scan of the library has completed.
+fn startup_trigger(db: &Database, library: i64) -> anyhow::Result<Trigger> {
+    let scanned = db.read_blocking(move |conn| libraries::scanned(conn, library))?;
+    Ok(if scanned { Trigger::Scheduled } else { Trigger::Initial })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use jewelcase_ffmpeg::Config as FfmpegConfig;
+    use rusqlite::params;
+
+    use super::*;
+    use crate::db::testing;
+
+    /// A library's startup scan is its first until one of its own scans completes, whatever
+    /// else it or another library has run.
+    #[test]
+    fn the_startup_scan_is_initial_until_a_scan_completes() {
+        let cases = [
+            (None, "initial"),
+            (Some("suspended"), "initial"),
+            (Some("cancelled"), "initial"),
+            (Some("completed"), "scheduled"),
+        ];
+        for (earlier, expected) in cases {
+            let temp = tempfile::tempdir().unwrap();
+            let (music, other) = (temp.path().join("music"), temp.path().join("other"));
+            fs::create_dir(&music).unwrap();
+            fs::create_dir(&other).unwrap();
+            let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
+            db.write_blocking(move |tx| {
+                testing::library(tx, 1, "Music", &music)?;
+                testing::library(tx, 2, "Other", &other)?;
+                let scan = "INSERT INTO scans (id, library_id, trigger, state, scopes, created_at) \
+                            VALUES (?1, ?2, 'manual', ?3, '[]', 0)";
+                tx.execute(scan, params![2, 2, "completed"])?;
+                if let Some(state) = earlier {
+                    tx.execute(scan, params![1, 1, state])?;
+                }
+                Ok(())
+            })
+            .unwrap();
+
+            let scanning = Scanning::start(&db, &Ffmpeg::new(FfmpegConfig::default())).unwrap();
+            let trigger = db.read_blocking(|conn| {
+                let startup = "SELECT trigger FROM scans WHERE library_id = 1 AND id != 1";
+                conn.query_row(startup, [], |r| r.get::<_, String>(0))
+            });
+            scanning.stop();
+            assert_eq!(trigger.unwrap(), expected, "after a scan {earlier:?}");
+        }
     }
 }
