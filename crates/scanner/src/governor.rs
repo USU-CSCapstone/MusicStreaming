@@ -1,8 +1,8 @@
 //! Yielding to listeners (`design/scanning.md` §10).
 //!
-//! The governor only ever slows background work. Indexing threads park at
-//! directory boundaries; ffmpeg children are stopped with a signal and
-//! continue where they were.
+//! The governor only ever slows background work. Indexing threads park
+//! between files; ffmpeg children are stopped with a signal and continue where
+//! they were.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};

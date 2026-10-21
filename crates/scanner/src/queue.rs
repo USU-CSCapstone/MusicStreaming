@@ -146,8 +146,8 @@ impl Scanner {
         self.scan_library(Trigger::Reconfigure)
     }
 
-    /// Cancel a queued or running scan. A running scan stops after the directory in hand and
-    /// ends cancelled, even if a shutdown follows; everything persisted stays persisted.
+    /// Cancel a queued or running scan. A running scan stops after the file in hand and ends
+    /// cancelled, even if a shutdown follows; everything persisted stays persisted.
     pub fn cancel(&self, id: ScanId) -> bool {
         let mut q = self.inner.queue.lock().unwrap();
         if q.running.as_ref().is_some_and(|s| s.id == id) {
@@ -191,9 +191,9 @@ impl Scanner {
         }
     }
 
-    /// Ask the worker to stop without waiting for it. The running scan stops after the
-    /// directory in hand and stays running at its last flushed cursor, and queued scans stay
-    /// queued, so the next [`Scanner::start`] resumes them as it would after a crash.
+    /// Ask the worker to stop without waiting for it. The running scan stops after the file in
+    /// hand and stays running at its last flushed cursor, and queued scans stay queued, so the
+    /// next [`Scanner::start`] resumes them as it would after a crash.
     pub(crate) fn stop(&self) {
         let queue = self.inner.queue.lock().unwrap();
         self.inner.shutdown.store(true, Ordering::SeqCst);

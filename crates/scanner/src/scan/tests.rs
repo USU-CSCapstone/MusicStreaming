@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 
 use super::*;
-use crate::store::{FileToDecode, IndexedFile, MemoryStore, StoreError};
+use crate::store::{Batch, FileToDecode, IndexedFile, MemoryStore, StoreError};
 use crate::testing::{library, make_album, write_small_wav};
 
 /// A memory store that runs `on_apply` before applying each batch, failing the batch if it
@@ -75,9 +75,15 @@ where
     }
 }
 
-/// Runs a new scan of the whole library against `store`, flushing whenever the batch holds
-/// a track or problem, and never on a timer.
-fn scan_flushing_often(store: &dyn Store, lib: &LibraryConfig) -> Scan {
+/// The flags that cancel a scan, or shut it down, from inside it.
+#[derive(Default)]
+struct Stops {
+    cancel: AtomicBool,
+    shutdown: AtomicBool,
+}
+
+/// A new manual scan of the library's one root, saved to `store`.
+fn new_scan(store: &dyn Store, lib: &LibraryConfig) -> Scan {
     let mut scan = Scan {
         id: 0,
         library: lib.id.clone(),
@@ -90,16 +96,55 @@ fn scan_flushing_often(store: &dyn Store, lib: &LibraryConfig) -> Scan {
         cursor: None,
     };
     scan.id = store.create_scan(&scan);
-    let options = ScanOptions { batch_size: 1, batch_interval: Duration::MAX };
+    scan
+}
+
+/// Batches of `batch_size` outcomes, never flushed on a timer.
+fn batches_of(batch_size: usize) -> ScanOptions {
+    ScanOptions { batch_size, batch_interval: Duration::MAX }
+}
+
+/// Runs `scan`, already saved to `store`, with `options`, cancelled or shut down once `stops`
+/// says so.
+fn run(
+    store: &dyn Store,
+    lib: &LibraryConfig,
+    scan: &mut Scan,
+    options: &ScanOptions,
+    stops: &Stops,
+) {
     let ctx = ScanContext {
         store,
         library: lib,
         governor: &Governor::new(),
-        cancel: &AtomicBool::new(false),
-        shutdown: &AtomicBool::new(false),
-        options: &options,
+        cancel: &stops.cancel,
+        shutdown: &stops.shutdown,
+        options,
     };
-    run_scan(&ctx, &mut scan);
+    run_scan(&ctx, scan);
+}
+
+/// A cursor after the folder `relative` under `root`, in the first scope.
+fn after(root: &Path, relative: &str) -> Option<Cursor> {
+    Some(Cursor { scope_index: 0, after_directory: Some(root.join(relative)) })
+}
+
+/// The one scan row `store` holds.
+fn only_row<F, L>(store: &Hooked<F, L>, lib: &LibraryConfig) -> Scan {
+    let [row] = store.inner.scans(&lib.id).try_into().unwrap();
+    row
+}
+
+/// The `n`th track of the album `folder` that [`make_album`] wrote under `root`.
+fn track(root: &Path, folder: &str, n: usize) -> PathBuf {
+    root.join(folder).join(format!("{n:02} - Track {n}.wav"))
+}
+
+/// Runs a new scan of the whole library against `store`, flushing whenever the batch holds
+/// a track or problem, and never on a timer.
+fn scan_flushing_often(store: &dyn Store, lib: &LibraryConfig) -> Scan {
+    let mut scan = new_scan(store, lib);
+    run(store, lib, &mut scan, &batches_of(1), &Stops::default());
     scan
 }
 
@@ -114,39 +159,19 @@ fn a_stop_flushes_the_batch_in_hand() {
     make_album(&root, "B", "Y", 1);
     make_album(&root, "C", "Z", 1);
     let lib = library(&root);
-    let shutdown = AtomicBool::new(false);
+    let stops = Stops::default();
     let stop_at = root.join("B/Y/01 - Track 1.wav");
     let on_lookup = |path: &Path| {
         if path == stop_at {
-            shutdown.store(true, Ordering::SeqCst);
+            stops.shutdown.store(true, Ordering::SeqCst);
         }
     };
     let store = Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup };
-    let mut scan = Scan {
-        id: 0,
-        library: lib.id.clone(),
-        trigger: Trigger::Manual,
-        scopes: vec![Scope::root(&root)],
-        state: ScanState::Queued,
-        started_at: None,
-        finished_at: None,
-        progress: ScanProgress::default(),
-        cursor: None,
-    };
-    scan.id = store.create_scan(&scan);
-    let ctx = ScanContext {
-        store: &store,
-        library: &lib,
-        governor: &Governor::new(),
-        cancel: &AtomicBool::new(false),
-        shutdown: &shutdown,
-        options: &ScanOptions { batch_size: 1000, batch_interval: Duration::MAX },
-    };
-    run_scan(&ctx, &mut scan);
+    let mut scan = new_scan(&store, &lib);
+    run(&store, &lib, &mut scan, &batches_of(1000), &stops);
 
     let [row] = store.inner.scans(&lib.id).try_into().unwrap();
-    let cursor = Some(Cursor { scope_index: 0, after_directory: Some(root.join("B/Y")) });
-    assert_eq!((row.state, &row.cursor), (ScanState::Running, &cursor), "{row:?}");
+    assert_eq!((row.state, &row.cursor), (ScanState::Running, &after(&root, "B/Y")), "{row:?}");
     assert_eq!(row.finished_at, None);
     let mut paths: Vec<_> =
         store.inner.tracks(&lib.id).into_iter().map(|t| t.record.path).collect();
@@ -240,4 +265,7 @@ fn sidecars_are_read_once_per_directory() {
     assert_eq!(texts, [Some("Version 0".to_owned()), Some("Version 0".to_owned())]);
 }
 
+mod checkpoints;
 mod panics;
+mod resume;
+mod unlistable;

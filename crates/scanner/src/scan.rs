@@ -4,7 +4,7 @@ use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use crate::confine::without_links;
 use crate::discover::{
@@ -13,12 +13,13 @@ use crate::discover::{
 use crate::governor::Governor;
 use crate::problems;
 use crate::sidecar::SidecarResolver;
-use crate::store::{Batch, Store};
+use crate::store::Store;
 use crate::types::*;
+use file::process_file;
+use writer::{Halt, Writer};
 
 mod file;
-
-use file::process_file;
+mod writer;
 
 /// Tunables. Defaults are the design's starting points; benchmarks decide
 /// the shipped values.
@@ -42,7 +43,7 @@ pub struct ScanContext<'a> {
     pub store: &'a dyn Store,
     pub library: &'a LibraryConfig,
     pub governor: &'a Governor,
-    /// Set by the queue to stop the scan after the directory in hand and end it cancelled.
+    /// Set by the queue to stop the scan after the file in hand and end it cancelled.
     pub cancel: &'a AtomicBool,
     /// Set by the queue to stop the scan at the same point but leave it running at its last
     /// flushed cursor, so the next start resumes it.
@@ -53,32 +54,35 @@ pub struct ScanContext<'a> {
 impl ScanContext<'_> {
     /// Whether the queue has asked the scan to stop, to cancel it or to shut down.
     fn stopping(&self) -> bool {
-        self.cancel.load(Ordering::SeqCst) || self.shutdown.load(Ordering::SeqCst)
+        self.cancelled() || self.shutdown.load(Ordering::SeqCst)
+    }
+
+    /// Whether the queue has asked the scan to stop and end cancelled.
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
     }
 }
-
-/// The cursor and progress the store holds for a scan.
-type Persisted = (Option<Cursor>, ScanProgress);
 
 /// Run `scan` to completion, cancellation, or suspension, or until a shutdown, which leaves it
 /// running at its last flushed cursor for the next start to resume. A panic ends it at that
-/// cursor through [`suspend`], so the caller carries on. The scan row is updated on every flush;
-/// `scan` is left in the state the row holds.
+/// cursor through [`Writer::suspend`], so the caller carries on. The scan row is updated on every
+/// flush; `scan` is left in the state the row holds.
 pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
-    let mut persisted = (scan.cursor.clone(), scan.progress.clone());
+    let mut writer = Writer::new(scan);
     // Asserted unwind safe because a panic can leave `scan`'s cursor and progress ahead of the
-    // store, and `suspend` replaces both from `persisted`, which changes only as a whole, after a
-    // flush, and sets the state itself. Everything else the scan touches is shared through `ctx`
-    // and keeps its own guarantees: the store commits a batch whole or not at all.
-    let scanned = panic::catch_unwind(AssertUnwindSafe(|| scan_scopes(ctx, scan, &mut persisted)));
+    // store, and `suspend` replaces both from what the writer last persisted, which changes only
+    // as a whole, after a flush, and sets the state itself; a batch left half filled is dropped.
+    // Everything else the scan touches is shared through `ctx` and keeps its own guarantees: the
+    // store commits a batch whole or not at all.
+    let scanned = panic::catch_unwind(AssertUnwindSafe(|| scan_scopes(ctx, scan, &mut writer)));
     if scanned.is_err() {
         tracing::error!(scan = scan.id, "scan panicked; ending it at its last flushed cursor");
-        suspend(ctx, scan, &persisted);
+        writer.suspend(ctx, scan);
     }
 }
 
-/// [`run_scan`] without the panic guard, keeping `persisted` current as it flushes.
-fn scan_scopes(ctx: &ScanContext<'_>, scan: &mut Scan, persisted: &mut Persisted) {
+/// [`run_scan`] without the panic guard, flushing through `writer`.
+fn scan_scopes(ctx: &ScanContext<'_>, scan: &mut Scan, writer: &mut Writer) {
     let excludes = match compile_excludes(&ctx.library.excludes) {
         Ok(e) => e,
         Err(e) => {
@@ -95,6 +99,10 @@ fn scan_scopes(ctx: &ScanContext<'_>, scan: &mut Scan, persisted: &mut Persisted
 
     let start_scope = scan.cursor.as_ref().map(|c| c.scope_index).unwrap_or(0);
     let mut suspended = false;
+    // Folders the walk could not list since the cursor last moved, which may lie in an earlier
+    // scope left unreconciled. Each is counted as a problem once the cursor moves past it, since
+    // until then a resume lists it again.
+    let mut unlisted_folders = 0;
 
     for scope_index in start_scope..scan.scopes.len() {
         if ctx.stopping() {
@@ -112,9 +120,6 @@ fn scan_scopes(ctx: &ScanContext<'_>, scan: &mut Scan, persisted: &mut Persisted
             _ => None,
         };
         let mut sidecars = SidecarResolver::new(&scope.root);
-        let mut batch = Batch::new(scan.id);
-        let mut last_flush = Instant::now();
-        let mut stopped = false;
 
         // A scope reached through a symlink below the root, as the watcher or a plugin may
         // name one, is skipped whole: nothing is walked and nothing reconciled. One that no
@@ -122,53 +127,44 @@ fn scan_scopes(ctx: &ScanContext<'_>, scan: &mut Scan, persisted: &mut Persisted
         if scope.path.exists()
             && let Err(error) = without_links(&scope.root, &scope.path)
         {
-            batch.problems.push(problems::from_io(&scope.path, &error));
-            scan.progress.problems += 1;
+            writer.batch.problems.push(problems::from_io(&scope.path, &error));
+            scan.progress.problems += 1 + std::mem::take(&mut unlisted_folders);
             scan.cursor = Some(Cursor { scope_index: scope_index + 1, after_directory: None });
-            if !flush(ctx, scan, &mut batch, persisted) {
+            if writer.flush(ctx, scan).is_err() {
                 return;
             }
             continue;
         }
 
         let mut walk = Walk::new(&scope, &excludes, resume_after.as_deref());
-        for item in walk.by_ref() {
-            ctx.governor.wait_if_paused();
-            if ctx.stopping() {
-                stopped = true;
-                break;
-            }
+        let walked = walk.by_ref().try_for_each(|item| {
+            writer.checkpoint(ctx, scan)?;
             match item {
                 WalkItem::Error(err) => {
-                    batch.problems.push(problems::from_io(&err.path, &err.error));
-                    scan.progress.problems += 1;
+                    writer.batch.problems.push(problems::from_io(&err.path, &err.error));
+                    unlisted_folders += 1;
                 }
                 WalkItem::Directory(dir) => {
-                    process_directory(ctx, scan, &scope, &dir, &mut sidecars, &mut batch);
-                    scan.cursor =
-                        Some(Cursor { scope_index, after_directory: Some(dir.path.clone()) });
-                    scan.progress.current_path = Some(dir.path);
+                    process_directory(ctx, scan, &scope, &dir, &mut sidecars, writer)?;
+                    scan.cursor = Some(Cursor { scope_index, after_directory: Some(dir.path) });
+                    scan.progress.problems += std::mem::take(&mut unlisted_folders);
                 }
             }
-            if batch.len() >= ctx.options.batch_size
-                || last_flush.elapsed() >= ctx.options.batch_interval
-            {
-                if !flush(ctx, scan, &mut batch, persisted) {
-                    return;
-                }
-                last_flush = Instant::now();
-            }
-        }
-        if !flush(ctx, scan, &mut batch, persisted) {
+            Ok(())
+        });
+        // The batch in hand is flushed whether the walk finished or was asked to stop.
+        if matches!(walked, Err(Halt::Ended)) || writer.flush(ctx, scan).is_err() {
             return;
         }
-
-        if stopped {
+        if walked.is_err() {
             break;
         }
 
         // Stage 7: reconcile. Only after a complete walk of a root that still answers, and never
         // under what the walk could not read. Problems at paths that no longer exist go too.
+        // A root that has gone leaves the cursor in this scope, so the unlisted folders stay
+        // uncounted: a resume lists them again, or a later scope counts them as it moves the
+        // cursor.
         if !root_answers(&scope.root) {
             suspended = true;
             continue;
@@ -176,23 +172,28 @@ fn scan_scopes(ctx: &ScanContext<'_>, scan: &mut Scan, persisted: &mut Persisted
         let missing =
             ctx.store.mark_missing_unseen(&ctx.library.id, &scope, scan.id, walk.unreadable());
         scan.progress.missing += missing as u64;
-        batch.cleared = ctx
+        writer.batch.cleared = ctx
             .store
             .problems_under(&ctx.library.id, &scope)
             .into_iter()
             .filter(|path| fs::symlink_metadata(path).is_err_and(|error| gone(&error)))
             .collect();
         scan.cursor = Some(Cursor { scope_index: scope_index + 1, after_directory: None });
-        if !flush(ctx, scan, &mut batch, persisted) {
+        scan.progress.problems += std::mem::take(&mut unlisted_folders);
+        if writer.flush(ctx, scan).is_err() {
             return;
         }
     }
 
     // A shutdown leaves the row as the last flush wrote it, running at its cursor, unless the
     // scan was cancelled too.
-    let cancelled = ctx.cancel.load(Ordering::SeqCst);
+    let cancelled = ctx.cancelled();
     if ctx.shutdown.load(Ordering::SeqCst) && !cancelled {
         return;
+    }
+    if cancelled {
+        // A cancelled scan never resumes, so it counts the unlisted folders it carries as it ends.
+        scan.progress.problems += unlisted_folders;
     }
     scan.state = if cancelled {
         ScanState::Cancelled
@@ -221,64 +222,41 @@ fn root_answers(root: &Path) -> bool {
     false
 }
 
-/// Persist the batch and the scan row. On a store failure the scan ends at
-/// its last persisted cursor through [`suspend`] rather than reporting
-/// success over lost work (`requirements/scanning.md` §10: problems are
-/// honest). Returns whether the scan may continue.
-fn flush(
-    ctx: &ScanContext<'_>,
-    scan: &mut Scan,
-    batch: &mut Batch,
-    persisted: &mut Persisted,
-) -> bool {
-    if !batch.is_empty() {
-        let full = std::mem::replace(batch, Batch::new(scan.id));
-        if let Err(e) = ctx.store.apply(&ctx.library.id, full) {
-            tracing::error!(scan = scan.id, error = %e, "batch not persisted; suspending scan");
-            suspend(ctx, scan, persisted);
-            return false;
-        }
-    }
-    *persisted = (scan.cursor.clone(), scan.progress.clone());
-    ctx.store.update_scan(scan);
-    true
-}
-
-/// Ends `scan` at the cursor and progress the store holds and saves its row: suspended, so a
-/// resume retries what was not persisted, or cancelled if a cancel was asked for, since a
-/// cancelled scan never resumes.
-fn suspend(ctx: &ScanContext<'_>, scan: &mut Scan, persisted: &Persisted) {
-    scan.cursor = persisted.0.clone();
-    scan.progress = persisted.1.clone();
-    scan.progress.current_path = None;
-    scan.state =
-        if ctx.cancel.load(Ordering::SeqCst) { ScanState::Cancelled } else { ScanState::Suspended };
-    scan.finished_at = Some(SystemTime::now());
-    ctx.store.update_scan(scan);
-}
-
-/// Runs every audio candidate in `dir` through stages 2 to 5 into `batch`, clears any problem
-/// on `dir` itself, since it listed, and records a problem for each symlink the walk skipped
-/// and each entry it could not read.
+/// Runs every audio candidate in `dir` through stages 2 to 5 into the writer's batch, with a
+/// checkpoint before each, clears any problem on `dir` itself, since it listed, and records a
+/// problem for each symlink the walk skipped and each entry it could not read. Returns the
+/// checkpoint's [`Halt`] if the scan stops or ends partway.
+///
+/// The caller moves the cursor past `dir` only once all of it is processed, so a scan stopped
+/// partway walks it again from the start on resume. A track added or updated before the stop is
+/// found unchanged then, so its counts go to the progress at once. The files seen, the problem
+/// files and the entry problems would be counted again, so they go in only once `dir` is
+/// complete, or when a cancel stops the scan in it, since a cancelled scan never resumes.
 fn process_directory(
     ctx: &ScanContext<'_>,
     scan: &mut Scan,
     scope: &Scope,
     dir: &Directory,
     sidecars: &mut SidecarResolver,
-    batch: &mut Batch,
-) {
-    batch.cleared.push(dir.path.clone());
-    for failure in dir.skipped_links.iter().chain(&dir.unreadable) {
-        scan.progress.problems += 1;
-        batch.problems.push(problems::from_io(&failure.path, &failure.error));
-    }
+    writer: &mut Writer,
+) -> Result<(), Halt> {
+    scan.progress.current_path = Some(dir.path.clone());
+    writer.batch.cleared.push(dir.path.clone());
+    let entry_problems = dir.skipped_links.iter().chain(&dir.unreadable);
+    writer.batch.problems.extend(entry_problems.map(|f| problems::from_io(&f.path, &f.error)));
     sidecars.offer_listing(&dir.path, &dir.files);
     let mut resolved = None;
+    let (mut seen, mut problem_files) = (0, 0);
+    let mut halted = Ok(());
 
     for candidate in &dir.candidates {
-        scan.progress.files_seen += 1;
+        halted = writer.checkpoint(ctx, scan);
+        if halted.is_err() {
+            break;
+        }
+        seen += 1;
         let outcome = process_file(ctx, scan, scope, dir, candidate, sidecars, &mut resolved);
+        let batch = &mut writer.batch;
         match outcome {
             FileOutcome::Unchanged { track_id } => batch.touched.push(track_id),
             FileOutcome::Returned { track_id } => {
@@ -298,12 +276,18 @@ fn process_directory(
                 batch.upserts.push(*record);
             }
             FileOutcome::Problem(problem) => {
-                scan.progress.files_processed += 1;
-                scan.progress.problems += 1;
+                problem_files += 1;
                 batch.problems.push(problem);
             }
         }
     }
+    if halted.is_ok() || (matches!(halted, Err(Halt::Stop)) && ctx.cancelled()) {
+        let entry_problems = (dir.skipped_links.len() + dir.unreadable.len()) as u64;
+        scan.progress.files_seen += seen;
+        scan.progress.files_processed += problem_files;
+        scan.progress.problems += problem_files + entry_problems;
+    }
+    halted
 }
 
 #[cfg(test)]

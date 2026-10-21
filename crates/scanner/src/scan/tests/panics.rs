@@ -59,8 +59,8 @@ fn a_panic_suspends_the_scan_and_the_worker_runs_the_next() {
         }
     };
     let store = Arc::new(Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup });
-    let options = ScanOptions { batch_size: 1, batch_interval: Duration::MAX };
-    let scanner = Scanner::start(store.clone(), lib.clone(), Arc::new(Governor::new()), options);
+    let scanner =
+        Scanner::start(store.clone(), lib.clone(), Arc::new(Governor::new()), batches_of(1));
 
     let idle = "the scanner never went idle";
     let panicked = scanner.scan_library(Trigger::Manual);
@@ -91,17 +91,17 @@ fn a_panic_after_a_cancel_ends_cancelled() {
     make_album(&root, "A", "X", 1);
     make_album(&root, "B", "Y", 1);
     let lib = library(&root);
-    let cancel = AtomicBool::new(false);
+    let stops = Stops::default();
     let panic_at = root.join("B/Y/01 - Track 1.wav");
     let on_lookup = |path: &Path| {
         if path == panic_at {
-            cancel.store(true, Ordering::SeqCst);
+            stops.cancel.store(true, Ordering::SeqCst);
             panic!("a store bug after the admin cancelled");
         }
     };
     let store = Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup };
-    let options = ScanOptions { batch_size: 1, batch_interval: Duration::MAX };
-    run(&store, &lib, library_scan(&lib), &cancel, options);
+    let mut scan = new_scan(&store, &lib);
+    run(&store, &lib, &mut scan, &batches_of(1), &stops);
 
     let [row] = store.inner.scans(&lib.id).try_into().unwrap();
     assert_eq!((row.state, &row.cursor), (ScanState::Cancelled, &after(&root, "A/X")), "{row:?}");
@@ -148,15 +148,15 @@ fn a_resumed_scan_that_panics_keeps_its_starting_cursor() {
         }
     };
     let store = Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup };
-    let resumed = Scan {
+    let mut resumed = Scan {
         state: ScanState::Running,
         started_at: Some(SystemTime::now()),
         progress: one_added(),
         cursor: after(&root, "A/X"),
-        ..library_scan(&lib)
+        ..new_scan(&store, &lib)
     };
-    let options = ScanOptions { batch_size: 1000, batch_interval: Duration::MAX };
-    run(&store, &lib, resumed, &AtomicBool::new(false), options);
+    store.update_scan(&resumed);
+    run(&store, &lib, &mut resumed, &batches_of(1000), &Stops::default());
 
     let [row] = store.inner.scans(&lib.id).try_into().unwrap();
     assert_eq!(
@@ -164,46 +164,6 @@ fn a_resumed_scan_that_panics_keeps_its_starting_cursor() {
         (ScanState::Suspended, &after(&root, "A/X"), &one_added()),
         "{row:?}"
     );
-}
-
-/// A new manual scan of the library's one root.
-fn library_scan(lib: &LibraryConfig) -> Scan {
-    Scan {
-        id: 0,
-        library: lib.id.clone(),
-        trigger: Trigger::Manual,
-        scopes: vec![Scope::root(&lib.roots[0])],
-        state: ScanState::Queued,
-        started_at: None,
-        finished_at: None,
-        progress: ScanProgress::default(),
-        cursor: None,
-    }
-}
-
-/// Saves `scan` to `store` and runs it with `options`, cancelled once `cancel` is set.
-fn run(
-    store: &dyn Store,
-    lib: &LibraryConfig,
-    mut scan: Scan,
-    cancel: &AtomicBool,
-    options: ScanOptions,
-) {
-    scan.id = store.create_scan(&scan);
-    let ctx = ScanContext {
-        store,
-        library: lib,
-        governor: &Governor::new(),
-        cancel,
-        shutdown: &AtomicBool::new(false),
-        options: &options,
-    };
-    run_scan(&ctx, &mut scan);
-}
-
-/// A cursor after the folder `relative` under `root`, in the first scope.
-fn after(root: &Path, relative: &str) -> Option<Cursor> {
-    Some(Cursor { scope_index: 0, after_directory: Some(root.join(relative)) })
 }
 
 /// The progress the store holds once A/X's one track is added.
