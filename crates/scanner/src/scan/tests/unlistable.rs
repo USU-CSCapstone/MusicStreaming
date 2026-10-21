@@ -59,8 +59,10 @@ fn an_unlistable_folder_is_counted_once_across_resumes() {
                 stops.shutdown.store(true, Ordering::SeqCst);
             }
         }
+        Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup };
+    let store =
+        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: || Ok(()) };
     let mut row = new_scan(&store, &lib);
     let mut stopped = Vec::new();
     for _ in &stop_at {
@@ -96,8 +98,10 @@ fn a_cancel_counts_an_unlistable_folder_it_passed() {
         if path == cancel_at {
             stops.cancel.store(true, Ordering::SeqCst);
         }
+        Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup };
+    let store =
+        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: || Ok(()) };
     let mut scan = new_scan(&store, &lib);
     run(&store, &lib, &mut scan, &batches_of(1000), &stops);
 
@@ -126,6 +130,7 @@ fn unlistable_folders_count_once_the_cursor_passes_their_scope() {
         if path == last {
             walked.store(true, Ordering::SeqCst);
         }
+        Ok(())
     };
     let on_apply = || {
         if walked.load(Ordering::SeqCst) && gone.exists() {
@@ -133,7 +138,7 @@ fn unlistable_folders_count_once_the_cursor_passes_their_scope() {
         }
         Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup };
+    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup, on_under: || Ok(()) };
     let link = Scope::folder(&kept, kept.join("A/L"), Depth::Subtree);
     let scopes = vec![Scope::root(&kept), Scope::root(&gone), link];
     let mut scan = Scan { scopes, ..new_scan(&store, &lib) };
@@ -161,6 +166,7 @@ fn a_root_gone_after_its_walk_leaves_its_last_unlistable_folder_uncounted() {
         if path == last {
             walked.store(true, Ordering::SeqCst);
         }
+        Ok(())
     };
     let on_apply = || {
         if walked.load(Ordering::SeqCst) && root.exists() {
@@ -168,7 +174,7 @@ fn a_root_gone_after_its_walk_leaves_its_last_unlistable_folder_uncounted() {
         }
         Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup };
+    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup, on_under: || Ok(()) };
     let mut scan = new_scan(&store, &lib);
     run(&store, &lib, &mut scan, &batches_of(1000), &Stops::default());
     // Put back, so the locked folders are found to restore.

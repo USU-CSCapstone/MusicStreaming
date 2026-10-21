@@ -6,71 +6,89 @@ use super::*;
 use crate::store::{Batch, FileToDecode, IndexedFile, MemoryStore, PickedTrack, StoreError};
 use crate::testing::{library, make_album, write_small_wav};
 
-/// A memory store that runs `on_apply` before applying each batch, failing the batch if it
-/// returns an error, and `on_lookup` with each path it looks up, so a test can change the world,
-/// or fail, partway through a scan.
+/// A memory store that runs `on_apply` before applying each batch, `on_lookup` with each path it
+/// looks up, and `on_under` before [`Store::problems_under`] and [`Store::indexes_under`], failing
+/// the call if the hook returns an error, so a test can change the world, or fail, partway
+/// through a scan.
 struct Hooked<F, L> {
     inner: MemoryStore,
     on_apply: F,
     on_lookup: L,
+    on_under: fn() -> Result<(), StoreError>,
 }
 
 impl<F, L> Store for Hooked<F, L>
 where
     F: Fn() -> Result<(), StoreError> + Send + Sync,
-    L: Fn(&Path) + Send + Sync,
+    L: Fn(&Path) -> Result<(), StoreError> + Send + Sync,
 {
-    fn create_scan(&self, scan: &Scan) -> ScanId {
+    fn create_scan(&self, scan: &Scan) -> Result<ScanId, StoreError> {
         self.inner.create_scan(scan)
     }
-    fn update_scan(&self, scan: &Scan) {
+    fn update_scan(&self, scan: &Scan) -> Result<(), StoreError> {
         self.inner.update_scan(scan)
     }
-    fn interrupted_scans(&self, library: &LibraryId) -> Vec<Scan> {
+    fn interrupted_scans(&self, library: LibraryId) -> Result<Vec<Scan>, StoreError> {
         self.inner.interrupted_scans(library)
     }
-    fn lookup(&self, library: &LibraryId, path: &Path) -> Option<IndexedFile> {
-        (self.on_lookup)(path);
+    fn lookup(&self, library: LibraryId, path: &Path) -> Result<Option<IndexedFile>, StoreError> {
+        (self.on_lookup)(path)?;
         self.inner.lookup(library, path)
     }
-    fn apply(&self, library: &LibraryId, batch: Batch) -> Result<(), StoreError> {
+    fn apply(&self, library: LibraryId, batch: Batch) -> Result<(), StoreError> {
         (self.on_apply)()?;
         self.inner.apply(library, batch)
     }
     fn mark_missing_unseen(
         &self,
-        library: &LibraryId,
+        library: LibraryId,
         scope: &Scope,
         scan_id: ScanId,
         unreadable: &[PathBuf],
-    ) -> usize {
+    ) -> Result<i64, StoreError> {
         self.inner.mark_missing_unseen(library, scope, scan_id, unreadable)
     }
-    fn problems_under(&self, library: &LibraryId, scope: &Scope) -> Vec<PathBuf> {
+    fn problems_under(
+        &self,
+        library: LibraryId,
+        scope: &Scope,
+    ) -> Result<Vec<PathBuf>, StoreError> {
+        (self.on_under)()?;
         self.inner.problems_under(library, scope)
     }
-    fn indexes_under(&self, library: &LibraryId, folder: &Path) -> bool {
+    fn indexes_under(&self, library: LibraryId, folder: &Path) -> Result<bool, StoreError> {
+        (self.on_under)()?;
         self.inner.indexes_under(library, folder)
     }
     fn next_unanalyzed(
         &self,
-        library: &LibraryId,
+        library: LibraryId,
         analyzer_version: u32,
         limit: usize,
-    ) -> Vec<(PickedTrack, FileToDecode)> {
+    ) -> Result<Vec<(PickedTrack, FileToDecode)>, StoreError> {
         self.inner.next_unanalyzed(library, analyzer_version, limit)
     }
-    fn store_analysis(&self, library: &LibraryId, track: PickedTrack, result: AnalysisResult) {
+    fn store_analysis(
+        &self,
+        library: LibraryId,
+        track: PickedTrack,
+        result: AnalysisResult,
+    ) -> Result<(), StoreError> {
         self.inner.store_analysis(library, track, result)
     }
     fn next_without_placeholder(
         &self,
-        library: &LibraryId,
+        library: LibraryId,
         limit: usize,
-    ) -> Vec<(Vec<u8>, FileToDecode)> {
+    ) -> Result<Vec<(Vec<u8>, FileToDecode)>, StoreError> {
         self.inner.next_without_placeholder(library, limit)
     }
-    fn store_placeholder(&self, library: &LibraryId, hash: &[u8], placeholder: Vec<u8>) {
+    fn store_placeholder(
+        &self,
+        library: LibraryId,
+        hash: &[u8],
+        placeholder: Vec<u8>,
+    ) -> Result<(), StoreError> {
         self.inner.store_placeholder(library, hash, placeholder)
     }
 }
@@ -86,7 +104,7 @@ struct Stops {
 fn new_scan(store: &dyn Store, lib: &LibraryConfig) -> Scan {
     let mut scan = Scan {
         id: 0,
-        library: lib.id.clone(),
+        library: lib.id,
         trigger: Trigger::Manual,
         scopes: vec![Scope::root(&lib.roots[0])],
         state: ScanState::Queued,
@@ -95,7 +113,7 @@ fn new_scan(store: &dyn Store, lib: &LibraryConfig) -> Scan {
         progress: ScanProgress::default(),
         cursor: None,
     };
-    scan.id = store.create_scan(&scan);
+    scan.id = store.create_scan(&scan).unwrap();
     scan
 }
 
@@ -131,7 +149,7 @@ fn after(root: &Path, relative: &str) -> Option<Cursor> {
 
 /// The one scan row `store` holds.
 fn only_row<F, L>(store: &Hooked<F, L>, lib: &LibraryConfig) -> Scan {
-    let [row] = store.inner.scans(&lib.id).try_into().unwrap();
+    let [row] = store.inner.scans(lib.id).try_into().unwrap();
     row
 }
 
@@ -165,16 +183,17 @@ fn a_stop_flushes_the_batch_in_hand() {
         if path == stop_at {
             stops.shutdown.store(true, Ordering::SeqCst);
         }
+        Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup };
+    let store =
+        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: || Ok(()) };
     let mut scan = new_scan(&store, &lib);
     run(&store, &lib, &mut scan, &batches_of(1000), &stops);
 
-    let [row] = store.inner.scans(&lib.id).try_into().unwrap();
+    let [row] = store.inner.scans(lib.id).try_into().unwrap();
     assert_eq!((row.state, &row.cursor), (ScanState::Running, &after(&root, "B/Y")), "{row:?}");
     assert_eq!(row.finished_at, None);
-    let mut paths: Vec<_> =
-        store.inner.tracks(&lib.id).into_iter().map(|t| t.record.path).collect();
+    let mut paths: Vec<_> = store.inner.tracks(lib.id).into_iter().map(|t| t.record.path).collect();
     paths.sort();
     assert_eq!(paths, [root.join("A/X/01 - Track 1.wav"), stop_at.clone()]);
 }
@@ -195,14 +214,19 @@ fn a_root_gone_before_reconcile_suspends_and_marks_nothing() {
         }
         Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup: |_: &Path| {} };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply,
+        on_lookup: |_: &Path| Ok(()),
+        on_under: || Ok(()),
+    };
     scan_flushing_often(&store.inner, &lib);
 
     // The root goes once A/X's touch lands, so B and B/Y are never listed.
     let scan = scan_flushing_often(&store, &lib);
     assert!(!root.exists());
     assert_eq!(scan.progress.missing, 0);
-    assert!(store.inner.tracks(&lib.id).iter().all(|t| !t.missing));
+    assert!(store.inner.tracks(lib.id).iter().all(|t| !t.missing));
     assert_eq!(scan.state, ScanState::Suspended);
 }
 
@@ -222,14 +246,19 @@ fn an_unchanged_file_reads_no_sidecars() {
         fs::write(&biography, "Read when needed.").unwrap();
         Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup: |_: &Path| {} };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply,
+        on_lookup: |_: &Path| Ok(()),
+        on_under: || Ok(()),
+    };
     scan_flushing_often(&store.inner, &lib);
 
     let added = root.join("A/Y/01 - New.wav");
     write_small_wav(&added);
     let scan = scan_flushing_often(&store, &lib);
     assert_eq!((scan.progress.added, scan.progress.updated), (1, 0), "{:?}", scan.progress);
-    let tracks = store.inner.tracks(&lib.id);
+    let tracks = store.inner.tracks(lib.id);
     let new = tracks.iter().find(|t| t.record.path == added).unwrap();
     let text = new.record.artist_biography.as_ref().map(|b| b.text.as_str());
     assert_eq!(text, Some("Read when needed."));
@@ -252,13 +281,18 @@ fn sidecars_are_read_once_per_directory() {
         fs::write(&biography, format!("Version {n}")).unwrap();
         Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup: |_: &Path| {} };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply,
+        on_lookup: |_: &Path| Ok(()),
+        on_under: || Ok(()),
+    };
     let lib = library(&root);
     let scan = scan_flushing_often(&store, &lib);
     assert_eq!(scan.progress.added, 2, "{:?}", scan.progress);
     let texts: Vec<_> = store
         .inner
-        .tracks(&lib.id)
+        .tracks(lib.id)
         .into_iter()
         .map(|t| t.record.artist_biography.map(|b| b.text))
         .collect();
@@ -267,6 +301,7 @@ fn sidecars_are_read_once_per_directory() {
 
 mod checkpoints;
 mod excludes;
+mod failures;
 mod panics;
 mod resume;
 mod unlistable;

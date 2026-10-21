@@ -39,7 +39,7 @@ pub enum Identity {
 /// Decide what a read file is. The `store` argument is unused by the
 /// placeholder but is part of the interface a content fingerprint will need
 /// to look up matches.
-pub fn identify(facts: &FileFacts<'_>, _library: &LibraryId, _store: &dyn Store) -> Identity {
+pub fn identify(facts: &FileFacts<'_>, _library: LibraryId, _store: &dyn Store) -> Identity {
     match facts.indexed {
         Some(indexed) => Identity::Updated { track_id: indexed.track_id },
         None => Identity::New,

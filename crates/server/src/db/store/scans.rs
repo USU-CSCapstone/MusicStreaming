@@ -13,7 +13,8 @@ use serde::de::DeserializeOwned;
 use super::SqliteStore;
 use crate::db::{DbError, now_ms};
 
-pub fn create(store: &SqliteStore, lib: i64, scan: &Scan) -> Result<ScanId, DbError> {
+/// Records `scan` as a new scan of its library and returns its id.
+pub fn create(store: &SqliteStore, scan: &Scan) -> Result<ScanId, DbError> {
     let scan = scan.clone();
     store.db.write_blocking(move |tx| {
         // A path that is not UTF-8 cannot be written: better no record of the scan than one
@@ -23,17 +24,18 @@ pub fn create(store: &SqliteStore, lib: i64, scan: &Scan) -> Result<ScanId, DbEr
         let id = tx.query_row(
             "INSERT INTO scans (id, library_id, trigger, state, scopes, created_at) \
              VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, ?5) RETURNING id",
-            params![lib, name(scan.trigger), name(scan.state), scopes, now_ms()],
+            params![scan.library, name(scan.trigger), name(scan.state), scopes, now_ms()],
             |r| r.get(0),
         )?;
         save(tx, id, &scan)?;
-        Ok(id as ScanId)
+        Ok(id)
     })
 }
 
+/// Saves what changes as `scan` runs.
 pub fn update(store: &SqliteStore, scan: &Scan) -> Result<(), DbError> {
     let scan = scan.clone();
-    store.db.write_blocking(move |tx| save(tx, scan.id as i64, &scan))
+    store.db.write_blocking(move |tx| save(tx, scan.id, &scan))
 }
 
 /// The library's scans that were queued or running when the server last stopped.
@@ -62,15 +64,15 @@ fn save(tx: &Transaction, id: i64, scan: &Scan) -> Result<()> {
         params![
             id,
             name(scan.state),
-            scan.cursor.as_ref().map(|c| c.scope_index as i64),
+            scan.cursor.as_ref().map(|c| c.scope_index),
             path(scan.cursor.as_ref().and_then(|c| c.after_directory.as_ref())),
-            progress.files_seen as i64,
-            progress.files_processed as i64,
-            progress.added as i64,
-            progress.updated as i64,
-            progress.moved as i64,
-            progress.missing as i64,
-            progress.problems as i64,
+            progress.files_seen,
+            progress.files_processed,
+            progress.added,
+            progress.updated,
+            progress.moved,
+            progress.missing,
+            progress.problems,
             path(progress.current_path.as_ref()),
             time_to_ms(scan.started_at),
             time_to_ms(scan.finished_at),
@@ -79,7 +81,8 @@ fn save(tx: &Transaction, id: i64, scan: &Scan) -> Result<()> {
     Ok(())
 }
 
-/// The library's scans that `rest`, such as an `ORDER BY`, selects.
+/// The library's scans that `rest`, such as an `ORDER BY`, selects. A row that cannot be read is
+/// logged and left out, so one bad row hides only itself.
 fn read(conn: &Connection, lib: i64, rest: &str) -> Result<Vec<Scan>> {
     let sql = format!(
         "SELECT id, library_id, trigger, state, scopes, cursor_scope, cursor_dir, files_seen, \
@@ -87,37 +90,47 @@ fn read(conn: &Connection, lib: i64, rest: &str) -> Result<Vec<Scan>> {
          finished_at FROM scans WHERE library_id = ?1 {rest}"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([lib], |r| {
-        let scopes: String = r.get(4)?;
-        let scopes = serde_json::from_str(&scopes)
-            .map_err(|error| FromSqlConversionFailure(4, Type::Text, Box::new(error)))?;
-        let cursor_scope: Option<i64> = r.get(5)?;
-        let cursor_dir: Option<String> = r.get(6)?;
-        Ok(Scan {
-            id: r.get::<_, i64>(0)? as u64,
-            library: r.get::<_, i64>(1)?.to_string(),
-            trigger: parse(r, 2)?,
-            state: parse(r, 3)?,
-            scopes,
-            cursor: cursor_scope.map(|s| Cursor {
-                scope_index: s as usize,
-                after_directory: cursor_dir.map(PathBuf::from),
-            }),
-            progress: ScanProgress {
-                files_seen: r.get::<_, i64>(7)? as u64,
-                files_processed: r.get::<_, i64>(8)? as u64,
-                added: r.get::<_, i64>(9)? as u64,
-                updated: r.get::<_, i64>(10)? as u64,
-                moved: r.get::<_, i64>(11)? as u64,
-                missing: r.get::<_, i64>(12)? as u64,
-                problems: r.get::<_, i64>(13)? as u64,
-                current_path: r.get::<_, Option<String>>(14)?.map(PathBuf::from),
-            },
-            started_at: ms_to_time(r.get(15)?),
-            finished_at: ms_to_time(r.get(16)?),
-        })
+    let rows = stmt.query_map([lib], |r| match scan(r) {
+        Ok(found) => Ok(Some(found)),
+        Err(error) => {
+            let id: i64 = r.get(0)?;
+            tracing::error!(library = lib, scan = id, %error, "scan row cannot be read; skipping it");
+            Ok(None)
+        }
     })?;
-    rows.collect()
+    rows.filter_map(Result::transpose).collect()
+}
+
+/// The scan in row `r`, in the columns [`read`] selects.
+fn scan(r: &Row) -> Result<Scan> {
+    let scopes: String = r.get(4)?;
+    let scopes = serde_json::from_str(&scopes)
+        .map_err(|error| FromSqlConversionFailure(4, Type::Text, Box::new(error)))?;
+    let cursor_scope: Option<i64> = r.get(5)?;
+    let cursor_dir: Option<String> = r.get(6)?;
+    Ok(Scan {
+        id: r.get(0)?,
+        library: r.get(1)?,
+        trigger: parse(r, 2)?,
+        state: parse(r, 3)?,
+        scopes,
+        cursor: cursor_scope.map(|scope_index| Cursor {
+            scope_index,
+            after_directory: cursor_dir.map(PathBuf::from),
+        }),
+        progress: ScanProgress {
+            files_seen: r.get(7)?,
+            files_processed: r.get(8)?,
+            added: r.get(9)?,
+            updated: r.get(10)?,
+            moved: r.get(11)?,
+            missing: r.get(12)?,
+            problems: r.get(13)?,
+            current_path: r.get::<_, Option<String>>(14)?.map(PathBuf::from),
+        },
+        started_at: ms_to_time(r.get(15)?),
+        finished_at: ms_to_time(r.get(16)?),
+    })
 }
 
 /// A trigger's or state's name as the API spells it, which is also what the schema's `CHECK`

@@ -67,18 +67,18 @@ fn queue_drains_and_broken_files_do_not_repeat() {
     scan_library(&store, &lib);
     // The garbage MP3 may or may not pass tag reading; make sure something
     // is indexed either way so analysis has work.
-    let indexed = store.tracks(&lib.id).len();
+    let indexed = store.tracks(lib.id).len();
     assert!(indexed >= 1);
 
     let ffmpeg = Ffmpeg::new(Config::default());
     let governor = Arc::new(Governor::new());
     let analyzer = Analyzer::new(ffmpeg, store.clone(), governor);
-    let first = analyzer.run_once(&lib.id, 10);
+    let first = analyzer.run_once(lib.id, 10);
     assert_eq!(first.done + first.failed, indexed);
     assert!(first.done >= 1);
-    let second = analyzer.run_once(&lib.id, 10);
+    let second = analyzer.run_once(lib.id, 10);
     assert_eq!(second.done + second.failed, 0, "nothing left to do");
-    let ok = store.tracks(&lib.id).into_iter().find(|t| t.record.path.ends_with("ok.wav")).unwrap();
+    let ok = store.tracks(lib.id).into_iter().find(|t| t.record.path.ends_with("ok.wav")).unwrap();
     assert!(ok.analysis.unwrap().integrated_lufs.is_some());
 }
 

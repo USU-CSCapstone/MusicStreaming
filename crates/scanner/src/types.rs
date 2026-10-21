@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 pub use crate::image::ImageInfo;
 use crate::{AudioProperties, Lyrics, TagSet};
 
-pub type LibraryId = String;
-pub type TrackId = u64;
-pub type ScanId = u64;
+pub type LibraryId = i64;
+pub type TrackId = i64;
+pub type ScanId = i64;
 
 /// What the scanner needs to know about a library (`requirements/libraries.md` §1).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,13 +104,13 @@ impl Scope {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanProgress {
-    pub files_seen: u64,
-    pub files_processed: u64,
-    pub added: u64,
-    pub updated: u64,
-    pub moved: u64,
-    pub missing: u64,
-    pub problems: u64,
+    pub files_seen: i64,
+    pub files_processed: i64,
+    pub added: i64,
+    pub updated: i64,
+    pub moved: i64,
+    pub missing: i64,
+    pub problems: i64,
     pub current_path: Option<PathBuf>,
 }
 
@@ -133,7 +133,7 @@ pub struct Scan {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cursor {
-    pub scope_index: usize,
+    pub scope_index: i64,
     pub after_directory: Option<PathBuf>,
 }
 

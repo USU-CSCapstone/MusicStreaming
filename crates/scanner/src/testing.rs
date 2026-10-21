@@ -58,21 +58,24 @@ pub struct InspectTrack {
 
 /// What a store must expose for the suite to check it.
 pub trait InspectStore: Store {
-    fn inspect_tracks(&self, library: &LibraryId) -> Vec<InspectTrack>;
-    fn inspect_problems(&self, library: &LibraryId) -> Vec<Problem>;
-    fn inspect_scans(&self, library: &LibraryId) -> Vec<Scan>;
+    /// Every track of `library`, missing or not.
+    fn inspect_tracks(&self, library: LibraryId) -> Vec<InspectTrack>;
+    /// Every problem recorded for `library`.
+    fn inspect_problems(&self, library: LibraryId) -> Vec<Problem>;
+    /// Every scan of `library`.
+    fn inspect_scans(&self, library: LibraryId) -> Vec<Scan>;
     /// The change feed's head: the position of its latest entry, or zero when it is
     /// empty. Every entry written raises it, so an unchanged head means nothing was
     /// written, even to a feed that keeps one entry per item.
-    fn feed_head(&self, library: &LibraryId) -> i64;
+    fn feed_head(&self, library: LibraryId) -> i64;
     /// The tracks named by feed entries after position `head`, oldest first.
-    fn feed_tracks_after(&self, library: &LibraryId, head: i64) -> Vec<TrackId>;
+    fn feed_tracks_after(&self, library: LibraryId, head: i64) -> Vec<TrackId>;
     /// The placeholder stored for the image with content `hash`.
-    fn inspect_placeholder(&self, library: &LibraryId, hash: &[u8]) -> Option<Vec<u8>>;
+    fn inspect_placeholder(&self, library: LibraryId, hash: &[u8]) -> Option<Vec<u8>>;
 }
 
 impl InspectStore for MemoryStore {
-    fn inspect_tracks(&self, library: &LibraryId) -> Vec<InspectTrack> {
+    fn inspect_tracks(&self, library: LibraryId) -> Vec<InspectTrack> {
         self.tracks(library)
             .into_iter()
             .map(|t| InspectTrack {
@@ -96,24 +99,24 @@ impl InspectStore for MemoryStore {
             .collect()
     }
 
-    fn inspect_placeholder(&self, library: &LibraryId, hash: &[u8]) -> Option<Vec<u8>> {
+    fn inspect_placeholder(&self, library: LibraryId, hash: &[u8]) -> Option<Vec<u8>> {
         self.placeholder(library, hash)
     }
 
-    fn inspect_problems(&self, library: &LibraryId) -> Vec<Problem> {
+    fn inspect_problems(&self, library: LibraryId) -> Vec<Problem> {
         self.problems(library)
     }
 
-    fn inspect_scans(&self, library: &LibraryId) -> Vec<Scan> {
+    fn inspect_scans(&self, library: LibraryId) -> Vec<Scan> {
         self.scans(library)
     }
 
-    fn feed_head(&self, library: &LibraryId) -> i64 {
+    fn feed_head(&self, library: LibraryId) -> i64 {
         // The memory feed only appends, so its length is its head.
         i64::try_from(self.feed(library).len()).unwrap()
     }
 
-    fn feed_tracks_after(&self, library: &LibraryId, head: i64) -> Vec<TrackId> {
+    fn feed_tracks_after(&self, library: LibraryId, head: i64) -> Vec<TrackId> {
         self.feed(library)
             .into_iter()
             .skip(usize::try_from(head).unwrap())
@@ -189,8 +192,9 @@ pub fn make_album(root: &Path, artist: &str, album: &str, n: usize) {
     }
 }
 
+/// Library 1, with `root` as its one root and no excludes.
 pub fn library(root: &Path) -> LibraryConfig {
-    LibraryConfig { id: "1".into(), roots: vec![root.to_path_buf()], excludes: Vec::new() }
+    LibraryConfig { id: 1, roots: vec![root.to_path_buf()], excludes: Vec::new() }
 }
 
 /// Run one scan of `scopes` synchronously against `store`.
@@ -205,7 +209,7 @@ pub fn scan_once(
     let options = ScanOptions::default();
     let mut scan = Scan {
         id: 0,
-        library: lib.id.clone(),
+        library: lib.id,
         trigger,
         scopes,
         state: ScanState::Queued,
@@ -214,7 +218,7 @@ pub fn scan_once(
         progress: ScanProgress::default(),
         cursor: None,
     };
-    scan.id = store.create_scan(&scan);
+    scan.id = store.create_scan(&scan).unwrap();
     let ctx = ScanContext {
         store,
         library: lib,
@@ -231,9 +235,10 @@ pub fn scan_library(store: &dyn Store, lib: &LibraryConfig) -> Scan {
     scan_once(store, lib, Trigger::Manual, lib.roots.iter().map(Scope::root).collect())
 }
 
+/// The tracks of `lib` not marked missing, sorted by path.
 fn live(store: &dyn InspectStore, lib: &LibraryConfig) -> Vec<InspectTrack> {
     let mut v: Vec<InspectTrack> =
-        store.inspect_tracks(&lib.id).into_iter().filter(|t| !t.missing).collect();
+        store.inspect_tracks(lib.id).into_iter().filter(|t| !t.missing).collect();
     v.sort_by(|a, b| a.path.cmp(&b.path));
     v
 }
@@ -263,7 +268,7 @@ pub fn cold_scan_then_incremental_is_all_unchanged<S: InspectStore>(make: Factor
     assert_eq!(first.state, ScanState::Completed);
     assert_eq!(first.progress.files_seen, 5);
     assert_eq!(first.progress.added, 5);
-    assert_eq!(first.progress.problems, 0, "{:?}", store.inspect_problems(&lib.id));
+    assert_eq!(first.progress.problems, 0, "{:?}", store.inspect_problems(lib.id));
     let tracks = live(&store, &lib);
     assert_eq!(tracks.len(), 5);
 
@@ -278,12 +283,12 @@ pub fn cold_scan_then_incremental_is_all_unchanged<S: InspectStore>(make: Factor
     assert!(!utero.has_artwork, "no cover anywhere above In Utero");
     assert!(utero.has_biography, "biography inherited from the artist folder");
 
-    let mut announced = store.feed_tracks_after(&lib.id, 0);
+    let mut announced = store.feed_tracks_after(lib.id, 0);
     announced.sort_unstable();
     let mut ids: Vec<TrackId> = tracks.iter().map(|t| t.id).collect();
     ids.sort_unstable();
     assert_eq!(announced, ids, "one feed entry per track");
-    let head_after_first = store.feed_head(&lib.id);
+    let head_after_first = store.feed_head(lib.id);
 
     // Second scan: nothing opened, nothing changed.
     let second = scan_library(&store, &lib);
@@ -293,7 +298,7 @@ pub fn cold_scan_then_incremental_is_all_unchanged<S: InspectStore>(make: Factor
     assert_eq!(second.progress.added + second.progress.updated, 0);
     assert_eq!(second.progress.missing, 0);
     assert_eq!(
-        store.feed_head(&lib.id),
+        store.feed_head(lib.id),
         head_after_first,
         "an unchanged scan must not touch the feed"
     );
@@ -363,22 +368,22 @@ pub fn missing_then_returned<S: InspectStore>(make: Factory<S>) {
     let p = root.join("A/X/02 - Track 2.wav");
     let bytes = fs::read(&p).unwrap();
     let meta = fs::metadata(&p).unwrap();
-    let head_before_missing = store.feed_head(&lib.id);
+    let head_before_missing = store.feed_head(lib.id);
     fs::remove_file(&p).unwrap();
 
     let scan = scan_library(&store, &lib);
     assert_eq!(scan.progress.missing, 1);
     let missing: Vec<InspectTrack> =
-        store.inspect_tracks(&lib.id).into_iter().filter(|t| t.missing).collect();
+        store.inspect_tracks(lib.id).into_iter().filter(|t| t.missing).collect();
     assert_eq!(missing.len(), 1);
     assert!(missing[0].path.ends_with("02 - Track 2.wav"));
     let id = missing[0].id;
     assert_eq!(
-        store.feed_tracks_after(&lib.id, head_before_missing),
+        store.feed_tracks_after(lib.id, head_before_missing),
         vec![id],
         "the loss is announced"
     );
-    let head_before_return = store.feed_head(&lib.id);
+    let head_before_return = store.feed_head(lib.id);
 
     // The file comes back byte-identical with its old mtime: reconnects.
     fs::write(&p, &bytes).unwrap();
@@ -386,15 +391,15 @@ pub fn missing_then_returned<S: InspectStore>(make: Factory<S>) {
     let scan = scan_library(&store, &lib);
     assert_eq!(scan.progress.missing, 0);
     assert_eq!(scan.progress.added, 0);
-    let t = store.inspect_tracks(&lib.id).into_iter().find(|t| t.path == p).unwrap();
+    let t = store.inspect_tracks(lib.id).into_iter().find(|t| t.path == p).unwrap();
     assert!(!t.missing);
     assert_eq!(t.id, id);
     assert_eq!(
-        store.feed_tracks_after(&lib.id, head_before_return),
+        store.feed_tracks_after(lib.id, head_before_return),
         vec![id],
         "the return is announced"
     );
-    assert!(store.feed_head(&lib.id) > head_before_return, "the head moves past the return");
+    assert!(store.feed_head(lib.id) > head_before_return, "the head moves past the return");
 }
 
 pub fn unavailable_root_suspends_and_touches_nothing<S: InspectStore>(make: Factory<S>) {
@@ -412,13 +417,13 @@ pub fn unavailable_root_suspends_and_touches_nothing<S: InspectStore>(make: Fact
     let scan = scan_library(&store, &lib);
     assert_eq!(scan.state, ScanState::Suspended);
     assert_eq!(scan.progress.missing, 0);
-    assert!(store.inspect_tracks(&lib.id).iter().all(|t| !t.missing));
+    assert!(store.inspect_tracks(lib.id).iter().all(|t| !t.missing));
 
     // An empty mount point is unavailable too.
     fs::create_dir(&root).unwrap();
     let scan = scan_library(&store, &lib);
     assert_eq!(scan.state, ScanState::Suspended);
-    assert!(store.inspect_tracks(&lib.id).iter().all(|t| !t.missing));
+    assert!(store.inspect_tracks(lib.id).iter().all(|t| !t.missing));
 
     // Remount: everything unchanged, nothing re-added.
     fs::remove_dir(&root).unwrap();
@@ -441,7 +446,7 @@ pub fn bad_file_is_a_problem_that_clears<S: InspectStore>(make: Factory<S>) {
     assert_eq!(scan.state, ScanState::Completed, "one bad file never aborts a scan");
     assert_eq!(scan.progress.added, 1);
     assert_eq!(scan.progress.problems, 1);
-    let problems = store.inspect_problems(&lib.id);
+    let problems = store.inspect_problems(lib.id);
     assert_eq!(problems.len(), 1);
     assert_eq!(problems[0].path, bad);
     assert_eq!(problems[0].kind, ProblemKind::CorruptAudio);
@@ -450,7 +455,7 @@ pub fn bad_file_is_a_problem_that_clears<S: InspectStore>(make: Factory<S>) {
     write_small_wav(&bad);
     let scan = scan_library(&store, &lib);
     assert_eq!(scan.progress.added, 1);
-    assert!(store.inspect_problems(&lib.id).is_empty());
+    assert!(store.inspect_problems(lib.id).is_empty());
 }
 
 pub fn a_symlink_is_a_problem<S: InspectStore>(make: Factory<S>) {
@@ -467,7 +472,7 @@ pub fn a_symlink_is_a_problem<S: InspectStore>(make: Factory<S>) {
     let scan = scan_library(&store, &lib);
     assert_eq!(scan.progress.added, 1, "only the regular file");
     assert_eq!(scan.progress.problems, 1);
-    let problems = store.inspect_problems(&lib.id);
+    let problems = store.inspect_problems(lib.id);
     assert_eq!(problems.len(), 1);
     assert_eq!(problems[0].path, link);
     assert_eq!(problems[0].detail, "symlinks are not followed");
@@ -488,7 +493,7 @@ pub fn a_scope_through_a_folder_link_walks_nothing<S: InspectStore>(make: Factor
     let scan = scan_once(&store, &lib, Trigger::Watch, vec![scope]);
     assert_eq!(scan.progress.files_seen, 0);
     assert_eq!(scan.progress.problems, 1);
-    let problems = store.inspect_problems(&lib.id);
+    let problems = store.inspect_problems(lib.id);
     assert_eq!(problems.len(), 1);
     assert_eq!(problems[0].path, link);
     assert!(live(&store, &lib).is_empty());
@@ -505,7 +510,7 @@ pub fn a_scope_naming_a_deleted_folder_reconciles<S: InspectStore>(make: Factory
     let store = make(&root);
     let lib = library(&root);
     scan_library(&store, &lib);
-    assert_eq!(store.inspect_problems(&lib.id).len(), 1);
+    assert_eq!(store.inspect_problems(lib.id).len(), 1);
     fs::remove_dir_all(root.join("A/X")).unwrap();
 
     let scope = Scope::folder(&root, root.join("A/X"), Depth::Subtree);
@@ -514,7 +519,7 @@ pub fn a_scope_naming_a_deleted_folder_reconciles<S: InspectStore>(make: Factory
     assert_eq!(scan.progress.missing, 2);
     assert_eq!(scan.progress.problems, 0);
     assert_eq!(live(&store, &lib).len(), 1);
-    assert_eq!(store.inspect_problems(&lib.id), []);
+    assert_eq!(store.inspect_problems(lib.id), []);
 }
 
 /// A deleted file takes its problem with it, while a deleted file the scope does not reach, in a
@@ -531,7 +536,7 @@ pub fn a_deleted_file_takes_its_problem<S: InspectStore>(make: Factory<S>) {
     let store = make(&root);
     let lib = library(&root);
     scan_library(&store, &lib);
-    assert_eq!(store.inspect_problems(&lib.id).len(), 3);
+    assert_eq!(store.inspect_problems(lib.id).len(), 3);
 
     for folder in ["A/X", "A/X 2", "A/X/Y"] {
         fs::remove_file(root.join(folder).join("broken.flac")).unwrap();
@@ -539,7 +544,7 @@ pub fn a_deleted_file_takes_its_problem<S: InspectStore>(make: Factory<S>) {
     let scope = Scope::folder(&root, root.join("A/X"), Depth::Directory);
     scan_once(&store, &lib, Trigger::Watch, vec![scope]);
     let mut problems: Vec<PathBuf> =
-        store.inspect_problems(&lib.id).into_iter().map(|p| p.path).collect();
+        store.inspect_problems(lib.id).into_iter().map(|p| p.path).collect();
     problems.sort();
     assert_eq!(problems, [root.join("A/X/Y/broken.flac"), root.join("A/X 2/broken.flac")]);
     assert_eq!(live(&store, &lib).len(), 1);
@@ -563,7 +568,7 @@ pub fn a_scope_at_a_file_reconciles_nothing<S: InspectStore>(make: Factory<S>) {
         (scan.state, scan.progress.problems, scan.progress.missing),
         (ScanState::Completed, 0, 0)
     );
-    assert_eq!(store.inspect_problems(&lib.id), []);
+    assert_eq!(store.inspect_problems(lib.id), []);
 
     fs::remove_file(&track).unwrap();
     let scan = scan_once(&store, &lib, Trigger::Watch, vec![scope]);
@@ -583,7 +588,7 @@ pub fn indexes_under_sees_live_tracks_and_problems<S: InspectStore>(make: Factor
     let store = make(&root);
     let lib = library(&root);
     scan_library(&store, &lib);
-    let under = |path: &str| store.indexes_under(&lib.id, &root.join(path));
+    let under = |path: &str| store.indexes_under(lib.id, &root.join(path)).unwrap();
     assert!(under("A") && under("A/X") && under("B"));
     assert!(!under("A/X/01 - Track 1.wav") && !under("B/broken.flac") && !under("C"));
 
@@ -605,7 +610,7 @@ pub fn a_dangling_link_keeps_its_problem<S: InspectStore>(make: Factory<S>) {
 
     scan_library(&store, &lib);
     let problems: Vec<PathBuf> =
-        store.inspect_problems(&lib.id).into_iter().map(|p| p.path).collect();
+        store.inspect_problems(lib.id).into_iter().map(|p| p.path).collect();
     assert_eq!(problems, [link]);
 }
 
@@ -626,11 +631,11 @@ pub fn a_problem_on_a_present_file_stays<S: InspectStore>(make: Factory<S>) {
         detail: "decode failed".into(),
         seen_at: std::time::SystemTime::UNIX_EPOCH,
     });
-    store.apply(&lib.id, batch).unwrap();
+    store.apply(lib.id, batch).unwrap();
 
     scan_library(&store, &lib);
     let problems: Vec<PathBuf> =
-        store.inspect_problems(&lib.id).into_iter().map(|p| p.path).collect();
+        store.inspect_problems(lib.id).into_iter().map(|p| p.path).collect();
     assert_eq!(problems, [track]);
 }
 
@@ -653,12 +658,12 @@ pub fn a_folder_problem_clears_once_it_lists<S: InspectStore>(make: Factory<S>) 
     scan_library(&store, &lib);
     fs::set_permissions(&folder, fs::Permissions::from_mode(0o755)).unwrap();
     let problems: Vec<PathBuf> =
-        store.inspect_problems(&lib.id).into_iter().map(|p| p.path).collect();
+        store.inspect_problems(lib.id).into_iter().map(|p| p.path).collect();
     assert_eq!(problems, [folder]);
 
     let scan = scan_library(&store, &lib);
     assert_eq!(scan.progress.added, 1);
-    assert_eq!(store.inspect_problems(&lib.id), []);
+    assert_eq!(store.inspect_problems(lib.id), []);
 }
 
 /// A folder that cannot be listed, and one whose entries cannot be read, keep their tracks
@@ -699,7 +704,7 @@ pub fn an_unreadable_folder_keeps_its_tracks<S: InspectStore>(make: Factory<S>) 
     assert_eq!(scan.progress.missing, 2, "only the deleted files");
     assert_eq!(live(&store, &lib).len(), 5);
     let mut problems: Vec<(PathBuf, ProblemKind)> =
-        store.inspect_problems(&lib.id).into_iter().map(|p| (p.path, p.kind)).collect();
+        store.inspect_problems(lib.id).into_iter().map(|p| (p.path, p.kind)).collect();
     problems.sort_by(|a, b| a.0.cmp(&b.0));
     let denied = |path: &str| (root.join(path), ProblemKind::PermissionDenied);
     assert_eq!(
@@ -755,7 +760,7 @@ pub fn folder_scope_reconciles_only_inside_itself<S: InspectStore>(make: Factory
         vec![Scope::folder(&root, root.join("A"), Depth::Subtree)],
     );
     assert_eq!(scan.progress.missing, 0);
-    assert!(store.inspect_tracks(&lib.id).iter().all(|t| !t.missing));
+    assert!(store.inspect_tracks(lib.id).iter().all(|t| !t.missing));
     let scan = scan_once(
         &store,
         &lib,
@@ -851,7 +856,7 @@ pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory
     // with a cursor. Starting the scanner resumes it.
     let interrupted = Scan {
         id: 0,
-        library: lib.id.clone(),
+        library: lib.id,
         trigger: Trigger::Initial,
         scopes: vec![Scope::root(&root)],
         state: ScanState::Running,
@@ -861,14 +866,14 @@ pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory
         cursor: Some(Cursor { scope_index: 0, after_directory: Some(root.join("A/X")) }),
     };
     let mut interrupted_row = interrupted.clone();
-    interrupted_row.id = store.create_scan(&interrupted);
-    store.update_scan(&interrupted_row);
+    interrupted_row.id = store.create_scan(&interrupted).unwrap();
+    store.update_scan(&interrupted_row).unwrap();
 
     let governor = Arc::new(Governor::new());
     let scanner =
         Scanner::start(store.clone(), lib.clone(), governor.clone(), ScanOptions::default());
     scanner.wait_idle();
-    let scans = store.inspect_scans(&lib.id);
+    let scans = store.inspect_scans(lib.id);
     let resumed = scans.iter().find(|s| s.id == interrupted_row.id).unwrap();
     assert_eq!(resumed.state, ScanState::Completed);
     assert_eq!(resumed.progress.files_seen, 4, "{:?}", resumed.progress);
@@ -876,31 +881,39 @@ pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory
     // A scan of "C", parked by the paused governor, holds what is requested after it in the queue.
     governor.pause();
     let held = scanner
-        .request(Trigger::Manual, vec![Scope::folder(&root, root.join("C"), Depth::Subtree)]);
+        .request(Trigger::Manual, vec![Scope::folder(&root, root.join("C"), Depth::Subtree)])
+        .unwrap();
     wait_until_running(&scanner, held);
     let z = || vec![Scope::folder(&root, root.join("C/Z"), Depth::Directory)];
-    let behind = scanner.request(Trigger::Watch, z());
+    let behind = scanner.request(Trigger::Watch, z()).unwrap();
     assert_ne!(behind, held, "the running scan takes no new work, even work it covers");
-    assert_eq!(scanner.request(Trigger::Watch, z()), behind, "it joins the one queued behind");
+    assert_eq!(
+        scanner.request(Trigger::Watch, z()).unwrap(),
+        behind,
+        "it joins the one queued behind"
+    );
     let dropped = scanner
-        .request(Trigger::Manual, vec![Scope::folder(&root, root.join("B"), Depth::Subtree)]);
+        .request(Trigger::Manual, vec![Scope::folder(&root, root.join("B"), Depth::Subtree)])
+        .unwrap();
     assert!(scanner.cancel(dropped));
     assert!(scanner.queued().iter().all(|s| s.id != dropped), "{:?}", scanner.queued());
     assert!(!scanner.cancel(dropped), "a cancelled scan is gone");
-    let stored = store.inspect_scans(&lib.id).into_iter().find(|s| s.id == dropped).unwrap();
+    let stored = store.inspect_scans(lib.id).into_iter().find(|s| s.id == dropped).unwrap();
     assert_eq!(stored.state, ScanState::Cancelled);
     assert!(stored.finished_at.is_some());
     let a = scanner
-        .request(Trigger::Manual, vec![Scope::folder(&root, root.join("A"), Depth::Subtree)]);
+        .request(Trigger::Manual, vec![Scope::folder(&root, root.join("A"), Depth::Subtree)])
+        .unwrap();
     let b = scanner
-        .request(Trigger::Manual, vec![Scope::folder(&root, root.join("A/X"), Depth::Directory)]);
-    let all = scanner.scan_library(Trigger::Scheduled);
-    let again = scanner.scan_library(Trigger::Manual);
+        .request(Trigger::Manual, vec![Scope::folder(&root, root.join("A/X"), Depth::Directory)])
+        .unwrap();
+    let all = scanner.scan_library(Trigger::Scheduled).unwrap();
+    let again = scanner.scan_library(Trigger::Manual).unwrap();
     assert_eq!(a, b, "a covered scope joins the queued scan");
     assert_eq!(all, again);
     governor.resume();
     scanner.wait_idle();
-    let final_scans = store.inspect_scans(&lib.id);
+    let final_scans = store.inspect_scans(lib.id);
     let state = |id| final_scans.iter().find(|s| s.id == id).unwrap().state;
     assert_eq!(state(held), ScanState::Completed);
     assert_eq!(state(behind), ScanState::Cancelled, "the library scan replaced it");
@@ -940,7 +953,7 @@ pub fn a_resumed_scan_takes_no_new_work<S: InspectStore + 'static>(make: Factory
     for _ in 0..2 {
         let mut interrupted = Scan {
             id: 0,
-            library: lib.id.clone(),
+            library: lib.id,
             trigger: Trigger::Initial,
             scopes: vec![Scope::root(&root)],
             state: ScanState::Running,
@@ -949,8 +962,8 @@ pub fn a_resumed_scan_takes_no_new_work<S: InspectStore + 'static>(make: Factory
             progress: ScanProgress::default(),
             cursor: Some(Cursor { scope_index: 0, after_directory: Some(root.join("B/Y")) }),
         };
-        interrupted.id = store.create_scan(&interrupted);
-        store.update_scan(&interrupted);
+        interrupted.id = store.create_scan(&interrupted).unwrap();
+        store.update_scan(&interrupted).unwrap();
     }
 
     let governor = Arc::new(Governor::new());
@@ -961,14 +974,14 @@ pub fn a_resumed_scan_takes_no_new_work<S: InspectStore + 'static>(make: Factory
     let [waiting] = scanner.queued().try_into().unwrap();
     let added = root.join("A/X/02 - Added.wav");
     write_small_wav(&added);
-    let startup = scanner.scan_library(Trigger::Initial);
+    let startup = scanner.scan_library(Trigger::Initial).unwrap();
     assert_ne!(startup, waiting.id, "the startup scan does not join a resumed scan");
     governor.resume();
     scanner.wait_idle();
     scanner.shutdown();
 
     assert!(live(store.as_ref(), &lib).iter().any(|t| t.path == added));
-    let scans = store.inspect_scans(&lib.id);
+    let scans = store.inspect_scans(lib.id);
     let state = |id| scans.iter().find(|s| s.id == id).unwrap().state;
     assert_eq!(state(waiting.id), ScanState::Cancelled, "the startup scan replaced it");
     assert_eq!(state(startup), ScanState::Completed);
@@ -989,20 +1002,20 @@ pub fn a_reconfigure_during_a_scan_applies_its_excludes<S: InspectStore + 'stati
     let governor = Arc::new(Governor::new());
     let scanner =
         Scanner::start(store.clone(), lib.clone(), governor.clone(), ScanOptions::default());
-    scanner.scan_library(Trigger::Initial);
+    scanner.scan_library(Trigger::Initial).unwrap();
     scanner.wait_idle();
     governor.pause();
-    let running = scanner.scan_library(Trigger::Scheduled);
+    let running = scanner.scan_library(Trigger::Scheduled).unwrap();
     wait_until_running(&scanner, running);
 
     let excluding = LibraryConfig { excludes: vec!["backup".into(), "backup/**".into()], ..lib };
-    let reconfigured = scanner.reconfigure(excluding.clone());
+    let reconfigured = scanner.reconfigure(excluding.clone()).unwrap();
     assert_ne!(reconfigured, running, "a scan that has started takes no new work");
     governor.resume();
     scanner.wait_idle();
     scanner.shutdown();
 
-    let tracks = store.inspect_tracks(&excluding.id);
+    let tracks = store.inspect_tracks(excluding.id);
     let missing = |path: &str| tracks.iter().find(|t| t.path == root.join(path)).unwrap().missing;
     assert!(!missing("A/X/01 - Track 1.wav"));
     assert!(missing("backup/X/01 - Track 1.wav"));
@@ -1031,26 +1044,26 @@ pub fn placeholders_fill_once_per_image<S: InspectStore + 'static>(make: Factory
     let lib = library(&root);
     scan_library(&*store, &lib);
 
-    let pending = store.next_without_placeholder(&lib.id, 10);
+    let pending = store.next_without_placeholder(lib.id, 10).unwrap();
     assert_eq!(pending.len(), 2, "one per distinct image: {pending:?}");
     let red = pending.iter().find(|(_, file)| file.path == cover).unwrap().0.clone();
     let broken = pending.iter().find(|(hash, _)| *hash != red).unwrap().0.clone();
 
     let ffmpeg = jewelcase_ffmpeg::Ffmpeg::new(jewelcase_ffmpeg::Config::default());
     let placeholders = crate::placeholders::Placeholders::new(ffmpeg, store.clone());
-    let report = placeholders.run_once(&lib.id, 10);
+    let report = placeholders.run_once(lib.id, 10);
     assert_eq!((report.done, report.failed), (1, 1));
-    assert!(store.next_without_placeholder(&lib.id, 10).is_empty());
-    assert!(placeholders.run_once(&lib.id, 10).idle(), "a broken image is not retried");
+    assert!(store.next_without_placeholder(lib.id, 10).unwrap().is_empty());
+    assert!(placeholders.run_once(lib.id, 10).idle(), "a broken image is not retried");
 
-    let hash = store.inspect_placeholder(&lib.id, &red).unwrap();
+    let hash = store.inspect_placeholder(lib.id, &red).unwrap();
     assert!(hash.len() < 40, "a few bytes: {}", hash.len());
     let (r, g, b, a) = thumbhash::thumb_hash_to_average_rgba(&hash).unwrap();
     assert!(r > 0.9 && g < 0.1 && b < 0.1 && a > 0.99, "{r} {g} {b} {a}");
     let ratio = thumbhash::thumb_hash_to_approximate_aspect_ratio(&hash).unwrap();
     // ThumbHash keeps the aspect ratio only coarsely.
     assert!((ratio - 1.5).abs() < 0.2, "{ratio}");
-    assert_eq!(store.inspect_placeholder(&lib.id, &broken), Some(Vec::new()));
+    assert_eq!(store.inspect_placeholder(lib.id, &broken), Some(Vec::new()));
 }
 
 /// The one track [`rescan_after`] indexes, relative to the library root.
@@ -1072,10 +1085,10 @@ fn rescan_after<S: InspectStore>(
     let lib = library(&root);
     scan_library(&store, &lib);
     let before = live(&store, &lib)[0].clone();
-    let head = store.feed_head(&lib.id);
+    let head = store.feed_head(lib.id);
     change(&root);
     let scan = scan_library(&store, &lib);
-    (before, scan, store.inspect_tracks(&lib.id), store.feed_tracks_after(&lib.id, head))
+    (before, scan, store.inspect_tracks(lib.id), store.feed_tracks_after(lib.id, head))
 }
 
 /// Move [`TRACK`] under `root` to [`ELSEWHERE`], returning its new path.

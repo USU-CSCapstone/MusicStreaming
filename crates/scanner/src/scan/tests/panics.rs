@@ -31,12 +31,12 @@ fn a_parser_panic_is_a_problem_and_the_scan_completes() {
 
     let scan = scan_flushing_often(&store, &lib);
     assert_eq!(scan.state, ScanState::Completed, "{scan:?}");
-    let [problem] = store.problems(&lib.id).try_into().unwrap();
+    let [problem] = store.problems(lib.id).try_into().unwrap();
     assert_eq!(
         (&problem.path, problem.kind, problem.detail.as_str()),
         (&bad, ProblemKind::MalformedTags, "the tag reader failed unexpectedly")
     );
-    let mut paths: Vec<_> = store.tracks(&lib.id).into_iter().map(|t| t.record.path).collect();
+    let mut paths: Vec<_> = store.tracks(lib.id).into_iter().map(|t| t.record.path).collect();
     paths.sort();
     assert_eq!(paths, [root.join("A/X/01 - Track 1.wav"), root.join("C/Z/01 - Track 1.wav")]);
 }
@@ -57,19 +57,25 @@ fn a_panic_suspends_the_scan_and_the_worker_runs_the_next() {
         if path == panic_at && armed.swap(false, Ordering::SeqCst) {
             panic!("a store bug");
         }
+        Ok(())
     };
-    let store = Arc::new(Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup });
+    let store = Arc::new(Hooked {
+        inner: MemoryStore::new(),
+        on_apply: || Ok(()),
+        on_lookup,
+        on_under: || Ok(()),
+    });
     let scanner =
         Scanner::start(store.clone(), lib.clone(), Arc::new(Governor::new()), batches_of(1));
 
     let idle = "the scanner never went idle";
-    let panicked = scanner.scan_library(Trigger::Manual);
+    let panicked = scanner.scan_library(Trigger::Manual).unwrap();
     wait_until(&scanner, idle, Scanner::is_idle);
-    let next = scanner.scan_library(Trigger::Manual);
+    let next = scanner.scan_library(Trigger::Manual).unwrap();
     wait_until(&scanner, idle, Scanner::is_idle);
     scanner.shutdown();
 
-    let rows = store.inner.scans(&lib.id);
+    let rows = store.inner.scans(lib.id);
     let row = |id| rows.iter().find(|s| s.id == id).unwrap();
     let suspended = row(panicked);
     assert_eq!(
@@ -79,7 +85,7 @@ fn a_panic_suspends_the_scan_and_the_worker_runs_the_next() {
     );
     assert!(suspended.finished_at.is_some());
     assert_eq!(row(next).state, ScanState::Completed);
-    assert_eq!(store.inner.tracks(&lib.id).len(), 2);
+    assert_eq!(store.inner.tracks(lib.id).len(), 2);
 }
 
 /// A scan cancelled just before a panic ends cancelled rather than suspended, so it never resumes,
@@ -98,12 +104,14 @@ fn a_panic_after_a_cancel_ends_cancelled() {
             stops.cancel.store(true, Ordering::SeqCst);
             panic!("a store bug after the admin cancelled");
         }
+        Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup };
+    let store =
+        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: || Ok(()) };
     let mut scan = new_scan(&store, &lib);
     run(&store, &lib, &mut scan, &batches_of(1), &stops);
 
-    let [row] = store.inner.scans(&lib.id).try_into().unwrap();
+    let [row] = store.inner.scans(lib.id).try_into().unwrap();
     assert_eq!((row.state, &row.cursor), (ScanState::Cancelled, &after(&root, "A/X")), "{row:?}");
 }
 
@@ -121,10 +129,15 @@ fn a_failed_batch_suspends_at_the_last_persisted_cursor() {
         1 => Err(StoreError("disk full".into())),
         _ => Ok(()),
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup: |_: &Path| {} };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply,
+        on_lookup: |_: &Path| Ok(()),
+        on_under: || Ok(()),
+    };
     scan_flushing_often(&store, &lib);
 
-    let [row] = store.inner.scans(&lib.id).try_into().unwrap();
+    let [row] = store.inner.scans(lib.id).try_into().unwrap();
     assert_eq!(
         (row.state, &row.cursor, &row.progress),
         (ScanState::Suspended, &after(&root, "A/X"), &one_added()),
@@ -146,8 +159,10 @@ fn a_resumed_scan_that_panics_keeps_its_starting_cursor() {
         if path == panic_at {
             panic!("a store bug");
         }
+        Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup };
+    let store =
+        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: || Ok(()) };
     let mut resumed = Scan {
         state: ScanState::Running,
         started_at: Some(SystemTime::now()),
@@ -155,10 +170,10 @@ fn a_resumed_scan_that_panics_keeps_its_starting_cursor() {
         cursor: after(&root, "A/X"),
         ..new_scan(&store, &lib)
     };
-    store.update_scan(&resumed);
+    store.update_scan(&resumed).unwrap();
     run(&store, &lib, &mut resumed, &batches_of(1000), &Stops::default());
 
-    let [row] = store.inner.scans(&lib.id).try_into().unwrap();
+    let [row] = store.inner.scans(lib.id).try_into().unwrap();
     assert_eq!(
         (row.state, &row.cursor, &row.progress),
         (ScanState::Suspended, &after(&root, "A/X"), &one_added()),

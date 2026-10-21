@@ -24,7 +24,7 @@ fn scanner(root: &Path) -> (Scanner, Arc<MemoryStore>) {
 
 /// The library's scans in `store`.
 fn scans(store: &MemoryStore) -> Vec<Scan> {
-    store.scans(&"1".into())
+    store.scans(1)
 }
 
 /// Short waits throughout, and a fallback schedule of `fallback`.

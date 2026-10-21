@@ -5,7 +5,7 @@
 use std::time::{Instant, SystemTime};
 
 use super::ScanContext;
-use crate::store::Batch;
+use crate::store::{Batch, StoreError};
 use crate::types::*;
 
 /// Why a scan leaves its walk early.
@@ -13,7 +13,7 @@ pub(super) enum Halt {
     /// The queue asked it to stop, to cancel or to shut down. `checkpoint` does not flush the
     /// batch in hand; the caller does.
     Stop,
-    /// The store failed a batch, and the scan has ended at its last persisted cursor.
+    /// The store failed, and the scan has ended at its last persisted cursor.
     Ended,
 }
 
@@ -52,33 +52,46 @@ impl Writer {
         if ctx.stopping() { Err(Halt::Stop) } else { Ok(()) }
     }
 
-    /// Persists the batch and the scan row. On a store failure the scan ends at its last persisted
-    /// cursor through [`Writer::suspend`] rather than reporting success over lost work
-    /// (`requirements/scanning.md` §10: problems are honest), and the error is [`Halt::Ended`].
+    /// Persists the batch and the scan row. On a store failure the scan ends through
+    /// [`Writer::fail`] and the error is [`Halt::Ended`].
     pub fn flush(&mut self, ctx: &ScanContext<'_>, scan: &mut Scan) -> Result<(), Halt> {
         if !self.batch.is_empty() {
             let full = std::mem::replace(&mut self.batch, Batch::new(scan.id));
-            if let Err(e) = ctx.store.apply(&ctx.library.id, full) {
-                tracing::error!(scan = scan.id, error = %e, "batch not persisted; suspending scan");
-                self.suspend(ctx, scan);
-                return Err(Halt::Ended);
-            }
+            ctx.store.apply(ctx.library.id, full).map_err(|e| self.fail(ctx, scan, &e))?;
         }
         self.persisted = (scan.cursor.clone(), scan.progress.clone());
         self.last_flush = Instant::now();
-        ctx.store.update_scan(scan);
-        Ok(())
+        self.save(ctx, scan)
+    }
+
+    /// Saves the scan row. On a store failure the scan ends through [`Writer::fail`] and the
+    /// error is [`Halt::Ended`].
+    pub fn save(&self, ctx: &ScanContext<'_>, scan: &mut Scan) -> Result<(), Halt> {
+        ctx.store.update_scan(scan).map_err(|e| self.fail(ctx, scan, &e))
+    }
+
+    /// Ends `scan` after the store failed with `error`: logs it and ends the scan at its last
+    /// persisted cursor through [`Writer::suspend`] rather than reporting success over lost work
+    /// (`requirements/scanning.md` §10: problems are honest). Returns [`Halt::Ended`] for the
+    /// caller to stop with.
+    pub fn fail(&self, ctx: &ScanContext<'_>, scan: &mut Scan, error: &StoreError) -> Halt {
+        tracing::error!(scan = scan.id, %error, "store failed; suspending scan");
+        self.suspend(ctx, scan);
+        Halt::Ended
     }
 
     /// Ends `scan` at the cursor and progress the store holds and saves its row: suspended, so a
     /// resume retries what was not persisted, or cancelled if a cancel was asked for, since a
-    /// cancelled scan never resumes.
+    /// cancelled scan never resumes. A row that cannot be saved is logged and stays as the store
+    /// last held it, queued or running, so the next start resumes the scan from there.
     pub fn suspend(&self, ctx: &ScanContext<'_>, scan: &mut Scan) {
         scan.cursor = self.persisted.0.clone();
         scan.progress = self.persisted.1.clone();
         scan.progress.current_path = None;
         scan.state = if ctx.cancelled() { ScanState::Cancelled } else { ScanState::Suspended };
         scan.finished_at = Some(SystemTime::now());
-        ctx.store.update_scan(scan);
+        if let Err(error) = ctx.store.update_scan(scan) {
+            tracing::error!(scan = scan.id, %error, "scan row not saved as it ended");
+        }
     }
 }

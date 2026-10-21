@@ -23,7 +23,7 @@ fn analyzer<S: InspectStore + 'static>(store: &Arc<S>, config: Config) -> Analyz
 }
 
 /// Whether the track at `path` has an analysis result.
-fn analyzed(store: &impl InspectStore, lib: &LibraryId, path: &Path) -> bool {
+fn analyzed(store: &impl InspectStore, lib: LibraryId, path: &Path) -> bool {
     let tracks = store.inspect_tracks(lib);
     tracks.iter().find(|t| t.path == path).unwrap_or_else(|| panic!("{tracks:?}")).analyzed
 }
@@ -57,24 +57,24 @@ fn waits_until_it_opens<S: InspectStore + 'static>(
     kind: ProblemKind,
 ) {
     let (_tmp, store, lib, file) = album(make);
-    let problem = |store: &S| store.inspect_problems(&lib).into_iter().map(|p| (p.path, p.kind));
+    let problem = |store: &S| store.inspect_problems(lib).into_iter().map(|p| (p.path, p.kind));
     hide(&file);
 
     let retried = analyzer(&store, Config::default()).with_retry_after(Duration::ZERO);
-    assert_eq!(retried.run_once(&lib, 10), report(1, 0, 1), "the other track goes on");
+    assert_eq!(retried.run_once(lib, 10), report(1, 0, 1), "the other track goes on");
     assert_eq!(problem(&store).collect::<Vec<_>>(), [(file.clone(), kind)]);
-    assert_eq!(retried.run_once(&lib, 10), report(0, 0, 1), "tried again after its wait");
+    assert_eq!(retried.run_once(lib, 10), report(0, 0, 1), "tried again after its wait");
 
     let waiting = analyzer(&store, Config::default());
-    assert_eq!(waiting.run_once(&lib, 10), report(0, 0, 1));
-    assert_eq!(waiting.run_once(&lib, 10), RunReport::default());
+    assert_eq!(waiting.run_once(lib, 10), report(0, 0, 1));
+    assert_eq!(waiting.run_once(lib, 10), RunReport::default());
     show(&file);
-    assert_eq!(waiting.run_once(&lib, 10), RunReport::default(), "still waiting");
-    assert!(!analyzed(store.as_ref(), &lib, &file));
+    assert_eq!(waiting.run_once(lib, 10), RunReport::default(), "still waiting");
+    assert!(!analyzed(store.as_ref(), lib, &file));
 
     let restarted = analyzer(&store, Config::default());
-    assert_eq!(restarted.run_once(&lib, 10), report(1, 0, 0));
-    assert!(analyzed(store.as_ref(), &lib, &file));
+    assert_eq!(restarted.run_once(lib, 10), report(1, 0, 0));
+    assert!(analyzed(store.as_ref(), lib, &file));
     assert_eq!(problem(&store).count(), 0);
 }
 
@@ -114,22 +114,22 @@ pub fn a_root_going_away_pauses_without_writing<S: InspectStore + 'static>(make:
     scan_library(store.as_ref(), &lib);
     let analyzer = analyzer(&store, Config::default());
     let placeholders = Placeholders::new(Ffmpeg::new(Config::default()), store.clone());
-    assert_eq!(analyzer.run_once(&lib.id, 1), report(1, 0, 0));
+    assert_eq!(analyzer.run_once(lib.id, 1), report(1, 0, 0));
 
     let away = tmp.path().join("away");
     fs::rename(&root, &away).unwrap();
     for _ in 0..3 {
-        assert_eq!(analyzer.run_once(&lib.id, 10), BACKED_OFF);
-        assert_eq!(placeholders.run_once(&lib.id, 10), BACKED_OFF);
+        assert_eq!(analyzer.run_once(lib.id, 10), BACKED_OFF);
+        assert_eq!(placeholders.run_once(lib.id, 10), BACKED_OFF);
     }
-    let tracks = store.inspect_tracks(&lib.id);
+    let tracks = store.inspect_tracks(lib.id);
     assert_eq!(tracks.iter().filter(|t| t.analyzed).count(), 1, "{tracks:?}");
-    assert_eq!(store.next_without_placeholder(&lib.id, 10).len(), 1);
-    assert!(store.inspect_problems(&lib.id).is_empty());
+    assert_eq!(store.next_without_placeholder(lib.id, 10).unwrap().len(), 1);
+    assert!(store.inspect_problems(lib.id).is_empty());
 
     fs::rename(&away, &root).unwrap();
-    assert_eq!(analyzer.run_once(&lib.id, 10), report(2, 0, 0));
-    assert_eq!(placeholders.run_once(&lib.id, 10), report(1, 0, 0));
+    assert_eq!(analyzer.run_once(lib.id, 10), report(2, 0, 0));
+    assert_eq!(placeholders.run_once(lib.id, 10), report(1, 0, 0));
 }
 
 /// A file whose every probe is killed by a signal backs the worker off once, then is judged and
@@ -148,13 +148,13 @@ pub fn a_file_that_always_fails_does_not_block_the_next<S: InspectStore + 'stati
     let ffprobe = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake-ffprobe.sh");
     let analyzer = analyzer(&store, Config { ffprobe, ..Config::default() });
 
-    assert!(analyzer.run_once(&lib.id, 10).backed_off);
-    assert!(!analyzed(store.as_ref(), &lib.id, &killed), "a first failure may pass");
-    assert_eq!(analyzer.run_once(&lib.id, 10).failed, 1);
-    assert_eq!(analyzer.run_once(&lib.id, 10), RunReport::default(), "nothing left");
-    let tracks = store.inspect_tracks(&lib.id);
+    assert!(analyzer.run_once(lib.id, 10).backed_off);
+    assert!(!analyzed(store.as_ref(), lib.id, &killed), "a first failure may pass");
+    assert_eq!(analyzer.run_once(lib.id, 10).failed, 1);
+    assert_eq!(analyzer.run_once(lib.id, 10), RunReport::default(), "nothing left");
+    let tracks = store.inspect_tracks(lib.id);
     assert!(tracks.iter().all(|t| t.analyzed), "{tracks:?}");
-    let problems = store.inspect_problems(&lib.id);
+    let problems = store.inspect_problems(lib.id);
     assert_eq!(problems.iter().map(|p| &p.path).collect::<Vec<_>>(), [&killed]);
     assert!(problems[0].detail.starts_with("ffmpeg was killed by signal 9"), "{problems:?}");
 }
@@ -163,10 +163,10 @@ pub fn a_file_that_always_fails_does_not_block_the_next<S: InspectStore + 'stati
 /// the queue for a newer one (`design/scanning.md` §12).
 pub fn an_older_analyzers_results_are_redone<S: InspectStore>(make: Factory<S>) {
     let (_tmp, store, lib, _) = album(make);
-    let queued = |version| store.next_unanalyzed(&lib, version, 10).len();
+    let queued = |version| store.next_unanalyzed(lib, version, 10).unwrap().len();
     assert_eq!((queued(0), queued(1)), (0, 2), "nothing is below version 0");
-    let track = store.next_unanalyzed(&lib, 1, 1)[0].0;
-    store.store_analysis(&lib, track, AnalysisResult::empty(1));
+    let track = store.next_unanalyzed(lib, 1, 1).unwrap()[0].0;
+    store.store_analysis(lib, track, AnalysisResult::empty(1)).unwrap();
     assert_eq!((queued(1), queued(2)), (1, 2), "version 1's result is redone for version 2");
 }
 
@@ -175,11 +175,11 @@ pub fn an_older_analyzers_results_are_redone<S: InspectStore>(make: Factory<S>) 
 pub fn an_unopenable_file_does_not_starve_the_next<S: InspectStore + 'static>(make: Factory<S>) {
     let (_tmp, store, lib, _) = album(make);
     // The queue's order is the store's to choose.
-    let first = store.next_unanalyzed(&lib, ANALYZER_VERSION, 1).remove(0).1.path;
+    let first = store.next_unanalyzed(lib, ANALYZER_VERSION, 1).unwrap().remove(0).1.path;
     fs::rename(&first, first.with_extension("away")).unwrap();
     let analyzer = analyzer(&store, Config::default());
-    assert_eq!(analyzer.run_once(&lib, 1), report(0, 0, 1));
-    assert_eq!(analyzer.run_once(&lib, 1), report(1, 0, 0));
+    assert_eq!(analyzer.run_once(lib, 1), report(0, 0, 1));
+    assert_eq!(analyzer.run_once(lib, 1), report(1, 0, 0));
 }
 
 /// Opening a file clears only a problem saying it could not be opened: a placeholder made from a
@@ -195,9 +195,9 @@ pub fn opening_a_file_clears_only_unopened_problems<S: InspectStore + 'static>(m
     };
     let problems =
         vec![problem(&file, ProblemKind::CorruptAudio), problem(&other, ProblemKind::Unreadable)];
-    store.apply(&lib, Batch { problems, ..Batch::default() }).unwrap();
-    store.apply(&lib, Batch { opened: vec![file.clone(), other], ..Batch::default() }).unwrap();
-    let left = store.inspect_problems(&lib);
+    store.apply(lib, Batch { problems, ..Batch::default() }).unwrap();
+    store.apply(lib, Batch { opened: vec![file.clone(), other], ..Batch::default() }).unwrap();
+    let left = store.inspect_problems(lib);
     assert_eq!(
         left.iter().map(|p| (&p.path, p.kind)).collect::<Vec<_>>(),
         [(&file, ProblemKind::CorruptAudio)]
@@ -215,23 +215,23 @@ pub fn a_cover_moved_away_waits_until_it_returns<S: InspectStore + 'static>(make
     let store = Arc::new(make(&root));
     let lib = library(&root);
     scan_library(store.as_ref(), &lib);
-    let hash = store.next_without_placeholder(&lib.id, 10).remove(0).0;
+    let hash = store.next_without_placeholder(lib.id, 10).unwrap().remove(0).0;
     let placeholders = Placeholders::new(Ffmpeg::new(Config::default()), store.clone())
         .with_retry_after(Duration::ZERO);
 
     fs::rename(&cover, tmp.path().join("cover.png")).unwrap();
-    assert_eq!(placeholders.run_once(&lib.id, 10), report(0, 0, 1));
-    let problems = store.inspect_problems(&lib.id);
+    assert_eq!(placeholders.run_once(lib.id, 10), report(0, 0, 1));
+    let problems = store.inspect_problems(lib.id);
     assert_eq!(
         problems.iter().map(|p| (&p.path, p.kind)).collect::<Vec<_>>(),
         [(&cover, ProblemKind::Unreadable)]
     );
-    assert_eq!(store.inspect_placeholder(&lib.id, &hash), None);
+    assert_eq!(store.inspect_placeholder(lib.id, &hash), None);
 
     fs::rename(tmp.path().join("cover.png"), &cover).unwrap();
-    assert_eq!(placeholders.run_once(&lib.id, 10), report(1, 0, 0));
-    assert!(store.inspect_placeholder(&lib.id, &hash).is_some_and(|p| !p.is_empty()));
-    assert!(store.inspect_problems(&lib.id).is_empty());
+    assert_eq!(placeholders.run_once(lib.id, 10), report(1, 0, 0));
+    assert!(store.inspect_placeholder(lib.id, &hash).is_some_and(|p| !p.is_empty()));
+    assert!(store.inspect_problems(lib.id).is_empty());
 }
 
 /// A track replaced by a pipe after the scan is judged without opening it, which would block
@@ -242,11 +242,10 @@ pub fn a_pipe_is_judged_without_blocking<S: InspectStore + 'static>(make: Factor
     assert!(Command::new("mkfifo").arg(&file).status().unwrap().success());
     let analyzer = analyzer(&store, Config::default());
     let (sent, received) = mpsc::channel();
-    let pass = lib.clone();
-    std::thread::spawn(move || sent.send(analyzer.run_once(&pass, 10)));
+    std::thread::spawn(move || sent.send(analyzer.run_once(lib, 10)));
     let report = received.recv_timeout(Duration::from_secs(30)).expect("the pass blocked");
     assert_eq!(report, self::report(1, 1, 0));
-    let problems = store.inspect_problems(&lib);
+    let problems = store.inspect_problems(lib);
     assert_eq!(
         problems.iter().map(|p| (&p.path, p.detail.as_str())).collect::<Vec<_>>(),
         [(&file, "not a regular file")]
@@ -268,10 +267,10 @@ pub fn a_decoder_that_cannot_start_backs_off<S: InspectStore + 'static>(make: Fa
     let ffprobe = PathBuf::from("/nonexistent/ffprobe");
     let analyzer = analyzer(&store, Config { ffprobe, ..Config::default() });
     for _ in 0..3 {
-        assert_eq!(analyzer.run_once(&lib, 10), BACKED_OFF);
+        assert_eq!(analyzer.run_once(lib, 10), BACKED_OFF);
     }
-    assert!(store.inspect_tracks(&lib).iter().all(|t| !t.analyzed));
-    assert!(store.inspect_problems(&lib).is_empty());
+    assert!(store.inspect_tracks(lib).iter().all(|t| !t.analyzed));
+    assert!(store.inspect_problems(lib).is_empty());
 }
 
 /// A file that becomes a symlink after the scan is never decoded through it, whether the link
@@ -298,11 +297,11 @@ pub fn a_link_is_judged_once<S: InspectStore + 'static>(make: Factory<S>) {
     let analyzer = analyzer(&store, Config::default());
     let placeholders = Placeholders::new(Ffmpeg::new(Config::default()), store.clone());
 
-    assert_eq!(analyzer.run_once(&lib.id, 10), report(1, 3, 0));
-    assert_eq!(analyzer.run_once(&lib.id, 10), RunReport::default(), "not tried again");
-    assert_eq!(placeholders.run_once(&lib.id, 10), report(0, 1, 0));
-    assert_eq!(placeholders.run_once(&lib.id, 10), RunReport::default(), "not tried again");
-    let problems = store.inspect_problems(&lib.id);
+    assert_eq!(analyzer.run_once(lib.id, 10), report(1, 3, 0));
+    assert_eq!(analyzer.run_once(lib.id, 10), RunReport::default(), "not tried again");
+    assert_eq!(placeholders.run_once(lib.id, 10), report(0, 1, 0));
+    assert_eq!(placeholders.run_once(lib.id, 10), RunReport::default(), "not tried again");
+    let problems = store.inspect_problems(lib.id);
     assert!(problems.iter().all(|p| p.detail == "symlinks are not followed"), "{problems:?}");
     let mut paths: Vec<_> = problems.into_iter().map(|p| p.path).collect();
     paths.sort();

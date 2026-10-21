@@ -55,9 +55,9 @@ fn replaced_audio_loses_its_analysis_and_a_lyrics_file_keeps_it() {
     let store = make(&root);
     let lib = testing::library(&root);
     testing::scan_library(&store, &lib);
-    for (track, file) in store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 2) {
+    for (track, file) in store.next_unanalyzed(lib.id, ANALYZER_VERSION, 2).unwrap() {
         let lufs = if file.path == one { -10.0 } else { -20.0 };
-        store.store_analysis(&lib.id, track, measured(lufs));
+        store.store_analysis(lib.id, track, measured(lufs)).unwrap();
     }
     let version = i64::from(ANALYZER_VERSION);
     let analyzed = |path: &str, lufs| (path.to_owned(), version, Some(lufs), Some(-1.0), true);
@@ -86,13 +86,13 @@ fn a_result_for_replaced_audio_writes_nothing() {
     let store = make(&root);
     let lib = testing::library(&root);
     testing::scan_library(&store, &lib);
-    let (picked, file) = store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 1).remove(0);
+    let (picked, file) = store.next_unanalyzed(lib.id, ANALYZER_VERSION, 1).unwrap().remove(0);
 
     testing::replace_audio(&file.path, "Track 1");
     assert_eq!(testing::scan_library(&store, &lib).progress.updated, 1);
-    store.store_analysis(&lib.id, picked, measured(-10.0));
+    store.store_analysis(lib.id, picked, measured(-10.0)).unwrap();
     assert_eq!(analysis(&store), [("A/X/01 - Track 1.wav".to_owned(), 0, None, None, false)]);
-    assert_eq!(store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 10).len(), 1);
+    assert_eq!(store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap().len(), 1);
 }
 
 /// Audio replaced by a file that cannot be read loses its loudness, peak and waveform, though the
@@ -108,7 +108,7 @@ fn audio_replaced_by_an_unreadable_file_loses_its_analysis() {
     let first = ("A/X/01 - Track 1.wav".to_owned(), version, Some(-10.0), Some(-1.0), true);
     let cleared = ("A/X/02 - Track 2.wav".to_owned(), 0, None, None, false);
     assert_eq!(analysis(&store), [first, cleared]);
-    assert!(store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 10).is_empty());
+    assert!(store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap().is_empty());
     assert_eq!(album_lufs(&store), Some(-10.0), "the album is as loud as its analyzed track");
 }
 
@@ -126,8 +126,8 @@ fn a_silent_track_replaced_unreadably_loses_its_waveform() {
         waveform: Waveform { peaks: vec![0, 0], rms: vec![0, 0] },
         ..AnalysisResult::empty(ANALYZER_VERSION)
     };
-    let (track, file) = store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 1).remove(0);
-    store.store_analysis(&lib.id, track, silence);
+    let (track, file) = store.next_unanalyzed(lib.id, ANALYZER_VERSION, 1).unwrap().remove(0);
+    store.store_analysis(lib.id, track, silence).unwrap();
     let version = i64::from(ANALYZER_VERSION);
     let path = "A/X/01 - Track 1.wav".to_owned();
     assert_eq!(analysis(&store), [(path.clone(), version, None, None, true)]);
@@ -171,9 +171,9 @@ fn measured_album() -> (tempfile::TempDir, SqliteStore, LibraryConfig, std::path
     let store = make(&root);
     let lib = testing::library(&root);
     testing::scan_library(&store, &lib);
-    for (track, file) in store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 2) {
+    for (track, file) in store.next_unanalyzed(lib.id, ANALYZER_VERSION, 2).unwrap() {
         let lufs = if file.path.ends_with("01 - Track 1.wav") { -10.0 } else { -20.0 };
-        store.store_analysis(&lib.id, track, measured(lufs));
+        store.store_analysis(lib.id, track, measured(lufs)).unwrap();
     }
     assert_eq!(album_lufs(&store), Some(-12.6));
     (tmp, store, lib, root)

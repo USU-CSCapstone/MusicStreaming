@@ -23,12 +23,12 @@ pub(super) fn analyzed_album<S: InspectStore>(
     let store = make(&root);
     let lib = library(&root);
     scan_library(&store, &lib);
-    for (track, _) in store.next_unanalyzed(&lib.id, ANALYZER_VERSION, n) {
+    for (track, _) in store.next_unanalyzed(lib.id, ANALYZER_VERSION, n).unwrap() {
         let measured = AnalysisResult {
             integrated_lufs: Some(-10.0),
             ..AnalysisResult::empty(ANALYZER_VERSION)
         };
-        store.store_analysis(&lib.id, track, measured);
+        store.store_analysis(lib.id, track, measured).unwrap();
     }
     assert!(live(&store, &lib).iter().all(|t| t.measured));
     (tmp, store, lib, root.join("A/X"))
@@ -79,7 +79,8 @@ pub fn a_changed_file_is_analyzed_again<S: InspectStore>(make: Factory<S>) {
     let analyzed: Vec<bool> = live(&store, &lib).iter().map(|t| t.analyzed).collect();
     assert_eq!(analyzed, [false, false, false, true]);
     let mut queued: Vec<PathBuf> = store
-        .next_unanalyzed(&lib.id, ANALYZER_VERSION, 10)
+        .next_unanalyzed(lib.id, ANALYZER_VERSION, 10)
+        .unwrap()
         .into_iter()
         .map(|(_, file)| file.path)
         .collect();
@@ -96,7 +97,7 @@ pub fn a_lyrics_file_alone_keeps_the_analysis<S: InspectStore>(make: Factory<S>)
     assert_eq!(scan_library(&store, &lib).progress.updated, 1);
     let tracks = live(&store, &lib);
     assert!(tracks[0].has_sidecar_lyrics && tracks[0].analyzed, "{tracks:?}");
-    assert!(store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 10).is_empty());
+    assert!(store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap().is_empty());
 }
 
 /// A result for a file changed and rescanned while it was being decoded is not stored, whether
@@ -109,7 +110,7 @@ pub fn a_result_for_replaced_audio_is_not_stored<S: InspectStore>(make: Factory<
     let store = make(&root);
     let lib = library(&root);
     scan_library(&store, &lib);
-    let picked = store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 2);
+    let picked = store.next_unanalyzed(lib.id, ANALYZER_VERSION, 2).unwrap();
     let (one, two) = (root.join("A/X/01 - Track 1.wav"), root.join("A/X/02 - Track 2.wav"));
 
     replace_audio(&one, "Track 1");
@@ -118,8 +119,8 @@ pub fn a_result_for_replaced_audio_is_not_stored<S: InspectStore>(make: Factory<
     set_modified(&two, at);
     assert_eq!(scan_library(&store, &lib).progress.updated, 2);
     for (track, _) in picked {
-        store.store_analysis(&lib.id, track, AnalysisResult::empty(ANALYZER_VERSION));
+        store.store_analysis(lib.id, track, AnalysisResult::empty(ANALYZER_VERSION)).unwrap();
     }
     assert!(live(&store, &lib).iter().all(|t| !t.analyzed));
-    assert_eq!(store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 10).len(), 2);
+    assert_eq!(store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap().len(), 2);
 }

@@ -15,7 +15,7 @@ use super::libraries;
 use super::store::SqliteStore;
 use super::testing::Image;
 
-/// The suite's library has id "1"; its database lives beside the root.
+/// The suite's library has id 1; its database lives beside the root.
 fn make(root: &Path) -> SqliteStore {
     let dir = root.parent().unwrap().join("state");
     std::fs::create_dir_all(&dir).unwrap();
@@ -47,8 +47,7 @@ fn format_of(codec: &str, container: &str) -> Format {
 }
 
 impl InspectStore for SqliteStore {
-    fn inspect_tracks(&self, library: &LibraryId) -> Vec<InspectTrack> {
-        let lib: i64 = library.parse().unwrap();
+    fn inspect_tracks(&self, lib: LibraryId) -> Vec<InspectTrack> {
         self.db().read_blocking(move |conn| {
         let roots: std::collections::HashMap<i64, PathBuf> = libraries::roots(conn, lib)
             .unwrap()
@@ -124,7 +123,7 @@ impl InspectStore for SqliteStore {
                     .unwrap()
             };
             out.push(InspectTrack {
-                id: id as u64,
+                id,
                 path: roots[&root_id].join(&rel),
                 missing,
                 title,
@@ -151,8 +150,7 @@ impl InspectStore for SqliteStore {
         .unwrap()
     }
 
-    fn inspect_problems(&self, library: &LibraryId) -> Vec<Problem> {
-        let lib: i64 = library.parse().unwrap();
+    fn inspect_problems(&self, lib: LibraryId) -> Vec<Problem> {
         self.db().read_blocking(move |conn| {
         let roots: std::collections::HashMap<i64, PathBuf> = libraries::roots(conn, lib)
             .unwrap()
@@ -180,8 +178,7 @@ impl InspectStore for SqliteStore {
         .unwrap()
     }
 
-    fn inspect_placeholder(&self, library: &LibraryId, hash: &[u8]) -> Option<Vec<u8>> {
-        let lib: i64 = library.parse().unwrap();
+    fn inspect_placeholder(&self, lib: LibraryId, hash: &[u8]) -> Option<Vec<u8>> {
         let hash = hash.to_vec();
         self.db()
             .read_blocking(move |conn| {
@@ -196,12 +193,11 @@ impl InspectStore for SqliteStore {
             .flatten()
     }
 
-    fn inspect_scans(&self, library: &LibraryId) -> Vec<Scan> {
-        self.scans(library.parse().unwrap()).unwrap()
+    fn inspect_scans(&self, lib: LibraryId) -> Vec<Scan> {
+        self.scans(lib).unwrap()
     }
 
-    fn feed_head(&self, library: &LibraryId) -> i64 {
-        let lib: i64 = library.parse().unwrap();
+    fn feed_head(&self, lib: LibraryId) -> i64 {
         self.db()
             .read_blocking(move |conn| {
                 conn.query_row(
@@ -213,8 +209,7 @@ impl InspectStore for SqliteStore {
             .unwrap()
     }
 
-    fn feed_tracks_after(&self, library: &LibraryId, head: i64) -> Vec<TrackId> {
-        let lib: i64 = library.parse().unwrap();
+    fn feed_tracks_after(&self, lib: LibraryId, head: i64) -> Vec<TrackId> {
         self.db()
             .read_blocking(move |conn| {
                 conn.prepare(
@@ -236,6 +231,7 @@ mod suite {
 }
 
 mod derived;
+mod failures;
 mod reanalysis;
 mod recompute;
 mod totals;
@@ -277,13 +273,13 @@ fn a_placeholder_is_an_album_change() {
     let album_seq = |store: &SqliteStore| {
         scalar::<i64>(store, "SELECT seq FROM library_changes WHERE entity_type = 'album'").unwrap()
     };
-    let (hash, _) = store.next_without_placeholder(&lib.id, 1).remove(0);
+    let (hash, _) = store.next_without_placeholder(lib.id, 1).unwrap().remove(0);
 
     // One that could not be made changes nothing clients see.
     let before = album_seq(&store);
-    store.store_placeholder(&lib.id, &hash, Vec::new());
+    store.store_placeholder(lib.id, &hash, Vec::new()).unwrap();
     assert_eq!(album_seq(&store), before);
-    store.store_placeholder(&lib.id, &hash, vec![1, 2, 3]);
+    store.store_placeholder(lib.id, &hash, vec![1, 2, 3]).unwrap();
     assert!(album_seq(&store) > before);
 }
 
@@ -489,21 +485,12 @@ fn unreadable_settings_fail_loudly_rather_than_read_as_empty() {
     let root = tmp.path().join("lib");
     std::fs::create_dir_all(&root).unwrap();
     let store = make(&root);
-    let lib = testing::library(&root);
-    // Valid JSON arrays, as the schema checks, but not of what they should hold.
+    // A valid JSON array, as the schema checks, but not of what it should hold.
     store
         .db()
-        .write_blocking(|tx| {
-            tx.execute_batch(
-                "UPDATE libraries SET excludes = '[1]';
-                 INSERT INTO scans (id, library_id, trigger, state, scopes, created_at)
-                 VALUES (7, 1, 'manual', 'running', '[1]', 0);",
-            )
-        })
+        .write_blocking(|tx| tx.execute("UPDATE libraries SET excludes = '[1]'", []))
         .unwrap();
-    assert!(store.db().read_blocking(libraries::all).is_err(), "excludes");
-    assert!(store.scans(1).is_err(), "scopes");
-    assert!(store.interrupted_scans(&lib.id).is_empty());
+    assert!(store.db().read_blocking(libraries::all).is_err());
 }
 
 #[test]
@@ -518,7 +505,7 @@ fn a_scan_that_cannot_be_recorded_is_not_recorded_empty() {
     let folder = root.join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
     let scan = Scan {
         id: 0,
-        library: lib.id.clone(),
+        library: lib.id,
         trigger: Trigger::Watch,
         scopes: vec![Scope::folder(&root, folder, Depth::Directory)],
         state: ScanState::Queued,
@@ -527,7 +514,7 @@ fn a_scan_that_cannot_be_recorded_is_not_recorded_empty() {
         progress: ScanProgress::default(),
         cursor: None,
     };
-    assert_eq!(store.create_scan(&scan), 0);
+    assert!(store.create_scan(&scan).is_err());
     assert!(store.scans(1).unwrap().is_empty());
 }
 
@@ -701,9 +688,9 @@ fn analysis_results_reach_tracks_albums_and_waveforms() {
         store.clone(),
         Arc::new(Governor::new()),
     );
-    let report = analyzer.run_once(&lib.id, 10);
+    let report = analyzer.run_once(lib.id, 10);
     assert_eq!(report.done, 1);
-    assert_eq!(analyzer.run_once(&lib.id, 10).done, 0, "nothing left");
+    assert_eq!(analyzer.run_once(lib.id, 10).done, 0, "nothing left");
     let lufs: f64 = scalar(&store, "SELECT loudness_lufs FROM tracks").unwrap();
     assert!((lufs - -6.7).abs() < 1.0, "{lufs}");
     assert_eq!(
@@ -736,24 +723,24 @@ fn another_librarys_track_is_left_alone() {
         })
         .unwrap();
     store.refresh_roots().unwrap();
-    let track = scalar::<i64>(&store, "SELECT id FROM tracks").unwrap() as TrackId;
+    let track: TrackId = scalar(&store, "SELECT id FROM tracks").unwrap();
 
-    let other: LibraryId = "2".into();
+    let other: LibraryId = 2;
     let mut batch = Batch::new(999);
     batch.returned.push(track);
     batch.changed_unread.push(track);
-    store.apply(&other, batch).unwrap();
+    store.apply(other, batch).unwrap();
     // No peaks: the path that deletes a waveform. The file is as picked, so only the library
     // stops the write.
     let result = AnalysisResult { integrated_lufs: Some(-9.0), ..AnalysisResult::empty(1) };
     let stamp = |sql| scalar::<i64>(&store, sql).unwrap() as u64;
     let (size, mtime_ms) =
         (stamp("SELECT file_size FROM tracks"), stamp("SELECT file_mtime FROM tracks"));
-    store.store_analysis(&other, PickedTrack { id: track, size, mtime_ms }, result);
+    store.store_analysis(other, PickedTrack { id: track, size, mtime_ms }, result).unwrap();
     // A placeholder made in library 2 for content only library 1 has an image of.
     store.db().write_blocking(|tx| Image::new(1, 1, "A/X/cover.png").insert(tx)).unwrap();
     let hash = 1_i64.to_be_bytes();
-    store.store_placeholder(&other, &hash, vec![1, 2, 3]);
+    store.store_placeholder(other, &hash, vec![1, 2, 3]).unwrap();
 
     let row = "SELECT missing_since, last_seen_scan_id = 999, analyzer_version FROM tracks";
     let unchanged = store
@@ -770,7 +757,7 @@ fn another_librarys_track_is_left_alone() {
         count(&store, "SELECT COUNT(*) FROM images WHERE id = 1 AND placeholder IS NULL"),
         1
     );
-    assert_eq!(store.feed_head(&other), 0);
+    assert_eq!(store.feed_head(other), 0);
 }
 
 #[test]
@@ -781,7 +768,7 @@ fn an_upsert_naming_another_librarys_track_is_skipped() {
     let store = make(&root);
     let lib = testing::library(&root);
     // A track with an artist, an album artist, and a genre.
-    store.apply(&lib.id, Batch { upserts: vec![record(&root, 0)], ..Batch::new(1) }).unwrap();
+    store.apply(lib.id, Batch { upserts: vec![record(&root, 0)], ..Batch::new(1) }).unwrap();
     let other_root = tmp.path().join("other");
     let created = other_root.clone();
     store
@@ -789,17 +776,17 @@ fn an_upsert_naming_another_librarys_track_is_skipped() {
         .write_blocking(move |tx| libraries::create(tx, Some(2), "Other", &[&created], &[]))
         .unwrap();
     store.refresh_roots().unwrap();
-    let (before, head) = (store.inspect_tracks(&lib.id), store.feed_head(&lib.id));
+    let (before, head) = (store.inspect_tracks(lib.id), store.feed_head(lib.id));
 
     // A record for a file under library 2's root that carries library 1's track ID.
-    let other: LibraryId = "2".into();
+    let other: LibraryId = 2;
     let mut batch = Batch::new(999);
     batch.upserts.push(TrackRecord { id: Some(before[0].id), ..record(&other_root, 0) });
-    store.apply(&other, batch).unwrap();
+    store.apply(other, batch).unwrap();
 
-    assert_eq!(store.inspect_tracks(&lib.id), before);
-    assert_eq!(store.feed_head(&lib.id), head);
-    assert!(store.inspect_tracks(&other).is_empty());
+    assert_eq!(store.inspect_tracks(lib.id), before);
+    assert_eq!(store.feed_head(lib.id), head);
+    assert!(store.inspect_tracks(other).is_empty());
     let made = "SELECT (SELECT COUNT(*) FROM albums WHERE library_id = 2) \
                 + (SELECT COUNT(*) FROM artists WHERE library_id = 2)";
     assert_eq!(count(&store, made), 0, "nothing made for it is left behind");
@@ -876,17 +863,19 @@ fn benchmark_cold_scan_store_only() {
 
     let synth = |i: usize| record(&root, i);
 
-    let scan_id = store.create_scan(&Scan {
-        id: 0,
-        library: lib.id.clone(),
-        trigger: Trigger::Initial,
-        scopes: vec![Scope::root(&root)],
-        state: ScanState::Running,
-        started_at: None,
-        finished_at: None,
-        progress: ScanProgress::default(),
-        cursor: None,
-    });
+    let scan_id = store
+        .create_scan(&Scan {
+            id: 0,
+            library: lib.id,
+            trigger: Trigger::Initial,
+            scopes: vec![Scope::root(&root)],
+            state: ScanState::Running,
+            started_at: None,
+            finished_at: None,
+            progress: ScanProgress::default(),
+            cursor: None,
+        })
+        .unwrap();
 
     let started = Instant::now();
     let batch_size = 250;
@@ -896,7 +885,7 @@ fn benchmark_cold_scan_store_only() {
         for j in i..(i + batch_size).min(tracks) {
             batch.upserts.push(synth(j));
         }
-        store.apply(&lib.id, batch).unwrap();
+        store.apply(lib.id, batch).unwrap();
         i += batch_size;
     }
     let insert = started.elapsed();
@@ -904,7 +893,7 @@ fn benchmark_cold_scan_store_only() {
     let started = Instant::now();
     let mut hits = 0;
     for j in 0..tracks {
-        if store.lookup(&lib.id, &synth(j).path).is_some() {
+        if store.lookup(lib.id, &synth(j).path).unwrap().is_some() {
             hits += 1;
         }
     }
@@ -913,11 +902,11 @@ fn benchmark_cold_scan_store_only() {
 
     // An unchanged rescan: touches only.
     let started = Instant::now();
-    let ids: Vec<u64> = store.inspect_tracks(&lib.id).iter().map(|t| t.id).collect();
+    let ids: Vec<TrackId> = store.inspect_tracks(lib.id).iter().map(|t| t.id).collect();
     for chunk in ids.chunks(batch_size) {
         let mut batch = Batch::new(scan_id + 1);
         batch.touched.extend_from_slice(chunk);
-        store.apply(&lib.id, batch).unwrap();
+        store.apply(lib.id, batch).unwrap();
     }
     let touch = started.elapsed();
 

@@ -36,7 +36,7 @@ fn a_scope_inside_an_excluded_folder_indexes_nothing() {
     let scan = watch_scan(&store, &lib, scopes);
 
     assert_eq!((scan.state, scan.progress.files_seen), (ScanState::Completed, 1), "{scan:?}");
-    let paths: Vec<_> = store.tracks(&lib.id).into_iter().map(|t| t.record.path).collect();
+    let paths: Vec<_> = store.tracks(lib.id).into_iter().map(|t| t.record.path).collect();
     assert_eq!(paths, [track(&root, "A/X", 1)]);
 }
 
@@ -54,7 +54,7 @@ fn a_scope_inside_a_newly_excluded_folder_marks_its_tracks_missing() {
     let scan = watch_scan(&store, &lib, vec![scope]);
     assert_eq!((scan.state, scan.progress.missing), (ScanState::Completed, 1), "{scan:?}");
     let missing: Vec<_> =
-        store.tracks(&lib.id).into_iter().filter(|t| t.missing).map(|t| t.record.path).collect();
+        store.tracks(lib.id).into_iter().filter(|t| t.missing).map(|t| t.record.path).collect();
     assert_eq!(missing, [track(&root, "backup/X", 1)]);
 }
 
@@ -72,8 +72,8 @@ fn a_linked_scope_inside_an_excluded_folder_reports_nothing() {
     let scope = Scope::folder(&root, root.join("backup/B/Y"), Depth::Directory);
     let scan = watch_scan(&store, &lib, vec![scope]);
     assert_eq!((scan.state, scan.progress.problems), (ScanState::Completed, 0), "{scan:?}");
-    assert!(store.problems(&lib.id).is_empty());
-    assert!(store.tracks(&lib.id).is_empty());
+    assert!(store.problems(lib.id).is_empty());
+    assert!(store.tracks(lib.id).is_empty());
 }
 
 /// An exclude pattern that does not compile suspends the scan before it touches anything: a file
@@ -87,7 +87,7 @@ fn an_invalid_pattern_suspends_and_leaves_the_store_untouched() {
     let store = MemoryStore::new();
     scan_flushing_often(&store, &library(&root));
     let tracks = || -> Vec<_> {
-        let tracks = store.tracks(&lib.id).into_iter();
+        let tracks = store.tracks(lib.id).into_iter();
         tracks.map(|t| (t.record.path, t.missing, t.record.last_seen_scan)).collect()
     };
     let before = tracks();
@@ -98,9 +98,9 @@ fn an_invalid_pattern_suspends_and_leaves_the_store_untouched() {
 
     assert_eq!((scan.state, &scan.cursor), (ScanState::Suspended, &None), "{scan:?}");
     assert_eq!(scan.progress, ScanProgress::default());
-    let row = store.scans(&lib.id).into_iter().find(|s| s.id == scan.id).unwrap();
+    let row = store.scans(lib.id).into_iter().find(|s| s.id == scan.id).unwrap();
     assert_eq!((row.state, row.started_at), (ScanState::Suspended, None));
     assert!(row.finished_at.is_some());
     assert_eq!(tracks(), before);
-    assert!(store.problems(&lib.id).is_empty());
+    assert!(store.problems(lib.id).is_empty());
 }

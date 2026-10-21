@@ -48,16 +48,18 @@ impl Placeholders {
     /// Fills up to `limit` placeholders, skipping images whose files are waiting to be tried
     /// again. A failure is handled as [`crate::jobs`] describes; a verdict is stored empty, and
     /// new content is a new image, which gets a new try.
-    pub fn run_once(&self, library: &LibraryId, limit: usize) -> RunReport {
-        let queue = self.store.next_without_placeholder(library, self.retries.fetch(limit));
+    pub fn run_once(&self, library: LibraryId, limit: usize) -> RunReport {
+        let store = self.store.as_ref();
+        let next = |fetch| store.next_without_placeholder(library, fetch);
         let decode = |file: &FileToDecode| {
             let path = file.open().map_err(Failure::Open)?;
             self.placeholder(&path).map_err(|error| Failure::from_ffmpeg(&file.path, &error))
         };
         let keep = |hash: Vec<u8>, placeholder: Option<Vec<u8>>| {
-            self.store.store_placeholder(library, &hash, placeholder.unwrap_or_default());
+            store.store_placeholder(library, &hash, placeholder.unwrap_or_default())
         };
-        self.retries.pass(self.store.as_ref(), library, queue, limit, decode, keep)
+        let pass = self.retries.pass(store, library, limit, next, decode, keep);
+        pass.unwrap_or_else(RunReport::store_failed)
     }
 
     /// Runs in the background until stopped, sleeping when idle or backing off.
@@ -68,7 +70,7 @@ impl Placeholders {
             .name("scanner-placeholders".into())
             .spawn(move || {
                 while !stopping.load(Ordering::SeqCst) {
-                    if self.run_once(&library, 32).idle() {
+                    if self.run_once(library, 32).idle() {
                         // Woken early by `stop`.
                         std::thread::park_timeout(idle_sleep);
                     }

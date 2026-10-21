@@ -29,10 +29,9 @@ pub fn next_unanalyzed(
     let found = store.db.read_blocking(move |conn| {
         conn.prepare_cached(UNANALYZED)?
             .query_map(params![lib, analyzer_version as i64, limit as i64], |r| {
-                let (id, size, mtime_ms) =
-                    (r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?);
+                let (size, mtime_ms) = (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?);
                 let track =
-                    PickedTrack { id: id as u64, size: size as u64, mtime_ms: mtime_ms as u64 };
+                    PickedTrack { id: r.get(0)?, size: size as u64, mtime_ms: mtime_ms as u64 };
                 Ok((track, r.get(3)?, r.get(4)?))
             })?
             .collect()
@@ -52,7 +51,7 @@ pub fn store_analysis(
 ) -> Result<(), DbError> {
     store.db.write_blocking(move |tx| {
         let now = now_ms();
-        let id = track.id as i64;
+        let id = track.id;
         // No row means the track is not in this library or its file changed, so nothing else
         // may change.
         let Some(album_id) = tx

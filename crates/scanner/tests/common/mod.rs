@@ -52,8 +52,9 @@ pub fn encode(wav: &Path, out: &Path, args: &[&str]) {
     assert!(status.success(), "ffmpeg failed encoding {}", out.display());
 }
 
+/// Library 1, with `root` as its one root and no excludes.
 pub fn library(root: &Path) -> LibraryConfig {
-    LibraryConfig { id: "lib".into(), roots: vec![root.to_path_buf()], excludes: Vec::new() }
+    LibraryConfig { id: 1, roots: vec![root.to_path_buf()], excludes: Vec::new() }
 }
 
 /// Run one scan of `scopes` synchronously against `store`.
@@ -68,7 +69,7 @@ pub fn scan_once(
     let options = ScanOptions::default();
     let mut scan = Scan {
         id: 0,
-        library: lib.id.clone(),
+        library: lib.id,
         trigger,
         scopes,
         state: ScanState::Queued,
@@ -77,7 +78,7 @@ pub fn scan_once(
         progress: ScanProgress::default(),
         cursor: None,
     };
-    scan.id = store.create_scan(&scan);
+    scan.id = store.create_scan(&scan).unwrap();
     let ctx = ScanContext {
         store,
         library: lib,
@@ -98,9 +99,10 @@ pub fn shared(store: MemoryStore) -> Arc<MemoryStore> {
     Arc::new(store)
 }
 
+/// The paths of `lib`'s tracks not marked missing, sorted.
 pub fn paths_of(store: &MemoryStore, lib: &LibraryConfig) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> =
-        store.tracks(&lib.id).into_iter().filter(|t| !t.missing).map(|t| t.record.path).collect();
+        store.tracks(lib.id).into_iter().filter(|t| !t.missing).map(|t| t.record.path).collect();
     v.sort();
     v
 }

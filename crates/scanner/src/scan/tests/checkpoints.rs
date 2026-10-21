@@ -21,8 +21,9 @@ fn applied_before_last(options: &ScanOptions) -> (usize, Scan) {
         if path == last {
             applied_before_last.store(applied.load(Ordering::SeqCst), Ordering::SeqCst);
         }
+        Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup };
+    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup, on_under: || Ok(()) };
     let mut scan = new_scan(&store, &lib);
     run(&store, &lib, &mut scan, options, &Stops::default());
     (applied_before_last.load(Ordering::SeqCst), scan)
@@ -65,8 +66,10 @@ fn a_cancel_partway_through_a_folder_stops_there_and_counts_what_it_saw() {
         if path == cancel_at {
             stops.cancel.store(true, Ordering::SeqCst);
         }
+        Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup };
+    let store =
+        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: || Ok(()) };
     let mut scan = new_scan(&store, &lib);
     run(&store, &lib, &mut scan, &batches_of(1000), &stops);
 
@@ -81,5 +84,5 @@ fn a_cancel_partway_through_a_folder_stops_there_and_counts_what_it_saw() {
     };
     assert_eq!(row.progress, saw);
     assert_eq!(looked_up.load(Ordering::SeqCst), 3);
-    assert_eq!(store.inner.tracks(&lib.id).len(), 2);
+    assert_eq!(store.inner.tracks(lib.id).len(), 2);
 }

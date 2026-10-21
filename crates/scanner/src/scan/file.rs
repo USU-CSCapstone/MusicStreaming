@@ -7,7 +7,7 @@ use crate::discover::{Candidate, Directory};
 use crate::identity::{self, FileFacts, Identity};
 use crate::problems;
 use crate::sidecar::SidecarResolver;
-use crate::store::{IndexedFile, IndexedLyrics};
+use crate::store::{IndexedFile, IndexedLyrics, StoreError};
 use crate::tags;
 use crate::types::*;
 
@@ -25,6 +25,7 @@ fn lyrics_file_changed(ix: &IndexedFile, candidate: &Candidate, dir: &Directory)
 }
 
 /// Runs `candidate`, one of `dir`'s files, through stages 2 to 5: what the scan does with it.
+/// Fails only when the store cannot look the file up.
 pub(super) fn process_file(
     ctx: &ScanContext<'_>,
     scan: &Scan,
@@ -33,20 +34,20 @@ pub(super) fn process_file(
     candidate: &Candidate,
     sidecars: &mut SidecarResolver,
     resolved: &mut Option<crate::sidecar::Sidecars>,
-) -> FileOutcome {
+) -> Result<FileOutcome, StoreError> {
     // Stage 2: skip. Path, size, and mtime unchanged means done without
     // opening the file. This check carries the incremental budget.
-    let indexed = ctx.store.lookup(&ctx.library.id, &candidate.path);
+    let indexed = ctx.store.lookup(ctx.library.id, &candidate.path)?;
     if let Some(ix) = &indexed
         && ix.size == candidate.size
         && ix.mtime_ms == Some(candidate.mtime_ms)
         && !lyrics_file_changed(ix, candidate, dir)
     {
-        return if ix.missing {
+        return Ok(if ix.missing {
             FileOutcome::Returned { track_id: ix.track_id }
         } else {
             FileOutcome::Unchanged { track_id: ix.track_id }
-        };
+        });
     }
 
     // Stage 3: read headers. A known file that cannot be read keeps its track, as a problem.
@@ -54,7 +55,7 @@ pub(super) fn process_file(
         Ok(r) => r,
         Err(e) => {
             let problem = problems::from_read_error(&candidate.path, &e);
-            return match indexed {
+            return Ok(match indexed {
                 Some(ix) => FileOutcome::Unread {
                     track_id: ix.track_id,
                     missing: ix.missing,
@@ -62,7 +63,7 @@ pub(super) fn process_file(
                     problem,
                 },
                 None => FileOutcome::Problem(problem),
-            };
+            });
         }
     };
 
@@ -76,7 +77,7 @@ pub(super) fn process_file(
         properties: &read.properties,
         indexed: indexed.as_ref(),
     };
-    let identity = identity::identify(&facts, &ctx.library.id, ctx.store);
+    let identity = identity::identify(&facts, ctx.library.id, ctx.store);
 
     // Stage 5: sidecars, once per directory. Embedded art wins over a
     // sidecar; sidecar lyrics apply only when the file has none.
@@ -123,10 +124,10 @@ pub(super) fn process_file(
         last_seen_scan: scan.id,
     };
 
-    match identity {
+    Ok(match identity {
         Identity::New => FileOutcome::Added(Box::new(record)),
         Identity::Updated { track_id } | Identity::Moved { track_id, .. } => {
             FileOutcome::Updated(Box::new(TrackRecord { id: Some(track_id), ..record }))
         }
-    }
+    })
 }

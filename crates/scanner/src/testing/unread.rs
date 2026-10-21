@@ -25,7 +25,7 @@ pub fn break_file(path: &Path) {
 /// Every recorded problem's path and kind, in path order.
 fn problems(store: &dyn InspectStore, lib: &LibraryConfig) -> Vec<(PathBuf, ProblemKind)> {
     let mut found: Vec<_> =
-        store.inspect_problems(&lib.id).into_iter().map(|p| (p.path, p.kind)).collect();
+        store.inspect_problems(lib.id).into_iter().map(|p| (p.path, p.kind)).collect();
     found.sort_by(|a, b| a.0.cmp(&b.0));
     found
 }
@@ -52,7 +52,7 @@ pub fn a_known_file_that_cannot_be_read_keeps_its_track<S: InspectStore>(make: F
     break_file(&one);
     fs::write(&new, b"not audio either").unwrap();
 
-    let head = store.feed_head(&lib.id);
+    let head = store.feed_head(lib.id);
     let scan = scan_library(&store, &lib);
     let p = &scan.progress;
     assert_eq!((scan.state, p.problems, p.missing), (ScanState::Completed, 2, 0), "{p:?}");
@@ -61,16 +61,16 @@ pub fn a_known_file_that_cannot_be_read_keeps_its_track<S: InspectStore>(make: F
     assert_eq!(tracks.len(), 2, "{tracks:?}");
     assert_eq!((tracks[0].id, &tracks[0].title), (kept.id, &kept.title));
     assert_eq!((tracks[0].measured, tracks[1].measured), (false, true));
-    assert!(store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 10).is_empty());
-    assert_eq!(store.feed_tracks_after(&lib.id, head), [kept.id], "the clear is announced");
+    assert!(store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap().is_empty());
+    assert_eq!(store.feed_tracks_after(lib.id, head), [kept.id], "the clear is announced");
     assert_eq!(problems(&store, &lib), [corrupt(&one), corrupt(&new)]);
 
-    let head = store.feed_head(&lib.id);
+    let head = store.feed_head(lib.id);
     let scan = scan_library(&store, &lib);
     let p = &scan.progress;
     assert_eq!((p.problems, p.missing, p.updated, p.files_processed), (2, 0, 0, 2), "{p:?}");
     assert_eq!(live(&store, &lib).len(), 2);
-    assert_eq!(store.feed_head(&lib.id), head, "nothing flaps");
+    assert_eq!(store.feed_head(lib.id), head, "nothing flaps");
     assert_eq!(problems(&store, &lib), [corrupt(&one), corrupt(&new)]);
 
     write_small_wav(&one);
@@ -101,8 +101,8 @@ pub fn an_unreadable_file_is_read_again_until_it_reads<S: InspectStore>(make: Fa
 
     assert_eq!(scan_library(&store, &lib).progress.problems, 1);
     assert_eq!(problems(&store, &lib), denied());
-    assert!(store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 10).is_empty());
-    store.apply(&lib.id, Batch { opened: vec![one.clone()], ..Batch::default() }).unwrap();
+    assert!(store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap().is_empty());
+    store.apply(lib.id, Batch { opened: vec![one.clone()], ..Batch::default() }).unwrap();
     assert_eq!(problems(&store, &lib), []);
     assert_eq!(scan_library(&store, &lib).progress.problems, 1);
     assert_eq!(problems(&store, &lib), denied());
@@ -153,7 +153,7 @@ pub fn a_file_restored_with_its_old_time_is_read_again<S: InspectStore>(make: Fa
     let scan = scan_library(&store, &lib);
     assert_eq!((scan.progress.updated, scan.progress.problems), (1, 0), "{:?}", scan.progress);
     assert_eq!(problems(&store, &lib), []);
-    let queued = store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 10);
+    let queued = store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap();
     assert_eq!(queued.into_iter().map(|(_, file)| file.path).collect::<Vec<_>>(), [one]);
 }
 
@@ -170,18 +170,18 @@ pub fn a_result_for_a_file_broken_during_its_decode_is_not_stored<S: InspectStor
     let lib = library(&root);
     scan_library(&store, &lib);
     let (one, two) = (root.join("A/X/01 - Track 1.wav"), root.join("A/X/02 - Track 2.wav"));
-    let picked = store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 2);
+    let picked = store.next_unanalyzed(lib.id, ANALYZER_VERSION, 2).unwrap();
     let (size, at) = (fs::metadata(&one).unwrap().len(), modified(&one));
     fs::write(&one, vec![0; usize::try_from(size).unwrap()]).unwrap();
     set_modified(&one, at + Duration::from_secs(5));
     assert_eq!(scan_library(&store, &lib).progress.problems, 1);
-    let queued = store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 10);
+    let queued = store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap();
     assert_eq!(queued.into_iter().map(|(_, file)| file.path).collect::<Vec<_>>(), [two]);
 
     let measured =
         AnalysisResult { integrated_lufs: Some(-10.0), ..AnalysisResult::empty(ANALYZER_VERSION) };
     for (track, _) in picked {
-        store.store_analysis(&lib.id, track, measured.clone());
+        store.store_analysis(lib.id, track, measured.clone()).unwrap();
     }
     let tracks = live(&store, &lib);
     assert_eq!((tracks[0].analyzed, tracks[0].measured, tracks[1].measured), (false, false, true));
@@ -203,7 +203,7 @@ pub fn an_unreadable_replacement_loses_its_analysis<S: InspectStore>(make: Facto
     assert_eq!(scan_library(&store, &lib).progress.problems, 2);
     let measured: Vec<bool> = live(&store, &lib).iter().map(|t| t.measured).collect();
     assert_eq!(measured, [false, false, true]);
-    assert!(store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 10).is_empty());
+    assert!(store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap().is_empty());
 }
 
 /// A missing track whose file comes back unreadable is back, as a problem, since its file is
@@ -217,10 +217,10 @@ pub fn a_missing_file_back_unreadable_is_back<S: InspectStore>(make: Factory<S>)
     fs::remove_file(&three).unwrap();
     assert_eq!(scan_library(&store, &lib).progress.missing, 2);
     let mut gone: Vec<_> =
-        store.inspect_tracks(&lib.id).into_iter().filter(|t| t.missing).map(|t| t.id).collect();
+        store.inspect_tracks(lib.id).into_iter().filter(|t| t.missing).map(|t| t.id).collect();
     gone.sort();
 
-    let head = store.feed_head(&lib.id);
+    let head = store.feed_head(lib.id);
     fs::write(&two, b"no longer audio").unwrap();
     fs::write(&three, vec![0; usize::try_from(size).unwrap()]).unwrap();
     set_modified(&three, at);
@@ -229,7 +229,7 @@ pub fn a_missing_file_back_unreadable_is_back<S: InspectStore>(make: Factory<S>)
     assert_eq!((scan.progress.problems, scan.progress.added), (2, 0), "{:?}", scan.progress);
     let measured: Vec<bool> = live(&store, &lib).iter().map(|t| t.measured).collect();
     assert_eq!(measured, [true, false, true]);
-    let mut announced = store.feed_tracks_after(&lib.id, head);
+    let mut announced = store.feed_tracks_after(lib.id, head);
     announced.sort();
     assert_eq!(announced, gone, "the returns are announced");
     assert_eq!(problems(&store, &lib), [corrupt(&two), corrupt(&three)]);

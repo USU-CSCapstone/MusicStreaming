@@ -46,14 +46,18 @@ impl Scanner {
     /// Start the worker. Interrupted scans from a previous process are
     /// re-queued with their cursors, so they continue where they stopped
     /// instead of walking from the start. Folders that could not be read before the
-    /// cursor are not remembered (`design/scanning.md` §9).
+    /// cursor are not remembered (`design/scanning.md` §9). If the store cannot list them, none
+    /// is resumed now; their rows stay as they are for the next start.
     pub fn start(
         store: Arc<dyn Store>,
         library: LibraryConfig,
         governor: Arc<Governor>,
         options: ScanOptions,
     ) -> Scanner {
-        let interrupted = store.interrupted_scans(&library.id);
+        let interrupted = store.interrupted_scans(library.id).unwrap_or_else(|error| {
+            tracing::error!(library = library.id, %error, "interrupted scans not resumed");
+            Vec::new()
+        });
         let inner = Arc::new(Inner {
             store,
             library: RwLock::new(library),
@@ -82,16 +86,17 @@ impl Scanner {
     /// Enqueue work. Returns the id of the scan that will do it: a queued scan
     /// that has not started and already covers it, or a new one, never the
     /// running scan or a resumed one. A new scan cancels the queued scans it
-    /// covers.
-    pub fn request(&self, trigger: Trigger, scopes: Vec<Scope>) -> ScanId {
+    /// covers. `None` when the store cannot record a new scan: the error is logged and the
+    /// request is dropped, so its work is queued only when a later trigger asks for it again.
+    pub fn request(&self, trigger: Trigger, scopes: Vec<Scope>) -> Option<ScanId> {
         let scopes = coalesce_scopes(scopes);
         let mut q = self.inner.queue.lock().unwrap();
         if let Some(existing) = q.queued.iter().find(|s| s.cursor.is_none() && s.covers(&scopes)) {
-            return existing.id;
+            return Some(existing.id);
         }
         let mut scan = Scan {
             id: 0,
-            library: self.inner.library.read().unwrap().id.clone(),
+            library: self.inner.library.read().unwrap().id,
             trigger,
             scopes,
             state: ScanState::Queued,
@@ -100,6 +105,13 @@ impl Scanner {
             progress: ScanProgress::default(),
             cursor: None,
         };
+        scan.id = match self.inner.store.create_scan(&scan) {
+            Ok(id) => id,
+            Err(error) => {
+                tracing::error!(library = scan.library, ?trigger, %error, "scan not queued");
+                return None;
+            }
+        };
         q.queued.retain_mut(|queued| {
             let subsumed = scan.covers(&queued.scopes);
             if subsumed {
@@ -107,24 +119,25 @@ impl Scanner {
             }
             !subsumed
         });
-        scan.id = self.inner.store.create_scan(&scan);
         let id = scan.id;
         q.queued.push_back(scan);
         drop(q);
         self.inner.wake.notify_all();
-        id
+        Some(id)
     }
 
-    /// Scan every root (`Trigger::Initial`, `Scheduled`, `Reconfigure`, ...).
-    pub fn scan_library(&self, trigger: Trigger) -> ScanId {
+    /// Scan every root (`Trigger::Initial`, `Scheduled`, `Reconfigure`, ...). `None` as for
+    /// [`Scanner::request`].
+    pub fn scan_library(&self, trigger: Trigger) -> Option<ScanId> {
         let roots = self.inner.library.read().unwrap().roots.clone();
         self.request(trigger, roots.into_iter().map(Scope::root).collect())
     }
 
-    /// Scan one folder inside a root, recursively.
+    /// Scan one folder inside a root, recursively. `None` when no root holds `path`, or as for
+    /// [`Scanner::request`].
     pub fn scan_folder(&self, trigger: Trigger, path: &std::path::Path) -> Option<ScanId> {
         let root = self.root_for(path)?;
-        Some(self.request(trigger, vec![Scope::folder(root, path, Depth::Subtree)]))
+        self.request(trigger, vec![Scope::folder(root, path, Depth::Subtree)])
     }
 
     /// The root containing `path`, if any.
@@ -133,15 +146,19 @@ impl Scanner {
     }
 
     /// Whether the index holds a track not yet missing, or a problem, under `folder`, which
-    /// may no longer exist.
+    /// may no longer exist. When the store cannot say, the error is logged and the answer is
+    /// yes, which costs the watcher only a scan of the folder.
     pub fn indexes_under(&self, folder: &std::path::Path) -> bool {
-        let library = self.inner.library.read().unwrap().id.clone();
-        self.inner.store.indexes_under(&library, folder)
+        let library = self.inner.library.read().unwrap().id;
+        self.inner.store.indexes_under(library, folder).unwrap_or_else(|error| {
+            tracing::error!(library, folder = %folder.display(), %error, "index not checked");
+            true
+        })
     }
 
     /// Replace the library configuration and reconcile
-    /// (`requirements/scanning.md` §7).
-    pub fn reconfigure(&self, library: LibraryConfig) -> ScanId {
+    /// (`requirements/scanning.md` §7). `None` as for [`Scanner::request`].
+    pub fn reconfigure(&self, library: LibraryConfig) -> Option<ScanId> {
         *self.inner.library.write().unwrap() = library;
         self.scan_library(Trigger::Reconfigure)
     }
@@ -163,11 +180,14 @@ impl Scanner {
         false
     }
 
-    /// Marks `scan`, already taken off the queue, cancelled and saves it to the store.
+    /// Marks `scan`, already taken off the queue, cancelled and saves it to the store. A row that
+    /// cannot be saved is logged and stays queued, so the next start runs it.
     fn cancelled(&self, scan: &mut Scan) {
         scan.state = ScanState::Cancelled;
         scan.finished_at = Some(std::time::SystemTime::now());
-        self.inner.store.update_scan(scan);
+        if let Err(error) = self.inner.store.update_scan(scan) {
+            tracing::error!(scan = scan.id, %error, "cancelled scan not saved");
+        }
     }
 
     pub fn running(&self) -> Option<Scan> {

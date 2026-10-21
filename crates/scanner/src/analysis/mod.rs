@@ -117,15 +117,15 @@ impl Analyzer {
 
     /// Analyze up to `limit` tracks that need it, skipping those whose files are waiting to be
     /// tried again. A failure is handled as [`crate::jobs`] describes.
-    pub fn run_once(&self, library: &LibraryId, limit: usize) -> RunReport {
-        let fetch = self.retries.fetch(limit);
-        let queue = self.store.next_unanalyzed(library, ANALYZER_VERSION, fetch);
-        let keep = |track, result: Option<AnalysisResult>| {
-            let result = result.unwrap_or_else(failed_result);
-            self.store.store_analysis(library, track, result);
-        };
+    pub fn run_once(&self, library: LibraryId, limit: usize) -> RunReport {
         let store = self.store.as_ref();
-        self.retries.pass(store, library, queue, limit, |file| self.analyze(file), keep)
+        let next = |fetch| store.next_unanalyzed(library, ANALYZER_VERSION, fetch);
+        let keep = |track, result: Option<AnalysisResult>| {
+            store.store_analysis(library, track, result.unwrap_or_else(failed_result))
+        };
+        let decode = |file: &FileToDecode| self.analyze(file);
+        let pass = self.retries.pass(store, library, limit, next, decode, keep);
+        pass.unwrap_or_else(RunReport::store_failed)
     }
 
     /// Analyze `file`, if it opens.
@@ -151,7 +151,7 @@ impl Analyzer {
             .name("scanner-analysis".into())
             .spawn(move || {
                 while !stop2.load(Ordering::SeqCst) {
-                    if self.run_once(&library, 1).idle() {
+                    if self.run_once(library, 1).idle() {
                         // Woken early by `stop`.
                         std::thread::park_timeout(idle_sleep);
                     }

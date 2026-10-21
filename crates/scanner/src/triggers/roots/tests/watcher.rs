@@ -102,7 +102,7 @@ fn a_root_replaced_under_its_path_is_watched_afresh() {
         FsWatcher::spawn(scanner.clone(), vec![root.clone()], RootWatch::start, timing(None));
     let folder = vec![Scope::folder(&root, &root, Depth::Directory)];
     // Writes into the root until a watcher scan newer than `after` covers just that write.
-    let seen = |after: u64| {
+    let seen = |after: i64| {
         let deadline = Instant::now() + PATIENCE;
         let mut n = 0;
         loop {

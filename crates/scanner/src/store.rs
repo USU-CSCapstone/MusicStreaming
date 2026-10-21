@@ -80,8 +80,8 @@ impl Batch {
     }
 }
 
-/// A persistence failure. The scan that hit it suspends at its last
-/// persisted cursor rather than reporting success over lost work.
+/// A persistence failure. A scan that hits one suspends at its last persisted cursor, and a
+/// background job backs off as [`crate::jobs`] describes.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("store: {0}")]
 pub struct StoreError(pub String);
@@ -121,36 +121,42 @@ impl FileToDecode {
 }
 
 /// Everything the scanner needs from persistence. Implementations are
-/// synchronous; the scanner calls them from its own blocking threads.
+/// synchronous; the scanner calls them from its own blocking threads. Every
+/// method can fail with a [`StoreError`], which the caller handles, so a
+/// failure is never mistaken for an answer.
 pub trait Store: Send + Sync {
     // --- scans ---
     /// Persist a new scan row and return its id.
-    fn create_scan(&self, scan: &Scan) -> ScanId;
-    fn update_scan(&self, scan: &Scan);
-    /// Scans left in `Running` or `Queued` by a previous process, for resume.
-    fn interrupted_scans(&self, library: &LibraryId) -> Vec<Scan>;
+    fn create_scan(&self, scan: &Scan) -> Result<ScanId, StoreError>;
+    /// Save `scan`'s state, cursor, progress and times over its row.
+    fn update_scan(&self, scan: &Scan) -> Result<(), StoreError>;
+    /// Scans left in `Running` or `Queued` by a previous process, for resume. A row that cannot
+    /// be read is left out, so it does not stop the others resuming.
+    fn interrupted_scans(&self, library: LibraryId) -> Result<Vec<Scan>, StoreError>;
 
     // --- files ---
-    fn lookup(&self, library: &LibraryId, path: &Path) -> Option<IndexedFile>;
+    /// What the index holds for the file at `path`, or `None` when it holds no track there.
+    fn lookup(&self, library: LibraryId, path: &Path) -> Result<Option<IndexedFile>, StoreError>;
     /// Apply one batch atomically and append its net effect to the change feed.
     /// An upserted track keeps its analysis only while its file's size and mtime
     /// are unchanged. An error means nothing in the batch was persisted.
-    fn apply(&self, library: &LibraryId, batch: Batch) -> Result<(), StoreError>;
+    fn apply(&self, library: LibraryId, batch: Batch) -> Result<(), StoreError>;
     /// Mark every non-missing track under `scope` whose `last_seen_scan` is
     /// not `scan_id` as missing, except those at or under a path in
     /// `unreadable`, which the scan could not read. Returns how many.
     fn mark_missing_unseen(
         &self,
-        library: &LibraryId,
+        library: LibraryId,
         scope: &Scope,
         scan_id: ScanId,
         unreadable: &[PathBuf],
-    ) -> usize;
+    ) -> Result<i64, StoreError>;
     /// The paths with a recorded problem that `scope` reaches: under it, or for a Directory
     /// scope directly in it ([`Scope::contains_file`]).
-    fn problems_under(&self, library: &LibraryId, scope: &Scope) -> Vec<PathBuf>;
+    fn problems_under(&self, library: LibraryId, scope: &Scope)
+    -> Result<Vec<PathBuf>, StoreError>;
     /// Whether a track not yet missing, or a problem, lies under `folder`, at any depth.
-    fn indexes_under(&self, library: &LibraryId, folder: &Path) -> bool;
+    fn indexes_under(&self, library: LibraryId, folder: &Path) -> Result<bool, StoreError>;
 
     // --- analysis ---
     /// Tracks whose results come from an analyzer older than `analyzer_version`, most useful
@@ -159,24 +165,34 @@ pub trait Store: Send + Sync {
     /// its problem first.
     fn next_unanalyzed(
         &self,
-        library: &LibraryId,
+        library: LibraryId,
         analyzer_version: u32,
         limit: usize,
-    ) -> Vec<(PickedTrack, FileToDecode)>;
+    ) -> Result<Vec<(PickedTrack, FileToDecode)>, StoreError>;
     /// Stores `result` on `track`, its loudness and waveform together, unless its file's size or
     /// mtime is no longer the one it was picked with.
-    fn store_analysis(&self, library: &LibraryId, track: PickedTrack, result: AnalysisResult);
+    fn store_analysis(
+        &self,
+        library: LibraryId,
+        track: PickedTrack,
+        result: AnalysisResult,
+    ) -> Result<(), StoreError>;
 
     // --- placeholders ---
     /// Images with no placeholder yet, by content hash, each with a file to decode it from.
     fn next_without_placeholder(
         &self,
-        library: &LibraryId,
+        library: LibraryId,
         limit: usize,
-    ) -> Vec<(Vec<u8>, FileToDecode)>;
+    ) -> Result<Vec<(Vec<u8>, FileToDecode)>, StoreError>;
     /// Stores the placeholder of the image with content `hash`. Empty means it could not be
     /// decoded, so it is not tried again until its content changes.
-    fn store_placeholder(&self, library: &LibraryId, hash: &[u8], placeholder: Vec<u8>);
+    fn store_placeholder(
+        &self,
+        library: LibraryId,
+        hash: &[u8],
+        placeholder: Vec<u8>,
+    ) -> Result<(), StoreError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -229,75 +245,76 @@ impl MemoryStore {
         MemoryStore::default()
     }
 
-    pub fn tracks(&self, library: &LibraryId) -> Vec<StoredTrack> {
+    /// Every track of `library`, missing or not.
+    pub fn tracks(&self, library: LibraryId) -> Vec<StoredTrack> {
         let inner = self.inner.lock().unwrap();
         inner
             .libraries
-            .get(library)
+            .get(&library)
             .map(|l| l.tracks.values().cloned().collect())
             .unwrap_or_default()
     }
 
-    pub fn track(&self, library: &LibraryId, id: TrackId) -> Option<StoredTrack> {
-        self.inner.lock().unwrap().libraries.get(library).and_then(|l| l.tracks.get(&id).cloned())
+    /// The track `id` of `library`, if there is one.
+    pub fn track(&self, library: LibraryId, id: TrackId) -> Option<StoredTrack> {
+        self.inner.lock().unwrap().libraries.get(&library).and_then(|l| l.tracks.get(&id).cloned())
     }
 
-    pub fn problems(&self, library: &LibraryId) -> Vec<Problem> {
+    /// Every problem recorded for `library`.
+    pub fn problems(&self, library: LibraryId) -> Vec<Problem> {
         let inner = self.inner.lock().unwrap();
         inner
             .libraries
-            .get(library)
+            .get(&library)
             .map(|l| l.problems.values().cloned().collect())
             .unwrap_or_default()
     }
 
-    pub fn scans(&self, library: &LibraryId) -> Vec<Scan> {
+    /// Every scan of `library`, oldest first.
+    pub fn scans(&self, library: LibraryId) -> Vec<Scan> {
         let inner = self.inner.lock().unwrap();
         inner
             .libraries
-            .get(library)
+            .get(&library)
             .map(|l| l.scans.values().cloned().collect())
             .unwrap_or_default()
     }
 
     /// The placeholder stored for the image with content `hash`.
-    pub fn placeholder(&self, library: &LibraryId, hash: &[u8]) -> Option<Vec<u8>> {
+    pub fn placeholder(&self, library: LibraryId, hash: &[u8]) -> Option<Vec<u8>> {
         let inner = self.inner.lock().unwrap();
-        inner.libraries.get(library)?.placeholders.get(hash).cloned()
+        inner.libraries.get(&library)?.placeholders.get(hash).cloned()
     }
 
-    pub fn feed(&self, library: &LibraryId) -> Vec<FeedEntry> {
+    /// `library`'s change feed, oldest entry first.
+    pub fn feed(&self, library: LibraryId) -> Vec<FeedEntry> {
         let inner = self.inner.lock().unwrap();
-        inner.libraries.get(library).map(|l| l.feed.clone()).unwrap_or_default()
+        inner.libraries.get(&library).map(|l| l.feed.clone()).unwrap_or_default()
     }
 }
 
 impl Store for MemoryStore {
-    fn create_scan(&self, scan: &Scan) -> ScanId {
+    fn create_scan(&self, scan: &Scan) -> Result<ScanId, StoreError> {
         let mut inner = self.inner.lock().unwrap();
         inner.next_scan += 1;
         let id = inner.next_scan;
         let mut scan = scan.clone();
         scan.id = id;
-        inner.libraries.entry(scan.library.clone()).or_default().scans.insert(id, scan);
-        id
+        inner.libraries.entry(scan.library).or_default().scans.insert(id, scan);
+        Ok(id)
     }
 
-    fn update_scan(&self, scan: &Scan) {
+    fn update_scan(&self, scan: &Scan) -> Result<(), StoreError> {
         let mut inner = self.inner.lock().unwrap();
-        inner
-            .libraries
-            .entry(scan.library.clone())
-            .or_default()
-            .scans
-            .insert(scan.id, scan.clone());
+        inner.libraries.entry(scan.library).or_default().scans.insert(scan.id, scan.clone());
+        Ok(())
     }
 
-    fn interrupted_scans(&self, library: &LibraryId) -> Vec<Scan> {
+    fn interrupted_scans(&self, library: LibraryId) -> Result<Vec<Scan>, StoreError> {
         let inner = self.inner.lock().unwrap();
-        inner
+        Ok(inner
             .libraries
-            .get(library)
+            .get(&library)
             .map(|l| {
                 l.scans
                     .values()
@@ -305,15 +322,16 @@ impl Store for MemoryStore {
                     .cloned()
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
-    fn lookup(&self, library: &LibraryId, path: &Path) -> Option<IndexedFile> {
+    fn lookup(&self, library: LibraryId, path: &Path) -> Result<Option<IndexedFile>, StoreError> {
         let inner = self.inner.lock().unwrap();
-        let lib = inner.libraries.get(library)?;
-        let id = *lib.by_path.get(path)?;
-        let t = lib.tracks.get(&id)?;
-        Some(IndexedFile {
+        let found = inner.libraries.get(&library).and_then(|lib| {
+            let id = *lib.by_path.get(path)?;
+            Some((id, lib.tracks.get(&id)?))
+        });
+        Ok(found.map(|(id, t)| IndexedFile {
             track_id: id,
             size: t.record.size,
             mtime_ms: (!t.mtime_unknown).then_some(t.record.mtime_ms),
@@ -325,13 +343,13 @@ impl Store for MemoryStore {
             } else {
                 IndexedLyrics::None
             },
-        })
+        }))
     }
 
-    fn apply(&self, library: &LibraryId, batch: Batch) -> Result<(), StoreError> {
+    fn apply(&self, library: LibraryId, batch: Batch) -> Result<(), StoreError> {
         let mut inner = self.inner.lock().unwrap();
         let Inner { libraries, next_track, .. } = &mut *inner;
-        let lib = libraries.entry(library.clone()).or_default();
+        let lib = libraries.entry(library).or_default();
         for mut record in batch.upserts {
             record.last_seen_scan = batch.scan_id;
             let id = match record.id {
@@ -401,14 +419,14 @@ impl Store for MemoryStore {
 
     fn mark_missing_unseen(
         &self,
-        library: &LibraryId,
+        library: LibraryId,
         scope: &Scope,
         scan_id: ScanId,
         unreadable: &[PathBuf],
-    ) -> usize {
+    ) -> Result<i64, StoreError> {
         let mut inner = self.inner.lock().unwrap();
-        let Some(lib) = inner.libraries.get_mut(library) else {
-            return 0;
+        let Some(lib) = inner.libraries.get_mut(&library) else {
+            return Ok(0);
         };
         let unreadable: HashSet<&Path> = unreadable.iter().map(PathBuf::as_path).collect();
         let mut count = 0;
@@ -423,38 +441,43 @@ impl Store for MemoryStore {
                 count += 1;
             }
         }
-        count
+        Ok(count)
     }
 
-    fn problems_under(&self, library: &LibraryId, scope: &Scope) -> Vec<PathBuf> {
+    fn problems_under(
+        &self,
+        library: LibraryId,
+        scope: &Scope,
+    ) -> Result<Vec<PathBuf>, StoreError> {
         let inner = self.inner.lock().unwrap();
-        let Some(lib) = inner.libraries.get(library) else {
-            return Vec::new();
+        let Some(lib) = inner.libraries.get(&library) else {
+            return Ok(Vec::new());
         };
-        lib.problems.keys().filter(|path| scope.contains_file(path)).cloned().collect()
+        Ok(lib.problems.keys().filter(|path| scope.contains_file(path)).cloned().collect())
     }
 
-    fn indexes_under(&self, library: &LibraryId, folder: &Path) -> bool {
+    fn indexes_under(&self, library: LibraryId, folder: &Path) -> Result<bool, StoreError> {
         let inner = self.inner.lock().unwrap();
-        let Some(lib) = inner.libraries.get(library) else {
-            return false;
+        let Some(lib) = inner.libraries.get(&library) else {
+            return Ok(false);
         };
         let under = |path: &Path| path != folder && path.starts_with(folder);
-        lib.tracks.values().any(|t| !t.missing && under(&t.record.path))
-            || lib.problems.keys().any(|path| under(path))
+        Ok(lib.tracks.values().any(|t| !t.missing && under(&t.record.path))
+            || lib.problems.keys().any(|path| under(path)))
     }
 
     fn next_unanalyzed(
         &self,
-        library: &LibraryId,
+        library: LibraryId,
         analyzer_version: u32,
         limit: usize,
-    ) -> Vec<(PickedTrack, FileToDecode)> {
+    ) -> Result<Vec<(PickedTrack, FileToDecode)>, StoreError> {
         let inner = self.inner.lock().unwrap();
-        let Some(lib) = inner.libraries.get(library) else {
-            return Vec::new();
+        let Some(lib) = inner.libraries.get(&library) else {
+            return Ok(Vec::new());
         };
-        lib.tracks
+        Ok(lib
+            .tracks
             .iter()
             .filter(|(_, t)| {
                 !t.missing
@@ -468,12 +491,17 @@ impl Store for MemoryStore {
                 (PickedTrack { id, size, mtime_ms }, file)
             })
             .take(limit)
-            .collect()
+            .collect())
     }
 
-    fn store_analysis(&self, library: &LibraryId, track: PickedTrack, result: AnalysisResult) {
+    fn store_analysis(
+        &self,
+        library: LibraryId,
+        track: PickedTrack,
+        result: AnalysisResult,
+    ) -> Result<(), StoreError> {
         let mut inner = self.inner.lock().unwrap();
-        let stored = inner.libraries.get_mut(library).and_then(|l| l.tracks.get_mut(&track.id));
+        let stored = inner.libraries.get_mut(&library).and_then(|l| l.tracks.get_mut(&track.id));
         if let Some(t) = stored
             && !t.mtime_unknown
             && t.record.size == track.size
@@ -481,19 +509,21 @@ impl Store for MemoryStore {
         {
             t.analysis = Some(result);
         }
+        Ok(())
     }
 
     fn next_without_placeholder(
         &self,
-        library: &LibraryId,
+        library: LibraryId,
         limit: usize,
-    ) -> Vec<(Vec<u8>, FileToDecode)> {
+    ) -> Result<Vec<(Vec<u8>, FileToDecode)>, StoreError> {
         let inner = self.inner.lock().unwrap();
-        let Some(lib) = inner.libraries.get(library) else {
-            return Vec::new();
+        let Some(lib) = inner.libraries.get(&library) else {
+            return Ok(Vec::new());
         };
         let mut seen = HashSet::new();
-        lib.tracks
+        Ok(lib
+            .tracks
             .values()
             .flat_map(|t| {
                 let artwork = t.record.artwork.as_ref().map(|art| match &art.source {
@@ -509,13 +539,19 @@ impl Store for MemoryStore {
                 (hash.clone(), FileToDecode { root: root.clone(), path: path.clone() })
             })
             .take(limit)
-            .collect()
+            .collect())
     }
 
-    fn store_placeholder(&self, library: &LibraryId, hash: &[u8], placeholder: Vec<u8>) {
+    fn store_placeholder(
+        &self,
+        library: LibraryId,
+        hash: &[u8],
+        placeholder: Vec<u8>,
+    ) -> Result<(), StoreError> {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(lib) = inner.libraries.get_mut(library) {
+        if let Some(lib) = inner.libraries.get_mut(&library) {
             lib.placeholders.insert(hash.to_vec(), placeholder);
         }
+        Ok(())
     }
 }

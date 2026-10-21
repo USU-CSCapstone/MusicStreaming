@@ -53,120 +53,90 @@ impl SqliteStore {
         *self.roots.0.write().unwrap() = map;
         Ok(())
     }
-
-    fn lib(id: &LibraryId) -> Option<i64> {
-        id.parse().ok()
-    }
 }
 
-/// The scanner's calls cannot fail, so an error is logged and the scanner carries on with
-/// `default`.
-fn logged<T>(what: &str, result: Result<T, DbError>, default: T) -> T {
-    result.unwrap_or_else(|error| {
-        tracing::error!(%error, "store: {what} failed");
-        default
-    })
+/// A database error, as the scanner sees it.
+impl From<DbError> for StoreError {
+    fn from(error: DbError) -> StoreError {
+        StoreError(error.to_string())
+    }
 }
 
 impl Store for SqliteStore {
-    fn create_scan(&self, scan: &Scan) -> ScanId {
-        let Some(lib) = Self::lib(&scan.library) else {
-            return 0;
-        };
-        logged("create_scan", scans::create(self, lib, scan), 0)
+    fn create_scan(&self, scan: &Scan) -> Result<ScanId, StoreError> {
+        Ok(scans::create(self, scan)?)
     }
 
-    fn update_scan(&self, scan: &Scan) {
-        logged("update_scan", scans::update(self, scan), ());
+    fn update_scan(&self, scan: &Scan) -> Result<(), StoreError> {
+        Ok(scans::update(self, scan)?)
     }
 
-    fn interrupted_scans(&self, library: &LibraryId) -> Vec<Scan> {
-        let Some(lib) = Self::lib(library) else {
-            return Vec::new();
-        };
-        logged("interrupted_scans", scans::interrupted(self, lib), Vec::new())
+    fn interrupted_scans(&self, library: LibraryId) -> Result<Vec<Scan>, StoreError> {
+        Ok(scans::interrupted(self, library)?)
     }
 
-    fn lookup(&self, library: &LibraryId, path: &Path) -> Option<IndexedFile> {
-        let lib = Self::lib(library)?;
-        logged("lookup", tracks::lookup(self, lib, path), None)
+    fn lookup(&self, library: LibraryId, path: &Path) -> Result<Option<IndexedFile>, StoreError> {
+        Ok(tracks::lookup(self, library, path)?)
     }
 
-    fn apply(&self, library: &LibraryId, batch: Batch) -> Result<(), StoreError> {
-        let Some(lib) = Self::lib(library) else {
-            return Err(StoreError(format!("unknown library id {library}")));
-        };
-        tracks::apply(self, lib, batch).map_err(|error| {
-            tracing::error!(%error, "store: apply failed");
-            StoreError(error.to_string())
-        })
+    fn apply(&self, library: LibraryId, batch: Batch) -> Result<(), StoreError> {
+        Ok(tracks::apply(self, library, batch)?)
     }
 
     fn mark_missing_unseen(
         &self,
-        library: &LibraryId,
+        library: LibraryId,
         scope: &Scope,
         scan_id: ScanId,
         unreadable: &[PathBuf],
-    ) -> usize {
-        let Some(lib) = Self::lib(library) else {
-            return 0;
-        };
-        let marked = tracks::mark_missing_unseen(self, lib, scope, scan_id, unreadable);
-        logged("mark_missing_unseen", marked, 0)
+    ) -> Result<i64, StoreError> {
+        Ok(tracks::mark_missing_unseen(self, library, scope, scan_id, unreadable)?)
     }
 
-    fn indexes_under(&self, library: &LibraryId, folder: &Path) -> bool {
-        let Some(lib) = Self::lib(library) else {
-            return false;
-        };
-        // On an error the watcher scans the folder anyway, which costs only a walk.
-        logged("indexes_under", tracks::indexes_under(self, lib, folder), true)
+    fn indexes_under(&self, library: LibraryId, folder: &Path) -> Result<bool, StoreError> {
+        Ok(tracks::indexes_under(self, library, folder)?)
     }
 
-    fn problems_under(&self, library: &LibraryId, scope: &Scope) -> Vec<PathBuf> {
-        let Some(lib) = Self::lib(library) else {
-            return Vec::new();
-        };
-        logged("problems_under", problems::under(self, lib, scope), Vec::new())
+    fn problems_under(
+        &self,
+        library: LibraryId,
+        scope: &Scope,
+    ) -> Result<Vec<PathBuf>, StoreError> {
+        Ok(problems::under(self, library, scope)?)
     }
 
     fn next_unanalyzed(
         &self,
-        library: &LibraryId,
+        library: LibraryId,
         analyzer_version: u32,
         limit: usize,
-    ) -> Vec<(PickedTrack, FileToDecode)> {
-        let Some(lib) = Self::lib(library) else {
-            return Vec::new();
-        };
-        let next = jobs::next_unanalyzed(self, lib, analyzer_version, limit);
-        logged("next_unanalyzed", next, Vec::new())
+    ) -> Result<Vec<(PickedTrack, FileToDecode)>, StoreError> {
+        Ok(jobs::next_unanalyzed(self, library, analyzer_version, limit)?)
     }
 
-    fn store_analysis(&self, library: &LibraryId, track: PickedTrack, result: AnalysisResult) {
-        if let Some(lib) = Self::lib(library) {
-            let stored = jobs::store_analysis(self, lib, track, result);
-            logged("store_analysis", stored, ());
-        }
+    fn store_analysis(
+        &self,
+        library: LibraryId,
+        track: PickedTrack,
+        result: AnalysisResult,
+    ) -> Result<(), StoreError> {
+        Ok(jobs::store_analysis(self, library, track, result)?)
     }
 
     fn next_without_placeholder(
         &self,
-        library: &LibraryId,
+        library: LibraryId,
         limit: usize,
-    ) -> Vec<(Vec<u8>, FileToDecode)> {
-        let Some(lib) = Self::lib(library) else {
-            return Vec::new();
-        };
-        let next = jobs::next_without_placeholder(self, lib, limit);
-        logged("next_without_placeholder", next, Vec::new())
+    ) -> Result<Vec<(Vec<u8>, FileToDecode)>, StoreError> {
+        Ok(jobs::next_without_placeholder(self, library, limit)?)
     }
 
-    fn store_placeholder(&self, library: &LibraryId, hash: &[u8], placeholder: Vec<u8>) {
-        if let Some(lib) = Self::lib(library) {
-            let stored = jobs::store_placeholder(self, lib, hash, placeholder);
-            logged("store_placeholder", stored, ());
-        }
+    fn store_placeholder(
+        &self,
+        library: LibraryId,
+        hash: &[u8],
+        placeholder: Vec<u8>,
+    ) -> Result<(), StoreError> {
+        Ok(jobs::store_placeholder(self, library, hash, placeholder)?)
     }
 }

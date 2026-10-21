@@ -35,7 +35,7 @@ pub fn upsert_track(
     let rel = relative(&rec.root, &rec.path);
     if let Some(id) = rec.id {
         // Whatever it pointed at before may now be orphaned.
-        touched.track(tx, lib, id as i64)?;
+        touched.track(tx, lib, id)?;
     }
 
     // Artists: the unknown artist (key "") when a file names none.
@@ -127,7 +127,7 @@ pub fn upsert_track(
              WHERE tracks.library_id = excluded.library_id \
              RETURNING id, analyzer_version",
             params![
-                rec.id.map(|id| id as i64),
+                rec.id,
                 lib,
                 album_id,
                 rec.tags.album,

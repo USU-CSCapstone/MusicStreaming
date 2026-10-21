@@ -298,7 +298,7 @@ mod tests {
             .flat_map(|(kind, paths)| {
                 paths
                     .iter()
-                    .flat_map(|path| classify(kind, path, |p| store.indexes_under(&"1".into(), p)))
+                    .flat_map(|path| classify(kind, path, |p| store.indexes_under(1, p).unwrap()))
             })
             .map(|(dir, depth)| Scope::folder(root, dir, depth))
             .collect();
@@ -316,7 +316,7 @@ mod tests {
     /// Each track's path, and whether it is missing, sorted by path.
     fn indexed(store: &MemoryStore) -> Vec<(PathBuf, bool)> {
         let mut tracks: Vec<(PathBuf, bool)> =
-            store.tracks(&"1".into()).into_iter().map(|t| (t.record.path, t.missing)).collect();
+            store.tracks(1).into_iter().map(|t| (t.record.path, t.missing)).collect();
         tracks.sort();
         tracks
     }
@@ -420,7 +420,7 @@ mod tests {
                 (track(&d, 2), true)
             ]
         );
-        assert_eq!(store.problems(&"1".into()), []);
+        assert_eq!(store.problems(1), []);
     }
 
     #[test]

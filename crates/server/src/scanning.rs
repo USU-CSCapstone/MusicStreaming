@@ -70,7 +70,7 @@ impl Scanning {
                 schedule,
                 // One of each per library, since each remembers its library's failures.
                 analysis: Arc::new(Analyzer::new(ffmpeg.clone(), store.clone(), governor.clone()))
-                    .start(config.id.clone(), Duration::from_secs(30)),
+                    .start(config.id, Duration::from_secs(30)),
                 // Soon after a scan finds an image, since clients draw its placeholder at once.
                 placeholders: Arc::new(Placeholders::new(ffmpeg.clone(), store.clone()))
                     .start(config.id, Duration::from_secs(5)),

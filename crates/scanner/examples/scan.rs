@@ -23,8 +23,7 @@ fn main() {
     let watch = rest.iter().any(|a| a == "--watch");
 
     let store = Arc::new(MemoryStore::new());
-    let library =
-        LibraryConfig { id: "demo".into(), roots: vec![root.clone()], excludes: Vec::new() };
+    let library = LibraryConfig { id: 1, roots: vec![root.clone()], excludes: Vec::new() };
     let governor = Arc::new(Governor::new());
     let scanner =
         Scanner::start(store.clone(), library.clone(), governor.clone(), ScanOptions::default());
@@ -34,8 +33,8 @@ fn main() {
     scanner.wait_idle();
     let elapsed = started.elapsed();
 
-    let tracks = store.tracks(&library.id);
-    let scan = store.scans(&library.id).into_iter().last().unwrap();
+    let tracks = store.tracks(library.id);
+    let scan = store.scans(library.id).into_iter().last().unwrap();
     println!("scan {:?} in {:.2?}: {:?}", scan.state, elapsed, scan.progress);
     println!("{} tracks indexed", tracks.len());
 
@@ -65,7 +64,7 @@ fn main() {
         println!("  ...");
     }
 
-    let problems = store.problems(&library.id);
+    let problems = store.problems(library.id);
     if !problems.is_empty() {
         println!("{} problems:", problems.len());
         for p in problems.iter().take(10) {
@@ -86,14 +85,14 @@ fn main() {
         }
         let analyzer = Analyzer::new(ffmpeg, store.clone(), governor.clone());
         let started = Instant::now();
-        let report = analyzer.run_once(&library.id, usize::MAX);
+        let report = analyzer.run_once(library.id, usize::MAX);
         println!(
             "analysis: {} ok, {} failed in {:.2?}",
             report.done,
             report.failed,
             started.elapsed()
         );
-        for t in store.tracks(&library.id).iter().take(5) {
+        for t in store.tracks(library.id).iter().take(5) {
             if let Some(a) = &t.analysis {
                 println!(
                     "  {}: {:.1} LUFS, {:.1} dBTP, waveform {} bins",
@@ -110,10 +109,10 @@ fn main() {
         println!("watching {} (ctrl-c to stop)", root.display());
         let watcher =
             FsWatcher::start(scanner.clone(), &library.roots, Duration::from_secs(2), None);
-        let mut seen = store.scans(&library.id).len();
+        let mut seen = store.scans(library.id).len();
         loop {
             std::thread::sleep(Duration::from_secs(1));
-            let scans = store.scans(&library.id);
+            let scans = store.scans(library.id);
             for s in scans.iter().skip(seen) {
                 if s.state != ScanState::Queued && s.state != ScanState::Running {
                     println!("scan {} {:?} {:?}: {:?}", s.id, s.trigger, s.state, s.progress);

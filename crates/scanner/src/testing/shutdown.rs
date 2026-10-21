@@ -25,7 +25,7 @@ pub fn a_shutdown_leaves_its_scans_to_resume<S: InspectStore + 'static>(make: Fa
     let cursor = Some(Cursor { scope_index: 0, after_directory: Some(root.join("A/X")) });
     let mut interrupted = Scan {
         id: 0,
-        library: lib.id.clone(),
+        library: lib.id,
         trigger: Trigger::Initial,
         scopes: vec![Scope::root(&root)],
         state: ScanState::Running,
@@ -34,8 +34,8 @@ pub fn a_shutdown_leaves_its_scans_to_resume<S: InspectStore + 'static>(make: Fa
         progress: ScanProgress::default(),
         cursor: cursor.clone(),
     };
-    interrupted.id = store.create_scan(&interrupted);
-    store.update_scan(&interrupted);
+    interrupted.id = store.create_scan(&interrupted).unwrap();
+    store.update_scan(&interrupted).unwrap();
 
     let governor = Arc::new(Governor::new());
     governor.pause();
@@ -43,12 +43,13 @@ pub fn a_shutdown_leaves_its_scans_to_resume<S: InspectStore + 'static>(make: Fa
         Scanner::start(store.clone(), lib.clone(), governor.clone(), ScanOptions::default());
     wait_until_running(&scanner, interrupted.id);
     let queued = scanner
-        .request(Trigger::Manual, vec![Scope::folder(&root, root.join("C"), Depth::Subtree)]);
+        .request(Trigger::Manual, vec![Scope::folder(&root, root.join("C"), Depth::Subtree)])
+        .unwrap();
     scanner.stop();
     governor.resume();
     scanner.shutdown();
 
-    let scans = store.inspect_scans(&lib.id);
+    let scans = store.inspect_scans(lib.id);
     let row = |id| scans.iter().find(|s| s.id == id).unwrap();
     let stopped = row(interrupted.id);
     assert_eq!((stopped.state, &stopped.cursor), (ScanState::Running, &cursor), "{stopped:?}");
@@ -63,7 +64,7 @@ pub fn a_shutdown_leaves_its_scans_to_resume<S: InspectStore + 'static>(make: Fa
     );
     restarted.wait_idle();
     restarted.shutdown();
-    let scans = store.inspect_scans(&lib.id);
+    let scans = store.inspect_scans(lib.id);
     let row = |id| scans.iter().find(|s| s.id == id).unwrap();
     let resumed = row(interrupted.id);
     assert_eq!(resumed.state, ScanState::Completed);
@@ -87,14 +88,14 @@ pub fn a_cancelled_scan_stays_cancelled<S: InspectStore + 'static>(make: Factory
         Scanner::start(store.clone(), lib.clone(), governor.clone(), ScanOptions::default());
 
     governor.pause();
-    let cancelled = scanner.scan_library(Trigger::Manual);
+    let cancelled = scanner.scan_library(Trigger::Manual).unwrap();
     wait_until_running(&scanner, cancelled);
     assert!(scanner.cancel(cancelled));
     governor.resume();
     scanner.wait_idle();
 
     governor.pause();
-    let then_shut_down = scanner.scan_library(Trigger::Manual);
+    let then_shut_down = scanner.scan_library(Trigger::Manual).unwrap();
     wait_until_running(&scanner, then_shut_down);
     assert!(scanner.cancel(then_shut_down));
     scanner.stop();
@@ -109,7 +110,7 @@ pub fn a_cancelled_scan_stays_cancelled<S: InspectStore + 'static>(make: Factory
     );
     restarted.wait_idle();
     restarted.shutdown();
-    let scans = store.inspect_scans(&lib.id);
+    let scans = store.inspect_scans(lib.id);
     for id in [cancelled, then_shut_down] {
         let scan = scans.iter().find(|s| s.id == id).unwrap();
         assert_eq!(scan.state, ScanState::Cancelled, "{scan:?}");

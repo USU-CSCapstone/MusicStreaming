@@ -28,9 +28,10 @@ pub struct LibraryRow {
 }
 
 impl LibraryRow {
+    /// What the scanner needs to know about this library.
     pub fn config(&self) -> LibraryConfig {
         LibraryConfig {
-            id: self.id.to_string(),
+            id: self.id,
             roots: self.roots.iter().map(|r| r.path.clone()).collect(),
             excludes: self.excludes.clone(),
         }

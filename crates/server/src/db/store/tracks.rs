@@ -16,6 +16,8 @@ use crate::db::catalog::{self, Touched};
 use crate::db::feed::{self, Entity, Op};
 use crate::db::{DbError, now_ms};
 
+/// What the index holds for the file at `path` in `lib`, or `None` when no root of `lib` holds
+/// it or no track is there.
 pub fn lookup(store: &SqliteStore, lib: i64, path: &Path) -> Result<Option<IndexedFile>, DbError> {
     let Some((root_id, rel)) = store.roots.locate(lib, path) else {
         return Ok(None);
@@ -28,7 +30,7 @@ pub fn lookup(store: &SqliteStore, lib: i64, path: &Path) -> Result<Option<Index
             params![root_id, rel],
             |r| {
                 Ok(IndexedFile {
-                    track_id: r.get::<_, i64>(0)? as u64,
+                    track_id: r.get(0)?,
                     size: r.get::<_, i64>(1)? as u64,
                     mtime_ms: r.get::<_, Option<i64>>(2)?.map(|m| m as u64),
                     missing: r.get::<_, Option<i64>>(3)?.is_some(),
@@ -53,16 +55,15 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<(), DbError>
         let now = now_ms();
         let mut touched = Touched::default();
         for record in &batch.upserts {
-            upsert_track(&roots, tx, lib, record, batch.scan_id as i64, now, &mut touched)?;
+            upsert_track(&roots, tx, lib, record, batch.scan_id, now, &mut touched)?;
         }
         for id in batch.touched.iter().chain(&batch.returned) {
             tx.execute(
                 "UPDATE tracks SET last_seen_scan_id = ?2 WHERE id = ?1 AND library_id = ?3",
-                params![*id as i64, batch.scan_id as i64, lib],
+                params![id, batch.scan_id, lib],
             )?;
         }
-        for id in &batch.returned {
-            let id = *id as i64;
+        for &id in &batch.returned {
             let changed = tx.execute(
                 "UPDATE tracks SET missing_since = NULL \
                  WHERE id = ?1 AND library_id = ?2 AND missing_since IS NOT NULL",
@@ -73,8 +74,8 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<(), DbError>
                 feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)?;
             }
         }
-        for id in &batch.changed_unread {
-            forget_stamp(tx, lib, *id as i64, now, &mut touched)?;
+        for &id in &batch.changed_unread {
+            forget_stamp(tx, lib, id, now, &mut touched)?;
         }
         for path in &batch.cleared {
             clear_problem(&roots, tx, lib, path)?;
@@ -121,7 +122,7 @@ pub fn mark_missing_unseen(
     scope: &Scope,
     scan_id: ScanId,
     unreadable: &[PathBuf],
-) -> Result<usize, DbError> {
+) -> Result<i64, DbError> {
     let Some(root_id) = store.roots.root_by_path(lib, &scope.root) else {
         return Ok(0);
     };
@@ -133,7 +134,6 @@ pub fn mark_missing_unseen(
         let now = now_ms();
         let unseen = "SELECT id, path FROM tracks WHERE root_id = ?1 AND missing_since IS NULL \
                       AND (last_seen_scan_id IS NULL OR last_seen_scan_id <> ?2)";
-        let scan_id = scan_id as i64;
         let unseen_rows = match bounds_under(&rel) {
             None => {
                 let sql = match depth {
@@ -158,19 +158,19 @@ pub fn mark_missing_unseen(
         };
         // The unseen rows are already in hand, so the paths the scan could not read are matched
         // here rather than in SQL.
-        let ids: Vec<i64> = unseen_rows
+        let readable = unseen_rows
             .into_iter()
-            .filter(|(_, path)| !Path::new(path).ancestors().any(|a| unreadable.contains(a)))
-            .map(|(id, _)| id)
-            .collect();
+            .filter(|(_, path)| !Path::new(path).ancestors().any(|a| unreadable.contains(a)));
         let mut touched = Touched::default();
-        for id in &ids {
+        let mut marked = 0;
+        for (id, _) in readable {
             tx.execute("UPDATE tracks SET missing_since = ?2 WHERE id = ?1", params![id, now])?;
-            touched.track(tx, lib, *id)?;
-            feed::record(tx, lib, Entity::Track, *id, Op::Upsert, now)?;
+            touched.track(tx, lib, id)?;
+            feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)?;
+            marked += 1;
         }
         catalog::recompute(tx, lib, &touched, now)?;
-        Ok(ids.len())
+        Ok(marked)
     })
 }
 
