@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 
 use super::*;
-use crate::store::{FileToDecode, MemoryStore, StoreError};
+use crate::store::{FileToDecode, IndexedFile, MemoryStore, StoreError};
 use crate::testing::{library, make_album, write_small_wav};
 
 /// A memory store that runs `on_apply` before applying each batch, failing the batch if it
