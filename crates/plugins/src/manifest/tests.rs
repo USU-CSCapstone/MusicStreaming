@@ -53,6 +53,36 @@ fn finds_the_problems_each_case_lists() {
     }
 }
 
+/// Each permission's name reads back as it. A permission name in the cases is refused as unknown
+/// exactly when it names none, and the names they accept cover all of [`Permission::ALL`].
+#[test]
+fn every_permission_is_named_as_the_cases_name_it() {
+    for permission in Permission::ALL {
+        assert_eq!(Permission::from_name(&permission.name()), Some(permission));
+    }
+    let cases: Vec<Value> =
+        serde_json::from_str(include_str!("../../manifest-cases.json")).unwrap();
+    let mut asked = Vec::new();
+    for case in &cases {
+        let problems = case["problems"].as_array().unwrap();
+        let requests = case["manifest"]["permissions"].as_array().into_iter().flatten();
+        let named = requests.enumerate().filter_map(|(i, r)| Some((i, r["permission"].as_str()?)));
+        for (i, name) in named {
+            let unknown = format!(r#"permissions[{i}]: unknown permission "{name}""#);
+            let refused = problems.contains(&unknown.into());
+            assert_eq!(Permission::from_name(name).is_none(), refused, "{name}");
+            if !refused {
+                asked.push(name.to_owned());
+            }
+        }
+    }
+    asked.sort();
+    asked.dedup();
+    let mut all = Permission::ALL.map(Permission::name);
+    all.sort();
+    assert_eq!(asked, all);
+}
+
 /// Every key validation allows, at every level, is one the typed form reads and writes back,
 /// so none is accepted and then dropped.
 #[test]

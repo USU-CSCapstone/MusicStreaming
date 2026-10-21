@@ -55,16 +55,6 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn from_name(name: &str) -> Option<Kind> {
-        Some(match name {
-            "string" => Kind::String,
-            "number" => Kind::Number,
-            "integer" => Kind::Integer,
-            "boolean" => Kind::Boolean,
-            _ => return None,
-        })
-    }
-
     fn accepts(self, value: &Value) -> bool {
         match self {
             Kind::String => value.is_string(),
@@ -112,12 +102,14 @@ pub fn validate(key: &str, settings: &Value) -> Vec<String> {
             continue;
         };
         problems.extend(unknown_keys(&at, s, &SETTING_KEYS));
-        let Some(kind) = s.get("type").and_then(Value::as_str).and_then(Kind::from_name) else {
+        // Only a string is a kind: serde alone would also take `{"string": null}` as one.
+        let type_name = s.get("type").and_then(Value::as_str).unwrap_or_default();
+        let Ok(kind) = serde_json::from_value::<Kind>(type_name.into()) else {
             problems.push(format!(r#"{at}: "type" must be string, number, integer, or boolean"#));
             continue;
         };
         for key in ["title", "description"] {
-            if s.get(key).is_some_and(|v| !v.as_str().is_some_and(|v| !v.trim().is_empty())) {
+            if s.get(key).is_some_and(|v| v.as_str().is_none_or(|v| v.trim().is_empty())) {
                 problems.push(format!(r#"{at}: "{key}" must be a non-empty string"#));
             }
         }
@@ -129,10 +121,8 @@ pub fn validate(key: &str, settings: &Value) -> Vec<String> {
             .and_then(Value::as_array)
             .filter(|c| !c.is_empty() && c.iter().all(|v| kind.accepts(v)));
         if choices.is_some() && valid_choices.is_none() {
-            problems.push(format!(
-                r#"{at}: "enum" must be a non-empty list of {} values"#,
-                name_of(kind)
-            ));
+            problems
+                .push(format!(r#"{at}: "enum" must be a non-empty list of {type_name} values"#));
         }
         match s.get("default") {
             Some(default) if !kind.accepts(default) => {
@@ -158,15 +148,6 @@ pub fn validate(key: &str, settings: &Value) -> Vec<String> {
 /// Whether `a` and `b` are the same value, numbers compared by value, so `1.0` is `1`.
 fn same(a: &Value, b: &Value) -> bool {
     a == b || a.as_f64().zip(b.as_f64()).is_some_and(|(x, y)| x == y)
-}
-
-fn name_of(kind: Kind) -> &'static str {
-    match kind {
-        Kind::String => "string",
-        Kind::Number => "number",
-        Kind::Integer => "integer",
-        Kind::Boolean => "boolean",
-    }
 }
 
 fn valid_name(name: &str) -> bool {

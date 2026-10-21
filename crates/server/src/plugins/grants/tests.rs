@@ -42,7 +42,7 @@ async fn set(plugins: &Plugins, plugin_wide: &[Permission], per_library: &[(i64,
 }
 
 /// What `plugin` holds in `library`, by name and sorted.
-async fn held(db: &Database, library: i64) -> Vec<&'static str> {
+async fn held(db: &Database, library: i64) -> Vec<String> {
     let permissions = db.read(move |conn| granted(conn, "plugin", library)).await.unwrap();
     let mut names: Vec<_> = permissions.into_iter().map(Permission::name).collect();
     names.sort_unstable();

@@ -623,6 +623,25 @@
 		]
 	},
 	{
+		"name": "a permission named in the wrong case",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.1",
+			"permissions": [
+				{
+					"permission": "LibraryRead",
+					"required": true,
+					"reason": "x"
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: unknown permission \"LibraryRead\""
+		]
+	},
+	{
 		"name": "a permission without a name",
 		"manifest": {
 			"id": "lrclib-lyrics",
@@ -1223,6 +1242,28 @@
 		]
 	},
 	{
+		"name": "a setting whose type is an object naming a type",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.1",
+			"permissions": [],
+			"settings": {
+				"properties": {
+					"x": {
+						"type": {
+							"string": null
+						}
+					}
+				}
+			}
+		},
+		"problems": [
+			"settings.x: \"type\" must be string, number, integer, or boolean"
+		]
+	},
+	{
 		"name": "a setting that is not an object",
 		"manifest": {
 			"id": "lrclib-lyrics",
@@ -1315,6 +1356,27 @@
 		"problems": [
 			"settings.x: \"title\" must be a non-empty string",
 			"settings.x: \"writeOnly\" must be true or false"
+		]
+	},
+	{
+		"name": "a setting whose title is not a string",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.1",
+			"permissions": [],
+			"settings": {
+				"properties": {
+					"x": {
+						"type": "string",
+						"title": 5
+					}
+				}
+			}
+		},
+		"problems": [
+			"settings.x: \"title\" must be a non-empty string"
 		]
 	},
 	{
@@ -2213,6 +2275,36 @@
 			"permissions[0]: rateLimits: \"a.example\" needs \"per\": \"plugin\", \"user\", or \"host\"",
 			"permissions[0]: rateLimits: \"b.example\" needs \"per\": \"plugin\", \"user\", or \"host\"",
 			"permissions[0]: rateLimits: \"c.example\" needs a limit such as \"1/s\", \"60/min\", or \"1000/h\""
+		]
+	},
+	{
+		"name": "a rate limit whose \"per\" is an object naming whose requests",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"apiVersion": "0.1",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"a.example"
+					],
+					"rateLimits": {
+						"a.example": {
+							"limit": "1/s",
+							"per": {
+								"host": null
+							}
+						}
+					}
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: rateLimits: \"a.example\" needs \"per\": \"plugin\", \"user\", or \"host\""
 		]
 	},
 	{

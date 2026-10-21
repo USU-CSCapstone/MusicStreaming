@@ -35,18 +35,6 @@ pub enum Per {
     Host,
 }
 
-impl Per {
-    pub const ALL: [Per; 3] = [Per::Plugin, Per::User, Per::Host];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Per::Plugin => "plugin",
-            Per::User => "user",
-            Per::Host => "host",
-        }
-    }
-}
-
 /// A rate limit a manifest declares, read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RateLimit {
@@ -79,6 +67,8 @@ pub fn rate_limit_gap(limit: &str) -> Option<Duration> {
     Some(Duration::from_secs(period) / count.parse::<u32>().ok()?)
 }
 
+/// Every problem with the `rateLimits` of the network request at `at`, checked against the
+/// `destinations` it lists.
 pub(super) fn validate_rate_limits(
     at: &str,
     limits: &Value,
@@ -116,12 +106,12 @@ pub(super) fn validate_rate_limits(
                 r#"{at}: rateLimits: "{host}" limits every plugin, so its destinations must name it rather than "*""#
             ));
         }
-        if !pace.and_then(Value::as_str).is_some_and(|pace| rate_limit_gap(pace).is_some()) {
+        if pace.and_then(Value::as_str).is_none_or(|pace| rate_limit_gap(pace).is_none()) {
             problems.push(format!(
                 r#"{at}: rateLimits: "{host}" needs a limit such as "1/s", "60/min", or "1000/h""#
             ));
         }
-        let known = |per: &str| Per::ALL.iter().any(|p| p.name() == per);
+        let known = |per: &str| serde_json::from_value::<Per>(per.into()).is_ok();
         if limit.is_object() && !per.and_then(Value::as_str).is_some_and(known) {
             problems.push(format!(
                 r#"{at}: rateLimits: "{host}" needs "per": "plugin", "user", or "host""#

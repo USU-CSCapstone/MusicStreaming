@@ -29,7 +29,7 @@ pub const SECTION: &str = "jewelcase:manifest";
 pub const API_VERSION: &str = "0.1";
 
 /// The shortest interval a schedule may ask for.
-pub const MIN_EVERY_MINUTES: u64 = 5;
+const MIN_EVERY_MINUTES: u64 = 5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,12 +93,6 @@ impl Manifest {
             Some(RateLimit { host: host.to_ascii_lowercase(), limit: pace.clone(), gap, per })
         };
         limits.filter_map(limit).collect()
-    }
-
-    /// How often its schedule runs, if it asks for one.
-    pub fn every_minutes(&self) -> Option<u32> {
-        let schedule = self.permissions.iter().find(|r| r.permission == Permission::Schedule);
-        schedule.and_then(|r| r.every_minutes)
     }
 
     pub fn required(&self) -> impl Iterator<Item = Permission> + '_ {

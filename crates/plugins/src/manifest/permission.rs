@@ -1,6 +1,7 @@
 //! What a plugin can ask for, and how the admin sees it.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// What a plugin can ask for (`requirements/plugins.md` §4.1): what it may reach, and the hooks
 /// that run it, which are approved the same way.
@@ -41,7 +42,9 @@ pub enum Permission {
 }
 
 impl Permission {
-    pub const ALL: [Permission; 15] = [
+    /// Every permission, each once.
+    #[cfg(test)]
+    pub(crate) const ALL: [Permission; 15] = [
         Self::LibraryRead,
         Self::LibraryAdd,
         Self::LibraryChange,
@@ -59,29 +62,20 @@ impl Permission {
         Self::HostRateLimits,
     ];
 
-    /// Its name in manifests and the API, such as `libraryRead`.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::LibraryRead => "libraryRead",
-            Self::LibraryAdd => "libraryAdd",
-            Self::LibraryChange => "libraryChange",
-            Self::Network => "network",
-            Self::ListeningActivity => "listeningActivity",
-            Self::TracksChanged => "tracksChanged",
-            Self::ScanFinished => "scanFinished",
-            Self::Schedule => "schedule",
-            Self::Played => "played",
-            Self::Playing => "playing",
-            Self::SearchActivity => "searchActivity",
-            Self::Searched => "searched",
-            Self::AlbumsChanged => "albumsChanged",
-            Self::ArtistsChanged => "artistsChanged",
-            Self::HostRateLimits => "hostRateLimits",
+    /// Its name in manifests, the API and the database, such as `libraryRead`. It is the name its
+    /// serde derive reads and writes, so the names a manifest may use and the names stored and
+    /// shown come from one place and cannot disagree. Its rate-limit `per` values and the settings
+    /// kinds are read the same way.
+    pub fn name(self) -> String {
+        match serde_json::to_value(self) {
+            Ok(Value::String(name)) => name,
+            _ => unreachable!("a unit variant serializes as its name"),
         }
     }
 
+    /// The permission named `name` in manifests and the API, if there is one.
     pub fn from_name(name: &str) -> Option<Permission> {
-        Self::ALL.into_iter().find(|p| p.name() == name)
+        serde_json::from_value(name.into()).ok()
     }
 
     /// Granted per library, rather than once for the plugin (`requirements/plugins.md` §4.1).

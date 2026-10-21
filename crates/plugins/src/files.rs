@@ -16,11 +16,11 @@ use std::time::UNIX_EPOCH;
 use crate::host::{Entry, Error};
 
 /// The largest file a plugin writes in one call. It is held in the plugin's memory whole.
-pub const MAX_WRITE: usize = 32 << 20;
+const MAX_WRITE: usize = 32 << 20;
 /// The most a plugin reads in one call.
 pub const MAX_READ: u32 = 8 << 20;
 /// The most entries one call to [`entries`] answers, as many as a page of the library.
-pub const PAGE: usize = 500;
+const PAGE: usize = 500;
 
 /// `relative` within `root`, refused unless it is a plain relative path of one name or more.
 fn resolve(root: &Path, relative: &str) -> Result<PathBuf, Error> {

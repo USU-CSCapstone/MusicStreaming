@@ -21,7 +21,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 /// The longest a request waits for its turn before it is refused instead. A run has five
 /// minutes in all.
-pub const MAX_WAIT: Duration = Duration::from_secs(60);
+const MAX_WAIT: Duration = Duration::from_secs(60);
 /// The longest pause a service can ask for. One that asks for a day is believed for an hour,
 /// then asked again.
 const MAX_PAUSE: Duration = Duration::from_secs(60 * 60);
