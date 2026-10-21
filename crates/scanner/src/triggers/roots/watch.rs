@@ -13,8 +13,8 @@ use notify::{ErrorKind, RecursiveMode, Watcher};
 use super::{Events, identity, limit};
 use crate::confine::without_links;
 use crate::discover::{excluded, excluded_scope, gone};
+use crate::scope::{Depth, Scope};
 use crate::triggers::watcher;
-use crate::types::{Depth, Scope};
 
 /// One root's watch, as it was set up.
 pub(in crate::triggers) struct RootWatch {

@@ -3,8 +3,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
+use crate::analysis::AnalysisResult;
+use crate::library::LibraryId;
+use crate::scan::{Scan, ScanId, ScanState};
+use crate::scope::Scope;
 use crate::store::{Batch, FileToDecode, IndexedFile, PickedTrack, Store, StoreError};
-use crate::types::*;
 
 /// Passes every call to the store it wraps. While held, a scan that saves its row as running
 /// waits, once the row is written, until [`Parked::release`]: a scan that starts while held

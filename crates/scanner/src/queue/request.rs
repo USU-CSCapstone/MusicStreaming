@@ -5,7 +5,8 @@ use std::collections::VecDeque;
 use std::time::{Instant, SystemTime};
 
 use super::{Inner, coalesce_scopes};
-use crate::types::*;
+use crate::scan::{Scan, ScanId, ScanProgress, ScanState, Trigger};
+use crate::scope::Scope;
 
 impl Inner {
     /// [`Scanner::request`](super::Scanner::request). The new scan's row is written before the

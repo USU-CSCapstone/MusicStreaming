@@ -4,44 +4,63 @@
 //! (`requirements/general.md` §3.2). The crate reads and never writes to a
 //! library; it persists through the [`Store`] trait the server implements.
 //!
-//! Layout follows the design: [`discover`] walks, [`tags`] reads, [`sidecar`]
-//! resolves, [`identity`] classifies, [`scan`] runs the pipeline over a scope,
-//! [`queue`] coalesces triggers into scans, [`triggers`] feeds the queue from
-//! the filesystem watcher and the schedule, and [`analysis`] is the one decode pass.
-//! [`jobs`] is what analysis and placeholders make of a file they could not decode.
-//! [`confine`] refuses paths through symlinks, which are never followed.
-//! [`TagSet`] and [`AudioProperties`] are what [`tags`] reads from every file,
-//! and [`lrc`] turns synced lyrics into timed lines.
+//! Layout follows the design: `discover` walks, `tags` reads, `sidecar`
+//! resolves, `identity` classifies, `scan` runs the pipeline over a scope,
+//! `queue` coalesces triggers into scans, `triggers` feeds the queue from
+//! the filesystem watcher and the schedule, and `analysis` is the one decode pass.
+//! `jobs` is what analysis and placeholders make of a file they could not decode.
+//! `confine` refuses paths through symlinks, which are never followed.
+//! [`TagSet`] and [`AudioProperties`] are what `tags` reads from every file,
+//! and `lrc` turns synced lyrics into timed lines.
 
 #[cfg(panic = "abort")]
 compile_error!("the scanner turns parser panics into problems and needs unwinding");
 
-pub mod analysis;
+mod analysis;
 mod audio;
-pub mod confine;
-pub mod discover;
-pub mod identity;
-pub mod image;
-pub mod jobs;
-pub mod lrc;
+mod clock;
+mod confine;
+mod discover;
+mod identity;
+mod image;
+mod jobs;
+mod library;
+mod lrc;
 mod multi_value;
-pub mod placeholders;
-pub mod problems;
-pub mod queue;
-pub mod scan;
-pub mod sidecar;
-pub mod store;
+mod placeholders;
+mod problems;
+mod queue;
+mod scan;
+mod scope;
+mod sidecar;
+mod store;
 mod tag_set;
-pub mod tags;
+mod tags;
 #[cfg(feature = "testing")]
 pub mod testing;
-pub mod triggers;
-pub mod types;
+mod track;
+mod triggers;
 
+pub use analysis::waveform::Waveform;
+pub use analysis::{ANALYZER_VERSION, AnalysisResult, AnalysisWorker, Analyzer};
 pub use audio::AudioProperties;
+pub use clock::{now_ms, system_time_ms};
+pub use confine::without_links;
+pub use image::{ImageInfo, describe};
+pub use jobs::RunReport;
+pub use library::{LibraryConfig, LibraryId};
+pub use lrc::{SyncedLine, parse};
+pub use placeholders::{PlaceholderWorker, Placeholders};
+pub use problems::{Problem, ProblemKind, UNOPENED, group_key};
 pub use queue::Scanner;
+pub use scan::{
+    Cursor, Scan, ScanContext, ScanId, ScanOptions, ScanProgress, ScanState, Trigger, run_scan,
+};
+pub use scope::{Depth, Scope};
 pub use store::{
     Batch, FileToDecode, IndexedFile, IndexedLyrics, MemoryStore, PickedTrack, Store, StoreError,
 };
 pub use tag_set::{Lyrics, PartialDate, TagSet};
-pub use types::*;
+pub use tags::{ReadError, read};
+pub use track::{ArtworkSource, SortKeys, TrackId, TrackRecord};
+pub use triggers::{FsWatcher, Schedule};

@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime};
 use super::{
     Factory, InspectStore, library, live, make_album, scan_library, tag_wav, write_sine_wav,
 };
-use crate::analysis::ANALYZER_VERSION;
-use crate::types::{AnalysisResult, LibraryConfig};
+use crate::analysis::{ANALYZER_VERSION, AnalysisResult};
+use crate::library::LibraryConfig;
 
 /// An album of `n` tracks under `A/X`, scanned into a fresh store with every track analyzed and
 /// its loudness measured, and the album's folder.

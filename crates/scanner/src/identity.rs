@@ -8,7 +8,7 @@
 //! file stage 3 cannot read, keeps the track the index holds at its path without reaching it.
 
 use crate::store::IndexedFile;
-use crate::types::TrackId;
+use crate::track::TrackId;
 
 /// What a read file is to the index.
 #[derive(Debug, Clone, PartialEq, Eq)]

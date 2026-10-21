@@ -16,7 +16,6 @@ mod upsert;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use jewelcase_scanner::store::{Batch, IndexedFile, Store, StoreError};
 use jewelcase_scanner::*;
 
 use self::roots::Roots;

@@ -2,8 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use jewelcase_scanner::Scanner;
-use jewelcase_scanner::scan::ScanOptions;
+use jewelcase_scanner::{ScanOptions, Scanner};
 
 use super::Plugins;
 use crate::db::{Database, SqliteStore, libraries};

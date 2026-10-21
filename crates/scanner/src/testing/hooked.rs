@@ -3,8 +3,11 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::analysis::AnalysisResult;
+use crate::library::LibraryId;
+use crate::scan::{Scan, ScanId};
+use crate::scope::Scope;
 use crate::store::{Batch, FileToDecode, IndexedFile, MemoryStore, PickedTrack, Store, StoreError};
-use crate::types::*;
 
 /// A memory store that runs `on_apply` before applying each batch, `on_lookup` with each path it
 /// looks up, `on_under` before [`Store::problems_under`] and [`Store::indexes_under`], and

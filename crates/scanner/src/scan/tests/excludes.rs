@@ -5,6 +5,7 @@
 use std::os::unix::fs::symlink;
 
 use super::*;
+use crate::scope::Depth;
 
 /// A library at `root` with A/X and backup/X, one track each, excluding the folder `backup`
 /// alone, so only an ancestor of backup/X matches.

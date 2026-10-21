@@ -5,9 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jewelcase_ffmpeg::{Config, Ffmpeg};
-use jewelcase_scanner::MemoryStore;
-use jewelcase_scanner::analysis::Analyzer;
-use jewelcase_scanner::placeholders::Placeholders;
+use jewelcase_scanner::{Analyzer, MemoryStore, Placeholders};
 
 /// The nice value in a `/proc/.../stat` line: its 19th field, after the name in parentheses,
 /// which may hold spaces.

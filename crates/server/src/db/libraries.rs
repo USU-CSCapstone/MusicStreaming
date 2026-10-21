@@ -3,8 +3,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use jewelcase_scanner::confine::without_links;
-use jewelcase_scanner::{FileToDecode, LibraryConfig};
+use jewelcase_scanner::{FileToDecode, LibraryConfig, without_links};
 use rusqlite::Error::FromSqlConversionFailure;
 use rusqlite::types::Type;
 use rusqlite::{Connection, Result, params};

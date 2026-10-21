@@ -5,6 +5,7 @@ use std::fs::Permissions;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
 use super::*;
+use crate::scope::Depth;
 
 /// Folders made unlistable, listable again when dropped, so the temporary directory can be
 /// removed even after a failed assertion.

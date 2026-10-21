@@ -7,9 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jewelcase_ffmpeg::{Config, Ffmpeg};
-use jewelcase_scanner::analysis::Analyzer;
-use jewelcase_scanner::jobs::RunReport;
-use jewelcase_scanner::scan::ScanOptions;
 use jewelcase_scanner::testing::{self, InspectStore};
 use jewelcase_scanner::*;
 

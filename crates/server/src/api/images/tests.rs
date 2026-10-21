@@ -1,6 +1,6 @@
 use axum::Router;
 use axum::http::StatusCode;
-use jewelcase_scanner::image::describe;
+use jewelcase_scanner::describe;
 use serde_json::Value;
 
 use super::super::testing::{app, ffmpeg, owner_request, send};

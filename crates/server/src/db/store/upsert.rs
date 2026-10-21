@@ -203,7 +203,7 @@ pub fn upsert_track(
     tx.execute("DELETE FROM track_lyrics WHERE track_id = ?1", [id])?;
     if let Some(l) = lyrics {
         let synced = if l.synced {
-            let lines = jewelcase_scanner::lrc::parse(&l.text);
+            let lines = jewelcase_scanner::parse(&l.text);
             if lines.is_empty() { None } else { Some(serde_json::to_string(&lines).unwrap()) }
         } else {
             None

@@ -7,11 +7,10 @@ use std::time::Duration;
 
 use anyhow::Context;
 use jewelcase_ffmpeg::Ffmpeg;
-use jewelcase_scanner::analysis::{AnalysisWorker, Analyzer};
-use jewelcase_scanner::placeholders::{PlaceholderWorker, Placeholders};
-use jewelcase_scanner::scan::ScanOptions;
-use jewelcase_scanner::triggers::{FsWatcher, Schedule};
-use jewelcase_scanner::{Scanner, Trigger};
+use jewelcase_scanner::{
+    AnalysisWorker, Analyzer, FsWatcher, PlaceholderWorker, Placeholders, ScanOptions, Scanner,
+    Schedule, Trigger,
+};
 use tracing::{info, warn};
 
 use crate::db::{Database, SqliteStore, libraries};

@@ -683,7 +683,7 @@ fn analysis_results_reach_tracks_albums_and_waveforms() {
     let lib = testing::library(&root);
     testing::scan_library(store.as_ref(), &lib);
     let ffmpeg = jewelcase_ffmpeg::Ffmpeg::new(jewelcase_ffmpeg::Config::default());
-    let analyzer = jewelcase_scanner::analysis::Analyzer::new(ffmpeg, store.clone());
+    let analyzer = jewelcase_scanner::Analyzer::new(ffmpeg, store.clone());
     let report = analyzer.run_once(lib.id, 10);
     assert_eq!(report.done, 1);
     assert_eq!(analyzer.run_once(lib.id, 10).done, 0, "nothing left");
@@ -691,7 +691,7 @@ fn analysis_results_reach_tracks_albums_and_waveforms() {
     assert!((lufs - -6.7).abs() < 1.0, "{lufs}");
     assert_eq!(
         scalar::<i64>(&store, "SELECT analyzer_version FROM tracks"),
-        Some(jewelcase_scanner::analysis::ANALYZER_VERSION as i64)
+        Some(jewelcase_scanner::ANALYZER_VERSION as i64)
     );
     let album_lufs: f64 = scalar(&store, "SELECT loudness_lufs FROM albums").unwrap();
     assert!((album_lufs - lufs).abs() < 0.01, "a one-track album is as loud as its track");

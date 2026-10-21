@@ -2,14 +2,39 @@
 
 use jewelcase_core::sort_key;
 
-use super::ScanContext;
+use super::{Scan, ScanContext};
 use crate::discover::{Candidate, Directory};
 use crate::identity::{self, Identity};
-use crate::problems;
+use crate::problems::{self, Problem};
+use crate::scope::Scope;
 use crate::sidecar::SidecarResolver;
 use crate::store::{IndexedFile, IndexedLyrics, StoreError};
 use crate::tags;
-use crate::types::*;
+use crate::track::{Artwork, ArtworkSource, SortKeys, TrackId, TrackRecord, filename_title};
+
+/// Per-file result of the pipeline (`design/scanning.md` §2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileOutcome {
+    Unchanged {
+        track_id: TrackId,
+    },
+    /// A missing track whose file is back, byte-identical.
+    Returned {
+        track_id: TrackId,
+    },
+    Added(Box<TrackRecord>),
+    Updated(Box<TrackRecord>),
+    /// A file with no track that could not be read.
+    Problem(Problem),
+    /// A known track's file, there but unreadable, with its `problem`. `changed` is whether the
+    /// file's size or mtime differs from the index, or the index has forgotten its mtime.
+    Unread {
+        track_id: TrackId,
+        missing: bool,
+        changed: bool,
+        problem: Problem,
+    },
+}
 
 /// Whether a lyrics file has appeared beside a track that had none, or gone from one
 /// that had it (`requirements/scanning.md` §7). Checked against the directory listing

@@ -10,15 +10,19 @@ use crate::confine::without_links;
 use crate::discover::{
     Directory, RootUnavailable, Walk, WalkItem, check_root, compile_excludes, excluded_scope, gone,
 };
+use crate::library::LibraryConfig;
 use crate::problems;
+use crate::scope::Scope;
 use crate::sidecar::SidecarResolver;
 use crate::store::{Store, StoreError};
-use crate::types::*;
-use file::process_file;
+use file::{FileOutcome, process_file};
 use writer::{Halt, Writer};
 
 mod file;
+mod row;
 mod writer;
+
+pub use row::{Cursor, Scan, ScanId, ScanProgress, ScanState, Trigger};
 
 /// Tunables. Defaults are the design's starting points; benchmarks decide
 /// the shipped values.

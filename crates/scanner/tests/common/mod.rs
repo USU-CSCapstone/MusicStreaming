@@ -7,7 +7,6 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use jewelcase_scanner::scan::{ScanContext, ScanOptions, run_scan};
 use jewelcase_scanner::*;
 
 /// Write a stereo 16-bit WAV of a sine at `hz` and `amplitude` lasting

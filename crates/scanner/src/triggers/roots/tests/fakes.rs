@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use notify::{Config, EventHandler, RecommendedWatcher, RecursiveMode, Watcher, WatcherKind};
 
 use super::*;
+use crate::scope::Depth;
 use crate::triggers::watcher;
-use crate::types::Depth;
 
 /// A real watcher that fails to watch one folder, with the error `error` makes, and counts
 /// every folder it is asked to watch.

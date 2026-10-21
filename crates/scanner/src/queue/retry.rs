@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 
 use super::coalesce_scopes;
 use crate::scan::Undone;
-use crate::types::{Scan, ScanState, Scope, Trigger};
+use crate::scan::{Scan, ScanState, Trigger};
+use crate::scope::Scope;
 
 /// The wait before work first left undone is queued again.
 const FIRST_WAIT: Duration = Duration::from_secs(60);
@@ -136,7 +137,8 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::types::{Cursor, Depth, ScanProgress};
+    use crate::scan::{Cursor, ScanProgress};
+    use crate::scope::Depth;
 
     const MINUTE: Duration = Duration::from_secs(60);
 

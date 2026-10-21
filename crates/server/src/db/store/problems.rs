@@ -3,8 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use jewelcase_scanner::problems::{UNOPENED, group_key};
-use jewelcase_scanner::{Problem, ProblemKind, Scope, system_time_ms};
+use jewelcase_scanner::{Problem, ProblemKind, Scope, UNOPENED, group_key, system_time_ms};
 use rusqlite::{Connection, OptionalExtension, Result, ToSql, Transaction, params};
 
 use super::SqliteStore;

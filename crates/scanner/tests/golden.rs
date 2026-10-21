@@ -10,7 +10,7 @@ use std::path::Path;
 
 use common::*;
 use jewelcase_core::Format;
-use jewelcase_scanner::{Lyrics, PartialDate, TagSet, tags};
+use jewelcase_scanner::{Lyrics, PartialDate, ReadError, TagSet, read};
 use lofty::config::WriteOptions;
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::*;
@@ -128,7 +128,7 @@ fn every_format_reads_the_same_tagset() {
         encode(&wav, &path, &args);
         write_tags(&path, tag_type);
         let size = std::fs::metadata(&path).unwrap().len();
-        let got = tags::read(&path, size).unwrap_or_else(|e| panic!("read {name}: {e}"));
+        let got = read(&path, size).unwrap_or_else(|e| panic!("read {name}: {e}"));
         if got.properties.format != format {
             failures.push(format!("{name}: format {:?}, wanted {format:?}", got.properties.format));
         }
@@ -160,8 +160,8 @@ fn mpeg_layer_ii_named_mp3_is_unsupported() {
     encode(&wav, &path, &["-c:a", "mp2", "-f", "mp2"]);
 
     let size = std::fs::metadata(&path).unwrap().len();
-    match tags::read(&path, size) {
-        Err(tags::ReadError::Unsupported(detail)) => assert!(detail.contains("Layer2"), "{detail}"),
+    match read(&path, size) {
+        Err(ReadError::Unsupported(detail)) => assert!(detail.contains("Layer2"), "{detail}"),
         other => panic!("Layer II read as {other:?}"),
     }
 }
@@ -189,7 +189,7 @@ fn id3v23_packed_totals_and_semicolons() {
     tag.insert(frame("TCON", "Hip-Hop;R&B"));
     tag.insert(frame("TDRC", "2018"));
     tag.save_to_path(&path, WriteOptions::default()).unwrap();
-    let got = tags::read(&path, 1).unwrap().tags;
+    let got = read(&path, 1).unwrap().tags;
     assert_eq!(got.track_number, Some(1));
     assert_eq!(got.track_total, Some(12));
     assert_eq!(got.disc_number, Some(1));

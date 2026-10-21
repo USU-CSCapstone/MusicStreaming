@@ -3,7 +3,7 @@
 
 use axum::Router;
 use axum::http::StatusCode;
-use jewelcase_scanner::image::describe;
+use jewelcase_scanner::describe;
 use jewelcase_scanner::testing::{library, make_album, scan_library};
 use serde_json::Value;
 

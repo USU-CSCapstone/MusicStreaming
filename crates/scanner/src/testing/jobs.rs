@@ -10,11 +10,12 @@ use std::time::{Duration, SystemTime};
 use jewelcase_ffmpeg::{Config, Ffmpeg};
 
 use super::{Factory, InspectStore, PNG, library, make_album, scan_library};
-use crate::analysis::{ANALYZER_VERSION, Analyzer};
+use crate::analysis::{ANALYZER_VERSION, AnalysisResult, Analyzer};
 use crate::jobs::RunReport;
+use crate::library::LibraryId;
 use crate::placeholders::Placeholders;
+use crate::problems::{Problem, ProblemKind};
 use crate::store::Batch;
-use crate::types::{AnalysisResult, LibraryId, Problem, ProblemKind};
 
 /// An analyzer over `store` that runs ffmpeg with `config`.
 fn analyzer<S: InspectStore + 'static>(store: &Arc<S>, config: Config) -> Analyzer {

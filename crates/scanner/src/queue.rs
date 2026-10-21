@@ -16,9 +16,10 @@ use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use crate::scan::{ScanContext, ScanOptions, run_scan};
+use crate::library::LibraryConfig;
+use crate::scan::{Scan, ScanContext, ScanId, ScanOptions, ScanState, Trigger, run_scan};
+use crate::scope::{Depth, Scope};
 use crate::store::Store;
-use crate::types::*;
 use retry::Retry;
 
 mod request;

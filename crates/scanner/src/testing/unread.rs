@@ -10,9 +10,11 @@ use std::time::Duration;
 use super::reanalysis::{analyzed_album, modified, set_modified};
 use super::{Factory, InspectStore, library, live, make_album, scan_library, tag_wav};
 use super::{InspectTrack, write_small_wav};
-use crate::analysis::ANALYZER_VERSION;
+use crate::analysis::{ANALYZER_VERSION, AnalysisResult};
+use crate::library::LibraryConfig;
+use crate::problems::ProblemKind;
+use crate::scan::ScanState;
 use crate::store::Batch;
-use crate::types::{AnalysisResult, LibraryConfig, ProblemKind, ScanState};
 
 /// Overwrites the file at `path` with bytes that are not audio, and dates it five seconds after
 /// it was last modified, so a scan finds it changed.

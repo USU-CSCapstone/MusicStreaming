@@ -7,6 +7,7 @@ use std::sync::{Arc, Once};
 use lofty::resolve::register_custom_resolver;
 
 use super::*;
+use crate::problems::ProblemKind;
 use crate::queue::Scanner;
 use crate::testing::wait_until;
 use resolver::{PANICS, Panics};

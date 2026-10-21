@@ -20,9 +20,9 @@ use std::time::{Duration, Instant};
 
 use crate::confine::is_refused;
 use crate::discover::check_root;
-use crate::problems;
+use crate::library::LibraryId;
+use crate::problems::{self, Problem};
 use crate::store::{Batch, FileToDecode, Store, StoreError};
-use crate::types::{LibraryId, Problem};
 
 /// How long a file that cannot be opened is skipped before it is tried again.
 pub const RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
@@ -248,8 +248,8 @@ mod tests {
     use std::time::SystemTime;
 
     use super::*;
+    use crate::problems::ProblemKind;
     use crate::store::MemoryStore;
-    use crate::types::ProblemKind;
 
     /// A root holding the files `a` and `b`, and a store to record problems in.
     fn setup() -> (tempfile::TempDir, MemoryStore, [FileToDecode; 2]) {

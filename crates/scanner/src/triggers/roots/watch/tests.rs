@@ -4,7 +4,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 
 use super::*;
 use crate::discover::compile_excludes;
-use crate::types::Depth;
+use crate::scope::Depth;
 
 /// A root holding the folders `a`, `a/x`, `b` and `skip/y`, a file, and a link to `a`.
 fn tree() -> tempfile::TempDir {

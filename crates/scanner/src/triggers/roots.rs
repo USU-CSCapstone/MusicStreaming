@@ -15,7 +15,8 @@ use tracing::{info, warn};
 
 use super::{Schedule, Timing};
 use crate::queue::Scanner;
-use crate::types::{Scope, Trigger};
+use crate::scan::Trigger;
+use crate::scope::Scope;
 pub(super) use watch::RootWatch;
 
 /// Where every root's watch sends its events.

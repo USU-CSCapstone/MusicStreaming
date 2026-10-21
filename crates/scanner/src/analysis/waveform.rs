@@ -4,7 +4,41 @@
 //! the same order always give the same bytes. No legibility shaping here;
 //! that happens at render time from these honest measurements.
 
-use crate::types::Waveform;
+use serde::{Deserialize, Serialize};
+
+/// Peak and RMS per bin, quantized to 0..=255, over a mono downmix. The
+/// honest measurement; legibility shaping happens at render time
+/// (`requirements/playback.md` §3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Waveform {
+    pub peaks: Vec<u8>,
+    pub rms: Vec<u8>,
+}
+
+impl Waveform {
+    /// Serialize for the `track_waveforms.data` blob: a one-byte version, a
+    /// two-byte little-endian bin count, then peaks, then RMS.
+    pub fn to_blob(&self) -> Vec<u8> {
+        let n = self.peaks.len().min(u16::MAX as usize);
+        let mut out = Vec::with_capacity(3 + 2 * n);
+        out.push(1);
+        out.extend_from_slice(&(n as u16).to_le_bytes());
+        out.extend_from_slice(&self.peaks[..n]);
+        out.extend_from_slice(&self.rms[..n.min(self.rms.len())]);
+        out
+    }
+
+    pub fn from_blob(blob: &[u8]) -> Option<Waveform> {
+        if blob.len() < 3 || blob[0] != 1 {
+            return None;
+        }
+        let n = u16::from_le_bytes([blob[1], blob[2]]) as usize;
+        if blob.len() < 3 + 2 * n {
+            return None;
+        }
+        Some(Waveform { peaks: blob[3..3 + n].to_vec(), rms: blob[3 + n..3 + 2 * n].to_vec() })
+    }
+}
 
 /// Frames per fine-grained chunk when the total length is unknown up front.
 const CHUNK_FRAMES: usize = 1024;
@@ -124,5 +158,12 @@ mod tests {
     fn empty_input() {
         let out = WaveformBuilder::new(3, Some(0)).finish();
         assert_eq!(out.peaks, vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn waveform_blob_round_trips() {
+        let w = Waveform { peaks: vec![1, 2, 3], rms: vec![4, 5, 6] };
+        assert_eq!(Waveform::from_blob(&w.to_blob()), Some(w));
+        assert_eq!(Waveform::from_blob(&[9, 0, 0]), None);
     }
 }

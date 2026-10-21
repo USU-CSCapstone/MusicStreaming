@@ -4,7 +4,6 @@ mod common;
 
 use common::*;
 use jewelcase_ffmpeg::{Config, Ffmpeg};
-use jewelcase_scanner::analysis::{ANALYZER_VERSION, Analyzer};
 use jewelcase_scanner::*;
 
 #[test]

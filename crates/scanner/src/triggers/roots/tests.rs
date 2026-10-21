@@ -5,10 +5,9 @@ use std::sync::{Arc, mpsc};
 use std::collections::BTreeSet;
 
 use super::*;
-use crate::scan::ScanOptions;
+use crate::scan::{Scan, ScanOptions};
 use crate::store::MemoryStore;
 use crate::testing::library;
-use crate::types::Scan;
 use fakes::{FailsAt, limit_error, seen};
 
 mod coverage;

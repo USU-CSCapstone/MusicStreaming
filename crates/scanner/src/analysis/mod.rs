@@ -15,11 +15,13 @@ use std::time::{Duration, SystemTime};
 
 use ebur128::{EbuR128, Mode};
 use jewelcase_ffmpeg::{Ffmpeg, ProbeInfo};
+use serde::{Deserialize, Serialize};
 
 use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport};
+use crate::library::LibraryId;
+use crate::problems::{Problem, ProblemKind};
 use crate::store::{FileToDecode, Store};
-use crate::types::*;
-use waveform::WaveformBuilder;
+use waveform::{Waveform, WaveformBuilder};
 
 /// Bumped whenever any sink's output changes; tracks below it are reprocessed
 /// in the background (`requirements/deployment.md` §5).
@@ -37,6 +39,31 @@ pub enum AnalysisError {
     Ffmpeg(#[from] jewelcase_ffmpeg::Error),
     #[error("loudness meter: {0}")]
     Meter(#[from] ebur128::Error),
+}
+
+/// Result of analyzing one track (`design/scanning.md` §12).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisResult {
+    pub analyzer_version: u32,
+    /// Integrated loudness, LUFS. `None` for silence.
+    pub integrated_lufs: Option<f64>,
+    /// True peak across channels, dBTP.
+    pub true_peak_dbtp: Option<f64>,
+    pub waveform: Waveform,
+}
+
+impl AnalysisResult {
+    /// A result from analyzer `version` that measured nothing: no loudness, no peak, and no
+    /// waveform bins.
+    pub fn empty(version: u32) -> AnalysisResult {
+        AnalysisResult {
+            analyzer_version: version,
+            integrated_lufs: None,
+            true_peak_dbtp: None,
+            waveform: Waveform { peaks: Vec::new(), rms: Vec::new() },
+        }
+    }
 }
 
 /// Runs analysis for one library.
@@ -65,7 +92,7 @@ impl Analyzer {
     }
 
     /// Builds waveforms of `bins` peak and RMS bins, at least one, rather than
-    /// [`DEFAULT_WAVEFORM_BINS`].
+    /// `DEFAULT_WAVEFORM_BINS`.
     pub fn with_waveform_bins(mut self, bins: usize) -> Analyzer {
         self.waveform_bins = bins.max(1);
         self
@@ -110,7 +137,7 @@ impl Analyzer {
     }
 
     /// Analyze up to `limit` tracks that need it, skipping those whose files are waiting to be
-    /// tried again. A failure is handled as [`crate::jobs`] describes.
+    /// tried again. A failure is handled as `jobs` describes.
     pub fn run_once(&self, library: LibraryId, limit: usize) -> RunReport {
         let store = self.store.as_ref();
         let next = |fetch| store.next_unanalyzed(library, ANALYZER_VERSION, fetch);

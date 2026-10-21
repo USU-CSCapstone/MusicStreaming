@@ -6,8 +6,8 @@ use notify::EventKind;
 use notify::event::Flag;
 
 use super::*;
+use crate::library::LibraryConfig;
 use crate::triggers::{FsWatcher, STOP_WAIT};
-use crate::types::LibraryConfig;
 
 /// The root's watch is set up on the watcher's own thread, so the server listens without
 /// waiting for it.

@@ -3,9 +3,8 @@
 
 use std::time::{Instant, SystemTime};
 
-use super::ScanContext;
+use super::{Cursor, Scan, ScanContext, ScanProgress, ScanState};
 use crate::store::{Batch, StoreError};
-use crate::types::*;
 
 /// Why a scan leaves its walk early.
 pub(super) enum Halt {

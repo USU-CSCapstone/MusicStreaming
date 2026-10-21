@@ -6,8 +6,8 @@ use std::time::SystemTime;
 
 use super::{Factory, InspectStore, Parked, library, live, make_album, wait_until_running};
 use crate::queue::Scanner;
-use crate::scan::ScanOptions;
-use crate::types::*;
+use crate::scan::{Cursor, Scan, ScanOptions, ScanProgress, ScanState, Trigger};
+use crate::scope::{Depth, Scope};
 
 /// A shutdown stops the running scan without ending it: the row stays running at its cursor and
 /// a queued scan stays queued, so the next start resumes both. The running scan is one a previous

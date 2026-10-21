@@ -3,7 +3,6 @@
 
 use std::fs;
 
-use jewelcase_scanner::analysis::ANALYZER_VERSION;
 use jewelcase_scanner::*;
 
 use super::{make, scalar};

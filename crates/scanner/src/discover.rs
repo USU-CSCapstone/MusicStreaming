@@ -24,8 +24,9 @@ use std::path::{Path, PathBuf};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use jewelcase_core::Format;
 
+use crate::clock::system_time_ms;
 use crate::confine::not_followed;
-use crate::types::{Depth, Scope, system_time_ms};
+use crate::scope::{Depth, Scope};
 
 /// An audio candidate: passed the extension filter, not yet opened.
 #[derive(Debug, Clone, PartialEq, Eq)]

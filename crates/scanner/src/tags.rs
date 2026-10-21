@@ -20,7 +20,8 @@ use lofty::picture::PictureType;
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, Tag, TagType};
 
-use crate::{AudioProperties, Lyrics, PartialDate, TagSet, multi_value};
+use crate::audio::AudioProperties;
+use crate::{Lyrics, PartialDate, TagSet, multi_value};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {

@@ -11,9 +11,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::analysis::AnalysisResult;
 use crate::confine::{not_a_file, without_links};
-use crate::problems::UNOPENED;
-use crate::types::*;
+use crate::library::LibraryId;
+use crate::problems::{Problem, UNOPENED};
+use crate::scan::{Scan, ScanId, ScanState};
+use crate::scope::Scope;
+use crate::track::{ArtworkSource, TrackId, TrackRecord};
 
 /// What the store already knows about a path. Enough for the skip check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,7 +85,7 @@ impl Batch {
 }
 
 /// A persistence failure. A scan that hits one suspends at its last persisted cursor, and a
-/// background job backs off as [`crate::jobs`] describes.
+/// background job backs off as `jobs` describes.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("store: {0}")]
 pub struct StoreError(pub String);
@@ -107,7 +111,7 @@ pub struct FileToDecode {
 
 impl FileToDecode {
     /// The real path to decode, once the file opens. Refused when a symlink sits below the root
-    /// or the file is not a regular one ([`crate::confine`]), and an error when the file is gone,
+    /// or the file is not a regular one (`confine`), and an error when the file is gone,
     /// out of reach, or not permitted.
     pub fn open(&self) -> io::Result<PathBuf> {
         let real = without_links(&self.root, &self.path)?;

@@ -21,8 +21,9 @@ use notify::{Config, EventKind, RecommendedWatcher, Watcher as _};
 
 use crate::discover::{compile_excludes, gone};
 use crate::queue::Scanner;
+use crate::scan::Trigger;
+use crate::scope::{Depth, Scope};
 use crate::sidecar::is_sidecar_name;
-use crate::types::{Depth, Scope, Trigger};
 use roots::{Events, RootWatch, Roots};
 
 /// How often the watcher checks that each root is still the directory it watches.

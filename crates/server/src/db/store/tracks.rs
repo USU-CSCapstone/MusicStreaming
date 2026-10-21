@@ -4,8 +4,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use jewelcase_scanner::store::{Batch, IndexedFile, IndexedLyrics};
-use jewelcase_scanner::{Depth, ScanId, Scope};
+use jewelcase_scanner::{Batch, Depth, IndexedFile, IndexedLyrics, ScanId, Scope};
 use rusqlite::{Connection, OptionalExtension, Result, ToSql, Transaction, params};
 
 use super::SqliteStore;

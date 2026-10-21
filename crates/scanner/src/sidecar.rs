@@ -16,7 +16,9 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::types::{Biography, SidecarImage, SidecarLyrics};
+use serde::{Deserialize, Serialize};
+
+use crate::image::ImageInfo;
 use crate::{Lyrics, image};
 
 /// `cover.*` — album art (`requirements/scanning.md` §3.1).
@@ -34,6 +36,27 @@ pub const LYRICS_EXTENSIONS: &[&str] = &["lrc", "txt"];
 /// Largest sidecar file read whole. Covers are rarely over a few megabytes;
 /// anything larger is ignored rather than hashed.
 const MAX_SIDECAR_BYTES: u64 = 32 * 1024 * 1024;
+
+/// An `artist.*` sidecar image.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidecarImage {
+    pub path: PathBuf,
+    pub info: ImageInfo,
+}
+
+/// An `artist.txt` sidecar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Biography {
+    pub path: PathBuf,
+    pub text: String,
+}
+
+/// A lyrics sidecar, read (`requirements/scanning.md` §3.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidecarLyrics {
+    pub path: PathBuf,
+    pub lyrics: Lyrics,
+}
 
 /// What resolved for one directory, after the upward walk.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -16,10 +16,15 @@ use lofty::config::WriteOptions;
 use lofty::prelude::*;
 use lofty::tag::{ItemKey, Tag, TagType};
 
+use crate::library::{LibraryConfig, LibraryId};
+use crate::problems::{Problem, ProblemKind};
 use crate::queue::Scanner;
-use crate::scan::{ScanContext, ScanOptions, run_scan};
+use crate::scan::{
+    Cursor, Scan, ScanContext, ScanId, ScanOptions, ScanProgress, ScanState, Trigger, run_scan,
+};
+use crate::scope::{Depth, Scope};
 use crate::store::{Batch, FeedEntry, MemoryStore, Store};
-use crate::types::*;
+use crate::track::TrackId;
 
 #[cfg(test)]
 mod hooked;

@@ -14,8 +14,8 @@ use std::time::Duration;
 use jewelcase_ffmpeg::Ffmpeg;
 
 use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport};
+use crate::library::LibraryId;
 use crate::store::{FileToDecode, Store};
-use crate::types::LibraryId;
 
 /// ThumbHash encodes at most 100 pixels a side, and gains nothing from more.
 const MAX_SIDE: u32 = 100;
@@ -46,7 +46,7 @@ impl Placeholders {
     }
 
     /// Fills up to `limit` placeholders, skipping images whose files are waiting to be tried
-    /// again. A failure is handled as [`crate::jobs`] describes; a verdict is stored empty, and
+    /// again. A failure is handled as `jobs` describes; a verdict is stored empty, and
     /// new content is a new image, which gets a new try.
     pub fn run_once(&self, library: LibraryId, limit: usize) -> RunReport {
         let store = self.store.as_ref();

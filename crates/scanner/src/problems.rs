@@ -1,11 +1,59 @@
 //! Scan problems (`requirements/scanning.md` §10, `design/scanning.md` §13).
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use serde::{Deserialize, Serialize};
+
 use crate::tags::ReadError;
-use crate::types::{Problem, ProblemKind};
+
+/// Scan problem kinds, mirroring the API's `ScanProblemGroup.kind` plus the
+/// watchdog kill the design adds (`design/scanning.md` §11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProblemKind {
+    Unreadable,
+    PermissionDenied,
+    MalformedTags,
+    UnsupportedEncoding,
+    CorruptAudio,
+    Stalled,
+}
+
+impl ProblemKind {
+    /// The API's and schema's spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProblemKind::Unreadable => "unreadable",
+            ProblemKind::PermissionDenied => "permissionDenied",
+            ProblemKind::MalformedTags => "malformedTags",
+            ProblemKind::UnsupportedEncoding => "unsupportedEncoding",
+            ProblemKind::CorruptAudio => "corruptAudio",
+            ProblemKind::Stalled => "stalled",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<ProblemKind> {
+        Some(match s {
+            "unreadable" => ProblemKind::Unreadable,
+            "permissionDenied" => ProblemKind::PermissionDenied,
+            "malformedTags" => ProblemKind::MalformedTags,
+            "unsupportedEncoding" => ProblemKind::UnsupportedEncoding,
+            "corruptAudio" => ProblemKind::CorruptAudio,
+            "stalled" => ProblemKind::Stalled,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Problem {
+    pub path: PathBuf,
+    pub kind: ProblemKind,
+    pub detail: String,
+    pub seen_at: SystemTime,
+}
 
 /// The kinds a background job records for a file it could not open, which an open clears.
 pub const UNOPENED: [ProblemKind; 2] = [ProblemKind::Unreadable, ProblemKind::PermissionDenied];
