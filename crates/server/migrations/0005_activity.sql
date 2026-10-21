@@ -10,28 +10,38 @@
 CREATE TABLE plays (
     -- The client's `playId`. Any device can choose any ID, so it names a play only among its
     -- user's own, and one user's report can never reach another's play.
-    id             TEXT    NOT NULL,
-    user_id        INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    id                TEXT    NOT NULL,
+    user_id           INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     -- Kept when the device is forgotten: the play still happened.
-    device_id      INTEGER REFERENCES devices (id) ON DELETE SET NULL,
-    library_id     INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
+    device_id         INTEGER REFERENCES devices (id) ON DELETE SET NULL,
+    -- Cleared when the library is deleted: the play is still its user's (analytics.md §8).
+    library_id        INTEGER REFERENCES libraries (id) ON DELETE SET NULL,
     -- No foreign key: a purged track leaves its plays, which keep the snapshot below.
-    track_id       INTEGER NOT NULL,
-    -- The track as the play's latest report found it, which history shows in place of the
-    -- live track once the track is purged (requirements/analytics.md §8): its title, its
-    -- artists' names in credit order as a JSON array without the unknown artist, and its
-    -- album's title, NULL for the unknown album.
-    title          TEXT    NOT NULL,
-    artists        TEXT    NOT NULL CHECK (json_valid(artists) AND json_type(artists) = 'array'),
-    album          TEXT,
-    started_at     INTEGER NOT NULL,
-    listen_time_ms INTEGER NOT NULL CHECK (listen_time_ms >= 0),
+    track_id          INTEGER NOT NULL,
+    -- The track as the play's latest report found it, which history shows and statistics
+    -- count once the track or its library is gone (requirements/analytics.md §8). Its
+    -- artists, album and genres are kept as the catalog names and matches them
+    -- (design/database.md §3, §6): the artists' names in credit order as a JSON array, null
+    -- for the unknown artist, and their name keys in the same order; the album's title, NULL
+    -- for the unknown album, and its title and artists keys; the genres' keys in key order.
+    title             TEXT    NOT NULL,
+    artists           TEXT    NOT NULL CHECK (json_valid(artists) AND json_type(artists) = 'array'),
+    artist_keys       TEXT    NOT NULL CHECK (json_valid(artist_keys) AND json_type(artist_keys) = 'array'
+                                          AND json_array_length(artist_keys) = json_array_length(artists)),
+    album             TEXT,
+    album_title_key   TEXT    NOT NULL,
+    album_artists_key TEXT    NOT NULL,
+    genre_keys        TEXT    NOT NULL CHECK (json_valid(genre_keys) AND json_type(genre_keys) = 'array'),
+    release_date      TEXT,
+    duration_us       INTEGER NOT NULL,
+    started_at        INTEGER NOT NULL,
+    listen_time_ms    INTEGER NOT NULL CHECK (listen_time_ms >= 0),
     -- NULL while it is still playing.
-    ended          TEXT    CHECK (ended IN ('finished', 'skipped', 'stopped')),
-    context        TEXT    NOT NULL CHECK (json_valid(context)),
-    origin         TEXT    NOT NULL CHECK (origin IN ('manual', 'context', 'automatic')),
-    reason         TEXT    CHECK (json_valid(reason)),
-    updated_at     INTEGER NOT NULL,
+    ended             TEXT    CHECK (ended IN ('finished', 'skipped', 'stopped')),
+    context           TEXT    NOT NULL CHECK (json_valid(context)),
+    origin            TEXT    NOT NULL CHECK (origin IN ('manual', 'context', 'automatic')),
+    reason            TEXT    CHECK (json_valid(reason)),
+    updated_at        INTEGER NOT NULL,
     PRIMARY KEY (user_id, id)
 ) STRICT;
 
@@ -49,7 +59,8 @@ CREATE TABLE play_events (
     seq         INTEGER PRIMARY KEY AUTOINCREMENT,
     play_id     TEXT    NOT NULL,
     user_id     INTEGER NOT NULL,
-    library_id  INTEGER NOT NULL,
+    -- A deleted library's events go with it, though its plays stay.
+    library_id  INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
     kind        TEXT    NOT NULL CHECK (kind IN ('started', 'ended')),
     reported_at INTEGER NOT NULL,
     FOREIGN KEY (user_id, play_id) REFERENCES plays (user_id, id) ON DELETE CASCADE

@@ -169,9 +169,10 @@ async fn connected(plugins: &Plugins, db: &Database, plugin_wide: &[Permission])
 async fn play(db: &Database, id: &'static str, user: i64, track: i64, at: i64, end: &'static str) {
     db.write(move |tx| {
         tx.execute(
-            "INSERT INTO plays (id, user_id, library_id, track_id, title, artists, started_at, \
-                                listen_time_ms, context, origin, updated_at) \
-             VALUES (?1, ?2, 1, ?3, 'A', '[]', ?4, 0, '{}', 'context', ?4)",
+            "INSERT INTO plays (id, user_id, library_id, track_id, title, artists, artist_keys, \
+                                album_title_key, album_artists_key, genre_keys, duration_us, \
+                                started_at, listen_time_ms, context, origin, updated_at) \
+             VALUES (?1, ?2, 1, ?3, 'A', '[]', '[]', '', '', '[]', 0, ?4, 0, '{}', 'context', ?4)",
             rusqlite::params![id, user, track, at],
         )?;
         let ended =
@@ -189,9 +190,10 @@ async fn play(db: &Database, id: &'static str, user: i64, track: i64, at: i64, e
 async fn start(db: &Database, id: &'static str, user: i64, track: i64, at: i64) {
     db.write(move |tx| {
         tx.execute(
-            "INSERT INTO plays (id, user_id, library_id, track_id, title, artists, started_at, \
-                                listen_time_ms, context, origin, updated_at) \
-             VALUES (?1, ?2, 1, ?3, 'A', '[]', ?4, 0, '{}', 'context', ?4)",
+            "INSERT INTO plays (id, user_id, library_id, track_id, title, artists, artist_keys, \
+                                album_title_key, album_artists_key, genre_keys, duration_us, \
+                                started_at, listen_time_ms, context, origin, updated_at) \
+             VALUES (?1, ?2, 1, ?3, 'A', '[]', '[]', '', '', '[]', 0, ?4, 0, '{}', 'context', ?4)",
             rusqlite::params![id, user, track, at],
         )
     })

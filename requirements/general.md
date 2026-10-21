@@ -71,7 +71,7 @@ Two differences are permissible, and only these:
 The second is a difference of input, not of quality. Client-side search matches, ranks, and presents exactly as the server does, and **where a device holds the whole library and its lyrics, offline results are identical to the server's** — not similar, identical. Any divergence beyond missing input is a defect.
 
 ### 3.6 Libraries Are the Isolation Boundary
-Every piece of content and metadata is scoped to a library, enforced on every request. Cross-library leakage is a correctness bug of the highest severity.
+Every piece of content and metadata is scoped to a library, enforced on every request. Cross-library leakage is a correctness bug of the highest severity. A user's record of what they played is theirs, not the library's; reaching it never reveals what a library holds now.
 
 ### 3.7 Payloads Carry Only What the Client Needs
 Responses are trimmed to what a client can act on or render. Internal bookkeeping — how a shuffled order was derived, played-track state, scan internals — is never sent to a client that does not need it to render.

@@ -107,6 +107,7 @@ Adding an explicit signal later must not invalidate what was recorded before it 
 ## 8. Durability
 
 - **History survives its tracks.** When a file is purged from the library, past plays remain readable, showing the correct title and artist, marked unavailable ([`scanning.md` §8.1](scanning.md#81-purging-never-costs-history)).
+- **History survives its library.** A user's own plays stay in their history and statistics when the library they were heard in is deleted, or when their access to it is revoked, marked unavailable. They show the track as it was when they played it, so they reveal nothing about what the library holds now ([`users.md` §10](users.md#10-access-semantics)), and they appear in views across all libraries rather than under a library the user cannot open.
 - **Statistics never shift retroactively.** Cleaning up missing files does not change what a user listened to last year.
 - **Retagging does not rewrite history.** Identity follows content ([`scanning.md` §6](scanning.md#6-track-identity)), so a corrected tag updates how a past play is displayed without altering that it happened.
 

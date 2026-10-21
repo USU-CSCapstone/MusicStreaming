@@ -77,7 +77,7 @@ A device carries a **name** (defaulted to something recognizable, user-editable)
 - Admins grant and revoke per account, and in bulk.
 - **Admins and the owner have access to every library** implicitly.
 - A user may hold access to any number of libraries and moves between them freely.
-- **Revocation is not destruction.** Playlists, history, and statistics for that library are preserved and return intact if access is restored.
+- **Revocation is not destruction.** Playlists for that library are preserved and return intact if access is restored. The user's own history and statistics of it stay theirs throughout, marked unavailable ([`analytics.md` §8](analytics.md#8-durability)).
 - A user with access to nothing can still sign in, seeing an empty state that explains why rather than an error.
 
 ---

@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use super::authenticate::Caller;
 use super::extract::Json;
-use super::refs::artist_names_json;
+use super::refs::credits_json;
 use super::{Id, Problem};
 use crate::db::{Database, now_ms};
 
@@ -143,8 +143,9 @@ pub(super) fn is_uuid(text: &str) -> bool {
 /// Records `plays` for `caller`, unless one's `startedAt` is not a date and time: then it
 /// records nothing and answers that. A `playId` names a play among the caller's own, so
 /// another user's play under the same ID is a different play and never changes. Each play
-/// keeps a snapshot of its track's title, artists and album, which history shows once the
-/// track is purged (`requirements/analytics.md` §8).
+/// keeps a snapshot of its track, which history shows and statistics count once the track or
+/// its library is gone (`requirements/analytics.md` §8): its title, duration, release date,
+/// artists, album and genres, with the keys the catalog matches them by.
 fn save(tx: &Transaction, caller: Caller, plays: &[Play]) -> rusqlite::Result<Option<String>> {
     // SQLite reads the time, offset and all, and answers `NULL` for anything it cannot.
     let mut parse = tx.prepare_cached("SELECT CAST(unixepoch(?1, 'subsec') * 1000 AS INTEGER)")?;
@@ -156,20 +157,32 @@ fn save(tx: &Transaction, caller: Caller, plays: &[Play]) -> rusqlite::Result<Op
         }
     }
     // Each report refreshes the snapshot, so a play reported again after a retag takes the
-    // new names; once the track is purged no report finds it, and the play keeps the last
-    // ones. A report naming a track other than the play's changes nothing of it. Track IDs
-    // are unique across libraries, so that check covers the library too.
+    // new tags; once the track or its library is gone no report finds it, and the play keeps
+    // the last ones. A report naming a track other than the play's changes nothing of it.
+    // Track IDs are unique across libraries, so that check covers the library too.
     let mut upsert = tx.prepare_cached(concat!(
-        "INSERT INTO plays (id, user_id, device_id, library_id, track_id, title, artists, album, \
-                            started_at, listen_time_ms, ended, context, origin, reason, updated_at) \
+        "INSERT INTO plays (id, user_id, device_id, library_id, track_id, title, artists, \
+                            artist_keys, album, album_title_key, album_artists_key, genre_keys, \
+                            release_date, duration_us, started_at, listen_time_ms, ended, \
+                            context, origin, reason, updated_at) \
          SELECT ?1, ?2, ?3, t.library_id, t.id, t.title, ",
-        artist_names_json!("track", "t.id"),
-        ", al.title, ?6, ?7, ?8, ?9, ?10, ?11, ?12 \
+        credits_json!("credited.name", "track", "t.id"),
+        ", ",
+        credits_json!("credited.name_key", "track", "t.id"),
+        ", al.title, al.title_key, al.artists_key, \
+           (SELECT json_group_array(tag.name_key ORDER BY tag.name_key) FROM track_tags tagged \
+            JOIN tags tag ON tag.id = tagged.tag_id \
+            WHERE tagged.track_id = t.id AND tag.type = 'genre'), \
+           t.release_date, t.duration_us, ?6, ?7, ?8, ?9, ?10, ?11, ?12 \
          FROM tracks t JOIN albums al ON al.id = t.album_id \
          WHERE t.id = ?5 AND t.library_id = ?4 AND (?13 OR EXISTS \
                (SELECT 1 FROM library_access WHERE user_id = ?2 AND library_id = ?4)) \
          ON CONFLICT (user_id, id) DO UPDATE SET \
-             title = excluded.title, artists = excluded.artists, album = excluded.album, \
+             title = excluded.title, artists = excluded.artists, \
+             artist_keys = excluded.artist_keys, album = excluded.album, \
+             album_title_key = excluded.album_title_key, \
+             album_artists_key = excluded.album_artists_key, genre_keys = excluded.genre_keys, \
+             release_date = excluded.release_date, duration_us = excluded.duration_us, \
              listen_time_ms = max(listen_time_ms, excluded.listen_time_ms), \
              ended = coalesce(excluded.ended, ended), updated_at = excluded.updated_at \
          WHERE plays.track_id = excluded.track_id"

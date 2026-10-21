@@ -130,7 +130,7 @@ Work done offline is not provisional. It syncs when a connection returns, with n
 - **A downloaded track whose file leaves the server keeps playing on that device**, marked as no longer in the library. It stops counting against server retention ([`scanning.md` §8](scanning.md#8-missing-files)).
 - **Retagging updates metadata, not audio.** Identity follows content ([`scanning.md` §6](scanning.md#6-track-identity)), so a retagged or moved file is the same download.
 - **Replaced audio re-downloads.**
-- **Losing access to a library removes its downloads from the device** — access is the boundary ([`general.md` §3.6](general.md#36-libraries-are-the-isolation-boundary)). Playlists, history, and statistics survive and return if access is restored ([`users.md` §5](users.md#5-library-access)).
+- **Losing access to a library removes its downloads from the device** — access is the boundary ([`general.md` §3.6](general.md#36-libraries-are-the-isolation-boundary)). Playlists survive and return if access is restored, and history and statistics stay ([`users.md` §5](users.md#5-library-access)).
 - **Signing a device out removes its downloads**, as does deleting the account ([`users.md` §9](users.md#9-account-lifecycle)).
 - **A password change is not that case.** Changing a password signs other devices out ([`users.md` §3](users.md#3-authentication)), but those devices **keep their downloads**, usable again the moment the same account signs back in. The same holds for an admin-initiated reset. A user securing their account must not pay for it by re-downloading their library over cellular.
 

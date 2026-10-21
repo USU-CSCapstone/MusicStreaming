@@ -31,7 +31,7 @@ This file covers what a library is, where it lives, and how it is administered. 
 ## 3. Management
 
 - Admins can **create, rename, reconfigure, and delete** libraries at any time.
-- **Deleting a library removes only Jewelcase's knowledge of it** — the index, and the playlists, queues, history, and statistics scoped to it. It never deletes, moves, or alters a file on disk. The confirmation must say so unmistakably, since it is the one place a user might reasonably fear otherwise.
+- **Deleting a library removes only Jewelcase's knowledge of it** — the index, and the playlists and queues scoped to it. Each user's history and statistics of it stay theirs, marked unavailable ([`analytics.md` §8](analytics.md#8-durability)). It never deletes, moves, or alters a file on disk. The confirmation must say so unmistakably, since it is the one place a user might reasonably fear otherwise.
 - **Plugins are enabled per library**, toggled independently for each.
 - **Library access is granted per account** ([`users.md`](users.md)).
 - Admins see per-library health at a glance: track count, total size, last scan time, current scan state, unavailable roots, missing tracks, outstanding scan problems.
