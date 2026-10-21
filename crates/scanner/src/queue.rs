@@ -1,9 +1,11 @@
 //! One scanner task per library owning one coalescing queue of scopes
 //! (`design/scanning.md` §9).
 //!
-//! Every trigger does nothing but enqueue scopes. Equal work is dropped,
-//! containing work replaces contained work, and the API's "an equivalent
-//! scan is already running, return it" is a lookup.
+//! Every trigger does nothing but enqueue scopes. Work that a queued scan
+//! not yet started covers joins it, and work that covers queued scans
+//! replaces them. A scan that has started, running or resumed from a cursor,
+//! takes no new work, since its walk may already have passed that work, so a
+//! trigger repeated during a scan queues one follow-up scan, not one each time.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -75,21 +77,16 @@ impl Scanner {
         Scanner { inner, worker: Arc::new(Mutex::new(Some(handle))) }
     }
 
-    /// Enqueue work. Returns the id of the scan that will do it, which may be
-    /// an existing queued or running scan that already covers it.
+    /// Enqueue work. Returns the id of the scan that will do it: a queued scan
+    /// that has not started and already covers it, or a new one, never the
+    /// running scan or a resumed one. A new scan cancels the queued scans it
+    /// covers.
     pub fn request(&self, trigger: Trigger, scopes: Vec<Scope>) -> ScanId {
         let scopes = coalesce_scopes(scopes);
         let mut q = self.inner.queue.lock().unwrap();
-        if let Some(running) = &q.running
-            && running.covers(&scopes)
-            && !self.inner.cancel_running.load(Ordering::SeqCst)
-        {
-            return running.id;
-        }
-        if let Some(existing) = q.queued.iter().find(|s| s.covers(&scopes)) {
+        if let Some(existing) = q.queued.iter().find(|s| s.cursor.is_none() && s.covers(&scopes)) {
             return existing.id;
         }
-        // Replace anything the new work subsumes.
         let mut scan = Scan {
             id: 0,
             library: self.inner.library.read().unwrap().id.clone(),
@@ -101,17 +98,13 @@ impl Scanner {
             progress: ScanProgress::default(),
             cursor: None,
         };
-        let subsumed: Vec<Scan> = {
-            let (keep, drop): (VecDeque<Scan>, VecDeque<Scan>) =
-                q.queued.drain(..).partition(|s| !scan.covers(&s.scopes));
-            q.queued = keep;
-            drop.into_iter().collect()
-        };
-        for mut s in subsumed {
-            s.state = ScanState::Cancelled;
-            s.finished_at = Some(std::time::SystemTime::now());
-            self.inner.store.update_scan(&s);
-        }
+        q.queued.retain_mut(|queued| {
+            let subsumed = scan.covers(&queued.scopes);
+            if subsumed {
+                self.cancelled(queued);
+            }
+            !subsumed
+        });
         scan.id = self.inner.store.create_scan(&scan);
         let id = scan.id;
         q.queued.push_back(scan);
@@ -159,14 +152,20 @@ impl Scanner {
             self.inner.cancel_running.store(true, Ordering::SeqCst);
             return true;
         }
-        if let Some(pos) = q.queued.iter().position(|s| s.id == id) {
-            let mut s = q.queued.remove(pos).unwrap();
-            s.state = ScanState::Cancelled;
-            s.finished_at = Some(std::time::SystemTime::now());
-            self.inner.store.update_scan(&s);
+        if let Some(mut s) =
+            q.queued.iter().position(|s| s.id == id).and_then(|p| q.queued.remove(p))
+        {
+            self.cancelled(&mut s);
             return true;
         }
         false
+    }
+
+    /// Marks `scan`, already taken off the queue, cancelled and saves it to the store.
+    fn cancelled(&self, scan: &mut Scan) {
+        scan.state = ScanState::Cancelled;
+        scan.finished_at = Some(std::time::SystemTime::now());
+        self.inner.store.update_scan(scan);
     }
 
     pub fn running(&self) -> Option<Scan> {
