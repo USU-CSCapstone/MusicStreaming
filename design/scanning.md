@@ -168,6 +168,7 @@ Until it is, stage 4 keys on path: a file at a new path is a new track, and a fi
 
 - **Indexing runs on a small dedicated blocking pool** — discovery, `stat`, and tag reading are synchronous I/O and never touch the async runtime's workers. Pool size defaults to one on the Pi and a few on the desktop; storage is the bottleneck either way.
 - **Analysis runs on a smaller pool still** — ffmpeg processes, one on the Pi, a few on the desktop ([§12](#12-analysis)).
+- **Background work runs at low priority.** The analysis and placeholder threads each lower their own priority by 10 nice steps when they start, and the ffmpeg children they spawn inherit it, since on Linux niceness belongs to a thread. Request handling and the artwork resize keep normal priority.
 - **A governor watches active streams and pauses both pools** when listening is at risk, analysis first. Pausing is `SIGSTOP` on ffmpeg children and a parked flag on the indexing pool; resuming is `SIGCONT` and unparking. An indexing thread checks the flag before each file. A paused decode resumes where it was rather than restarting, so yielding costs nothing but time. The threshold is derived from the saturation policy in [`requirements/performance.md` §7](../requirements/performance.md#7-under-saturation).
 - **Nothing here decides what a listener gets.** The governor only ever slows background work. If the host cannot serve a new stream, that refusal belongs to the playback design.
 

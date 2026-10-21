@@ -142,14 +142,15 @@ impl Analyzer {
         })
     }
 
-    /// Run in the background until stopped, sleeping when idle or backing off. One track at a
-    /// time, so a stop waits for one track at most.
+    /// Run in the background, at low priority, until stopped, sleeping when idle or backing off.
+    /// One track at a time, so a stop waits for one track at most.
     pub fn start(self: Arc<Self>, library: LibraryId, idle_sleep: Duration) -> AnalysisWorker {
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = stop.clone();
         let thread = std::thread::Builder::new()
             .name("scanner-analysis".into())
             .spawn(move || {
+                jewelcase_ffmpeg::lower_thread_priority();
                 while !stop2.load(Ordering::SeqCst) {
                     if self.run_once(library, 1).idle() {
                         // Woken early by `stop`.

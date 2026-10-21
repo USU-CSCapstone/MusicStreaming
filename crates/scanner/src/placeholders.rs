@@ -62,13 +62,14 @@ impl Placeholders {
         pass.unwrap_or_else(RunReport::store_failed)
     }
 
-    /// Runs in the background until stopped, sleeping when idle or backing off.
+    /// Runs in the background, at low priority, until stopped, sleeping when idle or backing off.
     pub fn start(self: Arc<Self>, library: LibraryId, idle_sleep: Duration) -> PlaceholderWorker {
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         let thread = std::thread::Builder::new()
             .name("scanner-placeholders".into())
             .spawn(move || {
+                jewelcase_ffmpeg::lower_thread_priority();
                 while !stopping.load(Ordering::SeqCst) {
                     if self.run_once(library, 32).idle() {
                         // Woken early by `stop`.

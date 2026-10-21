@@ -14,6 +14,7 @@ mod error;
 mod image;
 mod input;
 mod pooled;
+mod priority;
 mod probe;
 mod registry;
 mod stderr;
@@ -28,6 +29,7 @@ pub use decode::PcmStream;
 pub use error::Error;
 pub use image::Rgba;
 use input::input;
+pub use priority::lower_thread_priority;
 pub use probe::ProbeInfo;
 pub use registry::Registry;
 
