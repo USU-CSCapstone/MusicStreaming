@@ -26,14 +26,14 @@ crates/
 
 ## 2. The Pipeline
 
-Every file that reaches the scanner passes through the same stages, and every stage yields one `FileOutcome`: unchanged, added, updated, moved, or a problem. Stages are ordinary functions over that type; the scan loop is a fold.
+Every file that reaches the scanner passes through the same stages, and every stage yields one `FileOutcome`: unchanged, returned from missing, added, updated, kept though unreadable, or a problem ([§6](#6-track-identity) adds moved once track identity is built). Stages are ordinary functions over that type; the scan loop is a fold.
 
 | Stage | Reads | Produces | Cost per file |
 |---|---|---|---|
 | 1. Discover | directory entries | candidate paths + `stat` | one `readdir` per directory |
 | 2. Skip | index row | unchanged, or continue | one indexed lookup |
 | 3. Read | file header and tag regions | `TagSet`, `AudioProperties` | tens of kilobytes of I/O |
-| 4. Identify | (deferred, [§6](#6-track-identity)) | new / moved / retagged / replaced | — |
+| 4. Identify | stage 2's index row (deferred, [§6](#6-track-identity)) | new / updated | — |
 | 5. Sidecars | directory cache | artwork, artist image, biography, lyrics refs | amortized to per-directory |
 | 6. Persist | — | store batch + feed entries | amortized to per-batch |
 | 7. Reconcile | index rows under scope | missing marks | one range query per scope |
@@ -109,10 +109,10 @@ lofty exposes most fields through a scheme-independent key, which does the bulk 
 
 **Deferred.** Content-derived identity that survives moves and retags ([`requirements/scanning.md` §6](../requirements/scanning.md#6-track-identity)) is open decision 3 in [`general.md` §11](general.md#11-open-decisions) and is not settled here.
 
-Until it is, stage 4 keys on path: a file at a new path is a new track, and a file gone from its path is missing. This is wrong per the requirement and is understood to be temporary. What this design fixes now is the *shape* of the stage so the swap is contained:
+Until it is, stage 4 keys on path: a file at a new path is a new track, and a file gone from its path is missing. This is wrong per the requirement and is understood to be temporary. Move identity is not built. What this design fixes now is where the stage sits, so the swap is contained:
 
-- `identify(&FileFacts, &Store) -> Identity` takes everything stages 1–3 learned (path, size, mtime, device and inode, `TagSet`, `AudioProperties`, and the byte ranges of the tag regions, which any content fingerprint will need to skip) and returns new, moved-from, retagged, or audio-replaced.
-- Nothing outside the stage reads paths to decide identity. The reconcile stage asks the store for "tracks under this scope not seen in this scan", not "tracks whose path is missing".
+- `identify` takes only what it uses today, the index row stage 2 found at the file's path, and returns new or updated. The identity that replaces it will take what stages 1–3 learned (path, size, mtime, device and inode, `TagSet`, `AudioProperties`, and the byte ranges of the tag regions, which any content fingerprint will need to skip) and the store, to tell a file moved from elsewhere, retagged, or with its audio replaced.
+- Every file that is read reaches the identity stage; until identity is built, a file skipped at stage 2 or a known file that cannot be read keeps the track the index holds at its path without reaching it. The reconcile stage asks the store for "tracks under this scope not seen in this scan", not "tracks whose path is missing".
 - The constraint the eventual design must meet: whatever it reads per new file has to keep a cold scan of a large library fast, which rules out hashing whole files at 500,000 tracks.
 
 ---
@@ -262,7 +262,7 @@ The job will run on the indexing pool at the lowest priority, write only to a du
 
 ## 16. Open Decisions
 
-1. **Track identity** ([§6](#6-track-identity)) — open decision 3 in [`general.md` §11](general.md#11-open-decisions). This design fixes the stage's interface and budget, not its algorithm.
+1. **Track identity** ([§6](#6-track-identity)) — open decision 3 in [`general.md` §11](general.md#11-open-decisions). This design fixes where the stage sits and its budget, not its algorithm or its inputs.
 2. **Waveform bin count and shaping function** — the playback design's, constrained here to be derived from stored peak and RMS bins with no second decode.
 3. **Feature extractor** — the recommendations design's, constrained here to consume the shared block stream.
 4. **Background pool size** — one pool for every library, at two children for now ([§10](#10-priority-and-pacing)); benchmarks on low-power hardware decide the shipped value.

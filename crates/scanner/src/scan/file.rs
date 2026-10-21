@@ -4,7 +4,7 @@ use jewelcase_core::sort_key;
 
 use super::ScanContext;
 use crate::discover::{Candidate, Directory};
-use crate::identity::{self, FileFacts, Identity};
+use crate::identity::{self, Identity};
 use crate::problems;
 use crate::sidecar::SidecarResolver;
 use crate::store::{IndexedFile, IndexedLyrics, StoreError};
@@ -68,16 +68,7 @@ pub(super) fn process_file(
     };
 
     // Stage 4: identify.
-    let facts = FileFacts {
-        root: &scope.root,
-        path: &candidate.path,
-        size: candidate.size,
-        mtime_ms: candidate.mtime_ms,
-        tags: &read.tags,
-        properties: &read.properties,
-        indexed: indexed.as_ref(),
-    };
-    let identity = identity::identify(&facts, ctx.library.id, ctx.store);
+    let identity = identity::identify(indexed.as_ref());
 
     // Stage 5: sidecars, once per directory. Embedded art wins over a
     // sidecar; sidecar lyrics apply only when the file has none.
@@ -126,7 +117,7 @@ pub(super) fn process_file(
 
     Ok(match identity {
         Identity::New => FileOutcome::Added(Box::new(record)),
-        Identity::Updated { track_id } | Identity::Moved { track_id, .. } => {
+        Identity::Updated { track_id } => {
             FileOutcome::Updated(Box::new(TrackRecord { id: Some(track_id), ..record }))
         }
     })
