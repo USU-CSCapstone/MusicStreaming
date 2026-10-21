@@ -6,14 +6,15 @@ use super::*;
 use crate::store::{FileToDecode, MemoryStore, StoreError};
 use crate::testing::{library, make_album, write_small_wav};
 
-/// A memory store that runs `on_apply` before applying each batch, so a test can change the
-/// world partway through a scan.
-struct Hooked<F> {
+/// A memory store that runs `on_apply` before applying each batch and `on_lookup` with each path
+/// it looks up, so a test can change the world partway through a scan.
+struct Hooked<F, L> {
     inner: MemoryStore,
     on_apply: F,
+    on_lookup: L,
 }
 
-impl<F: Fn() + Send + Sync> Store for Hooked<F> {
+impl<F: Fn() + Send + Sync, L: Fn(&Path) + Send + Sync> Store for Hooked<F, L> {
     fn create_scan(&self, scan: &Scan) -> ScanId {
         self.inner.create_scan(scan)
     }
@@ -24,6 +25,7 @@ impl<F: Fn() + Send + Sync> Store for Hooked<F> {
         self.inner.interrupted_scans(library)
     }
     fn lookup(&self, library: &LibraryId, path: &Path) -> Option<IndexedFile> {
+        (self.on_lookup)(path);
         self.inner.lookup(library, path)
     }
     fn apply(&self, library: &LibraryId, batch: Batch) -> Result<(), StoreError> {
@@ -92,10 +94,62 @@ fn scan_flushing_often(store: &dyn Store, lib: &LibraryConfig) -> Scan {
         library: lib,
         governor: &Governor::new(),
         cancel: &AtomicBool::new(false),
+        shutdown: &AtomicBool::new(false),
         options: &options,
     };
     run_scan(&ctx, &mut scan);
     scan
+}
+
+/// A stop flushes the batch in hand: a shutdown asked for while B/Y's track is read leaves the
+/// row running at B/Y with A's and B's tracks stored, though no batch filled and no timer fired,
+/// and C never read.
+#[test]
+fn a_stop_flushes_the_batch_in_hand() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    make_album(&root, "A", "X", 1);
+    make_album(&root, "B", "Y", 1);
+    make_album(&root, "C", "Z", 1);
+    let lib = library(&root);
+    let shutdown = AtomicBool::new(false);
+    let stop_at = root.join("B/Y/01 - Track 1.wav");
+    let on_lookup = |path: &Path| {
+        if path == stop_at {
+            shutdown.store(true, Ordering::SeqCst);
+        }
+    };
+    let store = Hooked { inner: MemoryStore::new(), on_apply: || {}, on_lookup };
+    let mut scan = Scan {
+        id: 0,
+        library: lib.id.clone(),
+        trigger: Trigger::Manual,
+        scopes: vec![Scope::root(&root)],
+        state: ScanState::Queued,
+        started_at: None,
+        finished_at: None,
+        progress: ScanProgress::default(),
+        cursor: None,
+    };
+    scan.id = store.create_scan(&scan);
+    let ctx = ScanContext {
+        store: &store,
+        library: &lib,
+        governor: &Governor::new(),
+        cancel: &AtomicBool::new(false),
+        shutdown: &shutdown,
+        options: &ScanOptions { batch_size: 1000, batch_interval: Duration::MAX },
+    };
+    run_scan(&ctx, &mut scan);
+
+    let [row] = store.inner.scans(&lib.id).try_into().unwrap();
+    let cursor = Some(Cursor { scope_index: 0, after_directory: Some(root.join("B/Y")) });
+    assert_eq!((row.state, &row.cursor), (ScanState::Running, &cursor), "{row:?}");
+    assert_eq!(row.finished_at, None);
+    let mut paths: Vec<_> =
+        store.inner.tracks(&lib.id).into_iter().map(|t| t.record.path).collect();
+    paths.sort();
+    assert_eq!(paths, [root.join("A/X/01 - Track 1.wav"), stop_at.clone()]);
 }
 
 /// A root that goes away after the walk began suspends the scan before reconcile, and nothing
@@ -113,7 +167,7 @@ fn a_root_gone_before_reconcile_suspends_and_marks_nothing() {
             fs::rename(&root, &away).unwrap();
         }
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply };
+    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup: |_: &Path| {} };
     scan_flushing_often(&store.inner, &lib);
 
     // The root goes once A/X's touch lands, so B and B/Y are never listed.
@@ -137,7 +191,7 @@ fn an_unchanged_file_reads_no_sidecars() {
     fs::write(&biography, "Read early.").unwrap();
     let lib = library(&root);
     let on_apply = || fs::write(&biography, "Read when needed.").unwrap();
-    let store = Hooked { inner: MemoryStore::new(), on_apply };
+    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup: |_: &Path| {} };
     scan_flushing_often(&store.inner, &lib);
 
     let added = root.join("A/Y/01 - New.wav");
@@ -166,7 +220,7 @@ fn sidecars_are_read_once_per_directory() {
         let n = applied.fetch_add(1, Ordering::SeqCst) + 1;
         fs::write(&biography, format!("Version {n}")).unwrap();
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply };
+    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup: |_: &Path| {} };
     let lib = library(&root);
     let scan = scan_flushing_often(&store, &lib);
     assert_eq!(scan.progress.added, 2, "{:?}", scan.progress);

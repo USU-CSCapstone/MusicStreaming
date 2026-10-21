@@ -83,6 +83,7 @@ pub fn scan_once(
         library: lib,
         governor: &governor,
         cancel: &cancel,
+        shutdown: &AtomicBool::new(false),
         options: &options,
     };
     run_scan(&ctx, &mut scan);

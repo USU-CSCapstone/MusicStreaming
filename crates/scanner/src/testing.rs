@@ -23,7 +23,9 @@ use crate::store::{Batch, FeedEntry, MemoryStore, Store};
 use crate::types::*;
 
 mod jobs;
+mod shutdown;
 pub use jobs::*;
+pub use shutdown::*;
 
 // ───────────────────────────── Inspection ─────────────────────────────
 
@@ -211,6 +213,7 @@ pub fn scan_once(
         library: lib,
         governor: &governor,
         cancel: &cancel,
+        shutdown: &AtomicBool::new(false),
         options: &options,
     };
     run_scan(&ctx, &mut scan);
@@ -1258,6 +1261,14 @@ macro_rules! store_suite {
         #[test]
         fn a_reconfigure_during_a_scan_applies_its_excludes() {
             $crate::testing::a_reconfigure_during_a_scan_applies_its_excludes($make);
+        }
+        #[test]
+        fn a_shutdown_leaves_its_scans_to_resume() {
+            $crate::testing::a_shutdown_leaves_its_scans_to_resume($make);
+        }
+        #[test]
+        fn a_cancelled_scan_stays_cancelled() {
+            $crate::testing::a_cancelled_scan_stays_cancelled($make);
         }
         #[test]
         fn placeholders_fill_once_per_image() {

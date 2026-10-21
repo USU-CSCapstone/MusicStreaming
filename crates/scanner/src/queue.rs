@@ -20,7 +20,6 @@ use crate::types::*;
 struct Queue {
     queued: VecDeque<Scan>,
     running: Option<Scan>,
-    shutdown: bool,
 }
 
 struct Inner {
@@ -31,6 +30,8 @@ struct Inner {
     queue: Mutex<Queue>,
     wake: Condvar,
     cancel_running: AtomicBool,
+    /// Set once, under the queue lock, so a worker about to wait for work sees it or is woken.
+    shutdown: AtomicBool,
 }
 
 /// Handle to one library's scanner. Cloneable; the worker thread lives as
@@ -58,9 +59,10 @@ impl Scanner {
             library: RwLock::new(library),
             governor,
             options,
-            queue: Mutex::new(Queue { queued: VecDeque::new(), running: None, shutdown: false }),
+            queue: Mutex::new(Queue { queued: VecDeque::new(), running: None }),
             wake: Condvar::new(),
             cancel_running: AtomicBool::new(false),
+            shutdown: AtomicBool::new(false),
         });
         {
             let mut q = inner.queue.lock().unwrap();
@@ -144,8 +146,8 @@ impl Scanner {
         self.scan_library(Trigger::Reconfigure)
     }
 
-    /// Cancel a queued or running scan. Running scans stop at the next batch
-    /// boundary; everything persisted stays persisted.
+    /// Cancel a queued or running scan. A running scan stops after the directory in hand and
+    /// ends cancelled, even if a shutdown follows; everything persisted stays persisted.
     pub fn cancel(&self, id: ScanId) -> bool {
         let mut q = self.inner.queue.lock().unwrap();
         if q.running.as_ref().is_some_and(|s| s.id == id) {
@@ -189,14 +191,19 @@ impl Scanner {
         }
     }
 
-    /// Stop after the current batch and join the worker.
-    pub fn shutdown(&self) {
-        {
-            let mut q = self.inner.queue.lock().unwrap();
-            q.shutdown = true;
-            self.inner.cancel_running.store(true, Ordering::SeqCst);
-        }
+    /// Ask the worker to stop without waiting for it. The running scan stops after the
+    /// directory in hand and stays running at its last flushed cursor, and queued scans stay
+    /// queued, so the next [`Scanner::start`] resumes them as it would after a crash.
+    pub(crate) fn stop(&self) {
+        let queue = self.inner.queue.lock().unwrap();
+        self.inner.shutdown.store(true, Ordering::SeqCst);
+        drop(queue);
         self.inner.wake.notify_all();
+    }
+
+    /// [`Scanner::stop`], then wait for the worker to finish.
+    pub fn shutdown(&self) {
+        self.stop();
         if let Some(h) = self.worker.lock().unwrap().take() {
             let _ = h.join();
         }
@@ -208,7 +215,7 @@ fn worker(inner: Arc<Inner>) {
         let mut scan = {
             let mut q = inner.queue.lock().unwrap();
             loop {
-                if q.shutdown {
+                if inner.shutdown.load(Ordering::SeqCst) {
                     return;
                 }
                 if let Some(mut s) = q.queued.pop_front() {
@@ -228,11 +235,16 @@ fn worker(inner: Arc<Inner>) {
             library: &library,
             governor: &inner.governor,
             cancel: &inner.cancel_running,
+            shutdown: &inner.shutdown,
             options: &inner.options,
         };
         tracing::info!(scan = scan.id, trigger = ?scan.trigger, scopes = scan.scopes.len(), "scan starting");
         run_scan(&ctx, &mut scan);
-        tracing::info!(scan = scan.id, state = ?scan.state, progress = ?scan.progress, "scan finished");
+        if scan.state == ScanState::Running {
+            tracing::info!(scan = scan.id, progress = ?scan.progress, "scan stopped for shutdown");
+        } else {
+            tracing::info!(scan = scan.id, state = ?scan.state, progress = ?scan.progress, "scan finished");
+        }
         {
             let mut q = inner.queue.lock().unwrap();
             q.running = None;

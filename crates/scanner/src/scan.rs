@@ -41,13 +41,24 @@ pub struct ScanContext<'a> {
     pub store: &'a dyn Store,
     pub library: &'a LibraryConfig,
     pub governor: &'a Governor,
-    /// Set by the queue to stop at the next batch boundary.
+    /// Set by the queue to stop the scan after the directory in hand and end it cancelled.
     pub cancel: &'a AtomicBool,
+    /// Set by the queue to stop the scan at the same point but leave it running at its last
+    /// flushed cursor, so the next start resumes it.
+    pub shutdown: &'a AtomicBool,
     pub options: &'a ScanOptions,
 }
 
-/// Run `scan` to completion, cancellation, or suspension. The scan row is
-/// updated on every flush; `scan` is left in its final state.
+impl ScanContext<'_> {
+    /// Whether the queue has asked the scan to stop, to cancel it or to shut down.
+    fn stopping(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst) || self.shutdown.load(Ordering::SeqCst)
+    }
+}
+
+/// Run `scan` to completion, cancellation, or suspension, or until a shutdown, which leaves it
+/// running at its last flushed cursor for the next start to resume. The scan row is updated on
+/// every flush; `scan` is left in the state the row holds.
 pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
     let excludes = match compile_excludes(&ctx.library.excludes) {
         Ok(e) => e,
@@ -67,7 +78,7 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
     let mut suspended = false;
 
     for scope_index in start_scope..scan.scopes.len() {
-        if ctx.cancel.load(Ordering::SeqCst) {
+        if ctx.stopping() {
             break;
         }
         let scope = scan.scopes[scope_index].clone();
@@ -84,7 +95,7 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
         let mut sidecars = SidecarResolver::new(&scope.root);
         let mut batch = Batch::new(scan.id);
         let mut last_flush = Instant::now();
-        let mut cancelled = false;
+        let mut stopped = false;
         // What the store has actually seen, to fall back to if a flush fails.
         let mut persisted = (scan.cursor.clone(), scan.progress.clone());
 
@@ -106,8 +117,8 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
         let mut walk = Walk::new(&scope, &excludes, resume_after.as_deref());
         for item in walk.by_ref() {
             ctx.governor.wait_if_paused();
-            if ctx.cancel.load(Ordering::SeqCst) {
-                cancelled = true;
+            if ctx.stopping() {
+                stopped = true;
                 break;
             }
             match item {
@@ -135,13 +146,12 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
             return;
         }
 
-        if cancelled {
+        if stopped {
             break;
         }
 
-        // Stage 7: reconcile. Only after a complete, uncancelled walk of a root that still
-        // answers, and never under what the walk could not read. Problems at paths that no
-        // longer exist go too.
+        // Stage 7: reconcile. Only after a complete walk of a root that still answers, and never
+        // under what the walk could not read. Problems at paths that no longer exist go too.
         if !root_answers(&scope.root) {
             suspended = true;
             continue;
@@ -161,7 +171,13 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
         }
     }
 
-    scan.state = if ctx.cancel.load(Ordering::SeqCst) {
+    // A shutdown leaves the row as the last flush wrote it, running at its cursor, unless the
+    // scan was cancelled too.
+    let cancelled = ctx.cancel.load(Ordering::SeqCst);
+    if ctx.shutdown.load(Ordering::SeqCst) && !cancelled {
+        return;
+    }
+    scan.state = if cancelled {
         ScanState::Cancelled
     } else if suspended {
         ScanState::Suspended
