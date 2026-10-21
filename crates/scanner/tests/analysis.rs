@@ -1,9 +1,9 @@
 //! The one decode pass against a signal with known loudness and peak.
 
-mod common;
+use std::sync::Arc;
 
-use common::*;
 use jewelcase_ffmpeg::{Config, Ffmpeg};
+use jewelcase_scanner::testing::{encode, ffmpeg_available, library, scan_library, write_sine_wav};
 use jewelcase_scanner::*;
 
 #[test]
@@ -26,7 +26,7 @@ fn sine_measures_as_expected() {
     let caps = ffmpeg.verify().expect("ffmpeg verify");
     assert!(caps.missing.is_empty(), "missing decoders: {:?}", caps.missing);
 
-    let store = shared(MemoryStore::new());
+    let store = Arc::new(MemoryStore::new());
     let analyzer = Analyzer::new(ffmpeg, store.clone());
 
     for path in [&wav, &flac] {
@@ -58,9 +58,9 @@ fn queue_drains_and_broken_files_do_not_repeat() {
     std::fs::write(root.join("bad.mp3"), b"ID3\x03\x00\x00\x00\x00\x00\x00garbage garbage garbage")
         .unwrap();
 
-    let store = shared(MemoryStore::new());
+    let store = Arc::new(MemoryStore::new());
     let lib = library(root);
-    scan_library(&store, &lib);
+    scan_library(&*store, &lib);
     // The garbage MP3 may or may not pass tag reading; make sure something
     // is indexed either way so analysis has work.
     let indexed = store.tracks(lib.id).len();
