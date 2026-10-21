@@ -2,13 +2,18 @@ use std::cell::Cell;
 use std::slice;
 use std::sync::{Arc, mpsc};
 
+use std::collections::BTreeSet;
+
 use super::*;
 use crate::Governor;
 use crate::scan::ScanOptions;
 use crate::store::MemoryStore;
 use crate::testing::library;
 use crate::types::Scan;
+use fakes::{FailsAt, limit_error, seen};
 
+mod coverage;
+mod fakes;
 mod watcher;
 
 /// How long a test waits for what it expects before it fails.
@@ -41,7 +46,13 @@ fn seconds() -> Timing {
 
 /// A watch with no watcher, of the directory `identity`, covering what `coverage` says.
 fn fake(identity: Option<(u64, u64)>, coverage: notify::Result<()>) -> RootWatch {
-    RootWatch { watcher: None, identity, coverage }
+    let (excludes, unreadable) = (Arc::default(), BTreeSet::new());
+    RootWatch { watcher: None, identity, coverage, excludes, unreadable }
+}
+
+/// A real watch of `root` that leaves nothing out.
+fn watched(root: &Path, events: &Events) -> RootWatch {
+    RootWatch::start(root, &Arc::default(), events)
 }
 
 /// The watch of a root stopped by the OS limit on watches before it covered anything.
@@ -65,10 +76,10 @@ fn a_watch_covers_the_whole_root_or_says_why_not() {
     let root = tmp.path().join("root");
     fs::create_dir_all(root.join("a/b")).unwrap();
     let events = mpsc::channel().0;
-    let watch = RootWatch::start(&root, &events);
+    let watch = watched(&root, &events);
     assert!(watch.coverage.is_ok());
     assert_eq!(watch.identity, identity(&root));
-    let missing = RootWatch::start(&tmp.path().join("missing"), &events);
+    let missing = watched(&tmp.path().join("missing"), &events);
     assert!(matches!(missing.coverage.unwrap_err().kind, ErrorKind::PathNotFound));
     assert_eq!(missing.identity, None);
 }
@@ -82,7 +93,7 @@ fn a_library_not_wholly_watched_is_scanned_on_the_fallback_schedule() {
         Roots::start(scanner.clone(), &root, mpsc::channel().0, watch, &timing(fallback))
     };
     let every = Some(Duration::from_millis(20));
-    let whole = start(RootWatch::start, every);
+    let whole = start(watched, every);
     assert!(whole.fallback.is_none(), "a library wholly watched needs no fallback");
     whole.stop();
     let scheduled = start(limited, None);
@@ -101,26 +112,6 @@ fn a_library_not_wholly_watched_is_scanned_on_the_fallback_schedule() {
     let stopped = scans(&store).len();
     std::thread::sleep(Duration::from_millis(600));
     assert_eq!(scans(&store).len(), stopped, "the fallback schedule outlived the stop");
-    scanner.shutdown();
-}
-
-/// A folder created once the OS limit on watches is reached cannot be watched, so the
-/// library is no longer wholly watched.
-#[test]
-fn reaching_the_limit_later_starts_the_fallback_schedule() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().to_path_buf();
-    let (scanner, _) = scanner(&root);
-    let roots_at = slice::from_ref(&root);
-    let mut roots =
-        Roots::start(scanner.clone(), roots_at, mpsc::channel().0, RootWatch::start, &seconds());
-    let limit_at = |path: PathBuf| notify::Error::new(ErrorKind::MaxFilesWatch).add_path(path);
-    assert!(!roots.limit_reached(&limit_at("/elsewhere".into())));
-    assert!(!roots.limit_reached(&notify::Error::generic("other").add_path(root.join("new"))));
-    assert!(roots.fallback.is_none());
-    assert!(roots.limit_reached(&limit_at(root.join("new"))));
-    assert!(roots.fallback.is_some());
-    roots.stop();
     scanner.shutdown();
 }
 
@@ -193,6 +184,34 @@ fn a_failed_watch_is_tried_again_after_a_growing_wait() {
     let mut roots = Roots::start(scanner.clone(), &root, mpsc::channel().0, counted, &seconds());
     roots.check(start + 2 * MAX_BACKOFF);
     assert_eq!(limited_tries.get(), 1, "a watch the OS limit stopped was tried again");
+    roots.stop();
+    scanner.shutdown();
+}
+
+/// A fresh watch that meets the OS limit, as it may while the watches it replaced are let go,
+/// is tried once more, and only once.
+#[test]
+fn a_fresh_watch_that_meets_the_limit_is_tried_once_more() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = vec![tmp.path().to_path_buf()];
+    let (scanner, _) = scanner(tmp.path());
+    let tries = Cell::new(0);
+    // Lost at once, then each fresh watch meets the limit.
+    let limited_afresh = |root: &Path, events: &Events| {
+        tries.set(tries.get() + 1);
+        if tries.get() == 1 { elsewhere(root, events) } else { limited(root, events) }
+    };
+    let start = Instant::now();
+    let mut roots =
+        Roots::start(scanner.clone(), &root, mpsc::channel().0, limited_afresh, &seconds());
+    for after in [1500, 4000] {
+        roots.check(start + Duration::from_millis(after));
+    }
+    assert_eq!(tries.get(), 3, "the fresh watch was not tried once more");
+    for n in 1..=5 {
+        roots.check(start + n * 2 * MAX_BACKOFF);
+    }
+    assert_eq!(tries.get(), 3, "the limit was tried more than once more");
     roots.stop();
     scanner.shutdown();
 }

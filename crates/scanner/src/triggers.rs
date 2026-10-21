@@ -15,10 +15,11 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use globset::GlobSet;
 use notify::event::RemoveKind;
 use notify::{Config, EventKind, RecommendedWatcher, Watcher as _};
 
-use crate::discover::gone;
+use crate::discover::{compile_excludes, gone};
 use crate::queue::Scanner;
 use crate::sidecar::is_sidecar_name;
 use crate::types::{Depth, Scope, Trigger};
@@ -50,9 +51,9 @@ struct Timing {
 
 impl FsWatcher {
     /// Watches every root of `scanner`'s library, from a thread of its own, so this returns
-    /// before the watches are set up. Changes are grouped by directory over `debounce` and
-    /// enqueued as one scope each. While part of the library is not watched, it is scanned every
-    /// `fallback`, when given.
+    /// before the watches are set up. What the library's excludes match as this starts is not
+    /// watched. Changes are grouped by directory over `debounce` and enqueued as one scope each.
+    /// While part of the library is not watched, it is scanned every `fallback`, when given.
     pub fn start(
         scanner: Scanner,
         roots: &[PathBuf],
@@ -60,7 +61,15 @@ impl FsWatcher {
         fallback: Option<Duration>,
     ) -> FsWatcher {
         let timing = Timing { debounce, check: CHECK_ROOTS, fallback };
-        FsWatcher::spawn(scanner, roots.to_vec(), RootWatch::start, timing)
+        // Every scan suspends on a pattern that does not compile, so watching the folders it
+        // meant to leave out indexes none of them.
+        let excludes = compile_excludes(&scanner.excludes()).unwrap_or_else(|error| {
+            tracing::warn!(%error, "an exclude pattern does not compile, so every folder is watched");
+            GlobSet::empty()
+        });
+        let excludes = Arc::new(excludes);
+        let watch = move |root: &Path, events: &Events| RootWatch::start(root, &excludes, events);
+        FsWatcher::spawn(scanner, roots.to_vec(), watch, timing)
     }
 
     /// [`FsWatcher::start`], setting each root's watch up with `watch`, which tests replace to
@@ -97,14 +106,13 @@ impl FsWatcher {
     }
 }
 
-/// A watcher that sends every event to `tx`. Folder links are not watched
-/// through, as the walk does not follow them.
+/// A watcher that sends every event to `tx`.
 fn watcher(tx: mpsc::Sender<notify::Result<notify::Event>>) -> notify::Result<RecommendedWatcher> {
     RecommendedWatcher::new(
         move |res| {
             let _ = tx.send(res);
         },
-        Config::default().with_follow_symlinks(false),
+        Config::default(),
     )
 }
 
@@ -130,8 +138,10 @@ fn debounce_loop<W: Fn(&Path, &Events) -> RootWatch>(
             Ok(Ok(event)) => {
                 if event.need_rescan() {
                     rescan_all = true;
+                    roots.watch_all();
                 }
                 for path in event.paths {
+                    roots.watch_shown(&event.kind, &path);
                     let indexed = |path: &Path| scanner.indexes_under(path);
                     for (dir, depth) in classify(&event.kind, &path, indexed) {
                         pending
@@ -146,10 +156,8 @@ fn debounce_loop<W: Fn(&Path, &Events) -> RootWatch>(
                 }
             }
             Ok(Err(e)) => {
-                if !roots.limit_reached(&e) {
-                    tracing::warn!(error = %e, "watcher error; rescanning library");
-                    rescan_all = true;
-                }
+                tracing::warn!(error = %e, "watcher error; rescanning library");
+                rescan_all = true;
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
@@ -265,8 +273,7 @@ mod tests {
     use super::*;
     use crate::store::{MemoryStore, Store};
     use crate::testing::{library, make_album, scan_library, scan_once};
-    use notify::RecursiveMode;
-    use notify::event::{CreateKind, ModifyKind};
+    use notify::event::{CreateKind, ModifyKind, RenameMode};
 
     #[test]
     fn sidecars_widen_to_subtree() {
@@ -324,7 +331,6 @@ mod tests {
     /// A folder renamed, with the events a Linux watcher reports for `mv A B`.
     #[test]
     fn a_renamed_folder_moves_its_tracks() {
-        use notify::event::RenameMode;
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("lib");
         make_album(&root, "Artist", "A", 2);
@@ -358,7 +364,6 @@ mod tests {
     /// A file renamed is a change to its folder only, as nothing is indexed under its old path.
     #[test]
     fn a_renamed_file_dirties_only_its_folder() {
-        use notify::event::RenameMode;
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("lib");
         make_album(&root, "Artist", "A", 1);
@@ -421,32 +426,6 @@ mod tests {
             ]
         );
         assert_eq!(store.problems(1), []);
-    }
-
-    #[test]
-    fn the_watcher_does_not_follow_a_folder_link() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (root, outside) = (tmp.path().join("root"), tmp.path().join("outside"));
-        fs::create_dir(&root).unwrap();
-        fs::create_dir(&outside).unwrap();
-        let link = root.join("linked");
-        std::os::unix::fs::symlink(&outside, &link).unwrap();
-        let (tx, rx) = mpsc::channel();
-        let mut watcher = watcher(tx).unwrap();
-        watcher.watch(&root, RecursiveMode::Recursive).unwrap();
-
-        // A watch delivers events in order, so once the sentinel inside the root arrives, any
-        // event for the earlier write behind the link would have arrived before it.
-        fs::write(outside.join("01.flac"), b"x").unwrap();
-        let sentinel = root.join("sentinel");
-        fs::write(&sentinel, b"x").unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut paths = Vec::new();
-        while !paths.contains(&sentinel) {
-            let left = deadline.saturating_duration_since(Instant::now());
-            paths.extend(rx.recv_timeout(left).expect("the sentinel's event").unwrap().paths);
-        }
-        assert!(!paths.iter().any(|p| p.starts_with(&link)), "{paths:?}");
     }
 
     #[test]

@@ -73,6 +73,12 @@ pub fn compile_excludes(patterns: &[String]) -> Result<GlobSet, globset::Error> 
     b.build()
 }
 
+/// Whether `path`, which lies under `root`, matches `excludes` itself. Whether it lies in an
+/// excluded folder is [`excluded_scope`]'s question.
+pub fn excluded(root: &Path, path: &Path, excludes: &GlobSet) -> bool {
+    !excludes.is_empty() && excludes.is_match(path.strip_prefix(root).unwrap_or(path))
+}
+
 /// Whether `scope` lies in an excluded folder: its own folder, or one between it and its root,
 /// matches `excludes`. Nothing in such a scope is indexed. The root itself is never matched, as
 /// the walk never matches it.
@@ -141,14 +147,9 @@ impl<'a> Walk<'a> {
         &self.unreadable
     }
 
-    fn relative(&self, path: &Path) -> PathBuf {
-        path.strip_prefix(&self.scope.root)
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|_| path.to_path_buf())
-    }
-
+    /// Whether `path` matches the excludes ([`excluded`]).
     fn excluded(&self, path: &Path) -> bool {
-        !self.excludes.is_empty() && self.excludes.is_match(self.relative(path))
+        excluded(&self.scope.root, path, self.excludes)
     }
 
     /// Where `dir` sits relative to the cursor in traversal order.

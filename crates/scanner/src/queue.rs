@@ -145,6 +145,11 @@ impl Scanner {
         self.inner.library.read().unwrap().roots.iter().find(|r| path.starts_with(r)).cloned()
     }
 
+    /// The library's exclude patterns, as configured.
+    pub(crate) fn excludes(&self) -> Vec<String> {
+        self.inner.library.read().unwrap().excludes.clone()
+    }
+
     /// Whether the index holds a track not yet missing, or a problem, under `folder`, which
     /// may no longer exist. When the store cannot say, the error is logged and the answer is
     /// yes, which costs the watcher only a scan of the folder.

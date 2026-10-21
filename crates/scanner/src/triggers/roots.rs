@@ -1,49 +1,28 @@
 //! The watcher's roots (`design/scanning.md` §9): a watch of each root, set up afresh when the
 //! root is lost, and the fallback schedule while any root is not wholly watched.
 
+mod events;
+mod watch;
+
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use notify::{ErrorKind, RecommendedWatcher, RecursiveMode, Watcher as _};
-use tracing::{debug, info, warn};
+use notify::ErrorKind;
+use tracing::{info, warn};
 
-use super::{Schedule, Timing, watcher};
+use super::{Schedule, Timing};
 use crate::queue::Scanner;
 use crate::types::{Scope, Trigger};
+pub(super) use watch::RootWatch;
 
 /// Where every root's watch sends its events.
 pub(super) type Events = Sender<notify::Result<notify::Event>>;
 
 /// The longest wait between fresh watches of a root.
 const MAX_BACKOFF: Duration = Duration::from_secs(60 * 60);
-
-/// One root's watch, as it was set up.
-pub(super) struct RootWatch {
-    /// Holds the OS watch until dropped; `None` when no watcher could be made.
-    watcher: Option<RecommendedWatcher>,
-    /// The directory watched, as device and inode, read before the watch was set up.
-    identity: Option<(u64, u64)>,
-    /// Whether the watch covers the whole root, or why it may not.
-    coverage: notify::Result<()>,
-}
-
-impl RootWatch {
-    /// Watches `root` and every folder below it, sending the events to `events`. A watch that
-    /// fails partway keeps the folders it reached.
-    pub(super) fn start(root: &Path, events: &Events) -> RootWatch {
-        let identity = identity(root);
-        match watcher(events.clone()) {
-            Ok(mut watcher) => {
-                let coverage = watcher.watch(root, RecursiveMode::Recursive);
-                RootWatch { watcher: Some(watcher), identity, coverage }
-            }
-            Err(error) => RootWatch { watcher: None, identity, coverage: Err(error) },
-        }
-    }
-}
 
 /// A root of the library and its watch.
 struct Root {
@@ -55,13 +34,18 @@ struct Root {
     lost_at: Instant,
     /// The wait after the next fresh watch.
     backoff: Duration,
+    /// Whether a fresh watch met the OS limit on watches, which the watches it replaced may have
+    /// held a moment longer, so it is tried once more.
+    retry_limit: bool,
 }
 
 impl Root {
     /// Whether the root needs watching afresh: its watch failed short of the OS limit on
-    /// watches, or the directory at its path is not the one watched.
+    /// watches, or met it as a fresh watch for the first time, or the directory at its path is
+    /// not the one watched.
     fn lost(&self) -> bool {
-        matches!(&self.watch.coverage, Err(e) if !limit(e))
+        self.retry_limit
+            || matches!(&self.watch.coverage, Err(e) if !limit(e))
             || identity(&self.path) != self.watch.identity
     }
 
@@ -73,17 +57,11 @@ impl Root {
         self.backoff = (self.backoff * 2).min(MAX_BACKOFF);
     }
 
-    /// Ends the root's watch. Unwatching removes the OS watches before this returns, which
-    /// dropping the watcher alone does not, so they no longer count against the OS limit when
-    /// the root is watched afresh.
+    /// Ends the root's watch before it is watched afresh, so its OS watches stop counting
+    /// against the OS limit. Dropping the watcher ends them on notify's own thread, a moment
+    /// after this returns.
     fn unwatch(&mut self) {
-        let Some(mut watcher) = self.watch.watcher.take() else {
-            return;
-        };
-        // After an unmount the OS has already removed the watches, so this fails harmlessly.
-        if let Err(error) = watcher.unwatch(&self.path) {
-            debug!(root = %self.path.display(), %error, "the old watch was already gone");
-        }
+        self.watch.watcher = None;
     }
 }
 
@@ -117,8 +95,14 @@ impl<W: Fn(&Path, &Events) -> RootWatch> Roots<W> {
             .map(|path| {
                 let watch = watch(path, &events);
                 let path = path.clone();
-                let mut root =
-                    Root { path, watch, retry_at: now, lost_at: now, backoff: timing.check };
+                let mut root = Root {
+                    path,
+                    watch,
+                    retry_at: now,
+                    lost_at: now,
+                    backoff: timing.check,
+                    retry_limit: false,
+                };
                 root.settle(now);
                 root
             })
@@ -157,34 +141,16 @@ impl<W: Fn(&Path, &Events) -> RootWatch> Roots<W> {
             if now < root.retry_at {
                 continue;
             }
+            let retried = root.retry_limit;
             root.unwatch();
             root.watch = (self.watch)(&root.path, &self.events);
+            root.retry_limit = !retried && matches!(&root.watch.coverage, Err(e) if limit(e));
             root.settle(now);
             if root.watch.coverage.is_ok() {
                 self.scanner.request(Trigger::Watch, vec![Scope::root(root.path.clone())]);
             }
         }
         self.fall_back();
-    }
-
-    /// Takes an error from a watch. When it says the OS limit on watches kept a folder in a
-    /// root from being watched, as happens to one created after the limit was reached, that
-    /// root counts as not wholly watched, and this returns true.
-    pub(super) fn limit_reached(&mut self, error: &notify::Error) -> bool {
-        if !limit(error) {
-            return false;
-        }
-        let in_root =
-            |root: &&mut Root| error.paths.iter().any(|path| path.starts_with(&root.path));
-        let Some(root) = self.roots.iter_mut().find(in_root) else {
-            return false;
-        };
-        if root.watch.coverage.is_ok() {
-            root.watch.coverage = Err(notify::Error::new(ErrorKind::MaxFilesWatch));
-            report(&root.path, &root.watch);
-            self.fall_back();
-        }
-        true
     }
 
     /// Scans the library every `fallback_every` while any root is not wholly watched, and stops

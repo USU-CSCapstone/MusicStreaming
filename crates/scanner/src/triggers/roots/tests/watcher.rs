@@ -2,9 +2,12 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use notify::EventKind;
+use notify::event::Flag;
+
 use super::*;
 use crate::triggers::{FsWatcher, STOP_WAIT};
-use crate::types::Depth;
+use crate::types::LibraryConfig;
 
 /// The root's watch is set up on the watcher's own thread, so the server listens without
 /// waiting for it.
@@ -16,7 +19,7 @@ fn watching_is_set_up_after_start_returns() {
     let (entered, set_up) = mpsc::channel();
     let waiting = move |root: &Path, events: &Events| {
         entered.send(released.recv_timeout(PATIENCE).is_ok()).unwrap();
-        RootWatch::start(root, events)
+        watched(root, events)
     };
     let watcher = FsWatcher::spawn(scanner.clone(), vec![tmp.path().into()], waiting, timing(None));
     release.send(()).unwrap();
@@ -33,7 +36,7 @@ fn stopping_does_not_wait_for_a_watch_being_set_up() {
     let (release, released) = mpsc::channel::<()>();
     let held = move |root: &Path, events: &Events| {
         assert!(released.recv_timeout(PATIENCE).is_ok(), "never released");
-        RootWatch::start(root, events)
+        watched(root, events)
     };
     let watcher = FsWatcher::spawn(scanner.clone(), vec![tmp.path().into()], held, timing(None));
     let stopping = Instant::now();
@@ -53,7 +56,7 @@ fn stopping_an_idle_watcher_waits_for_its_thread() {
     let held = watches.clone();
     let counted = move |root: &Path, events: &Events| {
         held.fetch_add(1, Ordering::SeqCst);
-        RootWatch::start(root, events)
+        watched(root, events)
     };
     let watcher = FsWatcher::spawn(scanner.clone(), vec![tmp.path().into()], counted, timing(None));
     let deadline = Instant::now() + PATIENCE;
@@ -66,20 +69,21 @@ fn stopping_an_idle_watcher_waits_for_its_thread() {
     scanner.shutdown();
 }
 
-/// The watcher meets the OS limit on watches as it watches a folder created in the root: the
+/// The watcher meets the OS limit on watches as it watches a folder made in the root: the
 /// library then falls back to its schedule, with no rescan.
 #[test]
 fn the_limit_met_while_watching_brings_the_fallback_not_a_rescan() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().to_path_buf();
     let (scanner, store) = scanner(&root);
-    let limit_met = |root: &Path, events: &Events| {
-        let error = notify::Error::new(ErrorKind::MaxFilesWatch).add_path(root.join("new"));
-        events.send(Err(error)).unwrap();
-        RootWatch::start(root, events)
-    };
+    let limit_at_new =
+        |root: &Path, events: &Events| FailsAt::watch(root, events, root.join("new"), limit_error);
     let fallback = Some(Duration::from_millis(20));
-    let watcher = FsWatcher::spawn(scanner.clone(), vec![root], limit_met, timing(fallback));
+    let watcher =
+        FsWatcher::spawn(scanner.clone(), vec![root.clone()], limit_at_new, timing(fallback));
+    // Waits until the root is watched, so the new folder's event is seen.
+    seen(&store, &root, &root, 0);
+    fs::create_dir(root.join("new")).unwrap();
     let deadline = Instant::now() + PATIENCE;
     while !scans(&store).iter().any(|scan| scan.trigger == Trigger::Scheduled) {
         assert!(Instant::now() < deadline, "no fallback scan: {:?}", scans(&store));
@@ -87,7 +91,9 @@ fn the_limit_met_while_watching_brings_the_fallback_not_a_rescan() {
     }
     watcher.stop();
     scanner.shutdown();
-    assert!(!scans(&store).iter().any(|scan| scan.trigger == Trigger::Watch));
+    let library = Scope::root(root);
+    let rescan = |scan: &Scan| scan.trigger == Trigger::Watch && scan.scopes.contains(&library);
+    assert!(!scans(&store).iter().any(rescan), "{:?}", scans(&store));
 }
 
 /// Another directory takes the root's place, as a share mounted over it would, and its
@@ -98,28 +104,102 @@ fn a_root_replaced_under_its_path_is_watched_afresh() {
     let root = tmp.path().join("root");
     fs::create_dir(&root).unwrap();
     let (scanner, store) = scanner(&root);
-    let watcher =
-        FsWatcher::spawn(scanner.clone(), vec![root.clone()], RootWatch::start, timing(None));
-    let folder = vec![Scope::folder(&root, &root, Depth::Directory)];
-    // Writes into the root until a watcher scan newer than `after` covers just that write.
-    let seen = |after: i64| {
-        let deadline = Instant::now() + PATIENCE;
-        let mut n = 0;
-        loop {
-            fs::write(root.join(format!("{n}.txt")), b"x").unwrap();
-            std::thread::sleep(Duration::from_millis(50));
-            let scans = scans(&store);
-            if let Some(scan) = scans.iter().find(|s| s.id > after && s.scopes == folder) {
-                break scan.id;
-            }
-            assert!(Instant::now() < deadline, "no watcher scan after {after}: {scans:?}");
-            n += 1;
-        }
-    };
-    let before = seen(0);
+    let watcher = FsWatcher::spawn(scanner.clone(), vec![root.clone()], watched, timing(None));
+    let before = seen(&store, &root, &root, 0);
     fs::rename(&root, tmp.path().join("old")).unwrap();
     fs::create_dir(&root).unwrap();
-    seen(before);
+    seen(&store, &root, &root, before);
+    watcher.stop();
+    scanner.shutdown();
+}
+
+/// The watcher leaves out what the library's excludes match.
+#[test]
+fn what_the_library_excludes_is_not_watched() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    let skip = root.join("skip");
+    fs::create_dir(&skip).unwrap();
+    let store = Arc::new(MemoryStore::new());
+    let library = LibraryConfig { excludes: vec!["skip".into()], ..library(&root) };
+    let governor = Arc::new(Governor::new());
+    let scanner = Scanner::start(store.clone(), library, governor, ScanOptions::default());
+    let debounce = Duration::from_millis(20);
+    let watcher = FsWatcher::start(scanner.clone(), slice::from_ref(&root), debounce, None);
+    let watching = seen(&store, &root, &root, 0);
+    // A watch delivers events in order, so a scope for this write, were `skip` watched, would be
+    // queued by the time the root's next write is scanned.
+    fs::write(skip.join("01.flac"), b"x").unwrap();
+    seen(&store, &root, &root, watching);
+    watcher.stop();
+    scanner.shutdown();
+    let scopes: Vec<Scope> = scans(&store).into_iter().flat_map(|scan| scan.scopes).collect();
+    assert!(!scopes.iter().any(|scope| scope.path.starts_with(&skip)), "{scopes:?}");
+}
+
+/// An error from a watch rescans the library, since what it missed is unknown.
+#[test]
+fn a_watch_error_rescans_the_library() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    let (scanner, store) = scanner(&root);
+    let failing = |root: &Path, events: &Events| {
+        events.send(Err(notify::Error::generic("lost"))).unwrap();
+        watched(root, events)
+    };
+    let watcher = FsWatcher::spawn(scanner.clone(), vec![root.clone()], failing, timing(None));
+    let library = Scope::root(root);
+    let rescan = |scan: &Scan| scan.trigger == Trigger::Watch && scan.scopes.contains(&library);
+    let deadline = Instant::now() + PATIENCE;
+    while !scans(&store).iter().any(rescan) {
+        assert!(Instant::now() < deadline, "no rescan: {:?}", scans(&store));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    watcher.stop();
+    scanner.shutdown();
+}
+
+/// Once the OS drops events, every root is walked again, so a folder made meanwhile, whose
+/// event was dropped, is watched.
+#[test]
+fn dropped_events_have_every_root_walked_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    fs::create_dir(root.join("a")).unwrap();
+    let (scanner, _) = scanner(&root);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let overflowing = move |root: &Path, events: &Events| {
+        let watch = FailsAt::counted(root, events, &counted);
+        let dropped = notify::Event::new(EventKind::Other).set_flag(Flag::Rescan);
+        events.send(Ok(dropped)).unwrap();
+        watch
+    };
+    let watcher = FsWatcher::spawn(scanner.clone(), vec![root], overflowing, timing(None));
+    // The root and `a`, as the watch starts and again.
+    let deadline = Instant::now() + PATIENCE;
+    while calls.load(Ordering::SeqCst) < 4 {
+        assert!(Instant::now() < deadline, "{} folders watched", calls.load(Ordering::SeqCst));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    watcher.stop();
+    scanner.shutdown();
+}
+
+/// With an exclude pattern that does not compile, every folder is watched.
+#[test]
+fn every_folder_is_watched_when_an_exclude_does_not_compile() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    let sub = root.join("sub");
+    fs::create_dir(&sub).unwrap();
+    let store = Arc::new(MemoryStore::new());
+    let library = LibraryConfig { excludes: vec!["[".into()], ..library(&root) };
+    let governor = Arc::new(Governor::new());
+    let scanner = Scanner::start(store.clone(), library, governor, ScanOptions::default());
+    let debounce = Duration::from_millis(20);
+    let watcher = FsWatcher::start(scanner.clone(), slice::from_ref(&root), debounce, None);
+    seen(&store, &root, &sub, 0);
     watcher.stop();
     scanner.shutdown();
 }
