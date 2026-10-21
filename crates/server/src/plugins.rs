@@ -26,6 +26,7 @@ use rusqlite::{Connection, params};
 use tokio::runtime::Runtime;
 
 use crate::db::{Database, DbError, now_ms};
+use library::RunLibrary;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {
@@ -65,7 +66,7 @@ pub struct Plugins {
     /// Each library's scanner, to pick up what a plugin saves.
     scanners: HashMap<i64, Scanner>,
     /// Started on first use, so a server that never runs a plugin pays nothing for them.
-    host: OnceLock<anyhow::Result<Arc<Host>>>,
+    host: OnceLock<anyhow::Result<Arc<Host<RunLibrary>>>>,
     runtime: OnceLock<Result<Runtime, String>>,
     /// The plugin, library, hook, and user of each delivery under way, so each has one at a
     /// time.
@@ -95,7 +96,7 @@ impl Plugins {
 
     /// The plugin host, started on first use. A host that could not start is logged and
     /// answered as an internal error, every time it is asked for.
-    fn host(&self) -> Result<Arc<Host>, PluginError> {
+    fn host(&self) -> Result<Arc<Host<RunLibrary>>, PluginError> {
         let host = self.host.get_or_init(|| Ok(Arc::new(Host::new(self.compiled.as_deref())?)));
         host.as_ref().map(Arc::clone).map_err(|error| {
             tracing::error!(error = %format_args!("{error:#}"), "cannot start the plugin host");
@@ -151,7 +152,7 @@ impl Plugins {
         })
         .await
         .map_err(|e| PluginError::Internal(e.to_string()))?;
-        let component = checked
+        let linked = checked
             .map_err(|e| PluginError::Invalid(format!("This plugin cannot run here: {e:#}.")))?;
 
         std::fs::create_dir_all(&self.dir).map_err(internal)?;
@@ -177,7 +178,7 @@ impl Plugins {
             std::fs::remove_file(&part).ok();
             return Err(PluginError::Exists(name));
         }
-        host.installed(&id, component);
+        host.installed(&id, linked);
         Ok(id)
     }
 
@@ -204,7 +205,7 @@ impl Plugins {
             std::io::ErrorKind::NotFound => Ok(()),
             _ => Err(internal(e)),
         });
-        // A host not started yet has nothing compiled to forget.
+        // A host not started yet has nothing linked to forget.
         if let Some(Ok(host)) = self.host.get() {
             host.uninstalled(&plugin);
         }

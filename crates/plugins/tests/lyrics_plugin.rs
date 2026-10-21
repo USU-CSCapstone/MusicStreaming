@@ -73,7 +73,7 @@ async fn the_network_reaches_only_approved_destinations() {
 
 #[test]
 fn a_real_plugin_passes_the_install_check() {
-    let host = Host::new(None).unwrap();
+    let host = Host::<Tracks>::new(None).unwrap();
     let bytes = std::fs::read(plugin()).unwrap();
     host.check(&bytes).unwrap();
     assert!(host.check(b"not a component").is_err());

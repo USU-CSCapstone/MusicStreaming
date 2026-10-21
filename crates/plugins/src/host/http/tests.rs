@@ -14,6 +14,7 @@ use crate::manifest::Permission;
 use crate::network::Network;
 
 mod cache;
+mod clients;
 mod limits;
 mod requests;
 
@@ -32,6 +33,7 @@ type Hits = Arc<Mutex<HashMap<String, usize>>>;
 ///   `/busy` on `localhost`;
 /// - `/hops/n` with a redirect to `/hops/n-1`, and `/hops/0` with `hello`;
 /// - `/down` with `500 Internal Server Error`, and `/none` with `404 Not Found`;
+/// - `/agent` with the `User-Agent` it was sent, lowercase;
 /// - `/slow` with nothing, holding the connection open;
 /// - anything else with `hello`.
 async fn server() -> (u16, Hits) {
@@ -90,6 +92,10 @@ async fn server() -> (u16, Hits) {
                     .to_owned(),
                 "/down" => "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n".to_owned(),
                 "/none" => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_owned(),
+                "/agent" => {
+                    let agent = request.lines().find_map(|line| line.strip_prefix("user-agent: "));
+                    ok("", agent.unwrap_or_default())
+                }
                 hops if hops.starts_with("/hops/") => match hops["/hops/".len()..].parse::<u32>().unwrap() {
                     0 => ok("", "hello"),
                     n => format!(

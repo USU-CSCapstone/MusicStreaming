@@ -76,7 +76,7 @@ impl Library for Empty {
 
 #[test]
 fn a_real_plugin_passes_the_install_check() {
-    let (host, bytes) = (Host::new(None).unwrap(), std::fs::read(plugin()).unwrap());
+    let (host, bytes) = (Host::<Empty>::new(None).unwrap(), std::fs::read(plugin()).unwrap());
     host.check(&bytes).unwrap();
 }
 

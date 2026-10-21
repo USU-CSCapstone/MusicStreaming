@@ -26,7 +26,7 @@ fn grants() -> Grants {
 }
 
 /// Runs the plugin on `host` over one track without lyrics, track 1.
-async fn run(host: &Host) -> Outcome {
+async fn run(host: &Host<Memory>) -> Outcome {
     assert!(Path::new(PLUGIN).is_file(), "run plugins/lrclib-lyrics/build.sh first");
     let library = Memory { tracks: vec![testing::track(1)], ..Memory::default() };
     host.run(Path::new(PLUGIN), grants(), library, Event::Run).await

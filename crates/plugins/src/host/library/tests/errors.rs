@@ -1,13 +1,70 @@
 //! Which error each import answers: `refused` for what the host will not do, and `failed` for
 //! what the library or the disk could not.
 
-use super::super::super::{NO_LIBRARY, Refused};
+use std::path::PathBuf;
+
+use super::super::super::{Album, Artist, Track};
 use super::*;
+
+/// A library nothing can be read from, which answers every call with [`NO_LIBRARY`].
+struct Unreadable;
+
+const NO_LIBRARY: &str = "no library";
+
+impl Library for Unreadable {
+    async fn tracks(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Track>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn get_tracks(&mut self, _: Vec<u64>) -> Result<Vec<Track>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn albums(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Album>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn artists(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Artist>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn get_albums(&mut self, _: Vec<u64>) -> Result<Vec<Album>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn get_artists(&mut self, _: Vec<u64>) -> Result<Vec<Artist>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn album_tracks(&mut self, _: u64) -> Result<Vec<Track>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn artist_albums(&mut self, _: u64) -> Result<Vec<Album>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn state_get(&mut self, _: String) -> Result<Option<Vec<u8>>, String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn state_set(&mut self, _: String, _: Vec<u8>) -> Result<(), String> {
+        Err(NO_LIBRARY.into())
+    }
+
+    async fn state_delete(&mut self, _: String) -> Result<(), String> {
+        Err(NO_LIBRARY.into())
+    }
+}
 
 #[tokio::test]
 async fn a_library_that_cannot_be_read_answers_failed_with_its_reason() {
     let failed = Answer::Failed(format!("{:?}", Error::Failed(NO_LIBRARY.into())));
-    let run = &mut testing::run(Refused, &Permission::ALL);
+    let run = &mut testing::run(Unreadable, &Permission::ALL);
     for (import, ..) in GATED.iter().filter(|(import, ..)| *import != "http.send") {
         assert_eq!(call(run, import).await, failed, "{import}");
     }

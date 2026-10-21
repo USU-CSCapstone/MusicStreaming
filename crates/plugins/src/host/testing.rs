@@ -139,7 +139,7 @@ pub fn grants(permissions: &[Permission]) -> Grants {
     }
 }
 
-/// A run over `library` with `grants(permissions)`, and a network of its own.
+/// A run over `library` with `grants(permissions)`, and a network and client of its own.
 pub fn run<L: Library>(library: L, permissions: &[Permission]) -> Run<L> {
     Run {
         wasi: WasiCtx::builder().build(),
@@ -148,7 +148,7 @@ pub fn run<L: Library>(library: L, permissions: &[Permission]) -> Run<L> {
         ticks: 0,
         grants: grants(permissions),
         library,
-        client: None,
+        client: Arc::default(),
         network: Arc::default(),
         roots: None,
         log: Vec::new(),

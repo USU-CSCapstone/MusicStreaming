@@ -1,5 +1,6 @@
-//! Each plugin compiled once: kept by ID in memory until it is uninstalled or installed again,
-//! and on disk by wasmtime, against `sandbox.wat` and a copy of it that answers differently.
+//! Each plugin compiled and linked once: kept by ID in memory, with its HTTP client, until it is
+//! uninstalled or installed again, and on disk by wasmtime, against `sandbox.wat` and a copy of it
+//! that answers differently.
 
 use std::path::{Path, PathBuf};
 
@@ -19,7 +20,7 @@ fn plugin(dir: &Path, answer: &str) -> PathBuf {
 }
 
 /// Runs plugin `test`, installed at `file`, on `host` for an event it answers at once.
-async fn run(host: &Host, file: &Path) -> Outcome {
+async fn run(host: &Host<Memory>, file: &Path) -> Outcome {
     let event = Event::Searched(Vec::new());
     host.run(file, testing::grants(&[]), Memory::default(), event).await
 }
@@ -78,9 +79,10 @@ async fn a_plugin_that_does_not_link_is_unloadable() {
 async fn runs_that_start_together_share_one_compile() {
     let temp = tempfile::tempdir().unwrap();
     let file = plugin(temp.path(), "done");
-    let host = Host::new(None).unwrap();
+    let host = Host::<Memory>::new(None).unwrap();
     let (a, b) = tokio::join!(host.compiled("test", &file), host.compiled("test", &file));
-    assert!(Component::same(&a.unwrap(), &b.unwrap()));
+    let ((a, _), (b, _)) = (a.unwrap(), b.unwrap());
+    assert!(Component::same(a.instance_pre().component(), b.instance_pre().component()));
 }
 
 #[tokio::test]
@@ -102,9 +104,43 @@ async fn installing_again_runs_the_new_code() {
     let host = Host::new(None).unwrap();
     assert_eq!(run(&host, &file).await.result, Ok("done".to_owned()));
     let file = plugin(temp.path(), "anew");
-    let component = host.check(&std::fs::read(&file).unwrap()).unwrap();
-    host.installed("test", component);
+    let linked = host.check(&std::fs::read(&file).unwrap()).unwrap();
+    host.installed("test", linked);
     assert_eq!(run(&host, &file).await.result, Ok("anew".to_owned()));
+}
+
+/// Whether `host` keeps an HTTP client for plugin `test`, installed at `file`.
+async fn keeps_client(host: &Host<Memory>, file: &Path) -> bool {
+    let (_, client) = host.compiled("test", file).await.unwrap();
+    client.lock().unwrap().is_some()
+}
+
+/// Keeps an HTTP client on `host` for plugin `test`, installed at `file`, as its first request
+/// would.
+async fn keep_client(host: &Host<Memory>, file: &Path) {
+    let (_, client) = host.compiled("test", file).await.unwrap();
+    *client.lock().unwrap() = Some((vec!["127.0.0.1".into()], reqwest::Client::new()));
+    assert!(keeps_client(host, file).await);
+}
+
+#[tokio::test]
+async fn uninstalling_forgets_the_client() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = plugin(temp.path(), "done");
+    let host = Host::new(None).unwrap();
+    keep_client(&host, &file).await;
+    host.uninstalled("test");
+    assert!(!keeps_client(&host, &file).await);
+}
+
+#[tokio::test]
+async fn installing_again_forgets_the_client() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = plugin(temp.path(), "done");
+    let host = Host::new(None).unwrap();
+    keep_client(&host, &file).await;
+    host.installed("test", host.check(&std::fs::read(&file).unwrap()).unwrap());
+    assert!(!keeps_client(&host, &file).await);
 }
 
 /// wasmtime keeps what it compiles in the directory it is given, in a folder for its version
@@ -114,7 +150,7 @@ async fn installing_again_runs_the_new_code() {
 fn compiled_code_is_kept_in_the_directory_given() {
     let temp = tempfile::tempdir().unwrap();
     let (dir, file) = (temp.path().join("compiled"), plugin(temp.path(), "done"));
-    let host = Host::new(Some(&dir)).unwrap();
+    let host = Host::<Memory>::new(Some(&dir)).unwrap();
     host.check(&std::fs::read(&file).unwrap()).unwrap();
     let versions = std::fs::read_dir(dir.join("modules")).unwrap();
     let files = versions.flat_map(|version| std::fs::read_dir(version.unwrap().path()).unwrap());

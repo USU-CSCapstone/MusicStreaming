@@ -18,7 +18,7 @@ async fn instantiate(module: &str, count: usize) -> Result<(), String> {
     let host = Host::new(None).expect("host");
     let component =
         Component::new(&host.engine, component(module, count)).expect("component compiles");
-    let mut store = host.store(testing::grants(&[]), Memory::default());
+    let mut store = host.store(testing::grants(&[]), Memory::default(), Default::default());
     let instantiated = Linker::new(&host.engine).instantiate_async(&mut store, &component).await;
     instantiated.map(drop).map_err(|e| e.root_cause().to_string())
 }
@@ -27,8 +27,9 @@ async fn instantiate(module: &str, count: usize) -> Result<(), String> {
 /// of these components fit the plugin world, so the check always refuses them; what matters is
 /// why.
 fn refused_at_install(wat: &str) -> String {
-    let host = Host::new(None).expect("host");
-    format!("{:#}", host.check(wat.as_bytes()).expect_err("refused"))
+    let host = Host::<Memory>::new(None).expect("host");
+    let Err(refused) = host.check(wat.as_bytes()) else { panic!("{wat} was let in") };
+    format!("{refused:#}")
 }
 
 #[tokio::test]

@@ -19,6 +19,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::manifest::{Permission, RateLimit};
 use crate::network::Network;
+use http::KeptClient;
 
 mod compiled;
 mod http;
@@ -164,22 +165,23 @@ pub struct Grants {
     pub settings: serde_json::Map<String, serde_json::Value>,
 }
 
-pub struct Host {
+/// Runs plugins over libraries read as an `L`.
+pub struct Host<L: Library> {
     engine: Engine,
-    /// Each installed plugin compiled once, by ID.
-    compiled: compiled::Cache,
+    /// Each installed plugin compiled and linked once, by ID.
+    compiled: compiled::Cache<L>,
     /// What every run's requests share: each destination's pace, and replies to reuse.
     network: Arc<Network>,
     /// The ticks of compute each run may spend: `CPU_BUDGET`, or fewer in tests.
     budget: u64,
 }
 
-impl Host {
+impl<L: Library> Host<L> {
     /// The engine, and a thread advancing its epoch every `TICK`. The thread ends with the
     /// engine. With `cache`, an absolute directory for wasmtime's alone that no other user can
     /// write, compiled code is kept there too, so a restart loads it rather than compiling
     /// again. Fails if the engine, the thread, or the cache cannot be started.
-    pub fn new(cache: Option<&Path>) -> wasmtime::Result<Host> {
+    pub fn new(cache: Option<&Path>) -> wasmtime::Result<Host<L>> {
         let mut config = Config::new();
         config.epoch_interruption(true);
         if let Some(directory) = cache {
@@ -201,32 +203,28 @@ impl Host {
 
     /// Refuses a component that could never run here: one that does not compile, instantiates
     /// core modules it imports, needs more memories, tables, or table elements than a run may
-    /// create, or does not fit the contract. Answers the component compiled, for
+    /// create, or does not fit the contract. Answers the component compiled and linked, for
     /// [`Host::installed`] once it is installed. Only a refusal's whole chain of causes (`{:#}`)
     /// is sure to say why, as with one from linking (`pre`).
-    pub fn check(&self, bytes: &[u8]) -> wasmtime::Result<Component> {
+    pub fn check(&self, bytes: &[u8]) -> wasmtime::Result<PluginPre<Run<L>>> {
         let component = Component::new(&self.engine, bytes)?;
         fits(&component)?;
-        self.pre::<Refused>(&component).map(|_| component)
+        self.pre(&component)
     }
 
     /// Runs plugin `grants.plugin`, installed at `file`, once for `library`, with exactly
-    /// `grants`, to handle `event`.
-    pub async fn run<L: Library>(
-        &self,
-        file: &Path,
-        grants: Grants,
-        library: L,
-        event: Event,
-    ) -> Outcome {
-        let pre = match self.load::<L>(&grants.plugin, file).await {
-            Ok(pre) => pre,
-            Err(error) => {
+    /// `grants`, to handle `event`. One that cannot be compiled or linked is `Unloadable`, with
+    /// every cause in its chain (`pre` says why).
+    pub async fn run(&self, file: &Path, grants: Grants, library: L, event: Event) -> Outcome {
+        let (pre, client) = match self.compiled(&grants.plugin, file).await {
+            Ok(compiled) => compiled,
+            Err(e) => {
                 let (log, touched) = (Vec::new(), Vec::new());
-                return Outcome { result: Err(error), log, written: 0, touched, outage: false };
+                let result = Err(RunError::Unloadable(format!("{e:#}")));
+                return Outcome { result, log, written: 0, touched, outage: false };
             }
         };
-        let mut store = self.store(grants, library);
+        let mut store = self.store(grants, library, client);
         let result = call(&pre, &mut store, &event).await;
         // The store owned the run's state while the plugin ran; what it logged and saved is
         // read back from it.
@@ -234,16 +232,9 @@ impl Host {
         Outcome { result, log, written, touched, outage }
     }
 
-    /// Plugin `id`, installed at `file`, compiled and linked for a run over an `L`. One that
-    /// cannot be is `Unloadable`, with every cause in its chain (`pre` says why).
-    async fn load<L: Library>(&self, id: &str, file: &Path) -> Result<PluginPre<Run<L>>, RunError> {
-        let component = self.compiled(id, file).await;
-        let pre = component.and_then(|component| self.pre(&component));
-        pre.map_err(|e| RunError::Unloadable(format!("{e:#}")))
-    }
-
-    /// A fresh store for one run over `library` with `grants`, with its caps and compute budget.
-    fn store<L: Library>(&self, grants: Grants, library: L) -> Store<Run<L>> {
+    /// A fresh store for one run over `library` with `grants`, with its caps and compute budget,
+    /// and the plugin's `client` kept where its runs share it.
+    fn store(&self, grants: Grants, library: L, client: Arc<KeptClient>) -> Store<Run<L>> {
         let mut table = ResourceTable::new();
         table.set_max_capacity(RESOURCES);
         let run = Run {
@@ -259,7 +250,7 @@ impl Host {
             ticks: 0,
             grants,
             library,
-            client: None,
+            client,
             network: self.network.clone(),
             roots: None,
             log: Vec::new(),
@@ -290,7 +281,7 @@ impl Host {
     /// The component linked against the contract's bindings, ready to instantiate. An import it
     /// cannot be given is named only in the whole chain of the error's causes: the root cause
     /// says just "implementation is missing".
-    fn pre<L: Library>(&self, component: &Component) -> wasmtime::Result<PluginPre<Run<L>>> {
+    fn pre(&self, component: &Component) -> wasmtime::Result<PluginPre<Run<L>>> {
         let mut linker = Linker::new(&self.engine);
         // WASI with nothing granted: no files, sockets, or environment. Only the imports below.
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
@@ -328,61 +319,6 @@ async fn call<L: Library>(
     answered.map_err(RunError::trapped)?.map_err(RunError::Reported)
 }
 
-/// A library nothing can be read from, for linking a component to check it.
-struct Refused;
-
-impl Library for Refused {
-    async fn tracks(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Track>, String> {
-        Err(NO_LIBRARY.into())
-    }
-
-    async fn get_tracks(&mut self, _: Vec<u64>) -> Result<Vec<Track>, String> {
-        Err(NO_LIBRARY.into())
-    }
-
-    async fn albums(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Album>, String> {
-        Err(NO_LIBRARY.into())
-    }
-
-    async fn artists(&mut self, _: Option<u64>, _: u32) -> Result<Vec<Artist>, String> {
-        Err(NO_LIBRARY.into())
-    }
-
-    async fn get_albums(&mut self, _: Vec<u64>) -> Result<Vec<Album>, String> {
-        Err(NO_LIBRARY.into())
-    }
-
-    async fn get_artists(&mut self, _: Vec<u64>) -> Result<Vec<Artist>, String> {
-        Err(NO_LIBRARY.into())
-    }
-
-    async fn album_tracks(&mut self, _: u64) -> Result<Vec<Track>, String> {
-        Err(NO_LIBRARY.into())
-    }
-
-    async fn artist_albums(&mut self, _: u64) -> Result<Vec<Album>, String> {
-        Err(NO_LIBRARY.into())
-    }
-
-    async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
-        Err(NO_LIBRARY.into())
-    }
-
-    async fn state_get(&mut self, _: String) -> Result<Option<Vec<u8>>, String> {
-        Err(NO_LIBRARY.into())
-    }
-
-    async fn state_set(&mut self, _: String, _: Vec<u8>) -> Result<(), String> {
-        Err(NO_LIBRARY.into())
-    }
-
-    async fn state_delete(&mut self, _: String) -> Result<(), String> {
-        Err(NO_LIBRARY.into())
-    }
-}
-
-const NO_LIBRARY: &str = "no library";
-
 /// A run's state, which the plugin's host calls reach through the store.
 pub struct Run<L> {
     wasi: WasiCtx,
@@ -392,8 +328,8 @@ pub struct Run<L> {
     ticks: u64,
     grants: Grants,
     library: L,
-    /// Made on the first request, so a plugin that never uses the network costs no client.
-    client: Option<reqwest::Client>,
+    /// Where the plugin's HTTP client is kept for all its runs (`compiled::Entry`).
+    client: Arc<KeptClient>,
     network: Arc<Network>,
     /// Read on first use, and kept for the run.
     roots: Option<Vec<(u64, PathBuf)>>,

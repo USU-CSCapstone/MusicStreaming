@@ -7,7 +7,7 @@
 //! answered from a reply already fetched while that reply is fresh, and a stale one is checked
 //! rather than fetched again.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use super::bindings::jewelcase::plugin::http;
@@ -29,31 +29,50 @@ const USER_AGENT: &str = concat!("Jewelcase/", env!("CARGO_PKG_VERSION"), " (plu
 const RESERVED: [&str; 7] =
     ["host", "content-length", "transfer-encoding", "connection", "upgrade", "te", "trailer"];
 
+/// A plugin's HTTP client once its first request made it, with the destinations it keeps to.
+pub(super) type KeptClient = Mutex<Option<(Vec<String>, reqwest::Client)>>;
+
 impl<L: Library> Run<L> {
-    /// Made on the first request, so a plugin that never uses the network costs no client.
-    fn client(&mut self) -> Result<reqwest::Client, String> {
-        if let Some(client) = &self.client {
+    /// The plugin's client, made on its first request, so a plugin that never uses the network
+    /// costs none. It is kept for the plugin's later runs while their destinations are the ones
+    /// it was made for, and made again when they differ, since it follows redirects only to those.
+    /// It is made under the kept client's lock, so runs that start together make one.
+    fn client(&self) -> Result<reqwest::Client, String> {
+        let destinations = &self.grants.destinations;
+        let mut kept = self.client.lock().expect("client lock");
+        if let Some((kept_to, client)) = &*kept
+            && kept_to == destinations
+        {
             return Ok(client.clone());
         }
-        let destinations = self.grants.destinations.clone();
-        let redirects = reqwest::redirect::Policy::custom(move |attempt| {
-            // The first of `previous` is where the request started, not a redirect.
-            if attempt.previous().len() > MAX_REDIRECTS {
-                return attempt.error("it redirected too many times");
-            }
-            match rules::allowed(attempt.url().as_str(), &destinations) {
-                Ok(_) => attempt.follow(),
-                Err(refused) => attempt.error(format!("it redirected elsewhere: {refused}")),
-            }
-        });
-        let client = reqwest::Client::builder()
-            .user_agent(USER_AGENT)
-            .connect_timeout(Duration::from_secs(10))
-            .redirect(redirects)
-            .build()
-            .map_err(|e| format!("the network is unavailable: {e}"))?;
-        Ok(self.client.insert(client).clone())
+        let client =
+            build(destinations.clone()).map_err(|e| format!("the network is unavailable: {e}"))?;
+        *kept = Some((destinations.clone(), client.clone()));
+        Ok(client)
     }
+}
+
+/// A client that follows a redirect only to one of `destinations`, and at most `MAX_REDIRECTS`
+/// in a row.
+fn build(destinations: Vec<String>) -> reqwest::Result<reqwest::Client> {
+    let redirects = reqwest::redirect::Policy::custom(move |attempt| {
+        // The first of `previous` is where the request started, not a redirect.
+        if attempt.previous().len() > MAX_REDIRECTS {
+            return attempt.error("it redirected too many times");
+        }
+        match rules::allowed(attempt.url().as_str(), &destinations) {
+            Ok(_) => attempt.follow(),
+            Err(refused) => attempt.error(format!("it redirected elsewhere: {refused}")),
+        }
+    });
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(Duration::from_secs(10))
+        .redirect(redirects)
+        // Shorter than servers commonly keep an idle connection open, so a request is rarely
+        // written to one the server is closing just then, which would fail it.
+        .pool_idle_timeout(Duration::from_secs(4))
+        .build()
 }
 
 fn method(method: http::Method) -> reqwest::Method {
