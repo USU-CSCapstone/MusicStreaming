@@ -20,8 +20,10 @@
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use jewelcase_plugins::Permission;
 use rusqlite::{Connection, params};
 
+mod changes;
 mod due;
 mod playing;
 mod plays;
@@ -45,37 +47,12 @@ const MAX_OUTAGE_MS: i64 = 72 * 60 * 60_000;
 const BACKOFF_MS: i64 = 60_000;
 const MAX_BACKOFF_MS: i64 = 60 * 60_000;
 
-/// A hook, as the grants and cursors name it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Hook {
-    TracksChanged,
-    ScanFinished,
-    Schedule,
-    Played,
-    Playing,
-    Searched,
-    AlbumsChanged,
-    ArtistsChanged,
-}
-
-impl Hook {
-    fn name(self) -> &'static str {
-        match self {
-            Hook::TracksChanged => "tracksChanged",
-            Hook::ScanFinished => "scanFinished",
-            Hook::Schedule => "schedule",
-            Hook::Played => "played",
-            Hook::Playing => "playing",
-            Hook::Searched => "searched",
-            Hook::AlbumsChanged => "albumsChanged",
-            Hook::ArtistsChanged => "artistsChanged",
-        }
-    }
-}
-
 /// A hook due for a plugin in a library, and how far delivery has got.
+#[derive(Clone)]
 struct Due {
-    hook: Hook,
+    hook: Permission,
+    /// How its event is read.
+    read: due::Read,
     plugin: String,
     library: i64,
     position: i64,
@@ -134,7 +111,7 @@ impl Plugins {
         };
         let Ok(runtime) = self.runtime() else { return };
         for due in due {
-            let key = (due.plugin.clone(), due.library, due.hook.name(), due.user);
+            let key = (due.plugin.clone(), due.library, due.hook, due.user);
             if !self.delivering.lock().expect("delivery lock").insert(key.clone()) {
                 continue;
             }
@@ -148,27 +125,14 @@ impl Plugins {
 
     /// Delivers what is due to one plugin in one library, and records how it went.
     async fn deliver(&self, due: Due) {
-        let (plugin, library, user) = (due.plugin.clone(), due.library, due.user);
-        let (hook, position) = (due.hook, due.position);
+        let at = due.clone();
         let read = self
             .db
             .read(move |conn| {
-                let plugin_id = plugin.clone();
-                let at = Due {
-                    hook,
-                    plugin: plugin_id,
-                    library,
-                    position,
-                    failures: 0,
-                    outages: 0,
-                    outage_since: None,
-                    user,
-                };
-                let event = due::event(conn, &at, now_ms())?;
                 Ok((
-                    event,
-                    grants::manifest(conn, &plugin)?,
-                    grants::granted(conn, &plugin, library)?,
+                    (at.read)(conn, &at, now_ms())?,
+                    grants::manifest(conn, &at.plugin)?,
+                    grants::granted(conn, &at.plugin, at.library)?,
                 ))
             })
             .await;
@@ -181,7 +145,8 @@ impl Plugins {
         let (ran, summary) = match event {
             None => (Ran::Handled, String::new()),
             Some(event) => {
-                let run_for = RunFor { library, user: (due.user != 0).then_some(due.user) };
+                let run_for =
+                    RunFor { library: due.library, user: (due.user != 0).then_some(due.user) };
                 match self.run_in(&due.plugin, &manifest, run_for, permissions, event).await {
                     Ok((outcome, _)) => {
                         (Ran::of(outcome.result.is_ok(), outcome.outage), outcome.summary())

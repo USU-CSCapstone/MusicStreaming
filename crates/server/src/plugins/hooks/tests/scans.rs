@@ -3,7 +3,7 @@
 use jewelcase_plugins::Event;
 use jewelcase_plugins::Permission::{LibraryRead, ScanFinished, Schedule};
 
-use super::{HANDLED, HOUR, Hook, deliver, one, plan, setup};
+use super::{HANDLED, HOUR, deliver, one, plan, setup};
 use crate::plugins::testing::grant;
 
 #[tokio::test]
@@ -49,12 +49,31 @@ async fn a_finished_scan_is_delivered_once_with_its_counts_added_up() {
     assert!(deliver(&db, 1000, HANDLED).await.is_empty());
 }
 
+/// A finished scan is about the library, so it is delivered only to a plugin that may read it.
+#[tokio::test]
+async fn a_finished_scan_needs_library_read_as_well_as_the_hook() {
+    let (_temp, db, plugins) = setup().await;
+    grant(&plugins, "plugin", &[], &[ScanFinished]).await;
+    db.write(|tx| {
+        tx.execute_batch(
+            "INSERT INTO scans (id, library_id, trigger, state, scopes, added, updated, created_at, finished_at)
+             VALUES (1, 1, 'watch', 'completed', '[]', 2, 1, 0, 100);",
+        )
+    })
+    .await
+    .unwrap();
+    assert!(deliver(&db, 201, HANDLED).await.is_empty(), "not granted libraryRead");
+    grant(&plugins, "plugin", &[], &[LibraryRead, ScanFinished]).await;
+    let event = one(deliver(&db, 201, HANDLED).await, 0);
+    assert!(matches!(event, Event::ScanFinished(_)), "{event:?}");
+}
+
 /// Scans are kept for months, mostly finished, so finding the hook due reads only the
 /// library's completed scans after its position.
 #[tokio::test]
 async fn a_finished_scan_is_found_from_the_completed_scans_index() {
     let (_temp, db, _plugins) = setup().await;
-    let steps = plan(&db, Hook::ScanFinished).await;
+    let steps = plan(&db, ScanFinished).await;
     let completed = "SEARCH s EXISTS USING COVERING INDEX scans_completed \
                      (library_id=? AND finished_at>? AND finished_at<?)";
     assert!(steps.iter().any(|step| step == completed), "{steps:#?}");

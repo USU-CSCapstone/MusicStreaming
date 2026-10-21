@@ -19,7 +19,7 @@ mod rate_limit;
 mod tests;
 mod validate;
 
-pub use permission::Permission;
+pub use permission::{Hook, Permission};
 pub use rate_limit::{Limit, Per, RateLimit, rate_limit_gap};
 pub use validate::validate;
 

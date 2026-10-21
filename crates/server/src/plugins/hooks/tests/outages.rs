@@ -5,10 +5,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use jewelcase_plugins::Permission;
 use jewelcase_plugins::Permission::{LibraryRead, TracksChanged};
 use rusqlite::OptionalExtension;
 
-use super::super::{BACKOFF_MS, Hook, MAX_FAILURES, Ran};
+use super::super::{BACKOFF_MS, MAX_FAILURES, Ran};
 use super::{HOUR, Received, changes, ran, setup};
 use crate::db::Database;
 use crate::plugins::testing::{grant, plugins};
@@ -17,7 +18,7 @@ const TIMED_OUT: &str = "the request timed out";
 const REFUSED: &str = "LRCLIB answered 400";
 
 /// The hooks `received` delivered.
-fn hooks(received: Vec<Received>) -> Vec<Hook> {
+fn hooks(received: Vec<Received>) -> Vec<Permission> {
     received.into_iter().map(|r| r.hook).collect()
 }
 
@@ -46,7 +47,7 @@ async fn changed() -> (tempfile::TempDir, Arc<Database>) {
 async fn hourly_outages(db: &Database, first: i64, last: i64) {
     for hour in first..=last {
         let tried = hooks(ran(db, hour * HOUR, Ran::Unreachable, TIMED_OUT).await);
-        assert_eq!(tried, [Hook::TracksChanged], "hour {hour}");
+        assert_eq!(tried, [TracksChanged], "hour {hour}");
     }
 }
 
@@ -82,7 +83,7 @@ async fn a_plugin_that_cannot_be_loaded_fails_without_an_outage() {
 #[tokio::test]
 async fn outages_back_off_but_never_disable_the_plugin_and_other_failures_still_count() {
     let (_temp, db) = changed().await;
-    let tried = [Hook::TracksChanged];
+    let tried = [TracksChanged];
 
     assert_eq!(hooks(ran(&db, 0, Ran::Unreachable, TIMED_OUT).await), tried);
     assert!(ran(&db, BACKOFF_MS - 1, Ran::Unreachable, TIMED_OUT).await.is_empty(), "waiting");
@@ -111,7 +112,7 @@ async fn outages_back_off_but_never_disable_the_plugin_and_other_failures_still_
 async fn an_outage_disables_the_plugin_once_it_has_lasted_72_hours() {
     // Begun a millisecond in, so the last is 72 hours less a millisecond after it.
     let (_temp, db) = changed().await;
-    assert_eq!(hooks(ran(&db, 1, Ran::Unreachable, TIMED_OUT).await), [Hook::TracksChanged]);
+    assert_eq!(hooks(ran(&db, 1, Ran::Unreachable, TIMED_OUT).await), [TracksChanged]);
     hourly_outages(&db, 1, 72).await;
     assert!(enabled(&db).await, "just under 72 hours");
 
@@ -128,24 +129,21 @@ async fn an_outage_disables_the_plugin_once_it_has_lasted_72_hours() {
 async fn a_success_or_a_failure_of_its_own_starts_the_outage_clock_again() {
     let (_temp, db) = changed().await;
     hourly_outages(&db, 0, 40).await;
-    assert_eq!(hooks(ran(&db, 41 * HOUR, Ran::Handled, "").await), [Hook::TracksChanged]);
+    assert_eq!(hooks(ran(&db, 41 * HOUR, Ran::Handled, "").await), [TracksChanged]);
     changes(&db, "(1, 'track', 12, 'upsert', 0)").await;
     // The success cleared the outages, so the next failure waits only the first backoff.
     let failed = hooks(ran(&db, 42 * HOUR, Ran::Failed, REFUSED).await);
-    assert_eq!(failed, [Hook::TracksChanged]);
+    assert_eq!(failed, [TracksChanged]);
     let first_wait = 42 * HOUR + BACKOFF_MS;
     assert!(ran(&db, first_wait - 1, Ran::Unreachable, TIMED_OUT).await.is_empty());
-    assert_eq!(
-        hooks(ran(&db, first_wait, Ran::Unreachable, TIMED_OUT).await),
-        [Hook::TracksChanged]
-    );
+    assert_eq!(hooks(ran(&db, first_wait, Ran::Unreachable, TIMED_OUT).await), [TracksChanged]);
     hourly_outages(&db, 43, 42 + 71).await;
     assert!(enabled(&db).await, "under 71 hours since the outage began");
 
     // A failure of its own shows the service was reached, or that the plugin is at fault. The
     // outages before it still set its backoff, which is an hour by now.
     let failed = hooks(ran(&db, 114 * HOUR, Ran::Failed, REFUSED).await);
-    assert_eq!(failed, [Hook::TracksChanged]);
+    assert_eq!(failed, [TracksChanged]);
     assert!(ran(&db, 114 * HOUR + 2 * BACKOFF_MS, Ran::Failed, REFUSED).await.is_empty());
     hourly_outages(&db, 115, 115 + 71).await;
     assert!(enabled(&db).await, "71 hours since the failure");

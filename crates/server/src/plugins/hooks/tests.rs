@@ -6,8 +6,8 @@ use std::sync::Arc;
 use jewelcase_plugins::{Event, Permission};
 use serde_json::json;
 
-use super::due::{all, event, queries};
-use super::{Hook, Ran, record};
+use super::due::{Read, all, hooks};
+use super::{Due, Ran, record};
 use crate::db::Database;
 use crate::db::testing::{User, access};
 use crate::plugins::Plugins;
@@ -30,7 +30,7 @@ const HOUR: i64 = 60 * 60_000;
 /// the plugin received, if there was anything to send.
 #[derive(Debug)]
 struct Received {
-    hook: Hook,
+    hook: Permission,
     library: i64,
     user: i64,
     event: Option<Event>,
@@ -86,7 +86,7 @@ async fn ran(db: &Database, now: i64, how: Ran, summary: &'static str) -> Vec<Re
     db.write(move |tx| {
         let mut received = Vec::new();
         for due in all(tx, now)? {
-            let (next, event) = event(tx, &due, now)?;
+            let (next, event) = (due.read)(tx, &due, now)?;
             let how = if event.is_none() { Ran::Handled } else { how };
             record(tx, &due, next, how, summary, now)?;
             let (hook, library, user) = (due.hook, due.library, due.user);
@@ -98,9 +98,44 @@ async fn ran(db: &Database, now: i64, how: Ran, summary: &'static str) -> Vec<Re
     .unwrap()
 }
 
+/// The query that finds `hook` due, and how its event is read.
+fn row(hook: Permission) -> (String, Read) {
+    let found = hooks().into_iter().find(|(h, ..)| *h == hook);
+    let (_, sql, read) = found.unwrap_or_else(|| panic!("{hook:?} is not in the table"));
+    (sql, read)
+}
+
+/// `hook` found due for the stand-in plugin in library 1, for `user`, at position 0 with no
+/// failures.
+fn due_for(hook: Permission, user: i64) -> Due {
+    let (_, read) = row(hook);
+    Due {
+        hook,
+        read,
+        plugin: "plugin".into(),
+        library: 1,
+        position: 0,
+        failures: 0,
+        outages: 0,
+        outage_since: None,
+        user,
+    }
+}
+
+/// Every permission that is a hook has one row in the table, and nothing else has one.
+#[test]
+fn the_table_has_a_row_for_each_hook() {
+    let mut rows: Vec<String> = hooks().into_iter().map(|(hook, ..)| hook.name()).collect();
+    let mut hooks: Vec<String> =
+        Permission::ALL.into_iter().filter(|p| p.hook().is_some()).map(Permission::name).collect();
+    rows.sort();
+    hooks.sort();
+    assert_eq!(rows, hooks);
+}
+
 /// The steps of the plan for the query that finds `hook` due, which runs every few seconds.
-async fn plan(db: &Database, hook: Hook) -> Vec<String> {
-    let (_, sql) = queries().into_iter().find(|(h, _)| *h == hook).unwrap();
+async fn plan(db: &Database, hook: Permission) -> Vec<String> {
+    let (sql, _) = row(hook);
     db.read(move |conn| {
         conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?
             .query_map(rusqlite::params![0, hook.name()], |row| row.get(3))?

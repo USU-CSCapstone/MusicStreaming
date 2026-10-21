@@ -70,7 +70,7 @@ pub struct Plugins {
     runtime: OnceLock<Result<Runtime, String>>,
     /// The plugin, library, hook, and user of each delivery under way, so each has one at a
     /// time.
-    delivering: Mutex<HashSet<(String, i64, &'static str, i64)>>,
+    delivering: Mutex<HashSet<(String, i64, Permission, i64)>>,
 }
 
 impl Plugins {

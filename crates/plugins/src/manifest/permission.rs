@@ -15,36 +15,43 @@ pub enum Permission {
     LibraryChange,
     Network,
     ListeningActivity,
-    /// A hook: run when tracks are added, changed, or removed. Needs library-read too.
+    /// A hook: run when tracks are added, changed, or removed.
     TracksChanged,
-    /// A hook: run when a scan of the library finishes. Needs library-read too.
+    /// A hook: run when a scan of the library finishes.
     ScanFinished,
     /// A hook: run at the interval its request names, in every library it is enabled in.
     Schedule,
-    /// A hook: run when a user who connected it finishes playing something. Needs
-    /// listening-activity, library-read where it was played, and personal settings to connect.
+    /// A hook: run when a user who connected it finishes playing something.
     Played,
-    /// A hook: run when a user who connected it starts playing something. Needs what `Played`
-    /// does.
+    /// A hook: run when a user who connected it starts playing something.
     Playing,
     /// The searches of users who turned on sharing them with it.
     SearchActivity,
     /// A hook: run when a user who shares their searches settles on one, or asks for some to be
-    /// forgotten. Needs search-activity, library-read, and personal settings to connect.
+    /// forgotten.
     Searched,
-    /// A hook: run when albums are added, changed, or removed. Needs library-read too.
+    /// A hook: run when albums are added, changed, or removed.
     AlbumsChanged,
-    /// A hook: run when artists are added, changed, or removed. Needs library-read too.
+    /// A hook: run when artists are added, changed, or removed.
     ArtistsChanged,
     /// Its rate limits that say `"per": "host"` are kept to by every plugin's requests to that
     /// host, so it can slow other plugins. Without it, they count its own.
     HostRateLimits,
 }
 
+/// Whom a hook runs a plugin for (`design/hooks.md` §2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hook {
+    /// The plugin, in each library it is enabled in.
+    Library,
+    /// Each user who connected the plugin, in each library it is enabled in.
+    Personal,
+}
+
 impl Permission {
-    /// Every permission, each once.
-    #[cfg(test)]
-    pub(crate) const ALL: [Permission; 15] = [
+    /// Every permission, each once. Public so the server's tests can check its hook table
+    /// against [`Permission::hook`].
+    pub const ALL: [Permission; 15] = [
         Self::LibraryRead,
         Self::LibraryAdd,
         Self::LibraryChange,
@@ -90,6 +97,47 @@ impl Permission {
                 | Self::AlbumsChanged
                 | Self::ArtistsChanged
         )
+    }
+
+    /// Whom it runs the plugin for, if it is a hook.
+    pub fn hook(self) -> Option<Hook> {
+        match self {
+            Self::TracksChanged
+            | Self::ScanFinished
+            | Self::Schedule
+            | Self::AlbumsChanged
+            | Self::ArtistsChanged => Some(Hook::Library),
+            Self::Played | Self::Playing | Self::Searched => Some(Hook::Personal),
+            Self::LibraryRead
+            | Self::LibraryAdd
+            | Self::LibraryChange
+            | Self::Network
+            | Self::ListeningActivity
+            | Self::SearchActivity
+            | Self::HostRateLimits => None,
+        }
+    }
+
+    /// The other permissions a manifest asking for it must ask for, and the admin must grant,
+    /// before it is any use: a hook needs the permission for what its events carry
+    /// (`requirements/plugins.md` §8).
+    pub fn needs(self) -> &'static [Permission] {
+        match self {
+            Self::TracksChanged
+            | Self::ScanFinished
+            | Self::AlbumsChanged
+            | Self::ArtistsChanged => &[Self::LibraryRead],
+            Self::Played | Self::Playing => &[Self::LibraryRead, Self::ListeningActivity],
+            Self::Searched => &[Self::LibraryRead, Self::SearchActivity],
+            Self::LibraryRead
+            | Self::LibraryAdd
+            | Self::LibraryChange
+            | Self::Network
+            | Self::ListeningActivity
+            | Self::Schedule
+            | Self::SearchActivity
+            | Self::HostRateLimits => &[],
+        }
     }
 
     /// How the admin saw it when granting it.

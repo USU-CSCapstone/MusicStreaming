@@ -53,6 +53,24 @@ fn finds_the_problems_each_case_lists() {
     }
 }
 
+/// What each permission needs is listed once, in the order the permissions were asked for, even
+/// for one asked for twice.
+#[test]
+fn says_once_what_each_permission_needs_in_the_order_asked() {
+    let request = |p| serde_json::json!({"permission": p, "required": false, "reason": "r"});
+    let manifest = serde_json::json!({"id": "needs", "name": "Needs", "version": "1",
+        "apiVersion": API_VERSION,
+        "permissions": [request("searched"), request("tracksChanged"), request("searched")]});
+    let problems = [
+        "permissions[2]: searched is requested twice",
+        "searched needs libraryRead as well",
+        "searched needs searchActivity as well",
+        r#"searched needs "personalSettings", which users connect it with"#,
+        "tracksChanged needs libraryRead as well",
+    ];
+    assert_eq!(validate(&manifest), problems);
+}
+
 /// Each permission's name reads back as it. A permission name in the cases is refused as unknown
 /// exactly when it names none, and the names they accept cover all of [`Permission::ALL`].
 #[test]

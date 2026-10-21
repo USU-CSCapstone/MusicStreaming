@@ -6,19 +6,19 @@ use jewelcase_plugins::Permission::{
 };
 use jewelcase_plugins::{Event, Permission};
 
-use super::super::due::batch;
-use super::super::{BACKOFF_MS, Hook, MAX_FAILURES};
+use super::super::changes::batch;
+use super::super::{BACKOFF_MS, MAX_FAILURES};
 use super::{HANDLED, HOUR, Received, changes, deliver, setup};
 use crate::plugins::testing::{enable, grant};
 
 /// Each event's hook and library, and the IDs it names as changed and removed. Panics unless
 /// each event is the one its hook delivers, since every kind carries the same record.
-fn named(received: Vec<Received>) -> Vec<(Hook, i64, Vec<u64>, Vec<u64>)> {
+fn named(received: Vec<Received>) -> Vec<(Permission, i64, Vec<u64>, Vec<u64>)> {
     let named = |r: Received| {
         let (case, changes) = match r.event {
-            Some(Event::TracksChanged(changes)) => (Hook::TracksChanged, changes),
-            Some(Event::AlbumsChanged(changes)) => (Hook::AlbumsChanged, changes),
-            Some(Event::ArtistsChanged(changes)) => (Hook::ArtistsChanged, changes),
+            Some(Event::TracksChanged(changes)) => (TracksChanged, changes),
+            Some(Event::AlbumsChanged(changes)) => (AlbumsChanged, changes),
+            Some(Event::ArtistsChanged(changes)) => (ArtistsChanged, changes),
             other => panic!("not a change: {other:?}"),
         };
         assert_eq!(case, r.hook, "the event is the one its hook delivers");
@@ -42,7 +42,7 @@ async fn changes_reach_a_plugin_only_while_it_is_enabled_with_both_grants() {
         assert!(deliver(&db, 0, HANDLED).await.is_empty(), "{granted:?}, enabled: {enabled}");
     }
     enable(&plugins, "plugin", true).await;
-    let ours = [(Hook::TracksChanged, 1, vec![11], vec![])];
+    let ours = [(TracksChanged, 1, vec![11], vec![])];
     assert_eq!(named(deliver(&db, 0, HANDLED).await), ours, "only its own library");
     assert!(deliver(&db, 0, HANDLED).await.is_empty(), "each change is delivered once");
 }
@@ -56,7 +56,7 @@ async fn a_hook_is_due_only_where_it_is_granted_and_a_plugin_wide_one_everywhere
     let mut due: Vec<_> =
         deliver(&db, 0, HANDLED).await.into_iter().map(|r| (r.hook, r.library)).collect();
     due.sort_by_key(|&(hook, library)| (hook.name(), library));
-    let expected = [(Hook::Schedule, 1), (Hook::Schedule, 2), (Hook::TracksChanged, 1)];
+    let expected = [(Schedule, 1), (Schedule, 2), (TracksChanged, 1)];
     assert_eq!(due, expected, "library 1's grants are not library 2's");
 }
 
@@ -70,7 +70,7 @@ async fn an_event_names_the_tracks_changed_and_removed() {
          (1, 'track', 12, 'delete', 0), (2, 'track', 21, 'upsert', 0)",
     )
     .await;
-    let tracks = [(Hook::TracksChanged, 1, vec![11], vec![12])];
+    let tracks = [(TracksChanged, 1, vec![11], vec![12])];
     assert_eq!(named(deliver(&db, 0, HANDLED).await), tracks);
     assert!(deliver(&db, 0, HANDLED).await.is_empty(), "nothing further in library 1");
 }
@@ -122,12 +122,12 @@ async fn album_and_artist_hooks_hear_only_their_own_kind_in_their_own_library() 
          (2, 'artist', 401, 'upsert', 0)",
     )
     .await;
-    let albums = [(Hook::AlbumsChanged, 1, vec![101], vec![102])];
+    let albums = [(AlbumsChanged, 1, vec![101], vec![102])];
     assert_eq!(named(deliver(&db, 0, HANDLED).await), albums, "not artists, nor library 2's");
     assert!(deliver(&db, 0, HANDLED).await.is_empty(), "each change is delivered once");
 
     grant(&plugins, "plugin", &[], &[LibraryRead, AlbumsChanged, ArtistsChanged]).await;
-    let artists = [(Hook::ArtistsChanged, 1, vec![301], vec![])];
+    let artists = [(ArtistsChanged, 1, vec![301], vec![])];
     assert_eq!(named(deliver(&db, 0, HANDLED).await), artists, "its own position, from zero");
 }
 
@@ -137,7 +137,7 @@ async fn failures_wait_longer_each_time_then_disable_the_plugin_there() {
     let (_temp, db, plugins) = setup().await;
     grant(&plugins, "plugin", &[], &[LibraryRead, TracksChanged]).await;
     changes(&db, "(1, 'track', 11, 'upsert', 0)").await;
-    let track = |id| vec![(Hook::TracksChanged, 1, vec![id], vec![])];
+    let track = |id| vec![(TracksChanged, 1, vec![id], vec![])];
 
     assert_eq!(named(deliver(&db, 0, FAILED).await), track(11));
     assert!(deliver(&db, BACKOFF_MS - 1, FAILED).await.is_empty(), "waiting to retry");

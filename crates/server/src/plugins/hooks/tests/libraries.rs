@@ -1,12 +1,12 @@
 //! The hooks that act for users, whose connection and sharing hold in every library: each
 //! library's activity still reaches only that library's deliveries.
 
-use jewelcase_plugins::Event;
 use jewelcase_plugins::Permission::{
     LibraryRead, ListeningActivity, Played, SearchActivity, Searched,
 };
+use jewelcase_plugins::{Event, Permission};
 
-use super::{HANDLED, Hook, Received, connected, deliver, setup};
+use super::{HANDLED, Received, connected, deliver, setup};
 use crate::db::testing::access;
 use crate::db::{Database, now_ms};
 use crate::plugins::personal::set_search_sharing;
@@ -51,7 +51,7 @@ async fn noted(db: &Database, library: i64, search: i64, kept: bool, at: i64) {
 
 /// Each delivery's hook and library, and the IDs it named: the tracks played, the searches
 /// found or forgotten, or zero for a request to forget everything.
-fn named(received: Vec<Received>) -> Vec<(Hook, i64, Vec<u64>)> {
+fn named(received: Vec<Received>) -> Vec<(Permission, i64, Vec<u64>)> {
     let ids = |event: Option<Event>| match event {
         Some(Event::Played(plays)) => plays.iter().map(|p| p.track.id).collect(),
         Some(Event::Searched(found)) => found.iter().map(|s| s.id).collect(),
@@ -83,19 +83,19 @@ async fn a_users_activity_reaches_only_the_library_it_happened_in() {
     played(&db, 1, 11, since).await;
     played(&db, 2, 21, since).await;
     let expected = [
-        (Hook::Played, 1, vec![11]),
-        (Hook::Played, 2, vec![21]),
-        (Hook::Searched, 1, vec![1]),
-        (Hook::Searched, 2, vec![2]),
+        (Played, 1, vec![11]),
+        (Played, 2, vec![21]),
+        (Searched, 1, vec![1]),
+        (Searched, 2, vec![2]),
     ];
     assert_eq!(named(deliver(&db, 0, HANDLED).await), expected);
 
     noted(&db, 2, 3, true, since).await;
-    let expected = [(Hook::Searched, 2, vec![3])];
+    let expected = [(Searched, 2, vec![3])];
     assert_eq!(named(deliver(&db, 0, HANDLED).await), expected, "library 1 has nothing new");
 
     let stopped = db.write(|tx| set_search_sharing(tx, "plugin", 7, false, false)).await.unwrap();
     assert!(stopped.is_ok());
-    let forget = [(Hook::Searched, 1, vec![0]), (Hook::Searched, 2, vec![0])];
+    let forget = [(Searched, 1, vec![0]), (Searched, 2, vec![0])];
     assert_eq!(named(deliver(&db, 0, HANDLED).await), forget, "in each library, once");
 }

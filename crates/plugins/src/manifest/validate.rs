@@ -3,7 +3,7 @@
 use serde_json::{Map, Value};
 
 use super::rate_limit::validate_rate_limits;
-use super::{API_VERSION, MIN_EVERY_MINUTES, Permission, is_host_name, unknown_keys};
+use super::{API_VERSION, Hook, MIN_EVERY_MINUTES, Permission, is_host_name, unknown_keys};
 use crate::settings;
 
 /// The keys a manifest may give at its top level.
@@ -92,42 +92,23 @@ pub fn validate(manifest: &Value) -> Vec<String> {
     } else if granted && !host {
         problems.push(r#"hostRateLimits needs a rate limit "per": "host""#.into());
     }
-    // A library hook's event is about the library, which only reading it can make anything of.
-    let library_hooks = [
-        Permission::TracksChanged,
-        Permission::ScanFinished,
-        Permission::AlbumsChanged,
-        Permission::ArtistsChanged,
-    ];
-    for hook in library_hooks {
-        if seen.contains(&hook) && !seen.contains(&Permission::LibraryRead) {
-            problems.push(format!("{} needs libraryRead as well", hook.name()));
+    // What each one needs, in the order they were asked for. A personal hook runs for the users
+    // who connected the plugin, and they connect it by entering its personal settings.
+    for permission in &seen {
+        let name = permission.name();
+        for needed in permission.needs().iter().filter(|needed| !seen.contains(needed)) {
+            problems.push(format!("{name} needs {} as well", needed.name()));
         }
-    }
-    // Their events are plays of a library's tracks or searches of it, by the users who
-    // connected it.
-    let hooks = [
-        (Permission::Played, Permission::ListeningActivity),
-        (Permission::Playing, Permission::ListeningActivity),
-        (Permission::Searched, Permission::SearchActivity),
-    ];
-    for (hook, activity) in hooks.into_iter().filter(|(h, _)| seen.contains(h)) {
-        let hook = hook.name();
-        for needed in [Permission::LibraryRead, activity] {
-            if !seen.contains(&needed) {
-                problems.push(format!("{hook} needs {} as well", needed.name()));
-            }
-        }
-        if o.get("personalSettings").is_none() {
+        if permission.hook() == Some(Hook::Personal) && o.get("personalSettings").is_none() {
             problems
-                .push(format!(r#"{hook} needs "personalSettings", which users connect it with"#));
+                .push(format!(r#"{name} needs "personalSettings", which users connect it with"#));
         }
     }
     problems
 }
 
 /// The problems with permission request `r`, found at `at` in the manifest. Adds its permission
-/// to `seen`, so a later request for the same one is reported.
+/// to `seen` unless it is there already, so a later request for the same one is reported.
 fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>) -> Vec<String> {
     let Some(permission) =
         r.get("permission").and_then(Value::as_str).and_then(Permission::from_name)
@@ -140,8 +121,9 @@ fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>
     let mut problems = unknown_keys(at, r, &REQUEST_KEYS);
     if seen.contains(&permission) {
         problems.push(format!("{at}: {} is requested twice", permission.name()));
+    } else {
+        seen.push(permission);
     }
-    seen.push(permission);
     if !r.get("required").is_some_and(Value::is_boolean) {
         problems.push(format!(r#"{at}: "required" must be true or false"#));
     }

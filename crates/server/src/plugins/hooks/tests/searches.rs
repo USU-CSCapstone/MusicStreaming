@@ -4,7 +4,7 @@ use jewelcase_plugins::Event;
 use jewelcase_plugins::Permission::{LibraryRead, SearchActivity, Searched};
 use serde_json::json;
 
-use super::{HANDLED, Hook, connected, deliver, one, plan, setup};
+use super::{HANDLED, connected, deliver, one, plan, setup};
 use crate::db::{Database, now_ms};
 use crate::plugins::Plugins;
 use crate::plugins::personal::{SharingRefused, disconnect, set_search_sharing};
@@ -152,6 +152,31 @@ async fn searches_need_search_activity_as_well_as_the_hook() {
     assert!(deliver(&db, 0, HANDLED).await.is_empty());
 }
 
+/// Without the hook itself, neither a search nor a request to forget reaches the plugin.
+#[tokio::test]
+async fn searches_and_requests_to_forget_need_the_hook() {
+    let (_temp, db, plugins) = setup().await;
+    let since = sharing(&plugins, &db).await;
+    grant(&plugins, "plugin", &[SearchActivity], &[LibraryRead]).await;
+    searched(&db, 2, 7, "kept", since, 1).await;
+    assert!(deliver(&db, 0, HANDLED).await.is_empty(), "a search");
+    let stopped = db.write(|tx| set_search_sharing(tx, "plugin", 7, false, false)).await.unwrap();
+    assert!(stopped.is_ok());
+    assert!(deliver(&db, 0, HANDLED).await.is_empty(), "a request to forget");
+}
+
+/// A request to forget carries nothing of the user's, so it needs only the hook.
+#[tokio::test]
+async fn a_request_to_forget_needs_only_the_hook() {
+    let (_temp, db, plugins) = setup().await;
+    sharing(&plugins, &db).await;
+    grant(&plugins, "plugin", &[Searched], &[]).await;
+    let stopped = db.write(|tx| set_search_sharing(tx, "plugin", 7, false, false)).await.unwrap();
+    assert!(stopped.is_ok());
+    let told = one(deliver(&db, 0, HANDLED).await, 7);
+    assert!(matches!(told, Event::SearchesForgotten(None)), "{told:?}");
+}
+
 #[tokio::test]
 async fn sharing_is_turned_on_only_by_a_connected_user_of_a_plugin_allowed_searches() {
     let (_temp, db, plugins) = setup().await;
@@ -198,7 +223,7 @@ async fn sharing_is_turned_on_only_by_a_connected_user_of_a_plugin_allowed_searc
 #[tokio::test]
 async fn who_stopped_sharing_is_read_from_the_stopped_events_index() {
     let (_temp, db, _plugins) = setup().await;
-    let steps = plan(&db, Hook::Searched).await;
+    let steps = plan(&db, Searched).await;
     let stopped = "SCAN search_events USING COVERING INDEX search_events_stopped";
     assert!(steps.iter().any(|step| step == stopped), "{steps:#?}");
     assert!(!steps.iter().any(|step| step.contains("TEMP B-TREE")), "{steps:#?}");

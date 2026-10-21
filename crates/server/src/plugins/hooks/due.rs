@@ -1,27 +1,32 @@
-//! Which hooks are due, and the event each delivers.
+//! Which hooks are due, and how each one's event is read.
 //!
-//! A hook is due for a plugin in a library when the plugin is enabled there, the hook (and the
-//! permission its events need) is granted, it is not waiting to retry a failure, and there is
-//! something past its position: changes of the kind it asked for, a finished scan, its interval gone by, plays ended
-//! by a user who connected it, a play one of them has just started and is still playing, or
-//! searches by a user who shares them with it. Each user has a position of their own in
-//! `played`, `playing`, and `searched`.
+//! A hook is due for a plugin in a library when the plugin is enabled there, the hook and the
+//! permissions it needs ([`Permission::needs`]) are granted, it is not waiting to retry a
+//! failure, and there is something past its position: changes of the kind it asked for, a
+//! finished scan, its interval gone by, plays ended by a user who connected it, a play one of
+//! them has just started and is still playing, or searches by a user who shares them with it.
+//! Each user has a position of their own in the personal hooks ([`Hook::Personal`]).
 
-use jewelcase_plugins::{Changes, Event, ScanFinished};
-use rusqlite::{Connection, OptionalExtension, params};
+use jewelcase_plugins::{Event, Hook, Permission};
+use rusqlite::{Connection, params};
 
+use super::Due;
+use super::changes::{changed, scans};
 use super::playing::{deliverable, playing};
 use super::plays::plays;
 use super::searches::searches;
-use super::{BATCH, Due, Hook};
+
+/// Reads what a due hook delivers at the time given: the position once it is handled, and its
+/// event. No event means nothing for the plugin, and the position moves on anyway.
+pub(super) type Read = fn(&Connection, &Due, i64) -> rusqlite::Result<(i64, Option<Event>)>;
 
 /// The pair's position in the hook `?2`, its failures, outages and outage start, and the user
-/// it is for. `per_user` pairs it with each user who connected the plugin, as `s`; otherwise the
-/// user is 0.
-fn position(per_user: bool) -> String {
-    let (users, user) = match per_user {
-        true => ("JOIN plugin_connections s ON s.plugin_id = p.plugin_id", "s.user_id"),
-        false => ("", "0"),
+/// it is for. A personal hook pairs it with each user who connected the plugin, as `s`; a
+/// library hook's user is 0.
+fn position(hook: Hook) -> String {
+    let (users, user) = match hook {
+        Hook::Personal => ("JOIN plugin_connections s ON s.plugin_id = p.plugin_id", "s.user_id"),
+        Hook::Library => ("", "0"),
     };
     format!(
         "coalesce(c.position, 0), coalesce(c.failures, 0), coalesce(c.outages, 0), c.outage_since, \
@@ -32,12 +37,26 @@ fn position(per_user: bool) -> String {
     )
 }
 
-/// Granted to the pair's plugin, in the pair's library or to the plugin itself (library 0).
-fn granted(permission: &str) -> String {
-    format!(
-        "EXISTS (SELECT 1 FROM plugin_grants g WHERE g.plugin_id = p.plugin_id \
-         AND g.library_id IN (0, p.library_id) AND g.permission = '{permission}')"
-    )
+/// Each of `permissions` granted to the pair's plugin, in the pair's library or to the plugin
+/// itself (library 0), as conditions to add to a `WHERE`. The names are written into the SQL
+/// rather than bound: they are serde's names for the enum's variants, a closed set, so no outside
+/// text reaches the query.
+fn granted(permissions: &[Permission]) -> String {
+    permissions
+        .iter()
+        .map(|permission| {
+            format!(
+                " AND EXISTS (SELECT 1 FROM plugin_grants g WHERE g.plugin_id = p.plugin_id \
+                 AND g.library_id IN (0, p.library_id) AND g.permission = '{}')",
+                permission.name()
+            )
+        })
+        .collect()
+}
+
+/// `hook` granted, and every permission it needs ([`Permission::needs`]).
+fn hook_granted(hook: Permission) -> String {
+    granted(&[hook]) + &granted(hook.needs())
 }
 
 const READY: &str = "p.enabled AND (c.retry_at IS NULL OR c.retry_at <= ?1)";
@@ -46,11 +65,12 @@ const READY: &str = "p.enabled AND (c.retry_at IS NULL OR c.retry_at <= ?1)";
 /// and user.
 pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
     let mut due = Vec::new();
-    for (hook, sql) in queries() {
+    for (hook, sql, read) in hooks() {
         let mut statement = conn.prepare_cached(&sql)?;
         let pairs = statement.query_map(params![now, hook.name()], |row| {
             Ok(Due {
                 hook,
+                read,
                 plugin: row.get(0)?,
                 library: row.get(1)?,
                 position: row.get(2)?,
@@ -65,65 +85,61 @@ pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
     Ok(due)
 }
 
-/// Each hook's query for the pairs it is due for, given the time as `?1` and the hook's name
-/// as `?2`: the plugin, the library, the position, the failures, the outages, when they began,
-/// and the user.
-pub(super) fn queries() -> [(Hook, String); 8] {
-    let pair = position(false);
+/// Each hook, with its query for the pairs it is due for and how its event is read. The query
+/// is given the time as `?1` and the hook's name as `?2`, and finds the plugin, the library, the
+/// position, the failures, the outages, when they began, and the user.
+pub(super) fn hooks() -> [(Permission, String, Read); 8] {
+    use Permission::*;
+    let pair = position(Hook::Library);
     // Changes of one kind of entity in the library, for the hook that asked for them.
-    let changes = |hook: &str, entity: &str| {
+    let changes = |hook: Permission, entity: &str| {
         format!(
-            "SELECT p.plugin_id, p.library_id, {pair} WHERE {READY} AND {} AND {} \
+            "SELECT p.plugin_id, p.library_id, {pair} WHERE {READY}{} \
              AND EXISTS (SELECT 1 FROM library_changes f \
                          WHERE f.library_id = p.library_id AND f.entity_type = '{entity}' \
                          AND f.seq > coalesce(c.position, 0))",
-            granted(hook),
-            granted("libraryRead"),
+            hook_granted(hook),
         )
     };
     // Only scans finished before now, so one finishing this millisecond is never skipped.
-    let scans = format!(
-        "SELECT p.plugin_id, p.library_id, {pair} WHERE {READY} AND {} AND {} \
+    let finished = format!(
+        "SELECT p.plugin_id, p.library_id, {pair} WHERE {READY}{} \
          AND EXISTS (SELECT 1 FROM scans s WHERE s.library_id = p.library_id \
                      AND s.state = 'completed' AND s.finished_at > coalesce(c.position, 0) \
                      AND s.finished_at < ?1)",
-        granted("scanFinished"),
-        granted("libraryRead"),
+        hook_granted(ScanFinished),
     );
     // At once if it has never run; after that at the interval from its manifest.
-    let schedules = format!(
-        "SELECT p.plugin_id, p.library_id, {pair} WHERE {READY} AND {} \
+    let scheduled = format!(
+        "SELECT p.plugin_id, p.library_id, {pair} WHERE {READY}{} \
          AND (c.position IS NULL OR c.position + 60000 * \
               (SELECT json_extract(r.value, '$.everyMinutes') \
                FROM plugins pl, json_each(pl.manifest, '$.permissions') r \
-               WHERE pl.id = p.plugin_id AND json_extract(r.value, '$.permission') = 'schedule') <= ?1)",
-        granted("schedule"),
+               WHERE pl.id = p.plugin_id AND json_extract(r.value, '$.permission') = ?2) <= ?1)",
+        hook_granted(Schedule),
     );
     // For each user who connected it, plays they ended in the library since they did.
-    let played = format!(
-        "SELECT p.plugin_id, p.library_id, {} WHERE {READY} AND {} AND {} AND {} \
+    let ended = format!(
+        "SELECT p.plugin_id, p.library_id, {} WHERE {READY}{} \
          AND EXISTS (SELECT 1 FROM play_events e WHERE e.library_id = p.library_id \
                      AND e.user_id = s.user_id AND e.kind = 'ended' \
                      AND e.seq > coalesce(c.position, 0) AND e.reported_at >= s.connected_at)",
-        position(true),
-        granted("played"),
-        granted("listeningActivity"),
-        granted("libraryRead"),
+        position(Hook::Personal),
+        hook_granted(Played),
     );
     // For each user who connected it, a play they started in the library that is still fresh.
-    let playing = format!(
-        "SELECT p.plugin_id, p.library_id, {} WHERE {READY} AND {} AND {} AND {} \
+    let started = format!(
+        "SELECT p.plugin_id, p.library_id, {} WHERE {READY}{} \
          AND EXISTS (SELECT 1 FROM play_events st \
                      JOIN plays pl ON pl.user_id = st.user_id AND pl.id = st.play_id WHERE {})",
-        position(true),
-        granted("playing"),
-        granted("listeningActivity"),
-        granted("libraryRead"),
+        position(Hook::Personal),
+        hook_granted(Playing),
         deliverable("p.library_id", "s.user_id", "coalesce(c.position, 0)"),
     );
     // For each user who shares their searches with it, what they searched or removed since; and
-    // for each who stopped, the request to forget, which needs only the hook.
-    let searched = format!(
+    // for each who stopped, the request to forget. The hook's grant holds for both, but what it
+    // needs holds only for the searches: a request to forget carries nothing of the user's.
+    let shared = format!(
         "SELECT p.plugin_id, p.library_id, coalesce(c.position, 0), coalesce(c.failures, 0), \
                 coalesce(c.outages, 0), c.outage_since, u.user_id FROM plugin_libraries p \
          JOIN (SELECT plugin_id, user_id FROM plugin_connections \
@@ -133,117 +149,44 @@ pub(super) fn queries() -> [(Hook, String); 8] {
          LEFT JOIN plugin_connections s ON s.plugin_id = p.plugin_id AND s.user_id = u.user_id \
          LEFT JOIN plugin_cursors c ON c.plugin_id = p.plugin_id \
               AND c.library_id = p.library_id AND c.hook = ?2 AND c.user_id = u.user_id \
-         WHERE {READY} AND {} \
+         WHERE {READY}{} \
          AND EXISTS (SELECT 1 FROM search_events e WHERE e.library_id = p.library_id \
                      AND e.user_id = u.user_id AND e.seq > coalesce(c.position, 0) \
-                     AND ((e.kind <> 'stopped' AND e.created_at >= s.searches_shared_at AND {} AND {}) \
+                     AND ((e.kind <> 'stopped' AND e.created_at >= s.searches_shared_at{}) \
                           OR (e.kind = 'stopped' AND e.plugin_id = p.plugin_id)))",
-        granted("searched"),
-        granted("searchActivity"),
-        granted("libraryRead"),
+        granted(&[Searched]),
+        granted(Searched.needs()),
     );
     [
-        (Hook::TracksChanged, changes("tracksChanged", "track")),
-        (Hook::AlbumsChanged, changes("albumsChanged", "album")),
-        (Hook::ArtistsChanged, changes("artistsChanged", "artist")),
-        (Hook::ScanFinished, scans),
-        (Hook::Schedule, schedules),
-        (Hook::Played, played),
-        (Hook::Playing, playing),
-        (Hook::Searched, searched),
-    ]
-}
-
-/// What `due` delivers: the position once it is handled, and its event. No event means
-/// nothing for the plugin, and the position moves on anyway.
-pub fn event(conn: &Connection, due: &Due, now: i64) -> rusqlite::Result<(i64, Option<Event>)> {
-    Ok(match due.hook {
-        Hook::TracksChanged => {
-            let (next, changes) = batch(conn, due.library, due.position, "track")?;
-            (next, changes.map(Event::TracksChanged))
-        }
-        Hook::AlbumsChanged => {
-            let (next, changes) = batch(conn, due.library, due.position, "album")?;
-            (next, changes.map(Event::AlbumsChanged))
-        }
-        Hook::ArtistsChanged => {
-            let (next, changes) = batch(conn, due.library, due.position, "artist")?;
-            (next, changes.map(Event::ArtistsChanged))
-        }
-        Hook::ScanFinished => match scans(conn, due.library, due.position, now)? {
-            Some((next, totals)) => (next, Some(Event::ScanFinished(totals))),
-            None => (due.position, None),
-        },
-        Hook::Schedule => (now, Some(Event::Scheduled)),
-        Hook::Played => {
+        (TracksChanged, changes(TracksChanged, "track"), |conn, due, _| {
+            changed(conn, due, "track", Event::TracksChanged)
+        }),
+        (AlbumsChanged, changes(AlbumsChanged, "album"), |conn, due, _| {
+            changed(conn, due, "album", Event::AlbumsChanged)
+        }),
+        (ArtistsChanged, changes(ArtistsChanged, "artist"), |conn, due, _| {
+            changed(conn, due, "artist", Event::ArtistsChanged)
+        }),
+        (ScanFinished, finished, |conn, due, now| {
+            Ok(match scans(conn, due.library, due.position, now)? {
+                Some((next, totals)) => (next, Some(Event::ScanFinished(totals))),
+                None => (due.position, None),
+            })
+        }),
+        (Schedule, scheduled, |_, _, now| Ok((now, Some(Event::Scheduled)))),
+        (Played, ended, |conn, due, _| {
             let (next, plays) = plays(conn, &due.plugin, due.library, due.user, due.position)?;
-            (next, (!plays.is_empty()).then_some(Event::Played(plays)))
-        }
-        Hook::Searched => searches(conn, &due.plugin, due.library, due.user, due.position)?,
+            Ok((next, (!plays.is_empty()).then_some(Event::Played(plays))))
+        }),
         // One that ended or went stale since it was found due is no longer news.
-        Hook::Playing => {
-            match playing(conn, &due.plugin, due.library, due.user, due.position, now)? {
+        (Playing, started, |conn, due, now| {
+            Ok(match playing(conn, &due.plugin, due.library, due.user, due.position, now)? {
                 Some((next, started)) => (next, Some(Event::Playing(started))),
                 None => (due.position, None),
-            }
-        }
-    })
-}
-
-/// The next batch of changes to `library`'s entities of type `entity` (`track`, `album`, or
-/// `artist`) after `position`: the position after it, and the IDs it names, if there are any.
-pub fn batch(
-    conn: &Connection,
-    library: i64,
-    position: i64,
-    entity: &str,
-) -> rusqlite::Result<(i64, Option<Changes>)> {
-    let rows: Vec<(i64, i64, String)> = conn
-        .prepare_cached(
-            "SELECT seq, entity_id, op FROM library_changes \
-             WHERE library_id = ?1 AND entity_type = ?2 AND seq > ?3 ORDER BY seq LIMIT ?4",
-        )?
-        .query_map(params![library, entity, position, BATCH], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-    let Some(&(next, ..)) = rows.last() else { return Ok((position, None)) };
-    let mut changes = Changes { changed: Vec::new(), removed: Vec::new() };
-    for (_, id, op) in rows {
-        match op.as_str() {
-            "delete" => changes.removed.push(id as u64),
-            _ => changes.changed.push(id as u64),
-        }
-    }
-    Ok((next, Some(changes)))
-}
-
-/// The scans of `library` completed after `position` and before now, added together, and
-/// when the last of them finished.
-fn scans(
-    conn: &Connection,
-    library: i64,
-    position: i64,
-    now: i64,
-) -> rusqlite::Result<Option<(i64, ScanFinished)>> {
-    conn.prepare_cached(
-        "SELECT max(finished_at), sum(files_seen), sum(added), sum(updated), sum(moved), \
-                sum(missing), sum(problems) FROM scans \
-         WHERE library_id = ?1 AND state = 'completed' AND finished_at > ?2 AND finished_at < ?3 \
-         HAVING count(*) > 0",
-    )?
-    .query_row(params![library, position, now], |row| {
-        Ok((
-            row.get(0)?,
-            ScanFinished {
-                files_seen: row.get(1)?,
-                added: row.get(2)?,
-                updated: row.get(3)?,
-                moved: row.get(4)?,
-                missing: row.get(5)?,
-                problems: row.get(6)?,
-            },
-        ))
-    })
-    .optional()
+            })
+        }),
+        (Searched, shared, |conn, due, _| {
+            searches(conn, &due.plugin, due.library, due.user, due.position)
+        }),
+    ]
 }

@@ -6,10 +6,11 @@ use jewelcase_plugins::Permission::{ListeningActivity, Played, Playing};
 use jewelcase_plugins::PlayEnd::{Finished, Skipped};
 use serde_json::json;
 
-use super::super::due::event;
+use super::super::MAX_FAILURES;
 use super::super::playing::FRESH_MS;
-use super::super::{Due, Hook, MAX_FAILURES};
-use super::{HANDLED, HOUR, connected, deliver, one, plan, play, setup, start, tracks_by_user};
+use super::{
+    HANDLED, HOUR, connected, deliver, due_for, one, plan, play, setup, start, tracks_by_user,
+};
 use crate::plugins::personal::disconnect;
 use crate::plugins::testing::{connect, install, manifest};
 
@@ -66,18 +67,9 @@ async fn a_connection_to_another_plugin_sends_this_one_nothing() {
     // Found due just before they disconnected it, so only the other connection is left.
     start(&db, "now", 7, 11, 1000).await;
     db.write(|tx| disconnect(tx, "plugin", 7)).await.unwrap();
-    for hook in [Hook::Played, Hook::Playing] {
-        let due = Due {
-            hook,
-            plugin: "plugin".into(),
-            library: 1,
-            position: 0,
-            failures: 0,
-            outages: 0,
-            outage_since: None,
-            user: 7,
-        };
-        let (_, nothing) = db.read(move |conn| event(conn, &due, 1000)).await.unwrap();
+    for hook in [Played, Playing] {
+        let due = due_for(hook, 7);
+        let (_, nothing) = db.read(move |conn| (due.read)(conn, &due, 1000)).await.unwrap();
         assert!(nothing.is_none(), "{hook:?} after disconnecting: {nothing:?}");
     }
 }
@@ -187,17 +179,8 @@ async fn a_start_that_ended_or_went_stale_is_never_delivered() {
     .unwrap();
     assert!(deliver(&db, later, HANDLED).await.is_empty(), "skipped before it could be announced");
     // Found due just before it ended, it is read as nothing to deliver.
-    let gone = Due {
-        hook: Hook::Playing,
-        plugin: "plugin".into(),
-        library: 1,
-        position: 0,
-        failures: 0,
-        outages: 0,
-        outage_since: None,
-        user: 7,
-    };
-    let (position, nothing) = db.read(move |conn| event(conn, &gone, later)).await.unwrap();
+    let gone = due_for(Playing, 7);
+    let (position, nothing) = db.read(move |conn| (gone.read)(conn, &gone, later)).await.unwrap();
     assert!(nothing.is_none() && position == 0, "nothing to deliver, so nothing moves");
 
     // A device catching up after being offline reports its plays already ended.
@@ -263,7 +246,7 @@ async fn clearing_old_starts_reads_only_them() {
 async fn each_listening_hook_reads_only_its_own_kind_of_play_event() {
     let (_temp, db, _plugins) = setup().await;
     let feed = "USING INDEX play_events_feed (library_id=? AND user_id=? AND kind=? AND seq>?)";
-    for (hook, event) in [(Hook::Played, "SEARCH e "), (Hook::Playing, "SEARCH st ")] {
+    for (hook, event) in [(Played, "SEARCH e "), (Playing, "SEARCH st ")] {
         let steps = plan(&db, hook).await;
         let reads = |step: &String| step.starts_with(event) && step.ends_with(feed);
         assert!(steps.iter().any(reads), "{hook:?}: {steps:#?}");

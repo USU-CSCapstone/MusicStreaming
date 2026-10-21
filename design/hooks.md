@@ -11,7 +11,7 @@ Its companions are [`imports.md`](imports.md), covering what a plugin can call, 
 
 ## 1. Built Hooks
 
-**Eight hooks are built, each approved like a permission** ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)). The dispatcher is `crates/server/src/plugins/hooks.rs`, and the contract is [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.1`. A plugin learns a hook was granted only by its event arriving: `host.granted` names the permissions its imports check, and no hook, so a new hook never changes that type.
+**Eight hooks are built, each approved like a permission** ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)). The dispatcher is `crates/server/src/plugins/hooks.rs`. What each hook also needs comes from `Permission::needs`, which install and the dispatcher both read, and whether it is personal from `Permission::hook`, which install reads ([`permission.rs`](../crates/plugins/src/manifest/permission.rs)). The contract is [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.1`. A plugin learns a hook was granted only by its event arriving: `host.granted` names the permissions its imports check, and no hook, so a new hook never changes that type.
 
 | Hook (manifest / WIT) | Delivers | Granted | Also needs |
 |---|---|---|---|
