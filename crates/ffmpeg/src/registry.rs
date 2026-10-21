@@ -5,8 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use nix::sys::signal::{Signal, kill};
-use nix::unistd::Pid;
+use rustix::process::{Pid, Signal, kill_process};
 
 /// How long a child may go without progress before the watchdog kills it. A PCM decode makes
 /// progress with every read of its output; a probe or an image decode records none, so for them
@@ -25,7 +24,7 @@ struct Entry {
 }
 
 struct State {
-    children: HashMap<u32, Entry>,
+    children: HashMap<Pid, Entry>,
     paused: bool,
 }
 
@@ -71,30 +70,36 @@ impl Registry {
         // correctness property.
     }
 
-    pub(crate) fn register(&self, pid: u32) -> Arc<AtomicBool> {
+    /// Add the child `pid` to the pool, stopped at once if the pool is paused. Returns the flag the
+    /// watchdog sets if it kills the child as stalled. The caller must [`Registry::unregister`]
+    /// the child before reaping it, as [`crate::pooled::Pooled`] does.
+    pub(crate) fn register(&self, pid: Pid) -> Arc<AtomicBool> {
         let stalled = Arc::new(AtomicBool::new(false));
         let mut state = self.state.lock().unwrap();
         state
             .children
             .insert(pid, Entry { last_progress: Instant::now(), stalled: stalled.clone() });
         if state.paused {
-            // Born into a paused pool: stop it immediately.
-            let _ = kill(Pid::from_raw(pid as i32), Signal::SIGSTOP);
+            send(pid, Signal::STOP);
         }
         stalled
     }
 
-    pub(crate) fn progress(&self, pid: u32) {
+    /// Record that the child `pid` made progress, restarting its stall clock.
+    pub(crate) fn progress(&self, pid: Pid) {
         if let Some(entry) = self.state.lock().unwrap().children.get_mut(&pid) {
             entry.last_progress = Instant::now();
         }
     }
 
-    pub(crate) fn unregister(&self, pid: u32) {
+    /// Remove the child `pid` from the pool, freeing its slot. After this returns, nothing here
+    /// signals that pid again.
+    pub(crate) fn unregister(&self, pid: Pid) {
         self.state.lock().unwrap().children.remove(&pid);
         self.slot_free.notify_all();
     }
 
+    /// Kill every child that has gone [`STALL_TIMEOUT`] without progress, marking it stalled.
     fn reap_stalled(&self) {
         let state = self.state.lock().unwrap();
         if state.paused {
@@ -103,9 +108,9 @@ impl Registry {
         let now = Instant::now();
         for (pid, entry) in &state.children {
             if now.duration_since(entry.last_progress) > STALL_TIMEOUT {
-                tracing::warn!(pid, "ffmpeg stalled; killing");
+                tracing::warn!(pid = pid.as_raw_pid(), "ffmpeg stalled; killing");
                 entry.stalled.store(true, Ordering::SeqCst);
-                let _ = kill(Pid::from_raw(*pid as i32), Signal::SIGKILL);
+                send(*pid, Signal::KILL);
             }
         }
     }
@@ -116,7 +121,7 @@ impl Registry {
         let mut state = self.state.lock().unwrap();
         state.paused = true;
         for pid in state.children.keys() {
-            let _ = kill(Pid::from_raw(*pid as i32), Signal::SIGSTOP);
+            send(*pid, Signal::STOP);
         }
     }
 
@@ -128,9 +133,20 @@ impl Registry {
         let now = Instant::now();
         for (pid, entry) in state.children.iter_mut() {
             entry.last_progress = now;
-            let _ = kill(Pid::from_raw(*pid as i32), Signal::SIGCONT);
+            send(*pid, Signal::CONT);
         }
         drop(state);
         self.slot_free.notify_all();
     }
 }
+
+/// Send `signal` to the registered child `pid`, logging a failure. Callers hold the registry's
+/// lock, which is what lets [`Registry::unregister`] promise no signal once it returns.
+fn send(pid: Pid, signal: Signal) {
+    if let Err(error) = kill_process(pid, signal) {
+        tracing::warn!(pid = pid.as_raw_pid(), ?signal, %error, "could not signal ffmpeg");
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
+use crate::pooled::Pooled;
 use crate::{Config, Error, Registry, input};
 
 /// The first audio stream's properties.
@@ -53,29 +54,17 @@ pub(crate) fn probe(
     registry: &Arc<Registry>,
     path: &Path,
 ) -> Result<ProbeInfo, Error> {
-    registry.acquire();
-    let child = Command::new(&config.ffprobe)
-        .args(["-v", "error", "-print_format", "json", "-show_streams", "-show_format"])
-        .args(input(path))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| Error::Spawn { binary: config.ffprobe.clone(), source: e })?;
-    let pid = child.id();
-    let stalled = registry.register(pid);
-    let out = child.wait_with_output();
-    registry.unregister(pid);
-    let out = out?;
-    if stalled.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err(Error::Stalled);
-    }
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
-        return Err(Error::exited(out.status, stderr));
-    }
-    let parsed: Output =
-        serde_json::from_slice(&out.stdout).map_err(|e| Error::Probe(e.to_string()))?;
+    let child = Pooled::spawn(
+        registry,
+        Command::new(&config.ffprobe)
+            .args(["-v", "error", "-print_format", "json", "-show_streams", "-show_format"])
+            .args(input(path))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )?;
+    let out = child.output()?;
+    let parsed: Output = serde_json::from_slice(&out).map_err(|e| Error::Probe(e.to_string()))?;
     let stream = parsed
         .streams
         .into_iter()

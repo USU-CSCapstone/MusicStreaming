@@ -4,8 +4,8 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
+use crate::pooled::Pooled;
 use crate::{Config, Error, Registry, input};
 
 /// Decoded pixels: `width × height` of them, row by row, four bytes each (RGBA).
@@ -52,23 +52,8 @@ pub(crate) fn decode_image(
     path: &Path,
     max_side: u32,
 ) -> Result<Rgba, Error> {
-    registry.acquire();
-    let child = command(config, path, max_side, PAM)
-        .spawn()
-        .map_err(|e| Error::Spawn { binary: config.ffmpeg.clone(), source: e })?;
-    let pid = child.id();
-    let stalled = registry.register(pid);
-    let out = child.wait_with_output();
-    registry.unregister(pid);
-    let out = out?;
-    if stalled.load(Ordering::SeqCst) {
-        return Err(Error::Stalled);
-    }
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-        return Err(Error::exited(out.status, stderr));
-    }
-    parse_pam(&out.stdout)
+    let out = Pooled::spawn(registry, &mut command(config, path, max_side, PAM))?.output()?;
+    parse_pam(&out)
         .filter(|image| image.width <= max_side as usize && image.height <= max_side as usize)
         .ok_or_else(|| Error::Image("ffmpeg's output was not the expected PAM".into()))
 }

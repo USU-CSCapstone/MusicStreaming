@@ -13,6 +13,7 @@ mod decode;
 mod error;
 mod image;
 mod input;
+mod pooled;
 mod probe;
 mod registry;
 mod stderr;
