@@ -22,10 +22,14 @@ use crate::scan::{ScanContext, ScanOptions, run_scan};
 use crate::store::{Batch, FeedEntry, MemoryStore, Store};
 use crate::types::*;
 
+#[cfg(test)]
+mod hooked;
 mod jobs;
 mod reanalysis;
 mod shutdown;
 mod unread;
+#[cfg(test)]
+pub(crate) use hooked::Hooked;
 pub use jobs::*;
 pub use reanalysis::*;
 pub use shutdown::*;

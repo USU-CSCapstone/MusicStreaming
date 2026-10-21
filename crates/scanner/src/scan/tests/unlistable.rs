@@ -1,5 +1,5 @@
-//! A folder the walk cannot list counts as one problem, once the cursor passes it or a cancel
-//! ends the scan, however often the scan resumes (`design/scanning.md` §9, §13).
+//! A folder the walk cannot list counts as one problem, once the cursor passes it or the scan
+//! ends, however often the scan resumes (`design/scanning.md` §9, §13).
 
 use std::fs::Permissions;
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -61,8 +61,13 @@ fn an_unlistable_folder_is_counted_once_across_resumes() {
         }
         Ok(())
     };
-    let store =
-        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: || Ok(()) };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply: || Ok(()),
+        on_lookup,
+        on_under: || Ok(()),
+        on_scan_write: || Ok(()),
+    };
     let mut row = new_scan(&store, &lib);
     let mut stopped = Vec::new();
     for _ in &stop_at {
@@ -100,8 +105,13 @@ fn a_cancel_counts_an_unlistable_folder_it_passed() {
         }
         Ok(())
     };
-    let store =
-        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: || Ok(()) };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply: || Ok(()),
+        on_lookup,
+        on_under: || Ok(()),
+        on_scan_write: || Ok(()),
+    };
     let mut scan = new_scan(&store, &lib);
     run(&store, &lib, &mut scan, &batches_of(1000), &stops);
 
@@ -113,7 +123,8 @@ fn a_cancel_counts_an_unlistable_folder_it_passed() {
 /// An unlistable folder met in a scope whose root went before reconcile counts once a later scope
 /// moves the cursor past it, and one met as a scope's walk ends counts then, each once. The first
 /// root completes, counting B, D, and its symlink L; the second goes as its walk is flushed,
-/// counting B and leaving D until the last scope, L itself, refused, moves the cursor.
+/// counting B and leaving D until the last scope, L itself, refused, moves the cursor. The second
+/// root is left for a retry to walk again, since no resume from the cursor would.
 #[test]
 fn unlistable_folders_count_once_the_cursor_passes_their_scope() {
     let tmp = tempfile::tempdir().unwrap();
@@ -138,23 +149,32 @@ fn unlistable_folders_count_once_the_cursor_passes_their_scope() {
         }
         Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup, on_under: || Ok(()) };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply,
+        on_lookup,
+        on_under: || Ok(()),
+        on_scan_write: || Ok(()),
+    };
     let link = Scope::folder(&kept, kept.join("A/L"), Depth::Subtree);
     let scopes = vec![Scope::root(&kept), Scope::root(&gone), link];
     let mut scan = Scan { scopes, ..new_scan(&store, &lib) };
-    run(&store, &lib, &mut scan, &batches_of(1000), &Stops::default());
+    let undone = run(&store, &lib, &mut scan, &batches_of(1000), &Stops::default());
     // Put back, so the locked folders are found to restore.
     fs::rename(&away, &gone).unwrap();
 
     let row = only_row(&store, &lib);
     assert_eq!(row.state, ScanState::Suspended);
     assert_eq!(row.progress.problems, 6, "{:?}", row.progress);
+    assert_eq!(undone.unanswered, [Scope::root(&gone)]);
+    assert_eq!(undone.failed, []);
 }
 
 /// A scope whose root goes as its walk is flushed ends the scan suspended with the cursor still
-/// in it, and D, met after its last folder, uncounted, since a resume from there meets it again.
+/// in it, counting D, met after its last folder, as the scan ends, and leaves the scope for a
+/// retry, which counts what it meets for itself.
 #[test]
-fn a_root_gone_after_its_walk_leaves_its_last_unlistable_folder_uncounted() {
+fn a_root_gone_after_its_walk_counts_its_last_unlistable_folder_as_the_scan_ends() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     let Some(_locked) = unlistable_folders(&root) else { return };
@@ -174,13 +194,21 @@ fn a_root_gone_after_its_walk_leaves_its_last_unlistable_folder_uncounted() {
         }
         Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup, on_under: || Ok(()) };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply,
+        on_lookup,
+        on_under: || Ok(()),
+        on_scan_write: || Ok(()),
+    };
     let mut scan = new_scan(&store, &lib);
-    run(&store, &lib, &mut scan, &batches_of(1000), &Stops::default());
+    let undone = run(&store, &lib, &mut scan, &batches_of(1000), &Stops::default());
     // Put back, so the locked folders are found to restore.
     fs::rename(&away, &root).unwrap();
 
     let row = only_row(&store, &lib);
     let ended = (row.state, &row.cursor, row.progress.problems);
-    assert_eq!(ended, (ScanState::Suspended, &after(&root, "C/Z"), 1), "{row:?}");
+    assert_eq!(ended, (ScanState::Suspended, &after(&root, "C/Z"), 2), "{row:?}");
+    assert_eq!(undone.unanswered, [Scope::root(&root)]);
+    assert_eq!(undone.failed, []);
 }

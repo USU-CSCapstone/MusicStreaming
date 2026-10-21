@@ -23,7 +23,13 @@ fn applied_before_last(options: &ScanOptions) -> (usize, Scan) {
         }
         Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup, on_under: || Ok(()) };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply,
+        on_lookup,
+        on_under: || Ok(()),
+        on_scan_write: || Ok(()),
+    };
     let mut scan = new_scan(&store, &lib);
     run(&store, &lib, &mut scan, options, &Stops::default());
     (applied_before_last.load(Ordering::SeqCst), scan)
@@ -68,8 +74,13 @@ fn a_cancel_partway_through_a_folder_stops_there_and_counts_what_it_saw() {
         }
         Ok(())
     };
-    let store =
-        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: || Ok(()) };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply: || Ok(()),
+        on_lookup,
+        on_under: || Ok(()),
+        on_scan_write: || Ok(()),
+    };
     let mut scan = new_scan(&store, &lib);
     run(&store, &lib, &mut scan, &batches_of(1000), &stops);
 

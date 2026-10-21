@@ -38,18 +38,35 @@ pub fn update(store: &SqliteStore, scan: &Scan) -> Result<(), DbError> {
     store.db.write_blocking(move |tx| save(tx, scan.id, &scan))
 }
 
-/// The library's scans that were queued or running when the server last stopped.
+/// The library's scans that were queued or running when the server last stopped. A row that
+/// cannot be read is marked suspended, since it can never resume; if even that fails, the error
+/// is logged and the row is left as it was.
 pub fn interrupted(store: &SqliteStore, lib: i64) -> Result<Vec<Scan>, DbError> {
-    store.db.read_blocking(move |conn| {
+    let (scans, unreadable) = store.db.read_blocking(move |conn| {
         read(conn, lib, "AND state IN ('queued', 'running') ORDER BY created_at, id")
-    })
+    })?;
+    if !unreadable.is_empty() {
+        let suspended = store.db.write_blocking(move |tx| {
+            let mut suspend =
+                tx.prepare("UPDATE scans SET state = 'suspended', finished_at = ?2 WHERE id = ?1")?;
+            for id in unreadable {
+                suspend.execute(params![id, now_ms()])?;
+            }
+            Ok(())
+        });
+        if let Err(error) = suspended {
+            tracing::error!(library = lib, %error, "unreadable scan rows not marked suspended");
+        }
+    }
+    Ok(scans)
 }
 
 #[cfg(test)]
 impl SqliteStore {
     /// All scans for a library, newest first. Only the tests read them until the admin API.
     pub fn scans(&self, library: i64) -> Result<Vec<Scan>, DbError> {
-        self.db.read_blocking(move |conn| read(conn, library, "ORDER BY created_at DESC, id DESC"))
+        let order = "ORDER BY created_at DESC, id DESC";
+        self.db.read_blocking(move |conn| Ok(read(conn, library, order)?.0))
     }
 }
 
@@ -81,9 +98,9 @@ fn save(tx: &Transaction, id: i64, scan: &Scan) -> Result<()> {
     Ok(())
 }
 
-/// The library's scans that `rest`, such as an `ORDER BY`, selects. A row that cannot be read is
-/// logged and left out, so one bad row hides only itself.
-fn read(conn: &Connection, lib: i64, rest: &str) -> Result<Vec<Scan>> {
+/// The library's scans that `rest`, such as an `ORDER BY`, selects, and the ids of those whose
+/// rows cannot be read. Each of those is logged and left out, so one bad row hides only itself.
+fn read(conn: &Connection, lib: i64, rest: &str) -> Result<(Vec<Scan>, Vec<i64>)> {
     let sql = format!(
         "SELECT id, library_id, trigger, state, scopes, cursor_scope, cursor_dir, files_seen, \
          files_processed, added, updated, moved, missing, problems, current_path, started_at, \
@@ -91,14 +108,21 @@ fn read(conn: &Connection, lib: i64, rest: &str) -> Result<Vec<Scan>> {
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([lib], |r| match scan(r) {
-        Ok(found) => Ok(Some(found)),
+        Ok(found) => Ok(Ok(found)),
         Err(error) => {
             let id: i64 = r.get(0)?;
             tracing::error!(library = lib, scan = id, %error, "scan row cannot be read; skipping it");
-            Ok(None)
+            Ok(Err(id))
         }
     })?;
-    rows.filter_map(Result::transpose).collect()
+    let (mut scans, mut unreadable) = (Vec::new(), Vec::new());
+    for row in rows {
+        match row? {
+            Ok(found) => scans.push(found),
+            Err(id) => unreadable.push(id),
+        }
+    }
+    Ok((scans, unreadable))
 }
 
 /// The scan in row `r`, in the columns [`read`] selects.

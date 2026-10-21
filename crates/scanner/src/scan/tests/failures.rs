@@ -33,7 +33,13 @@ fn a_lookup_the_store_fails_suspends_the_scan_before_another_write() {
         }
         Ok(())
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup, on_under: || Ok(()) };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply,
+        on_lookup,
+        on_under: || Ok(()),
+        on_scan_write: || Ok(()),
+    };
     scan_flushing_often(&store.inner, &lib);
 
     let mut scan = new_scan(&store, &lib);
@@ -57,8 +63,13 @@ fn a_problem_list_the_store_fails_suspends_the_scan_before_marking_missing() {
     let lib = library(&root);
     let failing = || Err(StoreError("disk I/O error".into()));
     let on_lookup = |_: &Path| Ok(());
-    let store =
-        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: failing };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply: || Ok(()),
+        on_lookup,
+        on_under: failing,
+        on_scan_write: || Ok(()),
+    };
     scan_flushing_often(&store.inner, &lib);
     fs::remove_file(track(&root, "A/X", 2)).unwrap();
 
@@ -78,8 +89,13 @@ fn a_folder_the_store_cannot_check_counts_as_indexed() {
     make_album(&root, "A", "X", 1);
     let failing = || Err(StoreError("disk I/O error".into()));
     let on_lookup = |_: &Path| Ok(());
-    let store =
-        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: failing };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply: || Ok(()),
+        on_lookup,
+        on_under: failing,
+        on_scan_write: || Ok(()),
+    };
     let governor = Arc::new(Governor::new());
     let scanner = Scanner::start(Arc::new(store), library(&root), governor, batches_of(1));
     assert!(scanner.indexes_under(&root.join("A")));

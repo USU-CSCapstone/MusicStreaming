@@ -31,8 +31,13 @@ fn a_scan_shut_down_partway_through_a_folder_resumes_counting_each_file_once() {
         }
         Ok(())
     };
-    let store =
-        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: || Ok(()) };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply: || Ok(()),
+        on_lookup,
+        on_under: || Ok(()),
+        on_scan_write: || Ok(()),
+    };
     let mut scan = new_scan(&store, &lib);
     run(&store, &lib, &mut scan, &batches_of(2), &stops);
 
@@ -78,7 +83,13 @@ fn a_scan_suspended_partway_through_a_folder_resumes_counting_each_file_once() {
             Ok(())
         }
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup, on_under: || Ok(()) };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply,
+        on_lookup,
+        on_under: || Ok(()),
+        on_scan_write: || Ok(()),
+    };
     let mut scan = new_scan(&store, &lib);
     run(&store, &lib, &mut scan, &batches_of(2), &Stops::default());
 
@@ -94,7 +105,7 @@ fn a_scan_suspended_partway_through_a_folder_resumes_counting_each_file_once() {
 
 /// The resumed scan of [`two_folders`] completed with the progress an uninterrupted scan of the
 /// same files reports, each of its five tracks stored once, and both problems recorded.
-fn assert_resumed_like_an_uninterrupted_scan<F, L>(store: &Hooked<F, L>, lib: &LibraryConfig)
+fn assert_resumed_like_an_uninterrupted_scan<F, L, W>(store: &Hooked<F, L, W>, lib: &LibraryConfig)
 where
     F: Fn() -> Result<(), StoreError> + Send + Sync,
     L: Fn(&Path) -> Result<(), StoreError> + Send + Sync,
@@ -136,8 +147,13 @@ fn a_known_file_that_cannot_be_read_is_counted_once_across_a_resume() {
         }
         Ok(())
     };
-    let store =
-        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: || Ok(()) };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply: || Ok(()),
+        on_lookup,
+        on_under: || Ok(()),
+        on_scan_write: || Ok(()),
+    };
     scan_flushing_often(&store.inner, &lib);
     crate::testing::break_file(&track(&root, "A/X", 1));
 

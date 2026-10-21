@@ -3,95 +3,8 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicUsize;
 
 use super::*;
-use crate::store::{Batch, FileToDecode, IndexedFile, MemoryStore, PickedTrack, StoreError};
-use crate::testing::{library, make_album, write_small_wav};
-
-/// A memory store that runs `on_apply` before applying each batch, `on_lookup` with each path it
-/// looks up, and `on_under` before [`Store::problems_under`] and [`Store::indexes_under`], failing
-/// the call if the hook returns an error, so a test can change the world, or fail, partway
-/// through a scan.
-struct Hooked<F, L> {
-    inner: MemoryStore,
-    on_apply: F,
-    on_lookup: L,
-    on_under: fn() -> Result<(), StoreError>,
-}
-
-impl<F, L> Store for Hooked<F, L>
-where
-    F: Fn() -> Result<(), StoreError> + Send + Sync,
-    L: Fn(&Path) -> Result<(), StoreError> + Send + Sync,
-{
-    fn create_scan(&self, scan: &Scan) -> Result<ScanId, StoreError> {
-        self.inner.create_scan(scan)
-    }
-    fn update_scan(&self, scan: &Scan) -> Result<(), StoreError> {
-        self.inner.update_scan(scan)
-    }
-    fn interrupted_scans(&self, library: LibraryId) -> Result<Vec<Scan>, StoreError> {
-        self.inner.interrupted_scans(library)
-    }
-    fn lookup(&self, library: LibraryId, path: &Path) -> Result<Option<IndexedFile>, StoreError> {
-        (self.on_lookup)(path)?;
-        self.inner.lookup(library, path)
-    }
-    fn apply(&self, library: LibraryId, batch: Batch) -> Result<(), StoreError> {
-        (self.on_apply)()?;
-        self.inner.apply(library, batch)
-    }
-    fn mark_missing_unseen(
-        &self,
-        library: LibraryId,
-        scope: &Scope,
-        scan_id: ScanId,
-        unreadable: &[PathBuf],
-    ) -> Result<i64, StoreError> {
-        self.inner.mark_missing_unseen(library, scope, scan_id, unreadable)
-    }
-    fn problems_under(
-        &self,
-        library: LibraryId,
-        scope: &Scope,
-    ) -> Result<Vec<PathBuf>, StoreError> {
-        (self.on_under)()?;
-        self.inner.problems_under(library, scope)
-    }
-    fn indexes_under(&self, library: LibraryId, folder: &Path) -> Result<bool, StoreError> {
-        (self.on_under)()?;
-        self.inner.indexes_under(library, folder)
-    }
-    fn next_unanalyzed(
-        &self,
-        library: LibraryId,
-        analyzer_version: u32,
-        limit: usize,
-    ) -> Result<Vec<(PickedTrack, FileToDecode)>, StoreError> {
-        self.inner.next_unanalyzed(library, analyzer_version, limit)
-    }
-    fn store_analysis(
-        &self,
-        library: LibraryId,
-        track: PickedTrack,
-        result: AnalysisResult,
-    ) -> Result<(), StoreError> {
-        self.inner.store_analysis(library, track, result)
-    }
-    fn next_without_placeholder(
-        &self,
-        library: LibraryId,
-        limit: usize,
-    ) -> Result<Vec<(Vec<u8>, FileToDecode)>, StoreError> {
-        self.inner.next_without_placeholder(library, limit)
-    }
-    fn store_placeholder(
-        &self,
-        library: LibraryId,
-        hash: &[u8],
-        placeholder: Vec<u8>,
-    ) -> Result<(), StoreError> {
-        self.inner.store_placeholder(library, hash, placeholder)
-    }
-}
+use crate::store::{MemoryStore, StoreError};
+use crate::testing::{Hooked, library, make_album, write_small_wav};
 
 /// The flags that cancel a scan, or shut it down, from inside it.
 #[derive(Default)]
@@ -123,14 +36,14 @@ fn batches_of(batch_size: usize) -> ScanOptions {
 }
 
 /// Runs `scan`, already saved to `store`, with `options`, cancelled or shut down once `stops`
-/// says so.
+/// says so, and returns what it left undone for a retry.
 fn run(
     store: &dyn Store,
     lib: &LibraryConfig,
     scan: &mut Scan,
     options: &ScanOptions,
     stops: &Stops,
-) {
+) -> Undone {
     let ctx = ScanContext {
         store,
         library: lib,
@@ -139,7 +52,7 @@ fn run(
         shutdown: &stops.shutdown,
         options,
     };
-    run_scan(&ctx, scan);
+    run_scan(&ctx, scan)
 }
 
 /// A cursor after the folder `relative` under `root`, in the first scope.
@@ -148,7 +61,7 @@ fn after(root: &Path, relative: &str) -> Option<Cursor> {
 }
 
 /// The one scan row `store` holds.
-fn only_row<F, L>(store: &Hooked<F, L>, lib: &LibraryConfig) -> Scan {
+fn only_row<F, L, W>(store: &Hooked<F, L, W>, lib: &LibraryConfig) -> Scan {
     let [row] = store.inner.scans(lib.id).try_into().unwrap();
     row
 }
@@ -185,8 +98,13 @@ fn a_stop_flushes_the_batch_in_hand() {
         }
         Ok(())
     };
-    let store =
-        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: || Ok(()) };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply: || Ok(()),
+        on_lookup,
+        on_under: || Ok(()),
+        on_scan_write: || Ok(()),
+    };
     let mut scan = new_scan(&store, &lib);
     run(&store, &lib, &mut scan, &batches_of(1000), &stops);
 
@@ -219,6 +137,7 @@ fn a_root_gone_before_reconcile_suspends_and_marks_nothing() {
         on_apply,
         on_lookup: |_: &Path| Ok(()),
         on_under: || Ok(()),
+        on_scan_write: || Ok(()),
     };
     scan_flushing_often(&store.inner, &lib);
 
@@ -251,6 +170,7 @@ fn an_unchanged_file_reads_no_sidecars() {
         on_apply,
         on_lookup: |_: &Path| Ok(()),
         on_under: || Ok(()),
+        on_scan_write: || Ok(()),
     };
     scan_flushing_often(&store.inner, &lib);
 
@@ -286,6 +206,7 @@ fn sidecars_are_read_once_per_directory() {
         on_apply,
         on_lookup: |_: &Path| Ok(()),
         on_under: || Ok(()),
+        on_scan_write: || Ok(()),
     };
     let lib = library(&root);
     let scan = scan_flushing_often(&store, &lib);
@@ -304,4 +225,5 @@ mod excludes;
 mod failures;
 mod panics;
 mod resume;
+mod undone;
 mod unlistable;

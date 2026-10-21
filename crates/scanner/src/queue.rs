@@ -6,20 +6,41 @@
 //! replaces them. A scan that has started, running or resumed from a cursor,
 //! takes no new work, since its walk may already have passed that work, so a
 //! trigger repeated during a scan queues one follow-up scan, not one each time.
+//! The queue decides under its lock and writes scan rows after, so a busy store
+//! holds up only the caller writing. Work a suspended scan left undone is queued
+//! again after a wait ([`retry`]).
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use crate::governor::Governor;
 use crate::scan::{ScanContext, ScanOptions, run_scan};
 use crate::store::Store;
 use crate::types::*;
+use retry::Retry;
+
+mod request;
+#[cfg(test)]
+mod retries;
+mod retry;
+#[cfg(test)]
+mod scan_rows;
 
 struct Queue {
     queued: VecDeque<Scan>,
     running: Option<Scan>,
+    retry: Retry,
+}
+
+impl Queue {
+    /// The queued scan, not yet started, that already covers `scopes`, which a request for them
+    /// joins.
+    fn covering(&self, scopes: &[Scope]) -> Option<ScanId> {
+        self.queued.iter().find(|s| s.cursor.is_none() && s.covers(scopes)).map(|s| s.id)
+    }
 }
 
 struct Inner {
@@ -63,7 +84,11 @@ impl Scanner {
             library: RwLock::new(library),
             governor,
             options,
-            queue: Mutex::new(Queue { queued: VecDeque::new(), running: None }),
+            queue: Mutex::new(Queue {
+                queued: VecDeque::new(),
+                running: None,
+                retry: Retry::new(),
+            }),
             wake: Condvar::new(),
             cancel_running: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
@@ -87,43 +112,9 @@ impl Scanner {
     /// that has not started and already covers it, or a new one, never the
     /// running scan or a resumed one. A new scan cancels the queued scans it
     /// covers. `None` when the store cannot record a new scan: the error is logged and the
-    /// request is dropped, so its work is queued only when a later trigger asks for it again.
+    /// work is queued again after a wait, as a suspended scan's is.
     pub fn request(&self, trigger: Trigger, scopes: Vec<Scope>) -> Option<ScanId> {
-        let scopes = coalesce_scopes(scopes);
-        let mut q = self.inner.queue.lock().unwrap();
-        if let Some(existing) = q.queued.iter().find(|s| s.cursor.is_none() && s.covers(&scopes)) {
-            return Some(existing.id);
-        }
-        let mut scan = Scan {
-            id: 0,
-            library: self.inner.library.read().unwrap().id,
-            trigger,
-            scopes,
-            state: ScanState::Queued,
-            started_at: None,
-            finished_at: None,
-            progress: ScanProgress::default(),
-            cursor: None,
-        };
-        scan.id = match self.inner.store.create_scan(&scan) {
-            Ok(id) => id,
-            Err(error) => {
-                tracing::error!(library = scan.library, ?trigger, %error, "scan not queued");
-                return None;
-            }
-        };
-        q.queued.retain_mut(|queued| {
-            let subsumed = scan.covers(&queued.scopes);
-            if subsumed {
-                self.cancelled(queued);
-            }
-            !subsumed
-        });
-        let id = scan.id;
-        q.queued.push_back(scan);
-        drop(q);
-        self.inner.wake.notify_all();
-        Some(id)
+        self.inner.request(trigger, scopes)
     }
 
     /// Scan every root (`Trigger::Initial`, `Scheduled`, `Reconfigure`, ...). `None` as for
@@ -168,31 +159,41 @@ impl Scanner {
         self.scan_library(Trigger::Reconfigure)
     }
 
-    /// Cancel a queued or running scan. A running scan stops after the file in hand and ends
-    /// cancelled, even if a shutdown follows; everything persisted stays persisted.
+    /// Cancel a queued or running scan, returning whether it is cancelled. A running scan stops
+    /// after the file in hand and ends cancelled, even if a shutdown follows; everything persisted
+    /// stays persisted. A queued scan whose row the store cannot save cancelled goes back in the
+    /// queue, and this returns false.
     pub fn cancel(&self, id: ScanId) -> bool {
+        let (ahead, scan) = {
+            let mut q = self.inner.queue.lock().unwrap();
+            if q.running.as_ref().is_some_and(|s| s.id == id) {
+                self.inner.cancel_running.store(true, Ordering::SeqCst);
+                return true;
+            }
+            let Some(position) = q.queued.iter().position(|s| s.id == id) else {
+                return false;
+            };
+            let ahead: Vec<ScanId> = q.queued.iter().take(position).map(|s| s.id).collect();
+            let Some(scan) = q.queued.remove(position) else {
+                return false;
+            };
+            (ahead, scan)
+        };
+        // An idle check waiting on the queue sees it empty now, or still running. Only a stopped
+        // worker leaves a scan queued with nothing running for longer than it takes to start it,
+        // so this matters only to an idle check after a shutdown.
+        self.inner.wake.notify_all();
+        if self.inner.cancelled(&scan) {
+            return true;
+        }
+        // Back where it was: after the last scan still queued that was ahead of it, whatever has
+        // left the queue meanwhile.
         let mut q = self.inner.queue.lock().unwrap();
-        if q.running.as_ref().is_some_and(|s| s.id == id) {
-            self.inner.cancel_running.store(true, Ordering::SeqCst);
-            return true;
-        }
-        if let Some(mut s) =
-            q.queued.iter().position(|s| s.id == id).and_then(|p| q.queued.remove(p))
-        {
-            self.cancelled(&mut s);
-            return true;
-        }
+        let position = q.queued.iter().rposition(|s| ahead.contains(&s.id)).map_or(0, |p| p + 1);
+        q.queued.insert(position, scan);
+        drop(q);
+        self.inner.wake.notify_all();
         false
-    }
-
-    /// Marks `scan`, already taken off the queue, cancelled and saves it to the store. A row that
-    /// cannot be saved is logged and stays queued, so the next start runs it.
-    fn cancelled(&self, scan: &mut Scan) {
-        scan.state = ScanState::Cancelled;
-        scan.finished_at = Some(std::time::SystemTime::now());
-        if let Err(error) = self.inner.store.update_scan(scan) {
-            tracing::error!(scan = scan.id, %error, "cancelled scan not saved");
-        }
     }
 
     pub fn running(&self) -> Option<Scan> {
@@ -233,8 +234,19 @@ impl Scanner {
             let _ = h.join();
         }
     }
+
+    /// Shortens the wait of the work waiting to be retried to `wait` from now, after which the
+    /// worker queues it, and returns whether any waits.
+    #[cfg(feature = "testing")]
+    pub fn retry_in(&self, wait: std::time::Duration) -> bool {
+        let waits = self.inner.queue.lock().unwrap().retry.hurry(Instant::now() + wait);
+        self.inner.wake.notify_all();
+        waits
+    }
 }
 
+/// Runs the library's scans one at a time, and queues the work waiting to be retried once it is
+/// due, until a shutdown.
 fn worker(inner: Arc<Inner>) {
     loop {
         let mut scan = {
@@ -243,15 +255,39 @@ fn worker(inner: Arc<Inner>) {
                 if inner.shutdown.load(Ordering::SeqCst) {
                     return;
                 }
+                if let Some((trigger, mut scopes)) = q.retry.take_due(Instant::now()) {
+                    drop(q);
+                    // A reconfiguration may have removed a root since the work was left undone.
+                    let library = inner.library.read().unwrap();
+                    scopes.retain(|scope| library.roots.contains(&scope.root));
+                    drop(library);
+                    if scopes.is_empty() {
+                        tracing::debug!(
+                            ?trigger,
+                            "work left undone not retried; its roots have left the library"
+                        );
+                    } else {
+                        inner.request(trigger, scopes);
+                    }
+                    q = inner.queue.lock().unwrap();
+                    continue;
+                }
                 if let Some(mut s) = q.queued.pop_front() {
                     // Running from the moment it leaves the queue, under the same lock, so a
                     // request, cancel, or idle check always finds it in one place or the other.
                     s.state = ScanState::Running;
                     inner.cancel_running.store(false, Ordering::SeqCst);
+                    q.retry.started(&s);
                     q.running = Some(s.clone());
                     break s;
                 }
-                q = inner.wake.wait(q).unwrap();
+                q = match q.retry.due() {
+                    Some(due) => {
+                        let wait = due.saturating_duration_since(Instant::now());
+                        inner.wake.wait_timeout(q, wait).unwrap().0
+                    }
+                    None => inner.wake.wait(q).unwrap(),
+                };
             }
         };
         let library = inner.library.read().unwrap().clone();
@@ -264,7 +300,7 @@ fn worker(inner: Arc<Inner>) {
             options: &inner.options,
         };
         tracing::info!(scan = scan.id, trigger = ?scan.trigger, scopes = scan.scopes.len(), "scan starting");
-        run_scan(&ctx, &mut scan);
+        let undone = run_scan(&ctx, &mut scan);
         if scan.state == ScanState::Running {
             tracing::info!(scan = scan.id, progress = ?scan.progress, "scan stopped for shutdown");
         } else {
@@ -273,6 +309,7 @@ fn worker(inner: Arc<Inner>) {
         {
             let mut q = inner.queue.lock().unwrap();
             q.running = None;
+            q.retry.ended(&scan, undone, Instant::now());
         }
         inner.wake.notify_all();
     }

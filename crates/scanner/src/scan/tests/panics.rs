@@ -43,7 +43,7 @@ fn a_parser_panic_is_a_problem_and_the_scan_completes() {
 
 /// A panic outside parsing, here in the store as B/Y's track is looked up, suspends the scan at
 /// its last flushed cursor with the progress the store holds, after A/X, and the worker goes on
-/// to run the next scan, which completes.
+/// to run the next scan, which completes. Nothing waits to be retried.
 #[test]
 fn a_panic_suspends_the_scan_and_the_worker_runs_the_next() {
     let tmp = tempfile::tempdir().unwrap();
@@ -64,6 +64,7 @@ fn a_panic_suspends_the_scan_and_the_worker_runs_the_next() {
         on_apply: || Ok(()),
         on_lookup,
         on_under: || Ok(()),
+        on_scan_write: || Ok(()),
     });
     let scanner =
         Scanner::start(store.clone(), lib.clone(), Arc::new(Governor::new()), batches_of(1));
@@ -71,20 +72,20 @@ fn a_panic_suspends_the_scan_and_the_worker_runs_the_next() {
     let idle = "the scanner never went idle";
     let panicked = scanner.scan_library(Trigger::Manual).unwrap();
     wait_until(&scanner, idle, Scanner::is_idle);
+    assert!(!scanner.retry_in(Duration::ZERO), "a panic left work to retry");
     let next = scanner.scan_library(Trigger::Manual).unwrap();
     wait_until(&scanner, idle, Scanner::is_idle);
     scanner.shutdown();
 
-    let rows = store.inner.scans(lib.id);
-    let row = |id| rows.iter().find(|s| s.id == id).unwrap();
-    let suspended = row(panicked);
+    let [suspended, next_row] = store.inner.scans(lib.id).try_into().unwrap();
+    assert_eq!((suspended.id, next_row.id), (panicked, next));
     assert_eq!(
         (suspended.state, &suspended.cursor, &suspended.progress),
         (ScanState::Suspended, &after(&root, "A/X"), &one_added()),
         "{suspended:?}"
     );
     assert!(suspended.finished_at.is_some());
-    assert_eq!(row(next).state, ScanState::Completed);
+    assert_eq!(next_row.state, ScanState::Completed);
     assert_eq!(store.inner.tracks(lib.id).len(), 2);
 }
 
@@ -106,8 +107,13 @@ fn a_panic_after_a_cancel_ends_cancelled() {
         }
         Ok(())
     };
-    let store =
-        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: || Ok(()) };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply: || Ok(()),
+        on_lookup,
+        on_under: || Ok(()),
+        on_scan_write: || Ok(()),
+    };
     let mut scan = new_scan(&store, &lib);
     run(&store, &lib, &mut scan, &batches_of(1), &stops);
 
@@ -134,6 +140,7 @@ fn a_failed_batch_suspends_at_the_last_persisted_cursor() {
         on_apply,
         on_lookup: |_: &Path| Ok(()),
         on_under: || Ok(()),
+        on_scan_write: || Ok(()),
     };
     scan_flushing_often(&store, &lib);
 
@@ -161,8 +168,13 @@ fn a_resumed_scan_that_panics_keeps_its_starting_cursor() {
         }
         Ok(())
     };
-    let store =
-        Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup, on_under: || Ok(()) };
+    let store = Hooked {
+        inner: MemoryStore::new(),
+        on_apply: || Ok(()),
+        on_lookup,
+        on_under: || Ok(()),
+        on_scan_write: || Ok(()),
+    };
     let mut resumed = Scan {
         state: ScanState::Running,
         started_at: Some(SystemTime::now()),

@@ -131,7 +131,8 @@ pub trait Store: Send + Sync {
     /// Save `scan`'s state, cursor, progress and times over its row.
     fn update_scan(&self, scan: &Scan) -> Result<(), StoreError>;
     /// Scans left in `Running` or `Queued` by a previous process, for resume. A row that cannot
-    /// be read is left out, so it does not stop the others resuming.
+    /// be read is left out, so it does not stop the others resuming, and marked suspended, since
+    /// it can never resume.
     fn interrupted_scans(&self, library: LibraryId) -> Result<Vec<Scan>, StoreError>;
 
     // --- files ---

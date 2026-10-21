@@ -63,30 +63,72 @@ impl ScanContext<'_> {
     }
 }
 
+/// What a suspended scan left undone, by why, for a new scan to retry whole.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Undone {
+    /// Each scope whose root did not answer, before its walk or before its reconcile.
+    pub unanswered: Vec<Scope>,
+    /// After a store failure, each scope from the last persisted cursor on.
+    pub failed: Vec<Scope>,
+}
+
 /// Run `scan` to completion, cancellation, or suspension, or until a shutdown, which leaves it
 /// running at its last flushed cursor for the next start to resume. A panic ends it at that
 /// cursor through [`Writer::suspend`], so the caller carries on. The scan row is updated on every
 /// flush; `scan` is left in the state the row holds, unless the store could not save it.
-pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
+///
+/// Returns what a suspended scan left undone, and nothing for any other end. That leaves out what
+/// a panic or an exclude pattern that does not compile left unwalked, since a retry would panic
+/// or suspend again, but not a root found not answering before a panic.
+pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) -> Undone {
     let mut writer = Writer::new(scan);
+    let mut unanswered = Vec::new();
     // Asserted unwind safe because a panic can leave `scan`'s cursor and progress ahead of the
     // store, and `suspend` replaces both from what the writer last persisted, which changes only
     // as a whole, after a flush, and sets the state itself; a batch left half filled is dropped.
+    // `unanswered` only grows, so a panic leaves it naming the roots that did not answer so far.
     // Everything else the scan touches is shared through `ctx` and keeps its own guarantees: the
     // store commits a batch whole or not at all.
-    match panic::catch_unwind(AssertUnwindSafe(|| scan_scopes(ctx, scan, &mut writer))) {
-        // Completed, stopped, or ended by a store failure that `Writer::fail` has handled.
-        Ok(_) => {}
+    let walked = panic::catch_unwind(AssertUnwindSafe(|| {
+        scan_scopes(ctx, scan, &mut writer, &mut unanswered)
+    }));
+    let failed = match walked {
+        // Completed, stopped, or suspended with the roots that did not answer in `unanswered`.
+        Ok(Ok(())) => Vec::new(),
+        // Ended by a store failure that `Writer::fail` has handled.
+        Ok(Err(_)) => from_cursor(scan).map(|(_, scope)| scope).collect(),
         Err(_) => {
-            tracing::error!(scan = scan.id, "scan panicked; ending it at its last flushed cursor");
+            tracing::error!(
+                scan = scan.id,
+                "scan panicked; ending it at its last flushed cursor, without a retry of what it \
+                 left, which would panic again"
+            );
             writer.suspend(ctx, scan);
+            Vec::new()
         }
+    };
+    if scan.state != ScanState::Suspended {
+        return Undone::default();
     }
+    Undone { unanswered, failed }
 }
 
-/// [`run_scan`] without the panic guard, flushing through `writer`. Fails with [`Halt::Ended`]
-/// once a store failure has ended the scan through [`Writer::fail`].
-fn scan_scopes(ctx: &ScanContext<'_>, scan: &mut Scan, writer: &mut Writer) -> Result<(), Halt> {
+/// The scopes of `scan` from the one its cursor is in on, or all of them when it has no cursor,
+/// each with its index. The iterator owns a copy of them, so `scan` can change as it is walked.
+fn from_cursor(scan: &Scan) -> impl Iterator<Item = (i64, Scope)> + use<> {
+    let from = scan.cursor.as_ref().map_or(0, |c| c.scope_index);
+    (0..).zip(scan.scopes.clone()).skip_while(move |(i, _)| *i < from)
+}
+
+/// [`run_scan`] without the panic guard, flushing through `writer` and adding each scope whose
+/// root does not answer to `unanswered`. Fails with [`Halt::Ended`] once a store failure has
+/// ended the scan through [`Writer::fail`].
+fn scan_scopes(
+    ctx: &ScanContext<'_>,
+    scan: &mut Scan,
+    writer: &mut Writer,
+    unanswered: &mut Vec<Scope>,
+) -> Result<(), Halt> {
     // Leaving out a pattern that does not compile would index what the admin meant to exclude.
     let excludes = match compile_excludes(&ctx.library.excludes) {
         Ok(e) => e,
@@ -103,21 +145,18 @@ fn scan_scopes(ctx: &ScanContext<'_>, scan: &mut Scan, writer: &mut Writer) -> R
     }
     writer.save(ctx, scan)?;
 
-    let start_scope = scan.cursor.as_ref().map_or(0, |c| c.scope_index);
-    let mut suspended = false;
     // Folders the walk could not list since the cursor last moved, which may lie in an earlier
-    // scope left unreconciled. Each is counted as a problem once the cursor moves past it, since
-    // until then a resume lists it again.
+    // scope left unreconciled. Each is counted as a problem once the cursor moves past it or the
+    // scan ends, since until then a resume lists it again.
     let mut unlisted_folders = 0;
 
-    let scopes = scan.scopes.clone();
-    for (scope_index, scope) in (0..).zip(scopes).skip_while(|(i, _)| *i < start_scope) {
+    for (scope_index, scope) in from_cursor(scan) {
         if ctx.stopping() {
             break;
         }
 
         if !root_answers(&scope.root) {
-            suspended = true;
+            unanswered.push(scope);
             continue;
         }
 
@@ -171,10 +210,10 @@ fn scan_scopes(ctx: &ScanContext<'_>, scan: &mut Scan, writer: &mut Writer) -> R
         // Stage 7: reconcile. Only after a complete walk of a root that still answers, and never
         // under what the walk could not read. Problems at paths that no longer exist go too.
         // A root that has gone leaves the cursor in this scope, so the unlisted folders stay
-        // uncounted: a resume lists them again, or a later scope counts them as it moves the
-        // cursor.
+        // uncounted until a later scope moves the cursor or the scan ends, and the scope is left
+        // for a retry to walk again, since a later scope may move the cursor past it.
         if !root_answers(&scope.root) {
-            suspended = true;
+            unanswered.push(scope);
             continue;
         }
         let reconciled = reconcile(ctx, &scope, scan.id, walk.unreadable());
@@ -192,13 +231,11 @@ fn scan_scopes(ctx: &ScanContext<'_>, scan: &mut Scan, writer: &mut Writer) -> R
     if ctx.shutdown.load(Ordering::SeqCst) && !cancelled {
         return Ok(());
     }
-    if cancelled {
-        // A cancelled scan never resumes, so it counts the unlisted folders it carries as it ends.
-        scan.progress.problems += unlisted_folders;
-    }
+    // A scan that ends never resumes, so it counts the unlisted folders it carries.
+    scan.progress.problems += unlisted_folders;
     scan.state = if cancelled {
         ScanState::Cancelled
-    } else if suspended {
+    } else if !unanswered.is_empty() {
         ScanState::Suspended
     } else {
         ScanState::Completed

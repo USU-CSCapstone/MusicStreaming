@@ -1,6 +1,6 @@
-//! What the scanner does when the store fails: a scan suspends, a request queues nothing, a
-//! background job backs off, and one unreadable scan row hides only itself. Each failure is a
-//! trigger that aborts the write it guards, as a full disk would.
+//! What the scanner does when the store fails: a scan suspends, a request queues nothing at
+//! once, a background job backs off, and one unreadable scan row hides only itself and is marked
+//! suspended. Each failure is a trigger that aborts the write it guards, as a full disk would.
 
 use std::fs;
 use std::sync::Arc;
@@ -105,7 +105,8 @@ fn a_scan_the_store_cannot_record_is_not_queued() {
     assert_eq!(count(&store, "SELECT COUNT(*) FROM scans WHERE state = 'completed'"), 2);
 }
 
-/// One scan row that cannot be read is left out of those to resume, and the others resume.
+/// One scan row that cannot be read is left out of those to resume, and marked suspended, since
+/// it never can, and the others resume.
 #[test]
 fn an_unreadable_scan_row_does_not_stop_the_others_resuming() {
     let tmp = tempfile::tempdir().unwrap();
@@ -130,6 +131,9 @@ fn an_unreadable_scan_row_does_not_stop_the_others_resuming() {
     let corrupt = "UPDATE scans SET scopes = '[1]' WHERE id = ?1";
     store.db().write_blocking(move |tx| tx.execute(corrupt, [unreadable])).unwrap();
 
+    assert_eq!(store.interrupted_scans(lib.id).unwrap(), [scan.clone()]);
+    let suspended = "SELECT COUNT(*) FROM scans WHERE state = 'suspended' AND finished_at > 0";
+    assert_eq!(count(&store, suspended), 1);
     assert_eq!(store.interrupted_scans(lib.id).unwrap(), [scan]);
 }
 

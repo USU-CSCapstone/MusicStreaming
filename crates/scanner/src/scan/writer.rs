@@ -80,10 +80,11 @@ impl Writer {
         Halt::Ended
     }
 
-    /// Ends `scan` at the cursor and progress the store holds and saves its row: suspended, so a
-    /// resume retries what was not persisted, or cancelled if a cancel was asked for, since a
-    /// cancelled scan never resumes. A row that cannot be saved is logged and stays as the store
-    /// last held it, queued or running, so the next start resumes the scan from there.
+    /// Ends `scan` at the cursor and progress the store holds and saves its row: suspended, or
+    /// cancelled if a cancel was asked for, since a cancelled scan's work is not wanted.
+    /// [`super::run_scan`] says what of a suspended scan's work is retried. A row that cannot be
+    /// logged and stays as the store last held it, queued or running, so the next start resumes
+    /// the scan from there.
     pub fn suspend(&self, ctx: &ScanContext<'_>, scan: &mut Scan) {
         scan.cursor = self.persisted.0.clone();
         scan.progress = self.persisted.1.clone();
