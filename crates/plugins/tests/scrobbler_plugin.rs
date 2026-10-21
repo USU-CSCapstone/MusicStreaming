@@ -76,7 +76,7 @@ impl Library for Empty {
 
 #[test]
 fn a_real_plugin_passes_the_install_check() {
-    let (host, bytes) = (Host::new().unwrap(), std::fs::read(plugin()).unwrap());
+    let (host, bytes) = (Host::new(None).unwrap(), std::fs::read(plugin()).unwrap());
     host.check(&bytes).unwrap();
 }
 
@@ -128,7 +128,7 @@ fn track(artists: &[&str]) -> Track {
 
 /// Runs the plugin for user 1, granted `permissions`, on `event`.
 async fn run(permissions: &[Permission], event: Event) -> Outcome {
-    Host::new().unwrap().run(plugin(), grants(permissions), Empty, event).await
+    Host::new(None).unwrap().run(plugin(), grants(permissions), Empty, event).await
 }
 
 #[tokio::test]

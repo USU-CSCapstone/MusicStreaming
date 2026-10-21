@@ -2,8 +2,9 @@
 //! admin grants them, and running one with exactly those grants.
 //!
 //! What is installed and granted lives in the database (`0006_plugins.sql`); each plugin's
-//! code is `state/plugins/<id>.wasm`. Plugin code runs on its own executor, never on the
-//! threads serving requests (`design/plugins.md` §2).
+//! code is `state/plugins/<id>.wasm`, kept compiled in memory once installed or first run, and
+//! by wasmtime in `cache/plugins` across restarts. Plugin code runs on its own executor, never
+//! on the threads serving requests (`design/plugins.md` §2).
 
 pub mod grants;
 mod hooks;
@@ -58,6 +59,9 @@ pub struct Plugins {
     db: Arc<Database>,
     /// `state/plugins`, where installed components are kept.
     dir: PathBuf,
+    /// `cache/plugins`, wasmtime's own, where it keeps them compiled across restarts, or `None`
+    /// to compile them again after each restart.
+    compiled: Option<PathBuf>,
     /// Each library's scanner, to pick up what a plugin saves.
     scanners: HashMap<i64, Scanner>,
     /// Started on first use, so a server that never runs a plugin pays nothing for them.
@@ -69,10 +73,19 @@ pub struct Plugins {
 }
 
 impl Plugins {
-    pub fn new(db: Arc<Database>, dir: PathBuf, scanners: HashMap<i64, Scanner>) -> Plugins {
+    /// The plugins over `db`, installed in `dir`, kept compiled in `compiled` if given (a
+    /// directory only the server's user can write, from `DataDir::private_cache`), with each
+    /// library's scanner in `scanners` to pick up what a plugin saves.
+    pub fn new(
+        db: Arc<Database>,
+        dir: PathBuf,
+        compiled: Option<PathBuf>,
+        scanners: HashMap<i64, Scanner>,
+    ) -> Plugins {
         Plugins {
             db,
             dir,
+            compiled,
             scanners,
             host: OnceLock::new(),
             runtime: OnceLock::new(),
@@ -80,8 +93,11 @@ impl Plugins {
         }
     }
 
+    /// The plugin host, started on first use. A host that could not start is logged and
+    /// answered as an internal error, every time it is asked for.
     fn host(&self) -> Result<Arc<Host>, PluginError> {
-        self.host.get_or_init(|| Host::new().map(Arc::new)).clone().map_err(|error| {
+        let host = self.host.get_or_init(|| Host::new(self.compiled.as_deref()).map(Arc::new));
+        host.clone().map_err(|error| {
             tracing::error!(%error, "cannot start the plugin host");
             PluginError::Internal("Plugins cannot run on this server.".into())
         })
@@ -114,9 +130,9 @@ impl Plugins {
     }
 
     /// Installs the plugin in `bytes`, disabled in every library and with the grants it held
-    /// before for requests it makes again unchanged (`requirements/plugins.md` §4.2, §5), and
-    /// returns its ID. A file that could never run here, or a plugin installed already, is
-    /// refused.
+    /// before for requests it makes again unchanged (`requirements/plugins.md` §4.2, §5), kept
+    /// compiled for its runs, and returns its ID. A file that could never run here, or a plugin
+    /// installed already, is refused.
     pub async fn install(
         &self,
         bytes: Vec<u8>,
@@ -127,14 +143,16 @@ impl Plugins {
         }
         let manifest = jewelcase_plugins::manifest::read(&bytes)?;
         let host = self.host()?;
+        let checker = host.clone();
         // Compiling is CPU-bound: 10 ms for a Rust plugin, about a second for JavaScript.
         let (bytes, checked) = tokio::task::spawn_blocking(move || {
-            let checked = host.check(&bytes);
+            let checked = checker.check(&bytes);
             (bytes, checked)
         })
         .await
         .map_err(|e| PluginError::Internal(e.to_string()))?;
-        checked.map_err(|e| PluginError::Invalid(format!("This plugin cannot run here: {e}.")))?;
+        let component = checked
+            .map_err(|e| PluginError::Invalid(format!("This plugin cannot run here: {e}.")))?;
 
         std::fs::create_dir_all(&self.dir).map_err(internal)?;
         let part = self.dir.join(format!("{}.{}.part", manifest.id, std::process::id()));
@@ -159,6 +177,7 @@ impl Plugins {
             std::fs::remove_file(&part).ok();
             return Err(PluginError::Exists(name));
         }
+        host.installed(&id, component);
         Ok(id)
     }
 
@@ -167,7 +186,7 @@ impl Plugins {
     /// to forget their searches meant for it, so after a reinstall, which starts every position
     /// over, users connect again and nothing from before is sent twice.
     pub async fn uninstall(&self, id: String) -> Result<(), PluginError> {
-        let path = self.path(&id);
+        let (path, plugin) = (self.path(&id), id.clone());
         let removed = self
             .db
             .write(move |tx| {
@@ -181,10 +200,15 @@ impl Plugins {
         if removed == 0 {
             return Err(PluginError::NotFound);
         }
-        std::fs::remove_file(path).or_else(|e| match e.kind() {
+        let file = std::fs::remove_file(path).or_else(|e| match e.kind() {
             std::io::ErrorKind::NotFound => Ok(()),
             _ => Err(internal(e)),
-        })
+        });
+        // A host not started yet has nothing compiled to forget.
+        if let Some(Ok(host)) = self.host.get() {
+            host.uninstalled(&plugin);
+        }
+        file
     }
 
     /// Replaces what `id` is granted ([`grants::set`]).

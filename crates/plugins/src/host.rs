@@ -4,20 +4,22 @@
 //! Imports stay linked when their permission is declined, so a plugin with an optional one
 //! still loads: the call answers `not-granted`, and `granted` lets it adapt up front.
 
-use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
-use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline};
+use wasmtime::{
+    Cache, CacheConfig, Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline,
+};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::manifest::{Permission, RateLimit};
 use crate::network::Network;
 
+mod compiled;
 mod http;
 mod library;
 #[cfg(test)]
@@ -177,9 +179,8 @@ pub struct Outcome {
 
 pub struct Host {
     engine: Engine,
-    /// Each plugin compiled once, until its file changes: compiling is what costs, and hooks
-    /// run a plugin often.
-    compiled: Mutex<HashMap<PathBuf, (SystemTime, Component)>>,
+    /// Each installed plugin compiled once, by ID.
+    compiled: compiled::Cache,
     /// What every run's requests share: each destination's pace, and replies to reuse.
     network: Arc<Network>,
     /// The ticks of compute each run may spend: `CPU_BUDGET`, or fewer in tests.
@@ -188,10 +189,17 @@ pub struct Host {
 
 impl Host {
     /// The engine, and a thread advancing its epoch every `TICK`. The thread ends with the
-    /// engine. Fails if either cannot be started.
-    pub fn new() -> Result<Host, String> {
+    /// engine. With `cache`, an absolute directory for wasmtime's alone that no other user can
+    /// write, compiled code is kept there too, so a restart loads it rather than compiling
+    /// again. Fails if the engine, the thread, or the cache cannot be started.
+    pub fn new(cache: Option<&Path>) -> Result<Host, String> {
         let mut config = Config::new();
         config.epoch_interruption(true);
+        if let Some(directory) = cache {
+            let mut settings = CacheConfig::new();
+            settings.with_directory(directory);
+            config.cache(Some(Cache::new(settings).map_err(|e| format!("{e:?}"))?));
+        }
         let engine = Engine::new(&config).map_err(|e| format!("{e:?}"))?;
         let weak = engine.weak();
         thread::Builder::new()
@@ -209,47 +217,25 @@ impl Host {
 
     /// Refuses a component that could never run here: one that does not compile, instantiates
     /// core modules it imports, needs more memories, tables, or table elements than a run may
-    /// create, or does not fit the contract.
-    pub fn check(&self, bytes: &[u8]) -> Result<(), String> {
+    /// create, or does not fit the contract. Answers the component compiled, for
+    /// [`Host::installed`] once it is installed.
+    pub fn check(&self, bytes: &[u8]) -> Result<Component, String> {
         let component =
             Component::new(&self.engine, bytes).map_err(|e| e.root_cause().to_string())?;
         fits(&component)?;
-        self.pre::<Refused>(&component).map(drop)
+        self.pre::<Refused>(&component).map(|_| component)
     }
 
-    /// The plugin in `file`, compiled, from the cache while the file is unchanged.
-    async fn compiled(&self, file: &Path) -> Result<Component, String> {
-        let unloadable = |e: String| format!("the plugin could not be loaded: {e}");
-        let modified = std::fs::metadata(file)
-            .and_then(|m| m.modified())
-            .map_err(|e| unloadable(e.to_string()))?;
-        let cache = |compiled: &HashMap<_, (SystemTime, Component)>| {
-            compiled.get(file).filter(|(at, _)| *at == modified).map(|(_, c)| c.clone())
-        };
-        if let Some(component) = cache(&self.compiled.lock().expect("cache lock")) {
-            return Ok(component);
-        }
-        // Compiling is CPU-bound, up to a second for a JavaScript plugin.
-        let (engine, path) = (self.engine.clone(), file.to_path_buf());
-        let component = tokio::task::spawn_blocking(move || Component::from_file(&engine, path))
-            .await
-            .map_err(|e| unloadable(e.to_string()))?
-            .map_err(|e| unloadable(e.root_cause().to_string()))?;
-        let mut compiled = self.compiled.lock().expect("cache lock");
-        compiled.insert(file.to_path_buf(), (modified, component.clone()));
-        Ok(component)
-    }
-
-    /// Runs the plugin in `component` once for `library`, with exactly `grants`, to handle
-    /// `event`.
+    /// Runs plugin `grants.plugin`, installed at `file`, once for `library`, with exactly
+    /// `grants`, to handle `event`.
     pub async fn run<L: Library>(
         &self,
-        component: &Path,
+        file: &Path,
         grants: Grants,
         library: L,
         event: Event,
     ) -> Outcome {
-        let compiled = self.compiled(component).await;
+        let compiled = self.compiled(&grants.plugin, file).await;
         let loaded = compiled.and_then(|component| self.pre::<L>(&component));
         let pre = match loaded {
             Ok(pre) => pre,

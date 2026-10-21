@@ -31,7 +31,7 @@ async fn a_lookup_that_cannot_be_answered_now_ends_the_run_with_an_error() {
     for event in [Event::Run, Event::Scheduled, Event::TracksChanged(changes())] {
         let library = library(dir.path());
         let grants = grants(&[Permission::LibraryRead, Permission::LibraryAdd], &["lrclib.net"]);
-        let outcome = Host::new().unwrap().run(plugin(), grants, library.clone(), event).await;
+        let outcome = Host::new(None).unwrap().run(plugin(), grants, library.clone(), event).await;
         assert!(!outcome.ok);
         assert_eq!(outcome.summary, not_granted);
         assert!(outcome.log.is_empty(), "{:?}", outcome.log);
@@ -56,7 +56,7 @@ async fn the_network_reaches_only_approved_destinations() {
     let dir = tempfile::tempdir().unwrap();
     let permissions = [Permission::LibraryRead, Permission::Network, Permission::LibraryAdd];
     // The plugin asks lrclib.net, which this run does not approve, so nothing leaves.
-    let outcome = Host::new()
+    let outcome = Host::new(None)
         .unwrap()
         .run(plugin(), grants(&permissions, &["example.invalid"]), library(dir.path()), Event::Run)
         .await;
@@ -74,7 +74,7 @@ async fn the_network_reaches_only_approved_destinations() {
 
 #[test]
 fn a_real_plugin_passes_the_install_check() {
-    let host = Host::new().unwrap();
+    let host = Host::new(None).unwrap();
     let bytes = std::fs::read(plugin()).unwrap();
     host.check(&bytes).unwrap();
     assert!(host.check(b"not a component").is_err());

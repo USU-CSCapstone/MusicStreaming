@@ -54,7 +54,12 @@ pub async fn database() -> (tempfile::TempDir, Arc<Database>) {
 
 /// The plugins over `db`, keeping their files in `temp`, with no scanners.
 pub fn plugins(temp: &tempfile::TempDir, db: &Arc<Database>) -> Arc<Plugins> {
-    Arc::new(Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new()))
+    Arc::new(Plugins::new(
+        db.clone(),
+        temp.path().join("plugins"),
+        Some(temp.path().join("compiled")),
+        HashMap::new(),
+    ))
 }
 
 /// A manifest for plugin `id`, named after it and built against the contract, that asks for

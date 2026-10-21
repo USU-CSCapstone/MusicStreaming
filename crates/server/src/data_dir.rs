@@ -4,13 +4,13 @@
 //! data/
 //! ├── jewelcase.lock  # held while a server runs
 //! ├── state/          # database, custom artwork, plugin data — back this up
-//! └── cache/          # transcodes, resized images, indexes — rebuilt on demand
+//! └── cache/          # transcodes, resized images, compiled plugins, indexes — rebuilt on demand
 //! ```
 //!
 //! No library's root may be the data directory, inside it, or around it.
 
 use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -57,16 +57,16 @@ impl DataDir {
         }
 
         let data_dir = DataDir { root, _lock: lock };
-        // The database and plugin credentials are for the server's user alone. A `state/` that
-        // exists keeps the mode its owner gave it.
-        let state = data_dir.state();
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&state)
-            .with_context(|| format!("cannot create {}", state.display()))?;
-        let cache = data_dir.cache();
-        fs::create_dir_all(&cache).with_context(|| format!("cannot create {}", cache.display()))?;
+        // The database and plugin credentials are for the server's user alone, and so is the
+        // cache, which holds compiled plugin code the server runs ([`DataDir::private_cache`]).
+        // One that exists keeps the mode its owner gave it.
+        for dir in [data_dir.state(), data_dir.cache()] {
+            DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&dir)
+                .with_context(|| format!("cannot create {}", dir.display()))?;
+        }
         Ok(data_dir)
     }
 
@@ -83,6 +83,44 @@ impl DataDir {
     /// Rebuildable state that can be deleted and reconstructed
     pub fn cache(&self) -> PathBuf {
         self.root.join("cache")
+    }
+
+    /// `cache/<name>`, created for the server's user alone (0700), for code the server will
+    /// load and run. wasmtime runs an entry in its cache of compiled plugins as native code once
+    /// it sees that its own version and the engine's settings built it, with no check of who
+    /// wrote it, so whoever can write there can run code as the server.
+    ///
+    /// Fails if the folder cannot be created, or if it or any folder above it up to the data
+    /// directory is a symbolic link (whose target and the folders above that go unchecked),
+    /// belongs to someone other than the data directory's owner, or can be written by group or
+    /// others. A folder that exists keeps whatever mode it has, so it is checked rather than
+    /// trusted to be 0700.
+    pub fn private_cache(&self, name: &str) -> anyhow::Result<PathBuf> {
+        let dir = self.cache().join(name);
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+            .with_context(|| format!("cannot create {}", dir.display()))?;
+        let read = |folder: &Path| {
+            fs::symlink_metadata(folder)
+                .with_context(|| format!("cannot read the owner and mode of {}", folder.display()))
+        };
+        let owner = read(&self.root)?.uid();
+        for folder in dir.ancestors().take_while(|folder| folder.starts_with(&self.root)) {
+            let metadata = read(folder)?;
+            let problem = if metadata.file_type().is_symlink() {
+                "is a symbolic link"
+            } else if metadata.uid() != owner {
+                "belongs to another user"
+            } else if metadata.permissions().mode() & 0o022 != 0 {
+                "can be written by other users"
+            } else {
+                continue;
+            };
+            bail!("{} {problem}", folder.display());
+        }
+        Ok(dir)
     }
 }
 
@@ -102,8 +140,6 @@ pub fn apart(data: &Path, root: &Path) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
-
     use super::*;
 
     #[test]
@@ -116,11 +152,45 @@ mod tests {
     }
 
     #[test]
-    fn state_is_the_owners_alone() {
+    fn state_and_cache_are_the_owners_alone() {
         let temp = tempfile::tempdir().unwrap();
         let data_dir = DataDir::open(&temp.path().join("data"), None).unwrap();
-        let mode = fs::metadata(data_dir.state()).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o700, "{mode:o}");
+        for dir in [data_dir.state(), data_dir.cache(), data_dir.private_cache("code").unwrap()] {
+            let mode = fs::metadata(&dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{}: {mode:o}", dir.display());
+        }
+    }
+
+    /// Whichever folder from the data directory down others can write to, a private cache is
+    /// refused, naming it.
+    #[test]
+    fn a_private_cache_others_can_write_to_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = DataDir::open(temp.path(), None).unwrap();
+        let code = data_dir.private_cache("code").unwrap();
+        for (folder, mode) in [(&code, 0o777), (&data_dir.cache(), 0o770), (&data_dir.root, 0o757)]
+        {
+            fs::set_permissions(folder, fs::Permissions::from_mode(mode)).unwrap();
+            let error = data_dir.private_cache("code").unwrap_err().to_string();
+            assert_eq!(error, format!("{} can be written by other users", folder.display()));
+            fs::set_permissions(folder, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        data_dir.private_cache("code").unwrap();
+    }
+
+    /// A private cache that is a symbolic link is refused, even one leading to a folder that is
+    /// the owner's alone. A folder that belongs to another user is refused too, which needs root
+    /// to set up, so it is not tested here.
+    #[test]
+    fn a_private_cache_through_a_symbolic_link_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = DataDir::open(&temp.path().join("data"), None).unwrap();
+        let elsewhere = temp.path().join("elsewhere");
+        DirBuilder::new().mode(0o700).create(&elsewhere).unwrap();
+        let link = data_dir.cache().join("code");
+        std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+        let error = data_dir.private_cache("code").unwrap_err().to_string();
+        assert_eq!(error, format!("{} is a symbolic link", link.display()));
     }
 
     #[test]

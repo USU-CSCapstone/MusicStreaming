@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use super::testing::{self, Memory};
 use super::{CPU_BUDGET, Event, Host, Outcome, ScanFinished};
 
+mod compiled;
 mod limits;
 mod lyrics;
 
@@ -19,10 +20,10 @@ const BUDGET: u64 = 100;
 /// long the run took, timed after the fixture compiled.
 async fn run(budget: u64, event: Event) -> (Outcome, Duration) {
     let file = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/host/tests/sandbox.wat"));
-    let host = Host { budget, ..Host::new().expect("host") };
-    host.compiled(file).await.expect("fixture compiles");
-    let started = Instant::now();
+    let host = Host { budget, ..Host::new(None).expect("host") };
     let grants = testing::grants(&[]);
+    host.compiled(&grants.plugin, file).await.expect("fixture compiles");
+    let started = Instant::now();
     let outcome = host.run(file, grants, Memory::default(), event).await;
     (outcome, started.elapsed())
 }

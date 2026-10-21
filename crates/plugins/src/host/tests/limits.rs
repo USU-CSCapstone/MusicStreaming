@@ -15,7 +15,7 @@ fn component(module: &str, count: usize) -> String {
 /// Instantiates `component(module, count)` in the store a run gets, returning why it was refused
 /// if it was.
 async fn instantiate(module: &str, count: usize) -> Result<(), String> {
-    let host = Host::new().expect("host");
+    let host = Host::new(None).expect("host");
     let component =
         Component::new(&host.engine, component(module, count)).expect("component compiles");
     let mut store = host.store(testing::grants(&[]), Memory::default());
@@ -26,7 +26,7 @@ async fn instantiate(module: &str, count: usize) -> Result<(), String> {
 /// Why the check at install refuses the component in `wat`. None of these components fit the
 /// plugin world, so the check always refuses them; what matters is why.
 fn refused_at_install(wat: &str) -> String {
-    let host = Host::new().expect("host");
+    let host = Host::new(None).expect("host");
     host.check(wat.as_bytes()).expect_err("refused")
 }
 

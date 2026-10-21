@@ -312,12 +312,8 @@ async fn a_run_needs_a_library_it_is_enabled_in() {
     );
 }
 
-/// The whole path with a real plugin: install the file, grant, enable, and run. It reaches no
-/// network: it is granted reading, and enabled without the network it requires, as only the
-/// database allows.
-#[tokio::test]
-async fn installs_and_runs_a_real_plugin() {
-    let (temp, db, app) = app_with_tracks().await;
+/// Installs the real lyrics plugin through the API, and returns its file's bytes.
+async fn install_lyrics(app: &Router) -> Vec<u8> {
     let file = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm"
@@ -330,7 +326,25 @@ async fn installs_and_runs_a_real_plugin() {
         .unwrap();
     let (status, _, body) = respond(app.clone(), request).await;
     assert_eq!(status, StatusCode::CREATED, "{}", String::from_utf8_lossy(&body));
+    bytes
+}
+
+/// Saves server-wide settings for the lyrics plugin, which runs it to check them, and returns
+/// the status and body.
+async fn check_settings(app: &Router) -> (StatusCode, Value) {
+    let values = Some(json!({ "values": { "syncedOnly": true } }));
+    call(app, ADMIN, "PUT", "/api/v1/admin/plugins/lrclib-lyrics/settings", values).await
+}
+
+/// The whole path with a real plugin: install the file, grant, enable, and run. It reaches no
+/// network: it is granted reading, and enabled without the network it requires, as only the
+/// database allows.
+#[tokio::test]
+async fn installs_and_runs_a_real_plugin() {
+    let (temp, db, app) = app_with_tracks().await;
+    let bytes = install_lyrics(&app).await;
     assert!(temp.path().join("plugins/lrclib-lyrics.wasm").is_file());
+    assert!(temp.path().join("compiled/modules").is_dir(), "kept compiled where it was told");
     let request = Request::post("/api/v1/admin/plugins")
         .header(header::AUTHORIZATION, ADMIN)
         .body(Body::from(bytes))
@@ -351,19 +365,38 @@ async fn installs_and_runs_a_real_plugin() {
     assert_eq!(plugin["libraries"][0]["lastRun"], Value::Null, "a refused run is not recorded");
 
     // Settings pass its own check, which it answers by running, and are kept.
-    let (status, saved) = call(
-        &app,
-        ADMIN,
-        "PUT",
-        "/api/v1/admin/plugins/lrclib-lyrics/settings",
-        Some(json!({ "values": { "syncedOnly": true } })),
-    )
-    .await;
+    let (status, saved) = check_settings(&app).await;
     assert_eq!(
         (status, &saved["values"]),
         (StatusCode::OK, &json!({ "syncedOnly": true })),
         "{saved}"
     );
+}
+
+/// The component compiled to check the file at install is the one its runs use, so a run does
+/// not read the file again.
+#[tokio::test]
+async fn an_installed_plugin_runs_as_compiled_at_install() {
+    let (temp, _db, app) = app_with_tracks().await;
+    install_lyrics(&app).await;
+    std::fs::remove_file(temp.path().join("plugins/lrclib-lyrics.wasm")).unwrap();
+    let (status, saved) = check_settings(&app).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+}
+
+/// Uninstalling forgets the compiled plugin: one recorded as installed again without its file
+/// cannot be loaded.
+#[tokio::test]
+async fn an_uninstalled_plugin_is_not_kept_compiled() {
+    let (_temp, db, app) = app_with_tracks().await;
+    let bytes = install_lyrics(&app).await;
+    assert_eq!(call(&app, ADMIN, "DELETE", PLUGIN, None).await.0, StatusCode::NO_CONTENT);
+    let manifest = jewelcase_plugins::manifest::read(&bytes).unwrap();
+    install(&db, serde_json::to_value(manifest).unwrap()).await;
+    let (status, problem) = check_settings(&app).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
+    let detail = problem["detail"].as_str().unwrap();
+    assert!(detail.starts_with("the plugin could not be loaded"), "{detail}");
 }
 
 const SETTINGS: &str = "/api/v1/admin/plugins/lrclib-lyrics/settings";

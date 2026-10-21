@@ -1,6 +1,6 @@
 //! Helpers for the API's tests: a server over a fresh database, and requests to it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,7 +17,7 @@ use super::session::token_hash;
 use super::{AppState, Images, router};
 use crate::db::Database;
 use crate::db::testing::{Album, Device, Track, User, library};
-use crate::plugins::Plugins;
+use crate::plugins::testing::plugins;
 
 pub mod catalog;
 pub mod player;
@@ -68,8 +68,7 @@ pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, R
     let images = Images::new(temp.path().join("cache"), Ffmpeg::new(Config::default()));
     // A client with a public address, unless a request carries its own `ConnectInfo`.
     let peer = SocketAddr::from(([203, 0, 113, 1], 50_000));
-    let plugins = Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new());
-    let app = router(base_path, db.clone(), images, Arc::new(plugins), Arc::default())
+    let app = router(base_path, db.clone(), images, plugins(&temp, &db), Arc::default())
         .layer(MockConnectInfo(peer));
     (temp, db, app)
 }
@@ -77,8 +76,8 @@ pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, R
 /// What the API's handlers share, over `db` in `temp`, mounted at the root.
 pub fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
     let images = Images::new(temp.path().join("cache"), Ffmpeg::new(Config::default()));
-    let plugins = Plugins::new(db.clone(), temp.path().join("plugins"), HashMap::new());
-    AppState::new(db, images, Arc::new(plugins), Arc::default(), "/api/v1")
+    let plugins = plugins(temp, &db);
+    AppState::new(db, images, plugins, Arc::default(), "/api/v1")
 }
 
 /// [`app`] with library 1 holding tracks 1 and 2, and library 2 holding track 3, each called

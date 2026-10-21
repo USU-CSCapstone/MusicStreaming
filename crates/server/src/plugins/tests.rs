@@ -27,8 +27,12 @@ async fn saved_files_are_scanned_without_blocking_the_runtime() {
     })
     .await
     .unwrap();
-    let plugins =
-        Plugins::new(db, temp.path().join("plugins"), HashMap::from([(1, scanner.clone())]));
+    let plugins = Plugins::new(
+        db,
+        temp.path().join("plugins"),
+        Some(temp.path().join("compiled")),
+        HashMap::from([(1, scanner.clone())]),
+    );
 
     let saved = [music.join("Album/01.lrc"), music.join("Album/02.lrc")];
     assert!(plugins.scan(1, &saved).await);
