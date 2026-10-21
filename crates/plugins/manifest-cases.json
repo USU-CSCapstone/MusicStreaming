@@ -1319,7 +1319,8 @@
 						"enum": [
 							1,
 							"two"
-						]
+						],
+						"default": 3
 					}
 				}
 			}
@@ -2397,6 +2398,201 @@
 		"problems": [
 			"albumsChanged needs libraryRead as well",
 			"artistsChanged needs libraryRead as well"
+		]
+	},
+	{
+		"name": "destinations that are a URL, a port, a pattern, or end in a dot",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"https://lrclib.net",
+						"lrclib.net:443",
+						"*.x.com",
+						"lrclib.net.",
+						"lrclib.net"
+					]
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: destinations: \"https://lrclib.net\" is not a host name",
+			"permissions[0]: destinations: \"lrclib.net:443\" is not a host name",
+			"permissions[0]: destinations: \"*.x.com\" is not a host name",
+			"permissions[0]: destinations: \"lrclib.net.\" is not a host name"
+		]
+	},
+	{
+		"name": "destinations the URL parser would rewrite, beside a bracketed IPv6 address and an underscore",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"127.1",
+						"999.1.1.1",
+						"[fd00::10]",
+						"my_service"
+					],
+					"rateLimits": {
+						"[FD00::10]": "1/s",
+						"my_service": "1/s"
+					}
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: destinations: \"127.1\" is not a host name",
+			"permissions[0]: destinations: \"999.1.1.1\" is not a host name"
+		]
+	},
+	{
+		"name": "a default that is not one of its choices",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"permissions": [],
+			"settings": {
+				"properties": {
+					"level": {
+						"type": "integer",
+						"enum": [
+							1,
+							2
+						],
+						"default": 2
+					},
+					"mode": {
+						"type": "string",
+						"enum": [
+							"fast",
+							"careful"
+						],
+						"default": "slow"
+					},
+					"on": {
+						"type": "boolean",
+						"enum": [
+							true
+						],
+						"default": "yes"
+					}
+				}
+			}
+		},
+		"problems": [
+			"settings.mode: \"default\" must be one of \"enum\"",
+			"settings.on: \"default\" must be true or false"
+		]
+	},
+	{
+		"name": "misspelt top-level keys",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"permissions": [],
+			"permision": [],
+			"homePage": "https://x.example"
+		},
+		"problems": [
+			"unknown key \"homePage\"",
+			"unknown key \"permision\""
+		]
+	},
+	{
+		"name": "a misspelt rate limit, which would install without pacing",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"lrclib.net"
+					],
+					"rateLimit": {
+						"lrclib.net": "1/s"
+					}
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: unknown key \"rateLimit\""
+		]
+	},
+	{
+		"name": "an unknown key in a rate limit",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"permissions": [
+				{
+					"permission": "network",
+					"required": true,
+					"reason": "To look things up.",
+					"destinations": [
+						"lrclib.net"
+					],
+					"rateLimits": {
+						"lrclib.net": {
+							"limit": "1/s",
+							"per": "user",
+							"burst": 5
+						}
+					}
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: rateLimits: \"lrclib.net\": unknown key \"burst\""
+		]
+	},
+	{
+		"name": "unknown keys in settings and personal settings",
+		"manifest": {
+			"id": "x-plugin",
+			"name": "X",
+			"version": "1.0.0",
+			"permissions": [],
+			"settings": {
+				"properties": {
+					"mode": {
+						"type": "string",
+						"defualt": "fast"
+					}
+				},
+				"additionalProperties": false
+			},
+			"personalSettings": {
+				"properties": {
+					"token": {
+						"type": "string",
+						"secret": true
+					}
+				}
+			}
+		},
+		"problems": [
+			"settings: unknown key \"additionalProperties\"",
+			"settings.mode: unknown key \"defualt\"",
+			"personalSettings.token: unknown key \"secret\""
 		]
 	}
 ]

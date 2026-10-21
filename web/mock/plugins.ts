@@ -15,7 +15,7 @@ import {
 	type PluginSettings,
 	type SettingSchema
 } from '../src/lib/api/plugins.ts';
-import { HOST_NAME, PluginFileError, readManifest } from '../../tools/plugin-pack/manifest.mjs';
+import { PluginFileError, isHostName, readManifest } from '../../tools/plugin-pack/manifest.mjs';
 
 const LIBRARY_PERMISSIONS: PermissionName[] = [
 	'libraryRead',
@@ -260,7 +260,7 @@ export class PluginStore {
 
 	/** Exempts it from, or holds it to, the limit for every plugin at one host. */
 	setExempt(id: string, host: string, exempt: boolean) {
-		if (!HOST_NAME.test(host)) {
+		if (!isHostName(host)) {
 			throw new PluginError(
 				422,
 				'validation_failed',

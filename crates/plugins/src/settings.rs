@@ -11,6 +11,15 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::manifest::unknown_keys;
+
+/// The keys `settings` and `personalSettings` may give.
+pub(crate) const SCHEMA_KEYS: [&str; 2] = ["properties", "required"];
+
+/// The keys each setting may give.
+pub(crate) const SETTING_KEYS: [&str; 6] =
+    ["type", "title", "description", "enum", "default", "writeOnly"];
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Schema {
     pub properties: BTreeMap<String, Setting>,
@@ -85,10 +94,12 @@ impl Setting {
 /// Every problem with the settings a manifest declares under `key`, in the words the pack tool
 /// uses too.
 pub fn validate(key: &str, settings: &Value) -> Vec<String> {
-    let Some(properties) = settings.get("properties").and_then(Value::as_object) else {
-        return vec![format!(r#""{key}" must be an object with "properties""#)];
+    let invalid = || vec![format!(r#""{key}" must be an object with "properties""#)];
+    let Some(schema) = settings.as_object() else { return invalid() };
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return invalid();
     };
-    let mut problems = Vec::new();
+    let mut problems = unknown_keys(key, schema, &SCHEMA_KEYS);
     for (name, setting) in properties {
         if !valid_name(name) {
             problems.push(format!(
@@ -101,6 +112,7 @@ pub fn validate(key: &str, settings: &Value) -> Vec<String> {
             problems.push(format!("{at} must be an object"));
             continue;
         };
+        problems.extend(unknown_keys(&at, s, &SETTING_KEYS));
         let Some(kind) = s.get("type").and_then(Value::as_str).and_then(Kind::from_name) else {
             problems.push(format!(r#"{at}: "type" must be string, number, integer, or boolean"#));
             continue;
@@ -113,22 +125,27 @@ pub fn validate(key: &str, settings: &Value) -> Vec<String> {
         if s.get("writeOnly").is_some_and(|v| !v.is_boolean()) {
             problems.push(format!(r#"{at}: "writeOnly" must be true or false"#));
         }
-        if let Some(choices) = s.get("enum") {
-            let valid = choices
-                .as_array()
-                .is_some_and(|c| !c.is_empty() && c.iter().all(|v| kind.accepts(v)));
-            if !valid {
-                problems.push(format!(
-                    r#"{at}: "enum" must be a non-empty list of {} values"#,
-                    name_of(kind)
-                ));
-            }
+        let choices = s.get("enum");
+        let valid_choices = choices
+            .and_then(Value::as_array)
+            .filter(|c| !c.is_empty() && c.iter().all(|v| kind.accepts(v)));
+        if choices.is_some() && valid_choices.is_none() {
+            problems.push(format!(
+                r#"{at}: "enum" must be a non-empty list of {} values"#,
+                name_of(kind)
+            ));
         }
-        if s.get("default").is_some_and(|v| !kind.accepts(v)) {
-            problems.push(format!(r#"{at}: "default" must be {}"#, kind.described()));
+        match s.get("default") {
+            Some(default) if !kind.accepts(default) => {
+                problems.push(format!(r#"{at}: "default" must be {}"#, kind.described()));
+            }
+            Some(default) if valid_choices.is_some_and(|c| !c.iter().any(|v| same(v, default))) => {
+                problems.push(format!(r#"{at}: "default" must be one of "enum""#));
+            }
+            _ => {}
         }
     }
-    if let Some(required) = settings.get("required") {
+    if let Some(required) = schema.get("required") {
         let named = required.as_array().is_some_and(|r| {
             r.iter().all(|n| n.as_str().is_some_and(|n| properties.contains_key(n)))
         });
@@ -137,6 +154,11 @@ pub fn validate(key: &str, settings: &Value) -> Vec<String> {
         }
     }
     problems
+}
+
+/// Whether `a` and `b` are the same value, numbers compared by value, so `1.0` is `1`.
+fn same(a: &Value, b: &Value) -> bool {
+    a == b || a.as_f64().zip(b.as_f64()).is_some_and(|(x, y)| x == y)
 }
 
 fn name_of(kind: Kind) -> &'static str {
@@ -168,7 +190,7 @@ impl Schema {
             let label = setting.label(name);
             if !setting.kind.accepts(value) {
                 problems.push(format!("{label} must be {}", setting.kind.described()));
-            } else if setting.choices.as_ref().is_some_and(|c| !c.contains(value)) {
+            } else if setting.choices.as_ref().is_some_and(|c| !c.iter().any(|v| same(v, value))) {
                 let choices: Vec<String> =
                     setting.choices.iter().flatten().map(Value::to_string).collect();
                 problems.push(format!("{label} must be one of {}", choices.join(", ")));
@@ -244,6 +266,17 @@ mod tests {
                 "syncedOnly must be true or false",
             ]
         );
+    }
+
+    /// JSON has one kind of number, so `1.0` is `1` wherever a value is checked against choices.
+    #[test]
+    fn numbers_are_compared_by_value_against_choices() {
+        let declared = json!({ "properties": { "x": { "type": "integer", "enum": [1, 2],
+            "default": 1.0 } } });
+        assert_eq!(validate("settings", &declared), Vec::<String>::new());
+        let s: Schema = serde_json::from_value(declared).unwrap();
+        assert!(s.check(&values(json!({ "x": 1.0 }))).is_empty());
+        assert_eq!(s.check(&values(json!({ "x": 3.0 }))), ["x must be one of 1, 2"]);
     }
 
     #[test]

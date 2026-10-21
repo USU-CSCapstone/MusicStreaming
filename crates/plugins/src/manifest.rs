@@ -21,6 +21,27 @@ pub const API_VERSION: &str = "0.1";
 /// The shortest interval a schedule may ask for.
 pub const MIN_EVERY_MINUTES: u64 = 5;
 
+/// The keys a manifest may give at its top level.
+const KEYS: [&str; 10] = [
+    "id",
+    "name",
+    "version",
+    "apiVersion",
+    "description",
+    "author",
+    "homepage",
+    "permissions",
+    "settings",
+    "personalSettings",
+];
+
+/// The keys a permission request may give.
+const REQUEST_KEYS: [&str; 6] =
+    ["permission", "required", "reason", "destinations", "rateLimits", "everyMinutes"];
+
+/// The keys a rate limit given as an object may give.
+const LIMIT_KEYS: [&str; 2] = ["limit", "per"];
+
 /// What a plugin can ask for (`requirements/plugins.md` §4.1): what it may reach, and the hooks
 /// that run it, which are approved the same way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -328,7 +349,7 @@ pub fn read(bytes: &[u8]) -> Result<Manifest, InvalidPlugin> {
 /// Every problem with a manifest, in words an admin can act on; none when it is valid.
 pub fn validate(manifest: &Value) -> Vec<String> {
     let Some(o) = manifest.as_object() else { return vec!["it must be a JSON object".into()] };
-    let mut problems = Vec::new();
+    let mut problems = unknown_keys("", o, &KEYS);
     let id_ok = o.get("id").and_then(Value::as_str).is_some_and(|id| {
         let mut chars = id.chars();
         (2..=64).contains(&id.len())
@@ -437,7 +458,7 @@ fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>
         let shown = r.get("permission").map_or("undefined".to_owned(), Value::to_string);
         return vec![format!("{at}: unknown permission {shown}")];
     };
-    let mut problems = Vec::new();
+    let mut problems = unknown_keys(at, r, &REQUEST_KEYS);
     if seen.contains(&permission) {
         problems.push(format!("{at}: {} is requested twice", permission.name()));
     }
@@ -450,14 +471,19 @@ fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>
     }
     let destinations = r.get("destinations");
     if permission == Permission::Network {
-        let hosts = destinations.and_then(Value::as_array);
-        let valid = hosts.is_some_and(|hosts| {
-            !hosts.is_empty() && hosts.iter().all(|h| h.as_str().is_some_and(|h| !h.is_empty()))
-        });
-        if !valid {
-            problems.push(format!(
+        let hosts = destinations
+            .and_then(Value::as_array)
+            .and_then(|hosts| hosts.iter().map(Value::as_str).collect::<Option<Vec<_>>>());
+        match hosts {
+            Some(hosts) if !hosts.is_empty() && !hosts.contains(&"") => {
+                let named = hosts.into_iter().filter(|h| *h != "*" && !is_host_name(h));
+                problems.extend(
+                    named.map(|h| format!(r#"{at}: destinations: "{h}" is not a host name"#)),
+                );
+            }
+            _ => problems.push(format!(
                 r#"{at}: network needs "destinations", host names or ["*"] for any"#
-            ));
+            )),
         }
     } else if destinations.is_some() {
         problems.push(format!(r#"{at}: only network takes "destinations""#));
@@ -529,15 +555,32 @@ fn validate_rate_limits(at: &str, limits: &Value, destinations: Option<&Value>) 
                 r#"{at}: rateLimits: "{host}" needs "per": "plugin", "user", or "host""#
             ));
         }
+        if let Value::Object(o) = limit {
+            let at = format!(r#"{at}: rateLimits: "{host}""#);
+            problems.extend(unknown_keys(&at, o, &LIMIT_KEYS));
+        }
     }
     problems
 }
 
-/// Whether `host` is one host name, as a rate limit or an exemption from one names it. It is
-/// matched exactly against the host a request names, so `*` or a pattern never would be.
+/// A problem for each key of `o` that is not one of `known`, found at `at` in the manifest
+/// (empty for its top level).
+pub(crate) fn unknown_keys(at: &str, o: &Map<String, Value>, known: &[&str]) -> Vec<String> {
+    let at = if at.is_empty() { String::new() } else { format!("{at}: ") };
+    let unknown = o.keys().filter(|key| !known.contains(&key.as_str()));
+    unknown.map(|key| format!(r#"{at}unknown key "{key}""#)).collect()
+}
+
+/// Whether `host` is one host, as a destination, a rate limit, or an exemption from one names
+/// it: one the URL parser gives back unchanged but for ASCII case, since a request's parsed host
+/// is matched against it that way (`rules::allowed`). So a pattern, a URL, a port, a trailing
+/// dot, an IPv4 shorthand such as `127.1`, IPv6 outside brackets, or an IDN not in punycode
+/// never is.
 pub fn is_host_name(host: &str) -> bool {
-    let allowed = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'.';
-    !host.is_empty() && !host.ends_with('.') && host.bytes().all(allowed)
+    let parsed = reqwest::Url::parse(&format!("http://{host}/")).ok();
+    let same =
+        parsed.as_ref().and_then(|u| u.host_str()).is_some_and(|h| h.eq_ignore_ascii_case(host));
+    same && !host.contains('*') && !host.ends_with('.')
 }
 
 fn non_empty(value: Option<&Value>) -> bool {
@@ -606,6 +649,47 @@ mod tests {
         assert_eq!(validate(&manifest), Vec::<String>::new());
         manifest.as_object_mut().unwrap().remove("apiVersion");
         assert_eq!(validate(&manifest), [r#""apiVersion" must be "0.1""#]);
+    }
+
+    /// Every key validation allows, at every level, is one the typed form reads and writes back,
+    /// so none is accepted and then dropped.
+    #[test]
+    fn the_typed_form_keeps_every_key_validation_allows() {
+        let setting = serde_json::json!({"type": "integer", "title": "Level", "description": "How.",
+            "enum": [1, 2], "default": 1, "writeOnly": true});
+        let schema = serde_json::json!({"properties": {"level": setting}, "required": ["level"]});
+        let mut personal = schema.clone();
+        personal["properties"] = serde_json::json!({"mine": setting});
+        personal["required"] = serde_json::json!(["mine"]);
+        let limit = serde_json::json!({"limit": "1/s", "per": "user"});
+        let network = serde_json::json!({"permission": "network", "required": true, "reason": "r",
+            "destinations": ["a.example", "b.example"],
+            "rateLimits": {"a.example": "2/s", "b.example": limit}});
+        let schedule = serde_json::json!({"permission": "schedule", "required": false,
+            "reason": "r", "everyMinutes": 60});
+        let manifest = serde_json::json!({"id": "ab", "name": "A", "version": "1",
+            "apiVersion": API_VERSION, "description": "D", "author": "Me",
+            "homepage": "https://a.example", "permissions": [network, schedule],
+            "settings": schema, "personalSettings": personal});
+        assert_eq!(validate(&manifest), Vec::<String>::new());
+
+        let keys = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        let sorted = |known: &[&str]| {
+            let mut known: Vec<String> = known.iter().map(|k| k.to_string()).collect();
+            known.sort();
+            known
+        };
+        let mut request = [keys(&network), keys(&schedule)].concat();
+        request.sort();
+        request.dedup();
+        assert_eq!(keys(&manifest), sorted(&KEYS));
+        assert_eq!(request, sorted(&REQUEST_KEYS));
+        assert_eq!(keys(&limit), sorted(&LIMIT_KEYS));
+        assert_eq!(keys(&schema), sorted(&settings::SCHEMA_KEYS));
+        assert_eq!(keys(&setting), sorted(&settings::SETTING_KEYS));
+
+        let typed: Manifest = serde_json::from_value(manifest.clone()).unwrap();
+        assert_eq!(serde_json::to_value(typed).unwrap(), manifest);
     }
 
     #[test]

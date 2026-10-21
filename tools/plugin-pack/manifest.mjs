@@ -39,10 +39,49 @@ const PER = ['plugin', 'user', 'host'];
 /** The shortest interval a schedule may ask for. */
 export const MIN_EVERY_MINUTES = 5;
 
+/** The keys a manifest may give at its top level. */
+const KEYS = [
+	'id',
+	'name',
+	'version',
+	'apiVersion',
+	'description',
+	'author',
+	'homepage',
+	'permissions',
+	'settings',
+	'personalSettings'
+];
+/** The keys a permission request may give. */
+const REQUEST_KEYS = ['permission', 'required', 'reason', 'destinations', 'rateLimits', 'everyMinutes'];
+/** The keys a rate limit given as an object may give. */
+const LIMIT_KEYS = ['limit', 'per'];
+/** The keys settings may give. */
+const SCHEMA_KEYS = ['properties', 'required'];
+/** The keys each setting may give. */
+const SETTING_KEYS = ['type', 'title', 'description', 'enum', 'default', 'writeOnly'];
+
 /** A rate limit for a destination: up to nine digits, no leading zero, per second, minute, or hour. */
 const RATE_LIMIT = /^[1-9][0-9]{0,8}\/(s|min|h)$/;
-/** One host name, as a rate limit or an exemption from one names it: no pattern, and no trailing dot. */
-export const HOST_NAME = /^[A-Za-z0-9.-]*[A-Za-z0-9-]$/;
+/** `s` with ASCII capitals lowercase and nothing else changed, as the server compares hosts. */
+const asciiLower = (/** @type {string} */ s) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+
+/**
+ * Whether `host` is one host, as a destination, a rate limit, or an exemption from one names it:
+ * one the URL parser gives back unchanged but for ASCII case, as the server's `is_host_name`
+ * reads it. So a pattern, a URL, a port, a trailing dot, an IPv4 shorthand such as `127.1`, IPv6
+ * outside brackets, or an IDN not in punycode never is.
+ * @param {string} host
+ * @returns {boolean}
+ */
+export function isHostName(host) {
+	try {
+		const parsed = new URL(`http://${host}/`).hostname;
+		return asciiLower(parsed) === asciiLower(host) && !host.includes('*') && !host.endsWith('.');
+	} catch {
+		return false;
+	}
+}
 
 const MAGIC = [0x00, 0x61, 0x73, 0x6d];
 /** Component-model binaries: version 0x0d, layer 1. A core module is version 1, layer 0. */
@@ -147,7 +186,7 @@ export function readManifest(bytes) {
 export function validateManifest(m) {
 	if (typeof m !== 'object' || m === null || Array.isArray(m)) return ['it must be a JSON object'];
 	const o = /** @type {Record<string, unknown>} */ (m);
-	const problems = [];
+	const problems = unknownKeys('', o, KEYS);
 	const text = (/** @type {string} */ key, required = true) => {
 		const v = o[key];
 		if (v === undefined && !required) return;
@@ -189,6 +228,7 @@ export function validateManifest(m) {
 		if (!PERMISSIONS.includes(/** @type {string} */ (r.permission))) {
 			return problems.push(`${at}: unknown permission ${JSON.stringify(r.permission)}`);
 		}
+		problems.push(...unknownKeys(at, r, REQUEST_KEYS));
 		if (seen.has(r.permission)) problems.push(`${at}: ${r.permission} is requested twice`);
 		seen.add(r.permission);
 		if (typeof r.required !== 'boolean') problems.push(`${at}: "required" must be true or false`);
@@ -199,6 +239,10 @@ export function validateManifest(m) {
 			const d = r.destinations;
 			if (!Array.isArray(d) || d.length === 0 || d.some((x) => typeof x !== 'string' || !x)) {
 				problems.push(`${at}: network needs "destinations", host names or ["*"] for any`);
+			} else {
+				for (const h of d.filter((h) => h !== '*' && !isHostName(h))) {
+					problems.push(`${at}: destinations: "${h}" is not a host name`);
+				}
 			}
 		} else if (r.destinations !== undefined) {
 			problems.push(`${at}: only network takes "destinations"`);
@@ -259,7 +303,6 @@ export function validateManifest(m) {
  */
 function validateRateLimits(at, limits, destinations) {
 	if (!isObject(limits)) return [`${at}: "rateLimits" must map destinations to limits such as "1/s"`];
-	const ascii = (/** @type {string} */ s) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
 	const hosts = Array.isArray(destinations) ? destinations.filter((d) => typeof d === 'string') : [];
 	const problems = [];
 	const entries = /** @type {Record<string, unknown>} */ (limits);
@@ -267,7 +310,7 @@ function validateRateLimits(at, limits, destinations) {
 	const keys = Object.keys(entries).sort();
 	for (const [i, host] of keys.entries()) {
 		// Hosts are compared without case, so two keys that differ only in case would be one.
-		const same = keys.slice(0, i).find((key) => ascii(key) === ascii(host));
+		const same = keys.slice(0, i).find((key) => asciiLower(key) === asciiLower(host));
 		if (same !== undefined) {
 			problems.push(`${at}: rateLimits: "${host}" is the same host as "${same}"`);
 			continue;
@@ -275,9 +318,9 @@ function validateRateLimits(at, limits, destinations) {
 		const limit = entries[host];
 		const counted = isObject(limit) ? /** @type {Record<string, unknown>} */ (limit) : undefined;
 		const pace = counted ? counted.limit : limit;
-		const named = hosts.some((d) => ascii(d) === ascii(host));
+		const named = hosts.some((d) => asciiLower(d) === asciiLower(host));
 		// Matched exactly against the host a request names, so `*` or a pattern never would be.
-		if (!HOST_NAME.test(host)) {
+		if (!isHostName(host)) {
 			problems.push(`${at}: rateLimits: "${host}" is not a host name; each limit is for one host`);
 		} else if (!named && !hosts.includes('*')) {
 			problems.push(`${at}: rateLimits: "${host}" is not one of its destinations`);
@@ -293,6 +336,7 @@ function validateRateLimits(at, limits, destinations) {
 		if (counted && !PER.includes(/** @type {string} */ (counted.per))) {
 			problems.push(`${at}: rateLimits: "${host}" needs "per": "plugin", "user", or "host"`);
 		}
+		if (counted) problems.push(...unknownKeys(`${at}: rateLimits: "${host}"`, counted, LIMIT_KEYS));
 	}
 	return problems;
 }
@@ -303,6 +347,22 @@ const KINDS = {
 	integer: { accepts: (/** @type {unknown} */ v) => Number.isInteger(v), described: 'a whole number' },
 	boolean: { accepts: (/** @type {unknown} */ v) => typeof v === 'boolean', described: 'true or false' }
 };
+
+/**
+ * A problem for each key of `o` that is not one of `known`, found at `at` in the manifest (empty
+ * for its top level), sorted as the server's map of them is.
+ * @param {string} at
+ * @param {Record<string, unknown>} o
+ * @param {string[]} known
+ * @returns {string[]}
+ */
+function unknownKeys(at, o, known) {
+	const prefix = at ? `${at}: ` : '';
+	return Object.keys(o)
+		.filter((key) => !known.includes(key))
+		.sort()
+		.map((key) => `${prefix}unknown key "${key}"`);
+}
 
 /** @param {unknown} v */
 const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -320,7 +380,7 @@ function validateSettings(key, settings) {
 		return [`"${key}" must be an object with "properties"`];
 	}
 	const properties = /** @type {Record<string, unknown>} */ (props);
-	const problems = [];
+	const problems = unknownKeys(key, /** @type {Record<string, unknown>} */ (settings), SCHEMA_KEYS);
 	// Sorted, as the server's map of them is.
 	for (const name of Object.keys(properties).sort()) {
 		if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name)) {
@@ -333,6 +393,7 @@ function validateSettings(key, settings) {
 			problems.push(`${at} must be an object`);
 			continue;
 		}
+		problems.push(...unknownKeys(at, s, SETTING_KEYS));
 		const kind = KINDS[/** @type {keyof typeof KINDS} */ (s.type)];
 		if (typeof s.type !== 'string' || !Object.hasOwn(KINDS, s.type)) {
 			problems.push(`${at}: "type" must be string, number, integer, or boolean`);
@@ -347,11 +408,14 @@ function validateSettings(key, settings) {
 		if (s.writeOnly !== undefined && typeof s.writeOnly !== 'boolean') {
 			problems.push(`${at}: "writeOnly" must be true or false`);
 		}
-		if (s.enum !== undefined && !(Array.isArray(s.enum) && s.enum.length && s.enum.every(kind.accepts))) {
+		const choices = Array.isArray(s.enum) && s.enum.length && s.enum.every(kind.accepts) ? s.enum : undefined;
+		if (s.enum !== undefined && !choices) {
 			problems.push(`${at}: "enum" must be a non-empty list of ${s.type} values`);
 		}
 		if (s.default !== undefined && !kind.accepts(s.default)) {
 			problems.push(`${at}: "default" must be ${kind.described}`);
+		} else if (s.default !== undefined && choices && !choices.includes(s.default)) {
+			problems.push(`${at}: "default" must be one of "enum"`);
 		}
 	}
 	const required = /** @type {Record<string, unknown>} */ (settings).required;
