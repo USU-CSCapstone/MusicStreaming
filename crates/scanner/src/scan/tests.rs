@@ -1,9 +1,10 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicUsize;
 
 use super::*;
 use crate::store::{FileToDecode, MemoryStore, StoreError};
-use crate::testing::{library, make_album};
+use crate::testing::{library, make_album, write_small_wav};
 
 /// A memory store that runs `on_apply` before applying each batch, so a test can change the
 /// world partway through a scan.
@@ -71,7 +72,7 @@ impl<F: Fn() + Send + Sync> Store for Hooked<F> {
 }
 
 /// Runs a new scan of the whole library against `store`, flushing whenever the batch holds
-/// anything.
+/// a track or problem, and never on a timer.
 fn scan_flushing_often(store: &dyn Store, lib: &LibraryConfig) -> Scan {
     let mut scan = Scan {
         id: 0,
@@ -85,7 +86,7 @@ fn scan_flushing_often(store: &dyn Store, lib: &LibraryConfig) -> Scan {
         cursor: None,
     };
     scan.id = store.create_scan(&scan);
-    let options = ScanOptions { batch_size: 1, ..ScanOptions::default() };
+    let options = ScanOptions { batch_size: 1, batch_interval: Duration::MAX };
     let ctx = ScanContext {
         store,
         library: lib,
@@ -121,4 +122,59 @@ fn a_root_gone_before_reconcile_suspends_and_marks_nothing() {
     assert_eq!(scan.progress.missing, 0);
     assert!(store.inner.tracks(&lib.id).iter().all(|t| !t.missing));
     assert_eq!(scan.state, ScanState::Suspended);
+}
+
+/// Sidecars are read only for a file past stage 2, so a folder of unchanged files opens none.
+/// Here an unchanged track sits beside `artist.txt`, and a new track one folder below inherits
+/// it. The biography changes as the unchanged track's touch is applied, so the new track gets
+/// the later text only because the unchanged track never read the file.
+#[test]
+fn an_unchanged_file_reads_no_sidecars() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    let biography = root.join("A/artist.txt");
+    write_small_wav(&root.join("A/01 - Kept.wav"));
+    fs::write(&biography, "Read early.").unwrap();
+    let lib = library(&root);
+    let on_apply = || fs::write(&biography, "Read when needed.").unwrap();
+    let store = Hooked { inner: MemoryStore::new(), on_apply };
+    scan_flushing_often(&store.inner, &lib);
+
+    let added = root.join("A/Y/01 - New.wav");
+    write_small_wav(&added);
+    let scan = scan_flushing_often(&store, &lib);
+    assert_eq!((scan.progress.added, scan.progress.updated), (1, 0), "{:?}", scan.progress);
+    let tracks = store.inner.tracks(&lib.id);
+    let new = tracks.iter().find(|t| t.record.path == added).unwrap();
+    let text = new.record.artist_biography.as_ref().map(|b| b.text.as_str());
+    assert_eq!(text, Some("Read when needed."));
+}
+
+/// A directory's sidecars are read once per scan, however many folders below inherit them.
+/// The biography changes as each new track's batch is applied, yet both sibling folders carry
+/// the text read for the first.
+#[test]
+fn sidecars_are_read_once_per_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    let biography = root.join("A/artist.txt");
+    write_small_wav(&root.join("A/Y/01 - One.wav"));
+    write_small_wav(&root.join("A/Z/01 - Two.wav"));
+    fs::write(&biography, "Version 0").unwrap();
+    let applied = AtomicUsize::new(0);
+    let on_apply = || {
+        let n = applied.fetch_add(1, Ordering::SeqCst) + 1;
+        fs::write(&biography, format!("Version {n}")).unwrap();
+    };
+    let store = Hooked { inner: MemoryStore::new(), on_apply };
+    let lib = library(&root);
+    let scan = scan_flushing_often(&store, &lib);
+    assert_eq!(scan.progress.added, 2, "{:?}", scan.progress);
+    let texts: Vec<_> = store
+        .inner
+        .tracks(&lib.id)
+        .into_iter()
+        .map(|t| t.record.artist_biography.map(|b| b.text))
+        .collect();
+    assert_eq!(texts, [Some("Version 0".to_owned()), Some("Version 0".to_owned())]);
 }

@@ -5,8 +5,11 @@
 //! constants here and nowhere else. Resolution is per directory and memoized
 //! for the life of a scan; the upward walk stops at the scan's root, and a
 //! symlinked sidecar is never read ([`crate::confine`]). Sidecar files are
-//! read here, once per directory: image headers and hashes for the `images`
-//! table, biography text, and lyric files per track.
+//! read here: image headers and hashes for the `images` table, biography
+//! text, and lyric files per track. A listing only names a directory's
+//! sidecars; its images and biography are read once, the first time the
+//! directory resolves, which only a file past stage 2 asks for, so a
+//! directory of unchanged files opens none.
 
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::{OsStr, OsString};
@@ -46,6 +49,27 @@ impl Sidecars {
     }
 }
 
+/// The sidecars a directory holds itself, by path, none of them read yet.
+#[derive(Default)]
+struct Local {
+    cover: Option<PathBuf>,
+    artist_image: Option<PathBuf>,
+    biography: Option<PathBuf>,
+}
+
+impl Local {
+    /// Reads the files. One that is unreadable, empty, or not an image counts as absent.
+    fn read(self) -> Sidecars {
+        Sidecars {
+            cover: self.cover.and_then(|path| read_image(&path)),
+            artist_image: self.artist_image.and_then(|path| read_image(&path)),
+            biography: self
+                .biography
+                .and_then(|path| read_text(&path).map(|text| Biography { path, text })),
+        }
+    }
+}
+
 /// Whether a filename is one of the sidecar names. The watcher uses this to
 /// widen a change to the subtree (`design/scanning.md` §9).
 pub fn is_sidecar_name(name: &OsStr) -> bool {
@@ -65,8 +89,8 @@ pub fn is_sidecar_name(name: &OsStr) -> bool {
 /// Resolver for one scan of one root.
 pub struct SidecarResolver {
     root: PathBuf,
-    /// Per directory: what is *in* it (not inherited).
-    local: HashMap<PathBuf, Sidecars>,
+    /// Per listed directory not yet resolved: the sidecars in it (not inherited).
+    local: HashMap<PathBuf, Local>,
     /// Per directory: what resolves for it after the walk.
     resolved: HashMap<PathBuf, Sidecars>,
 }
@@ -76,8 +100,8 @@ impl SidecarResolver {
         SidecarResolver { root: root.into(), local: HashMap::new(), resolved: HashMap::new() }
     }
 
-    /// Use a listing discovery already made, so the directory is not read
-    /// twice.
+    /// Use a listing discovery already made, so the directory is not listed
+    /// twice. Only names are kept; nothing is read until `dir` resolves.
     pub fn offer_listing(&mut self, dir: &Path, files: &BTreeSet<OsString>) {
         if !self.local.contains_key(dir) {
             let local = local_from_names(dir, files.iter().map(|f| f.as_os_str()));
@@ -85,13 +109,14 @@ impl SidecarResolver {
         }
     }
 
-    /// Resolve for `dir`, walking up to the root. Nearest match wins
+    /// Resolve for `dir`, walking up to the root and reading each directory's
+    /// sidecars the first time it resolves. Nearest match wins
     /// (`requirements/scanning.md` §3.5).
     pub fn resolve(&mut self, dir: &Path) -> Sidecars {
         if let Some(r) = self.resolved.get(dir) {
             return r.clone();
         }
-        let mut result = self.local_for(dir);
+        let mut result = self.local_for(dir).read();
         if !result.is_complete()
             && dir != self.root
             && dir.starts_with(&self.root)
@@ -106,22 +131,22 @@ impl SidecarResolver {
         result
     }
 
-    fn local_for(&mut self, dir: &Path) -> Sidecars {
-        if let Some(l) = self.local.get(dir) {
-            return l.clone();
+    /// The sidecars in `dir`, taken from its offered listing. A directory the
+    /// walk did not list (it lists top-down, so this is an ancestor of a
+    /// folder-scoped scan) is listed here. Called once per directory, since
+    /// [`Self::resolve`] memoizes what it returns.
+    fn local_for(&mut self, dir: &Path) -> Local {
+        if let Some(local) = self.local.remove(dir) {
+            return local;
         }
-        // A parent the walk did not list (it lists top-down, so this is
-        // ancestors of a folder-scoped scan): read it once.
-        let local = match fs::read_dir(dir) {
+        match fs::read_dir(dir) {
             Ok(entries) => {
                 let names: Vec<OsString> =
                     entries.filter_map(|e| e.ok()).map(|e| e.file_name()).collect();
                 local_from_names(dir, names.iter().map(|n| n.as_os_str()))
             }
-            Err(_) => Sidecars::default(),
-        };
-        self.local.insert(dir.to_path_buf(), local.clone());
-        local
+            Err(_) => Local::default(),
+        }
     }
 
     /// Lyrics: same directory, same stem, no walk (`requirements/scanning.md` §3.4).
@@ -173,8 +198,9 @@ fn read_image(path: &Path) -> Option<SidecarImage> {
     Some(SidecarImage { path: path.to_path_buf(), info })
 }
 
-fn local_from_names<'a>(dir: &Path, names: impl Iterator<Item = &'a OsStr>) -> Sidecars {
-    let mut out = Sidecars::default();
+/// Picks the sidecars among the file names listed in `dir`, without reading any.
+fn local_from_names<'a>(dir: &Path, names: impl Iterator<Item = &'a OsStr>) -> Local {
+    let mut out = Local::default();
     // Prefer extensions in IMAGE_EXTENSIONS order when several covers exist,
     // so the choice is deterministic across filesystems.
     let mut cover: Option<(usize, PathBuf)> = None;
@@ -183,8 +209,7 @@ fn local_from_names<'a>(dir: &Path, names: impl Iterator<Item = &'a OsStr>) -> S
         let Some(s) = name.to_str() else { continue };
         let lower = s.to_ascii_lowercase();
         if lower == BIOGRAPHY_NAME {
-            let path = dir.join(name);
-            out.biography = read_text(&path).map(|text| Biography { path, text });
+            out.biography = Some(dir.join(name));
             continue;
         }
         let Some((stem, ext)) = lower.rsplit_once('.') else {
@@ -199,8 +224,8 @@ fn local_from_names<'a>(dir: &Path, names: impl Iterator<Item = &'a OsStr>) -> S
             artist = Some((rank, dir.join(name)));
         }
     }
-    out.cover = cover.and_then(|(_, p)| read_image(&p));
-    out.artist_image = artist.and_then(|(_, p)| read_image(&p));
+    out.cover = cover.map(|(_, p)| p);
+    out.artist_image = artist.map(|(_, p)| p);
     out
 }
 
