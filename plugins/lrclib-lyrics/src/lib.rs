@@ -31,7 +31,8 @@ mod plugin {
     use crate::progress::{self, Saving, Seen, TIME_PER_RUN};
     use imports::Imports;
 
-    wit_bindgen::generate!({ path: "../../crates/plugins/wit", world: "plugin" });
+    // Reads the contract from this plugin's own copy, `wit/plugin.wit` (plugins/README.md).
+    wit_bindgen::generate!();
 
     use jewelcase::plugin::files::{self, WriteMode};
     use jewelcase::plugin::host::{self, Error, Permission};

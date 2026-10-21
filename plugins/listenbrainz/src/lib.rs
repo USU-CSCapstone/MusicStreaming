@@ -7,7 +7,8 @@ pub mod listens;
 mod plugin {
     use crate::listens::{self, Delivery, Listen};
 
-    wit_bindgen::generate!({ path: "../../crates/plugins/wit", world: "plugin" });
+    // Reads the contract from this plugin's own copy, `wit/plugin.wit` (plugins/README.md).
+    wit_bindgen::generate!();
 
     use jewelcase::plugin::events::{Play, Playing};
     use jewelcase::plugin::library::Track;

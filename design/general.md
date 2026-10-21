@@ -122,7 +122,7 @@ jewelcase/
 │   ├── plugins/     # plugin host — Wasmtime, the WIT contract, manifests (plugins.md)
 │   ├── scanner/     # ingestion pipeline (scanning.md)
 │   └── server/
-├── plugins/         # example plugins, each its own workspace
+├── plugins/         # example plugins, each its own workspace, and the author guide
 ├── tools/           # plugin-pack, which embeds a manifest in a plugin
 ├── web/             # SvelteKit client (SPA mode)
 ├── android/         # native app (later)

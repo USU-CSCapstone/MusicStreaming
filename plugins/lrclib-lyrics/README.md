@@ -18,8 +18,9 @@ library is; the added tracks it had no time for are looked up first by the next 
 manifest keeps it to 45 requests a minute, the allowance lrclib.net gives a client that doesn't
 identify itself with a homepage link or email ([its docs](https://lrclib.net/docs), Rate
 Limiting); the host doesn't send one yet.
-Its contract is [`crates/plugins/wit/plugin.wit`](../../crates/plugins/wit/plugin.wit), and
-`manifest.json` is what the Plugins page shows.
+Its contract is its own copy of the host's, [`wit/plugin.wit`](wit/plugin.wit), and
+`manifest.json` is what the Plugins page shows. How to write one like it is in
+[`plugins/README.md`](../README.md).
 
 ```sh
 rustup target add wasm32-wasip2   # once

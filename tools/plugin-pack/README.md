@@ -1,7 +1,8 @@
 # plugin-pack
 
 Turns a WebAssembly component into an installable Jewelcase plugin by embedding its
-manifest (`design/plugins.md` §6). Node only, no dependencies.
+manifest (`design/plugins.md` §6). Node only, no dependencies. Writing a plugin is covered in
+[`plugins/README.md`](../../plugins/README.md).
 
 ```sh
 node tools/plugin-pack/pack.mjs plugin.wasm manifest.json -o my-plugin.wasm
@@ -46,7 +47,7 @@ is refused at install. The other caps a run keeps to are in `design/plugins.md` 
 | Field | |
 |---|---|
 | `id` | Lowercase letters, digits, and hyphens. Stays the same across versions. |
-| `apiVersion` | `"0.1"`, the contract ([`crates/plugins/wit/plugin.wit`](../../crates/plugins/wit/plugin.wit)). |
+| `apiVersion` | `"0.1"`, the contract ([`crates/plugins/wit/plugin.wit`](../../crates/plugins/wit/plugin.wit)), which the plugin builds against from its own copy in `wit/plugin.wit`. |
 | `permissions` | Any of `libraryRead`, `libraryAdd`, `libraryChange`, `network`, `listeningActivity`, `searchActivity`, `hostRateLimits` (`requirements/plugins.md` §4.1); and the hooks `tracksChanged`, `scanFinished`, `schedule`, `played`, `playing`, `searched`, `albumsChanged`, and `artistsChanged` (`design/plugins.md` §7, `design/hooks.md`). Each needs a `reason`, which the admin sees. Mark as `required` only what the plugin cannot work without; an admin can decline the rest. |
 | `destinations` | For `network` only: the host names it talks to, such as `lrclib.net` (not a URL, a port, or a pattern; an IPv6 address in brackets, an IDN in punycode), or `["*"]` for any. |
 | `rateLimits` | For `network` only, optional: the most often each destination may be asked, as `{ "musicbrainz.org": "1/s" }`, per `s`, `min`, or `h`. Each key is one host name from `destinations`, or any host if they are `["*"]`; no wildcards. `"1/s"` counts only this plugin's requests; `{ "limit": "1/s", "per": "user" }` counts its runs for each connected user apart, for a service that limits each account; `"per": "host"` is kept to by every plugin's requests to that host, for one that limits the whole server; it needs `hostRateLimits` and a host named in `destinations`, not reached through `*` (`design/plugins.md` §7). |
