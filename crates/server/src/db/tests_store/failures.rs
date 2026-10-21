@@ -83,7 +83,7 @@ fn a_scan_the_store_cannot_record_is_not_queued() {
     testing::make_album(&root, "A", "X", 1);
     let store = Arc::new(make(&root));
     let lib = testing::library(&root);
-    let parked = testing::Parked::new(store.clone());
+    let parked = Arc::new(testing::Hooked::new(store.clone()));
     parked.hold();
     let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
     scanner.scan_library(Trigger::Manual).unwrap();
@@ -110,19 +110,11 @@ fn an_unreadable_scan_row_does_not_stop_the_others_resuming() {
     fs::create_dir_all(&root).unwrap();
     let store = make(&root);
     let lib = testing::library(&root);
-    let mut scan = Scan {
-        id: 0,
-        library: lib.id,
-        trigger: Trigger::Manual,
-        scopes: vec![Scope::root(&root)],
-        state: ScanState::Running,
-        started_at: None,
-        finished_at: None,
-        progress: ScanProgress::default(),
-        cursor: None,
-    };
-    let unreadable = store.create_scan(&scan).unwrap();
-    scan.id = store.create_scan(&scan).unwrap();
+    let scopes = [Scope::root(&root)];
+    let unreadable = store.create_scan(lib.id, Trigger::Manual, &scopes).unwrap().id;
+    let mut scan = store.create_scan(lib.id, Trigger::Manual, &scopes).unwrap();
+    scan.state = ScanState::Running;
+    store.update_scan(&scan).unwrap();
     // A valid JSON array, as the schema checks, but not of scopes.
     let corrupt = "UPDATE scans SET scopes = '[1]' WHERE id = ?1";
     store.db().write_blocking(move |tx| tx.execute(corrupt, [unreadable])).unwrap();

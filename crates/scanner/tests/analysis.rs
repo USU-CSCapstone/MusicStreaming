@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use jewelcase_ffmpeg::{Config, Ffmpeg};
-use jewelcase_scanner::testing::{encode, ffmpeg_available, library, scan_library, write_sine_wav};
-use jewelcase_scanner::*;
+use jewelcase_scanner::testing::{BareStore, encode, ffmpeg_available, write_sine_wav};
+use jewelcase_scanner::{ANALYZER_VERSION, Analyzer};
 
 #[test]
 fn sine_measures_as_expected() {
@@ -26,8 +26,7 @@ fn sine_measures_as_expected() {
     let caps = ffmpeg.verify().expect("ffmpeg verify");
     assert!(caps.missing.is_empty(), "missing decoders: {:?}", caps.missing);
 
-    let store = Arc::new(MemoryStore::new());
-    let analyzer = Analyzer::new(ffmpeg, store.clone());
+    let analyzer = Analyzer::new(ffmpeg, Arc::new(BareStore::default()));
 
     for path in [&wav, &flac] {
         let r = analyzer.analyze_file(path).expect("analyze");
@@ -45,34 +44,4 @@ fn sine_measures_as_expected() {
         assert!((rms - 0.5 / 2f64.sqrt()).abs() < 0.02, "rms {rms}");
         assert_eq!(r.analyzer_version, ANALYZER_VERSION);
     }
-}
-
-#[test]
-fn queue_drains_and_broken_files_do_not_repeat() {
-    if !ffmpeg_available() {
-        return;
-    }
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path();
-    write_sine_wav(&root.join("ok.wav"), 440.0, 0.2, 0.5);
-    std::fs::write(root.join("bad.mp3"), b"ID3\x03\x00\x00\x00\x00\x00\x00garbage garbage garbage")
-        .unwrap();
-
-    let store = Arc::new(MemoryStore::new());
-    let lib = library(root);
-    scan_library(&*store, &lib);
-    // The garbage MP3 may or may not pass tag reading; make sure something
-    // is indexed either way so analysis has work.
-    let indexed = store.tracks(lib.id).len();
-    assert!(indexed >= 1);
-
-    let ffmpeg = Ffmpeg::new(Config::default());
-    let analyzer = Analyzer::new(ffmpeg, store.clone());
-    let first = analyzer.run_once(lib.id, 10);
-    assert_eq!(first.done + first.failed, indexed);
-    assert!(first.done >= 1);
-    let second = analyzer.run_once(lib.id, 10);
-    assert_eq!(second.done + second.failed, 0, "nothing left to do");
-    let ok = store.tracks(lib.id).into_iter().find(|t| t.record.path.ends_with("ok.wav")).unwrap();
-    assert!(ok.analysis.unwrap().integrated_lufs.is_some());
 }

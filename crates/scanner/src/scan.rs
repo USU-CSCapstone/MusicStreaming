@@ -367,6 +367,3 @@ fn process_directory(
     }
     halted
 }
-
-#[cfg(test)]
-mod tests;

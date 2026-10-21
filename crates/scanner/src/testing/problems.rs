@@ -20,8 +20,8 @@ pub fn bad_file_is_a_problem_that_clears<S: InspectStore>(make: Factory<S>) {
     make_album(&root, "A", "X", 1);
     let bad = root.join("A/X/broken.flac");
     fs::write(&bad, b"this is not audio at all, just text pretending").unwrap();
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
 
     let scan = scan_library(&store, &lib);
     assert_eq!(scan.state, ScanState::Completed, "one bad file never aborts a scan");
@@ -48,8 +48,8 @@ pub fn a_symlink_is_a_problem<S: InspectStore>(make: Factory<S>) {
     write_small_wav(&outside);
     let link = root.join("A/X/linked.wav");
     std::os::unix::fs::symlink(&outside, &link).unwrap();
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
 
     let scan = scan_library(&store, &lib);
     assert_eq!(scan.progress.added, 1, "only the regular file");
@@ -71,8 +71,8 @@ pub fn a_deleted_file_takes_its_problem<S: InspectStore>(make: Factory<S>) {
         fs::create_dir_all(root.join(folder)).unwrap();
         fs::write(root.join(folder).join("broken.flac"), b"not audio").unwrap();
     }
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     assert_eq!(store.inspect_problems(lib.id).len(), 3);
 
@@ -95,8 +95,8 @@ pub fn a_dangling_link_keeps_its_problem<S: InspectStore>(make: Factory<S>) {
     make_album(&root, "A", "X", 1);
     let link = root.join("A/X/dangling.flac");
     std::os::unix::fs::symlink(root.join("A/X/nowhere.flac"), &link).unwrap();
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
 
     scan_library(&store, &lib);
     let problems: Vec<PathBuf> =
@@ -110,8 +110,8 @@ pub fn a_problem_on_a_present_file_stays<S: InspectStore>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     let track = root.join("A/X/01 - Track 1.wav");
     let mut batch = Batch::new(0);
@@ -136,8 +136,8 @@ pub fn a_folder_problem_clears_once_it_lists<S: InspectStore>(make: Factory<S>) 
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     let folder = root.join("A/X");
     fs::set_permissions(&folder, fs::Permissions::from_mode(0o000)).unwrap();
     if fs::read_dir(&folder).is_ok() {
@@ -168,8 +168,8 @@ pub fn an_unreadable_folder_keeps_its_tracks<S: InspectStore>(make: Factory<S>) 
     // A sibling whose name extends B/Y's, which a text prefix would wrongly match.
     make_album(&root, "B", "Yz", 2);
     make_album(&root, "C", "Z", 2);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     fs::remove_file(root.join("A/X/01 - Track 1.wav")).unwrap();
     fs::remove_file(root.join("B/Yz/01 - Track 1.wav")).unwrap();

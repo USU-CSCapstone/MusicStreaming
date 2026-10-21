@@ -1,5 +1,5 @@
-//! The scanner's [`Store`] on SQLite (`design/scanning.md` §7,
-//! `design/database.md` §3).
+//! The scanner's [`Store`], and the narrower traits its background jobs use, on
+//! SQLite (`design/scanning.md` §7, `design/database.md` §3).
 //!
 //! Paths are stored relative to their root. Every batch is one transaction
 //! that also maintains the derived data the schema assigns to the scanner
@@ -63,8 +63,13 @@ impl From<DbError> for StoreError {
 }
 
 impl Store for SqliteStore {
-    fn create_scan(&self, scan: &Scan) -> Result<ScanId, StoreError> {
-        Ok(scans::create(self, scan)?)
+    fn create_scan(
+        &self,
+        library: LibraryId,
+        trigger: Trigger,
+        scopes: &[Scope],
+    ) -> Result<Scan, StoreError> {
+        Ok(scans::create(self, library, trigger, scopes)?)
     }
 
     fn update_scan(&self, scan: &Scan) -> Result<(), StoreError> {
@@ -104,7 +109,19 @@ impl Store for SqliteStore {
     ) -> Result<Vec<PathBuf>, StoreError> {
         Ok(problems::under(self, library, scope)?)
     }
+}
 
+impl ProblemLog for SqliteStore {
+    fn record_problem(&self, library: LibraryId, problem: Problem) -> Result<(), StoreError> {
+        Ok(problems::record(self, library, problem)?)
+    }
+
+    fn clear_unopened(&self, library: LibraryId, path: &Path) -> Result<(), StoreError> {
+        Ok(problems::clear_unopened(self, library, path)?)
+    }
+}
+
+impl AnalysisStore for SqliteStore {
     fn next_unanalyzed(
         &self,
         library: LibraryId,
@@ -122,7 +139,9 @@ impl Store for SqliteStore {
     ) -> Result<(), StoreError> {
         Ok(jobs::store_analysis(self, library, track, result)?)
     }
+}
 
+impl PlaceholderStore for SqliteStore {
     fn next_without_placeholder(
         &self,
         library: LibraryId,

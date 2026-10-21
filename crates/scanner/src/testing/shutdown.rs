@@ -3,10 +3,10 @@
 
 use std::sync::Arc;
 
-use super::{Factory, InspectStore, Parked, library, live, make_album, wait_until_running};
-use crate::clock::now_ms;
+use super::queue::interrupted;
+use super::{Factory, Hooked, InspectStore, library, live, make_album, wait_until_running};
 use crate::queue::Scanner;
-use crate::scan::{Cursor, Scan, ScanProgress, ScanState, Trigger};
+use crate::scan::{ScanState, Trigger};
 use crate::scope::{Depth, Scope};
 
 /// A shutdown stops the running scan without ending it: the row stays running at its cursor and
@@ -19,24 +19,12 @@ pub fn a_shutdown_leaves_its_scans_to_resume<S: InspectStore + 'static>(make: Fa
     make_album(&root, "A", "X", 1);
     make_album(&root, "B", "Y", 1);
     make_album(&root, "C", "Z", 1);
-    let store: Arc<S> = Arc::new(make(&root));
     let lib = library(&root);
-    let cursor = Some(Cursor { scope_index: 0, after_directory: Some(root.join("A/X")) });
-    let mut interrupted = Scan {
-        id: 0,
-        library: lib.id,
-        trigger: Trigger::Initial,
-        scopes: vec![Scope::root(&root)],
-        state: ScanState::Running,
-        started_at: Some(now_ms()),
-        finished_at: None,
-        progress: ScanProgress::default(),
-        cursor: cursor.clone(),
-    };
-    interrupted.id = store.create_scan(&interrupted).unwrap();
-    store.update_scan(&interrupted).unwrap();
+    let store: Arc<S> = Arc::new(make(&lib));
+    let interrupted = interrupted(store.as_ref(), &root, "A/X");
+    let cursor = interrupted.cursor.clone();
 
-    let parked = Parked::new(store.clone());
+    let parked = Arc::new(Hooked::new(store.clone()));
     parked.hold();
     let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
     wait_until_running(&scanner, interrupted.id);
@@ -74,9 +62,9 @@ pub fn a_cancelled_scan_stays_cancelled<S: InspectStore + 'static>(make: Factory
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
     make_album(&root, "B", "Y", 1);
-    let store: Arc<S> = Arc::new(make(&root));
     let lib = library(&root);
-    let parked = Parked::new(store.clone());
+    let store: Arc<S> = Arc::new(make(&lib));
+    let parked = Arc::new(Hooked::new(store.clone()));
     let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
 
     parked.hold();

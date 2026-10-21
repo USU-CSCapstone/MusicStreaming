@@ -8,8 +8,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::scan::ScanState;
-use crate::store::MemoryStore;
-use crate::testing::{library, make_album, wait_until};
+use crate::testing::{BareStore, library, make_album, wait_until};
 
 /// A library of two roots, `nas` and `kept`, with one album each, where `nas` has gone, as an
 /// unmounted share does, and the path it has gone to. `nas` sorts first, so a scan has walked
@@ -23,16 +22,15 @@ fn nas_gone(tmp: &Path) -> (LibraryConfig, PathBuf, PathBuf) {
 }
 
 /// A scanner of `lib` over `store`, and the owner of its thread.
-fn scanner(store: &Arc<MemoryStore>, lib: &LibraryConfig) -> (Scanner, ScannerThread) {
+fn scanner(store: &Arc<BareStore>, lib: &LibraryConfig) -> (Scanner, ScannerThread) {
     Scanner::start(store.clone(), lib.clone()).unwrap()
 }
 
 /// Shortens the wait of the work `scanner` holds to retry to `wait`, and waits for the scan the
-/// worker queues for it once the wait has passed to end, as the second of `store`'s scans of
-/// library 1.
-fn retried(scanner: &Scanner, store: &MemoryStore, wait: Duration) {
+/// worker queues for it once the wait has passed to end, as the second of `store`'s scans.
+fn retried(scanner: &Scanner, store: &BareStore, wait: Duration) {
     assert!(scanner.retry_in(wait), "nothing waits to be retried");
-    let ended = |_: &Scanner| store.scans(1).get(1).is_some_and(|s| s.finished_at.is_some());
+    let ended = |_: &Scanner| store.scans().get(1).is_some_and(|s| s.finished_at.is_some());
     wait_until(scanner, "the retry never ended", ended);
 }
 
@@ -43,7 +41,7 @@ fn retried(scanner: &Scanner, store: &MemoryStore, wait: Duration) {
 fn a_root_that_did_not_answer_is_retried() {
     let tmp = tempfile::tempdir().unwrap();
     let (lib, nas, away) = nas_gone(tmp.path());
-    let store = Arc::new(MemoryStore::new());
+    let store = Arc::new(BareStore::default());
     let (scanner, thread) = scanner(&store, &lib);
     let suspended = scanner.scan_library(Trigger::Initial).unwrap();
     scanner.wait_idle();
@@ -51,11 +49,11 @@ fn a_root_that_did_not_answer_is_retried() {
     fs::rename(&away, &nas).unwrap();
     retried(&scanner, &store, Duration::from_millis(100));
     drop(thread);
-    let [first, retry] = store.scans(lib.id).try_into().unwrap();
+    let [first, retry] = store.scans().try_into().unwrap();
     assert_eq!((first.id, first.state), (suspended, ScanState::Suspended));
     assert_eq!((retry.trigger, retry.state), (Trigger::Initial, ScanState::Completed));
     assert_eq!(retry.scopes, [Scope::root(&nas)]);
-    assert_eq!(store.tracks(lib.id).len(), 2);
+    assert_eq!(retry.progress.added, 1, "the retry indexed the root: {:?}", retry.progress);
 }
 
 /// A scan suspended by an exclude pattern that does not compile is not retried.
@@ -65,14 +63,14 @@ fn a_pattern_that_does_not_compile_is_not_retried() {
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
     let lib = LibraryConfig { excludes: vec!["[".into()], ..library(&root) };
-    let store = Arc::new(MemoryStore::new());
+    let store = Arc::new(BareStore::default());
     let (scanner, thread) = scanner(&store, &lib);
     scanner.scan_library(Trigger::Manual).unwrap();
     scanner.wait_idle();
 
     assert!(!scanner.retry_in(Duration::ZERO));
     drop(thread);
-    let [row] = store.scans(lib.id).try_into().unwrap();
+    let [row] = store.scans().try_into().unwrap();
     assert_eq!(row.state, ScanState::Suspended);
 }
 
@@ -82,7 +80,7 @@ fn a_pattern_that_does_not_compile_is_not_retried() {
 fn a_scan_covering_the_waiting_work_takes_it_over() {
     let tmp = tempfile::tempdir().unwrap();
     let (lib, nas, away) = nas_gone(tmp.path());
-    let store = Arc::new(MemoryStore::new());
+    let store = Arc::new(BareStore::default());
     let (scanner, thread) = scanner(&store, &lib);
     scanner.scan_library(Trigger::Initial).unwrap();
     scanner.wait_idle();
@@ -92,7 +90,7 @@ fn a_scan_covering_the_waiting_work_takes_it_over() {
     scanner.wait_idle();
     assert!(!scanner.retry_in(Duration::ZERO));
     drop(thread);
-    let row = store.scans(lib.id).into_iter().find(|s| s.id == scheduled).unwrap();
+    let row = store.scans().into_iter().find(|s| s.id == scheduled).unwrap();
     assert_eq!(row.state, ScanState::Completed);
 }
 
@@ -104,7 +102,7 @@ fn a_scan_covering_the_waiting_work_takes_it_over() {
 fn a_root_removed_from_the_library_is_not_retried() {
     let tmp = tempfile::tempdir().unwrap();
     let (lib, nas, _) = nas_gone(tmp.path());
-    let store = Arc::new(MemoryStore::new());
+    let store = Arc::new(BareStore::default());
     let (scanner, thread) = scanner(&store, &lib);
     scanner.scan_library(Trigger::Initial).unwrap();
     scanner.wait_idle();
@@ -118,7 +116,7 @@ fn a_root_removed_from_the_library_is_not_retried() {
     scanner.scan_library(Trigger::Manual).unwrap();
     scanner.wait_idle();
     drop(thread);
-    let rows = store.scans(lib.id);
+    let rows = store.scans();
     let in_nas = |scan: &Scan| scan.scopes.iter().any(|scope| scope.root == nas);
     assert_eq!(rows.iter().filter(|scan| in_nas(scan)).count(), 1, "{rows:?}");
     assert_eq!(rows.len(), 3, "{rows:?}");

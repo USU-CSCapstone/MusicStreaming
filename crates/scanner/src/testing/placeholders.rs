@@ -24,8 +24,8 @@ pub fn placeholders_fill_once_per_image<S: InspectStore + 'static>(make: Factory
     assert!(status.success());
     let png = fs::read(&cover).unwrap();
     fs::write(root.join("B/Y/cover.png"), &png[..33]).unwrap();
-    let store = Arc::new(make(&root));
     let lib = library(&root);
+    let store = Arc::new(make(&lib));
     scan_library(&*store, &lib);
 
     let pending = store.next_without_placeholder(lib.id, 10).unwrap();

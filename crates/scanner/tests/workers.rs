@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jewelcase_ffmpeg::{Config, Ffmpeg};
-use jewelcase_scanner::{Analyzer, MemoryStore, Placeholders};
+use jewelcase_scanner::testing::BareStore;
+use jewelcase_scanner::{Analyzer, Placeholders};
 
 /// The nice value in a `/proc/.../stat` line: its 19th field, after the name in parentheses,
 /// which may hold spaces.
@@ -27,7 +28,7 @@ fn analysis_and_placeholder_threads_run_at_low_priority() {
     let own = nice_in(&std::fs::read_to_string("/proc/thread-self/stat").unwrap());
     let lowered = (own + 10).min(19);
     let ffmpeg = Ffmpeg::new(Config::default());
-    let store = Arc::new(MemoryStore::new());
+    let store = Arc::new(BareStore::default());
     let analyzer = Arc::new(Analyzer::new(ffmpeg.clone(), store.clone()));
     let placeholders = Arc::new(Placeholders::new(ffmpeg, store));
     let workers = (analyzer.start(1).unwrap(), placeholders.start(1).unwrap());

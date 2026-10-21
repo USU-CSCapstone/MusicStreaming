@@ -2,16 +2,17 @@
 //! queue behind the scans already there (`design/scanning.md` §9).
 
 use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 
 use super::{
-    Factory, InspectStore, Parked, library, live, make_album, wait_until, wait_until_running,
+    Factory, Hooked, InspectStore, library, live, make_album, wait_until, wait_until_running,
     write_small_wav,
 };
 use crate::clock::now_ms;
 use crate::library::LibraryConfig;
 use crate::queue::Scanner;
-use crate::scan::{Cursor, Scan, ScanProgress, ScanState, Trigger};
+use crate::scan::{Cursor, Scan, ScanState, Trigger};
 use crate::scope::{Depth, Scope};
 
 /// A scan's start and finish times read back as they were saved.
@@ -19,20 +20,10 @@ pub fn scan_times_read_back<S: InspectStore>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     fs::create_dir_all(&root).unwrap();
-    let store = make(&root);
     let lib = library(&root);
-    let mut scan = Scan {
-        id: 0,
-        library: lib.id,
-        trigger: Trigger::Manual,
-        scopes: vec![Scope::root(&root)],
-        state: ScanState::Running,
-        started_at: None,
-        finished_at: None,
-        progress: ScanProgress::default(),
-        cursor: None,
-    };
-    scan.id = store.create_scan(&scan).unwrap();
+    let store = make(&lib);
+    let mut scan = store.create_scan(lib.id, Trigger::Manual, &[Scope::root(&root)]).unwrap();
+    scan.state = ScanState::Running;
     scan.started_at = Some(1_700_000_000_123);
     scan.finished_at = Some(1_700_000_000_456);
     store.update_scan(&scan).unwrap();
@@ -49,27 +40,13 @@ pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory
     make_album(&root, "A", "X", 2);
     make_album(&root, "B", "Y", 2);
     make_album(&root, "C", "Z", 2);
-    let store: Arc<S> = Arc::new(make(&root));
     let lib = library(&root);
+    let store: Arc<S> = Arc::new(make(&lib));
 
-    // A scan interrupted after finishing directory "A/X" is left Running
-    // with a cursor. Starting the scanner resumes it.
-    let interrupted = Scan {
-        id: 0,
-        library: lib.id,
-        trigger: Trigger::Initial,
-        scopes: vec![Scope::root(&root)],
-        state: ScanState::Running,
-        started_at: Some(now_ms()),
-        finished_at: None,
-        progress: ScanProgress::default(),
-        cursor: Some(Cursor { scope_index: 0, after_directory: Some(root.join("A/X")) }),
-    };
-    let mut interrupted_row = interrupted.clone();
-    interrupted_row.id = store.create_scan(&interrupted).unwrap();
-    store.update_scan(&interrupted_row).unwrap();
+    // Starting the scanner resumes the scan interrupted after "A/X".
+    let interrupted_row = interrupted(store.as_ref(), &root, "A/X");
 
-    let parked = Parked::new(store.clone());
+    let parked = Arc::new(Hooked::new(store.clone()));
     let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
     scanner.wait_idle();
     let scans = store.inspect_scans(lib.id);
@@ -132,25 +109,13 @@ pub fn a_resumed_scan_takes_no_new_work<S: InspectStore + 'static>(make: Factory
     make_album(&root, "A", "X", 1);
     make_album(&root, "B", "Y", 1);
     make_album(&root, "C", "Z", 1);
-    let store: Arc<S> = Arc::new(make(&root));
     let lib = library(&root);
+    let store: Arc<S> = Arc::new(make(&lib));
     for _ in 0..2 {
-        let mut interrupted = Scan {
-            id: 0,
-            library: lib.id,
-            trigger: Trigger::Initial,
-            scopes: vec![Scope::root(&root)],
-            state: ScanState::Running,
-            started_at: Some(now_ms()),
-            finished_at: None,
-            progress: ScanProgress::default(),
-            cursor: Some(Cursor { scope_index: 0, after_directory: Some(root.join("B/Y")) }),
-        };
-        interrupted.id = store.create_scan(&interrupted).unwrap();
-        store.update_scan(&interrupted).unwrap();
+        interrupted(store.as_ref(), &root, "B/Y");
     }
 
-    let parked = Parked::new(store.clone());
+    let parked = Arc::new(Hooked::new(store.clone()));
     parked.hold();
     let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
     wait_until(&scanner, "no resumed scan started", |scanner| scanner.running().is_some());
@@ -180,9 +145,9 @@ pub fn a_reconfigure_during_a_scan_applies_its_excludes<S: InspectStore + 'stati
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
     make_album(&root, "backup", "X", 1);
-    let store: Arc<S> = Arc::new(make(&root));
     let lib = library(&root);
-    let parked = Parked::new(store.clone());
+    let store: Arc<S> = Arc::new(make(&lib));
+    let parked = Arc::new(Hooked::new(store.clone()));
     let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
     scanner.scan_library(Trigger::Initial).unwrap();
     scanner.wait_idle();
@@ -201,4 +166,16 @@ pub fn a_reconfigure_during_a_scan_applies_its_excludes<S: InspectStore + 'stati
     let missing = |path: &str| tracks.iter().find(|t| t.path == root.join(path)).unwrap().missing;
     assert!(!missing("A/X/01 - Track 1.wav"));
     assert!(missing("backup/X/01 - Track 1.wav"));
+}
+
+/// A scan of the [`library`] at `root` that a previous process left running after the folder
+/// `after`, as `store` holds it.
+pub(super) fn interrupted(store: &dyn InspectStore, root: &Path, after: &str) -> Scan {
+    let scopes = [Scope::root(root)];
+    let mut scan = store.create_scan(library(root).id, Trigger::Initial, &scopes).unwrap();
+    scan.state = ScanState::Running;
+    scan.started_at = Some(now_ms());
+    scan.cursor = Some(Cursor { scope_index: 0, after_directory: Some(root.join(after)) });
+    store.update_scan(&scan).unwrap();
+    scan
 }

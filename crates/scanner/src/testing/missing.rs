@@ -12,8 +12,8 @@ pub fn missing_then_returned<S: InspectStore>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 2);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
 
     let p = root.join("A/X/02 - Track 2.wav");
@@ -59,8 +59,8 @@ pub fn unavailable_root_suspends_and_touches_nothing<S: InspectStore>(make: Fact
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("nas");
     make_album(&root, "A", "X", 2);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     assert_eq!(live(&store, &lib).len(), 2);
 

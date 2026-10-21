@@ -7,8 +7,7 @@ use std::collections::BTreeSet;
 use super::*;
 use crate::queue::ScannerThread;
 use crate::scan::Scan;
-use crate::store::MemoryStore;
-use crate::testing::library;
+use crate::testing::{BareStore, library};
 use fakes::{FailsAt, limit_error, seen};
 
 mod coverage;
@@ -19,15 +18,15 @@ mod watcher;
 const PATIENCE: Duration = Duration::from_secs(10);
 
 /// A scanner of the library with its one root at `root`, the owner of its thread, and its store.
-fn scanner(root: &Path) -> (Scanner, ScannerThread, Arc<MemoryStore>) {
-    let store = Arc::new(MemoryStore::new());
+fn scanner(root: &Path) -> (Scanner, ScannerThread, Arc<BareStore>) {
+    let store = Arc::new(BareStore::default());
     let (scanner, thread) = Scanner::start(store.clone(), library(root)).unwrap();
     (scanner, thread, store)
 }
 
 /// The library's scans in `store`.
-fn scans(store: &MemoryStore) -> Vec<Scan> {
-    store.scans(1)
+fn scans(store: &BareStore) -> Vec<Scan> {
+    store.scans()
 }
 
 /// Short waits throughout, and a fallback schedule of `fallback`.

@@ -19,7 +19,7 @@ use crate::clock::now_ms;
 use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport, in_background};
 use crate::library::LibraryId;
 use crate::problems::{Problem, ProblemKind};
-use crate::store::{FileToDecode, Store};
+use crate::store::{AnalysisStore, FileToDecode};
 use crate::worker::Worker;
 use waveform::{Waveform, WaveformBuilder};
 
@@ -71,14 +71,14 @@ impl AnalysisResult {
 /// Runs analysis for one library.
 pub struct Analyzer {
     ffmpeg: Ffmpeg,
-    store: Arc<dyn Store>,
+    store: Arc<dyn AnalysisStore>,
     waveform_bins: usize,
     retries: Retries,
 }
 
 impl Analyzer {
     /// Analyzes with `ffmpeg` into `store`.
-    pub fn new(ffmpeg: Ffmpeg, store: Arc<dyn Store>) -> Analyzer {
+    pub fn new(ffmpeg: Ffmpeg, store: Arc<dyn AnalysisStore>) -> Analyzer {
         Analyzer {
             ffmpeg,
             store,

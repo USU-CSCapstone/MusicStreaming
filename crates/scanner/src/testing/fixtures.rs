@@ -14,9 +14,7 @@ use lofty::tag::{ItemKey, Tag, TagType};
 use super::{InspectStore, InspectTrack};
 use crate::library::LibraryConfig;
 use crate::queue::Scanner;
-use crate::scan::{
-    Scan, ScanContext, ScanId, ScanOptions, ScanProgress, ScanState, Trigger, run_scan,
-};
+use crate::scan::{Scan, ScanContext, ScanId, ScanOptions, Trigger, run_scan};
 use crate::scope::Scope;
 use crate::store::Store;
 
@@ -98,18 +96,7 @@ pub fn scan_once(
 ) -> Scan {
     let cancel = AtomicBool::new(false);
     let options = ScanOptions::default();
-    let mut scan = Scan {
-        id: 0,
-        library: lib.id,
-        trigger,
-        scopes,
-        state: ScanState::Queued,
-        started_at: None,
-        finished_at: None,
-        progress: ScanProgress::default(),
-        cursor: None,
-    };
-    scan.id = store.create_scan(&scan).unwrap();
+    let mut scan = store.create_scan(lib.id, trigger, &scopes).unwrap();
     let ctx = ScanContext {
         store,
         library: lib,
@@ -134,10 +121,12 @@ pub(super) fn live(store: &dyn InspectStore, lib: &LibraryConfig) -> Vec<Inspect
     v
 }
 
-/// Makes the store a scenario runs against, given the library root. The store must be able to
-/// hold library 1, the id [`library`] uses; a store that needs a row for it (SQLite) creates one
-/// here.
-pub type Factory<S> = fn(&Path) -> S;
+/// Makes the store a scenario runs against, holding `lib`: library 1, as [`library`] makes it,
+/// with every one of its roots. It takes the whole library because a scenario may give it more
+/// than one root, and a store that keeps rows for them (SQLite) creates each here, as it can
+/// place a path only under a root it holds. The library's excludes reach the scan through `lib`,
+/// so the store need not keep them.
+pub type Factory<S> = fn(&LibraryConfig) -> S;
 
 /// Blocks until `condition` holds for `scanner`, failing the test with `what` after 30 seconds.
 pub fn wait_until(scanner: &Scanner, what: &str, condition: impl Fn(&Scanner) -> bool) {

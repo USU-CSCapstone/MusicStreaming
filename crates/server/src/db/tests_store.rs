@@ -1,4 +1,4 @@
-//! The SQLite store against the scanner's conformance suite, plus the
+//! The SQLite store against the scanner's pipeline suite, plus the
 //! derived-data rules the schema assigns to the scanner.
 
 use std::path::{Path, PathBuf};
@@ -17,17 +17,24 @@ use super::store::names::parse;
 use super::testing::Image;
 use super::waveform;
 
-/// The suite's library has id 1; its database lives beside the root.
+/// The store [`library_store`] makes for the library with its one root at `root`.
 fn make(root: &Path) -> SqliteStore {
-    let dir = root.parent().unwrap().join("state");
+    library_store(&testing::library(root))
+}
+
+/// The suite's [`testing::Factory`]: a store holding `lib`, with id 1 and every one of its roots,
+/// whose database lives beside its first root.
+fn library_store(lib: &LibraryConfig) -> SqliteStore {
+    let dir = lib.roots[0].parent().unwrap().join("state");
     std::fs::create_dir_all(&dir).unwrap();
     let db = Arc::new(Database::open(&dir.join("jewelcase.db")).unwrap());
-    let root = root.to_path_buf();
+    let roots = lib.roots.clone();
     db.write_blocking(move |tx| {
         let exists: Option<i64> =
             tx.query_row("SELECT id FROM libraries WHERE id = 1", [], |r| r.get(0)).optional()?;
         if exists.is_none() {
-            libraries::create(tx, Some(1), "Test", &[&root], &[])?;
+            let roots: Vec<&Path> = roots.iter().map(PathBuf::as_path).collect();
+            libraries::create(tx, Some(1), "Test", &roots, &[])?;
         }
         Ok(())
     })
@@ -60,7 +67,7 @@ impl InspectStore for SqliteStore {
             .prepare(
                 "SELECT t.id, t.root_id, t.path, t.missing_since IS NOT NULL, t.title, t.album_title, t.sort_key, \
                  t.artist_sort_key, t.codec, t.container, t.channels, t.sample_rate_hz, t.analyzer_version > 0, \
-                 t.loudness_lufs IS NOT NULL, \
+                 t.loudness_lufs IS NOT NULL, t.last_seen_scan_id, \
                  (SELECT image_id FROM albums a WHERE a.id = t.album_id) IS NOT NULL, \
                  EXISTS (SELECT 1 FROM track_artists ta JOIN artists ar ON ar.id = ta.artist_id \
                          WHERE ta.track_id = t.id AND ar.biography IS NOT NULL), \
@@ -85,9 +92,10 @@ impl InspectStore for SqliteStore {
                     r.get::<_, i64>(11)?,
                     r.get::<_, bool>(12)?,
                     r.get::<_, bool>(13)?,
-                    r.get::<_, bool>(14)?,
+                    r.get::<_, Option<i64>>(14)?,
                     r.get::<_, bool>(15)?,
                     r.get::<_, bool>(16)?,
+                    r.get::<_, bool>(17)?,
                 ))
             })
             .unwrap();
@@ -108,6 +116,7 @@ impl InspectStore for SqliteStore {
                 rate,
                 analyzed,
                 measured,
+                last_seen_scan,
                 art,
                 bio,
                 lyr,
@@ -128,6 +137,7 @@ impl InspectStore for SqliteStore {
                 id,
                 path: roots[&root_id].join(&rel),
                 missing,
+                last_seen_scan,
                 title,
                 artists,
                 album,
@@ -228,7 +238,7 @@ impl InspectStore for SqliteStore {
 }
 
 mod suite {
-    jewelcase_scanner::store_suite!(super::make);
+    jewelcase_scanner::store_suite!(super::library_store);
 }
 
 mod derived;
@@ -504,18 +514,8 @@ fn a_scan_that_cannot_be_recorded_is_not_recorded_empty() {
     let lib = testing::library(&root);
     // A folder name that is not UTF-8, as Linux allows.
     let folder = root.join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
-    let scan = Scan {
-        id: 0,
-        library: lib.id,
-        trigger: Trigger::Watch,
-        scopes: vec![Scope::folder(&root, folder, Depth::Directory)],
-        state: ScanState::Queued,
-        started_at: None,
-        finished_at: None,
-        progress: ScanProgress::default(),
-        cursor: None,
-    };
-    assert!(store.create_scan(&scan).is_err());
+    let scopes = [Scope::folder(&root, folder, Depth::Directory)];
+    assert!(store.create_scan(lib.id, Trigger::Watch, &scopes).is_err());
     assert!(store.scans(1).unwrap().is_empty());
 }
 
@@ -858,19 +858,7 @@ fn benchmark_cold_scan_store_only() {
 
     let synth = |i: usize| record(&root, i);
 
-    let scan_id = store
-        .create_scan(&Scan {
-            id: 0,
-            library: lib.id,
-            trigger: Trigger::Initial,
-            scopes: vec![Scope::root(&root)],
-            state: ScanState::Running,
-            started_at: None,
-            finished_at: None,
-            progress: ScanProgress::default(),
-            cursor: None,
-        })
-        .unwrap();
+    let scan_id = store.create_scan(lib.id, Trigger::Initial, &[Scope::root(&root)]).unwrap().id;
 
     let started = Instant::now();
     let batch_size = 250;

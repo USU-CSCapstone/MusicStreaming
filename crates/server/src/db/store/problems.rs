@@ -37,6 +37,12 @@ pub fn under(store: &SqliteStore, lib: i64, scope: &Scope) -> Result<Vec<PathBuf
     })
 }
 
+/// Records `problem` for `lib` in a transaction of its own, as a background job does.
+pub fn record(store: &SqliteStore, lib: i64, problem: Problem) -> Result<(), DbError> {
+    let roots = store.roots.clone();
+    store.db.write_blocking(move |tx| record_problem(&roots, tx, lib, &problem))
+}
+
 /// Runs `sql` with `args` bound and returns its one text column.
 fn texts(conn: &Connection, sql: &str, args: &[&dyn ToSql]) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(sql)?;
@@ -115,21 +121,23 @@ pub fn clear_problem(roots: &Roots, tx: &Transaction<'_>, lib: i64, path: &Path)
 }
 
 /// Clears the problem at `path` if it says the file could not be opened ([`UNOPENED`]), now
-/// that a background job has opened it.
-pub fn clear_unopened(roots: &Roots, tx: &Transaction<'_>, lib: i64, path: &Path) -> Result<()> {
-    let Some((root_id, rel)) = roots.locate(lib, path) else {
+/// that a background job has opened it, in a transaction of its own.
+pub fn clear_unopened(store: &SqliteStore, lib: i64, path: &Path) -> Result<(), DbError> {
+    let Some((root_id, rel)) = store.roots.locate(lib, path) else {
         return Ok(());
     };
-    let [unreadable, denied] = UNOPENED.map(name);
-    let group = tx
-        .query_row(
-            "SELECT p.group_id FROM scan_problems p JOIN scan_problem_groups g ON g.id = p.group_id \
-             WHERE p.root_id = ?1 AND p.path = ?2 AND g.kind IN (?3, ?4)",
-            params![root_id, rel, unreadable, denied],
-            |r| r.get(0),
-        )
-        .optional()?;
-    clear_problem_rel(tx, root_id, &rel, group)
+    store.db.write_blocking(move |tx| {
+        let [unreadable, denied] = UNOPENED.map(name);
+        let group = tx
+            .query_row(
+                "SELECT p.group_id FROM scan_problems p JOIN scan_problem_groups g ON g.id = p.group_id \
+                 WHERE p.root_id = ?1 AND p.path = ?2 AND g.kind IN (?3, ?4)",
+                params![root_id, rel, unreadable, denied],
+                |r| r.get(0),
+            )
+            .optional()?;
+        clear_problem_rel(tx, root_id, &rel, group)
+    })
 }
 
 /// Deletes the problem at `rel` under `root_id` when `group`, the group it is in, is `Some`, and

@@ -14,10 +14,12 @@ fn two_roots(tmp: &Path) -> (PathBuf, PathBuf, LibraryConfig) {
 
 /// A batch that fails in the second root leaves that root undone, from the cursor the store
 /// holds, and not the first, which completed.
-#[test]
-fn a_failed_batch_leaves_the_scopes_from_its_cursor_undone() {
+pub fn a_failed_batch_leaves_the_scopes_from_its_cursor_undone<S: InspectStore + 'static>(
+    make: Factory<S>,
+) {
     let tmp = tempfile::tempdir().unwrap();
     let (a, b, lib) = two_roots(tmp.path());
+    let store = Arc::new(make(&lib));
     let fail_after = track(&b, "B/Y", 1);
     let armed = AtomicBool::new(false);
     let on_lookup = |path: &Path| {
@@ -26,23 +28,17 @@ fn a_failed_batch_leaves_the_scopes_from_its_cursor_undone() {
         }
         Ok(())
     };
-    let on_apply = || {
+    let on_apply = |_: &_| {
         if armed.load(Ordering::SeqCst) {
             return Err(StoreError("disk full".into()));
         }
         Ok(())
     };
-    let store = Hooked {
-        inner: MemoryStore::new(),
-        on_apply,
-        on_lookup,
-        on_under: || Ok(()),
-        on_scan_write: || Ok(()),
-    };
-    let scopes = vec![Scope::root(&a), Scope::root(&b)];
-    let mut scan = Scan { scopes, ..new_scan(&store, &lib) };
+    let hooked = Hooked::new(store).on_apply(on_apply).on_lookup(on_lookup);
+    let scopes = [Scope::root(&a), Scope::root(&b)];
+    let mut scan = hooked.create_scan(lib.id, Trigger::Manual, &scopes).unwrap();
 
-    let undone = run(&store, &lib, &mut scan, &batches_of(1), &Stops::default());
+    let undone = run(&hooked, &lib, &mut scan, &batches_of(1), &Stops::default());
     assert_eq!(scan.state, ScanState::Suspended);
     assert_eq!(scan.cursor.as_ref().map(|c| c.scope_index), Some(1), "{scan:?}");
     assert_eq!(undone, Undone { unanswered: Vec::new(), failed: vec![Scope::root(&b)] });
@@ -51,12 +47,12 @@ fn a_failed_batch_leaves_the_scopes_from_its_cursor_undone() {
 /// A scan whose first root does not answer leaves nothing undone when a shutdown or a cancel
 /// stops it in a later root: a shutdown leaves its row running, for the next start to resume,
 /// and a cancelled scan's work is not wanted.
-#[test]
-fn a_stopped_scan_leaves_nothing_undone() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (a, b, lib) = two_roots(tmp.path());
-    let gone = tmp.path().join("gone");
+pub fn a_stopped_scan_leaves_nothing_undone<S: InspectStore + 'static>(make: Factory<S>) {
     for (stopped, state) in [(true, ScanState::Running), (false, ScanState::Cancelled)] {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b, lib) = two_roots(tmp.path());
+        let gone = tmp.path().join("gone");
+        let store = Arc::new(make(&lib));
         let stops = Stops::default();
         let stop_at = track(&b, "B/Y", 1);
         let on_lookup = |path: &Path| {
@@ -66,17 +62,11 @@ fn a_stopped_scan_leaves_nothing_undone() {
             }
             Ok(())
         };
-        let store = Hooked {
-            inner: MemoryStore::new(),
-            on_apply: || Ok(()),
-            on_lookup,
-            on_under: || Ok(()),
-            on_scan_write: || Ok(()),
-        };
-        let scopes = vec![Scope::root(&gone), Scope::root(&a), Scope::root(&b)];
-        let mut scan = Scan { scopes, ..new_scan(&store, &lib) };
+        let hooked = Hooked::new(store.clone()).on_lookup(on_lookup);
+        let scopes = [Scope::root(&gone), Scope::root(&a), Scope::root(&b)];
+        let mut scan = hooked.create_scan(lib.id, Trigger::Manual, &scopes).unwrap();
 
-        let undone = run(&store, &lib, &mut scan, &batches_of(1), &stops);
-        assert_eq!((only_row(&store, &lib).state, undone), (state, Undone::default()));
+        let undone = run(&hooked, &lib, &mut scan, &batches_of(1), &stops);
+        assert_eq!((only_row(store.as_ref(), &lib).state, undone), (state, Undone::default()));
     }
 }

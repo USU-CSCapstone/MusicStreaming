@@ -14,7 +14,7 @@ use jewelcase_ffmpeg::Ffmpeg;
 
 use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport, in_background};
 use crate::library::LibraryId;
-use crate::store::{FileToDecode, Store};
+use crate::store::{FileToDecode, PlaceholderStore};
 use crate::worker::Worker;
 
 /// ThumbHash encodes at most 100 pixels a side, and gains nothing from more.
@@ -28,13 +28,13 @@ const IDLE: Duration = Duration::from_secs(5);
 /// Fills placeholders for one library.
 pub struct Placeholders {
     ffmpeg: Ffmpeg,
-    store: Arc<dyn Store>,
+    store: Arc<dyn PlaceholderStore>,
     retries: Retries,
 }
 
 impl Placeholders {
     /// Makes placeholders with `ffmpeg` and stores them in `store`.
-    pub fn new(ffmpeg: Ffmpeg, store: Arc<dyn Store>) -> Placeholders {
+    pub fn new(ffmpeg: Ffmpeg, store: Arc<dyn PlaceholderStore>) -> Placeholders {
         Placeholders { ffmpeg, store, retries: Retries::new(RETRY_AFTER) }
     }
 

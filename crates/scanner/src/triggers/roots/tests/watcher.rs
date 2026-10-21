@@ -125,7 +125,7 @@ fn what_the_library_excludes_is_not_watched() {
     let root = tmp.path().to_path_buf();
     let skip = root.join("skip");
     fs::create_dir(&skip).unwrap();
-    let store = Arc::new(MemoryStore::new());
+    let store = Arc::new(BareStore::default());
     let library = LibraryConfig { excludes: vec!["skip".into()], ..library(&root) };
     let (scanner, thread) = Scanner::start(store.clone(), library).unwrap();
     let debounce = Duration::from_millis(20);
@@ -199,7 +199,7 @@ fn every_folder_is_watched_when_an_exclude_does_not_compile() {
     let root = tmp.path().to_path_buf();
     let sub = root.join("sub");
     fs::create_dir(&sub).unwrap();
-    let store = Arc::new(MemoryStore::new());
+    let store = Arc::new(BareStore::default());
     let library = LibraryConfig { excludes: vec!["[".into()], ..library(&root) };
     let (scanner, thread) = Scanner::start(store.clone(), library).unwrap();
     let debounce = Duration::from_millis(20);

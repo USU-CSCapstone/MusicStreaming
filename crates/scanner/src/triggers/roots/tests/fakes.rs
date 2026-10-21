@@ -85,7 +85,7 @@ pub(super) fn limit_error() -> notify::Error {
 
 /// Writes files into `folder`, in `root`, until a watcher scan newer than scan `after` covers
 /// just that folder, and returns that scan's id.
-pub(super) fn seen(store: &MemoryStore, root: &Path, folder: &Path, after: i64) -> i64 {
+pub(super) fn seen(store: &BareStore, root: &Path, folder: &Path, after: i64) -> i64 {
     let scope = vec![Scope::folder(root, folder, Depth::Directory)];
     let deadline = Instant::now() + PATIENCE;
     let mut n = 0;

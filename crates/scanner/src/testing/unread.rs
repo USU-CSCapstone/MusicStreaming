@@ -14,7 +14,6 @@ use crate::analysis::{ANALYZER_VERSION, AnalysisResult};
 use crate::library::LibraryConfig;
 use crate::problems::ProblemKind;
 use crate::scan::ScanState;
-use crate::store::Batch;
 
 /// Overwrites the file at `path` with bytes that are not audio, and dates it five seconds after
 /// it was last modified, so a scan finds it changed.
@@ -104,7 +103,7 @@ pub fn an_unreadable_file_is_read_again_until_it_reads<S: InspectStore>(make: Fa
     assert_eq!(scan_library(&store, &lib).progress.problems, 1);
     assert_eq!(problems(&store, &lib), denied());
     assert!(store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap().is_empty());
-    store.apply(lib.id, Batch { opened: vec![one.clone()], ..Batch::default() }).unwrap();
+    store.clear_unopened(lib.id, &one).unwrap();
     assert_eq!(problems(&store, &lib), []);
     assert_eq!(scan_library(&store, &lib).progress.problems, 1);
     assert_eq!(problems(&store, &lib), denied());
@@ -123,8 +122,8 @@ pub fn a_broken_file_moved_away_and_back_keeps_its_problem<S: InspectStore>(make
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     let (one, away) = (root.join("A/X/01 - Track 1.wav"), tmp.path().join("away.wav"));
     break_file(&one);
@@ -168,8 +167,8 @@ pub fn a_result_for_a_file_broken_during_its_decode_is_not_stored<S: InspectStor
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 2);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     let (one, two) = (root.join("A/X/01 - Track 1.wav"), root.join("A/X/02 - Track 2.wav"));
     let picked = store.next_unanalyzed(lib.id, ANALYZER_VERSION, 2).unwrap();

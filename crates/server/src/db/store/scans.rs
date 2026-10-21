@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use jewelcase_scanner::{Cursor, Scan, ScanId, ScanProgress};
+use jewelcase_scanner::{Cursor, Scan, ScanProgress, ScanState, Scope, Trigger};
 use rusqlite::Error::{FromSqlConversionFailure, ToSqlConversionFailure};
 use rusqlite::types::Type;
 use rusqlite::{Connection, Result, Row, Transaction, params};
@@ -11,22 +11,26 @@ use super::SqliteStore;
 use super::names::{name, parse};
 use crate::db::{DbError, now_ms};
 
-/// Records `scan` as a new scan of its library and returns its id.
-pub fn create(store: &SqliteStore, scan: &Scan) -> Result<ScanId, DbError> {
-    let scan = scan.clone();
+/// Records a new scan of `scopes` in `lib` under `trigger`, queued, and returns it.
+pub fn create(
+    store: &SqliteStore,
+    lib: i64,
+    trigger: Trigger,
+    scopes: &[Scope],
+) -> Result<Scan, DbError> {
+    let scopes = scopes.to_vec();
     store.db.write_blocking(move |tx| {
         // A path that is not UTF-8 cannot be written: better no record of the scan than one
         // that resumes as a scan of nothing.
-        let scopes = serde_json::to_string(&scan.scopes)
+        let json = serde_json::to_string(&scopes)
             .map_err(|error| ToSqlConversionFailure(Box::new(error)))?;
         let id = tx.query_row(
             "INSERT INTO scans (id, library_id, trigger, state, scopes, created_at) \
              VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, ?5) RETURNING id",
-            params![scan.library, name(scan.trigger), name(scan.state), scopes, now_ms()],
+            params![lib, name(trigger), name(ScanState::Queued), json, now_ms()],
             |r| r.get(0),
         )?;
-        save(tx, id, &scan)?;
-        Ok(id)
+        Ok(Scan::queued(id, lib, trigger, scopes))
     })
 }
 

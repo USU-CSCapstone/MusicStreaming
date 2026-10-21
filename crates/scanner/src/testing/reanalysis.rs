@@ -20,8 +20,8 @@ pub(super) fn analyzed_album<S: InspectStore>(
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", n);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     for (track, _) in store.next_unanalyzed(lib.id, ANALYZER_VERSION, n).unwrap() {
         let measured = AnalysisResult {
@@ -107,8 +107,8 @@ pub fn a_result_for_replaced_audio_is_not_stored<S: InspectStore>(make: Factory<
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 2);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     let picked = store.next_unanalyzed(lib.id, ANALYZER_VERSION, 2).unwrap();
     let (one, two) = (root.join("A/X/01 - Track 1.wav"), root.join("A/X/02 - Track 2.wav"));

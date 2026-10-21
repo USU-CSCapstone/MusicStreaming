@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use super::{Inner, coalesce_scopes};
 use crate::clock::now_ms;
-use crate::scan::{Scan, ScanId, ScanProgress, ScanState, Trigger};
+use crate::scan::{Scan, ScanId, ScanState, Trigger};
 use crate::scope::Scope;
 
 impl Inner {
@@ -19,30 +19,19 @@ impl Inner {
             return Some(id);
         }
         let library = self.library.read().unwrap().id;
-        let mut scan = Scan {
-            id: 0,
-            library,
-            trigger,
-            scopes,
-            state: ScanState::Queued,
-            started_at: None,
-            finished_at: None,
-            progress: ScanProgress::default(),
-            cursor: None,
-        };
-        match self.store.create_scan(&scan) {
-            Ok(id) => scan.id = id,
+        let scan = match self.store.create_scan(library, trigger, &scopes) {
+            Ok(scan) => scan,
             Err(error) => {
                 tracing::error!(
                     library, ?trigger, %error,
                     "scan not queued; retrying after a wait"
                 );
-                self.queue.lock().unwrap().retry.add(trigger, scan.scopes, Instant::now());
+                self.queue.lock().unwrap().retry.add(trigger, scopes, Instant::now());
                 // The worker may be waiting with no time limit, and must wait for the retry's.
                 self.wake.notify_all();
                 return None;
             }
-        }
+        };
         let (id, replaced) = {
             let mut q = self.queue.lock().unwrap();
             match q.covering(&scan.scopes) {

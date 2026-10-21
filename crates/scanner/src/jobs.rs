@@ -22,7 +22,7 @@ use crate::confine::is_refused;
 use crate::discover::check_root;
 use crate::library::LibraryId;
 use crate::problems::{self, Problem};
-use crate::store::{Batch, FileToDecode, Store, StoreError};
+use crate::store::{FileToDecode, ProblemLog, StoreError};
 use crate::worker::Worker;
 
 /// How long a file that cannot be opened is skipped before it is tried again.
@@ -148,7 +148,7 @@ impl Retries {
     /// returned for [`RunReport::store_failed`].
     pub fn pass<K, T>(
         &self,
-        store: &dyn Store,
+        store: &dyn ProblemLog,
         library: LibraryId,
         limit: usize,
         next: impl FnOnce(usize) -> Result<Vec<(K, FileToDecode)>, StoreError>,
@@ -195,11 +195,11 @@ impl Retries {
     /// store error leaves the file to decode again.
     fn succeeded(
         &self,
-        store: &dyn Store,
+        store: &dyn ProblemLog,
         library: LibraryId,
         file: &FileToDecode,
     ) -> Result<(), StoreError> {
-        store.apply(library, Batch { opened: vec![file.path.clone()], ..Batch::default() })?;
+        store.clear_unopened(library, &file.path)?;
         *self.last_failed.lock().unwrap() = None;
         self.waiting.lock().unwrap().remove(&file.path);
         Ok(())
@@ -209,7 +209,7 @@ impl Retries {
     /// waits only once its problem is recorded, so a store error leaves it as it was.
     fn failed(
         &self,
-        store: &dyn Store,
+        store: &dyn ProblemLog,
         library: LibraryId,
         file: &FileToDecode,
         failure: Failure,
@@ -219,7 +219,7 @@ impl Retries {
             return Ok(Outcome::BackOff);
         };
         tracing::warn!(path = %file.path.display(), kind = ?problem.kind, "cannot decode: {}", problem.detail);
-        store.apply(library, Batch { problems: vec![problem], ..Batch::default() })?;
+        store.record_problem(library, problem)?;
         let mut waiting = self.waiting.lock().unwrap();
         if outcome == Outcome::Skipped {
             waiting.insert(file.path.clone(), Instant::now() + self.retry_after);
@@ -269,17 +269,17 @@ mod tests {
     use super::*;
     use crate::clock::now_ms;
     use crate::problems::ProblemKind;
-    use crate::store::MemoryStore;
+    use crate::testing::BareStore;
 
     /// A root holding the files `a` and `b`, and a store to record problems in.
-    fn setup() -> (tempfile::TempDir, MemoryStore, [FileToDecode; 2]) {
+    fn setup() -> (tempfile::TempDir, BareStore, [FileToDecode; 2]) {
         let tmp = tempfile::tempdir().unwrap();
         let file = |name: &str| {
             fs::write(tmp.path().join(name), b"x").unwrap();
             FileToDecode { root: tmp.path().to_path_buf(), path: tmp.path().join(name) }
         };
         let files = [file("a"), file("b")];
-        (tmp, MemoryStore::new(), files)
+        (tmp, BareStore::default(), files)
     }
 
     /// A background job runs its next pass at once after a pass that did something, and waits
@@ -321,9 +321,9 @@ mod tests {
         let retries = Retries::new(RETRY_AFTER);
         let lib = 1;
         assert_eq!(retries.failed(&store, lib, &a, stall(&a)).unwrap(), Outcome::BackOff);
-        assert!(store.problems(lib).is_empty());
+        assert!(store.problems().is_empty());
         assert_eq!(retries.failed(&store, lib, &a, stall(&a)).unwrap(), Outcome::Verdict);
-        assert_eq!(store.problems(lib).len(), 1);
+        assert_eq!(store.problems().len(), 1);
         // Another file failing in between makes it a first failure again.
         assert_eq!(retries.failed(&store, lib, &b, stall(&b)).unwrap(), Outcome::BackOff);
         assert_eq!(retries.failed(&store, lib, &a, stall(&a)).unwrap(), Outcome::BackOff);
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(retries.failed(&store, lib, &a, stall(&a)).unwrap(), Outcome::BackOff);
         retries.succeeded(&store, lib, &a).unwrap();
         assert_eq!(retries.failed(&store, lib, &a, stall(&a)).unwrap(), Outcome::BackOff);
-        assert!(store.problems(lib).is_empty());
+        assert!(store.problems().is_empty());
     }
 
     #[test]
@@ -351,7 +351,7 @@ mod tests {
             assert_eq!(retries.failed(&store, lib, &a, gone).unwrap(), Outcome::BackOff);
             assert_eq!(retries.failed(&store, lib, &a, stall(&a)).unwrap(), Outcome::BackOff);
         }
-        assert!(store.problems(lib).is_empty());
+        assert!(store.problems().is_empty());
         assert!(!retries.waiting(&a));
         fs::rename(tmp.path().with_extension("away"), tmp.path()).unwrap();
     }
@@ -366,7 +366,7 @@ mod tests {
         let failure = Failure::from_ffmpeg(&a.path, &rejected);
         assert_eq!(retries.failed(&store, lib, &a, failure).unwrap(), Outcome::Skipped);
         assert!(retries.waiting(&a));
-        assert_eq!(store.problems(lib)[0].kind, ProblemKind::Unreadable);
+        assert_eq!(store.problems()[0].kind, ProblemKind::Unreadable);
     }
 
     #[test]

@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use super::*;
 use crate::scan::ScanState;
-use crate::store::{MemoryStore, StoreError};
-use crate::testing::{Hooked, Parked, library, make_album, wait_until};
+use crate::store::StoreError;
+use crate::testing::{BareStore, Hooked, library, make_album, wait_until};
 
 /// How long a test waits for something another thread does.
 const BOUND: Duration = Duration::from_secs(10);
@@ -70,15 +70,9 @@ impl Gate {
     }
 }
 
-/// The store [`gated`] makes.
-type Gated = Hooked<
-    fn() -> Result<(), StoreError>,
-    fn(&Path) -> Result<(), StoreError>,
-    Box<dyn Fn() -> Result<(), StoreError> + Send + Sync>,
->;
-
-/// A memory store whose scan-row writes the returned [`Gate`] holds up or fails.
-fn gated() -> (Arc<Gated>, Arc<Gate>) {
+/// A store whose scan-row writes the returned [`Gate`] holds up or fails, and the bare store it
+/// wraps, which holds the rows.
+fn gated() -> (Arc<Hooked<'static>>, Arc<BareStore>, Arc<Gate>) {
     let ((enter, entered), (release, released)) = (mpsc::channel(), mpsc::channel());
     let gate = Arc::new(Gate {
         hold_at: AtomicUsize::new(0),
@@ -88,36 +82,30 @@ fn gated() -> (Arc<Gated>, Arc<Gate>) {
         release,
         released: Mutex::new(released),
     });
+    let rows = Arc::new(BareStore::default());
     let hook = gate.clone();
-    let store = Gated {
-        inner: MemoryStore::new(),
-        on_apply: || Ok(()),
-        on_lookup: |_| Ok(()),
-        on_under: || Ok(()),
-        on_scan_write: Box::new(move || hook.write()),
-    };
-    (Arc::new(store), gate)
+    let store = Hooked::new(rows.clone()).on_scan_write(move || hook.write());
+    (Arc::new(store), rows, gate)
 }
 
 /// A scanner of the library at `root`, A/X and B/Y with one track each, over `store`, running a
-/// scan of A that is held once its row says it runs, with a scan of B queued behind it. Returns
-/// the scanner, the owner of its thread, the store that holds the scan, and the two scans' ids.
+/// scan of A that `store` holds once its row, one of `rows`, says it runs, with a scan of B
+/// queued behind it. Returns the scanner, the owner of its thread, and the two scans' ids.
 fn parked(
     root: &Path,
-    store: &Arc<Gated>,
-) -> (Scanner, ScannerThread, Arc<Parked>, ScanId, ScanId) {
+    store: &Arc<Hooked<'static>>,
+    rows: &BareStore,
+) -> (Scanner, ScannerThread, ScanId, ScanId) {
     make_album(root, "A", "X", 1);
     make_album(root, "B", "Y", 1);
-    let parked = Parked::new(store.clone());
-    parked.hold();
-    let (scanner, thread) = Scanner::start(parked.clone(), library(root)).unwrap();
+    store.hold();
+    let (scanner, thread) = Scanner::start(store.clone(), library(root)).unwrap();
     let running = scanner.request(Trigger::Manual, folder(root, "A")).unwrap();
     let queued = scanner.request(Trigger::Manual, folder(root, "B")).unwrap();
-    let saved_running = |_: &Scanner| {
-        store.inner.scans(1).iter().any(|s| s.id == running && s.state == ScanState::Running)
-    };
+    let saved_running =
+        |_: &Scanner| rows.scans().iter().any(|s| s.id == running && s.state == ScanState::Running);
     wait_until(&scanner, "the scan of A never started", saved_running);
-    (scanner, thread, parked, running, queued)
+    (scanner, thread, running, queued)
 }
 
 /// A scan of the folder `name` under `root`, and all below it.
@@ -142,9 +130,9 @@ fn running_within_bound(scanner: &Scanner) -> Result<Option<ScanId>, RecvTimeout
     answered.recv_timeout(BOUND)
 }
 
-/// The state of the scan `id` among `store`'s rows.
-fn state(store: &Gated, id: ScanId) -> ScanState {
-    store.inner.scans(1).into_iter().find(|s| s.id == id).unwrap().state
+/// The state of the scan `id` among `rows`.
+fn state(rows: &BareStore, id: ScanId) -> ScanState {
+    rows.scans().into_iter().find(|s| s.id == id).unwrap().state
 }
 
 /// While a request, a cancel, or a request replacing a queued scan waits on the store to write a
@@ -153,8 +141,8 @@ fn state(store: &Gated, id: ScanId) -> ScanState {
 fn the_queue_answers_while_a_scan_row_is_written() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
-    let (store, gate) = gated();
-    let (scanner, thread, parked, running, queued) = parked(&root, &store);
+    let (store, rows, gate) = gated();
+    let (scanner, thread, running, queued) = parked(&root, &store, &rows);
     gate.hold(1);
     let scopes = folder(&root, "C");
     let requesting = in_thread(&scanner, move |s| s.request(Trigger::Watch, scopes));
@@ -178,10 +166,10 @@ fn the_queue_answers_while_a_scan_row_is_written() {
     gate.release();
     let library = replacing.join().unwrap().unwrap();
 
-    parked.release();
+    store.release();
     scanner.wait_idle();
     drop(thread);
-    let states = [running, queued, requested, library].map(|id| state(&store, id));
+    let states = [running, queued, requested, library].map(|id| state(&rows, id));
     use ScanState::{Cancelled, Completed};
     assert_eq!(states, [Completed, Cancelled, Cancelled, Completed]);
 }
@@ -193,8 +181,8 @@ fn the_queue_answers_while_a_scan_row_is_written() {
 fn requests_racing_for_the_same_work_queue_it_once() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
-    let (store, gate) = gated();
-    let (scanner, thread, parked, _, _) = parked(&root, &store);
+    let (store, rows, gate) = gated();
+    let (scanner, thread, _, _) = parked(&root, &store, &rows);
 
     gate.hold(1);
     let scopes = folder(&root, "C");
@@ -205,9 +193,9 @@ fn requests_racing_for_the_same_work_queue_it_once() {
     assert_eq!(first.join().unwrap(), Some(second));
     let queued = scanner.queued();
     assert_eq!(queued.iter().filter(|s| s.scopes == folder(&root, "C")).count(), 1);
-    let rows = store.inner.scans(1);
+    let rows = rows.scans();
     assert_eq!(rows.iter().filter(|s| s.state == ScanState::Cancelled).count(), 1);
-    parked.release();
+    store.release();
     scanner.wait_idle();
     drop(thread);
 }
@@ -217,14 +205,14 @@ fn requests_racing_for_the_same_work_queue_it_once() {
 fn a_request_joining_a_queued_scan_writes_no_row() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
-    let (store, _) = gated();
-    let (scanner, thread, parked, _, queued) = parked(&root, &store);
-    let rows = store.inner.scans(1).len();
+    let (store, rows, _) = gated();
+    let (scanner, thread, _, queued) = parked(&root, &store, &rows);
+    let written = rows.scans().len();
 
     let within = vec![Scope::folder(&root, root.join("B/Y"), Depth::Directory)];
     assert_eq!(scanner.request(Trigger::Watch, within), Some(queued));
-    assert_eq!(store.inner.scans(1).len(), rows);
-    parked.release();
+    assert_eq!(rows.scans().len(), written);
+    store.release();
     scanner.wait_idle();
     drop(thread);
 }
@@ -236,16 +224,16 @@ fn a_request_the_store_cannot_record_is_retried() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
-    let (store, gate) = gated();
+    let (store, rows, gate) = gated();
     let (scanner, thread) = Scanner::start(store.clone(), library(&root)).unwrap();
 
     gate.fail(1);
     assert_eq!(scanner.scan_library(Trigger::Manual), None);
     assert!(scanner.retry_in(Duration::ZERO), "the request waits to be retried");
-    let ended = |_: &Scanner| store.inner.scans(1).first().is_some_and(|s| s.finished_at.is_some());
+    let ended = |_: &Scanner| rows.scans().first().is_some_and(|s| s.finished_at.is_some());
     wait_until(&scanner, "the retry never ended", ended);
     drop(thread);
-    let [row] = store.inner.scans(1).try_into().unwrap();
+    let [row] = rows.scans().try_into().unwrap();
     assert_eq!((row.trigger, row.state), (Trigger::Manual, ScanState::Completed));
     assert_eq!(row.scopes, [Scope::root(&root)]);
 }
@@ -256,8 +244,8 @@ fn a_request_the_store_cannot_record_is_retried() {
 fn a_cancel_the_store_cannot_save_leaves_the_scan_queued_where_it_was() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
-    let (store, gate) = gated();
-    let (scanner, thread, parked, running, queued) = parked(&root, &store);
+    let (store, rows, gate) = gated();
+    let (scanner, thread, running, queued) = parked(&root, &store, &rows);
     let c = scanner.request(Trigger::Manual, folder(&root, "C")).unwrap();
     let d = scanner.request(Trigger::Manual, folder(&root, "D")).unwrap();
 
@@ -265,10 +253,10 @@ fn a_cancel_the_store_cannot_save_leaves_the_scan_queued_where_it_was() {
     assert!(!scanner.cancel(c));
     let ids: Vec<ScanId> = scanner.queued().iter().map(|s| s.id).collect();
     assert_eq!(ids, [queued, c, d]);
-    parked.release();
+    store.release();
     scanner.wait_idle();
     drop(thread);
-    let states = [running, queued, c, d].map(|id| state(&store, id));
+    let states = [running, queued, c, d].map(|id| state(&rows, id));
     assert_eq!(states, [ScanState::Completed; 4]);
 }
 
@@ -278,8 +266,8 @@ fn a_cancel_the_store_cannot_save_leaves_the_scan_queued_where_it_was() {
 fn a_scan_put_back_goes_after_what_is_still_ahead_of_it() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
-    let (store, gate) = gated();
-    let (scanner, thread, parked, _, queued) = parked(&root, &store);
+    let (store, rows, gate) = gated();
+    let (scanner, thread, _, queued) = parked(&root, &store, &rows);
     let c = scanner.request(Trigger::Manual, folder(&root, "C")).unwrap();
     let d = scanner.request(Trigger::Manual, folder(&root, "D")).unwrap();
 
@@ -292,7 +280,7 @@ fn a_scan_put_back_goes_after_what_is_still_ahead_of_it() {
     assert!(!cancelling.join().unwrap());
     let ids: Vec<ScanId> = scanner.queued().iter().map(|s| s.id).collect();
     assert_eq!(ids, [c, d]);
-    parked.release();
+    store.release();
     scanner.wait_idle();
     drop(thread);
 }
@@ -303,19 +291,19 @@ fn a_scan_put_back_goes_after_what_is_still_ahead_of_it() {
 fn a_scan_put_back_after_a_failed_cancel_runs() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
-    let (store, gate) = gated();
-    let (scanner, thread, parked, running, queued) = parked(&root, &store);
+    let (store, rows, gate) = gated();
+    let (scanner, thread, running, queued) = parked(&root, &store, &rows);
 
     gate.hold(1);
     gate.fail(1);
     let cancelling = in_thread(&scanner, move |s| s.cancel(queued));
     gate.wait_held();
-    parked.release();
-    let idle = |s: &Scanner| s.is_idle() && state(&store, running) == ScanState::Completed;
+    store.release();
+    let idle = |s: &Scanner| s.is_idle() && state(&rows, running) == ScanState::Completed;
     wait_until(&scanner, "the running scan never ended", idle);
     gate.release();
     assert!(!cancelling.join().unwrap());
-    let ran = |_: &Scanner| state(&store, queued) == ScanState::Completed;
+    let ran = |_: &Scanner| state(&rows, queued) == ScanState::Completed;
     wait_until(&scanner, "the scan put back never ran", ran);
     drop(thread);
 }

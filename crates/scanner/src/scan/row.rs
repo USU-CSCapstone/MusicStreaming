@@ -77,6 +77,22 @@ pub struct Cursor {
 }
 
 impl Scan {
+    /// The scan `id` of `scopes` in `library` under `trigger`, queued: not started, with no
+    /// progress and no cursor. What [`Store::create_scan`](crate::Store::create_scan) returns.
+    pub fn queued(id: ScanId, library: LibraryId, trigger: Trigger, scopes: Vec<Scope>) -> Scan {
+        Scan {
+            id,
+            library,
+            trigger,
+            scopes,
+            state: ScanState::Queued,
+            started_at: None,
+            finished_at: None,
+            progress: ScanProgress::default(),
+            cursor: None,
+        }
+    }
+
     /// Whether `other`'s work is entirely within this scan's.
     pub fn covers(&self, other: &[Scope]) -> bool {
         other.iter().all(|o| self.scopes.iter().any(|s| s.covers(o)))

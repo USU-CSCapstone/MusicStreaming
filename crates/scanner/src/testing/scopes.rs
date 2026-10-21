@@ -19,8 +19,8 @@ pub fn a_scope_through_a_folder_link_walks_nothing<S: InspectStore>(make: Factor
     make_album(&tmp.path().join("other"), "B", "Y", 1);
     let link = root.join("linked");
     std::os::unix::fs::symlink(tmp.path().join("other/B"), &link).unwrap();
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
 
     let scope = Scope::folder(&root, &link, Depth::Subtree);
     let scan = scan_once(&store, &lib, Trigger::Watch, vec![scope]);
@@ -40,8 +40,8 @@ pub fn a_scope_naming_a_deleted_folder_reconciles<S: InspectStore>(make: Factory
     make_album(&root, "A", "X", 2);
     make_album(&root, "B", "Y", 1);
     fs::write(root.join("A/X/broken.flac"), b"not audio").unwrap();
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     assert_eq!(store.inspect_problems(lib.id).len(), 1);
     fs::remove_dir_all(root.join("A/X")).unwrap();
@@ -62,8 +62,8 @@ pub fn a_scope_at_a_file_reconciles_nothing<S: InspectStore>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     let track = root.join("A/X/01 - Track 1.wav");
     let scope = Scope::folder(&root, &track, Depth::Subtree);
@@ -90,8 +90,8 @@ pub fn indexes_under_sees_live_tracks_and_problems<S: InspectStore>(make: Factor
     make_album(&root, "A 2", "X", 1);
     fs::create_dir_all(root.join("B")).unwrap();
     fs::write(root.join("B/broken.flac"), b"not audio").unwrap();
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     let under = |path: &str| store.indexes_under(lib.id, &root.join(path)).unwrap();
     assert!(under("A") && under("A/X") && under("B"));
@@ -109,8 +109,8 @@ pub fn folder_scope_reconciles_only_inside_itself<S: InspectStore>(make: Factory
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
     make_album(&root, "B", "Y", 1);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
 
     fs::remove_file(root.join("B/Y/01 - Track 1.wav")).unwrap();
@@ -140,8 +140,8 @@ pub fn non_ascii_subtree_reconciles_only_inside_itself<S: InspectStore>(make: Fa
     make_album(&root, "Björk 1", "Début", 2);
     make_album(&root, "Björk 1 (Live)", "X", 1);
     make_album(&root, "Björk 10", "X", 1);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
 
     for path in ["Björk 1/Début", "Björk 1 (Live)/X", "Björk 10/X"] {
@@ -168,8 +168,8 @@ pub fn non_ascii_directory_reconciles_only_itself<S: InspectStore>(make: Factory
     let root = tmp.path().join("lib");
     make_album(&root, "Björk", "Début", 2);
     make_album(&root, "Björk/Début", "1", 1);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
 
     fs::remove_file(root.join("Björk/Début/01 - Track 1.wav")).unwrap();
@@ -189,8 +189,8 @@ pub fn root_directory_reconciles_only_its_own_files<S: InspectStore>(make: Facto
     let root = tmp.path().join("lib");
     write_small_wav(&root.join("loose.wav"));
     make_album(&root, "A", "X", 1);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
 
     fs::remove_file(root.join("loose.wav")).unwrap();

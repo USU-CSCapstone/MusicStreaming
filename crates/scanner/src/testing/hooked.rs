@@ -1,39 +1,113 @@
-//! A memory store with hooks, for the scanner's own tests of what a scan or the queue does when
-//! the store is slow, fails, or the world changes partway.
+//! A store wrapper with hooks, for scenarios where the store is slow or fails, the world changes
+//! partway through a scan, or scans are held up while the queue is worked.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex};
 
-use crate::analysis::AnalysisResult;
 use crate::library::LibraryId;
-use crate::scan::{Scan, ScanId};
+use crate::scan::{Scan, ScanId, ScanState, Trigger};
 use crate::scope::Scope;
-use crate::store::{Batch, FileToDecode, IndexedFile, MemoryStore, PickedTrack, Store, StoreError};
+use crate::store::{Batch, IndexedFile, Store, StoreError};
 
-/// A memory store that runs `on_apply` before applying each batch, `on_lookup` with each path it
-/// looks up, `on_under` before [`Store::problems_under`] and [`Store::indexes_under`], and
-/// `on_scan_write` before it creates or saves a scan row, failing the call if the hook returns an
-/// error, so a test can change the world, hold a call up, or fail it, partway through a scan.
-pub struct Hooked<F, L, W> {
-    pub inner: MemoryStore,
-    pub on_apply: F,
-    pub on_lookup: L,
-    pub on_under: fn() -> Result<(), StoreError>,
-    pub on_scan_write: W,
+/// A hook run before a call.
+type Hook<'a> = Box<dyn Fn() -> Result<(), StoreError> + Send + Sync + 'a>;
+
+/// A [`Hook`] given what the call is about, such as the batch it applies.
+type HookOn<'a, A> = Box<dyn Fn(&A) -> Result<(), StoreError> + Send + Sync + 'a>;
+
+/// Passes every call to the store it wraps, first running the hook set for it, so a test can
+/// change the world, hold a call up, or fail it. Every hook passes until a builder method such as
+/// [`Hooked::on_apply`] sets it, and one that returns an error fails the call before it reaches
+/// the inner store. Hooks may borrow from the test for `'a`. Apart from the hooks,
+/// [`Hooked::hold`] holds scans up until [`Hooked::release`].
+pub struct Hooked<'a> {
+    inner: Arc<dyn Store>,
+    on_apply: HookOn<'a, Batch>,
+    on_lookup: HookOn<'a, Path>,
+    on_under: Hook<'a>,
+    on_scan_write: Hook<'a>,
+    held: Mutex<bool>,
+    released: Condvar,
 }
 
-impl<F, L, W> Store for Hooked<F, L, W>
-where
-    F: Fn() -> Result<(), StoreError> + Send + Sync,
-    L: Fn(&Path) -> Result<(), StoreError> + Send + Sync,
-    W: Fn() -> Result<(), StoreError> + Send + Sync,
-{
-    fn create_scan(&self, scan: &Scan) -> Result<ScanId, StoreError> {
+impl<'a> Hooked<'a> {
+    /// Wraps `inner`, with every hook passing and no scan held up.
+    pub fn new(inner: Arc<dyn Store>) -> Hooked<'a> {
+        Hooked {
+            inner,
+            on_apply: Box::new(|_| Ok(())),
+            on_lookup: Box::new(|_| Ok(())),
+            on_under: Box::new(|| Ok(())),
+            on_scan_write: Box::new(|| Ok(())),
+            held: Mutex::new(false),
+            released: Condvar::new(),
+        }
+    }
+
+    /// Runs `hook` with each batch before it is applied.
+    pub fn on_apply(
+        self,
+        hook: impl Fn(&Batch) -> Result<(), StoreError> + Send + Sync + 'a,
+    ) -> Hooked<'a> {
+        Hooked { on_apply: Box::new(hook), ..self }
+    }
+
+    /// Runs `hook` with each path before it is looked up.
+    pub fn on_lookup(
+        self,
+        hook: impl Fn(&Path) -> Result<(), StoreError> + Send + Sync + 'a,
+    ) -> Hooked<'a> {
+        Hooked { on_lookup: Box::new(hook), ..self }
+    }
+
+    /// Runs `hook` before each [`Store::problems_under`] and [`Store::indexes_under`].
+    pub fn on_under(
+        self,
+        hook: impl Fn() -> Result<(), StoreError> + Send + Sync + 'a,
+    ) -> Hooked<'a> {
+        Hooked { on_under: Box::new(hook), ..self }
+    }
+
+    /// Runs `hook` before each scan row is created or saved.
+    pub fn on_scan_write(
+        self,
+        hook: impl Fn() -> Result<(), StoreError> + Send + Sync + 'a,
+    ) -> Hooked<'a> {
+        Hooked { on_scan_write: Box::new(hook), ..self }
+    }
+
+    /// Holds up each scan as it next saves its row as running: the row is written, then the save
+    /// waits until [`Hooked::release`], so a scan that starts while held waits before it reads
+    /// anything.
+    pub fn hold(&self) {
+        *self.held.lock().unwrap() = true;
+    }
+
+    /// Lets every held scan go on.
+    pub fn release(&self) {
+        *self.held.lock().unwrap() = false;
+        self.released.notify_all();
+    }
+}
+
+impl Store for Hooked<'_> {
+    fn create_scan(
+        &self,
+        library: LibraryId,
+        trigger: Trigger,
+        scopes: &[Scope],
+    ) -> Result<Scan, StoreError> {
         (self.on_scan_write)()?;
-        self.inner.create_scan(scan)
+        self.inner.create_scan(library, trigger, scopes)
     }
     fn update_scan(&self, scan: &Scan) -> Result<(), StoreError> {
         (self.on_scan_write)()?;
-        self.inner.update_scan(scan)
+        self.inner.update_scan(scan)?;
+        if scan.state == ScanState::Running {
+            let held = self.held.lock().unwrap();
+            drop(self.released.wait_while(held, |held| *held).unwrap());
+        }
+        Ok(())
     }
     fn interrupted_scans(&self, library: LibraryId) -> Result<Vec<Scan>, StoreError> {
         self.inner.interrupted_scans(library)
@@ -43,7 +117,7 @@ where
         self.inner.lookup(library, path)
     }
     fn apply(&self, library: LibraryId, batch: Batch) -> Result<(), StoreError> {
-        (self.on_apply)()?;
+        (self.on_apply)(&batch)?;
         self.inner.apply(library, batch)
     }
     fn mark_missing_unseen(
@@ -66,36 +140,5 @@ where
     fn indexes_under(&self, library: LibraryId, folder: &Path) -> Result<bool, StoreError> {
         (self.on_under)()?;
         self.inner.indexes_under(library, folder)
-    }
-    fn next_unanalyzed(
-        &self,
-        library: LibraryId,
-        analyzer_version: u32,
-        limit: usize,
-    ) -> Result<Vec<(PickedTrack, FileToDecode)>, StoreError> {
-        self.inner.next_unanalyzed(library, analyzer_version, limit)
-    }
-    fn store_analysis(
-        &self,
-        library: LibraryId,
-        track: PickedTrack,
-        result: AnalysisResult,
-    ) -> Result<(), StoreError> {
-        self.inner.store_analysis(library, track, result)
-    }
-    fn next_without_placeholder(
-        &self,
-        library: LibraryId,
-        limit: usize,
-    ) -> Result<Vec<(Vec<u8>, FileToDecode)>, StoreError> {
-        self.inner.next_without_placeholder(library, limit)
-    }
-    fn store_placeholder(
-        &self,
-        library: LibraryId,
-        hash: &[u8],
-        placeholder: Vec<u8>,
-    ) -> Result<(), StoreError> {
-        self.inner.store_placeholder(library, hash, placeholder)
     }
 }

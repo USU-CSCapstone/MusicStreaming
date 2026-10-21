@@ -16,7 +16,6 @@ use crate::jobs::RunReport;
 use crate::library::LibraryId;
 use crate::placeholders::Placeholders;
 use crate::problems::{Problem, ProblemKind};
-use crate::store::Batch;
 
 /// An analyzer over `store` that runs ffmpeg with `config`.
 fn analyzer<S: InspectStore + 'static>(store: &Arc<S>, config: Config) -> Analyzer {
@@ -42,8 +41,8 @@ fn album<S: InspectStore>(make: Factory<S>) -> (tempfile::TempDir, Arc<S>, Libra
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 2);
-    let store = Arc::new(make(&root));
     let lib = library(&root);
+    let store = Arc::new(make(&lib));
     scan_library(store.as_ref(), &lib);
     (tmp, store, lib.id, root.join("A/X/01 - Track 1.wav"))
 }
@@ -110,8 +109,8 @@ pub fn a_root_going_away_pauses_without_writing<S: InspectStore + 'static>(make:
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 3);
     write_cover(&root.join("A/X/cover.png"));
-    let store = Arc::new(make(&root));
     let lib = library(&root);
+    let store = Arc::new(make(&lib));
     scan_library(store.as_ref(), &lib);
     let analyzer = analyzer(&store, Config::default());
     let placeholders = Placeholders::new(Ffmpeg::new(Config::default()), store.clone());
@@ -143,8 +142,8 @@ pub fn a_file_that_always_fails_does_not_block_the_next<S: InspectStore + 'stati
     make_album(&root, "A", "X", 2);
     let killed = root.join("A/X/killed.wav");
     fs::rename(root.join("A/X/01 - Track 1.wav"), &killed).unwrap();
-    let store = Arc::new(make(&root));
     let lib = library(&root);
+    let store = Arc::new(make(&lib));
     scan_library(store.as_ref(), &lib);
     let ffprobe = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake-ffprobe.sh");
     let analyzer = analyzer(&store, Config { ffprobe, ..Config::default() });
@@ -194,10 +193,10 @@ pub fn opening_a_file_clears_only_unopened_problems<S: InspectStore + 'static>(m
         detail: "detail".into(),
         seen_at: now_ms(),
     };
-    let problems =
-        vec![problem(&file, ProblemKind::CorruptAudio), problem(&other, ProblemKind::Unreadable)];
-    store.apply(lib, Batch { problems, ..Batch::default() }).unwrap();
-    store.apply(lib, Batch { opened: vec![file.clone(), other], ..Batch::default() }).unwrap();
+    store.record_problem(lib, problem(&file, ProblemKind::CorruptAudio)).unwrap();
+    store.record_problem(lib, problem(&other, ProblemKind::Unreadable)).unwrap();
+    store.clear_unopened(lib, &file).unwrap();
+    store.clear_unopened(lib, &other).unwrap();
     let left = store.inspect_problems(lib);
     assert_eq!(
         left.iter().map(|p| (&p.path, p.kind)).collect::<Vec<_>>(),
@@ -213,8 +212,8 @@ pub fn a_cover_moved_away_waits_until_it_returns<S: InspectStore + 'static>(make
     make_album(&root, "A", "X", 1);
     let cover = root.join("A/X/cover.png");
     write_cover(&cover);
-    let store = Arc::new(make(&root));
     let lib = library(&root);
+    let store = Arc::new(make(&lib));
     scan_library(store.as_ref(), &lib);
     let hash = store.next_without_placeholder(lib.id, 10).unwrap().remove(0).0;
     let placeholders = Placeholders::new(Ffmpeg::new(Config::default()), store.clone())
@@ -281,8 +280,8 @@ pub fn a_link_is_judged_once<S: InspectStore + 'static>(make: Factory<S>) {
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 4);
     fs::write(root.join("A/X/cover.png"), PNG).unwrap();
-    let store = Arc::new(make(&root));
     let lib = library(&root);
+    let store = Arc::new(make(&lib));
     scan_library(store.as_ref(), &lib);
     let mut links = [
         (root.join("A/X/01 - Track 1.wav"), root.join("moved.wav")),

@@ -26,8 +26,8 @@ fn rescan_after<S: InspectStore>(
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     let before = live(&store, &lib)[0].clone();
     let head = store.feed_head(lib.id);

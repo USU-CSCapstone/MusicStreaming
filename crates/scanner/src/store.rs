@@ -1,23 +1,22 @@
 //! Persistence as the scanner sees it (`design/scanning.md` §1, §7).
 //!
-//! The scanner never opens SQLite. It hands the store batches and asks it a
-//! handful of questions. [`MemoryStore`] is the reference implementation,
-//! used by tests and the example; the server's SQLite store implements the
-//! same trait.
+//! The scanner never opens SQLite. A scan hands the [`Store`] batches and asks it a handful of
+//! questions. Analysis and placeholders are each given a narrower trait, [`AnalysisStore`] or
+//! [`PlaceholderStore`], so a background job reaches only its own queue and results and the
+//! [`ProblemLog`] it records problems in, and none of a scan's batches or questions. The server's
+//! SQLite store implements them all.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use crate::analysis::AnalysisResult;
 use crate::confine::{not_a_file, without_links};
 use crate::library::LibraryId;
-use crate::problems::{Problem, UNOPENED};
-use crate::scan::{Scan, ScanId, ScanState};
+use crate::problems::Problem;
+use crate::scan::{Scan, ScanId, Trigger};
 use crate::scope::Scope;
-use crate::track::{ArtworkSource, TrackId, TrackRecord};
+use crate::track::{TrackId, TrackRecord};
 
 /// What the store already knows about a path. Enough for the skip check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,9 +58,6 @@ pub struct Batch {
     /// recorded for them. Applied before `problems`, so a path in both keeps the problem this
     /// batch records.
     pub cleared: Vec<PathBuf>,
-    /// Paths a background job has just opened: clear a problem saying they could not be
-    /// ([`crate::problems::UNOPENED`]), and leave any other.
-    pub opened: Vec<PathBuf>,
 }
 
 impl Batch {
@@ -73,14 +69,11 @@ impl Batch {
         self.upserts.len() + self.touched.len() + self.returned.len() + self.problems.len()
     }
 
-    /// Whether applying the batch would change nothing. Paths to clear or mark opened and tracks
-    /// changed but unread count, though not toward [`Batch::len`], which sizes a batch by the
-    /// tracks and problems it writes.
+    /// Whether applying the batch would change nothing. Paths to clear and tracks changed but
+    /// unread count, though not toward [`Batch::len`], which sizes a batch by the tracks and
+    /// problems it writes.
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
-            && self.cleared.is_empty()
-            && self.opened.is_empty()
-            && self.changed_unread.is_empty()
+        self.len() == 0 && self.cleared.is_empty() && self.changed_unread.is_empty()
     }
 }
 
@@ -91,7 +84,7 @@ impl Batch {
 pub struct StoreError(pub String);
 
 /// A track the analysis queue handed out, with its file's size and mtime when it was picked,
-/// which [`Store::store_analysis`] checks before storing its result.
+/// which [`AnalysisStore::store_analysis`] checks before storing its result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PickedTrack {
     pub id: TrackId,
@@ -124,14 +117,20 @@ impl FileToDecode {
     }
 }
 
-/// Everything the scanner needs from persistence. Implementations are
-/// synchronous; the scanner calls them from its own blocking threads. Every
-/// method can fail with a [`StoreError`], which the caller handles, so a
-/// failure is never mistaken for an answer.
+/// Everything a scan and the queue need from persistence. Implementations are synchronous; the
+/// scanner calls them from its own blocking threads. Every method of this trait and the narrower
+/// ones below can fail with a [`StoreError`], which the caller handles, so a failure is never
+/// mistaken for an answer.
 pub trait Store: Send + Sync {
     // --- scans ---
-    /// Persist a new scan row and return its id.
-    fn create_scan(&self, scan: &Scan) -> Result<ScanId, StoreError>;
+    /// Persist a new scan of `scopes` in `library` under `trigger`, queued, and return it with
+    /// the id the store assigned.
+    fn create_scan(
+        &self,
+        library: LibraryId,
+        trigger: Trigger,
+        scopes: &[Scope],
+    ) -> Result<Scan, StoreError>;
     /// Save `scan`'s state, cursor, progress and times over its row.
     fn update_scan(&self, scan: &Scan) -> Result<(), StoreError>;
     /// Scans left in `Running` or `Queued` by a previous process, for resume. A row that cannot
@@ -162,8 +161,21 @@ pub trait Store: Send + Sync {
     -> Result<Vec<PathBuf>, StoreError>;
     /// Whether a track not yet missing, or a problem, lies under `folder`, at any depth.
     fn indexes_under(&self, library: LibraryId, folder: &Path) -> Result<bool, StoreError>;
+}
 
-    // --- analysis ---
+/// Where a background job records what it made of a file it could not decode, and clears the
+/// problem saying a file could not be opened once it opens (`jobs`). Each call stands alone,
+/// outside any scan's batch.
+pub trait ProblemLog: Send + Sync {
+    /// Records `problem`, replacing any problem recorded for its path.
+    fn record_problem(&self, library: LibraryId, problem: Problem) -> Result<(), StoreError>;
+    /// Clears a problem saying the file at `path` could not be opened
+    /// ([`crate::problems::UNOPENED`]), and leaves any other.
+    fn clear_unopened(&self, library: LibraryId, path: &Path) -> Result<(), StoreError>;
+}
+
+/// The analysis queue and its results (`design/scanning.md` §12).
+pub trait AnalysisStore: ProblemLog {
     /// Tracks whose results come from an analyzer older than `analyzer_version`, most useful
     /// first, each with its file. A track never analyzed is at version 0. A track whose mtime is
     /// forgotten waits for a scan to read its file, so analysis does not open the file and clear
@@ -182,8 +194,10 @@ pub trait Store: Send + Sync {
         track: PickedTrack,
         result: AnalysisResult,
     ) -> Result<(), StoreError>;
+}
 
-    // --- placeholders ---
+/// The images still without a placeholder, and their placeholders (`crate::Placeholders`).
+pub trait PlaceholderStore: ProblemLog {
     /// Images with no placeholder yet, by content hash, each with a file to decode it from.
     fn next_without_placeholder(
         &self,
@@ -198,373 +212,4 @@ pub trait Store: Send + Sync {
         hash: &[u8],
         placeholder: Vec<u8>,
     ) -> Result<(), StoreError>;
-}
-
-// ---------------------------------------------------------------------------
-
-/// A track as [`MemoryStore`] keeps it.
-#[derive(Debug, Clone)]
-pub struct StoredTrack {
-    pub record: TrackRecord,
-    /// The last scan that saw its file.
-    pub last_seen_scan: ScanId,
-    pub missing: bool,
-    /// Whether its mtime is forgotten ([`Batch::changed_unread`]).
-    pub mtime_unknown: bool,
-    pub analysis: Option<AnalysisResult>,
-}
-
-#[derive(Default)]
-struct LibraryState {
-    tracks: BTreeMap<TrackId, StoredTrack>,
-    by_path: HashMap<PathBuf, TrackId>,
-    problems: HashMap<PathBuf, Problem>,
-    scans: BTreeMap<ScanId, Scan>,
-    /// Placeholders by image content hash.
-    placeholders: HashMap<Vec<u8>, Vec<u8>>,
-    /// Net-effect change feed: one entry per track per batch at most.
-    feed: Vec<FeedEntry>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FeedEntry {
-    Added(TrackId),
-    Updated(TrackId),
-    Missing(TrackId),
-    Returned(TrackId),
-}
-
-/// In-memory [`Store`]. Complete, so tests exercise every path the SQLite
-/// store must support.
-#[derive(Default)]
-pub struct MemoryStore {
-    inner: Mutex<Inner>,
-}
-
-#[derive(Default)]
-struct Inner {
-    libraries: HashMap<LibraryId, LibraryState>,
-    next_track: TrackId,
-    next_scan: ScanId,
-}
-
-impl MemoryStore {
-    pub fn new() -> MemoryStore {
-        MemoryStore::default()
-    }
-
-    /// Every track of `library`, missing or not.
-    pub fn tracks(&self, library: LibraryId) -> Vec<StoredTrack> {
-        let inner = self.inner.lock().unwrap();
-        inner
-            .libraries
-            .get(&library)
-            .map(|l| l.tracks.values().cloned().collect())
-            .unwrap_or_default()
-    }
-
-    /// The track `id` of `library`, if there is one.
-    pub fn track(&self, library: LibraryId, id: TrackId) -> Option<StoredTrack> {
-        self.inner.lock().unwrap().libraries.get(&library).and_then(|l| l.tracks.get(&id).cloned())
-    }
-
-    /// Every problem recorded for `library`.
-    pub fn problems(&self, library: LibraryId) -> Vec<Problem> {
-        let inner = self.inner.lock().unwrap();
-        inner
-            .libraries
-            .get(&library)
-            .map(|l| l.problems.values().cloned().collect())
-            .unwrap_or_default()
-    }
-
-    /// Every scan of `library`, oldest first.
-    pub fn scans(&self, library: LibraryId) -> Vec<Scan> {
-        let inner = self.inner.lock().unwrap();
-        inner
-            .libraries
-            .get(&library)
-            .map(|l| l.scans.values().cloned().collect())
-            .unwrap_or_default()
-    }
-
-    /// The placeholder stored for the image with content `hash`.
-    pub fn placeholder(&self, library: LibraryId, hash: &[u8]) -> Option<Vec<u8>> {
-        let inner = self.inner.lock().unwrap();
-        inner.libraries.get(&library)?.placeholders.get(hash).cloned()
-    }
-
-    /// `library`'s change feed, oldest entry first.
-    pub fn feed(&self, library: LibraryId) -> Vec<FeedEntry> {
-        let inner = self.inner.lock().unwrap();
-        inner.libraries.get(&library).map(|l| l.feed.clone()).unwrap_or_default()
-    }
-}
-
-impl Store for MemoryStore {
-    fn create_scan(&self, scan: &Scan) -> Result<ScanId, StoreError> {
-        let mut inner = self.inner.lock().unwrap();
-        inner.next_scan += 1;
-        let id = inner.next_scan;
-        let mut scan = scan.clone();
-        scan.id = id;
-        inner.libraries.entry(scan.library).or_default().scans.insert(id, scan);
-        Ok(id)
-    }
-
-    fn update_scan(&self, scan: &Scan) -> Result<(), StoreError> {
-        let mut inner = self.inner.lock().unwrap();
-        inner.libraries.entry(scan.library).or_default().scans.insert(scan.id, scan.clone());
-        Ok(())
-    }
-
-    fn interrupted_scans(&self, library: LibraryId) -> Result<Vec<Scan>, StoreError> {
-        let inner = self.inner.lock().unwrap();
-        Ok(inner
-            .libraries
-            .get(&library)
-            .map(|l| {
-                l.scans
-                    .values()
-                    .filter(|s| matches!(s.state, ScanState::Running | ScanState::Queued))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default())
-    }
-
-    fn lookup(&self, library: LibraryId, path: &Path) -> Result<Option<IndexedFile>, StoreError> {
-        let inner = self.inner.lock().unwrap();
-        let found = inner.libraries.get(&library).and_then(|lib| {
-            let id = *lib.by_path.get(path)?;
-            Some((id, lib.tracks.get(&id)?))
-        });
-        Ok(found.map(|(id, t)| IndexedFile {
-            track_id: id,
-            size: t.record.size,
-            mtime_ms: (!t.mtime_unknown).then_some(t.record.mtime_ms),
-            missing: t.missing,
-            lyrics: if t.record.tags.lyrics.is_some() {
-                IndexedLyrics::Embedded
-            } else if t.record.lyrics_sidecar.is_some() {
-                IndexedLyrics::Sidecar
-            } else {
-                IndexedLyrics::None
-            },
-        }))
-    }
-
-    fn apply(&self, library: LibraryId, batch: Batch) -> Result<(), StoreError> {
-        let mut inner = self.inner.lock().unwrap();
-        let Inner { libraries, next_track, .. } = &mut *inner;
-        let lib = libraries.entry(library).or_default();
-        for mut record in batch.upserts {
-            let id = match record.id {
-                Some(id) => id,
-                None => {
-                    *next_track += 1;
-                    *next_track
-                }
-            };
-            record.id = Some(id);
-            let old = lib.tracks.remove(&id);
-            let is_new = old.is_none();
-            // A record replacing the path of another track (identity is path
-            // keyed for now) evicts the old path mapping.
-            if let Some(old) = &old {
-                lib.by_path.remove(&old.record.path);
-            }
-            let analysis = old
-                .filter(|old| {
-                    old.record.size == record.size && old.record.mtime_ms == record.mtime_ms
-                })
-                .and_then(|old| old.analysis);
-            lib.by_path.insert(record.path.clone(), id);
-            let stored = StoredTrack {
-                record,
-                last_seen_scan: batch.scan_id,
-                missing: false,
-                mtime_unknown: false,
-                analysis,
-            };
-            lib.tracks.insert(id, stored);
-            lib.feed.push(if is_new { FeedEntry::Added(id) } else { FeedEntry::Updated(id) });
-        }
-        for id in batch.touched {
-            if let Some(t) = lib.tracks.get_mut(&id) {
-                t.last_seen_scan = batch.scan_id;
-            }
-        }
-        for &id in &batch.returned {
-            if let Some(t) = lib.tracks.get_mut(&id) {
-                t.last_seen_scan = batch.scan_id;
-                if t.missing {
-                    t.missing = false;
-                    lib.feed.push(FeedEntry::Returned(id));
-                }
-            }
-        }
-        for id in batch.changed_unread {
-            if let Some(t) = lib.tracks.get_mut(&id)
-                && !t.mtime_unknown
-            {
-                t.mtime_unknown = true;
-                t.analysis = None;
-                // A track this batch returned has its one feed entry already.
-                if !batch.returned.contains(&id) {
-                    lib.feed.push(FeedEntry::Updated(id));
-                }
-            }
-        }
-        for path in batch.cleared {
-            lib.problems.remove(&path);
-        }
-        for path in batch.opened {
-            if lib.problems.get(&path).is_some_and(|p| UNOPENED.contains(&p.kind)) {
-                lib.problems.remove(&path);
-            }
-        }
-        for problem in batch.problems {
-            lib.problems.insert(problem.path.clone(), problem);
-        }
-        Ok(())
-    }
-
-    fn mark_missing_unseen(
-        &self,
-        library: LibraryId,
-        scope: &Scope,
-        scan_id: ScanId,
-        unreadable: &[PathBuf],
-    ) -> Result<i64, StoreError> {
-        let mut inner = self.inner.lock().unwrap();
-        let Some(lib) = inner.libraries.get_mut(&library) else {
-            return Ok(0);
-        };
-        let unreadable: HashSet<&Path> = unreadable.iter().map(PathBuf::as_path).collect();
-        let mut count = 0;
-        for (id, t) in lib.tracks.iter_mut() {
-            if !t.missing
-                && t.last_seen_scan != scan_id
-                && scope.contains_file(&t.record.path)
-                && !t.record.path.ancestors().any(|a| unreadable.contains(a))
-            {
-                t.missing = true;
-                lib.feed.push(FeedEntry::Missing(*id));
-                count += 1;
-            }
-        }
-        Ok(count)
-    }
-
-    fn problems_under(
-        &self,
-        library: LibraryId,
-        scope: &Scope,
-    ) -> Result<Vec<PathBuf>, StoreError> {
-        let inner = self.inner.lock().unwrap();
-        let Some(lib) = inner.libraries.get(&library) else {
-            return Ok(Vec::new());
-        };
-        Ok(lib.problems.keys().filter(|path| scope.contains_file(path)).cloned().collect())
-    }
-
-    fn indexes_under(&self, library: LibraryId, folder: &Path) -> Result<bool, StoreError> {
-        let inner = self.inner.lock().unwrap();
-        let Some(lib) = inner.libraries.get(&library) else {
-            return Ok(false);
-        };
-        let under = |path: &Path| path != folder && path.starts_with(folder);
-        Ok(lib.tracks.values().any(|t| !t.missing && under(&t.record.path))
-            || lib.problems.keys().any(|path| under(path)))
-    }
-
-    fn next_unanalyzed(
-        &self,
-        library: LibraryId,
-        analyzer_version: u32,
-        limit: usize,
-    ) -> Result<Vec<(PickedTrack, FileToDecode)>, StoreError> {
-        let inner = self.inner.lock().unwrap();
-        let Some(lib) = inner.libraries.get(&library) else {
-            return Ok(Vec::new());
-        };
-        Ok(lib
-            .tracks
-            .iter()
-            .filter(|(_, t)| {
-                !t.missing
-                    && !t.mtime_unknown
-                    && t.analysis.as_ref().map_or(0, |a| a.analyzer_version) < analyzer_version
-            })
-            .map(|(&id, t)| {
-                let (size, mtime_ms) = (t.record.size, t.record.mtime_ms);
-                let file =
-                    FileToDecode { root: t.record.root.clone(), path: t.record.path.clone() };
-                (PickedTrack { id, size, mtime_ms }, file)
-            })
-            .take(limit)
-            .collect())
-    }
-
-    fn store_analysis(
-        &self,
-        library: LibraryId,
-        track: PickedTrack,
-        result: AnalysisResult,
-    ) -> Result<(), StoreError> {
-        let mut inner = self.inner.lock().unwrap();
-        let stored = inner.libraries.get_mut(&library).and_then(|l| l.tracks.get_mut(&track.id));
-        if let Some(t) = stored
-            && !t.mtime_unknown
-            && t.record.size == track.size
-            && t.record.mtime_ms == track.mtime_ms
-        {
-            t.analysis = Some(result);
-        }
-        Ok(())
-    }
-
-    fn next_without_placeholder(
-        &self,
-        library: LibraryId,
-        limit: usize,
-    ) -> Result<Vec<(Vec<u8>, FileToDecode)>, StoreError> {
-        let inner = self.inner.lock().unwrap();
-        let Some(lib) = inner.libraries.get(&library) else {
-            return Ok(Vec::new());
-        };
-        let mut seen = HashSet::new();
-        Ok(lib
-            .tracks
-            .values()
-            .flat_map(|t| {
-                let artwork = t.record.artwork.as_ref().map(|art| match &art.source {
-                    ArtworkSource::Embedded => (&art.info.hash, &t.record.path),
-                    ArtworkSource::Sidecar(path) => (&art.info.hash, path),
-                });
-                let artist =
-                    t.record.artist_image.as_ref().map(|image| (&image.info.hash, &image.path));
-                artwork.into_iter().chain(artist).map(|(hash, path)| (hash, &t.record.root, path))
-            })
-            .filter(|(hash, ..)| !lib.placeholders.contains_key(*hash) && seen.insert(*hash))
-            .map(|(hash, root, path)| {
-                (hash.clone(), FileToDecode { root: root.clone(), path: path.clone() })
-            })
-            .take(limit)
-            .collect())
-    }
-
-    fn store_placeholder(
-        &self,
-        library: LibraryId,
-        hash: &[u8],
-        placeholder: Vec<u8>,
-    ) -> Result<(), StoreError> {
-        let mut inner = self.inner.lock().unwrap();
-        if let Some(lib) = inner.libraries.get_mut(&library) {
-            lib.placeholders.insert(hash.to_vec(), placeholder);
-        }
-        Ok(())
-    }
 }

@@ -211,7 +211,7 @@ fn debounce_loop<W: Fn(&Path, &Events) -> RootWatch>(
 /// the event says was removed, or, for any other event such as a rename, one under which
 /// `indexed` says the index holds something. A link to a folder is a change to its parent's
 /// listing, never a scope through it.
-fn classify(
+pub(crate) fn classify(
     kind: &EventKind,
     path: &Path,
     indexed: impl FnOnce(&Path) -> bool,
@@ -255,9 +255,7 @@ pub fn scan_every(scanner: Scanner, interval: Duration) -> io::Result<Worker> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{MemoryStore, Store};
-    use crate::testing::{library, make_album, scan_library, scan_once};
-    use notify::event::{CreateKind, ModifyKind, RenameMode};
+    use notify::event::{CreateKind, ModifyKind};
 
     #[test]
     fn sidecars_widen_to_subtree() {
@@ -276,140 +274,6 @@ mod tests {
     /// what the index holds: it panics.
     fn unasked(path: &Path) -> bool {
         panic!("asked what is indexed under {}", path.display())
-    }
-
-    /// The scopes `classify` makes of `events` against what `store` holds under `root`.
-    fn scopes(
-        store: &MemoryStore,
-        root: &Path,
-        events: &[(EventKind, Vec<PathBuf>)],
-    ) -> Vec<Scope> {
-        let mut scopes: Vec<Scope> = events
-            .iter()
-            .flat_map(|(kind, paths)| {
-                paths
-                    .iter()
-                    .flat_map(|path| classify(kind, path, |p| store.indexes_under(1, p).unwrap()))
-            })
-            .map(|(dir, depth)| Scope::folder(root, dir, depth))
-            .collect();
-        scopes.sort_by(|a, b| a.path.cmp(&b.path));
-        scopes.dedup();
-        scopes
-    }
-
-    /// Runs the scopes `classify` makes of `events` as one watcher scan of `root`'s library.
-    fn scan_events(store: &MemoryStore, root: &Path, events: &[(EventKind, Vec<PathBuf>)]) {
-        let scopes = scopes(store, root, events);
-        scan_once(store, &library(root), Trigger::Watch, scopes);
-    }
-
-    /// Each track's path, and whether it is missing, sorted by path.
-    fn indexed(store: &MemoryStore) -> Vec<(PathBuf, bool)> {
-        let mut tracks: Vec<(PathBuf, bool)> =
-            store.tracks(1).into_iter().map(|t| (t.record.path, t.missing)).collect();
-        tracks.sort();
-        tracks
-    }
-
-    /// A folder renamed, with the events a Linux watcher reports for `mv A B`.
-    #[test]
-    fn a_renamed_folder_moves_its_tracks() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("lib");
-        make_album(&root, "Artist", "A", 2);
-        let store = MemoryStore::new();
-        scan_library(&store, &library(&root));
-        let (a, b) = (root.join("Artist/A"), root.join("Artist/B"));
-        fs::rename(&a, &b).unwrap();
-
-        let name = |mode| EventKind::Modify(ModifyKind::Name(mode));
-        scan_events(
-            &store,
-            &root,
-            &[
-                (name(RenameMode::From), vec![a.clone()]),
-                (name(RenameMode::To), vec![b.clone()]),
-                (name(RenameMode::Both), vec![a.clone(), b.clone()]),
-            ],
-        );
-        let track = |dir: &Path, n: u32| dir.join(format!("{n:02} - Track {n}.wav"));
-        assert_eq!(
-            indexed(&store),
-            [
-                (track(&a, 1), true),
-                (track(&a, 2), true),
-                (track(&b, 1), false),
-                (track(&b, 2), false)
-            ]
-        );
-    }
-
-    /// A file renamed is a change to its folder only, as nothing is indexed under its old path.
-    #[test]
-    fn a_renamed_file_dirties_only_its_folder() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("lib");
-        make_album(&root, "Artist", "A", 1);
-        let store = MemoryStore::new();
-        scan_library(&store, &library(&root));
-        let a = root.join("Artist/A");
-        let (old, new) = (a.join("01 - Track 1.wav"), a.join("renamed.wav"));
-        fs::rename(&old, &new).unwrap();
-
-        let name = |mode| EventKind::Modify(ModifyKind::Name(mode));
-        let events =
-            [(name(RenameMode::From), vec![old.clone()]), (name(RenameMode::To), vec![new])];
-        assert_eq!(scopes(&store, &root, &events), [Scope::folder(&root, &a, Depth::Directory)]);
-    }
-
-    /// A file deleted, then a folder deleted, with the events a Linux watcher reports for `rm`
-    /// and `rm -r`.
-    #[test]
-    fn deleted_files_and_folders_go_missing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("lib");
-        make_album(&root, "Artist", "A", 2);
-        make_album(&root, "Artist", "D", 2);
-        let store = MemoryStore::new();
-        scan_library(&store, &library(&root));
-        let (a, d) = (root.join("Artist/A"), root.join("Artist/D"));
-        let track = |dir: &Path, n: u32| dir.join(format!("{n:02} - Track {n}.wav"));
-
-        fs::remove_file(track(&a, 1)).unwrap();
-        let removed = EventKind::Remove(RemoveKind::File);
-        assert_eq!(classify(&removed, &track(&a, 1), unasked), [(a.clone(), Depth::Directory)]);
-        scan_events(&store, &root, &[(removed, vec![track(&a, 1)])]);
-        assert_eq!(
-            indexed(&store),
-            [
-                (track(&a, 1), true),
-                (track(&a, 2), false),
-                (track(&d, 1), false),
-                (track(&d, 2), false)
-            ]
-        );
-
-        fs::remove_dir_all(&d).unwrap();
-        scan_events(
-            &store,
-            &root,
-            &[
-                (EventKind::Remove(RemoveKind::File), vec![track(&d, 1)]),
-                (EventKind::Remove(RemoveKind::File), vec![track(&d, 2)]),
-                (EventKind::Remove(RemoveKind::Folder), vec![d.clone()]),
-            ],
-        );
-        assert_eq!(
-            indexed(&store),
-            [
-                (track(&a, 1), true),
-                (track(&a, 2), false),
-                (track(&d, 1), true),
-                (track(&d, 2), true)
-            ]
-        );
-        assert_eq!(store.problems(1), []);
     }
 
     #[test]

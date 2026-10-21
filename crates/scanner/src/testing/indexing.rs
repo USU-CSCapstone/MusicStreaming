@@ -27,8 +27,8 @@ pub fn cold_scan_then_incremental_is_all_unchanged<S: InspectStore>(make: Factor
     fs::write(root.join("readme.txt"), "ignored").unwrap();
     fs::write(root.join("Nirvana/old.wma"), "ignored too").unwrap();
 
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
 
     let first = scan_library(&store, &lib);
     assert_eq!(first.state, ScanState::Completed);
@@ -75,8 +75,8 @@ pub fn retag_updates_in_place_and_keeps_identity<S: InspectStore>(make: Factory<
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     let before = live(&store, &lib)[0].clone();
 
@@ -101,8 +101,8 @@ pub fn lyrics_file_beside_an_unchanged_track<S: InspectStore>(make: Factory<S>) 
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 2);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     assert!(live(&store, &lib).iter().all(|t| !t.has_sidecar_lyrics));
 
@@ -131,8 +131,8 @@ pub fn untagged_file_is_named_after_itself<S: InspectStore>(make: Factory<S>) {
     let root = tmp.path().join("lib");
     let p = root.join("loose/My Song.wav");
     write_small_wav(&p);
-    let store = make(&root);
     let lib = library(&root);
+    let store = make(&lib);
     scan_library(&store, &lib);
     let t = live(&store, &lib)[0].clone();
     assert_eq!(t.title, "My Song", "named after its file");
@@ -149,7 +149,7 @@ pub fn excludes_are_never_indexed<S: InspectStore>(make: Factory<S>) {
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
     make_album(&root, "backup", "X", 1);
-    let store = make(&root);
+    let store = make(&library(&root));
     let mut lib = library(&root);
     lib.excludes = vec!["backup".into(), "backup/**".into()];
     let scan = scan_library(&store, &lib);
