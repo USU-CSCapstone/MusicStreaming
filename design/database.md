@@ -11,7 +11,7 @@ The SQLite schema behind `api/openapi.yaml`. Migrations are plain SQL in `crates
 |---|---|
 | **IDs** | Random positive 63-bit integers as `INTEGER PRIMARY KEY`, generated in each `INSERT` by `random() & 0x7FFFFFFFFFFFFFFF`. A collision, about one in 10¹³ per insert at a million rows, fails its transaction rather than being retried. The API shows them as decimal strings, which clients treat as opaque. |
 | **Timestamps** | Integer milliseconds since the Unix epoch, UTC, named `*_at`. |
-| **Durations** | Integer microseconds, named `*_us`, matching the API. Playback positions and listen time are the exception: integer milliseconds named `*_ms` (`player_states.position_ms`, `plays.listen_time_ms`), because the API carries them in milliseconds (`positionMs`, `listenTimeMs`). |
+| **Durations** | Integer microseconds, named `*_us`, matching the API. Playback positions and listen time are the exception: integer milliseconds named `*_ms` (`player_states.position_ms`, `plays.listen_time_ms`), because the API carries them in milliseconds (`positionMs`, `listenTimeMs`). A track's `duration_us` holds whole milliseconds, the precision lofty, the tag reader, reports for every format. |
 | **Booleans** | `INTEGER` with `CHECK (x IN (0, 1))`. |
 | **Indexes** | Partial and unique indexes, feeds (ending in `seq`, named `_feed`) and sweeps (`_age`) are named for their purpose: `tracks_missing`, `tracks_file`, `library_changes_feed`, `search_events_age`. Every other index is `<table>_by_<key>`, leaving out a leading `library_id`: `tracks_by_added`, `plays_by_user`. |
 | **Tables** | `STRICT`, so a column holds only its declared type. Link tables are `WITHOUT ROWID`. |
