@@ -1,6 +1,7 @@
 //! The pipeline over one scan (`design/scanning.md` §2, §7, §8).
 
 use std::fs;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
@@ -56,10 +57,28 @@ impl ScanContext<'_> {
     }
 }
 
+/// The cursor and progress the store holds for a scan.
+type Persisted = (Option<Cursor>, ScanProgress);
+
 /// Run `scan` to completion, cancellation, or suspension, or until a shutdown, which leaves it
-/// running at its last flushed cursor for the next start to resume. The scan row is updated on
-/// every flush; `scan` is left in the state the row holds.
+/// running at its last flushed cursor for the next start to resume. A panic ends it at that
+/// cursor through [`suspend`], so the caller carries on. The scan row is updated on every flush;
+/// `scan` is left in the state the row holds.
 pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
+    let mut persisted = (scan.cursor.clone(), scan.progress.clone());
+    // Asserted unwind safe because a panic can leave `scan`'s cursor and progress ahead of the
+    // store, and `suspend` replaces both from `persisted`, which changes only as a whole, after a
+    // flush, and sets the state itself. Everything else the scan touches is shared through `ctx`
+    // and keeps its own guarantees: the store commits a batch whole or not at all.
+    let scanned = panic::catch_unwind(AssertUnwindSafe(|| scan_scopes(ctx, scan, &mut persisted)));
+    if scanned.is_err() {
+        tracing::error!(scan = scan.id, "scan panicked; ending it at its last flushed cursor");
+        suspend(ctx, scan, &persisted);
+    }
+}
+
+/// [`run_scan`] without the panic guard, keeping `persisted` current as it flushes.
+fn scan_scopes(ctx: &ScanContext<'_>, scan: &mut Scan, persisted: &mut Persisted) {
     let excludes = match compile_excludes(&ctx.library.excludes) {
         Ok(e) => e,
         Err(e) => {
@@ -96,8 +115,6 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
         let mut batch = Batch::new(scan.id);
         let mut last_flush = Instant::now();
         let mut stopped = false;
-        // What the store has actually seen, to fall back to if a flush fails.
-        let mut persisted = (scan.cursor.clone(), scan.progress.clone());
 
         // A scope reached through a symlink below the root, as the watcher or a plugin may
         // name one, is skipped whole: nothing is walked and nothing reconciled. One that no
@@ -108,7 +125,7 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
             batch.problems.push(problems::from_io(&scope.path, &error));
             scan.progress.problems += 1;
             scan.cursor = Some(Cursor { scope_index: scope_index + 1, after_directory: None });
-            if !flush(ctx, scan, &mut batch, &mut persisted) {
+            if !flush(ctx, scan, &mut batch, persisted) {
                 return;
             }
             continue;
@@ -136,13 +153,13 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
             if batch.len() >= ctx.options.batch_size
                 || last_flush.elapsed() >= ctx.options.batch_interval
             {
-                if !flush(ctx, scan, &mut batch, &mut persisted) {
+                if !flush(ctx, scan, &mut batch, persisted) {
                     return;
                 }
                 last_flush = Instant::now();
             }
         }
-        if !flush(ctx, scan, &mut batch, &mut persisted) {
+        if !flush(ctx, scan, &mut batch, persisted) {
             return;
         }
 
@@ -166,7 +183,7 @@ pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) {
             .filter(|path| fs::symlink_metadata(path).is_err_and(|error| gone(&error)))
             .collect();
         scan.cursor = Some(Cursor { scope_index: scope_index + 1, after_directory: None });
-        if !flush(ctx, scan, &mut batch, &mut persisted) {
+        if !flush(ctx, scan, &mut batch, persisted) {
             return;
         }
     }
@@ -204,32 +221,40 @@ fn root_answers(root: &Path) -> bool {
     false
 }
 
-/// Persist the batch and the scan row. On a store failure the scan suspends
-/// at its last persisted cursor rather than reporting success over lost
-/// work (`requirements/scanning.md` §10: problems are honest). Returns
-/// whether the scan may continue.
+/// Persist the batch and the scan row. On a store failure the scan ends at
+/// its last persisted cursor through [`suspend`] rather than reporting
+/// success over lost work (`requirements/scanning.md` §10: problems are
+/// honest). Returns whether the scan may continue.
 fn flush(
     ctx: &ScanContext<'_>,
     scan: &mut Scan,
     batch: &mut Batch,
-    persisted: &mut (Option<Cursor>, ScanProgress),
+    persisted: &mut Persisted,
 ) -> bool {
     if !batch.is_empty() {
         let full = std::mem::replace(batch, Batch::new(scan.id));
         if let Err(e) = ctx.store.apply(&ctx.library.id, full) {
             tracing::error!(scan = scan.id, error = %e, "batch not persisted; suspending scan");
-            scan.cursor = persisted.0.clone();
-            scan.progress = persisted.1.clone();
-            scan.progress.current_path = None;
-            scan.state = ScanState::Suspended;
-            scan.finished_at = Some(SystemTime::now());
-            ctx.store.update_scan(scan);
+            suspend(ctx, scan, persisted);
             return false;
         }
     }
     *persisted = (scan.cursor.clone(), scan.progress.clone());
     ctx.store.update_scan(scan);
     true
+}
+
+/// Ends `scan` at the cursor and progress the store holds and saves its row: suspended, so a
+/// resume retries what was not persisted, or cancelled if a cancel was asked for, since a
+/// cancelled scan never resumes.
+fn suspend(ctx: &ScanContext<'_>, scan: &mut Scan, persisted: &Persisted) {
+    scan.cursor = persisted.0.clone();
+    scan.progress = persisted.1.clone();
+    scan.progress.current_path = None;
+    scan.state =
+        if ctx.cancel.load(Ordering::SeqCst) { ScanState::Cancelled } else { ScanState::Suspended };
+    scan.finished_at = Some(SystemTime::now());
+    ctx.store.update_scan(scan);
 }
 
 /// Runs every audio candidate in `dir` through stages 2 to 5 into `batch`, clears any problem

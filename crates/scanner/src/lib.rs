@@ -14,6 +14,9 @@
 //! [`TagSet`] and [`AudioProperties`] are what [`tags`] reads from every file,
 //! and [`lrc`] turns synced lyrics into timed lines.
 
+#[cfg(panic = "abort")]
+compile_error!("the scanner turns parser panics into problems and needs unwinding");
+
 pub mod analysis;
 mod audio;
 pub mod confine;

@@ -6,15 +6,20 @@ use super::*;
 use crate::store::{FileToDecode, MemoryStore, StoreError};
 use crate::testing::{library, make_album, write_small_wav};
 
-/// A memory store that runs `on_apply` before applying each batch and `on_lookup` with each path
-/// it looks up, so a test can change the world partway through a scan.
+/// A memory store that runs `on_apply` before applying each batch, failing the batch if it
+/// returns an error, and `on_lookup` with each path it looks up, so a test can change the world,
+/// or fail, partway through a scan.
 struct Hooked<F, L> {
     inner: MemoryStore,
     on_apply: F,
     on_lookup: L,
 }
 
-impl<F: Fn() + Send + Sync, L: Fn(&Path) + Send + Sync> Store for Hooked<F, L> {
+impl<F, L> Store for Hooked<F, L>
+where
+    F: Fn() -> Result<(), StoreError> + Send + Sync,
+    L: Fn(&Path) + Send + Sync,
+{
     fn create_scan(&self, scan: &Scan) -> ScanId {
         self.inner.create_scan(scan)
     }
@@ -29,7 +34,7 @@ impl<F: Fn() + Send + Sync, L: Fn(&Path) + Send + Sync> Store for Hooked<F, L> {
         self.inner.lookup(library, path)
     }
     fn apply(&self, library: &LibraryId, batch: Batch) -> Result<(), StoreError> {
-        (self.on_apply)();
+        (self.on_apply)()?;
         self.inner.apply(library, batch)
     }
     fn mark_missing_unseen(
@@ -119,7 +124,7 @@ fn a_stop_flushes_the_batch_in_hand() {
             shutdown.store(true, Ordering::SeqCst);
         }
     };
-    let store = Hooked { inner: MemoryStore::new(), on_apply: || {}, on_lookup };
+    let store = Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup };
     let mut scan = Scan {
         id: 0,
         library: lib.id.clone(),
@@ -166,6 +171,7 @@ fn a_root_gone_before_reconcile_suspends_and_marks_nothing() {
         if root.exists() {
             fs::rename(&root, &away).unwrap();
         }
+        Ok(())
     };
     let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup: |_: &Path| {} };
     scan_flushing_often(&store.inner, &lib);
@@ -190,7 +196,10 @@ fn an_unchanged_file_reads_no_sidecars() {
     write_small_wav(&root.join("A/01 - Kept.wav"));
     fs::write(&biography, "Read early.").unwrap();
     let lib = library(&root);
-    let on_apply = || fs::write(&biography, "Read when needed.").unwrap();
+    let on_apply = || {
+        fs::write(&biography, "Read when needed.").unwrap();
+        Ok(())
+    };
     let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup: |_: &Path| {} };
     scan_flushing_often(&store.inner, &lib);
 
@@ -219,6 +228,7 @@ fn sidecars_are_read_once_per_directory() {
     let on_apply = || {
         let n = applied.fetch_add(1, Ordering::SeqCst) + 1;
         fs::write(&biography, format!("Version {n}")).unwrap();
+        Ok(())
     };
     let store = Hooked { inner: MemoryStore::new(), on_apply, on_lookup: |_: &Path| {} };
     let lib = library(&root);
@@ -232,3 +242,5 @@ fn sidecars_are_read_once_per_directory() {
         .collect();
     assert_eq!(texts, [Some("Version 0".to_owned()), Some("Version 0".to_owned())]);
 }
+
+mod panics;

@@ -903,13 +903,19 @@ pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory
     scanner.shutdown();
 }
 
-/// Blocks until `scanner` is running the scan `id`, failing the test after 30 seconds.
-fn wait_until_running(scanner: &Scanner, id: ScanId) {
+/// Blocks until `condition` holds for `scanner`, failing the test with `what` after 30 seconds.
+pub fn wait_until(scanner: &Scanner, what: &str, condition: impl Fn(&Scanner) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(30);
-    while scanner.running().map(|scan| scan.id) != Some(id) {
-        assert!(Instant::now() < deadline, "scan {id} never started");
+    while !condition(scanner) {
+        assert!(Instant::now() < deadline, "{what}");
         std::thread::sleep(Duration::from_millis(1));
     }
+}
+
+/// Blocks until `scanner` is running the scan `id`, failing the test after 30 seconds.
+fn wait_until_running(scanner: &Scanner, id: ScanId) {
+    let started = |scanner: &Scanner| scanner.running().is_some_and(|scan| scan.id == id);
+    wait_until(scanner, &format!("scan {id} never started"), started);
 }
 
 /// A resumed scan waiting in the queue takes no new work, since its walk has passed what lies
@@ -944,11 +950,7 @@ pub fn a_resumed_scan_takes_no_new_work<S: InspectStore + 'static>(make: Factory
     governor.pause();
     let scanner =
         Scanner::start(store.clone(), lib.clone(), governor.clone(), ScanOptions::default());
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while scanner.running().is_none() {
-        assert!(Instant::now() < deadline, "no resumed scan started");
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    wait_until(&scanner, "no resumed scan started", |scanner| scanner.running().is_some());
     let [waiting] = scanner.queued().try_into().unwrap();
     let added = root.join("A/X/02 - Added.wav");
     write_small_wav(&added);

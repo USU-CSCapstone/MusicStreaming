@@ -7,6 +7,7 @@
 
 use std::fs::File;
 use std::io;
+use std::panic;
 use std::path::Path;
 
 use jewelcase_core::Format;
@@ -47,8 +48,18 @@ pub struct ReadResult {
 }
 
 /// Read one file. `file_size` comes from discovery's `stat`, so the file is
-/// not stat'ed twice.
+/// not stat'ed twice. A panic while parsing it, in lofty or the mapping, is
+/// [`ReadError::Malformed`] with a fixed reason, never the panic's message,
+/// which may name a host path.
 pub fn read(path: &Path, file_size: u64) -> Result<ReadResult, ReadError> {
+    // The closure borrows only `path`, and everything the parse builds is dropped as it unwinds,
+    // so nothing a panic interrupted is used again.
+    panic::catch_unwind(|| parse(path, file_size))
+        .unwrap_or_else(|_| Err(ReadError::Malformed("the tag reader failed unexpectedly".into())))
+}
+
+/// [`read`] without the panic guard.
+fn parse(path: &Path, file_size: u64) -> Result<ReadResult, ReadError> {
     let mut file = File::open(path)?;
     let options = ParseOptions::new();
 
