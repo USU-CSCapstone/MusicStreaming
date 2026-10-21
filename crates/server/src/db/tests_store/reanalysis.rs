@@ -94,3 +94,87 @@ fn a_result_for_replaced_audio_writes_nothing() {
     assert_eq!(analysis(&store), [("A/X/01 - Track 1.wav".to_owned(), 0, None, None, false)]);
     assert_eq!(store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 10).len(), 1);
 }
+
+/// Audio replaced by a file that cannot be read loses its loudness, peak and waveform, though the
+/// track stays, and is not queued until a scan reads the file. Its album is as loud as its other
+/// track.
+#[test]
+fn audio_replaced_by_an_unreadable_file_loses_its_analysis() {
+    let (_tmp, store, lib, root) = measured_album();
+    testing::break_file(&root.join("A/X/02 - Track 2.wav"));
+    let scan = testing::scan_library(&store, &lib);
+    assert_eq!((scan.progress.problems, scan.progress.missing), (1, 0), "{:?}", scan.progress);
+    let version = i64::from(ANALYZER_VERSION);
+    let first = ("A/X/01 - Track 1.wav".to_owned(), version, Some(-10.0), Some(-1.0), true);
+    let cleared = ("A/X/02 - Track 2.wav".to_owned(), 0, None, None, false);
+    assert_eq!(analysis(&store), [first, cleared]);
+    assert!(store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 10).is_empty());
+    assert_eq!(album_lufs(&store), Some(-10.0), "the album is as loud as its analyzed track");
+}
+
+/// A track measured as silence, with a waveform but no loudness or peak, loses its waveform too
+/// when its file is replaced by one that cannot be read.
+#[test]
+fn a_silent_track_replaced_unreadably_loses_its_waveform() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    testing::make_album(&root, "A", "X", 1);
+    let store = make(&root);
+    let lib = testing::library(&root);
+    testing::scan_library(&store, &lib);
+    let silence = AnalysisResult {
+        waveform: Waveform { peaks: vec![0, 0], rms: vec![0, 0] },
+        ..AnalysisResult::empty(ANALYZER_VERSION)
+    };
+    let (track, file) = store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 1).remove(0);
+    store.store_analysis(&lib.id, track, silence);
+    let version = i64::from(ANALYZER_VERSION);
+    let path = "A/X/01 - Track 1.wav".to_owned();
+    assert_eq!(analysis(&store), [(path.clone(), version, None, None, true)]);
+
+    testing::break_file(&file.path);
+    assert_eq!(testing::scan_library(&store, &lib).progress.problems, 1);
+    assert_eq!(analysis(&store), [(path, 0, None, None, false)]);
+}
+
+/// A missing track whose file comes back unreadable with its size and modified time, read only
+/// because a lyrics file appeared beside it, is back with its analysis, waveform and album
+/// loudness as they were: its audio did not change.
+#[test]
+fn a_missing_file_back_unreadable_and_unchanged_keeps_its_analysis() {
+    let (_tmp, store, lib, root) = measured_album();
+    let two = root.join("A/X/02 - Track 2.wav");
+    let before = analysis(&store);
+    let (size, at) = (fs::metadata(&two).unwrap().len(), fs::metadata(&two).unwrap().modified());
+    fs::remove_file(&two).unwrap();
+    assert_eq!(testing::scan_library(&store, &lib).progress.missing, 1);
+
+    fs::write(&two, vec![0; usize::try_from(size).unwrap()]).unwrap();
+    fs::File::open(&two).unwrap().set_modified(at.unwrap()).unwrap();
+    fs::write(two.with_extension("lrc"), "[00:01.00]hello\n").unwrap();
+    let scan = testing::scan_library(&store, &lib);
+    assert_eq!((scan.progress.problems, scan.progress.missing), (1, 0), "{:?}", scan.progress);
+    assert_eq!(
+        scalar::<i64>(&store, "SELECT COUNT(*) FROM tracks WHERE missing_since IS NULL"),
+        Some(2)
+    );
+    assert_eq!(analysis(&store), before);
+    assert_eq!(album_lufs(&store), Some(-12.6));
+}
+
+/// Two tracks under `A/X` scanned into a fresh store and measured at -10 and -20 LUFS, with the
+/// store, library and root.
+fn measured_album() -> (tempfile::TempDir, SqliteStore, LibraryConfig, std::path::PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    testing::make_album(&root, "A", "X", 2);
+    let store = make(&root);
+    let lib = testing::library(&root);
+    testing::scan_library(&store, &lib);
+    for (track, file) in store.next_unanalyzed(&lib.id, ANALYZER_VERSION, 2) {
+        let lufs = if file.path.ends_with("01 - Track 1.wav") { -10.0 } else { -20.0 };
+        store.store_analysis(&lib.id, track, measured(lufs));
+    }
+    assert_eq!(album_lufs(&store), Some(-12.6));
+    (tmp, store, lib, root)
+}

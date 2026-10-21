@@ -11,9 +11,9 @@ use super::{
 use crate::analysis::ANALYZER_VERSION;
 use crate::types::{AnalysisResult, LibraryConfig};
 
-/// An album of `n` tracks under `A/X`, scanned into a fresh store with every track analyzed,
-/// and the album's folder.
-fn analyzed_album<S: InspectStore>(
+/// An album of `n` tracks under `A/X`, scanned into a fresh store with every track analyzed and
+/// its loudness measured, and the album's folder.
+pub(super) fn analyzed_album<S: InspectStore>(
     make: Factory<S>,
     n: usize,
 ) -> (tempfile::TempDir, S, LibraryConfig, PathBuf) {
@@ -24,19 +24,23 @@ fn analyzed_album<S: InspectStore>(
     let lib = library(&root);
     scan_library(&store, &lib);
     for (track, _) in store.next_unanalyzed(&lib.id, ANALYZER_VERSION, n) {
-        store.store_analysis(&lib.id, track, AnalysisResult::empty(ANALYZER_VERSION));
+        let measured = AnalysisResult {
+            integrated_lufs: Some(-10.0),
+            ..AnalysisResult::empty(ANALYZER_VERSION)
+        };
+        store.store_analysis(&lib.id, track, measured);
     }
-    assert!(live(&store, &lib).iter().all(|t| t.analyzed));
+    assert!(live(&store, &lib).iter().all(|t| t.measured));
     (tmp, store, lib, root.join("A/X"))
 }
 
 /// When `path` was last modified.
-fn modified(path: &Path) -> SystemTime {
+pub(super) fn modified(path: &Path) -> SystemTime {
     fs::metadata(path).unwrap().modified().unwrap()
 }
 
 /// Sets when `path` was last modified to `at`.
-fn set_modified(path: &Path, at: SystemTime) {
+pub(super) fn set_modified(path: &Path, at: SystemTime) {
     fs::File::open(path).unwrap().set_modified(at).unwrap();
 }
 

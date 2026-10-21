@@ -39,7 +39,7 @@ pub(super) fn process_file(
     let indexed = ctx.store.lookup(&ctx.library.id, &candidate.path);
     if let Some(ix) = &indexed
         && ix.size == candidate.size
-        && ix.mtime_ms == candidate.mtime_ms
+        && ix.mtime_ms == Some(candidate.mtime_ms)
         && !lyrics_file_changed(ix, candidate, dir)
     {
         return if ix.missing {
@@ -49,10 +49,21 @@ pub(super) fn process_file(
         };
     }
 
-    // Stage 3: read headers.
+    // Stage 3: read headers. A known file that cannot be read keeps its track, as a problem.
     let read = match tags::read(&candidate.path, candidate.size) {
         Ok(r) => r,
-        Err(e) => return FileOutcome::Problem(problems::from_read_error(&candidate.path, &e)),
+        Err(e) => {
+            let problem = problems::from_read_error(&candidate.path, &e);
+            return match indexed {
+                Some(ix) => FileOutcome::Unread {
+                    track_id: ix.track_id,
+                    missing: ix.missing,
+                    changed: (ix.size, ix.mtime_ms) != (candidate.size, Some(candidate.mtime_ms)),
+                    problem,
+                },
+                None => FileOutcome::Problem(problem),
+            };
+        }
     };
 
     // Stage 4: identify.

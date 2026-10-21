@@ -20,7 +20,8 @@ use crate::types::*;
 pub struct IndexedFile {
     pub track_id: TrackId,
     pub size: u64,
-    pub mtime_ms: u64,
+    /// `None` while the store has forgotten it ([`Batch::changed_unread`]), so no file matches.
+    pub mtime_ms: Option<u64>,
     pub missing: bool,
     /// Where its lyrics came from, so a lyrics file added or removed beside an
     /// unchanged track is noticed (`requirements/scanning.md` §7).
@@ -42,8 +43,13 @@ pub struct Batch {
     pub upserts: Vec<TrackRecord>,
     /// Unchanged tracks: set `last_seen_scan` so reconcile leaves them alone.
     pub touched: Vec<TrackId>,
-    /// Missing tracks whose files are back unchanged: clear the mark and touch.
+    /// Missing tracks whose files are back unchanged, or back and unreadable: clear the mark and
+    /// touch.
     pub returned: Vec<TrackId>,
+    /// Tracks whose files changed but could not be read: forget each one's mtime, so no file
+    /// matches it and every scan reads the file until one reads it, and reset its analysis,
+    /// which measured other audio.
+    pub changed_unread: Vec<TrackId>,
     pub problems: Vec<Problem>,
     /// Paths that scanned or listed successfully, or no longer exist: clear any problems
     /// recorded for them. Applied before `problems`, so a path in both keeps the problem this
@@ -63,10 +69,14 @@ impl Batch {
         self.upserts.len() + self.touched.len() + self.returned.len() + self.problems.len()
     }
 
-    /// Whether applying the batch would change nothing. Paths to clear or mark opened count,
-    /// though not toward [`Batch::len`], which sizes a batch by the tracks and problems it writes.
+    /// Whether applying the batch would change nothing. Paths to clear or mark opened and tracks
+    /// changed but unread count, though not toward [`Batch::len`], which sizes a batch by the
+    /// tracks and problems it writes.
     pub fn is_empty(&self) -> bool {
-        self.len() == 0 && self.cleared.is_empty() && self.opened.is_empty()
+        self.len() == 0
+            && self.cleared.is_empty()
+            && self.opened.is_empty()
+            && self.changed_unread.is_empty()
     }
 }
 
@@ -144,7 +154,9 @@ pub trait Store: Send + Sync {
 
     // --- analysis ---
     /// Tracks whose results come from an analyzer older than `analyzer_version`, most useful
-    /// first, each with its file. A track never analyzed is at version 0.
+    /// first, each with its file. A track never analyzed is at version 0. A track whose mtime is
+    /// forgotten waits for a scan to read its file, so analysis does not open the file and clear
+    /// its problem first.
     fn next_unanalyzed(
         &self,
         library: &LibraryId,
@@ -173,6 +185,8 @@ pub trait Store: Send + Sync {
 pub struct StoredTrack {
     pub record: TrackRecord,
     pub missing: bool,
+    /// Whether its mtime is forgotten ([`Batch::changed_unread`]).
+    pub mtime_unknown: bool,
     pub analysis: Option<AnalysisResult>,
 }
 
@@ -302,7 +316,7 @@ impl Store for MemoryStore {
         Some(IndexedFile {
             track_id: id,
             size: t.record.size,
-            mtime_ms: t.record.mtime_ms,
+            mtime_ms: (!t.mtime_unknown).then_some(t.record.mtime_ms),
             missing: t.missing,
             lyrics: if t.record.tags.lyrics.is_some() {
                 IndexedLyrics::Embedded
@@ -341,7 +355,8 @@ impl Store for MemoryStore {
                 })
                 .and_then(|old| old.analysis);
             lib.by_path.insert(record.path.clone(), id);
-            lib.tracks.insert(id, StoredTrack { record, missing: false, analysis });
+            let stored = StoredTrack { record, missing: false, mtime_unknown: false, analysis };
+            lib.tracks.insert(id, stored);
             lib.feed.push(if is_new { FeedEntry::Added(id) } else { FeedEntry::Updated(id) });
         }
         for id in batch.touched {
@@ -349,12 +364,24 @@ impl Store for MemoryStore {
                 t.record.last_seen_scan = batch.scan_id;
             }
         }
-        for id in batch.returned {
+        for &id in &batch.returned {
             if let Some(t) = lib.tracks.get_mut(&id) {
                 t.record.last_seen_scan = batch.scan_id;
                 if t.missing {
                     t.missing = false;
                     lib.feed.push(FeedEntry::Returned(id));
+                }
+            }
+        }
+        for id in batch.changed_unread {
+            if let Some(t) = lib.tracks.get_mut(&id)
+                && !t.mtime_unknown
+            {
+                t.mtime_unknown = true;
+                t.analysis = None;
+                // A track this batch returned has its one feed entry already.
+                if !batch.returned.contains(&id) {
+                    lib.feed.push(FeedEntry::Updated(id));
                 }
             }
         }
@@ -431,6 +458,7 @@ impl Store for MemoryStore {
             .iter()
             .filter(|(_, t)| {
                 !t.missing
+                    && !t.mtime_unknown
                     && t.analysis.as_ref().map_or(0, |a| a.analyzer_version) < analyzer_version
             })
             .map(|(&id, t)| {
@@ -447,6 +475,7 @@ impl Store for MemoryStore {
         let mut inner = self.inner.lock().unwrap();
         let stored = inner.libraries.get_mut(library).and_then(|l| l.tracks.get_mut(&track.id));
         if let Some(t) = stored
+            && !t.mtime_unknown
             && t.record.size == track.size
             && t.record.mtime_ms == track.mtime_ms
         {

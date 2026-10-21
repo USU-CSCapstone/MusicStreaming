@@ -13,7 +13,8 @@ use crate::db::{DbError, now_ms};
 /// The analysis queue: library `?1`'s tracks analyzed below version `?2`, at most `?3` of them,
 /// in the order of `tracks_unanalyzed`, so each pick reads the head of one index range.
 const UNANALYZED: &str = "SELECT id, file_size, file_mtime, root_id, path FROM tracks \
-     WHERE library_id = ?1 AND missing_since IS NULL AND analyzer_version < ?2 \
+     WHERE library_id = ?1 AND missing_since IS NULL AND file_mtime IS NOT NULL \
+     AND analyzer_version < ?2 \
      ORDER BY analyzer_version, added_at DESC, id LIMIT ?3";
 
 /// Tracks of `lib` analyzed below `analyzer_version`, each with its file and the size and mtime
@@ -42,7 +43,7 @@ pub fn next_unanalyzed(
 /// Saves `result`'s loudness and waveform on the track, refreshes its album's loudness, and
 /// records both in the feed. Does nothing when the track is not in `lib`, or when its file's size
 /// or mtime differs from those it was picked with: a scan found the file changed during the
-/// decode, so the result may have measured other audio and the track stays queued.
+/// decode, so the result may have measured other audio.
 pub fn store_analysis(
     store: &SqliteStore,
     lib: i64,

@@ -125,8 +125,9 @@ CREATE TABLE tracks (
     path            TEXT    NOT NULL,
     file_size       INTEGER NOT NULL,
     -- The file's mtime, for detecting changes without opening the file (requirements/scanning.md §5,
-    -- design/scanning.md §2).
-    file_mtime      INTEGER NOT NULL,
+    -- design/scanning.md §2). NULL while the file has changed and not been read since
+    -- (design/scanning.md §8).
+    file_mtime      INTEGER,
     missing_since   INTEGER,
     -- The scan that last saw this file on disk. Reconciliation marks missing whatever a completed
     -- scan of a scope did not touch (design/scanning.md §7–§8).
@@ -183,7 +184,8 @@ CREATE INDEX tracks_missing ON tracks (library_id, missing_since) WHERE missing_
 -- The analysis queue in the order it is worked: tracks never analyzed before those an older
 -- analyzer did, and newest first within each, so a pick reads the head of one range and sorts
 -- nothing.
-CREATE INDEX tracks_unanalyzed ON tracks (library_id, analyzer_version, added_at DESC, id) WHERE missing_since IS NULL;
+CREATE INDEX tracks_unanalyzed ON tracks (library_id, analyzer_version, added_at DESC, id)
+    WHERE missing_since IS NULL AND file_mtime IS NOT NULL;
 
 CREATE TABLE track_artists (
     library_id INTEGER NOT NULL,

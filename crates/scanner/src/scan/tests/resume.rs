@@ -115,3 +115,38 @@ where
     assert_eq!(paths, expected);
     assert_eq!(store.inner.problems(&lib.id).len(), 2);
 }
+
+/// A known track that cannot be read is counted once across a resume, which reads it again. A/X's
+/// four tracks are scanned, then the first is broken. A scan shut down as the third track is read,
+/// after the first was persisted, resumes to the counts of one never stopped: the broken file
+/// processed and a problem once, and the four files seen.
+#[test]
+fn a_known_file_that_cannot_be_read_is_counted_once_across_a_resume() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    make_album(&root, "A", "X", 4);
+    let lib = library(&root);
+    let stops = Stops::default();
+    let stop_at = track(&root, "A/X", 3);
+    let on_lookup = |path: &Path| {
+        if path == stop_at {
+            stops.shutdown.store(true, Ordering::SeqCst);
+        }
+    };
+    let store = Hooked { inner: MemoryStore::new(), on_apply: || Ok(()), on_lookup };
+    scan_flushing_often(&store.inner, &lib);
+    crate::testing::break_file(&track(&root, "A/X", 1));
+
+    let mut scan = new_scan(&store, &lib);
+    run(&store, &lib, &mut scan, &batches_of(1), &stops);
+    let row = |id| store.inner.scans(&lib.id).into_iter().find(|s| s.id == id).unwrap();
+    let mut stopped = row(scan.id);
+    assert_eq!(stopped.state, ScanState::Running);
+    run(&store, &lib, &mut stopped, &batches_of(1), &Stops::default());
+
+    let resumed = row(scan.id);
+    let p = &resumed.progress;
+    assert_eq!(resumed.state, ScanState::Completed);
+    assert_eq!((p.files_seen, p.files_processed, p.problems), (4, 1, 1), "{p:?}");
+    assert!(store.inner.tracks(&lib.id).iter().all(|t| !t.missing));
+}

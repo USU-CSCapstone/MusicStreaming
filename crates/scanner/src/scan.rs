@@ -284,6 +284,15 @@ fn process_directory(
                 problem_files += 1;
                 batch.problems.push(problem);
             }
+            FileOutcome::Unread { track_id, missing, changed, problem } => {
+                problem_files += 1;
+                batch.problems.push(problem);
+                let seen = if missing { &mut batch.returned } else { &mut batch.touched };
+                seen.push(track_id);
+                if changed {
+                    batch.changed_unread.push(track_id);
+                }
+            }
         }
     }
     if halted.is_ok() || (matches!(halted, Err(Halt::Stop)) && ctx.cancelled()) {

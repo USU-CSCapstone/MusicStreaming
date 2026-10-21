@@ -298,7 +298,16 @@ pub enum FileOutcome {
     },
     Added(Box<TrackRecord>),
     Updated(Box<TrackRecord>),
+    /// A file with no track that could not be read.
     Problem(Problem),
+    /// A known track's file, there but unreadable, with its `problem`. `changed` is whether the
+    /// file's size or mtime differs from the index, or the index has forgotten its mtime.
+    Unread {
+        track_id: TrackId,
+        missing: bool,
+        changed: bool,
+        problem: Problem,
+    },
 }
 
 /// Result of analyzing one track (`design/scanning.md` §12).

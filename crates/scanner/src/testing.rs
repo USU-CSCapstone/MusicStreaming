@@ -25,9 +25,11 @@ use crate::types::*;
 mod jobs;
 mod reanalysis;
 mod shutdown;
+mod unread;
 pub use jobs::*;
 pub use reanalysis::*;
 pub use shutdown::*;
+pub use unread::*;
 
 // ───────────────────────────── Inspection ─────────────────────────────
 
@@ -50,6 +52,8 @@ pub struct InspectTrack {
     pub channels: Option<u8>,
     pub sample_rate: Option<u32>,
     pub analyzed: bool,
+    /// Whether its analysis measured a loudness.
+    pub measured: bool,
 }
 
 /// What a store must expose for the suite to check it.
@@ -87,6 +91,7 @@ impl InspectStore for MemoryStore {
                 channels: t.record.properties.channels,
                 sample_rate: t.record.properties.sample_rate,
                 analyzed: t.analysis.is_some(),
+                measured: t.analysis.is_some_and(|a| a.integrated_lufs.is_some()),
             })
             .collect()
     }
@@ -1189,6 +1194,34 @@ macro_rules! store_suite {
         #[test]
         fn a_result_for_replaced_audio_is_not_stored() {
             $crate::testing::a_result_for_replaced_audio_is_not_stored($make);
+        }
+        #[test]
+        fn a_known_file_that_cannot_be_read_keeps_its_track() {
+            $crate::testing::a_known_file_that_cannot_be_read_keeps_its_track($make);
+        }
+        #[test]
+        fn an_unreadable_file_is_read_again_until_it_reads() {
+            $crate::testing::an_unreadable_file_is_read_again_until_it_reads($make);
+        }
+        #[test]
+        fn a_broken_file_moved_away_and_back_keeps_its_problem() {
+            $crate::testing::a_broken_file_moved_away_and_back_keeps_its_problem($make);
+        }
+        #[test]
+        fn a_file_restored_with_its_old_time_is_read_again() {
+            $crate::testing::a_file_restored_with_its_old_time_is_read_again($make);
+        }
+        #[test]
+        fn a_result_for_a_file_broken_during_its_decode_is_not_stored() {
+            $crate::testing::a_result_for_a_file_broken_during_its_decode_is_not_stored($make);
+        }
+        #[test]
+        fn an_unreadable_replacement_loses_its_analysis() {
+            $crate::testing::an_unreadable_replacement_loses_its_analysis($make);
+        }
+        #[test]
+        fn a_missing_file_back_unreadable_is_back() {
+            $crate::testing::a_missing_file_back_unreadable_is_back($make);
         }
         #[test]
         fn missing_then_returned() {

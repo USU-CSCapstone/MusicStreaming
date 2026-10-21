@@ -59,6 +59,7 @@ impl InspectStore for SqliteStore {
             .prepare(
                 "SELECT t.id, t.root_id, t.path, t.missing_since IS NOT NULL, t.title, t.album_title, t.sort_key, \
                  t.artist_sort_key, t.codec, t.container, t.channels, t.sample_rate_hz, t.analyzer_version > 0, \
+                 t.loudness_lufs IS NOT NULL, \
                  (SELECT image_id FROM albums a WHERE a.id = t.album_id) IS NOT NULL, \
                  EXISTS (SELECT 1 FROM track_artists ta JOIN artists ar ON ar.id = ta.artist_id \
                          WHERE ta.track_id = t.id AND ar.biography IS NOT NULL), \
@@ -85,6 +86,7 @@ impl InspectStore for SqliteStore {
                     r.get::<_, bool>(13)?,
                     r.get::<_, bool>(14)?,
                     r.get::<_, bool>(15)?,
+                    r.get::<_, bool>(16)?,
                 ))
             })
             .unwrap();
@@ -104,6 +106,7 @@ impl InspectStore for SqliteStore {
                 channels,
                 rate,
                 analyzed,
+                measured,
                 art,
                 bio,
                 lyr,
@@ -140,6 +143,7 @@ impl InspectStore for SqliteStore {
                 },
                 sample_rate: if rate == 0 { None } else { Some(rate as u32) },
                 analyzed,
+                measured,
             });
         }
         Ok(out)
@@ -737,6 +741,7 @@ fn another_librarys_track_is_left_alone() {
     let other: LibraryId = "2".into();
     let mut batch = Batch::new(999);
     batch.returned.push(track);
+    batch.changed_unread.push(track);
     store.apply(&other, batch).unwrap();
     // No peaks: the path that deletes a waveform. The file is as picked, so only the library
     // stops the write.

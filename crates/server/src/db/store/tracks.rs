@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use jewelcase_scanner::store::{Batch, IndexedFile, IndexedLyrics};
 use jewelcase_scanner::{Depth, ScanId, Scope};
-use rusqlite::{Connection, OptionalExtension, Result, ToSql, params};
+use rusqlite::{Connection, OptionalExtension, Result, ToSql, Transaction, params};
 
 use super::SqliteStore;
 use super::problems::{clear_problem, clear_unopened, record_problem};
@@ -30,7 +30,7 @@ pub fn lookup(store: &SqliteStore, lib: i64, path: &Path) -> Result<Option<Index
                 Ok(IndexedFile {
                     track_id: r.get::<_, i64>(0)? as u64,
                     size: r.get::<_, i64>(1)? as u64,
-                    mtime_ms: r.get::<_, i64>(2)? as u64,
+                    mtime_ms: r.get::<_, Option<i64>>(2)?.map(|m| m as u64),
                     missing: r.get::<_, Option<i64>>(3)?.is_some(),
                     // So a lyrics file added or removed beside an unchanged track is noticed.
                     lyrics: match r.get::<_, Option<i64>>(4)? {
@@ -45,8 +45,8 @@ pub fn lookup(store: &SqliteStore, lib: i64, path: &Path) -> Result<Option<Index
     })
 }
 
-/// Writes `batch` in one transaction: its tracks, returned files, problems, and the derived data
-/// they touch.
+/// Writes `batch` in one transaction: its tracks, returned files, files changed but unread,
+/// problems, and the derived data they touch.
 pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<(), DbError> {
     let roots = store.roots.clone();
     store.db.write_blocking(move |tx| {
@@ -73,6 +73,9 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<(), DbError>
                 feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)?;
             }
         }
+        for id in &batch.changed_unread {
+            forget_stamp(tx, lib, *id as i64, now, &mut touched)?;
+        }
         for path in &batch.cleared {
             clear_problem(&roots, tx, lib, path)?;
         }
@@ -84,6 +87,30 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<(), DbError>
         }
         catalog::recompute(tx, lib, &touched, now)
     })
+}
+
+/// Applies [`Batch::changed_unread`] to track `id` of `lib`: forgets its mtime and resets its
+/// analysis to version 0 with no loudness, peak or waveform. A track this changes is recorded in
+/// the feed at `now` and added to `touched`, so its album's loudness follows; one already
+/// forgotten, or another library's, is left alone.
+fn forget_stamp(
+    tx: &Transaction<'_>,
+    lib: i64,
+    id: i64,
+    now: i64,
+    touched: &mut Touched,
+) -> Result<()> {
+    let changed = tx.execute(
+        "UPDATE tracks SET file_mtime = NULL, analyzer_version = 0, loudness_lufs = NULL, \
+         peak_dbtp = NULL WHERE id = ?1 AND library_id = ?2 AND file_mtime IS NOT NULL",
+        params![id, lib],
+    )?;
+    if changed == 0 {
+        return Ok(());
+    }
+    tx.execute("DELETE FROM track_waveforms WHERE track_id = ?1", [id])?;
+    touched.track(tx, lib, id)?;
+    feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)
 }
 
 /// Marks the tracks in `scope` that scan `scan_id` did not see as missing, other than those at
