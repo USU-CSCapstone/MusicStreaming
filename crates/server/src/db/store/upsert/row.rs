@@ -149,16 +149,15 @@ pub(super) fn write_row(
         "each column binds once"
     );
     let Some((id, analyzer_version)) = tx
-        .query_row(UPSERT.as_str(), values.as_slice(), |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-        })
+        .prepare_cached(UPSERT.as_str())?
+        .query_row(values.as_slice(), |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
         .optional()?
     else {
         return Ok(None);
     };
     // A track at version 0 has no analysis to keep, its waveform included; a new track has none.
     if rec.id.is_some() && analyzer_version == 0 {
-        tx.execute("DELETE FROM track_waveforms WHERE track_id = ?1", [id])?;
+        tx.prepare_cached("DELETE FROM track_waveforms WHERE track_id = ?1")?.execute([id])?;
     }
     Ok(Some(id))
 }

@@ -35,9 +35,10 @@ pub fn record(
     op: Op,
     now: i64,
 ) -> Result<()> {
-    conn.execute(
-        "INSERT OR REPLACE INTO library_changes (library_id, entity_type, entity_id, op, changed_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![library_id, Text(entity), id, Text(op), now],
-    )?;
+    conn.prepare_cached(
+        "INSERT OR REPLACE INTO library_changes (library_id, entity_type, entity_id, op, \
+         changed_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+    )?
+    .execute(params![library_id, Text(entity), id, Text(op), now])?;
     Ok(())
 }

@@ -81,30 +81,30 @@ pub(super) fn save(tx: &Transaction, roots: &Roots, scan: &Scan) -> Result<()> {
     let current = progress.current_path.as_ref();
     let (current_root, current_path) =
         current.and_then(|path| roots.locate(scan.library, path)).unzip();
-    tx.execute(
+    tx.prepare_cached(
         "UPDATE scans SET state = ?2, cursor_scope = ?3, cursor_dir = ?4, files_seen = ?5, \
          files_processed = ?6, added = ?7, updated = ?8, moved = ?9, missing = ?10, problems = ?11, \
          current_root_id = ?12, current_path = ?13, started_at = ?14, finished_at = ?15 \
          WHERE id = ?1 AND library_id = ?16",
-        params![
-            scan.id,
-            Text(scan.state),
-            scan.cursor.as_ref().map(|c| c.scope_index),
-            cursor_dir(scan),
-            progress.files_seen,
-            progress.files_processed,
-            progress.added,
-            progress.updated,
-            progress.moved,
-            progress.missing,
-            progress.problems,
-            current_root,
-            current_path,
-            scan.started_at,
-            scan.finished_at,
-            scan.library,
-        ],
-    )?;
+    )?
+    .execute(params![
+        scan.id,
+        Text(scan.state),
+        scan.cursor.as_ref().map(|c| c.scope_index),
+        cursor_dir(scan),
+        progress.files_seen,
+        progress.files_processed,
+        progress.added,
+        progress.updated,
+        progress.moved,
+        progress.missing,
+        progress.problems,
+        current_root,
+        current_path,
+        scan.started_at,
+        scan.finished_at,
+        scan.library,
+    ])?;
     Ok(())
 }
 

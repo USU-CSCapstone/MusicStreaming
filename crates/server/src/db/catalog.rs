@@ -36,11 +36,8 @@ impl Touched {
     /// another library's.
     pub fn track(&mut self, tx: &Transaction<'_>, lib: i64, track_id: i64) -> Result<()> {
         if let Some(album) = tx
-            .query_row(
-                "SELECT album_id FROM tracks WHERE id = ?1 AND library_id = ?2",
-                [track_id, lib],
-                |r| r.get::<_, i64>(0),
-            )
+            .prepare_cached("SELECT album_id FROM tracks WHERE id = ?1 AND library_id = ?2")?
+            .query_row([track_id, lib], |r| r.get::<_, i64>(0))
             .optional()?
         {
             self.albums.insert(album);

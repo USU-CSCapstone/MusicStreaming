@@ -55,19 +55,16 @@ pub fn sidecar_rows(
 fn find_or_create_biography(tx: &Transaction<'_>, lib: i64, biography: &Biography) -> Result<i64> {
     let hash = &biography.hash[..];
     if let Some(id) = tx
-        .query_row(
-            "SELECT id FROM biographies WHERE library_id = ?1 AND hash = ?2",
-            params![lib, hash],
-            |r| r.get(0),
-        )
+        .prepare_cached("SELECT id FROM biographies WHERE library_id = ?1 AND hash = ?2")?
+        .query_row(params![lib, hash], |r| r.get(0))
         .optional()?
     {
         return Ok(id);
     }
     let id = new_id()?;
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO biographies (id, library_id, hash, text) VALUES (?1, ?2, ?3, ?4)",
-        params![id, lib, hash, &*biography.text],
-    )?;
+    )?
+    .execute(params![id, lib, hash, &*biography.text])?;
     Ok(id)
 }

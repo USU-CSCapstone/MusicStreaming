@@ -44,10 +44,12 @@ pub fn record(store: &SqliteStore, lib: i64, problem: Problem) -> Result<(), DbE
 
 /// Runs `sql` with `args` bound and returns its one text column.
 fn texts(conn: &Connection, sql: &str, args: &[&dyn ToSql]) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare(sql)?;
+    let mut stmt = conn.prepare_cached(sql)?;
     stmt.query_map(args, |r| r.get(0))?.collect()
 }
 
+/// Records `problem` for `lib` in its group, replacing any problem already recorded at its path,
+/// and recounts the groups it leaves and joins. A path under none of `lib`'s roots records nothing.
 pub fn record_problem(
     roots: &Roots,
     tx: &Transaction<'_>,
@@ -62,39 +64,46 @@ pub fn record_problem(
         return Ok(());
     };
     let key = problem_group_key(problem.kind, &root_path, &problem.detail);
-    let group_id: i64 = tx.query_row(
-        "INSERT INTO scan_problem_groups (id, library_id, kind, group_key, summary, count, first_seen_at, last_seen_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6) \
-         ON CONFLICT (library_id, group_key) DO UPDATE SET last_seen_at = MAX(last_seen_at, excluded.last_seen_at) \
-         RETURNING id",
-        params![new_id()?, lib, Text(problem.kind), key, problem.detail, problem.seen_at],
-        |r| r.get(0),
-    )?;
-    let existing: Option<i64> = tx
+    let group_id: i64 = tx
+        .prepare_cached(
+            "INSERT INTO scan_problem_groups (id, library_id, kind, group_key, summary, count, \
+             first_seen_at, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6) \
+             ON CONFLICT (library_id, group_key) \
+             DO UPDATE SET last_seen_at = MAX(last_seen_at, excluded.last_seen_at) RETURNING id",
+        )?
         .query_row(
-            "SELECT group_id FROM scan_problems WHERE root_id = ?1 AND path = ?2",
-            params![root_id, rel],
+            params![new_id()?, lib, Text(problem.kind), key, problem.detail, problem.seen_at],
             |r| r.get(0),
-        )
+        )?;
+    let existing: Option<i64> = tx
+        .prepare_cached("SELECT group_id FROM scan_problems WHERE root_id = ?1 AND path = ?2")?
+        .query_row(params![root_id, rel], |r| r.get(0))
         .optional()?;
     match existing {
         Some(old) if old == group_id => {
-            tx.execute(
-                    "UPDATE scan_problems SET detail = ?3, seen_at = ?4 WHERE root_id = ?1 AND path = ?2",
-                    params![root_id, rel, problem.detail, problem.seen_at],
-                )?;
+            tx.prepare_cached(
+                "UPDATE scan_problems SET detail = ?3, seen_at = ?4 \
+                 WHERE root_id = ?1 AND path = ?2",
+            )?
+            .execute(params![root_id, rel, problem.detail, problem.seen_at])?;
         }
         _ => {
             // Insert into the new group before recounting the old one, so
             // a group is never emptied and deleted while still referenced.
-            tx.execute(
-                "DELETE FROM scan_problems WHERE root_id = ?1 AND path = ?2",
-                params![root_id, rel],
-            )?;
-            tx.execute(
-                    "INSERT INTO scan_problems (library_id, group_id, root_id, path, detail, seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![lib, group_id, root_id, rel, problem.detail, problem.seen_at],
-                )?;
+            tx.prepare_cached("DELETE FROM scan_problems WHERE root_id = ?1 AND path = ?2")?
+                .execute(params![root_id, rel])?;
+            tx.prepare_cached(
+                "INSERT INTO scan_problems (library_id, group_id, root_id, path, detail, seen_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?
+            .execute(params![
+                lib,
+                group_id,
+                root_id,
+                rel,
+                problem.detail,
+                problem.seen_at
+            ])?;
             recount_group(tx, group_id)?;
             if let Some(old) = existing {
                 recount_group(tx, old)?;
@@ -110,11 +119,8 @@ pub fn clear_problem(roots: &Roots, tx: &Transaction<'_>, lib: i64, path: &Path)
         return Ok(());
     };
     let group = tx
-        .query_row(
-            "SELECT group_id FROM scan_problems WHERE root_id = ?1 AND path = ?2",
-            params![root_id, rel],
-            |r| r.get(0),
-        )
+        .prepare_cached("SELECT group_id FROM scan_problems WHERE root_id = ?1 AND path = ?2")?
+        .query_row(params![root_id, rel], |r| r.get(0))
         .optional()?;
     clear_problem_rel(tx, root_id, &rel, group)
 }
@@ -128,12 +134,12 @@ pub fn clear_unopened(store: &SqliteStore, lib: i64, path: &Path) -> Result<(), 
     store.db.write_blocking(move |tx| {
         let [unreadable, denied] = UNOPENED.map(Text);
         let group = tx
-            .query_row(
-                "SELECT p.group_id FROM scan_problems p JOIN scan_problem_groups g ON g.id = p.group_id \
+            .prepare_cached(
+                "SELECT p.group_id FROM scan_problems p \
+                 JOIN scan_problem_groups g ON g.id = p.group_id \
                  WHERE p.root_id = ?1 AND p.path = ?2 AND g.kind IN (?3, ?4)",
-                params![root_id, rel, unreadable, denied],
-                |r| r.get(0),
-            )
+            )?
+            .query_row(params![root_id, rel, unreadable, denied], |r| r.get(0))
             .optional()?;
         clear_problem_rel(tx, root_id, &rel, group)
     })
@@ -148,20 +154,24 @@ fn clear_problem_rel(
     group: Option<i64>,
 ) -> Result<()> {
     if let Some(group_id) = group {
-        tx.execute(
-            "DELETE FROM scan_problems WHERE root_id = ?1 AND path = ?2",
-            params![root_id, rel],
-        )?;
+        tx.prepare_cached("DELETE FROM scan_problems WHERE root_id = ?1 AND path = ?2")?
+            .execute(params![root_id, rel])?;
         recount_group(tx, group_id)?;
     }
     Ok(())
 }
 
+/// Sets group `group_id`'s count from its problems, and deletes the group once none is left.
 fn recount_group(tx: &Transaction<'_>, group_id: i64) -> Result<()> {
-    tx.execute(
-        "UPDATE scan_problem_groups SET count = (SELECT COUNT(*) FROM scan_problems WHERE group_id = ?1) WHERE id = ?1",
-        [group_id],
-    )?;
-    tx.execute("DELETE FROM scan_problem_groups WHERE id = ?1 AND count = 0", [group_id])?;
+    tx.prepare_cached(
+        "UPDATE scan_problem_groups \
+         SET count = (SELECT COUNT(*) FROM scan_problems WHERE group_id = ?1) WHERE id = ?1",
+    )?
+    .execute([group_id])?;
+    tx.prepare_cached("DELETE FROM scan_problem_groups WHERE id = ?1 AND count = 0")?
+        .execute([group_id])?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

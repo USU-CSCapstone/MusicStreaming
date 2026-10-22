@@ -14,38 +14,35 @@ use crate::db::feed::{self, Entity, Op};
 /// reaches the albums the artist heads ([`follow_artist_sort_key`]).
 pub(super) fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i64) -> Result<()> {
     let Some((credited, name, tagged_sort, old_sort)) = tx
-        .query_row(
+        .prepare_cached(
             "SELECT EXISTS (SELECT 1 FROM track_artists WHERE artist_id = ?1) \
                  OR EXISTS (SELECT 1 FROM track_album_artists WHERE artist_id = ?1), \
              (SELECT name FROM artist_spellings WHERE artist_id = ?1 ORDER BY uses DESC, name LIMIT 1), \
              (SELECT sort_key FROM artist_sort_keys WHERE artist_id = ?1 ORDER BY uses DESC, sort_key LIMIT 1), \
              sort_key FROM artists WHERE id = ?1",
-            [artist],
-            |r| {
-                Ok((
-                    r.get::<_, bool>(0)?,
-                    r.get::<_, Option<String>>(1)?,
-                    r.get::<_, Option<Vec<u8>>>(2)?,
-                    r.get::<_, Vec<u8>>(3)?,
-                ))
-            },
-        )
+        )?
+        .query_row([artist], |r| {
+            Ok((
+                r.get::<_, bool>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<Vec<u8>>>(2)?,
+                r.get::<_, Vec<u8>>(3)?,
+            ))
+        })
         .optional()?
     else {
         return Ok(());
     };
     if !credited {
-        tx.execute("DELETE FROM artists WHERE id = ?1", [artist])?;
+        tx.prepare_cached("DELETE FROM artists WHERE id = ?1")?.execute([artist])?;
         return feed::record(tx, lib, Entity::Artist, artist, Op::Delete, now);
     }
     // The tagged sort value where this artist is the primary credit, else derived from the name.
     let sort_key = tagged_sort
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| sort_key(name.as_deref().unwrap_or(""), None).into_bytes());
-    tx.execute(
-        "UPDATE artists SET name = ?2, sort_key = ?3 WHERE id = ?1",
-        params![artist, name, sort_key],
-    )?;
+    tx.prepare_cached("UPDATE artists SET name = ?2, sort_key = ?3 WHERE id = ?1")?
+        .execute(params![artist, name, sort_key])?;
     if sort_key != old_sort {
         follow_artist_sort_key(tx, lib, artist, &sort_key, now)?;
     }

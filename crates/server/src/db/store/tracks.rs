@@ -29,11 +29,12 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<i64, DbError
         }
         let mut marked = 0;
         for &id in &batch.missing {
-            let changed = tx.execute(
-                "UPDATE tracks SET missing_since = ?3 \
-                 WHERE id = ?1 AND library_id = ?2 AND missing_since IS NULL",
-                params![id, lib, now],
-            )?;
+            let changed = tx
+                .prepare_cached(
+                    "UPDATE tracks SET missing_since = ?3 \
+                     WHERE id = ?1 AND library_id = ?2 AND missing_since IS NULL",
+                )?
+                .execute(params![id, lib, now])?;
             if changed > 0 {
                 track_changed(tx, lib, id, now, &mut touched)?;
                 marked += 1;
@@ -43,11 +44,12 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<i64, DbError
             marked += mark_vanished(&roots, tx, lib, folder, now, &mut touched)?;
         }
         for &id in &batch.returned {
-            let changed = tx.execute(
-                "UPDATE tracks SET missing_since = NULL \
-                 WHERE id = ?1 AND library_id = ?2 AND missing_since IS NOT NULL",
-                params![id, lib],
-            )?;
+            let changed = tx
+                .prepare_cached(
+                    "UPDATE tracks SET missing_since = NULL \
+                     WHERE id = ?1 AND library_id = ?2 AND missing_since IS NOT NULL",
+                )?
+                .execute(params![id, lib])?;
             if changed > 0 {
                 track_changed(tx, lib, id, now, &mut touched)?;
             }
@@ -113,15 +115,16 @@ fn forget_stamp(
     now: i64,
     touched: &mut Touched,
 ) -> Result<()> {
-    let changed = tx.execute(
-        "UPDATE tracks SET file_mtime = NULL, analyzer_version = 0, loudness_lufs = NULL, \
-         peak_dbtp = NULL WHERE id = ?1 AND library_id = ?2 AND file_mtime IS NOT NULL",
-        params![id, lib],
-    )?;
+    let changed = tx
+        .prepare_cached(
+            "UPDATE tracks SET file_mtime = NULL, analyzer_version = 0, loudness_lufs = NULL, \
+             peak_dbtp = NULL WHERE id = ?1 AND library_id = ?2 AND file_mtime IS NOT NULL",
+        )?
+        .execute(params![id, lib])?;
     if changed == 0 {
         return Ok(());
     }
-    tx.execute("DELETE FROM track_waveforms WHERE track_id = ?1", [id])?;
+    tx.prepare_cached("DELETE FROM track_waveforms WHERE track_id = ?1")?.execute([id])?;
     track_changed(tx, lib, id, now, touched)
 }
 
@@ -147,19 +150,15 @@ pub fn indexes_under(store: &SqliteStore, lib: i64, folder: &Path) -> Result<boo
         let tracks = "SELECT 1 FROM tracks WHERE root_id = ?1 AND missing_since IS NULL";
         let problems = "SELECT 1 FROM scan_problems WHERE root_id = ?1";
         match bounds_under(&rel) {
-            None => conn.query_row(
-                &format!("SELECT EXISTS ({tracks}) OR EXISTS ({problems})"),
-                params![root_id],
-                |r| r.get(0),
-            ),
-            Some([lower, upper]) => conn.query_row(
-                &format!(
+            None => conn
+                .prepare_cached(&format!("SELECT EXISTS ({tracks}) OR EXISTS ({problems})"))?
+                .query_row(params![root_id], |r| r.get(0)),
+            Some([lower, upper]) => conn
+                .prepare_cached(&format!(
                     "SELECT EXISTS ({tracks} AND path >= ?2 AND path < ?3) \
                      OR EXISTS ({problems} AND path >= ?2 AND path < ?3)"
-                ),
-                params![root_id, lower, upper],
-                |r| r.get(0),
-            ),
+                ))?
+                .query_row(params![root_id, lower, upper], |r| r.get(0)),
         }
     })
 }

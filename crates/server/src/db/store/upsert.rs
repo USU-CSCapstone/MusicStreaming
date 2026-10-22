@@ -113,30 +113,30 @@ fn replace_links(
     genres: &[String],
     touched: &mut Touched,
 ) -> Result<()> {
-    tx.execute("DELETE FROM track_artists WHERE track_id = ?1", [id])?;
-    tx.execute("DELETE FROM track_album_artists WHERE track_id = ?1", [id])?;
-    tx.execute("DELETE FROM track_tags WHERE track_id = ?1", [id])?;
+    tx.prepare_cached("DELETE FROM track_artists WHERE track_id = ?1")?.execute([id])?;
+    tx.prepare_cached("DELETE FROM track_album_artists WHERE track_id = ?1")?.execute([id])?;
+    tx.prepare_cached("DELETE FROM track_tags WHERE track_id = ?1")?.execute([id])?;
+    let mut artists = tx.prepare_cached(
+        "INSERT INTO track_artists (library_id, track_id, position, artist_id, artist_name) \
+         VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
+    )?;
     for (pos, (artist_id, name)) in credits.artists.iter().enumerate() {
-        tx.execute(
-            "INSERT INTO track_artists (library_id, track_id, position, artist_id, artist_name) VALUES (?1, ?2, ?3, ?4, ?5) \
-             ON CONFLICT DO NOTHING",
-            params![lib, id, pos as i64, artist_id, name.map(str::trim)],
-        )?;
+        artists.execute(params![lib, id, pos as i64, artist_id, name.map(str::trim)])?;
     }
+    let mut album_artists = tx.prepare_cached(
+        "INSERT INTO track_album_artists (library_id, track_id, position, artist_id, artist_name) \
+         VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
+    )?;
     for (pos, (artist_id, name)) in credits.album_artists.iter().enumerate() {
-        tx.execute(
-            "INSERT INTO track_album_artists (library_id, track_id, position, artist_id, artist_name) VALUES (?1, ?2, ?3, ?4, ?5) \
-             ON CONFLICT DO NOTHING",
-            params![lib, id, pos as i64, artist_id, name.map(str::trim)],
-        )?;
+        album_artists.execute(params![lib, id, pos as i64, artist_id, name.map(str::trim)])?;
     }
+    let mut tags = tx.prepare_cached(
+        "INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT DO NOTHING",
+    )?;
     for genre in genres {
         let tag_id = find_or_create_tag(tx, lib, genre)?;
-        tx.execute(
-            "INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES (?1, ?2, ?3, ?4) \
-             ON CONFLICT DO NOTHING",
-            params![lib, id, tag_id, genre.trim()],
-        )?;
+        tags.execute(params![lib, id, tag_id, genre.trim()])?;
         touched.tags.insert(tag_id);
     }
     Ok(())
@@ -144,16 +144,17 @@ fn replace_links(
 
 /// Replaces track `id`'s lyrics with `lyrics`, or removes them when it is `None`.
 fn replace_lyrics(tx: &Transaction<'_>, lib: i64, id: i64, lyrics: Option<&Lyrics>) -> Result<()> {
-    tx.execute("DELETE FROM track_lyrics WHERE track_id = ?1", [id])?;
+    tx.prepare_cached("DELETE FROM track_lyrics WHERE track_id = ?1")?.execute([id])?;
     if let Some(lyrics) = lyrics {
         let (plain, synced) = match lyrics {
             Lyrics::Plain(text) => (Some(text), None),
             Lyrics::Synced(lines) => (None, Some(Json(lines))),
         };
-        tx.execute(
-            "INSERT INTO track_lyrics (library_id, track_id, plain, synced) VALUES (?1, ?2, ?3, ?4)",
-            params![lib, id, plain, synced],
-        )?;
+        tx.prepare_cached(
+            "INSERT INTO track_lyrics (library_id, track_id, plain, synced) \
+             VALUES (?1, ?2, ?3, ?4)",
+        )?
+        .execute(params![lib, id, plain, synced])?;
     }
     Ok(())
 }

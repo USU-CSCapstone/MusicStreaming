@@ -20,22 +20,19 @@ pub fn find_or_create_artist(
 ) -> Result<i64> {
     let key = name.map(name_key).unwrap_or_default();
     if let Some(id) = tx
-        .query_row(
-            "SELECT id FROM artists WHERE library_id = ?1 AND name_key = ?2",
-            params![lib, key],
-            |r| r.get(0),
-        )
+        .prepare_cached("SELECT id FROM artists WHERE library_id = ?1 AND name_key = ?2")?
+        .query_row(params![lib, key], |r| r.get(0))
         .optional()?
     {
         return Ok(id);
     }
     let sort_key = sort_key(name.unwrap_or(""), None);
     let id = new_id()?;
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO artists (id, library_id, name, name_key, sort_key, added_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![id, lib, name.map(str::trim), key, sort_key.as_bytes(), now],
-    )?;
+    )?
+    .execute(params![id, lib, name.map(str::trim), key, sort_key.as_bytes(), now])?;
     Ok(id)
 }
 
@@ -52,21 +49,29 @@ pub fn find_or_create_album(
 ) -> Result<i64> {
     let title_key = title.map(name_key).unwrap_or_default();
     if let Some(id) = tx
-        .query_row(
+        .prepare_cached(
             "SELECT id FROM albums WHERE library_id = ?1 AND title_key = ?2 AND artists_key = ?3",
-            params![lib, title_key, artists_key],
-            |r| r.get(0),
-        )
+        )?
+        .query_row(params![lib, title_key, artists_key], |r| r.get(0))
         .optional()?
     {
         return Ok(id);
     }
     let id = new_id()?;
-    tx.execute(
-        "INSERT INTO albums (id, library_id, title, title_key, artists_key, sort_key, artist_sort_key, added_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![id, lib, title.map(str::trim), title_key, artists_key, sort_key.as_bytes(), artist_sort_key.as_bytes(), now],
-    )?;
+    tx.prepare_cached(
+        "INSERT INTO albums (id, library_id, title, title_key, artists_key, sort_key, \
+         artist_sort_key, added_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    )?
+    .execute(params![
+        id,
+        lib,
+        title.map(str::trim),
+        title_key,
+        artists_key,
+        sort_key.as_bytes(),
+        artist_sort_key.as_bytes(),
+        now
+    ])?;
     Ok(id)
 }
 
@@ -74,22 +79,21 @@ pub fn find_or_create_album(
 pub fn find_or_create_tag(tx: &Transaction<'_>, lib: i64, name: &str) -> Result<i64> {
     let key = tag_key(name);
     if let Some(id) = tx
-        .query_row(
+        .prepare_cached(
             "SELECT id FROM tags WHERE library_id = ?1 AND type = 'genre' AND name_key = ?2",
-            params![lib, key],
-            |r| r.get(0),
-        )
+        )?
+        .query_row(params![lib, key], |r| r.get(0))
         .optional()?
     {
         return Ok(id);
     }
     let sort_key = sort_key(name, None);
     let id = new_id()?;
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO tags (id, library_id, type, name, name_key, sort_key) \
          VALUES (?1, ?2, 'genre', ?3, ?4, ?5)",
-        params![id, lib, name.trim(), key, sort_key.as_bytes()],
-    )?;
+    )?
+    .execute(params![id, lib, name.trim(), key, sort_key.as_bytes()])?;
     Ok(id)
 }
 
@@ -102,11 +106,12 @@ pub fn upsert_image(
     rel: &str,
     info: &ImageInfo,
 ) -> Result<i64> {
-    tx.query_row(
+    tx.prepare_cached(
         "INSERT INTO images (id, library_id, hash, width, height, placeholder, root_id, path) \
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7) \
-         ON CONFLICT (library_id, hash) DO UPDATE SET root_id = excluded.root_id, path = excluded.path \
-         RETURNING id",
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7) ON CONFLICT (library_id, hash) \
+         DO UPDATE SET root_id = excluded.root_id, path = excluded.path RETURNING id",
+    )?
+    .query_row(
         params![new_id()?, lib, info.hash, info.width as i64, info.height as i64, root_id, rel],
         |r| r.get(0),
     )

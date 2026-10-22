@@ -9,25 +9,22 @@ use crate::db::feed::{self, Entity, Op};
 /// when no track carries it. Whether one does is read from the tracks' genres, not the count.
 pub(super) fn refresh_tag(tx: &Transaction<'_>, lib: i64, tag: i64, now: i64) -> Result<()> {
     let Some((carried, name)) = tx
-        .query_row(
+        .prepare_cached(
             "SELECT EXISTS (SELECT 1 FROM track_tags WHERE tag_id = ?1), \
              (SELECT name FROM tag_spellings WHERE tag_id = ?1 ORDER BY uses DESC, name LIMIT 1) \
              FROM tags WHERE id = ?1",
-            [tag],
-            |r| Ok((r.get::<_, bool>(0)?, r.get::<_, Option<String>>(1)?)),
-        )
+        )?
+        .query_row([tag], |r| Ok((r.get::<_, bool>(0)?, r.get::<_, Option<String>>(1)?)))
         .optional()?
     else {
         return Ok(());
     };
     if !carried {
-        tx.execute("DELETE FROM tags WHERE id = ?1", [tag])?;
+        tx.prepare_cached("DELETE FROM tags WHERE id = ?1")?.execute([tag])?;
         return feed::record(tx, lib, Entity::Tag, tag, Op::Delete, now);
     }
     let name = name.unwrap_or_default();
-    tx.execute(
-        "UPDATE tags SET name = ?2, sort_key = ?3 WHERE id = ?1",
-        params![tag, name, sort_key(&name, None).into_bytes()],
-    )?;
+    tx.prepare_cached("UPDATE tags SET name = ?2, sort_key = ?3 WHERE id = ?1")?
+        .execute(params![tag, name, sort_key(&name, None).into_bytes()])?;
     feed::record(tx, lib, Entity::Tag, tag, Op::Upsert, now)
 }

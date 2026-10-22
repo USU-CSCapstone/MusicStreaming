@@ -55,10 +55,12 @@ pub fn store_analysis(
         // No row means the track is not in this library or its file changed, so nothing else
         // may change.
         let Some(album_id) = tx
-            .query_row(
+            .prepare_cached(
                 "UPDATE tracks SET loudness_lufs = ?2, peak_dbtp = ?3, analyzer_version = ?4 \
                  WHERE id = ?1 AND library_id = ?5 AND file_size = ?6 AND file_mtime = ?7 \
                  RETURNING album_id",
+            )?
+            .query_row(
                 params![
                     id,
                     result.integrated_lufs,
@@ -75,12 +77,13 @@ pub fn store_analysis(
             return Ok(());
         };
         if result.waveform.is_empty() {
-            tx.execute("DELETE FROM track_waveforms WHERE track_id = ?1", [id])?;
+            tx.prepare_cached("DELETE FROM track_waveforms WHERE track_id = ?1")?.execute([id])?;
         } else {
-            tx.execute(
-                "INSERT OR REPLACE INTO track_waveforms (library_id, track_id, data) VALUES (?1, ?2, ?3)",
-                params![lib, id, waveform::encode(&result.waveform)],
-            )?;
+            tx.prepare_cached(
+                "INSERT OR REPLACE INTO track_waveforms (library_id, track_id, data) \
+                 VALUES (?1, ?2, ?3)",
+            )?
+            .execute(params![lib, id, waveform::encode(&result.waveform)])?;
         }
         catalog::recompute_album_loudness(tx, album_id)?;
         feed::record(tx, lib, Entity::Album, album_id, Op::Upsert, now)?;
@@ -118,6 +121,10 @@ fn files<K>(roots: &Roots, lib: i64, found: Vec<(K, i64, String)>) -> Vec<(K, Fi
         .collect()
 }
 
+/// Stores `placeholder` for `lib`'s image with content `hash`, and puts the albums and artists
+/// showing it on the change feed. An empty placeholder, one that could not be made, keeps the
+/// image from being picked again and changes nothing clients see. An image no longer there is
+/// left alone.
 pub fn store_placeholder(
     store: &SqliteStore,
     lib: i64,
@@ -129,11 +136,11 @@ pub fn store_placeholder(
         let now = now_ms();
         let changed = !placeholder.is_empty();
         let Some(image) = tx
-            .query_row(
-                "UPDATE images SET placeholder = ?3 WHERE library_id = ?1 AND hash = ?2 RETURNING id",
-                params![lib, hash, placeholder],
-                |r| r.get::<_, i64>(0),
-            )
+            .prepare_cached(
+                "UPDATE images SET placeholder = ?3 WHERE library_id = ?1 AND hash = ?2 \
+                 RETURNING id",
+            )?
+            .query_row(params![lib, hash, placeholder], |r| r.get::<_, i64>(0))
             .optional()?
         else {
             return Ok(());

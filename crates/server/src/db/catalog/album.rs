@@ -16,31 +16,30 @@ pub(super) fn refresh_album_links(tx: &Transaction<'_>, lib: i64, album: i64) ->
     // are the album's, and the head of `tracks_by_album_order` is the one read. An album with no
     // track left loses them all.
     let first: Option<i64> = tx
-        .query_row(
+        .prepare_cached(
             "SELECT id FROM tracks WHERE album_id = ?1 \
              ORDER BY disc_number, ifnull(track_number, 9223372036854775807), id LIMIT 1",
-            [album],
-            |r| r.get(0),
-        )
+        )?
+        .query_row([album], |r| r.get(0))
         .optional()?;
-    tx.execute(
+    tx.prepare_cached(
         "DELETE FROM album_artists WHERE album_id = ?1 AND (position, artist_id) NOT IN \
          (SELECT position, artist_id FROM track_album_artists WHERE track_id = ?2)",
-        params![album, first],
-    )?;
-    tx.execute(
+    )?
+    .execute(params![album, first])?;
+    tx.prepare_cached(
         "INSERT INTO album_artists (library_id, album_id, position, artist_id) \
          SELECT ?1, ?2, position, artist_id FROM track_album_artists WHERE track_id = ?3 \
          ORDER BY position ON CONFLICT DO NOTHING",
-        params![lib, album, first],
-    )?;
-    tx.execute("DELETE FROM album_discs WHERE album_id = ?1", [album])?;
-    tx.execute(
+    )?
+    .execute(params![lib, album, first])?;
+    tx.prepare_cached("DELETE FROM album_discs WHERE album_id = ?1")?.execute([album])?;
+    tx.prepare_cached(
         "INSERT INTO album_discs (library_id, album_id, disc_number, track_count, track_total) \
          SELECT ?1, ?2, disc_number, SUM(track_count), NULLIF(MAX(track_total), -1) FROM album_groups \
          WHERE album_id = ?2 GROUP BY disc_number",
-        params![lib, album],
-    )?;
+    )?
+    .execute(params![lib, album])?;
     Ok(())
 }
 
@@ -66,33 +65,35 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
         Option<i64>,
         i64,
         i64,
-    ) = tx.query_row(
-        "SELECT COALESCE(SUM(track_count), 0), COALESCE(SUM(available_count), 0), \
-         COALESCE(SUM(duration_us), 0), NULLIF(MAX(disc_total), -1), NULLIF(MAX(track_total), -1), \
-         COUNT(DISTINCT disc_number), COALESCE(MAX(compilation), 0) FROM album_groups WHERE album_id = ?1",
-        [album],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
-    )?;
+    ) = tx
+        .prepare_cached(
+            "SELECT COALESCE(SUM(track_count), 0), COALESCE(SUM(available_count), 0), \
+             COALESCE(SUM(duration_us), 0), NULLIF(MAX(disc_total), -1), \
+             NULLIF(MAX(track_total), -1), COUNT(DISTINCT disc_number), \
+             COALESCE(MAX(compilation), 0) FROM album_groups WHERE album_id = ?1",
+        )?
+        .query_row([album], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+        })?;
     if count == 0 {
-        tx.execute("DELETE FROM albums WHERE id = ?1", [album])?;
+        tx.prepare_cached("DELETE FROM albums WHERE id = ?1")?.execute([album])?;
         feed::record(tx, lib, Entity::Album, album, Op::Delete, now)?;
         return Ok(());
     }
 
     let title = most_used(tx, "title", album)?;
     // The first sort key among the tracks with that title, or with none when no track has one.
-    let sort_key: Option<Vec<u8>> = tx.query_row(
-        "SELECT MIN(sort_key) FROM album_groups WHERE album_id = ?1 AND title = ifnull(?2, '')",
-        params![album, title],
-        |r| r.get(0),
-    )?;
+    let sort_key: Option<Vec<u8>> = tx
+        .prepare_cached(
+            "SELECT MIN(sort_key) FROM album_groups WHERE album_id = ?1 AND title = ifnull(?2, '')",
+        )?
+        .query_row(params![album, title], |r| r.get(0))?;
     let artist_sort_key: Option<Vec<u8>> = tx
-        .query_row(
+        .prepare_cached(
             "SELECT a.sort_key FROM album_artists aa JOIN artists a ON a.id = aa.artist_id \
              WHERE aa.album_id = ?1 ORDER BY aa.position LIMIT 1",
-            [album],
-            |r| r.get(0),
-        )
+        )?
+        .query_row([album], |r| r.get(0))
         .optional()?;
     let release_date = most_used(tx, "release_date", album)?;
     let release_type = most_used(tx, "release_type", album)?;
@@ -100,25 +101,27 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
 
     // The track total is the spec's `trackTotal`: the sum of the totals of the discs present,
     // which `refresh_album_links` has just written.
-    tx.execute(
-        "UPDATE albums SET title = ?2, sort_key = COALESCE(?3, sort_key), artist_sort_key = COALESCE(?4, artist_sort_key), \
-         type = ?5, release_date = ?6, disc_total = ?7, \
+    tx.prepare_cached(
+        "UPDATE albums SET title = ?2, sort_key = COALESCE(?3, sort_key), \
+         artist_sort_key = COALESCE(?4, artist_sort_key), type = ?5, release_date = ?6, \
+         disc_total = ?7, \
          track_total = (SELECT SUM(track_total) FROM album_discs WHERE album_id = ?1), \
-         disc_count = ?8, track_count = ?9, available_track_count = ?10, duration_us = ?11 WHERE id = ?1",
-        params![
-            album,
-            title,
-            sort_key,
-            artist_sort_key,
-            album_type,
-            release_date,
-            disc_total,
-            disc_count,
-            count,
-            available,
-            duration
-        ],
-    )?;
+         disc_count = ?8, track_count = ?9, available_track_count = ?10, duration_us = ?11 \
+         WHERE id = ?1",
+    )?
+    .execute(params![
+        album,
+        title,
+        sort_key,
+        artist_sort_key,
+        album_type,
+        release_date,
+        disc_total,
+        disc_count,
+        count,
+        available,
+        duration
+    ])?;
     recompute_album_loudness(tx, album)?;
     feed::record(tx, lib, Entity::Album, album, Op::Upsert, now)?;
     Ok(())
@@ -167,10 +170,8 @@ pub fn recompute_album_loudness(tx: &Transaction<'_>, album: i64) -> Result<()> 
     }
     let loudness =
         if weight > 0.0 && energy > 0.0 { Some(10.0 * (energy / weight).log10()) } else { None };
-    tx.execute(
-        "UPDATE albums SET loudness_lufs = ?2, peak_dbtp = ?3 WHERE id = ?1",
-        params![album, loudness, peak],
-    )?;
+    tx.prepare_cached("UPDATE albums SET loudness_lufs = ?2, peak_dbtp = ?3 WHERE id = ?1")?
+        .execute(params![album, loudness, peak])?;
     Ok(())
 }
 

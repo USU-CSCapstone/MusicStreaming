@@ -61,6 +61,11 @@ const READER_MMAP_SIZE: i64 = 1 << 30;
 /// after a checkpoint, so the disk a cold scan's log took is given back (`design/database.md` §7).
 const JOURNAL_SIZE_LIMIT: i64 = 64 << 20;
 
+/// How many prepared statements each connection keeps for `prepare_cached` to reuse, least
+/// recently used dropped first: more than the store and the catalog recompute run per batch, so a
+/// scan prepares each only once (`design/database.md` §7).
+const STATEMENT_CACHE: usize = 128;
+
 /// Work for a database thread. It sends its own result back to whoever queued it.
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
 
@@ -297,8 +302,10 @@ fn optimize(conn: &Connection) {
     }
 }
 
-/// Settings every connection needs
+/// Settings every connection needs, and room in its statement cache for every statement the
+/// scanner's writes and the busiest reads repeat ([`STATEMENT_CACHE`]).
 fn configure(conn: &Connection) -> anyhow::Result<()> {
+    conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE);
     conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
         .context("cannot configure a database connection")
 }
