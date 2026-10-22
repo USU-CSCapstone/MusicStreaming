@@ -114,7 +114,7 @@ pub fn a_problem_on_a_present_file_stays<S: InspectStore>(make: Factory<S>) {
     let store = make(&lib);
     scan_library(&store, &lib);
     let track = root.join("A/X/01 - Track 1.wav");
-    let mut batch = Batch::new(0);
+    let mut batch = Batch::default();
     batch.problems.push(Problem {
         path: track.clone(),
         kind: ProblemKind::CorruptAudio,
@@ -156,9 +156,10 @@ pub fn a_folder_problem_clears_once_it_lists<S: InspectStore>(make: Factory<S>) 
     assert_eq!(store.inspect_problems(lib.id), []);
 }
 
-/// A folder that cannot be listed, and one whose entries cannot be read, keep their tracks
-/// and record problems, while reconcile still runs everywhere else (`requirements/scanning.md`
-/// §7). Skipped, saying so, where permissions do not stop this user reading, as for root.
+/// A folder that cannot be listed, and one whose entries cannot be read, keep their tracks,
+/// those of a folder among those entries too, and record problems, while reconcile still runs
+/// everywhere else (`requirements/scanning.md` §7). Skipped, saying so, where permissions do not
+/// stop this user reading, as for root.
 pub fn an_unreadable_folder_keeps_its_tracks<S: InspectStore>(make: Factory<S>) {
     use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
@@ -168,6 +169,7 @@ pub fn an_unreadable_folder_keeps_its_tracks<S: InspectStore>(make: Factory<S>) 
     // A sibling whose name extends B/Y's, which a text prefix would wrongly match.
     make_album(&root, "B", "Yz", 2);
     make_album(&root, "C", "Z", 2);
+    make_album(&root, "C/Z", "Bonus", 1);
     let lib = library(&root);
     let store = make(&lib);
     scan_library(&store, &lib);
@@ -192,13 +194,18 @@ pub fn an_unreadable_folder_keeps_its_tracks<S: InspectStore>(make: Factory<S>) 
 
     assert_eq!(scan.state, ScanState::Completed);
     assert_eq!(scan.progress.missing, 2, "only the deleted files");
-    assert_eq!(live(&store, &lib).len(), 5);
+    assert_eq!(live(&store, &lib).len(), 6);
     let mut problems: Vec<(PathBuf, ProblemKind)> =
         store.inspect_problems(lib.id).into_iter().map(|p| (p.path, p.kind)).collect();
     problems.sort_by(|a, b| a.0.cmp(&b.0));
     let denied = |path: &str| (root.join(path), ProblemKind::PermissionDenied);
     assert_eq!(
         problems,
-        [denied("B/Y"), denied("C/Z/01 - Track 1.wav"), denied("C/Z/02 - Track 2.wav")]
+        [
+            denied("B/Y"),
+            denied("C/Z/01 - Track 1.wav"),
+            denied("C/Z/02 - Track 2.wav"),
+            denied("C/Z/Bonus"),
+        ]
     );
 }

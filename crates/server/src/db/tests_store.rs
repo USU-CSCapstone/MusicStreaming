@@ -67,7 +67,7 @@ impl InspectStore for SqliteStore {
             .prepare(
                 "SELECT t.id, t.root_id, t.path, t.missing_since IS NOT NULL, t.title, t.album_title, t.sort_key, \
                  t.artist_sort_key, t.codec, t.container, t.channels, t.sample_rate_hz, t.analyzer_version > 0, \
-                 t.loudness_lufs IS NOT NULL, t.last_seen_scan_id, \
+                 t.loudness_lufs IS NOT NULL, \
                  (SELECT image_id FROM albums a WHERE a.id = t.album_id) IS NOT NULL, \
                  EXISTS (SELECT 1 FROM track_artists ta JOIN artists ar ON ar.id = ta.artist_id \
                          WHERE ta.track_id = t.id AND ar.biography IS NOT NULL), \
@@ -92,10 +92,9 @@ impl InspectStore for SqliteStore {
                     r.get::<_, i64>(11)?,
                     r.get::<_, bool>(12)?,
                     r.get::<_, bool>(13)?,
-                    r.get::<_, Option<i64>>(14)?,
+                    r.get::<_, bool>(14)?,
                     r.get::<_, bool>(15)?,
                     r.get::<_, bool>(16)?,
-                    r.get::<_, bool>(17)?,
                 ))
             })
             .unwrap();
@@ -116,7 +115,6 @@ impl InspectStore for SqliteStore {
                 rate,
                 analyzed,
                 measured,
-                last_seen_scan,
                 art,
                 bio,
                 lyr,
@@ -137,7 +135,6 @@ impl InspectStore for SqliteStore {
                 id,
                 path: roots[&root_id].join(&rel),
                 missing,
-                last_seen_scan,
                 title,
                 artists,
                 album,
@@ -244,6 +241,7 @@ mod suite {
 mod derived;
 mod failures;
 mod lyrics;
+mod marks;
 mod reanalysis;
 mod recompute;
 mod totals;
@@ -724,9 +722,7 @@ fn another_librarys_track_is_left_alone() {
     let track: TrackId = scalar(&store, "SELECT id FROM tracks").unwrap();
 
     let other: LibraryId = 2;
-    let mut batch = Batch::new(999);
-    batch.returned.push(track);
-    batch.changed_unread.push(track);
+    let batch = Batch { returned: vec![track], changed_unread: vec![track], ..Batch::default() };
     store.apply(other, batch).unwrap();
     // No peaks: the path that deletes a waveform. The file is as picked, so only the library
     // stops the write.
@@ -740,22 +736,45 @@ fn another_librarys_track_is_left_alone() {
     let hash = 1_i64.to_be_bytes();
     store.store_placeholder(other, &hash, vec![1, 2, 3]).unwrap();
 
-    let row = "SELECT missing_since, last_seen_scan_id = 999, analyzer_version FROM tracks";
+    let row = "SELECT missing_since, analyzer_version FROM tracks";
     let unchanged = store
         .db()
         .read_blocking(move |conn| {
-            conn.query_row(row, [], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, bool>(1)?, r.get::<_, i64>(2)?))
-            })
+            conn.query_row(row, [], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
         })
         .unwrap();
-    assert_eq!(unchanged, (5, false, 0));
+    assert_eq!(unchanged, (5, 0));
     assert_eq!(count(&store, "SELECT COUNT(*) FROM track_waveforms"), 1);
     assert_eq!(
         count(&store, "SELECT COUNT(*) FROM images WHERE id = 1 AND placeholder IS NULL"),
         1
     );
     assert_eq!(store.feed_head(other), 0);
+}
+
+/// A batch applied for another library marks none of this one's tracks missing, whether it names
+/// a track or a folder holding one.
+#[test]
+fn another_librarys_batch_marks_nothing_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    testing::make_album(&root, "A", "X", 1);
+    let store = make(&root);
+    let lib = testing::library(&root);
+    testing::scan_library(&store, &lib);
+    let other = tmp.path().join("other");
+    store
+        .db()
+        .write_blocking(move |tx| libraries::create(tx, Some(2), "Other", &[&other], &[]))
+        .unwrap();
+    store.refresh_roots().unwrap();
+    let (track, head): (TrackId, i64) =
+        (scalar(&store, "SELECT id FROM tracks").unwrap(), store.feed_head(lib.id));
+
+    let batch = Batch { missing: vec![track], vanished: vec![root.join("A")], ..Batch::default() };
+    assert_eq!(store.apply(2, batch).unwrap(), 0);
+    assert!(store.inspect_tracks(lib.id).iter().all(|t| !t.missing));
+    assert_eq!((store.feed_head(lib.id), store.feed_head(2)), (head, 0));
 }
 
 #[test]
@@ -766,7 +785,7 @@ fn an_upsert_naming_another_librarys_track_is_skipped() {
     let store = make(&root);
     let lib = testing::library(&root);
     // A track with an artist, an album artist, and a genre.
-    store.apply(lib.id, Batch { upserts: vec![record(&root, 0)], ..Batch::new(1) }).unwrap();
+    store.apply(lib.id, Batch { upserts: vec![record(&root, 0)], ..Batch::default() }).unwrap();
     let other_root = tmp.path().join("other");
     let created = other_root.clone();
     store
@@ -778,7 +797,7 @@ fn an_upsert_naming_another_librarys_track_is_skipped() {
 
     // A record for a file under library 2's root that carries library 1's track ID.
     let other: LibraryId = 2;
-    let mut batch = Batch::new(999);
+    let mut batch = Batch::default();
     batch.upserts.push(TrackRecord { id: Some(before[0].id), ..record(&other_root, 0) });
     store.apply(other, batch).unwrap();
 
@@ -841,7 +860,7 @@ fn record(root: &Path, i: usize) -> TrackRecord {
 
 /// The cold-scan budget, store side only (`design/scanning.md` §15,
 /// `requirements/performance.md` §5): does persisting a large library and
-/// looking every file up fit inside an hour? Run with
+/// reading what is indexed in every folder fit inside an hour? Run with
 /// `cargo test --release -p jewelcase-server benchmark_cold_scan -- --ignored --nocapture`.
 /// `BUDGET_TRACKS` sets the library size (default 50,000); each time is also printed scaled
 /// to 500,000 tracks.
@@ -859,13 +878,11 @@ fn benchmark_cold_scan_store_only() {
 
     let synth = |i: usize| record(&root, i);
 
-    let scan_id = store.create_scan(lib.id, Trigger::Initial, &[Scope::root(&root)]).unwrap().id;
-
     let started = Instant::now();
     let batch_size = 250;
     let mut i = 0;
     while i < tracks {
-        let mut batch = Batch::new(scan_id);
+        let mut batch = Batch::default();
         for j in i..(i + batch_size).min(tracks) {
             batch.upserts.push(synth(j));
         }
@@ -874,31 +891,24 @@ fn benchmark_cold_scan_store_only() {
     }
     let insert = started.elapsed();
 
+    // An unchanged rescan reads what is indexed in each folder, root and artists included, and
+    // writes nothing.
     let started = Instant::now();
-    let mut hits = 0;
-    for j in 0..tracks {
-        if store.lookup(lib.id, &synth(j).path).unwrap().is_some() {
-            hits += 1;
-        }
-    }
-    let lookup = started.elapsed();
-    assert_eq!(hits, tracks);
-
-    // An unchanged rescan: touches only.
-    let started = Instant::now();
-    let ids: Vec<TrackId> = store.inspect_tracks(lib.id).iter().map(|t| t.id).collect();
-    for chunk in ids.chunks(batch_size) {
-        let mut batch = Batch::new(scan_id + 1);
-        batch.touched.extend_from_slice(chunk);
-        store.apply(lib.id, batch).unwrap();
-    }
-    let touch = started.elapsed();
+    let mut folders = vec![root.clone()];
+    folders.extend(
+        (0..tracks).step_by(10).filter_map(|i| synth(i).path.parent().map(Path::to_path_buf)),
+    );
+    folders.extend((0..tracks).step_by(100).map(|i| root.join(format!("Artist {}", i / 100))));
+    let read: usize =
+        folders.iter().map(|f| store.indexed_in(lib.id, f).unwrap().files.len()).sum();
+    let reads = started.elapsed();
+    assert_eq!(read, tracks);
 
     let per_500k = |d: std::time::Duration| d.as_secs_f64() * 500_000.0 / tracks as f64;
     eprintln!(
-        "{tracks} tracks: insert {insert:.2?} ({:.0}s per 500k), lookup {lookup:.2?} ({:.0}s per 500k), touch-only rescan {touch:.2?} ({:.0}s per 500k)",
+        "{tracks} tracks: insert {insert:.2?} ({:.0}s per 500k), unchanged rescan's {} folder reads {reads:.2?} ({:.1}s per 500k)",
         per_500k(insert),
-        per_500k(lookup),
-        per_500k(touch)
+        folders.len(),
+        per_500k(reads)
     );
 }

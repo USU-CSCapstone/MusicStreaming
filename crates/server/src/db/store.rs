@@ -6,6 +6,7 @@
 //! and appends the net effect to the change feed.
 
 mod entities;
+mod folders;
 mod jobs;
 pub(super) mod names;
 mod problems;
@@ -80,22 +81,12 @@ impl Store for SqliteStore {
         Ok(scans::interrupted(self, library)?)
     }
 
-    fn lookup(&self, library: LibraryId, path: &Path) -> Result<Option<IndexedFile>, StoreError> {
-        Ok(tracks::lookup(self, library, path)?)
+    fn indexed_in(&self, library: LibraryId, dir: &Path) -> Result<IndexedFolder, StoreError> {
+        Ok(folders::indexed_in(self, library, dir)?)
     }
 
-    fn apply(&self, library: LibraryId, batch: Batch) -> Result<(), StoreError> {
+    fn apply(&self, library: LibraryId, batch: Batch) -> Result<i64, StoreError> {
         Ok(tracks::apply(self, library, batch)?)
-    }
-
-    fn mark_missing_unseen(
-        &self,
-        library: LibraryId,
-        scope: &Scope,
-        scan_id: ScanId,
-        unreadable: &[PathBuf],
-    ) -> Result<i64, StoreError> {
-        Ok(tracks::mark_missing_unseen(self, library, scope, scan_id, unreadable)?)
     }
 
     fn indexes_under(&self, library: LibraryId, folder: &Path) -> Result<bool, StoreError> {

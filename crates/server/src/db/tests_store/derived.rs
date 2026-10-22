@@ -112,7 +112,8 @@ fn derived_values_equal_a_recompute_after_every_change() {
                 let mut upserts: Vec<TrackRecord> = Vec::new();
                 for _ in 0..1 + rng.next() % 4 {
                     let root = rng.pick(&[&a, &b]).as_path();
-                    let path = root.join(format!("{}.flac", rng.next() % 12));
+                    let n = rng.next() % 12;
+                    let path = root.join(format!("{}/{n}.flac", n % 3));
                     if upserts.iter().all(|u| u.path != path) {
                         upserts.push(TrackRecord { id: id(&path), ..random(&mut rng, root, path) });
                     }
@@ -120,7 +121,7 @@ fn derived_values_equal_a_recompute_after_every_change() {
                 let returned =
                     missing.first().filter(|(p, _)| upserts.iter().all(|u| &u.path != p));
                 let returned = returned.map(|(_, id)| *id).into_iter().collect();
-                store.apply(one, Batch { upserts, returned, ..Batch::new(scan) }).unwrap();
+                store.apply(one, Batch { upserts, returned, ..Batch::default() }).unwrap();
             }
             // A file moved to the other root, retagged on the way.
             4 if !present.is_empty() => {
@@ -128,21 +129,27 @@ fn derived_values_equal_a_recompute_after_every_change() {
                 let to = if from.starts_with(&a) { &b } else { &a };
                 let path = to.join(format!("moved {scan}.flac"));
                 let rec = TrackRecord { id: Some(id), ..random(&mut rng, to, path) };
-                store.apply(one, Batch { upserts: vec![rec], ..Batch::new(scan) }).unwrap();
+                store.apply(one, Batch { upserts: vec![rec], ..Batch::default() }).unwrap();
             }
-            // A scan of one root that sees about half of its files, so the rest go missing.
+            // A scan of one root whose listings lack one of its folders, or about half of its
+            // files, which go missing.
             5 => {
                 let root = rng.pick(&[&a, &b]).as_path();
-                let on_root = present.iter().filter(|(p, _)| p.starts_with(root));
-                let touched = on_root.filter(|_| rng.chance(50)).map(|(_, id)| *id).collect();
-                store.apply(one, Batch { touched, ..Batch::new(scan) }).unwrap();
-                store.mark_missing_unseen(one, &Scope::root(root), scan, &[]).unwrap();
+                let batch = if rng.chance(50) {
+                    let folder = root.join((rng.next() % 3).to_string());
+                    Batch { vanished: vec![folder], ..Batch::default() }
+                } else {
+                    let on_root = present.iter().filter(|(p, _)| p.starts_with(root));
+                    let missing = on_root.filter(|_| rng.chance(50)).map(|(_, id)| *id).collect();
+                    Batch { missing, ..Batch::default() }
+                };
+                store.apply(one, batch).unwrap();
             }
             // Missing files coming back, one unchanged and the others changed but unreadable.
             6 => {
                 let returned: Vec<TrackId> = missing.iter().take(3).map(|(_, id)| *id).collect();
                 let changed_unread = returned.iter().skip(1).copied().collect();
-                let batch = Batch { returned, changed_unread, ..Batch::new(scan) };
+                let batch = Batch { returned, changed_unread, ..Batch::default() };
                 store.apply(one, batch).unwrap();
             }
             // A missing file back with new tags.
@@ -150,13 +157,13 @@ fn derived_values_equal_a_recompute_after_every_change() {
                 let (path, id) = rng.pick(&missing).clone();
                 let root = if path.starts_with(&a) { &a } else { &b };
                 let rec = TrackRecord { id: Some(id), ..random(&mut rng, root, path) };
-                store.apply(one, Batch { upserts: vec![rec], ..Batch::new(scan) }).unwrap();
+                store.apply(one, Batch { upserts: vec![rec], ..Batch::default() }).unwrap();
             }
             // The other library, with the same names, which must count apart.
             8 => {
                 let path = c.join(format!("{}.flac", rng.next() % 6));
                 let rec = TrackRecord { id: id(&path), ..random(&mut rng, &c, path) };
-                store.apply(two, Batch { upserts: vec![rec], ..Batch::new(scan) }).unwrap();
+                store.apply(two, Batch { upserts: vec![rec], ..Batch::default() }).unwrap();
             }
             // A track deleted outright, which the scanner itself never does.
             9 if !present.is_empty() => {

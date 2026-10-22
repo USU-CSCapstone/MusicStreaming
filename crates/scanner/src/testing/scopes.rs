@@ -56,8 +56,8 @@ pub fn a_scope_naming_a_deleted_folder_reconciles<S: InspectStore>(make: Factory
 }
 
 /// A Subtree scope at a file, as the watcher makes when a folder is replaced by a file within
-/// its wait, walks nothing: it records no problem and marks nothing missing, whether the file is
-/// there or not.
+/// its wait, walks nothing: it records no problem, clears none, and marks nothing missing,
+/// whether the file is there or not.
 pub fn a_scope_at_a_file_reconciles_nothing<S: InspectStore>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
@@ -79,6 +79,15 @@ pub fn a_scope_at_a_file_reconciles_nothing<S: InspectStore>(make: Factory<S>) {
     let scan = scan_once(&store, &lib, Trigger::Watch, vec![scope]);
     assert_eq!(scan.progress.missing, 0);
     assert_eq!(live(&store, &lib).len(), 1);
+
+    let broken = root.join("A/X/broken.flac");
+    fs::write(&broken, b"not audio").unwrap();
+    scan_library(&store, &lib);
+    let scope = Scope::folder(&root, &broken, Depth::Subtree);
+    scan_once(&store, &lib, Trigger::Watch, vec![scope]);
+    let problems: Vec<PathBuf> =
+        store.inspect_problems(lib.id).into_iter().map(|p| p.path).collect();
+    assert_eq!(problems, [broken]);
 }
 
 /// What the watcher asks of a folder renamed away: whether a live track or a problem lies under

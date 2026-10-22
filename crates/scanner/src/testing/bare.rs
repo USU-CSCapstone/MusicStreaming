@@ -9,7 +9,7 @@ use crate::problems::Problem;
 use crate::scan::{Scan, ScanId, Trigger};
 use crate::scope::Scope;
 use crate::store::{
-    AnalysisStore, Batch, FileToDecode, IndexedFile, PickedTrack, PlaceholderStore, ProblemLog,
+    AnalysisStore, Batch, FileToDecode, IndexedFolder, PickedTrack, PlaceholderStore, ProblemLog,
     Store, StoreError,
 };
 
@@ -66,21 +66,11 @@ impl Store for BareStore {
         Ok(Vec::new())
     }
 
-    fn lookup(&self, _: LibraryId, _: &Path) -> Result<Option<IndexedFile>, StoreError> {
-        Ok(None)
+    fn indexed_in(&self, _: LibraryId, _: &Path) -> Result<IndexedFolder, StoreError> {
+        Ok(IndexedFolder::default())
     }
 
-    fn apply(&self, _: LibraryId, _: Batch) -> Result<(), StoreError> {
-        Ok(())
-    }
-
-    fn mark_missing_unseen(
-        &self,
-        _: LibraryId,
-        _: &Scope,
-        _: ScanId,
-        _: &[PathBuf],
-    ) -> Result<i64, StoreError> {
+    fn apply(&self, _: LibraryId, _: Batch) -> Result<i64, StoreError> {
         Ok(0)
     }
 

@@ -2,22 +2,20 @@
 
 use jewelcase_core::sort_key;
 
-use super::ScanContext;
 use crate::discover::{Candidate, Directory};
 use crate::identity::{self, Identity};
 use crate::problems::{self, Problem};
 use crate::scope::Scope;
 use crate::sidecar::SidecarResolver;
-use crate::store::{IndexedFile, IndexedLyrics, StoreError};
+use crate::store::{IndexedFile, IndexedLyrics};
 use crate::tags;
 use crate::track::{Artwork, ArtworkSource, SortKeys, TrackId, TrackRecord, filename_title};
 
 /// Per-file result of the pipeline (`design/scanning.md` §2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileOutcome {
-    Unchanged {
-        track_id: TrackId,
-    },
+    /// A file the index holds as it is, which the scan has nothing to write for.
+    Unchanged,
     /// A missing track whose file is back, byte-identical.
     Returned {
         track_id: TrackId,
@@ -49,29 +47,28 @@ fn lyrics_file_changed(ix: &IndexedFile, candidate: &Candidate, dir: &Directory)
     }
 }
 
-/// Runs `candidate`, one of `dir`'s files, through stages 2 to 5: what the scan does with it.
-/// Fails only when the store cannot look the file up.
+/// Runs `candidate`, one of `dir`'s files, through stages 2 to 5, given what the index holds
+/// at its path, `indexed`: what the scan does with it.
 pub(super) fn process_file(
-    ctx: &ScanContext<'_>,
     scope: &Scope,
     dir: &Directory,
     candidate: &Candidate,
+    indexed: Option<IndexedFile>,
     sidecars: &mut SidecarResolver,
     resolved: &mut Option<crate::sidecar::Sidecars>,
-) -> Result<FileOutcome, StoreError> {
+) -> FileOutcome {
     // Stage 2: skip. Path, size, and mtime unchanged means done without
     // opening the file. This check carries the incremental budget.
-    let indexed = ctx.store.lookup(ctx.library.id, &candidate.path)?;
     if let Some(ix) = &indexed
         && ix.size == candidate.size
         && ix.mtime_ms == Some(candidate.mtime_ms)
         && !lyrics_file_changed(ix, candidate, dir)
     {
-        return Ok(if ix.missing {
+        return if ix.missing {
             FileOutcome::Returned { track_id: ix.track_id }
         } else {
-            FileOutcome::Unchanged { track_id: ix.track_id }
-        });
+            FileOutcome::Unchanged
+        };
     }
 
     // Stage 3: read headers. A known file that cannot be read keeps its track, as a problem.
@@ -79,7 +76,7 @@ pub(super) fn process_file(
         Ok(r) => r,
         Err(e) => {
             let problem = problems::from_read_error(&candidate.path, &e);
-            return Ok(match indexed {
+            return match indexed {
                 Some(ix) => FileOutcome::Unread {
                     track_id: ix.track_id,
                     missing: ix.missing,
@@ -87,7 +84,7 @@ pub(super) fn process_file(
                     problem,
                 },
                 None => FileOutcome::Problem(problem),
-            });
+            };
         }
     };
 
@@ -138,10 +135,10 @@ pub(super) fn process_file(
         sort,
     };
 
-    Ok(match identity {
+    match identity {
         Identity::New => FileOutcome::Added(Box::new(record)),
         Identity::Updated { track_id } => {
             FileOutcome::Updated(Box::new(TrackRecord { id: Some(track_id), ..record }))
         }
-    })
+    }
 }

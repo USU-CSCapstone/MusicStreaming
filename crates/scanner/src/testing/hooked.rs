@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::library::LibraryId;
-use crate::scan::{Scan, ScanId, ScanState, Trigger};
+use crate::scan::{Scan, ScanState, Trigger};
 use crate::scope::Scope;
-use crate::store::{Batch, IndexedFile, Store, StoreError};
+use crate::store::{Batch, IndexedFolder, Store, StoreError};
 
 /// A hook run before a call.
 type Hook<'a> = Box<dyn Fn() -> Result<(), StoreError> + Send + Sync + 'a>;
@@ -23,7 +23,7 @@ type HookOn<'a, A> = Box<dyn Fn(&A) -> Result<(), StoreError> + Send + Sync + 'a
 pub struct Hooked<'a> {
     inner: Arc<dyn Store>,
     on_apply: HookOn<'a, Batch>,
-    on_lookup: HookOn<'a, Path>,
+    on_folder: HookOn<'a, Path>,
     on_under: Hook<'a>,
     on_scan_write: Hook<'a>,
     held: Mutex<bool>,
@@ -36,7 +36,7 @@ impl<'a> Hooked<'a> {
         Hooked {
             inner,
             on_apply: Box::new(|_| Ok(())),
-            on_lookup: Box::new(|_| Ok(())),
+            on_folder: Box::new(|_| Ok(())),
             on_under: Box::new(|| Ok(())),
             on_scan_write: Box::new(|| Ok(())),
             held: Mutex::new(false),
@@ -52,12 +52,13 @@ impl<'a> Hooked<'a> {
         Hooked { on_apply: Box::new(hook), ..self }
     }
 
-    /// Runs `hook` with each path before it is looked up.
-    pub fn on_lookup(
+    /// Runs `hook` with each folder before what the index holds in it is read
+    /// ([`Store::indexed_in`]), which a scan does as it starts on the folder.
+    pub fn on_folder(
         self,
         hook: impl Fn(&Path) -> Result<(), StoreError> + Send + Sync + 'a,
     ) -> Hooked<'a> {
-        Hooked { on_lookup: Box::new(hook), ..self }
+        Hooked { on_folder: Box::new(hook), ..self }
     }
 
     /// Runs `hook` before each [`Store::problems_under`] and [`Store::indexes_under`].
@@ -112,22 +113,13 @@ impl Store for Hooked<'_> {
     fn interrupted_scans(&self, library: LibraryId) -> Result<Vec<Scan>, StoreError> {
         self.inner.interrupted_scans(library)
     }
-    fn lookup(&self, library: LibraryId, path: &Path) -> Result<Option<IndexedFile>, StoreError> {
-        (self.on_lookup)(path)?;
-        self.inner.lookup(library, path)
+    fn indexed_in(&self, library: LibraryId, dir: &Path) -> Result<IndexedFolder, StoreError> {
+        (self.on_folder)(dir)?;
+        self.inner.indexed_in(library, dir)
     }
-    fn apply(&self, library: LibraryId, batch: Batch) -> Result<(), StoreError> {
+    fn apply(&self, library: LibraryId, batch: Batch) -> Result<i64, StoreError> {
         (self.on_apply)(&batch)?;
         self.inner.apply(library, batch)
-    }
-    fn mark_missing_unseen(
-        &self,
-        library: LibraryId,
-        scope: &Scope,
-        scan_id: ScanId,
-        unreadable: &[PathBuf],
-    ) -> Result<i64, StoreError> {
-        self.inner.mark_missing_unseen(library, scope, scan_id, unreadable)
     }
     fn problems_under(
         &self,

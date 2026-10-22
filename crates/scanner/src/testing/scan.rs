@@ -13,12 +13,13 @@ use crate::scan::{
     Cursor, Scan, ScanContext, ScanOptions, ScanProgress, ScanState, Trigger, Undone, run_scan,
 };
 use crate::scope::Scope;
-use crate::store::{Store, StoreError};
+use crate::store::{Batch, Store, StoreError};
 
 mod checkpoints;
 mod excludes;
 mod failures;
 mod panics;
+mod reconcile;
 mod resume;
 mod undone;
 mod unlistable;
@@ -26,6 +27,7 @@ pub use checkpoints::*;
 pub use excludes::*;
 pub use failures::*;
 pub use panics::*;
+pub use reconcile::*;
 pub use resume::*;
 pub use undone::*;
 pub use unlistable::*;
@@ -102,9 +104,9 @@ fn scan_flushing_often(store: &dyn Store, lib: &LibraryConfig) -> Scan {
     scan
 }
 
-/// A stop flushes the batch in hand: a shutdown asked for while B/Y's track is read leaves the
-/// row running at B/Y with A's and B's tracks stored, though no batch filled and no timer fired,
-/// and C never read.
+/// A stop flushes the batch in hand: a shutdown asked for as the scan starts on C leaves the row
+/// running at C with A's and B's tracks stored, though no batch filled and no timer fired, and
+/// C/Z never read.
 pub fn a_stop_flushes_the_batch_in_hand<S: InspectStore + 'static>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
@@ -114,8 +116,8 @@ pub fn a_stop_flushes_the_batch_in_hand<S: InspectStore + 'static>(make: Factory
     let lib = library(&root);
     let store = Arc::new(make(&lib));
     let stops = Stops::default();
-    let stop_at = root.join("B/Y/01 - Track 1.wav");
-    let hooked = Hooked::new(store.clone()).on_lookup(|path| {
+    let stop_at = root.join("C");
+    let hooked = Hooked::new(store.clone()).on_folder(|path| {
         if path == stop_at {
             stops.shutdown.store(true, Ordering::SeqCst);
         }
@@ -125,43 +127,57 @@ pub fn a_stop_flushes_the_batch_in_hand<S: InspectStore + 'static>(make: Factory
     run(&hooked, &lib, &mut scan, &batches_of(1000), &stops);
 
     let row = only_row(store.as_ref(), &lib);
-    assert_eq!((row.state, &row.cursor), (ScanState::Running, &after(&root, "B/Y")), "{row:?}");
+    assert_eq!((row.state, &row.cursor), (ScanState::Running, &after(&root, "C")), "{row:?}");
     assert_eq!(row.finished_at, None);
-    assert_eq!(paths(store.as_ref(), &lib), [root.join("A/X/01 - Track 1.wav"), stop_at.clone()]);
+    assert_eq!(paths(store.as_ref(), &lib), [track(&root, "A/X", 1), track(&root, "B/Y", 1)]);
 }
 
-/// A root that goes away after the walk began suspends the scan before reconcile, and nothing
-/// the walk did not reach is marked missing (`requirements/scanning.md` §7).
+/// A root that goes away during the walk suspends the scan before anything is marked missing
+/// (`requirements/scanning.md` §7). Here it goes as the scan starts on A/X, already listed
+/// without its deleted second track, so marking that track finds the root gone; it comes back as
+/// the batch in hand is flushed, before the check at the scope's end, and the scope is still left
+/// for a retry. A suspended scan never resumes, so A/X's one file counts as seen.
 pub fn a_root_gone_before_reconcile_suspends_and_marks_nothing<S: InspectStore + 'static>(
     make: Factory<S>,
 ) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("nas");
-    make_album(&root, "A", "X", 1);
+    make_album(&root, "A", "X", 2);
     make_album(&root, "B", "Y", 2);
     let lib = library(&root);
     let store = Arc::new(make(&lib));
     let away = tmp.path().join("away");
-    let hooked = Hooked::new(store.clone()).on_apply(|_| {
-        if root.exists() {
+    let gone_at = root.join("A/X");
+    let on_folder = |path: &Path| {
+        if path == gone_at {
             fs::rename(&root, &away).unwrap();
         }
         Ok(())
-    });
+    };
+    let on_apply = |_: &Batch| {
+        if !root.exists() {
+            fs::rename(&away, &root).unwrap();
+        }
+        Ok(())
+    };
+    let hooked = Hooked::new(store.clone()).on_folder(on_folder).on_apply(on_apply);
     scan_flushing_often(store.as_ref(), &lib);
+    fs::remove_file(track(&root, "A/X", 2)).unwrap();
 
-    // The root goes once A/X's touch lands, so B and B/Y are never listed.
-    let scan = scan_flushing_often(&hooked, &lib);
-    assert!(!root.exists());
-    assert_eq!(scan.progress.missing, 0);
-    assert!(store.inspect_tracks(lib.id).iter().all(|t| !t.missing));
+    let mut scan = new_scan(&hooked, &lib);
+    let undone = run(&hooked, &lib, &mut scan, &batches_of(1), &Stops::default());
+    assert!(root.exists());
     assert_eq!(scan.state, ScanState::Suspended);
+    assert_eq!(undone, Undone { unanswered: vec![Scope::root(&root)], failed: Vec::new() });
+    assert_eq!((scan.progress.files_seen, scan.progress.missing), (1, 0), "{:?}", scan.progress);
+    assert!(store.inspect_tracks(lib.id).iter().all(|t| !t.missing));
 }
 
 /// Sidecars are read only for a file past stage 2, so a folder of unchanged files opens none.
 /// Here an unchanged track sits beside `artist.txt`, and a new track one folder below inherits
-/// it. The biography changes as the unchanged track's touch is applied, so the new track, the
-/// only one written, gets the later text only because the unchanged track never read the file.
+/// it. The biography changes as the scan starts on the new track's folder, after the unchanged
+/// track, so the new track, the only one written, gets the later text only because the unchanged
+/// track never read the file.
 pub fn an_unchanged_file_reads_no_sidecars<S: InspectStore + 'static>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
@@ -171,18 +187,25 @@ pub fn an_unchanged_file_reads_no_sidecars<S: InspectStore + 'static>(make: Fact
     let lib = library(&root);
     let store = Arc::new(make(&lib));
     let written = Mutex::new(Vec::new());
-    let hooked = Hooked::new(store.clone()).on_apply(|batch| {
+    let new_folder = root.join("A/Y");
+    let on_apply = |batch: &Batch| {
         let upserts = batch.upserts.iter();
         written
             .lock()
             .unwrap()
             .extend(upserts.map(|t| (t.path.clone(), t.artist_biography.clone())));
-        fs::write(&biography, "Read when needed.").unwrap();
         Ok(())
-    });
+    };
+    let on_folder = |path: &Path| {
+        if path == new_folder {
+            fs::write(&biography, "Read when needed.").unwrap();
+        }
+        Ok(())
+    };
+    let hooked = Hooked::new(store.clone()).on_apply(on_apply).on_folder(on_folder);
     scan_flushing_often(store.as_ref(), &lib);
 
-    let added = root.join("A/Y/01 - New.wav");
+    let added = new_folder.join("01 - New.wav");
     write_small_wav(&added);
     let scan = scan_flushing_often(&hooked, &lib);
     assert_eq!((scan.progress.added, scan.progress.updated), (1, 0), "{:?}", scan.progress);

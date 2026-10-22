@@ -14,6 +14,9 @@ pub(super) enum Halt {
     Stop,
     /// The store failed, and the scan has ended at its last persisted cursor.
     Ended,
+    /// The scope's root stopped answering. The caller flushes the batch in hand and leaves the
+    /// rest of the scope for a retry.
+    Unanswered,
 }
 
 /// The cursor and progress the store holds for a scan.
@@ -31,7 +34,7 @@ impl Writer {
     /// A writer for `scan`, whose cursor and progress the store already holds.
     pub fn new(scan: &Scan) -> Writer {
         Writer {
-            batch: Batch::new(scan.id),
+            batch: Batch::default(),
             last_flush: Instant::now(),
             persisted: (scan.cursor.clone(), scan.progress.clone()),
         }
@@ -49,12 +52,13 @@ impl Writer {
         if ctx.stopping() { Err(Halt::Stop) } else { Ok(()) }
     }
 
-    /// Persists the batch and the scan row. On a store failure the scan ends through
-    /// [`Writer::fail`] and the error is [`Halt::Ended`].
+    /// Persists the batch, counting the tracks it marked missing, and the scan row. On a store
+    /// failure the scan ends through [`Writer::fail`] and the error is [`Halt::Ended`].
     pub fn flush(&mut self, ctx: &ScanContext<'_>, scan: &mut Scan) -> Result<(), Halt> {
         if !self.batch.is_empty() {
-            let full = std::mem::replace(&mut self.batch, Batch::new(scan.id));
-            ctx.store.apply(ctx.library.id, full).map_err(|e| self.fail(ctx, scan, &e))?;
+            let full = std::mem::take(&mut self.batch);
+            let applied = ctx.store.apply(ctx.library.id, full);
+            scan.progress.missing += applied.map_err(|e| self.fail(ctx, scan, &e))?;
         }
         self.persisted = (scan.cursor.clone(), scan.progress.clone());
         self.last_flush = Instant::now();

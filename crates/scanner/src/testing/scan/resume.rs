@@ -15,9 +15,10 @@ fn two_folders(root: &Path) {
     symlink(track(root, "A/X", 1), root.join("B/Y/zz - Link.wav")).unwrap();
 }
 
-/// A shutdown asked for as B/Y's third track is read leaves the row running at B, the last
-/// folder completed, counting only what a resume will not count again: A/X's track seen, and the
-/// four tracks stored. The resumed scan ends with the counts and tracks of one never stopped.
+/// A shutdown asked for as the batch holding B/Y's third track is stored leaves the row running
+/// at B, the last folder completed, counting only what a resume will not count again: A/X's track
+/// seen, and the four tracks stored. The resumed scan ends with the counts and tracks of one
+/// never stopped.
 pub fn a_scan_shut_down_partway_through_a_folder_resumes_counting_each_file_once<
     S: InspectStore + 'static,
 >(
@@ -30,13 +31,13 @@ pub fn a_scan_shut_down_partway_through_a_folder_resumes_counting_each_file_once
     let store = Arc::new(make(&lib));
     let stops = Stops::default();
     let stop_at = track(&root, "B/Y", 3);
-    let on_lookup = |path: &Path| {
-        if path == stop_at {
+    let on_apply = |batch: &Batch| {
+        if batch.upserts.iter().any(|t| t.path == stop_at) {
             stops.shutdown.store(true, Ordering::SeqCst);
         }
         Ok(())
     };
-    let hooked = Hooked::new(store.clone()).on_lookup(on_lookup);
+    let hooked = Hooked::new(store.clone()).on_apply(on_apply);
     let mut scan = new_scan(&hooked, &lib);
     run(&hooked, &lib, &mut scan, &batches_of(2), &stops);
 
@@ -69,24 +70,17 @@ pub fn a_scan_suspended_partway_through_a_folder_resumes_counting_each_file_once
     two_folders(&root);
     let lib = library(&root);
     let store = Arc::new(make(&lib));
-    // The first batch applied after B/Y's third track is first read fails, and no other.
-    let (armed, fired) = (AtomicBool::new(false), AtomicBool::new(false));
-    let arm_at = track(&root, "B/Y", 3);
-    let on_lookup = |path: &Path| {
-        if path == arm_at && !fired.load(Ordering::SeqCst) {
-            armed.store(true, Ordering::SeqCst);
-        }
-        Ok(())
-    };
-    let on_apply = |_: &_| {
-        if armed.swap(false, Ordering::SeqCst) {
-            fired.store(true, Ordering::SeqCst);
+    // The first batch holding B/Y's third track fails, and no other.
+    let fired = AtomicBool::new(false);
+    let fail_at = track(&root, "B/Y", 3);
+    let on_apply = |batch: &Batch| {
+        if batch.upserts.iter().any(|t| t.path == fail_at) && !fired.swap(true, Ordering::SeqCst) {
             Err(StoreError("disk full".into()))
         } else {
             Ok(())
         }
     };
-    let hooked = Hooked::new(store.clone()).on_apply(on_apply).on_lookup(on_lookup);
+    let hooked = Hooked::new(store.clone()).on_apply(on_apply);
     let mut scan = new_scan(&hooked, &lib);
     run(&hooked, &lib, &mut scan, &batches_of(2), &Stops::default());
 
@@ -122,9 +116,9 @@ fn assert_resumed_like_an_uninterrupted_scan(store: &dyn InspectStore, lib: &Lib
 }
 
 /// A known track that cannot be read is counted once across a resume, which reads it again. A/X's
-/// four tracks are scanned, then the first is broken. A scan shut down as the third track is read,
-/// after the first was persisted, resumes to the counts of one never stopped: the broken file
-/// processed and a problem once, and the four files seen.
+/// four tracks are scanned, then the first is broken. A scan shut down partway through A/X, as the
+/// batch holding the first file's problem is stored, resumes to the counts of one never stopped:
+/// the broken file processed and a problem once, and the four files seen.
 pub fn a_known_file_that_cannot_be_read_is_counted_once_across_a_resume<
     S: InspectStore + 'static,
 >(
@@ -136,16 +130,16 @@ pub fn a_known_file_that_cannot_be_read_is_counted_once_across_a_resume<
     let lib = library(&root);
     let store = Arc::new(make(&lib));
     let stops = Stops::default();
-    let stop_at = track(&root, "A/X", 3);
-    let on_lookup = |path: &Path| {
-        if path == stop_at {
+    let broken = track(&root, "A/X", 1);
+    let on_apply = |batch: &Batch| {
+        if batch.problems.iter().any(|p| p.path == broken) {
             stops.shutdown.store(true, Ordering::SeqCst);
         }
         Ok(())
     };
-    let hooked = Hooked::new(store.clone()).on_lookup(on_lookup);
+    let hooked = Hooked::new(store.clone()).on_apply(on_apply);
     scan_flushing_often(store.as_ref(), &lib);
-    crate::testing::break_file(&track(&root, "A/X", 1));
+    crate::testing::break_file(&broken);
 
     let mut scan = new_scan(&hooked, &lib);
     run(&hooked, &lib, &mut scan, &batches_of(1), &stops);

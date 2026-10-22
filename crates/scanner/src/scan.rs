@@ -20,6 +20,7 @@ use file::{FileOutcome, process_file};
 use writer::{Halt, Writer};
 
 mod file;
+mod reconcile;
 mod row;
 mod writer;
 
@@ -172,7 +173,7 @@ fn scan_scopes(
         // A scope reached through a symlink below the root, as the watcher or a plugin may
         // name one, is skipped whole with a problem: nothing is walked and nothing reconciled.
         // One that no longer exists, or lies in an excluded folder, goes on to a walk that lists
-        // nothing, so reconcile marks what was indexed under it missing. Excluded content is
+        // its folder as empty, so reconcile marks what was indexed under it missing. Excluded content is
         // never reported, so a link in an excluded folder is not either.
         if scope.path.exists()
             && !excluded_scope(&scope, &excludes)
@@ -185,8 +186,7 @@ fn scan_scopes(
             continue;
         }
 
-        let mut walk = Walk::new(&scope, &excludes, resume_after.as_deref());
-        let walked = walk.by_ref().try_for_each(|item| {
+        let walked = Walk::new(&scope, &excludes, resume_after.as_deref()).try_for_each(|item| {
             writer.checkpoint(ctx, scan)?;
             match item {
                 WalkItem::Error(err) => {
@@ -201,28 +201,28 @@ fn scan_scopes(
             }
             Ok(())
         });
-        // The batch in hand is flushed whether the walk finished or was asked to stop.
+        // The batch in hand is flushed whether the walk finished, was asked to stop, or found
+        // its root gone.
         if let Err(Halt::Ended) = walked {
             return walked;
         }
         writer.flush(ctx, scan)?;
-        if walked.is_err() {
+        if let Err(Halt::Stop) = walked {
             break;
         }
 
-        // Stage 7: reconcile. Only after a complete walk of a root that still answers, and never
-        // under what the walk could not read. Problems at paths that no longer exist go too.
+        // Stage 7 runs on each folder as the walk lists it (`process_directory`). What remains
+        // is clearing the problems at paths that no longer exist, only after a complete walk of a
+        // root that still answers.
         // A root that has gone leaves the cursor in this scope, so the unlisted folders stay
         // uncounted until a later scope moves the cursor or the scan ends, and the scope is left
         // for a retry to walk again, since a later scope may move the cursor past it.
-        if !root_answers(&scope.root) {
+        if walked.is_err() || !root_answers(&scope.root) {
             unanswered.push(scope);
             continue;
         }
-        let reconciled = reconcile(ctx, &scope, scan.id, walk.unreadable());
-        let (missing, vanished) = reconciled.map_err(|e| writer.fail(ctx, scan, &e))?;
-        scan.progress.missing += missing;
-        writer.batch.cleared = vanished;
+        let gone = gone_problems(ctx, &scope).map_err(|e| writer.fail(ctx, scan, &e))?;
+        writer.batch.cleared = gone;
         scan.cursor = Some(Cursor { scope_index: scope_index + 1, after_directory: None });
         scan.progress.problems += std::mem::take(&mut unlisted_folders);
         writer.flush(ctx, scan)?;
@@ -248,22 +248,11 @@ fn scan_scopes(
     writer.save(ctx, scan)
 }
 
-/// Stage 7 on `scope`, walked whole by scan `scan_id`: marks the tracks the scan did not see as
-/// missing, other than those under the `unreadable` paths, and returns how many, with the paths
-/// under `scope` that have a problem but no longer exist.
-fn reconcile(
-    ctx: &ScanContext<'_>,
-    scope: &Scope,
-    scan_id: ScanId,
-    unreadable: &[PathBuf],
-) -> Result<(i64, Vec<PathBuf>), StoreError> {
-    // The read goes first, so a failure cannot leave tracks marked missing that the scan has
-    // not counted.
+/// The paths under `scope` with a recorded problem that no longer exist.
+fn gone_problems(ctx: &ScanContext<'_>, scope: &Scope) -> Result<Vec<PathBuf>, StoreError> {
     let problems = ctx.store.problems_under(ctx.library.id, scope)?;
-    let missing = ctx.store.mark_missing_unseen(ctx.library.id, scope, scan_id, unreadable)?;
-    let vanished =
-        problems.into_iter().filter(|p| fs::symlink_metadata(p).is_err_and(|e| gone(&e)));
-    Ok((missing, vanished.collect()))
+    let gone = problems.into_iter().filter(|p| fs::symlink_metadata(p).is_err_and(|e| gone(&e)));
+    Ok(gone.collect())
 }
 
 /// Whether `root` is available, logging why not. Nothing under a root that is not may be
@@ -282,16 +271,20 @@ fn root_answers(root: &Path) -> bool {
 }
 
 /// Runs every audio candidate in `dir` through stages 2 to 5 into the writer's batch, with a
-/// checkpoint before each, clears any problem on `dir` itself, since it listed, and records a
-/// problem for each symlink the walk skipped and each entry it could not read. Returns
-/// [`Halt::Stop`] if the scan is asked to stop partway, or [`Halt::Ended`] once a store failure
-/// has ended it.
+/// checkpoint before each, against what the index holds in `dir`, read once for all of them.
+/// Then reconciles `dir` (stage 7): the tracks in it whose files it no longer lists, and every
+/// track under a folder it no longer lists, go missing with the batch, once the root is found
+/// still answering. Clears any problem on `dir` itself if it listed, and records a problem for
+/// each symlink the walk skipped and each entry it could not read. Returns [`Halt::Stop`] if the
+/// scan is asked to stop partway, [`Halt::Unanswered`] if the root no longer answers, or
+/// [`Halt::Ended`] once a store failure has ended it.
 ///
 /// The caller moves the cursor past `dir` only once all of it is processed, so a scan stopped
-/// partway walks it again from the start on resume. A track added or updated before the stop is
-/// found unchanged then, so its counts go to the progress at once. The files seen, the problem
-/// files and the entry problems would be counted again, so they go in only once `dir` is
-/// complete, or when a cancel stops the scan in it, since a cancelled scan never resumes.
+/// partway walks and reconciles it again from the start on resume. A track added or updated
+/// before the stop is found unchanged then, so its counts go to the progress at once. The files
+/// seen, the problem files and the entry problems would be counted again, so they go in only
+/// once `dir` is complete, or when the scan stops in it never to resume: cancelled, or its root
+/// gone.
 fn process_directory(
     ctx: &ScanContext<'_>,
     scan: &mut Scan,
@@ -301,7 +294,11 @@ fn process_directory(
     writer: &mut Writer,
 ) -> Result<(), Halt> {
     scan.progress.current_path = Some(dir.path.clone());
-    writer.batch.cleared.push(dir.path.clone());
+    let indexed = ctx.store.indexed_in(ctx.library.id, &dir.path);
+    let mut indexed = indexed.map_err(|e| writer.fail(ctx, scan, &e))?;
+    if dir.listed {
+        writer.batch.cleared.push(dir.path.clone());
+    }
     let mut entry_problems = 0;
     for file in dir.skipped_links.iter().chain(&dir.unreadable) {
         writer.batch.problems.push(problems::from_io(&file.path, &file.error));
@@ -318,17 +315,11 @@ fn process_directory(
             break;
         }
         seen += 1;
-        let processed = process_file(ctx, scope, dir, candidate, sidecars, &mut resolved);
-        let outcome = match processed {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                halted = Err(writer.fail(ctx, scan, &error));
-                break;
-            }
-        };
+        let known = indexed.take(&candidate.path);
+        let outcome = process_file(scope, dir, candidate, known, sidecars, &mut resolved);
         let batch = &mut writer.batch;
         match outcome {
-            FileOutcome::Unchanged { track_id } => batch.touched.push(track_id),
+            FileOutcome::Unchanged => {}
             FileOutcome::Returned { track_id } => {
                 batch.returned.push(track_id);
                 batch.cleared.push(candidate.path.clone());
@@ -352,15 +343,34 @@ fn process_directory(
             FileOutcome::Unread { track_id, missing, changed, problem } => {
                 problem_files += 1;
                 batch.problems.push(problem);
-                let seen = if missing { &mut batch.returned } else { &mut batch.touched };
-                seen.push(track_id);
+                if missing {
+                    batch.returned.push(track_id);
+                }
                 if changed {
                     batch.changed_unread.push(track_id);
                 }
             }
         }
     }
-    if halted.is_ok() || (matches!(halted, Err(Halt::Stop)) && ctx.cancelled()) {
+    if halted.is_ok() {
+        let (missing, vanished) = reconcile::unlisted(dir, indexed);
+        // A root that went during the walk lists every folder after it as gone, so nothing is
+        // marked missing unless it still answers (`requirements/scanning.md` §7).
+        let marks = !missing.is_empty() || !vanished.is_empty();
+        if marks && !root_answers(&scope.root) {
+            halted = Err(Halt::Unanswered);
+        } else {
+            writer.batch.missing.extend(missing);
+            writer.batch.vanished.extend(vanished);
+        }
+    }
+    // Whether no resume walks `dir` again, so its counts go in here.
+    let last_walk = match halted {
+        Ok(()) | Err(Halt::Unanswered) => true,
+        Err(Halt::Stop) => ctx.cancelled(),
+        Err(Halt::Ended) => false,
+    };
+    if last_walk {
         scan.progress.files_seen += seen;
         scan.progress.files_processed += problem_files;
         scan.progress.problems += problem_files + entry_problems;

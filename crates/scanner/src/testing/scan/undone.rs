@@ -20,9 +20,9 @@ pub fn a_failed_batch_leaves_the_scopes_from_its_cursor_undone<S: InspectStore +
     let tmp = tempfile::tempdir().unwrap();
     let (a, b, lib) = two_roots(tmp.path());
     let store = Arc::new(make(&lib));
-    let fail_after = track(&b, "B/Y", 1);
+    let fail_after = b.join("B/Y");
     let armed = AtomicBool::new(false);
-    let on_lookup = |path: &Path| {
+    let on_folder = |path: &Path| {
         if path == fail_after {
             armed.store(true, Ordering::SeqCst);
         }
@@ -34,7 +34,7 @@ pub fn a_failed_batch_leaves_the_scopes_from_its_cursor_undone<S: InspectStore +
         }
         Ok(())
     };
-    let hooked = Hooked::new(store).on_apply(on_apply).on_lookup(on_lookup);
+    let hooked = Hooked::new(store).on_apply(on_apply).on_folder(on_folder);
     let scopes = [Scope::root(&a), Scope::root(&b)];
     let mut scan = hooked.create_scan(lib.id, Trigger::Manual, &scopes).unwrap();
 
@@ -54,15 +54,15 @@ pub fn a_stopped_scan_leaves_nothing_undone<S: InspectStore + 'static>(make: Fac
         let gone = tmp.path().join("gone");
         let store = Arc::new(make(&lib));
         let stops = Stops::default();
-        let stop_at = track(&b, "B/Y", 1);
-        let on_lookup = |path: &Path| {
+        let stop_at = b.join("B/Y");
+        let on_folder = |path: &Path| {
             if path == stop_at {
                 let stop = if stopped { &stops.shutdown } else { &stops.cancel };
                 stop.store(true, Ordering::SeqCst);
             }
             Ok(())
         };
-        let hooked = Hooked::new(store.clone()).on_lookup(on_lookup);
+        let hooked = Hooked::new(store.clone()).on_folder(on_folder);
         let scopes = [Scope::root(&gone), Scope::root(&a), Scope::root(&b)];
         let mut scan = hooked.create_scan(lib.id, Trigger::Manual, &scopes).unwrap();
 

@@ -88,7 +88,7 @@ pub fn an_invalid_pattern_suspends_and_leaves_the_store_untouched<S: InspectStor
     scan_flushing_often(&store, &library(&root));
     let tracks = || -> Vec<_> {
         let tracks = store.inspect_tracks(lib.id).into_iter();
-        tracks.map(|t| (t.path, t.missing, t.last_seen_scan)).collect()
+        tracks.map(|t| (t.path, t.missing)).collect()
     };
     let before = tracks();
 

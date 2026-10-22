@@ -12,9 +12,9 @@ use super::roots::{Roots, relative};
 use crate::db::catalog::Touched;
 use crate::db::feed::{self, Entity, Op};
 
-/// Writes `rec` as a track of `lib` seen by `scan_id`, with its credits, genres, lyrics,
-/// artwork, and artist biography, records it in the feed at `now`, and adds the albums, artists
-/// and tags it pointed at before and after to `touched`. A track whose file's size or mtime
+/// Writes `rec` as a track of `lib`, with its credits, genres, lyrics, artwork, and artist
+/// biography, records it in the feed at `now`, and adds the albums, artists and tags it pointed
+/// at before and after to `touched`. A track whose file's size or mtime
 /// changed loses its loudness, peak and waveform and goes back to analyzer version 0, which
 /// queues it for analysis again: neither says whether the audio or only the tags changed. A
 /// record under a root `lib` doesn't have, or one naming another library's track, is logged and
@@ -24,7 +24,6 @@ pub fn upsert_track(
     tx: &Transaction<'_>,
     lib: i64,
     rec: &TrackRecord,
-    scan_id: i64,
     now: i64,
     touched: &mut Touched,
 ) -> Result<()> {
@@ -101,11 +100,11 @@ pub fn upsert_track(
     // right of the update's `=` are the row's values before it.
     let Some((id, analyzer_version)) = tx.query_row(
             "INSERT INTO tracks (id, library_id, album_id, album_title, root_id, path, file_size, file_mtime, \
-             missing_since, last_seen_scan_id, title, sort_key, artist_sort_key, album_sort_key, disc_number, track_number, \
+             missing_since, title, sort_key, artist_sort_key, album_sort_key, disc_number, track_number, \
              track_total, disc_total, release_date, explicit, compilation, release_type, isrc, identifiers, lyrics_kind, \
              codec, container, lossless, bitrate_kbps, sample_rate_hz, bit_depth, channels, duration_us, added_at) \
-             VALUES (coalesce(?1, random() & 0x7FFFFFFFFFFFFFFF), ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, \
-             ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33) \
+             VALUES (coalesce(?1, random() & 0x7FFFFFFFFFFFFFFF), ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
+             ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32) \
              ON CONFLICT (id) DO UPDATE SET \
              analyzer_version = CASE WHEN file_size IS excluded.file_size AND file_mtime IS excluded.file_mtime \
              THEN analyzer_version ELSE 0 END, \
@@ -115,7 +114,7 @@ pub fn upsert_track(
              THEN peak_dbtp END, \
              album_id = excluded.album_id, album_title = excluded.album_title, \
              root_id = excluded.root_id, path = excluded.path, file_size = excluded.file_size, file_mtime = excluded.file_mtime, \
-             missing_since = NULL, last_seen_scan_id = excluded.last_seen_scan_id, title = excluded.title, \
+             missing_since = NULL, title = excluded.title, \
              sort_key = excluded.sort_key, artist_sort_key = excluded.artist_sort_key, album_sort_key = excluded.album_sort_key, \
              disc_number = excluded.disc_number, track_number = excluded.track_number, track_total = excluded.track_total, \
              disc_total = excluded.disc_total, release_date = excluded.release_date, explicit = excluded.explicit, \
@@ -135,7 +134,6 @@ pub fn upsert_track(
                 rel,
                 rec.size as i64,
                 rec.mtime_ms as i64,
-                scan_id,
                 rec.display_title(),
                 rec.sort.title.as_bytes(),
                 rec.sort.artist.as_bytes(),

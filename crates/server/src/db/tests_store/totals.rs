@@ -80,9 +80,9 @@ fn id_at(store: &SqliteStore, path: &Path) -> TrackId {
     tracks.iter().find(|t| t.path == path).map(|t| t.id).unwrap()
 }
 
-/// Applies `upserts` to library `lib` as scan `scan`.
-fn upsert(store: &SqliteStore, lib: LibraryId, scan: ScanId, upserts: Vec<TrackRecord>) {
-    store.apply(lib, Batch { upserts, ..Batch::new(scan) }).unwrap();
+/// Applies `upserts` to library `lib`.
+fn upsert(store: &SqliteStore, lib: LibraryId, upserts: Vec<TrackRecord>) {
+    store.apply(lib, Batch { upserts, ..Batch::default() }).unwrap();
 }
 
 #[test]
@@ -107,8 +107,8 @@ fn library_totals_equal_a_track_scan() {
     first.extend((11..14).map(|i| compilation_track(&a, i)));
     first.push(track(&b, 14, "Solo"));
     first.push(untagged(&a, 15));
-    upsert(&store, 1, 1, first);
-    upsert(&store, 2, 1, (0..3).map(|i| track(&other, i, "Elsewhere")).collect());
+    upsert(&store, 1, first);
+    upsert(&store, 2, (0..3).map(|i| track(&other, i, "Elsewhere")).collect());
     assert_totals_match_tracks(&store, "the first upserts");
     assert_eq!(count(&store, "SELECT COUNT(*) FROM albums WHERE library_id = 1"), 6);
 
@@ -120,21 +120,22 @@ fn library_totals_equal_a_track_scan() {
         update(&store, track(&a, 13, "Split")),
         TrackRecord { id: Some(id_at(&store, &track(&b, 6, "").path)), ..track(&a, 6, "Split") },
     ];
-    upsert(&store, 1, 2, retags);
+    upsert(&store, 1, retags);
     assert_totals_match_tracks(&store, "retags and a move");
     assert_eq!(count(&store, "SELECT COUNT(*) FROM albums WHERE library_id = 1"), 4);
 
-    // Everything on root b goes missing except one track, and stays counted.
-    let kept = id_at(&store, &track(&b, 9, "").path);
-    store.apply(1, Batch { touched: vec![kept], ..Batch::new(3) }).unwrap();
-    let missing = store.mark_missing_unseen(1, &Scope::root(&b), 3, &[]).unwrap();
-    assert_eq!(missing, 4);
+    // Everything on root b goes missing except one track, and stays counted: two tracks gone
+    // from their folder, and the two in a folder gone from its parent.
+    let on_b = |i| id_at(&store, &track(&b, i, "").path);
+    let missing = vec![on_b(4), on_b(5)];
+    let vanished = vec![b.join("Artist 0/Album 1")];
+    assert_eq!(store.apply(1, Batch { missing, vanished, ..Batch::default() }).unwrap(), 4);
     assert_totals_match_tracks(&store, "tracks going missing");
 
     // Two come back, one is retagged into the compilation while missing, and one stays missing.
     let returned = [5, 10].map(|i| id_at(&store, &track(&b, i, "").path)).to_vec();
-    store.apply(1, Batch { returned, ..Batch::new(4) }).unwrap();
-    upsert(&store, 1, 4, vec![update(&store, compilation_track(&b, 14))]);
+    store.apply(1, Batch { returned, ..Batch::default() }).unwrap();
+    upsert(&store, 1, vec![update(&store, compilation_track(&b, 14))]);
     assert_totals_match_tracks(&store, "restores and retagging a missing track");
     assert_eq!(count(&store, "SELECT COUNT(*) FROM tracks WHERE missing_since IS NOT NULL"), 1);
 }

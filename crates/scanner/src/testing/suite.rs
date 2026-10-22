@@ -72,8 +72,8 @@ macro_rules! store_suite {
             a_scope_inside_a_newly_excluded_folder_marks_its_tracks_missing,
             a_linked_scope_inside_an_excluded_folder_reports_nothing,
             an_invalid_pattern_suspends_and_leaves_the_store_untouched,
-            a_lookup_the_store_fails_suspends_the_scan_before_another_write,
-            a_problem_list_the_store_fails_suspends_the_scan_before_marking_missing,
+            a_folder_read_the_store_fails_suspends_the_scan_before_another_write,
+            a_problem_list_the_store_fails_suspends_the_scan_counting_what_it_marked_missing,
             a_folder_the_store_cannot_check_counts_as_indexed,
             a_parser_panic_is_a_problem_and_the_scan_completes,
             a_panic_suspends_the_scan_and_the_worker_runs_the_next,
@@ -92,6 +92,10 @@ macro_rules! store_suite {
             a_renamed_folder_moves_its_tracks,
             a_renamed_file_dirties_only_its_folder,
             deleted_files_and_folders_go_missing,
+            an_unchanged_rescan_writes_nothing,
+            a_folder_gone_from_its_parents_listing_takes_its_tracks,
+            an_unlistable_folder_keeps_its_tracks_across_a_resume,
+            a_scan_stopped_partway_through_a_folder_marks_nothing_there,
             queue_drains_and_broken_files_do_not_repeat,
         );
         #[test]

@@ -6,7 +6,7 @@ use jewelcase_core::Format;
 
 use crate::library::LibraryId;
 use crate::problems::Problem;
-use crate::scan::{Scan, ScanId};
+use crate::scan::Scan;
 use crate::store::{AnalysisStore, PlaceholderStore, Store};
 use crate::track::TrackId;
 
@@ -16,8 +16,6 @@ pub struct InspectTrack {
     pub id: TrackId,
     pub path: PathBuf,
     pub missing: bool,
-    /// The last scan that saw its file, if any has.
-    pub last_seen_scan: Option<ScanId>,
     /// The displayed title: the tag, or the filename stem.
     pub title: String,
     pub artists: Vec<String>,

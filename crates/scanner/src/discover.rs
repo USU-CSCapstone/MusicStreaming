@@ -3,16 +3,18 @@
 //!
 //! Directories come out in sorted pre-order so a resume cursor is just "the
 //! last directory finished". Each yielded directory carries its audio
-//! candidates (extension-filtered, stat'ed) and its full filename list, which
-//! the sidecar resolver reuses so no directory is listed twice.
+//! candidates (extension-filtered, stat'ed), its full filename list, which
+//! the sidecar resolver reuses so no directory is listed twice, and its folders,
+//! against which reconcile finds the folders that have gone.
 //!
 //! Symlinks are never followed ([`crate::confine`]), so the walk needs no loop
 //! detection. Each link it lists is reported as a problem instead, unless excluded.
 //!
-//! A directory or entry the walk cannot read is reported too, and remembered in
-//! [`Walk::unreadable`] so reconcile leaves what is indexed under it alone. One that no
-//! longer exists is gone rather than unreadable, and lists as empty without a problem, so
-//! reconcile marks what was under it missing.
+//! A directory or entry the walk cannot read is reported too. A directory that cannot be listed
+//! is not yielded, so reconcile leaves what is indexed in it alone, and an entry that cannot be
+//! read is named in its directory's [`Directory::unreadable`]. One that no longer exists is gone
+//! rather than unreadable, and lists as empty without a problem, so reconcile marks what was in
+//! it missing.
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -40,9 +42,16 @@ pub struct Candidate {
 #[derive(Debug)]
 pub struct Directory {
     pub path: PathBuf,
+    /// Whether the directory was there to list. One deleted or replaced by a file, or the folder of
+    /// a scope in an excluded folder, comes out empty and unlisted, so what is indexed in it goes
+    /// missing.
+    pub listed: bool,
     pub candidates: Vec<Candidate>,
     /// Every regular file's name, sorted. For sidecar and lyrics lookup.
     pub files: BTreeSet<OsString>,
+    /// The name of each folder in it that the excludes leave in, sorted. A subtree walk descends
+    /// into each.
+    pub folders: BTreeSet<OsString>,
     /// The symlinks in it, which the walk does not follow.
     pub skipped_links: Vec<WalkError>,
     /// Its entries that could not be read. A failure partway through the listing is
@@ -122,30 +131,23 @@ pub struct Walk<'a> {
     scope: &'a Scope,
     excludes: &'a GlobSet,
     resume_after: Option<&'a Path>,
+    /// Whether the scope lies in an excluded folder ([`excluded_scope`]).
+    scope_excluded: bool,
     /// Directories still to visit, most recently pushed first (depth-first).
     stack: Vec<PathBuf>,
-    /// Paths that failed to read and still exist, as far as the walk can tell.
-    unreadable: Vec<PathBuf>,
 }
 
 impl<'a> Walk<'a> {
     /// A walk starting at `scope.path` that leaves out what `excludes` matches. A scope in an
-    /// excluded folder ([`excluded_scope`]) lists nothing, so reconcile treats what is indexed in
-    /// it as missing, as a walk of its root does.
+    /// excluded folder ([`excluded_scope`]) lists its own folder as empty, so reconcile treats
+    /// what is indexed in it as missing, as a walk of its root does.
     pub fn new(
         scope: &'a Scope,
         excludes: &'a GlobSet,
         resume_after: Option<&'a Path>,
     ) -> Walk<'a> {
-        let stack =
-            if excluded_scope(scope, excludes) { Vec::new() } else { vec![scope.path.clone()] };
-        Walk { scope, excludes, resume_after, stack, unreadable: Vec::new() }
-    }
-
-    /// The directories and entries this walk could not read so far. Whatever is under them
-    /// may still be there, so reconcile must not mark it missing.
-    pub fn unreadable(&self) -> &[PathBuf] {
-        &self.unreadable
+        let scope_excluded = excluded_scope(scope, excludes);
+        Walk { scope, excludes, resume_after, scope_excluded, stack: vec![scope.path.clone()] }
     }
 
     /// Whether `path` matches the excludes ([`excluded`]).
@@ -197,22 +199,24 @@ impl Iterator for Walk<'_> {
             if matches!(position, Position::Done) {
                 continue;
             }
-            let entries = match fs::read_dir(&dir) {
-                Ok(e) => e,
-                // A folder deleted or renamed away, or a scope's start that is now a file, holds
-                // nothing.
-                Err(error) if gone(&error) => continue,
-                Err(error) => {
-                    self.unreadable.push(dir.clone());
-                    return Some(WalkItem::Error(WalkError { path: dir, error }));
+            // A folder deleted or renamed away, or a scope's start that is a file, holds nothing,
+            // as does a scope in an excluded folder.
+            let entries = if self.scope_excluded {
+                None
+            } else {
+                match fs::read_dir(&dir) {
+                    Ok(entries) => Some(entries),
+                    Err(error) if gone(&error) => None,
+                    Err(error) => return Some(WalkItem::Error(WalkError { path: dir, error })),
                 }
             };
-            let mut subdirs = Vec::new();
+            let listed = entries.is_some();
+            let mut folders = BTreeSet::new();
             let mut files = BTreeSet::new();
             let mut candidates = Vec::new();
             let mut skipped_links = Vec::new();
             let mut unreadable = Vec::new();
-            for entry in entries {
+            for entry in entries.into_iter().flatten() {
                 let entry = match entry {
                     Ok(entry) => entry,
                     Err(error) => {
@@ -232,8 +236,8 @@ impl Iterator for Walk<'_> {
                 };
                 let file_type = meta.file_type();
                 if file_type.is_dir() {
-                    if self.scope.depth == Depth::Subtree && !self.excluded(&path) {
-                        subdirs.push(path);
+                    if !self.excluded(&path) {
+                        folders.insert(entry.file_name());
                     }
                 } else if file_type.is_symlink() {
                     // Excluded content is never indexed, so its links are not reported.
@@ -252,11 +256,9 @@ impl Iterator for Walk<'_> {
                 }
             }
             unreadable.retain(|e| !gone(&e.error));
-            self.unreadable.extend(unreadable.iter().map(|e| e.path.clone()));
             // Depth-first in sorted order: push children reversed.
-            subdirs.sort_by(|a, b| compare_components(a, b));
-            for sub in subdirs.into_iter().rev() {
-                self.stack.push(sub);
+            if self.scope.depth == Depth::Subtree {
+                self.stack.extend(folders.iter().rev().map(|name| dir.join(name)));
             }
             if matches!(position, Position::Ancestor) {
                 continue;
@@ -264,8 +266,10 @@ impl Iterator for Walk<'_> {
             candidates.sort_by(|a, b| a.path.cmp(&b.path));
             return Some(WalkItem::Directory(Directory {
                 path: dir,
+                listed,
                 candidates,
                 files,
+                folders,
                 skipped_links,
                 unreadable,
             }));
@@ -357,11 +361,26 @@ mod tests {
         assert!(keep.files.contains(&OsString::from("cover.jpg")));
     }
 
-    /// A scope at or under a folder the excludes match lists nothing, even when no pattern
-    /// matches the scope's own path, while a walk of the root lists the rest and leaves that
-    /// folder out.
+    /// Each directory `scope`'s walk yields, as its path, whether it was listed, and its
+    /// candidates' and folders' names.
+    fn shapes(
+        scope: &Scope,
+        excludes: &GlobSet,
+    ) -> Vec<(PathBuf, bool, Vec<PathBuf>, Vec<OsString>)> {
+        let listed = listings(scope, excludes).into_iter();
+        listed
+            .map(|d| {
+                let candidates = d.candidates.iter().map(|c| c.path.clone()).collect();
+                (d.path, d.listed, candidates, d.folders.into_iter().collect())
+            })
+            .collect()
+    }
+
+    /// A scope at or under a folder the excludes match lists its own folder as empty, even when
+    /// no pattern matches the scope's own path, while a walk of the root lists the rest and
+    /// leaves that folder out.
     #[test]
-    fn a_scope_in_an_excluded_folder_lists_nothing() {
+    fn a_scope_in_an_excluded_folder_lists_as_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         touch(&root.join("keep/1.flac"));
@@ -370,14 +389,16 @@ mod tests {
         let backup = |depth| Scope::folder(root, root.join("backup"), depth);
         let inside = |depth| Scope::folder(root, root.join("backup/x"), depth);
         for scope in [backup(Depth::Subtree), inside(Depth::Subtree), inside(Depth::Directory)] {
-            assert_eq!(dirs(&scope, &ex, None), Vec::<PathBuf>::new(), "{scope:?}");
+            assert_eq!(shapes(&scope, &ex), [(scope.path.clone(), false, vec![], vec![])]);
         }
         assert_eq!(dirs(&Scope::root(root), &ex, None), [root.to_path_buf(), root.join("keep")]);
+        assert_eq!(shapes(&Scope::root(root), &ex)[0].3, ["keep"], "backup is not a folder of it");
         // The root's own relative path is empty, and the walk never matches it.
         let empty = compile_excludes(&["".into()]).unwrap();
         assert_eq!(dirs(&backup(Depth::Directory), &empty, None), vec![root.join("backup")]);
     }
 
+    /// A Directory walk names its folder's folders without descending into them.
     #[test]
     fn directory_depth_does_not_descend() {
         let tmp = tempfile::tempdir().unwrap();
@@ -386,7 +407,24 @@ mod tests {
         touch(&root.join("a/x/2.flac"));
         let scope = Scope::folder(root, root.join("a"), Depth::Directory);
         let none = compile_excludes(&[]).unwrap();
-        assert_eq!(dirs(&scope, &none, None), vec![root.join("a")]);
+        let a = (root.join("a"), true, vec![root.join("a/1.flac")], vec![OsString::from("x")]);
+        assert_eq!(shapes(&scope, &none), [a]);
+    }
+
+    /// A folder that is gone, or a file where a scope's folder was, lists as empty without an
+    /// error.
+    #[test]
+    fn a_gone_folder_lists_as_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        touch(&root.join("file.flac"));
+        let none = compile_excludes(&[]).unwrap();
+        for path in [root.join("gone"), root.join("file.flac")] {
+            let scope = Scope::folder(root, &path, Depth::Subtree);
+            let items: Vec<WalkItem> = Walk::new(&scope, &none, None).collect();
+            assert!(!items.iter().any(|i| matches!(i, WalkItem::Error(_))), "{path:?}");
+            assert_eq!(shapes(&scope, &none), [(path, false, vec![], vec![])]);
+        }
     }
 
     /// Every directory a walk of `scope` lists.

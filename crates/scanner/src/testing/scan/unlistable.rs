@@ -10,7 +10,7 @@ use crate::testing::BareStore;
 
 /// Folders made unlistable, listable again when dropped, so the temporary directory can be
 /// removed even after a failed assertion.
-struct Locked(Vec<PathBuf>);
+pub(super) struct Locked(pub(super) Vec<PathBuf>);
 
 impl Drop for Locked {
     /// Restores each folder's mode, reporting any it cannot.
@@ -42,10 +42,11 @@ fn unlistable_folders(root: &Path) -> Option<Locked> {
     Some(locked)
 }
 
-/// B, which could not be listed, counts once the cursor passes it, and not before. A shutdown in
-/// C, the first folder after B, leaves B uncounted, since the resume meets it again; one in C/Z,
-/// once C is complete, leaves it counted. The scan, resumed again, counts D, met after the last
-/// folder, as the walk ends, and ends with the counts of one never stopped.
+/// B, which could not be listed, counts once the cursor passes it, and not before. A shutdown as
+/// the scan starts on C, the first folder after B, leaves B uncounted, since the resume meets it
+/// again; one as it starts on C/Z, once C is complete, leaves it counted. The scan, resumed
+/// again, counts D, met after the last folder, as the walk ends, and ends with the counts of one
+/// never stopped.
 pub fn an_unlistable_folder_is_counted_once_across_resumes<S: InspectStore + 'static>(
     make: Factory<S>,
 ) {
@@ -55,9 +56,9 @@ pub fn an_unlistable_folder_is_counted_once_across_resumes<S: InspectStore + 'st
     let lib = library(&root);
     let store = Arc::new(make(&lib));
     let stops = Stops::default();
-    let stop_at = [track(&root, "C", 2), track(&root, "C/Z", 1)];
+    let stop_at = [root.join("C"), root.join("C/Z")];
     let fired = [AtomicBool::new(false), AtomicBool::new(false)];
-    let on_lookup = |path: &Path| {
+    let on_folder = |path: &Path| {
         for (at, fired) in stop_at.iter().zip(&fired) {
             if path == at && !fired.swap(true, Ordering::SeqCst) {
                 stops.shutdown.store(true, Ordering::SeqCst);
@@ -65,7 +66,7 @@ pub fn an_unlistable_folder_is_counted_once_across_resumes<S: InspectStore + 'st
         }
         Ok(())
     };
-    let hooked = Hooked::new(store.clone()).on_lookup(on_lookup);
+    let hooked = Hooked::new(store.clone()).on_folder(on_folder);
     let mut row = new_scan(&hooked, &lib);
     let mut stopped = Vec::new();
     for _ in &stop_at {
@@ -87,8 +88,8 @@ pub fn an_unlistable_folder_is_counted_once_across_resumes<S: InspectStore + 'st
     assert_eq!(counts, (6, 2), "{:?}", resumed.progress);
 }
 
-/// A cancel in C counts B, which could not be listed, though the cursor has not passed it, since
-/// a cancelled scan never resumes.
+/// A cancel in C, as the batch holding its second track is stored, counts B, which could not be
+/// listed, though the cursor has not passed it, since a cancelled scan never resumes.
 pub fn a_cancel_counts_an_unlistable_folder_it_passed<S: InspectStore + 'static>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
@@ -97,15 +98,15 @@ pub fn a_cancel_counts_an_unlistable_folder_it_passed<S: InspectStore + 'static>
     let store = Arc::new(make(&lib));
     let stops = Stops::default();
     let cancel_at = track(&root, "C", 2);
-    let on_lookup = |path: &Path| {
-        if path == cancel_at {
+    let on_apply = |batch: &Batch| {
+        if batch.upserts.iter().any(|t| t.path == cancel_at) {
             stops.cancel.store(true, Ordering::SeqCst);
         }
         Ok(())
     };
-    let hooked = Hooked::new(store.clone()).on_lookup(on_lookup);
+    let hooked = Hooked::new(store.clone()).on_apply(on_apply);
     let mut scan = new_scan(&hooked, &lib);
-    run(&hooked, &lib, &mut scan, &batches_of(1000), &stops);
+    run(&hooked, &lib, &mut scan, &batches_of(1), &stops);
 
     let row = only_row(store.as_ref(), &lib);
     assert_eq!(row.state, ScanState::Cancelled);
@@ -128,10 +129,11 @@ pub fn unlistable_folders_count_once_the_cursor_passes_their_scope<S: InspectSto
     symlink(kept.join("C"), kept.join("A/L")).unwrap();
     let lib = LibraryConfig { roots: vec![kept.clone(), gone.clone()], ..library(&kept) };
     let store = Arc::new(make(&lib));
-    let (away, last) = (tmp.path().join("away"), track(&gone, "C/Z", 2));
-    // The second root goes at the first flush once its last track is read, as its walk ends.
+    let (away, last) = (tmp.path().join("away"), gone.join("C/Z"));
+    // The second root goes at the first flush after the scan starts on its last folder, as its
+    // walk ends.
     let walked = AtomicBool::new(false);
-    let on_lookup = |path: &Path| {
+    let on_folder = |path: &Path| {
         if path == last {
             walked.store(true, Ordering::SeqCst);
         }
@@ -143,7 +145,7 @@ pub fn unlistable_folders_count_once_the_cursor_passes_their_scope<S: InspectSto
         }
         Ok(())
     };
-    let hooked = Hooked::new(store.clone()).on_apply(on_apply).on_lookup(on_lookup);
+    let hooked = Hooked::new(store.clone()).on_apply(on_apply).on_folder(on_folder);
     let link = Scope::folder(&kept, kept.join("A/L"), Depth::Subtree);
     let scopes = [Scope::root(&kept), Scope::root(&gone), link];
     let mut scan = hooked.create_scan(lib.id, Trigger::Manual, &scopes).unwrap();
@@ -171,10 +173,11 @@ pub fn a_root_gone_after_its_walk_counts_its_last_unlistable_folder_as_the_scan_
     let Some(_locked) = unlistable_folders(&root) else { return };
     let lib = library(&root);
     let store = Arc::new(make(&lib));
-    let (away, last) = (tmp.path().join("away"), track(&root, "C/Z", 2));
-    // The root goes at the first flush once its last track is read, as its walk ends.
+    let (away, last) = (tmp.path().join("away"), root.join("C/Z"));
+    // The root goes at the first flush after the scan starts on its last folder, as its walk
+    // ends.
     let walked = AtomicBool::new(false);
-    let on_lookup = |path: &Path| {
+    let on_folder = |path: &Path| {
         if path == last {
             walked.store(true, Ordering::SeqCst);
         }
@@ -186,7 +189,7 @@ pub fn a_root_gone_after_its_walk_counts_its_last_unlistable_folder_as_the_scan_
         }
         Ok(())
     };
-    let hooked = Hooked::new(store.clone()).on_apply(on_apply).on_lookup(on_lookup);
+    let hooked = Hooked::new(store.clone()).on_apply(on_apply).on_folder(on_folder);
     let mut scan = new_scan(&hooked, &lib);
     let undone = run(&hooked, &lib, &mut scan, &batches_of(1000), &Stops::default());
     // Put back, so the locked folders are found to restore.

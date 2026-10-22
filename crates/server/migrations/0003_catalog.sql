@@ -129,9 +129,6 @@ CREATE TABLE tracks (
     -- (design/scanning.md §8).
     file_mtime      INTEGER,
     missing_since   INTEGER,
-    -- The scan that last saw this file on disk. Reconciliation marks missing whatever a completed
-    -- scan of a scope did not touch (design/scanning.md §7–§8).
-    last_seen_scan_id INTEGER,
     title           TEXT    NOT NULL,
     sort_key        BLOB    NOT NULL,
     artist_sort_key BLOB    NOT NULL,

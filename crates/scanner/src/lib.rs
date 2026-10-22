@@ -62,8 +62,8 @@ pub use scan::{
 };
 pub use scope::{Depth, Scope};
 pub use store::{
-    AnalysisStore, Batch, FileToDecode, IndexedFile, IndexedLyrics, PickedTrack, PlaceholderStore,
-    ProblemLog, Store, StoreError,
+    AnalysisStore, Batch, FileToDecode, IndexedFile, IndexedFolder, IndexedLyrics, PickedTrack,
+    PlaceholderStore, ProblemLog, Store, StoreError,
 };
 pub use tag_set::{Lyrics, PartialDate, TagSet};
 pub use tags::{ReadError, read as read_tags};

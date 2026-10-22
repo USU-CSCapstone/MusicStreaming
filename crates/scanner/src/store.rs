@@ -6,6 +6,7 @@
 //! [`ProblemLog`] it records problems in, and none of a scan's batches or questions. The server's
 //! SQLite store implements them all.
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -14,11 +15,11 @@ use crate::analysis::AnalysisResult;
 use crate::confine::{not_a_file, without_links};
 use crate::library::LibraryId;
 use crate::problems::Problem;
-use crate::scan::{Scan, ScanId, Trigger};
+use crate::scan::{Scan, Trigger};
 use crate::scope::Scope;
 use crate::track::{TrackId, TrackRecord};
 
-/// What the store already knows about a path. Enough for the skip check.
+/// What the store already knows about a file. Enough for the skip check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexedFile {
     pub track_id: TrackId,
@@ -38,17 +39,37 @@ pub enum IndexedLyrics {
     Sidecar,
 }
 
-/// One transaction's worth of outcomes (`design/scanning.md` §7).
+/// What the index holds directly in one folder ([`Store::indexed_in`]), by name as the store
+/// keeps it: UTF-8, with any invalid sequence replaced, as [`std::ffi::OsStr::to_string_lossy`]
+/// gives it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct IndexedFolder {
+    /// The tracks whose files are directly in the folder, missing or not, by file name.
+    pub files: HashMap<String, IndexedFile>,
+    /// The name of each folder directly in it under which a track lies, at any depth.
+    pub folders: Vec<String>,
+}
+
+impl IndexedFolder {
+    /// Removes and returns what the index holds for the file at `path`, which lies directly in
+    /// the folder, so [`IndexedFolder::files`] keeps only the tracks no listed file has taken.
+    pub fn take(&mut self, path: &Path) -> Option<IndexedFile> {
+        self.files.remove(path.file_name()?.to_string_lossy().as_ref())
+    }
+}
+
+/// One transaction's worth of outcomes (`design/scanning.md` §7). An unchanged file is in none
+/// of them, so a folder of unchanged files writes nothing.
 #[derive(Debug, Default, Clone)]
 pub struct Batch {
-    pub scan_id: ScanId,
     /// New and updated tracks.
     pub upserts: Vec<TrackRecord>,
-    /// Unchanged tracks: set `last_seen_scan` so reconcile leaves them alone.
-    pub touched: Vec<TrackId>,
-    /// Missing tracks whose files are back unchanged, or back and unreadable: clear the mark and
-    /// touch.
+    /// Missing tracks whose files are back unchanged, or back and unreadable: clear the mark.
     pub returned: Vec<TrackId>,
+    /// Tracks whose files their folder no longer lists: mark them missing.
+    pub missing: Vec<TrackId>,
+    /// Folders their parent no longer lists: mark every track under them missing.
+    pub vanished: Vec<PathBuf>,
     /// Tracks whose files changed but could not be read: forget each one's mtime, so no file
     /// matches it and every scan reads the file until one reads it, and reset its analysis,
     /// which measured other audio.
@@ -61,17 +82,18 @@ pub struct Batch {
 }
 
 impl Batch {
-    pub fn new(scan_id: ScanId) -> Batch {
-        Batch { scan_id, ..Default::default() }
-    }
-
+    /// How many tracks, folders and problems the batch writes, which is what sizes it.
     pub fn len(&self) -> usize {
-        self.upserts.len() + self.touched.len() + self.returned.len() + self.problems.len()
+        self.upserts.len()
+            + self.returned.len()
+            + self.missing.len()
+            + self.vanished.len()
+            + self.problems.len()
     }
 
     /// Whether applying the batch would change nothing. Paths to clear and tracks changed but
-    /// unread count, though not toward [`Batch::len`], which sizes a batch by the tracks and
-    /// problems it writes.
+    /// unread count, though not toward [`Batch::len`], which sizes a batch by the tracks, folders
+    /// and problems it writes.
     pub fn is_empty(&self) -> bool {
         self.len() == 0 && self.cleared.is_empty() && self.changed_unread.is_empty()
     }
@@ -139,22 +161,14 @@ pub trait Store: Send + Sync {
     fn interrupted_scans(&self, library: LibraryId) -> Result<Vec<Scan>, StoreError>;
 
     // --- files ---
-    /// What the index holds for the file at `path`, or `None` when it holds no track there.
-    fn lookup(&self, library: LibraryId, path: &Path) -> Result<Option<IndexedFile>, StoreError>;
-    /// Apply one batch atomically and append its net effect to the change feed.
-    /// An upserted track keeps its analysis only while its file's size and mtime
-    /// are unchanged. An error means nothing in the batch was persisted.
-    fn apply(&self, library: LibraryId, batch: Batch) -> Result<(), StoreError>;
-    /// Mark every non-missing track under `scope` whose `last_seen_scan` is
-    /// not `scan_id` as missing, except those at or under a path in
-    /// `unreadable`, which the scan could not read. Returns how many.
-    fn mark_missing_unseen(
-        &self,
-        library: LibraryId,
-        scope: &Scope,
-        scan_id: ScanId,
-        unreadable: &[PathBuf],
-    ) -> Result<i64, StoreError>;
+    /// What the index holds directly in the folder `dir`, read in one pass however much lies
+    /// below it; nothing when no root of `library` holds `dir`.
+    fn indexed_in(&self, library: LibraryId, dir: &Path) -> Result<IndexedFolder, StoreError>;
+    /// Apply one batch atomically and append its net effect to the change feed, and return how
+    /// many tracks it marked missing that were not already. An upserted track keeps its analysis
+    /// only while its file's size and mtime are unchanged. An error means nothing in the batch
+    /// was persisted.
+    fn apply(&self, library: LibraryId, batch: Batch) -> Result<i64, StoreError>;
     /// The paths with a recorded problem that `scope` reaches: under it, or for a Directory
     /// scope directly in it ([`Scope::contains_file`]).
     fn problems_under(&self, library: LibraryId, scope: &Scope)

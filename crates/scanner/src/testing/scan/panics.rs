@@ -41,7 +41,7 @@ pub fn a_parser_panic_is_a_problem_and_the_scan_completes<S: InspectStore>(make:
     assert_eq!(paths(&store, &lib), tracks);
 }
 
-/// A panic outside parsing, here in the store as B/Y's track is looked up, suspends the scan at
+/// A panic outside parsing, here in the store as B/Y's index is read, suspends the scan at
 /// its last flushed cursor with the progress the store holds, after A/X, and the worker goes on
 /// to run the next scan, which completes. Nothing waits to be retried.
 pub fn a_panic_suspends_the_scan_and_the_worker_runs_the_next<S: InspectStore + 'static>(
@@ -53,15 +53,15 @@ pub fn a_panic_suspends_the_scan_and_the_worker_runs_the_next<S: InspectStore + 
     make_album(&root, "B", "Y", 1);
     let lib = library(&root);
     let store = Arc::new(make(&lib));
-    let panic_at = root.join("B/Y/01 - Track 1.wav");
+    let panic_at = root.join("B/Y");
     let armed = AtomicBool::new(true);
-    let on_lookup = move |path: &Path| {
+    let on_folder = move |path: &Path| {
         if path == panic_at && armed.swap(false, Ordering::SeqCst) {
             panic!("a store bug");
         }
         Ok(())
     };
-    let hooked = Arc::new(Hooked::new(store.clone()).on_lookup(on_lookup));
+    let hooked = Arc::new(Hooked::new(store.clone()).on_folder(on_folder));
     let (scanner, thread) = Scanner::start_with(hooked, lib.clone(), batches_of(1)).unwrap();
 
     let idle = "the scanner never went idle";
@@ -95,15 +95,15 @@ pub fn a_panic_after_a_cancel_ends_cancelled<S: InspectStore + 'static>(make: Fa
     let lib = library(&root);
     let store = Arc::new(make(&lib));
     let stops = Stops::default();
-    let panic_at = root.join("B/Y/01 - Track 1.wav");
-    let on_lookup = |path: &Path| {
+    let panic_at = root.join("B/Y");
+    let on_folder = |path: &Path| {
         if path == panic_at {
             stops.cancel.store(true, Ordering::SeqCst);
             panic!("a store bug after the admin cancelled");
         }
         Ok(())
     };
-    let hooked = Hooked::new(store.clone()).on_lookup(on_lookup);
+    let hooked = Hooked::new(store.clone()).on_folder(on_folder);
     let mut scan = new_scan(&hooked, &lib);
     run(&hooked, &lib, &mut scan, &batches_of(1), &stops);
 
@@ -149,14 +149,14 @@ pub fn a_resumed_scan_that_panics_keeps_its_starting_cursor<S: InspectStore + 's
     make_album(&root, "B", "Y", 1);
     let lib = library(&root);
     let store = Arc::new(make(&lib));
-    let panic_at = root.join("B/Y/01 - Track 1.wav");
-    let on_lookup = |path: &Path| {
+    let panic_at = root.join("B/Y");
+    let on_folder = |path: &Path| {
         if path == panic_at {
             panic!("a store bug");
         }
         Ok(())
     };
-    let hooked = Hooked::new(store.clone()).on_lookup(on_lookup);
+    let hooked = Hooked::new(store.clone()).on_folder(on_folder);
     let mut resumed = Scan {
         state: ScanState::Running,
         started_at: Some(now_ms()),
