@@ -3,9 +3,7 @@
 
 use super::distance::distance;
 use super::{Index, Kind, Section, words};
-
-/// Leading articles, which a query may leave out and still match exactly.
-const ARTICLES: [&str; 3] = ["the", "a", "an"];
+use crate::fold::ARTICLES;
 
 /// Words longer than this are matched exactly or as a prefix only, which bounds the typo check.
 const MAX_FUZZY_CHARS: usize = 32;

@@ -1,34 +1,52 @@
-//! Identity keys for artists, albums, and tags (`design/database.md` §3).
+//! Text folding shared by identity keys, sort keys and search (`design/database.md` §3).
 //!
-//! Identity is a folded key; the displayed name is whatever spelling most
-//! files use. The fold has to be byte-identical on the server and in
-//! WebAssembly, so it uses only `char::to_lowercase`, which is Unicode-aware
-//! and locale-free. It is deliberately *not* full Unicode case folding or
-//! normalization: those need tables the client should not carry until the
-//! offline design asks for them.
+//! Identity is a folded key; the displayed name is whatever spelling most files use. Names fold to
+//! lowercase, with every `ς` written `σ` and every whitespace character a space, then NFC.
+//! Lowercasing is not full Unicode case folding, so `straße` and `STRASSE` stay apart.
 
-/// Fold a name for identity: trim outer whitespace, lowercase every
-/// character. Interior spacing is kept, so "Sun Ra" and "Sunra" stay
-/// distinct.
-pub fn name_key(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    for ch in name.trim().chars() {
-        out.extend(ch.to_lowercase());
+use unicode_normalization::UnicodeNormalization;
+
+/// Leading articles, which a sort key drops and a search query may leave out.
+pub(crate) const ARTICLES: [&str; 3] = ["the", "a", "an"];
+
+/// `name` without a leading article and the whitespace after it, unless the article is all of it.
+/// "The Beatles" gives "Beatles"; "The" and "Them" are kept.
+pub(crate) fn strip_article(name: &str) -> &str {
+    if let Some((first, rest)) = name.split_once(char::is_whitespace)
+        && ARTICLES.iter().any(|article| first.eq_ignore_ascii_case(article))
+        && !rest.trim_start().is_empty()
+    {
+        return rest.trim_start();
     }
-    out
+    name
 }
 
-/// Fold a tag for identity: case *and* spacing (`requirements/tags.md` §4),
-/// so "Hip Hop", "hip-hop", and "HipHop" are one tag.
+/// `text` with each run of whitespace collapsed to one space and none at either end.
+pub(crate) fn collapse_spaces(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Fold a name for identity: trim outer whitespace, lowercase, write `ς` as `σ` and each
+/// whitespace character (a tab, a no-break space) as a space, then NFC. Normalizing last lets a
+/// lowercased base and mark compose (`J\u{30C}` gives `ǰ`). Runs of spaces are kept, so
+/// "Sun  Ra", "Sun Ra" and "Sunra" stay distinct.
+pub fn name_key(name: &str) -> String {
+    name.trim()
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|ch| match ch {
+            'ς' => 'σ',
+            ch if ch.is_whitespace() => ' ',
+            ch => ch,
+        })
+        .nfc()
+        .collect()
+}
+
+/// Fold a tag for identity (`requirements/tags.md` §4): its name key with repeated spaces
+/// collapsed, so "Hip  Hop" is "Hip Hop", while "HipHop" and "Hip-Hop" are other tags.
 pub fn tag_key(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    for ch in name.trim().chars() {
-        if ch.is_whitespace() || ch == '-' || ch == '_' {
-            continue;
-        }
-        out.extend(ch.to_lowercase());
-    }
-    out
+    collapse_spaces(&name_key(name))
 }
 
 /// The album-artists half of album identity: each artist's `name_key`,
@@ -55,9 +73,42 @@ mod tests {
     }
 
     #[test]
-    fn tags_fold_spacing_too() {
-        assert_eq!(tag_key("Hip Hop"), tag_key("hip-hop"));
-        assert_eq!(tag_key("Hip Hop"), tag_key("HipHop"));
+    fn names_fold_canonical_equivalents_and_final_sigma() {
+        assert_eq!(name_key("Bj\u{f6}rk"), name_key("Bjo\u{308}rk"));
+        assert_eq!(name_key("ΝΊΚΟΣ"), name_key("Νίκος"));
+        assert_eq!(name_key("J\u{30C}"), name_key("\u{1F0}"));
+        assert_eq!(name_key("\u{399}\u{308}\u{301}"), name_key("\u{390}"));
+    }
+
+    #[test]
+    fn names_read_any_whitespace_as_a_space_without_collapsing() {
+        assert_eq!(name_key("Sun\u{a0}Ra"), name_key("Sun Ra"));
+        assert_eq!(name_key("Sun\tRa"), name_key("Sun Ra"));
+        assert_ne!(name_key("Sun  Ra"), name_key("Sun Ra"));
+        assert_eq!(name_key("\u{a0}Sun Ra\t"), "sun ra");
+    }
+
+    #[test]
+    fn strip_article_keeps_a_lone_article() {
+        assert_eq!(strip_article("The  Beatles"), "Beatles");
+        assert_eq!(strip_article("the\tBeatles"), "Beatles");
+        assert_eq!(strip_article("The "), "The ");
+        assert_eq!(strip_article("Them Crooked Vultures"), "Them Crooked Vultures");
+    }
+
+    #[test]
+    fn tags_fold_case_and_surrounding_or_repeated_spaces() {
+        assert_eq!(tag_key("  Rock "), tag_key("rock"));
+        assert_eq!(tag_key("Hip  Hop"), tag_key("Hip Hop"));
+        assert_eq!(tag_key("M\u{fa}sica"), tag_key("Mu\u{301}sica"));
+    }
+
+    #[test]
+    fn tags_merge_nothing_else() {
+        assert_ne!(tag_key("Hip Hop"), tag_key("HipHop"));
+        assert_ne!(tag_key("Hip Hop"), tag_key("Hip-Hop"));
+        assert_ne!(tag_key("HipHop"), tag_key("Hip-Hop"));
+        assert_ne!(tag_key("Drum_and_Bass"), tag_key("Drum and Bass"));
         assert_ne!(tag_key("Rock"), tag_key("Rocks"));
     }
 

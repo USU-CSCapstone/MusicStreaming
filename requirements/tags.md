@@ -41,9 +41,9 @@ Anticipated but not built: **mood**, from the standard mood field; **personal la
 
 ## 4. Matching
 
-**Tags differing only in case or spacing are the same tag.** `Rock`, `rock`, and `  Rock ` are one.
+**Tags differing only in case, or in surrounding or repeated spaces, are the same tag.** `Rock`, `rock`, and `  Rock ` are one, and a tab or no-break space counts as a space.
 
-- **Nothing else is merged.** `Hip-Hop` and `Hip Hop` remain separate, because deciding they are the same means deciding which genres are genuinely distinct — a judgement Jewelcase has no standing to make about someone else's collection.
+- **Nothing else is merged.** `Hip-Hop`, `HipHop` and `Hip Hop` remain separate, because deciding they are the same means deciding which genres are genuinely distinct — a judgement Jewelcase has no standing to make about someone else's collection.
 - **Display follows the collection.** Where variants of one tag exist, the form shown is the one the library uses most, not an invented canonical spelling.
 - **A messy library shows as messy.** Near-duplicate tags stay visible: that is information about the collection, and the fix is to fix the tags.
 

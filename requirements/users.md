@@ -63,7 +63,7 @@ Strong, fixed defaults chosen by the project. There is no configuration that can
 
 Every sign-in registers a **device** — a first-class named entity, not an anonymous session. This is the same identity used for remote control and playback handoff, so the list a user sees in settings and the list they cast to are the same list.
 
-A device carries a **name** (defaulted to something recognizable, user-editable), its **type** (phone, tablet, desktop, web), **first and last seen** times, whether it is **currently connected**, and **what it is playing**.
+A device carries a **name** (defaulted to something recognizable, user-editable), its **type** (phone, tablet, desktop, tv), **first and last seen** times, whether it is **currently connected**, and **what it is playing**.
 
 - **Sessions are long-lived.** A music app that demands frequent re-authentication is a broken music app. A device that has been offline a long time does not lose its session for having been idle.
 - **Users manage their own devices**, signing out any of them remotely, individually or all at once.

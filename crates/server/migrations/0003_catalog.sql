@@ -33,7 +33,7 @@ CREATE TABLE artists (
     library_id       INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
     -- NULL is the unknown artist. Otherwise the most-used spelling in artist_spellings
     name             TEXT,
-    -- Name split from the tag on semicolons, trimmed of outer whitespace, and Unicode case-folded
+    -- Name split from the tag on semicolons, trimmed, lowercased, ς as σ, whitespace as a space, NFC
     name_key         TEXT    NOT NULL,
     sort_key         BLOB    NOT NULL,
     image_id         INTEGER,
@@ -59,7 +59,7 @@ CREATE TABLE albums (
     library_id            INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
     -- NULL is the unknown album. Otherwise the most-used spelling of tracks.album_title
     title                 TEXT,
-    -- The title trimmed of outer whitespace and Unicode case-folded
+    -- The title trimmed, lowercased, ς as σ, whitespace as a space, NFC
     title_key             TEXT    NOT NULL,
     -- The album artists' name_keys, sorted so order does not matter, joined with ';'
     artists_key           TEXT    NOT NULL,
@@ -243,7 +243,7 @@ CREATE TABLE tags (
     type         TEXT    NOT NULL CHECK (type IN ('genre')),
     -- The most-used spelling in tag_spellings
     name         TEXT    NOT NULL,
-    -- Folded for case and spacing only (requirements/tags.md §4)
+    -- The name folded as artists.name_key is, with whitespace runs collapsed (requirements/tags.md §4)
     name_key     TEXT    NOT NULL,
     sort_key     BLOB    NOT NULL,
     track_count  INTEGER NOT NULL DEFAULT 0,

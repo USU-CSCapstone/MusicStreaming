@@ -3,31 +3,20 @@
 //! The semicolon is the only delimiter. Nothing here splits on "feat.", "&",
 //! "vs." or commas: "Earth, Wind & Fire" is one artist.
 
-/// Split a raw tag value into its values. Trims whitespace, drops empties,
-/// preserves order, and de-duplicates exact repeats.
-pub fn split(raw: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for part in raw.split(';') {
-        let part = part.trim();
-        if part.is_empty() {
-            continue;
-        }
-        if !out.iter().any(|existing| existing == part) {
-            out.push(part.to_owned());
-        }
-    }
-    out
-}
+use jewelcase_core::name_key;
 
-/// Split many raw values (a tag that carried repeated fields natively) and
-/// merge them into one ordered list.
+/// Split raw tag values, one per field the tag carried natively, into one ordered list. Each
+/// value is trimmed and empties are dropped. A value with the same name key as an earlier one is
+/// dropped too, so the first spelling stays.
 pub fn split_all<'a>(raws: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for raw in raws {
-        for value in split(raw) {
-            if !out.contains(&value) {
-                out.push(value);
-            }
+    let mut out = Vec::new();
+    let mut keys = Vec::new();
+    let values = raws.into_iter().flat_map(|raw| raw.split(';')).map(str::trim);
+    for value in values.filter(|value| !value.is_empty()) {
+        let key = name_key(value);
+        if !keys.contains(&key) {
+            keys.push(key);
+            out.push(value.to_owned());
         }
     }
     out
@@ -39,20 +28,30 @@ mod tests {
 
     #[test]
     fn semicolon_is_the_only_delimiter() {
-        assert_eq!(split("Kendrick Lamar;SZA"), vec!["Kendrick Lamar", "SZA"]);
-        assert_eq!(split("Earth, Wind & Fire"), vec!["Earth, Wind & Fire"]);
-        assert_eq!(split("A feat. B"), vec!["A feat. B"]);
+        assert_eq!(split_all(["Kendrick Lamar;SZA"]), vec!["Kendrick Lamar", "SZA"]);
+        assert_eq!(split_all(["Earth, Wind & Fire"]), vec!["Earth, Wind & Fire"]);
+        assert_eq!(split_all(["A feat. B"]), vec!["A feat. B"]);
     }
 
     #[test]
     fn trims_and_drops_empties() {
-        assert_eq!(split(" A ; ;B;"), vec!["A", "B"]);
-        assert!(split("  ;  ").is_empty());
+        assert_eq!(split_all([" A ; ;B;"]), vec!["A", "B"]);
+        assert!(split_all(["  ;  "]).is_empty());
     }
 
     #[test]
     fn native_repeats_and_semicolons_read_the_same() {
-        assert_eq!(split_all(["A", "B"]), split("A;B"));
+        assert_eq!(split_all(["A", "B"]), split_all(["A;B"]));
         assert_eq!(split_all(["A;B", "B", "C"]), vec!["A", "B", "C"]);
+    }
+
+    #[test]
+    fn repeats_differing_only_in_case_keep_the_first_spelling() {
+        assert_eq!(split_all(["A;a"]), vec!["A"]);
+        assert_eq!(split_all(["Sun Ra;Sun  Ra"]), vec!["Sun Ra", "Sun  Ra"]);
+        assert_eq!(
+            split_all(["Kendrick Lamar", "kendrick lamar;SZA"]),
+            vec!["Kendrick Lamar", "SZA"]
+        );
     }
 }
