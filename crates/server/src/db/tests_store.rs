@@ -243,6 +243,7 @@ mod suite {
 
 mod derived;
 mod failures;
+mod lyrics;
 mod reanalysis;
 mod recompute;
 mod totals;

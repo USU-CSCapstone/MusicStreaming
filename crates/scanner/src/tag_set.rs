@@ -4,6 +4,8 @@
 //! carrying the same logical metadata in ID3v2 and Vorbis comments yield
 //! equal `TagSet`s; that equality is what the golden-corpus test asserts.
 
+use crate::lrc::{self, SyncedLine};
+
 /// A date at whatever precision the tag carried (`requirements/tracks.md` §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PartialDate {
@@ -47,41 +49,28 @@ impl std::fmt::Display for PartialDate {
     }
 }
 
-/// Lyrics as read from the file or a sidecar (`requirements/tracks.md` §5).
+/// Lyrics as read from the file or a sidecar, in the one form they are stored and served
+/// (`requirements/tracks.md` §5).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Lyrics {
-    pub text: String,
-    /// True when the text carries LRC-style timestamps.
-    pub synced: bool,
+pub enum Lyrics {
+    /// Text with no timed lines.
+    Plain(String),
+    /// The timed lines, sorted by time.
+    Synced(Vec<SyncedLine>),
 }
 
 impl Lyrics {
-    /// Wrap text, detecting synchronization from `[mm:ss.xx]` markers.
-    pub fn from_text(text: String) -> Lyrics {
-        let synced = text.lines().take(50).any(is_lrc_line);
-        Lyrics { text, synced }
-    }
-}
-
-fn is_lrc_line(line: &str) -> bool {
-    let line = line.trim_start();
-    let Some(rest) = line.strip_prefix('[') else {
-        return false;
-    };
-    let Some(end) = rest.find(']') else {
-        return false;
-    };
-    let stamp = &rest[..end];
-    let mut it = stamp.split(':');
-    match (it.next(), it.next()) {
-        (Some(m), Some(s)) => {
-            m.chars().all(|c| c.is_ascii_digit())
-                && !m.is_empty()
-                && s.split('.')
-                    .next()
-                    .is_some_and(|sec| sec.len() == 2 && sec.chars().all(|c| c.is_ascii_digit()))
+    /// Lyrics from text, less any leading byte order mark: synced when the LRC parser finds a
+    /// timed line anywhere, plain otherwise. Plain text loses surrounding whitespace. `None` when
+    /// nothing is left.
+    pub fn parse(text: &str) -> Option<Lyrics> {
+        let text = text.trim_start_matches('\u{FEFF}');
+        let lines = lrc::parse(text);
+        if !lines.is_empty() {
+            return Some(Lyrics::Synced(lines));
         }
-        _ => false,
+        let text = text.trim();
+        (!text.is_empty()).then(|| Lyrics::Plain(text.to_owned()))
     }
 }
 
@@ -156,10 +145,38 @@ mod tests {
     }
 
     #[test]
-    fn lrc_is_detected() {
-        assert!(Lyrics::from_text("[00:12.50]Hello".into()).synced);
-        assert!(Lyrics::from_text("[01:02]Hello".into()).synced);
-        assert!(!Lyrics::from_text("Hello [verse 1]".into()).synced);
-        assert!(!Lyrics::from_text("[Chorus]\nla la".into()).synced);
+    fn any_timed_line_makes_lyrics_synced() {
+        let line = |start_ms, text: &str| SyncedLine { start_ms, text: text.into() };
+        assert_eq!(
+            Lyrics::parse("[ti:Song]\n[00:12.50]Hello\n[Chorus]"),
+            Some(Lyrics::Synced(vec![line(12_500, "Hello")]))
+        );
+        // A byte order mark hides no stamp, and neither does a long untimed preamble.
+        let preamble = "words\n".repeat(60);
+        assert_eq!(
+            Lyrics::parse(&format!("\u{FEFF}{preamble}[01:02]Hello")),
+            Some(Lyrics::Synced(vec![line(62_000, "Hello")]))
+        );
+    }
+
+    #[test]
+    fn a_byte_order_mark_keeps_the_first_line() {
+        let lyrics = Lyrics::parse("\u{FEFF}[00:01.00]First\n[00:02.00]Second");
+        let Some(Lyrics::Synced(lines)) = lyrics else { panic!("{lyrics:?}") };
+        assert_eq!(lines[0], SyncedLine { start_ms: 1_000, text: "First".into() });
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn text_without_a_valid_stamp_is_plain() {
+        for text in ["Hello [verse 1]", "[Chorus]\nla la", "[00:60.00]x", "[00:01.1234]x"] {
+            assert_eq!(Lyrics::parse(text), Some(Lyrics::Plain(text.into())), "{text}");
+        }
+    }
+
+    #[test]
+    fn plain_text_loses_its_byte_order_mark() {
+        assert_eq!(Lyrics::parse("\u{FEFF} Hello\n"), Some(Lyrics::Plain("Hello".into())));
+        assert_eq!(Lyrics::parse("\u{FEFF} \n"), None);
     }
 }

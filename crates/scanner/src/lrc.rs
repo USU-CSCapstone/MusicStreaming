@@ -1,8 +1,8 @@
 //! LRC parsing (`requirements/tracks.md` §5).
 //!
 //! Turns `[mm:ss.xx]text` lines into timestamped lines, the shape the API's
-//! `Lyrics.lines` carries. Lines without a timestamp are dropped from the
-//! synced view; the caller keeps the full text as the plain fallback.
+//! `Lyrics.lines` carries. Lines without a timestamp are dropped; text with
+//! none at all is plain lyrics (`Lyrics::parse`).
 
 use serde::{Deserialize, Serialize};
 
@@ -18,14 +18,13 @@ pub struct SyncedLine {
     pub text: String,
 }
 
-/// Parse LRC text. Handles a leading byte order mark, several timestamps on one line, `mm:ss`,
-/// and fractions of one to three digits after a `.` or a `:`. An `[offset:ms]` tag, wherever it
-/// is, shifts every line: a positive offset shows them sooner, never before the start; when
-/// there are several, the last one counts. Lines that would take the output past
-/// [`MAX_OUTPUT_BYTES`] are left out. Returns lines sorted by time. Empty when nothing had a
-/// timestamp.
+/// Parse LRC text that has no byte order mark ([`crate::Lyrics::parse`] strips it). Handles
+/// several timestamps on one line, `mm:ss`, and fractions of one to three digits after a `.` or
+/// a `:`. An `[offset:ms]` tag, wherever it is, shifts every line: a positive offset shows them
+/// sooner, never before the start; when there are several, the last one counts. Lines that would
+/// take the output past [`MAX_OUTPUT_BYTES`] are left out. Returns lines sorted by time. Empty
+/// when nothing had a timestamp.
 pub fn parse(text: &str) -> Vec<SyncedLine> {
-    let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
     let mut out = Vec::new();
     let mut offset = 0;
     let mut size = 0;
@@ -117,13 +116,6 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].start_ms, 10_000);
         assert_eq!(lines[1].start_ms, 30_000);
-    }
-
-    #[test]
-    fn a_byte_order_mark_keeps_the_first_line() {
-        let lines = parse("\u{FEFF}[00:01.00]First\n[00:02.00]Second");
-        assert_eq!(lines[0], SyncedLine { start_ms: 1_000, text: "First".into() });
-        assert_eq!(lines.len(), 2);
     }
 
     #[test]

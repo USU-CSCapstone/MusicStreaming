@@ -8,12 +8,16 @@ use std::path::Path;
 
 use jewelcase_core::Format;
 use jewelcase_scanner::testing::{PNG, encode, ffmpeg_available, write_sine_wav, write_small_wav};
-use jewelcase_scanner::{Lyrics, PartialDate, ReadError, TagSet, read_tags};
+use jewelcase_scanner::{Lyrics, PartialDate, ReadError, SyncedLine, TagSet, read_tags};
 use lofty::config::WriteOptions;
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::*;
 use lofty::tag::{ItemKey, ItemValue, Tag, TagItem, TagType};
 
+/// The embedded lyrics every file carries, which read back as [`expected`]'s timed lines.
+const LYRICS: &str = "[00:12.00]Load up on guns\n[00:15.00]Bring your friends";
+
+/// The tags every file in the corpus is written with, and must read back as.
 fn expected() -> TagSet {
     TagSet {
         title: Some("Smells Like Teen Spirit".into()),
@@ -32,9 +36,10 @@ fn expected() -> TagSet {
         isrc: Some("USGF19942501".into()),
         musicbrainz_recording_id: Some("2bd6a4a6-8c8a-4d2d-9a4b-0a6a9b2a9c1d".into()),
         musicbrainz_release_id: None,
-        lyrics: Some(Lyrics::from_text(
-            "[00:12.00]Load up on guns\n[00:15.00]Bring your friends".into(),
-        )),
+        lyrics: Some(Lyrics::Synced(vec![
+            SyncedLine { start_ms: 12_000, text: "Load up on guns".into() },
+            SyncedLine { start_ms: 15_000, text: "Bring your friends".into() },
+        ])),
         has_embedded_art: true,
         title_sort: Some("Smells Like Teen Spirit".into()),
         artist_sort: Some("Nirvana".into()),
@@ -43,6 +48,8 @@ fn expected() -> TagSet {
     }
 }
 
+/// Tag the file at `path` with [`expected`]'s values in `tag_type`, lyrics as raw [`LYRICS`] text
+/// and the cover as [`PNG`]. Panics when the tag can't be saved.
 fn write_tags(path: &Path, tag_type: TagType) {
     let e = expected();
     let mut tag = Tag::new(tag_type);
@@ -73,7 +80,7 @@ fn write_tags(path: &Path, tag_type: TagType) {
     // the mapper must make both read identically.
     let lyrics_key =
         if tag_type == TagType::Id3v2 { ItemKey::UnsyncLyrics } else { ItemKey::Lyrics };
-    tag.insert(text(lyrics_key, &e.lyrics.as_ref().unwrap().text));
+    tag.insert(text(lyrics_key, LYRICS));
     tag.insert(text(ItemKey::TrackTitleSortOrder, e.title_sort.as_deref().unwrap()));
     tag.insert(text(ItemKey::TrackArtistSortOrder, e.artist_sort.as_deref().unwrap()));
     tag.insert(text(ItemKey::AlbumTitleSortOrder, e.album_sort.as_deref().unwrap()));

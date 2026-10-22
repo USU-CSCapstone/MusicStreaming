@@ -177,7 +177,7 @@ impl SidecarResolver {
     /// Lyrics for a track, read. An unreadable or empty file is no lyrics.
     pub fn lyrics_for(audio: &Path, files: &BTreeSet<OsString>) -> Option<Lyrics> {
         let path = Self::lyrics_path_for(audio, files)?;
-        read_text(&path).map(Lyrics::from_text)
+        Lyrics::parse(&read_text(&path)?)
     }
 }
 
@@ -191,9 +191,12 @@ fn read_bytes(path: &Path) -> Option<Vec<u8>> {
     fs::read(path).ok()
 }
 
+/// The text of the file at `path` ([`read_bytes`]), without a leading byte order mark or
+/// surrounding whitespace. `None` when the file can't be read or nothing is left.
 fn read_text(path: &Path) -> Option<String> {
     let bytes = read_bytes(path)?;
-    let text = String::from_utf8_lossy(&bytes).trim().to_owned();
+    let text = String::from_utf8_lossy(&bytes);
+    let text = text.trim_start_matches('\u{FEFF}').trim().to_owned();
     if text.is_empty() { None } else { Some(text) }
 }
 
@@ -237,6 +240,7 @@ fn local_from_names<'a>(dir: &Path, names: impl Iterator<Item = &'a OsStr>) -> L
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SyncedLine;
 
     /// A 1x1 PNG.
     const PNG: &[u8] = &[
@@ -258,7 +262,8 @@ mod tests {
         let root = tmp.path().join("lib");
         touch(&root.join("cover.png"), PNG);
         touch(&root.join("Artist/artist.jpg"), PNG);
-        touch(&root.join("Artist/artist.txt"), b"A band.");
+        // Saved with a byte order mark, which is not part of the text.
+        touch(&root.join("Artist/artist.txt"), b"\xEF\xBB\xBFA band.\n");
         touch(&root.join("Artist/Album/cover.jpg"), PNG);
         touch(&root.join("Artist/Other/01.flac"), b"x");
         // Above the root: must never be seen.
@@ -302,9 +307,14 @@ mod tests {
             SidecarResolver::lyrics_path_for(&song, &files),
             Some(dir.join("01 - Song.lrc"))
         );
-        assert!(SidecarResolver::lyrics_for(&song, &files).unwrap().synced);
-        let b = SidecarResolver::lyrics_for(&dir.join("02 - Other.flac"), &files).unwrap();
-        assert!(!b.synced);
+        assert_eq!(
+            SidecarResolver::lyrics_for(&song, &files),
+            Some(Lyrics::Synced(vec![SyncedLine { start_ms: 1_000, text: "hi".into() }]))
+        );
+        assert_eq!(
+            SidecarResolver::lyrics_for(&dir.join("02 - Other.flac"), &files),
+            Some(Lyrics::Plain("plain words".into()))
+        );
         assert_eq!(SidecarResolver::lyrics_for(&dir.join("03.flac"), &files), None);
     }
 

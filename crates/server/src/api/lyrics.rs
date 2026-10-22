@@ -21,6 +21,8 @@ pub struct Lyrics {
     plain: Option<String>,
 }
 
+/// `getLyrics`: the track's lyrics in the one form stored, kind `none` when it has none, and not
+/// found when the library has no such track.
 pub async fn get(
     State(db): State<Arc<Database>>,
     Path((Id(library), Id(track))): Path<(Id, Id)>,
@@ -34,7 +36,6 @@ pub async fn get(
             let plain: Option<String> = row.get(0)?;
             let synced: Option<String> = row.get(1)?;
             Ok(match synced {
-                // `plain` holds the LRC text the lines came from, not a plain version.
                 Some(synced) => Lyrics {
                     kind: "synced",
                     lines: Some(serde_json::from_str(&synced).map_err(|error| {
@@ -69,7 +70,7 @@ mod tests {
         db.write(|tx| {
             tx.execute_batch(
                 r#"INSERT INTO track_lyrics (library_id, track_id, plain, synced, embedded) VALUES
-                       (1, 1, '[00:01.00]Hello', '[{"startMs":1000,"text":"Hello"}]', 1),
+                       (1, 1, NULL, '[{"startMs":1000,"text":"Hello"}]', 1),
                        (1, 2, 'Hello', NULL, 0);"#,
             )
         })

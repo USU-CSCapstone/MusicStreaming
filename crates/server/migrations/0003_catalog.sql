@@ -226,7 +226,9 @@ CREATE TABLE track_lyrics (
     -- Whether the lyrics are embedded in the track file
     embedded   INTEGER NOT NULL CHECK (embedded IN (0, 1)),
     FOREIGN KEY (library_id, track_id) REFERENCES tracks (library_id, id) ON DELETE CASCADE,
-    CHECK (plain IS NOT NULL OR synced IS NOT NULL)
+    -- Exactly one form: the plain text, or the timed lines alone
+    CHECK (plain IS NOT NULL OR synced IS NOT NULL),
+    CHECK (synced IS NULL OR plain IS NULL)
 ) STRICT;
 
 CREATE TABLE track_waveforms (

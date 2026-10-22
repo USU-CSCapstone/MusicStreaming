@@ -2,7 +2,7 @@
 //! transaction.
 
 use jewelcase_core::artists_key;
-use jewelcase_scanner::{ArtworkSource, TrackRecord};
+use jewelcase_scanner::{ArtworkSource, Lyrics, TrackRecord};
 use rusqlite::{OptionalExtension, Result, Transaction, params};
 
 use super::entities::{
@@ -91,8 +91,8 @@ pub fn upsert_track(
     let lyrics = rec.lyrics();
     let lyrics_kind = match lyrics {
         None => "none",
-        Some(l) if l.synced => "synced",
-        Some(_) => "plain",
+        Some(Lyrics::Plain(_)) => "plain",
+        Some(Lyrics::Synced(_)) => "synced",
     };
     let format = rec.properties.format;
 
@@ -202,15 +202,15 @@ pub fn upsert_track(
     // Lyrics.
     tx.execute("DELETE FROM track_lyrics WHERE track_id = ?1", [id])?;
     if let Some(l) = lyrics {
-        let synced = if l.synced {
-            let lines = jewelcase_scanner::parse_lrc(&l.text);
-            if lines.is_empty() { None } else { Some(serde_json::to_string(&lines).unwrap()) }
-        } else {
-            None
+        let (plain, synced) = match l {
+            Lyrics::Plain(text) => (Some(text), None),
+            Lyrics::Synced(lines) => {
+                (None, Some(serde_json::to_string(lines).expect("timed lines serialize")))
+            }
         };
         tx.execute(
                 "INSERT INTO track_lyrics (library_id, track_id, plain, synced, embedded) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![lib, id, l.text, synced, rec.tags.lyrics.is_some()],
+                params![lib, id, plain, synced, rec.tags.lyrics.is_some()],
             )?;
     }
 

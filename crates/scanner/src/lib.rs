@@ -52,7 +52,7 @@ pub use confine::without_links;
 pub use image::{ImageInfo, describe as describe_image};
 pub use jobs::RunReport;
 pub use library::{LibraryConfig, LibraryId};
-pub use lrc::{SyncedLine, parse as parse_lrc};
+pub use lrc::SyncedLine;
 pub use placeholders::Placeholders;
 pub use pool::{Job, Pool};
 pub use problems::{Problem, ProblemKind, UNOPENED, group_key as problem_group_key};

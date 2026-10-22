@@ -278,7 +278,7 @@ fn map_tags(file: &TaggedFile) -> TagSet {
 
     out.lyrics = first_string(&tags, &ItemKey::Lyrics)
         .or_else(|| first_string(&tags, &ItemKey::UnsyncLyrics))
-        .map(Lyrics::from_text);
+        .and_then(|text| Lyrics::parse(&text));
 
     out.has_embedded_art = tags.iter().any(|t| !t.pictures().is_empty());
 
