@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use jewelcase_core::waveform_level;
 use jewelcase_ffmpeg::{Config, Ffmpeg};
 use jewelcase_scanner::testing::{BareStore, encode, ffmpeg_available, write_sine_wav};
 use jewelcase_scanner::{ANALYZER_VERSION, Analyzer};
@@ -35,13 +36,13 @@ fn sine_measures_as_expected() {
         let peak = r.true_peak_dbtp.expect("peak");
         assert!((peak - -6.02).abs() < 0.3, "{}: {peak} dBTP", path.display());
         assert_eq!(r.waveform.peaks.len(), 512);
-        // Every bin sees the same amplitude.
+        // Every bin sees the same amplitude, stored as its level in half decibels.
         let mid = r.waveform.peaks[256];
-        assert!((mid as i32 - 128).abs() <= 2, "peak bin {mid}");
-        assert!(r.waveform.peaks.iter().all(|p| (*p as i32 - mid as i32).abs() <= 2));
-        // RMS of a sine is peak / sqrt(2).
-        let rms = r.waveform.rms[256] as f64 / 255.0;
-        assert!((rms - 0.5 / 2f64.sqrt()).abs() < 0.02, "rms {rms}");
+        assert!(mid.abs_diff(waveform_level(0.5)) <= 1, "peak bin {mid}");
+        assert!(r.waveform.peaks.iter().all(|p| p.abs_diff(mid) <= 1));
+        // RMS of a sine is peak / sqrt(2), 3 dB below it.
+        let rms = r.waveform.rms[256];
+        assert!(rms.abs_diff(waveform_level(0.5 / 2f64.sqrt())) <= 1, "rms bin {rms}");
         assert_eq!(r.analyzer_version, ANALYZER_VERSION);
     }
 }

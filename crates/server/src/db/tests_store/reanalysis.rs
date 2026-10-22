@@ -94,6 +94,20 @@ fn a_result_for_replaced_audio_writes_nothing() {
     assert_eq!(store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap().len(), 1);
 }
 
+/// A track analyzed by version 1, which stored waveforms on a linear scale, is analyzed again.
+#[test]
+fn a_track_analyzed_by_version_1_is_analyzed_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    testing::make_album(&root, "A", "X", 1);
+    let store = make(&root);
+    let lib = testing::library(&root);
+    testing::scan_library(&store, &lib);
+    let (track, _) = store.next_unanalyzed(lib.id, ANALYZER_VERSION, 1).unwrap().remove(0);
+    store.store_analysis(lib.id, track, AnalysisResult::empty(1)).unwrap();
+    assert_eq!(store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap().len(), 1);
+}
+
 /// Audio replaced by a file that cannot be read loses its loudness, peak and waveform, though the
 /// track stays, and is not queued until a scan reads the file. Its album is as loud as its other
 /// track.

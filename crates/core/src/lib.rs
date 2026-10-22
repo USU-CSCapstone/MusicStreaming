@@ -8,8 +8,10 @@ mod fold;
 mod format;
 mod search;
 mod sort;
+mod waveform;
 
 pub use fold::{artists_key, name_key, tag_key};
 pub use format::Format;
 pub use search::{Document, Index, Kind, Section, words};
 pub use sort::sort_key;
+pub use waveform::{shape_waveform, waveform_level};

@@ -24,7 +24,7 @@ use waveform::{Waveform, WaveformBuilder};
 
 /// Bumped whenever any sink's output changes; tracks below it are reprocessed
 /// in the background (`requirements/deployment.md` §5).
-pub const ANALYZER_VERSION: u32 = 1;
+pub const ANALYZER_VERSION: u32 = 2;
 
 /// Default waveform resolution. The playback design owns the final number.
 pub const DEFAULT_WAVEFORM_BINS: usize = 512;

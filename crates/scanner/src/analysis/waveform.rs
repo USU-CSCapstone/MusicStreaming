@@ -3,9 +3,11 @@
 //! Deterministic: the same samples in the same order always give the same
 //! bins.
 
-/// Peak and RMS per bin, quantized to 0..=255, over a mono downmix. The
-/// honest measurement; legibility shaping happens at render time
-/// (`requirements/playback.md` §3).
+use jewelcase_core::waveform_level;
+
+/// Peak and RMS per bin over a mono downmix, each a level on the log scale of
+/// [`jewelcase_core::waveform_level`]. The honest measurement; the server
+/// shapes the RMS levels for legibility with [`jewelcase_core::shape_waveform`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Waveform {
     pub peaks: Vec<u8>,
@@ -80,15 +82,11 @@ impl WaveformBuilder {
                 n += self.counts[i];
             }
             let r = if n > 0 { (ss / n as f64).sqrt() } else { 0.0 };
-            peaks.push(quantize(peak as f64));
-            rms.push(quantize(r));
+            peaks.push(waveform_level(f64::from(peak)));
+            rms.push(waveform_level(r));
         }
         Waveform { peaks, rms }
     }
-}
-
-fn quantize(v: f64) -> u8 {
-    (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 #[cfg(test)]
@@ -101,9 +99,14 @@ mod tests {
         let mut b = WaveformBuilder::new(4, Some(400));
         let mut samples = Vec::new();
         for i in 0..400 {
-            // Quiet first half, loud second half.
-            let amp = if i < 200 { 0.2 } else { 0.8 };
-            samples.push(if i % 2 == 0 { amp } else { -amp });
+            // Quiet first half; loud second half, alternating 0.8 and -0.4.
+            let sample = match (i < 200, i % 2 == 0) {
+                (true, true) => 0.2,
+                (true, false) => -0.2,
+                (false, true) => 0.8,
+                (false, false) => -0.4,
+            };
+            samples.push(sample);
         }
         a.push_mono(&samples[..150]);
         a.push_mono(&samples[150..]);
@@ -113,8 +116,10 @@ mod tests {
         assert_eq!(wa, wb);
         assert_eq!(wa.peaks.len(), 4);
         assert!(wa.peaks[0] < wa.peaks[3]);
-        assert_eq!(wa.peaks[3], quantize(0.8));
-        assert_eq!(wa.rms[3], quantize(0.8));
+        assert_eq!(wa.peaks[3], waveform_level(0.8));
+        // The RMS of 0.8 and 0.4 alternating is the square root of 0.4, about 2 dB below the peak.
+        assert_eq!(wa.rms[3], waveform_level(0.4f64.sqrt()));
+        assert!(wa.rms[3] < wa.peaks[3]);
     }
 
     #[test]
@@ -123,7 +128,7 @@ mod tests {
         w.push_mono(&vec![0.5; 10_000]);
         let out = w.finish();
         assert_eq!(out.peaks.len(), 8);
-        assert!(out.peaks.iter().all(|p| *p == quantize(0.5)));
+        assert!(out.peaks.iter().all(|p| *p == waveform_level(0.5)));
     }
 
     #[test]

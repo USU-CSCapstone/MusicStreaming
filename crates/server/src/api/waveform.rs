@@ -8,6 +8,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use jewelcase_core::shape_waveform;
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 
@@ -23,7 +24,7 @@ struct Waveform {
     data: String,
 }
 
-/// `getWaveform`: the track's shaped peaks, no content while it has no waveform this server
+/// `getWaveform`: the track's shaped RMS levels, no content while it has no waveform this server
 /// reads, and not found when the library has no such track.
 pub async fn get(
     State(db): State<Arc<Database>>,
@@ -42,23 +43,13 @@ pub async fn get(
         .await?;
     let blob = blob.ok_or_else(Problem::not_found)?;
     Ok(match blob.as_deref().and_then(waveform::decode) {
-        Some(measured) => Json(shape(&measured.peaks)).into_response(),
+        Some(measured) => {
+            let points = shape_waveform(&measured.rms);
+            Json(Waveform { point_count: points.len(), data: BASE64.encode(&points) })
+                .into_response()
+        }
         None => StatusCode::NO_CONTENT.into_response(),
     })
-}
-
-/// Shapes the measured peaks for legibility (`requirements/playback.md` §3). Scaling to the
-/// track's own loudest peak keeps a quiet recording from drawing as a flat line without
-/// inventing structure: every point keeps its place and relative height.
-fn shape(peaks: &[u8]) -> Waveform {
-    let max = u32::from(peaks.iter().copied().max().unwrap_or(0));
-    let points: Vec<u8> = if max == 0 {
-        peaks.to_vec()
-    } else {
-        // Rounded to the nearest step, in integers.
-        peaks.iter().map(|&peak| ((u32::from(peak) * 255 + max / 2) / max) as u8).collect()
-    };
-    Waveform { point_count: points.len(), data: BASE64.encode(&points) }
 }
 
 #[cfg(test)]
@@ -70,10 +61,12 @@ mod tests {
     use super::super::testing::{app_with_tracks, send};
     use super::*;
 
+    /// The points are the RMS levels shaped by `jewelcase_core`, whatever the peaks: a quiet
+    /// passage 40 dB down and a loud one 6 dB down both stay visible.
     #[tokio::test]
-    async fn serves_the_shaped_peaks() {
+    async fn serves_the_shaped_rms_levels() {
         let (_temp, db, app) = app_with_tracks().await;
-        let measured = Measured { peaks: vec![0, 32, 64, 128], rms: vec![0, 16, 32, 64] };
+        let measured = Measured { peaks: vec![255; 8], rms: [[175; 4], [243; 4]].concat() };
         let blob = waveform::encode(&measured);
         db.write(move |tx| {
             tx.execute(
@@ -87,15 +80,8 @@ mod tests {
         let (status, _, body) = send(app, "GET", "/api/v1/libraries/1/tracks/1/waveform").await;
         assert_eq!(status, StatusCode::OK);
         let body: Value = serde_json::from_slice(&body).unwrap();
-        // 32/128 of 255 is 63.75, and 64/128 is 127.5, which rounds up.
-        let expected = BASE64.encode([0, 64, 128, 255]);
-        assert_eq!(body, json!({ "pointCount": 4, "data": expected }));
-    }
-
-    #[tokio::test]
-    async fn silence_stays_flat() {
-        assert_eq!(shape(&[0, 0, 0]).data, BASE64.encode([0, 0, 0]));
-        assert_eq!(shape(&[]).point_count, 0);
+        let expected = BASE64.encode([24, 24, 24, 24, 255, 255, 255, 255]);
+        assert_eq!(body, json!({ "pointCount": 8, "data": expected }));
     }
 
     #[tokio::test]

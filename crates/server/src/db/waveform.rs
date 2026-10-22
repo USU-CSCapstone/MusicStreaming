@@ -1,5 +1,7 @@
 //! The `track_waveforms.data` blob: a one-byte version, a two-byte little-endian bin count, then
-//! that many peaks, then as many RMS values.
+//! that many peak levels, then as many RMS levels, each a byte on the scale of
+//! `jewelcase_core::waveform_level`. A blob from analyzer version 1 holds linear values in the
+//! same layout; it is read the same way and rewritten when its track is analyzed again.
 
 use jewelcase_scanner::Waveform;
 
