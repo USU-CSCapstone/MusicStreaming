@@ -12,9 +12,9 @@ use axum::response::{IntoResponse, Response};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
+use super::devices::DeviceRegistration;
 use super::extract::Json;
-use super::session::{self, DeviceRegistration};
-use super::{AppState, Code, Problem, password};
+use super::{AppState, Code, Problem, me, password, session};
 use crate::db::{Database, new_id, now_ms};
 
 /// Whether setup is done, which is whether the owner exists.
@@ -87,9 +87,9 @@ pub async fn complete(
         return Err(Problem::not_found());
     }
     let SetupRequest { username, password, display_name, device } = request;
-    session::check_username(&username)?;
+    me::check_username(&username)?;
     let display_name = display_name.unwrap_or_else(|| username.clone());
-    session::check_name("displayName", &display_name)?;
+    me::check_name("displayName", &display_name)?;
     device.validate()?;
     let password = password::hash_new(password, vec![username.clone(), display_name.clone()]);
     let password = password.await?;

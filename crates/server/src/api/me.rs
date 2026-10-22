@@ -1,4 +1,5 @@
-//! The caller's own account: `getMe` (`api/openapi.yaml`).
+//! The caller's own account: `getMe` (`api/openapi.yaml`), and the checks on the names an
+//! account and its devices are given.
 
 use std::sync::Arc;
 
@@ -39,4 +40,25 @@ pub fn user(conn: &Connection, id: i64) -> rusqlite::Result<User> {
 
 pub async fn get(State(db): State<Arc<Database>>, caller: Caller) -> Result<Json<User>, Problem> {
     Ok(Json(db.read(move |conn| user(conn, caller.user)).await?))
+}
+
+/// Longer names are refused, so no one stores megabytes in an account or device row.
+const MAX_NAME_CHARS: usize = 100;
+
+/// Refuses a `field` that is blank or longer than [`MAX_NAME_CHARS`].
+pub fn check_name(field: &str, value: &str) -> Result<(), Problem> {
+    if value.trim().is_empty() || value.chars().count() > MAX_NAME_CHARS {
+        return Err(Problem::invalid(format!("{field} must be 1 to {MAX_NAME_CHARS} characters")));
+    }
+    Ok(())
+}
+
+/// The spec's `Username`: 1 to 32 ASCII letters, digits, `_`, and `-`.
+pub fn check_username(username: &str) -> Result<(), Problem> {
+    let allowed = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
+    if (1..=32).contains(&username.len()) && username.bytes().all(allowed) {
+        Ok(())
+    } else {
+        Err(Problem::invalid("username must be 1 to 32 letters, digits, '_', or '-'"))
+    }
 }

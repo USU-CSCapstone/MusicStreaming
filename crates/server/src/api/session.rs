@@ -1,5 +1,5 @@
-//! Sessions: the device every login registers, its token, the `Session` that setup and login
-//! answer with, and `logout` (`requirements/users.md` §4).
+//! Sessions: the token every login is given, the `Session` that setup and login answer with,
+//! and `logout` (`requirements/users.md` §4).
 //!
 //! A token is shown once and stored only as its SHA-256 hash (`design/database.md`). It is
 //! 256 random bits, so a fast hash is enough; a slow one would only slow every request.
@@ -9,68 +9,22 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL;
-use rusqlite::{Transaction, params};
-use serde::{Deserialize, Serialize};
+use rusqlite::Transaction;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use super::authenticate::Caller;
-use super::devices::{self, Device};
+use super::devices::{self, Device, DeviceRegistration};
 use super::me::{self, User};
 use super::realtime::Revoked;
 use super::{AppState, Code, Problem};
-use crate::db::{DbError, new_id, now_ms};
+use crate::db::DbError;
 
 /// The cookie browser clients authenticate with (`cookieAuth` in `api/openapi.yaml`).
 pub const COOKIE: &str = "jewelcase_session";
 
 /// Browsers keep a cookie for at most 400 days, so that is how long it asks for.
 const COOKIE_MAX_AGE_S: u32 = 400 * 24 * 60 * 60;
-
-/// Longer names and platforms are refused, so no one stores megabytes in a device row.
-const MAX_NAME_CHARS: usize = 100;
-
-const DEVICE_TYPES: [&str; 4] = ["phone", "tablet", "desktop", "tv"];
-
-/// The spec's `DeviceRegistration`: how a logging-in device describes itself.
-#[derive(Deserialize)]
-pub struct DeviceRegistration {
-    name: String,
-    #[serde(rename = "type")]
-    kind: String,
-    platform: Option<String>,
-}
-
-impl DeviceRegistration {
-    /// Refuses an empty or overlong name or platform, or a type the spec does not list.
-    pub fn validate(&self) -> Result<(), Problem> {
-        if !DEVICE_TYPES.contains(&self.kind.as_str()) {
-            return Err(Problem::invalid("device.type must be phone, tablet, desktop, or tv"));
-        }
-        check_name("device.name", &self.name)?;
-        if let Some(platform) = &self.platform {
-            check_name("device.platform", platform)?;
-        }
-        Ok(())
-    }
-}
-
-/// Refuses a `field` that is blank or longer than [`MAX_NAME_CHARS`].
-pub fn check_name(field: &str, value: &str) -> Result<(), Problem> {
-    if value.trim().is_empty() || value.chars().count() > MAX_NAME_CHARS {
-        return Err(Problem::invalid(format!("{field} must be 1 to {MAX_NAME_CHARS} characters")));
-    }
-    Ok(())
-}
-
-/// The spec's `Username`: 1 to 32 ASCII letters, digits, `_`, and `-`.
-pub fn check_username(username: &str) -> Result<(), Problem> {
-    let allowed = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
-    if (1..=32).contains(&username.len()) && username.bytes().all(allowed) {
-        Ok(())
-    } else {
-        Err(Problem::invalid("username must be 1 to 32 letters, digits, '_', or '-'"))
-    }
-}
 
 #[derive(Serialize)]
 pub struct Session {
@@ -101,13 +55,7 @@ pub fn register(
     device: &DeviceRegistration,
     token: String,
 ) -> rusqlite::Result<Session> {
-    let id = new_id()?;
-    tx.execute(
-        "INSERT INTO devices (id, user_id, name, type, platform, token_hash, created_at, \
-         last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
-        params![id, user, device.name, device.kind, device.platform, token_hash(&token), now_ms()],
-    )?;
-    let device = devices::get(tx, id)?;
+    let device = devices::register(tx, user, device, &token_hash(&token))?;
     Ok(Session { token, user: me::user(tx, user)?, device })
 }
 

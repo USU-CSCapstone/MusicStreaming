@@ -1,6 +1,7 @@
-//! The caller's devices: `listDevices` (`requirements/users.md` §4). It is also the list Shift
-//! sends music to (`requirements/realtime.md` §1), so the account's realtime connections are
-//! sent it again whenever it changes.
+//! The caller's devices: the registration every login makes, and `listDevices`
+//! (`requirements/users.md` §4). That list is also the one Shift sends music to
+//! (`requirements/realtime.md` §1), so the account's realtime connections are sent it again
+//! whenever it changes.
 //!
 //! A device signed out by anything but its own `logout` keeps its row and token hash, so its
 //! next request is told why. It is not signed in, so it is not listed.
@@ -9,14 +10,15 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use rusqlite::{Connection, Row};
-use serde::Serialize;
+use rusqlite::{Connection, Row, Transaction, params};
+use serde::{Deserialize, Serialize};
 
 use super::authenticate::Caller;
+use super::me::check_name;
 use super::realtime::{Hub, ServerMessage};
 use super::sql::timestamp;
 use super::{Id, Problem};
-use crate::db::Database;
+use crate::db::{Database, new_id, now_ms};
 
 /// The spec's `Device`.
 #[derive(Serialize)]
@@ -40,6 +42,31 @@ pub struct Device {
 #[derive(Serialize)]
 pub struct DeviceList {
     items: Vec<Device>,
+}
+
+const DEVICE_TYPES: [&str; 4] = ["phone", "tablet", "desktop", "tv"];
+
+/// The spec's `DeviceRegistration`: how a logging-in device describes itself.
+#[derive(Deserialize)]
+pub struct DeviceRegistration {
+    name: String,
+    #[serde(rename = "type")]
+    kind: String,
+    platform: Option<String>,
+}
+
+impl DeviceRegistration {
+    /// Refuses an empty or overlong name or platform, or a type the spec does not list.
+    pub fn validate(&self) -> Result<(), Problem> {
+        if !DEVICE_TYPES.contains(&self.kind.as_str()) {
+            return Err(Problem::invalid("device.type must be phone, tablet, desktop, or tv"));
+        }
+        check_name("device.name", &self.name)?;
+        if let Some(platform) = &self.platform {
+            check_name("device.platform", platform)?;
+        }
+        Ok(())
+    }
 }
 
 const SELECT: &str = concat!(
@@ -66,6 +93,23 @@ fn device(row: &Row) -> rusqlite::Result<Device> {
 /// Device `id`.
 pub fn get(conn: &Connection, id: i64) -> rusqlite::Result<Device> {
     conn.prepare_cached(&format!("{SELECT} WHERE id = ?1"))?.query_row([id], device)
+}
+
+/// Adds `device` as `user`'s, signed in with the token whose hash is `token_hash`, and
+/// returns it.
+pub fn register(
+    tx: &Transaction,
+    user: i64,
+    device: &DeviceRegistration,
+    token_hash: &[u8; 32],
+) -> rusqlite::Result<Device> {
+    let id = new_id()?;
+    tx.execute(
+        "INSERT INTO devices (id, user_id, name, type, platform, token_hash, created_at, \
+         last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        params![id, user, device.name, device.kind, device.platform, token_hash, now_ms()],
+    )?;
+    get(tx, id)
 }
 
 /// `user`'s signed-in devices, most recently seen first, none of them `connected` yet.

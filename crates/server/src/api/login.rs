@@ -12,11 +12,10 @@ use axum::response::{IntoResponse, Response};
 use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 
-use super::devices;
+use super::devices::{self, DeviceRegistration};
 use super::extract::Json;
 use super::origin::Origin;
-use super::session::{self, DeviceRegistration};
-use super::{AppState, Code, Problem, password};
+use super::{AppState, Code, Problem, me, password, session};
 use crate::db::now_ms;
 
 #[derive(Deserialize)]
@@ -37,7 +36,7 @@ pub async fn login(
 ) -> Result<Response, Problem> {
     let LoginRequest { username, password, device } = request;
     // No account can have another name, and this keeps megabyte names out of the records.
-    session::check_username(&username)?;
+    me::check_username(&username)?;
     device.validate()?;
 
     let (attempt, account) = state
