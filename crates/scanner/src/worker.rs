@@ -10,8 +10,10 @@ use std::time::Duration;
 /// waits for it to finish.
 #[must_use = "dropping a worker stops its thread"]
 pub struct Worker {
-    /// The sender of the thread's [`Stop`], and the thread; `None` once it is stopped.
-    running: Option<(Sender<()>, JoinHandle<()>)>,
+    /// The sender of the thread's [`Stop`]; `None` once the thread is asked to stop.
+    stop: Option<Sender<()>>,
+    /// The thread; `None` once it is stopped.
+    thread: Option<JoinHandle<()>>,
 }
 
 /// How a worker's thread learns that it should stop: its worker drops the sender of a channel
@@ -41,7 +43,13 @@ impl Worker {
                 panicked();
             }
         })?;
-        Ok(Worker { running: Some((stop, thread)) })
+        Ok(Worker { stop: Some(stop), thread: Some(thread) })
+    }
+
+    /// Asks the thread to stop, without waiting for it, so that several workers can be asked
+    /// before any is waited for.
+    pub(crate) fn ask_to_stop(&mut self) {
+        self.stop = None;
     }
 
     /// Asks the thread to stop and waits for it to finish. While this thread is panicking it
@@ -49,10 +57,10 @@ impl Worker {
     /// blocked on what the unwind would have released; that thread is left to end alone. Does
     /// nothing once the thread is stopped.
     pub(crate) fn stop(&mut self) {
-        let Some((stop, thread)) = self.running.take() else {
+        self.ask_to_stop();
+        let Some(thread) = self.thread.take() else {
             return;
         };
-        drop(stop);
         if thread::panicking() {
             return;
         }

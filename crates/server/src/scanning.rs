@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::Context;
 use jewelcase_ffmpeg::Ffmpeg;
 use jewelcase_scanner::{
-    Analyzer, FsWatcher, Placeholders, Scanner, ScannerThread, Trigger, Worker, scan_every,
+    Analyzer, FsWatcher, Placeholders, Pool, Scanner, ScannerThread, Trigger, Worker, scan_every,
 };
 use tracing::{info, warn};
 
@@ -20,6 +20,8 @@ const FALLBACK_SCHEDULE: Duration = Duration::from_hours(24);
 /// Everything running for every library, until [`Scanning::stop`].
 pub struct Scanning {
     libraries: Vec<Library>,
+    /// The threads that run every library's analysis and placeholders.
+    background: Pool,
 }
 
 /// One library's scanner and everything running for it. Fields drop in the order declared, so
@@ -31,13 +33,12 @@ struct Library {
     watcher: Option<FsWatcher>,
     schedule: Option<Worker>,
     thread: ScannerThread,
-    analysis: Worker,
-    placeholders: Worker,
 }
 
 impl Scanning {
-    /// Starts a scanner, its triggers, and the background jobs for every library. Blocks, so
-    /// call it outside the async runtime. Fails if the store or a thread cannot be started.
+    /// Starts a scanner and its triggers for every library, and one pool for every library's
+    /// background jobs, sized from the host's cores. Blocks, so call it outside the async
+    /// runtime. Fails if the store or a thread cannot be started.
     pub fn start(db: &Arc<Database>, ffmpeg: &Ffmpeg) -> anyhow::Result<Scanning> {
         let store = Arc::new(SqliteStore::new(db.clone()).context("cannot initialise the store")?);
 
@@ -46,6 +47,7 @@ impl Scanning {
             warn!("no libraries configured; set JEWELCASE_MUSIC to create one on first start");
         }
         let mut running = Vec::with_capacity(libs.len());
+        let mut jobs = Vec::with_capacity(2 * libs.len());
         for lib in &libs {
             let config = lib.config();
             let fallback = lib.scan_interval_minutes.is_none().then_some(FALLBACK_SCHEDULE);
@@ -64,14 +66,13 @@ impl Scanning {
                 watcher: watcher.transpose()?,
                 schedule: schedule.transpose()?,
                 thread,
-                // One of each per library, since each remembers its library's failures.
-                analysis: Arc::new(Analyzer::new(ffmpeg.clone(), store.clone()))
-                    .start(config.id)?,
-                placeholders: Arc::new(Placeholders::new(ffmpeg.clone(), store.clone()))
-                    .start(config.id)?,
             });
+            // One of each per library, since each remembers its library's failures.
+            jobs.push(Arc::new(Analyzer::new(ffmpeg.clone(), store.clone())).job(config.id));
+            jobs.push(Arc::new(Placeholders::new(ffmpeg.clone(), store.clone())).job(config.id));
         }
-        Ok(Scanning { libraries: running })
+        let background = Pool::start(jobs, Pool::size_for_host())?;
+        Ok(Scanning { libraries: running, background })
     }
 
     /// Each library's scanner, for queuing scans from elsewhere, such as of what a plugin saved.
@@ -80,7 +81,7 @@ impl Scanning {
     }
 
     /// Stops everything, each once the work in hand is done: the triggers first, so nothing new
-    /// is queued. Blocks, so call it outside the async runtime.
+    /// is queued, and the background jobs last. Blocks, so call it outside the async runtime.
     pub fn stop(self) {
         for lib in self.libraries {
             // Dropped one by one, not whole, so the order they stop in reads here and does not
@@ -88,9 +89,8 @@ impl Scanning {
             drop(lib.watcher);
             drop(lib.schedule);
             drop(lib.thread);
-            drop(lib.analysis);
-            drop(lib.placeholders);
         }
+        drop(self.background);
         info!("background work stopped");
     }
 }

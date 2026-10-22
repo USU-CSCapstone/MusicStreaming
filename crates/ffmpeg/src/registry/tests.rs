@@ -119,45 +119,6 @@ fn a_decode_the_watchdog_kills_fails_as_stalled() {
     assert!(matches!(read, Err(Error::Stalled)), "{read:?}");
 }
 
-/// While two background children run, a third waits for a slot, and starts once one ends.
-#[test]
-fn a_third_child_waits_until_one_of_two_ends() {
-    let ffmpeg = lingering();
-    let info =
-        ProbeInfo { sample_rate: 8000, channels: 1, channel_layout: None, duration_secs: None };
-    let input = Path::new("/nonexistent/input");
-    let first = ffmpeg.decode_pcm(input, &info).unwrap();
-    let second = ffmpeg.decode_pcm(input, &info).unwrap();
-    let third = std::thread::spawn({
-        let (ffmpeg, info) = (ffmpeg.clone(), info.clone());
-        move || ffmpeg.decode_pcm(input, &info)
-    });
-    sleep(Duration::from_millis(300));
-    let two = registered(&ffmpeg.registry);
-    assert_eq!(two.len(), 2, "a third child started");
-    drop(first);
-    let started = || registered(&ffmpeg.registry).iter().any(|pid| !two.contains(pid));
-    wait_for("the third child to start", started);
-    drop((second, third.join().unwrap().unwrap()));
-}
-
-/// A child that cannot be spawned gives its slot back, so failures never fill the pool.
-#[test]
-fn a_failed_spawn_frees_its_slot() {
-    let missing = PathBuf::from("/nonexistent/ffprobe");
-    let ffmpeg = Ffmpeg::new(Config { ffmpeg: missing.clone(), ffprobe: missing });
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        for _ in 0..=MAX_CHILDREN {
-            sender.send(ffmpeg.probe(Path::new("/nonexistent/input"))).unwrap();
-        }
-    });
-    for _ in 0..=MAX_CHILDREN {
-        let probed = receiver.recv_timeout(Duration::from_secs(5)).expect("waited for a slot");
-        assert!(matches!(probed, Err(Error::Spawn { .. })), "{probed:?}");
-    }
-}
-
 /// A `sleep` child registered with a new registry that has no watchdog thread, and the flag
 /// the watchdog sets if it kills it. It ends by itself after 10 seconds, so a failed test
 /// leaves it behind for no longer.

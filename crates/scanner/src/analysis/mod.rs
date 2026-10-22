@@ -7,7 +7,6 @@
 
 pub mod waveform;
 
-use std::io;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,11 +15,11 @@ use ebur128::{EbuR128, Mode};
 use jewelcase_ffmpeg::{Ffmpeg, ProbeInfo};
 
 use crate::clock::now_ms;
-use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport, in_background};
+use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport};
 use crate::library::LibraryId;
+use crate::pool::Job;
 use crate::problems::{Problem, ProblemKind};
 use crate::store::{AnalysisStore, FileToDecode};
-use crate::worker::Worker;
 use waveform::{Waveform, WaveformBuilder};
 
 /// Bumped whenever any sink's output changes; tracks below it are reprocessed
@@ -68,7 +67,8 @@ impl AnalysisResult {
     }
 }
 
-/// Runs analysis for one library.
+/// Runs analysis for one library, as a job whose passes may run on several of the pool's
+/// threads at once.
 pub struct Analyzer {
     ffmpeg: Ffmpeg,
     store: Arc<dyn AnalysisStore>,
@@ -165,10 +165,10 @@ impl Analyzer {
         })
     }
 
-    /// Runs in the background, at low priority, until the worker is dropped, waiting [`IDLE`]
-    /// when idle or backing off. One track at a time, so a stop waits for one track at most.
-    pub fn start(self: Arc<Self>, library: LibraryId) -> io::Result<Worker> {
-        in_background("scanner-analysis", IDLE, move || self.run_once(library, 1))
+    /// The background job that analyzes `library` in the pool, waiting [`IDLE`] when idle or
+    /// backing off. One track a pass, so a stop waits for one track at most.
+    pub fn job(self: Arc<Self>, library: LibraryId) -> Job {
+        Job::new(library, IDLE, move || self.run_once(library, 1))
     }
 }
 

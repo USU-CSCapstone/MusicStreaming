@@ -132,7 +132,7 @@ pub fn a_root_going_away_pauses_without_writing<S: InspectStore + 'static>(make:
     assert_eq!(placeholders.run_once(lib.id, 10), report(1, 0, 0));
 }
 
-/// A file whose every probe is killed by a signal backs the worker off once, then is judged and
+/// A file whose every probe is killed by a signal backs the job off once, then is judged and
 /// recorded as a problem, so the track after it is still analyzed.
 pub fn a_file_that_always_fails_does_not_block_the_next<S: InspectStore + 'static>(
     make: Factory<S>,
@@ -235,7 +235,7 @@ pub fn a_cover_moved_away_waits_until_it_returns<S: InspectStore + 'static>(make
 }
 
 /// A track replaced by a pipe after the scan is judged without opening it, which would block
-/// the worker, and its shutdown, until something wrote to the pipe.
+/// the pool's thread, and its shutdown, until something wrote to the pipe.
 pub fn a_pipe_is_judged_without_blocking<S: InspectStore + 'static>(make: Factory<S>) {
     let (_tmp, store, lib, file) = album(make);
     fs::remove_file(&file).unwrap();

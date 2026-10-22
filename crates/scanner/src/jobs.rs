@@ -2,20 +2,20 @@
 //! (`design/scanning.md` §12):
 //!
 //! - **A verdict on the file**: a decoder's error on a file that opens, a symlink or something
-//!   other than a regular file refused, or a second failure in a row of a kind that may pass,
-//!   such as a stall. It is stored as an empty result, so the file is not decoded on every pass,
-//!   and recorded as a scan problem.
+//!   other than a regular file refused, or a second failure of the file of a kind that may
+//!   pass, such as a stall, with no success between. It is stored as an empty result, so the
+//!   file is not decoded on every pass, and recorded as a scan problem.
 //! - **A file that cannot be opened**, because it is gone, out of reach or not permitted: never
 //!   given a result. It is recorded as a problem and skipped for [`RETRY_AFTER`]. Once it
 //!   decodes, its `Unreadable` or `PermissionDenied` problem is cleared.
 //! - **Anything else**: an unavailable root, a decoder that cannot start, a first failure that
-//!   may pass, or a store error. The pass ends and the worker backs off, so an outage never
+//!   may pass, or a store error. The pass ends and the job backs off, so an outage never
 //!   strips results, and a failure of the store never counts against a file.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::confine::is_refused;
@@ -23,7 +23,6 @@ use crate::discover::check_root;
 use crate::library::LibraryId;
 use crate::problems::{self, Problem};
 use crate::store::{FileToDecode, ProblemLog, StoreError};
-use crate::worker::Worker;
 
 /// How long a file that cannot be opened is skipped before it is tried again.
 pub const RETRY_AFTER: Duration = Duration::from_hours(1);
@@ -38,7 +37,7 @@ pub struct RunReport {
     /// Files that could not be opened, left to try again later. They do not count towards a
     /// pass's limit.
     pub skipped: usize,
-    /// The pass ended early, and the worker should wait before the next.
+    /// The pass ended early, and the job should wait before its next.
     pub backed_off: bool,
 }
 
@@ -49,28 +48,11 @@ impl RunReport {
         RunReport { backed_off: true, ..RunReport::default() }
     }
 
-    /// Whether the worker should sleep before the next pass: it backed off, or decoded and
+    /// Whether the job should wait before its next pass: it backed off, or decoded and
     /// judged nothing.
     pub fn idle(&self) -> bool {
         self.backed_off || self.done + self.failed == 0
     }
-}
-
-/// Runs `pass` on a thread of its own named `name`, at low priority, until the worker is dropped,
-/// waiting `idle` after each pass that backed off or did nothing ([`RunReport::idle`]).
-pub(crate) fn in_background<F>(name: &str, idle: Duration, mut pass: F) -> io::Result<Worker>
-where
-    F: FnMut() -> RunReport + Send + 'static,
-{
-    Worker::spawn(name, move |stop| {
-        jewelcase_ffmpeg::lower_thread_priority();
-        loop {
-            let wait = if pass().idle() { idle } else { Duration::ZERO };
-            if stop.wait(wait) {
-                break;
-            }
-        }
-    })
 }
 
 /// How a decode failed.
@@ -114,38 +96,95 @@ enum Outcome {
     BackOff,
 }
 
-/// One job's memory of its failures, for one library. Kept in memory, so a restart tries every
-/// file afresh.
+/// One job's memory of its failures, and of the files its passes have in hand, for one library.
+/// Kept in memory, so a restart tries every file afresh.
 pub struct Retries {
     retry_after: Duration,
-    /// The file whose decode last failed in a way that may pass, until a decode succeeds or the
-    /// file is judged.
-    last_failed: Mutex<Option<PathBuf>>,
+    /// The files whose decode failed once in a way that may pass, until a decode of the file
+    /// succeeds or the file is judged.
+    struck: Mutex<HashSet<PathBuf>>,
     /// The files that could not be opened, each with when it may be tried again.
     waiting: Mutex<HashMap<PathBuf, Instant>>,
+    /// The files that passes running at once have taken, so that no two decode the same file
+    /// ([`Retries::take`]).
+    in_hand: Mutex<HashSet<PathBuf>>,
+}
+
+/// A file a pass has taken. Dropping it lets other passes take the file.
+struct Claim<'a> {
+    retries: &'a Retries,
+    path: PathBuf,
+}
+
+impl Drop for Claim<'_> {
+    /// Gives the file back.
+    fn drop(&mut self) {
+        self.retries.in_hand().remove(&self.path);
+    }
 }
 
 impl Retries {
     /// Skips a file that cannot be opened for `retry_after`.
     pub fn new(retry_after: Duration) -> Retries {
-        Retries { retry_after, last_failed: Mutex::new(None), waiting: Mutex::default() }
+        Retries {
+            retry_after,
+            struck: Mutex::default(),
+            waiting: Mutex::default(),
+            in_hand: Mutex::default(),
+        }
     }
 
-    /// How many files to fetch for a pass that decodes up to `limit`: room for the files still
-    /// waiting, and as many again found unopenable during the pass, so neither crowds out the
-    /// rest. Forgets the files whose wait is over.
-    fn fetch(&self, limit: usize) -> usize {
+    /// How many files to fetch for a pass that decodes up to `limit`, while `in_hand` files are
+    /// held by other passes: room for those, and for the files still waiting and as many again
+    /// found unopenable during the pass, so none of them crowds out the rest. Forgets the files
+    /// whose wait is over.
+    fn fetch(&self, limit: usize, in_hand: usize) -> usize {
         let mut waiting = self.waiting.lock().unwrap();
         let now = Instant::now();
         waiting.retain(|_, until| *until > now);
-        limit.saturating_add(waiting.len().saturating_mul(2))
+        limit.saturating_add(in_hand).saturating_add(waiting.len().saturating_mul(2))
+    }
+
+    /// The files passes have in hand. Its lock is held while the store is asked for files,
+    /// which may panic; the set is whole whatever panicked, so a poisoned lock is taken as it
+    /// is, and a [`Claim`] dropped while a thread unwinds never panics again.
+    fn in_hand(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
+        self.in_hand.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Fetches files with `next`, given how many to fetch, and takes those that are neither
+    /// waiting nor in another pass's hand, up to this pass's share of the fetch: what it is
+    /// fetched for beyond the files in hand. Returns each taken file with its key and its
+    /// [`Claim`]. The fetch and the taking hold the lock a [`Claim`] needs to give its file back,
+    /// and a pass gives a decoded file back only after its result is stored, so a fetch never
+    /// returns a file that another pass has decoded and not yet stored.
+    fn take<K>(
+        &self,
+        limit: usize,
+        next: impl FnOnce(usize) -> Result<Vec<(K, FileToDecode)>, StoreError>,
+    ) -> Result<Vec<(K, FileToDecode, Claim<'_>)>, StoreError> {
+        let mut in_hand = self.in_hand();
+        let fetch = self.fetch(limit, in_hand.len());
+        let share = fetch - in_hand.len();
+        let files = next(fetch)?;
+        // `take` stops the filter once the share is taken, so no file past it is put in hand.
+        let free = files
+            .into_iter()
+            .filter(|(_, file)| !self.waiting(file) && in_hand.insert(file.path.clone()))
+            .take(share);
+        let claim = |(key, file): (K, FileToDecode)| {
+            let path = file.path.clone();
+            (key, file, Claim { retries: self, path })
+        };
+        Ok(free.map(claim).collect())
     }
 
     /// One pass of a job: `next` fetches files from the store, given how many to fetch, and the
     /// pass decodes them in order with `decode` until `limit` are decoded or judged, skipping
-    /// those still waiting. `keep` stores what was made of a file, or `None` for a verdict's
-    /// empty result. A store error ends the pass, leaving the file in hand as it was, and is
-    /// returned for [`RunReport::store_failed`].
+    /// those still waiting and those that a pass running at the same time has in hand. `keep`
+    /// stores what was made of a file, or `None` for a verdict's empty result. A store error
+    /// ends the pass, leaving the file it was on as it was, and is returned for
+    /// [`RunReport::store_failed`].
     pub fn pass<K, T>(
         &self,
         store: &dyn ProblemLog,
@@ -156,12 +195,10 @@ impl Retries {
         keep: impl Fn(K, Option<T>) -> Result<(), StoreError>,
     ) -> Result<RunReport, StoreError> {
         let mut report = RunReport::default();
-        for (key, file) in next(self.fetch(limit))? {
+        // Each file's claim is dropped, giving the file back, once the loop is done with it.
+        for (key, file, _claim) in self.take(limit, next)? {
             if report.done + report.failed >= limit {
                 break;
-            }
-            if self.waiting(&file) {
-                continue;
             }
             match decode(&file) {
                 Ok(result) => {
@@ -200,7 +237,7 @@ impl Retries {
         file: &FileToDecode,
     ) -> Result<(), StoreError> {
         store.clear_unopened(library, &file.path)?;
-        *self.last_failed.lock().unwrap() = None;
+        self.struck.lock().unwrap().remove(&file.path);
         self.waiting.lock().unwrap().remove(&file.path);
         Ok(())
     }
@@ -241,12 +278,11 @@ impl Retries {
             Failure::Open(error) => error,
             Failure::Attempt(problem) => {
                 check_root(&file.root).ok()?;
-                let mut last = self.last_failed.lock().unwrap();
-                if last.as_ref() != Some(&file.path) {
-                    *last = Some(file.path.clone());
+                let mut struck = self.struck.lock().unwrap();
+                if struck.insert(file.path.clone()) {
                     return None;
                 }
-                *last = None;
+                struck.remove(&file.path);
                 return Some((Outcome::Verdict, problem));
             }
         };
@@ -261,159 +297,7 @@ impl Retries {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::fs;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+mod passes_at_once;
 
-    use super::*;
-    use crate::clock::now_ms;
-    use crate::problems::ProblemKind;
-    use crate::testing::BareStore;
-
-    /// A root holding the files `a` and `b`, and a store to record problems in.
-    fn setup() -> (tempfile::TempDir, BareStore, [FileToDecode; 2]) {
-        let tmp = tempfile::tempdir().unwrap();
-        let file = |name: &str| {
-            fs::write(tmp.path().join(name), b"x").unwrap();
-            FileToDecode { root: tmp.path().to_path_buf(), path: tmp.path().join(name) }
-        };
-        let files = [file("a"), file("b")];
-        (tmp, BareStore::default(), files)
-    }
-
-    /// A background job runs its next pass at once after a pass that did something, and waits
-    /// after one that found nothing to do.
-    #[test]
-    fn a_background_job_waits_only_when_idle() {
-        let long = Duration::from_secs(60);
-        let passes = Arc::new(AtomicUsize::new(0));
-        let counted = passes.clone();
-        let busy = RunReport { done: 1, ..RunReport::default() };
-        let worker = in_background("test-job", long, move || {
-            let pass = counted.fetch_add(1, Ordering::SeqCst);
-            if pass < 3 { busy.clone() } else { RunReport::default() }
-        })
-        .unwrap();
-        let deadline = Instant::now() + long / 4;
-        while passes.load(Ordering::SeqCst) < 4 {
-            assert!(Instant::now() < deadline, "{} passes", passes.load(Ordering::SeqCst));
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        std::thread::sleep(Duration::from_millis(200));
-        assert_eq!(passes.load(Ordering::SeqCst), 4, "an idle pass was not followed by a wait");
-        drop(worker);
-    }
-
-    /// A stall decoding `file`: a failure that may pass.
-    fn stall(file: &FileToDecode) -> Failure {
-        Failure::Attempt(Problem {
-            path: file.path.clone(),
-            kind: ProblemKind::Stalled,
-            detail: "stalled".into(),
-            seen_at: now_ms(),
-        })
-    }
-
-    #[test]
-    fn a_second_failure_in_a_row_is_a_verdict() {
-        let (_tmp, store, [a, b]) = setup();
-        let retries = Retries::new(RETRY_AFTER);
-        let lib = 1;
-        assert_eq!(retries.failed(&store, lib, &a, stall(&a)).unwrap(), Outcome::BackOff);
-        assert!(store.problems().is_empty());
-        assert_eq!(retries.failed(&store, lib, &a, stall(&a)).unwrap(), Outcome::Verdict);
-        assert_eq!(store.problems().len(), 1);
-        // Another file failing in between makes it a first failure again.
-        assert_eq!(retries.failed(&store, lib, &b, stall(&b)).unwrap(), Outcome::BackOff);
-        assert_eq!(retries.failed(&store, lib, &a, stall(&a)).unwrap(), Outcome::BackOff);
-    }
-
-    #[test]
-    fn a_success_resets_the_count() {
-        let (_tmp, store, [a, _]) = setup();
-        let retries = Retries::new(RETRY_AFTER);
-        let lib = 1;
-        assert_eq!(retries.failed(&store, lib, &a, stall(&a)).unwrap(), Outcome::BackOff);
-        retries.succeeded(&store, lib, &a).unwrap();
-        assert_eq!(retries.failed(&store, lib, &a, stall(&a)).unwrap(), Outcome::BackOff);
-        assert!(store.problems().is_empty());
-    }
-
-    #[test]
-    fn a_failure_under_an_unavailable_root_backs_off_unrecorded() {
-        let (tmp, store, [a, _]) = setup();
-        let retries = Retries::new(RETRY_AFTER);
-        let lib = 1;
-        fs::rename(tmp.path(), tmp.path().with_extension("away")).unwrap();
-        for _ in 0..3 {
-            let gone = Failure::Open(io::ErrorKind::NotFound.into());
-            assert_eq!(retries.failed(&store, lib, &a, gone).unwrap(), Outcome::BackOff);
-            assert_eq!(retries.failed(&store, lib, &a, stall(&a)).unwrap(), Outcome::BackOff);
-        }
-        assert!(store.problems().is_empty());
-        assert!(!retries.waiting(&a));
-        fs::rename(tmp.path().with_extension("away"), tmp.path()).unwrap();
-    }
-
-    #[test]
-    fn a_decoder_error_on_a_file_that_went_away_is_no_verdict() {
-        let (_tmp, store, [a, _]) = setup();
-        let retries = Retries::new(RETRY_AFTER);
-        let lib = 1;
-        fs::remove_file(&a.path).unwrap();
-        let rejected = jewelcase_ffmpeg::Error::Failed { status: Some(1), stderr: String::new() };
-        let failure = Failure::from_ffmpeg(&a.path, &rejected);
-        assert_eq!(retries.failed(&store, lib, &a, failure).unwrap(), Outcome::Skipped);
-        assert!(retries.waiting(&a));
-        assert_eq!(store.problems()[0].kind, ProblemKind::Unreadable);
-    }
-
-    #[test]
-    fn files_that_cannot_be_opened_do_not_count_towards_the_limit() {
-        let (tmp, store, [a, b]) = setup();
-        let retries = Retries::new(RETRY_AFTER);
-        let lib = 1;
-        let gone = FileToDecode { root: tmp.path().to_path_buf(), path: tmp.path().join("gone") };
-        let queue = vec![(1, gone.clone()), (2, a.clone()), (3, b)];
-        fs::remove_file(&a.path).unwrap();
-        let decode = |file: &FileToDecode| file.open().map_err(Failure::Open);
-        let keep = |_, _| Ok(());
-        let report = retries.pass(&store, lib, 1, |_| Ok(queue), decode, keep).unwrap();
-        assert_eq!(report, RunReport { done: 1, skipped: 2, ..RunReport::default() });
-        // Two files wait, with room for as many more found unopenable.
-        assert_eq!(retries.fetch(1), 5);
-        let queue = vec![(1, gone), (2, a)];
-        let report = retries.pass(&store, lib, 1, |_| Ok(queue), decode, keep).unwrap();
-        assert_eq!(report, RunReport::default());
-    }
-
-    #[test]
-    fn a_file_whose_wait_is_over_is_forgotten() {
-        let (_tmp, store, [a, _]) = setup();
-        let retries = Retries::new(Duration::ZERO);
-        let lib = 1;
-        fs::remove_file(&a.path).unwrap();
-        let gone = Failure::Open(io::ErrorKind::NotFound.into());
-        assert_eq!(retries.failed(&store, lib, &a, gone).unwrap(), Outcome::Skipped);
-        assert_eq!(retries.fetch(1), 1);
-        assert!(retries.waiting.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn a_pass_that_backed_off_is_idle_whatever_it_did() {
-        assert!(RunReport { done: 5, backed_off: true, ..RunReport::default() }.idle());
-        assert!(RunReport { skipped: 3, ..RunReport::default() }.idle(), "only skipped");
-        assert!(!RunReport { done: 1, skipped: 3, ..RunReport::default() }.idle());
-        assert!(RunReport::default().idle());
-    }
-
-    #[test]
-    fn a_decoder_killed_by_a_signal_may_pass() {
-        let path = Path::new("/music/a.flac");
-        let killed = jewelcase_ffmpeg::Error::Killed { signal: 9, stderr: String::new() };
-        assert!(matches!(Failure::from_ffmpeg(path, &killed), Failure::Attempt(_)));
-        let rejected = jewelcase_ffmpeg::Error::Failed { status: Some(1), stderr: String::new() };
-        assert!(matches!(Failure::from_ffmpeg(path, &rejected), Failure::Content(_)));
-    }
-}
+#[cfg(test)]
+mod tests;

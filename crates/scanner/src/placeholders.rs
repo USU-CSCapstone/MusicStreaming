@@ -5,17 +5,16 @@
 //! Filled in the background after a scan finds an image, the same way analysis follows it, and
 //! at the same low priority.
 
-use std::io;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use jewelcase_ffmpeg::Ffmpeg;
 
-use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport, in_background};
+use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport};
 use crate::library::LibraryId;
+use crate::pool::Job;
 use crate::store::{FileToDecode, PlaceholderStore};
-use crate::worker::Worker;
 
 /// ThumbHash encodes at most 100 pixels a side, and gains nothing from more.
 const MAX_SIDE: u32 = 100;
@@ -67,9 +66,9 @@ impl Placeholders {
         pass.unwrap_or_else(RunReport::store_failed)
     }
 
-    /// Runs in the background, at low priority, until the worker is dropped, waiting [`IDLE`]
+    /// The background job that fills `library`'s placeholders in the pool, waiting [`IDLE`]
     /// when idle or backing off.
-    pub fn start(self: Arc<Self>, library: LibraryId) -> io::Result<Worker> {
-        in_background("scanner-placeholders", IDLE, move || self.run_once(library, 32))
+    pub fn job(self: Arc<Self>, library: LibraryId) -> Job {
+        Job::new(library, IDLE, move || self.run_once(library, 32))
     }
 }

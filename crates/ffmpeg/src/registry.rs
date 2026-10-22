@@ -1,10 +1,11 @@
-//! The process pool: every background ffmpeg child, the slots that bound how many run at once,
-//! and the watchdog that kills those that stall.
+//! The process pool: every background ffmpeg child, and the watchdog that kills those that
+//! stall. The scanner's pool bounds how many run at once: each of its threads runs one child at
+//! a time.
 
 use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rustix::process::{Pid, Signal, kill_process};
@@ -17,10 +18,6 @@ pub(crate) const STALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// How often the watchdog checks for stalls.
 const CHECK_EVERY: Duration = Duration::from_secs(1);
 
-/// The most background children that run at once, across every library that shares the pool.
-/// Each holds a decode's memory, which for a 64-megapixel picture is about 400 MB.
-const MAX_CHILDREN: usize = 2;
-
 #[derive(Default)]
 struct Entry {
     /// How long the child has gone without progress, counted as [`Registry::reap_stalled`] says.
@@ -32,27 +29,10 @@ struct Entry {
     stalled: Arc<AtomicBool>,
 }
 
-/// Tracks every live background ffmpeg child so the watchdog can kill stalls, and bounds how
-/// many run at once.
+/// Tracks every live background ffmpeg child so the watchdog can kill stalls.
 #[derive(Default)]
 pub(crate) struct Registry {
     children: Mutex<HashMap<Pid, Entry>>,
-    /// How many [`Slot`]s are taken.
-    taken: Mutex<usize>,
-    /// Signalled when a slot is freed.
-    freed: Condvar,
-}
-
-/// One of the pool's [`MAX_CHILDREN`] places, held by a [`crate::pooled::Pooled`] child. Dropping
-/// it frees the place.
-pub(crate) struct Slot(Arc<Registry>);
-
-impl Drop for Slot {
-    /// Frees the place and wakes one caller waiting for it.
-    fn drop(&mut self) {
-        *self.0.taken.lock().unwrap() -= 1;
-        self.0.freed.notify_one();
-    }
 }
 
 impl Registry {
@@ -75,14 +55,6 @@ impl Registry {
             })
             .expect("spawn ffmpeg watchdog");
         registry
-    }
-
-    /// Wait until fewer than [`MAX_CHILDREN`] slots are taken, then take one.
-    pub(crate) fn slot(self: &Arc<Self>) -> Slot {
-        let taken = self.taken.lock().unwrap();
-        let mut taken = self.freed.wait_while(taken, |taken| *taken >= MAX_CHILDREN).unwrap();
-        *taken += 1;
-        Slot(self.clone())
     }
 
     /// Add the child `pid` to the pool. Returns the flag the watchdog sets if it kills the child

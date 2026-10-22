@@ -6,9 +6,9 @@
 //! `-y`, always `-nostdin`, and the input always opened through `input()`.
 //!
 //! Background work (analysis and placeholders) runs through [`Ffmpeg`], whose pool kills a child
-//! that stalls. Interactive work, which a listener waits on, never joins that pool, so it never
-//! waits behind analysis for a slot: [`Config`] builds its commands, and the caller spawns them
-//! under its own bound and timeout.
+//! that stalls; the scanner's threads bound how many run at once. Interactive work, which a
+//! listener waits on, never joins that pool: [`Config`] builds its commands, and the caller spawns
+//! them under its own bound and timeout.
 //!
 //! The API is synchronous. Callers run it from blocking pools; decoding is
 //! stream I/O and the analysis that consumes it is CPU work, neither of which
@@ -74,8 +74,8 @@ pub struct Capabilities {
 }
 
 /// Handle to the ffmpeg installation and the pool of background children, which a watchdog
-/// thread checks for stalls. Clones share the pool, so one handle bounds background ffmpeg
-/// across every library that uses it.
+/// thread checks for stalls. Clones share the pool. Each call runs one child, so its callers
+/// bound how many run at once: the scanner's pool runs one per thread.
 #[derive(Clone)]
 pub struct Ffmpeg {
     config: Arc<Config>,
@@ -144,21 +144,20 @@ impl Ffmpeg {
         Ok(Capabilities { version, missing })
     }
 
-    /// Read stream properties needed to interpret a raw PCM decode. Waits while the pool is full.
+    /// Read stream properties needed to interpret a raw PCM decode.
     pub fn probe(&self, path: &Path) -> Result<ProbeInfo, Error> {
         probe::probe(&self.config, &self.registry, path)
     }
 
     /// Start decoding `path` to interleaved 32-bit float PCM in the sample rate
-    /// and channel layout `info` reports, which hold for the whole stream. Waits while the pool
-    /// is full, and holds its place until the stream is dropped.
+    /// and channel layout `info` reports, which hold for the whole stream. Its child runs until
+    /// the stream ends or is dropped.
     pub fn decode_pcm(&self, path: &Path, info: &ProbeInfo) -> Result<PcmStream, Error> {
         decode::decode_pcm(&self.config, &self.registry, path, info)
     }
 
     /// Decode the image at `path`, or the picture attached to an audio file, scaled to fit
-    /// `max_side` pixels. For small previews: the whole image is held in memory. Waits while the
-    /// pool is full.
+    /// `max_side` pixels. For small previews: the whole image is held in memory.
     pub fn decode_image(&self, path: &Path, max_side: u32) -> Result<Rgba, Error> {
         image::decode_image(&self.config, &self.registry, path, max_side)
     }
