@@ -8,11 +8,12 @@ use rusqlite::types::Type;
 use rusqlite::{Result, Row};
 use serde::{Deserialize, Serialize};
 
+use crate::db::Json;
 use crate::db::store::roots::{Roots, join, relative};
 
 /// A scope as a scan row keeps it: its root by id, and its folder relative to that root.
 #[derive(Serialize, Deserialize)]
-struct StoredScope {
+pub struct StoredScope {
     root: i64,
     path: String,
     depth: Depth,
@@ -21,7 +22,7 @@ struct StoredScope {
 /// `scopes` as a scan row keeps them, in JSON. Fails when a scope's root is not one of `lib`'s
 /// active roots, or its folder is not UTF-8 text under that root: better no record of a scan than
 /// one that resumes as a scan of something else.
-pub fn stored_scopes(roots: &Roots, lib: i64, scopes: &[Scope]) -> Result<String> {
+pub fn stored_scopes(roots: &Roots, lib: i64, scopes: &[Scope]) -> Result<Json<Vec<StoredScope>>> {
     let stored = scopes.iter().map(|scope| {
         let root =
             roots.root_by_path(lib, &scope.root).ok_or("a scope's root is not the library's")?;
@@ -29,24 +30,21 @@ pub fn stored_scopes(roots: &Roots, lib: i64, scopes: &[Scope]) -> Result<String
         let path = path.ok_or("a scope's folder is not text under its root")?;
         Ok(StoredScope { root, path: path.to_owned(), depth: scope.depth })
     });
-    let stored = stored
-        .collect::<Result<Vec<_>, &str>>()
-        .map_err(|why| ToSqlConversionFailure(why.into()))?;
-    serde_json::to_string(&stored).map_err(|error| ToSqlConversionFailure(Box::new(error)))
+    let stored = stored.collect::<Result<_, &str>>();
+    stored.map(Json).map_err(|why| ToSqlConversionFailure(why.into()))
 }
 
 /// The scopes kept in column `index` of row `r`, with their roots among `lib`'s active `roots`.
 /// A scope whose root is not one of them cannot be read.
 pub fn scopes(r: &Row, index: usize, roots: &Roots, lib: i64) -> Result<Vec<Scope>> {
-    let unreadable = |why| FromSqlConversionFailure(index, Type::Text, why);
-    let stored: Vec<StoredScope> = serde_json::from_str(&r.get::<_, String>(index)?)
-        .map_err(|error| unreadable(Box::new(error)))?;
+    let Json(stored): Json<Vec<StoredScope>> = r.get(index)?;
     stored
         .into_iter()
         .map(|scope| {
-            let root = roots
-                .root(lib, scope.root)
-                .ok_or_else(|| unreadable("a scope's root is no longer the library's".into()))?;
+            let root = roots.root(lib, scope.root).ok_or_else(|| {
+                let why = "a scope's root is no longer the library's";
+                FromSqlConversionFailure(index, Type::Text, why.into())
+            })?;
             Ok(Scope { path: join(&root, &scope.path), root, depth: scope.depth })
         })
         .collect()

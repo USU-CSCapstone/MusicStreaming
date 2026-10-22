@@ -9,7 +9,8 @@ use serde::Serialize;
 
 use crate::api::Id;
 use crate::api::refs::{Credit, ImageRef, TagRef, artists_json, genres_json, placeholder};
-use crate::api::sql::{Json, timestamp};
+use crate::api::sql::timestamp;
+use crate::db::Json;
 
 /// The spec's `TrackSummary`, without `personal` until accounts exist. A full `Track` has the
 /// same fields with more `audio`, so the audio type is a parameter.
@@ -165,9 +166,8 @@ pub fn track(conn: &Connection, library: i64, track: i64) -> rusqlite::Result<Op
                 file_size_bytes: row.get("file_size")?,
             };
             // `isrc`, then every other identifier tag as read (`requirements/tracks.md` §6).
-            // The schema checks that identifiers is a JSON object.
-            let mut identifiers: serde_json::Map<String, serde_json::Value> =
-                serde_json::from_str(&row.get::<_, String>("identifiers")?).unwrap_or_default();
+            let Json(mut identifiers) =
+                row.get::<_, Json<serde_json::Map<String, serde_json::Value>>>("identifiers")?;
             identifiers.insert("isrc".to_owned(), row.get::<_, Option<String>>("isrc")?.into());
             Ok(Track {
                 summary: summary(row, audio)?,

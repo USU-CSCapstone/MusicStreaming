@@ -10,12 +10,11 @@ use jewelcase_scanner::*;
 use lofty::tag::ItemKey;
 use rusqlite::{OptionalExtension, Result};
 
-use super::Database;
 use super::libraries;
 use super::store::SqliteStore;
-use super::store::names::parse;
 use super::testing::Image;
 use super::waveform;
+use super::{Database, Text};
 
 /// The store [`library_store`] makes for the library with its one root at `root`.
 fn make(root: &Path) -> SqliteStore {
@@ -189,7 +188,7 @@ impl InspectStore for SqliteStore {
         stmt.query_map([lib], |r| {
             Ok(Problem {
                 path: roots[&r.get::<_, i64>(0)?].join(r.get::<_, String>(1)?),
-                kind: parse(r, 2)?,
+                kind: r.get::<_, Text<_>>(2)?.0,
                 detail: r.get(3)?,
                 seen_at: r.get(4)?,
             })

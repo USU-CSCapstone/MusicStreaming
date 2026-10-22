@@ -27,7 +27,7 @@ use rusqlite::{Connection, OptionalExtension};
 use super::realtime::Revoked;
 use super::session::{COOKIE, token_hash};
 use super::{AppState, Code, Id, Problem};
-use crate::db::now_ms;
+use crate::db::{Text, now_ms};
 
 /// The header a cookie-authenticated write must carry.
 const CLIENT: &str = "x-jewelcase-client";
@@ -183,7 +183,7 @@ fn device(
             caller: Caller { device: row.get(0)?, user: row.get(1)?, admin: row.get(3)? },
             last_seen_at: row.get(2)?,
             reaches_library: row.get(4)?,
-            revoked: row.get(5)?,
+            revoked: row.get::<_, Option<Text<_>>>(5)?.map(|Text(reason)| reason),
         })
     })
     .optional()

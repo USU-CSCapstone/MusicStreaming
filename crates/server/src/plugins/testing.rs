@@ -116,10 +116,11 @@ pub async fn enable_ungranted(db: &Database, id: &'static str) {
     .unwrap();
 }
 
-/// Connects `user` to `id`, which must be installed, with `settings` at `at`, as saving them
-/// does once the plugin accepts them. Only a running plugin can accept them, and the tests'
-/// plugins cannot reach the services they check against.
+/// Connects `user` to `id`, which must be installed, with `settings`, a JSON object, at `at`, as
+/// saving them does once the plugin accepts them. Only a running plugin can accept them, and the
+/// tests' plugins cannot reach the services they check against.
 pub async fn connect(db: &Database, id: &'static str, user: i64, settings: Value, at: i64) {
-    let connected = db.write(move |tx| personal::connect(tx, id, user, &settings.to_string(), at));
+    let Value::Object(settings) = settings else { panic!("settings are a JSON object") };
+    let connected = db.write(move |tx| personal::connect(tx, id, user, &settings, at));
     assert!(connected.await.unwrap(), "{id} is installed");
 }

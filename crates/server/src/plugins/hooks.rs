@@ -32,7 +32,7 @@ mod searches;
 
 use super::run::RunFor;
 use super::{Plugins, grants};
-use crate::db::now_ms;
+use crate::db::{Text, now_ms};
 
 /// How often the dispatcher looks for hooks that are due.
 const POLL: Duration = Duration::from_secs(5);
@@ -202,7 +202,7 @@ fn record(
     summary: &str,
     now: i64,
 ) -> rusqlite::Result<()> {
-    let (plugin, library, hook, user) = (&due.plugin, due.library, due.hook.name(), due.user);
+    let (plugin, library, hook, user) = (&due.plugin, due.library, Text(due.hook), due.user);
     let (failures, outages, outage_since) = match ran {
         Ran::Handled => {
             conn.execute(
@@ -244,7 +244,13 @@ fn record(
              WHERE plugin_id = ?1 AND library_id = ?2",
             params![plugin, library, stopped],
         )?;
-        tracing::warn!(plugin, library, hook, reason = stopped, "disabled a plugin");
+        tracing::warn!(
+            plugin,
+            library,
+            hook = due.hook.name(),
+            reason = stopped,
+            "disabled a plugin"
+        );
     }
     Ok(())
 }

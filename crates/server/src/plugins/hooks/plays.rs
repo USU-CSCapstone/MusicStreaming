@@ -6,10 +6,12 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::super::library::{TRACK_COLUMNS, track};
 use super::BATCH;
+use crate::db::Text;
+use crate::db::plays::End;
 
 /// The next batch of plays `user` ended in `library` after `position`, since they connected
 /// `plugin`: the position after it, and the plays. One of a track since removed from the
-/// library is passed over.
+/// library is passed over. A stored end the server does not know is an error.
 pub fn plays(
     conn: &Connection,
     plugin: &str,
@@ -35,24 +37,32 @@ pub fn plays(
     let Some(next) = last else { return Ok((position, Vec::new())) };
     let plays = conn
         .prepare_cached(&format!(
-            "{TRACK_COLUMNS}, p.started_at, p.listen_time_ms, p.ended FROM play_events e \
+            "SELECT {}, p.started_at, p.listen_time_ms, p.ended FROM play_events e \
              JOIN plays p ON p.user_id = e.user_id AND p.id = e.play_id \
              JOIN tracks t ON t.id = p.track_id JOIN albums al ON al.id = t.album_id \
-             WHERE {after} AND e.seq <= ?5 ORDER BY e.seq"
+             WHERE {after} AND e.seq <= ?5 ORDER BY e.seq",
+            TRACK_COLUMNS.join(", ")
         ))?
         .query_map(params![library, user, position, connected_at, next], |row| {
-            let end = match row.get_ref(15)?.as_str()? {
-                "finished" => PlayEnd::Finished,
-                "skipped" => PlayEnd::Skipped,
-                _ => PlayEnd::Stopped,
-            };
+            let Text(end) = row.get::<_, Text<End>>(15)?;
             Ok(Play {
                 track: track(row)?,
                 started_at_ms: row.get::<_, i64>(13)? as u64,
                 listen_time_ms: row.get::<_, i64>(14)? as u64,
-                end,
+                end: end.into(),
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok((next, plays))
+}
+
+impl From<End> for PlayEnd {
+    /// The end a plugin is told of: the one the play was reported with.
+    fn from(end: End) -> PlayEnd {
+        match end {
+            End::Finished => PlayEnd::Finished,
+            End::Skipped => PlayEnd::Skipped,
+            End::Stopped => PlayEnd::Stopped,
+        }
+    }
 }

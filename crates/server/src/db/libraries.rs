@@ -4,11 +4,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use jewelcase_scanner::{FileToDecode, LibraryConfig, without_links};
-use rusqlite::Error::FromSqlConversionFailure;
-use rusqlite::types::Type;
 use rusqlite::{Connection, Result, params};
 
-use super::now_ms;
+use super::{Json, now_ms};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Root {
@@ -37,15 +35,18 @@ impl LibraryRow {
     }
 }
 
+/// Every library with its active roots, oldest first. Exclude patterns that cannot be read are
+/// an error.
 pub fn all(conn: &Connection) -> Result<Vec<LibraryRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, excludes, watch, scan_interval_minutes FROM libraries ORDER BY created_at, id",
     )?;
+    // Unreadable patterns fail loudly: read as none, they would scan what the admin excluded.
     let rows = stmt.query_map([], |r| {
         Ok((
             r.get::<_, i64>(0)?,
             r.get::<_, String>(1)?,
-            r.get::<_, String>(2)?,
+            r.get::<_, Json<Vec<String>>>(2)?.0,
             r.get::<_, i64>(3)? != 0,
             r.get::<_, Option<i64>>(4)?,
         ))
@@ -53,9 +54,6 @@ pub fn all(conn: &Connection) -> Result<Vec<LibraryRow>> {
     let mut out = Vec::new();
     for row in rows {
         let (id, name, excludes, watch, interval) = row?;
-        // Unreadable patterns fail loudly: read as none, they would scan what the admin excluded.
-        let excludes: Vec<String> = serde_json::from_str(&excludes)
-            .map_err(|error| FromSqlConversionFailure(2, Type::Text, Box::new(error)))?;
         out.push(LibraryRow {
             id,
             name,
@@ -137,7 +135,7 @@ pub fn create(
     let id = conn.query_row(
         "INSERT INTO libraries (id, name, excludes, created_at) \
          VALUES (coalesce(?1, random() & 0x7FFFFFFFFFFFFFFF), ?2, ?3, ?4) RETURNING id",
-        params![id, name, serde_json::to_string(excludes).unwrap(), now_ms()],
+        params![id, name, Json(excludes), now_ms()],
         |r| r.get(0),
     )?;
     for root in roots {

@@ -53,6 +53,9 @@ async fn gets_albums_and_artists_by_id_with_what_they_have() {
     let (_temp, db) = database().await;
     db.write(|tx| {
         Image::new(1, 1, "Signal/cover.png").insert(tx)?;
+        Artist::new(302, 1, "Silent").insert(tx)?;
+        Artist::new(303, 1, "Guest").insert(tx)?;
+        track_artist(tx, 1, 12, 0, 303, "Guest")?;
         tx.execute_batch(
             "UPDATE albums SET image_id = 1 WHERE id = 101;
              UPDATE artists SET biography = 'From the coast.' WHERE id = 301;",
@@ -66,9 +69,10 @@ async fn gets_albums_and_artists_by_id_with_what_they_have() {
     assert!(albums[0].has_artwork);
     assert!(!library.albums(None, 10).await.unwrap().is_empty());
 
-    let artists = library.get_artists(vec![401, 999, 301]).await.unwrap();
-    assert_eq!(ids(&artists, |a| a.id), [301], "not another library's");
-    assert_eq!((artists[0].has_image, artists[0].has_biography), (false, true));
+    let artists = library.get_artists(vec![401, 999, 302, 303, 301]).await.unwrap();
+    // One credited only on a track has music; another library's and one with none are left out.
+    assert_eq!(ids(&artists, |a| a.id), [303, 301]);
+    assert_eq!((artists[1].has_image, artists[1].has_biography), (false, true));
 }
 
 #[tokio::test]

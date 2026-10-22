@@ -8,9 +8,11 @@ use serde_json::json;
 
 use super::super::MAX_FAILURES;
 use super::super::playing::FRESH_MS;
+use super::super::plays::plays;
 use super::{
     HANDLED, HOUR, connected, deliver, due_for, one, plan, play, setup, start, tracks_by_user,
 };
+use crate::db::DbError;
 use crate::plugins::personal::disconnect;
 use crate::plugins::testing::{connect, install, manifest};
 
@@ -87,6 +89,30 @@ async fn one_users_failures_never_disable_the_plugin() {
     }
     assert!(deliver(&db, now - 1, HANDLED).await.is_empty(), "retried hourly");
     assert!(matches!(one(deliver(&db, now, HANDLED).await, 7), Event::Played(_)));
+}
+
+/// A stored end the server does not know cannot be read, rather than reaching the plugin as some
+/// other end.
+#[tokio::test]
+async fn an_unknown_stored_end_is_an_error() {
+    let (_temp, db, plugins) = setup().await;
+    connected(&plugins, &db, &[ListeningActivity, Played]).await;
+    play(&db, "a", 7, 11, 200, "finished").await;
+    db.write(|tx| {
+        tx.execute_batch(
+            "PRAGMA ignore_check_constraints = ON;
+             UPDATE plays SET ended = 'paused';
+             PRAGMA ignore_check_constraints = OFF;",
+        )
+    })
+    .await
+    .unwrap();
+    let read = db.read(|conn| plays(conn, "plugin", 1, 7, 0)).await;
+    assert!(
+        matches!(read, Err(DbError::Sqlite(rusqlite::Error::FromSqlConversionFailure(15, ..)))),
+        "{:?}",
+        read.map(|(next, plays)| (next, plays.len()))
+    );
 }
 
 #[tokio::test]

@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 use jewelcase_plugins::Permission;
 use rusqlite::{Result, Transaction, params};
 
+use super::Text;
+
 mod catalog;
 #[cfg(test)]
 mod tests;
@@ -180,6 +182,6 @@ fn forgets_delivered(tx: &Transaction<'_>, _: i64, _: &mut i64) -> Result<bool> 
              AND c.user_id = e.user_id AND c.position >= e.seq) \
          LIMIT ?2)",
         )?
-        .execute(params![Permission::Searched.name(), CHUNK as i64])?;
+        .execute(params![Text(Permission::Searched), CHUNK as i64])?;
     Ok(deleted < CHUNK)
 }

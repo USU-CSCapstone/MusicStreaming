@@ -23,9 +23,6 @@ use axum::http::uri::Authority;
 use axum::http::{HeaderMap, header};
 use axum::response::Response;
 use rusqlite::OptionalExtension;
-use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ValueRef};
-use serde::de::IntoDeserializer;
-use serde::de::value::StrDeserializer;
 use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, interval_at, timeout};
 
@@ -98,7 +95,7 @@ pub enum ServerMessage {
 }
 
 /// Why a device was signed out: the spec's `reason` in `sessionRevoked` and in a
-/// `session_revoked` Problem.
+/// `session_revoked` Problem, stored by the same name in `devices.revoked_reason`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Revoked {
@@ -106,14 +103,6 @@ pub enum Revoked {
     CredentialsChanged,
     /// Signed out: the device removes its downloads.
     LoggedOut,
-}
-
-/// Read from `devices.revoked_reason`, which holds the names it is sent with.
-impl FromSql for Revoked {
-    fn column_result(value: ValueRef) -> FromSqlResult<Revoked> {
-        let name: StrDeserializer<serde::de::value::Error> = value.as_str()?.into_deserializer();
-        Revoked::deserialize(name).map_err(|error| FromSqlError::Other(Box::new(error)))
-    }
 }
 
 /// `openRealtime`: upgrades to a WebSocket for the calling device.

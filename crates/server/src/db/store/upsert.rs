@@ -7,6 +7,7 @@ use rusqlite::{Result, Transaction, params};
 
 use super::entities::{find_or_create_album, find_or_create_artist, find_or_create_tag};
 use super::roots::Roots;
+use crate::db::Json;
 use crate::db::catalog::Touched;
 use crate::db::feed::{self, Entity, Op};
 use row::write_row;
@@ -147,9 +148,7 @@ fn replace_lyrics(tx: &Transaction<'_>, lib: i64, id: i64, lyrics: Option<&Lyric
     if let Some(lyrics) = lyrics {
         let (plain, synced) = match lyrics {
             Lyrics::Plain(text) => (Some(text), None),
-            Lyrics::Synced(lines) => {
-                (None, Some(serde_json::to_string(lines).expect("timed lines serialize")))
-            }
+            Lyrics::Synced(lines) => (None, Some(Json(lines))),
         };
         tx.execute(
             "INSERT INTO track_lyrics (library_id, track_id, plain, synced) VALUES (?1, ?2, ?3, ?4)",

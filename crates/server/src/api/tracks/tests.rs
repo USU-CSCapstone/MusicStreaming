@@ -176,6 +176,17 @@ async fn summaries_and_full_tracks() {
     assert_eq!(untagged["sortKeys"], json!({ "title": "untitled", "artist": "", "album": "" }));
 }
 
+/// Identifiers that cannot be read are a server error rather than none. SQLite takes a number
+/// too large for serde as JSON.
+#[tokio::test]
+async fn identifiers_that_cannot_be_read_are_an_error() {
+    let (_temp, db, app) = catalog::app().await;
+    let unreadable = "UPDATE tracks SET identifiers = '{\"musicbrainz_recordingid\": 1e400}'";
+    db.write(move |tx| tx.execute(unreadable, [])).await.unwrap();
+    let (status, problem) = json(&app, "/api/v1/libraries/1/tracks/1001").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{problem}");
+}
+
 #[tokio::test]
 async fn images_carry_their_placeholders() {
     let (_temp, db, app) = catalog::app().await;

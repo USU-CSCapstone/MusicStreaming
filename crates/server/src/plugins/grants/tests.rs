@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use super::super::Plugins;
 use super::super::testing::{database, install, manifest, plugins};
 use super::granted;
-use crate::db::Database;
-use crate::db::testing::library;
+use crate::db::testing::{library, stored};
+use crate::db::{Database, Text};
 
 /// A manifest for `plugin` that asks for each of `permissions`, the network to any host and a
 /// schedule of an hour.
@@ -150,4 +150,13 @@ async fn a_reinstall_keeps_a_grant_only_for_the_same_request() {
     changed["permissions"][2]["reason"] = json!("To read your tags.");
     reinstall(&db, &plugins, changed).await;
     assert_eq!(held(&db, 1).await, ["libraryAdd"], "any host, more often, or for another reason");
+}
+
+/// Each permission is stored by its name in manifests and the API, which the shared manifest
+/// cases hold to.
+#[test]
+fn every_permission_is_stored_by_its_manifest_name() {
+    for permission in Permission::ALL {
+        assert_eq!(stored(Text(permission)), permission.name());
+    }
 }

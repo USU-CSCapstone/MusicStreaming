@@ -9,19 +9,22 @@ use serde_json::{Map, Value};
 
 use super::run::RunFor;
 use super::{PluginError, Plugins, grants};
+use crate::db::Json;
 
 /// The level of every library.
 pub const SERVER: i64 = 0;
 
-/// The values stored at `level`: [`SERVER`] or a library's ID.
+/// The values stored at `level`: [`SERVER`] or a library's ID. None are stored until an admin
+/// saves some; stored values that cannot be read are an error, so a plugin never runs without
+/// what the admin set.
 pub fn level(conn: &Connection, id: &str, level: i64) -> rusqlite::Result<Map<String, Value>> {
-    let json: Option<String> = conn
+    let json: Option<Json<Map<String, Value>>> = conn
         .prepare_cached(
             "SELECT settings FROM plugin_settings WHERE plugin_id = ?1 AND library_id = ?2",
         )?
         .query_row(params![id, level], |row| row.get(0))
         .optional()?;
-    Ok(json.and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default())
+    Ok(json.map(|Json(values)| values).unwrap_or_default())
 }
 
 /// The values set for `library`: its own over the server-wide ones. [`SERVER`] has only the
@@ -54,7 +57,7 @@ pub fn store(
     conn.execute(
         "INSERT INTO plugin_settings (plugin_id, library_id, settings) VALUES (?1, ?2, ?3) \
          ON CONFLICT (plugin_id, library_id) DO UPDATE SET settings = excluded.settings",
-        params![id, level, Value::Object(values.clone()).to_string()],
+        params![id, level, Json(values)],
     )
     .map(drop)
 }
@@ -88,7 +91,8 @@ impl Plugins {
     /// must be of the kinds and among the choices the manifest declares, leave no required
     /// setting without a value, and pass the plugin's own check, run with them, so a wrong key
     /// is caught as it is entered rather than at three in the morning (§6). Only then are they
-    /// stored.
+    /// stored. Stored values at `level` that cannot be read are logged and saved over as if none
+    /// were set, so an admin can mend them by entering every setting again.
     pub async fn save_settings(
         &self,
         id: String,
@@ -100,8 +104,21 @@ impl Plugins {
             self.db
                 .read(move |conn| {
                     let Some(manifest) = grants::manifest(conn, &id)? else { return Ok(None) };
-                    let (own, server) =
-                        (self::level(conn, &id, level)?, self::level(conn, &id, SERVER)?);
+                    let own = match self::level(conn, &id, level) {
+                        Err(error @ rusqlite::Error::FromSqlConversionFailure(..)) => {
+                            tracing::warn!(
+                                plugin = id,
+                                level,
+                                %error,
+                                "stored settings cannot be read; the save replaces them"
+                            );
+                            Map::new()
+                        }
+                        own => own?,
+                    };
+                    // At the server level, `own` is the server-wide settings.
+                    let server =
+                        if level == SERVER { Map::new() } else { self::level(conn, &id, SERVER)? };
                     // At the server level, only what is granted to the plugin itself.
                     let permissions = grants::granted(conn, &id, level)?;
                     Ok(Some((manifest, own, server, permissions)))
@@ -115,7 +132,7 @@ impl Plugins {
         if !problems.is_empty() {
             return Err(PluginError::SettingsInvalid(format!("{}.", problems.join("; "))));
         }
-        let mut set = if level == SERVER { Map::new() } else { server };
+        let mut set = server;
         set.extend(values.clone());
         let missing = schema.missing(&set);
         // Server-wide settings may leave a required one to each library; a library's may not.
@@ -146,7 +163,9 @@ impl Plugins {
 mod tests {
     use serde_json::json;
 
+    use super::super::testing::{database, install, manifest};
     use super::*;
+    use crate::db::DbError;
 
     #[test]
     fn a_save_keeps_secrets_left_out_and_clears_the_rest() {
@@ -162,5 +181,29 @@ mod tests {
         let merged =
             merge(&schema, stored.as_object().unwrap(), entered.as_object().unwrap().clone());
         assert_eq!(Value::Object(merged), json!({ "apiKey": "k", "limit": 5 }));
+    }
+
+    /// Stored values that cannot be read are an error rather than none, so a plugin never runs
+    /// without the key an admin gave it. SQLite takes a number too large for serde as JSON.
+    #[tokio::test]
+    async fn values_that_cannot_be_read_are_an_error() {
+        let (_temp, db) = database().await;
+        install(&db, manifest("plugin", &[])).await;
+        let unreadable = r#"{"apiKey": "k", "limit": 1e400}"#;
+        db.write(move |tx| {
+            tx.execute(
+                "INSERT INTO plugin_settings (plugin_id, library_id, settings) \
+                 VALUES ('plugin', 0, ?1)",
+                [unreadable],
+            )
+        })
+        .await
+        .unwrap();
+        let read = db.read(|conn| level(conn, "plugin", SERVER)).await;
+        assert!(
+            matches!(read, Err(DbError::Sqlite(rusqlite::Error::FromSqlConversionFailure(0, ..)))),
+            "{read:?}"
+        );
+        assert!(db.read(|conn| level(conn, "plugin", 1)).await.unwrap().is_empty(), "none set");
     }
 }

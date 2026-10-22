@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use super::super::Id;
 use super::super::sql::timestamp;
+use crate::db::{Json, Text};
 use crate::plugins::grants;
 use crate::plugins::rate_limits::{self, HostLimit};
 
@@ -123,25 +124,25 @@ struct Stored {
     installed_at: String,
 }
 
+/// The plugin in a row of [`SELECT`]. A manifest that cannot be read is an error.
 fn stored(row: &Row) -> rusqlite::Result<Stored> {
-    let manifest: String = row.get(1)?;
     Ok(Stored {
         id: row.get(0)?,
-        manifest: serde_json::from_str(&manifest).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(e))
-        })?,
+        manifest: row.get::<_, Json<Manifest>>(1)?.0,
         source_url: row.get(2)?,
         installed_at: row.get(3)?,
     })
 }
 
+/// The spec's `Plugin` for `r`: its grants and standing in every library, and the host `limits`
+/// that apply to the hosts it reaches.
 fn view(conn: &Connection, r: Stored, limits: &[HostLimit]) -> rusqlite::Result<Plugin> {
     let plugin_wide: Vec<Permission> = conn
         .prepare_cached(
             "SELECT permission FROM plugin_grants WHERE plugin_id = ?1 AND library_id = 0 \
              ORDER BY permission",
         )?
-        .query_map([&r.id], |row| grants::permission(row.get(0)?))?
+        .query_map([&r.id], |row| Ok(row.get::<_, Text<Permission>>(0)?.0))?
         .collect::<rusqlite::Result<_>>()?;
     let rows: Vec<LibraryRow> = conn
         .prepare_cached(LIBRARIES)?

@@ -17,8 +17,8 @@ use super::albums::{self, AlbumSummary};
 use super::artists::{self, ArtistSummary};
 use super::extract::{Path, Query};
 use super::tracks::{self, TrackSummary};
-use super::{Id, Problem, page, sql};
-use crate::db::Database;
+use super::{Id, Problem, page};
+use crate::db::{Database, by_ids};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -139,23 +139,19 @@ fn results(conn: &Connection, library: i64, found: Vec<Found>) -> rusqlite::Resu
         let ids = &section.ids;
         let items = match section.kind {
             Kind::Track => {
-                sql::by_ids(conn, tracks::SELECT, "tracks t", tracks::JOINS, library, ids, |row| {
+                by_ids(conn, tracks::SELECT, "tracks t", tracks::JOINS, library, ids, |row| {
                     let track = tracks::list_summary(row)?;
                     Ok(SearchResult::Track { track })
                 })?
             }
-            Kind::Album => {
-                sql::by_ids(conn, albums::SELECT, "albums al", "", library, ids, |row| {
-                    let album = albums::summary(row)?;
-                    Ok(SearchResult::Album { album })
-                })?
-            }
-            Kind::Artist => {
-                sql::by_ids(conn, artists::SELECT, "artists ar", "", library, ids, |row| {
-                    let artist = artists::summary(row)?;
-                    Ok(SearchResult::Artist { artist })
-                })?
-            }
+            Kind::Album => by_ids(conn, albums::SELECT, "albums al", "", library, ids, |row| {
+                let album = albums::summary(row)?;
+                Ok(SearchResult::Album { album })
+            })?,
+            Kind::Artist => by_ids(conn, artists::SELECT, "artists ar", "", library, ids, |row| {
+                let artist = artists::summary(row)?;
+                Ok(SearchResult::Artist { artist })
+            })?,
         };
         // Gone since the index was built: nothing of it is left to show.
         if !items.is_empty() {

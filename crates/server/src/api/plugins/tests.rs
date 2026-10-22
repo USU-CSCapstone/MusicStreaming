@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::super::testing::{app_with_tracks, respond};
 use crate::db::Database;
+use crate::plugins::settings;
 use crate::plugins::testing::{enable_ungranted, install, manifest};
 
 const ADMIN: &str = "Bearer owner-token";
@@ -400,6 +401,32 @@ async fn an_uninstalled_plugin_is_not_kept_compiled() {
 }
 
 const SETTINGS: &str = "/api/v1/admin/plugins/lrclib-lyrics/settings";
+
+/// Server-wide settings that cannot be read fail their GET, as they would every run, until an
+/// admin saves settings again: the save writes over them, and they then read as saved.
+#[tokio::test]
+async fn a_save_mends_server_settings_that_cannot_be_read() {
+    let (_temp, db, app) = app_with_tracks().await;
+    install_lyrics(&app).await;
+    // SQLite takes a number too large for serde as JSON.
+    let unreadable = r#"{"syncedOnly": true, "limit": 1e400}"#;
+    db.write(move |tx| {
+        let sql = "INSERT INTO plugin_settings VALUES ('lrclib-lyrics', 0, ?1)";
+        tx.execute(sql, [unreadable])
+    })
+    .await
+    .unwrap();
+    let (status, _) = call(&app, ADMIN, "GET", SETTINGS, None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    let (status, saved) = check_settings(&app).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (status, settings) = call(&app, ADMIN, "GET", SETTINGS, None).await;
+    assert_eq!((status, &settings["values"]), (StatusCode::OK, &json!({ "syncedOnly": true })));
+    // What a run in a library reads.
+    let effective = db.read(|conn| settings::effective(conn, "lrclib-lyrics", None, 1)).await;
+    assert_eq!(Value::Object(effective.unwrap()), json!({ "syncedOnly": true }));
+}
 
 #[tokio::test]
 async fn settings_show_values_but_never_secrets() {

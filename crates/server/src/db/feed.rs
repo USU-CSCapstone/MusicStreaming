@@ -2,8 +2,13 @@
 //! coalesced on write, in the same transaction as the change.
 
 use rusqlite::{Connection, Result, params};
+use serde::Serialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use super::Text;
+
+/// What changed, stored by its name in `library_changes.entity_type`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Entity {
     Library,
     Track,
@@ -12,19 +17,9 @@ pub enum Entity {
     Tag,
 }
 
-impl Entity {
-    fn as_str(self) -> &'static str {
-        match self {
-            Entity::Library => "library",
-            Entity::Track => "track",
-            Entity::Album => "album",
-            Entity::Artist => "artist",
-            Entity::Tag => "tag",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How it changed, stored by its name in `library_changes.op`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Op {
     Upsert,
     Delete,
@@ -42,16 +37,7 @@ pub fn record(
 ) -> Result<()> {
     conn.execute(
         "INSERT OR REPLACE INTO library_changes (library_id, entity_type, entity_id, op, changed_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![
-            library_id,
-            entity.as_str(),
-            id,
-            match op {
-                Op::Upsert => "upsert",
-                Op::Delete => "delete",
-            },
-            now
-        ],
+        params![library_id, Text(entity), id, Text(op), now],
     )?;
     Ok(())
 }

@@ -26,7 +26,7 @@ use rusqlite::{Connection, params};
 use tokio::runtime::Runtime;
 use tokio::sync::Notify;
 
-use crate::db::{Database, DbError, now_ms};
+use crate::db::{Database, DbError, Json, now_ms};
 use library::RunLibrary;
 
 #[derive(Debug, thiserror::Error)]
@@ -279,11 +279,10 @@ impl Drop for Plugins {
 /// nothing, if a plugin with its ID is installed: the row is never replaced, so what goes with
 /// it, such as its users' connections, goes only on a real uninstall.
 fn add(conn: &Connection, manifest: &Manifest, source_url: Option<&str>) -> rusqlite::Result<bool> {
-    let json = serde_json::to_string(manifest).expect("a manifest serializes");
     let inserted = conn.execute(
         "INSERT INTO plugins (id, manifest, source_url, installed_at) \
          VALUES (?1, ?2, ?3, ?4) ON CONFLICT (id) DO NOTHING",
-        params![manifest.id, json, source_url, now_ms()],
+        params![manifest.id, Json(manifest), source_url, now_ms()],
     )?;
     if inserted == 0 {
         return Ok(false);

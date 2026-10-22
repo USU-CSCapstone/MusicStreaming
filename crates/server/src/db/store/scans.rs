@@ -10,9 +10,8 @@ use rusqlite::{Connection, Result, Row, Transaction, params};
 
 use self::stored::{cursor_dir, scope_at, scopes, stored_scopes};
 use super::SqliteStore;
-use super::names::{name, parse};
 use super::roots::{Roots, join};
-use crate::db::{DbError, now_ms};
+use crate::db::{DbError, Text, now_ms};
 
 /// Records a new scan of `scopes` in `lib` under `trigger`, queued, and returns it.
 pub fn create(
@@ -27,7 +26,7 @@ pub fn create(
         let id = tx.query_row(
             "INSERT INTO scans (id, library_id, trigger, state, scopes, created_at) \
              VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, ?5) RETURNING id",
-            params![lib, name(trigger), name(ScanState::Queued), json, now_ms()],
+            params![lib, Text(trigger), Text(ScanState::Queued), json, now_ms()],
             |r| r.get(0),
         )?;
         Ok(Scan::queued(id, lib, trigger, scopes))
@@ -89,7 +88,7 @@ pub(super) fn save(tx: &Transaction, roots: &Roots, scan: &Scan) -> Result<()> {
          WHERE id = ?1 AND library_id = ?16",
         params![
             scan.id,
-            name(scan.state),
+            Text(scan.state),
             scan.cursor.as_ref().map(|c| c.scope_index),
             cursor_dir(scan),
             progress.files_seen,
@@ -156,8 +155,8 @@ fn scan(r: &Row, roots: &Roots, lib: i64) -> Result<Scan> {
     Ok(Scan {
         id: r.get(0)?,
         library: r.get(1)?,
-        trigger: parse(r, 2)?,
-        state: parse(r, 3)?,
+        trigger: r.get::<_, Text<_>>(2)?.0,
+        state: r.get::<_, Text<_>>(3)?.0,
         scopes,
         cursor,
         progress: ScanProgress {

@@ -4,8 +4,8 @@ use serde_json::{Map, Value, json};
 use super::super::testing::{connect, database, enable, grant, install, manifest, plugins};
 use super::super::{PluginError, Plugins};
 use super::{SharingRefused, connectable, disconnect, set_search_sharing, values};
-use crate::db::Database;
 use crate::db::testing::{User, access};
+use crate::db::{Database, DbError};
 
 /// `scrobbler`, which users connect with a token, and `lyrics`, which they set nothing for, are
 /// both enabled in library 1, which user 7 reaches and user 8 does not.
@@ -79,6 +79,24 @@ async fn disconnecting_forgets_what_was_set() {
     db.write(|tx| disconnect(tx, "scrobbler", 7)).await.unwrap();
     assert_eq!(listed(&db, 7, false).await, [("Scrobbler".to_owned(), false)]);
     assert!(db.read(|conn| values(conn, "scrobbler", 7)).await.unwrap().is_empty());
+}
+
+/// Settings that cannot be read are an error rather than none, so a plugin never acts for a user
+/// without what they set. SQLite takes a number too large for serde as JSON.
+#[tokio::test]
+async fn settings_that_cannot_be_read_are_an_error() {
+    let (temp, db) = database().await;
+    scrobbler(&plugins(&temp, &db), &db).await;
+    connect(&db, "scrobbler", 7, json!({ "token": "t" }), 0).await;
+    let unreadable = r#"{"token": "t", "limit": 1e400}"#;
+    db.write(move |tx| tx.execute("UPDATE plugin_connections SET settings = ?1", [unreadable]))
+        .await
+        .unwrap();
+    let read = db.read(|conn| values(conn, "scrobbler", 7)).await;
+    assert!(
+        matches!(read, Err(DbError::Sqlite(rusqlite::Error::FromSqlConversionFailure(0, ..)))),
+        "{read:?}"
+    );
 }
 
 /// `first` and `second`, which users connect with a token and may share their searches with, each
@@ -231,7 +249,7 @@ async fn what_a_user_set_is_read_only_for_that_plugin_and_that_user() {
 async fn connecting_to_a_plugin_no_longer_installed_connects_nothing() {
     let (temp, db) = database().await;
     scrobbler(&plugins(&temp, &db), &db).await;
-    let connected = db.write(|tx| super::connect(tx, "gone", 7, "{}", 0)).await.unwrap();
+    let connected = db.write(|tx| super::connect(tx, "gone", 7, &Map::new(), 0)).await.unwrap();
     assert!(!connected);
     let count: i64 = db
         .read(|conn| conn.query_row("SELECT count(*) FROM plugin_connections", [], |r| r.get(0)))

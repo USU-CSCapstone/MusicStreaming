@@ -17,7 +17,8 @@ use super::authenticate::Caller;
 use super::extract::Json;
 use super::refs::credits_json;
 use super::{Id, Problem};
-use crate::db::{Database, now_ms};
+use crate::db::plays::{End, Origin};
+use crate::db::{self, Database, Text, now_ms};
 
 #[derive(Deserialize)]
 pub struct Plays {
@@ -40,42 +41,6 @@ struct PlayReport {
     reason: Option<Value>,
 }
 
-#[derive(Deserialize, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
-enum End {
-    Finished,
-    Skipped,
-    Stopped,
-}
-
-#[derive(Deserialize, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
-enum Origin {
-    Manual,
-    Context,
-    Automatic,
-}
-
-impl End {
-    fn name(self) -> &'static str {
-        match self {
-            End::Finished => "finished",
-            End::Skipped => "skipped",
-            End::Stopped => "stopped",
-        }
-    }
-}
-
-impl Origin {
-    fn name(self) -> &'static str {
-        match self {
-            Origin::Manual => "manual",
-            Origin::Context => "context",
-            Origin::Automatic => "automatic",
-        }
-    }
-}
-
 /// A report checked and ready to record.
 struct Play {
     id: String,
@@ -83,10 +48,10 @@ struct Play {
     track: Option<Id>,
     started_at: String,
     listen_time_ms: u32,
-    end: Option<&'static str>,
-    context: String,
-    origin: &'static str,
-    reason: Option<String>,
+    end: Option<End>,
+    context: Value,
+    origin: Origin,
+    reason: Option<Value>,
 }
 
 /// Records every report, or none if one is malformed. A play of a track that is not in a
@@ -105,6 +70,8 @@ pub async fn record(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `report` as a play to record, or the Problem that makes it malformed. A `null` reason is
+/// none.
 fn checked(report: PlayReport) -> Result<Play, Problem> {
     if !is_uuid(&report.play_id) {
         return Err(Problem::invalid("playId must be a UUID."));
@@ -125,10 +92,10 @@ fn checked(report: PlayReport) -> Result<Play, Problem> {
         track: Id::canonical(&track),
         started_at: report.started_at,
         listen_time_ms: report.listen_time_ms,
-        end: report.end.map(End::name),
-        context: report.context.to_string(),
-        origin: report.origin.name(),
-        reason: report.reason.filter(|r| !r.is_null()).map(|r| r.to_string()),
+        end: report.end,
+        context: report.context,
+        origin: report.origin,
+        reason: report.reason.filter(|r| !r.is_null()),
     })
 }
 
@@ -198,10 +165,10 @@ fn save(tx: &Transaction, caller: Caller, plays: &[Play]) -> rusqlite::Result<Op
             track.0,
             started_at,
             play.listen_time_ms,
-            play.end,
-            play.context,
-            play.origin,
-            play.reason,
+            play.end.map(Text),
+            db::Json(&play.context),
+            Text(play.origin),
+            play.reason.as_ref().map(db::Json),
             now,
             caller.admin,
         ])?;

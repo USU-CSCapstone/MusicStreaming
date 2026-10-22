@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 use super::run::RunFor;
 use super::settings::{self, SERVER, merge};
 use super::{PluginError, Plugins, grants};
-use crate::db::now_ms;
+use crate::db::{Json, now_ms};
 
 /// Whether `:user` (an admin if `:admin`) reaches a library the plugin `p` is enabled in.
 const REACHED: &str = "EXISTS (SELECT 1 FROM plugin_libraries l WHERE l.plugin_id = p.id \
@@ -157,15 +157,16 @@ pub fn manifest(
     Ok(manifest.filter(|m| m.personal_settings.is_some()))
 }
 
-/// What `user` has set for `id`: nothing unless they have connected it.
+/// What `user` has set for `id`: nothing unless they have connected it. Stored values that
+/// cannot be read are an error, so a plugin never runs without what the user set.
 pub fn values(conn: &Connection, id: &str, user: i64) -> rusqlite::Result<Map<String, Value>> {
-    let json: Option<String> = conn
+    let json: Option<Json<Map<String, Value>>> = conn
         .prepare_cached(
             "SELECT settings FROM plugin_connections WHERE plugin_id = ?1 AND user_id = ?2",
         )?
         .query_row(params![id, user], |row| row.get(0))
         .optional()?;
-    Ok(json.and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default())
+    Ok(json.map(|Json(values)| values).unwrap_or_default())
 }
 
 impl Plugins {
@@ -215,27 +216,26 @@ impl Plugins {
             )
             .await?;
         outcome.result.map_err(|error| PluginError::SettingsInvalid(error.to_string()))?;
-        let json = Value::Object(values).to_string();
-        let connected = self.db.write(move |tx| connect(tx, &id, user, &json, now_ms())).await?;
+        let connected = self.db.write(move |tx| connect(tx, &id, user, &values, now_ms())).await?;
         connected.then_some(()).ok_or(PluginError::NotFound)
     }
 }
 
-/// Connects `user` to `id` at `at` with `settings`, a JSON object, or replaces the settings they
-/// connected it with, keeping when they connected and whether they share their searches. False,
-/// connecting nothing, if `id` is not installed, such as when it was uninstalled meanwhile.
+/// Connects `user` to `id` at `at` with `settings`, or replaces the settings they connected it
+/// with, keeping when they connected and whether they share their searches. False, connecting
+/// nothing, if `id` is not installed, such as when it was uninstalled meanwhile.
 pub(super) fn connect(
     conn: &Connection,
     id: &str,
     user: i64,
-    settings: &str,
+    settings: &Map<String, Value>,
     at: i64,
 ) -> rusqlite::Result<bool> {
     let changed = conn.execute(
         "INSERT INTO plugin_connections (plugin_id, user_id, settings, connected_at) \
          SELECT id, ?2, ?3, ?4 FROM plugins WHERE id = ?1 \
          ON CONFLICT (plugin_id, user_id) DO UPDATE SET settings = excluded.settings",
-        params![id, user, settings, at],
+        params![id, user, Json(settings), at],
     )?;
     Ok(changed > 0)
 }

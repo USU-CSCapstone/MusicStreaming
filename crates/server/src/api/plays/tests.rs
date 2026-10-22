@@ -186,3 +186,27 @@ async fn a_malformed_report_records_nothing() {
     }
     assert!(plays(&db).await.is_empty());
 }
+
+/// A report's `context` and `reason` are stored as compact JSON, and its `origin` by name.
+#[tokio::test]
+async fn context_origin_and_reason_are_stored_as_reported() {
+    let (_temp, db, app) = app_with_tracks().await;
+    let mut played = report("1", 0, Value::Null);
+    played["reason"] = json!({ "type": "radio", "seed": { "trackId": "1" } });
+    assert_eq!(report_as_owner(&app, json!([played])).await, StatusCode::NO_CONTENT);
+    let stored: (String, String, String) = db
+        .read(|conn| {
+            let sql = "SELECT context, origin, reason FROM plays";
+            conn.query_row(sql, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        stored,
+        (
+            r#"{"id":"101","type":"album"}"#.to_owned(),
+            "context".to_owned(),
+            r#"{"seed":{"trackId":"1"},"type":"radio"}"#.to_owned()
+        )
+    );
+}

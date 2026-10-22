@@ -19,7 +19,7 @@ use super::super::super::testing::player::{command_id, progress_report};
 use super::super::super::testing::socket::{connect, serve};
 use super::super::super::testing::{add_signed_out_device, app, app_with_tracks, state};
 use super::super::{Presence, Revoked, handle, signed_in};
-use crate::db::Database;
+use crate::db::{Database, Text};
 
 const OWNER: Caller = Caller { user: 1, device: 1, admin: true };
 
@@ -109,7 +109,7 @@ async fn a_signed_out_device_is_not_signed_in_once_joined() {
 
 #[test]
 fn a_stored_reason_reads_by_its_spec_name() {
-    let read = |name: &[u8]| Revoked::column_result(ValueRef::Text(name));
+    let read = |name: &[u8]| Text::<Revoked>::column_result(ValueRef::Text(name)).map(|r| r.0);
     assert!(matches!(read(b"credentials_changed"), Ok(Revoked::CredentialsChanged)));
     assert!(matches!(read(b"logged_out"), Ok(Revoked::LoggedOut)));
     let unknown = read(b"unknown").unwrap_err().to_string();

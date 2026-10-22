@@ -8,10 +8,13 @@
 //! Callers pass a closure and await its result, or, on threads outside the runtime such as
 //! the scanner's, wait for it.
 
+mod by_ids;
 pub mod catalog;
+mod columns;
 pub mod feed;
 pub mod libraries;
 pub mod migrations;
+pub mod plays;
 pub mod retention;
 pub mod store;
 #[cfg(test)]
@@ -33,6 +36,8 @@ use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 
+pub use by_ids::by_ids;
+pub use columns::{Json, Text};
 use retention::Sweep;
 pub use store::SqliteStore;
 

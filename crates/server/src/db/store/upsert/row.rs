@@ -7,6 +7,7 @@ use jewelcase_scanner::{Lyrics, TagSet, TrackRecord};
 use rusqlite::types::Null;
 use rusqlite::{OptionalExtension, Result, ToSql, Transaction};
 
+use crate::db::Json;
 use crate::db::store::roots::relative;
 use crate::db::store::sidecars::sidecar_rows;
 
@@ -118,9 +119,9 @@ pub(super) fn write_row(
         (":explicit", &(rec.tags.explicit == Some(true))),
         (":compilation", &rec.tags.compilation),
         (":release_type", &rec.tags.release_type),
-        (":labels", &serde_json::to_string(&rec.tags.labels).expect("strings serialize")),
+        (":labels", &Json(&rec.tags.labels)),
         (":isrc", &rec.tags.isrc),
-        (":identifiers", &identifiers(&rec.tags)),
+        (":identifiers", &Json(identifiers(&rec.tags))),
         (":lyrics_kind", &lyrics_kind),
         (":codec", &format.codec_name()),
         (":container", &format.container_name()),
@@ -158,16 +159,15 @@ pub(super) fn write_row(
     Ok(Some(id))
 }
 
-/// The track's external identifiers as a JSON object, keyed as Picard names them.
-fn identifiers(tags: &TagSet) -> String {
-    let ids: BTreeMap<&str, &str> = [
+/// The track's external identifiers, keyed as Picard names them.
+fn identifiers(tags: &TagSet) -> BTreeMap<&'static str, &str> {
+    [
         ("musicbrainz_recordingid", &tags.musicbrainz_recording_id),
         ("musicbrainz_albumid", &tags.musicbrainz_release_id),
     ]
     .into_iter()
     .filter_map(|(key, id)| Some((key, id.as_deref()?)))
-    .collect();
-    serde_json::to_string(&ids).expect("strings serialize")
+    .collect()
 }
 
 #[cfg(test)]
@@ -175,6 +175,8 @@ mod tests {
     use jewelcase_scanner::TagSet;
 
     use super::identifiers;
+    use crate::db::Json;
+    use crate::db::testing::stored;
 
     #[test]
     fn identifiers_name_the_musicbrainz_ids_present() {
@@ -184,9 +186,9 @@ mod tests {
             ..TagSet::default()
         };
         assert_eq!(
-            identifiers(&tags),
+            stored(Json(identifiers(&tags))),
             r#"{"musicbrainz_albumid":"a","musicbrainz_recordingid":"r"}"#
         );
-        assert_eq!(identifiers(&TagSet::default()), "{}");
+        assert_eq!(stored(Json(identifiers(&TagSet::default()))), "{}");
     }
 }

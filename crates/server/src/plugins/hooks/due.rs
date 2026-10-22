@@ -15,6 +15,7 @@ use super::changes::{changed, scans};
 use super::playing::{deliverable, playing};
 use super::plays::plays;
 use super::searches::searches;
+use crate::db::Text;
 
 /// Reads what a due hook delivers at the time given: the position once it is handled, and its
 /// event. No event means nothing for the plugin, and the position moves on anyway.
@@ -73,7 +74,7 @@ pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
     let mut due = Vec::new();
     for (hook, sql, read) in hooks() {
         let mut statement = conn.prepare_cached(&sql)?;
-        let pairs = statement.query_map(params![now, hook.name()], |row| {
+        let pairs = statement.query_map(params![now, Text(hook)], |row| {
             Ok(Due {
                 hook,
                 read,

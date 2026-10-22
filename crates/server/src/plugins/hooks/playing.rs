@@ -36,11 +36,12 @@ pub fn playing(
 ) -> rusqlite::Result<Option<(i64, Playing)>> {
     let deliverable = deliverable("?2", "?3", "?4");
     conn.prepare_cached(&format!(
-        "{TRACK_COLUMNS}, pl.started_at, st.seq FROM play_events st \
+        "SELECT {}, pl.started_at, st.seq FROM play_events st \
          JOIN plays pl ON pl.user_id = st.user_id AND pl.id = st.play_id \
          JOIN tracks t ON t.id = pl.track_id JOIN albums al ON al.id = t.album_id \
          JOIN plugin_connections s ON s.plugin_id = ?5 AND s.user_id = st.user_id \
-         WHERE {deliverable} ORDER BY st.seq DESC LIMIT 1"
+         WHERE {deliverable} ORDER BY st.seq DESC LIMIT 1",
+        TRACK_COLUMNS.join(", ")
     ))?
     .query_row(params![now, library, user, position, plugin], |row| {
         let started_at_ms = row.get::<_, i64>(13)? as u64;

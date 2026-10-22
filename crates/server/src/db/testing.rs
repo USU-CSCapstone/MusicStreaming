@@ -126,3 +126,10 @@ impl Device {
         .map(drop)
     }
 }
+
+/// The text SQLite stores for `value`, bound as a parameter, such as a [`super::Text`] variant's
+/// name or a [`super::Json`] value's JSON.
+pub fn stored(value: impl rusqlite::ToSql) -> String {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.query_row("SELECT ?1", [value], |row| row.get(0)).unwrap()
+}

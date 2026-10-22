@@ -8,7 +8,8 @@ use serde::Serialize;
 
 use crate::api::Id;
 use crate::api::refs::{ImageRef, TagRef, genres_json, placeholder};
-use crate::api::sql::{Json, timestamp};
+use crate::api::sql::timestamp;
+use crate::db::Json;
 
 /// The spec's `ArtistSummary`, without `personal` until accounts exist.
 #[derive(Clone, Serialize)]

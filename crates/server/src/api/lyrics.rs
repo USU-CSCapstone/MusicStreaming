@@ -6,12 +6,11 @@ use axum::Json;
 use axum::extract::State;
 use jewelcase_scanner::SyncedLine;
 use rusqlite::OptionalExtension;
-use rusqlite::types::Type;
 use serde::Serialize;
 
 use super::extract::Path;
 use super::{Id, Problem};
-use crate::db::Database;
+use crate::db::{self, Database};
 
 /// The spec's `Lyrics`.
 #[derive(Serialize)]
@@ -34,15 +33,8 @@ pub async fn get(
         )?
         .query_row([library, track], |row| {
             let plain: Option<String> = row.get(0)?;
-            let synced: Option<String> = row.get(1)?;
-            Ok(match synced {
-                Some(synced) => Lyrics {
-                    kind: "synced",
-                    lines: Some(serde_json::from_str(&synced).map_err(|error| {
-                        rusqlite::Error::FromSqlConversionFailure(1, Type::Text, Box::new(error))
-                    })?),
-                    plain: None,
-                },
+            Ok(match row.get::<_, Option<db::Json<Vec<SyncedLine>>>>(1)? {
+                Some(db::Json(lines)) => Lyrics { kind: "synced", lines: Some(lines), plain: None },
                 None => Lyrics {
                     kind: if plain.is_some() { "plain" } else { "none" },
                     lines: None,

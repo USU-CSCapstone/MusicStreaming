@@ -7,7 +7,7 @@ use std::sync::Arc;
 use jewelcase_plugins::{Album, Artist, Library, Track};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-use crate::db::{Database, DbError, libraries};
+use crate::db::{Database, DbError, Json, by_ids, libraries};
 
 pub struct RunLibrary {
     db: Arc<Database>,
@@ -52,17 +52,30 @@ fn page<T>(
         .collect()
 }
 
-pub const TRACK_COLUMNS: &str = "SELECT t.id, t.title, \
-     (SELECT json_group_array(artist_name) FROM (SELECT artist_name FROM track_artists \
-      WHERE track_id = t.id AND artist_name IS NOT NULL ORDER BY position)), \
-     t.album_id, al.title, t.disc_number, t.track_number, t.release_date, t.isrc, t.duration_us, \
-     t.lyrics_kind <> 'none', t.root_id, t.path";
+/// A track's columns, as `t`, with its album as `al`, which [`track`] reads.
+pub const TRACK_COLUMNS: &[&str] = &[
+    "t.id",
+    "t.title",
+    "(SELECT json_group_array(artist_name) FROM (SELECT artist_name FROM track_artists \
+      WHERE track_id = t.id AND artist_name IS NOT NULL ORDER BY position))",
+    "t.album_id",
+    "al.title",
+    "t.disc_number",
+    "t.track_number",
+    "t.release_date",
+    "t.isrc",
+    "t.duration_us",
+    "t.lyrics_kind <> 'none'",
+    "t.root_id",
+    "t.path",
+];
 
+/// A track from a row that starts with [`TRACK_COLUMNS`].
 pub fn track(row: &Row) -> rusqlite::Result<Track> {
     Ok(Track {
         id: row.get::<_, i64>(0)? as u64,
         title: row.get(1)?,
-        artists: names(row, 2)?,
+        artists: row.get::<_, Json<_>>(2)?.0,
         album_id: row.get::<_, i64>(3)? as u64,
         album: row.get(4)?,
         disc_number: row.get(5)?,
@@ -77,25 +90,30 @@ pub fn track(row: &Row) -> rusqlite::Result<Track> {
 }
 
 /// An album's columns, as `al`. Only one with tracks is shown, as the browse lists show them.
-const ALBUM_COLUMNS: &str = "SELECT al.id, al.title, \
-     (SELECT json_group_array(name) FROM (SELECT ar.name FROM album_artists aa \
+const ALBUM_COLUMNS: &[&str] = &[
+    "al.id",
+    "al.title",
+    "(SELECT json_group_array(name) FROM (SELECT ar.name FROM album_artists aa \
       JOIN artists ar ON ar.id = aa.artist_id WHERE aa.album_id = al.id AND ar.name IS NOT NULL \
-      ORDER BY aa.position)), \
-     al.release_date, al.image_id IS NOT NULL";
+      ORDER BY aa.position))",
+    "al.release_date",
+    "al.image_id IS NOT NULL",
+];
 
+/// An album from a row of [`ALBUM_COLUMNS`].
 fn album(row: &Row) -> rusqlite::Result<Album> {
     Ok(Album {
         id: row.get::<_, i64>(0)? as u64,
         title: row.get(1)?,
-        artists: names(row, 2)?,
+        artists: row.get::<_, Json<_>>(2)?.0,
         release_date: row.get(3)?,
         has_artwork: row.get(4)?,
     })
 }
 
 /// An artist's columns, as `ar`. Only one with music is shown.
-const ARTIST_COLUMNS: &str =
-    "SELECT ar.id, ar.name, ar.image_id IS NOT NULL, coalesce(ar.biography, '') <> ''";
+const ARTIST_COLUMNS: &[&str] =
+    &["ar.id", "ar.name", "ar.image_id IS NOT NULL", "coalesce(ar.biography, '') <> ''"];
 
 fn artist(row: &Row) -> rusqlite::Result<Artist> {
     Ok(Artist {
@@ -106,93 +124,67 @@ fn artist(row: &Row) -> rusqlite::Result<Artist> {
     })
 }
 
-/// `select`'s rows for these IDs, in their order, leaving out any not in `library`. `select`
-/// names the IDs, as JSON, `?2`, and this library `?1`.
-fn by_ids<T>(
-    conn: &Connection,
-    select: &str,
-    library: i64,
-    ids: &[u64],
-    map: fn(&Row) -> rusqlite::Result<T>,
-) -> rusqlite::Result<Vec<T>> {
-    let ids = serde_json::to_string(ids).expect("integers serialize");
-    conn.prepare_cached(select)?.query_map(params![library, ids], map)?.collect()
-}
-
-/// A JSON array of names in column `index`.
-fn names(row: &Row, index: usize) -> rusqlite::Result<Vec<String>> {
-    let json: String = row.get(index)?;
-    serde_json::from_str(&json).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(index, rusqlite::types::Type::Text, Box::new(e))
-    })
-}
-
 // A method left out here would fall back to the trait's default and answer every plugin
 // `failed`, so clippy refuses one.
 #[deny(clippy::missing_trait_methods)]
 impl Library for RunLibrary {
     async fn tracks(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Track>, String> {
         let select = format!(
-            "{TRACK_COLUMNS} FROM tracks t JOIN albums al ON al.id = t.album_id \
-             WHERE t.library_id = ?1 AND t.id > ?2 AND t.missing_since IS NULL"
+            "SELECT {} FROM tracks t JOIN albums al ON al.id = t.album_id \
+             WHERE t.library_id = ?1 AND t.id > ?2 AND t.missing_since IS NULL",
+            TRACK_COLUMNS.join(", ")
         );
         self.read(move |conn, library| page(conn, &select, library, after, limit, track)).await
     }
 
     async fn get_tracks(&mut self, ids: Vec<u64>) -> Result<Vec<Track>, String> {
-        let ids = serde_json::to_string(&ids).expect("integers serialize");
+        let rest = "JOIN albums al ON al.id = t.album_id WHERE t.missing_since IS NULL";
         self.read(move |conn, library| {
-            // The IDs lead the join, so the tracks come out in the order asked for.
-            conn.prepare_cached(&format!(
-                "{TRACK_COLUMNS} FROM json_each(?2) ids CROSS JOIN tracks t ON t.id = ids.value \
-                 JOIN albums al ON al.id = t.album_id \
-                 WHERE t.library_id = ?1 AND t.missing_since IS NULL ORDER BY ids.key"
-            ))?
-            .query_map(params![library, ids], track)?
-            .collect()
+            by_ids(conn, TRACK_COLUMNS, "tracks t", rest, library, &ids, track)
         })
         .await
     }
 
     async fn albums(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Album>, String> {
         let select = format!(
-            "{ALBUM_COLUMNS} FROM albums al \
-             WHERE al.library_id = ?1 AND al.id > ?2 AND al.track_count > 0"
+            "SELECT {} FROM albums al \
+             WHERE al.library_id = ?1 AND al.id > ?2 AND al.track_count > 0",
+            ALBUM_COLUMNS.join(", ")
         );
         self.read(move |conn, library| page(conn, &select, library, after, limit, album)).await
     }
 
     async fn artists(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Artist>, String> {
         let select = format!(
-            "{ARTIST_COLUMNS} FROM artists ar WHERE ar.library_id = ?1 AND ar.id > ?2 \
-             AND (ar.album_count > 0 OR ar.track_count > 0)"
+            "SELECT {} FROM artists ar WHERE ar.library_id = ?1 AND ar.id > ?2 \
+             AND (ar.album_count > 0 OR ar.track_count > 0)",
+            ARTIST_COLUMNS.join(", ")
         );
         self.read(move |conn, library| page(conn, &select, library, after, limit, artist)).await
     }
 
     async fn get_albums(&mut self, ids: Vec<u64>) -> Result<Vec<Album>, String> {
-        // The IDs lead the join, so the albums come out in the order asked for.
-        let select = format!(
-            "{ALBUM_COLUMNS} FROM json_each(?2) ids CROSS JOIN albums al ON al.id = ids.value \
-             WHERE al.library_id = ?1 AND al.track_count > 0 ORDER BY ids.key"
-        );
-        self.read(move |conn, library| by_ids(conn, &select, library, &ids, album)).await
+        let rest = "WHERE al.track_count > 0";
+        self.read(move |conn, library| {
+            by_ids(conn, ALBUM_COLUMNS, "albums al", rest, library, &ids, album)
+        })
+        .await
     }
 
     async fn get_artists(&mut self, ids: Vec<u64>) -> Result<Vec<Artist>, String> {
-        let select = format!(
-            "{ARTIST_COLUMNS} FROM json_each(?2) ids CROSS JOIN artists ar ON ar.id = ids.value \
-             WHERE ar.library_id = ?1 AND (ar.album_count > 0 OR ar.track_count > 0) \
-             ORDER BY ids.key"
-        );
-        self.read(move |conn, library| by_ids(conn, &select, library, &ids, artist)).await
+        let rest = "WHERE ar.album_count > 0 OR ar.track_count > 0";
+        self.read(move |conn, library| {
+            by_ids(conn, ARTIST_COLUMNS, "artists ar", rest, library, &ids, artist)
+        })
+        .await
     }
 
     async fn album_tracks(&mut self, album: u64) -> Result<Vec<Track>, String> {
         let select = format!(
-            "{TRACK_COLUMNS} FROM tracks t JOIN albums al ON al.id = t.album_id \
+            "SELECT {} FROM tracks t JOIN albums al ON al.id = t.album_id \
              WHERE t.library_id = ?1 AND t.album_id = ?2 AND t.missing_since IS NULL \
-             ORDER BY t.disc_number, t.track_number IS NULL, t.track_number, t.id"
+             ORDER BY t.disc_number, t.track_number IS NULL, t.track_number, t.id",
+            TRACK_COLUMNS.join(", ")
         );
         self.read(move |conn, library| {
             conn.prepare_cached(&select)?
@@ -206,9 +198,10 @@ impl Library for RunLibrary {
         // Album artists only: an artist's discography, not their appearances
         // (`requirements/artists.md` §2).
         let select = format!(
-            "{ALBUM_COLUMNS} FROM albums al WHERE al.library_id = ?1 AND al.track_count > 0 \
+            "SELECT {} FROM albums al WHERE al.library_id = ?1 AND al.track_count > 0 \
              AND al.id IN (SELECT album_id FROM album_artists WHERE artist_id = ?2) \
-             ORDER BY al.release_date IS NULL, al.release_date, al.id"
+             ORDER BY al.release_date IS NULL, al.release_date, al.id",
+            ALBUM_COLUMNS.join(", ")
         );
         self.read(move |conn, library| {
             conn.prepare_cached(&select)?

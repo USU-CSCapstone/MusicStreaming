@@ -7,16 +7,16 @@
 use jewelcase_plugins::{Manifest, Permission, PermissionRequest};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::db::{Json, Text};
+
 /// Why a library was disabled by the server rather than by the admin.
 const REVOKED: &str = "A required permission was revoked.";
 
 /// The manifest of the installed plugin `id`.
 pub fn manifest(conn: &Connection, id: &str) -> rusqlite::Result<Option<Manifest>> {
     conn.prepare_cached("SELECT manifest FROM plugins WHERE id = ?1")?
-        .query_row([id], |row| row.get::<_, String>(0))
-        .optional()?
-        .map(|json| serde_json::from_str(&json).map_err(|e| invalid_json(0, e)))
-        .transpose()
+        .query_row([id], |row| Ok(row.get::<_, Json<Manifest>>(0)?.0))
+        .optional()
 }
 
 /// Everything granted to `id` for `library`: its library permissions there, and its own, which
@@ -25,7 +25,7 @@ pub fn granted(conn: &Connection, id: &str, library: i64) -> rusqlite::Result<Ve
     conn.prepare_cached(
         "SELECT permission FROM plugin_grants WHERE plugin_id = ?1 AND library_id IN (0, ?2)",
     )?
-    .query_map(params![id, library], |row| permission(row.get::<_, String>(0)?))?
+    .query_map(params![id, library], |row| Ok(row.get::<_, Text<Permission>>(0)?.0))?
     .collect()
 }
 
@@ -44,14 +44,15 @@ pub fn set(
     plugin_wide: &[Permission],
     per_library: &[(i64, Vec<Permission>)],
 ) -> rusqlite::Result<()> {
-    // A permission's name and the request approved in granting it, if it is asked for in that
-    // scope.
+    // The permission and the request approved in granting it, if it is asked for in that scope.
     let approve = |p: &Permission, library: bool| {
         let request = manifest.permissions.iter().find(|r| r.permission == *p);
-        request.filter(|_| p.per_library() == library).map(|r| (p.name(), approved(r)))
+        let request = request.filter(|_| p.per_library() == library);
+        request.map(|r| approved(r).map(|approved| (Text(*p), approved))).transpose()
     };
     conn.execute("DELETE FROM plugin_grants WHERE plugin_id = ?1 AND library_id = 0", [id])?;
-    for (name, request) in plugin_wide.iter().filter_map(|p| approve(p, false)) {
+    for p in plugin_wide {
+        let Some((name, request)) = approve(p, false)? else { continue };
         conn.execute(
             "INSERT OR IGNORE INTO plugin_grants (plugin_id, library_id, permission, approved) \
              VALUES (?1, 0, ?2, ?3)",
@@ -64,7 +65,8 @@ pub fn set(
             "DELETE FROM plugin_grants WHERE plugin_id = ?1 AND library_id = ?2",
             params![id, library],
         )?;
-        for (name, request) in permissions.iter().filter_map(|p| approve(p, true)) {
+        for p in permissions {
+            let Some((name, request)) = approve(p, true)? else { continue };
             // A library that does not exist is skipped, as the spec's IDs select and never add.
             conn.execute(
                 "INSERT OR IGNORE INTO plugin_grants (plugin_id, library_id, permission, approved) \
@@ -118,12 +120,12 @@ pub fn set_enabled(
 /// approved (`requirements/plugins.md` §4.2, §5). Its exemptions from host rate limits are kept
 /// only with its `network` grant, whose request names the hosts and limits they relate to.
 pub fn keep_requested(conn: &Connection, manifest: &Manifest) -> rusqlite::Result<()> {
-    let requests: Vec<String> = manifest.permissions.iter().map(approved).collect();
-    let requests = serde_json::to_string(&requests).expect("strings serialize");
+    let requests: Vec<String> =
+        manifest.permissions.iter().map(approved).collect::<rusqlite::Result<_>>()?;
     conn.execute(
         "DELETE FROM plugin_grants WHERE plugin_id = ?1 \
          AND approved NOT IN (SELECT value FROM json_each(?2))",
-        params![manifest.id, requests],
+        params![manifest.id, Json(requests)],
     )?;
     conn.execute(
         "DELETE FROM plugin_rate_limit_exemptions WHERE plugin_id = ?1 AND NOT EXISTS \
@@ -136,22 +138,11 @@ pub fn keep_requested(conn: &Connection, manifest: &Manifest) -> rusqlite::Resul
 /// `request` as a grant records it and a reinstall compares it: the manifest's request, read
 /// into its typed form and written back as compact JSON. So its keys always come in one order,
 /// absent ones are left out, and rate limits are sorted by host, while lists keep the order the
-/// manifest gives them and every value is compared exactly, the reason included.
-fn approved(request: &PermissionRequest) -> String {
-    serde_json::to_string(request).expect("a request serializes")
-}
-
-pub fn permission(name: String) -> rusqlite::Result<Permission> {
-    Permission::from_name(&name)
-        .ok_or_else(|| invalid_json(0, format!("unknown permission {name}")))
-}
-
-fn invalid_json(column: usize, error: impl std::fmt::Display) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        column,
-        rusqlite::types::Type::Text,
-        error.to_string().into(),
-    )
+/// manifest gives them and every value is compared exactly, the reason included. A request that
+/// does not serialize is a conversion error.
+fn approved(request: &PermissionRequest) -> rusqlite::Result<String> {
+    serde_json::to_string(request)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
 }
 
 #[cfg(test)]

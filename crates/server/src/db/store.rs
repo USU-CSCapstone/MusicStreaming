@@ -8,7 +8,6 @@
 mod entities;
 mod folders;
 mod jobs;
-pub(super) mod names;
 mod problems;
 mod roots;
 mod scans;

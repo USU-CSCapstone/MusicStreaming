@@ -13,6 +13,7 @@ use jewelcase_plugins::{Manifest, Per, RateLimit};
 use rusqlite::{Connection, params};
 
 use super::{PluginError, Plugins, grants};
+use crate::db::Json;
 
 /// The limit in force for one host.
 pub struct HostLimit {
@@ -29,7 +30,7 @@ pub struct HostLimit {
 /// Every host limit in force, by host.
 pub fn in_force(conn: &Connection) -> rusqlite::Result<Vec<HostLimit>> {
     // Grants outlive an uninstall; only an installed plugin's limits are in force.
-    let setters: Vec<(String, String)> = conn
+    let setters: Vec<(String, rusqlite::Result<Json<Manifest>>)> = conn
         .prepare_cached(
             "SELECT p.id, p.manifest FROM plugins p JOIN plugin_grants g ON g.plugin_id = p.id \
              WHERE g.permission = 'hostRateLimits' \
@@ -39,14 +40,14 @@ pub fn in_force(conn: &Connection) -> rusqlite::Result<Vec<HostLimit>> {
                          WHERE l.plugin_id = p.id AND l.enabled) \
              ORDER BY p.id",
         )?
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1))))?
         .collect::<rusqlite::Result<_>>()?;
     let mut limits = BTreeMap::<String, HostLimit>::new();
     for (id, manifest) in setters {
         // Every run reads these as it starts, so a manifest that cannot be read is left out, and
         // logged for the admin, rather than stopping every plugin (`requirements/plugins.md` §11).
-        let manifest = match serde_json::from_str::<Manifest>(&manifest) {
-            Ok(manifest) => manifest,
+        let manifest = match manifest {
+            Ok(Json(manifest)) => manifest,
             Err(error) => {
                 tracing::warn!(
                     plugin = id,

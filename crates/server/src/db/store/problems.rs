@@ -7,9 +7,8 @@ use jewelcase_scanner::{Problem, Scope, UNOPENED, problem_group_key};
 use rusqlite::{Connection, OptionalExtension, Result, ToSql, Transaction, params};
 
 use super::SqliteStore;
-use super::names::name;
 use super::roots::{Roots, bounds_under, join, relative};
-use crate::db::DbError;
+use crate::db::{DbError, Text};
 
 /// The absolute paths with a recorded problem that `scope` reaches ([`Scope::contains_file`]).
 pub fn under(store: &SqliteStore, lib: i64, scope: &Scope) -> Result<Vec<PathBuf>, DbError> {
@@ -68,7 +67,7 @@ pub fn record_problem(
          VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, 0, ?5, ?5) \
          ON CONFLICT (library_id, group_key) DO UPDATE SET last_seen_at = MAX(last_seen_at, excluded.last_seen_at) \
          RETURNING id",
-        params![lib, name(problem.kind), key, problem.detail, problem.seen_at],
+        params![lib, Text(problem.kind), key, problem.detail, problem.seen_at],
         |r| r.get(0),
     )?;
     let existing: Option<i64> = tx
@@ -127,7 +126,7 @@ pub fn clear_unopened(store: &SqliteStore, lib: i64, path: &Path) -> Result<(), 
         return Ok(());
     };
     store.db.write_blocking(move |tx| {
-        let [unreadable, denied] = UNOPENED.map(name);
+        let [unreadable, denied] = UNOPENED.map(Text);
         let group = tx
             .query_row(
                 "SELECT p.group_id FROM scan_problems p JOIN scan_problem_groups g ON g.id = p.group_id \
