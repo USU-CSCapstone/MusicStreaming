@@ -1,14 +1,17 @@
 //! Scans: what each one covers, how far it got, and where it resumes (`design/database.md` §8).
+//! A row keeps each path as a root's id and the path relative to it, as tracks do.
 
-use std::path::PathBuf;
+mod stored;
 
 use jewelcase_scanner::{Cursor, Scan, ScanProgress, ScanState, Scope, Trigger};
-use rusqlite::Error::{FromSqlConversionFailure, ToSqlConversionFailure};
+use rusqlite::Error::FromSqlConversionFailure;
 use rusqlite::types::Type;
 use rusqlite::{Connection, Result, Row, Transaction, params};
 
+use self::stored::{cursor_dir, scope_at, scopes, stored_scopes};
 use super::SqliteStore;
 use super::names::{name, parse};
+use super::roots::{Roots, join};
 use crate::db::{DbError, now_ms};
 
 /// Records a new scan of `scopes` in `lib` under `trigger`, queued, and returns it.
@@ -18,12 +21,9 @@ pub fn create(
     trigger: Trigger,
     scopes: &[Scope],
 ) -> Result<Scan, DbError> {
+    let json = stored_scopes(&store.roots, lib, scopes)?;
     let scopes = scopes.to_vec();
     store.db.write_blocking(move |tx| {
-        // A path that is not UTF-8 cannot be written: better no record of the scan than one
-        // that resumes as a scan of nothing.
-        let json = serde_json::to_string(&scopes)
-            .map_err(|error| ToSqlConversionFailure(Box::new(error)))?;
         let id = tx.query_row(
             "INSERT INTO scans (id, library_id, trigger, state, scopes, created_at) \
              VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, ?5) RETURNING id",
@@ -36,16 +36,20 @@ pub fn create(
 
 /// Saves what changes as `scan` runs.
 pub fn update(store: &SqliteStore, scan: &Scan) -> Result<(), DbError> {
+    let current = scan.progress.current_path.as_ref();
+    let current = current.and_then(|path| store.roots.locate(scan.library, path));
     let scan = scan.clone();
-    store.db.write_blocking(move |tx| save(tx, scan.id, &scan))
+    store.db.write_blocking(move |tx| save(tx, &scan, current))
 }
 
 /// The library's scans that were queued or running when the server last stopped. A row that
-/// cannot be read is marked suspended, since it can never resume; if even that fails, the error
-/// is logged and the row is left as it was.
+/// cannot be read, or has a scope whose root is no longer one of the library's, is marked
+/// suspended, since it can never resume; if even that fails, the error is logged and the row is
+/// left as it was.
 pub fn interrupted(store: &SqliteStore, lib: i64) -> Result<Vec<Scan>, DbError> {
+    let roots = store.roots.clone();
     let (scans, unreadable) = store.db.read_blocking(move |conn| {
-        read(conn, lib, "AND state IN ('queued', 'running') ORDER BY created_at, id")
+        read(conn, &roots, lib, "AND state IN ('queued', 'running') ORDER BY created_at, id")
     })?;
     if !unreadable.is_empty() {
         let suspended = store.db.write_blocking(move |tx| {
@@ -67,24 +71,26 @@ pub fn interrupted(store: &SqliteStore, lib: i64) -> Result<Vec<Scan>, DbError> 
 impl SqliteStore {
     /// All scans for a library, newest first. Only the tests read them until the admin API.
     pub fn scans(&self, library: i64) -> Result<Vec<Scan>, DbError> {
-        let order = "ORDER BY created_at DESC, id DESC";
-        self.db.read_blocking(move |conn| Ok(read(conn, library, order)?.0))
+        let (order, roots) = ("ORDER BY created_at DESC, id DESC", self.roots.clone());
+        self.db.read_blocking(move |conn| Ok(read(conn, &roots, library, order)?.0))
     }
 }
 
-/// Writes what changes as a scan runs: its state, cursor, progress, and times.
-fn save(tx: &Transaction, id: i64, scan: &Scan) -> Result<()> {
-    let path = |path: Option<&PathBuf>| path.map(|p| p.to_string_lossy().into_owned());
+/// Writes what changes as a scan runs: its state, cursor, progress, and times, with `current`,
+/// the root and relative path of the folder it is in, if any.
+fn save(tx: &Transaction, scan: &Scan, current: Option<(i64, String)>) -> Result<()> {
     let progress = &scan.progress;
+    let (current_root, current_path) = current.unzip();
     tx.execute(
         "UPDATE scans SET state = ?2, cursor_scope = ?3, cursor_dir = ?4, files_seen = ?5, \
          files_processed = ?6, added = ?7, updated = ?8, moved = ?9, missing = ?10, problems = ?11, \
-         current_path = ?12, started_at = ?13, finished_at = ?14 WHERE id = ?1",
+         current_root_id = ?12, current_path = ?13, started_at = ?14, finished_at = ?15 \
+         WHERE id = ?1",
         params![
-            id,
+            scan.id,
             name(scan.state),
             scan.cursor.as_ref().map(|c| c.scope_index),
-            path(scan.cursor.as_ref().and_then(|c| c.after_directory.as_ref())),
+            cursor_dir(scan),
             progress.files_seen,
             progress.files_processed,
             progress.added,
@@ -92,7 +98,8 @@ fn save(tx: &Transaction, id: i64, scan: &Scan) -> Result<()> {
             progress.moved,
             progress.missing,
             progress.problems,
-            path(progress.current_path.as_ref()),
+            current_root,
+            current_path,
             scan.started_at,
             scan.finished_at,
         ],
@@ -100,16 +107,17 @@ fn save(tx: &Transaction, id: i64, scan: &Scan) -> Result<()> {
     Ok(())
 }
 
-/// The library's scans that `rest`, such as an `ORDER BY`, selects, and the ids of those whose
-/// rows cannot be read. Each of those is logged and left out, so one bad row hides only itself.
-fn read(conn: &Connection, lib: i64, rest: &str) -> Result<(Vec<Scan>, Vec<i64>)> {
+/// The library's scans that `rest`, such as an `ORDER BY`, selects, with their paths under
+/// `roots`, and the ids of those whose rows cannot be read. Each of those is logged and left out,
+/// so one bad row hides only itself.
+fn read(conn: &Connection, roots: &Roots, lib: i64, rest: &str) -> Result<(Vec<Scan>, Vec<i64>)> {
     let sql = format!(
         "SELECT id, library_id, trigger, state, scopes, cursor_scope, cursor_dir, files_seen, \
-         files_processed, added, updated, moved, missing, problems, current_path, started_at, \
-         finished_at FROM scans WHERE library_id = ?1 {rest}"
+         files_processed, added, updated, moved, missing, problems, current_root_id, \
+         current_path, started_at, finished_at FROM scans WHERE library_id = ?1 {rest}"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([lib], |r| match scan(r) {
+    let rows = stmt.query_map([lib], |r| match scan(r, roots, lib) {
         Ok(found) => Ok(Ok(found)),
         Err(error) => {
             let id: i64 = r.get(0)?;
@@ -127,23 +135,29 @@ fn read(conn: &Connection, lib: i64, rest: &str) -> Result<(Vec<Scan>, Vec<i64>)
     Ok((scans, unreadable))
 }
 
-/// The scan in row `r`, in the columns [`read`] selects.
-fn scan(r: &Row) -> Result<Scan> {
-    let scopes: String = r.get(4)?;
-    let scopes = serde_json::from_str(&scopes)
-        .map_err(|error| FromSqlConversionFailure(4, Type::Text, Box::new(error)))?;
-    let cursor_scope: Option<i64> = r.get(5)?;
-    let cursor_dir: Option<String> = r.get(6)?;
+/// The scan of `lib` in row `r`, in the columns [`read`] selects, with its paths under `roots`.
+fn scan(r: &Row, roots: &Roots, lib: i64) -> Result<Scan> {
+    let scopes = scopes(r, 4, roots, lib)?;
+    let cursor = match r.get::<_, Option<i64>>(5)? {
+        None => None,
+        Some(scope_index) => {
+            let after_directory = r.get::<_, Option<String>>(6)?.map(|rel| -> Result<_> {
+                let scope = scope_at(&scopes, scope_index).ok_or_else(|| {
+                    FromSqlConversionFailure(6, Type::Text, "the cursor is in no scope".into())
+                })?;
+                Ok(join(&scope.root, &rel))
+            });
+            Some(Cursor { scope_index, after_directory: after_directory.transpose()? })
+        }
+    };
+    let current: Option<(i64, String)> = Option::zip(r.get(14)?, r.get(15)?);
     Ok(Scan {
         id: r.get(0)?,
         library: r.get(1)?,
         trigger: parse(r, 2)?,
         state: parse(r, 3)?,
         scopes,
-        cursor: cursor_scope.map(|scope_index| Cursor {
-            scope_index,
-            after_directory: cursor_dir.map(PathBuf::from),
-        }),
+        cursor,
         progress: ScanProgress {
             files_seen: r.get(7)?,
             files_processed: r.get(8)?,
@@ -152,9 +166,9 @@ fn scan(r: &Row) -> Result<Scan> {
             moved: r.get(11)?,
             missing: r.get(12)?,
             problems: r.get(13)?,
-            current_path: r.get::<_, Option<String>>(14)?.map(PathBuf::from),
+            current_path: current.and_then(|(root, rel)| roots.absolute(lib, root, &rel)),
         },
-        started_at: r.get(15)?,
-        finished_at: r.get(16)?,
+        started_at: r.get(16)?,
+        finished_at: r.get(17)?,
     })
 }

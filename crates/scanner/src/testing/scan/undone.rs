@@ -50,8 +50,9 @@ pub fn a_failed_batch_leaves_the_scopes_from_its_cursor_undone<S: InspectStore +
 pub fn a_stopped_scan_leaves_nothing_undone<S: InspectStore + 'static>(make: Factory<S>) {
     for (stopped, state) in [(true, ScanState::Running), (false, ScanState::Cancelled)] {
         let tmp = tempfile::tempdir().unwrap();
-        let (a, b, lib) = two_roots(tmp.path());
+        let (a, b, mut lib) = two_roots(tmp.path());
         let gone = tmp.path().join("gone");
+        lib.roots.push(gone.clone());
         let store = Arc::new(make(&lib));
         let stops = Stops::default();
         let stop_at = b.join("B/Y");

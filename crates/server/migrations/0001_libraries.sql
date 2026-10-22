@@ -24,7 +24,7 @@ CREATE TABLE library_roots (
     path       TEXT    NOT NULL,
     created_at INTEGER NOT NULL,
     removed_at INTEGER,
-    -- Target for tracks' and images' foreign keys.
+    -- Target for the foreign keys of tracks, images and scans.
     UNIQUE (library_id, id)
 ) STRICT;
 
@@ -39,9 +39,12 @@ CREATE TABLE scans (
     library_id      INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
     trigger         TEXT    NOT NULL CHECK (trigger IN ('initial', 'watch', 'scheduled', 'manual', 'reconfigure', 'restore')),
     state           TEXT    NOT NULL CHECK (state IN ('queued', 'running', 'completed', 'cancelled', 'suspended')),
-    -- The scopes as a JSON array of {root, path, depth}; never queried by field
+    -- The scopes as a JSON array of {root, path, depth}: a root's id, and a folder relative to
+    -- it, like tracks.path; never queried by field
     scopes          TEXT    NOT NULL CHECK (json_valid(scopes) AND json_type(scopes) = 'array'),
-    -- Resume cursor: the scope being worked and the last directory fully persisted in it
+    -- Resume cursor: the scope being worked, and the last directory fully persisted in it,
+    -- relative to the scope's root; a directory that is not UTF-8 is kept as its nearest
+    -- ancestor that is
     cursor_scope    INTEGER,
     cursor_dir      TEXT,
     files_seen      INTEGER NOT NULL DEFAULT 0,
@@ -51,10 +54,13 @@ CREATE TABLE scans (
     moved           INTEGER NOT NULL DEFAULT 0,
     missing         INTEGER NOT NULL DEFAULT 0,
     problems        INTEGER NOT NULL DEFAULT 0,
-    current_path    TEXT,
+    -- The folder being scanned: its root, and the path relative to it
+    current_root_id INTEGER,
+    current_path    TEXT    CHECK ((current_path IS NULL) = (current_root_id IS NULL)),
     created_at      INTEGER NOT NULL,
     started_at      INTEGER,
-    finished_at     INTEGER
+    finished_at     INTEGER,
+    FOREIGN KEY (library_id, current_root_id) REFERENCES library_roots (library_id, id)
 ) STRICT;
 
 CREATE INDEX scans_by_created ON scans (library_id, created_at, id);

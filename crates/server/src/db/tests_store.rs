@@ -260,6 +260,7 @@ mod marks;
 mod primary;
 mod reanalysis;
 mod recompute;
+mod scans;
 mod sidecars;
 mod totals;
 

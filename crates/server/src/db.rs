@@ -38,6 +38,16 @@ pub use store::SqliteStore;
 /// indexes (`design/database.md` §4).
 const OPTIMIZE_EVERY: Duration = Duration::from_secs(3600);
 
+/// How much of the database file each reader maps into memory, in bytes, so its reads come from
+/// the operating system's page cache, which every reader shares, rather than being copied into
+/// a small cache of its own (`design/database.md` §7). 1 GiB is about the database of a
+/// 500k-track library.
+const READER_MMAP_SIZE: i64 = 1 << 30;
+
+/// The size, in bytes, the writer cuts the write-ahead log back to when it starts the log over
+/// after a checkpoint, so the disk a cold scan's log took is given back (`design/database.md` §7).
+const JOURNAL_SIZE_LIMIT: i64 = 64 << 20;
+
 /// Work for a database thread. It sends its own result back to whoever queued it.
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
 
@@ -76,6 +86,8 @@ impl Database {
         // Every commit reaches disk before it is acknowledged. A commit lost to power failure
         // would let the change feeds reuse sequence numbers clients have already seen.
         writer.execute_batch("PRAGMA synchronous = FULL")?;
+        // Only the writer writes the log, so only its limit takes effect.
+        writer.pragma_update(None, "journal_size_limit", JOURNAL_SIZE_LIMIT)?;
 
         let schema_version = migrations::migrate(&mut writer, migrations::MIGRATIONS)?;
         // Gathers query-planner statistics where they are missing (design/database.md §4).
@@ -90,6 +102,7 @@ impl Database {
             )
             .with_context(|| format!("cannot open the database {}", path.display()))?;
             configure(&reader)?;
+            reader.pragma_update(None, "mmap_size", READER_MMAP_SIZE)?;
             readers.push(reader);
         }
 
@@ -325,6 +338,19 @@ mod tests {
             })
             .await;
         assert!(matches!(result, Err(DbError::Sqlite(_))));
+    }
+
+    /// Readers map the database into memory, and the writer, which writes the log, limits it.
+    #[tokio::test]
+    async fn readers_map_the_file_and_the_writer_limits_the_log() {
+        let (_temp, db) = open();
+        let pragma = |conn: &Connection, name: &str| {
+            conn.pragma_query_value(None, name, |r| r.get::<_, i64>(0))
+        };
+        let mmap = db.read(move |conn| pragma(conn, "mmap_size")).await.unwrap();
+        assert_eq!(mmap, READER_MMAP_SIZE);
+        let limit = db.write(move |tx| pragma(tx, "journal_size_limit")).await.unwrap();
+        assert_eq!(limit, JOURNAL_SIZE_LIMIT);
     }
 
     #[tokio::test]

@@ -44,7 +44,8 @@ impl SqliteStore {
         &self.db
     }
 
-    /// Reload roots from `library_roots`. Call after roots change.
+    /// Reload roots from `library_roots`. Call after roots change, before the library's scanner
+    /// is reconfigured: a scan of a root the store does not hold is refused.
     pub fn refresh_roots(&self) -> Result<(), DbError> {
         let map = self
             .db
