@@ -252,6 +252,7 @@ mod suite {
     jewelcase_scanner::store_suite!(super::library_store);
 }
 
+mod artist_sort;
 mod derived;
 mod failures;
 mod labels;
@@ -263,6 +264,7 @@ mod recompute;
 mod scans;
 mod sidecars;
 mod totals;
+mod track_totals;
 
 // ───────────────────────────── Derived rules ─────────────────────────────
 
@@ -349,8 +351,8 @@ fn album_split_across_folders_is_one_album() -> Result<()> {
     assert_eq!(scalar::<i64>(&store, "SELECT disc_count FROM albums"), Some(2));
     assert_eq!(
         scalar::<i64>(&store, "SELECT track_total FROM albums"),
-        Some(10),
-        "max of per-file totals"
+        Some(18),
+        "the sum of its discs' totals"
     );
     assert_eq!(count(&store, "SELECT COUNT(*) FROM album_discs"), 2);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM album_artists"), 1);

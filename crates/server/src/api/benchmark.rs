@@ -50,6 +50,7 @@ async fn benchmark_list_pages() {
              SELECT 1, id, 0, 1 + (id % 5000) FROM albums;
              INSERT INTO album_discs (library_id, album_id, disc_number, track_count, track_total)
              SELECT 1, id, 1, 10, 10 FROM albums;
+             UPDATE albums SET track_total = 10;
              INSERT INTO track_artists (library_id, track_id, position, artist_id)
              SELECT 1, id, 0, 1 + (id % 5000) FROM tracks;
              INSERT INTO track_artists (library_id, track_id, position, artist_id)

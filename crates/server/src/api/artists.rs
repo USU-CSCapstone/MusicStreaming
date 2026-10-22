@@ -84,6 +84,7 @@ fn source(library: i64) -> Source {
     Source {
         select: SELECT,
         from: "artists ar".to_owned(),
+        joins: "",
         filter: "ar.library_id = ?".to_owned(),
         params: vec![library.into()],
     }

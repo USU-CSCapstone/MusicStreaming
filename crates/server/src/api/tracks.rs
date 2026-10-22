@@ -8,7 +8,9 @@ use axum::Json;
 use axum::extract::State;
 use serde::Deserialize;
 
-pub use representation::{LOUDNESS, Loudness, SELECT, Track, TrackSummary, list_summary, loudness};
+pub use representation::{
+    JOINS, LOUDNESS, Loudness, SELECT, Track, TrackSummary, list_summary, loudness,
+};
 
 use super::credit::ArtistCredit;
 use super::extract::{Path, Query};
@@ -160,7 +162,7 @@ fn source(library: i64, album: Option<&str>, artist: Option<&str>, credit: Artis
         filter += " AND t.album_id = ?";
         params.push(key(album).into());
     }
-    Source { select: SELECT, from, filter, params }
+    Source { select: SELECT, from, joins: JOINS, filter, params }
 }
 
 #[cfg(test)]

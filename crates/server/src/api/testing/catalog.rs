@@ -22,9 +22,10 @@ pub async fn app() -> (tempfile::TempDir, Arc<Database>, Router) {
 ///   Radiohead, Nirvana, and the unknown artist, added in the order Radiohead, the unknown
 ///   artist, The Beatles, Nirvana.
 /// - "Abbey Road" by The Beatles (1969-09-26, Rock, on Apple, one disc of 17 tracks), "Kid A"
-///   by Radiohead (2000, none of its tracks available), "Nevermind" by Nirvana (no date), and
-///   the unknown album by the unknown artist (an unnumbered disc of 3 tracks). By date added
-///   they run Abbey Road, Nevermind, the unknown album, Kid A.
+///   by Radiohead (2000, none of its tracks available), "Nevermind" by Nirvana (no date, and a
+///   track total of 12 with no discs listed), and the unknown album by the unknown artist (an
+///   unnumbered disc of 3 tracks). By date added they run Abbey Road, Nevermind, the unknown
+///   album, Kid A.
 /// - On Abbey Road, by The Beatles: "Come Together" (disc 1, track 1, Rock, explicit, with
 ///   synced lyrics, an ISRC, and loudness), "Something" (1-2, missing), "Her Majesty" (disc 1,
 ///   unnumbered), and "Bonus" (2-1, with Radiohead). On Kid A, by Radiohead with The Beatles:
@@ -133,7 +134,8 @@ fn insert(tx: &Transaction) -> Result<()> {
            UPDATE artists SET image_id = 40, biography = 'Four lads from Liverpool.',
                               album_count = 2, track_count = 30, appearance_count = 1
                WHERE id = 10;
-           UPDATE albums SET disc_total = 1, labels = '["Apple"]' WHERE id = 101;
+           UPDATE albums SET disc_total = 1, track_total = 17, labels = '["Apple"]' WHERE id = 101;
+           UPDATE albums SET track_total = 12 WHERE id = 103;
            UPDATE tracks SET explicit = 1, isrc = 'GBAYE0601690', lyrics_kind = 'synced',
                              bitrate_kbps = 900, identifiers = '{"musicbrainz_recordingid":"abc"}'
                WHERE id = 1001;

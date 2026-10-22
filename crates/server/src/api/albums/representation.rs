@@ -56,8 +56,7 @@ pub const SELECT: &[&str] = &[
     "al.release_date",
     "al.type",
     "al.track_count",
-    // The spec's trackTotal sums the tagged totals of the discs present; NULL if none is tagged.
-    "(SELECT sum(track_total) FROM album_discs WHERE album_discs.album_id = al.id)",
+    "al.track_total",
     "al.disc_count",
     "al.disc_total",
     "al.duration_us",

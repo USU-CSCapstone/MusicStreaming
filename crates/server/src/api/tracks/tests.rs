@@ -284,3 +284,30 @@ async fn every_sort_reads_from_an_index() {
     .await
     .unwrap();
 }
+
+/// A track row reads its album once, for its title, its image and the image's placeholder alike.
+#[tokio::test]
+async fn a_track_row_reads_its_album_once() {
+    let (_temp, db, _app) = catalog::app().await;
+    db.read(|conn| {
+        let source = source(1, None, None, ArtistCredit::Any);
+        let sql = format!(
+            "EXPLAIN QUERY PLAN SELECT {} FROM {} {} WHERE {}",
+            SELECT.join(", "),
+            source.from,
+            source.joins,
+            source.filter
+        );
+        let plan: Vec<String> = conn
+            .prepare(&sql)?
+            .query_map(rusqlite::params_from_iter(&source.params), |row| row.get(3))?
+            .collect::<rusqlite::Result<_>>()?;
+        let reads = plan
+            .iter()
+            .filter(|step| step.starts_with("SEARCH al ") || step.starts_with("SEARCH albums "));
+        assert_eq!(reads.count(), 1, "{plan:#?}");
+        Ok(())
+    })
+    .await
+    .unwrap();
+}

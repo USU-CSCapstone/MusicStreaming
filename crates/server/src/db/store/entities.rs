@@ -6,7 +6,7 @@ use jewelcase_scanner::ImageInfo;
 use rusqlite::{OptionalExtension, Result, Transaction, params};
 
 // Each find-or-create reads first, since the key is almost always there already, and inserts
-// only when it is not.
+// only when it is not. An image is upserted instead, since its row takes the path it is found at.
 
 /// The artist of `lib` whose name key `name` folds to, added at `now` if new. `None` is the
 /// unknown artist.
@@ -88,8 +88,8 @@ pub fn find_or_create_tag(tx: &Transaction<'_>, lib: i64, name: &str) -> Result<
     )
 }
 
-/// The image of `lib` with `info`'s hash. A new one is added at `rel` under `root_id`; an
-/// existing one keeps its path.
+/// The image of `lib` with `info`'s hash, at `rel` under `root_id`: added if new, and otherwise
+/// moved there, so it follows its file to wherever a scan last found it.
 pub fn upsert_image(
     tx: &Transaction<'_>,
     lib: i64,
@@ -97,20 +97,65 @@ pub fn upsert_image(
     rel: &str,
     info: &ImageInfo,
 ) -> Result<i64> {
-    if let Some(id) = tx
-        .query_row(
-            "SELECT id FROM images WHERE library_id = ?1 AND hash = ?2",
-            params![lib, info.hash],
-            |r| r.get(0),
-        )
-        .optional()?
-    {
-        return Ok(id);
-    }
     tx.query_row(
         "INSERT INTO images (id, library_id, hash, width, height, placeholder, root_id, path) \
-         VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, NULL, ?5, ?6) RETURNING id",
+         VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, NULL, ?5, ?6) \
+         ON CONFLICT (library_id, hash) DO UPDATE SET root_id = excluded.root_id, path = excluded.path \
+         RETURNING id",
         params![lib, info.hash, info.width as i64, info.height as i64, root_id, rel],
         |r| r.get(0),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use rusqlite::Connection;
+
+    use super::*;
+    use crate::db::testing::library;
+    use crate::db::{Database, libraries};
+
+    /// The id of library `lib`'s first root.
+    fn root(conn: &Connection, lib: i64) -> Result<i64> {
+        conn.query_row("SELECT id FROM library_roots WHERE library_id = ?1", [lib], |r| r.get(0))
+    }
+
+    /// Each library's images, as `(library, id, root, path)` in id order.
+    fn images(conn: &Connection) -> Result<Vec<(i64, i64, i64, String)>> {
+        conn.prepare("SELECT library_id, id, root_id, path FROM images ORDER BY library_id, id")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect()
+    }
+
+    /// An image found again by its hash, as after its folder was renamed or moved to another
+    /// root, is the same row at the root and path it was found at; the same bytes in another
+    /// library are that library's own row.
+    #[test]
+    fn an_image_found_by_hash_follows_its_file_within_its_library() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("jewelcase.db")).unwrap();
+        let info = ImageInfo { hash: vec![7; 32], width: 2, height: 1 };
+        let (roots, ids, renamed, moved) = db
+            .write_blocking(move |tx| {
+                library(tx, 1, "Music", "/music")?;
+                library(tx, 2, "Other", "/other")?;
+                let (one, two) = (root(tx, 1)?, root(tx, 2)?);
+                let more = libraries::add_root(tx, 1, Path::new("/more"))?;
+                let first = upsert_image(tx, 1, one, "A/X/cover.png", &info)?;
+                let other = upsert_image(tx, 2, two, "A/X/cover.png", &info)?;
+                let again = upsert_image(tx, 1, one, "A/Y/cover.png", &info)?;
+                let renamed = images(tx)?;
+                let last = upsert_image(tx, 1, more, "B/cover.png", &info)?;
+                Ok(([one, two, more], [first, other, again, last], renamed, images(tx)?))
+            })
+            .unwrap();
+        let ([one, two, more], [first, other, again, last]) = (roots, ids);
+        assert_eq!([again, last], [first, first], "found by its hash");
+        assert_ne!(other, first, "another library's own row");
+        let elsewhere = (2, other, two, "A/X/cover.png".to_owned());
+        assert_eq!(renamed, [(1, first, one, "A/Y/cover.png".to_owned()), elsewhere.clone()]);
+        assert_eq!(moved, [(1, first, more, "B/cover.png".to_owned()), elsewhere]);
+    }
 }

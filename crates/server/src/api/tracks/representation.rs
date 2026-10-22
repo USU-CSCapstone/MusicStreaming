@@ -110,7 +110,7 @@ pub fn loudness(row: &Row) -> rusqlite::Result<Option<Loudness>> {
     })
 }
 
-/// The columns [`list_summary`] reads, in order.
+/// The columns [`list_summary`] reads, in order, from `tracks t` and [`JOINS`].
 pub const SELECT: &[&str] = &[
     "t.id",
     "t.title",
@@ -126,14 +126,18 @@ pub const SELECT: &[&str] = &[
     timestamp!("t.added_at"),
     artists_json!("track", "t.id"),
     genres_json!("track", "t.id"),
-    "(SELECT title FROM albums WHERE albums.id = t.album_id)",
-    "(SELECT image_id FROM albums WHERE albums.id = t.album_id)",
+    "al.title",
+    "al.image_id",
     artists_json!("album", "t.album_id"),
-    placeholder!("(SELECT image_id FROM albums WHERE albums.id = t.album_id)"),
+    placeholder!("al.image_id"),
     "t.sort_key",
     "t.artist_sort_key",
     "t.album_sort_key",
 ];
+
+/// The track's album `al`, which [`SELECT`] reads once per row. A left join, so the track stays
+/// the outer loop.
+pub const JOINS: &str = "LEFT JOIN albums al ON al.id = t.album_id";
 
 /// A track as lists show it, from a row of [`SELECT`].
 pub fn list_summary(row: &Row) -> rusqlite::Result<TrackSummary> {
@@ -146,9 +150,7 @@ pub fn track(conn: &Connection, library: i64, track: i64) -> rusqlite::Result<Op
         "SELECT {}, t.container AS container, t.bitrate_kbps AS bitrate_kbps, \
          t.sample_rate_hz AS sample_rate_hz, t.bit_depth AS bit_depth, t.channels AS channels, \
          t.file_size AS file_size, t.lyrics_kind AS lyrics_kind, {LOUDNESS}, t.isrc AS isrc, \
-         t.identifiers AS identifiers \
-         FROM tracks t JOIN albums al ON al.id = t.album_id \
-         WHERE t.library_id = ?1 AND t.id = ?2",
+         t.identifiers AS identifiers FROM tracks t {JOINS} WHERE t.library_id = ?1 AND t.id = ?2",
         SELECT.join(", ")
     );
     conn.prepare_cached(&sql)?

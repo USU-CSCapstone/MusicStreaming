@@ -20,12 +20,13 @@ macro_rules! timestamp {
 pub(crate) use timestamp;
 
 /// The rows of `table`, named with its alias such as `albums al`, with these IDs in this
-/// library, in the order of `ids`, mapped by `map` from the columns in `select`. An ID that is
-/// not there is left out.
+/// library, in the order of `ids`, mapped by `map` from the columns in `select`, which may read
+/// the tables in `joins` too. An ID that is not there is left out.
 pub fn by_ids<T>(
     conn: &Connection,
     select: &[&str],
     table: &str,
+    joins: &str,
     library: i64,
     ids: &[i64],
     mut map: impl FnMut(&Row) -> rusqlite::Result<T>,
@@ -34,7 +35,7 @@ pub fn by_ids<T>(
     // The IDs lead the join, so the rows come out in their order.
     let sql = format!(
         "SELECT {} FROM json_each(?2) AS ids CROSS JOIN {table} ON {alias}.id = ids.value \
-         WHERE {alias}.library_id = ?1 ORDER BY ids.key",
+         {joins} WHERE {alias}.library_id = ?1 ORDER BY ids.key",
         select.join(", ")
     );
     let ids = serde_json::to_string(ids).expect("integers serialize");
@@ -72,7 +73,9 @@ mod tests {
         .unwrap();
         let found: Vec<i64> = db
             .read_blocking(|conn| {
-                by_ids(conn, &["al.id"], "albums al", 1, &[102, 201, 999, 101], |row| row.get(0))
+                by_ids(conn, &["al.id"], "albums al", "", 1, &[102, 201, 999, 101], |row| {
+                    row.get(0)
+                })
             })
             .unwrap();
         assert_eq!(found, [102, 101]);

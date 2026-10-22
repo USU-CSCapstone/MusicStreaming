@@ -138,16 +138,20 @@ fn results(conn: &Connection, library: i64, found: Vec<Found>) -> rusqlite::Resu
     for section in found {
         let ids = &section.ids;
         let items = match section.kind {
-            Kind::Track => sql::by_ids(conn, tracks::SELECT, "tracks t", library, ids, |row| {
-                let track = tracks::list_summary(row)?;
-                Ok(SearchResult::Track { track })
-            })?,
-            Kind::Album => sql::by_ids(conn, albums::SELECT, "albums al", library, ids, |row| {
-                let album = albums::summary(row)?;
-                Ok(SearchResult::Album { album })
-            })?,
+            Kind::Track => {
+                sql::by_ids(conn, tracks::SELECT, "tracks t", tracks::JOINS, library, ids, |row| {
+                    let track = tracks::list_summary(row)?;
+                    Ok(SearchResult::Track { track })
+                })?
+            }
+            Kind::Album => {
+                sql::by_ids(conn, albums::SELECT, "albums al", "", library, ids, |row| {
+                    let album = albums::summary(row)?;
+                    Ok(SearchResult::Album { album })
+                })?
+            }
             Kind::Artist => {
-                sql::by_ids(conn, artists::SELECT, "artists ar", library, ids, |row| {
+                sql::by_ids(conn, artists::SELECT, "artists ar", "", library, ids, |row| {
                     let artist = artists::summary(row)?;
                     Ok(SearchResult::Artist { artist })
                 })?

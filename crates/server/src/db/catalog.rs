@@ -2,8 +2,9 @@
 //!
 //! Counts and spellings follow each change by trigger (`0007_catalog_counts.sql`). What is left
 //! runs for the entities a batch touched, never for the library: album links and art first (they
-//! decide who is an album artist, and what each album offers its artists), then artists, then
-//! albums (whose artist sort key reads artists), then tags.
+//! decide who is an album artist, and what each album offers its artists), then artists (whose
+//! changed sort key reaches the albums they head), then albums (whose artist sort key reads
+//! artists), then tags.
 
 use std::collections::HashSet;
 
@@ -113,7 +114,7 @@ fn most_used(tx: &Transaction<'_>, sql: &str, id: i64) -> Result<Option<String>>
 
 /// The album's resolved fields and counts from its tracks, or its deletion when none is left.
 fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i64) -> Result<()> {
-    let (count, available, duration, disc_total, track_total, disc_count, any_compilation): (
+    let (count, available, duration, disc_total, largest_disc_total, disc_count, any_compilation): (
         i64,
         i64,
         i64,
@@ -166,12 +167,15 @@ fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i64) -> Resu
          GROUP BY release_type ORDER BY COUNT(*) DESC, release_type ASC LIMIT 1",
         album,
     )?;
-    let album_type = album_type(release_type.as_deref(), any_compilation != 0, track_total);
+    let album_type = album_type(release_type.as_deref(), any_compilation != 0, largest_disc_total);
 
+    // The track total is the spec's `trackTotal`: the sum of the totals of the discs present,
+    // which `refresh_album_links` has just written.
     tx.execute(
         "UPDATE albums SET title = ?2, sort_key = COALESCE(?3, sort_key), artist_sort_key = COALESCE(?4, artist_sort_key), \
-         type = ?5, release_date = ?6, disc_total = ?7, track_total = ?8, disc_count = ?9, track_count = ?10, \
-         available_track_count = ?11, duration_us = ?12 WHERE id = ?1",
+         type = ?5, release_date = ?6, disc_total = ?7, \
+         track_total = (SELECT SUM(track_total) FROM album_discs WHERE album_id = ?1), \
+         disc_count = ?8, track_count = ?9, available_track_count = ?10, duration_us = ?11 WHERE id = ?1",
         params![
             album,
             title,
@@ -180,7 +184,6 @@ fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i64) -> Resu
             album_type,
             release_date,
             disc_total,
-            track_total,
             disc_count,
             count,
             available,
@@ -197,7 +200,7 @@ fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i64) -> Resu
 fn album_type(
     release_type: Option<&str>,
     compilation: bool,
-    track_total: Option<i64>,
+    largest_disc_total: Option<i64>,
 ) -> &'static str {
     if let Some(kind) = release_type.and_then(release_kind) {
         return kind;
@@ -205,7 +208,7 @@ fn album_type(
     if compilation {
         return "compilation";
     }
-    match track_total {
+    match largest_disc_total {
         Some(1..=3) => "single",
         Some(4..=6) => "ep",
         _ => "album",
@@ -244,17 +247,25 @@ pub fn recompute_album_loudness(tx: &Transaction<'_>, album: i64) -> Result<()> 
 /// The artist's displayed name and sort key from the spellings and sort keys its credits count,
 /// and its image and biography from its albums ([`art::artist`]), or its deletion when no track
 /// credits it. Whether one does is read from the credits themselves, so a wrong count can never
-/// delete a credited artist. The unknown artist has no image or biography.
+/// delete a credited artist. The unknown artist has no image or biography. A changed sort key
+/// reaches the albums the artist heads ([`follow_artist_sort_key`]).
 fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i64) -> Result<()> {
-    let Some((credited, name, tagged_sort)) = tx
+    let Some((credited, name, tagged_sort, old_sort)) = tx
         .query_row(
             "SELECT EXISTS (SELECT 1 FROM track_artists WHERE artist_id = ?1) \
                  OR EXISTS (SELECT 1 FROM track_album_artists WHERE artist_id = ?1), \
              (SELECT name FROM artist_spellings WHERE artist_id = ?1 ORDER BY uses DESC, name LIMIT 1), \
-             (SELECT sort_key FROM artist_sort_keys WHERE artist_id = ?1 ORDER BY uses DESC, sort_key LIMIT 1) \
-             FROM artists WHERE id = ?1",
+             (SELECT sort_key FROM artist_sort_keys WHERE artist_id = ?1 ORDER BY uses DESC, sort_key LIMIT 1), \
+             sort_key FROM artists WHERE id = ?1",
             [artist],
-            |r| Ok((r.get::<_, bool>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<Vec<u8>>>(2)?)),
+            |r| {
+                Ok((
+                    r.get::<_, bool>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<Vec<u8>>>(2)?,
+                    r.get::<_, Vec<u8>>(3)?,
+                ))
+            },
         )
         .optional()?
     else {
@@ -272,8 +283,33 @@ fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i64) -> Resu
         "UPDATE artists SET name = ?2, sort_key = ?3 WHERE id = ?1",
         params![artist, name, sort_key],
     )?;
+    if sort_key != old_sort {
+        follow_artist_sort_key(tx, lib, artist, &sort_key, now)?;
+    }
     art::artist(tx, artist, name.is_some())?;
     feed::record(tx, lib, Entity::Artist, artist, Op::Upsert, now)
+}
+
+/// Gives every album `artist` heads, as its first album artist, the artist's `sort_key`, and
+/// records each album that changes in the feed. Albums the batch touched take it again as they
+/// are recomputed; this reaches the rest. It costs the artist's albums, so the caller runs it
+/// only when the artist's key changes.
+fn follow_artist_sort_key(
+    tx: &Transaction<'_>,
+    lib: i64,
+    artist: i64,
+    sort_key: &[u8],
+    now: i64,
+) -> Result<()> {
+    let mut stmt = tx.prepare_cached(
+        "UPDATE albums SET artist_sort_key = ?2 WHERE artist_sort_key <> ?2 AND id IN \
+         (SELECT album_id FROM album_artists WHERE artist_id = ?1 AND position = 0) RETURNING id",
+    )?;
+    let albums = stmt.query_map(params![artist, sort_key], |r| r.get::<_, i64>(0))?;
+    for album in albums.collect::<Result<Vec<_>>>()? {
+        feed::record(tx, lib, Entity::Album, album, Op::Upsert, now)?;
+    }
+    Ok(())
 }
 
 /// The tag's displayed name and sort key from the spellings its tracks count, or its deletion

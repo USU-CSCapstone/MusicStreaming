@@ -86,6 +86,7 @@ CREATE TABLE albums (
     biography_track_id    INTEGER,
     release_date          TEXT    CHECK (release_date GLOB '[0-9][0-9][0-9][0-9]' OR release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]' OR release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
     disc_total            INTEGER,
+    -- The sum of album_discs.track_total; NULL when no disc has one
     track_total           INTEGER,
     disc_count            INTEGER NOT NULL DEFAULT 0,
     track_count           INTEGER NOT NULL DEFAULT 0,

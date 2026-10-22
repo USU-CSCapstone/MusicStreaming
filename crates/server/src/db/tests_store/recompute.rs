@@ -48,8 +48,17 @@ const CHECKS: &[(&str, &str, &str)] = &[
          disc_count FROM albums ORDER BY id",
         "SELECT album_id, (SELECT album_title FROM tracks WHERE album_id = t.album_id AND album_title IS NOT NULL \
                            GROUP BY album_title ORDER BY COUNT(*) DESC, album_title LIMIT 1), \
-         COUNT(*), SUM(missing_since IS NULL), SUM(duration_us), MAX(disc_total), MAX(track_total), \
+         COUNT(*), SUM(missing_since IS NULL), SUM(duration_us), MAX(disc_total), \
+         (SELECT SUM(total) FROM (SELECT MAX(track_total) AS total FROM tracks \
+                                  WHERE album_id = t.album_id GROUP BY disc_number)), \
          COUNT(DISTINCT disc_number) FROM tracks t GROUP BY album_id ORDER BY album_id",
+    ),
+    (
+        "album artist sort keys",
+        "SELECT id, artist_sort_key FROM albums ORDER BY id",
+        "SELECT al.id, (SELECT a.sort_key FROM album_artists aa JOIN artists a ON a.id = aa.artist_id \
+                        WHERE aa.album_id = al.id AND aa.position = 0) \
+         FROM albums al ORDER BY al.id",
     ),
     (
         "album art",

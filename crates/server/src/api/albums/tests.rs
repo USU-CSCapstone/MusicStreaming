@@ -89,6 +89,9 @@ async fn gets_an_album_with_its_discs() {
     assert_eq!(unknown["discs"], json!([{ "number": null, "trackCount": 3, "trackTotal": null }]));
     let (_, missing) = json(&app, "/api/v1/libraries/1/albums/102").await;
     assert_eq!(missing["availability"], "missing");
+    // The stored track total, which the API reads rather than summing the album's discs.
+    let (_, nevermind) = json(&app, "/api/v1/libraries/1/albums/103").await;
+    assert_eq!((&nevermind["trackTotal"], &nevermind["discs"]), (&json!(12), &json!([])));
 }
 
 /// Labels stored as anything but strings are an error, never an album with no labels.

@@ -33,12 +33,15 @@ pub struct Sort {
     pub unknown: Unknown,
 }
 
-/// What a list reads: `SELECT {select} FROM {from} WHERE {filter}`, with `params` for the `?`s
-/// in `from` and `filter`, in order.
+/// What a list reads: `SELECT {select} FROM {from} {joins} WHERE {filter}`, with `params` for
+/// the `?`s in `from` and `filter`, in order.
 pub struct Source {
     /// Columns for the row mapper, which reads them from the front of each row.
     pub select: &'static [&'static str],
     pub from: String,
+    /// Tables that only `select` reads, each joined to one row of `from` at most, so a count
+    /// leaves them out.
+    pub joins: &'static str,
     pub filter: String,
     pub params: Vec<Value>,
 }
@@ -166,10 +169,11 @@ fn part_query(
     // A bound limit keeps the text the same for every page, so the statement cache reuses it.
     params.push(Value::Integer(limit as i64));
     let sql = format!(
-        "SELECT {}, {} FROM {} WHERE {} ORDER BY {order_by} LIMIT ?",
+        "SELECT {}, {} FROM {} {} WHERE {} ORDER BY {order_by} LIMIT ?",
         source.select.join(", "),
         sort.columns.join(", "),
         source.from,
+        source.joins,
         conditions.join(" AND "),
     );
     (sql, params)
