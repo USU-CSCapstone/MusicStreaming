@@ -20,6 +20,7 @@
 //! so that is forgotten, whoever fetched it (RFC 9111 §4.4).
 
 use std::collections::{BTreeMap, HashMap};
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -98,6 +99,9 @@ pub struct Reply {
     pub body: Arc<Vec<u8>>,
     /// Where it came from after redirects, which a later request must be allowed to reach.
     pub url: String,
+    /// The address it came from, if known. Reusing a reply makes no connection for the
+    /// plugin's resolver to judge, so a later request must be allowed to reach this address too.
+    pub addr: Option<IpAddr>,
 }
 
 impl Reply {
@@ -334,6 +338,7 @@ mod tests {
             headers: headers.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect(),
             body: Arc::new(b"hello".to_vec()),
             url: "https://api.example/".into(),
+            addr: None,
         }
     }
 

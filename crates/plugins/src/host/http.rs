@@ -1,12 +1,14 @@
 //! The `http` import: a request of the plugin's choosing, to the destinations its manifest
 //! names and nowhere else. A redirect is followed only to an approved destination, so an
-//! approved service cannot hand the plugin on to one that was not.
+//! approved service cannot hand the plugin on to one that was not. Nor does a request reach an
+//! address no plugin may, or a private one its destinations do not name (`guard`).
 //!
 //! Every plugin's requests share two things (`crate::network`). Each waits its turn at the
 //! pace its destination allows, in the queues its manifest and the host's limits say. A GET is
 //! answered from a reply already fetched while that reply is fresh, and a stale one is checked
 //! rather than fetched again.
 
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -15,7 +17,11 @@ use super::{Library, Run};
 use crate::manifest::{Per, Permission};
 use crate::network::cache::{self, Key, Lookup, Reply, Visible};
 use crate::network::limits::Scope;
-use crate::rules;
+use crate::rules::{self, Reach};
+use guard::{Guard, System};
+use reqwest::dns::Resolve;
+
+mod guard;
 
 /// How long a request waits for its reply once sent, unless a run says otherwise.
 pub(super) const TIMEOUT: Duration = Duration::from_secs(15);
@@ -35,7 +41,8 @@ pub(super) type KeptClient = Mutex<Option<(Vec<String>, reqwest::Client)>>;
 impl<L: Library> Run<L> {
     /// The plugin's client, made on its first request, so a plugin that never uses the network
     /// costs none. It is kept for the plugin's later runs while their destinations are the ones
-    /// it was made for, and made again when they differ, since it follows redirects only to those.
+    /// it was made for, and made again when they differ, since it follows redirects only to those,
+    /// and reaches a private address only for a host they name.
     /// It is made under the kept client's lock, so runs that start together make one.
     fn client(&self) -> Result<reqwest::Client, String> {
         let destinations = &self.grants.destinations;
@@ -45,22 +52,28 @@ impl<L: Library> Run<L> {
         {
             return Ok(client.clone());
         }
-        let client =
-            build(destinations.clone()).map_err(|e| format!("the network is unavailable: {e}"))?;
+        let client = build(destinations, self.reach, System)
+            .map_err(|e| format!("the network is unavailable: {e}"))?;
         *kept = Some((destinations.clone(), client.clone()));
         Ok(client)
     }
 }
 
 /// A client that follows a redirect only to one of `destinations`, and at most `MAX_REDIRECTS`
-/// in a row.
-fn build(destinations: Vec<String>) -> reqwest::Result<reqwest::Client> {
+/// in a row, and connects only to an address `reach` lets it, looking names up with `lookup`.
+fn build(
+    destinations: &[String],
+    reach: fn(IpAddr) -> Reach,
+    lookup: impl Resolve + 'static,
+) -> reqwest::Result<reqwest::Client> {
+    let destinations: Arc<[String]> = destinations.into();
+    let resolver = Guard { lookup, destinations: destinations.clone(), reach };
     let redirects = reqwest::redirect::Policy::custom(move |attempt| {
         // The first of `previous` is where the request started, not a redirect.
         if attempt.previous().len() > MAX_REDIRECTS {
             return attempt.error("it redirected too many times");
         }
-        match rules::allowed(attempt.url().as_str(), &destinations) {
+        match rules::allowed(attempt.url().as_str(), &destinations, reach) {
             Ok(_) => attempt.follow(),
             Err(refused) => attempt.error(format!("it redirected elsewhere: {refused}")),
         }
@@ -69,6 +82,10 @@ fn build(destinations: Vec<String>) -> reqwest::Result<reqwest::Client> {
         .user_agent(USER_AGENT)
         .connect_timeout(Duration::from_secs(10))
         .redirect(redirects)
+        .dns_resolver(resolver)
+        // reqwest otherwise uses a proxy the environment names, which would look the name up
+        // itself, out of the resolver's sight.
+        .no_proxy()
         // Shorter than servers commonly keep an idle connection open, so a request is rarely
         // written to one the server is closing just then, which would fail it.
         .pool_idle_timeout(Duration::from_secs(4))
@@ -102,7 +119,7 @@ fn describe(error: reqwest::Error) -> String {
 impl<L: Library> http::Host for Run<L> {
     async fn send(&mut self, request: http::Request) -> Result<http::Response, http::Error> {
         self.may(Permission::Network)?;
-        let url = rules::allowed(&request.url, &self.grants.destinations)
+        let url = rules::allowed(&request.url, &self.grants.destinations, self.reach)
             .map_err(http::Error::Refused)?;
         // Checked to have one. Parsed, so it is lowercase, and every spelling of a URL is one.
         let host = url.host_str().unwrap_or_default().to_owned();
@@ -124,9 +141,15 @@ impl<L: Library> http::Host for Run<L> {
         let mut stale = None;
         if let Some(key) = &key {
             match self.network.cache.lookup(key, Instant::now()) {
-                Lookup::Fresh(reply) => return self.reuse(reply),
+                Lookup::Fresh(reply) => {
+                    if self.may_reuse(&reply)? {
+                        return Ok(response(reply));
+                    }
+                }
                 // One it could not reuse is no use checking either.
-                Lookup::Stale(reply) => stale = self.may_reuse(&reply).is_ok().then_some(reply),
+                Lookup::Stale(reply) => {
+                    stale = matches!(self.may_reuse(&reply), Ok(true)).then_some(reply)
+                }
                 Lookup::Miss => {}
             }
         }
@@ -151,9 +174,9 @@ impl<L: Library> http::Host for Run<L> {
         // The wait for a turn is not the service's slowness, so only the request is timed.
         let reply = match tokio::time::timeout(self.timeout, fetch(builder)).await {
             Ok(Ok(reply)) => reply,
-            Ok(Err(NoReply { why, unreachable })) => {
+            Ok(Err(NoReply { error, unreachable })) => {
                 self.outage |= unreachable;
-                return Err(http::Error::Failed(why));
+                return Err(error);
             }
             Err(_) => {
                 self.outage = true;
@@ -229,18 +252,17 @@ impl<L: Library> Run<L> {
         limits.iter().find(|(limited, _)| limited == host).map(|(_, gap)| *gap)
     }
 
-    /// A kept reply, if this plugin may reach where it came from.
-    fn reuse(&self, reply: Reply) -> Result<http::Response, http::Error> {
-        self.may_reuse(&reply).map_err(|refused| {
+    /// Whether this plugin may reuse a kept reply. One redirected where it could not have
+    /// followed fails, as fetching it again would. One from an address the plugin may not
+    /// reach, such as a private one through `*`, or from an unknown one, is fetched again
+    /// instead, and the resolver judges that.
+    fn may_reuse(&self, reply: &Reply) -> Result<bool, http::Error> {
+        let (destinations, reach) = (&self.grants.destinations, self.reach);
+        rules::allowed(&reply.url, destinations, reach).map_err(|refused| {
             http::Error::Failed(format!("request failed: it redirected elsewhere: {refused}"))
         })?;
-        Ok(response(reply))
-    }
-
-    /// Whether this plugin may reach where a kept reply came from. One that was redirected is
-    /// not for a plugin that could not have followed the redirect itself.
-    fn may_reuse(&self, reply: &Reply) -> Result<(), String> {
-        rules::allowed(&reply.url, &self.grants.destinations).map(|_| ())
+        let host = rules::host_of(&reply.url);
+        Ok(reply.addr.is_some_and(|ip| rules::may_reach(&host, ip, destinations, reach).is_ok()))
     }
 
     /// What this run can see, which decides whose kept replies it shares.
@@ -260,27 +282,32 @@ impl<L: Library> Run<L> {
 /// at all: any failure before a connection was made, such as no address for it, a refused
 /// connection, no route to it, the 10 s connect timeout, or a failed TLS handshake. Each is
 /// treated as an outage, so a lasting DNS or TLS problem disables the plugin only after the
-/// 72 hours an outage may last, not after five failures.
+/// 72 hours an outage may last, not after five failures. A name refused for its address is
+/// the plugin's doing, not an outage.
 struct NoReply {
-    why: String,
+    error: http::Error,
     unreachable: bool,
 }
 
 impl From<String> for NoReply {
     /// A failure after the service was reached, such as a reply cut short.
     fn from(why: String) -> NoReply {
-        NoReply { why, unreachable: false }
+        NoReply { error: http::Error::Failed(why), unreachable: false }
     }
 }
 
 /// Sends the request and reads the whole reply.
 async fn fetch(builder: reqwest::RequestBuilder) -> Result<Reply, NoReply> {
-    let mut res = builder.send().await.map_err(|e| NoReply {
-        unreachable: e.is_connect(),
-        why: format!("request failed: {}", describe(e)),
+    let mut res = builder.send().await.map_err(|e| match guard::forbidden(&e) {
+        Some(why) => NoReply { error: http::Error::Refused(why), unreachable: false },
+        None => NoReply {
+            unreachable: e.is_connect(),
+            error: http::Error::Failed(format!("request failed: {}", describe(e))),
+        },
     })?;
     let status = res.status().as_u16();
     let url = res.url().to_string();
+    let addr = res.remote_addr().map(|addr| addr.ip());
     // Names come lowercase from the HTTP library.
     let headers = res
         .headers()
@@ -296,7 +323,7 @@ async fn fetch(builder: reqwest::RequestBuilder) -> Result<Reply, NoReply> {
             return Err(format!("the reply is over {} MB", MAX_BODY >> 20).into());
         }
     }
-    Ok(Reply { status, headers, body: Arc::new(body), url })
+    Ok(Reply { status, headers, body: Arc::new(body), url, addr })
 }
 
 /// The reply as the plugin receives it. The body is copied only if the cache kept it too.

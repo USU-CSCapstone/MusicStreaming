@@ -5,6 +5,7 @@
 //! still loads: the call answers `not-granted`, and `granted` lets it adapt up front.
 
 use std::future::{Future, Ready, ready};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -19,6 +20,7 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 use crate::manifest::{Permission, RateLimit};
 use crate::network::Network;
+use crate::rules::{self, Reach};
 use http::KeptClient;
 
 mod compiled;
@@ -295,6 +297,7 @@ impl<L: Library> Host<L> {
             touched: Vec::new(),
             outage: false,
             timeout: http::TIMEOUT,
+            reach: rules::reach,
         };
         let mut store = Store::new(&self.engine, run);
         // Memories, tables, and instances are counted across the whole store, so the caps bound
@@ -377,6 +380,9 @@ pub struct Run<L> {
     outage: bool,
     /// How long a request waits for its reply once sent.
     timeout: Duration,
+    /// What each address is to the run's requests. A field rather than a call to `rules::reach`
+    /// so that tests reach their servers on loopback, which no plugin may (`testing::reach`).
+    reach: fn(IpAddr) -> Reach,
 }
 
 impl<L: Library> Run<L> {

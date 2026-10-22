@@ -68,6 +68,7 @@ async fn a_lookup_that_failed_ends_the_run() {
         headers: vec![("cache-control".into(), "max-age=60".into())],
         body: Default::default(),
         url: "https://elsewhere.example/".into(),
+        addr: None,
     };
     host.network.cache.store(key, reply, Instant::now(), SystemTime::now());
     let outcome = run(&host).await;

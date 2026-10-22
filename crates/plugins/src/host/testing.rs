@@ -2,6 +2,7 @@
 //! built without a plugin, so a test calls the host imports directly.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -11,6 +12,7 @@ use wasmtime_wasi::WasiCtx;
 
 use super::{Album, Artist, Grants, Library, Run, Track};
 use crate::manifest::Permission;
+use crate::rules::{self, Reach};
 
 /// A library held in memory: its catalog, one root (ID 1) at `root`, and the plugin's state.
 #[derive(Default)]
@@ -139,7 +141,14 @@ pub fn grants(permissions: &[Permission]) -> Grants {
     }
 }
 
-/// A run over `library` with `grants(permissions)`, and a network and client of its own.
+/// What an address is to a test's requests: what it is to any plugin's, except that loopback,
+/// where the tests' servers listen, is private, so a test that names its server reaches it.
+pub fn reach(ip: IpAddr) -> Reach {
+    if ip.to_canonical().is_loopback() { Reach::Private } else { rules::reach(ip) }
+}
+
+/// A run over `library` with `grants(permissions)`, and a network and client of its own. Its
+/// requests reach loopback as `reach` says.
 pub fn run<L: Library>(library: L, permissions: &[Permission]) -> Run<L> {
     Run {
         wasi: WasiCtx::builder().build(),
@@ -156,5 +165,6 @@ pub fn run<L: Library>(library: L, permissions: &[Permission]) -> Run<L> {
         touched: Vec::new(),
         outage: false,
         timeout: super::http::TIMEOUT,
+        reach,
     }
 }

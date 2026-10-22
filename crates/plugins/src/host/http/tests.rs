@@ -1,5 +1,5 @@
-//! The `http` import against a server on 127.0.0.1: requests and redirects, the shared cache,
-//! and rate limits, with what they share.
+//! The `http` import against a server on 127.0.0.1: requests and redirects, the addresses they
+//! reach, the shared cache, and rate limits, with what they share.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -13,6 +13,7 @@ use super::http::{self, Host as _};
 use crate::manifest::Permission;
 use crate::network::Network;
 
+mod addresses;
 mod cache;
 mod clients;
 mod limits;
@@ -23,8 +24,9 @@ type Hits = Arc<Mutex<HashMap<String, usize>>>;
 
 /// A server on 127.0.0.1, the port it listens on, and its hits. It answers:
 ///
-/// - `/away` with a redirect to `localhost`, `/near` with one to `/here` on itself, and `/far`
-///   with one to `/fresh` on `localhost`;
+/// - `/away` with a redirect to `localhost`, `/near` with one to `/here` on itself, `/far`
+///   with one to `/fresh` on `localhost`, `/to-ip` with one to `/fresh` on `127.0.0.1`, and
+///   `/loop` with one to `[::1]`;
 /// - `/fresh` with how many times it was asked, fresh for a minute;
 /// - `/checked` with how many times it was asked and an ETag, to be checked every time, and
 ///   `304 Not Modified` to a check;
@@ -65,6 +67,12 @@ async fn server() -> (u16, Hits) {
             let reply = match path.as_str() {
                 "/away" => format!(
                     "HTTP/1.1 302 Found\r\nLocation: http://localhost:{port}/\r\nContent-Length: 0\r\n\r\n"
+                ),
+                "/to-ip" => format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{port}/fresh\r\nContent-Length: 0\r\n\r\n"
+                ),
+                "/loop" => format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://[::1]:{port}/\r\nContent-Length: 0\r\n\r\n"
                 ),
                 "/near" => {
                     "HTTP/1.1 302 Found\r\nLocation: /here\r\nContent-Length: 0\r\n\r\n".to_owned()
