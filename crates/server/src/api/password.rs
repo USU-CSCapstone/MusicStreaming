@@ -18,18 +18,27 @@ const MIN_SCORE: Score = Score::Three;
 /// and there is still no maximum length.
 const SCORED_CHARS: usize = 100;
 
-/// Each hash holds Argon2's 19 MiB for its whole run, so at most one per core runs at once,
-/// however many requests arrive.
+/// Each hash holds Argon2's 19 MiB and a core for its whole run, so hashes run on at most half
+/// the cores at once ([`permits`]), however many requests arrive, and the rest are left for
+/// playback.
 static HASHING: LazyLock<Semaphore> = LazyLock::new(|| {
-    Semaphore::new(thread::available_parallelism().map_or(1, |cores| cores.get()))
+    Semaphore::new(thread::available_parallelism().map_or(1, |cores| permits(cores.get())))
 });
 
+/// How many hashes [`HASHING`] lets run at once on `cores` cores: half of them, and at least one.
+fn permits(cores: usize) -> usize {
+    (cores / 2).max(1)
+}
+
 /// What an unknown account's password is checked against, so refusing it takes as long as
-/// refusing a wrong password, and timing does not tell whether an account exists.
-static DUMMY: LazyLock<String> = LazyLock::new(|| {
-    let hash = Argon2::default().hash_password(b"no account has this password");
-    hash.expect("hashing a constant with the default parameters").to_string()
-});
+/// refusing a wrong password, and timing does not tell whether an account exists. A hash of
+/// `no account has this password` at the default parameters, written out so that even the
+/// first refusal costs one check and nothing more.
+const DUMMY: &str = concat!(
+    "$argon2id$v=19$m=19456,t=2,p=1",
+    "$FFn8kmUDtHswtAkjTZH/Fw",
+    "$by2VjfK2WKbndNP5YbAN24koouEvgbuj1/Rbl96PFpc",
+);
 
 /// Accepts a password that is hard to guess, judged without composition rules. A common or
 /// breached password, or one built from `inputs` such as the username, is `weak_password`.
@@ -68,21 +77,17 @@ pub async fn hash_new(password: String, inputs: Vec<String>) -> Result<String, P
 /// read, it is checked against a dummy hash and never matches, in the same time.
 pub async fn verify(password: String, stored: Option<String>) -> Result<bool, Problem> {
     off_thread(move || {
-        let argon2 = Argon2::default();
         let stored = stored.as_deref().and_then(|stored| PasswordHash::new(stored).ok());
-        Ok(match stored {
-            Some(hash) => argon2.verify_password(password.as_bytes(), &hash).is_ok(),
-            None => {
-                let dummy = PasswordHash::new(&DUMMY).expect("the dummy hash is well formed");
-                let _ = argon2.verify_password(password.as_bytes(), &dummy);
-                false
-            }
-        })
+        let known = stored.is_some();
+        let hash = stored
+            .unwrap_or_else(|| PasswordHash::new(DUMMY).expect("the dummy hash is well formed"));
+        let matches = Argon2::default().verify_password(password.as_bytes(), &hash).is_ok();
+        Ok(known && matches)
     })
     .await
 }
 
-/// Runs CPU-bound password work off the async threads, a core at a time ([`HASHING`]).
+/// Runs CPU-bound password work off the async threads, as many at once as [`HASHING`] allows.
 async fn off_thread<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, Problem> + Send + 'static,
 ) -> Result<T, Problem> {
@@ -143,6 +148,28 @@ mod tests {
             assert!(!verify(String::new(), stored.clone()).await.unwrap(), "{stored:?}");
             assert!(!verify("no account has this password".into(), stored).await.unwrap());
         }
+    }
+
+    /// The dummy is a hash of its phrase with the same algorithm, version and parameters as a
+    /// new password's hash, so checking it costs the same as checking a stored one.
+    #[tokio::test]
+    async fn the_dummy_hash_is_read_and_checked_like_a_real_one() {
+        let dummy = PasswordHash::new(DUMMY).unwrap();
+        let phc = hash_new("correct horse battery staple".into(), vec![]).await.unwrap();
+        let real = PasswordHash::new(&phc).unwrap();
+        assert_eq!(
+            (dummy.algorithm, dummy.version, &dummy.params),
+            (real.algorithm, real.version, &real.params)
+        );
+        let argon2 = Argon2::default();
+        assert!(argon2.verify_password(b"no account has this password", &dummy).is_ok());
+        assert!(argon2.verify_password(b"correct horse battery staple", &dummy).is_err());
+    }
+
+    #[test]
+    fn hashing_takes_half_the_cores_and_at_least_one() {
+        let permits = [1, 2, 4, 16].map(permits);
+        assert_eq!(permits, [1, 1, 2, 8]);
     }
 
     #[tokio::test]
