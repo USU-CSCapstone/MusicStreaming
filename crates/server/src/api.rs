@@ -30,6 +30,7 @@ mod problem;
 mod realtime;
 mod recent_searches;
 mod refs;
+mod routes;
 mod search;
 mod session;
 mod setup;
@@ -42,9 +43,9 @@ mod waveform;
 
 use std::sync::Arc;
 
-use axum::extract::{DefaultBodyLimit, FromRef};
+use axum::extract::FromRef;
 use axum::middleware;
-use axum::routing::{any, delete, get, post, put};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 
 pub use id::Id;
@@ -146,62 +147,10 @@ pub fn router(
     // These answer `401` without a token.
     let signed_in = Router::new()
         .route("/auth/logout", post(session::logout))
-        .route("/me", get(me::get))
-        .route("/me/devices", get(devices::list))
-        .route("/me/player", get(player::get))
-        .route("/me/player/commands", post(player::send_command))
-        .route("/me/plays", post(plays::record))
-        .route("/me/plugins", get(connections::list))
-        .route(
-            "/me/plugins/{plugin_id}/settings",
-            get(connections::get_settings)
-                .put(connections::set_settings)
-                .delete(connections::disconnect),
-        )
         .route("/realtime", get(realtime::open))
-        .route("/me/plugins/{plugin_id}/search-sharing", put(connections::set_search_sharing))
-        .route("/libraries", get(libraries::list))
-        .route("/libraries/{library_id}", get(libraries::get))
-        .route("/libraries/{library_id}/albums", get(albums::list))
-        .route("/libraries/{library_id}/artists", get(artists::list))
-        .route("/libraries/{library_id}/playlists", get(playlists::list))
-        .route("/libraries/{library_id}/tracks", get(tracks::list))
-        .route("/libraries/{library_id}/tracks/{track_id}", get(tracks::get))
-        .route("/libraries/{library_id}/search", get(search::search))
-        .route(
-            "/libraries/{library_id}/recent-searches",
-            get(recent_searches::list).post(recent_searches::record).delete(recent_searches::clear),
-        )
-        .route(
-            "/libraries/{library_id}/recent-searches/{recent_search_id}",
-            delete(recent_searches::delete),
-        )
-        .route("/libraries/{library_id}/images/{image_id}", get(images::get))
-        .route("/libraries/{library_id}/tracks/{track_id}/lyrics", get(lyrics::get))
-        .route("/libraries/{library_id}/tracks/{track_id}/waveform", get(waveform::get))
-        .route("/libraries/{library_id}/tracks/{track_id}/playback", get(audio::playback))
-        .route("/libraries/{library_id}/tracks/{track_id}/audio", get(audio::audio))
-        .route("/libraries/{library_id}/artists/{artist_id}", get(artists::get))
-        .route("/libraries/{library_id}/albums/{album_id}", get(albums::get))
-        .route(
-            "/admin/plugins",
-            // A plugin file may be larger than the default limit on a request body.
-            get(plugins::list)
-                .post(plugins::install)
-                .layer(DefaultBodyLimit::max(jewelcase_plugins::MAX_SIZE)),
-        )
-        .route("/admin/plugins/{plugin_id}", get(plugins::get).delete(plugins::uninstall))
-        .route("/admin/plugins/{plugin_id}/permissions", put(plugins::set_permissions))
-        .route(
-            "/admin/plugins/{plugin_id}/exemptions/{host}",
-            put(plugins::exempt).delete(plugins::unexempt),
-        )
-        .route("/admin/plugins/{plugin_id}/libraries/{library_id}", put(plugins::set_enabled))
-        .route("/admin/plugins/{plugin_id}/run", post(plugins::run))
-        .route(
-            "/admin/plugins/{plugin_id}/settings",
-            get(plugins::get_settings).put(plugins::set_settings),
-        )
+        .merge(routes::me::router())
+        .merge(routes::libraries::router())
+        .merge(routes::admin::router())
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate::require));
     // Until setup is done, these answer `503 setup_required`.
     let after_setup = Router::new()
