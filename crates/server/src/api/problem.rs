@@ -4,7 +4,7 @@
 //! turns a database error into a `500 internal` whose cause is logged, never sent.
 
 use axum::Json;
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
@@ -71,6 +71,9 @@ pub struct Problem {
     /// Why the device was signed out, with `session_revoked`.
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<Revoked>,
+    /// When to try again, in whole seconds, with `rate_limited`: sent as `Retry-After`.
+    #[serde(skip)]
+    retry_after: Option<i64>,
 }
 
 impl Problem {
@@ -85,6 +88,7 @@ impl Problem {
             code,
             detail: None,
             reason: None,
+            retry_after: None,
         }
     }
 
@@ -108,6 +112,12 @@ impl Problem {
         Problem { reason: Some(reason), ..Problem::new(Code::SessionRevoked) }
     }
 
+    /// A `429 rate_limited` that says, in whole seconds rounded up, when to try again.
+    pub fn rate_limited(wait_ms: i64) -> Problem {
+        let seconds = (wait_ms + 999) / 1000;
+        Problem { retry_after: Some(seconds), ..Problem::new(Code::RateLimited) }
+    }
+
     /// Its explanation, if it has one.
     pub fn explanation(&self) -> Option<&str> {
         self.detail.as_deref()
@@ -115,10 +125,14 @@ impl Problem {
 }
 
 impl IntoResponse for Problem {
+    /// The problem as `application/problem+json` with its status, and with `Retry-After` when
+    /// it says when to try again.
     fn into_response(self) -> Response {
         let status = self.code.status();
         let content_type = [(header::CONTENT_TYPE, "application/problem+json")];
-        (status, content_type, Json(self)).into_response()
+        let retry_after =
+            self.retry_after.map(|seconds| [(header::RETRY_AFTER, HeaderValue::from(seconds))]);
+        (status, content_type, retry_after, Json(self)).into_response()
     }
 }
 
@@ -127,5 +141,12 @@ impl From<DbError> for Problem {
         // The cause stays in the log: it can describe the schema or the host.
         tracing::error!(%error, "database error");
         Problem::new(Code::Internal)
+    }
+}
+
+impl From<rusqlite::Error> for Problem {
+    /// A database error, logged and answered as a `500 internal`, as a [`DbError`] is.
+    fn from(error: rusqlite::Error) -> Problem {
+        DbError::from(error).into()
     }
 }

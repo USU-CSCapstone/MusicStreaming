@@ -7,15 +7,14 @@ use serde_json::json;
 use super::{HANDLED, connected, deliver, one, plan, setup};
 use crate::db::{Database, now_ms};
 use crate::plugins::Plugins;
-use crate::plugins::personal::{SharingRefused, disconnect, set_search_sharing};
+use crate::plugins::personal::{SharingError, disconnect, set_search_sharing};
 use crate::plugins::testing::{connect, grant, install, manifest};
 
 /// `plugin` granted the searched hook and what it needs, and connected by user 7, who shares their
 /// searches with it from now; user 8 shares nothing. Returns a time since they began sharing.
 async fn sharing(plugins: &Plugins, db: &Database) -> i64 {
     connected(plugins, db, &[SearchActivity, Searched]).await;
-    let shared = db.write(|tx| set_search_sharing(tx, "plugin", 7, false, true)).await.unwrap();
-    assert!(shared.is_ok());
+    db.try_write(|tx| set_search_sharing(tx, "plugin", 7, false, true)).await.unwrap();
     now_ms()
 }
 
@@ -132,8 +131,7 @@ async fn sharing_with_another_plugin_or_by_another_user_shares_nothing() {
     searched(&db, 1, 7, "shared elsewhere", 200, 1).await;
     assert!(deliver(&db, 0, HANDLED).await.is_empty(), "connected, but not sharing with it");
 
-    let shared = db.write(|tx| set_search_sharing(tx, "plugin", 7, false, true)).await.unwrap();
-    assert!(shared.is_ok());
+    db.try_write(|tx| set_search_sharing(tx, "plugin", 7, false, true)).await.unwrap();
     let since = now_ms();
     assert!(deliver(&db, 0, HANDLED).await.is_empty(), "searched before they shared with it");
     searched(&db, 2, 7, "shared", since, 1).await;
@@ -160,8 +158,7 @@ async fn searches_and_requests_to_forget_need_the_hook() {
     grant(&plugins, "plugin", &[SearchActivity], &[LibraryRead]).await;
     searched(&db, 2, 7, "kept", since, 1).await;
     assert!(deliver(&db, 0, HANDLED).await.is_empty(), "a search");
-    let stopped = db.write(|tx| set_search_sharing(tx, "plugin", 7, false, false)).await.unwrap();
-    assert!(stopped.is_ok());
+    db.try_write(|tx| set_search_sharing(tx, "plugin", 7, false, false)).await.unwrap();
     assert!(deliver(&db, 0, HANDLED).await.is_empty(), "a request to forget");
 }
 
@@ -171,8 +168,7 @@ async fn a_request_to_forget_needs_only_the_hook() {
     let (_temp, db, plugins) = setup().await;
     sharing(&plugins, &db).await;
     grant(&plugins, "plugin", &[Searched], &[]).await;
-    let stopped = db.write(|tx| set_search_sharing(tx, "plugin", 7, false, false)).await.unwrap();
-    assert!(stopped.is_ok());
+    db.try_write(|tx| set_search_sharing(tx, "plugin", 7, false, false)).await.unwrap();
     let told = one(deliver(&db, 0, HANDLED).await, 7);
     assert!(matches!(told, Event::SearchesForgotten(None)), "{told:?}");
 }
@@ -184,17 +180,17 @@ async fn sharing_is_turned_on_only_by_a_connected_user_of_a_plugin_allowed_searc
     let set = |user: i64, sharing: bool| {
         let db = db.clone();
         async move {
-            db.write(move |tx| set_search_sharing(tx, "plugin", user, true, sharing)).await.unwrap()
+            db.try_write(move |tx| set_search_sharing(tx, "plugin", user, true, sharing)).await
         }
     };
-    assert!(matches!(set(8, true).await, Err(SharingRefused::Unconnected)));
+    assert!(matches!(set(8, true).await, Err(SharingError::Unconnected)));
     assert!(
-        matches!(set(7, true).await, Err(SharingRefused::SearchesNotAllowed)),
+        matches!(set(7, true).await, Err(SharingError::SearchesNotAllowed)),
         "not granted searches"
     );
     grant(&plugins, "plugin", &[Searched], &[LibraryRead]).await;
     assert!(
-        matches!(set(7, true).await, Err(SharingRefused::SearchesNotAllowed)),
+        matches!(set(7, true).await, Err(SharingError::SearchesNotAllowed)),
         "not granted search activity"
     );
     grant(&plugins, "plugin", &[SearchActivity, Searched], &[LibraryRead]).await;

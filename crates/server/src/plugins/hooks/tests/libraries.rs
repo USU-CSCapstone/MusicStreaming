@@ -74,8 +74,7 @@ async fn a_users_activity_reaches_only_the_library_it_happened_in() {
     plugins.set_grants("plugin".into(), plugin_wide.to_vec(), per_library).await.unwrap();
     plugins.set_enabled("plugin".into(), 2, true).await.unwrap();
     db.write(|tx| access(tx, 7, 2)).await.unwrap();
-    let shared = db.write(|tx| set_search_sharing(tx, "plugin", 7, false, true)).await.unwrap();
-    assert!(shared.is_ok());
+    db.try_write(|tx| set_search_sharing(tx, "plugin", 7, false, true)).await.unwrap();
     let since = now_ms();
     // The forget comes first, so a delivery reading every library would begin with it.
     noted(&db, 2, 2, false, since).await;
@@ -94,8 +93,7 @@ async fn a_users_activity_reaches_only_the_library_it_happened_in() {
     let expected = [(Searched, 2, vec![3])];
     assert_eq!(named(deliver(&db, 0, HANDLED).await), expected, "library 1 has nothing new");
 
-    let stopped = db.write(|tx| set_search_sharing(tx, "plugin", 7, false, false)).await.unwrap();
-    assert!(stopped.is_ok());
+    db.try_write(|tx| set_search_sharing(tx, "plugin", 7, false, false)).await.unwrap();
     let forget = [(Searched, 1, vec![0]), (Searched, 2, vec![0])];
     assert_eq!(named(deliver(&db, 0, HANDLED).await), forget, "in each library, once");
 }

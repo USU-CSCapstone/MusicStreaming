@@ -9,9 +9,9 @@ use serde_json::{Value, json};
 
 use super::{HANDLED, connected, deliver, play, setup, tracks_by_user};
 use crate::db::Database;
-use crate::plugins::add;
 use crate::plugins::personal::set_search_sharing;
 use crate::plugins::testing::{connect, enable, grant, install, manifest};
+use crate::plugins::{PluginError, add};
 
 /// How many rows `table` has.
 async fn count(db: &Database, table: &'static str) -> i64 {
@@ -34,8 +34,7 @@ async fn installed(db: &Database) -> Value {
 async fn a_reinstall_sends_nothing_from_before_and_users_reconnect() {
     let (_temp, db, plugins) = setup().await;
     connected(&plugins, &db, &[ListeningActivity, Played, SearchActivity, Searched]).await;
-    let shared = db.write(|tx| set_search_sharing(tx, "plugin", 7, false, true)).await.unwrap();
-    assert!(shared.is_ok());
+    db.try_write(|tx| set_search_sharing(tx, "plugin", 7, false, true)).await.unwrap();
     play(&db, "a", 7, 11, 200, "finished").await;
     play(&db, "b", 7, 12, 210, "finished").await;
     assert_eq!(tracks_by_user(deliver(&db, 0, HANDLED).await), [(7, vec![11, 12])]);
@@ -65,7 +64,8 @@ async fn installing_it_while_it_is_installed_changes_nothing() {
 
     let mut asks_less: Manifest = serde_json::from_value(installed(&db).await).unwrap();
     asks_less.permissions.clear();
-    assert!(!db.write(move |tx| add(tx, &asks_less, None)).await.unwrap(), "already installed");
+    let added = db.try_write(move |tx| add(tx, &asks_less, None)).await;
+    assert!(matches!(added, Err(PluginError::Exists(_))), "already installed");
     assert_eq!(count(&db, "plugin_connections").await, 1, "its users stay connected");
     assert!(deliver(&db, 0, HANDLED).await.is_empty(), "nothing is sent again");
     play(&db, "b", 7, 12, 300, "finished").await;
@@ -78,8 +78,7 @@ async fn a_reinstall_is_not_told_again_to_forget_what_it_was_told_before() {
     let (_temp, db, plugins) = setup().await;
     connected(&plugins, &db, &[SearchActivity, Searched]).await;
     for sharing in [true, false] {
-        let set = db.write(move |tx| set_search_sharing(tx, "plugin", 7, false, sharing));
-        assert!(set.await.unwrap().is_ok());
+        db.try_write(move |tx| set_search_sharing(tx, "plugin", 7, false, sharing)).await.unwrap();
     }
     assert_eq!(deliver(&db, 0, HANDLED).await.len(), 1, "told to forget once");
     // User 7 stops sharing with `other` too, which is then disabled before it is told.
@@ -90,8 +89,7 @@ async fn a_reinstall_is_not_told_again_to_forget_what_it_was_told_before() {
     enable(&plugins, "other", true).await;
     connect(&db, "other", 7, json!({}), 0).await;
     for sharing in [true, false] {
-        let set = db.write(move |tx| set_search_sharing(tx, "other", 7, false, sharing));
-        assert!(set.await.unwrap().is_ok());
+        db.try_write(move |tx| set_search_sharing(tx, "other", 7, false, sharing)).await.unwrap();
     }
     enable(&plugins, "other", false).await;
 

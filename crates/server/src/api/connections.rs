@@ -16,7 +16,7 @@ use super::extract::{self, Path};
 use super::plugins::{PluginSettings, SettingsUpdate};
 use crate::db::Database;
 use crate::plugins::Plugins;
-use crate::plugins::personal::{self, SharingRefused};
+use crate::plugins::personal::{self, SharingError};
 
 /// The spec's `PersonalPlugin`.
 #[derive(Serialize)]
@@ -62,16 +62,13 @@ pub async fn get_settings(
     caller: Caller,
     Path(id): Path<String>,
 ) -> Result<Json<PluginSettings>, Problem> {
-    db.read(move |conn| {
-        let Some(manifest) = personal::manifest(conn, &id, caller.user, caller.admin)? else {
-            return Ok(None);
-        };
+    db.try_read(move |conn| {
+        let manifest = personal::manifest(conn, &id, caller.user, caller.admin)?
+            .ok_or_else(Problem::not_found)?;
         let schema = manifest.personal_settings.unwrap_or_default();
-        Ok(Some(PluginSettings::new(schema, personal::values(conn, &id, caller.user)?)))
+        Ok(Json(PluginSettings::new(schema, personal::values(conn, &id, caller.user)?)))
     })
-    .await?
-    .map(Json)
-    .ok_or_else(Problem::not_found)
+    .await
 }
 
 /// Connects the plugin, or changes what it was connected with, once it accepts them.
@@ -100,17 +97,20 @@ pub async fn set_search_sharing(
     extract::Json(SearchSharing { sharing }): extract::Json<SearchSharing>,
 ) -> Result<StatusCode, Problem> {
     let set = db
-        .write(move |tx| personal::set_search_sharing(tx, &id, caller.user, caller.admin, sharing))
-        .await?;
+        .try_write(move |tx| {
+            personal::set_search_sharing(tx, &id, caller.user, caller.admin, sharing)
+        })
+        .await;
     match set {
         Ok(()) => Ok(StatusCode::NO_CONTENT),
-        Err(SharingRefused::Unknown) => Err(Problem::not_found()),
-        Err(SharingRefused::Unconnected) => {
+        Err(SharingError::Unknown) => Err(Problem::not_found()),
+        Err(SharingError::Unconnected) => {
             Err(Problem::invalid("Connect it before sharing your searches with it."))
         }
-        Err(SharingRefused::SearchesNotAllowed) => {
+        Err(SharingError::SearchesNotAllowed) => {
             Err(Problem::invalid("This plugin has not been allowed your searches."))
         }
+        Err(SharingError::Db(error)) => Err(error.into()),
     }
 }
 

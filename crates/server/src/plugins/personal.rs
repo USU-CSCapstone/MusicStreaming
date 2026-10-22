@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 use super::run::RunFor;
 use super::settings::{self, SERVER, merge};
 use super::{PluginError, Plugins, grants};
-use crate::db::{Json, now_ms};
+use crate::db::{DbError, Json, now_ms};
 
 /// Whether `:user` (an admin if `:admin`) reaches a library the plugin `p` is enabled in.
 const REACHED: &str = "EXISTS (SELECT 1 FROM plugin_libraries l WHERE l.plugin_id = p.id \
@@ -78,31 +78,48 @@ pub fn asks_for_searches(conn: &Connection, id: &str) -> rusqlite::Result<bool> 
         && [Permission::Searched, Permission::SearchActivity].iter().all(|p| granted.contains(p)))
 }
 
-/// Why turning on sharing searches was refused.
-pub enum SharingRefused {
+/// Why turning sharing searches on or off failed.
+#[derive(Debug)]
+pub enum SharingError {
     /// No such plugin the user can connect.
     Unknown,
     /// They have not connected it.
     Unconnected,
     /// It cannot be sent searches ([`asks_for_searches`]).
     SearchesNotAllowed,
+    /// The database failed.
+    Db(DbError),
+}
+
+impl From<DbError> for SharingError {
+    /// A database failure, as [`SharingError::Db`].
+    fn from(error: DbError) -> SharingError {
+        SharingError::Db(error)
+    }
+}
+
+impl From<rusqlite::Error> for SharingError {
+    /// A database error, as [`SharingError::Db`].
+    fn from(error: rusqlite::Error) -> SharingError {
+        SharingError::Db(error.into())
+    }
 }
 
 /// Turns sharing `user`'s searches with `id` on or off. On applies from now: nothing searched
-/// before is sent. Off asks it to forget everything it was sent.
+/// before is sent. Off asks it to forget everything it was sent. A failure is a [`SharingError`]
+/// that says why.
 pub fn set_search_sharing(
     conn: &Connection,
     id: &str,
     user: i64,
     admin: bool,
     sharing: bool,
-) -> rusqlite::Result<Result<(), SharingRefused>> {
+) -> Result<(), SharingError> {
     if manifest(conn, id, user, admin)?.is_none() {
-        return Ok(Err(SharingRefused::Unknown));
+        return Err(SharingError::Unknown);
     }
     if !sharing {
-        stop_sharing(conn, id, user)?;
-        return Ok(Ok(()));
+        return Ok(stop_sharing(conn, id, user)?);
     }
     let connected = conn
         .prepare_cached("SELECT 1 FROM plugin_connections WHERE plugin_id = ?1 AND user_id = ?2")?
@@ -110,17 +127,17 @@ pub fn set_search_sharing(
         .optional()?
         .is_some();
     if !connected {
-        return Ok(Err(SharingRefused::Unconnected));
+        return Err(SharingError::Unconnected);
     }
     if !asks_for_searches(conn, id)? {
-        return Ok(Err(SharingRefused::SearchesNotAllowed));
+        return Err(SharingError::SearchesNotAllowed);
     }
     conn.execute(
         "UPDATE plugin_connections SET searches_shared_at = ?3 \
          WHERE plugin_id = ?1 AND user_id = ?2 AND searches_shared_at IS NULL",
         params![id, user, now_ms()],
     )?;
-    Ok(Ok(()))
+    Ok(())
 }
 
 /// Stops sharing `user`'s searches with `id`, if they were, and asks it to forget them in every
@@ -180,19 +197,19 @@ impl Plugins {
         admin: bool,
         entered: Map<String, Value>,
     ) -> Result<(), PluginError> {
-        let read = {
+        let (manifest, mut candidate, stored, permissions) = {
             let id = id.clone();
             self.db
-                .read(move |conn| {
-                    let Some(manifest) = manifest(conn, &id, user, admin)? else { return Ok(None) };
+                .try_read(move |conn| -> Result<_, PluginError> {
+                    let manifest =
+                        manifest(conn, &id, user, admin)?.ok_or(PluginError::NotFound)?;
                     let shared =
                         settings::effective(conn, &id, manifest.settings.as_ref(), SERVER)?;
                     let stored = values(conn, &id, user)?;
-                    Ok(Some((manifest, shared, stored, grants::granted(conn, &id, SERVER)?)))
+                    Ok((manifest, shared, stored, grants::granted(conn, &id, SERVER)?))
                 })
                 .await?
         };
-        let (manifest, mut candidate, stored, permissions) = read.ok_or(PluginError::NotFound)?;
         let schema = manifest.personal_settings.clone().unwrap_or_default();
         let values = merge(&schema, &stored, entered);
         let problems = schema.check(&values);
@@ -216,28 +233,31 @@ impl Plugins {
             )
             .await?;
         outcome.result.map_err(|error| PluginError::SettingsInvalid(error.to_string()))?;
-        let connected = self.db.write(move |tx| connect(tx, &id, user, &values, now_ms())).await?;
-        connected.then_some(()).ok_or(PluginError::NotFound)
+        self.db.try_write(move |tx| connect(tx, &id, user, &values, now_ms())).await
     }
 }
 
 /// Connects `user` to `id` at `at` with `settings`, or replaces the settings they connected it
-/// with, keeping when they connected and whether they share their searches. False, connecting
-/// nothing, if `id` is not installed, such as when it was uninstalled meanwhile.
+/// with, keeping when they connected and whether they share their searches. Refused as
+/// [`PluginError::NotFound`], connecting nothing, if `id` is not installed, such as when it was
+/// uninstalled meanwhile.
 pub(super) fn connect(
     conn: &Connection,
     id: &str,
     user: i64,
     settings: &Map<String, Value>,
     at: i64,
-) -> rusqlite::Result<bool> {
+) -> Result<(), PluginError> {
     let changed = conn.execute(
         "INSERT INTO plugin_connections (plugin_id, user_id, settings, connected_at) \
          SELECT id, ?2, ?3, ?4 FROM plugins WHERE id = ?1 \
          ON CONFLICT (plugin_id, user_id) DO UPDATE SET settings = excluded.settings",
         params![id, user, Json(settings), at],
     )?;
-    Ok(changed > 0)
+    if changed == 0 {
+        return Err(PluginError::NotFound);
+    }
+    Ok(())
 }
 
 /// Disconnects `user` from `id`: it stops being sent their searches, their settings are

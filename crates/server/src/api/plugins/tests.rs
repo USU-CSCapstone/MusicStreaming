@@ -136,6 +136,27 @@ async fn is_installed_disabled_everywhere_with_nothing_granted() {
     );
 }
 
+/// Granting, enabling, and settings answer `404` for a plugin that is not installed.
+#[tokio::test]
+async fn a_plugin_not_installed_is_not_found() {
+    let (_temp, _db, app) = server().await;
+    let nothing = "/api/v1/admin/plugins/nothing";
+    let grants = json!({ "granted": [], "libraries": [] });
+    for (method, path, body) in [
+        ("PUT", format!("{nothing}/permissions"), Some(grants)),
+        ("PUT", format!("{nothing}/libraries/1"), Some(json!({ "enabled": false }))),
+        ("PUT", format!("{nothing}/settings"), Some(json!({ "values": {} }))),
+        ("GET", format!("{nothing}/settings"), None),
+    ] {
+        let (status, problem) = call(&app, ADMIN, method, &path, body).await;
+        assert_eq!(
+            (status, &problem["code"]),
+            (StatusCode::NOT_FOUND, &json!("not_found")),
+            "{path}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn cannot_be_enabled_until_its_required_permissions_are_granted() {
     let (_temp, _db, app) = server().await;
@@ -351,6 +372,11 @@ async fn installs_and_runs_a_real_plugin() {
         .body(Body::from(bytes))
         .unwrap();
     assert_eq!(respond(app.clone(), request).await.0, StatusCode::CONFLICT, "installed twice");
+    let parts = std::fs::read_dir(temp.path().join("plugins"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap());
+    let parts: Vec<_> = parts.filter(|name| name.ends_with(".part")).collect();
+    assert!(parts.is_empty(), "the refused upload is not kept: {parts:?}");
 
     let grants =
         json!({ "granted": [], "libraries": [{ "libraryId": "1", "granted": ["libraryRead"] }] });

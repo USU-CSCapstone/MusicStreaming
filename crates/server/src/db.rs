@@ -176,6 +176,17 @@ impl Database {
         F: FnOnce(&Connection) -> rusqlite::Result<T> + Send + 'static,
         T: Send + 'static,
     {
+        self.try_read(move |conn| f(conn).map_err(DbError::from)).await
+    }
+
+    /// [`read`](Self::read), for an `f` whose error is a type of the caller's own, such as a
+    /// refusal, which is returned as it is. A database failure is converted into that type.
+    pub async fn try_read<T, E, F>(&self, f: F) -> Result<T, E>
+    where
+        F: FnOnce(&Connection) -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: From<DbError> + From<rusqlite::Error> + Send + 'static,
+    {
         queue(&self.readers, in_snapshot(f))?.await.map_err(|_| DbError::Aborted)?
     }
 
@@ -185,7 +196,8 @@ impl Database {
         F: FnOnce(&Connection) -> rusqlite::Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        queue(&self.readers, in_snapshot(f))?.blocking_recv().map_err(|_| DbError::Aborted)?
+        let work = in_snapshot(move |conn| f(conn).map_err(DbError::from));
+        queue(&self.readers, work)?.blocking_recv().map_err(|_| DbError::Aborted)?
     }
 
     /// Runs `f` on the writer in one transaction, committed if it returns `Ok` and rolled back
@@ -194,6 +206,18 @@ impl Database {
     where
         F: FnOnce(&Transaction) -> rusqlite::Result<T> + Send + 'static,
         T: Send + 'static,
+    {
+        self.try_write(move |tx| f(tx).map_err(DbError::from)).await
+    }
+
+    /// [`write`](Self::write), for an `f` whose error is a type of the caller's own, such as a
+    /// refusal, which rolls the transaction back and is returned as it is. A database failure
+    /// is converted into that type.
+    pub async fn try_write<T, E, F>(&self, f: F) -> Result<T, E>
+    where
+        F: FnOnce(&Transaction) -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: From<DbError> + From<rusqlite::Error> + Send + 'static,
     {
         queue(&self.writer, in_transaction(f))?.await.map_err(|_| DbError::Aborted)?
     }
@@ -204,25 +228,28 @@ impl Database {
         F: FnOnce(&Transaction) -> rusqlite::Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        queue(&self.writer, in_transaction(f))?.blocking_recv().map_err(|_| DbError::Aborted)?
+        let work = in_transaction(move |tx| f(tx).map_err(DbError::from));
+        queue(&self.writer, work)?.blocking_recv().map_err(|_| DbError::Aborted)?
     }
 }
 
 /// Runs `f` in a read transaction, so all of its queries see one snapshot.
-fn in_snapshot<T, F>(f: F) -> impl FnOnce(&mut Connection) -> Result<T, DbError>
+fn in_snapshot<T, E, F>(f: F) -> impl FnOnce(&mut Connection) -> Result<T, E>
 where
-    F: FnOnce(&Connection) -> rusqlite::Result<T>,
+    F: FnOnce(&Connection) -> Result<T, E>,
+    E: From<rusqlite::Error>,
 {
     move |conn| {
         let snapshot = conn.transaction()?;
-        Ok(f(&snapshot)?)
+        f(&snapshot)
     }
 }
 
 /// Runs `f` in a write transaction, committed if it returns `Ok` and rolled back otherwise.
-fn in_transaction<T, F>(f: F) -> impl FnOnce(&mut Connection) -> Result<T, DbError>
+fn in_transaction<T, E, F>(f: F) -> impl FnOnce(&mut Connection) -> Result<T, E>
 where
-    F: FnOnce(&Transaction) -> rusqlite::Result<T>,
+    F: FnOnce(&Transaction) -> Result<T, E>,
+    E: From<rusqlite::Error>,
 {
     move |conn| {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -277,13 +304,10 @@ fn configure(conn: &Connection) -> anyhow::Result<()> {
 }
 
 /// Queues `work` and returns where its result will arrive.
-fn queue<T, W>(
-    queue: &mpsc::Sender<Job>,
-    work: W,
-) -> Result<oneshot::Receiver<Result<T, DbError>>, DbError>
+fn queue<R, W>(queue: &mpsc::Sender<Job>, work: W) -> Result<oneshot::Receiver<R>, DbError>
 where
-    W: FnOnce(&mut Connection) -> Result<T, DbError> + Send + 'static,
-    T: Send + 'static,
+    W: FnOnce(&mut Connection) -> R + Send + 'static,
+    R: Send + 'static,
 {
     let (reply, result) = oneshot::channel();
     let job: Job = Box::new(move |conn| {
@@ -366,6 +390,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    /// An error of the caller's own, which `try_write` and `try_read` return as it is.
+    #[derive(Debug, PartialEq)]
+    enum Refusal {
+        /// What the test's `f` returns.
+        Refused,
+        /// Any database failure.
+        Failed,
+    }
+
+    impl From<DbError> for Refusal {
+        /// Any database failure, as [`Refusal::Failed`].
+        fn from(_: DbError) -> Refusal {
+            Refusal::Failed
+        }
+    }
+
+    impl From<rusqlite::Error> for Refusal {
+        /// Any database error, as [`Refusal::Failed`].
+        fn from(_: rusqlite::Error) -> Refusal {
+            Refusal::Failed
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_write_rolls_back_and_returns_the_refusal() {
+        let (_temp, db) = open();
+        let result = db
+            .try_write(|tx| {
+                tx.execute(INSERT_LIBRARY, [1])?;
+                Err::<(), _>(Refusal::Refused)
+            })
+            .await;
+        assert_eq!(result, Err(Refusal::Refused));
+        let count: i64 = db
+            .read(|conn| conn.query_row("SELECT count(*) FROM libraries", [], |row| row.get(0)))
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn a_refused_read_returns_the_refusal() {
+        let (_temp, db) = open();
+        let result = db.try_read(|_| Err::<(), _>(Refusal::Refused)).await;
+        assert_eq!(result, Err(Refusal::Refused));
     }
 
     #[tokio::test]

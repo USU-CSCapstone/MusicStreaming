@@ -57,6 +57,8 @@ enum SearchResult {
     Artist { artist: ArtistSummary },
 }
 
+/// The spec's `search`: each section's best matches for `q` in `library`, which is `404` if it
+/// does not exist.
 pub async fn search(
     State(db): State<Arc<Database>>,
     State(indexes): State<Arc<Indexes>>,
@@ -90,14 +92,12 @@ pub async fn search(
     }
 
     let (track_count, position) = db
-        .read(move |conn| {
-            let Some(track_count) = page::library_count(conn, library, "track_count")? else {
-                return Ok(None);
-            };
-            Ok(Some((track_count, indexes::feed_position(conn, library)?)))
+        .try_read(move |conn| -> Result<_, Problem> {
+            let track_count = page::library_count(conn, library, "track_count")?
+                .ok_or_else(Problem::not_found)?;
+            Ok((track_count, indexes::feed_position(conn, library)?))
         })
-        .await?
-        .ok_or_else(Problem::not_found)?;
+        .await?;
     let index = indexes.index(&db, library, position).await?;
     let found = index.search(&query.q, &kinds, limit);
     let sections = db.read(move |conn| results(conn, library, found)).await?;

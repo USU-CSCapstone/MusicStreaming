@@ -169,8 +169,7 @@ async fn share_with_a_plugin(temp: &tempfile::TempDir, db: &Arc<Database>) {
     grant(&plugins, "plugin", &[SearchActivity, Searched], &[LibraryRead]).await;
     enable(&plugins, "plugin", true).await;
     connect(db, "plugin", 1, json!({}), 0).await;
-    let shared = db.write(|tx| set_search_sharing(tx, "plugin", 1, true, true)).await.unwrap();
-    assert!(shared.is_ok());
+    db.try_write(|tx| set_search_sharing(tx, "plugin", 1, true, true)).await.unwrap();
 }
 
 /// What a search found: its tracks, albums, and artists.

@@ -7,7 +7,7 @@
 mod limits;
 
 use axum::extract::State;
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
@@ -28,6 +28,8 @@ pub struct LoginRequest {
     // so every login registers a new device, as the spec says for an ID that is not one.
 }
 
+/// Logs `username` in on a new device and sets its session cookie, or refuses as the module
+/// docs describe.
 pub async fn login(
     State(state): State<AppState>,
     Origin(origin): Origin,
@@ -38,25 +40,21 @@ pub async fn login(
     session::check_username(&username)?;
     device.validate()?;
 
-    let attempt = state
+    let (attempt, account) = state
         .db
-        .write(move |tx| {
+        .try_write(move |tx| {
             let now = now_ms();
             let wait = limits::wait_ms(tx, &username, origin, now)?;
             if wait > 0 {
                 // Not recorded: a write per refusal would let anyone keep the disk busy.
-                return Ok(Err(wait));
+                return Err(Problem::rate_limited(wait));
             }
             let account = account(tx, &username)?;
             let user = account.as_ref().map(|(id, _, _)| *id);
             let id = limits::record(tx, &username, user, origin, now)?;
-            Ok(Ok((id, account)))
+            Ok((id, account))
         })
         .await?;
-    let (attempt, account) = match attempt {
-        Ok(attempt) => attempt,
-        Err(wait_ms) => return Ok(rate_limited(wait_ms)),
-    };
 
     let (user, stored, active) = match account {
         Some((user, stored, active)) => (Some(user), Some(stored), active),
@@ -85,12 +83,6 @@ fn account(conn: &Connection, username: &str) -> rusqlite::Result<Option<(i64, S
     conn.prepare_cached("SELECT id, password, status = 'active' FROM users WHERE username = ?1")?
         .query_row([username], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         .optional()
-}
-
-/// A `429` that says, in whole seconds rounded up, when to try again.
-fn rate_limited(wait_ms: i64) -> Response {
-    let seconds = HeaderValue::from((wait_ms + 999) / 1000);
-    ([(header::RETRY_AFTER, seconds)], Problem::new(Code::RateLimited)).into_response()
 }
 
 #[cfg(test)]

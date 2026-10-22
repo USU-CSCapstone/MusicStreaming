@@ -127,6 +127,8 @@ pub struct AudioQuery {
     variant: String,
 }
 
+/// The spec's `getAudio`: the track's original file, whole or by byte range. A track that is
+/// missing, or under a root no longer in its library, is `404`.
 pub async fn audio(
     State(db): State<Arc<Database>>,
     Path((Id(library), Id(track))): Path<(Id, Id)>,
@@ -137,8 +139,8 @@ pub async fn audio(
         return Err(Problem::not_found());
     }
     let (file, container) = db
-        .read(move |conn| {
-            let row = conn
+        .try_read(move |conn| -> Result<_, Problem> {
+            let (root, path, container) = conn
                 .prepare_cached(
                     "SELECT root_id, path, container FROM tracks \
                      WHERE library_id = ?1 AND id = ?2 AND missing_since IS NULL",
@@ -146,14 +148,13 @@ pub async fn audio(
                 .query_row([library, track], |row| {
                     Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
                 })
-                .optional()?;
-            let Some((root, path, container)) = row else {
-                return Ok(None);
-            };
-            Ok(libraries::file(conn, library, root, &path)?.map(|file| (file, container)))
+                .optional()?
+                .ok_or_else(Problem::not_found)?;
+            let file =
+                libraries::file(conn, library, root, &path)?.ok_or_else(Problem::not_found)?;
+            Ok((file, container))
         })
-        .await?
-        .ok_or_else(Problem::not_found)?;
+        .await?;
 
     // Checked on every request, since a file can become a symlink after the scan saw it.
     let path = tokio::task::spawn_blocking(move || file.resolve())

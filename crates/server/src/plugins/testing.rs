@@ -83,7 +83,7 @@ pub async fn install(db: &Database, manifest: Value) {
     let problems = manifest::validate(&manifest);
     assert!(problems.is_empty(), "{problems:?}");
     let manifest: Manifest = serde_json::from_value(manifest).unwrap();
-    assert!(db.write(move |tx| super::add(tx, &manifest, None)).await.unwrap(), "installed");
+    db.try_write(move |tx| super::add(tx, &manifest, None)).await.expect("installed");
 }
 
 /// Grants `id` exactly `plugin_wide` for itself and `in_library` in library 1, as the admin
@@ -121,6 +121,6 @@ pub async fn enable_ungranted(db: &Database, id: &'static str) {
 /// tests' plugins cannot reach the services they check against.
 pub async fn connect(db: &Database, id: &'static str, user: i64, settings: Value, at: i64) {
     let Value::Object(settings) = settings else { panic!("settings are a JSON object") };
-    let connected = db.write(move |tx| personal::connect(tx, id, user, &settings, at));
-    assert!(connected.await.unwrap(), "{id} is installed");
+    let connected = db.try_write(move |tx| personal::connect(tx, id, user, &settings, at)).await;
+    connected.unwrap_or_else(|error| panic!("{id} is installed: {error:?}"));
 }

@@ -99,11 +99,11 @@ impl Plugins {
         level: i64,
         entered: Map<String, Value>,
     ) -> Result<(), PluginError> {
-        let read = {
+        let (manifest, own, server, permissions) = {
             let id = id.clone();
             self.db
-                .read(move |conn| {
-                    let Some(manifest) = grants::manifest(conn, &id)? else { return Ok(None) };
+                .try_read(move |conn| -> Result<_, PluginError> {
+                    let manifest = grants::manifest(conn, &id)?.ok_or(PluginError::NotFound)?;
                     let own = match self::level(conn, &id, level) {
                         Err(error @ rusqlite::Error::FromSqlConversionFailure(..)) => {
                             tracing::warn!(
@@ -121,11 +121,10 @@ impl Plugins {
                         if level == SERVER { Map::new() } else { self::level(conn, &id, SERVER)? };
                     // At the server level, only what is granted to the plugin itself.
                     let permissions = grants::granted(conn, &id, level)?;
-                    Ok(Some((manifest, own, server, permissions)))
+                    Ok((manifest, own, server, permissions))
                 })
                 .await?
         };
-        let (manifest, own, server, permissions) = read.ok_or(PluginError::NotFound)?;
         let schema = manifest.settings.clone().unwrap_or_default();
         let values = merge(&schema, &own, entered);
         let problems = schema.check(&values);

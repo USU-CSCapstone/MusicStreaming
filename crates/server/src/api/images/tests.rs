@@ -248,3 +248,13 @@ async fn a_link_out_of_the_library_is_not_rendered() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(!temp.path().join("cache/06").exists(), "nothing rendered or remembered");
 }
+
+/// An image under a root removed from its library is not served, as if it did not exist.
+#[tokio::test]
+async fn an_image_under_a_removed_root_is_not_found() {
+    let (temp, app) = app_with_images().await;
+    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    conn.execute("UPDATE library_roots SET removed_at = 1 WHERE library_id = 1", []).unwrap();
+    let (status, _, _) = send(app, "GET", "/api/v1/libraries/1/images/1").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

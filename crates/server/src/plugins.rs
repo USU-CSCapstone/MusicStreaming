@@ -51,6 +51,13 @@ pub enum PluginError {
     Internal(String),
 }
 
+impl From<rusqlite::Error> for PluginError {
+    /// A database error, as [`PluginError::Db`].
+    fn from(error: rusqlite::Error) -> PluginError {
+        PluginError::Db(error.into())
+    }
+}
+
 impl From<InvalidPlugin> for PluginError {
     fn from(InvalidPlugin(message): InvalidPlugin) -> PluginError {
         PluginError::Invalid(message)
@@ -164,26 +171,16 @@ impl Plugins {
         std::fs::create_dir_all(&self.dir).map_err(internal)?;
         let part = self.dir.join(format!("{}.{}.part", manifest.id, std::process::id()));
         std::fs::write(&part, &bytes).map_err(internal)?;
-        let (target, id, name) =
-            (self.path(&manifest.id), manifest.id.clone(), manifest.name.clone());
+        let (target, id) = (self.path(&manifest.id), manifest.id.clone());
         let staged = part.clone();
-        let installed = self
-            .db
-            .write(move |tx| {
-                if !add(tx, &manifest, source_url.as_deref())? {
-                    return Ok(false);
-                }
+        self.db
+            .try_write(move |tx| {
+                add(tx, &manifest, source_url.as_deref())?;
                 // Put in place within the transaction, so a row never names a missing file.
-                std::fs::rename(&staged, &target)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                Ok(true)
+                std::fs::rename(&staged, &target).map_err(internal)
             })
-            .await;
-        let installed = installed.inspect_err(|_| drop(std::fs::remove_file(&part)))?;
-        if !installed {
-            std::fs::remove_file(&part).ok();
-            return Err(PluginError::Exists(name));
-        }
+            .await
+            .inspect_err(|_| drop(std::fs::remove_file(&part)))?;
         host.installed(&id, linked);
         Ok(id)
     }
@@ -226,13 +223,11 @@ impl Plugins {
         per_library: Vec<(i64, Vec<Permission>)>,
     ) -> Result<(), PluginError> {
         self.db
-            .write(move |tx| {
-                let Some(manifest) = grants::manifest(tx, &id)? else { return Ok(false) };
-                grants::set(tx, &id, &manifest, &plugin_wide, &per_library).map(|()| true)
+            .try_write(move |tx| {
+                let manifest = grants::manifest(tx, &id)?.ok_or(PluginError::NotFound)?;
+                Ok(grants::set(tx, &id, &manifest, &plugin_wide, &per_library)?)
             })
-            .await?
-            .then_some(())
-            .ok_or(PluginError::NotFound)
+            .await
     }
 
     /// Enables or disables `id` in `library`. Enabling needs every required permission, and
@@ -245,12 +240,11 @@ impl Plugins {
     ) -> Result<(), PluginError> {
         let missing = self
             .db
-            .write(move |tx| {
-                let Some(manifest) = grants::manifest(tx, &id)? else { return Ok(None) };
-                grants::set_enabled(tx, &id, &manifest, library, enabled).map(Some)
+            .try_write(move |tx| -> Result<_, PluginError> {
+                let manifest = grants::manifest(tx, &id)?.ok_or(PluginError::NotFound)?;
+                Ok(grants::set_enabled(tx, &id, &manifest, library, enabled)?)
             })
-            .await?
-            .ok_or(PluginError::NotFound)?;
+            .await?;
         if !missing.is_empty() {
             let missing = missing.into_iter().map(Permission::title).collect();
             return Err(PluginError::PermissionsRequired(missing));
@@ -275,20 +269,24 @@ impl Drop for Plugins {
 }
 
 /// Records `manifest`'s plugin as installed from `source_url`, keeping only the grants it held
-/// before whose requests it makes again unchanged ([`grants::keep_requested`]). False, changing
-/// nothing, if a plugin with its ID is installed: the row is never replaced, so what goes with
-/// it, such as its users' connections, goes only on a real uninstall.
-fn add(conn: &Connection, manifest: &Manifest, source_url: Option<&str>) -> rusqlite::Result<bool> {
+/// before whose requests it makes again unchanged ([`grants::keep_requested`]). Refused as
+/// [`PluginError::Exists`], changing nothing, if a plugin with its ID is installed: the row is
+/// never replaced, so what goes with it, such as its users' connections, goes only on a real
+/// uninstall.
+fn add(
+    conn: &Connection,
+    manifest: &Manifest,
+    source_url: Option<&str>,
+) -> Result<(), PluginError> {
     let inserted = conn.execute(
         "INSERT INTO plugins (id, manifest, source_url, installed_at) \
          VALUES (?1, ?2, ?3, ?4) ON CONFLICT (id) DO NOTHING",
         params![manifest.id, Json(manifest), source_url, now_ms()],
     )?;
     if inserted == 0 {
-        return Ok(false);
+        return Err(PluginError::Exists(manifest.name.clone()));
     }
-    grants::keep_requested(conn, manifest)?;
-    Ok(true)
+    Ok(grants::keep_requested(conn, manifest)?)
 }
 
 #[cfg(test)]

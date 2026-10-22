@@ -40,11 +40,10 @@ pub(super) struct RunFor {
 impl Plugins {
     /// Runs `id` once in each library it is enabled in, to do its whole job there.
     pub async fn run(&self, id: String) -> Result<RunResult, PluginError> {
-        let plan = {
+        let (manifest, libraries) = {
             let id = id.clone();
-            self.db.read(move |conn| plan(conn, &id)).await?.ok_or(PluginError::NotFound)?
+            self.db.try_read(move |conn| plan(conn, &id)).await?
         };
-        let (manifest, libraries) = plan;
         if libraries.is_empty() {
             return Ok(RunResult::failed(format!(
                 "{} is not enabled in any library.",
@@ -182,8 +181,9 @@ impl Plugins {
 /// The manifest of `id`, and each library it is enabled in with what is granted there.
 type Plan = (Manifest, Vec<(i64, Vec<Permission>)>);
 
-fn plan(conn: &Connection, id: &str) -> rusqlite::Result<Option<Plan>> {
-    let Some(manifest) = grants::manifest(conn, id)? else { return Ok(None) };
+/// The [`Plan`] for running `id`, or [`PluginError::NotFound`] if it is not installed.
+fn plan(conn: &Connection, id: &str) -> Result<Plan, PluginError> {
+    let manifest = grants::manifest(conn, id)?.ok_or(PluginError::NotFound)?;
     let libraries: Vec<i64> = conn
         .prepare_cached(
             "SELECT library_id FROM plugin_libraries WHERE plugin_id = ?1 AND enabled \
@@ -195,5 +195,5 @@ fn plan(conn: &Connection, id: &str) -> rusqlite::Result<Option<Plan>> {
         .into_iter()
         .map(|library| Ok((library, grants::granted(conn, id, library)?)))
         .collect::<rusqlite::Result<_>>()?;
-    Ok(Some((manifest, libraries)))
+    Ok((manifest, libraries))
 }

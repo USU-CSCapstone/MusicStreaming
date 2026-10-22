@@ -241,14 +241,12 @@ pub async fn get_settings(
     extract::Query(query): extract::Query<SettingsLevel>,
 ) -> Result<Json<PluginSettings>, Problem> {
     let level = level(&db, query).await?;
-    db.read(move |conn| {
-        let Some(manifest) = grants::manifest(conn, &id)? else { return Ok(None) };
+    db.try_read(move |conn| {
+        let manifest = grants::manifest(conn, &id)?.ok_or_else(Problem::not_found)?;
         let schema = manifest.settings.unwrap_or_default();
-        Ok(Some(PluginSettings::new(schema, settings::level(conn, &id, level)?)))
+        Ok(Json(PluginSettings::new(schema, settings::level(conn, &id, level)?)))
     })
-    .await?
-    .map(Json)
-    .ok_or_else(Problem::not_found)
+    .await
 }
 
 /// The spec's `PluginSettingsUpdate`.

@@ -29,6 +29,8 @@ pub struct ImageQuery {
     size: Option<u32>,
 }
 
+/// The spec's `getImage`: the image resized to the first of [`SIZES`] at or above `size`
+/// ([`DEFAULT_SIZE`] if not given). An image under a root no longer in its library is `404`.
 pub async fn get(
     State(db): State<Arc<Database>>,
     State(images): State<Arc<Images>>,
@@ -42,22 +44,21 @@ pub async fn get(
     }
     .ok_or_else(|| Problem::invalid("size must be from 16 to 4096"))?;
     let (hash, source) = db
-        .read(move |conn| {
-            let row = conn
+        .try_read(move |conn| -> Result<_, Problem> {
+            let (hash, root, path) = conn
                 .prepare_cached(
                     "SELECT hash, root_id, path FROM images WHERE library_id = ?1 AND id = ?2",
                 )?
                 .query_row([library, image], |row| {
                     Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?))
                 })
-                .optional()?;
-            let Some((hash, root, path)) = row else {
-                return Ok(None);
-            };
-            Ok(libraries::file(conn, library, root, &path)?.map(|file| (hash, file)))
+                .optional()?
+                .ok_or_else(Problem::not_found)?;
+            let file =
+                libraries::file(conn, library, root, &path)?.ok_or_else(Problem::not_found)?;
+            Ok((hash, file))
         })
-        .await?
-        .ok_or_else(Problem::not_found)?;
+        .await?;
 
     let resized = images.resized(&hash, size, source).await.map_err(|error| {
         // The cause stays in the log: it names a path on the host.

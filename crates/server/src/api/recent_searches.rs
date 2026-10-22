@@ -147,6 +147,8 @@ pub async fn list(
     Ok(Json(serde_json::json!({ "items": items })))
 }
 
+/// Records a search as the caller's newest in `library`, replacing an earlier one of the same
+/// words, and returns it as `201`. A `selected` result not in `library` is `422`.
 pub async fn record(
     State(db): State<Arc<Database>>,
     State(indexes): State<Arc<Indexes>>,
@@ -186,11 +188,11 @@ pub async fn record(
         None
     };
     let recorded = db
-        .write(move |tx| {
+        .try_write(move |tx| {
             if let Some((_, table, id)) = selected
                 && !in_library(tx, table, library, id)?
             {
-                return Ok(None);
+                return Err(Problem::invalid("selected is not in this library."));
             }
             let now = now_ms();
             tx.execute(
@@ -217,10 +219,9 @@ pub async fn record(
                   ORDER BY searched_at DESC, id DESC LIMIT ?3)",
                 params![user, library, KEPT],
             )?;
-            tx.query_row(&format!("SELECT {COLUMNS} WHERE id = ?1"), [id], row).map(Some)
+            Ok(tx.query_row(&format!("SELECT {COLUMNS} WHERE id = ?1"), [id], row)?)
         })
         .await?;
-    let recorded = recorded.ok_or_else(|| Problem::invalid("selected is not in this library."))?;
     Ok((StatusCode::CREATED, Json(recorded)))
 }
 

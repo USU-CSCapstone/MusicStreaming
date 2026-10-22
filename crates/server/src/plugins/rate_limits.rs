@@ -120,16 +120,12 @@ impl Plugins {
         sql: &'static str,
     ) -> Result<(), PluginError> {
         self.db
-            .write(move |tx| {
-                if grants::manifest(tx, &id)?.is_none() {
-                    return Ok(false);
-                }
+            .try_write(move |tx| {
+                grants::manifest(tx, &id)?.ok_or(PluginError::NotFound)?;
                 tx.execute(sql, params![id, host])?;
-                Ok(true)
+                Ok(())
             })
-            .await?
-            .then_some(())
-            .ok_or(PluginError::NotFound)
+            .await
     }
 }
 

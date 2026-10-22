@@ -97,10 +97,10 @@ pub async fn complete(
 
     let session = state
         .db
-        .write(move |tx| {
+        .try_write(move |tx| {
             // Checked again where writes are serialized, so two setups at once create one owner.
             if has_owner(tx)? {
-                return Ok(None);
+                return Err(Problem::not_found());
             }
             let now = now_ms();
             let user = new_id()?;
@@ -109,10 +109,9 @@ pub async fn complete(
                  VALUES (?1, ?2, ?3, 'owner', ?4, ?5)",
                 params![user, username, display_name, password, now],
             )?;
-            session::register(tx, user, &device, token).map(Some)
+            Ok(session::register(tx, user, &device, token)?)
         })
-        .await?
-        .ok_or_else(Problem::not_found)?;
+        .await?;
     state.setup.0.store(true, Ordering::Relaxed);
 
     let cookie = session::cookie(&state.prefix, &session.token);

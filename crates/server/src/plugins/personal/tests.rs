@@ -3,7 +3,7 @@ use serde_json::{Map, Value, json};
 
 use super::super::testing::{connect, database, enable, grant, install, manifest, plugins};
 use super::super::{PluginError, Plugins};
-use super::{SharingRefused, connectable, disconnect, set_search_sharing, values};
+use super::{SharingError, connectable, disconnect, set_search_sharing, values};
 use crate::db::testing::{User, access};
 use crate::db::{Database, DbError};
 
@@ -130,8 +130,8 @@ async fn connections(db: &Database, user: i64) -> Vec<(String, bool, bool)> {
 }
 
 /// Turns sharing `user`'s searches with `id` on or off, as that user rather than an admin.
-async fn share(db: &Database, id: &'static str, user: i64, on: bool) -> Result<(), SharingRefused> {
-    db.write(move |tx| set_search_sharing(tx, id, user, false, on)).await.unwrap()
+async fn share(db: &Database, id: &'static str, user: i64, on: bool) -> Result<(), SharingError> {
+    db.try_write(move |tx| set_search_sharing(tx, id, user, false, on)).await
 }
 
 /// Every request to forget written, as (user, library, plugin).
@@ -157,7 +157,7 @@ fn row(id: &str, connected: bool, shares: bool) -> (String, bool, bool) {
 async fn connecting_shares_nothing_and_sharing_needs_a_connection() {
     let (temp, db) = database().await;
     sharers(&plugins(&temp, &db), &db).await;
-    assert!(matches!(share(&db, "first", 7, true).await, Err(SharingRefused::Unconnected)));
+    assert!(matches!(share(&db, "first", 7, true).await, Err(SharingError::Unconnected)));
     let nothing = [row("first", false, false), row("second", false, false)];
     assert_eq!(connections(&db, 7).await, nothing, "no sharing without settings");
 
@@ -249,8 +249,8 @@ async fn what_a_user_set_is_read_only_for_that_plugin_and_that_user() {
 async fn connecting_to_a_plugin_no_longer_installed_connects_nothing() {
     let (temp, db) = database().await;
     scrobbler(&plugins(&temp, &db), &db).await;
-    let connected = db.write(|tx| super::connect(tx, "gone", 7, &Map::new(), 0)).await.unwrap();
-    assert!(!connected);
+    let connected = db.try_write(|tx| super::connect(tx, "gone", 7, &Map::new(), 0)).await;
+    assert!(matches!(connected, Err(PluginError::NotFound)), "{connected:?}");
     let count: i64 = db
         .read(|conn| conn.query_row("SELECT count(*) FROM plugin_connections", [], |r| r.get(0)))
         .await
