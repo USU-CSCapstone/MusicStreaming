@@ -8,6 +8,7 @@
 use std::collections::HashSet;
 
 use jewelcase_core::sort_key;
+use jewelcase_scanner::release_kind;
 use rusqlite::{OptionalExtension, Result, Transaction, params};
 
 use super::feed::{self, Entity, Op};
@@ -191,27 +192,15 @@ fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i64) -> Resu
     Ok(())
 }
 
-/// `requirements/albums.md` §3: the release-type tag is authoritative, the
-/// compilation flag overrides size inference, and the default is album.
+/// `requirements/albums.md` §3: the release-type tag is authoritative where it names a type
+/// ([`release_kind`]), the compilation flag overrides size inference, and the default is album.
 fn album_type(
     release_type: Option<&str>,
     compilation: bool,
     track_total: Option<i64>,
 ) -> &'static str {
-    if let Some(rt) = release_type {
-        let rt = rt.to_ascii_lowercase();
-        if rt.contains("compilation") {
-            return "compilation";
-        }
-        if rt.contains("single") {
-            return "single";
-        }
-        if rt.split(|c: char| !c.is_alphanumeric()).any(|w| w == "ep") {
-            return "ep";
-        }
-        if rt.contains("album") {
-            return "album";
-        }
+    if let Some(kind) = release_type.and_then(release_kind) {
+        return kind;
     }
     if compilation {
         return "compilation";

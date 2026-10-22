@@ -77,6 +77,7 @@ CREATE TABLE albums (
     sort_key              BLOB    NOT NULL,
     artist_sort_key       BLOB    NOT NULL,
     type                  TEXT    NOT NULL DEFAULT 'album' CHECK (type IN ('album', 'ep', 'single', 'compilation')),
+    -- The labels of the album's first track that has any, in the order design/database.md §3 gives
     labels                TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(labels) AND json_type(labels) = 'array'),
     image_id              INTEGER,
     -- The album's first track with an artist image and its first with a biography, in the order
@@ -166,6 +167,8 @@ CREATE TABLE tracks (
     -- Per-file album-type inputs, resolved onto albums.type (requirements/albums.md §3)
     compilation     INTEGER NOT NULL DEFAULT 0 CHECK (compilation IN (0, 1)),
     release_type    TEXT,
+    -- The file's record labels, as the scanner reads them; resolved onto albums.labels
+    labels          TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(labels) AND json_type(labels) = 'array'),
     isrc            TEXT,
     -- Other identifier tags, passed through by lowercased tag name for plugins.
     identifiers     TEXT    NOT NULL DEFAULT '{}' CHECK (json_valid(identifiers) AND json_type(identifiers) = 'object'),

@@ -77,7 +77,9 @@ pub fn album(conn: &Connection, library: i64, album: i64) -> rusqlite::Result<Op
     );
     let Some((summary, labels)) = conn
         .prepare_cached(&sql)?
-        .query_row([library, album], |row| Ok((summary(row)?, row.get::<_, String>("labels")?)))
+        .query_row([library, album], |row| {
+            Ok((summary(row)?, row.get::<_, Json<Vec<String>>>("labels")?.0))
+        })
         .optional()?
     else {
         return Ok(None);
@@ -95,12 +97,7 @@ pub fn album(conn: &Connection, library: i64, album: i64) -> rusqlite::Result<Op
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
-    Ok(Some(Album {
-        summary,
-        // The schema checks that labels is a JSON array; the scanner writes strings.
-        labels: serde_json::from_str(&labels).unwrap_or_default(),
-        discs,
-    }))
+    Ok(Some(Album { summary, labels, discs }))
 }
 
 /// An album from a row of [`SELECT`], with its artists and genres.

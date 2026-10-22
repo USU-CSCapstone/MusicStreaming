@@ -131,6 +131,19 @@ impl InspectStore for SqliteStore {
                     .collect::<std::result::Result<_, _>>()
                     .unwrap()
             };
+            let album_artists: Vec<String> = {
+                let mut s = conn
+                    .prepare(
+                        "SELECT ar.name FROM tracks t JOIN album_artists aa ON aa.album_id = t.album_id \
+                         JOIN artists ar ON ar.id = aa.artist_id \
+                         WHERE t.id = ?1 AND ar.name IS NOT NULL ORDER BY aa.position",
+                    )
+                    .unwrap();
+                s.query_map([id], |r| r.get(0))
+                    .unwrap()
+                    .collect::<std::result::Result<_, _>>()
+                    .unwrap()
+            };
             out.push(InspectTrack {
                 id,
                 path: roots[&root_id].join(&rel),
@@ -138,6 +151,7 @@ impl InspectStore for SqliteStore {
                 title,
                 artists,
                 album,
+                album_artists,
                 has_artwork: art,
                 has_biography: bio,
                 has_lyrics: lyr,
@@ -240,8 +254,10 @@ mod suite {
 
 mod derived;
 mod failures;
+mod labels;
 mod lyrics;
 mod marks;
+mod primary;
 mod reanalysis;
 mod recompute;
 mod sidecars;

@@ -91,6 +91,15 @@ async fn gets_an_album_with_its_discs() {
     assert_eq!(missing["availability"], "missing");
 }
 
+/// Labels stored as anything but strings are an error, never an album with no labels.
+#[tokio::test]
+async fn labels_that_are_not_strings_are_an_error() {
+    let (_temp, db, app) = catalog::app().await;
+    db.write(|tx| tx.execute("UPDATE albums SET labels = '[1]' WHERE id = 101", [])).await.unwrap();
+    let (status, _) = json(&app, "/api/v1/libraries/1/albums/101").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 #[tokio::test]
 async fn another_librarys_album_is_not_found() {
     let (_temp, _db, app) = catalog::app().await;

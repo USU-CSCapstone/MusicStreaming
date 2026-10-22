@@ -32,6 +32,7 @@ fn expected() -> TagSet {
         release_date: Some(PartialDate { year: 1991, month: Some(9), day: Some(24) }),
         genres: vec!["Grunge".into(), "Rock".into()],
         release_type: Some("album".into()),
+        labels: vec!["DGC".into()],
         explicit: None,
         isrc: Some("USGF19942501".into()),
         musicbrainz_recording_id: Some("2bd6a4a6-8c8a-4d2d-9a4b-0a6a9b2a9c1d".into()),
@@ -70,6 +71,8 @@ fn write_tags(path: &Path, tag_type: TagType) {
         tag.push(text(ItemKey::Genre, g));
     }
     tag.insert(text(ItemKey::MusicBrainzReleaseType, "album"));
+    // ID3v2 writes the label as `TPUB`, which reads back as the publisher.
+    tag.insert(text(ItemKey::Label, &e.labels[0]));
     tag.insert(text(ItemKey::Isrc, e.isrc.as_deref().unwrap()));
     tag.insert(text(
         ItemKey::MusicBrainzRecordingId,

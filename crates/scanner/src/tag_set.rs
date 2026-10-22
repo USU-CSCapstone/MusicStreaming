@@ -49,6 +49,24 @@ impl std::fmt::Display for PartialDate {
     }
 }
 
+/// The album type a release-type tag names (`requirements/albums.md` §3): `compilation`,
+/// `single`, `ep` or `album`, the first that it names in that order, or `None` when it names none
+/// of them. Matching ignores case, and `ep` must be a word of its own.
+pub fn release_kind(release_type: &str) -> Option<&'static str> {
+    let release_type = release_type.to_ascii_lowercase();
+    if release_type.contains("compilation") {
+        Some("compilation")
+    } else if release_type.contains("single") {
+        Some("single")
+    } else if release_type.split(|c: char| !c.is_alphanumeric()).any(|w| w == "ep") {
+        Some("ep")
+    } else if release_type.contains("album") {
+        Some("album")
+    } else {
+        None
+    }
+}
+
 /// Lyrics as read from the file or a sidecar, in the one form they are stored and served
 /// (`requirements/tracks.md` §5).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +115,9 @@ pub struct TagSet {
     /// The release-type tag, authoritative for album type
     /// (`requirements/albums.md` §3).
     pub release_type: Option<String>,
+    /// Record labels: the label tag's, then the publisher tag's, in tagged order, each once by its
+    /// name key with its first spelling (`design/scanning.md` §4).
+    pub labels: Vec<String>,
     /// Explicit-content flag where tagged (`requirements/tracks.md` §6).
     pub explicit: Option<bool>,
     pub isrc: Option<String>,
@@ -111,6 +132,27 @@ pub struct TagSet {
     pub artist_sort: Option<String>,
     pub album_sort: Option<String>,
     pub album_artist_sort: Option<String>,
+}
+
+impl TagSet {
+    /// The album artists this file gives its album (`requirements/albums.md` §1): the tagged
+    /// ones; else none for a compilation; else the first track artist, so a guest on one track
+    /// neither splits the album nor owns it. Empty means the unknown artist. The file is a
+    /// compilation when its release type names that kind, or names no kind ([`release_kind`]) and
+    /// the compilation flag is set (§3).
+    pub fn album_artists_or_primary(&self) -> &[String] {
+        let compilation = match self.release_type.as_deref().and_then(release_kind) {
+            Some(kind) => kind == "compilation",
+            None => self.compilation,
+        };
+        if !self.album_artists.is_empty() {
+            &self.album_artists
+        } else if compilation {
+            &[]
+        } else {
+            self.artists.first().map(std::slice::from_ref).unwrap_or_default()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -172,6 +214,30 @@ mod tests {
         for text in ["Hello [verse 1]", "[Chorus]\nla la", "[00:60.00]x", "[00:01.1234]x"] {
             assert_eq!(Lyrics::parse(text), Some(Lyrics::Plain(text.into())), "{text}");
         }
+    }
+
+    #[test]
+    fn an_absent_album_artist_is_the_primary_artist() {
+        let tags = |artists: &[&str], album_artists: &[&str], compilation| TagSet {
+            artists: artists.iter().map(|&a| a.into()).collect(),
+            album_artists: album_artists.iter().map(|&a| a.into()).collect(),
+            compilation,
+            ..TagSet::default()
+        };
+        let released_as = |kind: &str| TagSet {
+            release_type: Some(kind.into()),
+            ..tags(&["A", "B"], &[], false)
+        };
+        assert!(released_as("album; compilation").album_artists_or_primary().is_empty());
+        assert_eq!(released_as("album").album_artists_or_primary(), ["A"]);
+        // A release type that names a type decides over the flag; one that names none doesn't.
+        let flagged_as = |kind: &str| TagSet { compilation: true, ..released_as(kind) };
+        assert_eq!(flagged_as("album").album_artists_or_primary(), ["A"]);
+        assert!(flagged_as("live").album_artists_or_primary().is_empty());
+        assert_eq!(tags(&["A", "B"], &["C", "D"], true).album_artists_or_primary(), ["C", "D"]);
+        assert_eq!(tags(&["A", "B"], &[], false).album_artists_or_primary(), ["A"]);
+        assert!(tags(&["A", "B"], &[], true).album_artists_or_primary().is_empty());
+        assert!(tags(&[], &[], false).album_artists_or_primary().is_empty());
     }
 
     #[test]

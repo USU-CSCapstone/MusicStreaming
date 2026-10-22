@@ -65,7 +65,7 @@ pub use store::{
     AnalysisStore, Batch, FileToDecode, IndexedFile, IndexedFolder, PickedTrack, PlaceholderStore,
     ProblemLog, Store, StoreError,
 };
-pub use tag_set::{Lyrics, PartialDate, TagSet};
+pub use tag_set::{Lyrics, PartialDate, TagSet, release_kind};
 pub use tags::{ReadError, read as read_tags};
 pub use track::{Artwork, ArtworkSource, SortKeys, TrackId, TrackRecord};
 pub use triggers::{FsWatcher, scan_every};

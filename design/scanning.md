@@ -78,6 +78,7 @@ lofty exposes most fields through a scheme-independent key, which does the bulk 
 |---|---|
 | Album artist | `TPE2` (ID3), `ALBUMARTIST` / `ALBUM ARTIST` (Vorbis), `aART` (MP4) |
 | Compilation | `TCMP` (ID3), `COMPILATION` (Vorbis), `cpil` (MP4) |
+| Label | `TPUB` (ID3, which lofty reads as the publisher), `LABEL` / `ORGANIZATION` and `PUBLISHER` (Vorbis), `----:com.apple.iTunes:LABEL` (MP4) |
 | Track and disc totals | packed as `3/12` in ID3 and MP4; separate `TRACKTOTAL` / `TOTALTRACKS` in Vorbis |
 | Release date | `TDRC` (v2.4) vs `TYER`+`TDAT` (v2.3) vs free-text `DATE`; kept at tag precision ([`requirements/tracks.md` §2](../requirements/tracks.md#2-core-metadata)) |
 | Multi-value | null-separated frames in ID3v2.4, repeated fields in Vorbis and MP4, semicolons everywhere |
@@ -87,8 +88,10 @@ lofty exposes most fields through a scheme-independent key, which does the bulk 
 
 - **Multi-value handling is one function.** Native repeated fields and semicolon-separated single fields both become the same `Vec<String>`, trimmed, empties dropped, order preserved ([`requirements/artists.md` §1](../requirements/artists.md#1-identity), [`requirements/tags.md` §3](../requirements/tags.md#3-multiple-values)). The semicolon is the only delimiter; nothing splits on "feat." or "&".
 - **Unknown is a value.** A missing title becomes the filename stem; missing artist and album become `None`, which the core groups deterministically. The mapper never invents a value the file did not carry.
+- **An absent album artist is the primary artist.** The `TagSet` keeps the album artists the file carries; `album_artists_or_primary` gives the ones its album takes: those, else none (the unknown artist) for a compilation, which its release type decides where it names a kind and its flag otherwise, else the first track artist ([`requirements/albums.md` §1](../requirements/albums.md#1-identity)). The scanner decides this once, and the store takes it.
+- **Labels are the label tag's, then the publisher tag's**, in tagged order, each once: a label is dropped when an earlier one has the same name key (folded as an artist's is, [`database.md` §3](database.md#3-derived-data-the-scanner-maintains)), so a file carrying the same label in both tags, or in two spellings, has it once, as first spelled. The album takes those of its first track that has any.
 - **ReplayGain tags are read and ignored.** Loudness is measured, not trusted ([`requirements/playback.md` §5](../requirements/playback.md#5-loudness)).
-- **The golden corpus is the test.** One logical album is rendered into every supported format with identical logical metadata — multiple artists, a compilation flag, disc and track totals, a partial date, embedded art and lyrics — and a test asserts the `TagSet` for each is byte-identical after serialization. Any new format or lofty upgrade runs against it.
+- **The golden corpus is the test.** One logical album is rendered into every supported format with identical logical metadata — multiple artists, a compilation flag, disc and track totals, a partial date, a label, embedded art and lyrics — and a test asserts the `TagSet` for each is byte-identical after serialization. Any new format or lofty upgrade runs against it.
 
 ---
 

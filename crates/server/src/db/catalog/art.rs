@@ -1,15 +1,15 @@
-//! Album art and artist images and biographies, resolved from the tracks (`design/database.md`
-//! §3). Tracks offer theirs in one order: present before missing, then by disc, a track with
-//! none first, then by track number, a track with none last, then by path and id. An album takes
-//! the first art in that order, except that among present tracks, and among missing ones,
-//! embedded art comes before any `cover.*`. It points at its first track with an artist image and
-//! its first with a biography, so an artist chooses among its albums' offers rather than reading
-//! every track that credits it.
+//! Album art and labels, and artist images and biographies, resolved from the tracks
+//! (`design/database.md` §3). Tracks offer theirs in one order: present before missing, then by
+//! disc, a track with none first, then by track number, a track with none last, then by path and
+//! id. An album takes the labels of the first track in that order that has any, and the first
+//! art, except that among present tracks, and among missing ones, embedded art comes before any
+//! `cover.*`. It points at its first track with an artist image and its first with a biography,
+//! so an artist chooses among its albums' offers rather than reading every track that credits it.
 
 use rusqlite::{Result, Transaction, params};
 
-/// The album's art and the tracks that offer its artists an image and a biography, from its
-/// tracks.
+/// The album's art, its labels (none when no track has any), and the tracks that offer its
+/// artists an image and a biography: each the first in track order.
 pub fn album(tx: &Transaction<'_>, album: i64) -> Result<()> {
     tx.execute(
         "UPDATE albums SET \
@@ -21,7 +21,10 @@ pub fn album(tx: &Transaction<'_>, album: i64) -> Result<()> {
              ifnull(track_number, 9223372036854775807), path, id LIMIT 1), \
          biography_track_id = (SELECT id FROM tracks WHERE album_id = ?1 AND biography_id IS NOT NULL \
              ORDER BY missing_since IS NOT NULL, disc_number, \
-             ifnull(track_number, 9223372036854775807), path, id LIMIT 1) \
+             ifnull(track_number, 9223372036854775807), path, id LIMIT 1), \
+         labels = ifnull((SELECT labels FROM tracks WHERE album_id = ?1 AND json_array_length(labels) > 0 \
+             ORDER BY missing_since IS NOT NULL, disc_number, \
+             ifnull(track_number, 9223372036854775807), path, id LIMIT 1), '[]') \
          WHERE id = ?1",
         [album],
     )?;

@@ -40,10 +40,12 @@ const ARTISTS: &[&str] = &["Alpha", "alpha", " ALPHA ", "Beta", "beta", "Gamma",
 const ALBUMS: &[&str] = &["Red", "red", " RED", "Blue", "Green"];
 const GENRES: &[&str] = &["Rock", "rock", " Rock ", "Jazz", "jazz", "Hip Hop", "Hip-Hop", "Pop"];
 const SORTS: &[&str] = &["", "alpha", "beta", "zeta"];
+const LABELS: &[&str] = &["Sub Pop", "Domino", "Matador"];
 
 /// A record of the file at `path` under `root`, tagged from `rng`: up to two artists and three
-/// genres in several spellings, sometimes album artists or a compilation, sometimes no album, and
-/// sometimes art, embedded or a cover, an artist image or a biography, each one of a few.
+/// genres in several spellings, up to two labels, sometimes album artists or a compilation,
+/// sometimes no album, and sometimes art, embedded or a cover, an artist image or a biography,
+/// each one of a few.
 fn random(rng: &mut Rng, root: &Path, path: PathBuf) -> TrackRecord {
     let image =
         |rng: &mut Rng| ImageInfo { hash: vec![(rng.next() % 4) as u8], width: 1, height: 1 };
@@ -56,6 +58,7 @@ fn random(rng: &mut Rng, root: &Path, path: PathBuf) -> TrackRecord {
     rec.tags.compilation = rng.chance(15);
     rec.tags.album = rng.chance(80).then(|| rng.pick(ALBUMS).to_string());
     rec.tags.genres = names(rng, GENRES, 3);
+    rec.tags.labels = names(rng, LABELS, 2);
     rec.tags.disc_number = *rng.pick(&[None, Some(1), Some(2)]);
     rec.tags.track_number = *rng.pick(&[None, Some(1), Some(2)]);
     rec.artwork = rng.chance(60).then(|| Artwork {

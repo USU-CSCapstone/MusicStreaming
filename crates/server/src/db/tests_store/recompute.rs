@@ -61,6 +61,15 @@ const CHECKS: &[(&str, &str, &str)] = &[
          FROM tracks t ORDER BY album_id",
     ),
     (
+        "album labels",
+        "SELECT id, labels FROM albums ORDER BY id",
+        "SELECT DISTINCT album_id, ifnull((SELECT labels FROM tracks WHERE album_id = t.album_id \
+                                           AND labels <> '[]' ORDER BY missing_since IS NOT NULL, \
+                                           disc_number, ifnull(track_number, 9223372036854775807), \
+                                           path, id LIMIT 1), '[]') \
+         FROM tracks t ORDER BY album_id",
+    ),
+    (
         "artist images and biographies",
         "SELECT id, image_id, biography FROM artists ORDER BY id",
         "WITH credited AS (SELECT c.artist_id, t.* FROM track_album_artists c JOIN tracks t ON t.id = c.track_id) \

@@ -39,6 +39,7 @@ macro_rules! store_suite {
             a_folder_problem_clears_once_it_lists,
             an_unreadable_folder_keeps_its_tracks,
             untagged_file_is_named_after_itself,
+            an_absent_album_artist_is_the_primary_artist,
             excludes_are_never_indexed,
             folder_scope_reconciles_only_inside_itself,
             non_ascii_subtree_reconciles_only_inside_itself,

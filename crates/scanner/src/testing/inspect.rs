@@ -20,6 +20,8 @@ pub struct InspectTrack {
     pub title: String,
     pub artists: Vec<String>,
     pub album: Option<String>,
+    /// Its album's named artists, in order; empty for the unknown artist.
+    pub album_artists: Vec<String>,
     pub has_artwork: bool,
     pub has_biography: bool,
     /// Whether it has lyrics. The suite's files embed none, so any it has are a lyrics file's.

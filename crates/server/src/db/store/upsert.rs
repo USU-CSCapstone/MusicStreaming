@@ -36,26 +36,14 @@ pub fn upsert_track(
         touched.track(tx, lib, id)?;
     }
 
-    // Artists: the unknown artist (key "") when a file names none.
-    let credits: Vec<Option<&str>> = if rec.tags.artists.is_empty() {
-        vec![None]
-    } else {
-        rec.tags.artists.iter().map(|s| Some(s.as_str())).collect()
-    };
+    // Artists, and album artists as the scanner resolves them, each the unknown artist (key "")
+    // when there are none.
+    let credits = credits_of(&rec.tags.artists);
     let mut artist_ids = Vec::new();
     for name in &credits {
         artist_ids.push(find_or_create_artist(tx, lib, *name, now)?);
     }
-
-    // Album artists: tagged, else the track artists, else unknown for a
-    // compilation with no album-artist tag (`requirements/scanning.md` §2).
-    let album_credits: Vec<Option<&str>> = if !rec.tags.album_artists.is_empty() {
-        rec.tags.album_artists.iter().map(|s| Some(s.as_str())).collect()
-    } else if rec.tags.compilation {
-        vec![None]
-    } else {
-        credits.clone()
-    };
+    let album_credits = credits_of(rec.tags.album_artists_or_primary());
     let mut album_artist_ids = Vec::new();
     for name in &album_credits {
         album_artist_ids.push(find_or_create_artist(tx, lib, *name, now)?);
@@ -92,6 +80,7 @@ pub fn upsert_track(
         Some(Lyrics::Plain(_)) => "plain",
         Some(Lyrics::Synced(_)) => "synced",
     };
+    let labels = serde_json::to_string(&rec.tags.labels).expect("strings serialize");
     let format = rec.properties.format;
     let sidecars = sidecar_rows(tx, lib, root_id, rec)?;
 
@@ -101,11 +90,11 @@ pub fn upsert_track(
     let Some((id, analyzer_version)) = tx.query_row(
             "INSERT INTO tracks (id, library_id, album_id, album_title, root_id, path, file_size, file_mtime, \
              missing_since, title, sort_key, artist_sort_key, album_sort_key, disc_number, track_number, \
-             track_total, disc_total, release_date, explicit, compilation, release_type, isrc, identifiers, lyrics_kind, \
+             track_total, disc_total, release_date, explicit, compilation, release_type, labels, isrc, identifiers, lyrics_kind, \
              codec, container, lossless, bitrate_kbps, sample_rate_hz, bit_depth, channels, duration_us, added_at, \
              image_id, image_embedded, artist_image_id, biography_id, sidecar_stamp) \
              VALUES (coalesce(?1, random() & 0x7FFFFFFFFFFFFFFF), ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
-             ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37) \
+             ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38) \
              ON CONFLICT (id) DO UPDATE SET \
              analyzer_version = CASE WHEN file_size IS excluded.file_size AND file_mtime IS excluded.file_mtime \
              THEN analyzer_version ELSE 0 END, \
@@ -119,8 +108,9 @@ pub fn upsert_track(
              sort_key = excluded.sort_key, artist_sort_key = excluded.artist_sort_key, album_sort_key = excluded.album_sort_key, \
              disc_number = excluded.disc_number, track_number = excluded.track_number, track_total = excluded.track_total, \
              disc_total = excluded.disc_total, release_date = excluded.release_date, explicit = excluded.explicit, \
-             compilation = excluded.compilation, release_type = excluded.release_type, isrc = excluded.isrc, \
-             identifiers = excluded.identifiers, lyrics_kind = excluded.lyrics_kind, codec = excluded.codec, \
+             compilation = excluded.compilation, release_type = excluded.release_type, labels = excluded.labels, \
+             isrc = excluded.isrc, identifiers = excluded.identifiers, lyrics_kind = excluded.lyrics_kind, \
+             codec = excluded.codec, \
              container = excluded.container, lossless = excluded.lossless, bitrate_kbps = excluded.bitrate_kbps, \
              sample_rate_hz = excluded.sample_rate_hz, bit_depth = excluded.bit_depth, channels = excluded.channels, \
              duration_us = excluded.duration_us, image_id = excluded.image_id, image_embedded = excluded.image_embedded, \
@@ -149,6 +139,7 @@ pub fn upsert_track(
                 rec.tags.explicit == Some(true),
                 rec.tags.compilation,
                 rec.tags.release_type,
+                labels,
                 rec.tags.isrc,
                 identifiers,
                 lyrics_kind,
@@ -222,4 +213,9 @@ pub fn upsert_track(
 
     feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)?;
     Ok(())
+}
+
+/// Each of `names` as a credit, or the unknown artist (`None`) alone when there are none.
+fn credits_of(names: &[String]) -> Vec<Option<&str>> {
+    if names.is_empty() { vec![None] } else { names.iter().map(|s| Some(s.as_str())).collect() }
 }

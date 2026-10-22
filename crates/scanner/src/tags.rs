@@ -5,12 +5,13 @@
 //! scheme-independent key; the mapper below handles what survives that
 //! abstraction. Nothing outside this module knows what an ID3 frame is.
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io;
 use std::panic;
 use std::path::Path;
 
-use jewelcase_core::Format;
+use jewelcase_core::{Format, name_key};
 use lofty::config::ParseOptions;
 use lofty::error::{FileParseError, UnknownFormatError, UnsupportedTagError};
 use lofty::file::{AudioFile, FileType, TaggedFile, TaggedFileExt};
@@ -202,6 +203,18 @@ fn strings(tags: &[&Tag], key: &ItemKey) -> Vec<String> {
     Vec::new()
 }
 
+/// The record labels: the label tag's values, then the publisher tag's, in tagged order, each
+/// once by its name key with its first spelling. ID3v2 has one frame for both, `TPUB`, which lofty
+/// reads as the publisher; Vorbis comments have `LABEL` (or `ORGANIZATION`) and `PUBLISHER`, and
+/// MP4 has `----:com.apple.iTunes:LABEL`.
+fn labels(tags: &[&Tag]) -> Vec<String> {
+    let mut labels = strings(tags, &ItemKey::Label);
+    labels.extend(strings(tags, &ItemKey::Publisher));
+    let mut seen = HashSet::new();
+    labels.retain(|label| seen.insert(name_key(label)));
+    labels
+}
+
 /// Parse a number that may be packed as `n/total`.
 fn number_pair(raw: &str) -> (Option<u32>, Option<u32>) {
     let mut it = raw.split('/');
@@ -267,6 +280,7 @@ fn map_tags(file: &TaggedFile) -> TagSet {
     out.genres = strings(&tags, &ItemKey::Genre);
     out.release_type =
         first_string(&tags, &ItemKey::MusicBrainzReleaseType).map(|s| s.to_ascii_lowercase());
+    out.labels = labels(&tags);
     out.explicit = first_string(&tags, &ItemKey::ParentalAdvisory).and_then(|v| match v.trim() {
         "1" | "4" | "explicit" | "Explicit" => Some(true),
         "2" | "clean" | "Clean" => Some(false),
@@ -291,7 +305,24 @@ fn map_tags(file: &TaggedFile) -> TagSet {
 
 #[cfg(test)]
 mod tests {
+    use lofty::tag::{ItemValue, TagItem};
+
     use super::*;
+
+    #[test]
+    fn labels_come_from_label_then_publisher_once_each() {
+        let mut tag = Tag::new(TagType::VorbisComments);
+        for (key, value) in [
+            (ItemKey::Publisher, "Warner"),
+            (ItemKey::Label, "Sub Pop"),
+            (ItemKey::Label, "SUB POP;Domino"),
+            (ItemKey::Publisher, "sub pop"),
+        ] {
+            assert!(tag.push(TagItem::new(key, ItemValue::Text(value.into()))));
+        }
+        assert_eq!(labels(&[&tag]), ["Sub Pop", "Domino", "Warner"]);
+        assert!(labels(&[&Tag::new(TagType::VorbisComments)]).is_empty());
+    }
 
     #[test]
     fn packed_numbers() {

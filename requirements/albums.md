@@ -16,6 +16,7 @@ Shared behavior follows [`conventions.md`](conventions.md).
 - Same title and same album artists means the same album, regardless of location on disk. An album split across two folders, or two drives, is one album.
 - Different album titles in one folder are different albums. Folder structure carries no weight.
 - **Album artists are a list**, semicolon-separated as track artists are. The full set participates in identity.
+- **An absent album-artist tag means the track's primary (first) artist**, so a guest on one track neither splits the album nor gains it in their discography ([`artists.md` §2](artists.md#2-ownership-discography-vs-appearances)). Untagged albums whose tracks have different primary artists split by primary artist.
 - **Editions are distinguished by title, and by nothing else.** An original, a remaster, and a deluxe edition sharing one title and one set of album artists are one album, and their tracks merge. Separating them means tagging them apart — `Nevermind` and `Nevermind (Deluxe Edition)`. Jewelcase reads no edition, catalogue-number, or release-ID tag to do it automatically, because doing so would split albums for users who never asked.
 
 ---

@@ -6,6 +6,7 @@
 //! scenarios are ignored until track identity across moves is decided (`design/general.md` §11).
 //! [`BareStore`] serves tests that need a store but no index.
 
+mod albums;
 mod analysis;
 mod bare;
 mod events;
@@ -26,6 +27,7 @@ mod shutdown;
 mod sidecars;
 mod suite;
 mod unread;
+pub use albums::*;
 pub use analysis::*;
 pub use bare::BareStore;
 pub use events::*;
