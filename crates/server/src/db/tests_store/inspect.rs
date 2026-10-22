@@ -1,0 +1,219 @@
+//! The SQLite store as the scanner's pipeline suite inspects it.
+
+use std::path::PathBuf;
+
+use jewelcase_core::Format;
+use jewelcase_scanner::testing::{InspectStore, InspectTrack};
+use jewelcase_scanner::*;
+use rusqlite::{OptionalExtension, Result};
+
+use super::libraries;
+use crate::db::Text;
+use crate::db::store::SqliteStore;
+
+/// The format a stored codec and container name.
+fn format_of(codec: &str, container: &str) -> Format {
+    match (codec, container) {
+        ("flac", _) => Format::Flac,
+        ("alac", _) => Format::Alac,
+        ("mp3", _) => Format::Mp3,
+        ("aac", _) => Format::Aac,
+        ("vorbis", _) => Format::Vorbis,
+        ("opus", _) => Format::Opus,
+        (_, "aiff") => Format::Aiff,
+        _ => Format::Wav,
+    }
+}
+
+impl InspectStore for SqliteStore {
+    fn inspect_tracks(&self, lib: LibraryId) -> Vec<InspectTrack> {
+        self.db().read_blocking(move |conn| {
+        let roots: std::collections::HashMap<i64, PathBuf> = libraries::roots(conn, lib)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.id, r.path))
+            .collect();
+        let mut stmt = conn
+            .prepare(
+                "SELECT t.id, t.root_id, t.path, t.missing_since IS NOT NULL, t.title, t.album_title, t.sort_key, \
+                 t.artist_sort_key, t.codec, t.container, t.channels, t.sample_rate_hz, t.analyzer_version > 0, \
+                 t.loudness_lufs IS NOT NULL, \
+                 (SELECT image_id FROM albums a WHERE a.id = t.album_id) IS NOT NULL, \
+                 EXISTS (SELECT 1 FROM track_artists ta JOIN artists ar ON ar.id = ta.artist_id \
+                         WHERE ta.track_id = t.id AND ar.biography IS NOT NULL), \
+                 t.lyrics_kind <> 'none' \
+                 FROM tracks t WHERE t.library_id = ?1 ORDER BY t.path",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([lib], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, bool>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                    r.get::<_, Vec<u8>>(6)?,
+                    r.get::<_, Vec<u8>>(7)?,
+                    r.get::<_, String>(8)?,
+                    r.get::<_, String>(9)?,
+                    r.get::<_, i64>(10)?,
+                    r.get::<_, i64>(11)?,
+                    r.get::<_, bool>(12)?,
+                    r.get::<_, bool>(13)?,
+                    r.get::<_, bool>(14)?,
+                    r.get::<_, bool>(15)?,
+                    r.get::<_, bool>(16)?,
+                ))
+            })
+            .unwrap();
+        let mut out = Vec::new();
+        for row in rows {
+            let (
+                id,
+                root_id,
+                rel,
+                missing,
+                title,
+                album,
+                sort_key,
+                artist_sort_key,
+                codec,
+                container,
+                channels,
+                rate,
+                analyzed,
+                measured,
+                art,
+                bio,
+                lyr,
+            ) = row.unwrap();
+            let artists: Vec<String> = {
+                let mut s = conn
+                    .prepare(
+                        "SELECT ar.name FROM track_artists ta JOIN artists ar ON ar.id = ta.artist_id \
+                         WHERE ta.track_id = ?1 AND ar.name IS NOT NULL ORDER BY ta.position",
+                    )
+                    .unwrap();
+                s.query_map([id], |r| r.get(0))
+                    .unwrap()
+                    .collect::<std::result::Result<_, _>>()
+                    .unwrap()
+            };
+            let album_artists: Vec<String> = {
+                let mut s = conn
+                    .prepare(
+                        "SELECT ar.name FROM tracks t JOIN album_artists aa ON aa.album_id = t.album_id \
+                         JOIN artists ar ON ar.id = aa.artist_id \
+                         WHERE t.id = ?1 AND ar.name IS NOT NULL ORDER BY aa.position",
+                    )
+                    .unwrap();
+                s.query_map([id], |r| r.get(0))
+                    .unwrap()
+                    .collect::<std::result::Result<_, _>>()
+                    .unwrap()
+            };
+            out.push(InspectTrack {
+                id,
+                path: roots[&root_id].join(&rel),
+                missing,
+                title,
+                artists,
+                album,
+                album_artists,
+                has_artwork: art,
+                has_biography: bio,
+                has_lyrics: lyr,
+                sort_title: String::from_utf8(sort_key).unwrap(),
+                sort_artist: String::from_utf8(artist_sort_key).unwrap(),
+                format: format_of(&codec, &container),
+                channels: if channels == 0 {
+                    None
+                } else {
+                    Some(channels as u8)
+                },
+                sample_rate: if rate == 0 { None } else { Some(rate as u32) },
+                analyzed,
+                measured,
+            });
+        }
+        Ok(out)
+        })
+        .unwrap()
+    }
+
+    fn inspect_problems(&self, lib: LibraryId) -> Vec<Problem> {
+        self.db().read_blocking(move |conn| {
+        let roots: std::collections::HashMap<i64, PathBuf> = libraries::roots(conn, lib)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.id, r.path))
+            .collect();
+        let mut stmt = conn
+            .prepare(
+                "SELECT p.root_id, p.path, g.kind, p.detail, p.seen_at FROM scan_problems p \
+                 JOIN scan_problem_groups g ON g.id = p.group_id WHERE p.library_id = ?1 ORDER BY p.path",
+            )
+            .unwrap();
+        stmt.query_map([lib], |r| {
+            Ok(Problem {
+                path: roots[&r.get::<_, i64>(0)?].join(r.get::<_, String>(1)?),
+                kind: r.get::<_, Text<_>>(2)?.0,
+                detail: r.get(3)?,
+                seen_at: r.get(4)?,
+            })
+        })
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        })
+        .unwrap()
+    }
+
+    fn inspect_placeholder(&self, lib: LibraryId, hash: &[u8]) -> Option<Vec<u8>> {
+        let hash = hash.to_vec();
+        self.db()
+            .read_blocking(move |conn| {
+                conn.query_row(
+                    "SELECT placeholder FROM images WHERE library_id = ?1 AND hash = ?2",
+                    rusqlite::params![lib, hash],
+                    |r| r.get::<_, Option<Vec<u8>>>(0),
+                )
+                .optional()
+            })
+            .unwrap()
+            .flatten()
+    }
+
+    fn inspect_scans(&self, lib: LibraryId) -> Vec<Scan> {
+        self.scans(lib).unwrap()
+    }
+
+    fn feed_head(&self, lib: LibraryId) -> i64 {
+        self.db()
+            .read_blocking(move |conn| {
+                conn.query_row(
+                    "SELECT ifnull(max(seq), 0) FROM library_changes WHERE library_id = ?1",
+                    [lib],
+                    |r| r.get(0),
+                )
+            })
+            .unwrap()
+    }
+
+    fn feed_tracks_after(&self, lib: LibraryId, head: i64) -> Vec<TrackId> {
+        self.db()
+            .read_blocking(move |conn| {
+                conn.prepare(
+                    "SELECT entity_id FROM library_changes \
+                     WHERE library_id = ?1 AND entity_type = 'track' AND seq > ?2 ORDER BY seq",
+                )?
+                .query_map([lib, head], |r| r.get::<_, i64>(0))?
+                .collect::<Result<Vec<_>>>()
+            })
+            .unwrap()
+            .into_iter()
+            .map(|id| TrackId::try_from(id).unwrap())
+            .collect()
+    }
+}
