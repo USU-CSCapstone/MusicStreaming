@@ -58,6 +58,8 @@ fn benchmark_full_scale() {
     let mut typo = long.clone();
     typo.replace_range(3..4, "z");
     queries.extend([typo, format!("{common} {long}"), format!("{} {}", &long[..3], &common[..2])]);
+    // Queries led by an optional article.
+    queries.extend([format!("a {common}"), format!("a {long}")]);
     for query in &queries {
         let started = std::time::Instant::now();
         let rounds = 20;

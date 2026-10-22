@@ -4,9 +4,11 @@
 //! in the same order. Pure and deterministic: nothing here depends on the platform, the locale,
 //! or hash order.
 //!
-//! Names are folded into words: accents dropped, case folded, apostrophes joining (so `aint`
-//! is `Ain't`), anything else that is not a letter or digit separating. Every word of the query
-//! must match a different-or-same word of the name, in any order, in one of three ways:
+//! Names are folded into words: compatibility forms written plainly (`ﬁ` is `fi`, fullwidth `Ａ`
+//! is `a`), accents dropped, case folded with final `ς` as `σ`, apostrophes joining (so `aint` is
+//! `Ain't`), anything else that is not a letter or digit separating (so `™` too, not `tm`).
+//! Every word of the query must match a word of the name, in any order and two perhaps the same
+//! one, in one of three ways:
 //!
 //! - **exactly**;
 //! - **as a prefix**, so results appear from the first character typed;
@@ -14,10 +16,14 @@
 //!   pair as one. The first character must be right, which keeps the words to try few enough
 //!   to meet the time budget, and is the letter people mistype least.
 //!
-//! Matches rank by, in order: the whole name matching exactly, leading article optional (the
-//! guardrail that keeps an exact match from being buried); fewer typos; fewer words matched only
-//! as a prefix; fewer words in the name beyond the query's. Ties break by kind (tracks, then
-//! albums, then artists), then folded name, then ID.
+//! The one exception is a leading article in a query of more than one word, which may go
+//! unmatched, so `the beatles` finds Beatles.
+//!
+//! Matches rank by, in order: the whole name matching exactly, a leading article optional on
+//! either side (the guardrail that keeps an exact match from being buried); fewer typos; the
+//! query's leading article matched, so typing `the` narrows toward names that have it; fewer words
+//! matched only as a prefix; fewer words in the name beyond those the query matched. Ties break
+//! by kind (tracks, then albums, then artists), then folded name, then ID.
 
 mod build;
 mod distance;

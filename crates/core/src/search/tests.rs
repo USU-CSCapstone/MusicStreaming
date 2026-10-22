@@ -81,6 +81,101 @@ fn leading_articles_do_not_matter() {
 }
 
 #[test]
+fn a_leading_article_in_the_query_is_optional() {
+    let index = Index::build([
+        doc(Kind::Artist, 1, "Beatles"),
+        doc(Kind::Artist, 2, "A Perfect Circle"),
+        doc(Kind::Artist, 3, "An Horse"),
+        doc(Kind::Track, 4, "Beatles Medley"),
+        doc(Kind::Track, 5, "Perfect Circle Live"),
+        doc(Kind::Track, 6, "A Perfect Circle Live"),
+        doc(Kind::Track, 7, "Horse"),
+        doc(Kind::Album, 8, "Beatles, The"),
+    ]);
+    // A name without the article matches it exactly, above the same words in another order.
+    assert_eq!(
+        find(&index, "the beatles"),
+        [(Kind::Artist, vec![1]), (Kind::Album, vec![8]), (Kind::Track, vec![4])]
+    );
+    // Of names equally exact, the one with the article comes first.
+    assert_eq!(find(&index, "an horse"), [(Kind::Artist, vec![3]), (Kind::Track, vec![7])]);
+    assert_eq!(
+        find(&index, "a perfect circle"),
+        [(Kind::Artist, vec![2]), (Kind::Track, vec![6, 5])]
+    );
+    // A skipped article counts as no matched word, so "Beatles Medley" has a word beyond the
+    // query's.
+    assert_eq!(
+        find(&index, "the beat"),
+        [(Kind::Album, vec![8]), (Kind::Artist, vec![1]), (Kind::Track, vec![4])]
+    );
+    // A query that is only an article must match it.
+    assert_eq!(find(&index, "an"), [(Kind::Artist, vec![3])]);
+}
+
+#[test]
+fn a_name_that_matches_the_article_ranks_first() {
+    let index = Index::build([
+        doc(Kind::Artist, 1, "The Killers"),
+        doc(Kind::Track, 2, "Killers"),
+        doc(Kind::Track, 3, "The Beast"),
+        doc(Kind::Track, 4, "Baby"),
+    ]);
+    // Kind and name order alone would put each the other way round.
+    assert_eq!(find(&index, "the killers"), [(Kind::Artist, vec![1]), (Kind::Track, vec![2])]);
+    assert_eq!(find(&index, "the b"), [(Kind::Track, vec![3, 4])]);
+}
+
+#[test]
+fn a_skipped_article_costs_less_than_a_typo_and_more_than_an_extra_word() {
+    let index = Index::build([
+        doc(Kind::Track, 1, "Beatles Medley"),
+        doc(Kind::Track, 2, "The Beetles Tribute"),
+        doc(Kind::Track, 3, "The Beast Within"),
+        doc(Kind::Track, 4, "Beautiful"),
+    ]);
+    assert_eq!(find(&index, "the beatles"), [(Kind::Track, vec![1, 2])]);
+    // "Beautiful" has no word beyond the query's but skipped the article, so it follows
+    // "The Beast Within".
+    assert_eq!(find(&index, "the bea"), [(Kind::Track, vec![3, 4, 1])]);
+}
+
+#[test]
+fn every_word_but_a_leading_article_must_match() {
+    assert_eq!(find(&library(), "blue weezer"), [(Kind::Album, vec![10])]);
+}
+
+#[test]
+fn a_name_that_is_only_an_article_keeps_it() {
+    let index = Index::build([doc(Kind::Track, 1, "The"), doc(Kind::Artist, 2, "The The")]);
+    assert_eq!(find(&index, "the"), [(Kind::Track, vec![1]), (Kind::Artist, vec![2])]);
+}
+
+#[test]
+fn a_leading_article_in_the_name_is_optional() {
+    let index = Index::build([
+        doc(Kind::Artist, 1, "A Perfect Circle"),
+        doc(Kind::Artist, 2, "An Horse"),
+        doc(Kind::Track, 3, "Perfect Circle Live"),
+        doc(Kind::Track, 4, "Horse Medley"),
+    ]);
+    assert_eq!(find(&index, "perfect circle"), [(Kind::Artist, vec![1]), (Kind::Track, vec![3])]);
+    assert_eq!(find(&index, "horse"), [(Kind::Artist, vec![2]), (Kind::Track, vec![4])]);
+}
+
+#[test]
+fn compatibility_forms_and_final_sigma_match_exactly() {
+    let index = Index::build([
+        doc(Kind::Track, 1, "\u{FB01}re"),
+        doc(Kind::Artist, 2, "Νίκος"),
+        doc(Kind::Track, 3, "Νίκου"),
+    ]);
+    assert_eq!(find(&index, "fire"), [(Kind::Track, vec![1])]);
+    // The artist is exact and the track one typo away, so the artist comes first.
+    assert_eq!(find(&index, "ΝΙΚΟΣ"), [(Kind::Artist, vec![2]), (Kind::Track, vec![3])]);
+}
+
+#[test]
 fn exact_matches_always_win() {
     let index = library();
     // Exact, then the same word with more after it, then one typo away.
