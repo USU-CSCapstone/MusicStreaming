@@ -50,7 +50,7 @@ pub use bindings::jewelcase::plugin::events::{
 };
 pub use bindings::jewelcase::plugin::library::{Album, Artist, Track};
 pub(crate) use bindings::jewelcase::plugin::{files::Entry, host::Error};
-pub use outcome::{Outcome, RunError};
+pub use outcome::{Outcome, Refused, RunError};
 
 /// Compute a plugin may spend in one run, in ticks: about 63 s. Ticks count only while its code
 /// runs, but each host call it waits on costs one however long it takes, so this is approximate.
@@ -252,20 +252,16 @@ impl<L: Library> Host<L> {
     pub async fn run(&self, file: &Path, grants: Grants, library: L, event: Event) -> Outcome {
         let (pre, client) = match self.compiled(&grants.plugin, file).await {
             Ok(compiled) => compiled,
-            Err(e) => {
-                let (log, touched) = (Vec::new(), Vec::new());
-                let result = Err(RunError::Unloadable(format!("{e:#}")));
-                return Outcome { result, log, written: 0, touched, outage: false };
-            }
+            Err(e) => return Outcome::failed(RunError::Unloadable(format!("{e:#}"))),
         };
         let mut store = self.store(grants, library, client);
         // Held until the run ends, so the epoch advances and its deadlines are enforced.
         let _live = self.epoch.live();
         let result = call(&pre, &mut store, &event).await;
-        // The store owned the run's state while the plugin ran; what it logged and saved is
-        // read back from it.
-        let Run { log, written, touched, outage, .. } = store.into_data();
-        Outcome { result, log, written, touched, outage }
+        // The store owned the run's state while the plugin ran; what it logged, saved, was
+        // refused, and spent is read back from it.
+        let Run { log, written, touched, outage, refused, ticks, .. } = store.into_data();
+        Outcome { result, log, written, touched, outage, refused, ticks }
     }
 
     /// A fresh store for one run over `library` with `grants`, with its caps and compute budget,
@@ -293,6 +289,7 @@ impl<L: Library> Host<L> {
             written: 0,
             touched: Vec::new(),
             outage: false,
+            refused: Refused::default(),
             timeout: http::TIMEOUT,
             reach: rules::reach,
         };
@@ -375,6 +372,8 @@ pub struct Run<L> {
     touched: Vec<PathBuf>,
     /// Whether a request found its service out of reach ([`Outcome::outage`]).
     outage: bool,
+    /// What the host refused it ([`Outcome::refused`]).
+    refused: Refused,
     /// How long a request waits for its reply once sent.
     timeout: Duration,
     /// What each address is to the run's requests. A field rather than a call to `rules::reach`
@@ -383,9 +382,13 @@ pub struct Run<L> {
 }
 
 impl<L: Library> Run<L> {
-    /// Refuses as `not-granted` unless this run holds `permission`.
-    fn may(&self, permission: Permission) -> Result<(), Error> {
-        if self.grants.permissions.contains(&permission) { Ok(()) } else { Err(Error::NotGranted) }
+    /// Refuses as `not-granted`, and records the refusal, unless this run holds `permission`.
+    fn may(&mut self, permission: Permission) -> Result<(), Error> {
+        if self.grants.permissions.contains(&permission) {
+            return Ok(());
+        }
+        self.refused.add(permission.title());
+        Err(Error::NotGranted)
     }
 
     /// The library's roots, read on first use. Failing to read them is a `failed`.

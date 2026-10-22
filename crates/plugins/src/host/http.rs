@@ -119,8 +119,15 @@ fn describe(error: reqwest::Error) -> String {
 impl<L: Library> http::Host for Run<L> {
     async fn send(&mut self, request: http::Request) -> Result<http::Response, http::Error> {
         self.may(Permission::Network)?;
-        let url = rules::allowed(&request.url, &self.grants.destinations, self.reach)
-            .map_err(http::Error::Refused)?;
+        let allowed = rules::allowed(&request.url, &self.grants.destinations, self.reach);
+        let url = allowed.map_err(|why| {
+            // A string that is not an http(s) URL names no host it could reach.
+            let host = rules::host_of(&request.url);
+            if !host.is_empty() {
+                self.refused.add(&host);
+            }
+            http::Error::Refused(why)
+        })?;
         // Checked to have one. Parsed, so it is lowercase, and every spelling of a URL is one.
         let host = url.host_str().unwrap_or_default().to_owned();
         if request.body.len() > MAX_BODY {
@@ -174,8 +181,11 @@ impl<L: Library> http::Host for Run<L> {
         // The wait for a turn is not the service's slowness, so only the request is timed.
         let reply = match tokio::time::timeout(self.timeout, fetch(builder)).await {
             Ok(Ok(reply)) => reply,
-            Ok(Err(NoReply { error, unreachable })) => {
+            Ok(Err(NoReply { error, unreachable, forbidden })) => {
                 self.outage |= unreachable;
+                if let Some(host) = forbidden {
+                    self.refused.add(&host);
+                }
                 return Err(error);
             }
             Err(_) => {
@@ -287,22 +297,29 @@ impl<L: Library> Run<L> {
 struct NoReply {
     error: http::Error,
     unreachable: bool,
+    /// The name refused for its address, if that is why.
+    forbidden: Option<String>,
 }
 
 impl From<String> for NoReply {
     /// A failure after the service was reached, such as a reply cut short.
     fn from(why: String) -> NoReply {
-        NoReply { error: http::Error::Failed(why), unreachable: false }
+        NoReply { error: http::Error::Failed(why), unreachable: false, forbidden: None }
     }
 }
 
 /// Sends the request and reads the whole reply.
 async fn fetch(builder: reqwest::RequestBuilder) -> Result<Reply, NoReply> {
     let mut res = builder.send().await.map_err(|e| match guard::forbidden(&e) {
-        Some(why) => NoReply { error: http::Error::Refused(why), unreachable: false },
+        Some(refused) => NoReply {
+            error: http::Error::Refused(refused.to_string()),
+            unreachable: false,
+            forbidden: Some(refused.host.clone()),
+        },
         None => NoReply {
             unreachable: e.is_connect(),
             error: http::Error::Failed(format!("request failed: {}", describe(e))),
+            forbidden: None,
         },
     })?;
     let status = res.status().as_u16();

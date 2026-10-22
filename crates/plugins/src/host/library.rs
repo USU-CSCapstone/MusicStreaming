@@ -72,6 +72,8 @@ impl<L: Library> files::Host for Run<L> {
         let file_permissions =
             [Permission::LibraryRead, Permission::LibraryAdd, Permission::LibraryChange];
         if !file_permissions.iter().any(|p| self.grants.permissions.contains(p)) {
+            // Recorded as the least of them that would have let it through.
+            self.refused.add(Permission::LibraryRead.title());
             return Err(Error::NotGranted);
         }
         Ok(Run::roots(self).await?.iter().map(|(id, _)| *id).collect())

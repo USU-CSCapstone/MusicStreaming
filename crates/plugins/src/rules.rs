@@ -121,9 +121,9 @@ fn names(host: &str, destinations: &[String]) -> bool {
 }
 
 /// The host `url` names, lowercase as the parser gives an http(s) host, or nothing if it is
-/// not a URL.
+/// not an http(s) URL, since no other scheme's host is one a request is sent to.
 pub fn host_of(url: &str) -> String {
-    let url = reqwest::Url::parse(url).ok();
+    let url = reqwest::Url::parse(url).ok().filter(|url| matches!(url.scheme(), "http" | "https"));
     url.as_ref().and_then(|url| url.host_str()).unwrap_or_default().to_owned()
 }
 

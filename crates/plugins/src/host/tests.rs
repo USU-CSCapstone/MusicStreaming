@@ -35,6 +35,8 @@ async fn a_run_that_waits_past_its_budget_in_a_host_call_still_finishes() {
     let (outcome, took) = run(BUDGET, Event::Scheduled).await;
     assert_eq!(outcome.result, Ok("done".to_owned()));
     assert!(took >= Duration::from_millis(500), "it waited {took:?}");
+    // The 500 ms wait costs one tick and the work after it a few more, well under half the budget.
+    assert!((1..BUDGET / 2).contains(&outcome.ticks), "{} ticks", outcome.ticks);
 }
 
 /// On a thread and runtime of its own, so a spin the host never stops fails the test rather than
@@ -50,6 +52,7 @@ fn a_spin_traps_at_its_compute_budget() {
     let (outcome, took) = stopped.expect("the spin was never stopped");
     assert_eq!(outcome.result, Err(RunError::OutOfCompute));
     assert_eq!(outcome.summary(), "the plugin ran past its compute budget");
+    assert_eq!(outcome.ticks, BUDGET, "the whole budget is recorded as spent");
     // A tick lasts at least 1 ms, so the budget cannot run out sooner than that allows.
     assert!(took >= Duration::from_millis(BUDGET * 9 / 10), "it stopped after {took:?}");
     assert!(took < Duration::from_secs(1), "it stopped after {took:?}");

@@ -30,14 +30,29 @@ async fn the_host_header_is_the_hosts() {
     );
 }
 
+/// Each refusal is recorded once, by host or permission; a string that is not a URL, or a
+/// scheme other than http(s), names neither.
 #[tokio::test]
 async fn needs_the_network_and_an_approved_destination() {
     let mut run = run();
-    let refused = run.send(get("http://example.com/".into())).await.unwrap_err();
-    assert!(matches!(&refused, Error::Refused(why) if why.contains("not one of")), "{refused:?}");
+    for _ in 0..2 {
+        let refused = run.send(get("http://example.com/".into())).await.unwrap_err();
+        assert!(
+            matches!(&refused, Error::Refused(why) if why.contains("not one of")),
+            "{refused:?}"
+        );
+    }
+    let refused = run.send(get("not a url".into())).await.unwrap_err();
+    assert!(matches!(&refused, Error::Refused(why) if why == "not a URL"), "{refused:?}");
+    let refused = run.send(get("ftp://127.0.0.1/".into())).await.unwrap_err();
+    assert!(matches!(&refused, Error::Refused(why) if why.starts_with("ftp")), "{refused:?}");
     run.grants.permissions.clear();
-    let refused = run.send(get("http://127.0.0.1/".into())).await.unwrap_err();
-    assert!(matches!(refused, Error::NotGranted), "{refused:?}");
+    for _ in 0..2 {
+        let refused = run.send(get("http://127.0.0.1/".into())).await.unwrap_err();
+        assert!(matches!(refused, Error::NotGranted), "{refused:?}");
+    }
+    assert_eq!(run.refused.named, ["example.com", "Network access"]);
+    assert_eq!(run.refused.more, 0);
 }
 
 #[tokio::test]

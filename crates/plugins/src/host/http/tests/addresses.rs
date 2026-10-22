@@ -79,6 +79,7 @@ async fn a_name_at_loopback_is_refused_and_is_not_an_outage() {
         let why = "loopback.test: 127.0.0.1 is an address no plugin may reach";
         assert!(matches!(&refused, Error::Refused(r) if r == why), "{scheme}: {refused:?}");
     }
+    assert_eq!(run.refused.named, ["loopback.test"], "recorded once");
     assert!(!run.outage);
     assert!(hits.lock().unwrap().is_empty(), "the server is never asked");
 }
@@ -117,6 +118,8 @@ async fn a_redirect_to_loopback_is_refused() {
     let refused = run.send(get(format!("http://127.0.0.1:{port}/away"))).await.unwrap_err();
     let why = "localhost: ::1 is an address no plugin may reach";
     assert!(matches!(&refused, Error::Refused(r) if r == why), "{refused:?}");
+    // Only the name the resolver refused is the plugin's to answer for.
+    assert_eq!(run.refused.named, ["localhost"]);
     assert!(!run.outage);
 }
 

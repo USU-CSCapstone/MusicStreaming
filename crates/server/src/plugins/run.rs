@@ -82,8 +82,8 @@ impl Plugins {
     /// Runs `id` in `run_for`'s library with `permissions` to handle `event`, for its user if it
     /// acts for one, with their personal settings beside the shared ones. Then it queues scans
     /// of what it touched, as the scanner is the only way into the library
-    /// (`requirements/general.md` §3.2), and records the run for admins. Answers the outcome,
-    /// and whether a scan was queued.
+    /// (`requirements/general.md` §3.2), and records its report as the library's last run for
+    /// admins. Answers the outcome, and whether a scan was queued.
     pub(super) async fn run_in(
         &self,
         id: &str,
@@ -108,7 +108,7 @@ impl Plugins {
             .await?;
         let outcome = self.execute(id, manifest, run_for, permissions, settings, event).await?;
         let scanning = self.scan(library, &outcome.touched).await;
-        let (plugin, ok, summary) = (id.to_owned(), outcome.result.is_ok(), outcome.summary());
+        let (plugin, ok, summary) = (id.to_owned(), outcome.result.is_ok(), outcome.report());
         self.db
             .write(move |tx| {
                 tx.execute(
@@ -123,7 +123,7 @@ impl Plugins {
 
     /// Runs `id` in `run_for`'s library, for its user if it acts for one, with exactly these
     /// permissions and settings, and the host limits in force now, on the plugin runtime, and
-    /// nothing more.
+    /// nothing more. What it was refused goes to the log for admins, whatever ran it.
     pub(super) async fn execute(
         &self,
         id: &str,
@@ -148,12 +148,17 @@ impl Plugins {
             settings,
         };
         let (path, db, plugin) = (self.path(id), self.db.clone(), id.to_owned());
-        runtime
+        let outcome = runtime
             .spawn(async move {
                 host.run(&path, grants, RunLibrary::new(db, &plugin, library), event).await
             })
             .await
-            .map_err(|e| PluginError::Internal(e.to_string()))
+            .map_err(|e| PluginError::Internal(e.to_string()))?;
+        if !outcome.refused.is_empty() {
+            let refused = &outcome.refused;
+            tracing::warn!(plugin = id, library, user, %refused, "refused a plugin");
+        }
+        Ok(outcome)
     }
 
     /// Queues a scan of each folder the paths in `touched` are in, and says whether any was

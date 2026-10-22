@@ -1,5 +1,6 @@
 //! How a plugin run went (`design/plugins.md` §7).
 
+use std::fmt;
 use std::path::PathBuf;
 
 use super::WALL_BUDGET;
@@ -21,14 +22,90 @@ pub struct Outcome {
     /// may have failed only for that, so the server retries it without counting it among the
     /// plugin's own failures.
     pub outage: bool,
+    /// What the host refused it for want of a permission or an approved destination.
+    pub refused: Refused,
+    /// The ticks of compute it spent, each about a millisecond of its code running.
+    pub ticks: u64,
 }
 
 impl Outcome {
-    /// What the admin is shown of how the run went: the plugin's own summary, or why it failed.
+    /// A run that failed with `error` before the plugin's code ran.
+    pub(super) fn failed(error: RunError) -> Outcome {
+        let (log, touched, refused) = (Vec::new(), Vec::new(), Refused::default());
+        Outcome { result: Err(error), log, written: 0, touched, outage: false, refused, ticks: 0 }
+    }
+
+    /// The plugin's own summary, or why the run failed.
     pub fn summary(&self) -> String {
         match &self.result {
             Ok(summary) => summary.clone(),
             Err(error) => error.to_string(),
+        }
+    }
+
+    /// What is recorded of the run for the admin: its summary, then what it was refused, if
+    /// anything, and about how much compute it spent, in milliseconds under a second and
+    /// otherwise in seconds to a tenth, such as `done (refused Network access; about 42 ms of
+    /// compute)`.
+    pub fn report(&self) -> String {
+        let refused = if self.refused.is_empty() {
+            String::new()
+        } else {
+            format!("refused {}; ", self.refused)
+        };
+        let compute = match self.ticks {
+            ticks @ 0..1000 => format!("{ticks} ms"),
+            ticks => format!("{}.{} s", ticks / 1000, ticks % 1000 / 100),
+        };
+        format!("{} ({refused}about {compute} of compute)", self.summary())
+    }
+}
+
+/// How many distinct refusals a run keeps by name. A plugin can try thousands of hosts, so any
+/// past these are only counted.
+const REFUSALS_NAMED: usize = 10;
+/// The most of a refused name kept, in characters, as a host can be long.
+const NAME_CHARS: usize = 200;
+
+/// What a run was refused: each permission it lacked or host it was kept from, named once, in
+/// the order it first tried them.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Refused {
+    /// The first [`REFUSALS_NAMED`] things it was refused, each cut to [`NAME_CHARS`].
+    pub named: Vec<String>,
+    /// Its refused attempts at anything else.
+    pub more: usize,
+}
+
+impl Refused {
+    /// Records a refusal of `what`: a permission's title or a host.
+    pub(super) fn add(&mut self, what: &str) {
+        let what: String = what.chars().take(NAME_CHARS).collect();
+        if self.named.contains(&what) {
+            return;
+        }
+        if self.named.len() < REFUSALS_NAMED {
+            self.named.push(what);
+        } else {
+            self.more += 1;
+        }
+    }
+
+    /// Whether nothing was refused.
+    pub fn is_empty(&self) -> bool {
+        self.named.is_empty()
+    }
+}
+
+impl fmt::Display for Refused {
+    /// The names, then how many more attempts there were, such as `a.example, b.example and 3
+    /// more attempts`.
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(&self.named.join(", "))?;
+        match self.more {
+            0 => Ok(()),
+            1 => f.write_str(" and 1 more attempt"),
+            more => write!(f, " and {more} more attempts"),
         }
     }
 }
@@ -64,3 +141,6 @@ impl RunError {
         trap.downcast::<RunError>().unwrap_or_else(crashed)
     }
 }
+
+#[cfg(test)]
+mod tests;

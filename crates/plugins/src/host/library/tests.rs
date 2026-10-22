@@ -131,6 +131,7 @@ async fn every_import_refuses_without_its_permission() {
                 assert_eq!(run.touched.len(), touches, "{context}");
             } else {
                 assert_eq!(answer, Answer::NotGranted, "{context}");
+                assert_eq!(run.refused.named, [needs[0].title()], "{context}");
                 assert!(run.touched.is_empty(), "{context}");
                 assert_eq!(contents(dir.path()), before, "{context}");
             }

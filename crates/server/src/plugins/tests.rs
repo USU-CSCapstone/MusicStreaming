@@ -46,8 +46,9 @@ async fn saved_files_are_scanned_without_blocking_the_runtime() {
     tokio::task::spawn_blocking(move || drop(thread)).await.unwrap();
 }
 
-/// Run now answers a run that failed as failed, with why, and records it so for the admin: here
-/// a plugin installed without its file, which cannot be loaded.
+/// Run now answers a run that failed as failed, with why, and records it so for the admin, with
+/// the compute it spent: here a plugin installed without its file, which cannot be loaded, so
+/// it spent none.
 #[tokio::test]
 async fn a_failed_run_is_answered_and_recorded_as_failed() {
     let (temp, db) = database().await;
@@ -65,7 +66,7 @@ async fn a_failed_run_is_answered_and_recorded_as_failed() {
         .read(move |conn| conn.query_row(sql, [], |row| Ok((row.get(0)?, row.get(1)?))))
         .await
         .unwrap();
-    assert_eq!(recorded, (false, summary));
+    assert_eq!(recorded, (false, format!("{summary} (about 0 ms of compute)")));
 }
 
 /// A component that carries a valid manifest, but whose one core module declares a function of

@@ -19,11 +19,16 @@ pub(super) struct Guard<R> {
     pub reach: fn(IpAddr) -> Reach,
 }
 
-/// A name refused because none of its addresses is in reach, which the plugin sees as
+/// A name refused because none of its addresses is in reach, and why. The plugin sees it as
 /// `refused`.
 #[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub(super) struct Forbidden(String);
+#[error("{host}: {why}")]
+pub(super) struct Forbidden {
+    /// The name refused.
+    pub host: String,
+    /// Why its addresses are out of reach.
+    why: String,
+}
 
 impl<R: Resolve> Resolve for Guard<R> {
     fn resolve(&self, name: Name) -> Resolving {
@@ -39,7 +44,7 @@ impl<R: Resolve> Resolve for Guard<R> {
                 }
             }
             match refused {
-                Some(why) if allowed.is_empty() => Err(Forbidden(format!("{host}: {why}")).into()),
+                Some(why) if allowed.is_empty() => Err(Forbidden { host, why }.into()),
                 _ => Ok(Box::new(allowed.into_iter()) as Addrs),
             }
         })
@@ -60,8 +65,8 @@ impl Resolve for System {
     }
 }
 
-/// Why the resolver refused the connection `error` failed to make, if that is why it failed.
-pub(super) fn forbidden(error: &reqwest::Error) -> Option<String> {
+/// The name the resolver refused, and why, if that is why `error` failed to connect.
+pub(super) fn forbidden(error: &reqwest::Error) -> Option<&Forbidden> {
     let mut causes = std::iter::successors(std::error::Error::source(error), |e| e.source());
-    causes.find_map(|cause| cause.downcast_ref::<Forbidden>()).map(|why| why.0.clone())
+    causes.find_map(|cause| cause.downcast_ref::<Forbidden>())
 }
