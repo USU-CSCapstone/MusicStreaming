@@ -36,10 +36,8 @@ pub fn create(
 
 /// Saves what changes as `scan` runs.
 pub fn update(store: &SqliteStore, scan: &Scan) -> Result<(), DbError> {
-    let current = scan.progress.current_path.as_ref();
-    let current = current.and_then(|path| store.roots.locate(scan.library, path));
-    let scan = scan.clone();
-    store.db.write_blocking(move |tx| save(tx, &scan, current))
+    let (roots, scan) = (store.roots.clone(), scan.clone());
+    store.db.write_blocking(move |tx| save(tx, &roots, &scan))
 }
 
 /// The library's scans that were queued or running when the server last stopped. A row that
@@ -76,16 +74,19 @@ impl SqliteStore {
     }
 }
 
-/// Writes what changes as a scan runs: its state, cursor, progress, and times, with `current`,
-/// the root and relative path of the folder it is in, if any.
-fn save(tx: &Transaction, scan: &Scan, current: Option<(i64, String)>) -> Result<()> {
+/// Writes what changes as a scan runs: its state, cursor, progress, and times, and the folder it
+/// is in, if any, as one of `roots` and the path relative to it. Only a row in the scan's own
+/// library is changed.
+pub(super) fn save(tx: &Transaction, roots: &Roots, scan: &Scan) -> Result<()> {
     let progress = &scan.progress;
-    let (current_root, current_path) = current.unzip();
+    let current = progress.current_path.as_ref();
+    let (current_root, current_path) =
+        current.and_then(|path| roots.locate(scan.library, path)).unzip();
     tx.execute(
         "UPDATE scans SET state = ?2, cursor_scope = ?3, cursor_dir = ?4, files_seen = ?5, \
          files_processed = ?6, added = ?7, updated = ?8, moved = ?9, missing = ?10, problems = ?11, \
          current_root_id = ?12, current_path = ?13, started_at = ?14, finished_at = ?15 \
-         WHERE id = ?1",
+         WHERE id = ?1 AND library_id = ?16",
         params![
             scan.id,
             name(scan.state),
@@ -102,6 +103,7 @@ fn save(tx: &Transaction, scan: &Scan, current: Option<(i64, String)>) -> Result
             current_path,
             scan.started_at,
             scan.finished_at,
+            scan.library,
         ],
     )?;
     Ok(())

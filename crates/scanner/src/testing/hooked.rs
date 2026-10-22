@@ -69,7 +69,8 @@ impl<'a> Hooked<'a> {
         Hooked { on_under: Box::new(hook), ..self }
     }
 
-    /// Runs `hook` before each scan row is created or saved.
+    /// Runs `hook` before each scan row is created or saved on its own ([`Store::update_scan`]).
+    /// A row saved with a batch is part of the batch, which [`Hooked::on_apply`]'s hook sees.
     pub fn on_scan_write(
         self,
         hook: impl Fn() -> Result<(), StoreError> + Send + Sync + 'a,
@@ -77,9 +78,9 @@ impl<'a> Hooked<'a> {
         Hooked { on_scan_write: Box::new(hook), ..self }
     }
 
-    /// Holds up each scan as it next saves its row as running: the row is written, then the save
-    /// waits until [`Hooked::release`], so a scan that starts while held waits before it reads
-    /// anything.
+    /// Holds up each scan as it next saves its row as running on its own ([`Store::update_scan`]),
+    /// which it does as it starts: the row is written, then the save waits until
+    /// [`Hooked::release`], so a scan that starts while held waits before it reads anything.
     pub fn hold(&self) {
         *self.held.lock().unwrap() = true;
     }

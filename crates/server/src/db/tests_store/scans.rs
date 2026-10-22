@@ -28,6 +28,16 @@ fn saved_scan(root: &Path) -> (SqliteStore, Scan) {
     (store, scan)
 }
 
+/// A save of a scan row names its library, so a scan that names another library changes no row.
+#[test]
+fn a_scan_row_is_saved_only_in_its_library() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, scan) = saved_scan(&tmp.path().join("lib"));
+    let elsewhere = Scan { library: 2, state: ScanState::Completed, ..scan.clone() };
+    store.update_scan(&elsewhere).unwrap();
+    assert_eq!(store.scans(1).unwrap(), [scan]);
+}
+
 /// Adds library 2 to `store`, with its one root at `other`, and returns that root's id.
 fn other_library(store: &SqliteStore, other: &Path) -> i64 {
     let other = other.to_path_buf();

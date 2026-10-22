@@ -49,13 +49,16 @@ fn a_reconcile_the_store_fails_suspends_the_scan() {
     assert_eq!((scan.state, scan.progress.missing), (ScanState::Completed, 1), "{scan:?}");
 }
 
-/// A scan whose row cannot be saved as it starts, as it saves its progress, or as it completes
-/// ends suspended at its last saved cursor, rather than carrying on or completing unsaved.
+/// A scan whose row cannot be saved as it starts, as it saves its progress, as it finishes a
+/// scope, or as it completes ends suspended at its last saved cursor, rather than carrying on or
+/// completing unsaved. A row saved with a batch fails the batch with it, so the store holds
+/// exactly the tracks the row counts, and the next scan adds the rest.
 #[test]
 fn a_scan_whose_row_the_store_cannot_save_ends_suspended() {
     let saves = [
         "NEW.state = 'running' AND NEW.files_seen = 0",
         "NEW.state = 'running' AND NEW.files_seen > 0",
+        "NEW.state = 'running' AND NEW.cursor_scope > 0",
         "NEW.state = 'completed'",
     ];
     for save in saves {
@@ -69,8 +72,36 @@ fn a_scan_whose_row_the_store_cannot_save_ends_suspended() {
         let scan = testing::scan_library(&store, &lib);
         assert_eq!(scan.state, ScanState::Suspended, "{save}");
         let [row] = store.inspect_scans(lib.id).try_into().unwrap();
-        assert_eq!((row.id, row.state, row.progress), (scan.id, scan.state, scan.progress));
+        assert_eq!((row.id, row.state, &row.progress), (scan.id, scan.state, &scan.progress));
+        let tracks = i64::try_from(store.inspect_tracks(lib.id).len()).unwrap();
+        assert_eq!(tracks, row.progress.added, "{save}");
+
+        heal(&store);
+        let scan = testing::scan_library(&store, &lib);
+        assert_eq!(scan.state, ScanState::Completed, "{save}");
+        assert_eq!(store.inspect_tracks(lib.id).len(), 1, "{save}");
     }
+}
+
+/// A flush saves the scan row in its batch's transaction, counting the tracks the batch marked
+/// missing, so a scan stopped after it, as by a crash, leaves a row that agrees with the store.
+/// Here every save after the walk's flush fails, the one that would end the scan included, so the
+/// row stays as that flush left it.
+#[test]
+fn a_flush_saves_the_scan_row_with_what_its_batch_marked_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    testing::make_album(&root, "A", "X", 2);
+    let store = make(&root);
+    let lib = testing::library(&root);
+    testing::scan_library(&store, &lib);
+    fs::remove_file(root.join("A/X/02 - Track 2.wav")).unwrap();
+    fail(&store, "BEFORE UPDATE ON scans WHEN NEW.cursor_scope > 0 OR NEW.state <> 'running'");
+
+    let scan = testing::scan_library(&store, &lib);
+    let row = store.inspect_scans(lib.id).into_iter().find(|row| row.id == scan.id).unwrap();
+    assert_eq!((row.state, row.progress.missing), (ScanState::Running, 1), "{row:?}");
+    assert_eq!(store.inspect_tracks(lib.id).iter().filter(|t| t.missing).count(), 1);
 }
 
 /// A scan the store cannot record is never queued under a made-up id, and the queued scan it

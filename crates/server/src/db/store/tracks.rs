@@ -9,14 +9,16 @@ use rusqlite::{Result, Transaction, params};
 use super::SqliteStore;
 use super::problems::{clear_problem, record_problem};
 use super::roots::{Roots, bounds_under};
+use super::scans;
 use super::upsert::upsert_track;
 use crate::db::catalog::{self, Touched};
 use crate::db::feed::{self, Entity, Op};
 use crate::db::{DbError, now_ms};
 
 /// Writes `batch` in one transaction: its tracks, returned files, tracks and folders gone,
-/// files changed but unread, problems, and the derived data they touch. Returns how many tracks
-/// it marked missing that were not already.
+/// files changed but unread, problems, the derived data they touch, and the scan row it carries,
+/// with the row's missing count raised by the tracks the batch marked missing that were not
+/// already. Returns that number.
 pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<i64, DbError> {
     let roots = store.roots.clone();
     store.db.write_blocking(move |tx| {
@@ -60,6 +62,10 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<i64, DbError
             record_problem(&roots, tx, lib, problem)?;
         }
         catalog::recompute(tx, lib, &touched, now)?;
+        if let Some(mut scan) = batch.scan {
+            scan.progress.missing += marked;
+            scans::save(tx, &roots, &scan)?;
+        }
         Ok(marked)
     })
 }

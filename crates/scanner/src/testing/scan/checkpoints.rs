@@ -23,7 +23,7 @@ fn tracks_per_batch<S: InspectStore + 'static>(
         if !batch.upserts.is_empty() {
             batches.lock().unwrap().push(batch.upserts.len());
         }
-        thread::sleep(per_outcome * u32::try_from(batch.len()).unwrap());
+        thread::sleep(per_outcome * u32::try_from(batch.size()).unwrap());
         Ok(())
     };
     let store = Hooked::new(Arc::new(make(&lib))).on_apply(on_apply);

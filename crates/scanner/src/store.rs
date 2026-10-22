@@ -73,23 +73,20 @@ pub struct Batch {
     /// recorded for them. Applied before `problems`, so a path in both keeps the problem this
     /// batch records.
     pub cleared: Vec<PathBuf>,
+    /// The scan row to save in the same transaction, so its cursor and progress always agree
+    /// with what the store holds. Its missing count is saved raised by the tracks the batch marks
+    /// missing that were not already.
+    pub scan: Option<Scan>,
 }
 
 impl Batch {
     /// How many tracks, folders and problems the batch writes, which is what sizes it.
-    pub fn len(&self) -> usize {
+    pub fn size(&self) -> usize {
         self.upserts.len()
             + self.returned.len()
             + self.missing.len()
             + self.vanished.len()
             + self.problems.len()
-    }
-
-    /// Whether applying the batch would change nothing. Paths to clear and tracks changed but
-    /// unread count, though not toward [`Batch::len`], which sizes a batch by the tracks, folders
-    /// and problems it writes.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0 && self.cleared.is_empty() && self.changed_unread.is_empty()
     }
 }
 
@@ -147,7 +144,8 @@ pub trait Store: Send + Sync {
         trigger: Trigger,
         scopes: &[Scope],
     ) -> Result<Scan, StoreError>;
-    /// Save `scan`'s state, cursor, progress and times over its row.
+    /// Save `scan`'s state, cursor, progress and times over its row on its own, as a scan starts
+    /// or ends or the queue cancels it. A flush saves the row with its batch ([`Batch::scan`]).
     fn update_scan(&self, scan: &Scan) -> Result<(), StoreError>;
     /// Scans left in `Running` or `Queued` by a previous process, for resume. A row that cannot
     /// be read is left out, so it does not stop the others resuming, and marked suspended, since
@@ -158,10 +156,10 @@ pub trait Store: Send + Sync {
     /// What the index holds directly in the folder `dir`, read in one pass however much lies
     /// below it; nothing when no root of `library` holds `dir`.
     fn indexed_in(&self, library: LibraryId, dir: &Path) -> Result<IndexedFolder, StoreError>;
-    /// Apply one batch atomically and append its net effect to the change feed, and return how
-    /// many tracks it marked missing that were not already. An upserted track keeps its analysis
-    /// only while its file's size and mtime are unchanged. An error means nothing in the batch
-    /// was persisted.
+    /// Apply one batch atomically, with the scan row it carries, and append its net effect to the
+    /// change feed, and return how many tracks it marked missing that were not already. An
+    /// upserted track keeps its analysis only while its file's size and mtime are unchanged. An
+    /// error means nothing in the batch, its scan row included, was persisted.
     fn apply(&self, library: LibraryId, batch: Batch) -> Result<i64, StoreError>;
     /// The paths with a recorded problem that `scope` reaches: under it, or for a Directory
     /// scope directly in it ([`Scope::contains_file`]).

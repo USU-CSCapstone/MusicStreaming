@@ -48,28 +48,28 @@ impl Writer {
     /// outcomes as it was sized for or has waited `batch_interval`, and then stops the scan if the
     /// queue has asked. Short of those it costs a few atomic loads and a clock read.
     pub fn checkpoint(&mut self, ctx: &ScanContext<'_>, scan: &mut Scan) -> Result<(), Halt> {
-        if self.batch.len() >= self.limit || self.last_flush.elapsed() >= ctx.options.batch_interval
+        if self.batch.size() >= self.limit
+            || self.last_flush.elapsed() >= ctx.options.batch_interval
         {
             self.flush(ctx, scan)?;
         }
         if ctx.stopping() { Err(Halt::Stop) } else { Ok(()) }
     }
 
-    /// Persists the batch, counting the tracks it marked missing, and the scan row, and sizes the
-    /// next batch from how long this one took to apply. On a store failure the scan ends through
+    /// Persists the batch, even an empty one, and the scan row in one transaction, the row's
+    /// missing count raised by what the batch marked missing, and sizes the next batch from how
+    /// long that took. On a store failure nothing is persisted, and the scan ends through
     /// [`Writer::fail`] and the error is [`Halt::Ended`].
     pub fn flush(&mut self, ctx: &ScanContext<'_>, scan: &mut Scan) -> Result<(), Halt> {
-        if !self.batch.is_empty() {
-            let full = std::mem::take(&mut self.batch);
-            let len = full.len();
-            let started = Instant::now();
-            let applied = ctx.store.apply(ctx.library.id, full);
-            scan.progress.missing += applied.map_err(|e| self.fail(ctx, scan, &e))?;
-            self.limit = fit(ctx.options, self.limit, len, started.elapsed());
-        }
+        let full = Batch { scan: Some(scan.clone()), ..std::mem::take(&mut self.batch) };
+        let size = full.size();
+        let started = Instant::now();
+        let applied = ctx.store.apply(ctx.library.id, full);
+        scan.progress.missing += applied.map_err(|e| self.fail(ctx, scan, &e))?;
+        self.limit = fit(ctx.options, self.limit, size, started.elapsed());
         self.persisted = (scan.cursor.clone(), scan.progress.clone());
         self.last_flush = Instant::now();
-        self.save(ctx, scan)
+        Ok(())
     }
 
     /// Saves the scan row. On a store failure the scan ends through [`Writer::fail`] and the
@@ -105,18 +105,18 @@ impl Writer {
     }
 }
 
-/// How many outcomes the next batch holds, after one of `len` applied in `took` while batches
+/// How many outcomes the next batch holds, after one of `size` applied in `took` while batches
 /// held `limit`: as many as apply within `batch_time` at that rate, at least `min_batch` and at
 /// most `batch_size`. A batch that writes no track, folder or problem says nothing about what
 /// they cost, so `limit` stays. `took` counts any wait for the writer behind other writes, so a
 /// busy writer makes batches smaller.
-fn fit(options: &ScanOptions, limit: usize, len: usize, took: Duration) -> usize {
-    if len == 0 {
+fn fit(options: &ScanOptions, limit: usize, size: usize, took: Duration) -> usize {
+    if size == 0 {
         return limit;
     }
     // The float-to-integer `as` saturates: an infinite ratio, from a batch applied in no
     // measurable time, gives `usize::MAX`.
-    let fit = options.batch_time.div_duration_f64(took) * len as f64;
+    let fit = options.batch_time.div_duration_f64(took) * size as f64;
     (fit as usize).clamp(options.min_batch.min(options.batch_size), options.batch_size)
 }
 
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn a_batch_is_sized_to_apply_within_the_time_at_the_last_ones_rate() {
         let ms = Duration::from_millis;
-        // (min_batch, limit, len, took, next limit)
+        // (min_batch, limit, size, took, next limit)
         let cases = [
             (1, 10, 10, ms(25), 20),
             (1, 10, 10, ms(100), 5),
@@ -151,9 +151,9 @@ mod tests {
             (16, 40, 0, ms(1000), 40),
             (1, 7, 0, Duration::ZERO, 7),
         ];
-        for (min_batch, limit, len, took, next) in cases {
-            let fitted = fit(&options(min_batch), limit, len, took);
-            assert_eq!(fitted, next, "min_batch {min_batch}, {len} in {took:?}");
+        for (min_batch, limit, size, took, next) in cases {
+            let fitted = fit(&options(min_batch), limit, size, took);
+            assert_eq!(fitted, next, "min_batch {min_batch}, {size} in {took:?}");
         }
     }
 
