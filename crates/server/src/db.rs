@@ -47,6 +47,13 @@ pub use store::SqliteStore;
 /// gathers query-planner statistics, which the planner needs to choose indexes (§4).
 const SWEEP_EVERY: Duration = Duration::from_secs(3600);
 
+/// The fewest tracks, across every library, for which the writer gathers query-planner
+/// statistics. Statistics from a smaller library describe tables of a few rows, which lead the
+/// planner to scan a table that has since grown rather than look its rows up, until
+/// `PRAGMA optimize` notices that it has grown tenfold. Without statistics the planner takes
+/// every table to be large (`design/database.md` §4).
+const STATISTICS_FROM_TRACKS: i64 = 1_000;
+
 /// How long after the database opens the writer first sweeps, so a server restarted more often
 /// than [`SWEEP_EVERY`] still sweeps, without adding to its startup.
 const FIRST_SWEEP: Duration = Duration::from_secs(300);
@@ -113,8 +120,9 @@ impl Database {
         writer.pragma_update(None, "journal_size_limit", JOURNAL_SIZE_LIMIT)?;
 
         let schema_version = migrations::migrate(&mut writer, migrations::MIGRATIONS)?;
-        // Gathers query-planner statistics where they are missing (design/database.md §4).
-        writer.execute_batch("PRAGMA optimize = 0x10002")?;
+        // Gathers query-planner statistics where they are missing, once the libraries are large
+        // enough to describe (design/database.md §4).
+        gather_statistics(&writer, "PRAGMA optimize = 0x10002")?;
 
         let reader_count = thread::available_parallelism().map_or(4, NonZeroUsize::get).max(2);
         let mut readers = Vec::with_capacity(reader_count);
@@ -295,11 +303,23 @@ fn sweep(conn: &mut Connection, jobs: &mpsc::Receiver<Job>, sweep: Sweep) {
     }
 }
 
-/// Gathers query-planner statistics (`design/database.md` §4).
+/// Gathers query-planner statistics through [`gather_statistics`] (`design/database.md` §4),
+/// logging a failure rather than returning it.
 fn optimize(conn: &Connection) {
-    if let Err(error) = conn.execute_batch("PRAGMA optimize") {
+    if let Err(error) = gather_statistics(conn, "PRAGMA optimize") {
         warn!(%error, "cannot optimize the database");
     }
+}
+
+/// Runs `optimize`, a `PRAGMA optimize` statement, when the libraries together hold at least
+/// [`STATISTICS_FROM_TRACKS`] tracks, and does nothing otherwise.
+fn gather_statistics(conn: &Connection, optimize: &str) -> rusqlite::Result<()> {
+    let tracks: i64 =
+        conn.query_row("SELECT ifnull(SUM(track_count), 0) FROM libraries", [], |r| r.get(0))?;
+    if tracks >= STATISTICS_FROM_TRACKS {
+        conn.execute_batch(optimize)?;
+    }
+    Ok(())
 }
 
 /// Settings every connection needs, and room in its statement cache for every statement the

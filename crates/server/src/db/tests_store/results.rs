@@ -7,6 +7,7 @@ use jewelcase_scanner::testing;
 use jewelcase_scanner::*;
 use lofty::tag::ItemKey;
 
+use super::recompute::check;
 use super::{count, make, scalar, tagged};
 use crate::db::store::SqliteStore;
 use crate::db::waveform;
@@ -84,11 +85,14 @@ fn problems_group_by_kind_and_clear() {
     testing::scan_library(&store, &lib);
     assert_eq!(count(&store, "SELECT COUNT(*) FROM scan_problem_groups"), 1, "one systemic issue");
     assert_eq!(scalar::<i64>(&store, "SELECT count FROM scan_problem_groups"), Some(2));
+    check(&store, "two problems");
     testing::write_small_wav(&root.join("a/one.flac"));
     testing::scan_library(&store, &lib);
     assert_eq!(scalar::<i64>(&store, "SELECT count FROM scan_problem_groups"), Some(1));
+    check(&store, "one cleared");
     std::fs::remove_file(root.join("a/two.flac")).unwrap();
     testing::scan_library(&store, &lib);
+    check(&store, "the other gone");
     // A deleted file takes its problem with it, and the emptied group goes.
     assert_eq!(count(&store, "SELECT COUNT(*) FROM scan_problem_groups"), 0);
 }

@@ -90,7 +90,7 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
         .query_row(params![album, title], |r| r.get(0))?;
     let artist_sort_key: Option<Vec<u8>> = tx
         .prepare_cached(
-            "SELECT a.sort_key FROM album_artists aa JOIN artists a ON a.id = aa.artist_id \
+            "SELECT (SELECT sort_key FROM artists WHERE id = aa.artist_id) FROM album_artists aa \
              WHERE aa.album_id = ?1 ORDER BY aa.position LIMIT 1",
         )?
         .query_row([album], |r| r.get(0))

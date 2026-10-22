@@ -181,6 +181,11 @@ const CHECKS: &[(&str, &str, &str)] = &[
           GROUP BY t.artist_sort_key ORDER BY COUNT(*) DESC, t.artist_sort_key LIMIT 1), x''), a.name) \
          FROM artists a UNION ALL SELECT 'tag', id, name FROM tags ORDER BY 1, 2",
     ),
+    (
+        "problem groups",
+        "SELECT id, count FROM scan_problem_groups ORDER BY id",
+        "SELECT group_id, COUNT(*) FROM scan_problems GROUP BY group_id ORDER BY group_id",
+    ),
 ];
 
 /// The rows `sql` returns.

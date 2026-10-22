@@ -49,7 +49,8 @@ fn texts(conn: &Connection, sql: &str, args: &[&dyn ToSql]) -> Result<Vec<String
 }
 
 /// Records `problem` for `lib` in its group, replacing any problem already recorded at its path,
-/// and recounts the groups it leaves and joins. A path under none of `lib`'s roots records nothing.
+/// and counts it out of the group it leaves and into the one it joins. A path under none of
+/// `lib`'s roots records nothing.
 pub fn record_problem(
     roots: &Roots,
     tx: &Transaction<'_>,
@@ -88,8 +89,6 @@ pub fn record_problem(
             .execute(params![root_id, rel, problem.detail, problem.seen_at])?;
         }
         _ => {
-            // Insert into the new group before recounting the old one, so
-            // a group is never emptied and deleted while still referenced.
             tx.prepare_cached("DELETE FROM scan_problems WHERE root_id = ?1 AND path = ?2")?
                 .execute(params![root_id, rel])?;
             tx.prepare_cached(
@@ -104,9 +103,9 @@ pub fn record_problem(
                 problem.detail,
                 problem.seen_at
             ])?;
-            recount_group(tx, group_id)?;
+            count_in_group(tx, group_id, 1)?;
             if let Some(old) = existing {
-                recount_group(tx, old)?;
+                count_in_group(tx, old, -1)?;
             }
         }
     }
@@ -146,7 +145,7 @@ pub fn clear_unopened(store: &SqliteStore, lib: i64, path: &Path) -> Result<(), 
 }
 
 /// Deletes the problem at `rel` under `root_id` when `group`, the group it is in, is `Some`, and
-/// recounts that group.
+/// counts it out of that group.
 fn clear_problem_rel(
     tx: &Transaction<'_>,
     root_id: i64,
@@ -156,20 +155,25 @@ fn clear_problem_rel(
     if let Some(group_id) = group {
         tx.prepare_cached("DELETE FROM scan_problems WHERE root_id = ?1 AND path = ?2")?
             .execute(params![root_id, rel])?;
-        recount_group(tx, group_id)?;
+        count_in_group(tx, group_id, -1)?;
     }
     Ok(())
 }
 
-/// Sets group `group_id`'s count from its problems, and deletes the group once none is left.
-fn recount_group(tx: &Transaction<'_>, group_id: i64) -> Result<()> {
-    tx.prepare_cached(
-        "UPDATE scan_problem_groups \
-         SET count = (SELECT COUNT(*) FROM scan_problems WHERE group_id = ?1) WHERE id = ?1",
-    )?
-    .execute([group_id])?;
-    tx.prepare_cached("DELETE FROM scan_problem_groups WHERE id = ?1 AND count = 0")?
+/// Moves group `group_id`'s count by `by`, 1 as a problem joins it and -1 as one leaves, so
+/// recording or clearing a problem costs the same however many the group holds. As a problem
+/// leaves, the group is deleted if no problem is left in it, which is read from the problems
+/// rather than the count, so a wrong count never deletes a group that still holds problems.
+fn count_in_group(tx: &Transaction<'_>, group_id: i64, by: i64) -> Result<()> {
+    tx.prepare_cached("UPDATE scan_problem_groups SET count = count + ?2 WHERE id = ?1")?
+        .execute(params![group_id, by])?;
+    if by < 0 {
+        tx.prepare_cached(
+            "DELETE FROM scan_problem_groups WHERE id = ?1 \
+             AND NOT EXISTS (SELECT 1 FROM scan_problems WHERE group_id = ?1)",
+        )?
         .execute([group_id])?;
+    }
     Ok(())
 }
 

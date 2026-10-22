@@ -1,4 +1,5 @@
-//! A batch costs what it changes, not what the album it changes holds (`design/database.md` §3).
+//! A batch costs what it changes, not what the album it changes holds, nor what the library
+//! holds (`design/database.md` §3).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -8,6 +9,8 @@ use jewelcase_scanner::*;
 
 use super::{make, record};
 use crate::db::store::SqliteStore;
+
+mod problems;
 
 /// Track `i` of album `album` under `root`, with embedded art and a label, by one artist.
 fn track(root: &Path, album: &str, i: usize) -> TrackRecord {
@@ -119,4 +122,63 @@ fn emptying_a_group_costs_what_keeping_it_does() {
     let emptied = cost(&store, Batch { missing: ids[16..32].to_vec(), ..Batch::default() });
     // Reading the album's groups for each group emptied would take at least 16,000 steps more.
     assert!(emptied < kept + 500, "{emptied} steps against {kept}");
+}
+
+/// Track `i` of album `album` by `artist`, offering the artist an image and a biography.
+fn offering(root: &Path, artist: &str, album: &str, i: usize) -> TrackRecord {
+    let mut rec = track(root, album, i);
+    rec.path = root.join(format!("{artist}/{album}/{i:05}.flac"));
+    rec.tags.artists = vec![artist.to_owned()];
+    rec.sort.artist = artist.to_lowercase();
+    rec.sort.album_artist = artist.to_lowercase();
+    rec.artist_image = Some(SidecarImage {
+        path: root.join(format!("{artist}/artist.jpg")),
+        info: ImageInfo { hash: artist.as_bytes().to_vec(), width: 1, height: 1 },
+    });
+    rec.artist_biography = Some(Biography::new(&format!("About {artist}")));
+    rec
+}
+
+/// The statements that resolve an artist's art and an album's artist sort key read by id, so
+/// planner statistics gathered before any album offered an artist image, over a library of two
+/// tracks, don't send them through the whole library.
+#[test]
+fn early_statistics_leave_a_batch_costing_what_it_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    let store = make(&root);
+    // Planner statistics gathered over two tracks of one album by one artist, offering it
+    // nothing. The writer gathers none for a library this small (`STATISTICS_FROM_TRACKS`); the
+    // test does, to show the plans hold even on statistics that small.
+    let upserts = (0..2).map(|i| track(&root, "Plain", i)).collect();
+    store.apply(1, Batch { upserts, ..Batch::default() }).unwrap();
+    store.db().write_blocking(|tx| tx.execute_batch("ANALYZE")).unwrap();
+    // Zed sorts after every artist to come, so a walk of the artists by name meets it last.
+    let upserts = (0..16).map(|i| offering(&root, "Zed", "Mine", i)).collect();
+    store.apply(1, Batch { upserts, ..Batch::default() }).unwrap();
+
+    // Rereading 16 tracks of the artist's one album, changed, before and after 1,000 albums of
+    // other artists that each offer theirs an image and a biography.
+    let mine = ids(&store, "Mine");
+    let changed = || {
+        let upserts = (0..16)
+            .map(|i| TrackRecord {
+                id: Some(mine[i]),
+                size: 7,
+                ..offering(&root, "Zed", "Mine", i)
+            })
+            .collect();
+        Batch { upserts, ..Batch::default() }
+    };
+    let alone = cost(&store, changed());
+    for start in (0..1000).step_by(250) {
+        let upserts = (start..start + 250)
+            .map(|i| offering(&root, &format!("Other {i}"), &format!("Other {i}"), i))
+            .collect();
+        store.apply(1, Batch { upserts, ..Batch::default() }).unwrap();
+    }
+    let among = cost(&store, changed());
+    // Reading every album that offers an artist image, or every artist, even once, would take at
+    // least 1,000 steps more.
+    assert!(among < alone + 500, "{among} steps against {alone}");
 }

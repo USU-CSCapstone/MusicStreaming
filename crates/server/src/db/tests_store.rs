@@ -63,6 +63,7 @@ mod recompute;
 mod results;
 mod scans;
 mod sidecars;
+mod statistics;
 mod totals;
 mod track_totals;
 
