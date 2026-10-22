@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Result, ToSql, Transaction, params
 
 use super::SqliteStore;
 use super::roots::{Roots, bounds_under, join, relative};
-use crate::db::{DbError, Text};
+use crate::db::{DbError, Text, new_id};
 
 /// The absolute paths with a recorded problem that `scope` reaches ([`Scope::contains_file`]).
 pub fn under(store: &SqliteStore, lib: i64, scope: &Scope) -> Result<Vec<PathBuf>, DbError> {
@@ -64,10 +64,10 @@ pub fn record_problem(
     let key = problem_group_key(problem.kind, &root_path, &problem.detail);
     let group_id: i64 = tx.query_row(
         "INSERT INTO scan_problem_groups (id, library_id, kind, group_key, summary, count, first_seen_at, last_seen_at) \
-         VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, 0, ?5, ?5) \
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6) \
          ON CONFLICT (library_id, group_key) DO UPDATE SET last_seen_at = MAX(last_seen_at, excluded.last_seen_at) \
          RETURNING id",
-        params![lib, Text(problem.kind), key, problem.detail, problem.seen_at],
+        params![new_id()?, lib, Text(problem.kind), key, problem.detail, problem.seen_at],
         |r| r.get(0),
     )?;
     let existing: Option<i64> = tx

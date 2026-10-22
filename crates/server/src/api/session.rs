@@ -18,7 +18,7 @@ use super::devices::{self, Device};
 use super::me::{self, User};
 use super::realtime::Revoked;
 use super::{AppState, Code, Problem};
-use crate::db::{DbError, now_ms};
+use crate::db::{DbError, new_id, now_ms};
 
 /// The cookie browser clients authenticate with (`cookieAuth` in `api/openapi.yaml`).
 pub const COOKIE: &str = "jewelcase_session";
@@ -101,12 +101,11 @@ pub fn register(
     device: &DeviceRegistration,
     token: String,
 ) -> rusqlite::Result<Session> {
-    let id: i64 = tx.query_row(
+    let id = new_id()?;
+    tx.execute(
         "INSERT INTO devices (id, user_id, name, type, platform, token_hash, created_at, \
-         last_seen_at) VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, ?5, ?6, ?6) \
-         RETURNING id",
-        params![user, device.name, device.kind, device.platform, token_hash(&token), now_ms()],
-        |row| row.get(0),
+         last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        params![id, user, device.name, device.kind, device.platform, token_hash(&token), now_ms()],
     )?;
     let device = devices::get(tx, id)?;
     Ok(Session { token, user: me::user(tx, user)?, device })

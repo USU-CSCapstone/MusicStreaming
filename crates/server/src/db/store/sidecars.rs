@@ -9,6 +9,7 @@ use rusqlite::{OptionalExtension, Result, Transaction, params};
 
 use super::entities::upsert_image;
 use super::roots::relative;
+use crate::db::new_id;
 
 /// A track's art, artist image and biography, by row.
 pub struct SidecarRows {
@@ -63,10 +64,10 @@ fn find_or_create_biography(tx: &Transaction<'_>, lib: i64, biography: &Biograph
     {
         return Ok(id);
     }
-    tx.query_row(
-        "INSERT INTO biographies (id, library_id, hash, text) \
-         VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3) RETURNING id",
-        params![lib, hash, &*biography.text],
-        |r| r.get(0),
-    )
+    let id = new_id()?;
+    tx.execute(
+        "INSERT INTO biographies (id, library_id, hash, text) VALUES (?1, ?2, ?3, ?4)",
+        params![id, lib, hash, &*biography.text],
+    )?;
+    Ok(id)
 }

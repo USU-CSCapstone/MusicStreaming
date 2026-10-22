@@ -14,6 +14,7 @@ mod columns;
 pub mod feed;
 pub mod libraries;
 pub mod migrations;
+mod new_id;
 pub mod plays;
 pub mod retention;
 pub mod store;
@@ -38,6 +39,7 @@ use tracing::{error, info, warn};
 
 pub use by_ids::by_ids;
 pub use columns::{Json, Text};
+pub use new_id::new_id;
 use retention::Sweep;
 pub use store::SqliteStore;
 

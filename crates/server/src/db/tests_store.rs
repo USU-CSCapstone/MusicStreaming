@@ -814,6 +814,7 @@ fn an_upsert_naming_another_librarys_track_is_skipped() {
         .unwrap();
     store.refresh_roots().unwrap();
     let (before, head) = (store.inspect_tracks(lib.id), store.feed_head(lib.id));
+    assert!(before[0].id > i64::from(u32::MAX), "a new track's id is drawn");
 
     // A record for a file under library 2's root that carries library 1's track ID.
     let other: LibraryId = 2;

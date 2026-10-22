@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use super::extract::Json;
 use super::session::{self, DeviceRegistration};
 use super::{AppState, Code, Problem, password};
-use crate::db::{Database, now_ms};
+use crate::db::{Database, new_id, now_ms};
 
 /// Whether setup is done, which is whether the owner exists.
 #[derive(Default)]
@@ -103,11 +103,11 @@ pub async fn complete(
                 return Ok(None);
             }
             let now = now_ms();
-            let user = tx.query_row(
+            let user = new_id()?;
+            tx.execute(
                 "INSERT INTO users (id, username, display_name, role, password, created_at) \
-                 VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, 'owner', ?3, ?4) RETURNING id",
-                params![username, display_name, password, now],
-                |row| row.get(0),
+                 VALUES (?1, ?2, ?3, 'owner', ?4, ?5)",
+                params![user, username, display_name, password, now],
             )?;
             session::register(tx, user, &device, token).map(Some)
         })

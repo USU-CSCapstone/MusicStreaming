@@ -37,15 +37,17 @@ async fn a_new_server_serves_only_setup() {
 #[tokio::test]
 async fn setup_creates_the_owner_and_logs_it_in() {
     let (_temp, db, app) = app_before_setup("");
+    let mut request = setup_request("Sam", PASSWORD);
+    request["displayName"] = json!("Sam B");
     let (status, headers, session) =
-        send_json(app.clone(), "POST", "/api/v1/setup", &setup_request("Sam", PASSWORD)).await;
+        send_json(app.clone(), "POST", "/api/v1/setup", &request).await;
     assert_eq!(status, StatusCode::CREATED, "{session}");
 
     let token = session["token"].as_str().unwrap().to_owned();
     assert!(token.len() >= 43, "256 bits of base64url: {token}");
     assert_eq!(
         session["user"],
-        json!({ "id": session["user"]["id"], "username": "Sam", "displayName": "Sam",
+        json!({ "id": session["user"]["id"], "username": "Sam", "displayName": "Sam B",
                 "role": "owner", "hasAvatar": false })
     );
     let device = &session["device"];

@@ -7,9 +7,9 @@ use jewelcase_scanner::{Lyrics, TagSet, TrackRecord};
 use rusqlite::types::Null;
 use rusqlite::{OptionalExtension, Result, ToSql, Transaction};
 
-use crate::db::Json;
 use crate::db::store::roots::relative;
 use crate::db::store::sidecars::sidecar_rows;
+use crate::db::{Json, new_id};
 
 /// The track columns a scan sets, both when it inserts the row and when it updates it. Each binds
 /// by name, as `:column`. The insert also sets `id`, `library_id` and `added_at`, which an update
@@ -53,17 +53,17 @@ const COLUMNS: [&str; 36] = [
     "sidecar_stamp",
 ];
 
-/// Inserts track `:id` (a random id when NULL) with [`COLUMNS`], or updates it with them when
-/// it is a track of `:library_id`, returning its id and analyzer version. An update whose file
-/// size or mtime changed clears the analysis. Unqualified column names on the right of the
-/// update's `=` are the row's values before it.
+/// Inserts track `:id` with [`COLUMNS`], or updates it with them when it is a track of
+/// `:library_id`, returning its id and analyzer version. An update whose file size or mtime
+/// changed clears the analysis. Unqualified column names on the right of the update's `=` are
+/// the row's values before it.
 static UPSERT: LazyLock<String> = LazyLock::new(|| {
     let columns = COLUMNS.join(", ");
     let values = COLUMNS.map(|c| format!(":{c}")).join(", ");
     let updates = COLUMNS.map(|c| format!("{c} = excluded.{c}")).join(", ");
     format!(
         "INSERT INTO tracks (id, library_id, added_at, {columns}) \
-         VALUES (coalesce(:id, random() & 0x7FFFFFFFFFFFFFFF), :library_id, :added_at, {values}) \
+         VALUES (:id, :library_id, :added_at, {values}) \
          ON CONFLICT (id) DO UPDATE SET \
          analyzer_version = CASE WHEN file_size IS excluded.file_size AND file_mtime IS excluded.file_mtime \
          THEN analyzer_version ELSE 0 END, \
@@ -78,8 +78,8 @@ static UPSERT: LazyLock<String> = LazyLock::new(|| {
 });
 
 /// Upserts `rec` as a track of `lib` on album `album_id` under root `root_id` ([`UPSERT`]), with
-/// the art and sidecars it resolved and, when new, added at `now`. Returns its id, or `None` when
-/// `rec` names another library's track. A track that existed and is back at analyzer version 0
+/// the art and sidecars it resolved and, when new, added at `now`. Returns its id, drawn when
+/// `rec` has none, or `None` when `rec` names another library's track. A track that existed and is back at analyzer version 0
 /// loses its waveform.
 pub(super) fn write_row(
     tx: &Transaction<'_>,
@@ -96,8 +96,12 @@ pub(super) fn write_row(
         Some(Lyrics::Plain(_)) => "plain",
         Some(Lyrics::Synced(_)) => "synced",
     };
+    let id = match rec.id {
+        Some(id) => id,
+        None => new_id()?,
+    };
     let values: [(&str, &dyn ToSql); COLUMNS.len() + 3] = [
-        (":id", &rec.id),
+        (":id", &id),
         (":library_id", &lib),
         (":added_at", &now),
         (":album_id", &album_id),

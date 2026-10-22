@@ -11,7 +11,7 @@ use rusqlite::{Connection, Result, Row, Transaction, params};
 use self::stored::{cursor_dir, scope_at, scopes, stored_scopes};
 use super::SqliteStore;
 use super::roots::{Roots, join};
-use crate::db::{DbError, Text, now_ms};
+use crate::db::{DbError, Text, new_id, now_ms};
 
 /// Records a new scan of `scopes` in `lib` under `trigger`, queued, and returns it.
 pub fn create(
@@ -23,11 +23,11 @@ pub fn create(
     let json = stored_scopes(&store.roots, lib, scopes)?;
     let scopes = scopes.to_vec();
     store.db.write_blocking(move |tx| {
-        let id = tx.query_row(
+        let id = new_id()?;
+        tx.execute(
             "INSERT INTO scans (id, library_id, trigger, state, scopes, created_at) \
-             VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3, ?4, ?5) RETURNING id",
-            params![lib, Text(trigger), Text(ScanState::Queued), json, now_ms()],
-            |r| r.get(0),
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, lib, Text(trigger), Text(ScanState::Queued), json, now_ms()],
         )?;
         Ok(Scan::queued(id, lib, trigger, scopes))
     })

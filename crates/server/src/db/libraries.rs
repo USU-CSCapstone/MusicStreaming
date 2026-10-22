@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use jewelcase_scanner::{FileToDecode, LibraryConfig, without_links};
 use rusqlite::{Connection, Result, params};
 
-use super::{Json, now_ms};
+use super::{Json, new_id, now_ms};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Root {
@@ -123,7 +123,7 @@ pub fn file(
 }
 
 /// Create a library with its roots, and return its id: `id` if given (for tests and imports),
-/// otherwise a random one. Roots are stored as given; callers should pass canonical absolute
+/// otherwise a new one. Roots are stored as given; callers should pass canonical absolute
 /// paths.
 pub fn create(
     conn: &Connection,
@@ -132,11 +132,13 @@ pub fn create(
     roots: &[&Path],
     excludes: &[String],
 ) -> Result<i64> {
-    let id = conn.query_row(
-        "INSERT INTO libraries (id, name, excludes, created_at) \
-         VALUES (coalesce(?1, random() & 0x7FFFFFFFFFFFFFFF), ?2, ?3, ?4) RETURNING id",
+    let id = match id {
+        Some(id) => id,
+        None => new_id()?,
+    };
+    conn.execute(
+        "INSERT INTO libraries (id, name, excludes, created_at) VALUES (?1, ?2, ?3, ?4)",
         params![id, name, Json(excludes), now_ms()],
-        |r| r.get(0),
     )?;
     for root in roots {
         add_root(conn, id, root)?;
@@ -147,9 +149,9 @@ pub fn create(
 /// Add a root and return its id, or the id of the active root already at `path`.
 pub fn add_root(conn: &Connection, library_id: i64, path: &Path) -> Result<i64> {
     conn.query_row(
-        "INSERT INTO library_roots (id, library_id, path, created_at) VALUES (random() & 0x7FFFFFFFFFFFFFFF, ?1, ?2, ?3) \
+        "INSERT INTO library_roots (id, library_id, path, created_at) VALUES (?1, ?2, ?3, ?4) \
          ON CONFLICT (path) WHERE removed_at IS NULL DO UPDATE SET path = excluded.path RETURNING id",
-        params![library_id, path.to_string_lossy(), now_ms()],
+        params![new_id()?, library_id, path.to_string_lossy(), now_ms()],
         |r| r.get(0),
     )
 }
@@ -163,6 +165,22 @@ pub fn overlap(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Database;
+
+    /// A library created without an id is given a drawn one, and that is its row's id.
+    #[test]
+    fn a_library_created_without_an_id_is_given_a_drawn_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Database::open(&temp.path().join("jewelcase.db")).unwrap();
+        let (id, stored) = db
+            .write_blocking(|tx| {
+                let id = create(tx, None, "Music", &[Path::new("/music")], &[])?;
+                Ok((id, tx.query_row("SELECT id FROM libraries", [], |r| r.get::<_, i64>(0))?))
+            })
+            .unwrap();
+        assert_eq!(stored, id);
+        assert!(id > i64::from(u32::MAX), "a drawn id, not a rowid");
+    }
 
     #[test]
     fn directories_overlap_when_one_holds_the_other() {
