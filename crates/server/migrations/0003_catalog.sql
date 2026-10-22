@@ -26,6 +26,17 @@ CREATE TABLE images (
 -- The placeholder job's queue
 CREATE INDEX images_without_placeholder ON images (library_id) WHERE placeholder IS NULL;
 
+-- Artist biographies, one row per distinct text, found per requirements/scanning.md §3.3
+CREATE TABLE biographies (
+    id         INTEGER PRIMARY KEY,
+    library_id INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
+    -- SHA-256 of the text
+    hash       BLOB    NOT NULL,
+    text       TEXT    NOT NULL,
+    UNIQUE (library_id, hash),
+    UNIQUE (library_id, id)
+) STRICT;
+
 -- ───────────────────────────── Artists ─────────────────────────────
 
 CREATE TABLE artists (
@@ -68,6 +79,10 @@ CREATE TABLE albums (
     type                  TEXT    NOT NULL DEFAULT 'album' CHECK (type IN ('album', 'ep', 'single', 'compilation')),
     labels                TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(labels) AND json_type(labels) = 'array'),
     image_id              INTEGER,
+    -- The album's first track with an artist image and its first with a biography, in the order
+    -- design/database.md §3 gives, among which its artists choose
+    artist_image_track_id INTEGER,
+    biography_track_id    INTEGER,
     release_date          TEXT    CHECK (release_date GLOB '[0-9][0-9][0-9][0-9]' OR release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]' OR release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
     disc_total            INTEGER,
     track_total           INTEGER,
@@ -80,7 +95,12 @@ CREATE TABLE albums (
     added_at              INTEGER NOT NULL,
     UNIQUE (library_id, title_key, artists_key),
     UNIQUE (library_id, id),
-    FOREIGN KEY (library_id, image_id) REFERENCES images (library_id, id)
+    FOREIGN KEY (library_id, image_id) REFERENCES images (library_id, id),
+    -- Deferred, so a track can go before the recompute in its transaction points the album past it
+    FOREIGN KEY (library_id, artist_image_track_id) REFERENCES tracks (library_id, id)
+        DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY (library_id, biography_track_id) REFERENCES tracks (library_id, id)
+        DEFERRABLE INITIALLY DEFERRED
 ) STRICT;
 
 CREATE INDEX albums_by_name ON albums (library_id, sort_key, id);
@@ -89,6 +109,10 @@ CREATE INDEX albums_by_added ON albums (library_id, added_at, id);
 CREATE INDEX albums_by_release ON albums (library_id, release_date, sort_key, id);
 CREATE INDEX albums_by_duration ON albums (library_id, duration_us, id);
 CREATE INDEX albums_by_image ON albums (library_id, image_id);
+CREATE INDEX albums_by_artist_image_track ON albums (library_id, artist_image_track_id)
+    WHERE artist_image_track_id IS NOT NULL;
+CREATE INDEX albums_by_biography_track ON albums (library_id, biography_track_id)
+    WHERE biography_track_id IS NOT NULL;
 
 CREATE TABLE album_artists (
     library_id INTEGER NOT NULL,
@@ -160,10 +184,23 @@ CREATE TABLE tracks (
     -- file's size or mtime changed. Tracks below the current version are reprocessed in the
     -- background (design/scanning.md §12)
     analyzer_version INTEGER NOT NULL DEFAULT 0,
+    -- The art this file resolved, embedded or a cover.*, and whether it is embedded; resolved
+    -- onto albums.image_id (design/database.md §3)
+    image_id        INTEGER,
+    image_embedded  INTEGER NOT NULL DEFAULT 0 CHECK (image_embedded IN (0, 1)),
+    -- The artist.* and artist.txt this file resolved, resolved onto its album artists
+    artist_image_id INTEGER,
+    biography_id    INTEGER,
+    -- A hash of the path, size and mtime of each sidecar the file resolved, its lyrics file
+    -- included, which a scan compares to notice a sidecar change (design/scanning.md §2)
+    sidecar_stamp   INTEGER NOT NULL DEFAULT 0,
     added_at        INTEGER NOT NULL,
     UNIQUE (library_id, id),
     FOREIGN KEY (library_id, album_id) REFERENCES albums (library_id, id),
-    FOREIGN KEY (library_id, root_id) REFERENCES library_roots (library_id, id)
+    FOREIGN KEY (library_id, root_id) REFERENCES library_roots (library_id, id),
+    FOREIGN KEY (library_id, image_id) REFERENCES images (library_id, id),
+    FOREIGN KEY (library_id, artist_image_id) REFERENCES images (library_id, id),
+    FOREIGN KEY (library_id, biography_id) REFERENCES biographies (library_id, id)
 ) STRICT;
 
 CREATE UNIQUE INDEX tracks_file ON tracks (root_id, path);
@@ -183,6 +220,11 @@ CREATE INDEX tracks_missing ON tracks (library_id, missing_since) WHERE missing_
 -- nothing.
 CREATE INDEX tracks_unanalyzed ON tracks (library_id, analyzer_version, added_at DESC, id)
     WHERE missing_since IS NULL AND file_mtime IS NOT NULL;
+-- For the foreign keys' checks as an image or biography is deleted
+CREATE INDEX tracks_by_image ON tracks (library_id, image_id) WHERE image_id IS NOT NULL;
+CREATE INDEX tracks_by_artist_image ON tracks (library_id, artist_image_id)
+    WHERE artist_image_id IS NOT NULL;
+CREATE INDEX tracks_by_biography ON tracks (library_id, biography_id) WHERE biography_id IS NOT NULL;
 
 CREATE TABLE track_artists (
     library_id INTEGER NOT NULL,
@@ -220,8 +262,6 @@ CREATE TABLE track_lyrics (
     track_id   INTEGER NOT NULL PRIMARY KEY,
     plain      TEXT,
     synced     TEXT CHECK (synced IS NULL OR (json_valid(synced) AND json_type(synced) = 'array')),
-    -- Whether the lyrics are embedded in the track file
-    embedded   INTEGER NOT NULL CHECK (embedded IN (0, 1)),
     FOREIGN KEY (library_id, track_id) REFERENCES tracks (library_id, id) ON DELETE CASCADE,
     -- Exactly one form: the plain text, or the timed lines alone
     CHECK (plain IS NOT NULL OR synced IS NOT NULL),

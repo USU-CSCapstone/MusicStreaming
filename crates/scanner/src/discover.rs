@@ -1,11 +1,11 @@
 //! Stage 1: walk a scope in a stable order, one directory at a time
 //! (`design/scanning.md` §2, §9).
 //!
-//! Directories come out in sorted pre-order so a resume cursor is just "the
-//! last directory finished". Each yielded directory carries its audio
-//! candidates (extension-filtered, stat'ed), its full filename list, which
-//! the sidecar resolver reuses so no directory is listed twice, and its folders,
-//! against which reconcile finds the folders that have gone.
+//! Directories come out in sorted pre-order so a resume cursor is just "the last directory
+//! finished". Each yielded directory carries its audio candidates (extension-filtered, stat'ed),
+//! its regular files with their sizes and modified times, which the sidecar resolver reuses so no
+//! directory is listed or stat'ed twice, and its folders, against which reconcile finds the
+//! folders that have gone.
 //!
 //! Symlinks are never followed ([`crate::confine`]), so the walk needs no loop
 //! detection. Each link it lists is reported as a problem instead, unless excluded.
@@ -17,7 +17,7 @@
 //! it missing.
 
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -38,6 +38,13 @@ pub struct Candidate {
     pub mtime_ms: u64,
 }
 
+/// A regular file's size and modified time, as its directory's listing found them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileStat {
+    pub size: u64,
+    pub mtime_ms: u64,
+}
+
 /// One directory's listing.
 #[derive(Debug)]
 pub struct Directory {
@@ -47,8 +54,9 @@ pub struct Directory {
     /// missing.
     pub listed: bool,
     pub candidates: Vec<Candidate>,
-    /// Every regular file's name, sorted. For sidecar and lyrics lookup.
-    pub files: BTreeSet<OsString>,
+    /// Every regular file's size and modified time, by name, sorted. For sidecar and lyrics
+    /// lookup.
+    pub files: BTreeMap<OsString, FileStat>,
     /// The name of each folder in it that the excludes leave in, sorted. A subtree walk descends
     /// into each.
     pub folders: BTreeSet<OsString>,
@@ -212,7 +220,7 @@ impl Iterator for Walk<'_> {
             };
             let listed = entries.is_some();
             let mut folders = BTreeSet::new();
-            let mut files = BTreeSet::new();
+            let mut files = BTreeMap::new();
             let mut candidates = Vec::new();
             let mut skipped_links = Vec::new();
             let mut unreadable = Vec::new();
@@ -245,13 +253,11 @@ impl Iterator for Walk<'_> {
                         skipped_links.push(WalkError { path, error: not_followed() });
                     }
                 } else if file_type.is_file() {
-                    files.insert(entry.file_name());
+                    let mtime_ms = meta.modified().map(system_time_ms).unwrap_or(0);
+                    let stat = FileStat { size: meta.len(), mtime_ms };
+                    files.insert(entry.file_name(), stat);
                     if is_candidate(&path) && !self.excluded(&path) {
-                        candidates.push(Candidate {
-                            path,
-                            size: meta.len(),
-                            mtime_ms: meta.modified().map(system_time_ms).unwrap_or(0),
-                        });
+                        candidates.push(Candidate { path, size: stat.size, mtime_ms });
                     }
                 }
             }
@@ -294,6 +300,8 @@ pub fn is_candidate(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use super::*;
 
     fn touch(p: &Path) {
@@ -358,7 +366,7 @@ mod tests {
         let keep = items.iter().find(|d| d.path == root.join("keep")).unwrap();
         assert_eq!(keep.candidates.len(), 1);
         assert!(keep.candidates[0].path.ends_with("1.flac"));
-        assert!(keep.files.contains(&OsString::from("cover.jpg")));
+        assert!(keep.files.contains_key(OsStr::new("cover.jpg")));
     }
 
     /// Each directory `scope`'s walk yields, as its path, whether it was listed, and its
@@ -471,7 +479,8 @@ mod tests {
         let paths: Vec<&Path> = listed.iter().map(|d| d.path.as_path()).collect();
         assert_eq!(paths, [music.as_path(), &music.join("A")], "the loop is not descended");
         assert_eq!(listed[1].candidates.len(), 1);
-        assert_eq!(listed[1].files, BTreeSet::from([OsString::from("01.flac")]));
+        let files: Vec<&OsString> = listed[1].files.keys().collect();
+        assert_eq!(files, [OsStr::new("01.flac")]);
         let a = |name| music.join("A").join(name);
         assert_eq!(
             skipped(&listed),

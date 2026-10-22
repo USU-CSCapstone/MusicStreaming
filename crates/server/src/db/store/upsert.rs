@@ -1,24 +1,23 @@
-//! Writing one scanned file: its track row, credits, genres, lyrics, and artwork, in the batch's
-//! transaction.
+//! Writing one scanned file: its track row, credits, genres, lyrics, and the art and sidecars it
+//! resolved, in the batch's transaction.
 
 use jewelcase_core::artists_key;
-use jewelcase_scanner::{ArtworkSource, Lyrics, TrackRecord};
+use jewelcase_scanner::{Lyrics, TrackRecord};
 use rusqlite::{OptionalExtension, Result, Transaction, params};
 
-use super::entities::{
-    find_or_create_album, find_or_create_artist, find_or_create_tag, upsert_image,
-};
+use super::entities::{find_or_create_album, find_or_create_artist, find_or_create_tag};
 use super::roots::{Roots, relative};
+use super::sidecars::sidecar_rows;
 use crate::db::catalog::Touched;
 use crate::db::feed::{self, Entity, Op};
 
-/// Writes `rec` as a track of `lib`, with its credits, genres, lyrics, artwork, and artist
-/// biography, records it in the feed at `now`, and adds the albums, artists and tags it pointed
-/// at before and after to `touched`. A track whose file's size or mtime
-/// changed loses its loudness, peak and waveform and goes back to analyzer version 0, which
-/// queues it for analysis again: neither says whether the audio or only the tags changed. A
-/// record under a root `lib` doesn't have, or one naming another library's track, is logged and
-/// skipped.
+/// Writes `rec` as a track of `lib`, with its credits, genres, lyrics, and the art, artist image
+/// and biography it resolved, records it in the feed at `now`, and adds the albums, artists and
+/// tags it pointed at before and after to `touched`, which take their art and biographies from
+/// their tracks as they are recomputed. A track whose file's size or mtime changed loses its
+/// loudness, peak and waveform and goes back to analyzer version 0, which queues it for analysis
+/// again: neither says whether the audio or only the tags changed. A record under a root `lib`
+/// doesn't have, or one naming another library's track, is logged and skipped.
 pub fn upsert_track(
     roots: &Roots,
     tx: &Transaction<'_>,
@@ -94,6 +93,7 @@ pub fn upsert_track(
         Some(Lyrics::Synced(_)) => "synced",
     };
     let format = rec.properties.format;
+    let sidecars = sidecar_rows(tx, lib, root_id, rec)?;
 
     // A new track (no id yet) gets a random one. An id of another library's track is never
     // taken over: the update matches no row, and the record is skipped. Column names on the
@@ -102,9 +102,10 @@ pub fn upsert_track(
             "INSERT INTO tracks (id, library_id, album_id, album_title, root_id, path, file_size, file_mtime, \
              missing_since, title, sort_key, artist_sort_key, album_sort_key, disc_number, track_number, \
              track_total, disc_total, release_date, explicit, compilation, release_type, isrc, identifiers, lyrics_kind, \
-             codec, container, lossless, bitrate_kbps, sample_rate_hz, bit_depth, channels, duration_us, added_at) \
+             codec, container, lossless, bitrate_kbps, sample_rate_hz, bit_depth, channels, duration_us, added_at, \
+             image_id, image_embedded, artist_image_id, biography_id, sidecar_stamp) \
              VALUES (coalesce(?1, random() & 0x7FFFFFFFFFFFFFFF), ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
-             ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32) \
+             ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37) \
              ON CONFLICT (id) DO UPDATE SET \
              analyzer_version = CASE WHEN file_size IS excluded.file_size AND file_mtime IS excluded.file_mtime \
              THEN analyzer_version ELSE 0 END, \
@@ -122,7 +123,9 @@ pub fn upsert_track(
              identifiers = excluded.identifiers, lyrics_kind = excluded.lyrics_kind, codec = excluded.codec, \
              container = excluded.container, lossless = excluded.lossless, bitrate_kbps = excluded.bitrate_kbps, \
              sample_rate_hz = excluded.sample_rate_hz, bit_depth = excluded.bit_depth, channels = excluded.channels, \
-             duration_us = excluded.duration_us \
+             duration_us = excluded.duration_us, image_id = excluded.image_id, image_embedded = excluded.image_embedded, \
+             artist_image_id = excluded.artist_image_id, biography_id = excluded.biography_id, \
+             sidecar_stamp = excluded.sidecar_stamp \
              WHERE tracks.library_id = excluded.library_id \
              RETURNING id, analyzer_version",
             params![
@@ -158,6 +161,11 @@ pub fn upsert_track(
                 rec.properties.channels.unwrap_or(0) as i64,
                 (rec.properties.duration_ms * 1000) as i64,
                 now,
+                sidecars.image_id,
+                sidecars.image_embedded,
+                sidecars.artist_image_id,
+                sidecars.biography_id,
+                rec.sidecar_stamp,
             ],
             |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
         ).optional()? else {
@@ -207,42 +215,9 @@ pub fn upsert_track(
             }
         };
         tx.execute(
-                "INSERT INTO track_lyrics (library_id, track_id, plain, synced, embedded) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![lib, id, plain, synced, rec.tags.lyrics.is_some()],
+                "INSERT INTO track_lyrics (library_id, track_id, plain, synced) VALUES (?1, ?2, ?3, ?4)",
+                params![lib, id, plain, synced],
             )?;
-    }
-
-    // Artwork: one images row per distinct content hash; the album keeps the
-    // first it is given (`requirements/scanning.md` §3.1).
-    if let Some(art) = &rec.artwork {
-        let img_path = match &art.source {
-            ArtworkSource::Embedded => rel.clone(),
-            ArtworkSource::Sidecar(p) => relative(&rec.root, p),
-        };
-        let image_id = upsert_image(tx, lib, root_id, &img_path, &art.info)?;
-        tx.execute(
-            "UPDATE albums SET image_id = ?2 WHERE id = ?1 AND image_id IS NULL",
-            params![album_id, image_id],
-        )?;
-    }
-    let artist_targets: &[i64] =
-        if album_credits.iter().any(|c| c.is_some()) { &album_artist_ids } else { &artist_ids };
-    if let Some(img) = &rec.artist_image {
-        let image_id = upsert_image(tx, lib, root_id, &relative(&rec.root, &img.path), &img.info)?;
-        for artist_id in artist_targets {
-            tx.execute(
-                    "UPDATE artists SET image_id = ?2 WHERE id = ?1 AND image_id IS NULL AND name IS NOT NULL",
-                    params![artist_id, image_id],
-                )?;
-        }
-    }
-    if let Some(bio) = &rec.artist_biography {
-        for artist_id in artist_targets {
-            tx.execute(
-                    "UPDATE artists SET biography = ?2 WHERE id = ?1 AND biography IS NULL AND name IS NOT NULL",
-                    params![artist_id, bio],
-                )?;
-        }
     }
 
     feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)?;

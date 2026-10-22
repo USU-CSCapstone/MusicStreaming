@@ -1,9 +1,9 @@
 //! Derived data the scanner maintains (`design/database.md` §3).
 //!
 //! Counts and spellings follow each change by trigger (`0007_catalog_counts.sql`). What is left
-//! runs for the entities a batch touched, never for the library: album links first (they decide
-//! who is an album artist), then artists, then albums (whose artist sort key reads artists),
-//! then tags.
+//! runs for the entities a batch touched, never for the library: album links and art first (they
+//! decide who is an album artist, and what each album offers its artists), then artists, then
+//! albums (whose artist sort key reads artists), then tags.
 
 use std::collections::HashSet;
 
@@ -11,6 +11,8 @@ use jewelcase_core::sort_key;
 use rusqlite::{OptionalExtension, Result, Transaction, params};
 
 use super::feed::{self, Entity, Op};
+
+mod art;
 
 /// Entities whose derived values may be stale after a batch.
 #[derive(Debug, Default)]
@@ -61,6 +63,7 @@ pub fn recompute(tx: &Transaction<'_>, lib: i64, touched: &Touched, now: i64) ->
     }
     for &album in &touched.albums {
         refresh_album_links(tx, lib, album)?;
+        art::album(tx, album)?;
     }
     for &artist in &touched.artists {
         refresh_artist(tx, lib, artist, now)?;
@@ -250,8 +253,9 @@ pub fn recompute_album_loudness(tx: &Transaction<'_>, album: i64) -> Result<()> 
 }
 
 /// The artist's displayed name and sort key from the spellings and sort keys its credits count,
-/// or its deletion when no track credits it. Whether one does is read from the credits
-/// themselves, so a wrong count can never delete a credited artist.
+/// and its image and biography from its albums ([`art::artist`]), or its deletion when no track
+/// credits it. Whether one does is read from the credits themselves, so a wrong count can never
+/// delete a credited artist. The unknown artist has no image or biography.
 fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i64) -> Result<()> {
     let Some((credited, name, tagged_sort)) = tx
         .query_row(
@@ -279,6 +283,7 @@ fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i64) -> Resu
         "UPDATE artists SET name = ?2, sort_key = ?3 WHERE id = ?1",
         params![artist, name, sort_key],
     )?;
+    art::artist(tx, artist, name.is_some())?;
     feed::record(tx, lib, Entity::Artist, artist, Op::Upsert, now)
 }
 

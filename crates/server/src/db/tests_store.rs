@@ -71,7 +71,7 @@ impl InspectStore for SqliteStore {
                  (SELECT image_id FROM albums a WHERE a.id = t.album_id) IS NOT NULL, \
                  EXISTS (SELECT 1 FROM track_artists ta JOIN artists ar ON ar.id = ta.artist_id \
                          WHERE ta.track_id = t.id AND ar.biography IS NOT NULL), \
-                 EXISTS (SELECT 1 FROM track_lyrics l WHERE l.track_id = t.id AND l.embedded = 0) \
+                 t.lyrics_kind <> 'none' \
                  FROM tracks t WHERE t.library_id = ?1 ORDER BY t.path",
             )
             .unwrap();
@@ -140,7 +140,7 @@ impl InspectStore for SqliteStore {
                 album,
                 has_artwork: art,
                 has_biography: bio,
-                has_sidecar_lyrics: lyr,
+                has_lyrics: lyr,
                 sort_title: String::from_utf8(sort_key).unwrap(),
                 sort_artist: String::from_utf8(artist_sort_key).unwrap(),
                 format: format_of(&codec, &container),
@@ -244,6 +244,7 @@ mod lyrics;
 mod marks;
 mod reanalysis;
 mod recompute;
+mod sidecars;
 mod totals;
 
 // ───────────────────────────── Derived rules ─────────────────────────────
@@ -849,6 +850,7 @@ fn record(root: &Path, i: usize) -> TrackRecord {
         artist_image: None,
         artist_biography: None,
         lyrics_sidecar: None,
+        sidecar_stamp: 0,
         sort: SortKeys {
             title: format!("track {i}"),
             artist: format!("artist {}", i / 100),

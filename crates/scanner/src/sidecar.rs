@@ -4,20 +4,27 @@
 //! The filenames are a public contract plugins write against. They are
 //! constants here and nowhere else. Resolution is per directory and memoized
 //! for the life of a scan; the upward walk stops at the scan's root, and a
-//! symlinked sidecar is never read ([`crate::confine`]). Sidecar files are
-//! read here: image headers and hashes for the `images` table, biography
-//! text, and lyric files per track. A listing only names a directory's
-//! sidecars; its images and biography are read once, the first time the
-//! directory resolves, which only a file past stage 2 asks for, so a
-//! directory of unchanged files opens none.
+//! symlinked sidecar is never read ([`crate::confine`]). It has two steps.
+//! Locating settles which file of each kind applies to a directory from
+//! listings and the sizes and modified times they carry, which is all a
+//! track's [stamp](SidecarResolver::stamp) needs. Reading opens what was
+//! located, once per file per scan, and only a file past stage 2 asks for it,
+//! so a directory of unchanged files opens none.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use sha2::{Digest, Sha256};
+
+use self::locate::{Found, Located, LyricsNames};
+use crate::discover::FileStat;
 use crate::image::ImageInfo;
 use crate::{Lyrics, image};
+
+mod locate;
 
 /// `cover.*` — album art (`requirements/scanning.md` §3.1).
 pub const COVER_STEM: &str = "cover";
@@ -35,6 +42,10 @@ pub const LYRICS_EXTENSIONS: &[&str] = &["lrc", "txt"];
 /// anything larger is ignored rather than hashed.
 const MAX_SIDECAR_BYTES: u64 = 32 * 1024 * 1024;
 
+/// A hash of the path, size and modified time of each sidecar file a track resolved
+/// ([`SidecarResolver::stamp`]). Only equality means anything.
+pub type SidecarStamp = i64;
+
 /// An `artist.*` sidecar image.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SidecarImage {
@@ -42,38 +53,48 @@ pub struct SidecarImage {
     pub info: ImageInfo,
 }
 
-/// What resolved for one directory, after the upward walk.
+/// The text of an `artist.txt`, shared by every track that resolves it, with the SHA-256 of
+/// the text, by which the store keeps one row per distinct biography.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Biography {
+    pub text: Arc<str>,
+    pub hash: [u8; 32],
+}
+
+impl Biography {
+    /// `text`, with its hash.
+    pub fn new(text: &str) -> Biography {
+        Biography { text: Arc::from(text), hash: Sha256::digest(text).into() }
+    }
+}
+
+/// What resolved for one directory, after the upward walk, read.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Sidecars {
     pub cover: Option<SidecarImage>,
     pub artist_image: Option<SidecarImage>,
-    /// The text of an `artist.txt`.
-    pub biography: Option<String>,
+    pub biography: Option<Biography>,
 }
 
-impl Sidecars {
-    fn is_complete(&self) -> bool {
-        self.cover.is_some() && self.artist_image.is_some() && self.biography.is_some()
+/// A track's sidecar stamp, with the lyrics file it hashed, so the file is read without being
+/// looked up again.
+pub struct Stamped {
+    pub stamp: SidecarStamp,
+    lyrics: Option<Found>,
+}
+
+impl Stamped {
+    /// The lyrics in the file the stamp hashed, read. An unreadable or empty file is no lyrics.
+    pub fn read_lyrics(&self) -> Option<Lyrics> {
+        Lyrics::parse(&read_text(&self.lyrics.as_ref()?.path)?)
     }
 }
 
-/// The sidecars a directory holds itself, by path, none of them read yet.
-#[derive(Default)]
-struct Local {
-    cover: Option<PathBuf>,
-    artist_image: Option<PathBuf>,
-    biography: Option<PathBuf>,
-}
-
-impl Local {
-    /// Reads the files. One that is unreadable, empty, or not an image counts as absent.
-    fn read(self) -> Sidecars {
-        Sidecars {
-            cover: self.cover.and_then(|path| read_image(&path)),
-            artist_image: self.artist_image.and_then(|path| read_image(&path)),
-            biography: self.biography.and_then(|path| read_text(&path)),
-        }
-    }
+/// The sidecars that apply to a directory after the walk, and the digest of them that each
+/// stamp in it starts from.
+struct Applied {
+    located: Located,
+    digest: [u8; 32],
 }
 
 /// Whether a filename is one of the sidecar names. The watcher uses this to
@@ -95,94 +116,142 @@ pub fn is_sidecar_name(name: &OsStr) -> bool {
 /// Resolver for one scan of one root.
 pub struct SidecarResolver {
     root: PathBuf,
-    /// Per listed directory not yet resolved: the sidecars in it (not inherited).
-    local: HashMap<PathBuf, Local>,
-    /// Per directory: what resolves for it after the walk.
-    resolved: HashMap<PathBuf, Sidecars>,
+    /// Per listed directory not yet located: the sidecars in it (not inherited).
+    local: HashMap<PathBuf, Located>,
+    /// Per directory: the sidecars that apply to it after the walk.
+    applied: HashMap<PathBuf, Applied>,
+    /// The lyrics files of the directory whose tracks were last stamped.
+    lyrics_names: Option<LyricsNames>,
+    /// Per located image: what reading it gave.
+    images: HashMap<PathBuf, Option<SidecarImage>>,
+    /// Per located biography: what reading it gave.
+    biographies: HashMap<PathBuf, Option<Biography>>,
 }
 
 impl SidecarResolver {
+    /// A resolver for a scan of the root at `root`, with nothing located or read yet.
     pub fn new(root: impl Into<PathBuf>) -> SidecarResolver {
-        SidecarResolver { root: root.into(), local: HashMap::new(), resolved: HashMap::new() }
+        SidecarResolver {
+            root: root.into(),
+            local: HashMap::new(),
+            applied: HashMap::new(),
+            lyrics_names: None,
+            images: HashMap::new(),
+            biographies: HashMap::new(),
+        }
     }
 
-    /// Use a listing discovery already made, so the directory is not listed
-    /// twice. Only names are kept; nothing is read until `dir` resolves.
-    pub fn offer_listing(&mut self, dir: &Path, files: &BTreeSet<OsString>) {
+    /// Use a listing discovery already made, so the directory is not listed or its sidecars
+    /// stat'ed twice. Nothing is read until `dir` resolves.
+    pub fn offer_listing(&mut self, dir: &Path, files: &BTreeMap<OsString, FileStat>) {
         if !self.local.contains_key(dir) {
-            let local = local_from_names(dir, files.iter().map(|f| f.as_os_str()));
+            let names = files.keys().map(OsString::as_os_str);
+            let local = Located::pick(dir, names, |name, path| Found::listed(path, files[name]));
             self.local.insert(dir.to_path_buf(), local);
         }
     }
 
-    /// Resolve for `dir`, walking up to the root and reading each directory's
-    /// sidecars the first time it resolves. Nearest match wins
-    /// (`requirements/scanning.md` §3.5).
+    /// Resolve for `dir`: read what locating it found, each file once per scan. A located
+    /// file that cannot be read, or is not an image, is no sidecar; the walk does not go on past
+    /// it, so what a track resolved is decided by what its stamp hashes.
     pub fn resolve(&mut self, dir: &Path) -> Sidecars {
-        if let Some(r) = self.resolved.get(dir) {
-            return r.clone();
+        let Located { cover, artist_image, biography } = self.locate(dir).located.clone();
+        Sidecars {
+            cover: cover.and_then(|found| self.image(found.path)),
+            artist_image: artist_image.and_then(|found| self.image(found.path)),
+            biography: biography.and_then(|found| {
+                let read = |path: &PathBuf| read_text(path).map(|text| Biography::new(&text));
+                self.biographies.entry(found.path).or_insert_with_key(read).clone()
+            }),
         }
-        let mut result = self.local_for(dir).read();
-        if !result.is_complete()
-            && dir != self.root
-            && dir.starts_with(&self.root)
-            && let Some(parent) = dir.parent()
-        {
-            let inherited = self.resolve(parent);
-            result.cover = result.cover.or(inherited.cover);
-            result.artist_image = result.artist_image.or(inherited.artist_image);
-            result.biography = result.biography.or(inherited.biography);
-        }
-        self.resolved.insert(dir.to_path_buf(), result.clone());
-        result
     }
 
-    /// The sidecars in `dir`, taken from its offered listing. A directory the
-    /// walk did not list (it lists top-down, so this is an ancestor of a
-    /// folder-scoped scan) is listed here. Called once per directory, since
-    /// [`Self::resolve`] memoizes what it returns.
-    fn local_for(&mut self, dir: &Path) -> Local {
+    /// The stamp of the sidecars that apply to the track at `audio`, in `dir` whose listing is
+    /// `files`: its cover, artist image and biography, and its lyrics file. Taken from listings
+    /// alone, so an unchanged track's check opens nothing, and changed by a change to any of
+    /// them, but not to a sidecar a nearer one overrides. A track with no lyrics file has its
+    /// directory's digest, so only a track with one costs a hash.
+    pub fn stamp(
+        &mut self,
+        dir: &Path,
+        audio: &Path,
+        files: &BTreeMap<OsString, FileStat>,
+    ) -> Stamped {
+        if !self.lyrics_names.as_ref().is_some_and(|names| names.dir() == dir) {
+            self.lyrics_names = Some(LyricsNames::of(dir, files));
+        }
+        let lyrics = self.lyrics_names.as_ref().and_then(|names| names.find(audio, files));
+        let digest = self.locate(dir).digest;
+        let stamp = match &lyrics {
+            None => head(&digest),
+            Some(found) => {
+                let mut hasher = Sha256::new();
+                hasher.update(digest);
+                found.hash_into(&mut hasher);
+                head(&hasher.finalize())
+            }
+        };
+        Stamped { stamp, lyrics }
+    }
+
+    /// The sidecars that apply to `dir`, walking up to the root, each directory located once.
+    /// Nearest match wins (`requirements/scanning.md` §3.5).
+    fn locate(&mut self, dir: &Path) -> &Applied {
+        if !self.applied.contains_key(dir) {
+            let mut located = self.local_for(dir);
+            if !located.is_complete()
+                && dir != self.root
+                && dir.starts_with(&self.root)
+                && let Some(parent) = dir.parent()
+            {
+                let inherited = &self.locate(parent).located;
+                located.cover = located.cover.or_else(|| inherited.cover.clone());
+                located.artist_image =
+                    located.artist_image.or_else(|| inherited.artist_image.clone());
+                located.biography = located.biography.or_else(|| inherited.biography.clone());
+            }
+            let digest = located.digest();
+            self.applied.insert(dir.to_path_buf(), Applied { located, digest });
+        }
+        &self.applied[dir]
+    }
+
+    /// The sidecars in `dir`, taken from its offered listing. A directory the walk did not list
+    /// (it lists top-down, so this is an ancestor of a folder-scoped scan) is listed here, its
+    /// regular files only, as discovery lists, and only its sidecars are stat'ed. Called once
+    /// per directory, since [`Self::locate`] memoizes what it returns.
+    fn local_for(&mut self, dir: &Path) -> Located {
         if let Some(local) = self.local.remove(dir) {
             return local;
         }
         match fs::read_dir(dir) {
             Ok(entries) => {
-                let names: Vec<OsString> =
-                    entries.filter_map(|e| e.ok()).map(|e| e.file_name()).collect();
-                local_from_names(dir, names.iter().map(|n| n.as_os_str()))
+                let names: Vec<OsString> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+                    .map(|e| e.file_name())
+                    .collect();
+                Located::pick(dir, names.iter().map(OsString::as_os_str), |_, path| Found::at(path))
             }
-            Err(_) => Local::default(),
+            Err(_) => Located::default(),
         }
     }
 
-    /// Lyrics: same directory, same stem, no walk (`requirements/scanning.md` §3.4).
-    /// Returns the path, without reading it.
-    pub fn lyrics_path_for(audio: &Path, files: &BTreeSet<OsString>) -> Option<PathBuf> {
-        let stem = audio.file_stem()?;
-        for ext in LYRICS_EXTENSIONS {
-            let mut name = stem.to_os_string();
-            name.push(".");
-            name.push(ext);
-            if files.contains(&name) {
-                return Some(audio.with_file_name(name));
-            }
-            // Case-insensitive fallback for `.LRC`.
-            if let Some(found) = files.iter().find(|f| f.eq_ignore_ascii_case(&name)) {
-                return Some(audio.with_file_name(found));
-            }
-        }
-        None
-    }
-
-    /// Lyrics for a track, read. An unreadable or empty file is no lyrics.
-    pub fn lyrics_for(audio: &Path, files: &BTreeSet<OsString>) -> Option<Lyrics> {
-        let path = Self::lyrics_path_for(audio, files)?;
-        Lyrics::parse(&read_text(&path)?)
+    /// The image at the located `path`, read the first time it is asked for.
+    fn image(&mut self, path: PathBuf) -> Option<SidecarImage> {
+        self.images.entry(path).or_insert_with_key(|p| read_image(p)).clone()
     }
 }
 
+/// The first eight bytes of `digest`, as a stamp.
+fn head(digest: &[u8]) -> SidecarStamp {
+    let mut head = [0; 8];
+    head.copy_from_slice(&digest[..8]);
+    SidecarStamp::from_le_bytes(head)
+}
+
 /// The whole file at `path`, if it is a non-empty regular file, not a symlink, no larger than
-/// [`MAX_SIDECAR_BYTES`].
+/// [`MAX_SIDECAR_BYTES`]: what was located may have changed since.
 fn read_bytes(path: &Path) -> Option<Vec<u8>> {
     let meta = fs::symlink_metadata(path).ok()?;
     if !meta.is_file() || meta.len() == 0 || meta.len() > MAX_SIDECAR_BYTES {
@@ -200,151 +269,12 @@ fn read_text(path: &Path) -> Option<String> {
     if text.is_empty() { None } else { Some(text) }
 }
 
+/// The image at `path`, if it can be read and described.
 fn read_image(path: &Path) -> Option<SidecarImage> {
     let bytes = read_bytes(path)?;
     let info = image::describe(&bytes)?;
     Some(SidecarImage { path: path.to_path_buf(), info })
 }
 
-/// Picks the sidecars among the file names listed in `dir`, without reading any.
-fn local_from_names<'a>(dir: &Path, names: impl Iterator<Item = &'a OsStr>) -> Local {
-    let mut out = Local::default();
-    // Prefer extensions in IMAGE_EXTENSIONS order when several covers exist,
-    // so the choice is deterministic across filesystems.
-    let mut cover: Option<(usize, PathBuf)> = None;
-    let mut artist: Option<(usize, PathBuf)> = None;
-    for name in names {
-        let Some(s) = name.to_str() else { continue };
-        let lower = s.to_ascii_lowercase();
-        if lower == BIOGRAPHY_NAME {
-            out.biography = Some(dir.join(name));
-            continue;
-        }
-        let Some((stem, ext)) = lower.rsplit_once('.') else {
-            continue;
-        };
-        let Some(rank) = IMAGE_EXTENSIONS.iter().position(|e| *e == ext) else {
-            continue;
-        };
-        if stem == COVER_STEM && cover.as_ref().is_none_or(|(r, _)| rank < *r) {
-            cover = Some((rank, dir.join(name)));
-        } else if stem == ARTIST_STEM && artist.as_ref().is_none_or(|(r, _)| rank < *r) {
-            artist = Some((rank, dir.join(name)));
-        }
-    }
-    out.cover = cover.map(|(_, p)| p);
-    out.artist_image = artist.map(|(_, p)| p);
-    out
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::SyncedLine;
-
-    /// A 1x1 PNG.
-    const PNG: &[u8] = &[
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
-        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
-        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8,
-        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D, 0xB0, 0x00, 0x00, 0x00,
-        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
-    ];
-
-    fn touch(p: &Path, bytes: &[u8]) {
-        fs::create_dir_all(p.parent().unwrap()).unwrap();
-        fs::write(p, bytes).unwrap();
-    }
-
-    #[test]
-    fn nearest_wins_and_walk_stops_at_root() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("lib");
-        touch(&root.join("cover.png"), PNG);
-        touch(&root.join("Artist/artist.jpg"), PNG);
-        // Saved with a byte order mark, which is not part of the text.
-        touch(&root.join("Artist/artist.txt"), b"\xEF\xBB\xBFA band.\n");
-        touch(&root.join("Artist/Album/cover.jpg"), PNG);
-        touch(&root.join("Artist/Other/01.flac"), b"x");
-        // Above the root: must never be seen.
-        touch(&tmp.path().join("artist.png"), PNG);
-
-        let mut r = SidecarResolver::new(&root);
-        let album = r.resolve(&root.join("Artist/Album"));
-        assert_eq!(album.cover.unwrap().path, root.join("Artist/Album/cover.jpg"));
-        assert_eq!(album.artist_image.unwrap().path, root.join("Artist/artist.jpg"));
-        assert_eq!(album.biography.unwrap(), "A band.");
-
-        let other = r.resolve(&root.join("Artist/Other"));
-        assert_eq!(other.cover.unwrap().path, root.join("cover.png"));
-
-        let top = r.resolve(&root);
-        assert_eq!(top.artist_image, None);
-    }
-
-    #[test]
-    fn unreadable_image_is_not_artwork() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("lib");
-        touch(&root.join("A/cover.jpg"), b"not an image");
-        let mut r = SidecarResolver::new(&root);
-        assert_eq!(r.resolve(&root.join("A")).cover, None);
-    }
-
-    #[test]
-    fn lyrics_match_stem_only_in_place() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-        touch(&dir.join("01 - Song.lrc"), b"[00:01.00]hi");
-        touch(&dir.join("02 - Other.TXT"), b"plain words");
-        let files: BTreeSet<OsString> =
-            ["01 - Song.flac", "01 - Song.lrc", "02 - Other.flac", "02 - Other.TXT"]
-                .iter()
-                .map(OsString::from)
-                .collect();
-        let song = dir.join("01 - Song.flac");
-        assert_eq!(
-            SidecarResolver::lyrics_path_for(&song, &files),
-            Some(dir.join("01 - Song.lrc"))
-        );
-        assert_eq!(
-            SidecarResolver::lyrics_for(&song, &files),
-            Some(Lyrics::Synced(vec![SyncedLine { start_ms: 1_000, text: "hi".into() }]))
-        );
-        assert_eq!(
-            SidecarResolver::lyrics_for(&dir.join("02 - Other.flac"), &files),
-            Some(Lyrics::Plain("plain words".into()))
-        );
-        assert_eq!(SidecarResolver::lyrics_for(&dir.join("03.flac"), &files), None);
-    }
-
-    #[test]
-    fn symlinked_sidecars_are_not_read() {
-        use std::os::unix::fs::symlink;
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("lib");
-        touch(&root.join("A/01.flac"), b"x");
-        touch(&root.join("bio.txt"), b"A band.");
-        touch(&root.join("words.lrc"), b"[00:01.00]words");
-        touch(&root.join("cover.png"), PNG);
-        symlink(root.join("bio.txt"), root.join("A/artist.txt")).unwrap();
-        symlink(root.join("words.lrc"), root.join("A/01.lrc")).unwrap();
-        symlink(root.join("cover.png"), root.join("A/cover.png")).unwrap();
-        let files: BTreeSet<OsString> = ["01.flac", "01.lrc"].map(OsString::from).into();
-
-        let mut r = SidecarResolver::new(&root);
-        let found = r.resolve(&root.join("A"));
-        assert_eq!(found.biography, None);
-        assert_eq!(found.cover.unwrap().path, root.join("cover.png"), "the real one above");
-        assert_eq!(SidecarResolver::lyrics_for(&root.join("A/01.flac"), &files), None);
-    }
-
-    #[test]
-    fn sidecar_names() {
-        assert!(is_sidecar_name(OsStr::new("cover.jpg")));
-        assert!(is_sidecar_name(OsStr::new("Cover.PNG")));
-        assert!(is_sidecar_name(OsStr::new("artist.txt")));
-        assert!(!is_sidecar_name(OsStr::new("cover.txt")));
-        assert!(!is_sidecar_name(OsStr::new("front.jpg")));
-    }
-}
+mod tests;

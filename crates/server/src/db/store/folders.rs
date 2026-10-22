@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use jewelcase_scanner::{IndexedFile, IndexedFolder, IndexedLyrics};
+use jewelcase_scanner::{IndexedFile, IndexedFolder};
 use rusqlite::{Result, Row, params};
 
 use super::SqliteStore;
@@ -13,11 +13,10 @@ use crate::db::DbError;
 /// The rows of root `?1` from path `?2` on, and before `?3` when `bounded`, in path order, with
 /// what the skip check needs.
 fn select(bounded: bool) -> String {
-    let below = if bounded { " AND t.path < ?3" } else { "" };
+    let below = if bounded { " AND path < ?3" } else { "" };
     format!(
-        "SELECT t.path, t.id, t.file_size, t.file_mtime, t.missing_since, l.embedded \
-         FROM tracks t LEFT JOIN track_lyrics l ON l.track_id = t.id \
-         WHERE t.root_id = ?1 AND t.path >= ?2{below} ORDER BY t.path"
+        "SELECT path, id, file_size, file_mtime, missing_since, sidecar_stamp FROM tracks \
+         WHERE root_id = ?1 AND path >= ?2{below} ORDER BY path"
     )
 }
 
@@ -67,12 +66,7 @@ fn indexed_file(row: &Row<'_>) -> Result<IndexedFile> {
         size: row.get::<_, i64>(2)? as u64,
         mtime_ms: row.get::<_, Option<i64>>(3)?.map(|m| m as u64),
         missing: row.get::<_, Option<i64>>(4)?.is_some(),
-        // So a lyrics file added or removed beside an unchanged track is noticed.
-        lyrics: match row.get::<_, Option<i64>>(5)? {
-            None => IndexedLyrics::None,
-            Some(1) => IndexedLyrics::Embedded,
-            Some(_) => IndexedLyrics::Sidecar,
-        },
+        sidecar_stamp: row.get(5)?,
     })
 }
 

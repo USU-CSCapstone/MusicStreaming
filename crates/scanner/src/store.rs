@@ -17,6 +17,7 @@ use crate::library::LibraryId;
 use crate::problems::Problem;
 use crate::scan::{Scan, Trigger};
 use crate::scope::Scope;
+use crate::sidecar::SidecarStamp;
 use crate::track::{TrackId, TrackRecord};
 
 /// What the store already knows about a file. Enough for the skip check.
@@ -27,16 +28,9 @@ pub struct IndexedFile {
     /// `None` while the store has forgotten it ([`Batch::changed_unread`]), so no file matches.
     pub mtime_ms: Option<u64>,
     pub missing: bool,
-    /// Where its lyrics came from, so a lyrics file added or removed beside an
-    /// unchanged track is noticed (`requirements/scanning.md` §7).
-    pub lyrics: IndexedLyrics,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IndexedLyrics {
-    None,
-    Embedded,
-    Sidecar,
+    /// The stamp of the sidecars it resolved when last read, so a sidecar added, changed or
+    /// removed beside an unchanged file is noticed (`requirements/scanning.md` §7).
+    pub sidecar_stamp: SidecarStamp,
 }
 
 /// What the index holds directly in one folder ([`Store::indexed_in`]), by name as the store

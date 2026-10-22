@@ -14,6 +14,7 @@ use crate::scan::{
 };
 use crate::scope::Scope;
 use crate::store::{Batch, Store, StoreError};
+use crate::track::TrackRecord;
 
 mod checkpoints;
 mod excludes;
@@ -173,6 +174,11 @@ pub fn a_root_gone_before_reconcile_suspends_and_marks_nothing<S: InspectStore +
     assert!(store.inspect_tracks(lib.id).iter().all(|t| !t.missing));
 }
 
+/// The text of `track`'s biography, if it has one.
+fn biography_text(track: &TrackRecord) -> Option<String> {
+    track.artist_biography.as_ref().map(|b| b.text.to_string())
+}
+
 /// Sidecars are read only for a file past stage 2, so a folder of unchanged files opens none.
 /// Here an unchanged track sits beside `artist.txt`, and a new track one folder below inherits
 /// it. The biography changes as the scan starts on the new track's folder, after the unchanged
@@ -190,10 +196,7 @@ pub fn an_unchanged_file_reads_no_sidecars<S: InspectStore + 'static>(make: Fact
     let new_folder = root.join("A/Y");
     let on_apply = |batch: &Batch| {
         let upserts = batch.upserts.iter();
-        written
-            .lock()
-            .unwrap()
-            .extend(upserts.map(|t| (t.path.clone(), t.artist_biography.clone())));
+        written.lock().unwrap().extend(upserts.map(|t| (t.path.clone(), biography_text(t))));
         Ok(())
     };
     let on_folder = |path: &Path| {
@@ -226,7 +229,7 @@ pub fn sidecars_are_read_once_per_directory<S: InspectStore + 'static>(make: Fac
     let applied = AtomicUsize::new(0);
     let texts = Mutex::new(Vec::new());
     let hooked = Hooked::new(store.clone()).on_apply(|batch| {
-        texts.lock().unwrap().extend(batch.upserts.iter().map(|t| t.artist_biography.clone()));
+        texts.lock().unwrap().extend(batch.upserts.iter().map(biography_text));
         let n = applied.fetch_add(1, Ordering::SeqCst) + 1;
         fs::write(&biography, format!("Version {n}")).unwrap();
         Ok(())

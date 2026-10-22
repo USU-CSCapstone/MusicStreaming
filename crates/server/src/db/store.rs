@@ -12,6 +12,7 @@ pub(super) mod names;
 mod problems;
 mod roots;
 mod scans;
+mod sidecars;
 mod tracks;
 mod upsert;
 

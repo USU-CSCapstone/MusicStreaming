@@ -60,12 +60,13 @@ pub use scan::{
     Cursor, Scan, ScanContext, ScanId, ScanOptions, ScanProgress, ScanState, Trigger, run_scan,
 };
 pub use scope::{Depth, Scope};
+pub use sidecar::{Biography, SidecarImage, SidecarStamp};
 pub use store::{
-    AnalysisStore, Batch, FileToDecode, IndexedFile, IndexedFolder, IndexedLyrics, PickedTrack,
-    PlaceholderStore, ProblemLog, Store, StoreError,
+    AnalysisStore, Batch, FileToDecode, IndexedFile, IndexedFolder, PickedTrack, PlaceholderStore,
+    ProblemLog, Store, StoreError,
 };
 pub use tag_set::{Lyrics, PartialDate, TagSet};
 pub use tags::{ReadError, read as read_tags};
-pub use track::{ArtworkSource, SortKeys, TrackId, TrackRecord};
+pub use track::{Artwork, ArtworkSource, SortKeys, TrackId, TrackRecord};
 pub use triggers::{FsWatcher, scan_every};
 pub use worker::{Stop, Worker};

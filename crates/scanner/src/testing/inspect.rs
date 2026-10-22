@@ -22,7 +22,8 @@ pub struct InspectTrack {
     pub album: Option<String>,
     pub has_artwork: bool,
     pub has_biography: bool,
-    pub has_sidecar_lyrics: bool,
+    /// Whether it has lyrics. The suite's files embed none, so any it has are a lyrics file's.
+    pub has_lyrics: bool,
     pub sort_title: String,
     pub sort_artist: String,
     pub format: Format,

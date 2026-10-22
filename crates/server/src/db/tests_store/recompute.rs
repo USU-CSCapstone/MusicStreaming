@@ -52,6 +52,28 @@ const CHECKS: &[(&str, &str, &str)] = &[
          COUNT(DISTINCT disc_number) FROM tracks t GROUP BY album_id ORDER BY album_id",
     ),
     (
+        "album art",
+        "SELECT id, image_id FROM albums ORDER BY id",
+        "SELECT DISTINCT album_id, (SELECT image_id FROM tracks WHERE album_id = t.album_id \
+                                    AND image_id IS NOT NULL ORDER BY missing_since IS NOT NULL, \
+                                    image_embedded DESC, disc_number, \
+                                    ifnull(track_number, 9223372036854775807), path, id LIMIT 1) \
+         FROM tracks t ORDER BY album_id",
+    ),
+    (
+        "artist images and biographies",
+        "SELECT id, image_id, biography FROM artists ORDER BY id",
+        "WITH credited AS (SELECT c.artist_id, t.* FROM track_album_artists c JOIN tracks t ON t.id = c.track_id) \
+         SELECT a.id, \
+         (SELECT artist_image_id FROM credited WHERE artist_id = a.id AND artist_image_id IS NOT NULL \
+          AND a.name IS NOT NULL ORDER BY missing_since IS NOT NULL, disc_number, \
+          ifnull(track_number, 9223372036854775807), path, id LIMIT 1), \
+         (SELECT b.text FROM credited JOIN biographies b ON b.id = credited.biography_id \
+          WHERE credited.artist_id = a.id AND a.name IS NOT NULL ORDER BY missing_since IS NOT NULL, \
+          disc_number, ifnull(track_number, 9223372036854775807), path, credited.id LIMIT 1) \
+         FROM artists a ORDER BY a.id",
+    ),
+    (
         "album artists",
         "SELECT album_id, position, artist_id FROM album_artists ORDER BY album_id, position",
         "SELECT t.album_id, tam.position, tam.artist_id FROM track_album_artists tam \

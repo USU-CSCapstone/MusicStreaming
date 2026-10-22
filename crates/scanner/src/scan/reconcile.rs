@@ -41,12 +41,12 @@ pub(super) fn unlisted(dir: &Directory, indexed: IndexedFolder) -> (Vec<TrackId>
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeSet, HashMap};
+    use std::collections::{BTreeMap, BTreeSet, HashMap};
     use std::io;
 
     use super::*;
     use crate::discover::WalkError;
-    use crate::store::{IndexedFile, IndexedLyrics};
+    use crate::store::IndexedFile;
 
     /// A listing of `/m/A` that names nothing, with `unreadable` entries.
     fn empty_listing(unreadable: Vec<WalkError>) -> Directory {
@@ -54,7 +54,7 @@ mod tests {
             path: PathBuf::from("/m/A"),
             listed: true,
             candidates: Vec::new(),
-            files: BTreeSet::new(),
+            files: BTreeMap::new(),
             folders: BTreeSet::new(),
             skipped_links: Vec::new(),
             unreadable,
@@ -68,7 +68,7 @@ mod tests {
             size: 1,
             mtime_ms: Some(1),
             missing: false,
-            lyrics: IndexedLyrics::None,
+            sidecar_stamp: 0,
         };
         IndexedFolder {
             files: HashMap::from([("a.flac".into(), file)]),

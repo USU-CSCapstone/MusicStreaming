@@ -6,8 +6,8 @@ use crate::discover::{Candidate, Directory};
 use crate::identity::{self, Identity};
 use crate::problems::{self, Problem};
 use crate::scope::Scope;
-use crate::sidecar::SidecarResolver;
-use crate::store::{IndexedFile, IndexedLyrics};
+use crate::sidecar::{SidecarResolver, Sidecars};
+use crate::store::IndexedFile;
 use crate::tags;
 use crate::track::{Artwork, ArtworkSource, SortKeys, TrackId, TrackRecord, filename_title};
 
@@ -34,19 +34,6 @@ pub enum FileOutcome {
     },
 }
 
-/// Whether a lyrics file has appeared beside a track that had none, or gone from one
-/// that had it (`requirements/scanning.md` §7). Checked against the directory listing
-/// discovery already holds, so an unchanged library still costs no extra I/O. Embedded
-/// lyrics win (§3.4), so a sidecar next to them changes nothing.
-fn lyrics_file_changed(ix: &IndexedFile, candidate: &Candidate, dir: &Directory) -> bool {
-    let present = SidecarResolver::lyrics_path_for(&candidate.path, &dir.files).is_some();
-    match ix.lyrics {
-        IndexedLyrics::None => present,
-        IndexedLyrics::Sidecar => !present,
-        IndexedLyrics::Embedded => false,
-    }
-}
-
 /// Runs `candidate`, one of `dir`'s files, through stages 2 to 5, given what the index holds
 /// at its path, `indexed`: what the scan does with it.
 pub(super) fn process_file(
@@ -55,14 +42,15 @@ pub(super) fn process_file(
     candidate: &Candidate,
     indexed: Option<IndexedFile>,
     sidecars: &mut SidecarResolver,
-    resolved: &mut Option<crate::sidecar::Sidecars>,
+    resolved: &mut Option<Sidecars>,
 ) -> FileOutcome {
-    // Stage 2: skip. Path, size, and mtime unchanged means done without
-    // opening the file. This check carries the incremental budget.
+    // Stage 2: skip. Path, size, mtime and sidecar stamp unchanged means done without opening
+    // the file or any sidecar. This check carries the incremental budget.
+    let stamped = sidecars.stamp(&dir.path, &candidate.path, &dir.files);
     if let Some(ix) = &indexed
         && ix.size == candidate.size
         && ix.mtime_ms == Some(candidate.mtime_ms)
-        && !lyrics_file_changed(ix, candidate, dir)
+        && ix.sidecar_stamp == stamped.stamp
     {
         return if ix.missing {
             FileOutcome::Returned { track_id: ix.track_id }
@@ -100,11 +88,7 @@ pub(super) fn process_file(
             side.cover.map(|c| Artwork { source: ArtworkSource::Sidecar(c.path), info: c.info })
         }
     };
-    let lyrics_sidecar = if read.tags.lyrics.is_none() {
-        SidecarResolver::lyrics_for(&candidate.path, &dir.files)
-    } else {
-        None
-    };
+    let lyrics_sidecar = if read.tags.lyrics.is_none() { stamped.read_lyrics() } else { None };
 
     let title = read.tags.title.clone().unwrap_or_else(|| filename_title(&candidate.path));
     let sort = SortKeys {
@@ -132,6 +116,7 @@ pub(super) fn process_file(
         artist_image: side.artist_image,
         artist_biography: side.biography,
         lyrics_sidecar,
+        sidecar_stamp: stamped.stamp,
         sort,
     };
 

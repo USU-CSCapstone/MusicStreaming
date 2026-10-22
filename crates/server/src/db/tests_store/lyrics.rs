@@ -4,7 +4,7 @@
 use jewelcase_scanner::testing;
 use lofty::tag::ItemKey;
 
-use super::{make, scalar, tagged};
+use super::{make, tagged};
 use crate::db::store::SqliteStore;
 
 /// Each track's title, lyrics kind, plain text and timed lines as stored, by title.
@@ -90,5 +90,4 @@ fn an_embedded_tag_holding_only_a_byte_order_mark_leaves_the_lyrics_file() {
 
     let lines = r#"[{"startMs":1000,"text":"x"}]"#;
     assert_eq!(stored(&store), [("1".into(), "synced".into(), None, Some(lines.into()))]);
-    assert_eq!(scalar::<i64>(&store, "SELECT embedded FROM track_lyrics"), Some(0));
 }

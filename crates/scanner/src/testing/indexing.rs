@@ -41,7 +41,7 @@ pub fn cold_scan_then_incremental_is_all_unchanged<S: InspectStore>(make: Factor
     let t1 = tracks.iter().find(|t| t.path.ends_with("Nevermind/01 - Track 1.wav")).unwrap();
     assert!(t1.has_artwork, "cover.png in the album folder");
     assert!(t1.has_biography, "artist.txt one level up");
-    assert!(t1.has_sidecar_lyrics, "lyrics by stem");
+    assert!(t1.has_lyrics, "lyrics by stem");
     assert_eq!(t1.title, "Track 1");
     assert_eq!(t1.artists, vec!["Nirvana"]);
     assert_eq!(t1.sort_artist, "nirvana");
@@ -104,14 +104,13 @@ pub fn lyrics_file_beside_an_unchanged_track<S: InspectStore>(make: Factory<S>) 
     let lib = library(&root);
     let store = make(&lib);
     scan_library(&store, &lib);
-    assert!(live(&store, &lib).iter().all(|t| !t.has_sidecar_lyrics));
+    assert!(live(&store, &lib).iter().all(|t| !t.has_lyrics));
 
     let lrc = root.join("A/X/01 - Track 1.lrc");
     fs::write(&lrc, "[00:01.00]hello\n").unwrap();
     let scan = scan_library(&store, &lib);
     assert_eq!(scan.progress.updated, 1, "only the track beside the new file is re-read");
-    let with: Vec<InspectTrack> =
-        live(&store, &lib).into_iter().filter(|t| t.has_sidecar_lyrics).collect();
+    let with: Vec<InspectTrack> = live(&store, &lib).into_iter().filter(|t| t.has_lyrics).collect();
     assert_eq!(with.len(), 1);
     assert!(with[0].path.ends_with("01 - Track 1.wav"));
 
@@ -121,7 +120,7 @@ pub fn lyrics_file_beside_an_unchanged_track<S: InspectStore>(make: Factory<S>) 
     fs::remove_file(&lrc).unwrap();
     let scan = scan_library(&store, &lib);
     assert_eq!(scan.progress.updated, 1);
-    assert!(live(&store, &lib).iter().all(|t| !t.has_sidecar_lyrics));
+    assert!(live(&store, &lib).iter().all(|t| !t.has_lyrics));
 }
 
 /// A file with no tags is titled after its file name, has no artists, and still has its audio

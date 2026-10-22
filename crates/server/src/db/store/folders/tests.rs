@@ -79,14 +79,14 @@ fn plan(conn: &Connection, bounded: bool) -> rusqlite::Result<Vec<String>> {
     }
 }
 
-/// Both forms of the read seek a range of the `(root_id, path)` index, in its order, and join
-/// lyrics by key: nothing is scanned and nothing sorted.
+/// Both forms of the read seek a range of the `(root_id, path)` index, in its order: nothing is
+/// scanned and nothing sorted.
 #[test]
 fn the_read_seeks_the_file_index_and_sorts_nothing() {
     let (_dir, _root, store) = store(&["A/1.flac"]);
     for bounded in [true, false] {
         let steps = store.db().read_blocking(move |conn| plan(conn, bounded)).unwrap();
-        let seeks = "SEARCH t USING INDEX tracks_file (root_id=? AND path>?";
+        let seeks = "SEARCH tracks USING INDEX tracks_file (root_id=? AND path>?";
         assert!(steps.iter().any(|s| s.starts_with(seeks)), "{steps:?}");
         assert!(
             steps.iter().all(|s| !s.starts_with("SCAN") && !s.contains("TEMP B-TREE")),

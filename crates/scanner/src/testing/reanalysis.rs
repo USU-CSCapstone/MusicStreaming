@@ -96,7 +96,7 @@ pub fn a_lyrics_file_alone_keeps_the_analysis<S: InspectStore>(make: Factory<S>)
 
     assert_eq!(scan_library(&store, &lib).progress.updated, 1);
     let tracks = live(&store, &lib);
-    assert!(tracks[0].has_sidecar_lyrics && tracks[0].analyzed, "{tracks:?}");
+    assert!(tracks[0].has_lyrics && tracks[0].analyzed, "{tracks:?}");
     assert!(store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap().is_empty());
 }
 

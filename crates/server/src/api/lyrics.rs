@@ -69,9 +69,9 @@ mod tests {
         let (_temp, db, app) = app_with_tracks().await;
         db.write(|tx| {
             tx.execute_batch(
-                r#"INSERT INTO track_lyrics (library_id, track_id, plain, synced, embedded) VALUES
-                       (1, 1, NULL, '[{"startMs":1000,"text":"Hello"}]', 1),
-                       (1, 2, 'Hello', NULL, 0);"#,
+                r#"INSERT INTO track_lyrics (library_id, track_id, plain, synced) VALUES
+                       (1, 1, NULL, '[{"startMs":1000,"text":"Hello"}]'),
+                       (1, 2, 'Hello', NULL);"#,
             )
         })
         .await

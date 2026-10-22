@@ -42,8 +42,11 @@ const GENRES: &[&str] = &["Rock", "rock", " Rock ", "Jazz", "jazz", "Hip Hop", "
 const SORTS: &[&str] = &["", "alpha", "beta", "zeta"];
 
 /// A record of the file at `path` under `root`, tagged from `rng`: up to two artists and three
-/// genres in several spellings, sometimes album artists or a compilation, sometimes no album.
+/// genres in several spellings, sometimes album artists or a compilation, sometimes no album, and
+/// sometimes art, embedded or a cover, an artist image or a biography, each one of a few.
 fn random(rng: &mut Rng, root: &Path, path: PathBuf) -> TrackRecord {
+    let image =
+        |rng: &mut Rng| ImageInfo { hash: vec![(rng.next() % 4) as u8], width: 1, height: 1 };
     let names = |rng: &mut Rng, pool: &[&str], most: u64| -> Vec<String> {
         (0..rng.next() % (most + 1)).map(|_| rng.pick(pool).to_string()).collect()
     };
@@ -54,6 +57,19 @@ fn random(rng: &mut Rng, root: &Path, path: PathBuf) -> TrackRecord {
     rec.tags.album = rng.chance(80).then(|| rng.pick(ALBUMS).to_string());
     rec.tags.genres = names(rng, GENRES, 3);
     rec.tags.disc_number = *rng.pick(&[None, Some(1), Some(2)]);
+    rec.tags.track_number = *rng.pick(&[None, Some(1), Some(2)]);
+    rec.artwork = rng.chance(60).then(|| Artwork {
+        source: if rng.chance(50) {
+            ArtworkSource::Embedded
+        } else {
+            ArtworkSource::Sidecar(root.join("cover.png"))
+        },
+        info: image(rng),
+    });
+    rec.artist_image =
+        rng.chance(40).then(|| SidecarImage { path: root.join("artist.png"), info: image(rng) });
+    rec.artist_biography =
+        rng.chance(40).then(|| Biography::new(rng.pick(&["One.", "Two.", "Three."])));
     rec.tags.disc_total = *rng.pick(&[None, Some(2)]);
     rec.tags.track_total = *rng.pick(&[None, Some(3), Some(12)]);
     rec.tags.release_date = PartialDate::parse(rng.pick(&["1999", "2001-05"]));

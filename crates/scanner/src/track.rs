@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::audio::AudioProperties;
 use crate::image::ImageInfo;
-use crate::sidecar::SidecarImage;
+use crate::sidecar::{Biography, SidecarImage, SidecarStamp};
 use crate::{Lyrics, TagSet};
 
 /// A track's id, as the store assigns it.
@@ -51,10 +51,13 @@ pub struct TrackRecord {
     /// Embedded art wins over a sidecar (`requirements/scanning.md` §3.1).
     pub artwork: Option<Artwork>,
     pub artist_image: Option<SidecarImage>,
-    /// The text of an `artist.txt` sidecar.
-    pub artist_biography: Option<String>,
+    /// An `artist.txt` sidecar.
+    pub artist_biography: Option<Biography>,
     /// Sidecar lyrics, only when the file has no embedded lyrics.
     pub lyrics_sidecar: Option<Lyrics>,
+    /// The stamp of the sidecars it resolved, its lyrics file included, which the next scan
+    /// compares.
+    pub sidecar_stamp: SidecarStamp,
     pub sort: SortKeys,
 }
 
