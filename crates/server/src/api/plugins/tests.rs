@@ -179,12 +179,14 @@ async fn cannot_be_enabled_until_its_required_permissions_are_granted() {
     assert_eq!((status, &problem["code"]), (StatusCode::CONFLICT, &json!("permissions_required")));
     assert_eq!(problem["detail"], "It still needs Read the library and Network access.");
 
-    // Ignored: a permission it never asked for, one in the wrong scope, and an unknown library.
+    // Ignored: a permission it never asked for, one in the wrong scope, and an unknown or
+    // malformed library.
     let grants = json!({
         "granted": ["network", "listeningActivity", "libraryRead"],
         "libraries": [
             { "libraryId": "1", "granted": ["libraryRead", "network"] },
-            { "libraryId": "9", "granted": ["libraryRead"] }
+            { "libraryId": "9", "granted": ["libraryRead"] },
+            { "libraryId": "02", "granted": ["libraryAdd"] }
         ]
     });
     let (status, plugin) =
@@ -194,6 +196,11 @@ async fn cannot_be_enabled_until_its_required_permissions_are_granted() {
     assert_eq!(plugin["libraries"][0]["granted"], json!(["libraryRead"]));
     assert_eq!(plugin["libraries"][0]["missingRequired"], json!([]));
     assert_eq!(plugin["libraries"][1]["missingRequired"], json!(["libraryRead"]));
+    assert_eq!(
+        (&plugin["libraries"][1]["libraryId"], &plugin["libraries"][1]["granted"]),
+        (&json!("2"), &json!([])),
+        "02 is not library 2"
+    );
 
     let (status, plugin) =
         call(&app, ADMIN, "PUT", &enable("1"), Some(json!({ "enabled": true }))).await;
@@ -491,10 +498,14 @@ async fn settings_show_values_but_never_secrets() {
         (StatusCode::OK, &json!({})),
         "a library sets nothing of its own"
     );
-    assert_eq!(
-        call(&app, ADMIN, "GET", &format!("{SETTINGS}?libraryId=9"), None).await.0,
-        StatusCode::NOT_FOUND
-    );
+    for library in ["9", "x"] {
+        let uri = format!("{SETTINGS}?libraryId={library}");
+        assert_eq!(
+            call(&app, ADMIN, "GET", &uri, None).await.0,
+            StatusCode::NOT_FOUND,
+            "{library}"
+        );
+    }
     let (_, plugin) = call(&app, ADMIN, "GET", PLUGIN, None).await;
     assert_eq!(plugin["hasSettings"], true);
 }

@@ -16,6 +16,7 @@ pub mod libraries;
 pub mod migrations;
 mod new_id;
 pub mod plays;
+mod reach;
 pub mod retention;
 pub mod store;
 #[cfg(test)]
@@ -40,6 +41,7 @@ use tracing::{error, info, warn};
 pub use by_ids::by_ids;
 pub use columns::{Json, Text};
 pub use new_id::new_id;
+pub(crate) use reach::reaches;
 use retention::Sweep;
 pub use store::SqliteStore;
 

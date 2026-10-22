@@ -53,8 +53,9 @@ impl Request {
         Ok(Request { sort, order, after, limit })
     }
 
-    /// Reads the page of `source` in `library`, or `None` if there is no such library. Its
-    /// total is the library's `stored` count, such as `album_count`, unless it is `filtered`.
+    /// Reads the page of `source` in `library`. Its total is the library's `stored` count, such
+    /// as `album_count`, unless it is `filtered`. `library` is one the caller reaches, which
+    /// `authenticate` has checked.
     pub fn read<T>(
         self,
         conn: &Connection,
@@ -63,15 +64,14 @@ impl Request {
         filtered: bool,
         source: &Source,
         map: impl FnMut(&Row) -> rusqlite::Result<T>,
-    ) -> rusqlite::Result<Option<Page<T>>> {
-        let Some(mut total) = library_count(conn, library, stored)? else {
-            return Ok(None);
+    ) -> rusqlite::Result<Page<T>> {
+        let total = if filtered {
+            keyset::count(conn, source)?
+        } else {
+            library_count(conn, library, stored)?
         };
-        if filtered {
-            total = keyset::count(conn, source)?;
-        }
         let (items, next_cursor) = keyset::fetch(conn, source, &self, map)?;
-        Ok(Some(Page { items, next_cursor, total }))
+        Ok(Page { items, next_cursor, total })
     }
 }
 
@@ -86,13 +86,29 @@ pub fn limit(limit: Option<u32>) -> Result<usize, Problem> {
 }
 
 /// The library's stored count in `column`, such as `album_count`, which the scanner keeps
-/// current; `None` if there is no such library.
+/// current; 0 once the library is gone, as when it was deleted after the request was let in.
 pub fn library_count(
     conn: &Connection,
     library: i64,
     column: &'static str,
-) -> rusqlite::Result<Option<i64>> {
-    conn.prepare_cached(&format!("SELECT {column} FROM libraries WHERE id = ?1"))?
+) -> rusqlite::Result<i64> {
+    let count = conn
+        .prepare_cached(&format!("SELECT {column} FROM libraries WHERE id = ?1"))?
         .query_row([library], |row| row.get(0))
-        .optional()
+        .optional()?;
+    Ok(count.unwrap_or(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::library_count;
+    use crate::api::testing::app_with_tracks;
+
+    #[tokio::test]
+    async fn a_library_that_is_gone_counts_nothing() {
+        let (_temp, db, _app) = app_with_tracks().await;
+        let count = |library| db.read(move |conn| library_count(conn, library, "track_count"));
+        assert!(count(1).await.unwrap() > 0);
+        assert_eq!(count(999).await.unwrap(), 0);
+    }
 }

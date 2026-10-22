@@ -13,7 +13,7 @@ use serde::Serialize;
 use super::authenticate::Caller;
 use super::extract::Path;
 use super::{Id, Problem};
-use crate::db::Database;
+use crate::db::{Database, reaches};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,8 +47,8 @@ pub async fn list(
     let items = db
         .read(move |conn| {
             conn.prepare_cached(&format!(
-                "{SELECT} WHERE ?1 OR id IN (SELECT library_id FROM library_access \
-                 WHERE user_id = ?2) ORDER BY created_at, id"
+                "{SELECT} WHERE {} ORDER BY created_at, id",
+                reaches!(admin: "?1", user: "?2", library: "libraries.id")
             ))?
             .query_map(rusqlite::params![caller.admin, caller.user], library)?
             .collect()

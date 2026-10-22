@@ -288,7 +288,7 @@ async fn every_sort_reads_from_an_index() {
             let source = source(1, None, None, ArtistCredit::Any);
             page::assert_indexed(conn, &source, sort.sort())?;
         }
-        let one_album = source(1, Some("7"), None, ArtistCredit::Any);
+        let one_album = source(1, Some(AnyId(Some(7))), None, ArtistCredit::Any);
         page::assert_indexed(conn, &one_album, &WITHIN_ALBUM)?;
         Ok(())
     })

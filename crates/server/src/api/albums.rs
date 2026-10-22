@@ -13,7 +13,7 @@ pub use representation::{Album, AlbumSummary, SELECT, summary};
 use super::credit::ArtistCredit;
 use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Unknown};
-use super::{Id, Problem};
+use super::{AnyId, Id, Problem};
 use crate::db::Database;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -70,13 +70,15 @@ pub struct ListQuery {
     sort: AlbumSort,
     #[serde(default)]
     order: Order,
-    artist_id: Option<String>,
+    artist_id: Option<AnyId>,
     #[serde(default)]
     artist_credit: ArtistCredit,
     cursor: Option<String>,
     limit: Option<u32>,
 }
 
+/// The library's albums, or those credited to `artistId` as `artistCredit` says, a page at a
+/// time.
 pub async fn list(
     State(db): State<Arc<Database>>,
     Path(Id(library)): Path<Id>,
@@ -84,11 +86,11 @@ pub async fn list(
 ) -> Result<Json<Page<AlbumSummary>>, Problem> {
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
     let filtered = query.artist_id.is_some();
-    let source = source(library, query.artist_id.as_deref(), query.artist_credit);
-    db.read(move |conn| request.read(conn, library, "album_count", filtered, &source, summary))
-        .await?
-        .map(Json)
-        .ok_or_else(Problem::not_found)
+    let source = source(library, query.artist_id, query.artist_credit);
+    let page = db
+        .read(move |conn| request.read(conn, library, "album_count", filtered, &source, summary))
+        .await?;
+    Ok(Json(page))
 }
 
 pub async fn get(
@@ -107,7 +109,9 @@ const OWNED: &str = "SELECT album_id FROM album_artists WHERE artist_id = ?";
 const ON_TRACKS: &str = "SELECT tracks.album_id FROM track_artists \
      JOIN tracks ON tracks.id = track_artists.track_id WHERE track_artists.artist_id = ?";
 
-fn source(library: i64, artist: Option<&str>, credit: ArtistCredit) -> Source {
+/// The albums `list` pages through in `library`: every one, or those credited to `artist` as
+/// `credit` says.
+fn source(library: i64, artist: Option<AnyId>, credit: ArtistCredit) -> Source {
     let (from, mut params) = match artist {
         None => ("albums al".to_owned(), Vec::new()),
         Some(artist) => {

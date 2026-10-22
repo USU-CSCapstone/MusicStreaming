@@ -185,6 +185,15 @@ async fn a_library_out_of_reach_answers_exactly_as_one_that_does_not_exist() {
             let missing = send(&app, base, method, &format!("/libraries/9{rest}"), &user).await;
             assert_eq!(unreached.0, StatusCode::NOT_FOUND, "{at}");
             assert_eq!(unreached, missing, "{at}");
+            // Handlers rely on this: none checks again that its library exists, or that the
+            // path names one at all.
+            for library in ["9", "x", "01"] {
+                let path = format!("/libraries/{library}{rest}");
+                for (who, headers) in [("a user", &user), ("an admin", &admin)] {
+                    let answer = send(&app, base, method, &path, headers).await;
+                    assert_eq!(answer, missing, "{method} {base}{path} as {who}");
+                }
+            }
         }
         // The recent search the table deletes is there, and the user's attempt left it alone.
         let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();

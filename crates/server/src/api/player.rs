@@ -33,8 +33,8 @@ use serde::{Deserialize, Serialize};
 use super::authenticate::Caller;
 use super::realtime::{Hub, Presence, ServerMessage};
 use super::time::serialize_rfc3339;
-use super::{AppState, Id, Problem};
-use crate::db::now_ms;
+use super::{AnyId, AppState, Id, Problem};
+use crate::db::{now_ms, reaches};
 pub use commands::{CommandResult, PlayerCommand, send as send_command};
 
 /// Longer item IDs are refused, so no one keeps megabytes in memory as their place in a queue.
@@ -87,10 +87,10 @@ enum Status {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressReport {
-    device_id: String,
+    device_id: AnyId,
     item_id: String,
-    library_id: String,
-    track_id: String,
+    library_id: AnyId,
+    track_id: AnyId,
     status: Reported,
     position_ms: u32,
     volume: Option<f64>,
@@ -237,7 +237,7 @@ pub async fn apply(
     presence: &Presence,
     report: ProgressReport,
 ) -> Result<(), Problem> {
-    if Id::canonical(&report.device_id) != Some(Id(caller.device)) {
+    if report.device_id.0 != Some(caller.device) {
         return Err(Problem::invalid("deviceId must be the reporting device's."));
     }
     if report.item_id.is_empty() || report.item_id.chars().count() > MAX_ITEM_ID {
@@ -246,30 +246,28 @@ pub async fn apply(
     if report.volume.is_some_and(|volume| !(0.0..=1.0).contains(&volume)) {
         return Err(Problem::invalid("volume must be from 0 to 1."));
     }
-    // Out of reach is not found, exactly as a track that does not exist
-    // (`requirements/users.md` §10).
-    let (Some(library), Some(track)) =
-        (Id::canonical(&report.library_id), Id::canonical(&report.track_id))
-    else {
+    // A malformed ID, like one out of reach, is not found, exactly as a track that does not
+    // exist (`requirements/users.md` §10).
+    let (AnyId(Some(library)), AnyId(Some(track))) = (report.library_id, report.track_id) else {
         return Err(Problem::not_found());
     };
     // The connection was authenticated as it opened, perhaps hours ago, so whether the device
     // is still signed in, its account still active, and the library still in its reach are
     // read again.
     let reachable = state.db.read(move |conn| {
-        conn.prepare_cached(
+        conn.prepare_cached(concat!(
             "SELECT EXISTS (SELECT 1 FROM devices d JOIN users u ON u.id = d.user_id \
              JOIN tracks t ON t.id = ?2 AND t.library_id = ?1 \
-             WHERE d.id = ?3 AND d.revoked_reason IS NULL AND u.status = 'active' AND \
-             (u.role <> 'user' OR EXISTS \
-              (SELECT 1 FROM library_access WHERE user_id = u.id AND library_id = ?1)))",
-        )?
-        .query_row(params![library.0, track.0, caller.device], |row| row.get(0))
+             WHERE d.id = ?3 AND d.revoked_reason IS NULL AND u.status = 'active' AND ",
+            reaches!(admin: "u.role <> 'user'", user: "u.id", library: "?1"),
+            ")"
+        ))?
+        .query_row(params![library, track, caller.device], |row| row.get(0))
     });
     if !reachable.await? {
         return Err(Problem::not_found());
     }
-    state.players.report(&state.hub, caller, presence.id(), report, library, track)
+    state.players.report(&state.hub, caller, presence.id(), report, Id(library), Id(track))
 }
 
 /// `getPlayer`.

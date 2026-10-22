@@ -29,7 +29,7 @@ use tokio::sync::oneshot;
 use super::Players;
 use crate::api::authenticate::Caller;
 use crate::api::realtime::Hub;
-use crate::api::{Problem, extract};
+use crate::api::{AnyId, Problem, Uuid, extract};
 pub use relay::Commands;
 use relay::Reply;
 
@@ -37,9 +37,9 @@ use relay::Reply;
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerCommand {
-    command_id: String,
+    command_id: Uuid,
     #[serde(skip_serializing_if = "Option::is_none")]
-    device_id: Option<String>,
+    device_id: Option<AnyId>,
     #[serde(flatten)]
     action: Action,
 }
@@ -114,7 +114,7 @@ impl Players {
         connection: u64,
         command: PlayerCommand,
     ) -> CommandResult {
-        let id = command.command_id.clone();
+        let id = command.command_id.as_str().to_owned();
         let reply = Reply::Connection(connection);
         self.command(hub, caller, reply, command)
             .unwrap_or_else(|refused| CommandResult::new(id, Status::Failed, refused.explanation()))

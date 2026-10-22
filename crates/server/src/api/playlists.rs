@@ -4,17 +4,12 @@
 //! The rest of the playlist API arrives with accounts; until then any playlist's ID answers
 //! `404` like an unknown path.
 
-use std::sync::Arc;
-
 use axum::Json;
-use axum::extract::State;
-use rusqlite::OptionalExtension;
 use serde::Deserialize;
 
-use super::extract::{Path, Query};
+use super::Problem;
+use super::extract::Query;
 use super::page::{self, Order, Page};
-use super::{Id, Problem};
-use crate::db::Database;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,24 +35,14 @@ pub struct ListQuery {
     limit: Option<u32>,
 }
 
-/// An empty page. Its items have no type yet, so `()` stands in for one.
-pub async fn list(
-    State(db): State<Arc<Database>>,
-    Path(Id(library)): Path<Id>,
-    Query(query): Query<ListQuery>,
-) -> Result<Json<Page<()>>, Problem> {
+/// An empty page, in any library the caller reaches: `authenticate` answers `404` for any
+/// other. Its items have no type yet, so `()` stands in for one.
+pub async fn list(Query(query): Query<ListQuery>) -> Result<Json<Page<()>>, Problem> {
     page::limit(query.limit)?;
     // An empty list gives out no cursors, so no cursor is one of ours.
     if query.cursor.is_some() {
         return Err(Problem::invalid("cursor is not valid"));
     }
-    db.read(move |conn| {
-        conn.prepare_cached("SELECT 1 FROM libraries WHERE id = ?1")?
-            .query_row([library], |_| Ok(()))
-            .optional()
-    })
-    .await?
-    .ok_or_else(Problem::not_found)?;
     Ok(Json(Page { items: Vec::new(), next_cursor: None, total: 0 }))
 }
 

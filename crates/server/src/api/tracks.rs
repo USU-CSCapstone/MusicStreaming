@@ -15,7 +15,7 @@ pub use representation::{
 use super::credit::ArtistCredit;
 use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Unknown};
-use super::{Id, Problem};
+use super::{AnyId, Id, Problem};
 use crate::db::Database;
 
 /// A track with no number sorts last on its disc. This matches the indexes' expression
@@ -98,14 +98,16 @@ pub struct ListQuery {
     sort: TrackSort,
     #[serde(default)]
     order: Order,
-    album_id: Option<String>,
-    artist_id: Option<String>,
+    album_id: Option<AnyId>,
+    artist_id: Option<AnyId>,
     #[serde(default)]
     artist_credit: ArtistCredit,
     cursor: Option<String>,
     limit: Option<u32>,
 }
 
+/// The library's tracks, or those on `albumId` and credited to `artistId` as `artistCredit`
+/// says, a page at a time.
 pub async fn list(
     State(db): State<Arc<Database>>,
     Path(Id(library)): Path<Id>,
@@ -118,12 +120,13 @@ pub async fn list(
     };
     let request = Request::new(sort, query.order, query.cursor, query.limit)?;
     let filtered = query.album_id.is_some() || query.artist_id.is_some();
-    let source =
-        source(library, query.album_id.as_deref(), query.artist_id.as_deref(), query.artist_credit);
-    db.read(move |conn| request.read(conn, library, "track_count", filtered, &source, list_summary))
-        .await?
-        .map(Json)
-        .ok_or_else(Problem::not_found)
+    let source = source(library, query.album_id, query.artist_id, query.artist_credit);
+    let page = db
+        .read(move |conn| {
+            request.read(conn, library, "track_count", filtered, &source, list_summary)
+        })
+        .await?;
+    Ok(Json(page))
 }
 
 pub async fn get(
@@ -142,9 +145,14 @@ const OWNED: &str = "SELECT tracks.id AS track_id FROM album_artists \
 /// Tracks credited to this artist.
 const ON_TRACKS: &str = "SELECT track_id FROM track_artists WHERE artist_id = ?";
 
-fn source(library: i64, album: Option<&str>, artist: Option<&str>, credit: ArtistCredit) -> Source {
-    // A malformed ID matches nothing, like an unknown one: IDs are never negative.
-    let key = |text: &str| Id::canonical(text).map_or(-1, |Id(id)| id);
+/// The tracks `list` pages through in `library`: every one, or those on `album` and credited
+/// to `artist` as `credit` says.
+fn source(
+    library: i64,
+    album: Option<AnyId>,
+    artist: Option<AnyId>,
+    credit: ArtistCredit,
+) -> Source {
     let (from, mut params) = match artist {
         None => ("tracks t".to_owned(), Vec::new()),
         Some(artist) => {
@@ -160,7 +168,7 @@ fn source(library: i64, album: Option<&str>, artist: Option<&str>, credit: Artis
     params.push(library.into());
     if let Some(album) = album {
         filter += " AND t.album_id = ?";
-        params.push(key(album).into());
+        params.push(album.0.into());
     }
     Source { select: SELECT, from, joins: JOINS, filter, params }
 }

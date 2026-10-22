@@ -48,7 +48,7 @@ use axum::middleware;
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
 
-pub use id::Id;
+pub use id::{AnyId, Id, Uuid};
 pub use images::Images;
 pub use player::Players;
 pub use problem::{Code, Problem};

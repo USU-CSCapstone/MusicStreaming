@@ -26,8 +26,8 @@ use rusqlite::{Connection, OptionalExtension};
 
 use super::realtime::Revoked;
 use super::session::{self, COOKIE, token_hash};
-use super::{AppState, Code, Id, Problem};
-use crate::db::{Text, now_ms};
+use super::{AnyId, AppState, Code, Problem};
+use crate::db::{Text, now_ms, reaches};
 
 /// The header a cookie-authenticated write must carry.
 const CLIENT: &str = "x-jewelcase-client";
@@ -182,11 +182,12 @@ fn token(headers: &HeaderMap) -> Option<Token<'_>> {
     pairs.find_map(|pair| pair.trim().strip_prefix(COOKIE)?.strip_prefix('=')).map(Token::Cookie)
 }
 
-/// The library the path names, if any. One it names badly is `-1`, which no library is.
-fn library(params: Result<RawPathParams, RawPathParamsRejection>) -> Option<i64> {
-    let Ok(params) = params else { return Some(-1) };
+/// The library the path names, if it names one. An ID that is not one, or a path that cannot
+/// be read, names `AnyId(None)`: a library no one reaches.
+fn library(params: Result<RawPathParams, RawPathParamsRejection>) -> Option<AnyId> {
+    let Ok(params) = params else { return Some(AnyId(None)) };
     let (_, id) = params.iter().find(|(name, _)| *name == "library_id")?;
-    Some(Id::canonical(id).map_or(-1, |Id(id)| id))
+    Some(AnyId::from(id))
 }
 
 struct Found {
@@ -199,28 +200,27 @@ struct Found {
 }
 
 /// The caller behind `hash`, if it is a token of an active account, whether it reaches
-/// `library`, and whether its device is signed out. A suspended account's tokens answer exactly
-/// as unknown ones do, whether or not their devices are signed out (`requirements/users.md`
-/// §10).
+/// `library`, which no one does if it does not exist, and whether its device is signed out. A
+/// suspended account's tokens answer exactly as unknown ones do, whether or not their devices
+/// are signed out (`requirements/users.md` §10).
 fn device(
     conn: &Connection,
     hash: &[u8; 32],
-    library: Option<i64>,
+    library: Option<AnyId>,
 ) -> rusqlite::Result<Option<Found>> {
-    conn.prepare_cached(
-        "SELECT d.id, d.user_id, d.last_seen_at, u.role <> 'user', CASE \
-             WHEN ?2 IS NULL THEN 1 \
-             WHEN u.role <> 'user' THEN EXISTS (SELECT 1 FROM libraries WHERE id = ?2) \
-             ELSE EXISTS (SELECT 1 FROM library_access WHERE user_id = u.id AND library_id = ?2) \
-         END, d.revoked_reason \
+    conn.prepare_cached(concat!(
+        "SELECT d.id, d.user_id, d.last_seen_at, u.role <> 'user', \
+             EXISTS (SELECT 1 FROM libraries l WHERE l.id = ?2 AND ",
+        reaches!(admin: "u.role <> 'user'", user: "u.id", library: "l.id"),
+        "), d.revoked_reason \
          FROM devices d JOIN users u ON u.id = d.user_id \
-         WHERE d.token_hash = ?1 AND u.status = 'active'",
-    )?
+         WHERE d.token_hash = ?1 AND u.status = 'active'"
+    ))?
     .query_row(rusqlite::params![hash, library], |row| {
         Ok(Found {
             caller: Caller { device: row.get(0)?, user: row.get(1)?, admin: row.get(3)? },
             last_seen_at: row.get(2)?,
-            reaches_library: row.get(4)?,
+            reaches_library: library.is_none() || row.get(4)?,
             revoked: row.get::<_, Option<Text<_>>>(5)?.map(|Text(reason)| reason),
         })
     })

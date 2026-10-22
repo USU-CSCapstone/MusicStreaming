@@ -18,7 +18,7 @@ use jewelcase_plugins::settings::Schema;
 use serde::{Deserialize, Serialize};
 
 use super::extract::{self, Path};
-use super::{Code, Id, Problem};
+use super::{AnyId, Code, Id, Problem};
 use crate::db::Database;
 use crate::plugins::{PluginError, Plugins, grants, settings};
 use representation::Plugin;
@@ -93,7 +93,7 @@ pub struct PermissionGrants {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LibraryGrants {
-    library_id: String,
+    library_id: AnyId,
     granted: Vec<String>,
 }
 
@@ -101,6 +101,8 @@ fn permissions(names: &[String]) -> Vec<Permission> {
     names.iter().filter_map(|name| Permission::from_name(name)).collect()
 }
 
+/// Replaces what the plugin is granted, itself and per library ([`grants::set`]). A name that
+/// is no permission, or a library ID that is not an ID, is ignored.
 pub async fn set_permissions(
     State(db): State<Arc<Database>>,
     State(plugins): State<Arc<Plugins>>,
@@ -111,7 +113,7 @@ pub async fn set_permissions(
         .libraries
         .iter()
         // A malformed ID names no library, like an unknown one.
-        .filter_map(|l| Some((Id::canonical(&l.library_id)?.0, permissions(&l.granted))))
+        .filter_map(|l| Some((l.library_id.0?, permissions(&l.granted))))
         .collect();
     plugins.set_grants(id.clone(), permissions(&grants.granted), per_library).await?;
     Ok(Json(plugin(&db, id).await?))
@@ -192,14 +194,14 @@ pub async fn run(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsLevel {
-    library_id: Option<String>,
+    library_id: Option<AnyId>,
 }
 
 /// The level `query` names: a library that exists, or the server-wide settings.
 async fn level(db: &Database, query: SettingsLevel) -> Result<i64, Problem> {
-    let Some(library) = query.library_id else { return Ok(settings::SERVER) };
+    let Some(AnyId(library)) = query.library_id else { return Ok(settings::SERVER) };
     // A malformed ID names no library, like an unknown one.
-    let Some(Id(library)) = Id::canonical(&library) else { return Err(Problem::not_found()) };
+    let Some(library) = library else { return Err(Problem::not_found()) };
     let exists = db
         .read(move |conn| {
             conn.query_row(
@@ -255,6 +257,8 @@ pub struct SettingsUpdate {
     pub values: serde_json::Map<String, serde_json::Value>,
 }
 
+/// Saves `update` at the level `query` names, and answers the settings there as
+/// [`get_settings`] does.
 pub async fn set_settings(
     State(db): State<Arc<Database>>,
     State(plugins): State<Arc<Plugins>>,
@@ -262,7 +266,7 @@ pub async fn set_settings(
     extract::Query(query): extract::Query<SettingsLevel>,
     extract::Json(update): extract::Json<SettingsUpdate>,
 ) -> Result<Json<PluginSettings>, Problem> {
-    let level_id = query.library_id.clone();
+    let level_id = query.library_id;
     let level = level(&db, query).await?;
     plugins.save_settings(id.clone(), level, update.values).await?;
     get_settings(State(db), Path(id), extract::Query(SettingsLevel { library_id: level_id })).await

@@ -31,7 +31,7 @@ use super::authenticate::Caller;
 use super::extract::{Json as Body, Path};
 use super::search::{Indexes, totals};
 use super::sql::timestamp;
-use super::{Id, Problem};
+use super::{AnyId, Id, Problem};
 use crate::db::retention::WINDOW_MS;
 use crate::db::{Database, now_ms};
 
@@ -69,7 +69,7 @@ pub struct Create {
 struct Selected {
     #[serde(rename = "type")]
     kind: String,
-    id: String,
+    id: AnyId,
 }
 
 /// The kinds of result a search returns, and the table each is in.
@@ -170,7 +170,7 @@ pub async fn record(
             let Some((kind, table)) = KINDS.iter().find(|(k, _)| *k == kind) else {
                 return Err(Problem::invalid("selected must be a track, album, or artist."));
             };
-            let Some(Id(id)) = Id::canonical(&id) else {
+            let AnyId(Some(id)) = id else {
                 return Err(Problem::invalid("selected.id is not an ID."));
             };
             Some((*kind, *table, id))

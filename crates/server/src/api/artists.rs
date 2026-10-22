@@ -64,10 +64,10 @@ pub async fn list(
 ) -> Result<Json<Page<ArtistSummary>>, Problem> {
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
     let source = source(library);
-    db.read(move |conn| request.read(conn, library, "artist_count", false, &source, summary))
-        .await?
-        .map(Json)
-        .ok_or_else(Problem::not_found)
+    let page = db
+        .read(move |conn| request.read(conn, library, "artist_count", false, &source, summary))
+        .await?;
+    Ok(Json(page))
 }
 
 pub async fn get(

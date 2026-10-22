@@ -68,7 +68,10 @@ async fn a_play_is_recorded_once_and_keeps_its_most_listened_and_its_end() {
     );
     assert_eq!(plays(&db).await, [(PLAY.into(), 1, started, 0, None)]);
 
-    let reports = json!([report("1", 30_000, json!("skipped")), report("1", 10_000, Value::Null)]);
+    // In capitals it is the same play.
+    let mut louder = report("1", 30_000, json!("skipped"));
+    louder["playId"] = json!(PLAY.to_uppercase());
+    let reports = json!([louder, report("1", 10_000, Value::Null)]);
     assert_eq!(report_as_owner(&app, reports).await, StatusCode::NO_CONTENT);
     assert_eq!(
         plays(&db).await,
@@ -119,9 +122,16 @@ async fn a_play_out_of_reach_is_left_out() {
     let mut not_there = report("3", 0, Value::Null);
     not_there["libraryId"] = json!("1");
     assert_eq!(report_as_owner(&app, json!([not_there])).await, StatusCode::NO_CONTENT);
+    // An ID that is not one names nothing, so it is left out the same way.
+    for field in ["libraryId", "trackId"] {
+        let mut malformed = report("1", 0, Value::Null);
+        malformed[field] = json!("x");
+        let status = report_as_owner(&app, json!([malformed])).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "{field}");
+    }
     assert!(
         plays(&db).await.is_empty(),
-        "neither a library they cannot reach nor a track not in it"
+        "neither a library they cannot reach, a track not in it, nor a malformed ID"
     );
 }
 

@@ -16,9 +16,9 @@ use serde_json::Value;
 use super::authenticate::Caller;
 use super::extract::Json;
 use super::refs::credits_json;
-use super::{Id, Problem};
+use super::{AnyId, Problem, Uuid};
 use crate::db::plays::{End, Origin};
-use crate::db::{self, Database, Text, now_ms};
+use crate::db::{self, Database, Text, now_ms, reaches};
 
 #[derive(Deserialize)]
 pub struct Plays {
@@ -29,9 +29,9 @@ pub struct Plays {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlayReport {
-    play_id: String,
-    library_id: String,
-    track_id: Option<String>,
+    play_id: Uuid,
+    library_id: AnyId,
+    track_id: Option<AnyId>,
     external: Option<Value>,
     started_at: String,
     listen_time_ms: u32,
@@ -43,9 +43,11 @@ struct PlayReport {
 
 /// A report checked and ready to record.
 struct Play {
-    id: String,
-    library: Option<Id>,
-    track: Option<Id>,
+    id: Uuid,
+    /// A library or track the report names badly is none, and the play is left out like one
+    /// out of reach.
+    library: AnyId,
+    track: AnyId,
     started_at: String,
     listen_time_ms: u32,
     end: Option<End>,
@@ -73,9 +75,6 @@ pub async fn record(
 /// `report` as a play to record, or the Problem that makes it malformed. A `null` reason is
 /// none.
 fn checked(report: PlayReport) -> Result<Play, Problem> {
-    if !is_uuid(&report.play_id) {
-        return Err(Problem::invalid("playId must be a UUID."));
-    }
     if report.external.is_some() {
         return Err(Problem::invalid("Plays from outside a library are not recorded yet."));
     }
@@ -86,10 +85,9 @@ fn checked(report: PlayReport) -> Result<Play, Problem> {
         return Err(Problem::invalid("context must be an object with a type."));
     }
     Ok(Play {
-        id: report.play_id.to_ascii_lowercase(),
-        // An ID in any other spelling names nothing, and is left out like one out of reach.
-        library: Id::canonical(&report.library_id),
-        track: Id::canonical(&track),
+        id: report.play_id,
+        library: report.library_id,
+        track,
         started_at: report.started_at,
         listen_time_ms: report.listen_time_ms,
         end: report.end,
@@ -97,14 +95,6 @@ fn checked(report: PlayReport) -> Result<Play, Problem> {
         origin: report.origin,
         reason: report.reason.filter(|r| !r.is_null()),
     })
-}
-
-pub(super) fn is_uuid(text: &str) -> bool {
-    text.len() == 36
-        && text.char_indices().all(|(i, c)| match i {
-            8 | 13 | 18 | 23 => c == '-',
-            _ => c.is_ascii_hexdigit(),
-        })
 }
 
 /// Records `plays` for `caller`, unless one's `startedAt` is not a date and time: then it
@@ -142,9 +132,9 @@ fn save(tx: &Transaction, caller: Caller, plays: &[Play]) -> rusqlite::Result<Op
             WHERE tagged.track_id = t.id AND tag.type = 'genre'), \
            t.release_date, t.duration_us, ?6, ?7, ?8, ?9, ?10, ?11, ?12 \
          FROM tracks t JOIN albums al ON al.id = t.album_id \
-         WHERE t.id = ?5 AND t.library_id = ?4 AND (?13 OR EXISTS \
-               (SELECT 1 FROM library_access WHERE user_id = ?2 AND library_id = ?4)) \
-         ON CONFLICT (user_id, id) DO UPDATE SET \
+         WHERE t.id = ?5 AND t.library_id = ?4 AND ",
+        reaches!(admin: "?13", user: "?2", library: "?4"),
+        " ON CONFLICT (user_id, id) DO UPDATE SET \
              title = excluded.title, artists = excluded.artists, \
              artist_keys = excluded.artist_keys, album = excluded.album, \
              album_title_key = excluded.album_title_key, \
@@ -156,13 +146,12 @@ fn save(tx: &Transaction, caller: Caller, plays: &[Play]) -> rusqlite::Result<Op
     ))?;
     let now = now_ms();
     for (play, started_at) in plays.iter().zip(started) {
-        let (Some(library), Some(track)) = (play.library, play.track) else { continue };
         upsert.execute(params![
-            play.id,
+            play.id.as_str(),
             caller.user,
             caller.device,
-            library.0,
-            track.0,
+            play.library,
+            play.track,
             started_at,
             play.listen_time_ms,
             play.end.map(Text),

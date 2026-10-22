@@ -10,7 +10,7 @@ use tokio_tungstenite::tungstenite::Message;
 use super::super::super::authenticate::Caller;
 use super::super::super::realtime::Hub;
 use super::super::super::testing::player::{command_id, progress_report};
-use super::super::super::testing::socket::{Socket, connect_with, next_of, serve};
+use super::super::super::testing::socket::{Socket, connect_with, next, next_of, serve};
 use super::super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, respond};
 use super::super::Players;
 use super::relay::MAX_WAITING;
@@ -112,6 +112,19 @@ async fn a_command_with_nowhere_to_go_fails_at_once() {
     assert_eq!(command(&mut phone, loud).await["status"], json!("failed"));
     let unnamed = json!({ "type": "pause", "commandId": "not-a-uuid" });
     assert_eq!(command(&mut phone, unnamed).await["status"], json!("failed"));
+    let misnamed =
+        json!({ "type": "setVolume", "commandId": command_id(5), "deviceId": "x", "volume": 0.5 });
+    assert_eq!(reason(command(&mut phone, misnamed).await), not_playing, "a malformed deviceId");
+
+    // None of them reached the device playing.
+    send(&mut desk, json!({ "type": "ping" })).await;
+    loop {
+        let message = next(&mut desk).await;
+        assert_ne!(message["type"], json!("execute"), "{message}");
+        if message["type"] == json!("pong") {
+            break;
+        }
+    }
 }
 
 #[tokio::test]
@@ -267,6 +280,41 @@ async fn a_command_sent_again_after_it_was_answered_is_answered_again_not_carrie
 
     assert_eq!(command(&mut phone, next.clone()).await, applied, "at once, not pending");
     assert_eq!(post(&app, "phone", next).await, (StatusCode::OK, applied));
+}
+
+#[tokio::test]
+async fn a_command_id_names_the_same_command_in_capitals() {
+    let (_temp, app, address) = setup().await;
+    let mut desk = connect_with(address, TOKEN).await;
+    play(&mut desk, "1").await;
+    let id = "abcdef00-0000-4000-8000-000000000001";
+    let shouted = json!({ "type": "next", "commandId": id.to_uppercase() });
+    let first = tokio::spawn({
+        let app = app.clone();
+        async move { post(&app, "phone", shouted).await }
+    });
+    let executed = next_of(&mut desk, "execute").await;
+    assert_eq!(executed["command"]["commandId"], json!(id), "passed on in lowercase");
+    let applied = json!({ "commandId": id, "status": "applied" });
+    send(&mut desk, json!({ "type": "commandResult", "result": applied })).await;
+    assert_eq!(first.await.unwrap(), (StatusCode::OK, applied.clone()));
+    let again = json!({ "type": "next", "commandId": id });
+    assert_eq!(post(&app, "phone", again).await, (StatusCode::OK, applied), "not carried out");
+}
+
+#[tokio::test]
+async fn a_device_may_answer_a_command_with_its_id_in_capitals() {
+    let (_temp, _app, address) = setup().await;
+    let mut desk = connect_with(address, TOKEN).await;
+    let mut phone = connect_with(address, "phone").await;
+    play(&mut desk, "1").await;
+    let id = "abcdef00-0000-4000-8000-000000000002";
+    command(&mut phone, json!({ "type": "pause", "commandId": id })).await;
+    next_of(&mut desk, "execute").await;
+    let shouted = json!({ "commandId": id.to_uppercase(), "status": "applied" });
+    send(&mut desk, json!({ "type": "commandResult", "result": shouted })).await;
+    let applied = json!({ "commandId": id, "status": "applied" });
+    assert_eq!(result_of(&mut phone, &json!(id)).await, applied);
 }
 
 #[tokio::test]

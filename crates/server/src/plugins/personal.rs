@@ -15,12 +15,14 @@ use serde_json::{Map, Value};
 use super::run::RunFor;
 use super::settings::{self, SERVER, merge};
 use super::{PluginError, Plugins, grants};
-use crate::db::{DbError, Json, now_ms};
+use crate::db::{DbError, Json, now_ms, reaches};
 
 /// Whether `:user` (an admin if `:admin`) reaches a library the plugin `p` is enabled in.
-const REACHED: &str = "EXISTS (SELECT 1 FROM plugin_libraries l WHERE l.plugin_id = p.id \
-     AND l.enabled AND (:admin OR l.library_id IN \
-         (SELECT library_id FROM library_access WHERE user_id = :user)))";
+const REACHED: &str = concat!(
+    "EXISTS (SELECT 1 FROM plugin_libraries l WHERE l.plugin_id = p.id AND l.enabled AND ",
+    reaches!(admin: ":admin", user: ":user", library: "l.library_id"),
+    ")"
+);
 
 /// A plugin the user can connect.
 pub struct Connectable {

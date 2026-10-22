@@ -11,9 +11,8 @@ use tokio::task::AbortHandle;
 use super::{Action, CommandResult, PlayerCommand, Status};
 use crate::api::authenticate::Caller;
 use crate::api::player::{Players, Status as PlayStatus};
-use crate::api::plays::is_uuid;
 use crate::api::realtime::{Hub, ServerMessage};
-use crate::api::{Code, Id, Problem};
+use crate::api::{AnyId, Code, Id, Problem};
 
 /// How long a connection has to answer a command before it counts as failed.
 const ANSWER_WITHIN: Duration =
@@ -67,9 +66,6 @@ impl Players {
         reply: Reply,
         mut command: PlayerCommand,
     ) -> Result<CommandResult, Problem> {
-        if !is_uuid(&command.command_id) {
-            return Err(Problem::invalid("commandId must be a UUID."));
-        }
         if let Action::SetVolume { volume } = command.action {
             if command.device_id.is_none() {
                 let reason = "setVolume must name its deviceId: volume belongs to a device.";
@@ -79,7 +75,7 @@ impl Players {
                 return Err(Problem::invalid("volume must be from 0 to 1."));
             }
         }
-        let id = command.command_id.clone();
+        let id = command.command_id.as_str().to_owned();
         let pending = CommandResult::new(id.clone(), Status::Pending, None);
         let accounts = self.lock();
         let mut all = self.commands.lock().expect("player commands lock");
@@ -95,13 +91,13 @@ impl Players {
         }
         let state = accounts.get(&caller.user);
         let to = if let Action::Transfer { .. } = command.action {
-            let Some(device) = command.device_id.as_deref() else {
+            let Some(AnyId(device)) = command.device_id else {
                 return Err(Problem::invalid("transfer must name its deviceId."));
             };
             if state.and_then(|state| state.track_id).is_none() {
                 return Err(unavailable("Nothing has played to move."));
             }
-            let device = Id::canonical(device);
+            let device = device.map(Id);
             let active = state.filter(|state| device.is_some() && state.active_device_id == device);
             if let Some(active) = active {
                 // Moved where it already is: done, unless it is to play there and is paused,
@@ -128,7 +124,7 @@ impl Players {
             let Some((to, device)) = playing else {
                 return Err(unavailable("Nothing is playing."));
             };
-            if command.device_id.as_deref().is_some_and(|id| Id::canonical(id) != Some(device)) {
+            if command.device_id.is_some_and(|AnyId(id)| id.map(Id) != Some(device)) {
                 return Err(unavailable("That device is not the one playing."));
             }
             to
@@ -157,6 +153,9 @@ impl Players {
             return;
         }
         result.reason = result.reason.map(|reason| reason.chars().take(MAX_REASON).collect());
+        // Commands are kept by their IDs in lowercase, as `Uuid` reads them, so an answer in
+        // capitals finds its command too.
+        result.command_id.make_ascii_lowercase();
         let ends =
             |id: &str, waiting: &Waiting| id == result.command_id && waiting.to == connection;
         self.end(hub, user, ends, |_| result.clone());

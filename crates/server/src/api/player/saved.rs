@@ -17,7 +17,7 @@ use tokio::time::MissedTickBehavior;
 
 use super::{PlayerState, Players, Status};
 use crate::api::Id;
-use crate::db::{Database, now_ms};
+use crate::db::{Database, now_ms, reaches};
 
 /// How long a change may go unsaved: as much of their place as a crash can lose anyone.
 const SAVE_EVERY: Duration = Duration::from_secs(5);
@@ -122,15 +122,17 @@ impl Players {
     }
 }
 
+/// Each active account's saved state, by user ID, where its track is still in a library the
+/// account reaches.
 fn load(conn: &Connection) -> rusqlite::Result<HashMap<i64, PlayerState>> {
-    let mut select = conn.prepare(
+    let mut select = conn.prepare(concat!(
         "SELECT s.user_id, s.item_id, s.library_id, s.track_id, s.position_ms \
          FROM player_states s JOIN users u ON u.id = s.user_id \
          WHERE u.status = 'active' \
            AND EXISTS (SELECT 1 FROM tracks WHERE id = s.track_id AND library_id = s.library_id) \
-           AND (u.role <> 'user' OR EXISTS \
-                (SELECT 1 FROM library_access WHERE user_id = u.id AND library_id = s.library_id))",
-    )?;
+           AND ",
+        reaches!(admin: "u.role <> 'user'", user: "u.id", library: "s.library_id"),
+    ))?;
     let rows = select.query_map([], |row| {
         let state = PlayerState {
             item_id: Some(row.get(1)?),
