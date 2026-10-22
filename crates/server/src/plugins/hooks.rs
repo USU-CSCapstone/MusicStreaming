@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use jewelcase_plugins::Permission;
 use rusqlite::{Connection, params};
+use tokio::sync::Notify;
 
 mod changes;
 mod due;
@@ -100,11 +101,7 @@ impl Plugins {
             while let Some(plugins) = plugins.upgrade() {
                 let enabled = plugins.dispatch().await;
                 drop(plugins);
-                if enabled {
-                    tokio::time::sleep(POLL).await;
-                } else {
-                    wake.notified().await;
-                }
+                idle(enabled, &wake).await;
             }
         });
     }
@@ -178,6 +175,16 @@ impl Plugins {
         if let Err(error) = recorded {
             tracing::error!(%error, "cannot record a hook delivery");
         }
+    }
+}
+
+/// Waits until the hook loop should dispatch again: [`POLL`] after a dispatch that found a plugin
+/// `enabled`, and otherwise until `wake` is notified, as when an admin enables one.
+async fn idle(enabled: bool, wake: &Notify) {
+    if enabled {
+        tokio::time::sleep(POLL).await;
+    } else {
+        wake.notified().await;
     }
 }
 
