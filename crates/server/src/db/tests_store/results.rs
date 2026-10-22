@@ -16,13 +16,7 @@ fn a_placeholder_is_an_album_change() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     testing::make_album(&root, "A", "X", 1);
-    let status = std::process::Command::new("ffmpeg")
-        .args(["-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=red:s=8x8"])
-        .args(["-frames:v", "1"])
-        .arg(root.join("A/X/cover.png"))
-        .status()
-        .unwrap();
-    assert!(status.success());
+    std::fs::write(root.join("A/X/cover.png"), testing::PNG).unwrap();
     let store = make(&root);
     let lib = testing::library(&root);
     testing::scan_library(&store, &lib);
@@ -50,13 +44,7 @@ fn lyrics_and_artwork_land_in_their_tables() {
     );
     std::fs::write(root.join("a/01.lrc"), "[00:01.00]first\n[00:02.50]second").unwrap();
     // Not square, so a width and height stored the wrong way round show.
-    let status = std::process::Command::new("ffmpeg")
-        .args(["-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=red:s=2x1"])
-        .args(["-frames:v", "1"])
-        .arg(root.join("a/cover.png"))
-        .status()
-        .unwrap();
-    assert!(status.success());
+    std::fs::write(root.join("a/cover.png"), testing::PNG).unwrap();
     std::fs::copy(root.join("a/cover.png"), root.join("a/artist.png")).unwrap();
     std::fs::write(root.join("a/artist.txt"), "A biography.").unwrap();
     let store = make(&root);

@@ -11,7 +11,7 @@ use super::libraries;
 use crate::db::Text;
 use crate::db::store::SqliteStore;
 
-/// The format a stored codec and container name.
+/// The format of a stored codec and container.
 fn format_of(codec: &str, container: &str) -> Format {
     match (codec, container) {
         ("flac", _) => Format::Flac,

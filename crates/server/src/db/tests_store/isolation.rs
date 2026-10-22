@@ -121,3 +121,30 @@ fn an_upsert_naming_another_librarys_track_is_skipped() {
                  OR (c.entity_type = 'album' AND c.entity_id IN (SELECT id FROM albums WHERE library_id = 1)))";
     assert_eq!(count(&store, named), 0, "library 2's feed names nothing of library 1's");
 }
+
+/// Two libraries holding an artist, album and genre of the same names keep a row of each per
+/// library, each counting only its own library's tracks.
+#[test]
+fn the_same_names_in_two_libraries_are_rows_of_each() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (root, other) = (tmp.path().join("lib"), tmp.path().join("other"));
+    std::fs::create_dir_all(&root).unwrap();
+    let store = make(&root);
+    let created = other.clone();
+    store
+        .db()
+        .write_blocking(move |tx| libraries::create(tx, Some(2), "Other", &[&created], &[]))
+        .unwrap();
+    store.refresh_roots().unwrap();
+    // Each library's first track is by "Artist 0" on "Album 0" in "Genre 0"; library 2 has a
+    // second track on them too.
+    store.apply(1, Batch { upserts: vec![record(&root, 0)], ..Batch::default() }).unwrap();
+    let upserts = vec![record(&other, 0), record(&other, 3)];
+    store.apply(2, Batch { upserts, ..Batch::default() }).unwrap();
+
+    let counts = "SELECT group_concat(n, ' ' ORDER BY n) FROM (\
+         SELECT library_id || ':' || track_count AS n FROM artists \
+         UNION ALL SELECT library_id || ':' || track_count FROM albums \
+         UNION ALL SELECT library_id || ':' || track_count FROM tags)";
+    assert_eq!(scalar::<String>(&store, counts).unwrap(), "1:1 1:1 1:1 2:2 2:2 2:2");
+}

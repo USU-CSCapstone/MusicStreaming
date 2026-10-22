@@ -11,6 +11,7 @@ use super::retention::{STEP_TIME, Sweep};
 use super::{Database, libraries};
 
 mod catalog;
+pub mod scale;
 
 pub use catalog::{Album, Artist, Image, Track, album_artist, scattered_key, track_artist};
 

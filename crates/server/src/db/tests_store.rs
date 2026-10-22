@@ -1,5 +1,5 @@
 //! The SQLite store against the scanner's pipeline suite, plus the
-//! derived-data rules the schema assigns to the scanner.
+//! derived-data rules the schema assigns to the scanner and the scanning benchmarks.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

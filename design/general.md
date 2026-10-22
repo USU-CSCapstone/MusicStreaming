@@ -127,7 +127,7 @@ jewelcase/
 ├── web/             # SvelteKit client (SPA mode)
 ├── android/         # native app (later)
 ├── api/             # OpenAPI spec — the API contract
-├── bench/           # library generator and benchmark harness (not yet)
+├── bench/           # full-scale corpus with sidecars and corrupt files (not yet; the generated library is in crates/server/src/db/testing/scale.rs)
 ├── Dockerfile, compose.yaml  # development containers
 ├── adr/
 ├── design/
