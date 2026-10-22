@@ -3,13 +3,23 @@
 
 use jewelcase_core::artists_key;
 use jewelcase_scanner::{Lyrics, TrackRecord};
-use rusqlite::{OptionalExtension, Result, Transaction, params};
+use rusqlite::{Result, Transaction, params};
 
 use super::entities::{find_or_create_album, find_or_create_artist, find_or_create_tag};
-use super::roots::{Roots, relative};
-use super::sidecars::sidecar_rows;
+use super::roots::Roots;
 use crate::db::catalog::Touched;
 use crate::db::feed::{self, Entity, Op};
+use row::write_row;
+
+mod row;
+
+/// A track's artist and album-artist credits, each an artist's id and its name as tagged (`None`
+/// for the unknown artist), and the album they place the track on.
+struct Credits<'a> {
+    artists: Vec<(i64, Option<&'a str>)>,
+    album_artists: Vec<(i64, Option<&'a str>)>,
+    album_id: i64,
+}
 
 /// Writes `rec` as a track of `lib`, with its credits, genres, lyrics, and the art, artist image
 /// and biography it resolved, records it in the feed at `now`, and adds the albums, artists and
@@ -30,25 +40,36 @@ pub fn upsert_track(
         tracing::warn!(path = %rec.path.display(), "track under an unknown root; skipped");
         return Ok(());
     };
-    let rel = relative(&rec.root, &rec.path);
     if let Some(id) = rec.id {
         // Whatever it pointed at before may now be orphaned.
         touched.track(tx, lib, id)?;
     }
+    let credits = credits(tx, lib, rec, now)?;
+    // Touched even if the track is skipped below, so an album or artist made only for it is
+    // removed again.
+    touched.albums.insert(credits.album_id);
+    touched.artists.extend(credits.artists.iter().chain(&credits.album_artists).map(|&(id, _)| id));
 
-    // Artists, and album artists as the scanner resolves them, each the unknown artist (key "")
-    // when there are none.
-    let credits = credits_of(&rec.tags.artists);
-    let mut artist_ids = Vec::new();
-    for name in &credits {
-        artist_ids.push(find_or_create_artist(tx, lib, *name, now)?);
-    }
-    let album_credits = credits_of(rec.tags.album_artists_or_primary());
-    let mut album_artist_ids = Vec::new();
-    for name in &album_credits {
-        album_artist_ids.push(find_or_create_artist(tx, lib, *name, now)?);
-    }
-    let artists_key = artists_key(album_credits.iter().map(|n| n.unwrap_or("")));
+    let Some(id) = write_row(tx, lib, root_id, rec, credits.album_id, now)? else {
+        tracing::error!(path = %rec.path.display(), "track of another library; skipped");
+        return Ok(());
+    };
+    replace_links(tx, lib, id, &credits, &rec.tags.genres, touched)?;
+    replace_lyrics(tx, lib, id, rec.lyrics())?;
+    feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)
+}
+
+/// Finds or makes the artists `rec` credits, then its album artists as the scanner resolves them,
+/// then the album they place it on.
+fn credits<'a>(
+    tx: &Transaction<'_>,
+    lib: i64,
+    rec: &'a TrackRecord,
+    now: i64,
+) -> Result<Credits<'a>> {
+    let artists = artist_ids(tx, lib, &rec.tags.artists, now)?;
+    let album_artists = artist_ids(tx, lib, rec.tags.album_artists_or_primary(), now)?;
+    let artists_key = artists_key(album_artists.iter().map(|(_, name)| name.unwrap_or("")));
     let album_id = find_or_create_album(
         tx,
         lib,
@@ -58,164 +79,82 @@ pub fn upsert_track(
         &rec.sort.album_artist,
         now,
     )?;
+    Ok(Credits { artists, album_artists, album_id })
+}
 
-    // Touched even if the track is skipped below, so an album or artist made only for it is
-    // removed again.
-    touched.albums.insert(album_id);
-    touched.artists.extend(artist_ids.iter().chain(&album_artist_ids));
-
-    let identifiers = {
-        let mut m = serde_json::Map::new();
-        if let Some(v) = &rec.tags.musicbrainz_recording_id {
-            m.insert("musicbrainz_recordingid".into(), v.clone().into());
-        }
-        if let Some(v) = &rec.tags.musicbrainz_release_id {
-            m.insert("musicbrainz_albumid".into(), v.clone().into());
-        }
-        serde_json::Value::Object(m).to_string()
-    };
-    let lyrics = rec.lyrics();
-    let lyrics_kind = match lyrics {
-        None => "none",
-        Some(Lyrics::Plain(_)) => "plain",
-        Some(Lyrics::Synced(_)) => "synced",
-    };
-    let labels = serde_json::to_string(&rec.tags.labels).expect("strings serialize");
-    let format = rec.properties.format;
-    let sidecars = sidecar_rows(tx, lib, root_id, rec)?;
-
-    // A new track (no id yet) gets a random one. An id of another library's track is never
-    // taken over: the update matches no row, and the record is skipped. Column names on the
-    // right of the update's `=` are the row's values before it.
-    let Some((id, analyzer_version)) = tx.query_row(
-            "INSERT INTO tracks (id, library_id, album_id, album_title, root_id, path, file_size, file_mtime, \
-             missing_since, title, sort_key, artist_sort_key, album_sort_key, disc_number, track_number, \
-             track_total, disc_total, release_date, explicit, compilation, release_type, labels, isrc, identifiers, lyrics_kind, \
-             codec, container, lossless, bitrate_kbps, sample_rate_hz, bit_depth, channels, duration_us, added_at, \
-             image_id, image_embedded, artist_image_id, biography_id, sidecar_stamp) \
-             VALUES (coalesce(?1, random() & 0x7FFFFFFFFFFFFFFF), ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
-             ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38) \
-             ON CONFLICT (id) DO UPDATE SET \
-             analyzer_version = CASE WHEN file_size IS excluded.file_size AND file_mtime IS excluded.file_mtime \
-             THEN analyzer_version ELSE 0 END, \
-             loudness_lufs = CASE WHEN file_size IS excluded.file_size AND file_mtime IS excluded.file_mtime \
-             THEN loudness_lufs END, \
-             peak_dbtp = CASE WHEN file_size IS excluded.file_size AND file_mtime IS excluded.file_mtime \
-             THEN peak_dbtp END, \
-             album_id = excluded.album_id, album_title = excluded.album_title, \
-             root_id = excluded.root_id, path = excluded.path, file_size = excluded.file_size, file_mtime = excluded.file_mtime, \
-             missing_since = NULL, title = excluded.title, \
-             sort_key = excluded.sort_key, artist_sort_key = excluded.artist_sort_key, album_sort_key = excluded.album_sort_key, \
-             disc_number = excluded.disc_number, track_number = excluded.track_number, track_total = excluded.track_total, \
-             disc_total = excluded.disc_total, release_date = excluded.release_date, explicit = excluded.explicit, \
-             compilation = excluded.compilation, release_type = excluded.release_type, labels = excluded.labels, \
-             isrc = excluded.isrc, identifiers = excluded.identifiers, lyrics_kind = excluded.lyrics_kind, \
-             codec = excluded.codec, \
-             container = excluded.container, lossless = excluded.lossless, bitrate_kbps = excluded.bitrate_kbps, \
-             sample_rate_hz = excluded.sample_rate_hz, bit_depth = excluded.bit_depth, channels = excluded.channels, \
-             duration_us = excluded.duration_us, image_id = excluded.image_id, image_embedded = excluded.image_embedded, \
-             artist_image_id = excluded.artist_image_id, biography_id = excluded.biography_id, \
-             sidecar_stamp = excluded.sidecar_stamp \
-             WHERE tracks.library_id = excluded.library_id \
-             RETURNING id, analyzer_version",
-            params![
-                rec.id,
-                lib,
-                album_id,
-                rec.tags.album,
-                root_id,
-                rel,
-                rec.size as i64,
-                rec.mtime_ms as i64,
-                rec.display_title(),
-                rec.sort.title.as_bytes(),
-                rec.sort.artist.as_bytes(),
-                rec.sort.album.as_bytes(),
-                rec.tags.disc_number.unwrap_or(0) as i64,
-                rec.tags.track_number.map(|n| n as i64),
-                rec.tags.track_total.map(|n| n as i64),
-                rec.tags.disc_total.map(|n| n as i64),
-                rec.tags.release_date.map(|d| d.to_string()),
-                rec.tags.explicit == Some(true),
-                rec.tags.compilation,
-                rec.tags.release_type,
-                labels,
-                rec.tags.isrc,
-                identifiers,
-                lyrics_kind,
-                format.codec_name(),
-                format.container_name(),
-                format.is_lossless(),
-                rec.properties.bitrate_kbps.map(|b| b as i64),
-                rec.properties.sample_rate.unwrap_or(0) as i64,
-                rec.properties.bit_depth.map(|b| b as i64),
-                rec.properties.channels.unwrap_or(0) as i64,
-                (rec.properties.duration_ms * 1000) as i64,
-                now,
-                sidecars.image_id,
-                sidecars.image_embedded,
-                sidecars.artist_image_id,
-                sidecars.biography_id,
-                rec.sidecar_stamp,
-            ],
-            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
-        ).optional()? else {
-        tracing::error!(path = %rec.path.display(), "track of another library; skipped");
-        return Ok(());
-    };
-    // A track at version 0 has no analysis to keep, its waveform included; a new track has none.
-    if rec.id.is_some() && analyzer_version == 0 {
-        tx.execute("DELETE FROM track_waveforms WHERE track_id = ?1", [id])?;
+/// Finds or makes the artist of each of `names`, paired with the name, or the unknown artist
+/// (`None`, key "") alone when there are none.
+fn artist_ids<'a>(
+    tx: &Transaction<'_>,
+    lib: i64,
+    names: &'a [String],
+    now: i64,
+) -> Result<Vec<(i64, Option<&'a str>)>> {
+    if names.is_empty() {
+        return Ok(vec![(find_or_create_artist(tx, lib, None, now)?, None)]);
     }
+    names
+        .iter()
+        .map(|name| {
+            let name = Some(name.as_str());
+            Ok((find_or_create_artist(tx, lib, name, now)?, name))
+        })
+        .collect()
+}
 
-    // Links: replace wholesale.
+/// Replaces track `id`'s artist, album-artist and genre links wholesale with `credits` and
+/// `genres`, and adds each genre's tag to `touched`.
+fn replace_links(
+    tx: &Transaction<'_>,
+    lib: i64,
+    id: i64,
+    credits: &Credits<'_>,
+    genres: &[String],
+    touched: &mut Touched,
+) -> Result<()> {
     tx.execute("DELETE FROM track_artists WHERE track_id = ?1", [id])?;
     tx.execute("DELETE FROM track_album_artists WHERE track_id = ?1", [id])?;
     tx.execute("DELETE FROM track_tags WHERE track_id = ?1", [id])?;
-    for (pos, (artist_id, name)) in artist_ids.iter().zip(&credits).enumerate() {
+    for (pos, (artist_id, name)) in credits.artists.iter().enumerate() {
         tx.execute(
-                "INSERT INTO track_artists (library_id, track_id, position, artist_id, artist_name) VALUES (?1, ?2, ?3, ?4, ?5) \
-                 ON CONFLICT DO NOTHING",
-                params![lib, id, pos as i64, artist_id, name.map(str::trim)],
-            )?;
+            "INSERT INTO track_artists (library_id, track_id, position, artist_id, artist_name) VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT DO NOTHING",
+            params![lib, id, pos as i64, artist_id, name.map(str::trim)],
+        )?;
     }
-    for (pos, (artist_id, name)) in album_artist_ids.iter().zip(&album_credits).enumerate() {
+    for (pos, (artist_id, name)) in credits.album_artists.iter().enumerate() {
         tx.execute(
-                "INSERT INTO track_album_artists (library_id, track_id, position, artist_id, artist_name) VALUES (?1, ?2, ?3, ?4, ?5) \
-                 ON CONFLICT DO NOTHING",
-                params![lib, id, pos as i64, artist_id, name.map(str::trim)],
-            )?;
+            "INSERT INTO track_album_artists (library_id, track_id, position, artist_id, artist_name) VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT DO NOTHING",
+            params![lib, id, pos as i64, artist_id, name.map(str::trim)],
+        )?;
     }
-    for genre in &rec.tags.genres {
+    for genre in genres {
         let tag_id = find_or_create_tag(tx, lib, genre)?;
         tx.execute(
-                "INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES (?1, ?2, ?3, ?4) \
-                 ON CONFLICT DO NOTHING",
-                params![lib, id, tag_id, genre.trim()],
-            )?;
+            "INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT DO NOTHING",
+            params![lib, id, tag_id, genre.trim()],
+        )?;
         touched.tags.insert(tag_id);
     }
+    Ok(())
+}
 
-    // Lyrics.
+/// Replaces track `id`'s lyrics with `lyrics`, or removes them when it is `None`.
+fn replace_lyrics(tx: &Transaction<'_>, lib: i64, id: i64, lyrics: Option<&Lyrics>) -> Result<()> {
     tx.execute("DELETE FROM track_lyrics WHERE track_id = ?1", [id])?;
-    if let Some(l) = lyrics {
-        let (plain, synced) = match l {
+    if let Some(lyrics) = lyrics {
+        let (plain, synced) = match lyrics {
             Lyrics::Plain(text) => (Some(text), None),
             Lyrics::Synced(lines) => {
                 (None, Some(serde_json::to_string(lines).expect("timed lines serialize")))
             }
         };
         tx.execute(
-                "INSERT INTO track_lyrics (library_id, track_id, plain, synced) VALUES (?1, ?2, ?3, ?4)",
-                params![lib, id, plain, synced],
-            )?;
+            "INSERT INTO track_lyrics (library_id, track_id, plain, synced) VALUES (?1, ?2, ?3, ?4)",
+            params![lib, id, plain, synced],
+        )?;
     }
-
-    feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)?;
     Ok(())
-}
-
-/// Each of `names` as a credit, or the unknown artist (`None`) alone when there are none.
-fn credits_of(names: &[String]) -> Vec<Option<&str>> {
-    if names.is_empty() { vec![None] } else { names.iter().map(|s| Some(s.as_str())).collect() }
 }
