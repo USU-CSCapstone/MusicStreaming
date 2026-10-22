@@ -4,21 +4,23 @@
 //! locale ever decides an order, so this function is the only definition of
 //! "alphabetical" in Jewelcase and must be byte-identical on every build.
 
-use crate::fold::{collapse_spaces, name_key, strip_article};
+use crate::fold::{collapse_spaces, fold_accents, name_key, strip_article};
 
 /// Build the sort key for a display name.
 ///
 /// A tagged sort value (`ARTISTSORT`, `ALBUMSORT`, ...) wins when present.
 /// Otherwise the display name with a leading article removed, so "The Beatles"
-/// files under B. The result is folded as a name key is, with whitespace
-/// collapsed. An empty result means "no sortable value", and callers sort those
-/// last with a stable tie-break.
+/// files under B. The result is folded as a name key is, with compatibility
+/// forms and accents folded away and whitespace collapsed, so "Édith Piaf"
+/// files under E. Names that differ only in accents share a key, and callers
+/// break that tie by ID. An empty result means "no sortable value", and callers
+/// sort those last with a stable tie-break.
 pub fn sort_key(display: &str, sort_tag: Option<&str>) -> String {
     let source = match sort_tag.map(str::trim) {
         Some(tag) if !tag.is_empty() => tag,
         _ => strip_article(display.trim()),
     };
-    collapse_spaces(&name_key(source))
+    collapse_spaces(&fold_accents(&name_key(source)))
 }
 
 #[cfg(test)]
@@ -49,6 +51,72 @@ mod tests {
     #[test]
     fn whitespace_and_case_are_normalized() {
         assert_eq!(sort_key("  Foo   BAR ", None), "foo bar");
+    }
+
+    #[test]
+    fn accents_are_ignored() {
+        assert_eq!(sort_key("Édith Piaf", None), "edith piaf");
+        assert_eq!(sort_key("E\u{301}dith Piaf", None), "edith piaf");
+        assert_eq!(sort_key("Édith Piaf", Some("Piaf, Édith")), "piaf, edith");
+        assert_eq!(sort_key("Ångström", None), "angstrom");
+        assert_eq!(sort_key("Phở Bò", None), "pho bo");
+        assert_eq!(sort_key("Мумий Тролль", None), "мумии тролль");
+        assert_eq!(sort_key("ῶ", None), "ω");
+        assert_eq!(sort_key("Ά", None), "α");
+        let order = ["Dylan", "Edith Piaf", "Édith Piaf", "Elvis", "Zappa"];
+        assert!(order.windows(2).all(|w| sort_key(w[0], None) <= sort_key(w[1], None)));
+        // Names differing only in accents tie; lists break the tie by ID.
+        assert_eq!(sort_key("Édith Piaf", None), sort_key("Edith Piaf", None));
+    }
+
+    #[test]
+    fn letters_without_a_decomposition_file_as_spelled_without_their_mark() {
+        assert_eq!(sort_key("Øystein", None), "oystein");
+        assert_eq!(sort_key("Łódź", None), "lodz");
+        assert_eq!(sort_key("Ærø", None), "aero");
+        assert_eq!(sort_key("Straße", None), "strasse");
+        assert_eq!(sort_key("Œuvre", None), "oeuvre");
+        assert_eq!(sort_key("Þórir", None), "thorir");
+        assert_eq!(sort_key("Đorđe", None), "dorde");
+        assert_eq!(sort_key("Guðrún", None), "gudrun");
+        assert_eq!(sort_key("Sıla", None), "sila");
+        for (before, name, after) in [
+            ("Anathema", "Ångström", "Anthrax"),
+            ("Oasis", "Øystein", "Ozzy"),
+            ("Lizzo", "Łódź", "Lorde"),
+            ("Adele", "Ærø", "Afghan Whigs"),
+        ] {
+            assert!(sort_key(before, None) < sort_key(name, None), "{name}");
+            assert!(sort_key(name, None) < sort_key(after, None), "{name}");
+        }
+    }
+
+    #[test]
+    fn hebrew_points_and_arabic_harakat_are_ignored() {
+        assert_eq!(sort_key("שָׁלוֹם", None), sort_key("שלום", None));
+        assert_eq!(sort_key("\u{5d0}\u{591}\u{5c7}\u{5d1}", None), "\u{5d0}\u{5d1}");
+        assert_eq!(sort_key("מָה־זֶּה", None), "מה\u{5be}זה");
+        assert_eq!(sort_key("\u{5d0}\u{5c0}\u{5c3}\u{5c6}", None), "\u{5d0}\u{5c0}\u{5c3}\u{5c6}");
+        assert_eq!(sort_key("مُحَمَّد", None), sort_key("محمد", None));
+        assert_eq!(sort_key("\u{627}\u{64b}\u{670}\u{652}", None), "\u{627}");
+        assert_eq!(sort_key("\u{627}\u{653}", None), "\u{622}");
+    }
+
+    #[test]
+    fn compatibility_forms_fold_and_spaces_collapse_after_folding() {
+        assert_eq!(sort_key("ＡＢＢＡ", None), "abba");
+        assert_eq!(sort_key("\u{fb01}re", None), "fire");
+        assert_eq!(sort_key("Hello™", None), "hellotm");
+        assert_eq!(sort_key("\u{1d6d3}", None), "σ");
+        assert_eq!(sort_key("\u{301} Edith", None), "edith");
+        assert_eq!(sort_key("Sun \u{301} Ra", None), "sun ra");
+    }
+
+    #[test]
+    fn marks_that_spell_other_scripts_are_kept() {
+        assert_ne!(sort_key("कि", None), sort_key("का", None));
+        assert_ne!(sort_key("が", None), sort_key("か", None));
+        assert_eq!(sort_key("한국", None), "한국");
     }
 
     #[test]

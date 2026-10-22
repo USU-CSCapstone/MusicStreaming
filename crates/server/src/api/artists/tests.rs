@@ -38,6 +38,33 @@ async fn pages_through_every_sort_with_the_unknown_artist_last() {
 }
 
 #[tokio::test]
+async fn names_sort_without_their_accents_and_ties_by_id() {
+    let (_temp, db, app) = app("");
+    db.write(|tx| {
+        library(tx, 1, "Music", "/music")?;
+        for (id, name) in [(1, "Zappa"), (2, "Édith Piaf"), (3, "Dylan"), (4, "Edith Piaf")] {
+            Artist::new(id, 1, name).insert(tx)?;
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let base = "/api/v1/libraries/1/artists";
+    for limit in [1, 100] {
+        assert_eq!(
+            page_through(&app, base, limit, "name").await,
+            json!(["Dylan", "Édith Piaf", "Edith Piaf", "Zappa"]),
+            "limit {limit}"
+        );
+        assert_eq!(
+            page_through(&app, &format!("{base}?order=desc"), limit, "name").await,
+            json!(["Zappa", "Edith Piaf", "Édith Piaf", "Dylan"]),
+            "limit {limit}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn gets_an_artist_with_its_biography_and_genres() {
     let (_temp, _db, app) = catalog::app().await;
     let (status, artist) = json(&app, "/api/v1/libraries/1/artists/10").await;

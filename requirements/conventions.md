@@ -44,6 +44,7 @@ Consistency is the requirement: an entity offers the same actions everywhere, so
 ## 4. Sorting & Browsing
 
 - Sort by **sort tags where tagged** (`ARTISTSORT`, `ALBUMSORT`, `ALBUMARTISTSORT`), otherwise by display name with **leading articles stripped** — "The Beatles" files under B.
+- **Accents and diacritics are ignored** — "Édith Piaf" files under E, not after "Zappa".
 - Entities without a sortable value sort last in either direction, in a stable order that does not change between visits.
 - Browsing supports sorting by name, date added, and play count at minimum, plus filtering by genre and availability.
 - Sorting, filtering, and browsing stay instant at full library scale ([`performance.md`](performance.md)).

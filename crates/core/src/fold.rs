@@ -2,9 +2,11 @@
 //!
 //! Identity is a folded key; the displayed name is whatever spelling most files use. Names fold to
 //! lowercase, with every `ς` written `σ` and every whitespace character a space, then NFC.
-//! Lowercasing is not full Unicode case folding, so `straße` and `STRASSE` stay apart.
+//! Lowercasing is not full Unicode case folding, so `straße` and `STRASSE` stay apart. Sort keys
+//! also fold accents away, and search and sort keys spell out the same letters.
 
 use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::char::is_combining_mark;
 
 /// Leading articles, which a sort key drops and a search query may leave out.
 pub(crate) const ARTICLES: [&str; 3] = ["the", "a", "an"];
@@ -24,6 +26,48 @@ pub(crate) fn strip_article(name: &str) -> &str {
 /// `text` with each run of whitespace collapsed to one space and none at either end.
 pub(crate) fn collapse_spaces(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `text` without accents, as a sort key holds it: compatibility-decomposed (NFKD), lowercased,
+/// with every diacritic dropped and every `ς` written `σ`, then recomposed (NFC). So `é` is `e`,
+/// `й` is `и`, `ＡＢＢＡ` is `abba` and Hangul stays composed. The diacritics are the Combining
+/// Diacritical Marks, Hebrew points and cantillation, and Arabic harakat; marks that spell a
+/// letter or vowel of another script, such as a Devanagari vowel sign or a Japanese voicing mark,
+/// are kept. Letters with no decomposition are written as [`spelled_out`] gives.
+pub(crate) fn fold_accents(text: &str) -> String {
+    let mut letters = String::with_capacity(text.len());
+    for ch in text.nfkd().flat_map(char::to_lowercase).filter(|&ch| !is_diacritic(ch)) {
+        match (ch, spelled_out(ch)) {
+            (_, Some(spelled)) => letters.push_str(spelled),
+            ('ς', None) => letters.push('σ'),
+            (ch, None) => letters.push(ch),
+        }
+    }
+    letters.nfc().collect()
+}
+
+/// Whether `ch` is a diacritic that sort keys drop (see [`fold_accents`]). Hebrew punctuation
+/// among the points, such as the maqaf, is not.
+fn is_diacritic(ch: char) -> bool {
+    matches!(ch, '\u{300}'..='\u{36f}' | '\u{64b}'..='\u{652}' | '\u{670}')
+        || (('\u{591}'..='\u{5c7}').contains(&ch) && is_combining_mark(ch))
+}
+
+/// How library filing rules write lowercase `ch` when it is a letter with no decomposition:
+/// without its mark (`ø` as `o`) or as two letters (`æ` as `ae`). `None` for every other
+/// character. Sort keys and search words share it, so both spell these letters alike.
+pub(crate) fn spelled_out(ch: char) -> Option<&'static str> {
+    Some(match ch {
+        'ø' => "o",
+        'ł' => "l",
+        'đ' | 'ð' => "d",
+        'ı' => "i",
+        'æ' => "ae",
+        'œ' => "oe",
+        'ß' => "ss",
+        'þ' => "th",
+        _ => return None,
+    })
 }
 
 /// Fold a name for identity: trim outer whitespace, lowercase, write `ς` as `σ` and each

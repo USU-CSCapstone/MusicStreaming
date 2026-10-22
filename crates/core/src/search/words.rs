@@ -3,6 +3,8 @@
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
+use crate::fold::spelled_out;
+
 /// Whether `ch` is left out of a word without ending it: a combining mark or an apostrophe.
 fn is_dropped(ch: char) -> bool {
     is_combining_mark(ch) || ch == '\'' || ch == '\u{2019}'
@@ -19,18 +21,13 @@ pub fn words(text: &str) -> Vec<String> {
             continue;
         }
         if ch.is_alphanumeric() {
-            match ch {
-                // Letters with no decomposition that people type without their mark.
-                'ß' | 'ẞ' => word.push_str("ss"),
-                'æ' | 'Æ' => word.push_str("ae"),
-                'œ' | 'Œ' => word.push_str("oe"),
-                'ø' | 'Ø' => word.push('o'),
-                'ł' | 'Ł' => word.push('l'),
-                'đ' | 'Đ' => word.push('d'),
-                'þ' | 'Þ' => word.push_str("th"),
-                // `Σ` lowers to `σ` wherever it stands, so final `ς` folds to `σ` too.
-                'ς' => word.push('σ'),
-                _ => word.extend(ch.to_lowercase()),
+            for lower in ch.to_lowercase() {
+                match (lower, spelled_out(lower)) {
+                    (_, Some(spelled)) => word.push_str(spelled),
+                    // `Σ` lowers to `σ` wherever it stands, so final `ς` folds to `σ` too.
+                    ('ς', None) => word.push('σ'),
+                    (lower, None) => word.push(lower),
+                }
             }
         } else if !word.is_empty() {
             words.push(std::mem::take(&mut word));
@@ -54,6 +51,13 @@ mod tests {
         assert_eq!(words("Straße Øresund Ærø"), ["strasse", "oresund", "aero"]);
         assert_eq!(words("STRAẞE"), ["strasse"]);
         assert_eq!(words("  ...  "), Vec::<String>::new());
+    }
+
+    #[test]
+    fn spells_out_letters_with_no_decomposition_in_either_case() {
+        assert_eq!(words("ŒUVRE ŁÓDŹ ĐORĐE ÞÓRIR"), ["oeuvre", "lodz", "dorde", "thorir"]);
+        assert_eq!(words("œuvre łódź đorđe þórir"), ["oeuvre", "lodz", "dorde", "thorir"]);
+        assert_eq!(words("Guðrún GUÐRÚN Sıla"), ["gudrun", "gudrun", "sila"]);
     }
 
     #[test]
