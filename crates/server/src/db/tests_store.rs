@@ -254,6 +254,8 @@ mod suite {
 mod artist_sort;
 mod derived;
 mod failures;
+mod groups;
+mod growth;
 mod labels;
 mod lyrics;
 mod marks;

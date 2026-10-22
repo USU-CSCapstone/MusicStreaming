@@ -9,7 +9,8 @@
 use rusqlite::{Result, Transaction, params};
 
 /// The album's art, its labels (none when no track has any), and the tracks that offer its
-/// artists an image and a biography: each the first in track order.
+/// artists an image and a biography: each the first in track order, read from the head of the
+/// index that holds that order for the tracks offering it (`tracks_with_art` and the others).
 pub fn album(tx: &Transaction<'_>, album: i64) -> Result<()> {
     tx.execute(
         "UPDATE albums SET \
@@ -22,7 +23,7 @@ pub fn album(tx: &Transaction<'_>, album: i64) -> Result<()> {
          biography_track_id = (SELECT id FROM tracks WHERE album_id = ?1 AND biography_id IS NOT NULL \
              ORDER BY missing_since IS NOT NULL, disc_number, \
              ifnull(track_number, 9223372036854775807), path, id LIMIT 1), \
-         labels = ifnull((SELECT labels FROM tracks WHERE album_id = ?1 AND json_array_length(labels) > 0 \
+         labels = ifnull((SELECT labels FROM tracks WHERE album_id = ?1 AND labels <> '[]' \
              ORDER BY missing_since IS NOT NULL, disc_number, \
              ifnull(track_number, 9223372036854775807), path, id LIMIT 1), '[]') \
          WHERE id = ?1",

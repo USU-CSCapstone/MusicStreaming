@@ -26,7 +26,9 @@ const CHECKS: &[(&str, &str, &str)] = &[
         "artists",
         "SELECT id, name, album_count, track_count, appearance_count, available_track_count \
          FROM artists ORDER BY id",
-        "WITH firsts AS (SELECT MIN(id) AS id FROM tracks GROUP BY album_id), \
+        "WITH firsts (id) AS (SELECT (SELECT id FROM tracks f WHERE f.album_id = a.album_id \
+                    ORDER BY disc_number, ifnull(track_number, 9223372036854775807), id LIMIT 1) \
+                    FROM (SELECT DISTINCT album_id FROM tracks) a), \
          listed AS (SELECT t.album_id, tam.artist_id FROM track_album_artists tam \
                     JOIN tracks t ON t.id = tam.track_id WHERE t.id IN firsts) \
          SELECT a.id, (SELECT artist_name FROM (SELECT artist_name FROM track_artists WHERE artist_id = a.id \
@@ -44,14 +46,30 @@ const CHECKS: &[(&str, &str, &str)] = &[
     ),
     (
         "albums",
-        "SELECT id, title, track_count, available_track_count, duration_us, disc_total, track_total, \
-         disc_count FROM albums ORDER BY id",
-        "SELECT album_id, (SELECT album_title FROM tracks WHERE album_id = t.album_id AND album_title IS NOT NULL \
-                           GROUP BY album_title ORDER BY COUNT(*) DESC, album_title LIMIT 1), \
+        "SELECT id, title, sort_key, release_date, track_count, available_track_count, duration_us, \
+         disc_total, track_total, disc_count FROM albums ORDER BY id",
+        "WITH titled AS (SELECT album_id, (SELECT album_title FROM tracks WHERE album_id = t.album_id \
+                         AND album_title IS NOT NULL GROUP BY album_title \
+                         ORDER BY COUNT(*) DESC, album_title LIMIT 1) AS title FROM tracks t GROUP BY album_id) \
+         SELECT album_id, (SELECT title FROM titled WHERE album_id = t.album_id), \
+         (SELECT MIN(album_sort_key) FROM tracks WHERE album_id = t.album_id \
+          AND album_title IS (SELECT title FROM titled WHERE album_id = t.album_id)), \
+         (SELECT release_date FROM tracks WHERE album_id = t.album_id AND release_date IS NOT NULL \
+          GROUP BY release_date ORDER BY COUNT(*) DESC, release_date LIMIT 1), \
          COUNT(*), SUM(missing_since IS NULL), SUM(duration_us), MAX(disc_total), \
          (SELECT SUM(total) FROM (SELECT MAX(track_total) AS total FROM tracks \
                                   WHERE album_id = t.album_id GROUP BY disc_number)), \
          COUNT(DISTINCT disc_number) FROM tracks t GROUP BY album_id ORDER BY album_id",
+    ),
+    (
+        "album groups",
+        "SELECT album_id, disc_number, title, sort_key, release_date, release_type, track_total, \
+         disc_total, compilation, track_count, available_count, duration_us \
+         FROM album_groups ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9",
+        "SELECT album_id, disc_number, ifnull(album_title, ''), album_sort_key, ifnull(release_date, ''), \
+         ifnull(release_type, ''), ifnull(track_total, -1), ifnull(disc_total, -1), compilation, \
+         COUNT(*), SUM(missing_since IS NULL), SUM(duration_us) \
+         FROM tracks GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9 ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9",
     ),
     (
         "album artist sort keys",
@@ -61,12 +79,18 @@ const CHECKS: &[(&str, &str, &str)] = &[
          FROM albums al ORDER BY al.id",
     ),
     (
-        "album art",
-        "SELECT id, image_id FROM albums ORDER BY id",
+        "album art and offers",
+        "SELECT id, image_id, artist_image_track_id, biography_track_id FROM albums ORDER BY id",
         "SELECT DISTINCT album_id, (SELECT image_id FROM tracks WHERE album_id = t.album_id \
                                     AND image_id IS NOT NULL ORDER BY missing_since IS NOT NULL, \
                                     image_embedded DESC, disc_number, \
-                                    ifnull(track_number, 9223372036854775807), path, id LIMIT 1) \
+                                    ifnull(track_number, 9223372036854775807), path, id LIMIT 1), \
+         (SELECT id FROM tracks WHERE album_id = t.album_id AND artist_image_id IS NOT NULL \
+          ORDER BY missing_since IS NOT NULL, disc_number, ifnull(track_number, 9223372036854775807), \
+          path, id LIMIT 1), \
+         (SELECT id FROM tracks WHERE album_id = t.album_id AND biography_id IS NOT NULL \
+          ORDER BY missing_since IS NOT NULL, disc_number, ifnull(track_number, 9223372036854775807), \
+          path, id LIMIT 1) \
          FROM tracks t ORDER BY album_id",
     ),
     (
@@ -96,7 +120,9 @@ const CHECKS: &[(&str, &str, &str)] = &[
         "SELECT album_id, position, artist_id FROM album_artists ORDER BY album_id, position",
         "SELECT t.album_id, tam.position, tam.artist_id FROM track_album_artists tam \
          JOIN tracks t ON t.id = tam.track_id \
-         WHERE t.id IN (SELECT MIN(id) FROM tracks GROUP BY album_id) ORDER BY 1, 2",
+         WHERE t.id IN (SELECT (SELECT id FROM tracks f WHERE f.album_id = a.album_id \
+                    ORDER BY disc_number, ifnull(track_number, 9223372036854775807), id LIMIT 1) \
+                    FROM (SELECT DISTINCT album_id FROM tracks) a) ORDER BY 1, 2",
     ),
     (
         "album discs",

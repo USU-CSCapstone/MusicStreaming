@@ -41,11 +41,13 @@ const ALBUMS: &[&str] = &["Red", "red", " RED", "Blue", "Green"];
 const GENRES: &[&str] = &["Rock", "rock", " Rock ", "Jazz", "jazz", "Hip Hop", "Hip-Hop", "Pop"];
 const SORTS: &[&str] = &["", "alpha", "beta", "zeta"];
 const LABELS: &[&str] = &["Sub Pop", "Domino", "Matador"];
+const TYPES: &[&str] = &["ep", "single", "album; compilation"];
 
 /// A record of the file at `path` under `root`, tagged from `rng`: up to two artists and three
-/// genres in several spellings, up to two labels, sometimes album artists or a compilation,
-/// sometimes no album, and sometimes art, embedded or a cover, an artist image or a biography,
-/// each one of a few.
+/// genres in several spellings, up to two labels, sometimes album artists, a compilation or a
+/// release type, sometimes no album or release date, one of a few sort keys for its artist and
+/// album, and sometimes art, embedded or a cover, an artist image or a biography, each one of a
+/// few.
 fn random(rng: &mut Rng, root: &Path, path: PathBuf) -> TrackRecord {
     let image =
         |rng: &mut Rng| ImageInfo { hash: vec![(rng.next() % 4) as u8], width: 1, height: 1 };
@@ -75,8 +77,11 @@ fn random(rng: &mut Rng, root: &Path, path: PathBuf) -> TrackRecord {
         rng.chance(40).then(|| Biography::new(rng.pick(&["One.", "Two.", "Three."])));
     rec.tags.disc_total = *rng.pick(&[None, Some(2)]);
     rec.tags.track_total = *rng.pick(&[None, Some(3), Some(12)]);
-    rec.tags.release_date = PartialDate::parse(rng.pick(&["1999", "2001-05"]));
+    rec.tags.release_date =
+        rng.chance(70).then(|| PartialDate::parse(rng.pick(&["1999", "2001-05"]))).flatten();
+    rec.tags.release_type = rng.chance(40).then(|| rng.pick(TYPES).to_string());
     rec.sort.artist = rng.pick(SORTS).to_string();
+    rec.sort.album = rng.pick(SORTS).to_string();
     rec.properties.duration_ms = 1000 * (1 + rng.next() % 300);
     rec
 }
@@ -184,9 +189,11 @@ fn derived_values_equal_a_recompute_after_every_change() {
                 let rec = TrackRecord { id: id(&path), ..random(&mut rng, &c, path) };
                 store.apply(two, Batch { upserts: vec![rec], ..Batch::default() }).unwrap();
             }
-            // A track deleted outright, which the scanner itself never does.
+            // A track deleted outright, present or missing; outside tests only the purge of tracks
+            // long missing deletes one.
             9 if !present.is_empty() => {
-                let id = rng.pick(&present).1;
+                let pool = if !missing.is_empty() && rng.chance(50) { &missing } else { &present };
+                let id = rng.pick(pool).1;
                 store
                     .db()
                     .write_blocking(move |tx| {

@@ -1,45 +1,62 @@
-//! An album's links, resolved fields, counts, type and loudness, from its tracks
-//! (`design/database.md` §3).
+//! An album's links, resolved fields, counts, type and loudness (`design/database.md` §3). All
+//! but the loudness come from its groups and the heads of its tracks' indexes, so they cost the
+//! same however many tracks the album holds; the loudness reads each analyzed track's entry in
+//! `tracks_analyzed`.
 
 use jewelcase_scanner::release_kind;
 use rusqlite::{OptionalExtension, Result, Transaction, params};
 
 use crate::db::feed::{self, Entity, Op};
 
-/// `album_artists` and `album_discs` from the album's tracks. Album artists already in place
-/// are left alone, so the counts their triggers keep don't churn.
+/// `album_artists` from the album's first track in album order, and `album_discs` from its
+/// groups. Album artists already in place are left alone, so the counts their triggers keep don't
+/// churn.
 pub(super) fn refresh_album_links(tx: &Transaction<'_>, lib: i64, album: i64) -> Result<()> {
     // Every track of an album shares its artists_key, so any one track's album-artist credits
-    // are the album's. The lowest id is deterministic.
+    // are the album's, and the head of `tracks_by_album_order` is the one read. An album with no
+    // track left loses them all.
+    let first: Option<i64> = tx
+        .query_row(
+            "SELECT id FROM tracks WHERE album_id = ?1 \
+             ORDER BY disc_number, ifnull(track_number, 9223372036854775807), id LIMIT 1",
+            [album],
+            |r| r.get(0),
+        )
+        .optional()?;
     tx.execute(
         "DELETE FROM album_artists WHERE album_id = ?1 AND (position, artist_id) NOT IN \
-         (SELECT position, artist_id FROM track_album_artists \
-          WHERE track_id = (SELECT MIN(id) FROM tracks WHERE album_id = ?1))",
-        [album],
+         (SELECT position, artist_id FROM track_album_artists WHERE track_id = ?2)",
+        params![album, first],
     )?;
     tx.execute(
         "INSERT INTO album_artists (library_id, album_id, position, artist_id) \
-         SELECT ?1, ?2, position, artist_id FROM track_album_artists \
-         WHERE track_id = (SELECT MIN(id) FROM tracks WHERE album_id = ?2) ORDER BY position \
-         ON CONFLICT DO NOTHING",
-        params![lib, album],
+         SELECT ?1, ?2, position, artist_id FROM track_album_artists WHERE track_id = ?3 \
+         ORDER BY position ON CONFLICT DO NOTHING",
+        params![lib, album, first],
     )?;
     tx.execute("DELETE FROM album_discs WHERE album_id = ?1", [album])?;
     tx.execute(
         "INSERT INTO album_discs (library_id, album_id, disc_number, track_count, track_total) \
-         SELECT ?1, ?2, disc_number, COUNT(*), MAX(track_total) FROM tracks WHERE album_id = ?2 GROUP BY disc_number",
+         SELECT ?1, ?2, disc_number, SUM(track_count), NULLIF(MAX(track_total), -1) FROM album_groups \
+         WHERE album_id = ?2 GROUP BY disc_number",
         params![lib, album],
     )?;
     Ok(())
 }
 
-/// The most-used spelling, ties broken by bytes so a tie never flips
-/// between scans (`design/database.md` §3).
-fn most_used(tx: &Transaction<'_>, sql: &str, id: i64) -> Result<Option<String>> {
-    tx.query_row(sql, [id], |r| r.get::<_, String>(0)).optional()
+/// The value of `column`, one of `album_groups`' text columns, that most of `album`'s tracks
+/// carry, ties broken by bytes so a tie never flips between scans (`design/database.md` §3); none
+/// when no track has one.
+fn most_used(tx: &Transaction<'_>, column: &str, album: i64) -> Result<Option<String>> {
+    tx.prepare_cached(&format!(
+        "SELECT {column} FROM album_groups WHERE album_id = ?1 AND {column} <> '' \
+         GROUP BY {column} ORDER BY SUM(track_count) DESC, {column} LIMIT 1"
+    ))?
+    .query_row([album], |r| r.get(0))
+    .optional()
 }
 
-/// The album's resolved fields and counts from its tracks, or its deletion when none is left.
+/// The album's resolved fields and counts from its groups, or its deletion when none is left.
 pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i64) -> Result<()> {
     let (count, available, duration, disc_total, largest_disc_total, disc_count, any_compilation): (
         i64,
@@ -50,8 +67,9 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
         i64,
         i64,
     ) = tx.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(missing_since IS NULL), 0), COALESCE(SUM(duration_us), 0), MAX(disc_total), \
-         MAX(track_total), COUNT(DISTINCT disc_number), COALESCE(MAX(compilation), 0) FROM tracks WHERE album_id = ?1",
+        "SELECT COALESCE(SUM(track_count), 0), COALESCE(SUM(available_count), 0), \
+         COALESCE(SUM(duration_us), 0), NULLIF(MAX(disc_total), -1), NULLIF(MAX(track_total), -1), \
+         COUNT(DISTINCT disc_number), COALESCE(MAX(compilation), 0) FROM album_groups WHERE album_id = ?1",
         [album],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
     )?;
@@ -61,19 +79,13 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
         return Ok(());
     }
 
-    let title = most_used(
-        tx,
-        "SELECT album_title FROM tracks WHERE album_id = ?1 AND album_title IS NOT NULL \
-         GROUP BY album_title ORDER BY COUNT(*) DESC, album_title ASC LIMIT 1",
-        album,
+    let title = most_used(tx, "title", album)?;
+    // The first sort key among the tracks with that title, or with none when no track has one.
+    let sort_key: Option<Vec<u8>> = tx.query_row(
+        "SELECT MIN(sort_key) FROM album_groups WHERE album_id = ?1 AND title = ifnull(?2, '')",
+        params![album, title],
+        |r| r.get(0),
     )?;
-    let sort_key: Option<Vec<u8>> = tx
-        .query_row(
-            "SELECT album_sort_key FROM tracks WHERE album_id = ?1 AND album_title IS ?2 ORDER BY album_sort_key LIMIT 1",
-            params![album, title],
-            |r| r.get(0),
-        )
-        .optional()?;
     let artist_sort_key: Option<Vec<u8>> = tx
         .query_row(
             "SELECT a.sort_key FROM album_artists aa JOIN artists a ON a.id = aa.artist_id \
@@ -82,18 +94,8 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
             |r| r.get(0),
         )
         .optional()?;
-    let release_date = most_used(
-        tx,
-        "SELECT release_date FROM tracks WHERE album_id = ?1 AND release_date IS NOT NULL \
-         GROUP BY release_date ORDER BY COUNT(*) DESC, release_date ASC LIMIT 1",
-        album,
-    )?;
-    let release_type = most_used(
-        tx,
-        "SELECT release_type FROM tracks WHERE album_id = ?1 AND release_type IS NOT NULL \
-         GROUP BY release_type ORDER BY COUNT(*) DESC, release_type ASC LIMIT 1",
-        album,
-    )?;
+    let release_date = most_used(tx, "release_date", album)?;
+    let release_type = most_used(tx, "release_type", album)?;
     let album_type = album_type(release_type.as_deref(), any_compilation != 0, largest_disc_total);
 
     // The track total is the spec's `trackTotal`: the sum of the totals of the discs present,
@@ -142,8 +144,9 @@ fn album_type(
     }
 }
 
-/// Album loudness for album-mode normalization: the duration-weighted
-/// energy mean of the analyzed tracks, and the loudest peak.
+/// Album loudness for album-mode normalization: the duration-weighted energy mean of the
+/// analyzed tracks, and the loudest peak. It reads `tracks_analyzed`, so it costs the album's
+/// analyzed tracks, and nothing for an album with none.
 pub fn recompute_album_loudness(tx: &Transaction<'_>, album: i64) -> Result<()> {
     let mut stmt = tx.prepare_cached(
         "SELECT duration_us, loudness_lufs, peak_dbtp FROM tracks WHERE album_id = ?1 AND loudness_lufs IS NOT NULL",

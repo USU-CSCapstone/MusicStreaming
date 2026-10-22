@@ -32,6 +32,7 @@ tempfile = "3.27.0"
 tokio = { version = "1.53.1", features = ["test-util"] }
 tower = { version = "0.5.3", features = ["util"] }
 lofty = "0.25"
+rusqlite = { version = "0.40.2", features = ["hooks"] }
 tokio-tungstenite = "0.29"
 jewelcase-scanner = { version = "0.1.0", path = "../scanner", features = ["testing"] }
 

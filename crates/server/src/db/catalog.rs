@@ -1,7 +1,8 @@
 //! Derived data the scanner maintains (`design/database.md` §3).
 //!
-//! Counts and spellings follow each change by trigger (`0007_catalog_counts.sql`). What is left
-//! runs for the entities a batch touched, never for the library: album links and art first (they
+//! Counts, spellings and album groups follow each change by trigger (`0007_catalog_counts.sql`).
+//! What is left runs for the entities a batch touched, never for the library, and reads counts,
+//! groups and the heads of indexes rather than every track: album links and art first (they
 //! decide who is an album artist, and what each album offers its artists), then artists (whose
 //! changed sort key reaches the albums they head), then albums (whose artist sort key reads
 //! artists), then tags.
