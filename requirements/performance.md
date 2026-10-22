@@ -57,7 +57,7 @@ Under saturation, these hold for listeners who are already playing. New listener
 - **Incremental cost is proportional to change**, never to library size. Ten changed files cost what ten files cost. This is the most important scanning property: a library that costs more to keep current as it grows will eventually stop being kept current.
 - **Indexing is what users wait for; analysis is not.** Analysis touches every byte of every file, so it takes far longer than indexing. That is acceptable because a library is browsable and playable long before analysis finishes. Unanalyzed tracks play unnormalized ([`playback.md` §5](playback.md#5-loudness)) and are recommended on listening data alone ([`recommendations.md` §2.1](recommendations.md#21-how-the-music-sounds)).
 - **Analysis is one pass, whatever it produces.** Decoding the audio dominates its cost, so loudness, sonic characteristics, and waveforms are all derived together ([`scanning.md` §1](scanning.md#1-supported-formats)). **The number of results analysis yields must never become a number of passes over the library.**
-- **Analysis never competes with listening.** It runs at low priority, yields immediately under load, and can be interrupted ([`scanning.md` §5](scanning.md#5-behavior)).
+- **Analysis never competes with listening.** It runs at low priority, so under contention listeners get nearly all of the host and analysis slows down rather than taking from them, and it can be interrupted ([`scanning.md` §5](scanning.md#5-behavior)).
 
 ---
 
@@ -84,7 +84,7 @@ A saturated host degrades **predictably and legibly**, never unpredictably.
 
 - **Listeners already playing are protected.** Their quality does not drop and their streams do not break because someone else pressed play.
 - **New streams are refused, with an explanation.** A listener who cannot start is told the server is at capacity — not left with silence, an error code, or degraded audio they did not choose.
-- **Background work yields first.** Scanning, analysis, and image processing surrender resources to playback before any listener is affected ([`scanning.md` §5](scanning.md#5-behavior)).
+- **Background work yields first.** Scanning, analysis, and image processing run at low priority, so under contention they slow down before any listener is affected ([`scanning.md` §5](scanning.md#5-behavior)).
 - **Admins can see it happening** — current listeners, transcodes in flight, and what capacity is being hit — so the answer to "why was I refused" is available rather than guessed at.
 - **Refusal is a hardware signal.** Hitting capacity means the machine is full, and adding hardware raises the ceiling proportionally. It never means Jewelcase decided a number was enough.
 
