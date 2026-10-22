@@ -71,6 +71,8 @@ CREATE TABLE play_events (
 CREATE INDEX play_events_feed ON play_events (library_id, user_id, kind, seq);
 CREATE INDEX play_events_by_play ON play_events (user_id, play_id);
 CREATE INDEX play_events_started_age ON play_events (reported_at) WHERE kind = 'started';
+-- For the hourly sweep, which deletes ends once they are 30 days old (design/database.md §9).
+CREATE INDEX play_events_ended_age ON play_events (reported_at) WHERE kind = 'ended';
 
 -- Nothing is announced as playing late, so a start an hour old is of no use to anyone: each new
 -- play clears those, and the starts stay few.
@@ -137,7 +139,8 @@ CREATE INDEX recent_searches_age ON recent_searches (searched_at);
 -- than holding them: a search's words live only in `recent_searches`, so one deleted there is
 -- never sent. `searched` and `forgotten` go to every plugin the user shares with; `stopped`,
 -- written when they turn sharing off, goes to that plugin alone, asking it to forget everything
--- it was sent, and is deleted when that plugin is uninstalled. Rows age out with recent searches.
+-- it was sent, and is kept until it is delivered or that plugin is uninstalled. The other rows
+-- age out with recent searches (design/database.md §9).
 CREATE TABLE search_events (
     seq           INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id       INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,

@@ -54,3 +54,5 @@ CREATE TABLE login_attempts (
 -- Per-account limits count by the name tried, so unknown usernames lock out exactly as real ones do.
 CREATE INDEX login_attempts_by_username ON login_attempts (username_attempted, attempted_at);
 CREATE INDEX login_attempts_by_origin ON login_attempts (origin, attempted_at);
+-- For the hourly sweep, which deletes attempts once they are 30 days old (design/database.md §9).
+CREATE INDEX login_attempts_age ON login_attempts (attempted_at);

@@ -7,7 +7,8 @@ use std::path::Path;
 
 use rusqlite::{Connection, Result, params};
 
-use super::libraries;
+use super::retention::{STEP_TIME, Sweep};
+use super::{Database, libraries};
 
 mod catalog;
 
@@ -16,6 +17,14 @@ pub use catalog::{Album, Artist, Image, Track, album_artist, scattered_key, trac
 /// Adds library `id` called `name`, with its one root at `root`.
 pub fn library(conn: &Connection, id: i64, name: &str, root: impl AsRef<Path>) -> Result<()> {
     libraries::create(conn, Some(id), name, &[root.as_ref()], &[]).map(drop)
+}
+
+/// Sweeps `db` as its writer does each hour, at `now`, to the end.
+pub fn sweep(db: &Database, now: i64) {
+    let mut rest = Some(Sweep::new(now, STEP_TIME));
+    while let Some(sweep) = rest {
+        rest = db.write_blocking(move |tx| sweep.step(tx)).unwrap();
+    }
 }
 
 /// Grants `user` access to `library`.

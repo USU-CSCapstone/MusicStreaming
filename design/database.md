@@ -1,7 +1,7 @@
 # Database Design
 
 ## Overview
-The SQLite schema behind `api/openapi.yaml`. Migrations are plain SQL in `crates/server/migrations/`, applied in order at startup (`design/general.md` §2). There is one file per domain, so each table's whole definition is in one place: libraries and scanning, accounts, the catalog, the change feeds, listening and searching activity, and plugins. Sections of the API not yet built add their tables as they are (§9).
+The SQLite schema behind `api/openapi.yaml`. Migrations are plain SQL in `crates/server/migrations/`, applied in order at startup (`design/general.md` §2). There is one file per domain, so each table's whole definition is in one place: libraries and scanning, accounts, the catalog, the change feeds, listening and searching activity, and plugins. Sections of the API not yet built add their tables as they are (§10).
 
 ---
 
@@ -102,7 +102,7 @@ The displayed name — `artists.name`, `albums.title`, `tags.name` — is the sp
 
 **Hooks that act for one user read their domain's outbox** (`design/general.md` §4), written by the same transaction as the activity:
 
-- `play_events` holds each play's start and end, for `playing` and `played`, with a `kind` and one sequence. The feed index `play_events_feed` is keyed `(library_id, user_id, kind, seq)`, so each hook's due check and batch read one range of its own kind, as `library_changes_kind_feed` does for the change hooks. A position caught up on ends never steps over later starts, nor the reverse, though ends pile up when a device catches up after being offline. Stale starts are swept on each new play through `play_events_started_age`, a partial index on starts alone, so the sweep never reads an end.
+- `play_events` holds each play's start and end, for `playing` and `played`, with a `kind` and one sequence. The feed index `play_events_feed` is keyed `(library_id, user_id, kind, seq)`, so each hook's due check and batch read one range of its own kind, as `library_changes_kind_feed` does for the change hooks. A position caught up on ends never steps over later starts, nor the reverse, though ends pile up when a device catches up after being offline. Stale starts are swept on each new play through `play_events_started_age`, a partial index on starts alone, so the sweep never reads an end. Ends go at 30 days through `play_events_ended_age` (§9).
 - `search_events` names each search or forget, and keeps what a search found. Rows are written only for a user who shares their searches, and only then is the search index asked to count, so no one else's search pays for it.
 
 **A user's connection to a plugin is one row of `plugin_connections`**, keyed by plugin and user and the same in every library: their personal settings, when they connected, and `searches_shared_at`, null until they share their searches with it. Sharing is a column of the connection rather than a table of its own, so it can never exist without one, and disconnecting deletes both. Settings are kept as entered, secrets included, because the plugin needs them; the API never returns the secrets (`design/plugins.md` §7). A connection goes with its user, and with the plugin: unlike grants and settings, which are keyed by the plugin's ID and outlive an uninstall, it references `plugins`, so its users connect again after a reinstall (`0006_plugins.sql`, `design/plugins.md` §6).
@@ -143,7 +143,31 @@ Migrations are the exception: they run with foreign keys off, because rebuilding
 
 ---
 
-## 9. Not Yet Modelled
+## 9. Retention
+
+**One sweep, every hour, on the writer**, starting five minutes after the database opens, so a server restarted often still sweeps, and just before `PRAGMA optimize` (§4), so the statistics it gathers count what is left (`crates/server/src/db/retention.rs`). What is kept for a while goes once it is older than 30 days:
+
+| Rows | Kept |
+|---|---|
+| `scans` | 30 days after they finished. Each library keeps its last finished scan, which the admin sees, and its last completed one, which says the library has been scanned, so its next startup scan is not taken for its first (`design/scanning.md` §9). Unfinished scans stay. |
+| `login_attempts` | 30 days, through `login_attempts_age`, so admins can still see an account under pressure. |
+| `play_events` ends | 30 days, delivered or not, through `play_events_ended_age`. Starts over an hour old go as each new play is recorded (§6), so they stay few. |
+| `recent_searches`, and `search_events` other than `stopped` | 30 days (`requirements/search.md` §6). Until the sweep reaches them, the list of recent searches leaves out those past the window. |
+| `search_events` `stopped` | Until the plugin's `searched` position for that user in that library reaches it, however long that takes, or the plugin is uninstalled. |
+| Missing `tracks` | 30 days after `missing_since` (`requirements/scanning.md` §8). |
+| `images`, `biographies` | While a track, album or artist uses the image, or a track the biography. Artists keep a copy of a biography's text, not a reference to it. |
+
+A hook that cannot deliver for 30 days misses what aged out meanwhile: ends for `played`, finished scans for `scanFinished`, searches for `searched` (`design/hooks.md` §5). Problems need no sweep, since each is deleted when its path scans or lists cleanly, or is gone (§8), and the feed's tombstones wait for its horizon (§5).
+
+**A purge is a change like any scan's.** The sweep deletes a missing track in the same transaction as the recompute of the albums, artists and tags it counted toward (§3), which deletes those it was the last of, and records each deletion in the feed, so clients drop them. The recompute is what lets the transaction commit: `albums.artist_image_track_id` and `biography_track_id` are deferred foreign keys, and an album still pointing at a purged track fails the commit. A play of a purged track keeps its snapshot (§6). Playlists are not modelled yet (§10); when they are, a track in one is kept, since playlist membership is the only reference that extends retention. An admin's immediate cleanup is not built.
+
+**Each step holds the writer for about 50 ms.** The sweep is a chain of transactions, each sweeping one kind of row. A step deletes in chunks until 50 ms have passed, as long as a scan batch holds the writer (`design/scanning.md` §7), then commits, and the writer runs whatever was queued meanwhile before the next step, so a write waits for one step at most, never the whole sweep. Chunks are 100 rows, except tracks, which go 16 at a time, the smallest batch a scan writes: with its recompute, which reads each album it touches whole, a purged track costs about 2 ms in a debug build. Purging a whole 100,000-track library (debug build, laptop; albums of 10 tracks, artists of 5 albums) took 3,027 steps over 204 s, a mean of 67 ms, 117 ms at the 99th percentile and 252 ms at most, where chunks of 100 tracks, purging 20,000, took a mean of 167 ms and up to 385 ms. Images and biographies are walked by ID, 100 rows at a time, so no step reads either table whole. A step that fails or panics is rolled back, and the sweep passes over that kind of row until the next hour, so a row that cannot go never holds up the others.
+
+**Resized copies stay.** The image cache (§7) is named by content hash, which another library's image can share, and is rebuilt on demand, so the sweep leaves the copies of an image it deletes in `cache/images`.
+
+---
+
+## 10. Not Yet Modelled
 
 Playlists, queues, mixes, downloads, the job queue, external sources, the audit log, user settings, invites, password resets, the account change feed, and the completion-weighted score behind `sort=top`. Each arrives with its section of the API.
 
@@ -151,6 +175,6 @@ Playlists, queues, mixes, downloads, the job queue, external sources, the audit 
 
 ---
 
-## 10. Open Questions
+## 11. Open Questions
 
 1. **Tracks with no disc tag** are stored as disc `0` and shown as `null` in the API.

@@ -259,6 +259,7 @@ mod labels;
 mod lyrics;
 mod marks;
 mod primary;
+mod purge;
 mod reanalysis;
 mod recompute;
 mod scans;

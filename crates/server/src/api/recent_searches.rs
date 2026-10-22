@@ -3,8 +3,9 @@
 //!
 //! What the search box offers when it is empty (`requirements/search.md` §6). They are each
 //! user's own and kept per library, one entry per query. They are kept only for a recent
-//! window: the [`KEPT`] newest, none older than [`WINDOW_MS`]. Past that a search is deleted,
-//! not hidden. Every write sweeps away what has aged out for everyone, so there is no permanent
+//! window: the [`KEPT`] newest, none older than [`WINDOW_MS`]. Past that a search is deleted:
+//! one pushed out by newer ones as they are recorded, and one aged out by the hourly sweep
+//! (`crate::db::retention`), which the list leaves out until then. So there is no permanent
 //! search history.
 //!
 //! A client records a search once it settles: when the user acts on a result, submits it, or
@@ -31,12 +32,11 @@ use super::extract::{Json as Body, Path};
 use super::search::{Indexes, totals};
 use super::sql::timestamp;
 use super::{Id, Problem};
+use crate::db::retention::WINDOW_MS;
 use crate::db::{Database, now_ms};
 
 /// The most recent searches kept per user and library.
 const KEPT: i64 = 20;
-/// How long a recent search is kept: 30 days.
-const WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// The longest query kept, in bytes.
 const MAX_QUERY: usize = 500;
 
@@ -89,14 +89,6 @@ fn row(row: &Row) -> rusqlite::Result<RecentSearch> {
         _ => None,
     };
     Ok(RecentSearch { id: Id(row.get(0)?), query: row.get(1)?, selected, searched_at: row.get(4)? })
-}
-
-/// Deletes every search, anyone's, that has aged out of the window, and what the `searched`
-/// hook noted about searches as old.
-fn sweep(tx: &Transaction, now: i64) -> rusqlite::Result<()> {
-    tx.execute("DELETE FROM recent_searches WHERE searched_at < ?1", [now - WINDOW_MS])?;
-    tx.execute("DELETE FROM search_events WHERE created_at < ?1", [now - WINDOW_MS])?;
-    Ok(())
 }
 
 /// Whether user `?1` shares their searches with any plugin.
@@ -201,7 +193,6 @@ pub async fn record(
                 return Ok(None);
             }
             let now = now_ms();
-            sweep(tx, now)?;
             tx.execute(
                 "DELETE FROM recent_searches WHERE user_id = ?1 AND library_id = ?2 AND folded = ?3",
                 params![user, library, folded],
@@ -248,7 +239,6 @@ pub async fn delete(
     let deleted = db
         .write(move |tx| {
             let now = now_ms();
-            sweep(tx, now)?;
             let deleted = tx.execute(
                 "DELETE FROM recent_searches WHERE id = ?1 AND user_id = ?2 AND library_id = ?3",
                 params![search, user, library],
@@ -274,7 +264,6 @@ pub async fn clear(
     let user = caller.user;
     db.write(move |tx| {
         let now = now_ms();
-        sweep(tx, now)?;
         let cleared: Vec<i64> = tx
             .prepare(
                 "DELETE FROM recent_searches WHERE user_id = ?1 AND library_id = ?2 RETURNING id",

@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 
 use super::super::testing::{add_device, add_user, app_with_tracks, json, owner_request, respond};
 use super::{KEPT, WINDOW_MS};
-use crate::db::Database;
-use crate::db::testing::{Artist, Track, access};
+use crate::db::testing::{Artist, Track, access, sweep};
+use crate::db::{Database, now_ms};
 use crate::plugins::personal::set_search_sharing;
 use crate::plugins::testing::{connect, enable, grant, install, manifest, plugins};
 
@@ -87,11 +87,17 @@ async fn only_the_newest_within_the_window_are_kept() {
     age(&db, WINDOW_MS + 1).await;
     assert!(queries(&app).await.is_empty(), "aged out of the window");
     record(&app, json!({ "query": "fresh" })).await;
-    let stored: i64 = db
-        .read(|conn| conn.query_row("SELECT count(*) FROM recent_searches", [], |row| row.get(0)))
+    let swept = Arc::clone(&db);
+    tokio::task::spawn_blocking(move || sweep(&swept, now_ms())).await.unwrap();
+    let stored: Vec<String> = db
+        .read(|conn| {
+            conn.prepare("SELECT query FROM recent_searches")?
+                .query_map([], |row| row.get(0))?
+                .collect()
+        })
         .await
         .unwrap();
-    assert_eq!(stored, 1, "what aged out is deleted, not hidden");
+    assert_eq!(stored, ["fresh"], "what aged out is deleted by the sweep, not hidden");
 }
 
 #[tokio::test]
