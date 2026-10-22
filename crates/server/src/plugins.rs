@@ -24,6 +24,7 @@ use jewelcase_plugins::{Host, InvalidPlugin, Manifest, Permission};
 use jewelcase_scanner::Scanner;
 use rusqlite::{Connection, params};
 use tokio::runtime::Runtime;
+use tokio::sync::Notify;
 
 use crate::db::{Database, DbError, now_ms};
 use library::RunLibrary;
@@ -65,12 +66,16 @@ pub struct Plugins {
     compiled: Option<PathBuf>,
     /// Each library's scanner, to pick up what a plugin saves.
     scanners: HashMap<i64, Scanner>,
-    /// Started on first use, so a server that never runs a plugin pays nothing for them.
+    /// Each started on first use, the host by an install or a run and the runtime by a run, and
+    /// idle between runs, so a server with no plugin enabled pays nothing for them.
     host: OnceLock<anyhow::Result<Arc<Host<RunLibrary>>>>,
     runtime: OnceLock<Result<Runtime, String>>,
     /// The plugin, library, hook, and user of each delivery under way, so each has one at a
     /// time.
     delivering: Mutex<HashSet<(String, i64, Permission, i64)>>,
+    /// Wakes the hook loop, which sleeps while no plugin is enabled anywhere: notified when an
+    /// admin enables one, and when the plugins are dropped.
+    wake_hooks: Arc<Notify>,
 }
 
 impl Plugins {
@@ -91,6 +96,7 @@ impl Plugins {
             host: OnceLock::new(),
             runtime: OnceLock::new(),
             delivering: Mutex::default(),
+            wake_hooks: Arc::default(),
         }
     }
 
@@ -229,7 +235,8 @@ impl Plugins {
             .ok_or(PluginError::NotFound)
     }
 
-    /// Enables or disables `id` in `library`. Enabling needs every required permission.
+    /// Enables or disables `id` in `library`. Enabling needs every required permission, and
+    /// wakes the hook loop.
     pub async fn set_enabled(
         &self,
         id: String,
@@ -244,18 +251,22 @@ impl Plugins {
             })
             .await?
             .ok_or(PluginError::NotFound)?;
-        if missing.is_empty() {
-            Ok(())
-        } else {
-            Err(PluginError::PermissionsRequired(
-                missing.into_iter().map(Permission::title).collect(),
-            ))
+        if !missing.is_empty() {
+            let missing = missing.into_iter().map(Permission::title).collect();
+            return Err(PluginError::PermissionsRequired(missing));
         }
+        if enabled {
+            self.wake_hooks.notify_one();
+        }
+        Ok(())
     }
 }
 
 impl Drop for Plugins {
+    /// Ends the hook loop and the plugin runtime.
     fn drop(&mut self) {
+        // The hook loop, woken, finds the plugins gone and ends.
+        self.wake_hooks.notify_one();
         // Dropping a runtime waits for its threads, which is not allowed on an async thread.
         if let Some(Ok(runtime)) = self.runtime.take() {
             runtime.shutdown_background();

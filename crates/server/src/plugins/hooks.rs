@@ -17,7 +17,7 @@
 //! the admin is told why (§11), except in `played`: one user's failing account must not stop
 //! the plugin for everyone, so theirs is retried hourly instead.
 
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::time::Duration;
 
 use jewelcase_plugins::Permission;
@@ -89,28 +89,45 @@ impl Ran {
 }
 
 impl Plugins {
-    /// Starts delivering hook events in the background, until the plugins are dropped.
+    /// Starts delivering hook events in the background, until the plugins are dropped: every
+    /// [`POLL`] while a plugin is enabled in any library, and otherwise not until an admin
+    /// enables one. The loop runs on the Tokio runtime it is called on, so this panics outside
+    /// one, and only finds what is due; the deliveries run on the plugin runtime, which the first
+    /// one starts.
     pub fn start_hooks(self: &Arc<Plugins>) {
-        let Ok(runtime) = self.runtime() else { return };
-        let plugins: Weak<Plugins> = Arc::downgrade(self);
-        runtime.spawn(async move {
-            loop {
-                tokio::time::sleep(POLL).await;
-                let Some(plugins) = plugins.upgrade() else { break };
-                plugins.dispatch().await;
+        let (plugins, wake) = (Arc::downgrade(self), self.wake_hooks.clone());
+        tokio::spawn(async move {
+            while let Some(plugins) = plugins.upgrade() {
+                let enabled = plugins.dispatch().await;
+                drop(plugins);
+                if enabled {
+                    tokio::time::sleep(POLL).await;
+                } else {
+                    wake.notified().await;
+                }
             }
         });
     }
 
     /// Starts each delivery that is due and not already under way. One plugin, library, hook,
-    /// and user has at most one delivery at a time; different ones run side by side.
-    pub async fn dispatch(self: &Arc<Plugins>) {
-        let due = match self.db.read(|conn| due::all(conn, now_ms())).await {
-            Ok(due) => due,
-            Err(error) => return tracing::error!(%error, "cannot find hook events to deliver"),
+    /// and user has at most one delivery at a time; different ones run side by side. Answers
+    /// false if no plugin is enabled in any library, so nothing can be due until one is.
+    pub async fn dispatch(self: &Arc<Plugins>) -> bool {
+        let read = self.db.read(|conn| {
+            let enabled = due::any_enabled(conn)?;
+            enabled.then(|| due::all(conn, now_ms())).transpose()
+        });
+        let due = match read.await {
+            Ok(Some(due)) => due,
+            Ok(None) => return false,
+            Err(error) => {
+                // A failed read is no sign that nothing is enabled, so polling goes on.
+                tracing::error!(%error, "cannot find hook events to deliver");
+                return true;
+            }
         };
-        let Ok(runtime) = self.runtime() else { return };
         for due in due {
+            let Ok(runtime) = self.runtime() else { return true };
             let key = (due.plugin.clone(), due.library, due.hook, due.user);
             if !self.delivering.lock().expect("delivery lock").insert(key.clone()) {
                 continue;
@@ -121,6 +138,7 @@ impl Plugins {
                 plugins.delivering.lock().expect("delivery lock").remove(&key);
             });
         }
+        true
     }
 
     /// Delivers what is due to one plugin in one library, and records how it went.

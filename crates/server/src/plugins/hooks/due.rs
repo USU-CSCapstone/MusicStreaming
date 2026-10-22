@@ -61,6 +61,12 @@ fn hook_granted(hook: Permission) -> String {
 
 const READY: &str = "p.enabled AND (c.retry_at IS NULL OR c.retry_at <= ?1)";
 
+/// Whether any plugin is enabled in any library, which no hook can be due without.
+pub fn any_enabled(conn: &Connection) -> rusqlite::Result<bool> {
+    let sql = "SELECT EXISTS (SELECT 1 FROM plugin_libraries WHERE enabled)";
+    conn.prepare_cached(sql)?.query_row([], |row| row.get(0))
+}
+
 /// Every pair a hook is due for at `now`, with its position, failures, outages, outage start
 /// and user.
 pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {

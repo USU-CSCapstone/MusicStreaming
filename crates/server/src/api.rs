@@ -35,7 +35,7 @@ mod session;
 mod setup;
 mod sql;
 #[cfg(test)]
-mod testing;
+pub(crate) mod testing;
 mod time;
 mod tracks;
 mod waveform;

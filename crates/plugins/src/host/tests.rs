@@ -3,6 +3,8 @@
 //! sent.
 
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use super::testing::{self, Memory};
@@ -35,9 +37,17 @@ async fn a_run_that_waits_past_its_budget_in_a_host_call_still_finishes() {
     assert!(took >= Duration::from_millis(500), "it waited {took:?}");
 }
 
-#[tokio::test]
-async fn a_spin_traps_at_its_compute_budget() {
-    let (outcome, took) = run(BUDGET, Event::Run).await;
+/// On a thread and runtime of its own, so a spin the host never stops fails the test rather than
+/// hanging it.
+#[test]
+fn a_spin_traps_at_its_compute_budget() {
+    let (sent, received) = mpsc::channel();
+    thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build();
+        sent.send(runtime.expect("runtime").block_on(run(BUDGET, Event::Run))).expect("sent");
+    });
+    let stopped = received.recv_timeout(Duration::from_secs(10));
+    let (outcome, took) = stopped.expect("the spin was never stopped");
     assert_eq!(outcome.result, Err(RunError::OutOfCompute));
     assert_eq!(outcome.summary(), "the plugin ran past its compute budget");
     // A tick lasts at least 1 ms, so the budget cannot run out sooner than that allows.

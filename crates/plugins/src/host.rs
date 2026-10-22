@@ -8,7 +8,6 @@ use std::future::{Future, Ready, ready};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
 
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
@@ -21,9 +20,11 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 use crate::manifest::{Permission, RateLimit};
 use crate::network::Network;
 use crate::rules::{self, Reach};
+use epoch::Epoch;
 use http::KeptClient;
 
 mod compiled;
+mod epoch;
 mod http;
 mod library;
 mod outcome;
@@ -51,9 +52,6 @@ pub use bindings::jewelcase::plugin::library::{Album, Artist, Track};
 pub(crate) use bindings::jewelcase::plugin::{files::Entry, host::Error};
 pub use outcome::{Outcome, RunError};
 
-/// How often the epoch advances, and so how often a running plugin is checked. A tick is a sleep
-/// that runs a little long, at about 1.05 ms.
-const TICK: Duration = Duration::from_millis(1);
 /// Compute a plugin may spend in one run, in ticks: about 63 s. Ticks count only while its code
 /// runs, but each host call it waits on costs one however long it takes, so this is approximate.
 const CPU_BUDGET: u64 = 60_000;
@@ -213,11 +211,13 @@ pub struct Host<L: Library> {
     network: Arc<Network>,
     /// The ticks of compute each run may spend: `CPU_BUDGET`, or fewer in tests.
     budget: u64,
+    /// Advances the engine's epoch while a run is live.
+    epoch: Epoch,
 }
 
 impl<L: Library> Host<L> {
-    /// The engine, and a thread advancing its epoch every `TICK`. The thread ends with the
-    /// engine. With `cache`, an absolute directory for wasmtime's alone that no other user can
+    /// The engine, and a thread advancing its epoch while a run is live, which ends with the
+    /// host. With `cache`, an absolute directory for wasmtime's alone that no other user can
     /// write, compiled code is kept there too, so a restart loads it rather than compiling
     /// again. Fails if the engine, the thread, or the cache cannot be started.
     pub fn new(cache: Option<&Path>) -> wasmtime::Result<Host<L>> {
@@ -229,15 +229,10 @@ impl<L: Library> Host<L> {
             config.cache(Some(Cache::new(settings)?));
         }
         let engine = Engine::new(&config)?;
-        let weak = engine.weak();
-        thread::Builder::new().name("plugin-epoch".into()).spawn(move || {
-            while let Some(engine) = weak.upgrade() {
-                engine.increment_epoch();
-                drop(engine);
-                thread::sleep(TICK);
-            }
-        })?;
-        Ok(Host { engine, compiled: Mutex::default(), network: Arc::default(), budget: CPU_BUDGET })
+        let ticked = engine.clone();
+        let epoch = Epoch::start(move || ticked.increment_epoch())?;
+        let (compiled, network) = (Mutex::default(), Arc::default());
+        Ok(Host { engine, compiled, network, budget: CPU_BUDGET, epoch })
     }
 
     /// Refuses a component that could never run here: one that does not compile, instantiates
@@ -264,6 +259,8 @@ impl<L: Library> Host<L> {
             }
         };
         let mut store = self.store(grants, library, client);
+        // Held until the run ends, so the epoch advances and its deadlines are enforced.
+        let _live = self.epoch.live();
         let result = call(&pre, &mut store, &event).await;
         // The store owned the run's state while the plugin ran; what it logged and saved is
         // read back from it.

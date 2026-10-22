@@ -32,7 +32,7 @@ All eight hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-r
 
 - **A position per plugin and library, and per user in `played`, `playing`, and `searched`.** The position moves only once the plugin has handled a batch, so a crash, a restart, or an unreachable service loses nothing.
 - **Failures back off.** The retry comes after a minute, doubles up to an hour, and five failures in a row disable the plugin in that library. A failure after the plugin found a service out of reach (answered `429` or a `5xx`, `rate-limited`, `timed-out`, or unable to connect, TLS handshake included) is retried the same way but never counts toward the five; only an outage lasting 72 hours, with no success or other failure between, disables it ([`plugins.md` §7](plugins.md#7-running-plugins)). In `played`, `playing`, and `searched`, one user's failures are retried at most hourly and never disable the plugin for everyone else.
-- **One delivery per pair at a time**, polled every 5 seconds.
+- **One delivery per pair at a time**, polled every 5 seconds while a plugin is enabled in any library. While none is, the dispatcher sleeps until an admin enables one.
 
 ### 1.1 Playing
 

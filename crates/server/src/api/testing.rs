@@ -74,7 +74,7 @@ pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, R
 }
 
 /// What the API's handlers share, over `db` in `temp`, mounted at the root.
-pub fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
+pub(super) fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
     let images = Images::new(temp.path().join("cache"), Config::default());
     let plugins = plugins(temp, &db);
     AppState::new(db, images, plugins, Arc::default(), "/api/v1")
