@@ -99,11 +99,11 @@ fn a_folder_of_exactly_a_page_is_listed_in_one() {
 }
 
 #[test]
-fn an_entry_that_cannot_be_described_fails_the_listing_naming_it() {
+fn a_folder_that_cannot_be_searched_fails_the_listing_naming_it() {
     use std::os::unix::fs::PermissionsExt;
     let (_temp, root) = library();
     let album = root.join("Album");
-    // Readable but not searchable: its names list, but none of them can be looked at.
+    // Readable but not searchable, so nothing in it can be reached from the root.
     fs::set_permissions(&album, fs::Permissions::from_mode(0o444)).unwrap();
     if fs::symlink_metadata(album.join("01.flac")).is_ok() {
         fs::set_permissions(&album, fs::Permissions::from_mode(0o755)).unwrap();
@@ -112,7 +112,7 @@ fn an_entry_that_cannot_be_described_fails_the_listing_naming_it() {
     }
     let listed = entries(&root, "Album", None);
     fs::set_permissions(&album, fs::Permissions::from_mode(0o755)).unwrap();
-    assert!(failed(listed, "Album/01.flac: permission denied"));
+    assert!(failed(listed, "Album: permission denied"));
 }
 
 #[test]

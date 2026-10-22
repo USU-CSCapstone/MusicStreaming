@@ -48,8 +48,9 @@ use bindings::{Plugin, PluginPre};
 pub use bindings::jewelcase::plugin::events::{
     Changes, Event, Found, Play, PlayEnd, Playing, ResultKind, ScanFinished, Search, Selected,
 };
+pub(crate) use bindings::jewelcase::plugin::files::{Entry, WriteMode};
+pub(crate) use bindings::jewelcase::plugin::host::Error;
 pub use bindings::jewelcase::plugin::library::{Album, Artist, Track};
-pub(crate) use bindings::jewelcase::plugin::{files::Entry, host::Error};
 pub use outcome::{Outcome, Refused, RunError};
 
 /// Compute a plugin may spend in one run, in ticks: about 63 s. Ticks count only while its code

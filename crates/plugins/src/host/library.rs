@@ -109,11 +109,12 @@ impl<L: Library> files::Host for Run<L> {
         contents: Vec<u8>,
         mode: files::WriteMode,
     ) -> Result<(), Error> {
-        let replace = matches!(mode, files::WriteMode::Replace);
-        self.may(if replace { Permission::LibraryChange } else { Permission::LibraryAdd })?;
+        self.may(match mode {
+            files::WriteMode::Create => Permission::LibraryAdd,
+            files::WriteMode::Replace => Permission::LibraryChange,
+        })?;
         let root = self.root(root).await?;
-        let written =
-            blocking(move || library_files::write(&root, &path, &contents, replace)).await?;
+        let written = blocking(move || library_files::write(&root, &path, &contents, mode)).await?;
         self.written += 1;
         self.touched.push(written);
         Ok(())
