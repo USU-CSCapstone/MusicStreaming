@@ -45,7 +45,6 @@ mod track;
 mod triggers;
 mod worker;
 
-pub use analysis::waveform::Waveform;
 pub use analysis::{ANALYZER_VERSION, AnalysisResult, Analyzer};
 pub use audio::AudioProperties;
 pub use confine::without_links;

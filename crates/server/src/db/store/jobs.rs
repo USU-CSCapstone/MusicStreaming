@@ -74,7 +74,7 @@ pub fn store_analysis(
         else {
             return Ok(());
         };
-        if result.waveform.peaks.is_empty() {
+        if result.waveform.is_empty() {
             tx.execute("DELETE FROM track_waveforms WHERE track_id = ?1", [id])?;
         } else {
             tx.execute(

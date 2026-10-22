@@ -40,20 +40,15 @@ fn measured(lufs: f64) -> AnalysisResult {
     AnalysisResult {
         integrated_lufs: Some(lufs),
         true_peak_dbtp: Some(-1.0),
-        waveform: Waveform { peaks: vec![1, 2], rms: vec![1, 1] },
+        waveform: vec![1, 1],
         ..AnalysisResult::empty(ANALYZER_VERSION)
     }
 }
 
 #[test]
 fn replaced_audio_loses_its_analysis_and_a_lyrics_file_keeps_it() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    testing::make_album(&root, "A", "X", 2);
+    let (_tmp, store, lib, root) = scanned_album(2);
     let (one, two) = (root.join("A/X/01 - Track 1.wav"), root.join("A/X/02 - Track 2.wav"));
-    let store = make(&root);
-    let lib = testing::library(&root);
-    testing::scan_library(&store, &lib);
     for (track, file) in store.next_unanalyzed(lib.id, ANALYZER_VERSION, 2).unwrap() {
         let lufs = if file.path == one { -10.0 } else { -20.0 };
         store.store_analysis(lib.id, track, measured(lufs)).unwrap();
@@ -79,12 +74,7 @@ fn replaced_audio_loses_its_analysis_and_a_lyrics_file_keeps_it() {
 /// writes neither loudness nor waveform, and the track stays queued.
 #[test]
 fn a_result_for_replaced_audio_writes_nothing() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    testing::make_album(&root, "A", "X", 1);
-    let store = make(&root);
-    let lib = testing::library(&root);
-    testing::scan_library(&store, &lib);
+    let (_tmp, store, lib, _) = scanned_album(1);
     let (picked, file) = store.next_unanalyzed(lib.id, ANALYZER_VERSION, 1).unwrap().remove(0);
 
     testing::replace_audio(&file.path, "Track 1");
@@ -94,18 +84,32 @@ fn a_result_for_replaced_audio_writes_nothing() {
     assert_eq!(store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap().len(), 1);
 }
 
-/// A track analyzed by version 1, which stored waveforms on a linear scale, is analyzed again.
+/// Tracks analyzed by versions 1 and 2, whose waveforms this server does not read (linear values
+/// in version 1, peaks beside RMS in version 2), are analyzed again.
 #[test]
-fn a_track_analyzed_by_version_1_is_analyzed_again() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    testing::make_album(&root, "A", "X", 1);
-    let store = make(&root);
-    let lib = testing::library(&root);
-    testing::scan_library(&store, &lib);
-    let (track, _) = store.next_unanalyzed(lib.id, ANALYZER_VERSION, 1).unwrap().remove(0);
-    store.store_analysis(lib.id, track, AnalysisResult::empty(1)).unwrap();
-    assert_eq!(store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap().len(), 1);
+fn tracks_analyzed_by_versions_1_and_2_are_analyzed_again() {
+    let (_tmp, store, lib, _) = scanned_album(2);
+    let picked = store.next_unanalyzed(lib.id, ANALYZER_VERSION, 2).unwrap();
+    assert_eq!(picked.len(), 2);
+    for ((track, _), version) in picked.into_iter().zip([1, 2]) {
+        store.store_analysis(lib.id, track, AnalysisResult::empty(version)).unwrap();
+    }
+    assert_eq!(store.next_unanalyzed(lib.id, ANALYZER_VERSION, 10).unwrap().len(), 2);
+}
+
+/// A result with no waveform, as a file judged broken gets, deletes the waveform its track had.
+#[test]
+fn a_result_without_a_waveform_deletes_the_old_one() {
+    let (_tmp, store, lib, _) = scanned_album(1);
+    let pick = || store.next_unanalyzed(lib.id, ANALYZER_VERSION, 1).unwrap().remove(0).0;
+    store.store_analysis(lib.id, pick(), measured(-9.0)).unwrap();
+    assert!(analysis(&store)[0].4, "measured with a waveform");
+
+    let requeue = "UPDATE tracks SET analyzer_version = 0";
+    store.db().write_blocking(move |tx| tx.execute(requeue, [])).unwrap();
+    store.store_analysis(lib.id, pick(), AnalysisResult::empty(ANALYZER_VERSION)).unwrap();
+    let version = i64::from(ANALYZER_VERSION);
+    assert_eq!(analysis(&store), [("A/X/01 - Track 1.wav".to_owned(), version, None, None, false)]);
 }
 
 /// Audio replaced by a file that cannot be read loses its loudness, peak and waveform, though the
@@ -129,16 +133,9 @@ fn audio_replaced_by_an_unreadable_file_loses_its_analysis() {
 /// when its file is replaced by one that cannot be read.
 #[test]
 fn a_silent_track_replaced_unreadably_loses_its_waveform() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    testing::make_album(&root, "A", "X", 1);
-    let store = make(&root);
-    let lib = testing::library(&root);
-    testing::scan_library(&store, &lib);
-    let silence = AnalysisResult {
-        waveform: Waveform { peaks: vec![0, 0], rms: vec![0, 0] },
-        ..AnalysisResult::empty(ANALYZER_VERSION)
-    };
+    let (_tmp, store, lib, _) = scanned_album(1);
+    let silence =
+        AnalysisResult { waveform: vec![0, 0], ..AnalysisResult::empty(ANALYZER_VERSION) };
     let (track, file) = store.next_unanalyzed(lib.id, ANALYZER_VERSION, 1).unwrap().remove(0);
     store.store_analysis(lib.id, track, silence).unwrap();
     let version = i64::from(ANALYZER_VERSION);
@@ -175,15 +172,22 @@ fn a_missing_file_back_unreadable_and_unchanged_keeps_its_analysis() {
     assert_eq!(album_lufs(&store), Some(-12.6));
 }
 
-/// Two tracks under `A/X` scanned into a fresh store and measured at -10 and -20 LUFS, with the
-/// store, library and root.
-fn measured_album() -> (tempfile::TempDir, SqliteStore, LibraryConfig, std::path::PathBuf) {
+/// An album of `n` tracks under `A/X` scanned into a fresh store, with the store, library and
+/// root.
+fn scanned_album(n: usize) -> (tempfile::TempDir, SqliteStore, LibraryConfig, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
-    testing::make_album(&root, "A", "X", 2);
+    testing::make_album(&root, "A", "X", n);
     let store = make(&root);
     let lib = testing::library(&root);
     testing::scan_library(&store, &lib);
+    (tmp, store, lib, root)
+}
+
+/// Two tracks under `A/X` scanned into a fresh store and measured at -10 and -20 LUFS, with the
+/// store, library and root.
+fn measured_album() -> (tempfile::TempDir, SqliteStore, LibraryConfig, std::path::PathBuf) {
+    let (tmp, store, lib, root) = scanned_album(2);
     for (track, file) in store.next_unanalyzed(lib.id, ANALYZER_VERSION, 2).unwrap() {
         let lufs = if file.path.ends_with("01 - Track 1.wav") { -10.0 } else { -20.0 };
         store.store_analysis(lib.id, track, measured(lufs)).unwrap();

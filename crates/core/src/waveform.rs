@@ -1,9 +1,9 @@
 //! The waveform's level scale and its shaping for the seek bar (`requirements/playback.md` §3).
 //!
-//! The scanner stores each bin's peak and RMS as a level: a byte counting half decibels up from
-//! 127.5 dB below full scale, so 255 is full scale and 0 is silence. Shaping turns a track's RMS
-//! levels into the heights a client draws, in integer math, so the same levels give the same
-//! heights on every machine.
+//! The scanner stores each bin's RMS as a level: a byte counting half decibels up from 127.5 dB
+//! below full scale, so 255 is full scale and 0 is silence. Shaping turns a track's levels into
+//! the heights a client draws, in integer math, so the same levels give the same heights on every
+//! machine.
 
 /// Level steps per decibel.
 const STEPS_PER_DB: u8 = 2;

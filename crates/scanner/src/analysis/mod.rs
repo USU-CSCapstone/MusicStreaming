@@ -20,14 +20,14 @@ use crate::library::LibraryId;
 use crate::pool::Job;
 use crate::problems::{Problem, ProblemKind};
 use crate::store::{AnalysisStore, FileToDecode};
-use waveform::{Waveform, WaveformBuilder};
+use waveform::WaveformBuilder;
 
 /// Bumped whenever any sink's output changes; tracks below it are reprocessed
 /// in the background (`requirements/deployment.md` §5).
-pub const ANALYZER_VERSION: u32 = 2;
+pub const ANALYZER_VERSION: u32 = 3;
 
-/// Default waveform resolution. The playback design owns the final number.
-pub const DEFAULT_WAVEFORM_BINS: usize = 512;
+/// Waveform resolution. The playback design owns the final number.
+const WAVEFORM_BINS: usize = 512;
 
 /// Frames per block handed to the sinks.
 const BLOCK_FRAMES: usize = 8192;
@@ -51,7 +51,8 @@ pub struct AnalysisResult {
     pub integrated_lufs: Option<f64>,
     /// True peak across channels, dBTP.
     pub true_peak_dbtp: Option<f64>,
-    pub waveform: Waveform,
+    /// The RMS level of each waveform bin, on the scale of `jewelcase_core::waveform_level`.
+    pub waveform: Vec<u8>,
 }
 
 impl AnalysisResult {
@@ -62,7 +63,7 @@ impl AnalysisResult {
             analyzer_version: version,
             integrated_lufs: None,
             true_peak_dbtp: None,
-            waveform: Waveform { peaks: Vec::new(), rms: Vec::new() },
+            waveform: Vec::new(),
         }
     }
 }
@@ -72,31 +73,18 @@ impl AnalysisResult {
 pub struct Analyzer {
     ffmpeg: Ffmpeg,
     store: Arc<dyn AnalysisStore>,
-    waveform_bins: usize,
     retries: Retries,
 }
 
 impl Analyzer {
     /// Analyzes with `ffmpeg` into `store`.
     pub fn new(ffmpeg: Ffmpeg, store: Arc<dyn AnalysisStore>) -> Analyzer {
-        Analyzer {
-            ffmpeg,
-            store,
-            waveform_bins: DEFAULT_WAVEFORM_BINS,
-            retries: Retries::new(RETRY_AFTER),
-        }
+        Analyzer { ffmpeg, store, retries: Retries::new(RETRY_AFTER) }
     }
 
     /// Skips a track whose file cannot be opened for `retry_after`, rather than an hour.
     pub fn with_retry_after(mut self, retry_after: Duration) -> Analyzer {
         self.retries = Retries::new(retry_after);
-        self
-    }
-
-    /// Builds waveforms of `bins` peak and RMS bins, at least one, rather than
-    /// `DEFAULT_WAVEFORM_BINS`.
-    pub fn with_waveform_bins(mut self, bins: usize) -> Analyzer {
-        self.waveform_bins = bins.max(1);
         self
     }
 
@@ -107,7 +95,7 @@ impl Analyzer {
         let channels = info.channels as usize;
 
         let mut meter = EbuR128::new(info.channels, info.sample_rate, Mode::I | Mode::TRUE_PEAK)?;
-        let mut waveform = WaveformBuilder::new(self.waveform_bins, info.estimated_frames());
+        let mut waveform = WaveformBuilder::new(WAVEFORM_BINS, info.estimated_frames());
 
         let mut block: Vec<f32> = Vec::with_capacity(BLOCK_FRAMES * channels);
         let mut mono: Vec<f32> = Vec::with_capacity(BLOCK_FRAMES);

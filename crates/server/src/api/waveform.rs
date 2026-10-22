@@ -43,8 +43,8 @@ pub async fn get(
         .await?;
     let blob = blob.ok_or_else(Problem::not_found)?;
     Ok(match blob.as_deref().and_then(waveform::decode) {
-        Some(measured) => {
-            let points = shape_waveform(&measured.rms);
+        Some(rms) => {
+            let points = shape_waveform(rms);
             Json(Waveform { point_count: points.len(), data: BASE64.encode(&points) })
                 .into_response()
         }
@@ -55,19 +55,17 @@ pub async fn get(
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
-    use jewelcase_scanner::Waveform as Measured;
     use serde_json::{Value, json};
 
     use super::super::testing::{app_with_tracks, send};
     use super::*;
 
-    /// The points are the RMS levels shaped by `jewelcase_core`, whatever the peaks: a quiet
-    /// passage 40 dB down and a loud one 6 dB down both stay visible.
+    /// The points are the RMS levels shaped by `jewelcase_core`: a quiet passage 40 dB down and
+    /// a loud one 6 dB down both stay visible.
     #[tokio::test]
     async fn serves_the_shaped_rms_levels() {
         let (_temp, db, app) = app_with_tracks().await;
-        let measured = Measured { peaks: vec![255; 8], rms: [[175; 4], [243; 4]].concat() };
-        let blob = waveform::encode(&measured);
+        let blob = waveform::encode(&[[175; 4], [243; 4]].concat());
         db.write(move |tx| {
             tx.execute(
                 "INSERT INTO track_waveforms (library_id, track_id, data) VALUES (1, 1, ?1)",
@@ -108,7 +106,7 @@ mod tests {
     #[tokio::test]
     async fn only_the_callers_library_is_reachable() {
         let (_temp, db, app) = app_with_tracks().await;
-        let blob = waveform::encode(&Measured { peaks: vec![1], rms: vec![1] });
+        let blob = waveform::encode(&[1]);
         db.write(move |tx| {
             tx.execute(
                 "INSERT INTO track_waveforms (library_id, track_id, data) VALUES (2, 3, ?1)",

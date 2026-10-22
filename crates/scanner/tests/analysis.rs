@@ -35,14 +35,11 @@ fn sine_measures_as_expected() {
         assert!((lufs - -6.7).abs() < 1.0, "{}: {lufs} LUFS", path.display());
         let peak = r.true_peak_dbtp.expect("peak");
         assert!((peak - -6.02).abs() < 0.3, "{}: {peak} dBTP", path.display());
-        assert_eq!(r.waveform.peaks.len(), 512);
-        // Every bin sees the same amplitude, stored as its level in half decibels.
-        let mid = r.waveform.peaks[256];
-        assert!(mid.abs_diff(waveform_level(0.5)) <= 1, "peak bin {mid}");
-        assert!(r.waveform.peaks.iter().all(|p| p.abs_diff(mid) <= 1));
-        // RMS of a sine is peak / sqrt(2), 3 dB below it.
-        let rms = r.waveform.rms[256];
-        assert!(rms.abs_diff(waveform_level(0.5 / 2f64.sqrt())) <= 1, "rms bin {rms}");
+        assert_eq!(r.waveform.len(), 512);
+        // Every bin holds the sine's RMS, its peak / sqrt(2) or 3 dB below it, as a level in half
+        // decibels.
+        let level = waveform_level(0.5 / 2f64.sqrt());
+        assert!(r.waveform.iter().all(|r| r.abs_diff(level) <= 1), "{:?}", r.waveform);
         assert_eq!(r.analyzer_version, ANALYZER_VERSION);
     }
 }

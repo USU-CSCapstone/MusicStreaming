@@ -696,7 +696,7 @@ fn analysis_results_reach_tracks_albums_and_waveforms() {
     let album_lufs: f64 = scalar(&store, "SELECT loudness_lufs FROM albums").unwrap();
     assert!((album_lufs - lufs).abs() < 0.01, "a one-track album is as loud as its track");
     let blob: Vec<u8> = scalar(&store, "SELECT data FROM track_waveforms").unwrap();
-    assert_eq!(waveform::decode(&blob).unwrap().peaks.len(), 512);
+    assert_eq!(waveform::decode(&blob).unwrap().len(), 512);
 }
 
 #[test]
@@ -724,7 +724,7 @@ fn another_librarys_track_is_left_alone() {
     let other: LibraryId = 2;
     let batch = Batch { returned: vec![track], changed_unread: vec![track], ..Batch::default() };
     store.apply(other, batch).unwrap();
-    // No peaks: the path that deletes a waveform. The file is as picked, so only the library
+    // No RMS levels: the path that deletes a waveform. The file is as picked, so only the library
     // stops the write.
     let result = AnalysisResult { integrated_lufs: Some(-9.0), ..AnalysisResult::empty(1) };
     let stamp = |sql| scalar::<i64>(&store, sql).unwrap() as u64;
