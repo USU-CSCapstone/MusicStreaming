@@ -30,16 +30,28 @@ pub use row::{Cursor, Scan, ScanId, ScanProgress, ScanState, Trigger};
 /// starting points; tests choose others to flush at the points they check.
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
-    /// Flush a batch at this many outcomes...
+    /// Flush a batch at this many outcomes at most...
     pub batch_size: usize,
     /// ...or after this long, whichever comes first, so progress is visible
     /// and content appears within seconds.
     pub batch_interval: Duration,
+    /// How long a batch should hold the store's writer, which interactive writes wait behind.
+    /// Each batch is sized to apply in about this long at the rate the last one applied...
+    pub batch_time: Duration,
+    /// ...but holds at least this many outcomes, or `batch_size` if that is fewer, since part of
+    /// what a batch costs, such as its commit and the albums it touches, does not shrink with it.
+    /// A scan's first batch is this size.
+    pub min_batch: usize,
 }
 
 impl Default for ScanOptions {
     fn default() -> Self {
-        ScanOptions { batch_size: 250, batch_interval: Duration::from_secs(2) }
+        ScanOptions {
+            batch_size: 250,
+            batch_interval: Duration::from_secs(2),
+            batch_time: Duration::from_millis(50),
+            min_batch: 16,
+        }
     }
 }
 
@@ -85,7 +97,7 @@ pub struct Undone {
 /// a panic or an exclude pattern that does not compile left unwalked, since a retry would panic
 /// or suspend again, but not a root found not answering before a panic.
 pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) -> Undone {
-    let mut writer = Writer::new(scan);
+    let mut writer = Writer::new(scan, ctx.options);
     let mut unanswered = Vec::new();
     // Asserted unwind safe because a panic can leave `scan`'s cursor and progress ahead of the
     // store, and `suspend` replaces both from what the writer last persisted, which changes only

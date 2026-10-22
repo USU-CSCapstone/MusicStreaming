@@ -15,9 +15,9 @@ fn two_folders(root: &Path) {
     symlink(track(root, "A/X", 1), root.join("B/Y/zz - Link.wav")).unwrap();
 }
 
-/// A shutdown asked for as the batch holding B/Y's third track is stored leaves the row running
+/// A shutdown asked for as the batch holding B/Y's second track is stored leaves the row running
 /// at B, the last folder completed, counting only what a resume will not count again: A/X's track
-/// seen, and the four tracks stored. The resumed scan ends with the counts and tracks of one
+/// seen, and the three tracks stored. The resumed scan ends with the counts and tracks of one
 /// never stopped.
 pub fn a_scan_shut_down_partway_through_a_folder_resumes_counting_each_file_once<
     S: InspectStore + 'static,
@@ -30,7 +30,7 @@ pub fn a_scan_shut_down_partway_through_a_folder_resumes_counting_each_file_once
     let lib = library(&root);
     let store = Arc::new(make(&lib));
     let stops = Stops::default();
-    let stop_at = track(&root, "B/Y", 3);
+    let stop_at = track(&root, "B/Y", 2);
     let on_apply = |batch: &Batch| {
         if batch.upserts.iter().any(|t| t.path == stop_at) {
             stops.shutdown.store(true, Ordering::SeqCst);
@@ -44,14 +44,14 @@ pub fn a_scan_shut_down_partway_through_a_folder_resumes_counting_each_file_once
     let mut row = only_row(store.as_ref(), &lib);
     let stopped = ScanProgress {
         files_seen: 1,
-        files_processed: 4,
-        added: 4,
+        files_processed: 3,
+        added: 3,
         current_path: Some(root.join("B/Y")),
         ..Default::default()
     };
     let cursor = after(&root, "B");
     assert_eq!((row.state, &row.cursor, &row.progress), (ScanState::Running, &cursor, &stopped));
-    assert_eq!(store.inspect_tracks(lib.id).len(), 4);
+    assert_eq!(store.inspect_tracks(lib.id).len(), 3);
 
     run(&hooked, &lib, &mut row, &batches_of(2), &Stops::default());
     assert_resumed_like_an_uninterrupted_scan(store.as_ref(), &lib);
