@@ -108,7 +108,8 @@ async fn a_cookie_write_needs_the_client_header() {
     let headers = [("cookie", COOKIE), ("x-jewelcase-client", "web")];
     let (status, response, _) = call(&app, "POST", "/api/v1/auth/logout", &headers).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    assert_eq!(response[header::SET_COOKIE], "jewelcase_session=; Path=/api/v1; Max-Age=0");
+    let cookies: Vec<_> = response.get_all(header::SET_COOKIE).iter().collect();
+    assert_eq!(cookies, ["jewelcase_session=; Path=/api/v1; Max-Age=0"]);
 }
 
 #[tokio::test]

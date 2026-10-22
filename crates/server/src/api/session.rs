@@ -23,7 +23,8 @@ use crate::db::DbError;
 /// The cookie browser clients authenticate with (`cookieAuth` in `api/openapi.yaml`).
 pub const COOKIE: &str = "jewelcase_session";
 
-/// Browsers keep a cookie for at most 400 days, so that is how long it asks for.
+/// Browsers keep a cookie for at most 400 days, so that is how long it asks for. A session in
+/// use is sent it again (`authenticate`), so only one unused that long expires.
 const COOKIE_MAX_AGE_S: u32 = 400 * 24 * 60 * 60;
 
 #[derive(Serialize)]

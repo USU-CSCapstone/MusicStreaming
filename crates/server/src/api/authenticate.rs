@@ -25,7 +25,7 @@ use axum::response::{IntoResponse, Response};
 use rusqlite::{Connection, OptionalExtension};
 
 use super::realtime::Revoked;
-use super::session::{COOKIE, token_hash};
+use super::session::{self, COOKIE, token_hash};
 use super::{AppState, Code, Id, Problem};
 use crate::db::{Text, now_ms};
 
@@ -37,7 +37,7 @@ const CLIENT: &str = "x-jewelcase-client";
 const LAST_SEEN_EVERY: Duration = Duration::from_secs(5 * 60);
 
 /// The account and device a request is from. Handlers take it as an argument; only routes
-/// behind [`require`] can produce one.
+/// behind [`require`] or [`require_admin`] can produce one.
 #[derive(Debug, Clone, Copy)]
 pub struct Caller {
     pub user: i64,
@@ -55,15 +55,39 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 }
 
 /// Answers `401 unauthenticated` unless the request carries the token of a device whose
-/// account is active, `401 session_revoked` if that device is signed out, `403` if it is under
-/// `/admin` and the account is not an admin, and `404` if its path names a library that account
-/// cannot reach.
-/// Otherwise it passes the [`Caller`] on to the handler.
+/// account is active, `401 session_revoked` if that device is signed out, and `404` if its path
+/// names a library that account cannot reach. Otherwise it passes the [`Caller`] on to the
+/// handler.
 pub async fn require(
     State(state): State<AppState>,
     params: Result<RawPathParams, RawPathParamsRejection>,
+    request: Request,
+    next: Next,
+) -> Response {
+    gate(state, params, request, next, false).await
+}
+
+/// [`require`] for the routes under `/admin`, which also answers `403` unless the account is an
+/// admin or the owner (`requirements/users.md` §1), whatever the path names (§10).
+pub async fn require_admin(
+    State(state): State<AppState>,
+    params: Result<RawPathParams, RawPathParamsRejection>,
+    request: Request,
+    next: Next,
+) -> Response {
+    gate(state, params, request, next, true).await
+}
+
+/// [`require`], and with `admin_only`, [`require_admin`]. A request it passes refreshes its
+/// device's `last_seen_at` at most every [`LAST_SEEN_EVERY`]. When it does, a request
+/// authenticated by cookie is answered with the cookie again, unless the handler set one, and
+/// with `Cache-Control: private`, unless the handler set its own.
+async fn gate(
+    state: AppState,
+    params: Result<RawPathParams, RawPathParamsRejection>,
     mut request: Request,
     next: Next,
+    admin_only: bool,
 ) -> Response {
     let Some(token) = token(request.headers()) else {
         return unauthenticated();
@@ -90,16 +114,15 @@ pub async fn require(
             .detail("A write authenticated by cookie must send X-Jewelcase-Client.")
             .into_response();
     }
-    // Everything under `/admin` is for admins and the owner (`requirements/users.md` §1). A user
-    // is told they may not, before anything the path names is looked up (§10).
-    if !caller.admin && request.uri().path().starts_with("/admin/") {
+    if admin_only && !caller.admin {
         return Problem::new(Code::Forbidden).into_response();
     }
     if !reaches_library {
         return Problem::not_found().into_response();
     }
     let stale_before = now_ms() - LAST_SEEN_EVERY.as_millis() as i64;
-    if last_seen_at < stale_before {
+    let stale = last_seen_at < stale_before;
+    if stale {
         // Off the request's path: a busy writer must not hold up what the user asked for. The
         // requests that arrive together all find it stale, so it is checked again in the write:
         // after the first, each changes nothing, and SQLite commits those without touching disk.
@@ -116,8 +139,23 @@ pub async fn require(
             }
         });
     }
+    // The cookie is sent again whenever `last_seen_at` is refreshed, so a web session in use
+    // never reaches its `Max-Age` (`requirements/users.md` §4).
+    let refresh = match token {
+        Token::Cookie(secret) if stale => Some(session::cookie(&state.prefix, secret)),
+        _ => None,
+    };
     request.extensions_mut().insert(caller);
-    next.run(request).await
+    let mut response = next.run(request).await;
+    if let Some(cookie) = refresh {
+        // A cookie the handler set, such as `logout`'s, wins. No shared cache may keep the
+        // token, so a handler that sets its own `Cache-Control`, such as an image's, must make
+        // it private.
+        let headers = response.headers_mut();
+        headers.entry(header::SET_COOKIE).or_insert(cookie);
+        headers.entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static("private"));
+    }
+    response
 }
 
 /// A request's token, by where it came from.
@@ -202,6 +240,8 @@ fn challenge(problem: Problem) -> Response {
 
 #[cfg(test)]
 mod gates;
+#[cfg(test)]
+mod refresh;
 #[cfg(test)]
 mod revoked;
 #[cfg(test)]

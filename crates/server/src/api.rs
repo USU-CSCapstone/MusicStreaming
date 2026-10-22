@@ -150,12 +150,15 @@ pub fn router(
         .route("/realtime", get(realtime::open))
         .merge(routes::me::router())
         .merge(routes::libraries::router())
-        .merge(routes::admin::router())
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate::require));
+    // These answer as signed-in routes do, and `403` to anyone but an admin or the owner.
+    let admin = routes::admin::router()
+        .route_layer(middleware::from_fn_with_state(state.clone(), authenticate::require_admin));
     // Until setup is done, these answer `503 setup_required`.
     let after_setup = Router::new()
         .route("/auth/login", post(login::login))
         .merge(signed_in)
+        .merge(admin)
         .route_layer(middleware::from_fn_with_state(state.clone(), setup::require));
     // Anything else under the API is a Problem, like every other error.
     let api = Router::new()

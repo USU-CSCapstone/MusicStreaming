@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::super::testing::{app, owner_request, send};
+use super::super::testing::{TOKEN, app, owner_request, send};
 use super::*;
 use crate::db::libraries;
 use crate::db::testing::{Album, Track, library};
@@ -140,6 +140,32 @@ async fn audio_serves_the_file_and_its_ranges() {
     let (status, _, body) = send(app, "HEAD", uri).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.is_empty());
+}
+
+/// A track is only for those who reach its library, so no shared cache may keep it, nor the
+/// session cookie a cookie request may be answered with.
+#[tokio::test]
+async fn audio_is_cached_privately() {
+    let (_temp, app) = app_with_fixture().await;
+    let uri = "/api/v1/libraries/1/tracks/1/audio?variant=original";
+    // By cookie, while the device is not seen lately, so the cookie is sent again.
+    let cookie = format!("jewelcase_session={TOKEN}");
+    let request = axum::http::Request::get(uri).header(header::COOKIE, cookie);
+    let response = app.clone().oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().contains_key(header::SET_COOKIE));
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "private");
+
+    let response = get_range(app.clone(), uri, "bytes=2-5").await;
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "private");
+
+    // A cache revalidating what it kept is told the same.
+    let etag = response.headers()[header::ETAG].clone();
+    let request = owner_request("GET", uri).header(header::IF_NONE_MATCH, etag);
+    let response = app.oneshot(request.body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "private");
 }
 
 #[tokio::test]

@@ -104,6 +104,19 @@ async fn a_file_over_the_limit_is_refused_as_too_big() {
 }
 
 #[tokio::test]
+async fn a_file_over_the_default_body_limit_but_under_the_plugin_limit_is_read() {
+    let (_temp, _db, app) = server().await;
+    // Three times the 2 MB a request body may otherwise be.
+    let megabyte = Bytes::from(vec![0; 1 << 20]);
+    let (status, problem) = upload(&app, (0..6).map(|_| Ok(megabyte.clone())).collect()).await;
+    assert_eq!(
+        (status, &problem["code"]),
+        (StatusCode::UNPROCESSABLE_ENTITY, &json!("plugin_invalid"))
+    );
+    assert_eq!(problem["detail"], "This is not a WebAssembly file.");
+}
+
+#[tokio::test]
 async fn an_upload_that_breaks_off_is_not_called_too_big() {
     let (_temp, _db, app) = server().await;
     // What the server's body timeout makes of an upload that stalls.

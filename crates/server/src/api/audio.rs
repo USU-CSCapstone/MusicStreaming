@@ -164,6 +164,8 @@ pub async fn audio(
     // ServeFile answers ranges, `HEAD`, and the conditional headers, streaming from disk.
     let response = ServeFile::new(path).try_call(request).await.map_err(unreadable)?;
     let mut response = response.map(Body::new);
+    // Private: a track is only for those who can reach its library.
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private"));
     // ServeFile guesses the type from the extension; the probe read it from the content.
     if response.status().is_success() {
         response

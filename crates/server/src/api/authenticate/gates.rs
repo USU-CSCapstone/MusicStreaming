@@ -1,6 +1,7 @@
-//! Every signed-in route against the gates [`super::require`] applies: `401` without a valid
-//! token, `403` under `/admin` for a user, and for a library the caller cannot reach the same
-//! `404`, byte for byte, as for one that does not exist (`requirements/users.md` §10).
+//! Every signed-in route against the gates [`super::require`] and [`super::require_admin`]
+//! apply: `401` without a valid token, `403` under `/admin` for a user, and for a library the
+//! caller cannot reach the same `404`, byte for byte, as for one that does not exist
+//! (`requirements/users.md` §10).
 
 use axum::Router;
 use axum::body::Body;
@@ -10,9 +11,10 @@ use serde_json::{Value, json};
 use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks_at, respond};
 use crate::db::testing::{Artist, Image, access};
 
-/// Every route behind [`super::require`], as a method and a path under the API prefix with
-/// sample IDs. Paths under a library name library 2 and something [`server`] puts in it, so a
-/// handler reached past the gate would answer differently than for a library that does not exist.
+/// Every route behind [`super::require`] or [`super::require_admin`], as a method and a path
+/// under the API prefix with sample IDs. Paths under a library name library 2 and something
+/// [`server`] puts in it, so a handler reached past the gate would answer differently than for a
+/// library that does not exist.
 /// `search`, `playback` and `audio` leave out their required query, so there a handler reached
 /// past the gate answers `422`.
 pub(super) const ROUTES: &[(&str, &str)] = &[
@@ -90,7 +92,7 @@ async fn server(base: &str) -> (tempfile::TempDir, Router) {
 
 /// The status, headers, and body of `method` on `path` under `base`'s API, sent with `headers`
 /// and no body.
-async fn send(
+pub(super) async fn send(
     app: &Router,
     base: &str,
     method: &str,
@@ -136,11 +138,16 @@ async fn only_admins_pass_under_admin() {
         let (_temp, app) = server(base).await;
         for &(method, path) in ROUTES.iter().filter(|(_, path)| path.starts_with("/admin/")) {
             let at = format!("{method} {base}{path}");
+            // Whatever the path names: a library the user cannot reach is `403` here too.
             let (status, _, body) = send(&app, base, method, path, &user).await;
             let problem: Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(
-                (status, &problem["code"]),
-                (StatusCode::FORBIDDEN, &json!("forbidden")),
+                (status, problem),
+                (
+                    StatusCode::FORBIDDEN,
+                    json!({ "type": "about:blank", "title": "Forbidden", "status": 403,
+                            "code": "forbidden" })
+                ),
                 "{at}"
             );
             for admin in [ADMIN, &format!("Bearer {TOKEN}")] {

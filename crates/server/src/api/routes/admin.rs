@@ -1,4 +1,5 @@
-//! The routes under `/admin`, which only admins and the owner pass (`authenticate`).
+//! The routes under `/admin`, which only admins and the owner pass
+//! (`authenticate::require_admin`).
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;

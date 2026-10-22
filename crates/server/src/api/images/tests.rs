@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use jewelcase_scanner::describe_image;
 use serde_json::Value;
 
-use super::super::testing::{app, ffmpeg, owner_request, send};
+use super::super::testing::{TOKEN, app, ffmpeg, owner_request, send};
 use crate::db::testing::{Image, library};
 
 /// Library 1 holds image 1, a 300×200 `cover.png`; image 2, a 64×64 picture embedded in
@@ -96,15 +96,24 @@ async fn resizes_to_the_size_above_the_request() {
 
 #[tokio::test]
 async fn is_cacheable_by_the_client_only() {
+    use axum::body::Body;
+    use axum::http::{Request, header};
+
     let (_temp, app) = app_with_images().await;
-    let request = owner_request("GET", "/api/v1/libraries/1/images/1?size=64")
-        .body(axum::body::Body::empty())
-        .unwrap();
+    let uri = "/api/v1/libraries/1/images/1?size=64";
+    // By cookie, while the device is not seen lately: the cookie is sent again, and the image
+    // keeps its own `Cache-Control`.
+    let cookie = format!("jewelcase_session={TOKEN}");
+    let request = Request::get(uri).header(header::COOKIE, cookie);
+    let response = tower::ServiceExt::oneshot(app.clone(), request.body(Body::empty()).unwrap());
+    let response = response.await.unwrap();
+    assert!(response.headers().contains_key(header::SET_COOKIE));
+    let cache_control: Vec<_> = response.headers().get_all(header::CACHE_CONTROL).iter().collect();
+    assert_eq!(cache_control, ["private, max-age=31536000, immutable"]);
+
+    let request = owner_request("GET", uri).body(Body::empty()).unwrap();
     let response = tower::ServiceExt::oneshot(app, request).await.unwrap();
-    assert_eq!(
-        response.headers()[axum::http::header::CACHE_CONTROL],
-        "private, max-age=31536000, immutable"
-    );
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "private, max-age=31536000, immutable");
 }
 
 #[tokio::test]
