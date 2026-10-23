@@ -1,10 +1,14 @@
-use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
-use serde_json::{Value, json};
+use axum::http::StatusCode;
+use serde_json::json;
 
-use super::super::testing::{add_device, add_user, app, respond};
+use super::super::testing::{add_device, add_user, app, call, conn};
 use crate::db::testing::{access, library};
 use crate::plugins::testing::{connect, enable, install, manifest, plugins};
+
+/// The plugins the caller can connect.
+const PLUGINS: &str = "/api/v1/me/plugins";
+/// The caller's settings for the scrobbler.
+const SETTINGS: &str = "/api/v1/me/plugins/scrobbler/settings";
 
 /// A scrobbler enabled in library 1, which user 2 reaches and has connected and user 3 does
 /// not reach, each logged in with a token named after them.
@@ -23,7 +27,7 @@ async fn setup() -> (tempfile::TempDir, axum::Router) {
     } });
     install(&db, scrobbler).await;
     enable(&plugins(&temp, &db), "scrobbler", true).await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     for user in [2, 3] {
         add_user(&conn, user, "user");
         add_device(&conn, user, user, &format!("token-{user}"));
@@ -34,21 +38,10 @@ async fn setup() -> (tempfile::TempDir, axum::Router) {
     (temp, app)
 }
 
-async fn call(app: &axum::Router, user: i64, method: &str, uri: &str) -> (StatusCode, Value) {
-    let request = Request::builder()
-        .method(method)
-        .uri(format!("/api/v1{uri}"))
-        .header(header::AUTHORIZATION, format!("Bearer token-{user}"))
-        .body(Body::empty())
-        .unwrap();
-    let (status, _, body) = respond(app.clone(), request).await;
-    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
-}
-
 #[tokio::test]
 async fn a_user_sees_and_disconnects_only_what_they_can_reach() {
     let (_temp, app) = setup().await;
-    let (status, list) = call(&app, 2, "GET", "/me/plugins").await;
+    let (status, list) = call(&app, "token-2", "GET", PLUGINS, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         list,
@@ -61,29 +54,25 @@ async fn a_user_sees_and_disconnects_only_what_they_can_reach() {
         }] })
     );
 
-    let (_, settings) = call(&app, 2, "GET", "/me/plugins/scrobbler/settings").await;
+    let (_, settings) = call(&app, "token-2", "GET", SETTINGS, None).await;
     assert_eq!(settings["values"], json!({ "user": "two" }), "the token is never returned");
     assert_eq!(settings["secretsSet"], json!(["token"]));
 
-    assert_eq!(call(&app, 3, "GET", "/me/plugins").await.1, json!({ "items": [] }));
-    let (status, _) = call(&app, 3, "GET", "/me/plugins/scrobbler/settings").await;
+    assert_eq!(call(&app, "token-3", "GET", PLUGINS, None).await.1, json!({ "items": [] }));
+    let (status, _) = call(&app, "token-3", "GET", SETTINGS, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "as if it were not installed");
 
-    let (status, _) = call(&app, 2, "DELETE", "/me/plugins/scrobbler/settings").await;
+    let (status, _) = call(&app, "token-2", "DELETE", SETTINGS, None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    let (_, list) = call(&app, 2, "GET", "/me/plugins").await;
+    let (_, list) = call(&app, "token-2", "GET", PLUGINS, None).await;
     assert_eq!(list["items"][0]["connected"], json!(false));
 }
 
+/// Turns sharing searches with `plugin` on or off as user `user`, and returns the status.
 async fn share(app: &axum::Router, user: i64, plugin: &str, sharing: bool) -> StatusCode {
-    let request = Request::builder()
-        .method("PUT")
-        .uri(format!("/api/v1/me/plugins/{plugin}/search-sharing"))
-        .header(header::AUTHORIZATION, format!("Bearer token-{user}"))
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(json!({ "sharing": sharing }).to_string()))
-        .unwrap();
-    respond(app.clone(), request).await.0
+    let uri = format!("/api/v1/me/plugins/{plugin}/search-sharing");
+    let body = Some(json!({ "sharing": sharing }));
+    call(app, &format!("token-{user}"), "PUT", &uri, body).await.0
 }
 
 #[tokio::test]

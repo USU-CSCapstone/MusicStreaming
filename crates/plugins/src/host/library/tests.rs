@@ -211,7 +211,8 @@ async fn state_needs_no_permission_and_keeps_keys_and_values_small() {
         let deleted = state::Host::delete(run, key.clone()).await;
         assert!(matches!(deleted, Err(Error::Refused(_))), "{key:?}: {deleted:?}");
     }
-    assert_eq!(run.library.state.keys().collect::<Vec<_>>(), ["k".repeat(512).as_str()]);
+    let state = run.library.state.lock().unwrap();
+    assert_eq!(state.keys().collect::<Vec<_>>(), ["k".repeat(512).as_str()]);
 }
 
 #[tokio::test]

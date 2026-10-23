@@ -1,15 +1,14 @@
 use std::net::SocketAddr;
 
 use axum::Router;
-use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
+use axum::http::StatusCode;
 use futures_util::SinkExt;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::super::testing::player::{progress_report, report, start_playing};
 use super::super::testing::socket::{connect_with, next, next_of, serve};
-use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, respond};
+use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, call, conn};
 use crate::db::testing::access;
 
 mod disconnected;
@@ -19,7 +18,7 @@ mod saved;
 /// reaches only library 1, on device 3 as `user2`.
 async fn setup() -> (tempfile::TempDir, Router, SocketAddr) {
     let (temp, _db, app) = app_with_tracks().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     add_device(&conn, 1, 2, "phone");
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 3, "user2");
@@ -30,13 +29,9 @@ async fn setup() -> (tempfile::TempDir, Router, SocketAddr) {
 
 /// `getPlayer`, logged in with `token`.
 async fn player(app: &Router, token: &str) -> Value {
-    let request = Request::get("/api/v1/me/player")
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .body(Body::empty())
-        .unwrap();
-    let (status, _, body) = respond(app.clone(), request).await;
+    let (status, player) = call(app, token, "GET", "/api/v1/me/player", None).await;
     assert_eq!(status, StatusCode::OK);
-    serde_json::from_slice(&body).unwrap()
+    player
 }
 
 #[tokio::test]
@@ -178,7 +173,7 @@ async fn a_report_is_checked_against_the_account_as_it_is_now() {
 
     // Signed out by a path that does not close its connections.
     let mut phone = connect_with(address, "phone").await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     let revoke = "UPDATE devices SET revoked_reason = 'credentials_changed' WHERE id = 2";
     conn.execute(revoke, []).unwrap();
     start_playing(&mut phone, "2").await;

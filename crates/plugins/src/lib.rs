@@ -12,6 +12,8 @@ pub mod manifest;
 mod network;
 mod rules;
 pub mod settings;
+#[cfg(feature = "testing")]
+pub mod testing;
 
 pub use download::{MAX_SIZE, download};
 pub use host::{

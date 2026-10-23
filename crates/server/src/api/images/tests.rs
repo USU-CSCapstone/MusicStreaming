@@ -6,7 +6,7 @@ use jewelcase_ffmpeg::Config;
 use jewelcase_scanner::describe_image;
 use serde_json::Value;
 
-use super::super::testing::{TOKEN, app, ffmpeg, owner_request, send};
+use super::super::testing::{TOKEN, app, conn, ffmpeg, owner_request, send};
 use super::cache::Images;
 use crate::db::testing::{Image, library};
 use crate::db::{Database, libraries};
@@ -280,7 +280,7 @@ async fn an_image_the_size_of_a_size_is_made_at_that_size() {
         "1",
         square.to_str().unwrap(),
     ]);
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     let image = Image::new(9, 1, "square.png");
     Image { hash: vec![9], width: 512, height: 512, ..image }.insert(&conn).unwrap();
     let uri = "/api/v1/libraries/1/images/9?size=1024";
@@ -354,7 +354,7 @@ async fn the_sweep_deletes_what_no_image_needs() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(cache.join("1/03/03-512.failed").exists());
     // An image only library 2 holds.
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     Image { hash: vec![0x22], ..Image::new(9, 2, "cover.png") }.insert(&conn).unwrap();
     let kept = ["1/01/01-64.jpg", "2/22/22-64.jpg"];
     let unheld = [
@@ -386,7 +386,7 @@ async fn the_sweep_deletes_what_no_image_needs() {
 #[tokio::test]
 async fn an_image_under_a_removed_root_is_not_found() {
     let (temp, app) = app_with_images().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     conn.execute("UPDATE library_roots SET removed_at = 1 WHERE library_id = 1", []).unwrap();
     let (status, _, _) = send(app, "GET", "/api/v1/libraries/1/images/1").await;
     assert_eq!(status, StatusCode::NOT_FOUND);

@@ -8,7 +8,7 @@ use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use serde_json::{Value, json};
 
-use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks_at, respond};
+use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks_at, conn, respond};
 use crate::db::testing::{Artist, Image, access};
 
 /// Every route behind [`super::require`] or [`super::require_admin`], as a method and a path
@@ -74,7 +74,7 @@ const ADMIN: &str = "Bearer admin-token";
 /// 2's and just made, as if recorded before their access was taken away.
 async fn server(base: &str) -> (tempfile::TempDir, Router) {
     let (temp, _db, app) = app_with_tracks_at(base).await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 2, "user-token");
     access(&conn, 2, 1).unwrap();
@@ -197,7 +197,7 @@ async fn a_library_out_of_reach_answers_exactly_as_one_that_does_not_exist() {
             }
         }
         // The recent search the table deletes is there, and the user's attempt left it alone.
-        let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+        let conn = conn(&temp);
         let kept: i64 = conn
             .query_row(
                 "SELECT count(*) FROM recent_searches WHERE id = 20 AND user_id = 2 \

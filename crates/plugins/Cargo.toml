@@ -17,7 +17,12 @@ wasmparser = "0.258"
 wasmtime = "49.0.1"
 wasmtime-wasi = "49.0.1"
 
+[features]
+# A library held in memory and grants built in one call, for this crate's tests.
+testing = []
+
 [dev-dependencies]
+jewelcase-plugins = { path = ".", features = ["testing"] }
 tempfile = "3.27.0"
 tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt", "test-util"] }
 

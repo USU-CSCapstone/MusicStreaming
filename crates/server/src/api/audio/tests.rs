@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::super::testing::{TOKEN, app, owner_request, send};
+use super::super::testing::{TOKEN, app, conn, owner_request, send};
 use super::*;
 use crate::db::libraries;
 use crate::db::testing::{Album, Track, library};
@@ -262,7 +262,7 @@ async fn a_file_reached_through_a_link_is_not_served() {
 #[tokio::test]
 async fn a_removed_root_is_not_served() {
     let (temp, app) = app_with_fixture().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     conn.execute("UPDATE library_roots SET removed_at = 1 WHERE library_id = 1", []).unwrap();
     let (status, _, _) =
         send(app, "GET", "/api/v1/libraries/1/tracks/1/audio?variant=original").await;

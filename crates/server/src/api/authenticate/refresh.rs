@@ -3,7 +3,7 @@
 
 use axum::http::{HeaderMap, StatusCode, header};
 
-use super::super::testing::{TOKEN, app};
+use super::super::testing::{TOKEN, app, conn};
 use super::gates::send;
 
 /// Every value of the header `name` in `headers`.
@@ -29,7 +29,7 @@ async fn a_cookie_request_from_a_device_not_seen_lately_gets_its_cookie_again() 
         assert_eq!(all(&response, header::CACHE_CONTROL), ["private"], "{base}");
 
         // Seen within the last few minutes: neither refreshed nor sent again.
-        let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+        let conn = conn(&temp);
         conn.execute("UPDATE devices SET last_seen_at = unixepoch() * 1000", []).unwrap();
         let (_, response, _) = send(&app, base, "GET", "/me", &headers).await;
         assert!(all(&response, header::SET_COOKIE).is_empty(), "{base}");

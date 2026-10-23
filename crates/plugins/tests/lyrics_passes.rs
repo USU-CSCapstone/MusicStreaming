@@ -6,9 +6,8 @@
 
 mod common;
 
-use std::path::PathBuf;
-
-use common::{State, Tracks, grants, plugin, track};
+use common::{grants, plugin, track};
+use jewelcase_plugins::testing::Memory;
 use jewelcase_plugins::{Changes, Event, Grants, Host, Outcome, Permission, RunError};
 
 /// The reason a miss is stored with when nothing was found.
@@ -19,9 +18,9 @@ const UNSAVED: u8 = 1;
 const PLAIN_ONLY: u8 = 2;
 
 /// A library of tracks `ids`, without lyrics, and empty state.
-fn library(ids: impl IntoIterator<Item = u64>) -> Tracks {
+fn library(ids: impl IntoIterator<Item = u64>) -> Memory {
     let tracks = ids.into_iter().map(|id| track(id, &format!("Track {id}"))).collect();
-    Tracks { root: PathBuf::new(), tracks, state: State::default(), fail_after: None }
+    Memory { tracks, ..Memory::default() }
 }
 
 /// Grants under which every lookup is refused before it leaves, as a failure.
@@ -30,12 +29,12 @@ fn offline() -> Grants {
 }
 
 /// Runs the plugin on `library` with `grants`, on `event`.
-async fn run(library: &Tracks, grants: Grants, event: Event) -> Outcome {
+async fn run(library: &Memory, grants: Grants, event: Event) -> Outcome {
     Host::new(None).unwrap().run(plugin(), grants, library.clone(), event).await
 }
 
 /// Runs the plugin on `library` with [`offline`] grants, on `event`.
-async fn run_offline(library: &Tracks, event: Event) -> Outcome {
+async fn run_offline(library: &Memory, event: Event) -> Outcome {
     run(library, offline(), event).await
 }
 
@@ -48,13 +47,13 @@ fn looked_up(outcome: &Outcome) -> Vec<u64> {
 
 /// What the plugin keeps under `key`, as the number it stores first: the cursor's track, or when
 /// a miss is due.
-fn kept(library: &Tracks, key: &str) -> Option<u64> {
+fn kept(library: &Memory, key: &str) -> Option<u64> {
     let state = library.state.lock().unwrap();
     state.get(key).map(|bytes| u64::from_le_bytes(bytes[..8].try_into().unwrap()))
 }
 
 /// Records a miss on track `id`, due again at `at`, for reason `why`.
-fn miss(library: &Tracks, id: u64, at: u64, why: u8) {
+fn miss(library: &Memory, id: u64, at: u64, why: u8) {
     let mut value = at.to_le_bytes().to_vec();
     value.push(why);
     library.state.lock().unwrap().insert(format!("miss/{id}"), value);
@@ -142,7 +141,7 @@ async fn a_miss_is_looked_up_again_once_its_reason_is_gone() {
 
 #[tokio::test]
 async fn a_run_cut_short_keeps_its_place_after_each_lookup() {
-    let library = Tracks { fail_after: Some(500), ..library(1..=501) };
+    let library = Memory { fail_after: Some(500), ..library(1..=501) };
     let outcome = run_offline(&library, Event::Run).await;
     // The library's failure reaches the plugin as `failed`, in the library's words.
     let failed = RunError::Reported("the library could not be read".into());

@@ -7,7 +7,8 @@ use tokio_tungstenite::tungstenite::{Error, Message};
 
 use super::super::testing::socket::{Socket, connect, connect_with, next, next_of, serve};
 use super::super::testing::{
-    TOKEN, add_device, add_user, app, app_before_setup, eventually, json, respond, send, send_json,
+    TOKEN, add_device, add_user, app, app_before_setup, conn, eventually, json, respond, send,
+    send_json,
 };
 use super::{Hub, ServerMessage};
 use crate::db::testing::User;
@@ -77,7 +78,7 @@ async fn a_device_connects_says_hello_and_answers_pings() {
 #[tokio::test]
 async fn a_connection_needs_an_active_accounts_token() {
     let (temp, _db, app) = app("");
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     User { status: "suspended", ..User::new(2, "user") }.insert(&conn).unwrap();
     add_device(&conn, 2, 2, "suspended");
     let address = serve(app).await;
@@ -93,7 +94,7 @@ async fn a_connection_needs_an_active_accounts_token() {
 #[tokio::test]
 async fn logging_out_closes_the_devices_connections_and_no_others() {
     let (temp, _db, app) = app("");
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     add_device(&conn, 1, 2, "other-token");
     let address = serve(app.clone()).await;
     let mut tabs = Vec::new();
@@ -116,7 +117,7 @@ async fn logging_out_closes_the_devices_connections_and_no_others() {
 #[tokio::test]
 async fn the_accounts_connections_see_its_devices_come_and_go() {
     let (temp, _db, app) = app("");
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     add_device(&conn, 1, 2, "phone");
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 3, "stranger");

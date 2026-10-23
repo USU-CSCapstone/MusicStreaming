@@ -1,24 +1,17 @@
 //! Commands over HTTP, answered with how they went, and commands sent again.
 
 use axum::Router;
-use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
+use axum::http::StatusCode;
 use serde_json::{Value, json};
 
 use super::{command, result_of, send, setup};
 use crate::api::testing::player::{command_id, start_playing};
 use crate::api::testing::socket::{connect_with, next_of};
-use crate::api::testing::{TOKEN, respond};
+use crate::api::testing::{TOKEN, call};
 
 /// Sends `command` over HTTP, logged in with `token`.
 async fn post(app: &Router, token: &str, command: Value) -> (StatusCode, Value) {
-    let request = Request::post("/api/v1/me/player/commands")
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(command.to_string()))
-        .unwrap();
-    let (status, _, body) = respond(app.clone(), request).await;
-    (status, serde_json::from_slice(&body).unwrap())
+    call(app, token, "POST", "/api/v1/me/player/commands", Some(command)).await
 }
 
 #[tokio::test]

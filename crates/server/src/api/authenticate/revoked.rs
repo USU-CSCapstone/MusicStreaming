@@ -8,7 +8,7 @@ use axum::http::{HeaderMap, Request, StatusCode, header};
 use serde_json::{Value, json};
 
 use super::super::testing::{
-    add_signed_out_device, app, app_before_setup, app_with_tracks, respond, send_json,
+    add_signed_out_device, app, app_before_setup, app_with_tracks, conn, respond, send_json,
 };
 use super::gates::ROUTES;
 use crate::db::testing::User;
@@ -21,7 +21,7 @@ const PASSWORD: &str = "correct horse battery staple";
 /// `suspended`, signed out when their credentials changed.
 async fn server() -> (tempfile::TempDir, Router) {
     let (temp, _db, app) = app_with_tracks().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     User::new(2, "user").insert(&conn).unwrap();
     User { status: "suspended", ..User::new(3, "user") }.insert(&conn).unwrap();
     add_signed_out_device(&conn, 2, 2, "revoked", "credentials_changed");
@@ -110,7 +110,7 @@ async fn signing_in_again_leaves_the_old_token_signed_out() {
 #[tokio::test]
 async fn a_signed_out_device_keeps_its_token_hash() {
     let (temp, _db, _app) = app("");
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     let without_hash = conn.execute(
         "INSERT INTO devices (id, user_id, name, type, revoked_reason, created_at, last_seen_at) \
          VALUES (2, 1, 'Test', 'desktop', 'credentials_changed', 0, 0)",

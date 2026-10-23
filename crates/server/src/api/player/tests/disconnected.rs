@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::{player, setup};
 use crate::api::testing::player::{report, start_playing};
 use crate::api::testing::socket::{Socket, connect_with, next_of};
-use crate::api::testing::{TOKEN, eventually};
+use crate::api::testing::{TOKEN, conn, eventually};
 
 /// The furthest a report of playing from 1000 ms, sent at `reported`, can have got by now. The
 /// server subtracts whole-millisecond wall-clock times, which can count one more than has passed.
@@ -103,7 +103,7 @@ async fn an_old_connection_closing_after_its_device_took_over_again_changes_noth
     // Once the server has let a connection go, it records when its device was last seen. Seen
     // in 2100 until then, so only that write lowers it: a request skips refreshing a device
     // seen so recently.
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     let later = 4_102_444_800_000_i64;
     conn.execute("UPDATE devices SET last_seen_at = ?1 WHERE id = 1", [later]).unwrap();
     old.close(None).await.unwrap();

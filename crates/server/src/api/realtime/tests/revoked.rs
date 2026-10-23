@@ -17,7 +17,7 @@ use super::super::super::player;
 use super::super::super::scope::Caller;
 use super::super::super::testing::player::{command_id, progress_report};
 use super::super::super::testing::socket::{connect, serve};
-use super::super::super::testing::{add_signed_out_device, app, app_with_tracks, state};
+use super::super::super::testing::{add_signed_out_device, app, app_with_tracks, conn, state};
 use super::super::{Presence, Revoked, handle, signed_in};
 use crate::db::{Database, Text};
 
@@ -81,7 +81,7 @@ async fn a_revoked_connection_acts_for_no_one() {
 /// account's credentials changed.
 fn with_signed_out_device() -> (tempfile::TempDir, Arc<Database>, Router) {
     let (temp, db, app) = app("");
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     add_signed_out_device(&conn, 1, 2, "revoked", "credentials_changed");
     (temp, db, app)
 }

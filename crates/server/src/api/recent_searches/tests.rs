@@ -1,14 +1,11 @@
 use std::sync::Arc;
 
 use axum::Router;
-use axum::body::Body;
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use jewelcase_plugins::Permission::{LibraryRead, SearchActivity, Searched};
 use serde_json::{Value, json};
 
-use super::super::testing::{
-    TOKEN, add_device, add_user, app_with_tracks, json, owner_request, respond,
-};
+use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, call, conn, json};
 use super::{KEPT, WINDOW_MS};
 use crate::db::testing::{Artist, Track, access, sweep};
 use crate::db::{Database, now_ms};
@@ -19,45 +16,20 @@ const URI: &str = "/api/v1/libraries/1/recent-searches";
 
 /// Records `body` as the owner, and answers the status and the JSON body.
 async fn record(app: &Router, body: Value) -> (StatusCode, Value) {
-    let request = owner_request("POST", URI)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(body.to_string()))
-        .unwrap();
-    let (status, _, body) = respond(app.clone(), request).await;
-    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
-}
-
-/// Sends `method` on `uri` as the device with `token`, with `body` as JSON if given, and answers
-/// the status and the JSON body.
-async fn as_device(
-    app: &Router,
-    token: &str,
-    method: &str,
-    uri: &str,
-    body: Option<Value>,
-) -> (StatusCode, Value) {
-    let request = axum::http::Request::builder()
-        .method(method)
-        .uri(uri)
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .header(header::CONTENT_TYPE, "application/json");
-    let body = body.map_or_else(Body::empty, |body| Body::from(body.to_string()));
-    let (status, _, body) = respond(app.clone(), request.body(body).unwrap()).await;
-    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+    call(app, TOKEN, "POST", URI, Some(body)).await
 }
 
 /// The queries of the recent searches the device with `token` lists in library 1, newest
 /// first.
 async fn listed(app: &Router, token: &str) -> Vec<String> {
-    let (status, list) = as_device(app, token, "GET", URI, None).await;
+    let (status, list) = call(app, token, "GET", URI, None).await;
     assert_eq!(status, StatusCode::OK, "{list}");
     let items = list["items"].as_array().unwrap();
     items.iter().map(|item| item["query"].as_str().unwrap().to_owned()).collect()
 }
 
 async fn send(app: &Router, method: &str, uri: &str) -> StatusCode {
-    let request = owner_request(method, uri).body(Body::empty()).unwrap();
-    respond(app.clone(), request).await.0
+    call(app, TOKEN, method, uri, None).await.0
 }
 
 /// Moves every recent search `ms` into the past.
@@ -157,12 +129,12 @@ async fn one_can_be_removed_or_all_cleared_and_never_anyone_elses() {
     let (_, first) = record(&app, json!({ "query": "aurora" })).await;
     record(&app, json!({ "query": "signal" })).await;
 
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 2, "user-token");
     access(&conn, 2, 1).unwrap();
     let theirs = format!("{URI}/{}", first["id"].as_str().unwrap());
-    let deleted = as_device(&app, "user-token", "DELETE", &theirs, None).await;
+    let deleted = call(&app, "user-token", "DELETE", &theirs, None).await;
     assert_eq!(deleted.0, StatusCode::NOT_FOUND);
     assert!(listed(&app, "user-token").await.is_empty(), "each user sees only their own");
 
@@ -179,7 +151,7 @@ async fn one_can_be_removed_or_all_cleared_and_never_anyone_elses() {
 #[tokio::test]
 async fn a_search_is_the_accounts_on_each_of_its_devices() {
     let (temp, _db, app) = app_with_tracks().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 5, "laptop-token");
     add_device(&conn, 2, 6, "phone-token");
@@ -187,17 +159,17 @@ async fn a_search_is_the_accounts_on_each_of_its_devices() {
     let (laptop, phone) = ("laptop-token", "phone-token");
     let aurora = Some(json!({ "query": "aurora" }));
 
-    let (status, recorded) = as_device(&app, laptop, "POST", URI, aurora.clone()).await;
+    let (status, recorded) = call(&app, laptop, "POST", URI, aurora.clone()).await;
     assert_eq!(status, StatusCode::CREATED, "{recorded}");
     assert_eq!(listed(&app, phone).await, ["aurora"]);
     let one = format!("{URI}/{}", recorded["id"].as_str().unwrap());
-    assert_eq!(as_device(&app, phone, "DELETE", &one, None).await.0, StatusCode::NO_CONTENT);
-    assert_eq!(as_device(&app, laptop, "DELETE", &one, None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(call(&app, phone, "DELETE", &one, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(call(&app, laptop, "DELETE", &one, None).await.0, StatusCode::NOT_FOUND);
 
-    assert_eq!(as_device(&app, phone, "POST", URI, aurora).await.0, StatusCode::CREATED);
+    assert_eq!(call(&app, phone, "POST", URI, aurora).await.0, StatusCode::CREATED);
     // Clearing them leaves the owner's alone.
     record(&app, json!({ "query": "signal" })).await;
-    assert_eq!(as_device(&app, laptop, "DELETE", URI, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(call(&app, laptop, "DELETE", URI, None).await.0, StatusCode::NO_CONTENT);
     assert!(listed(&app, phone).await.is_empty());
     assert_eq!(listed(&app, TOKEN).await, ["signal"]);
 }

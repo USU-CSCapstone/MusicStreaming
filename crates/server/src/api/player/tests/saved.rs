@@ -9,7 +9,7 @@ use crate::api::Id;
 use crate::api::realtime::Hub;
 use crate::api::scope::Caller;
 use crate::api::testing::player::progress_report;
-use crate::api::testing::{add_user, app_with_tracks};
+use crate::api::testing::{add_user, app_with_tracks, conn};
 use crate::db::Database;
 use crate::db::testing::access;
 
@@ -102,7 +102,7 @@ async fn playing_on_through_a_track_is_saved_only_now_and_then() {
 #[tokio::test]
 async fn a_saved_place_out_of_reach_is_not_resumed() {
     let (temp, db, _app) = app_with_tracks().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     add_user(&conn, 2, "user");
     access(&conn, 2, 1).unwrap();
     conn.execute_batch(
@@ -120,7 +120,7 @@ async fn a_saved_place_out_of_reach_is_not_resumed() {
 #[tokio::test]
 async fn one_accounts_place_failing_to_save_keeps_no_one_elses_from_saving() {
     let (temp, db, _app) = app_with_tracks().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     add_user(&conn, 2, "user");
     let players = Players::default();
     report_to(&players, "paused", 1, 1000);

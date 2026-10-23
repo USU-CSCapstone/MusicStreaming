@@ -8,16 +8,17 @@ mod common;
 use std::path::Path;
 use std::time::Duration;
 
-use common::{State, Tracks, grants, plugin, track};
+use common::{grants, plugin, track};
+use jewelcase_plugins::testing::Memory;
 use jewelcase_plugins::{Changes, Event, Host, Per, Permission, RunError, manifest};
 
 /// Two tracks without lyrics, with their audio files in `dir`.
-fn library(dir: &Path) -> Tracks {
+fn library(dir: &Path) -> Memory {
     let tracks = vec![track(1, "Signal Part 1"), track(2, "Signal Part 2")];
     for t in &tracks {
         std::fs::write(dir.join(&t.path), b"audio").unwrap();
     }
-    Tracks { root: dir.to_path_buf(), tracks, state: State::default(), fail_after: None }
+    Memory { root: dir.to_path_buf(), tracks, ..Memory::default() }
 }
 
 /// A lookup that can't be answered now, as without the network, ends the run with an error at
@@ -73,7 +74,7 @@ async fn the_network_reaches_only_approved_destinations() {
 
 #[test]
 fn a_real_plugin_passes_the_install_check() {
-    let host = Host::<Tracks>::new(None).unwrap();
+    let host = Host::<Memory>::new(None).unwrap();
     let bytes = std::fs::read(plugin()).unwrap();
     host.check(&bytes).unwrap();
     assert!(host.check(b"not a component").is_err());

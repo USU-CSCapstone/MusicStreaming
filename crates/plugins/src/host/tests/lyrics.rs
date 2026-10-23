@@ -18,11 +18,7 @@ const PLUGIN: &str =
 /// The plugin's grants in library 1: reading it, and the network to lrclib.net.
 fn grants() -> Grants {
     let permissions = [Permission::LibraryRead, Permission::Network];
-    Grants {
-        plugin: "lrclib-lyrics".into(),
-        destinations: vec!["lrclib.net".into()],
-        ..testing::grants(&permissions)
-    }
+    Grants::new("lrclib-lyrics", 1, &permissions, &["lrclib.net"])
 }
 
 /// Runs the plugin on `host` over one track without lyrics, track 1.

@@ -1,11 +1,16 @@
-//! The catalog the tracks, albums, artists, and search tests share.
+//! The catalog the tracks, albums, artists, and search tests share, and a walk through its
+//! lists a page at a time.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::http::StatusCode;
 use jewelcase_core::sort_key;
 use rusqlite::{Result, Transaction};
+use serde_json::Value;
 
+use super::json;
 use crate::db::Database;
 use crate::db::testing::{Album, Artist, Image, Track, library};
 
@@ -140,4 +145,36 @@ fn insert(tx: &Transaction) -> Result<()> {
            UPDATE libraries SET track_count = 6, album_count = 4, artist_count = 4 WHERE id = 1;
            UPDATE libraries SET track_count = 1, album_count = 1, artist_count = 1 WHERE id = 2;"#,
     )
+}
+
+/// `field` of every item in the list at `uri`, read a page of `limit` at a time. Panics unless
+/// every page but the last is full and carries a cursor not seen before, the last carries none,
+/// and only an empty list has an empty page.
+pub async fn page_through(app: &Router, uri: &str, limit: u32, field: &str) -> Value {
+    let mut values = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut seen = HashSet::new();
+    loop {
+        let separator = if uri.contains('?') { '&' } else { '?' };
+        let mut page_uri = format!("{uri}{separator}limit={limit}");
+        if let Some(cursor) = &cursor {
+            page_uri += &format!("&cursor={cursor}");
+        }
+        let (status, page) = json(app, &page_uri).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        let items = page["items"].as_array().unwrap();
+        assert!(cursor.is_none() || !items.is_empty(), "a cursor led to an empty page: {page_uri}");
+        values.extend(items.iter().map(|item| item[field].clone()));
+        match page["nextCursor"].as_str() {
+            Some(next) => {
+                assert_eq!(items.len(), limit as usize, "a short page has a cursor: {page_uri}");
+                assert!(seen.insert(next.to_owned()), "a cursor came round again: {page_uri}");
+                cursor = Some(next.to_owned());
+            }
+            None => {
+                assert!(items.len() <= limit as usize, "{page_uri}");
+                return values.into();
+            }
+        }
+    }
 }

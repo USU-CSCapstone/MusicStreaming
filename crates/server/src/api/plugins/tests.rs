@@ -3,36 +3,15 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::body::{Body, Bytes};
-use axum::http::{Request, StatusCode, header};
+use axum::http::{StatusCode, header};
 use futures_util::stream;
 use serde_json::{Value, json};
 
-use super::super::testing::{app_with_tracks, respond};
+use super::super::testing::{TOKEN, app_with_tracks, call, conn, owner_request, respond};
 use super::{PluginError, Problem};
 use crate::db::Database;
 use crate::plugins::settings;
 use crate::plugins::testing::{enable_ungranted, install, manifest};
-
-const ADMIN: &str = "Bearer owner-token";
-
-/// Sends a request as `token` with a JSON body, if any, and returns the status and JSON body.
-async fn call(
-    app: &Router,
-    token: &str,
-    method: &str,
-    uri: &str,
-    body: Option<Value>,
-) -> (StatusCode, Value) {
-    let request = Request::builder().method(method).uri(uri).header(header::AUTHORIZATION, token);
-    let request = match body {
-        Some(body) => request
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(body.to_string())),
-        None => request.body(Body::empty()),
-    };
-    let (status, _, body) = respond(app.clone(), request.unwrap()).await;
-    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
-}
 
 /// Libraries 1 and 2, with `lrclib-lyrics` installed as a row: what a successful install
 /// leaves, without needing a compiled component.
@@ -63,8 +42,7 @@ const PLUGIN: &str = "/api/v1/admin/plugins/lrclib-lyrics";
 #[tokio::test]
 async fn a_file_that_is_not_a_plugin_is_refused_and_nothing_is_kept() {
     let (temp, _db, app) = server().await;
-    let request = Request::post("/api/v1/admin/plugins")
-        .header(header::AUTHORIZATION, ADMIN)
+    let request = owner_request("POST", "/api/v1/admin/plugins")
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .body(Body::from("hello"))
         .unwrap();
@@ -76,14 +54,13 @@ async fn a_file_that_is_not_a_plugin_is_refused_and_nothing_is_kept() {
     );
     assert_eq!(problem["detail"], "This is not a WebAssembly file.");
     assert!(!temp.path().join("plugins").exists());
-    let (_, list) = call(&app, ADMIN, "GET", "/api/v1/admin/plugins", None).await;
+    let (_, list) = call(&app, TOKEN, "GET", "/api/v1/admin/plugins", None).await;
     assert_eq!(list["items"].as_array().unwrap().len(), 1, "only the one installed before");
 }
 
 /// Uploads `chunks` as a plugin file, and returns the status and Problem.
 async fn upload(app: &Router, chunks: Vec<io::Result<Bytes>>) -> (StatusCode, Value) {
-    let request = Request::post("/api/v1/admin/plugins")
-        .header(header::AUTHORIZATION, ADMIN)
+    let request = owner_request("POST", "/api/v1/admin/plugins")
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .body(Body::from_stream(stream::iter(chunks)))
         .unwrap();
@@ -133,7 +110,7 @@ async fn an_upload_that_breaks_off_is_not_called_too_big() {
 #[tokio::test]
 async fn is_installed_disabled_everywhere_with_nothing_granted() {
     let (_temp, _db, app) = server().await;
-    let (status, plugin) = call(&app, ADMIN, "GET", PLUGIN, None).await;
+    let (status, plugin) = call(&app, TOKEN, "GET", PLUGIN, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(plugin["source"], json!({ "kind": "file" }));
     assert_eq!(plugin["permissions"].as_array().unwrap().len(), 3);
@@ -145,7 +122,7 @@ async fn is_installed_disabled_everywhere_with_nothing_granted() {
     );
     assert_eq!(plugin["libraries"].as_array().unwrap().len(), 2, "every library");
     assert_eq!(
-        call(&app, ADMIN, "GET", "/api/v1/admin/plugins/nothing", None).await.0,
+        call(&app, TOKEN, "GET", "/api/v1/admin/plugins/nothing", None).await.0,
         StatusCode::NOT_FOUND
     );
 }
@@ -163,7 +140,7 @@ async fn its_times_are_rfc_3339_with_milliseconds() {
     })
     .await
     .unwrap();
-    let (_, plugin) = call(&app, ADMIN, "GET", PLUGIN, None).await;
+    let (_, plugin) = call(&app, TOKEN, "GET", PLUGIN, None).await;
     assert_eq!(plugin["installedAt"], "2000-02-29T00:00:00.123Z");
     assert_eq!(
         plugin["libraries"][0]["lastRun"],
@@ -183,7 +160,7 @@ async fn a_plugin_not_installed_is_not_found() {
         ("PUT", format!("{nothing}/settings"), Some(json!({ "values": {} }))),
         ("GET", format!("{nothing}/settings"), None),
     ] {
-        let (status, problem) = call(&app, ADMIN, method, &path, body).await;
+        let (status, problem) = call(&app, TOKEN, method, &path, body).await;
         assert_eq!(
             (status, &problem["code"]),
             (StatusCode::NOT_FOUND, &json!("not_found")),
@@ -197,7 +174,7 @@ async fn cannot_be_enabled_until_its_required_permissions_are_granted() {
     let (_temp, _db, app) = server().await;
     let enable = |library: &str| format!("{PLUGIN}/libraries/{library}");
     let (status, problem) =
-        call(&app, ADMIN, "PUT", &enable("1"), Some(json!({ "enabled": true }))).await;
+        call(&app, TOKEN, "PUT", &enable("1"), Some(json!({ "enabled": true }))).await;
     assert_eq!((status, &problem["code"]), (StatusCode::CONFLICT, &json!("permissions_required")));
     assert_eq!(problem["detail"], "It still needs Read the library and Network access.");
 
@@ -212,7 +189,7 @@ async fn cannot_be_enabled_until_its_required_permissions_are_granted() {
         ]
     });
     let (status, plugin) =
-        call(&app, ADMIN, "PUT", &format!("{PLUGIN}/permissions"), Some(grants)).await;
+        call(&app, TOKEN, "PUT", &format!("{PLUGIN}/permissions"), Some(grants)).await;
     assert_eq!(status, StatusCode::OK, "{plugin}");
     assert_eq!(plugin["granted"], json!(["network"]));
     assert_eq!(plugin["libraries"][0]["granted"], json!(["libraryRead"]));
@@ -233,10 +210,10 @@ async fn cannot_be_enabled_until_its_required_permissions_are_granted() {
         ]
     });
     let (status, plugin) =
-        call(&app, ADMIN, "PUT", &format!("{PLUGIN}/permissions"), Some(grants)).await;
+        call(&app, TOKEN, "PUT", &format!("{PLUGIN}/permissions"), Some(grants)).await;
     assert_eq!(status, StatusCode::OK, "{plugin}");
     let (status, plugin) =
-        call(&app, ADMIN, "PUT", &enable("2"), Some(json!({ "enabled": true }))).await;
+        call(&app, TOKEN, "PUT", &enable("2"), Some(json!({ "enabled": true }))).await;
     let enabled = |plugin: &Value| {
         plugin["libraries"]
             .as_array()
@@ -247,10 +224,10 @@ async fn cannot_be_enabled_until_its_required_permissions_are_granted() {
     };
     assert_eq!((status, enabled(&plugin)), (StatusCode::OK, vec![json!(false), json!(true)]));
     let (status, plugin) =
-        call(&app, ADMIN, "PUT", &enable("1"), Some(json!({ "enabled": true }))).await;
+        call(&app, TOKEN, "PUT", &enable("1"), Some(json!({ "enabled": true }))).await;
     assert_eq!((status, enabled(&plugin)), (StatusCode::OK, vec![json!(true), json!(true)]));
     assert_eq!(
-        call(&app, ADMIN, "PUT", &enable("9"), Some(json!({ "enabled": true }))).await.0,
+        call(&app, TOKEN, "PUT", &enable("9"), Some(json!({ "enabled": true }))).await.0,
         StatusCode::NOT_FOUND
     );
 }
@@ -274,7 +251,7 @@ async fn a_limit_for_every_plugin_is_granted_like_any_other_permission_and_shown
     let artwork = "/api/v1/admin/plugins/artwork";
     let grants = json!({ "granted": ["network", "hostRateLimits"], "libraries": [] });
     let (status, plugin) =
-        call(&app, ADMIN, "PUT", &format!("{artwork}/permissions"), Some(grants)).await;
+        call(&app, TOKEN, "PUT", &format!("{artwork}/permissions"), Some(grants)).await;
     assert_eq!(status, StatusCode::OK, "{plugin}");
     assert_eq!(plugin["granted"], json!(["hostRateLimits", "network"]));
     // The admin sees the limit before granting it.
@@ -283,12 +260,12 @@ async fn a_limit_for_every_plugin_is_granted_like_any_other_permission_and_shown
     assert_eq!(plugin["hostLimits"], json!([]), "not in force until it is enabled");
 
     let enable = Some(json!({ "enabled": true }));
-    call(&app, ADMIN, "PUT", &format!("{artwork}/libraries/1"), enable).await;
+    call(&app, TOKEN, "PUT", &format!("{artwork}/libraries/1"), enable).await;
     let in_force =
         json!({ "host": "musicbrainz.org", "limit": "1/s", "setBy": ["artwork"], "exempt": false });
-    let (_, plugin) = call(&app, ADMIN, "GET", "/api/v1/admin/plugins/anywhere", None).await;
+    let (_, plugin) = call(&app, TOKEN, "GET", "/api/v1/admin/plugins/anywhere", None).await;
     assert_eq!(plugin["hostLimits"], json!([in_force]), "it reaches any host");
-    let (_, plugin) = call(&app, ADMIN, "GET", PLUGIN, None).await;
+    let (_, plugin) = call(&app, TOKEN, "GET", PLUGIN, None).await;
     assert_eq!(plugin["hostLimits"], json!([]), "it reaches only lrclib.net");
 }
 
@@ -305,18 +282,18 @@ async fn an_admin_exempts_a_plugin_from_limits_for_every_plugin_one_host_at_a_ti
     install(&db, plugin).await;
     let setter = "/api/v1/admin/plugins/setter";
     let grants = Some(json!({ "granted": ["network", "hostRateLimits"], "libraries": [] }));
-    call(&app, ADMIN, "PUT", &format!("{setter}/permissions"), grants).await;
-    call(&app, ADMIN, "PUT", &format!("{setter}/libraries/1"), Some(json!({ "enabled": true })))
+    call(&app, TOKEN, "PUT", &format!("{setter}/permissions"), grants).await;
+    call(&app, TOKEN, "PUT", &format!("{setter}/libraries/1"), Some(json!({ "enabled": true })))
         .await;
     let exempt = || async {
-        call(&app, ADMIN, "GET", PLUGIN, None).await.1["hostLimits"][0]["exempt"].clone()
+        call(&app, TOKEN, "GET", PLUGIN, None).await.1["hostLimits"][0]["exempt"].clone()
     };
     assert_eq!(exempt().await, json!(false));
 
     // Each is idempotent, so a repeat changes nothing.
     let lrclib = format!("{PLUGIN}/exemptions/LRCLIB.net");
     for (method, now) in [("PUT", true), ("PUT", true), ("DELETE", false), ("DELETE", false)] {
-        let (status, body) = call(&app, ADMIN, method, &lrclib, None).await;
+        let (status, body) = call(&app, TOKEN, method, &lrclib, None).await;
         assert_eq!((status, body), (StatusCode::NO_CONTENT, Value::Null), "{method}");
         assert_eq!(exempt().await, json!(now), "{method}");
     }
@@ -324,7 +301,7 @@ async fn an_admin_exempts_a_plugin_from_limits_for_every_plugin_one_host_at_a_ti
     for wrong in ["*", "*.last.fm", "last.fm:443", "a%2Fb"] {
         for method in ["PUT", "DELETE"] {
             let uri = format!("{PLUGIN}/exemptions/{wrong}");
-            let (status, problem) = call(&app, ADMIN, method, &uri, None).await;
+            let (status, problem) = call(&app, TOKEN, method, &uri, None).await;
             assert_eq!(
                 (status, &problem["code"]),
                 (StatusCode::UNPROCESSABLE_ENTITY, &json!("validation_failed")),
@@ -334,7 +311,7 @@ async fn an_admin_exempts_a_plugin_from_limits_for_every_plugin_one_host_at_a_ti
     }
     let elsewhere = "/api/v1/admin/plugins/nothing/exemptions/lrclib.net";
     for method in ["PUT", "DELETE"] {
-        assert_eq!(call(&app, ADMIN, method, elsewhere, None).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(call(&app, TOKEN, method, elsewhere, None).await.0, StatusCode::NOT_FOUND);
     }
 }
 
@@ -342,13 +319,13 @@ async fn an_admin_exempts_a_plugin_from_limits_for_every_plugin_one_host_at_a_ti
 async fn revoking_a_required_permission_disables_it_at_once() {
     let (_temp, _db, app) = server().await;
     let all = json!({ "granted": ["network"], "libraries": [{ "libraryId": "1", "granted": ["libraryRead"] }] });
-    call(&app, ADMIN, "PUT", &format!("{PLUGIN}/permissions"), Some(all)).await;
-    call(&app, ADMIN, "PUT", &format!("{PLUGIN}/libraries/1"), Some(json!({ "enabled": true })))
+    call(&app, TOKEN, "PUT", &format!("{PLUGIN}/permissions"), Some(all)).await;
+    call(&app, TOKEN, "PUT", &format!("{PLUGIN}/libraries/1"), Some(json!({ "enabled": true })))
         .await;
 
     let revoked = json!({ "granted": [], "libraries": [] });
     let (_, plugin) =
-        call(&app, ADMIN, "PUT", &format!("{PLUGIN}/permissions"), Some(revoked)).await;
+        call(&app, TOKEN, "PUT", &format!("{PLUGIN}/permissions"), Some(revoked)).await;
     let library = &plugin["libraries"][0];
     assert_eq!((&library["enabled"], &library["autoDisabled"]), (&json!(false), &json!(true)));
     assert_eq!(library["disabledReason"], "A required permission was revoked.");
@@ -360,9 +337,9 @@ async fn naming_library_0_leaves_the_plugins_own_grants() {
     let (_temp, _db, app) = server().await;
     let path = format!("{PLUGIN}/permissions");
     let all = json!({ "granted": ["network"], "libraries": [{ "libraryId": "1", "granted": ["libraryRead"] }] });
-    call(&app, ADMIN, "PUT", &path, Some(all)).await;
+    call(&app, TOKEN, "PUT", &path, Some(all)).await;
     let zero = json!({ "granted": ["network"], "libraries": [{ "libraryId": "0", "granted": ["libraryRead"] }] });
-    let (status, plugin) = call(&app, ADMIN, "PUT", &path, Some(zero)).await;
+    let (status, plugin) = call(&app, TOKEN, "PUT", &path, Some(zero)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(plugin["granted"], json!(["network"]));
     assert_eq!(plugin["libraries"][0]["granted"], json!(["libraryRead"]));
@@ -372,11 +349,11 @@ async fn naming_library_0_leaves_the_plugins_own_grants() {
 async fn uninstalling_keeps_its_grants_for_a_reinstall() {
     let (temp, _db, app) = server().await;
     let grants = json!({ "granted": ["network"], "libraries": [{ "libraryId": "2", "granted": ["libraryAdd"] }] });
-    call(&app, ADMIN, "PUT", &format!("{PLUGIN}/permissions"), Some(grants)).await;
-    assert_eq!(call(&app, ADMIN, "DELETE", PLUGIN, None).await.0, StatusCode::NO_CONTENT);
-    assert_eq!(call(&app, ADMIN, "GET", PLUGIN, None).await.0, StatusCode::NOT_FOUND);
-    assert_eq!(call(&app, ADMIN, "DELETE", PLUGIN, None).await.0, StatusCode::NOT_FOUND);
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    call(&app, TOKEN, "PUT", &format!("{PLUGIN}/permissions"), Some(grants)).await;
+    assert_eq!(call(&app, TOKEN, "DELETE", PLUGIN, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(call(&app, TOKEN, "GET", PLUGIN, None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(call(&app, TOKEN, "DELETE", PLUGIN, None).await.0, StatusCode::NOT_FOUND);
+    let conn = conn(&temp);
     let kept: i64 =
         conn.query_row("SELECT count(*) FROM plugin_grants", [], |row| row.get(0)).unwrap();
     assert_eq!(kept, 2);
@@ -385,7 +362,7 @@ async fn uninstalling_keeps_its_grants_for_a_reinstall() {
 #[tokio::test]
 async fn a_run_needs_a_library_it_is_enabled_in() {
     let (_temp, _db, app) = server().await;
-    let (status, result) = call(&app, ADMIN, "POST", &format!("{PLUGIN}/run"), None).await;
+    let (status, result) = call(&app, TOKEN, "POST", &format!("{PLUGIN}/run"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         result,
@@ -393,7 +370,7 @@ async fn a_run_needs_a_library_it_is_enabled_in() {
                 "saved": 0, "scannerRunning": false })
     );
     assert_eq!(
-        call(&app, ADMIN, "POST", "/api/v1/admin/plugins/nothing/run", None).await.0,
+        call(&app, TOKEN, "POST", "/api/v1/admin/plugins/nothing/run", None).await.0,
         StatusCode::NOT_FOUND
     );
 }
@@ -405,8 +382,7 @@ async fn install_lyrics(app: &Router) -> Vec<u8> {
         "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm"
     );
     let bytes = std::fs::read(file).expect("run plugins/lrclib-lyrics/build.sh first");
-    let request = Request::post("/api/v1/admin/plugins")
-        .header(header::AUTHORIZATION, ADMIN)
+    let request = owner_request("POST", "/api/v1/admin/plugins")
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .body(Body::from(bytes.clone()))
         .unwrap();
@@ -419,7 +395,7 @@ async fn install_lyrics(app: &Router) -> Vec<u8> {
 /// the status and body.
 async fn check_settings(app: &Router) -> (StatusCode, Value) {
     let values = Some(json!({ "values": { "syncedOnly": true } }));
-    call(app, ADMIN, "PUT", "/api/v1/admin/plugins/lrclib-lyrics/settings", values).await
+    call(app, TOKEN, "PUT", "/api/v1/admin/plugins/lrclib-lyrics/settings", values).await
 }
 
 /// The whole path with a real plugin: install the file, grant, enable, and run. It reaches no
@@ -433,10 +409,7 @@ async fn installs_and_runs_a_real_plugin() {
     assert!(temp.path().join("compiled/modules").is_dir(), "kept compiled where it was told");
     // The same plugin in another file: the same with a custom section added at its end.
     let other = [&bytes[..], &[0, 4, 3, b'x', b'y', b'z']].concat();
-    let request = Request::post("/api/v1/admin/plugins")
-        .header(header::AUTHORIZATION, ADMIN)
-        .body(Body::from(other))
-        .unwrap();
+    let request = owner_request("POST", "/api/v1/admin/plugins").body(Body::from(other)).unwrap();
     assert_eq!(respond(app.clone(), request).await.0, StatusCode::CONFLICT, "installed twice");
     let kept: Vec<_> = std::fs::read_dir(temp.path().join("plugins"))
         .unwrap()
@@ -449,15 +422,15 @@ async fn installs_and_runs_a_real_plugin() {
     let grants =
         json!({ "granted": [], "libraries": [{ "libraryId": "1", "granted": ["libraryRead"] }] });
     let (status, _) =
-        call(&app, ADMIN, "PUT", &format!("{PLUGIN}/permissions"), Some(grants)).await;
+        call(&app, TOKEN, "PUT", &format!("{PLUGIN}/permissions"), Some(grants)).await;
     assert_eq!(status, StatusCode::OK);
     enable_ungranted(&db, "lrclib-lyrics").await;
-    let (status, result) = call(&app, ADMIN, "POST", &format!("{PLUGIN}/run"), None).await;
+    let (status, result) = call(&app, TOKEN, "POST", &format!("{PLUGIN}/run"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(result["ok"], false, "{result}");
     let refused = "the plugin reported an error: a permission it needs was not granted";
     assert_eq!(result["summary"], refused);
-    let (_, plugin) = call(&app, ADMIN, "GET", PLUGIN, None).await;
+    let (_, plugin) = call(&app, TOKEN, "GET", PLUGIN, None).await;
     assert_eq!(plugin["libraries"][0]["lastRun"]["ok"], false, "{plugin}");
 
     // Settings pass its own check, which it answers by running, and are kept.
@@ -486,7 +459,7 @@ async fn an_installed_plugin_runs_as_compiled_at_install() {
 async fn an_uninstalled_plugin_is_not_kept_compiled() {
     let (_temp, db, app) = app_with_tracks().await;
     let bytes = install_lyrics(&app).await;
-    assert_eq!(call(&app, ADMIN, "DELETE", PLUGIN, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(call(&app, TOKEN, "DELETE", PLUGIN, None).await.0, StatusCode::NO_CONTENT);
     let manifest = jewelcase_plugins::manifest::read(&bytes).unwrap();
     install(&db, serde_json::to_value(manifest).unwrap()).await;
     let (status, problem) = check_settings(&app).await;
@@ -511,12 +484,12 @@ async fn a_save_mends_server_settings_that_cannot_be_read() {
     })
     .await
     .unwrap();
-    let (status, _) = call(&app, ADMIN, "GET", SETTINGS, None).await;
+    let (status, _) = call(&app, TOKEN, "GET", SETTINGS, None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 
     let (status, saved) = check_settings(&app).await;
     assert_eq!(status, StatusCode::OK, "{saved}");
-    let (status, settings) = call(&app, ADMIN, "GET", SETTINGS, None).await;
+    let (status, settings) = call(&app, TOKEN, "GET", SETTINGS, None).await;
     assert_eq!((status, &settings["values"]), (StatusCode::OK, &json!({ "syncedOnly": true })));
     // What a run in a library reads.
     let effective = db.read(|conn| settings::effective(conn, "lrclib-lyrics", None, 1)).await;
@@ -526,13 +499,13 @@ async fn a_save_mends_server_settings_that_cannot_be_read() {
 #[tokio::test]
 async fn settings_show_values_but_never_secrets() {
     let (temp, _db, app) = server().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     conn.execute(
         r#"INSERT INTO plugin_settings VALUES ('lrclib-lyrics', 0, '{"apiKey":"s3cret","limit":4}')"#,
         [],
     )
     .unwrap();
-    let (status, settings) = call(&app, ADMIN, "GET", SETTINGS, None).await;
+    let (status, settings) = call(&app, TOKEN, "GET", SETTINGS, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(settings["values"], json!({ "limit": 4 }));
     assert_eq!(settings["secretsSet"], json!(["apiKey"]));
@@ -541,7 +514,7 @@ async fn settings_show_values_but_never_secrets() {
     assert!(!settings.to_string().contains("s3cret"));
 
     let (status, library) =
-        call(&app, ADMIN, "GET", &format!("{SETTINGS}?libraryId=2"), None).await;
+        call(&app, TOKEN, "GET", &format!("{SETTINGS}?libraryId=2"), None).await;
     assert_eq!(
         (status, &library["values"]),
         (StatusCode::OK, &json!({})),
@@ -550,12 +523,12 @@ async fn settings_show_values_but_never_secrets() {
     for library in ["9", "x"] {
         let uri = format!("{SETTINGS}?libraryId={library}");
         assert_eq!(
-            call(&app, ADMIN, "GET", &uri, None).await.0,
+            call(&app, TOKEN, "GET", &uri, None).await.0,
             StatusCode::NOT_FOUND,
             "{library}"
         );
     }
-    let (_, plugin) = call(&app, ADMIN, "GET", PLUGIN, None).await;
+    let (_, plugin) = call(&app, TOKEN, "GET", PLUGIN, None).await;
     assert_eq!(plugin["hasSettings"], true);
 }
 
@@ -570,7 +543,7 @@ async fn settings_are_checked_before_the_plugin_sees_them() {
         (json!({ "colour": "red" }), "colour is not one of this plugin's settings."),
     ] {
         let (status, problem) =
-            call(&app, ADMIN, "PUT", SETTINGS, Some(json!({ "values": body }))).await;
+            call(&app, TOKEN, "PUT", SETTINGS, Some(json!({ "values": body }))).await;
         assert_eq!(
             (status, &problem["code"]),
             (StatusCode::UNPROCESSABLE_ENTITY, &json!("plugin_settings_invalid"))
@@ -580,7 +553,7 @@ async fn settings_are_checked_before_the_plugin_sees_them() {
     // A library's settings, with the server-wide ones under them, leave no required one unset.
     let (status, problem) = call(
         &app,
-        ADMIN,
+        TOKEN,
         "PUT",
         &format!("{SETTINGS}?libraryId=1"),
         Some(json!({ "values": { "limit": 2 } })),
@@ -598,7 +571,7 @@ async fn settings_are_checked_before_the_plugin_sees_them() {
     enable_ungranted(&db, "lrclib-lyrics").await;
     let (status, problem) = call(
         &app,
-        ADMIN,
+        TOKEN,
         "PUT",
         &format!("{SETTINGS}?libraryId=1"),
         Some(json!({ "values": { "limit": 2 } })),

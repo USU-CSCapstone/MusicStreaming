@@ -1,9 +1,8 @@
 use axum::Router;
-use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
+use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use super::super::testing::{add_device, add_user, app_with_tracks, owner_request, respond};
+use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, call, conn};
 use crate::db::Database;
 use crate::db::testing::access;
 
@@ -28,14 +27,15 @@ fn report(track: &str, listened: u32, end: Value) -> Value {
     })
 }
 
-async fn post(app: &Router, request: axum::http::request::Builder, items: Value) -> StatusCode {
-    let body = Body::from(json!({ "items": items }).to_string());
-    let request = request.header(header::CONTENT_TYPE, "application/json").body(body).unwrap();
-    respond(app.clone(), request).await.0
+/// Reports `items` as plays, logged in with `token`, and returns the status.
+async fn post(app: &Router, token: &str, items: Value) -> StatusCode {
+    let body = Some(json!({ "items": items }));
+    call(app, token, "POST", "/api/v1/me/plays", body).await.0
 }
 
+/// Reports `items` as plays as the owner, and returns the status.
 async fn report_as_owner(app: &Router, items: Value) -> StatusCode {
-    post(app, owner_request("POST", "/api/v1/me/plays"), items).await
+    post(app, TOKEN, items).await
 }
 
 async fn plays(db: &Database) -> Vec<(String, i64, i64, i64, Option<String>)> {
@@ -99,18 +99,10 @@ async fn a_play_first_reported_already_ended_ends_once_and_never_starts() {
 
 /// Adds user 2, who reaches library 1 and is logged in on device 2 as `user-token`.
 fn add_second_user(temp: &tempfile::TempDir) {
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(temp);
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 2, "user-token");
     access(&conn, 2, 1).unwrap();
-}
-
-/// A request that reports plays as user 2.
-fn as_second_user() -> axum::http::request::Builder {
-    Request::builder()
-        .method("POST")
-        .uri("/api/v1/me/plays")
-        .header(header::AUTHORIZATION, "Bearer user-token")
 }
 
 #[tokio::test]
@@ -119,7 +111,7 @@ async fn a_play_out_of_reach_is_left_out() {
     add_second_user(&temp);
     let mut elsewhere = report("3", 0, Value::Null);
     elsewhere["libraryId"] = json!("2");
-    assert_eq!(post(&app, as_second_user(), json!([elsewhere])).await, StatusCode::NO_CONTENT);
+    assert_eq!(post(&app, "user-token", json!([elsewhere])).await, StatusCode::NO_CONTENT);
     let mut not_there = report("3", 0, Value::Null);
     not_there["libraryId"] = json!("1");
     assert_eq!(report_as_owner(&app, json!([not_there])).await, StatusCode::NO_CONTENT);
@@ -153,7 +145,7 @@ async fn two_users_plays_under_one_id_are_each_their_own() {
     let owners = report("1", 5_000, Value::Null);
     assert_eq!(report_as_owner(&app, json!([owners])).await, StatusCode::NO_CONTENT);
     let theirs = report("2", 99_000, json!("finished"));
-    assert_eq!(post(&app, as_second_user(), json!([theirs])).await, StatusCode::NO_CONTENT);
+    assert_eq!(post(&app, "user-token", json!([theirs])).await, StatusCode::NO_CONTENT);
     let finished = Some("finished".to_owned());
     assert_eq!(
         plays(&db).await,

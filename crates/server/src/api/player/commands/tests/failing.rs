@@ -11,7 +11,7 @@ use super::super::relay::ANSWER_WITHIN;
 use super::{OWNER, command, playing, result_of, send, setup};
 use crate::api::testing::player::{command_id, report, start_playing};
 use crate::api::testing::socket::{connect_with, next_of};
-use crate::api::testing::{TOKEN, add_device};
+use crate::api::testing::{TOKEN, add_device, conn};
 
 // Paused time, which runs ahead whenever every task waits: no socket here waits on it.
 #[tokio::test(start_paused = true)]
@@ -47,7 +47,7 @@ async fn commands_waiting_on_a_device_that_goes_away_fail_at_once() {
 #[tokio::test]
 async fn commands_waiting_on_a_device_taken_over_from_fail_at_once() {
     let (temp, _app, address) = setup().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     add_device(&conn, 1, 4, "laptop");
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
@@ -93,7 +93,7 @@ async fn commands_waiting_on_a_device_taken_over_from_fail_at_once() {
 #[tokio::test]
 async fn commands_waiting_on_a_device_that_stopped_fail_once_playback_starts_elsewhere() {
     let (temp, _app, address) = setup().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     add_device(&conn, 1, 4, "laptop");
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;

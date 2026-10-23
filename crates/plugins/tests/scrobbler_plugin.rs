@@ -6,9 +6,10 @@
 use std::path::Path;
 use std::time::Duration;
 
+use jewelcase_plugins::testing::{self, Memory};
 use jewelcase_plugins::{
-    Event, Grants, Host, Library, Outcome, Per, Permission, Play, PlayEnd, Playing, RunError,
-    Track, manifest,
+    Event, Grants, Host, Outcome, Per, Permission, Play, PlayEnd, Playing, RunError, Track,
+    manifest,
 };
 
 /// The packed plugin. Panics, saying how to build it, when it is not built.
@@ -21,14 +22,9 @@ fn plugin() -> &'static Path {
     path
 }
 
-/// A library that serves nothing: the event carries all the plugin needs.
-struct Empty;
-
-impl Library for Empty {}
-
 #[test]
 fn a_real_plugin_passes_the_install_check() {
-    let (host, bytes) = (Host::<Empty>::new(None).unwrap(), std::fs::read(plugin()).unwrap());
+    let (host, bytes) = (Host::<Memory>::new(None).unwrap(), std::fs::read(plugin()).unwrap());
     host.check(&bytes).unwrap();
 }
 
@@ -45,16 +41,8 @@ fn it_asks_listenbrainz_at_most_once_a_second_for_each_user() {
 
 /// User 1's grants of `permissions` to the plugin in library 1, with their token set.
 fn grants(permissions: &[Permission]) -> Grants {
-    let mut grants = Grants {
-        plugin: "listenbrainz".into(),
-        library: 1,
-        user: Some(1),
-        permissions: permissions.to_vec(),
-        destinations: vec!["api.listenbrainz.org".into()],
-        rate_limits: Vec::new(),
-        host_limits: Vec::new(),
-        settings: Default::default(),
-    };
+    let mut grants = Grants::new("listenbrainz", 1, permissions, &["api.listenbrainz.org"]);
+    grants.user = Some(1);
     grants.settings.insert("token".into(), "a-token".into());
     grants
 }
@@ -62,25 +50,18 @@ fn grants(permissions: &[Permission]) -> Grants {
 /// A track by `artists`, 200 s long.
 fn track(artists: &[&str]) -> Track {
     Track {
-        id: 1,
         title: "Signal".into(),
         artists: artists.iter().map(|a| a.to_string()).collect(),
-        album: Some("Signal".into()),
-        duration_ms: 200_000,
         album_id: 3,
-        disc_number: 1,
         track_number: Some(1),
-        release_date: None,
-        isrc: None,
-        has_lyrics: false,
-        root: 7,
         path: "Signal.flac".into(),
+        ..testing::track(1)
     }
 }
 
 /// Runs the plugin for user 1, granted `permissions`, on `event`.
 async fn run(permissions: &[Permission], event: Event) -> Outcome {
-    Host::new(None).unwrap().run(plugin(), grants(permissions), Empty, event).await
+    Host::new(None).unwrap().run(plugin(), grants(permissions), Memory::default(), event).await
 }
 
 #[tokio::test]

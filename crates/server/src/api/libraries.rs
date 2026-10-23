@@ -84,11 +84,10 @@ fn library(row: &Row) -> rusqlite::Result<Library> {
 
 #[cfg(test)]
 mod tests {
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode, header};
+    use axum::http::StatusCode;
     use serde_json::{Value, json};
 
-    use super::super::testing::{add_device, add_user, app, app_with_tracks, respond, send};
+    use super::super::testing::{add_device, add_user, app, app_with_tracks, call, conn, send};
     use crate::db::libraries;
     use crate::db::testing::access;
 
@@ -142,24 +141,16 @@ mod tests {
     #[tokio::test]
     async fn lists_only_the_libraries_the_caller_reaches() {
         let (temp, _db, app) = app_with_tracks().await;
-        let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+        let conn = conn(&temp);
         for (id, role) in [(2, "user"), (3, "user"), (4, "admin")] {
             add_user(&conn, id, role);
             add_device(&conn, id, id, &format!("token-{id}"));
         }
         access(&conn, 2, 2).unwrap();
 
-        let ids = |token: &'static str| {
-            let app = app.clone();
-            async move {
-                let request = Request::get("/api/v1/libraries")
-                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                    .body(Body::empty())
-                    .unwrap();
-                let (_, _, body) = respond(app, request).await;
-                let items = serde_json::from_slice::<Value>(&body).unwrap()["items"].clone();
-                items.as_array().unwrap().iter().map(|l| l["id"].clone()).collect::<Vec<_>>()
-            }
+        let ids = async |token: &str| {
+            let (_, list) = call(&app, token, "GET", "/api/v1/libraries", None).await;
+            list["items"].as_array().unwrap().iter().map(|l| l["id"].clone()).collect::<Vec<_>>()
         };
         assert_eq!(ids("token-2").await, ["2"], "granted one");
         // No access is an empty list, not an error (`requirements/users.md` §5).

@@ -1,6 +1,5 @@
 //! Helpers for the API's tests: a server over a fresh database, and requests to it.
 
-use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,13 +29,18 @@ pub const TOKEN: &str = "owner-token";
 /// user 1, is logged in on device 1 with [`TOKEN`].
 pub fn app(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
     let (temp, db, app) = app_before_setup(base_path);
-    // Its own connection: tests call this inside the runtime, where `write_blocking` cannot wait.
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     let owner =
         User { username: "owner".into(), display_name: "Owner".into(), ..User::new(1, "owner") };
     owner.insert(&conn).unwrap();
     add_device(&conn, 1, 1, TOKEN);
     (temp, db, app)
+}
+
+/// A connection of its own to the database in `temp`, for a test to set data up with inside the
+/// runtime, where `write_blocking` cannot wait.
+pub fn conn(temp: &tempfile::TempDir) -> rusqlite::Connection {
+    rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap()
 }
 
 /// Adds account `id` with `role`, named after it, such as `user2`.
@@ -166,10 +170,33 @@ pub async fn send_json(
     (status, headers, serde_json::from_slice(&body).unwrap())
 }
 
-/// The status and JSON body of a `GET`.
+/// Sends `method` on `uri` logged in with `token`, with `body` as JSON if given, and returns the
+/// status and the JSON body: `null` when the response has none.
+pub async fn call(
+    app: &Router,
+    token: &str,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"));
+    let request = match body {
+        Some(body) => request
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string())),
+        None => request.body(Body::empty()),
+    };
+    let (status, _, body) = respond(app.clone(), request.unwrap()).await;
+    let body = if body.is_empty() { Value::Null } else { serde_json::from_slice(&body).unwrap() };
+    (status, body)
+}
+
+/// The status and JSON body of a `GET` as the owner.
 pub async fn json(app: &Router, uri: &str) -> (StatusCode, Value) {
-    let (status, _, body) = send(app.clone(), "GET", uri).await;
-    (status, serde_json::from_slice(&body).unwrap())
+    call(app, TOKEN, "GET", uri, None).await
 }
 
 /// Polls `check` every 10 ms until it returns a value, panicking with `what` after 30 seconds:
@@ -186,36 +213,4 @@ pub async fn eventually<T>(what: &str, mut check: impl AsyncFnMut() -> Option<T>
     tokio::time::timeout(Duration::from_secs(30), polled)
         .await
         .unwrap_or_else(|_| panic!("{what}: timed out after 30 s"))
-}
-
-/// `field` of every item in the list at `uri`, read a page of `limit` at a time. Panics unless
-/// every page but the last is full and carries a cursor not seen before, the last carries none,
-/// and only an empty list has an empty page.
-pub async fn page_through(app: &Router, uri: &str, limit: u32, field: &str) -> Value {
-    let mut values = Vec::new();
-    let mut cursor: Option<String> = None;
-    let mut seen = HashSet::new();
-    loop {
-        let separator = if uri.contains('?') { '&' } else { '?' };
-        let mut page_uri = format!("{uri}{separator}limit={limit}");
-        if let Some(cursor) = &cursor {
-            page_uri += &format!("&cursor={cursor}");
-        }
-        let (status, page) = json(app, &page_uri).await;
-        assert_eq!(status, StatusCode::OK, "{page}");
-        let items = page["items"].as_array().unwrap();
-        assert!(cursor.is_none() || !items.is_empty(), "a cursor led to an empty page: {page_uri}");
-        values.extend(items.iter().map(|item| item[field].clone()));
-        match page["nextCursor"].as_str() {
-            Some(next) => {
-                assert_eq!(items.len(), limit as usize, "a short page has a cursor: {page_uri}");
-                assert!(seen.insert(next.to_owned()), "a cursor came round again: {page_uri}");
-                cursor = Some(next.to_owned());
-            }
-            None => {
-                assert!(items.len() <= limit as usize, "{page_uri}");
-                return values.into();
-            }
-        }
-    }
 }

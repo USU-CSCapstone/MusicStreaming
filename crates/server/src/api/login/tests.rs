@@ -7,7 +7,7 @@ use axum::extract::ConnectInfo;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use serde_json::{Value, json};
 
-use super::super::testing::{app_before_setup, respond, send_json};
+use super::super::testing::{app_before_setup, call, respond, send_json};
 use crate::db::Database;
 use crate::db::testing::User;
 
@@ -70,11 +70,7 @@ async fn logs_in_on_a_new_device() {
     let cookie = headers[header::SET_COOKIE].to_str().unwrap();
     assert!(cookie.starts_with(&format!("jewelcase_session={token};")), "{cookie}");
 
-    let me = Request::get("/api/v1/me")
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .body(Body::empty())
-        .unwrap();
-    assert_eq!(respond(app, me).await.0, StatusCode::OK);
+    assert_eq!(call(&app, token, "GET", "/api/v1/me", None).await.0, StatusCode::OK);
     let devices: i64 = db
         .read(|conn| conn.query_row("SELECT count(*) FROM devices", [], |row| row.get(0)))
         .await

@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use super::{command, result_of, send, setup};
 use crate::api::testing::player::{command_id, report, start_playing};
 use crate::api::testing::socket::{connect_with, next_of};
-use crate::api::testing::{TOKEN, add_device};
+use crate::api::testing::{TOKEN, add_device, conn};
 
 #[tokio::test]
 async fn a_transfer_goes_to_the_device_it_names_and_its_answer_comes_back() {
@@ -54,7 +54,7 @@ async fn a_transfer_to_play_where_it_is_paused_plays_it() {
 #[tokio::test]
 async fn a_transfer_already_sent_is_left_to_finish_when_playback_starts_elsewhere() {
     let (temp, _app, address) = setup().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     add_device(&conn, 1, 4, "laptop");
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
@@ -91,7 +91,7 @@ async fn a_transfer_wakes_a_device_once_playback_stopped() {
 #[tokio::test]
 async fn a_transfer_needs_a_device_of_the_account_that_is_connected_and_something_to_move() {
     let (temp, _app, address) = setup().await;
-    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let conn = conn(&temp);
     add_device(&conn, 1, 4, "tablet");
     let mut desk = connect_with(address, TOKEN).await;
     // Another account's device, connected, which this one still cannot reach.

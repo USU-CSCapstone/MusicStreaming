@@ -1,7 +1,8 @@
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use super::super::testing::{app, catalog, json, page_through};
+use super::super::testing::catalog::{self, page_through};
+use super::super::testing::{app, json};
 use super::*;
 use crate::api::page;
 use crate::db::testing::{Album, library, scattered_key};
