@@ -9,6 +9,8 @@
 //! the plugin to forget every search it was sent, in each library they reach
 //! (`requirements/users.md` §7).
 
+use std::sync::Arc;
+
 use jewelcase_plugins::{Manifest, Permission};
 use rusqlite::{Connection, OptionalExtension, named_params, params};
 use serde_json::{Map, Value};
@@ -195,7 +197,7 @@ impl Plugins {
     /// `entered`, checked as an admin's settings are ([`Plugins::checked`]), with the shared
     /// settings beside them. A user's own settings must give every required one.
     pub async fn save_personal(
-        &self,
+        self: &Arc<Plugins>,
         id: String,
         caller: Caller,
         entered: Map<String, Value>,
@@ -210,8 +212,7 @@ impl Plugins {
                     let stored = values(conn, &id, user)?;
                     let beneath =
                         settings::effective(conn, &id, manifest.settings.as_ref(), SERVER)?;
-                    let permissions = grants::granted(conn, &id, SERVER)?;
-                    Ok(Saving { manifest, schema, stored, beneath, permissions })
+                    Ok(Saving { manifest, schema, stored, beneath })
                 })
                 .await?
         };

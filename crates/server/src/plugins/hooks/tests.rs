@@ -23,14 +23,15 @@ mod reenabling;
 mod reinstall;
 mod scans;
 mod searches;
+mod turns;
 mod waking;
 
 /// A plugin's answer to an event it handled.
 const HANDLED: Result<(), &str> = Ok(());
 const HOUR: i64 = 60 * 60_000;
 
-/// A delivery to a stand-in plugin: the hook, library, and user it was due for, and the event
-/// the plugin received, if there was anything to send.
+/// A delivery to a stand-in plugin: the hook, library, and user it was due for (0 for none, as
+/// its cursor stores it), and the event the plugin received, if there was anything to send.
 #[derive(Debug)]
 struct Received {
     hook: Permission,
@@ -92,7 +93,7 @@ async fn ran(db: &Database, now: i64, how: Ran, summary: &'static str) -> Vec<Re
             let (next, event) = (due.read)(tx, &due, now)?;
             let how = if event.is_none() { Ran::Handled } else { how };
             record(tx, &due, next, how, summary, now)?;
-            let (hook, library, user) = (due.hook, due.library, due.user);
+            let (hook, library, user) = (due.hook, due.library, due.user.unwrap_or(0));
             received.push(Received { hook, library, user, event });
         }
         Ok(received)
@@ -111,7 +112,7 @@ fn row(hook: Permission) -> (String, Read) {
 /// `hook` found due for the stand-in plugin in library 1, for `user`, at position 0.
 fn due_for(hook: Permission, user: i64) -> Due {
     let (_, read) = row(hook);
-    Due { hook, read, plugin: "plugin".into(), library: 1, position: 0, user }
+    Due { hook, read, plugin: "plugin".into(), library: 1, position: 0, user: Some(user) }
 }
 
 /// Every permission that is a hook has one row in the table, and nothing else has one.

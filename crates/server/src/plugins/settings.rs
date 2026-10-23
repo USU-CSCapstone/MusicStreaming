@@ -2,8 +2,10 @@
 //! where a library's differ. A run gets the settings in effect: the library's own, else the
 //! server-wide ones, else the defaults the manifest declares.
 
+use std::sync::Arc;
+
 use jewelcase_plugins::settings::Schema;
-use jewelcase_plugins::{Event, Manifest, Permission};
+use jewelcase_plugins::{Event, Manifest};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Map, Value};
 
@@ -98,8 +100,6 @@ pub(super) struct Saving {
     /// What a run there gets beneath them: the server-wide settings under a library's, and the
     /// shared settings in effect beside a user's.
     pub beneath: Map<String, Value>,
-    /// What the plugin's check run is granted there.
-    pub permissions: Vec<Permission>,
 }
 
 impl Plugins {
@@ -108,7 +108,7 @@ impl Plugins {
     /// and saved over as if none were set, so an admin can mend them by entering every setting
     /// again.
     pub async fn save_settings(
-        &self,
+        self: &Arc<Plugins>,
         id: String,
         level: i64,
         entered: Map<String, Value>,
@@ -133,10 +133,8 @@ impl Plugins {
                     // At the server level, `stored` is the server-wide settings.
                     let beneath =
                         if level == SERVER { Map::new() } else { self::level(conn, &id, SERVER)? };
-                    // At the server level, only what is granted to the plugin itself.
-                    let permissions = grants::granted(conn, &id, level)?;
                     let schema = manifest.settings.clone().unwrap_or_default();
-                    Ok(Saving { manifest, schema, stored, beneath, permissions })
+                    Ok(Saving { manifest, schema, stored, beneath })
                 })
                 .await?
         };
@@ -150,17 +148,22 @@ impl Plugins {
     /// once they are of the kinds and among the choices its schema declares, leave no required
     /// setting without a value, and pass the plugin's own check, run for `run_for` with them, what
     /// is beneath them, and the defaults, so a wrong key is caught as it is entered rather than at
-    /// three in the morning (§6). Server-wide settings may leave a required one to each library,
-    /// and a library's may take one from them; a user's must give every one themselves. Values
-    /// that fail are a [`PluginError::SettingsInvalid`] that says why.
+    /// three in the morning (§6). The check runs in the plugin's turn in the library, with what a
+    /// run there is granted, and not at all in a library it is disabled in, as a disabled plugin
+    /// runs nothing (`requirements/plugins.md` §5). One uninstalled by its turn is a
+    /// [`PluginError::NotFound`]. A caller that stops waiting for its turn leaves the queue; a
+    /// check that has started goes on to its end, and what it touched is scanned, as after any
+    /// run. Server-wide settings may leave a required one to each library, and a library's may
+    /// take one from them; a user's must give every one themselves. Values that fail are a
+    /// [`PluginError::SettingsInvalid`] that says why.
     pub(super) async fn checked(
-        &self,
+        self: &Arc<Plugins>,
         id: &str,
         run_for: RunFor,
         saving: Saving,
         entered: Map<String, Value>,
     ) -> Result<Map<String, Value>, PluginError> {
-        let Saving { manifest, schema, stored, beneath, permissions } = saving;
+        let Saving { manifest, schema, stored, beneath } = saving;
         let values = merge(&schema, &stored, entered);
         let problems = schema.check(&values);
         if !problems.is_empty() {
@@ -178,9 +181,23 @@ impl Plugins {
             return Err(PluginError::SettingsInvalid(format!("{missing} is required.")));
         }
         let candidate = schema.with_defaults(&set);
-        let check = Event::CheckSettings;
-        let outcome = self.execute(id, &manifest, run_for, permissions, candidate, check).await?;
-        outcome.result.map_err(|error| PluginError::SettingsInvalid(error.to_string()))?;
+        let turn = self.turns.take(id, run_for.library).await;
+        let (plugins, id) = (self.clone(), id.to_owned());
+        let checked = self.spawn(async move {
+            let _turn = turn;
+            let (plugin, library) = (id.clone(), run_for.library);
+            let granted = plugins.db.try_read(move |conn| -> Result<_, PluginError> {
+                // Uninstalled while it waited for its turn.
+                grants::manifest(conn, &plugin)?.ok_or(PluginError::NotFound)?;
+                Ok(grants::for_run(conn, &plugin, library)?)
+            });
+            let Some(permissions) = granted.await? else { return Ok(None) };
+            let check = Event::CheckSettings;
+            plugins.execute(&id, &manifest, run_for, permissions, candidate, check).await.map(Some)
+        });
+        if let Some((outcome, _)) = checked.await?? {
+            outcome.result.map_err(|error| PluginError::SettingsInvalid(error.to_string()))?;
+        }
         Ok(values)
     }
 }

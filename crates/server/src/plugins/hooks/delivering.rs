@@ -2,13 +2,8 @@
 
 use std::sync::Arc;
 
-use jewelcase_plugins::Permission;
-
 use super::Due;
-use crate::plugins::Plugins;
-
-/// The plugin, library, hook, and user of a delivery.
-type Key = (String, i64, Permission, i64);
+use crate::plugins::{DeliveryKey as Key, Plugins};
 
 /// A delivery under way, holding its key in `Plugins::delivering` until it is dropped, even by a
 /// panic.

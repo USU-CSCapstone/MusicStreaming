@@ -15,7 +15,8 @@ pub struct Outcome {
     pub log: Vec<String>,
     /// How many files it wrote.
     pub written: usize,
-    /// Every path it created, replaced, moved, or deleted, for the scanner to look at again.
+    /// Every path it created, replaced, moved, or deleted, or set out to, for the scanner to look
+    /// at again.
     pub touched: Vec<PathBuf>,
     /// Whether a request found its service out of reach: held back as `rate-limited`,
     /// `timed-out`, unable to connect, or answered `429` or a `5xx`. A run that failed after one

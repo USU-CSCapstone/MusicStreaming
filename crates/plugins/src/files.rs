@@ -48,6 +48,12 @@ fn relative(path: &str) -> Result<&Path, Error> {
     Ok(relative)
 }
 
+/// Where `path` is on this host, beneath `root`, refused as [`relative`] refuses it. Nothing on
+/// disk is looked at, so this is where a call would reach, not where it may lead through a link.
+pub fn resolve(root: &Path, path: &str) -> Result<PathBuf, Error> {
+    Ok(root.join(relative(path)?))
+}
+
 /// The library's root, opened as the folder every path is resolved beneath.
 fn open(root: &Path) -> Result<Dir, Error> {
     Dir::open_ambient_dir(root, ambient_authority())
@@ -115,9 +121,8 @@ pub fn read(root: &Path, path: &str, offset: u64, length: u32) -> Result<Vec<u8>
 }
 
 /// Moves `from` to `to`, which must not exist, making the folders `to` is in (see [`move_folder`]
-/// for the one case where an empty folder at `to` is replaced). Returns both on this host, as the
-/// scanner needs to see each.
-pub fn rename(root: &Path, from: &str, to: &str) -> Result<(PathBuf, PathBuf), Error> {
+/// for the one case where an empty folder at `to` is replaced).
+pub fn rename(root: &Path, from: &str, to: &str) -> Result<(), Error> {
     let (source, target) = (relative(from)?, relative(to)?);
     if target.starts_with(source) {
         return Err(Error::Refused(format!("{to} is {from}, or within it")));
@@ -138,8 +143,7 @@ pub fn rename(root: &Path, from: &str, to: &str) -> Result<(PathBuf, PathBuf), E
         ErrorKind::AlreadyExists => describe(to, e),
         _ => describe(from, e),
     })?;
-    moved(from, to, placed, || from_dir.remove_file(from_name))?;
-    Ok((root.join(source), root.join(target)))
+    moved(from, to, placed, || from_dir.remove_file(from_name))
 }
 
 /// Finishes moving `from` to `to` once it was `placed`: a file linked to its new name has its
@@ -159,15 +163,13 @@ fn moved(
 }
 
 /// Removes the file or empty folder at `path`, or a link there rather than what it leads to.
-/// Returns its path on this host, for the scanner to see it gone.
-pub fn delete(root: &Path, path: &str) -> Result<PathBuf, Error> {
+pub fn delete(root: &Path, path: &str) -> Result<(), Error> {
     let relative = relative(path)?;
     let root_dir = open(root)?;
     let meta = root_dir.symlink_metadata(relative).map_err(|e| describe(path, e))?;
     let removed =
         if meta.is_dir() { root_dir.remove_dir(relative) } else { root_dir.remove_file(relative) };
-    removed.map_err(|e| describe(path, e))?;
-    Ok(root.join(relative))
+    removed.map_err(|e| describe(path, e))
 }
 
 /// An I/O failure, as a plugin sees it: a path `cap_std` found leading outside the root is

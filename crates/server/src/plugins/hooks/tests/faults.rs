@@ -99,7 +99,7 @@ async fn a_failure_on_the_servers_side_backs_off_but_never_counts() {
 async fn a_delivery_that_panics_lets_the_next_one_start() {
     let (temp, db) = changed().await;
     let plugins = plugins(&temp, &db);
-    let key = ("plugin".to_owned(), 1, TracksChanged, 0);
+    let key = ("plugin".to_owned(), 1, TracksChanged, None);
     let delivering = Delivering::claim(&plugins, key.clone()).unwrap();
     assert!(Delivering::claim(&plugins, key.clone()).is_none(), "one at a time");
     let panicked = tokio::spawn(async move {
@@ -117,7 +117,7 @@ async fn a_delivery_lets_the_next_one_start_once_it_ends() {
     let (temp, db) = changed().await;
     let plugins = plugins(&temp, &db);
     dispatched(&plugins, &db).await;
-    let key = ("plugin".to_owned(), 1, TracksChanged, 0);
+    let key = ("plugin".to_owned(), 1, TracksChanged, None);
     let released = async {
         while Delivering::claim(&plugins, key.clone()).is_none() {
             tokio::time::sleep(Duration::from_millis(20)).await;

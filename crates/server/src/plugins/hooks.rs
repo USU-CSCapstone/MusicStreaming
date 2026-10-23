@@ -59,8 +59,8 @@ struct Due {
     plugin: String,
     library: i64,
     position: i64,
-    /// The user it acts for, in `played`, `playing`, and `searched`; otherwise 0.
-    user: i64,
+    /// The user it acts for, in `played`, `playing`, and `searched`. Its cursor stores none as 0.
+    user: Option<i64>,
 }
 
 /// How a delivery went, for its position and retries.
@@ -111,8 +111,9 @@ impl Plugins {
     }
 
     /// Starts each delivery that is due and not already under way. One plugin, library, hook,
-    /// and user has at most one delivery at a time; different ones run side by side. Answers
-    /// false if no plugin is enabled in any library, so nothing can be due until one is.
+    /// and user has at most one delivery at a time, and each waits for the plugin's turn in the
+    /// library ([`Plugins::deliver`]). Answers false if no plugin is enabled in any library, so
+    /// nothing can be due until one is.
     pub async fn dispatch(self: &Arc<Plugins>) -> bool {
         let read = self.db.read(|conn| {
             let enabled = due::any_enabled(conn)?;
@@ -136,30 +137,39 @@ impl Plugins {
         true
     }
 
-    /// Delivers what is due to one plugin in one library, and records how it went.
+    /// Delivers what is due to one plugin in one library, and records how it went, in the
+    /// plugin's turn there and once one of the [`Plugins::hook_slots`] is free. The turn comes
+    /// first, so a delivery waiting for it holds no slot another plugin or library could use; it
+    /// holds its turn while it waits for a slot. One no longer due once it has both, such as
+    /// for a plugin disabled meanwhile, runs nothing and records nothing.
     async fn deliver(&self, due: Due) {
+        let _turn = self.turns.take(&due.plugin, due.library).await;
+        let _slot = self.hook_slots.acquire().await.expect("the hook slots are never closed");
         let at = due.clone();
         let read = self
             .db
             .read(move |conn| {
-                Ok((
-                    (at.read)(conn, &at, now_ms())?,
+                let now = now_ms();
+                if !due::still(conn, &at, now)? {
+                    return Ok(None);
+                }
+                Ok(Some((
+                    (at.read)(conn, &at, now)?,
                     grants::manifest(conn, &at.plugin)?,
                     grants::granted(conn, &at.plugin, at.library)?,
-                ))
+                )))
             })
             .await;
         let ((next, event), manifest, permissions) = match read {
-            Ok((event, Some(manifest), permissions)) => (event, manifest, permissions),
-            Ok((_, None, _)) => return,
+            Ok(Some((event, Some(manifest), permissions))) => (event, manifest, permissions),
+            Ok(_) => return,
             Err(error) => return tracing::error!(%error, "cannot read hook events"),
         };
         // Nothing for the plugin, such as a start that went stale, moves the position on.
         let (ran, summary) = match event {
             None => (Ran::Handled, String::new()),
             Some(event) => {
-                let run_for =
-                    RunFor { library: due.library, user: (due.user != 0).then_some(due.user) };
+                let run_for = RunFor { library: due.library, user: due.user };
                 match self.run_in(&due.plugin, &manifest, run_for, permissions, event).await {
                     Ok((outcome, _)) => {
                         (Ran::of(&outcome.result, outcome.outage), outcome.summary())
@@ -203,7 +213,8 @@ fn record(
     summary: &str,
     now: i64,
 ) -> rusqlite::Result<()> {
-    let (plugin, library, hook, user) = (&due.plugin, due.library, Text(due.hook), due.user);
+    let (plugin, library, hook) = (&due.plugin, due.library, Text(due.hook));
+    let user = due.user.unwrap_or(0);
     let (failures, outages, since): (i64, i64, Option<i64>) = conn
         .prepare_cached(
             "SELECT failures, outages, outage_since FROM plugin_cursors \
@@ -252,7 +263,7 @@ fn record(
         }
         _ => return Ok(()),
     };
-    if user == 0 {
+    if due.user.is_none() {
         conn.execute(
             "UPDATE plugin_libraries SET enabled = 0, disabled_reason = ?3 \
              WHERE plugin_id = ?1 AND library_id = ?2",

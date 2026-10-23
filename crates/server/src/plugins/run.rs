@@ -3,15 +3,16 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use jewelcase_plugins::{Event, Grants, Manifest, Outcome, Permission};
-use jewelcase_scanner::Trigger;
+use jewelcase_scanner::{Depth, Scope, Trigger};
 use rusqlite::{Connection, params};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::library::RunLibrary;
-use super::{PluginError, Plugins, grants, personal, rate_limits, settings, unexpected};
+use super::{PluginError, Plugins, grants, personal, rate_limits, settings};
 use crate::db::now_ms;
 
 /// How a run went, as the admin sees it: the spec's `PluginRunResult`.
@@ -41,46 +42,58 @@ pub(super) struct RunFor {
 }
 
 impl Plugins {
-    /// Runs `id` once in each library it is enabled in, to do its whole job there.
-    pub async fn run(&self, id: String) -> Result<RunResult, PluginError> {
+    /// Runs `id` once in each library it is enabled in, in its turn there, to do its whole job
+    /// there. A library it is disabled in by the time its turn comes is passed over. The runs are
+    /// scanned and recorded even if the caller stops waiting for them.
+    pub async fn run(self: &Arc<Plugins>, id: String) -> Result<RunResult, PluginError> {
         let (manifest, libraries) = {
             let id = id.clone();
             self.db.try_read(move |conn| plan(conn, &id)).await?
         };
+        let nowhere =
+            RunResult::failed(format!("{} is not enabled in any library.", manifest.name));
         if libraries.is_empty() {
-            return Ok(RunResult::failed(format!(
-                "{} is not enabled in any library.",
-                manifest.name
-            )));
+            return Ok(nowhere);
         }
-        let mut result = RunResult {
-            ok: true,
-            summary: String::new(),
-            log: Vec::new(),
-            saved: 0,
-            scanning: false,
-        };
-        for (library, permissions) in libraries {
-            let (outcome, scanning) = self
-                .run_in(&id, &manifest, RunFor { library, user: None }, permissions, Event::Run)
-                .await?;
-            result.scanning |= scanning;
-            result.ok &= outcome.result.is_ok();
-            result.saved += outcome.written;
-            if !result.summary.is_empty() {
-                result.summary.push(' ');
+        let plugins = self.clone();
+        self.spawn(async move {
+            let mut ran = false;
+            let mut result = RunResult {
+                ok: true,
+                summary: String::new(),
+                log: Vec::new(),
+                saved: 0,
+                scanning: false,
+            };
+            for library in libraries {
+                let _turn = plugins.turns.take(&id, library).await;
+                let plugin = id.clone();
+                let granted = plugins.db.read(move |conn| grants::for_run(conn, &plugin, library));
+                // Disabled there, or uninstalled, while it waited for its turn.
+                let Some(permissions) = granted.await? else { continue };
+                ran = true;
+                let run_for = RunFor { library, user: None };
+                let (outcome, scanning) =
+                    plugins.run_in(&id, &manifest, run_for, permissions, Event::Run).await?;
+                result.scanning |= scanning;
+                result.ok &= outcome.result.is_ok();
+                result.saved += outcome.written;
+                if !result.summary.is_empty() {
+                    result.summary.push(' ');
+                }
+                result.summary.push_str(&outcome.summary());
+                result.log.extend(outcome.log);
             }
-            result.summary.push_str(&outcome.summary());
-            result.log.extend(outcome.log);
-        }
-        Ok(result)
+            Ok(if ran { result } else { nowhere })
+        })
+        .await?
     }
 
     /// Runs `id` in `run_for`'s library with `permissions` to handle `event`, for its user if it
-    /// acts for one, with their personal settings beside the shared ones. Then it queues scans
-    /// of what it touched, as the scanner is the only way into the library
-    /// (`requirements/general.md` §3.2), and records its report as the library's last run for
-    /// admins. Answers the outcome, and whether a scan was queued.
+    /// acts for one, with their personal settings beside the shared ones ([`Plugins::execute`]),
+    /// and records its report as the library's last run for admins. Answers the outcome, and
+    /// whether a scan of what it touched was queued. Called on the plugin runtime, in the
+    /// plugin's turn in the library.
     pub(super) async fn run_in(
         &self,
         id: &str,
@@ -103,8 +116,8 @@ impl Plugins {
                 Ok(settings)
             })
             .await?;
-        let outcome = self.execute(id, manifest, run_for, permissions, settings, event).await?;
-        let scanning = self.scan(library, &outcome.touched).await;
+        let (outcome, scanning) =
+            self.execute(id, manifest, run_for, permissions, settings, event).await?;
         let (plugin, ok, summary) = (id.to_owned(), outcome.result.is_ok(), outcome.report());
         self.db
             .write(move |tx| {
@@ -119,8 +132,12 @@ impl Plugins {
     }
 
     /// Runs `id` in `run_for`'s library, for its user if it acts for one, with exactly these
-    /// permissions and settings, and the host limits in force now, on the plugin runtime, and
-    /// nothing more. What it was refused goes to the log for admins, whatever ran it.
+    /// permissions and settings, and the host limits in force now, and nothing more. Then it
+    /// queues a scan of what it touched, as the scanner is the only way into the library
+    /// (`requirements/general.md` §3.2). What it was refused goes to the log for admins,
+    /// whatever ran it. Answers the outcome, and whether a scan was queued. Called only on the
+    /// plugin runtime, so plugin code never shares the threads serving requests, and in the
+    /// plugin's turn in the library.
     pub(super) async fn execute(
         &self,
         id: &str,
@@ -129,8 +146,8 @@ impl Plugins {
         permissions: Vec<Permission>,
         settings: Map<String, Value>,
         event: Event,
-    ) -> Result<Outcome, PluginError> {
-        let (host, runtime) = (self.host()?, self.runtime()?);
+    ) -> Result<(Outcome, bool), PluginError> {
+        let host = self.host()?;
         let plugin = id.to_owned();
         let host_limits = self.db.read(move |conn| rate_limits::for_run(conn, &plugin)).await?;
         let RunFor { library, user } = run_for;
@@ -144,40 +161,41 @@ impl Plugins {
             host_limits,
             settings,
         };
-        let (path, db, plugin) = (self.path(id), self.db.clone(), id.to_owned());
-        let outcome = runtime
-            .spawn(async move {
-                host.run(&path, grants, RunLibrary::new(db, &plugin, library), event).await
-            })
-            .await
-            .map_err(unexpected)?;
+        let library_access = RunLibrary::new(self.db.clone(), id, library);
+        let outcome = host.run(&self.path(id), grants, library_access, event).await;
         if !outcome.refused.is_empty() {
             let refused = &outcome.refused;
             tracing::warn!(plugin = id, library, user, %refused, "refused a plugin");
         }
-        Ok(outcome)
+        let scanning = self.scan(library, &outcome.touched).await;
+        Ok((outcome, scanning))
     }
 
-    /// Queues a scan of each folder the paths in `touched` are in, and says whether any was
-    /// queued. Queuing records the scan with a blocking write, which must not run on an async
-    /// thread: there it would panic while holding the scanner's queue, and take that library's
-    /// scanning down.
+    /// Queues one scan of every folder the paths in `touched` are in, within the library's
+    /// roots, and says whether it was queued. Queuing records the scan with a blocking write,
+    /// which must not run on an async thread: there it would panic while holding the scanner's
+    /// queue, and take that library's scanning down.
     pub(super) async fn scan(&self, library: i64, touched: &[PathBuf]) -> bool {
         let Some(scanner) = self.scanners.get(&library).cloned() else { return false };
         let folders: BTreeSet<PathBuf> =
             touched.iter().filter_map(|file| file.parent()).map(Path::to_path_buf).collect();
         tokio::task::spawn_blocking(move || {
-            // Every folder is queued, so none is skipped because an earlier one succeeded.
-            let queued = folders.iter().map(|folder| scanner.scan_folder(Trigger::Watch, folder));
-            queued.fold(false, |any, scan| any | scan.is_some())
+            let scopes: Vec<Scope> = folders
+                .into_iter()
+                .filter_map(|folder| {
+                    let root = scanner.root_for(&folder)?;
+                    Some(Scope::folder(root, folder, Depth::Subtree))
+                })
+                .collect();
+            !scopes.is_empty() && scanner.request(Trigger::Watch, scopes).is_some()
         })
         .await
         .unwrap_or(false)
     }
 }
 
-/// The manifest of `id`, and each library it is enabled in with what is granted there.
-type Plan = (Manifest, Vec<(i64, Vec<Permission>)>);
+/// The manifest of `id`, and each library it is enabled in.
+type Plan = (Manifest, Vec<i64>);
 
 /// The [`Plan`] for running `id`, or [`PluginError::NotFound`] if it is not installed.
 fn plan(conn: &Connection, id: &str) -> Result<Plan, PluginError> {
@@ -188,10 +206,6 @@ fn plan(conn: &Connection, id: &str) -> Result<Plan, PluginError> {
              ORDER BY library_id",
         )?
         .query_map([id], |row| row.get(0))?
-        .collect::<rusqlite::Result<_>>()?;
-    let libraries = libraries
-        .into_iter()
-        .map(|library| Ok((library, grants::granted(conn, id, library)?)))
         .collect::<rusqlite::Result<_>>()?;
     Ok((manifest, libraries))
 }

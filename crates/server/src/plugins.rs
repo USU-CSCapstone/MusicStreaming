@@ -15,9 +15,11 @@ mod run;
 pub mod settings;
 #[cfg(test)]
 pub mod testing;
+mod turns;
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -26,12 +28,16 @@ use jewelcase_scanner::Scanner;
 use rusqlite::{Connection, params};
 use tempfile::NamedTempFile;
 use tokio::runtime::Runtime;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinError;
 
 use crate::db::{Database, DbError, Json, now_ms};
 use library::RunLibrary;
 pub use run::RunResult;
+use turns::Turns;
+
+/// The plugin, library, hook, and user of a hook delivery.
+type DeliveryKey = (String, i64, Permission, Option<i64>);
 
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {
@@ -84,9 +90,14 @@ pub struct Plugins {
     /// idle between runs, so a server with no plugin enabled pays nothing for them.
     host: OnceLock<anyhow::Result<Arc<Host<RunLibrary>>>>,
     runtime: OnceLock<Result<Runtime, String>>,
-    /// The plugin, library, hook, and user of each delivery under way, so each has one at a
-    /// time.
-    delivering: Mutex<HashSet<(String, i64, Permission, i64)>>,
+    /// Each delivery under way, so each plugin, library, hook, and user has one at a time.
+    delivering: Mutex<HashSet<DeliveryKey>>,
+    /// Each plugin's turn to run in each library.
+    turns: Turns,
+    /// The hook deliveries that may run at once, one for each core, so a burst of them cannot
+    /// hold a store each beside playback. Run now and settings checks, which someone is waiting
+    /// on, take none.
+    hook_slots: Semaphore,
     /// Wakes the hook loop, which sleeps while no plugin is enabled anywhere: notified when an
     /// admin enables one, and when the plugins are dropped.
     wake_hooks: Arc<Notify>,
@@ -110,6 +121,10 @@ impl Plugins {
             host: OnceLock::new(),
             runtime: OnceLock::new(),
             delivering: Mutex::default(),
+            turns: Turns::default(),
+            hook_slots: Semaphore::new(
+                std::thread::available_parallelism().map_or(1, NonZeroUsize::get),
+            ),
             wake_hooks: Arc::default(),
         }
     }
@@ -138,6 +153,15 @@ impl Plugins {
             tracing::error!(%error, "cannot start the plugin runtime");
             PluginError::Internal("Plugins cannot run on this server.")
         })
+    }
+
+    /// Runs `task` on the plugin runtime and answers its output. The task goes on to its end even
+    /// if the caller stops waiting for it, as a request does when its client gives up.
+    async fn spawn<T: Send + 'static>(
+        &self,
+        task: impl Future<Output = T> + Send + 'static,
+    ) -> Result<T, PluginError> {
+        self.runtime()?.spawn(task).await.map_err(unexpected)
     }
 
     fn path(&self, id: &str) -> PathBuf {
@@ -192,11 +216,24 @@ impl Plugins {
         Ok(id)
     }
 
-    /// Uninstalls `id`. Files it wrote stay, and so do its grants and settings, for a reinstall
-    /// (`requirements/plugins.md` §5). Its users' connections go with it, and so do the requests
-    /// to forget their searches meant for it, so after a reinstall, which starts every position
-    /// over, users connect again and nothing from before is sent twice.
+    /// Uninstalls `id`, once each of its runs under way has ended. Files it wrote stay, and so do
+    /// its grants and settings, for a reinstall (`requirements/plugins.md` §5). Its users'
+    /// connections go with it, and so do the requests to forget their searches meant for it, so
+    /// after a reinstall, which starts every position over, users connect again and nothing from
+    /// before is sent twice.
     pub async fn uninstall(&self, id: String) -> Result<(), PluginError> {
+        // Its turn in every library and at the server level, taken in order and held until it is
+        // gone, so no run of it is under way meanwhile, and one waiting finds it gone.
+        let levels = self.db.read(|conn| {
+            let sql = "SELECT 0 UNION SELECT id FROM libraries ORDER BY 1";
+            conn.prepare_cached(sql)?
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<Vec<i64>, _>>()
+        });
+        let mut turns = Vec::new();
+        for level in levels.await? {
+            turns.push(self.turns.take(&id, level).await);
+        }
         let (path, plugin) = (self.path(&id), id.clone());
         let removed = self
             .db

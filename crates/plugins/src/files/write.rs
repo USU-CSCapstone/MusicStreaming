@@ -3,7 +3,7 @@
 
 use std::ffi::OsStr;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use cap_std::fs::{File, OpenOptions};
 
@@ -12,8 +12,8 @@ use crate::host::{Error, WriteMode};
 
 /// Writes `contents` to `path`, as `mode` says: `Create` makes a new file, making its folders,
 /// and fails if one is there, even one that appears during the call; `Replace` puts it in place
-/// of the file there, and fails unless a file is there. Returns the path written on this host.
-pub fn write(root: &Path, path: &str, contents: &[u8], mode: WriteMode) -> Result<PathBuf, Error> {
+/// of the file there, and fails unless a file is there.
+pub fn write(root: &Path, path: &str, contents: &[u8], mode: WriteMode) -> Result<(), Error> {
     if contents.len() > MAX_WRITE {
         let refused = format!("a file written at once is at most {} MB", MAX_WRITE >> 20);
         return Err(Error::Refused(refused));
@@ -40,8 +40,7 @@ pub fn write(root: &Path, path: &str, contents: &[u8], mode: WriteMode) -> Resul
         WriteMode::Create => place_new(&folder, OsStr::new(&staged), &folder, name),
         WriteMode::Replace => folder.rename(&staged, &folder, name).map(|()| Placed::Moved),
     });
-    settle(path, &staged, placed, || folder.remove_file(&staged))?;
-    Ok(root.join(relative))
+    settle(path, &staged, placed, || folder.remove_file(&staged))
 }
 
 /// What became of writing `path` once its staged copy `staged` was `placed`: unless it was

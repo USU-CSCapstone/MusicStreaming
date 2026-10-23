@@ -29,6 +29,23 @@ pub fn granted(conn: &Connection, id: &str, library: i64) -> rusqlite::Result<Ve
     .collect()
 }
 
+/// What a run of `id` in `library` is granted ([`granted`]), or `None` in a library it is
+/// disabled in, where it runs nothing, as in every library once it is uninstalled. At library 0,
+/// the server level, it is never `None`.
+pub fn for_run(
+    conn: &Connection,
+    id: &str,
+    library: i64,
+) -> rusqlite::Result<Option<Vec<Permission>>> {
+    let runs: bool = conn
+        .prepare_cached(
+            "SELECT ?2 = 0 OR EXISTS (SELECT 1 FROM plugin_libraries \
+             WHERE plugin_id = ?1 AND library_id = ?2 AND enabled)",
+        )?
+        .query_row(params![id, library], |row| row.get(0))?;
+    runs.then(|| granted(conn, id, library)).transpose()
+}
+
 /// The required permissions `granted` leaves out, in the manifest's order.
 pub fn missing(manifest: &Manifest, granted: &[Permission]) -> Vec<Permission> {
     manifest.required().filter(|p| !granted.contains(p)).collect()

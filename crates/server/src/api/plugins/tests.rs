@@ -591,10 +591,11 @@ async fn settings_are_checked_before_the_plugin_sees_them() {
         (StatusCode::UNPROCESSABLE_ENTITY, &json!("API key is required."))
     );
 
-    // Set server-wide, it is set for the library too, so the plugin is asked: here one installed
-    // without its file, which cannot be loaded.
+    // Set server-wide, it is set for the library too, so the plugin, enabled there, is asked:
+    // here one installed without its file, which cannot be loaded.
     let key = json!({ "apiKey": "k" }).as_object().unwrap().clone();
     db.write(move |tx| settings::store(tx, "lrclib-lyrics", settings::SERVER, &key)).await.unwrap();
+    enable_ungranted(&db, "lrclib-lyrics").await;
     let (status, problem) = call(
         &app,
         ADMIN,

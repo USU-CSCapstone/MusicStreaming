@@ -114,26 +114,27 @@ impl<L: Library> files::Host for Run<L> {
             files::WriteMode::Replace => Permission::LibraryChange,
         })?;
         let root = self.root(root).await?;
-        let written = blocking(move || library_files::write(&root, &path, &contents, mode)).await?;
+        // Each path is recorded as touched before the file work starts: a run cut off by its
+        // time limit stops waiting for that work, but not the work itself.
+        self.touched.push(library_files::resolve(&root, &path)?);
+        blocking(move || library_files::write(&root, &path, &contents, mode)).await?;
         self.written += 1;
-        self.touched.push(written);
         Ok(())
     }
 
     async fn rename(&mut self, root: u64, path: String, to: String) -> Result<(), Error> {
         self.may(Permission::LibraryChange)?;
         let root = self.root(root).await?;
-        let (from, to) = blocking(move || library_files::rename(&root, &path, &to)).await?;
-        self.touched.extend([from, to]);
-        Ok(())
+        let touched = [library_files::resolve(&root, &path)?, library_files::resolve(&root, &to)?];
+        self.touched.extend(touched);
+        blocking(move || library_files::rename(&root, &path, &to)).await
     }
 
     async fn delete(&mut self, root: u64, path: String) -> Result<(), Error> {
         self.may(Permission::LibraryChange)?;
         let root = self.root(root).await?;
-        let deleted = blocking(move || library_files::delete(&root, &path)).await?;
-        self.touched.push(deleted);
-        Ok(())
+        self.touched.push(library_files::resolve(&root, &path)?);
+        blocking(move || library_files::delete(&root, &path)).await
     }
 }
 

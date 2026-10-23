@@ -1,5 +1,7 @@
 use std::fs;
 use std::path::Path;
+use std::pin::pin;
+use std::task::Poll;
 
 use super::super::bindings::jewelcase::plugin::{files, host, http, library, state};
 use super::super::testing::{self, Memory, album, artist, track};
@@ -137,6 +139,41 @@ async fn every_import_refuses_without_its_permission() {
             }
         }
     }
+}
+
+/// Whether `call` is still waiting once it is polled, after which it is dropped, as the run's
+/// time limit drops a call it cuts off.
+async fn cut_off(call: impl Future) -> bool {
+    let mut call = pin!(call);
+    std::future::poll_fn(|context| Poll::Ready(call.as_mut().poll(context).is_pending())).await
+}
+
+/// A write, rename, or delete cut off while its file work waits for a thread has recorded what it
+/// touches, since the work still runs once one is free, and the scanner must see it.
+#[test]
+fn file_work_cut_off_is_still_touched() {
+    let runtime =
+        tokio::runtime::Builder::new_current_thread().max_blocking_threads(1).build().unwrap();
+    runtime.block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let run = &mut testing::run(library(dir.path()), &[LibraryAdd, LibraryChange]);
+        // The one thread for file work is held until this test lets it go.
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let holding = tokio::task::spawn_blocking(move || held.recv());
+
+        let mode = files::WriteMode::Create;
+        assert!(cut_off(files::Host::write(run, 1, "added".into(), b"x".to_vec(), mode)).await);
+        assert!(cut_off(files::Host::rename(run, 1, "moved".into(), "renamed".into())).await);
+        assert!(cut_off(files::Host::delete(run, 1, "deleted".into())).await);
+        let touched = ["added", "moved", "renamed", "deleted"].map(|name| dir.path().join(name));
+        assert_eq!(run.touched, touched);
+
+        release.send(()).unwrap();
+        holding.await.unwrap().unwrap();
+        // The one thread takes file work in order, so the cut-off work is done before this is,
+        // and none is left to write into the folder once it is removed.
+        tokio::task::spawn_blocking(|| ()).await.unwrap();
+    });
 }
 
 #[tokio::test]

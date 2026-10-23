@@ -38,6 +38,7 @@ fn paths_stay_within_the_root() {
     let outside = temp.path().join("secret");
     fs::write(&outside, b"host file").unwrap();
     for bad in ["/etc/passwd", "../outside", "Album/../../secret", "./Album/01.flac", "a\\x"] {
+        assert!(refused(resolve(&root, bad)), "{bad:?}");
         assert!(refused(write(&root, bad, b"x", Create)), "{bad:?}");
         assert!(refused(read(&root, bad, 0, 10)), "{bad:?}");
         assert!(refused(entries(&root, bad, None)), "{bad:?}");
@@ -84,7 +85,8 @@ fn a_link_is_followed_only_while_it_stays_within_the_root() {
 #[test]
 fn creating_never_replaces_and_replacing_needs_a_file() {
     let (_temp, root) = library();
-    let made = write(&root, "Album/01.lrc", b"[00:01]x", Create).unwrap();
+    write(&root, "Album/01.lrc", b"[00:01]x", Create).unwrap();
+    let made = resolve(&root, "Album/01.lrc").unwrap();
     assert_eq!(made, root.join("Album/01.lrc"));
     assert!(failed(write(&root, "Album/01.lrc", b"other", Create), "already exists"));
     assert_eq!(fs::read(&made).unwrap(), b"[00:01]x");
