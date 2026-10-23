@@ -252,7 +252,7 @@ Storage and scheduling:
 - **One album under two paths** — same album identity spanning two directories, where those directories are not the discs of one album (`CD1`, `CD2`); a store query.
 - **Matching content** — awaits track identity ([§6](#6-track-identity)); whatever fingerprint identity adopts, duplicates by content is an equality query on it.
 
-The job will run on the indexing pool at the lowest priority, write only to a duplicates table, and never touch a track row. The report is the API's `DuplicateGroup`.
+The job will run on the indexing pool at the lowest priority, write only to a duplicates table, and never touch a track row. The admin API is to serve the report.
 
 ---
 

@@ -162,6 +162,7 @@ mod tests {
 
     mod benchmark;
     mod end_to_end;
+    mod spec;
 
     #[tokio::test]
     async fn a_large_body_is_refused_before_sign_in() {

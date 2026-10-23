@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::clock::now_ms;
 use crate::tags::ReadError;
 
-/// Scan problem kinds, mirroring the API's `ScanProblemGroup.kind` plus the
-/// watchdog kill the design adds (`design/scanning.md` §11).
+/// Scan problem kinds (`requirements/scanning.md` §10), plus the watchdog kill
+/// the design adds (`design/scanning.md` §11).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProblemKind {

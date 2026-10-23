@@ -42,8 +42,8 @@ const SELECT: &str = "SELECT id, name, track_count, album_count, artist_count, d
              AND state IN ('queued', 'running')) \
      FROM libraries";
 
-/// `listLibraries`: every library the caller reaches, oldest first, since with no default
-/// library set clients open the first one (`AccountSettings`).
+/// `listLibraries`: every library the caller reaches, oldest first, since clients open the
+/// first one.
 pub async fn list(
     State(db): State<Arc<Database>>,
     caller: Caller,

@@ -61,7 +61,7 @@ Rules:
 
 ## 4. Sync and Mutations
 
-- **Change feeds.** Each library has an ordered feed of content changes; each account is to have one for its personal data, designed with `/me/changes`. Clients sync from a cursor, coalesced to net effect, and an expired cursor falls back to a full resync. Plugins follow the same feeds with durable cursors ([`requirements/plugins.md` §8](../requirements/plugins.md#8-events)).
+- **Change feeds.** Each library has an ordered feed of content changes; each account is to have one for its personal data. Clients sync from a cursor, coalesced to net effect, and an expired cursor falls back to a full resync. Plugins follow the same feeds with durable cursors ([`requirements/plugins.md` §8](../requirements/plugins.md#8-events)).
 - **Domain outboxes.** Until the account feed is designed, a hook that tells a plugin about one user's activity reads an outbox that activity's own domain keeps, written in the same transaction as the activity: `play_events` for `played` and `playing`, and `search_events` for `searched` ([`hooks.md` §1](hooks.md#1-built-hooks)). Each holds only what its hooks deliver, and new personal activity gets an outbox of its own rather than joining a shared log, so nothing commits to the account feed's shape before sync is designed.
 - **Commands.** Every user action applies locally, then goes to the server as an idempotent command with a client-generated ID, queued durably on the device. Offline is the same path with a longer wait ([`requirements/general.md` §3.4](../requirements/general.md#34-optimistic-by-default)).
 - **Plays** carry the time they happened, not the time they synced.

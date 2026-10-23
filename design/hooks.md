@@ -136,7 +136,7 @@ Any proposed hook must keep these. A hook that breaks one is rejected on that ba
 
 - **`plays-forgotten`, on the `played` hook and its grants**, delivered to each user who connected the plugin with the same per-user position. It is the twin of `searches-forgotten` ([§1.2](#12-searched)), and should be built alike.
 - **A play needs an ID in the contract.** The `play` record carries none today, so a plugin could not tell which play to forget. Adding `id` is a contract change, so a new version.
-- **Waits on clearing history itself.** The API specifies `/me/history/{playId}` and `/me/history/clear`, but the server does not implement them yet.
+- **Waits on clearing history itself.** The server cannot yet delete a play or clear history.
 - **What was sent on stays sent.** A scrobble on ListenBrainz is the user's to delete there, and the user is told so where they connect ([`requirements/users.md` §7](../requirements/users.md#7-privacy--personal-data)). A plugin that can also delete remotely is free to.
 
 ---
