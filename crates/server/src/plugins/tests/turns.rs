@@ -133,11 +133,12 @@ async fn a_delivery_disabled_while_it_waits_runs_nothing() {
 }
 
 /// Run now in a library the plugin is disabled in while it waits for its turn runs nothing
-/// there: the plugin is never loaded.
+/// there, even once it is enabled in another library: the plugin is never loaded.
 #[tokio::test]
 async fn run_now_disabled_while_it_waits_runs_nothing() {
     let (_temp, db, plugins, thread) = scanned().await;
     gate(&touching(&plugins, &db).await);
+    db.write(|tx| libraries::create(tx, Some(2), "Other", &[], &[])).await.unwrap();
     let turn = plugins.turns.take("plugin", 1).await;
     let run = tokio::spawn({
         let plugins = plugins.clone();
@@ -146,6 +147,8 @@ async fn run_now_disabled_while_it_waits_runs_nothing() {
     queued(&plugins, 1, 2).await;
 
     enable(&plugins, "plugin", false).await;
+    // Enabled there after the run planned its libraries, so it is not one of them.
+    plugins.set_enabled("plugin".into(), 2, true).await.unwrap();
     drop(turn);
     // A run that loaded the plugin would wait at the FIFO.
     let ran = tokio::time::timeout(Duration::from_secs(30), run).await;

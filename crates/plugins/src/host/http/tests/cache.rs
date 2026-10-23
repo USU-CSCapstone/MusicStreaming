@@ -23,6 +23,30 @@ async fn a_fresh_reply_is_shared_within_a_library_and_never_beyond_it() {
 }
 
 #[tokio::test]
+async fn a_fresh_reply_is_shared_only_by_runs_for_the_same_user_with_the_same_activity_grants() {
+    let (port, hits) = server().await;
+    let network = Arc::new(Network::default());
+    let for_user = |user| {
+        let mut run = with(network.clone(), "artwork", 1);
+        run.grants.user = user;
+        run
+    };
+    let granted = |permission| {
+        let mut run = with(network.clone(), "artwork", 1);
+        run.grants.permissions.push(permission);
+        run
+    };
+    assert_eq!(body(&mut for_user(Some(7)), port, "/fresh").await, "1");
+    assert_eq!(body(&mut for_user(Some(7)), port, "/fresh").await, "1");
+    assert_eq!(body(&mut for_user(Some(8)), port, "/fresh").await, "2");
+    assert_eq!(body(&mut for_user(None), port, "/fresh").await, "3");
+    // Each activity grant sees what a run without it cannot.
+    assert_eq!(body(&mut granted(Permission::ListeningActivity), port, "/fresh").await, "4");
+    assert_eq!(body(&mut granted(Permission::SearchActivity), port, "/fresh").await, "5");
+    assert_eq!(hits.lock().unwrap()["/fresh"], 5);
+}
+
+#[tokio::test]
 async fn a_change_that_succeeds_forgets_what_was_kept_for_its_url() {
     let (port, hits) = server().await;
     let mut run = run();

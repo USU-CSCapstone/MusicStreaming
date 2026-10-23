@@ -120,8 +120,11 @@ async fn keeps_state_per_plugin_and_library_until_uninstalled() {
     here.state_set("cursor".into(), b"13".to_vec()).await.unwrap();
     assert_eq!(here.state_get("cursor".into()).await.unwrap().as_deref(), Some(b"13".as_slice()));
     assert_eq!(there.state_get("cursor".into()).await.unwrap(), None);
+    there.state_set("cursor".into(), b"other".to_vec()).await.unwrap();
     here.state_delete("cursor".into()).await.unwrap();
     assert_eq!(here.state_get("cursor".into()).await.unwrap(), None);
+    let kept = there.state_get("cursor".into()).await.unwrap();
+    assert_eq!(kept.as_deref(), Some(b"other".as_slice()), "another library's is kept");
 
     here.state_set("kept".into(), b"x".to_vec()).await.unwrap();
     plugins(&temp, &db).uninstall("plugin".into()).await.unwrap();

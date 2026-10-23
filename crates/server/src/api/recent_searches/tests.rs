@@ -183,6 +183,26 @@ async fn a_search_is_kept_per_library() {
     assert_eq!((status, &other["items"]), (StatusCode::OK, &json!([])));
 }
 
+/// A search is removed only through its own library, and removing it elsewhere notes nothing,
+/// even for a user whose searches a plugin is told of.
+#[tokio::test]
+async fn a_search_is_removed_only_in_its_library() {
+    let (temp, db, app) = app_with_tracks().await;
+    share_with_a_plugin(&temp, &db).await;
+    let elsewhere = "/api/v1/libraries/2/recent-searches";
+    let (status, theirs) =
+        call(&app, TOKEN, "POST", elsewhere, Some(json!({ "query": "aurora" }))).await;
+    assert_eq!(status, StatusCode::CREATED, "{theirs}");
+
+    let here = format!("{URI}/{}", theirs["id"].as_str().unwrap());
+    assert_eq!(send(&app, "DELETE", &here).await, StatusCode::NOT_FOUND);
+    let (_, kept) = json(&app, elsewhere).await;
+    assert_eq!(kept["items"][0]["id"], theirs["id"]);
+    let sql = "SELECT count(*) FROM search_events WHERE library_id = 1";
+    let noted: i64 = db.read(move |conn| conn.query_row(sql, [], |row| row.get(0))).await.unwrap();
+    assert_eq!(noted, 0);
+}
+
 /// Shares the owner's searches with `plugin`, which is allowed them, enabled in library 1, and
 /// connected by the owner.
 async fn share_with_a_plugin(temp: &tempfile::TempDir, db: &Arc<Database>) {

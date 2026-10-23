@@ -192,6 +192,29 @@ async fn a_sweep_from_one_origin_is_limited() {
 }
 
 #[tokio::test]
+async fn an_origins_successes_do_not_count_against_it() {
+    let (_temp, db, app) = server().await;
+    let now = crate::db::now_ms();
+    db.write(move |tx| {
+        for _ in 0..25 {
+            tx.execute(
+                "INSERT INTO login_attempts \
+                 (attempted_at, username_attempted, user_id, origin, succeeded) \
+                 VALUES (?1, 'sam', (SELECT id FROM users WHERE username = 'sam'), \
+                 '203.0.113.5', 1)",
+                [now],
+            )?;
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let wrong = login(&app, "203.0.113.5", "sam", "wrong").await.0;
+    assert_eq!(wrong, StatusCode::UNAUTHORIZED);
+    assert_eq!(login(&app, "203.0.113.5", "sam", PASSWORD).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
 async fn an_ipv6_sweep_is_limited_across_its_64() {
     let (_temp, _db, app) = server().await;
     for i in 0..20 {

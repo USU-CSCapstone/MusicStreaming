@@ -43,8 +43,8 @@ async fn a_run_left_waiting_is_still_scanned_and_recorded() {
 }
 
 /// A settings check runs nothing in a library the plugin is disabled in, as a disabled plugin
-/// runs nothing (`requirements/plugins.md` §5); server-wide, and where it is enabled, it is
-/// checked. This plugin has no file, so a check of it fails.
+/// runs nothing (`requirements/plugins.md` §5), even where it is enabled in another; server-wide,
+/// and where it is enabled, it is checked. This plugin has no file, so a check of it fails.
 #[tokio::test]
 async fn a_check_runs_only_where_the_plugin_is_enabled() {
     let (temp, db) = database().await;
@@ -59,6 +59,9 @@ async fn a_check_runs_only_where_the_plugin_is_enabled() {
 
     save(1).await.unwrap();
     assert!(unloadable(save(SERVER).await));
+    plugins.set_enabled("plugin".into(), 2, true).await.unwrap();
+    save(1).await.unwrap();
+    assert!(unloadable(save(2).await));
     enable(&plugins, "plugin", true).await;
     assert!(unloadable(save(1).await));
     enable(&plugins, "plugin", false).await;

@@ -1,7 +1,7 @@
 //! The derived values after each step of a long, mixed run of scanner writes, against a
 //! recompute from scratch.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use jewelcase_scanner::*;
@@ -220,4 +220,43 @@ fn derived_values_equal_a_recompute_after_every_change() {
         |tx: &rusqlite::Transaction<'_>| tx.execute("DELETE FROM libraries WHERE id = 2", []);
     assert_eq!(store.db().write_blocking(delete).unwrap(), 1);
     check(&store, "deleting library 2");
+}
+
+/// A genre taken off a credited track on its own, which the scanner never does, as it takes a
+/// track's artists off first: the artist's count of the genre follows all the same. Another track
+/// keeps the genre, so the genre, and with it the count, is not deleted outright.
+#[test]
+fn a_genre_taken_off_a_credited_track_is_taken_off_its_artist() {
+    let (tmp, db) = open();
+    let root = tmp.path().join("a");
+    let created = root.clone();
+    db.write_blocking(move |tx| {
+        libraries::create(tx, Some(1), "Music", &[&created], &[]).map(drop)
+    })
+    .unwrap();
+    let store = SqliteStore::new(db).unwrap();
+    let tagged = |i, genres: &[&str]| {
+        let mut rec = record(&root, i);
+        rec.tags.genres = genres.iter().map(|genre| genre.to_string()).collect();
+        rec
+    };
+    let upserts = vec![tagged(0, &["Rock", "Jazz"]), tagged(1, &["Rock"])];
+    store.apply(1, Batch { upserts, ..Batch::default() }).unwrap();
+    check(&store, "two tracks by one artist");
+
+    store
+        .db()
+        .write_blocking(|tx| {
+            let (track, tag): (i64, i64) = tx.query_row(
+                "SELECT track_id, tag_id FROM track_tags WHERE tag_name = 'Rock' \
+                 AND track_id IN (SELECT track_id FROM track_tags WHERE tag_name = 'Jazz')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            tx.execute("DELETE FROM track_tags WHERE track_id = ?1 AND tag_id = ?2", [track, tag])?;
+            let touched = Touched { tags: HashSet::from([tag]), ..Touched::default() };
+            catalog::recompute(tx, 1, &touched, 0)
+        })
+        .unwrap();
+    check(&store, "taking a genre off one of them");
 }
