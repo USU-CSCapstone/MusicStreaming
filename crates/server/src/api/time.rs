@@ -1,7 +1,8 @@
-//! Timestamps the API sends that are not read from the database, which formats its own with
-//! `sql::timestamp!`.
+//! Timestamps as the API sends them. The database keeps milliseconds since the Unix epoch
+//! (`design/database.md` §1), which responses read as they are and format here.
 
-/// `ms` after the Unix epoch as RFC 3339 UTC with milliseconds, as `sql::timestamp!` writes it.
+/// `ms` after the Unix epoch as RFC 3339 UTC with milliseconds, such as
+/// `2000-02-29T12:34:56.789Z`.
 pub fn rfc3339(ms: i64) -> String {
     let (days, ms) = (ms.div_euclid(86_400_000), ms.rem_euclid(86_400_000));
     // Howard Hinnant's `civil_from_days`: the Gregorian date `days` after 1970-01-01, counted in
@@ -32,22 +33,24 @@ pub fn serialize_rfc3339<S: serde::Serializer>(ms: &i64, serializer: S) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use super::super::sql::timestamp;
     use super::*;
 
     #[test]
-    fn agrees_with_the_database() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        let mut stmt = conn.prepare(concat!("SELECT ", timestamp!("?1"))).unwrap();
-        // The epoch, leap days, century years, and the far future, each with milliseconds.
-        let days = [0, 59, 60, 10_956, 11_016, 11_017, 47_541, 47_542, 2_932_896];
-        for day in days {
-            for ms in
-                [day * 86_400_000, day * 86_400_000 + 86_399_999, day * 86_400_000 + 45_296_789]
-            {
-                let expected: String = stmt.query_row([ms], |row| row.get(0)).unwrap();
-                assert_eq!(rfc3339(ms), expected, "{ms}");
-            }
+    fn formats_dates_across_leap_days_centuries_and_eras() {
+        const DAY: i64 = 86_400_000;
+        let cases = [
+            (0, "1970-01-01T00:00:00.000Z"),
+            (-1, "1969-12-31T23:59:59.999Z"),
+            (59 * DAY + 45_296_789, "1970-03-01T12:34:56.789Z"),
+            (10_956 * DAY + DAY - 1, "1999-12-31T23:59:59.999Z"),
+            (11_016 * DAY, "2000-02-29T00:00:00.000Z"),
+            (11_017 * DAY + 1, "2000-03-01T00:00:00.001Z"),
+            (47_540 * DAY, "2100-02-28T00:00:00.000Z"),
+            (47_541 * DAY, "2100-03-01T00:00:00.000Z"),
+            (2_932_896 * DAY + DAY - 1, "9999-12-31T23:59:59.999Z"),
+        ];
+        for (ms, expected) in cases {
+            assert_eq!(rfc3339(ms), expected, "{ms}");
         }
     }
 }

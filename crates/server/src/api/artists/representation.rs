@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::api::Id;
 use crate::api::refs::{ImageRef, TagRef, genres_json, placeholder};
-use crate::api::sql::timestamp;
+use crate::api::time::serialize_rfc3339;
 use crate::db::Json;
 
 /// The spec's `ArtistSummary`, without `personal` until accounts exist.
@@ -23,7 +23,8 @@ pub struct ArtistSummary {
     album_count: i64,
     /// Owned and featured tracks.
     track_count: i64,
-    added_at: String,
+    #[serde(serialize_with = "serialize_rfc3339")]
+    added_at: i64,
 }
 
 /// The spec's `Artist`.
@@ -44,7 +45,7 @@ pub const SELECT: &[&str] = &[
     "ar.image_id",
     "ar.album_count",
     "ar.track_count",
-    timestamp!("ar.added_at"),
+    "ar.added_at",
     placeholder!("ar.image_id"),
 ];
 

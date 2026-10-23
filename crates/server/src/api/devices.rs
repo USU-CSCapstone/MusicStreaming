@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use super::authenticate::Caller;
 use super::me::check_name;
 use super::realtime::{Hub, ServerMessage};
-use super::sql::timestamp;
+use super::time::serialize_rfc3339;
 use super::{Id, Problem};
 use crate::db::{Database, new_id, now_ms};
 
@@ -30,8 +30,10 @@ pub struct Device {
     kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     platform: Option<String>,
-    first_seen_at: String,
-    last_seen_at: String,
+    #[serde(serialize_with = "serialize_rfc3339")]
+    first_seen_at: i64,
+    #[serde(serialize_with = "serialize_rfc3339")]
+    last_seen_at: i64,
     /// Whether the device holds a realtime connection.
     connected: bool,
     /// Whether this is the calling device. Only `/me` responses say.
@@ -69,13 +71,7 @@ impl DeviceRegistration {
     }
 }
 
-const SELECT: &str = concat!(
-    "SELECT id, name, type, platform, ",
-    timestamp!("created_at"),
-    ", ",
-    timestamp!("last_seen_at"),
-    " FROM devices"
-);
+const SELECT: &str = "SELECT id, name, type, platform, created_at, last_seen_at FROM devices";
 
 fn device(row: &Row) -> rusqlite::Result<Device> {
     Ok(Device {

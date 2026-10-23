@@ -13,6 +13,7 @@ mod devices;
 #[cfg(test)]
 mod end_to_end;
 mod extract;
+mod health;
 mod id;
 mod images;
 mod libraries;
@@ -34,7 +35,6 @@ mod routes;
 mod search;
 mod session;
 mod setup;
-mod sql;
 #[cfg(test)]
 pub(crate) mod testing;
 mod time;
@@ -43,10 +43,10 @@ mod waveform;
 
 use std::sync::Arc;
 
+use axum::Router;
 use axum::extract::FromRef;
 use axum::middleware;
 use axum::routing::{any, get, post};
-use axum::{Json, Router};
 
 pub use id::{AnyId, Id, Uuid};
 pub use images::Images;
@@ -162,7 +162,7 @@ pub fn router(
         .route_layer(middleware::from_fn_with_state(state.clone(), setup::require));
     // Anything else under the API is a Problem, like every other error.
     let api = Router::new()
-        .route("/health", get(health))
+        .route("/health", get(health::health))
         .route("/server", get(setup::server_info))
         .route("/setup", post(setup::complete))
         .merge(after_setup)
@@ -173,10 +173,6 @@ pub fn router(
         .nest(&prefix, api)
         // `nest` leaves out the prefix with a trailing slash.
         .route(&format!("{prefix}/"), any(not_found))
-}
-
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "status": "ok" }))
 }
 
 async fn not_found() -> Problem {

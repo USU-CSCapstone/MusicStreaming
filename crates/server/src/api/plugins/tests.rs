@@ -149,6 +149,27 @@ async fn is_installed_disabled_everywhere_with_nothing_granted() {
     );
 }
 
+#[tokio::test]
+async fn its_times_are_rfc_3339_with_milliseconds() {
+    let (_temp, db, app) = server().await;
+    db.write(|tx| {
+        tx.execute("UPDATE plugins SET installed_at = 951782400123", [])?;
+        tx.execute(
+            "INSERT INTO plugin_libraries (plugin_id, library_id, enabled, last_run_at, \
+             last_run_ok, last_run_summary) VALUES ('lrclib-lyrics', 1, 0, 4102444799999, 1, 'Ran.')",
+            [],
+        )
+    })
+    .await
+    .unwrap();
+    let (_, plugin) = call(&app, ADMIN, "GET", PLUGIN, None).await;
+    assert_eq!(plugin["installedAt"], "2000-02-29T00:00:00.123Z");
+    assert_eq!(
+        plugin["libraries"][0]["lastRun"],
+        json!({ "at": "2099-12-31T23:59:59.999Z", "ok": true, "summary": "Ran." })
+    );
+}
+
 /// Granting, enabling, and settings answer `404` for a plugin that is not installed.
 #[tokio::test]
 async fn a_plugin_not_installed_is_not_found() {

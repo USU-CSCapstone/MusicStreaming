@@ -6,7 +6,7 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
 use super::super::Id;
-use super::super::sql::timestamp;
+use super::super::time::serialize_rfc3339;
 use crate::db::{Json, Text};
 use crate::plugins::grants;
 use crate::plugins::rate_limits::{self, HostLimit};
@@ -26,7 +26,8 @@ pub struct Plugin {
     #[serde(skip_serializing_if = "Option::is_none")]
     homepage: Option<String>,
     source: Source,
-    installed_at: String,
+    #[serde(serialize_with = "serialize_rfc3339")]
+    installed_at: i64,
     /// What it asks for.
     permissions: Vec<PermissionRequest>,
     /// Plugin-wide permissions granted.
@@ -74,13 +75,13 @@ struct PluginLibrary {
 
 #[derive(Serialize)]
 struct LastRun {
-    at: String,
+    #[serde(serialize_with = "serialize_rfc3339")]
+    at: i64,
     ok: bool,
     summary: String,
 }
 
-const SELECT: &str =
-    concat!("SELECT id, manifest, source_url, ", timestamp!("installed_at"), " FROM plugins");
+const SELECT: &str = "SELECT id, manifest, source_url, installed_at FROM plugins";
 
 /// A library, and the plugin's standing in it if it was ever enabled or disabled there.
 struct LibraryRow {
@@ -90,13 +91,10 @@ struct LibraryRow {
     last_run: Option<LastRun>,
 }
 
-const LIBRARIES: &str = concat!(
-    "SELECT l.id, p.enabled, p.disabled_reason, ",
-    timestamp!("p.last_run_at"),
-    ", p.last_run_ok, p.last_run_summary FROM libraries l \
+const LIBRARIES: &str = "SELECT l.id, p.enabled, p.disabled_reason, p.last_run_at, p.last_run_ok, \
+     p.last_run_summary FROM libraries l \
      LEFT JOIN plugin_libraries p ON p.library_id = l.id AND p.plugin_id = ?1 \
-     ORDER BY l.created_at, l.id"
-);
+     ORDER BY l.created_at, l.id";
 
 /// Every installed plugin, by name.
 pub fn all(conn: &Connection) -> rusqlite::Result<Vec<Plugin>> {
@@ -121,7 +119,7 @@ struct Stored {
     id: String,
     manifest: Manifest,
     source_url: Option<String>,
-    installed_at: String,
+    installed_at: i64,
 }
 
 /// The plugin in a row of [`SELECT`]. A manifest that cannot be read is an error.
@@ -147,8 +145,7 @@ fn view(conn: &Connection, r: Stored, limits: &[HostLimit]) -> rusqlite::Result<
     let rows: Vec<LibraryRow> = conn
         .prepare_cached(LIBRARIES)?
         .query_map([&r.id], |row| {
-            let at: Option<String> = row.get(3)?;
-            let last_run = match at {
+            let last_run = match row.get(3)? {
                 Some(at) => Some(LastRun { at, ok: row.get(4)?, summary: row.get(5)? }),
                 None => None,
             };

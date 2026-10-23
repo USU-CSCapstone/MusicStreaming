@@ -64,6 +64,18 @@ async fn a_search_is_recorded_with_what_was_selected_and_listed_newest_first() {
 }
 
 #[tokio::test]
+async fn searched_at_is_rfc_3339_with_milliseconds() {
+    let (_temp, db, app) = app_with_tracks().await;
+    record(&app, json!({ "query": "aurora" })).await;
+    // In the future, so the window keeps it.
+    db.write(|tx| tx.execute("UPDATE recent_searches SET searched_at = 4102444799999", []))
+        .await
+        .unwrap();
+    let (_, list) = json(&app, URI).await;
+    assert_eq!(list["items"][0]["searchedAt"], "2099-12-31T23:59:59.999Z");
+}
+
+#[tokio::test]
 async fn the_same_words_again_move_to_the_top_under_a_new_id() {
     let (_temp, _db, app) = app_with_tracks().await;
     let (_, first) = record(&app, json!({ "query": "Björk" })).await;

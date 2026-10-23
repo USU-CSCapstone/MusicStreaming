@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::api::Id;
 use crate::api::refs::{Credit, ImageRef, TagRef, artists_json, genres_json, placeholder};
-use crate::api::sql::timestamp;
+use crate::api::time::serialize_rfc3339;
 use crate::db::Json;
 
 /// The spec's `TrackSummary`, without `personal` until accounts exist. A full `Track` has the
@@ -29,7 +29,8 @@ pub struct TrackSummary<A = AudioSummary> {
     explicit: bool,
     audio: A,
     availability: &'static str,
-    added_at: String,
+    #[serde(serialize_with = "serialize_rfc3339")]
+    added_at: i64,
     sort_keys: TrackSortKeys,
 }
 
@@ -124,7 +125,7 @@ pub const SELECT: &[&str] = &[
     "t.codec",
     "t.lossless",
     "t.missing_since IS NULL",
-    timestamp!("t.added_at"),
+    "t.added_at",
     artists_json!("track", "t.id"),
     genres_json!("track", "t.id"),
     "al.title",

@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use super::authenticate::Caller;
 use super::extract::{Json as Body, Path};
 use super::search::{Indexes, totals};
-use super::sql::timestamp;
+use super::time::serialize_rfc3339;
 use super::{AnyId, Id, Problem};
 use crate::db::retention::WINDOW_MS;
 use crate::db::{Database, now_ms};
@@ -47,7 +47,8 @@ pub struct RecentSearch {
     id: Id,
     query: String,
     selected: Option<EntityRef>,
-    searched_at: String,
+    #[serde(serialize_with = "serialize_rfc3339")]
+    searched_at: i64,
 }
 
 /// The spec's `EntityRef`, for the kinds of result search returns.
@@ -75,11 +76,7 @@ struct Selected {
 /// The kinds of result a search returns, and the table each is in.
 const KINDS: [(&str, &str); 3] = [("track", "tracks"), ("album", "albums"), ("artist", "artists")];
 
-const COLUMNS: &str = concat!(
-    "id, query, selected_type, selected_id, ",
-    timestamp!("searched_at"),
-    " FROM recent_searches"
-);
+const COLUMNS: &str = "id, query, selected_type, selected_id, searched_at FROM recent_searches";
 
 fn row(row: &Row) -> rusqlite::Result<RecentSearch> {
     let kind: Option<String> = row.get(2)?;
