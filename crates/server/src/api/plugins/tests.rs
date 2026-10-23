@@ -223,9 +223,31 @@ async fn cannot_be_enabled_until_its_required_permissions_are_granted() {
         "02 is not library 2"
     );
 
+    // Granted in library 2 as well, it is enabled in the library the path names and no other.
+    let grants = json!({
+        "granted": ["network"],
+        "libraries": [
+            { "libraryId": "1", "granted": ["libraryRead"] },
+            { "libraryId": "2", "granted": ["libraryRead"] }
+        ]
+    });
+    let (status, plugin) =
+        call(&app, ADMIN, "PUT", &format!("{PLUGIN}/permissions"), Some(grants)).await;
+    assert_eq!(status, StatusCode::OK, "{plugin}");
+    let (status, plugin) =
+        call(&app, ADMIN, "PUT", &enable("2"), Some(json!({ "enabled": true }))).await;
+    let enabled = |plugin: &Value| {
+        plugin["libraries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|library| library["enabled"].clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!((status, enabled(&plugin)), (StatusCode::OK, vec![json!(false), json!(true)]));
     let (status, plugin) =
         call(&app, ADMIN, "PUT", &enable("1"), Some(json!({ "enabled": true }))).await;
-    assert_eq!((status, &plugin["libraries"][0]["enabled"]), (StatusCode::OK, &json!(true)));
+    assert_eq!((status, enabled(&plugin)), (StatusCode::OK, vec![json!(true), json!(true)]));
     assert_eq!(
         call(&app, ADMIN, "PUT", &enable("9"), Some(json!({ "enabled": true }))).await.0,
         StatusCode::NOT_FOUND

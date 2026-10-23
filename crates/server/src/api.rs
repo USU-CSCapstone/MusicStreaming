@@ -32,6 +32,7 @@ mod realtime;
 mod recent_searches;
 mod refs;
 mod routes;
+mod scope;
 mod search;
 mod session;
 mod setup;

@@ -27,8 +27,8 @@ use jewelcase_core::words;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use serde::{Deserialize, Serialize};
 
-use super::authenticate::Caller;
 use super::extract::{Json as Body, Path};
+use super::scope::Scope;
 use super::search::{Indexes, totals};
 use super::time::serialize_rfc3339;
 use super::{AnyId, Id, Problem};
@@ -125,12 +125,11 @@ fn note(
     Ok(())
 }
 
+/// The caller's recent searches in `library`, newest first.
 pub async fn list(
     State(db): State<Arc<Database>>,
-    caller: Caller,
-    Path(Id(library)): Path<Id>,
+    Scope { user, library }: Scope,
 ) -> Result<Json<serde_json::Value>, Problem> {
-    let user = caller.user;
     let items = db
         .read(move |conn| {
             conn.prepare_cached(&format!(
@@ -149,8 +148,7 @@ pub async fn list(
 pub async fn record(
     State(db): State<Arc<Database>>,
     State(indexes): State<Arc<Indexes>>,
-    caller: Caller,
-    Path(Id(library)): Path<Id>,
+    Scope { user, library }: Scope,
     Body(Create { query, selected }): Body<Create>,
 ) -> Result<(StatusCode, Json<RecentSearch>), Problem> {
     let query = query.trim().to_owned();
@@ -173,7 +171,6 @@ pub async fn record(
             Some((*kind, *table, id))
         }
     };
-    let user = caller.user;
     // Only the `searched` hook reads what a search found, so it is counted only for a user who
     // shares their searches.
     let shares = db
@@ -228,12 +225,13 @@ fn in_library(conn: &Connection, table: &str, library: i64, id: i64) -> rusqlite
     Ok(conn.prepare_cached(&sql)?.query_row(params![id, library], |_| Ok(())).optional()?.is_some())
 }
 
+/// Removes one of the caller's recent searches in `library`, and has the plugins they share
+/// their searches with forget it.
 pub async fn delete(
     State(db): State<Arc<Database>>,
-    caller: Caller,
-    Path((Id(library), Id(search))): Path<(Id, Id)>,
+    Scope { user, library }: Scope,
+    Path((_, Id(search))): Path<(Id, Id)>,
 ) -> Result<StatusCode, Problem> {
-    let user = caller.user;
     let deleted = db
         .write(move |tx| {
             let now = now_ms();
@@ -254,12 +252,12 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Removes all the caller's recent searches in `library`, and has the plugins they share their
+/// searches with forget each.
 pub async fn clear(
     State(db): State<Arc<Database>>,
-    caller: Caller,
-    Path(Id(library)): Path<Id>,
+    Scope { user, library }: Scope,
 ) -> Result<StatusCode, Problem> {
-    let user = caller.user;
     db.write(move |tx| {
         let now = now_ms();
         let cleared: Vec<i64> = tx

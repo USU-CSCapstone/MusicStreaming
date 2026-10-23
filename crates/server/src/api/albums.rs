@@ -13,6 +13,7 @@ pub use representation::{Album, AlbumSummary, SELECT, summary};
 use super::credit::ArtistCredit;
 use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Unknown};
+use super::scope::Scope;
 use super::{AnyId, Id, Problem};
 use crate::db::Database;
 
@@ -81,7 +82,7 @@ pub struct ListQuery {
 /// time.
 pub async fn list(
     State(db): State<Arc<Database>>,
-    Path(Id(library)): Path<Id>,
+    Scope { library, .. }: Scope,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<AlbumSummary>>, Problem> {
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
@@ -93,9 +94,11 @@ pub async fn list(
     Ok(Json(page))
 }
 
+/// `getAlbum`: the album, or not found when the library has no such album.
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Path((Id(library), Id(album))): Path<(Id, Id)>,
+    Scope { library, .. }: Scope,
+    Path((_, Id(album))): Path<(Id, Id)>,
 ) -> Result<Json<Album>, Problem> {
     db.read(move |conn| representation::album(conn, library, album))
         .await?

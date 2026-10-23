@@ -11,7 +11,7 @@ use rusqlite::{OptionalExtension, Row};
 use serde::Serialize;
 
 use super::authenticate::Caller;
-use super::extract::Path;
+use super::scope::Scope;
 use super::{Id, Problem};
 use crate::db::{Database, reaches};
 
@@ -57,9 +57,10 @@ pub async fn list(
     Ok(Json(Libraries { items }))
 }
 
+/// `getLibrary`: the library the path names.
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Path(Id(id)): Path<Id>,
+    Scope { library: id, .. }: Scope,
 ) -> Result<Json<Library>, Problem> {
     db.read(move |conn| {
         conn.prepare_cached(&format!("{SELECT} WHERE id = ?1"))?.query_row([id], library).optional()

@@ -11,8 +11,8 @@
 //!
 //! A library the caller cannot reach answers `404` for everything under it, exactly as one that
 //! does not exist (`requirements/users.md` §10). Admins and the owner reach every library;
-//! anyone else only those granted to them (§5). Handlers below `/libraries/{library_id}` can
-//! rely on that, and on nothing the client says.
+//! anyone else only those granted to them (§5). A handler whose path names a library gets it
+//! only from the [`Scope`] made here, once that reach is checked.
 
 use std::time::Duration;
 
@@ -25,6 +25,7 @@ use axum::response::{IntoResponse, Response};
 use rusqlite::{Connection, OptionalExtension};
 
 use super::realtime::Revoked;
+use super::scope::Scope;
 use super::session::{self, COOKIE, token_hash};
 use super::{AnyId, AppState, Code, Problem};
 use crate::db::{Text, now_ms, reaches};
@@ -57,7 +58,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
 /// Answers `401 unauthenticated` unless the request carries the token of a device whose
 /// account is active, `401 session_revoked` if that device is signed out, and `404` if its path
 /// names a library that account cannot reach. Otherwise it passes the [`Caller`] on to the
-/// handler.
+/// handler, and the [`Scope`] if its path names a library.
 pub async fn require(
     State(state): State<AppState>,
     params: Result<RawPathParams, RawPathParamsRejection>,
@@ -146,6 +147,9 @@ async fn gate(
         _ => None,
     };
     request.extensions_mut().insert(caller);
+    if let Some(AnyId(Some(library))) = library {
+        request.extensions_mut().insert(Scope { user: caller.user, library });
+    }
     let mut response = next.run(request).await;
     if let Some(cookie) = refresh {
         // A cookie the handler set, such as `logout`'s, wins. No shared cache may keep the

@@ -18,6 +18,7 @@ use jewelcase_plugins::settings::Schema;
 use serde::{Deserialize, Serialize};
 
 use super::extract::{self, Path};
+use super::scope::Scope;
 use super::{AnyId, Code, Id, Problem};
 use crate::db::Database;
 use crate::plugins::{PluginError, Plugins, grants, settings};
@@ -152,11 +153,12 @@ pub struct Enabled {
     enabled: bool,
 }
 
-/// The library must exist: `authenticate` answers `404` for one that does not.
+/// Turns the plugin on or off in the library the path names, and answers the plugin.
 pub async fn set_enabled(
     State(db): State<Arc<Database>>,
     State(plugins): State<Arc<Plugins>>,
-    Path((id, Id(library))): Path<(String, Id)>,
+    Scope { library, .. }: Scope,
+    Path((id, _)): Path<(String, Id)>,
     extract::Json(Enabled { enabled }): extract::Json<Enabled>,
 ) -> Result<Json<Plugin>, Problem> {
     plugins.set_enabled(id.clone(), library, enabled).await?;

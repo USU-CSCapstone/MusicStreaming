@@ -83,7 +83,7 @@ Rules:
 - **JSON over HTTP**, with a compact encoding allowed for bulk sync — still documented.
 - **The spec is written first.** `api/openapi.yaml` is the contract; the server is tested against it, and CI lints it and diffs it to catch breaking changes.
 - **Responses are purpose-built types**, never serialized database rows ([`requirements/general.md` §3.7](../requirements/general.md#37-payloads-carry-only-what-the-client-needs)).
-- **Every query on library content takes an authenticated scope** — the account and the libraries it can reach — as a required argument. Client-supplied IDs select within the scope and never widen it. Plugins use the same scoped layer ([`requirements/general.md` §3.6](../requirements/general.md#36-libraries-are-the-isolation-boundary), [`requirements/users.md` §10](../requirements/users.md#10-access-semantics)).
+- **Every query on library content takes an authenticated scope** — the account and the libraries it can reach — as a required argument. Client-supplied IDs select within the scope and never widen it. Plugins use the same scoped layer ([`requirements/general.md` §3.6](../requirements/general.md#36-libraries-are-the-isolation-boundary), [`requirements/users.md` §10](../requirements/users.md#10-access-semantics)). In the server, the auth gate checks that the account reaches the library a path names, in one SQL test shared by every query that needs it, and only then hands the handler a `Scope`: the account and that library. A handler takes its library from the `Scope`, never from the path.
 
 ---
 

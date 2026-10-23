@@ -16,6 +16,7 @@ use tower_http::services::ServeFile;
 pub use cache::Images;
 
 use super::extract::{Path, Query};
+use super::scope::Scope;
 use super::{Code, Id, Problem};
 use crate::db::{Database, libraries};
 
@@ -34,7 +35,8 @@ pub struct ImageQuery {
 pub async fn get(
     State(db): State<Arc<Database>>,
     State(images): State<Arc<Images>>,
-    Path((Id(library), Id(image))): Path<(Id, Id)>,
+    Scope { library, .. }: Scope,
+    Path((_, Id(image))): Path<(Id, Id)>,
     Query(query): Query<ImageQuery>,
     request: Request,
 ) -> Result<Response, Problem> {

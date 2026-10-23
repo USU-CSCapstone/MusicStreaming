@@ -13,6 +13,7 @@ use rusqlite::OptionalExtension;
 use serde::Serialize;
 
 use super::extract::Path;
+use super::scope::Scope;
 use super::{Id, Problem};
 use crate::db::{Database, waveform};
 
@@ -28,7 +29,8 @@ struct Waveform {
 /// reads, and not found when the library has no such track.
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Path((Id(library), Id(track))): Path<(Id, Id)>,
+    Scope { library, .. }: Scope,
+    Path((_, Id(track))): Path<(Id, Id)>,
 ) -> Result<Response, Problem> {
     // No track is `None`; a track not yet analyzed is `Some(None)`.
     let blob: Option<Option<Vec<u8>>> = db

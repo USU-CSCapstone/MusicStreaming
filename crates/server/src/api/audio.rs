@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use tower_http::services::ServeFile;
 
 use super::extract::{Path, Query};
+use super::scope::Scope;
 use super::tracks::{LOUDNESS, Loudness, loudness};
 use super::{Code, Id, Problem};
 use crate::db::{Database, libraries};
@@ -71,9 +72,12 @@ pub struct PlaybackInfo {
     gapless: (),
 }
 
+/// The spec's `getPlaybackInfo`: how the track is delivered at the quality asked for. Only the
+/// original is offered, so another quality, or `codecs` that cannot play it, is `422`.
 pub async fn playback(
     State(db): State<Arc<Database>>,
-    Path((Id(library), Id(track))): Path<(Id, Id)>,
+    Scope { library, .. }: Scope,
+    Path((_, Id(track))): Path<(Id, Id)>,
     Query(query): Query<PlaybackQuery>,
 ) -> Result<Json<PlaybackInfo>, Problem> {
     let transcode = |detail| Err(Problem::invalid(detail));
@@ -131,7 +135,8 @@ pub struct AudioQuery {
 /// missing, or under a root no longer in its library, is `404`.
 pub async fn audio(
     State(db): State<Arc<Database>>,
-    Path((Id(library), Id(track))): Path<(Id, Id)>,
+    Scope { library, .. }: Scope,
+    Path((_, Id(track))): Path<(Id, Id)>,
     Query(query): Query<AudioQuery>,
     request: Request,
 ) -> Result<Response, Problem> {

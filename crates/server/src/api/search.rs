@@ -15,9 +15,10 @@ pub use indexes::Indexes;
 
 use super::albums::{self, AlbumSummary};
 use super::artists::{self, ArtistSummary};
-use super::extract::{Path, Query};
+use super::extract::Query;
+use super::scope::Scope;
 use super::tracks::{self, TrackSummary};
-use super::{Id, Problem, page};
+use super::{Problem, page};
 use crate::db::{Database, by_ids};
 
 #[derive(Deserialize)]
@@ -61,7 +62,7 @@ enum SearchResult {
 pub async fn search(
     State(db): State<Arc<Database>>,
     State(indexes): State<Arc<Indexes>>,
-    Path(Id(library)): Path<Id>,
+    Scope { library, .. }: Scope,
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<SearchResponse>, Problem> {
     let invalid = |detail| Problem::invalid(detail);

@@ -15,6 +15,7 @@ pub use representation::{
 use super::credit::ArtistCredit;
 use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Unknown};
+use super::scope::Scope;
 use super::{AnyId, Id, Problem};
 use crate::db::Database;
 
@@ -110,7 +111,7 @@ pub struct ListQuery {
 /// says, a page at a time.
 pub async fn list(
     State(db): State<Arc<Database>>,
-    Path(Id(library)): Path<Id>,
+    Scope { library, .. }: Scope,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<TrackSummary>>, Problem> {
     // An album's own track listing, the common case, reads straight from its index.
@@ -129,9 +130,11 @@ pub async fn list(
     Ok(Json(page))
 }
 
+/// `getTrack`: the track, or not found when the library has no such track.
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Path((Id(library), Id(track))): Path<(Id, Id)>,
+    Scope { library, .. }: Scope,
+    Path((_, Id(track))): Path<(Id, Id)>,
 ) -> Result<Json<Track>, Problem> {
     db.read(move |conn| representation::track(conn, library, track))
         .await?

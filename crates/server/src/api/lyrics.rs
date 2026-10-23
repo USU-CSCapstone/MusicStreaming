@@ -9,6 +9,7 @@ use rusqlite::OptionalExtension;
 use serde::Serialize;
 
 use super::extract::Path;
+use super::scope::Scope;
 use super::{Id, Problem};
 use crate::db::{self, Database};
 
@@ -24,7 +25,8 @@ pub struct Lyrics {
 /// found when the library has no such track.
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Path((Id(library), Id(track))): Path<(Id, Id)>,
+    Scope { library, .. }: Scope,
+    Path((_, Id(track))): Path<(Id, Id)>,
 ) -> Result<Json<Lyrics>, Problem> {
     db.read(move |conn| {
         conn.prepare_cached(

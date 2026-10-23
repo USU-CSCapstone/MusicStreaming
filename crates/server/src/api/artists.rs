@@ -12,6 +12,7 @@ pub use representation::{Artist, ArtistSummary, SELECT, summary};
 
 use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Unknown};
+use super::scope::Scope;
 use super::{Id, Problem};
 use crate::db::Database;
 
@@ -59,7 +60,7 @@ pub struct ListQuery {
 /// (`requirements/artists.md` §5).
 pub async fn list(
     State(db): State<Arc<Database>>,
-    Path(Id(library)): Path<Id>,
+    Scope { library, .. }: Scope,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<ArtistSummary>>, Problem> {
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
@@ -70,9 +71,11 @@ pub async fn list(
     Ok(Json(page))
 }
 
+/// `getArtist`: the artist, or not found when the library has no such artist.
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Path((Id(library), Id(artist))): Path<(Id, Id)>,
+    Scope { library, .. }: Scope,
+    Path((_, Id(artist))): Path<(Id, Id)>,
 ) -> Result<Json<Artist>, Problem> {
     db.read(move |conn| representation::artist(conn, library, artist))
         .await?
