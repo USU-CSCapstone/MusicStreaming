@@ -93,7 +93,8 @@ impl Plugins {
     /// Runs `id` in `run_for`'s library with `permissions` to handle `event`, for its user if it
     /// acts for one, with their personal settings beside the shared ones ([`Plugins::execute`]),
     /// and records its report as the library's last run for admins, or the error that kept it
-    /// from running. Answers the outcome, and whether a scan of what it touched was queued.
+    /// from running. A report that cannot be recorded is logged, and changes nothing it answers.
+    /// Answers the outcome, and whether a scan of what it touched was queued.
     /// Called on the plugin runtime, in the plugin's turn in the library.
     pub(super) async fn run_in(
         &self,
@@ -123,15 +124,16 @@ impl Plugins {
             Err(error) => (false, error.to_string()),
         };
         let plugin = id.to_owned();
-        self.db
-            .write(move |tx| {
-                tx.execute(
-                    "UPDATE plugin_libraries SET last_run_at = ?3, last_run_ok = ?4, \
-                     last_run_summary = ?5 WHERE plugin_id = ?1 AND library_id = ?2",
-                    params![plugin, library, now_ms(), ok, summary],
-                )
-            })
-            .await?;
+        let recorded = self.db.write(move |tx| {
+            tx.execute(
+                "UPDATE plugin_libraries SET last_run_at = ?3, last_run_ok = ?4, \
+                 last_run_summary = ?5 WHERE plugin_id = ?1 AND library_id = ?2",
+                params![plugin, library, now_ms(), ok, summary],
+            )
+        });
+        if let Err(error) = recorded.await {
+            tracing::error!(plugin = id, library, %error, "cannot record a plugin's last run");
+        }
         ran
     }
 

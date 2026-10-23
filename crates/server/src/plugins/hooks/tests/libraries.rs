@@ -152,3 +152,30 @@ async fn an_admins_activity_is_delivered_without_a_grant_of_the_library() {
     let delivered = deliver(&db, 0, HANDLED).await.into_iter().filter(|r| r.user == 9).collect();
     assert_eq!(named(delivered), [(Played, 1, vec![11]), (Searched, 1, vec![1])]);
 }
+
+/// Nothing is delivered for a suspended account, admin or not, until it is active again.
+#[tokio::test]
+async fn nothing_is_delivered_for_a_suspended_account() {
+    let (_temp, db, plugins) = setup().await;
+    connected(&plugins, &db, &[ListeningActivity, Played, SearchActivity, Searched]).await;
+    db.write(|tx| User { status: "suspended", ..User::new(9, "admin") }.insert(tx)).await.unwrap();
+    connect(&db, "plugin", 9, json!({}), 100).await;
+    for user in [(7, false), (9, true)] {
+        db.try_write(move |tx| set_search_sharing(tx, "plugin", caller(user.0, user.1), true))
+            .await
+            .unwrap();
+    }
+    db.write(|tx| tx.execute("UPDATE users SET status = 'suspended' WHERE id = 7", []))
+        .await
+        .unwrap();
+    let since = now_ms();
+    for user in [7, 9] {
+        played(&db, user, 1, 11, since).await;
+        noted(&db, user, 1, user, true, since).await;
+    }
+    assert!(deliver(&db, 0, HANDLED).await.is_empty());
+
+    db.write(|tx| tx.execute("UPDATE users SET status = 'active'", [])).await.unwrap();
+    let delivered = deliver(&db, 0, HANDLED).await.into_iter().filter(|r| r.user == 9).collect();
+    assert_eq!(named(delivered), [(Played, 1, vec![11]), (Searched, 1, vec![9])]);
+}

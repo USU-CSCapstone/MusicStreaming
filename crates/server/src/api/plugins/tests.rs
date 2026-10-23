@@ -479,7 +479,8 @@ async fn a_save_mends_server_settings_that_cannot_be_read() {
     // SQLite takes a number too large for serde as JSON.
     let unreadable = r#"{"syncedOnly": true, "limit": 1e400}"#;
     db.write(move |tx| {
-        let sql = "INSERT INTO plugin_settings VALUES ('lrclib-lyrics', 0, ?1)";
+        let sql = "INSERT INTO plugin_settings (plugin_id, library_id, settings) \
+                   VALUES ('lrclib-lyrics', 0, ?1)";
         tx.execute(sql, [unreadable])
     })
     .await
@@ -501,7 +502,8 @@ async fn settings_show_values_but_never_secrets() {
     let (temp, _db, app) = server().await;
     let conn = conn(&temp);
     conn.execute(
-        r#"INSERT INTO plugin_settings VALUES ('lrclib-lyrics', 0, '{"apiKey":"s3cret","limit":4}')"#,
+        r#"INSERT INTO plugin_settings (plugin_id, library_id, settings)
+           VALUES ('lrclib-lyrics', 0, '{"apiKey":"s3cret","limit":4}')"#,
         [],
     )
     .unwrap();
@@ -530,6 +532,27 @@ async fn settings_show_values_but_never_secrets() {
     }
     let (_, plugin) = call(&app, TOKEN, "GET", PLUGIN, None).await;
     assert_eq!(plugin["hasSettings"], true);
+}
+
+/// Only the settings the manifest declares are shown, and a value saved as a secret stays
+/// hidden once a reinstalled manifest no longer marks it one.
+#[tokio::test]
+async fn settings_saved_as_secrets_stay_hidden_after_a_reinstall() {
+    let (_temp, db, app) = server().await;
+    // In a library it is disabled in, so the plugin, which has no file, is not asked.
+    let library = format!("{SETTINGS}?libraryId=1");
+    let values = json!({ "values": { "apiKey": "s3cret", "limit": 4, "mode": "careful" } });
+    let (status, saved) = call(&app, TOKEN, "PUT", &library, Some(values)).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let reinstalled = "UPDATE plugins SET manifest = json_remove(manifest, \
+                       '$.settings.properties.apiKey.writeOnly', '$.settings.properties.limit')";
+    db.write(move |tx| tx.execute(reinstalled, [])).await.unwrap();
+
+    let (status, settings) = call(&app, TOKEN, "GET", &library, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(settings["values"], json!({ "mode": "careful" }));
+    assert_eq!(settings["secretsSet"], json!([]));
+    assert!(!settings.to_string().contains("s3cret"));
 }
 
 #[tokio::test]
@@ -567,7 +590,9 @@ async fn settings_are_checked_before_the_plugin_sees_them() {
     // Set server-wide, it is set for the library too, so the plugin, enabled there, is asked:
     // here one installed without its file, which cannot be loaded.
     let key = json!({ "apiKey": "k" }).as_object().unwrap().clone();
-    db.write(move |tx| settings::store(tx, "lrclib-lyrics", settings::SERVER, &key)).await.unwrap();
+    let secrets = ["apiKey".to_owned()];
+    let server = settings::SERVER;
+    db.write(move |tx| settings::store(tx, "lrclib-lyrics", server, &key, &secrets)).await.unwrap();
     enable_ungranted(&db, "lrclib-lyrics").await;
     let (status, problem) = call(
         &app,

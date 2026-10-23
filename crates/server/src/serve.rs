@@ -1,7 +1,9 @@
 //! Serves the app over HTTP/1, closing each connection after its response. A client that sends
-//! nothing, or stops partway through a request's header or body, loses its connection, so it
-//! cannot hold a file descriptor for long. The shutdown waits for requests in progress only up
-//! to a deadline.
+//! nothing, or stops partway through a request's header or body, loses its connection after a
+//! timeout. One that keeps a body trickling in keeps its connection, and a file descriptor with
+//! it, until a route's own limits end it: the routes open before sign-in allow a body 30 s in
+//! all (`api`). Nothing caps how many connections are open at once. The shutdown waits for
+//! requests in progress only up to a deadline.
 //!
 //! Every response tells a browser to take it as the type it says, to show it framed only by
 //! the server's own pages, and to tell other sites nothing of the page that linked to them.

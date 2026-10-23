@@ -67,7 +67,9 @@ pub async fn get_settings(
     db.try_read(move |conn| {
         let manifest = personal::manifest(conn, &id, caller)?.ok_or_else(Problem::not_found)?;
         let schema = manifest.personal_settings.unwrap_or_default();
-        Ok(Json(PluginSettings::new(schema, personal::values(conn, &id, caller.user)?)))
+        // Connections go when the plugin is uninstalled, so these values were stored under this
+        // schema, which marks every secret among them.
+        Ok(Json(PluginSettings::new(schema, personal::values(conn, &id, caller.user)?, &[])))
     })
     .await
 }

@@ -9,19 +9,19 @@ use super::super::settings::SERVER;
 use super::*;
 
 /// Whether `future` is still waiting once it is polled. It is dropped either way.
-fn waits(future: impl Future) -> bool {
+pub(super) fn waits(future: impl Future) -> bool {
     future.now_or_never().is_none()
 }
 
 /// Whether the plugin is installed.
-async fn installed(db: &Database) -> bool {
+pub(super) async fn installed(db: &Database) -> bool {
     let sql = "SELECT EXISTS (SELECT 1 FROM plugins WHERE id = 'plugin')";
     db.read(move |conn| conn.query_row(sql, [], |row| row.get(0))).await.unwrap()
 }
 
 /// Waits until `count` runs hold or wait for the plugin's turn in `library`. The deadline only
 /// bounds a hang.
-async fn queued(plugins: &Plugins, library: i64, count: usize) {
+pub(super) async fn queued(plugins: &Plugins, library: i64, count: usize) {
     let queued = async {
         while plugins.turns.waiting("plugin", library) < count {
             tokio::task::yield_now().await;

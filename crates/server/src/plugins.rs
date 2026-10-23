@@ -21,6 +21,7 @@ mod turns;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use jewelcase_plugins::{Host, InvalidPlugin, Permission};
@@ -104,6 +105,8 @@ pub struct Plugins {
     /// Wakes the hook loop, which sleeps while no plugin is enabled anywhere: notified when an
     /// admin enables one, and when the plugins are dropped.
     wake_hooks: Arc<Notify>,
+    /// Set as the server stops, after which no hook delivery starts.
+    hooks_stopped: AtomicBool,
 }
 
 impl Plugins {
@@ -129,6 +132,7 @@ impl Plugins {
                 std::thread::available_parallelism().map_or(1, NonZeroUsize::get),
             ),
             wake_hooks: Arc::default(),
+            hooks_stopped: AtomicBool::new(false),
         }
     }
 

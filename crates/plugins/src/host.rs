@@ -187,7 +187,8 @@ fn not_available<T>() -> Ready<Result<T, String>> {
 /// What a run may use: the permissions granted for its library, the hosts its manifest names
 /// for the network, and its settings.
 pub struct Grants {
-    /// The plugin and library the run is for, which scope what it shares with other runs.
+    /// The plugin and library the run is for, which scope what it shares with other runs. The
+    /// library is 0 for a run outside any library, which has no state.
     pub plugin: String,
     pub library: i64,
     /// The user it acts for, if it acts for one, whose `"per": "user"` rate limits it keeps to.

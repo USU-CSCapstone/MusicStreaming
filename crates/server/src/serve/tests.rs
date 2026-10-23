@@ -162,12 +162,14 @@ async fn shutdown_closes_a_connection_that_has_sent_nothing_at_once() {
     closed(stream).await;
 }
 
-#[tokio::test(start_paused = true)]
+// On real time: paused time can pass the header timeout before the kernel hands the server
+// the part of a header that was sent.
+#[tokio::test]
 async fn shutdown_waits_for_part_of_a_header_only_until_the_timeout() {
     let (address, stop, server) = start(routes()).await;
     let opened = Instant::now();
     let stream = send(address, PART_OF_A_HEADER).await;
-    sleep(Duration::from_secs(1)).await;
+    sleep(Duration::from_millis(100)).await;
     stop.notify_one();
     timeout(HEADER_READ_TIMEOUT, server).await.unwrap().unwrap();
     assert!(opened.elapsed() <= HEADER_READ_TIMEOUT, "{:?}", opened.elapsed());

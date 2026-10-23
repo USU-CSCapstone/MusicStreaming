@@ -58,11 +58,12 @@ impl Plugins {
         Ok(id)
     }
 
-    /// Uninstalls `id`, once each of its runs under way has ended. Files it wrote stay, and so do
-    /// its grants and settings, for a reinstall (`requirements/plugins.md` §5). Its users'
-    /// connections go with it, and so do the requests to forget their searches meant for it, so
-    /// after a reinstall, which starts every position over, users connect again and nothing from
-    /// before is sent twice.
+    /// Uninstalls `id`, once each of its runs under way, personal settings checks included, has
+    /// ended: its row goes, the host forgets it, and its file is removed, all in one write. Files
+    /// it wrote stay, and so do its grants and settings, for a reinstall
+    /// (`requirements/plugins.md` §5). Its users' connections go with it, and so do the requests
+    /// to forget their searches meant for it, so after a reinstall, which starts every position
+    /// over, users connect again and nothing from before is sent twice.
     pub async fn uninstall(&self, id: String) -> Result<(), PluginError> {
         // Its turn in every library and at the server level, taken in order and held until it is
         // gone, so no run of it is under way meanwhile, and one waiting finds it gone.
@@ -76,29 +77,33 @@ impl Plugins {
         for level in levels.await? {
             turns.push(self.turns.take(&id, level).await);
         }
-        let (path, plugin) = (self.path(&id), id.clone());
-        let removed = self
-            .db
-            .write(move |tx| {
+        // Held with the server-level turn, so no personal check starts until it is gone.
+        turns.extend(self.turns.take_every_personal(&id).await);
+        let path = self.path(&id);
+        // A host not started yet has nothing linked to forget.
+        let host = self.host.get().and_then(|host| host.as_ref().ok()).cloned();
+        self.db
+            .try_write(move |tx| {
                 tx.execute(
                     "DELETE FROM search_events WHERE kind = 'stopped' AND plugin_id = ?1",
                     [&id],
                 )?;
-                tx.execute("DELETE FROM plugins WHERE id = ?1", [&id])
+                if tx.execute("DELETE FROM plugins WHERE id = ?1", [&id])? == 0 {
+                    return Err(PluginError::NotFound);
+                }
+                // Removed and forgotten within the transaction, as an install puts its file in
+                // place, so an install of it again, which waits for this one, keeps its own.
+                if let Some(host) = host {
+                    host.uninstalled(&id);
+                }
+                match std::fs::remove_file(path) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        Err(internal(error))
+                    }
+                    _ => Ok(()),
+                }
             })
-            .await?;
-        if removed == 0 {
-            return Err(PluginError::NotFound);
-        }
-        let file = tokio::task::spawn_blocking(move || std::fs::remove_file(path)).await;
-        // A host not started yet has nothing linked to forget.
-        if let Some(Ok(host)) = self.host.get() {
-            host.uninstalled(&plugin);
-        }
-        match file.map_err(unexpected)? {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(internal(error)),
-            _ => Ok(()),
-        }
+            .await
     }
 }
 

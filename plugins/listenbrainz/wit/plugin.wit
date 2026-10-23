@@ -181,7 +181,9 @@ interface http {
 
 /// The plugin's own storage for this library, kept between runs, so nothing learned is
 /// fetched twice (requirements/plugins.md §2.1). Needs no permission. It goes when the plugin
-/// is uninstalled. A key is 1 to 512 bytes, and a value at most 1 MB.
+/// is uninstalled. A key is 1 to 512 bytes, and a value at most 1 MB. `check-settings` for the
+/// server-wide settings or for a user runs outside any library, so it has no state: every call
+/// is refused.
 interface state {
   use host.{error};
 
@@ -295,6 +297,7 @@ interface events {
     /// error is shown to them and nothing is saved, so a wrong key is caught as it is entered
     /// (requirements/plugins.md §6).
     /// A user connecting the plugin is checked the same way, with their personal settings.
+    /// Checked server-wide or for a user, it runs outside any library, with no `state`.
     check-settings,
     /// Plays one user who connected the plugin has finished in this library, oldest first.
     /// `settings.get` answers with that user's personal settings, as well as the shared ones.

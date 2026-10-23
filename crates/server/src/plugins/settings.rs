@@ -20,13 +20,26 @@ pub const SERVER: i64 = 0;
 /// saves some; stored values that cannot be read are an error, so a plugin never runs without
 /// what the admin set.
 pub fn level(conn: &Connection, id: &str, level: i64) -> rusqlite::Result<Map<String, Value>> {
-    let json: Option<Json<Map<String, Value>>> = conn
-        .prepare_cached(
-            "SELECT settings FROM plugin_settings WHERE plugin_id = ?1 AND library_id = ?2",
-        )?
-        .query_row(params![id, level], |row| row.get(0))
+    Ok(with_secrets(conn, id, level)?.0)
+}
+
+/// The values stored at `level`, as [`level`] reads them, and the names of those stored as
+/// secrets ([`store`]).
+pub fn with_secrets(
+    conn: &Connection,
+    id: &str,
+    level: i64,
+) -> rusqlite::Result<(Map<String, Value>, Vec<String>)> {
+    let sql =
+        "SELECT settings, secrets FROM plugin_settings WHERE plugin_id = ?1 AND library_id = ?2";
+    let stored = conn
+        .prepare_cached(sql)?
+        .query_row(params![id, level], |row| {
+            let (Json(values), Json(secrets)) = (row.get(0)?, row.get(1)?);
+            Ok((values, secrets))
+        })
         .optional()?;
-    Ok(json.map(|Json(values)| values).unwrap_or_default())
+    Ok(stored.unwrap_or_default())
 }
 
 /// The values set for `library`: its own over the server-wide ones. [`SERVER`] has only the
@@ -53,17 +66,22 @@ pub fn effective(
     })
 }
 
-/// Stores `values` as `id`'s settings at `level`, replacing any stored there.
+/// Stores `values` as `id`'s settings at `level`, replacing any stored there, and notes which
+/// of them are among `secrets`, the names the schema marks secret, so they stay hidden even
+/// under a later manifest that no longer marks them.
 pub fn store(
     conn: &Connection,
     id: &str,
     level: i64,
     values: &Map<String, Value>,
+    secrets: &[String],
 ) -> rusqlite::Result<()> {
+    let stored: Vec<&String> = secrets.iter().filter(|name| values.contains_key(*name)).collect();
     conn.execute(
-        "INSERT INTO plugin_settings (plugin_id, library_id, settings) VALUES (?1, ?2, ?3) \
-         ON CONFLICT (plugin_id, library_id) DO UPDATE SET settings = excluded.settings",
-        params![id, level, Json(values)],
+        "INSERT INTO plugin_settings (plugin_id, library_id, settings, secrets) \
+         VALUES (?1, ?2, ?3, ?4) ON CONFLICT (plugin_id, library_id) \
+         DO UPDATE SET settings = excluded.settings, secrets = excluded.secrets",
+        params![id, level, Json(values), Json(stored)],
     )
     .map(drop)
 }
@@ -143,8 +161,9 @@ impl Plugins {
                 .await?
         };
         let run_for = RunFor { library: level, user: None };
+        let secrets: Vec<String> = saving.schema.secrets().map(str::to_owned).collect();
         let values = self.checked(&id, run_for, saving, entered).await?;
-        self.db.write(move |tx| store(tx, &id, level, &values)).await?;
+        self.db.write(move |tx| store(tx, &id, level, &values, &secrets)).await?;
         Ok(())
     }
 
@@ -152,9 +171,10 @@ impl Plugins {
     /// once they are of the kinds and among the choices its schema declares, leave no required
     /// setting without a value, and pass the plugin's own check, run for `run_for` with them, what
     /// is beneath them, and the defaults, so a wrong key is caught as it is entered rather than at
-    /// three in the morning (§6). The check runs in the plugin's turn in the library, with what a
-    /// run there is granted, and not at all in a library it is disabled in, as a disabled plugin
-    /// runs nothing (`requirements/plugins.md` §5). One uninstalled by its turn is a
+    /// three in the morning (§6). The check runs in the plugin's turn in the library, or a user's
+    /// in a turn of that user's ([`super::turns::Turns::take_personal`]), with what a run there
+    /// is granted, and not at all in a library it is disabled in, as a disabled plugin runs
+    /// nothing (`requirements/plugins.md` §5). One uninstalled by its turn is a
     /// [`PluginError::NotFound`]. A caller that stops waiting for its turn leaves the queue; a
     /// check that has started goes on to its end, and what it touched is scanned, as after any
     /// run. Server-wide settings may leave a required one to each library, and a library's may
@@ -185,7 +205,10 @@ impl Plugins {
             return Err(PluginError::SettingsInvalid(format!("{missing} is required.")));
         }
         let candidate = schema.with_defaults(&set);
-        let turn = self.turns.take(id, run_for.library).await;
+        let turn = match run_for.user {
+            Some(user) => self.turns.take_personal(id, user).await,
+            None => self.turns.take(id, run_for.library).await,
+        };
         let (plugins, id) = (self.clone(), id.to_owned());
         let checked = self.spawn(async move {
             let _turn = turn;

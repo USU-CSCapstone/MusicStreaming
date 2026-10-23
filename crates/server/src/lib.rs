@@ -31,8 +31,9 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
 /// Runs the server until `shutdown` resolves, then stops it in the order that loses least if a
 /// kill cuts the stop short, as `docker stop` does after 10 s: it stops taking connections,
-/// closes the realtime ones and saves where everyone was playing while it waits a few seconds
-/// at most for the requests in progress, and last it stops the libraries' background work.
+/// starts no more hook deliveries, closes the realtime ones and saves where everyone was playing
+/// while it waits a few seconds at most for the requests in progress, and last it stops the
+/// libraries' background work.
 async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::Result<()> {
     let music = config.music.as_deref().and_then(resolve_music);
     let data_dir = DataDir::open(&config.data_dir, music.as_deref())
@@ -100,7 +101,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         db.clone(),
         images,
         indexes,
-        plugins,
+        plugins.clone(),
         players.clone(),
         hub.clone(),
     );
@@ -118,6 +119,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
     // one, and a report it was checking is dropped, so after the save only a connection whose
     // upgrade was already under way could still report.
     let as_it_stops = async {
+        plugins.stop_hooks();
         hub.close_all();
         // The periodic save stops first, leaving a write already begun to finish.
         saving.abort();
@@ -187,8 +189,10 @@ async fn roots_apart(db: &Database, data_dir: &DataDir) -> anyhow::Result<()> {
 }
 
 /// Waits for SIGINT or SIGTERM. It listens for them only once first polled, so until the server
-/// serves, either signal ends the process as it would any other. If it can't listen, it logs
-/// that and returns at once, so the server stops rather than run with no way to stop it cleanly.
+/// serves, either signal ends the process as it would any other. After the first, a second
+/// ends the process at once with exit code 130, for someone who will not wait for a slow stop.
+/// If it can't listen, it logs that and returns at once, so the server stops rather than run
+/// with no way to stop it cleanly.
 async fn shutdown_signal() {
     match (signal(SignalKind::interrupt()), signal(SignalKind::terminate())) {
         (Ok(mut interrupt), Ok(mut terminate)) => {
@@ -196,6 +200,14 @@ async fn shutdown_signal() {
                 _ = interrupt.recv() => {}
                 _ = terminate.recv() => {}
             }
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = interrupt.recv() => {}
+                    _ = terminate.recv() => {}
+                }
+                warn!("stopping at once, without finishing the stop");
+                std::process::exit(130);
+            });
         }
         (Err(error), _) | (_, Err(error)) => error!(%error, "cannot listen for SIGINT and SIGTERM"),
     }

@@ -62,10 +62,10 @@ fn hook_granted(hook: Permission) -> String {
 /// The pair is enabled and not waiting to retry a failure at the time `?1`.
 const READY: &str = "p.enabled AND (c.retry_at IS NULL OR c.retry_at <= ?1)";
 
-/// The user `s` who connected the plugin reaches the pair's library, so it never acts with their
-/// settings in a library they cannot reach.
+/// The user `s` who connected the plugin is active and reaches the pair's library, so it never
+/// acts with their settings while they are suspended, or in a library they cannot reach.
 const CONNECTED_REACHES: &str = concat!(
-    " AND ",
+    " AND (SELECT a.status = 'active' FROM users a WHERE a.id = s.user_id) AND ",
     reaches!(
         admin: "(SELECT a.role <> 'user' FROM users a WHERE a.id = s.user_id)",
         user: "s.user_id",
@@ -75,7 +75,7 @@ const CONNECTED_REACHES: &str = concat!(
 
 /// The same for the user `u` whose searches are shared or forgotten.
 const SHARER_REACHES: &str = concat!(
-    " AND ",
+    " AND (SELECT a.status = 'active' FROM users a WHERE a.id = u.user_id) AND ",
     reaches!(
         admin: "(SELECT a.role <> 'user' FROM users a WHERE a.id = u.user_id)",
         user: "u.user_id",

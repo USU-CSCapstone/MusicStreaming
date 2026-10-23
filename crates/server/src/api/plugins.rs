@@ -221,11 +221,20 @@ struct ObjectSchema {
 }
 
 impl PluginSettings {
-    /// `values` set for `schema`, secrets left out, and which secrets have a value.
-    pub fn new(schema: Schema, mut values: serde_json::Map<String, serde_json::Value>) -> Self {
+    /// `values` set for `schema`, and which of its secrets have a value. Only the settings it
+    /// declares are shown, and none of its secrets, nor any named in `hidden`, the names stored
+    /// as secrets.
+    pub fn new(
+        schema: Schema,
+        mut values: serde_json::Map<String, serde_json::Value>,
+        hidden: &[String],
+    ) -> Self {
         let secrets_set =
             schema.secrets().filter(|name| values.contains_key(*name)).map(str::to_owned).collect();
-        values.retain(|name, _| !schema.secrets().any(|secret| secret == name));
+        values.retain(|name, _| {
+            let shown = schema.properties.get(name).is_some_and(|setting| !setting.write_only);
+            shown && !hidden.contains(name)
+        });
         PluginSettings { schema: ObjectSchema { schema, kind: "object" }, values, secrets_set }
     }
 }
@@ -240,7 +249,8 @@ pub async fn get_settings(
     db.try_read(move |conn| {
         let manifest = grants::manifest(conn, &id)?.ok_or_else(Problem::not_found)?;
         let schema = manifest.settings.unwrap_or_default();
-        Ok(Json(PluginSettings::new(schema, settings::level(conn, &id, level)?)))
+        let (values, hidden) = settings::with_secrets(conn, &id, level)?;
+        Ok(Json(PluginSettings::new(schema, values, &hidden)))
     })
     .await
 }

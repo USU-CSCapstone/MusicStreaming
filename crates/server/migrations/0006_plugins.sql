@@ -104,6 +104,10 @@ CREATE TABLE plugin_settings (
     -- Zero for the settings of every library; a library's own override them.
     library_id INTEGER NOT NULL DEFAULT 0,
     settings   TEXT    NOT NULL CHECK (json_valid(settings) AND json_type(settings) = 'object'),
+    -- The names of the settings stored as secrets, which stay hidden even once a reinstall's
+    -- manifest no longer marks them so.
+    secrets    TEXT    NOT NULL DEFAULT '[]'
+        CHECK (json_valid(secrets) AND json_type(secrets) = 'array'),
     PRIMARY KEY (plugin_id, library_id)
 ) STRICT, WITHOUT ROWID;
 

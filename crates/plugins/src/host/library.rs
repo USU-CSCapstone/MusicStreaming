@@ -154,24 +154,31 @@ impl<L: Library> files::Host for Run<L> {
     }
 }
 
-/// Refuses a key that is empty or longer than [`MAX_KEY`].
-fn check_key(key: &str) -> Result<(), Error> {
-    if key.is_empty() || key.len() > MAX_KEY {
-        return Err(Error::Refused(format!("a key is 1 to {MAX_KEY} bytes")));
+impl<L: Library> Run<L> {
+    /// Refuses a state call from a run outside any library, such as a check of server-wide or
+    /// personal settings, which has no state, and one whose key is empty or longer than
+    /// [`MAX_KEY`].
+    fn check_state(&self, key: &str) -> Result<(), Error> {
+        if self.grants.library == 0 {
+            return Err(Error::Refused("a run outside any library has no state".into()));
+        }
+        if key.is_empty() || key.len() > MAX_KEY {
+            return Err(Error::Refused(format!("a key is 1 to {MAX_KEY} bytes")));
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 impl<L: Library> state::Host for Run<L> {
     /// The value kept under `key`, if any.
     async fn get(&mut self, key: String) -> Result<Option<Vec<u8>>, Error> {
-        check_key(&key)?;
+        self.check_state(&key)?;
         self.library.state_get(key).await.map_err(Error::Failed)
     }
 
     /// Keeps `value` under `key`, refusing one over [`MAX_VALUE`] bytes.
     async fn set(&mut self, key: String, value: Vec<u8>) -> Result<(), Error> {
-        check_key(&key)?;
+        self.check_state(&key)?;
         if value.len() > MAX_VALUE {
             return Err(Error::Refused(format!("a value is at most {} MB", MAX_VALUE >> 20)));
         }
@@ -180,7 +187,7 @@ impl<L: Library> state::Host for Run<L> {
 
     /// Forgets the value under `key`.
     async fn delete(&mut self, key: String) -> Result<(), Error> {
-        check_key(&key)?;
+        self.check_state(&key)?;
         self.library.state_delete(key).await.map_err(Error::Failed)
     }
 }

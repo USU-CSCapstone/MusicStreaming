@@ -16,6 +16,7 @@ use super::testing::{database, enable, grant, install, manifest, plugins};
 use super::{PluginError, Plugins};
 use crate::db::{Database, SqliteStore, libraries};
 
+mod personal_turns;
 mod scans;
 mod turns;
 
@@ -171,6 +172,25 @@ async fn a_run_that_fails_on_the_servers_side_is_recorded_as_failed() {
     assert!(matches!(plugins.run("plugin".into()).await, Err(PluginError::Db(_))));
     let (ok, summary) = last_run(&db).await;
     assert!(!ok && !summary.is_empty(), "{summary}");
+}
+
+/// A run whose report cannot be recorded, here for a disk the database finds full, still
+/// answers how it went.
+#[tokio::test]
+async fn a_run_whose_report_cannot_be_recorded_still_answers() {
+    let (temp, db) = database().await;
+    let plugins = plugins(&temp, &db);
+    install(&db, manifest("plugin", &[LibraryRead])).await;
+    grant(&plugins, "plugin", &[], &[LibraryRead]).await;
+    enable(&plugins, "plugin", true).await;
+    let refuse = "CREATE TRIGGER full BEFORE UPDATE OF last_run_at ON plugin_libraries \
+                  BEGIN SELECT RAISE(ABORT, 'the database or disk is full'); END";
+    db.write(move |tx| tx.execute_batch(refuse)).await.unwrap();
+
+    let result = plugins.run("plugin".into()).await.unwrap();
+    assert!(!result.ok);
+    let summary = result.summary;
+    assert!(summary.starts_with("the plugin could not be loaded: "), "{summary}");
 }
 
 /// A component that carries a valid manifest, but whose one core module declares a function of

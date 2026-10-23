@@ -126,3 +126,41 @@ async fn a_delivery_lets_the_next_one_start_once_it_ends() {
     };
     tokio::time::timeout(Duration::from_secs(10), released).await.unwrap();
 }
+
+/// A delivery whose outcome cannot be recorded, here for a disk the database finds full, lets
+/// the plugin's turn and its hook slot go at once, but keeps its claim for [`BACKOFF_MS`], so a
+/// run whose effects may have happened is not repeated at every poll. The deadline only bounds a
+/// hang.
+#[tokio::test]
+async fn a_delivery_that_cannot_be_recorded_backs_off() {
+    let (temp, db) = changed().await;
+    let refuse = format!(
+        "CREATE TRIGGER full_on_insert BEFORE INSERT ON plugin_cursors \
+         BEGIN SELECT RAISE(ABORT, '{DISK_FULL}'); END; \
+         CREATE TRIGGER full_on_update BEFORE UPDATE ON plugin_cursors \
+         BEGIN SELECT RAISE(ABORT, '{DISK_FULL}'); END;"
+    );
+    db.write(move |tx| tx.execute_batch(&refuse)).await.unwrap();
+    let plugins = plugins(&temp, &db);
+    let slots = plugins.hook_slots.available_permits();
+    plugins.dispatch().await;
+    // Its report is recorded as the library's last run before its outcome is.
+    let sql = "SELECT last_run_at IS NOT NULL FROM plugin_libraries WHERE library_id = 1";
+    let reported = async {
+        while !db
+            .read(move |conn| conn.query_row(sql, [], |row| row.get::<_, bool>(0)))
+            .await
+            .unwrap()
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(30), reported).await.unwrap();
+
+    let turn = tokio::time::timeout(Duration::from_secs(10), plugins.turns.take("plugin", 1));
+    drop(turn.await.expect("its turn is let go"));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(plugins.hook_slots.available_permits(), slots, "and its slot");
+    let key = ("plugin".to_owned(), 1, TracksChanged, None);
+    assert!(Delivering::claim(&plugins, key).is_none(), "but not its claim");
+}

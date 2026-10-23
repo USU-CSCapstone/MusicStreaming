@@ -3,9 +3,9 @@
 //!
 //! Directories come out in sorted pre-order so a resume cursor is just "the last directory
 //! finished". Each yielded directory carries its audio candidates (extension-filtered, stat'ed),
-//! its regular files with their sizes and modified times, which the sidecar resolver reuses so no
-//! directory is listed or stat'ed twice, and its folders, against which reconcile finds the
-//! folders that have gone.
+//! its regular files the excludes leave in, with their sizes and modified times, which the
+//! sidecar resolver reuses so no directory is listed or stat'ed twice, and its folders, against
+//! which reconcile finds the folders that have gone.
 //!
 //! Symlinks are never followed ([`crate::confine`]), so the walk needs no loop
 //! detection. Each link it lists is reported as a problem instead, unless excluded.
@@ -54,8 +54,8 @@ pub struct Directory {
     /// missing.
     pub listed: bool,
     pub candidates: Vec<Candidate>,
-    /// Every regular file's size and modified time, by name, sorted. For sidecar and lyrics
-    /// lookup.
+    /// Every regular file's size and modified time, by name, sorted, but those the excludes
+    /// match. For sidecar and lyrics lookup.
     pub files: BTreeMap<OsString, FileStat>,
     /// The name of each folder in it that the excludes leave in, sorted. A subtree walk descends
     /// into each.
@@ -255,11 +255,11 @@ impl Iterator for Walk<'_> {
                     if !self.excluded(&path) {
                         skipped_links.push(WalkError { path, error: not_followed() });
                     }
-                } else if file_type.is_file() {
+                } else if file_type.is_file() && !self.excluded(&path) {
                     let mtime_ms = meta.modified().map(system_time_ms).unwrap_or(0);
                     let stat = FileStat { size: meta.len(), mtime_ms };
                     files.insert(entry.file_name(), stat);
-                    if is_candidate(&path) && !self.excluded(&path) {
+                    if is_candidate(&path) {
                         candidates.push(Candidate { path, size: stat.size, mtime_ms });
                     }
                 }
@@ -354,13 +354,19 @@ mod tests {
     fn excludes_and_extension_filter() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        for p in
-            ["keep/1.flac", "keep/notes.txt", "keep/cover.jpg", "backup/2.flac", "keep/song.wma"]
-        {
+        for p in [
+            "keep/1.flac",
+            "keep/notes.txt",
+            "keep/cover.jpg",
+            "keep/1.lrc",
+            "backup/2.flac",
+            "keep/song.wma",
+        ] {
             touch(&root.join(p));
         }
         let scope = Scope::root(root);
-        let ex = compile_excludes(&["backup".into(), "backup/**".into()]).unwrap();
+        let ex =
+            compile_excludes(&["backup".into(), "backup/**".into(), "**/*.lrc".into()]).unwrap();
         let items: Vec<Directory> = Walk::new(&scope, &ex, None)
             .filter_map(|i| match i {
                 WalkItem::Directory(d) => Some(d),
@@ -372,6 +378,7 @@ mod tests {
         assert_eq!(keep.candidates.len(), 1);
         assert!(keep.candidates[0].path.ends_with("1.flac"));
         assert!(keep.files.contains_key(OsStr::new("cover.jpg")));
+        assert!(!keep.files.contains_key(OsStr::new("1.lrc")), "excluded, so no sidecar");
     }
 
     /// Each directory `scope`'s walk yields, as its path, whether it was listed, and its

@@ -19,6 +19,7 @@
 //! keeps being retried, at most an hour apart, instead.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use jewelcase_plugins::{Permission, RunError};
@@ -112,11 +113,21 @@ impl Plugins {
         });
     }
 
+    /// Stops starting hook deliveries, as the server stops. Those already running go on; those
+    /// still waiting for their turn or a slot run nothing.
+    pub fn stop_hooks(&self) {
+        self.hooks_stopped.store(true, Ordering::Relaxed);
+    }
+
     /// Starts each delivery that is due and not already under way. One plugin, library, hook,
     /// and user has at most one delivery at a time, and each waits for the plugin's turn in the
     /// library ([`Plugins::deliver`]). Answers false if no plugin is enabled in any library, so
-    /// nothing can be due until one is.
+    /// nothing can be due until one is, and, starting nothing, once the hooks are stopped
+    /// ([`Plugins::stop_hooks`]).
     pub async fn dispatch(self: &Arc<Plugins>) -> bool {
+        if self.hooks_stopped.load(Ordering::Relaxed) {
+            return false;
+        }
         let read = self.db.read(|conn| {
             let enabled = due::any_enabled(conn)?;
             enabled.then(|| due::all(conn, now_ms())).transpose()
@@ -143,14 +154,20 @@ impl Plugins {
     /// plugin's turn there and once one of the [`Plugins::hook_slots`] is free. The turn comes
     /// first, so a delivery waiting for it holds no slot another plugin or library could use; it
     /// holds its turn while it waits for a slot. One no longer due once it has both, such as
-    /// for a plugin disabled meanwhile, runs nothing and records nothing. If the slots are
-    /// closed, it logs that and delivers nothing.
+    /// for a plugin disabled meanwhile or the hooks stopped, runs nothing and records nothing. If
+    /// the slots are closed, it logs that and delivers nothing. One whose outcome cannot be
+    /// recorded lets its turn and slot go, then waits [`BACKOFF_MS`] still holding its claim, so
+    /// the same delivery, whose side effects may have happened, is not run again at the next
+    /// poll.
     async fn deliver(&self, due: Due) {
-        let _turn = self.turns.take(&due.plugin, due.library).await;
-        let Ok(_slot) = self.hook_slots.acquire().await else {
+        let turn = self.turns.take(&due.plugin, due.library).await;
+        let Ok(slot) = self.hook_slots.acquire().await else {
             tracing::error!(plugin = %due.plugin, "the hook slots are closed; nothing delivered");
             return;
         };
+        if self.hooks_stopped.load(Ordering::Relaxed) {
+            return;
+        }
         let at = due.clone();
         let read = self
             .db
@@ -188,6 +205,9 @@ impl Plugins {
             self.db.write(move |tx| record(tx, &due, next, ran, &summary, now_ms())).await;
         if let Err(error) = recorded {
             tracing::error!(%error, "cannot record a hook delivery");
+            drop(slot);
+            drop(turn);
+            tokio::time::sleep(Duration::from_millis(BACKOFF_MS.unsigned_abs())).await;
         }
     }
 }

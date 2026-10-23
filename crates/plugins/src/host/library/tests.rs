@@ -215,6 +215,21 @@ async fn state_needs_no_permission_and_keeps_keys_and_values_small() {
     assert_eq!(state.keys().collect::<Vec<_>>(), ["k".repeat(512).as_str()]);
 }
 
+/// A run outside any library, such as a check of server-wide settings, has no state: each
+/// state call is refused, and nothing is kept.
+#[tokio::test]
+async fn state_is_refused_outside_any_library() {
+    let run = &mut testing::run(Memory::default(), &[]);
+    run.grants.library = 0;
+    let got = state::Host::get(run, "k".into()).await;
+    assert!(matches!(got, Err(Error::Refused(_))), "{got:?}");
+    let set = state::Host::set(run, "k".into(), b"v".to_vec()).await;
+    assert!(matches!(set, Err(Error::Refused(_))), "{set:?}");
+    let deleted = state::Host::delete(run, "k".into()).await;
+    assert!(matches!(deleted, Err(Error::Refused(_))), "{deleted:?}");
+    assert!(run.library.state.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn a_read_answers_at_most_8_mb() {
     let dir = tempfile::tempdir().unwrap();
