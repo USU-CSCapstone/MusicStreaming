@@ -5,8 +5,8 @@ use futures_util::SinkExt;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
-use super::super::super::authenticate::Caller;
 use super::super::super::realtime::Hub;
+use super::super::super::scope::Caller;
 use super::super::super::testing::player::{command_id, progress_report, start_playing};
 use super::super::super::testing::socket::{Socket, connect_with, next, next_of, serve};
 use super::super::super::testing::{TOKEN, add_device, add_user, app_with_tracks};

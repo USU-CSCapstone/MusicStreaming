@@ -9,9 +9,9 @@ use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 
 use super::{Action, CommandResult, PlayerCommand, Status};
-use crate::api::authenticate::Caller;
 use crate::api::player::{Players, Status as PlayStatus};
 use crate::api::realtime::{Hub, ServerMessage};
+use crate::api::scope::Caller;
 use crate::api::{AnyId, Code, Id, Problem};
 
 /// How long a connection has to answer a command before it counts as failed.

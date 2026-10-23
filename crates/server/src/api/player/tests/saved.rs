@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use super::super::Players;
 use crate::api::Id;
-use crate::api::authenticate::Caller;
 use crate::api::realtime::Hub;
+use crate::api::scope::Caller;
 use crate::api::testing::player::progress_report;
 use crate::api::testing::{add_user, app_with_tracks};
 use crate::db::Database;

@@ -3,7 +3,7 @@
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 
-use super::Problem;
+use super::{Code, Problem};
 
 /// The caller's account and the library the request's path names, which that account reaches
 /// (`design/general.md` §6). Only the gate in [`super::authenticate`] makes one, once it has
@@ -22,6 +22,24 @@ impl<S: Send + Sync> FromRequestParts<S> for Scope {
     /// `library_id`, or one outside the gate, reaches no library.
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Scope, Problem> {
         parts.extensions.get::<Scope>().copied().ok_or_else(Problem::not_found)
+    }
+}
+
+/// The account and device a request is from. Handlers take it as an argument; only routes
+/// behind the gate in [`super::authenticate`] can produce one.
+#[derive(Debug, Clone, Copy)]
+pub struct Caller {
+    pub user: i64,
+    pub device: i64,
+    /// An admin or the owner: administers the server, and reaches every library.
+    pub admin: bool,
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for Caller {
+    type Rejection = Problem;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Caller, Problem> {
+        parts.extensions.get::<Caller>().copied().ok_or_else(|| Problem::new(Code::Unauthenticated))
     }
 }
 

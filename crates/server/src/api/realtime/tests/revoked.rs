@@ -13,8 +13,8 @@ use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Error;
 
 use super::super::super::AppState;
-use super::super::super::authenticate::Caller;
 use super::super::super::player;
+use super::super::super::scope::Caller;
 use super::super::super::testing::player::{command_id, progress_report};
 use super::super::super::testing::socket::{connect, serve};
 use super::super::super::testing::{add_signed_out_device, app, app_with_tracks, state};

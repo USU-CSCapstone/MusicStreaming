@@ -28,8 +28,8 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 
 use super::Players;
-use crate::api::authenticate::Caller;
 use crate::api::realtime::Hub;
+use crate::api::scope::Caller;
 use crate::api::{AnyId, Problem, Uuid, extract};
 pub use relay::Commands;
 use relay::Reply;

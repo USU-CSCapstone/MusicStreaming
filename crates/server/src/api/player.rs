@@ -31,8 +31,8 @@ use axum::extract::State;
 use serde::Serialize;
 
 use super::Id;
-use super::authenticate::Caller;
 use super::realtime::{Hub, Presence, ServerMessage};
+use super::scope::Caller;
 use super::time::serialize_rfc3339;
 use crate::db::now_ms;
 pub use commands::{CommandResult, PlayerCommand, send as send_command};

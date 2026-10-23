@@ -29,9 +29,9 @@ use tokio::time::{Instant, interval_at, timeout};
 pub use hub::{Hub, Presence};
 pub use messages::{Revoked, ServerMessage};
 
-use super::authenticate::Caller;
 use super::devices;
 use super::player::{self, PlayerCommand};
+use super::scope::Caller;
 use super::time::rfc3339;
 use super::{AppState, Code, Id, Problem};
 use crate::db::{Database, now_ms};

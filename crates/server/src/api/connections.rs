@@ -11,9 +11,9 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use super::Problem;
-use super::authenticate::Caller;
 use super::extract::{self, Path};
 use super::plugins::{PluginSettings, SettingsUpdate};
+use super::scope::Caller;
 use crate::db::Database;
 use crate::plugins::Plugins;
 use crate::plugins::personal::{self, SharingError};

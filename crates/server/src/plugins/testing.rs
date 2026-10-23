@@ -84,7 +84,7 @@ pub async fn install(db: &Database, manifest: Value) {
     let problems = manifest::validate(&manifest);
     assert!(problems.is_empty(), "{problems:?}");
     let manifest: Manifest = serde_json::from_value(manifest).unwrap();
-    db.try_write(move |tx| super::add(tx, &manifest, None)).await.expect("installed");
+    db.try_write(move |tx| super::install::add(tx, &manifest, None)).await.expect("installed");
 }
 
 /// Grants `id` exactly `plugin_wide` for itself and `in_library` in library 1, as the admin

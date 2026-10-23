@@ -17,9 +17,9 @@ use serde::de::IgnoredAny;
 
 use context::{Context, Reason};
 
-use super::authenticate::Caller;
 use super::extract::Json;
 use super::refs::credits_json;
+use super::scope::Caller;
 use super::time::Timestamp;
 use super::{AnyId, Problem, Uuid};
 use crate::db::plays::{End, Origin};

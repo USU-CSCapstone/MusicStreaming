@@ -8,7 +8,7 @@ use axum::extract::State;
 use rusqlite::Connection;
 use serde::Serialize;
 
-use super::authenticate::Caller;
+use super::scope::Caller;
 use super::{Id, Problem};
 use crate::db::Database;
 

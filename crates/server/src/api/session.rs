@@ -13,10 +13,10 @@ use rusqlite::Transaction;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::authenticate::Caller;
 use super::devices::{self, Device, DeviceRegistration};
 use super::me::{self, User};
 use super::realtime::Revoked;
+use super::scope::Caller;
 use super::{AppState, Code, Problem};
 use crate::db::DbError;
 

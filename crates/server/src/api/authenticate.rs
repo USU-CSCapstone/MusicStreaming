@@ -17,15 +17,14 @@
 use std::time::Duration;
 
 use axum::extract::rejection::RawPathParamsRejection;
-use axum::extract::{FromRequestParts, RawPathParams, Request, State};
-use axum::http::request::Parts;
+use axum::extract::{RawPathParams, Request, State};
 use axum::http::{HeaderMap, HeaderValue, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use rusqlite::{Connection, OptionalExtension};
 
 use super::realtime::Revoked;
-use super::scope::Scope;
+use super::scope::{Caller, Scope};
 use super::session::{self, COOKIE, token_hash};
 use super::{AnyId, AppState, Code, Problem};
 use crate::db::{Text, now_ms, reaches};
@@ -36,24 +35,6 @@ const CLIENT: &str = "x-jewelcase-client";
 /// How stale a device's `last_seen_at` may get before a request refreshes it. Coarse, so that
 /// using a device does not cost a write per request.
 const LAST_SEEN_EVERY: Duration = Duration::from_secs(5 * 60);
-
-/// The account and device a request is from. Handlers take it as an argument; only routes
-/// behind [`require`] or [`require_admin`] can produce one.
-#[derive(Debug, Clone, Copy)]
-pub struct Caller {
-    pub user: i64,
-    pub device: i64,
-    /// An admin or the owner: administers the server, and reaches every library.
-    pub admin: bool,
-}
-
-impl<S: Send + Sync> FromRequestParts<S> for Caller {
-    type Rejection = Problem;
-
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Caller, Problem> {
-        parts.extensions.get::<Caller>().copied().ok_or_else(|| Problem::new(Code::Unauthenticated))
-    }
-}
 
 /// Answers `401 unauthenticated` unless the request carries the token of a device whose
 /// account is active, `401 session_revoked` if that device is signed out, and `404` if its path

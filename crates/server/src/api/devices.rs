@@ -13,9 +13,9 @@ use axum::extract::State;
 use rusqlite::{Connection, Row, Transaction, params};
 use serde::{Deserialize, Serialize};
 
-use super::authenticate::Caller;
 use super::me::check_name;
 use super::realtime::{Hub, ServerMessage};
+use super::scope::Caller;
 use super::time::serialize_rfc3339;
 use super::{Id, Problem};
 use crate::db::{Database, new_id, now_ms};

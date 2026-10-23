@@ -10,7 +10,7 @@ use axum::extract::State;
 use rusqlite::{OptionalExtension, Row};
 use serde::Serialize;
 
-use super::authenticate::Caller;
+use super::scope::Caller;
 use super::scope::Scope;
 use super::{Id, Problem};
 use crate::db::{Database, reaches};

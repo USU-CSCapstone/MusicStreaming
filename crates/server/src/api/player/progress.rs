@@ -4,8 +4,8 @@ use rusqlite::params;
 use serde::Deserialize;
 
 use super::{PlayerState, Players, Status};
-use crate::api::authenticate::Caller;
 use crate::api::realtime::{Hub, Presence, ServerMessage};
+use crate::api::scope::Caller;
 use crate::api::{AnyId, AppState, Id, Problem};
 use crate::db::{now_ms, reaches};
 

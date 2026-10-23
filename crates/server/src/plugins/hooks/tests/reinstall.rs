@@ -9,9 +9,10 @@ use serde_json::{Value, json};
 
 use super::{HANDLED, connected, deliver, play, setup, tracks_by_user};
 use crate::db::Database;
+use crate::plugins::PluginError;
+use crate::plugins::install::add;
 use crate::plugins::personal::set_search_sharing;
 use crate::plugins::testing::{caller, connect, enable, grant, install, manifest};
-use crate::plugins::{PluginError, add};
 
 /// How many rows `table` has.
 async fn count(db: &Database, table: &'static str) -> i64 {
