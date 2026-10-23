@@ -47,10 +47,11 @@ const SHAPE: &str = "SELECT (SELECT COUNT(*) FROM tracks) || ' tracks; ' \
 /// the temporary folder, so run it with that on an SSD whose filesystem keeps sparse files (ext4,
 /// btrfs or XFS), not a tmpfs:
 /// `TMPDIR=<folder> cargo test --release -p jewelcase-server benchmark_scanning -- --ignored --nocapture`.
-/// `BUDGET_TRACKS` sets the library size (default 500,000).
+/// `BENCH_TRACKS` sets the library size (default 500,000). It prints each timing and fails only
+/// on a wrong count, never on a time.
 #[test]
 #[ignore = "benchmark"]
-fn benchmark_scanning_budgets() {
+fn benchmark_scanning() {
     let tracks = scale::size();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
@@ -73,16 +74,16 @@ fn benchmark_scanning_budgets() {
     let tenth = batches.len().div_ceil(10);
     let last = batches.len() - tenth;
     eprintln!("{}", scalar::<String>(&store, SHAPE).unwrap());
-    eprintln!("cold scan's store side: {total:.1?} (budget 1 h with reading the files)");
-    eprintln!("  first tenth's batches: {}", summary(&mut batches[..tenth], None));
-    eprintln!("  last tenth's batches:  {}", summary(&mut batches[last..], None));
+    eprintln!("cold scan's store side, without reading the files: {total:.1?}");
+    eprintln!("  first tenth's batches: {}", summary(&mut batches[..tenth]));
+    eprintln!("  last tenth's batches:  {}", summary(&mut batches[last..]));
 
     let started = Instant::now();
     let progress = testing::scan_library(&store, &lib).progress;
     let mut rescan = [started.elapsed()];
     assert_eq!(progress.files_seen, i64::try_from(tracks).unwrap());
     assert_eq!((progress.added, progress.updated, progress.missing), (0, 0, 0));
-    eprintln!("unchanged rescan: {}", summary(&mut rescan, None));
+    eprintln!("unchanged rescan: {}", summary(&mut rescan));
 
     let folders = changing
         .iter()
@@ -96,8 +97,7 @@ fn benchmark_scanning_budgets() {
         times.push(started.elapsed());
         assert_eq!(scan.progress.updated, 10);
     }
-    let budget = Some(Duration::from_secs(1));
-    eprintln!("ten-file incremental scan: {}", summary(&mut times, budget));
+    eprintln!("ten-file incremental scan: {}", summary(&mut times));
 
     let pick = |state: &str| {
         let mut times: Vec<Duration> = (0..100)
@@ -108,7 +108,7 @@ fn benchmark_scanning_budgets() {
                 started.elapsed()
             })
             .collect();
-        eprintln!("next_unanalyzed, {state}: {}", summary(&mut times, None));
+        eprintln!("next_unanalyzed, {state}: {}", summary(&mut times));
     };
     pick("none analyzed");
     let analyze = "UPDATE tracks SET analyzer_version = ?1 WHERE id % 100 <> 0";

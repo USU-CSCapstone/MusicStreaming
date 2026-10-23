@@ -58,8 +58,9 @@ UI.
 - **Streaming**: direct play with range requests, on-demand transcode to Opus
   with a disk cache.
 - **Search**: over artists, albums, playlists, and tracks with fuzzy matching.
-- **HTTP API**: JSON resources for the model above, static token per user,
-  every response scoped to the user's libraries.
+- **HTTP API**: JSON resources for the model above, a session per signed-in
+  device sent as a bearer token or the web client's cookie, every response
+  scoped to the user's libraries.
 - **Minimal web client**: browse, search, play, reorderable queue. Enough to
   exercise the API and observe plugins.
 

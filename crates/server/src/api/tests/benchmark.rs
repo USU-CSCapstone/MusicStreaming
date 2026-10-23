@@ -1,7 +1,7 @@
 //! Benchmarks of the API on a large generated library, ignored unless asked for.
 
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use axum::http::StatusCode;
 
@@ -23,7 +23,8 @@ const ARTISTS: &str = "SELECT id FROM (SELECT id FROM artists ORDER BY track_cou
 /// its first page is timed throughout. The database goes in the temporary folder, so run it with
 /// that on an SSD, not a tmpfs:
 /// `TMPDIR=<folder> cargo test --release -p jewelcase-server benchmark_list_pages -- --ignored --nocapture`.
-/// `BUDGET_TRACKS` sets the library size (default 500,000).
+/// `BENCH_TRACKS` sets the library size (default 500,000). It prints each page's timings and fails
+/// only on a wrong answer, never on a time.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "benchmark"]
 async fn benchmark_list_pages() {
@@ -68,7 +69,6 @@ async fn benchmark_list_pages() {
             assert_eq!(status, StatusCode::OK);
             times.push(started.elapsed());
         }
-        let budget = Some(Duration::from_millis(100));
-        println!("{uri}\n  {}", summary(&mut times, budget));
+        println!("{uri}\n  {}", summary(&mut times));
     }
 }

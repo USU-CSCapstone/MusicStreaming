@@ -47,7 +47,7 @@ mod album_artists;
 mod albums;
 mod artist_sort;
 mod artists;
-mod budget;
+mod benchmark;
 mod derived;
 mod fails_loudly;
 mod failures;

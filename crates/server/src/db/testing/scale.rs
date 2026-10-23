@@ -11,9 +11,11 @@ use jewelcase_scanner::*;
 use crate::db::OPTIMIZE;
 use crate::db::store::SqliteStore;
 
-/// How many tracks a benchmark generates: `BUDGET_TRACKS`, or 500,000.
+/// How many tracks a benchmark generates: `BENCH_TRACKS`, or 500,000 when it is unset. Panics
+/// when it is set to anything but a number of tracks, rather than run at another size.
 pub fn size() -> usize {
-    std::env::var("BUDGET_TRACKS").ok().and_then(|v| v.parse().ok()).unwrap_or(500_000)
+    std::env::var("BENCH_TRACKS")
+        .map_or(500_000, |tracks| tracks.parse().expect("BENCH_TRACKS is a number of tracks"))
 }
 
 /// SplitMix64's finalizer: a well-mixed number from `n`, so each choice the generator makes is a
@@ -140,17 +142,12 @@ pub fn fill(store: &SqliteStore, records: impl Iterator<Item = TrackRecord>) -> 
 }
 
 /// `times`' median, 95th and 99th percentiles and maximum (`requirements/performance.md` §8),
-/// and, given a `budget`, whether the 95th meets it. Sorts `times`, which must not be empty.
-pub fn summary(times: &mut [Duration], budget: Option<Duration>) -> String {
+/// as one line. Sorts `times`, which must not be empty.
+pub fn summary(times: &mut [Duration]) -> String {
     times.sort();
     let at = |percent: usize| times[(times.len() * percent / 100).min(times.len() - 1)];
     let (p50, p95, p99, max) = (at(50), at(95), at(99), times[times.len() - 1]);
-    let line = format!("p50 {p50:>9.2?}  p95 {p95:>9.2?}  p99 {p99:>9.2?}  max {max:>9.2?}");
-    match budget {
-        Some(budget) if p95 > budget => format!("{line}  MISSED the budget of {budget:.0?}"),
-        Some(budget) => format!("{line}  within the budget of {budget:.0?}"),
-        None => line,
-    }
+    format!("p50 {p50:>9.2?}  p95 {p95:>9.2?}  p99 {p99:>9.2?}  max {max:>9.2?}")
 }
 
 /// The generated files come in path order, as a scan walks them, each path once.
