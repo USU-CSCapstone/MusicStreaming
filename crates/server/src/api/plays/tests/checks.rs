@@ -1,6 +1,6 @@
-//! What a report's `startedAt` and `external` make of it: a start is read as RFC 3339 and never
-//! later than the server's clock, and a play of an external track is left out without failing
-//! the rest.
+//! What a report's `startedAt` and `external` make of it: a start is read as RFC 3339, never
+//! before 1970 and never later than the server's clock, and a play of an external track is left
+//! out without failing the rest.
 
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -41,4 +41,15 @@ async fn a_start_after_the_servers_time_is_taken_as_now() {
     assert_eq!(report_as_owner(&app, json!([played])).await, StatusCode::NO_CONTENT);
     let started = plays(&db).await[0].2;
     assert!((before..=now_ms()).contains(&started), "{started} is when it was heard");
+}
+
+/// A start before 1970 is taken as 1970, where stored times begin, so the hooks that read it
+/// still can.
+#[tokio::test]
+async fn a_start_before_the_epoch_is_taken_as_the_epoch() {
+    let (_temp, db, app) = app_with_tracks().await;
+    let mut played = report("1", 0, Value::Null);
+    played["startedAt"] = json!("1970-01-01T00:00:00+01:00");
+    assert_eq!(report_as_owner(&app, json!([played])).await, StatusCode::NO_CONTENT);
+    assert_eq!(plays(&db).await[0].2, 0);
 }

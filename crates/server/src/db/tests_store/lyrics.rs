@@ -1,8 +1,7 @@
 //! Lyrics are stored in one form: timed lines when any line carried a timestamp, the text
 //! otherwise, never both (`requirements/tracks.md` §5).
 
-use jewelcase_scanner::testing;
-use lofty::tag::ItemKey;
+use jewelcase_scanner::testing::{self, ItemKey};
 
 use super::{make, tagged};
 use crate::db::store::SqliteStore;

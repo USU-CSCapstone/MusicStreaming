@@ -7,9 +7,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use jewelcase_core::Format;
-use jewelcase_scanner::testing;
+use jewelcase_scanner::testing::{self, ItemKey};
 use jewelcase_scanner::*;
-use lofty::tag::ItemKey;
 use rusqlite::OptionalExtension;
 
 use super::store::SqliteStore;

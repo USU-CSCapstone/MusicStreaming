@@ -1533,7 +1533,6 @@ dependencies = [
  "jewelcase-ffmpeg",
  "jewelcase-plugins",
  "jewelcase-scanner",
- "lofty",
  "rusqlite",
  "serde",
  "serde_json",

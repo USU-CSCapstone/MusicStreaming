@@ -48,8 +48,8 @@ pub fn plays(
             let Text(end) = row.get::<_, Text<End>>(15)?;
             Ok(Play {
                 track: track(row)?,
-                started_at_ms: row.get::<_, i64>(13)? as u64,
-                listen_time_ms: row.get::<_, i64>(14)? as u64,
+                started_at_ms: row.get(13)?,
+                listen_time_ms: row.get(14)?,
                 end: end.into(),
             })
         })?

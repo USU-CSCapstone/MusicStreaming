@@ -15,8 +15,8 @@ pub use keyset::{Sort, Source, Total, Unknown};
 
 use super::Problem;
 
-pub const DEFAULT_LIMIT: u32 = 100;
-pub const MAX_LIMIT: u32 = 1000;
+const DEFAULT_LIMIT: u32 = 100;
+const MAX_LIMIT: u32 = 1000;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -40,7 +40,7 @@ pub struct Request {
     order: Order,
     /// The sort values the cursor continues after.
     after: Option<Vec<Value>>,
-    limit: usize,
+    limit: u32,
 }
 
 impl Request {
@@ -72,10 +72,10 @@ impl Request {
 }
 
 /// Checks `limit`, which the spec bounds from 1 to 1000.
-pub fn limit(limit: Option<u32>) -> Result<usize, Problem> {
+pub fn limit(limit: Option<u32>) -> Result<u32, Problem> {
     let limit = limit.unwrap_or(DEFAULT_LIMIT);
     if (1..=MAX_LIMIT).contains(&limit) {
-        Ok(limit as usize)
+        Ok(limit)
     } else {
         Err(Problem::invalid("limit must be from 1 to 1000"))
     }
@@ -84,7 +84,7 @@ pub fn limit(limit: Option<u32>) -> Result<usize, Problem> {
 /// The library's stored number in `column`, such as `album_count` or `names_version`, which the
 /// scanner keeps current; 0 once the library is gone, as when it was deleted after the request
 /// was let in.
-pub fn library_count(
+pub fn library_number(
     conn: &Connection,
     library: i64,
     column: &'static str,
@@ -98,13 +98,13 @@ pub fn library_count(
 
 #[cfg(test)]
 mod tests {
-    use super::library_count;
+    use super::library_number;
     use crate::api::testing::app_with_tracks;
 
     #[tokio::test]
     async fn a_library_that_is_gone_counts_nothing() {
         let (_temp, db, _app) = app_with_tracks().await;
-        let count = |library| db.read(move |conn| library_count(conn, library, "track_count"));
+        let count = |library| db.read(move |conn| library_number(conn, library, "track_count"));
         assert!(count(1).await.unwrap() > 0);
         assert_eq!(count(999).await.unwrap(), 0);
     }

@@ -95,7 +95,7 @@ const SHARES: &str = "EXISTS (SELECT 1 FROM plugin_connections \
 /// What a user did with one of their recent searches, as the `searched` hook is told it.
 enum Noted {
     /// Recorded it, and it found this many tracks, albums, and artists.
-    Searched([i64; 3]),
+    Searched([usize; 3]),
     /// Removed it.
     Forgotten,
 }
@@ -176,11 +176,7 @@ pub async fn record(
     let shares = db
         .read(move |conn| conn.query_row(&format!("SELECT {SHARES}"), [user], |row| row.get(0)))
         .await?;
-    let found = if shares {
-        Some(totals(&db, &indexes, library, &query).await?.map(|n| n as i64))
-    } else {
-        None
-    };
+    let found = if shares { Some(totals(&db, &indexes, library, &query).await?) } else { None };
     let recorded = db
         .try_write(move |tx| {
             if let Some((_, table, id)) = selected

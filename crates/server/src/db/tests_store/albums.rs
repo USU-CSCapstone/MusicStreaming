@@ -1,8 +1,7 @@
 //! How scanned tracks group into albums: across folders, without tags, and as compilations, EPs
 //! and albums.
 
-use jewelcase_scanner::testing;
-use lofty::tag::ItemKey;
+use jewelcase_scanner::testing::{self, ItemKey};
 use rusqlite::Result;
 
 use super::{count, make, scalar, tagged};

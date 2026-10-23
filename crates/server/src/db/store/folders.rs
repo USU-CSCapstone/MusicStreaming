@@ -63,8 +63,8 @@ pub fn indexed_in(store: &SqliteStore, lib: i64, dir: &Path) -> Result<IndexedFo
 fn indexed_file(row: &Row<'_>) -> Result<IndexedFile> {
     Ok(IndexedFile {
         track_id: row.get(1)?,
-        size: row.get::<_, i64>(2)? as u64,
-        mtime_ms: row.get::<_, Option<i64>>(3)?.map(|m| m as u64),
+        size: row.get(2)?,
+        mtime_ms: row.get(3)?,
         missing: row.get::<_, Option<i64>>(4)?.is_some(),
         sidecar_stamp: row.get(5)?,
     })

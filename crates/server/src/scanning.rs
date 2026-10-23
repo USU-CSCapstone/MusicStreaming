@@ -118,6 +118,7 @@ mod tests {
     use std::time::Instant;
 
     use jewelcase_ffmpeg::Config as FfmpegConfig;
+    use jewelcase_scanner::testing::PNG;
     use rusqlite::params;
 
     use super::*;
@@ -168,19 +169,9 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let music = temp.path().join("music");
         fs::create_dir(&music).unwrap();
-        let cover = music.join("cover.png");
-        let path = cover.to_str().unwrap();
-        crate::api::testing::ffmpeg(&[
-            "-f",
-            "lavfi",
-            "-i",
-            "color=red:s=8x8",
-            "-frames:v",
-            "1",
-            path,
-        ]);
+        fs::write(music.join("cover.png"), PNG).unwrap();
         // Its own hash, so the startup scan finds the same image.
-        let hash = jewelcase_scanner::describe_image(&fs::read(&cover).unwrap()).unwrap().hash;
+        let hash = jewelcase_scanner::describe_image(PNG).unwrap().hash;
         let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
         db.write_blocking(move |tx| {
             testing::library(tx, 1, "Music", &music)?;

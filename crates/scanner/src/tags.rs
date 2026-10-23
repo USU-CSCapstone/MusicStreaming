@@ -20,7 +20,7 @@ use lofty::picture::PictureType;
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, Tag, TagType};
 
-use crate::audio::AudioProperties;
+use crate::audio::{AudioProperties, duration_ms};
 use crate::{Lyrics, PartialDate, TagSet, multi_value};
 
 #[derive(Debug, thiserror::Error)]
@@ -100,7 +100,7 @@ fn parse(path: &Path) -> Result<ReadResult, ReadError> {
     let props = tagged.properties();
     let properties = AudioProperties {
         format,
-        duration_ms: props.duration().as_millis() as u64,
+        duration_ms: duration_ms(props.duration()),
         sample_rate: props.sample_rate(),
         bit_depth: props.bit_depth(),
         channels: props.channels(),

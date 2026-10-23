@@ -2,12 +2,12 @@
 //! every supported format must read back as byte-identical `TagSet`s, and
 //! content, not the extension, decides the format (§3).
 //!
-//! Needs ffmpeg on PATH to produce the encoded files; skips otherwise.
+//! Needs ffmpeg on PATH to produce the encoded files, and fails without it.
 
 use std::path::Path;
 
 use jewelcase_core::Format;
-use jewelcase_scanner::testing::{PNG, encode, ffmpeg_available, write_sine_wav, write_small_wav};
+use jewelcase_scanner::testing::{PNG, encode, write_sine_wav, write_small_wav};
 use jewelcase_scanner::{Lyrics, PartialDate, ReadError, SyncedLine, TagSet, read_tags};
 use lofty::config::WriteOptions;
 use lofty::picture::{MimeType, Picture, PictureType};
@@ -98,10 +98,6 @@ fn write_tags(path: &Path, tag_type: TagType) {
 
 #[test]
 fn every_format_reads_the_same_tagset() {
-    if !ffmpeg_available() {
-        eprintln!("skipping golden corpus: ffmpeg not on PATH");
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let wav = tmp.path().join("src.wav");
     write_sine_wav(&wav, 440.0, 0.3, 1.0);
@@ -145,10 +141,6 @@ fn every_format_reads_the_same_tagset() {
 
 #[test]
 fn mpeg_layer_ii_named_mp3_is_unsupported() {
-    if !ffmpeg_available() {
-        eprintln!("skipping Layer II: ffmpeg not on PATH");
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let wav = tmp.path().join("src.wav");
     write_small_wav(&wav);

@@ -125,14 +125,14 @@ fn replace_links(
          VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
     )?;
     for (pos, (artist_id, name)) in credits.artists.iter().enumerate() {
-        artists.execute(params![lib, id, pos as i64, artist_id, name.map(str::trim)])?;
+        artists.execute(params![lib, id, pos, artist_id, name.map(str::trim)])?;
     }
     let mut album_artists = tx.prepare_cached(
         "INSERT INTO track_album_artists (library_id, track_id, position, artist_id, artist_name) \
          VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
     for (pos, (artist_id, name)) in credits.album_artists.iter().enumerate() {
-        album_artists.execute(params![lib, id, pos as i64, artist_id, name.map(str::trim)])?;
+        album_artists.execute(params![lib, id, pos, artist_id, name.map(str::trim)])?;
     }
     let mut tags = tx.prepare_cached(
         "INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES (?1, ?2, ?3, ?4) \

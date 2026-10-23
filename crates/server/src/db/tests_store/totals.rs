@@ -2,12 +2,13 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
-use jewelcase_scanner::testing::InspectStore;
+use jewelcase_scanner::testing::{InspectStore, duration_ms};
 use jewelcase_scanner::*;
 use rusqlite::Result;
 
-use super::{count, record};
+use super::{count, make, record, scalar};
 use crate::db::store::SqliteStore;
 use crate::db::{Database, libraries};
 
@@ -138,4 +139,20 @@ fn library_totals_equal_a_track_scan() {
     upsert(&store, 1, vec![update(&store, compilation_track(&b, 14))]);
     assert_totals_match_tracks(&store, "restores and retagging a missing track");
     assert_eq!(count(&store, "SELECT COUNT(*) FROM tracks WHERE missing_since IS NOT NULL"), 1);
+}
+
+/// A track whose headers claim an impossible length lasts nothing, so the totals of its album
+/// and library stay those of the tracks beside it.
+#[test]
+fn a_track_claiming_an_impossible_length_adds_nothing_to_the_totals() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    let store = make(&root);
+    let mut endless = track(&root, 0, "Long");
+    endless.properties.duration_ms = duration_ms(Duration::MAX);
+    upsert(&store, 1, vec![endless, track(&root, 1, "Long"), track(&root, 2, "Short")]);
+    let durations = |sql: &'static str| scalar::<i64>(&store, sql).unwrap();
+    assert_eq!(durations("SELECT duration_us FROM libraries"), 5_000_000);
+    assert_eq!(durations("SELECT duration_us FROM albums WHERE title = 'Long'"), 2_000_000);
+    assert_eq!(durations("SELECT duration_us FROM albums WHERE title = 'Short'"), 3_000_000);
 }

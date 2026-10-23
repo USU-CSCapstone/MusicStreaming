@@ -83,7 +83,7 @@ pub async fn record(
 
 /// `report` as a play to record, `None` for an external track's, or the Problem that makes it
 /// malformed. A `startedAt` after `now` is taken as `now`: a device's clock can run ahead, and
-/// the play is still the user's.
+/// the play is still the user's. One before 1970 is taken as 1970, where stored times begin.
 fn checked(report: PlayReport, now: i64) -> Result<Option<Play>, Problem> {
     let track = match (report.track_id, report.external) {
         (Some(track), None) => track,
@@ -94,7 +94,7 @@ fn checked(report: PlayReport, now: i64) -> Result<Option<Play>, Problem> {
         id: report.play_id,
         library: report.library_id,
         track,
-        started_at: report.started_at.0.min(now),
+        started_at: report.started_at.0.clamp(0, now),
         listen_time_ms: report.listen_time_ms,
         end: report.end,
         context: report.context,

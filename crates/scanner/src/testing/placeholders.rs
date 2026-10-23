@@ -10,8 +10,9 @@ use super::{Factory, InspectStore, library, make_album, scan_library};
 pub fn placeholders_fill_once_per_image<S: InspectStore + 'static>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
-    // Two tracks share a red 300×200 cover; another album's cover has a valid header and
-    // nothing after it, so the scanner indexes it and ffmpeg cannot decode it.
+    // Two tracks share a red 300×200 cover, larger than a placeholder is decoded at; another
+    // album's cover has a valid header and nothing after it, so the scanner indexes it and ffmpeg
+    // cannot decode it.
     make_album(&root, "A", "X", 2);
     make_album(&root, "B", "Y", 1);
     let cover = root.join("A/X/cover.png");
@@ -20,7 +21,7 @@ pub fn placeholders_fill_once_per_image<S: InspectStore + 'static>(make: Factory
         .args(["-frames:v", "1"])
         .arg(&cover)
         .status()
-        .unwrap();
+        .expect("ffmpeg on PATH, which these tests need");
     assert!(status.success());
     let png = fs::read(&cover).unwrap();
     fs::write(root.join("B/Y/cover.png"), &png[..33]).unwrap();

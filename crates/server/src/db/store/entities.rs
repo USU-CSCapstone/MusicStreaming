@@ -110,10 +110,9 @@ pub fn upsert_image(
          VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7) ON CONFLICT (library_id, hash) \
          DO UPDATE SET root_id = excluded.root_id, path = excluded.path RETURNING id",
     )?
-    .query_row(
-        params![new_id()?, lib, info.hash, info.width as i64, info.height as i64, root_id, rel],
-        |r| r.get(0),
-    )
+    .query_row(params![new_id()?, lib, info.hash, info.width, info.height, root_id, rel], |r| {
+        r.get(0)
+    })
 }
 
 #[cfg(test)]

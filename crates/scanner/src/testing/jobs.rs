@@ -108,7 +108,7 @@ pub fn a_root_going_away_pauses_without_writing<S: InspectStore + 'static>(make:
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 3);
-    write_cover(&root.join("A/X/cover.png"));
+    fs::write(root.join("A/X/cover.png"), PNG).unwrap();
     let lib = library(&root);
     let store = Arc::new(make(&lib));
     scan_library(store.as_ref(), &lib);
@@ -211,7 +211,7 @@ pub fn a_cover_moved_away_waits_until_it_returns<S: InspectStore + 'static>(make
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
     let cover = root.join("A/X/cover.png");
-    write_cover(&cover);
+    fs::write(&cover, PNG).unwrap();
     let lib = library(&root);
     let store = Arc::new(make(&lib));
     scan_library(store.as_ref(), &lib);
@@ -250,15 +250,6 @@ pub fn a_pipe_is_judged_without_blocking<S: InspectStore + 'static>(make: Factor
         problems.iter().map(|p| (&p.path, p.detail.as_str())).collect::<Vec<_>>(),
         [(&file, "not a regular file")]
     );
-}
-
-/// Writes a small red PNG to `path`.
-fn write_cover(path: &Path) {
-    let status = Command::new("ffmpeg")
-        .args(["-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=red:s=8x8", "-frames:v", "1"])
-        .arg(path)
-        .status();
-    assert!(status.unwrap().success());
 }
 
 /// A decoder that cannot start says nothing about any file: every pass backs off.

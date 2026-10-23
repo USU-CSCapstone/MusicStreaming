@@ -30,8 +30,14 @@ pub struct Hub {
 }
 
 /// An account's turn to read and send a device list, so an earlier list never arrives after a
-/// later one, and whether a list is already waiting for it.
-type DeviceListTurn = (Arc<tokio::sync::Mutex<()>>, bool);
+/// later one.
+#[derive(Default)]
+struct DeviceListTurn {
+    /// Held while a list is read and sent.
+    turn: Arc<tokio::sync::Mutex<()>>,
+    /// Whether a list is already waiting for the turn.
+    waiting: bool,
+}
 
 struct Connection {
     id: u64,
@@ -110,7 +116,7 @@ impl Hub {
         let turns = &self.device_lists;
         let turn = {
             let mut turns = turns.lock().expect("device list lock");
-            let (turn, waiting) = turns.entry(user).or_default();
+            let DeviceListTurn { turn, waiting } = turns.entry(user).or_default();
             if std::mem::replace(waiting, true) {
                 return None;
             }
@@ -118,7 +124,7 @@ impl Hub {
         };
         let guard = turn.lock_owned().await;
         // Before the list is read, so a change after this has a list of its own.
-        turns.lock().expect("device list lock").entry(user).or_default().1 = false;
+        turns.lock().expect("device list lock").entry(user).or_default().waiting = false;
         Some(guard)
     }
 

@@ -45,7 +45,7 @@ pub fn playing(
         TRACK_COLUMNS.join(", ")
     ))?
     .query_row(params![now, library, user, position, plugin], |row| {
-        let started_at_ms = row.get::<_, i64>(13)? as u64;
+        let started_at_ms = row.get(13)?;
         Ok((row.get(14)?, Playing { track: track(row)?, started_at_ms }))
     })
     .optional()

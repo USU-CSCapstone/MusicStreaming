@@ -36,7 +36,7 @@ pub fn searches(
         .query_row(params![plugin, user], |row| row.get(0))
         .optional()?
         .flatten();
-    let rows: Vec<(i64, String, Option<i64>)> = conn
+    let rows: Vec<(i64, String, Option<u64>)> = conn
         .prepare_cached(&format!(
             "SELECT e.seq, e.kind, e.search_id FROM search_events e WHERE {FOR_PLUGIN} \
              ORDER BY e.seq LIMIT ?6"
@@ -60,7 +60,7 @@ pub fn searches(
             (!found.is_empty()).then_some(Event::Searched(found))
         }
         "forgotten" => {
-            let ids = run.iter().filter_map(|(_, _, search)| search.map(|id| id as u64));
+            let ids = run.iter().filter_map(|(_, _, search)| *search);
             Some(Event::SearchesForgotten(Some(ids.collect())))
         }
         _ => Some(Event::SearchesForgotten(None)),
@@ -85,13 +85,13 @@ fn search(conn: &Connection, seq: i64) -> rusqlite::Result<Option<Search>> {
             Some("artist") => Some(ResultKind::Artist),
             _ => None,
         };
-        let selected_id: Option<i64> = row.get(6)?;
+        let selected_id: Option<u64> = row.get(6)?;
         Ok(Search {
-            id: row.get::<_, i64>(0)? as u64,
+            id: row.get(0)?,
             query: row.get(1)?,
             found: Found { tracks: row.get(2)?, albums: row.get(3)?, artists: row.get(4)? },
-            selected: kind.zip(selected_id).map(|(kind, id)| Selected { kind, id: id as u64 }),
-            searched_at_ms: row.get::<_, i64>(7)? as u64,
+            selected: kind.zip(selected_id).map(|(kind, id)| Selected { kind, id }),
+            searched_at_ms: row.get(7)?,
         })
     })
     .optional()

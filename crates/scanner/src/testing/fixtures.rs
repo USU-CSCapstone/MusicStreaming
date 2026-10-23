@@ -9,8 +9,9 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use lofty::config::WriteOptions;
+use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::*;
-use lofty::tag::{ItemKey, Tag, TagType};
+use lofty::tag::{ItemKey, ItemValue, Tag, TagItem, TagType};
 
 use super::{InspectStore, InspectTrack};
 use crate::library::LibraryConfig;
@@ -75,11 +76,25 @@ pub fn tag_wav(path: &Path, title: &str, artist: &str, album: &str) {
 
 /// Give the WAV at `path` an ID3v2 tag holding the text `items`, replacing the ID3v2 tag it had.
 pub fn tag_wav_with(path: &Path, items: &[(ItemKey, &str)]) {
+    text_tag(items).save_to_path(path, WriteOptions::default()).unwrap();
+}
+
+/// Give the WAV at `path` an ID3v2 tag holding the text `items` and the PNG `art` as its front
+/// cover, replacing the ID3v2 tag it had.
+pub fn tag_wav_with_art(path: &Path, items: &[(ItemKey, &str)], art: &[u8]) {
+    let mut tag = text_tag(items);
+    let picture = Picture::unchecked(art.to_vec()).pic_type(PictureType::CoverFront);
+    tag.push_picture(picture.mime_type(MimeType::Png).build());
+    tag.save_to_path(path, WriteOptions::default()).unwrap();
+}
+
+/// An ID3v2 tag holding the text `items`.
+fn text_tag(items: &[(ItemKey, &str)]) -> Tag {
     let mut tag = Tag::new(TagType::Id3v2);
     for (key, value) in items {
-        tag.push(lofty::tag::TagItem::new(*key, lofty::tag::ItemValue::Text((*value).to_owned())));
+        tag.push(TagItem::new(*key, ItemValue::Text((*value).to_owned())));
     }
-    tag.save_to_path(path, WriteOptions::default()).unwrap();
+    tag
 }
 
 /// Write `n` small tagged WAVs to `root/artist/album`, named `01 - Track 1.wav` onwards and
@@ -153,12 +168,8 @@ pub(super) fn wait_until_running(scanner: &Scanner, id: ScanId) {
     wait_until(scanner, &format!("scan {id} never started"), started);
 }
 
-/// Whether `ffmpeg` on `PATH` runs, so tests that need it can skip where it does not.
-pub fn ffmpeg_available() -> bool {
-    Command::new("ffmpeg").arg("-version").output().map(|o| o.status.success()).unwrap_or(false)
-}
-
-/// Encode `wav` to `out` with the given ffmpeg codec arguments.
+/// Encode `wav` to `out` with the given ffmpeg codec arguments. Panics if ffmpeg is not on
+/// `PATH`: the tests that encode need it.
 pub fn encode(wav: &Path, out: &Path, args: &[&str]) {
     let status = Command::new("ffmpeg")
         .args(["-nostdin", "-v", "error", "-y", "-i"])
@@ -166,6 +177,6 @@ pub fn encode(wav: &Path, out: &Path, args: &[&str]) {
         .args(args)
         .arg(out)
         .status()
-        .expect("run ffmpeg");
+        .expect("ffmpeg on PATH, which these tests need");
     assert!(status.success(), "ffmpeg failed encoding {}", out.display());
 }

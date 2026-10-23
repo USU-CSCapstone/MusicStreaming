@@ -5,15 +5,12 @@ use std::sync::Arc;
 
 use jewelcase_ffmpeg::{Config, Ffmpeg};
 
-use super::{Factory, InspectStore, ffmpeg_available, library, scan_library, write_sine_wav};
+use super::{Factory, InspectStore, library, scan_library, write_sine_wav};
 use crate::analysis::Analyzer;
 
 /// One pass analyzes every indexed track, judging a broken one, and the next finds nothing left:
 /// a broken file is not decoded again. The good file's loudness is measured.
 pub fn queue_drains_and_broken_files_do_not_repeat<S: InspectStore + 'static>(make: Factory<S>) {
-    if !ffmpeg_available() {
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     write_sine_wav(&root.join("ok.wav"), 440.0, 0.2, 0.5);

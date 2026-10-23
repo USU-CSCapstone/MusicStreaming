@@ -47,7 +47,10 @@ pub fn effective(
     library: i64,
 ) -> rusqlite::Result<Map<String, Value>> {
     let set = set_for(conn, id, library)?;
-    Ok(schema.map_or(set.clone(), |schema| schema.with_defaults(&set)))
+    Ok(match schema {
+        Some(schema) => schema.with_defaults(&set),
+        None => set,
+    })
 }
 
 pub fn store(

@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use jewelcase_core::{Document, Index};
 use rusqlite::Connection;
 
-use crate::api::page::library_count;
+use crate::api::page::library_number;
 use crate::db::{Database, DbError};
 
 /// A rebuild waits this many times as long as the last one took.
@@ -131,7 +131,7 @@ async fn build(db: &Database, library: i64) -> Result<Built, DbError> {
     let (version, documents) = db
         .read(move |conn| {
             // One snapshot, so the version is exactly the one the documents reflect.
-            let version = library_count(conn, library, "names_version")?;
+            let version = library_number(conn, library, "names_version")?;
             Ok((version, documents(conn, library)?))
         })
         .await?;

@@ -4,7 +4,7 @@
 use rusqlite::Connection;
 use rusqlite::types::Value;
 
-use super::{Source, Total, library_count};
+use super::{Source, Total, library_number};
 
 /// A list's table, as every page of it reads it.
 pub struct Table {
@@ -49,7 +49,7 @@ impl Table {
     ) -> rusqlite::Result<Source> {
         let (name, alias) = (self.name, self.alias);
         let total = match (&lead, checks.is_empty()) {
-            (None, true) => Total::Stored(library_count(conn, library, self.count)?),
+            (None, true) => Total::Stored(library_number(conn, library, self.count)?),
             (Some(lead), true) => Total::Stored(lead.size),
             (_, false) => Total::Counted,
         };

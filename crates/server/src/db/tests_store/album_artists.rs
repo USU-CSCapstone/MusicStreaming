@@ -1,8 +1,8 @@
 //! Album artists compared as a set, shown in the order most of the album's tracks list them
 //! (`requirements/albums.md` §1–§2).
 
-use jewelcase_scanner::{Batch, Store, testing};
-use lofty::tag::ItemKey;
+use jewelcase_scanner::testing::{self, ItemKey};
+use jewelcase_scanner::{Batch, Store};
 
 use super::recompute::check;
 use super::{count, make, record, scalar, tagged};

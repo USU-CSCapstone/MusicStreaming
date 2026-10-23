@@ -44,9 +44,7 @@ pub(super) fn tracks(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool
     let mut purged = 0;
     for library in libraries(tx)? {
         let ids: Vec<i64> = missing
-            .query_map(params![library, now - WINDOW_MS, (TRACK_CHUNK - purged) as i64], |r| {
-                r.get(0)
-            })?
+            .query_map(params![library, now - WINDOW_MS, TRACK_CHUNK - purged], |r| r.get(0))?
             .collect::<Result<_>>()?;
         let mut touched = Touched::default();
         for &id in &ids {
@@ -78,17 +76,17 @@ pub(super) fn biographies(tx: &Transaction<'_>, _: i64, after: &mut i64) -> Resu
 /// were fewer, so the table is done. Each call reads only its own rows, so a large table costs a
 /// step at a time.
 fn unused(tx: &Transaction<'_>, table: &str, used: &str, after: &mut i64) -> Result<bool> {
-    let (last, seen): (Option<i64>, i64) = tx
+    let (last, seen): (Option<i64>, usize) = tx
         .prepare_cached(&format!(
             "SELECT max(id), count(*) FROM (SELECT id FROM {table} WHERE id > ?1 \
              ORDER BY id LIMIT ?2)"
         ))?
-        .query_row(params![*after, CHUNK as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        .query_row(params![*after, CHUNK], |r| Ok((r.get(0)?, r.get(1)?)))?;
     let Some(last) = last else { return Ok(true) };
     tx.prepare_cached(&format!(
         "DELETE FROM {table} AS r WHERE id > ?1 AND id <= ?2 AND NOT ({used})"
     ))?
     .execute(params![*after, last])?;
     *after = last;
-    Ok(seen < CHUNK as i64)
+    Ok(seen < CHUNK)
 }

@@ -76,7 +76,7 @@ pub async fn search(
     let kinds = query.types.as_deref().map_or_else(|| Ok(Kind::ALL.to_vec()), kinds)?;
 
     let track_count =
-        db.read(move |conn| page::library_count(conn, library, "track_count")).await?;
+        db.read(move |conn| page::library_number(conn, library, "track_count")).await?;
     let index = indexes.index(&db, library).await?;
     let found = index.search(&query.q, &kinds, limit);
     let sections = db.read(move |conn| results(conn, library, found)).await?;

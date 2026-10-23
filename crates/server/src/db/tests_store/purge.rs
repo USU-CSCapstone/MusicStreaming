@@ -4,8 +4,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use jewelcase_scanner::testing::{self, InspectStore};
-use lofty::tag::ItemKey;
+use jewelcase_scanner::testing::{self, InspectStore, ItemKey};
 use rusqlite::Connection;
 use rusqlite::types::Value;
 

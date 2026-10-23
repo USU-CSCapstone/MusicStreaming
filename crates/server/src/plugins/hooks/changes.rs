@@ -26,7 +26,7 @@ pub fn batch(
     position: i64,
     entity: &str,
 ) -> rusqlite::Result<(i64, Option<Changes>)> {
-    let rows: Vec<(i64, i64, String)> = conn
+    let rows: Vec<(i64, u64, String)> = conn
         .prepare_cached(
             "SELECT seq, entity_id, op FROM library_changes \
              WHERE library_id = ?1 AND entity_type = ?2 AND seq > ?3 ORDER BY seq LIMIT ?4",
@@ -39,8 +39,8 @@ pub fn batch(
     let mut changes = Changes { changed: Vec::new(), removed: Vec::new() };
     for (_, id, op) in rows {
         match op.as_str() {
-            "delete" => changes.removed.push(id as u64),
-            _ => changes.changed.push(id as u64),
+            "delete" => changes.removed.push(id),
+            _ => changes.changed.push(id),
         }
     }
     Ok((next, Some(changes)))

@@ -4,12 +4,8 @@
 use std::fs;
 use std::path::Path;
 
-use jewelcase_scanner::testing::{self, PNG};
+use jewelcase_scanner::testing::{self, ItemKey, PNG};
 use jewelcase_scanner::*;
-use lofty::config::WriteOptions;
-use lofty::picture::{MimeType, Picture, PictureType};
-use lofty::prelude::*;
-use lofty::tag::{ItemKey, ItemValue, Tag, TagItem, TagType};
 
 use super::recompute::check;
 use super::{count, libraries, make, scalar, tagged};
@@ -19,13 +15,7 @@ use crate::db::store::SqliteStore;
 fn with_art(root: &Path, rel: &str, items: &[(ItemKey, &str)], art: &[u8]) {
     let path = root.join(rel);
     testing::write_small_wav(&path);
-    let mut tag = Tag::new(TagType::Id3v2);
-    for (key, value) in items {
-        tag.push(TagItem::new(*key, ItemValue::Text((*value).to_owned())));
-    }
-    let picture = Picture::unchecked(art.to_vec()).pic_type(PictureType::CoverFront);
-    tag.push_picture(picture.mime_type(MimeType::Png).build());
-    tag.save_to_path(&path, WriteOptions::default()).unwrap();
+    testing::tag_wav_with_art(&path, items, art);
 }
 
 /// A PNG unlike any other `variant` gives, so each is its own image.

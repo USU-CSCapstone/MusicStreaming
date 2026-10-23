@@ -13,11 +13,6 @@ use super::{Code, Problem};
 /// zxcvbn's own threshold: below it, a password is guessable offline in hours.
 const MIN_SCORE: Score = Score::Three;
 
-/// zxcvbn's work grows faster than the password, so it scores only this many characters. A
-/// longer password is at least as strong as its start, so this never lets a weak one through,
-/// and there is still no maximum length.
-const SCORED_CHARS: usize = 100;
-
 /// Each hash holds Argon2's 19 MiB and a core for its whole run, so hashes run on at most half
 /// the cores at once ([`permits`]), however many requests arrive, and the rest are left for
 /// playback.
@@ -43,8 +38,7 @@ const DUMMY: &str = concat!(
 /// Accepts a password that is hard to guess, judged without composition rules. A common or
 /// breached password, or one built from `inputs` such as the username, is `weak_password`.
 fn check_strength(password: &str, inputs: &[&str]) -> Result<(), Problem> {
-    let end = password.char_indices().nth(SCORED_CHARS).map_or(password.len(), |(at, _)| at);
-    let entropy = zxcvbn(&password[..end], inputs);
+    let entropy = zxcvbn(password, inputs);
     if entropy.score() >= MIN_SCORE {
         return Ok(());
     }
@@ -124,6 +118,8 @@ mod tests {
         assert!(check_strength("jewelcaseowner", &["jewelcaseowner"]).is_err());
     }
 
+    /// zxcvbn's work grows faster than the password, so it scores only the first 100 characters
+    /// itself; this guards that cap.
     #[test]
     fn a_very_long_password_is_quick_to_check() {
         let long = "correct horse battery staple ".repeat(10_000);

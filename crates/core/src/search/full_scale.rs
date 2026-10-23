@@ -42,7 +42,7 @@ fn benchmark_full_scale() {
     let index = Index::build(documents);
     println!(
         "built {} documents, {} words, in {:?}",
-        index.len(),
+        index.documents.len(),
         index.vocabulary.len(),
         started.elapsed()
     );

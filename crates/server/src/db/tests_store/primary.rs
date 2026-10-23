@@ -2,8 +2,7 @@
 
 use std::fs;
 
-use jewelcase_scanner::testing;
-use lofty::tag::ItemKey;
+use jewelcase_scanner::testing::{self, ItemKey};
 
 use super::recompute::check;
 use super::{count, make, scalar, tagged};

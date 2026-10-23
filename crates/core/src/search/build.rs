@@ -48,12 +48,4 @@ impl Index {
         }
         index
     }
-
-    pub fn len(&self) -> usize {
-        self.documents.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.documents.is_empty()
-    }
 }

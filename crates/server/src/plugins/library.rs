@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use jewelcase_plugins::{Album, Artist, Library, Track};
+use rusqlite::types::FromSqlError;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::db::{Database, DbError, Json, by_ids, libraries};
@@ -46,9 +47,9 @@ fn page<T>(
     limit: u32,
     map: fn(&Row) -> rusqlite::Result<T>,
 ) -> rusqlite::Result<Vec<T>> {
-    let after = after.map_or(-1, |id| id as i64);
+    // IDs are positive, so 0 is before every one.
     conn.prepare_cached(&format!("{select} ORDER BY 1 LIMIT ?3"))?
-        .query_map(params![library, after, limit], map)?
+        .query_map(params![library, after.unwrap_or(0), limit], map)?
         .collect()
 }
 
@@ -73,18 +74,18 @@ pub const TRACK_COLUMNS: &[&str] = &[
 /// A track from a row that starts with [`TRACK_COLUMNS`].
 pub fn track(row: &Row) -> rusqlite::Result<Track> {
     Ok(Track {
-        id: row.get::<_, i64>(0)? as u64,
+        id: row.get(0)?,
         title: row.get(1)?,
         artists: row.get::<_, Json<_>>(2)?.0,
-        album_id: row.get::<_, i64>(3)? as u64,
+        album_id: row.get(3)?,
         album: row.get(4)?,
         disc_number: row.get(5)?,
         track_number: row.get(6)?,
         release_date: row.get(7)?,
         isrc: row.get(8)?,
-        duration_ms: (row.get::<_, i64>(9)? / 1000) as u64,
+        duration_ms: row.get::<_, u64>(9)? / 1000,
         has_lyrics: row.get(10)?,
-        root: row.get::<_, i64>(11)? as u64,
+        root: row.get(11)?,
         path: row.get(12)?,
     })
 }
@@ -103,7 +104,7 @@ const ALBUM_COLUMNS: &[&str] = &[
 /// An album from a row of [`ALBUM_COLUMNS`].
 fn album(row: &Row) -> rusqlite::Result<Album> {
     Ok(Album {
-        id: row.get::<_, i64>(0)? as u64,
+        id: row.get(0)?,
         title: row.get(1)?,
         artists: row.get::<_, Json<_>>(2)?.0,
         release_date: row.get(3)?,
@@ -115,9 +116,10 @@ fn album(row: &Row) -> rusqlite::Result<Album> {
 const ARTIST_COLUMNS: &[&str] =
     &["ar.id", "ar.name", "ar.image_id IS NOT NULL", "coalesce(ar.biography, '') <> ''"];
 
+/// An artist from a row of [`ARTIST_COLUMNS`].
 fn artist(row: &Row) -> rusqlite::Result<Artist> {
     Ok(Artist {
-        id: row.get::<_, i64>(0)? as u64,
+        id: row.get(0)?,
         name: row.get(1)?,
         has_image: row.get(2)?,
         has_biography: row.get(3)?,
@@ -187,9 +189,7 @@ impl Library for RunLibrary {
             TRACK_COLUMNS.join(", ")
         );
         self.read(move |conn, library| {
-            conn.prepare_cached(&select)?
-                .query_map(params![library, album as i64], track)?
-                .collect()
+            conn.prepare_cached(&select)?.query_map(params![library, album], track)?.collect()
         })
         .await
     }
@@ -204,9 +204,7 @@ impl Library for RunLibrary {
             ALBUM_COLUMNS.join(", ")
         );
         self.read(move |conn, library| {
-            conn.prepare_cached(&select)?
-                .query_map(params![library, artist as i64], album)?
-                .collect()
+            conn.prepare_cached(&select)?.query_map(params![library, artist], album)?.collect()
         })
         .await
     }
@@ -214,7 +212,14 @@ impl Library for RunLibrary {
     async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
         self.read(|conn, library| {
             let roots = libraries::roots(conn, library)?;
-            Ok(roots.into_iter().map(|root| (root.id as u64, root.path)).collect())
+            roots
+                .into_iter()
+                .map(|root| {
+                    let id =
+                        u64::try_from(root.id).map_err(|_| FromSqlError::OutOfRange(root.id))?;
+                    Ok((id, root.path))
+                })
+                .collect()
         })
         .await
     }

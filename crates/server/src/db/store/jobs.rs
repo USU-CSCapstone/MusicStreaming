@@ -28,10 +28,8 @@ pub fn next_unanalyzed(
 ) -> Result<Vec<(PickedTrack, FileToDecode)>, DbError> {
     let found = store.db.read_blocking(move |conn| {
         conn.prepare_cached(UNANALYZED)?
-            .query_map(params![lib, analyzer_version as i64, limit as i64], |r| {
-                let (size, mtime_ms) = (r.get::<_, i64>(1)?, r.get::<_, i64>(2)?);
-                let track =
-                    PickedTrack { id: r.get(0)?, size: size as u64, mtime_ms: mtime_ms as u64 };
+            .query_map(params![lib, analyzer_version, limit], |r| {
+                let track = PickedTrack { id: r.get(0)?, size: r.get(1)?, mtime_ms: r.get(2)? };
                 Ok((track, r.get(3)?, r.get(4)?))
             })?
             .collect()
@@ -65,10 +63,10 @@ pub fn store_analysis(
                     id,
                     result.integrated_lufs,
                     result.true_peak_dbtp,
-                    result.analyzer_version as i64,
+                    result.analyzer_version,
                     lib,
-                    track.size as i64,
-                    track.mtime_ms as i64
+                    track.size,
+                    track.mtime_ms
                 ],
                 |r| r.get::<_, i64>(0),
             )
@@ -102,7 +100,7 @@ pub fn next_without_placeholder(
             "SELECT hash, root_id, path FROM images \
              WHERE library_id = ?1 AND placeholder IS NULL LIMIT ?2",
         )?
-        .query_map(params![lib, limit as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .query_map(params![lib, limit], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
         .collect()
     })?;
     Ok(files(&store.roots, lib, found))

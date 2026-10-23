@@ -61,16 +61,16 @@ fn apply(conn: &mut Connection, migrations: &[Migration], applied: usize) -> any
                 migration.name
             );
         }
-        tx.pragma_update(None, "user_version", (index + 1) as u32)?;
+        tx.pragma_update(None, "user_version", index + 1)?;
         tx.commit()?;
         info!(migration = migration.name, "applied migration");
     }
     Ok(())
 }
 
+/// How many migrations the database has had, as its `user_version` records.
 fn version(conn: &Connection) -> rusqlite::Result<usize> {
-    let version: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    Ok(version as usize)
+    conn.pragma_query_value(None, "user_version", |row| row.get(0))
 }
 
 #[cfg(test)]

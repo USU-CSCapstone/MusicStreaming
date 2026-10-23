@@ -24,6 +24,13 @@ pub enum Unknown {
     Empty,
 }
 
+/// One part of a list: the rows whose first sort value is known, or those whose is unknown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Part {
+    Known,
+    Unknown,
+}
+
 pub struct Sort {
     /// Names the list and sort in its cursors, such as `albums.name`.
     pub label: &'static str,
@@ -69,23 +76,24 @@ impl Sort {
         cursor.map(|text| cursor::decode(text, &self.label(order), self.columns.len())).transpose()
     }
 
-    fn is_unknown(&self, first: &Value) -> bool {
-        match self.unknown {
-            Unknown::Never => false,
-            Unknown::Null => *first == Value::Null,
-            Unknown::Empty => matches!(first, Value::Blob(b) if b.is_empty()),
+    /// The part of the list a row whose sort values start with `first` is in.
+    fn part_of(&self, first: &Value) -> Part {
+        match (self.unknown, first) {
+            (Unknown::Null, Value::Null) => Part::Unknown,
+            (Unknown::Empty, Value::Blob(b)) if b.is_empty() => Part::Unknown,
+            _ => Part::Known,
         }
     }
 
-    /// The condition for the known part of the list, or for the unknown part.
-    fn part(&self, unknown: bool) -> Option<String> {
+    /// The condition for `part` of the list, if the list has parts.
+    fn condition(&self, part: Part) -> Option<String> {
         let first = self.columns[0];
-        match (self.unknown, unknown) {
+        match (self.unknown, part) {
             (Unknown::Never, _) => None,
-            (Unknown::Null, false) => Some(format!("{first} IS NOT NULL")),
-            (Unknown::Null, true) => Some(format!("{first} IS NULL")),
-            (Unknown::Empty, false) => Some(format!("{first} > x''")),
-            (Unknown::Empty, true) => Some(format!("{first} = x''")),
+            (Unknown::Null, Part::Known) => Some(format!("{first} IS NOT NULL")),
+            (Unknown::Null, Part::Unknown) => Some(format!("{first} IS NULL")),
+            (Unknown::Empty, Part::Known) => Some(format!("{first} > x''")),
+            (Unknown::Empty, Part::Unknown) => Some(format!("{first} = x''")),
         }
     }
 }
@@ -98,15 +106,14 @@ pub fn fetch<T>(
     mut map: impl FnMut(&Row) -> rusqlite::Result<T>,
 ) -> rusqlite::Result<(Vec<T>, Option<String>)> {
     // The row after the page, if there is one, says whether there is a next page.
-    let wanted = request.limit + 1;
-    let mut rows: Vec<(T, Vec<Value>)> = Vec::with_capacity(wanted);
+    let mut left = request.limit + 1;
+    let mut rows: Vec<(T, Vec<Value>)> = Vec::new();
     let after = request.after.as_deref();
-    for unknown in parts(request.sort, after) {
-        if rows.len() == wanted {
+    for &part in parts(request.sort, after) {
+        if left == 0 {
             break;
         }
-        let (sql, params) =
-            part_query(source, request.sort, request.order, after, unknown, wanted - rows.len());
+        let (sql, params) = part_query(source, request.sort, request.order, after, part, left);
         let mut statement = conn.prepare_cached(&sql)?;
         let mut result = statement.query(params_from_iter(params))?;
         while let Some(row) = result.next()? {
@@ -115,11 +122,12 @@ pub fn fetch<T>(
                 .map(|index| row.get::<_, Value>(index))
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             rows.push((map(row)?, key));
+            left -= 1;
         }
     }
 
-    let next = if rows.len() > request.limit {
-        rows.truncate(request.limit);
+    let next = if left == 0 {
+        rows.pop();
         rows.last().map(|(_, key)| cursor::encode(&request.sort.label(request.order), key))
     } else {
         None
@@ -127,14 +135,14 @@ pub fn fetch<T>(
     Ok((rows.into_iter().map(|(item, _)| item).collect(), next))
 }
 
-/// The parts of the list left to read from `after`: `false` for the known part, `true` for
-/// the unknown one. A cursor in the unknown part has already passed the known part.
-fn parts(sort: &Sort, after: Option<&[Value]>) -> Vec<bool> {
-    let starts_unknown = after.is_some_and(|values| sort.is_unknown(&values[0]));
-    match (sort.unknown, starts_unknown) {
-        (Unknown::Never, _) => vec![false],
-        (_, false) => vec![false, true],
-        (_, true) => vec![true],
+/// The parts of the list left to read from `after`, in order. A cursor in the unknown part has
+/// already passed the known part.
+fn parts(sort: &Sort, after: Option<&[Value]>) -> &'static [Part] {
+    let start = after.map_or(Part::Known, |values| sort.part_of(&values[0]));
+    match (sort.unknown, start) {
+        (Unknown::Never, _) => &[Part::Known],
+        (_, Part::Known) => &[Part::Known, Part::Unknown],
+        (_, Part::Unknown) => &[Part::Unknown],
     }
 }
 
@@ -144,8 +152,8 @@ fn part_query(
     sort: &Sort,
     order: Order,
     after: Option<&[Value]>,
-    unknown: bool,
-    limit: usize,
+    part: Part,
+    limit: u32,
 ) -> (String, Vec<Value>) {
     let (direction, comparison) = match order {
         Order::Asc => ("", ">"),
@@ -153,10 +161,10 @@ fn part_query(
     };
     // In the unknown part the first column is the same for every row, so it is left out of
     // the order and the keyset.
+    let unknown = part == Part::Unknown;
     let columns = if unknown { &sort.columns[1..] } else { sort.columns };
     // The cursor applies to the part it is in; the part after it starts from the top.
-    let starts_unknown = after.is_some_and(|values| sort.is_unknown(&values[0]));
-    let cursor = after.filter(|_| unknown == starts_unknown);
+    let cursor = after.filter(|values| sort.part_of(&values[0]) == part);
     let mut conditions = vec![format!("({})", source.filter)];
     // In the known part a cursor already rules out the unknown rows, except the empty keys
     // below it in a descending list. The redundant bound must be left out: next to the
@@ -164,7 +172,7 @@ fn part_query(
     let implied =
         cursor.is_some() && !unknown && !(sort.unknown == Unknown::Empty && order == Order::Desc);
     if !implied {
-        conditions.extend(sort.part(unknown));
+        conditions.extend(sort.condition(part));
     }
     let mut params = source.params.clone();
     if let Some(values) = cursor {
@@ -176,7 +184,7 @@ fn part_query(
     let order_by =
         columns.iter().map(|column| format!("{column}{direction}")).collect::<Vec<_>>().join(", ");
     // A bound limit keeps the text the same for every page, so the statement cache reuses it.
-    params.push(Value::Integer(limit as i64));
+    params.push(Value::from(limit));
     let sql = format!(
         "SELECT {}, {} FROM {} {} WHERE {} ORDER BY {order_by} LIMIT ?",
         source.select.join(", "),
@@ -217,8 +225,8 @@ pub fn assert_indexed(conn: &Connection, source: &Source, sort: &Sort) -> rusqli
     }
     for after in &cursors {
         for order in [Order::Asc, Order::Desc] {
-            for unknown in parts(sort, after.as_deref()) {
-                let (sql, params) = part_query(source, sort, order, after.as_deref(), unknown, 101);
+            for &part in parts(sort, after.as_deref()) {
+                let (sql, params) = part_query(source, sort, order, after.as_deref(), part, 101);
                 // Each step's parent, and what it does. The page's own steps have parent 0; a
                 // column's subquery, such as a track's credits, nests below them.
                 let steps: Vec<(i64, String)> = conn

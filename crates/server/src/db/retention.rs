@@ -104,7 +104,7 @@ fn libraries(tx: &Transaction<'_>) -> Result<Vec<i64>> {
 /// Runs `sql`, which deletes up to `?2` rows older than `?1`, with the sweep's cutoff and
 /// [`CHUNK`], and returns whether it deleted fewer, so none is left.
 fn aged(tx: &Transaction<'_>, now: i64, sql: &str) -> Result<bool> {
-    Ok(tx.prepare_cached(sql)?.execute(params![now - WINDOW_MS, CHUNK as i64])? < CHUNK)
+    Ok(tx.prepare_cached(sql)?.execute(params![now - WINDOW_MS, CHUNK])? < CHUNK)
 }
 
 /// Finished scans aged out, but in each library its last finished scan, which the admin sees,
@@ -122,7 +122,7 @@ fn scans(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
     )?;
     let mut deleted = 0;
     for library in libraries(tx)? {
-        deleted += stmt.execute(params![now - WINDOW_MS, (CHUNK - deleted) as i64, library])?;
+        deleted += stmt.execute(params![now - WINDOW_MS, CHUNK - deleted, library])?;
         if deleted == CHUNK {
             return Ok(false);
         }
@@ -182,6 +182,6 @@ fn forgets_delivered(tx: &Transaction<'_>, _: i64, _: &mut i64) -> Result<bool> 
              AND c.user_id = e.user_id AND c.position >= e.seq) \
          LIMIT ?2)",
         )?
-        .execute(params![Text(Permission::Searched), CHUNK as i64])?;
+        .execute(params![Text(Permission::Searched), CHUNK])?;
     Ok(deleted < CHUNK)
 }

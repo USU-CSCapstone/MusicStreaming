@@ -24,7 +24,7 @@ type Write = fn(&Transaction) -> rusqlite::Result<()>;
 
 /// Library 1's names version.
 async fn version(db: &Database) -> i64 {
-    db.read(|conn| library_count(conn, 1, "names_version")).await.unwrap()
+    db.read(|conn| library_number(conn, 1, "names_version")).await.unwrap()
 }
 
 #[tokio::test]

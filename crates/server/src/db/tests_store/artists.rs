@@ -1,8 +1,7 @@
 //! An artist's name is the most-used spelling of it, and a retag moves a track and removes the
 //! album and artist it emptied.
 
-use jewelcase_scanner::testing;
-use lofty::tag::ItemKey;
+use jewelcase_scanner::testing::{self, ItemKey};
 
 use super::{count, make, scalar, tagged};
 

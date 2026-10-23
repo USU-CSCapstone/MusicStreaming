@@ -36,6 +36,11 @@ pub use hooked::Hooked;
 pub use indexing::*;
 pub use inspect::{InspectStore, InspectTrack};
 pub use jobs::*;
+/// The tag keys fixtures are written with, so tests that tag files need no `lofty` of their own.
+pub use lofty::tag::ItemKey;
+
+/// How the scanner reads a file's claimed duration, so tests can make records the way it does.
+pub use crate::audio::duration_ms;
 pub use missing::*;
 pub use moves::*;
 pub use placeholders::*;

@@ -3,9 +3,8 @@
 
 use std::sync::Arc;
 
-use jewelcase_scanner::testing;
+use jewelcase_scanner::testing::{self, ItemKey};
 use jewelcase_scanner::*;
-use lofty::tag::ItemKey;
 
 use super::recompute::check;
 use super::{count, make, scalar, tagged};
@@ -99,15 +98,6 @@ fn problems_group_by_kind_and_clear() {
 
 #[test]
 fn analysis_results_reach_tracks_albums_and_waveforms() {
-    if std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|o| !o.status.success())
-        .unwrap_or(true)
-    {
-        eprintln!("skipping: ffmpeg not on PATH");
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     testing::write_sine_wav(&root.join("a/01.wav"), 1000.0, 0.5, 1.0);

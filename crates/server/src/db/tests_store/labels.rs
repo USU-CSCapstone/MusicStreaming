@@ -1,7 +1,6 @@
 //! Album labels, resolved from the labels each track's tags carry (`design/database.md` §3).
 
-use jewelcase_scanner::testing;
-use lofty::tag::ItemKey;
+use jewelcase_scanner::testing::{self, ItemKey};
 
 use super::recompute::check;
 use super::{make, retag, scalar, tagged};

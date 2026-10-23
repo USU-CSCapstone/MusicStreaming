@@ -4,15 +4,11 @@ use std::sync::Arc;
 
 use jewelcase_core::waveform_level;
 use jewelcase_ffmpeg::{Config, Ffmpeg};
-use jewelcase_scanner::testing::{BareStore, encode, ffmpeg_available, write_sine_wav};
+use jewelcase_scanner::testing::{BareStore, encode, write_sine_wav};
 use jewelcase_scanner::{ANALYZER_VERSION, Analyzer};
 
 #[test]
 fn sine_measures_as_expected() {
-    if !ffmpeg_available() {
-        eprintln!("skipping analysis test: ffmpeg not on PATH");
-        return;
-    }
     let tmp = tempfile::tempdir().unwrap();
     let wav = tmp.path().join("sine.wav");
     // 1 kHz at half scale: -6.02 dBFS peak per channel. EBU R128 sums the

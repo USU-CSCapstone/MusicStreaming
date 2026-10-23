@@ -213,7 +213,7 @@ fn device(
 }
 
 /// A `401 unauthenticated`.
-pub fn unauthenticated() -> Response {
+fn unauthenticated() -> Response {
     challenge(Problem::new(Code::Unauthenticated))
 }
 

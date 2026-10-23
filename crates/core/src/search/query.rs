@@ -76,9 +76,11 @@ impl Index {
 
         // Candidates are the documents the most selective required word matched, so an optional
         // article never picks them; `score` drops those that miss another required word.
-        let fewest = (optional..matched.len()).min_by_key(|&i| matched[i].len()).unwrap();
+        let Some(fewest) = matched[optional..].iter().min_by_key(|docs| docs.len()) else {
+            return Vec::new();
+        };
         let mut scored: [Vec<(Score, u32)>; 3] = Default::default();
-        for &d in &matched[fewest] {
+        for &d in fewest {
             let kind = self.documents[d as usize].kind;
             if !kinds.contains(&kind) {
                 continue;

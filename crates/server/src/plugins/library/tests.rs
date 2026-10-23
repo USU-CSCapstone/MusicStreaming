@@ -95,6 +95,17 @@ async fn reads_an_albums_tracks_and_an_artists_albums() {
     assert!(library.artist_albums(401).await.unwrap().is_empty(), "another library's");
 }
 
+/// An ID beyond any SQLite holds fails the call rather than wrapping round to a negative one,
+/// which would page from the start.
+#[tokio::test]
+async fn an_id_beyond_sqlites_range_fails() {
+    let (_temp, db) = database().await;
+    let mut library = RunLibrary::new(db, "plugin", 1);
+    assert!(library.tracks(Some(u64::MAX), 10).await.is_err());
+    assert!(library.album_tracks(u64::MAX).await.is_err());
+    assert!(library.artist_albums(u64::MAX).await.is_err());
+}
+
 #[tokio::test]
 async fn keeps_state_per_plugin_and_library_until_uninstalled() {
     let (temp, db) = database().await;
