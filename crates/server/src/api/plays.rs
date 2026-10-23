@@ -25,6 +25,7 @@ use super::{AnyId, Problem, Uuid};
 use crate::db::plays::{End, Origin};
 use crate::db::{self, Database, Text, now_ms, reaches};
 
+/// The spec's `recordPlays` body.
 #[derive(Deserialize)]
 pub struct Plays {
     items: Vec<PlayReport>,

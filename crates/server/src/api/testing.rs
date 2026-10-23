@@ -136,7 +136,8 @@ pub fn owner_request(method: &str, uri: &str) -> request::Builder {
         .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
 }
 
-/// Sends a request with no body, logged in as the owner.
+/// Sends a request with no body, logged in as the owner, and returns the status, the
+/// `Content-Type` if any, and the body.
 pub async fn send(app: Router, method: &str, uri: &str) -> (StatusCode, Option<String>, Vec<u8>) {
     let request = owner_request(method, uri).body(Body::empty()).unwrap();
     let (status, headers, body) = respond(app, request).await;

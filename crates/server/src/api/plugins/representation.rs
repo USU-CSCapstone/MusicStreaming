@@ -107,6 +107,7 @@ pub fn all(conn: &Connection) -> rusqlite::Result<Vec<Plugin>> {
     Ok(plugins)
 }
 
+/// The installed plugin `id`, or `None` when there is none.
 pub fn get(conn: &Connection, id: &str) -> rusqlite::Result<Option<Plugin>> {
     let found = conn
         .prepare_cached(&format!("{SELECT} WHERE id = ?1"))?

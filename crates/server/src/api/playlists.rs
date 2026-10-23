@@ -1,8 +1,7 @@
 //! Playlists: `listPlaylists` (`api/openapi.yaml`).
 //!
-//! A playlist belongs to a user, and there are no accounts yet, so every library lists none.
-//! The rest of the playlist API arrives with accounts; until then any playlist's ID answers
-//! `404` like an unknown path.
+//! Playlists are not stored, so every library lists none. No other playlist operation is routed,
+//! so any playlist's ID answers `404` like an unknown path.
 
 use axum::Json;
 use serde::Deserialize;
@@ -11,6 +10,7 @@ use super::Problem;
 use super::extract::Query;
 use super::page::{self, Order, Page};
 
+/// The spec's `sort` values for `listPlaylists`.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum PlaylistSort {
@@ -21,7 +21,8 @@ enum PlaylistSort {
     PlayCount,
 }
 
-/// The spec's parameters, checked like every other list's so a client's mistakes show now.
+/// The spec's parameters, checked like every other list's so a client's mistakes show even
+/// while there is nothing to list.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[expect(dead_code, reason = "with no playlists, the order and filter apply to nothing")]

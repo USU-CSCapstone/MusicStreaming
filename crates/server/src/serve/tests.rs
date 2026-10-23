@@ -22,6 +22,7 @@ use tower_http::services::ServeDir;
 
 use super::{BODY_READ_TIMEOUT, DRAIN_TIMEOUT, HEADER_READ_TIMEOUT, serve};
 
+/// A request line and one header field, without the blank line that would end the header.
 const PART_OF_A_HEADER: &[u8] = b"GET / HTTP/1.1\r\nHost: jewelcase\r\n";
 
 /// Routes where `/` answers with the client's address and `/echo` with the body it was sent.

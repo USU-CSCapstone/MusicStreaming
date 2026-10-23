@@ -10,12 +10,15 @@ use anyhow::{Context, bail};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use tracing::info;
 
+/// One migration file.
 pub struct Migration {
+    /// The file's name without its extension, such as `0001_libraries`.
     pub name: &'static str,
+    /// The file's SQL, run as one batch.
     pub sql: &'static str,
 }
 
-/// Every file in `migrations/`, in order, listed by build.rs
+/// Every file in `migrations/`, in order, listed by `build.rs`.
 pub const MIGRATIONS: &[Migration] = include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
 
 /// Applies every migration the database has not seen yet, and returns the schema version.
@@ -77,6 +80,7 @@ fn version(conn: &Connection) -> rusqlite::Result<usize> {
 mod tests {
     use super::*;
 
+    /// Whether the database has a table named `name`.
     fn table_exists(conn: &Connection, name: &str) -> bool {
         conn.query_row(
             "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = ?1",

@@ -10,7 +10,7 @@ CREATE TABLE libraries (
     watch                 INTEGER NOT NULL DEFAULT 1 CHECK (watch IN (0, 1)),
     -- The time between scheduled scans, in minutes; NULL disables them
     scan_interval_minutes INTEGER DEFAULT 1440 CHECK (scan_interval_minutes > 0),
-    -- Counts and durations maintained by the scanner in the same transaction as the content it changes
+    -- Kept by 0007_catalog_counts.sql's triggers, in the same transaction as the content they count
     track_count           INTEGER NOT NULL DEFAULT 0,
     album_count           INTEGER NOT NULL DEFAULT 0,
     artist_count          INTEGER NOT NULL DEFAULT 0,
@@ -27,7 +27,7 @@ CREATE TABLE library_roots (
     path       TEXT    NOT NULL,
     created_at INTEGER NOT NULL,
     removed_at INTEGER,
-    -- Target for the foreign keys of tracks, images and scans.
+    -- Target for the foreign keys of tracks, images, scans and scan problems.
     UNIQUE (library_id, id)
 ) STRICT;
 

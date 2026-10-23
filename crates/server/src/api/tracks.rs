@@ -32,6 +32,7 @@ const WITHIN_ALBUM: Sort = Sort {
     unknown: Unknown::Never,
 };
 
+/// The `sort` values `listTracks` supports.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum TrackSort {
@@ -42,12 +43,12 @@ enum TrackSort {
     DateAdded,
     ReleaseDate,
     Duration,
-    // `playCount`, `lastPlayed`, and `top` wait for listening history, and answer `422` until
-    // then.
+    // The spec's `playCount`, `lastPlayed`, and `top` are not implemented, so they answer `422`.
 }
 
 impl TrackSort {
-    /// Each is one of `tracks`' indexes after `library_id`.
+    /// The keyset this sort pages by. Each one's columns are one of `tracks`' indexes after
+    /// `library_id`.
     fn sort(self) -> &'static Sort {
         match self {
             TrackSort::Name => &Sort {

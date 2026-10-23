@@ -166,7 +166,7 @@ async fn problems() {
             StatusCode::UNPROCESSABLE_ENTITY,
             "validation_failed",
         ),
-        // ffmpeg's refusal names the file; it stays in the log.
+        // A file ffmpeg refuses, and an image with no content hash: the cause stays in the log.
         ("/api/v1/libraries/1/images/3", StatusCode::INTERNAL_SERVER_ERROR, "internal"),
         ("/api/v1/libraries/1/images/5", StatusCode::INTERNAL_SERVER_ERROR, "internal"),
     ] {

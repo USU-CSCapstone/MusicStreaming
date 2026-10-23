@@ -15,7 +15,7 @@ use crate::api::refs::{
 use crate::api::time::serialize_rfc3339;
 use crate::db::Json;
 
-/// The spec's `AlbumSummary`, without `personal` until accounts exist.
+/// The spec's `AlbumSummary`, without `personal`.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumSummary {
@@ -46,6 +46,7 @@ pub struct Album {
     discs: Vec<Disc>,
 }
 
+/// One entry of the spec's `Album.discs`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Disc {

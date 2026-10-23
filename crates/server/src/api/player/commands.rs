@@ -14,8 +14,8 @@
 //!
 //! Every command goes to the connection playing but `transfer` (Shift), which goes to the
 //! device it names, to take playback over from wherever it is, or from where it stopped; so it
-//! also wakes a device that is idle (§3). Until the server keeps the queue, that device picks
-//! up the track and where it was in it, and nothing after it comes along.
+//! also wakes a device that is idle (§3). The server does not keep the queue, so that device
+//! picks up only the track and where it was in it; nothing after it comes along.
 
 mod relay;
 
@@ -65,6 +65,7 @@ enum Action {
     },
 }
 
+/// The default for `Transfer`'s `play`: a transfer plays unless it says not to.
 fn yes() -> bool {
     true
 }
@@ -88,6 +89,7 @@ enum Status {
 }
 
 impl CommandResult {
+    /// Command `command_id`'s result, with `reason` if there is one to give.
     fn new(command_id: String, status: Status, reason: Option<&str>) -> CommandResult {
         CommandResult { command_id, status, reason: reason.map(str::to_owned) }
     }

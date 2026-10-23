@@ -11,7 +11,7 @@ use crate::api::refs::{ImageRef, TagRef, genres_json, placeholder};
 use crate::api::time::serialize_rfc3339;
 use crate::db::Json;
 
-/// The spec's `ArtistSummary`, without `personal` until accounts exist.
+/// The spec's `ArtistSummary`, without `personal`.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtistSummary {

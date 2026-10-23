@@ -24,7 +24,8 @@ use crate::db::{Database, new_id, now_ms};
 pub struct Setup(AtomicBool);
 
 impl Setup {
-    /// The owner can never be deleted, so once one exists this stops reading the database.
+    /// Whether the owner exists. The owner can never be deleted, so once one does this stops
+    /// reading the database.
     async fn done(&self, db: &Database) -> Result<bool, Problem> {
         if self.0.load(Ordering::Relaxed) {
             return Ok(true);
@@ -37,6 +38,7 @@ impl Setup {
     }
 }
 
+/// Whether the owner's account exists.
 fn has_owner(conn: &Connection) -> rusqlite::Result<bool> {
     conn.query_row("SELECT EXISTS (SELECT 1 FROM users WHERE role = 'owner')", [], |row| row.get(0))
 }
@@ -53,6 +55,7 @@ pub async fn require(
     Ok(next.run(request).await)
 }
 
+/// The spec's `ServerInfo`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerInfo {
@@ -61,6 +64,7 @@ pub struct ServerInfo {
     setup_required: bool,
 }
 
+/// `getServerInfo`: the server's version, the API's, and whether setup is still to be done.
 pub async fn server_info(State(state): State<AppState>) -> Result<axum::Json<ServerInfo>, Problem> {
     Ok(axum::Json(ServerInfo {
         version: env!("CARGO_PKG_VERSION"),
@@ -70,6 +74,7 @@ pub async fn server_info(State(state): State<AppState>) -> Result<axum::Json<Ser
     }))
 }
 
+/// The spec's `SetupRequest`.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SetupRequest {

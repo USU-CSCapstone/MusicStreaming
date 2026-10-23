@@ -11,7 +11,7 @@
 //! device that was taken over from cannot take playback back with reports it sent before it
 //! heard. A refused report is answered with the current state.
 //!
-//! Until the server keeps the queue, a report names its track itself, and `itemId` is the
+//! The server does not keep the queue, so a report names its track itself, and `itemId` is the
 //! device's own name for its place in its queue.
 //!
 //! Position is timed by when a report arrives: a device's clock may be off by more than a
@@ -118,7 +118,8 @@ impl Players {
     }
 
     /// Counts `device` of `user` as connected, with its account's current state queued first.
-    /// Under the lock a transfer picks its connection under, so none can arrive before it.
+    /// Queued under the lock a transfer holds to pick its connection, so no transfer reaches the
+    /// new connection before the state does.
     pub fn connect(&self, hub: &Arc<Hub>, user: i64, device: i64) -> Presence {
         let accounts = self.lock();
         let presence = hub.connect(user, device);

@@ -1,4 +1,5 @@
-//! Lists `migrations/*.sql` into a single file (src/db/migrations.rs).
+//! Lists `migrations/*.sql`, in order, in `$OUT_DIR/migrations.rs`, which `src/db/migrations.rs`
+//! includes.
 
 use std::error::Error;
 use std::path::Path;

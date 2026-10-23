@@ -60,6 +60,7 @@ pub fn bounds_under(rel: &str) -> Option<[String; 2]> {
     (!rel.is_empty()).then(|| [format!("{rel}/"), format!("{rel}0")])
 }
 
+/// `rel`, relative path text, under `root`; the root itself when `rel` is empty.
 pub fn join(root: &Path, rel: &str) -> PathBuf {
     if rel.is_empty() { root.to_path_buf() } else { root.join(rel) }
 }

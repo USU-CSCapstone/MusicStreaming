@@ -73,6 +73,7 @@ impl DeviceRegistration {
 
 const SELECT: &str = "SELECT id, name, type, platform, created_at, last_seen_at FROM devices";
 
+/// Reads a [`SELECT`] row as a device, not yet `connected` and without `current`.
 fn device(row: &Row) -> rusqlite::Result<Device> {
     Ok(Device {
         id: Id(row.get(0)?),

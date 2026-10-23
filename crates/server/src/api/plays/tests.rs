@@ -13,6 +13,7 @@ mod snapshot;
 
 const PLAY: &str = "5f0c6a52-3b7e-4d43-9a8e-0d1c2b3a4f5e";
 
+/// A report of play [`PLAY`] of `track` in library 1, `listened` milliseconds in, with `end`.
 fn report(track: &str, listened: u32, end: Value) -> Value {
     json!({
         "playId": PLAY,
@@ -38,6 +39,7 @@ async fn report_as_owner(app: &Router, items: Value) -> StatusCode {
     post(app, TOKEN, items).await
 }
 
+/// Every stored play's ID, user, start, listen time and end, by ID and then user.
 async fn plays(db: &Database) -> Vec<(String, i64, i64, i64, Option<String>)> {
     db.read(|conn| {
         conn.prepare(

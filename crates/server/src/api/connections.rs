@@ -1,7 +1,8 @@
 //! A user's own plugins (`api/openapi.yaml`, Account): those that act for each person, such as
 //! a scrobbler, which they connect with their own account on its service
 //! (`requirements/plugins.md` §4.1, §6). Only plugins enabled in a library the caller reaches
-//! are offered; any other answers `404`, as one that does not exist.
+//! are offered; any other answers `404`, as one that does not exist, except that disconnecting
+//! it succeeds.
 
 use std::sync::Arc;
 
@@ -37,6 +38,7 @@ pub struct PersonalPluginList {
     items: Vec<PersonalPlugin>,
 }
 
+/// The plugins the caller can connect, and whether each is connected.
 pub async fn list(
     State(db): State<Arc<Database>>,
     caller: Caller,
@@ -109,7 +111,8 @@ pub async fn set_search_sharing(
     }
 }
 
-/// Disconnects it: what the caller set is forgotten, and it stops acting for them.
+/// Disconnects it: what the caller set is forgotten, their searches stop being shared with it,
+/// and it stops acting for them. Succeeds whether or not it was connected.
 pub async fn disconnect(
     State(db): State<Arc<Database>>,
     caller: Caller,

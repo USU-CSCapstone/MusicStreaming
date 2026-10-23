@@ -43,7 +43,7 @@ pub async fn connect_with(address: SocketAddr, token: &str) -> Socket {
     socket
 }
 
-/// The next message, of any type.
+/// The next message, of any type. Panics if none arrives within 5 seconds.
 pub async fn next(socket: &mut Socket) -> Value {
     let message = timeout(Duration::from_secs(5), socket.next()).await.expect("a message");
     serde_json::from_str(message.unwrap().unwrap().to_text().unwrap()).unwrap()

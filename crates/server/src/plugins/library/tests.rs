@@ -1,9 +1,13 @@
+//! What a plugin run reads of its library: only that library's catalog, without what is missing
+//! or empty, and the plugin's own state there.
+
 use jewelcase_plugins::Library;
 
 use super::super::testing::{database, install, manifest, plugins};
 use super::RunLibrary;
 use crate::db::testing::{Artist, Image, track_artist};
 
+/// The IDs of `items`, in order, as `id` reads them.
 fn ids<T>(items: &[T], id: fn(&T) -> u64) -> Vec<u64> {
     items.iter().map(id).collect()
 }

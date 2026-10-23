@@ -37,13 +37,16 @@ use turns::Turns;
 /// The plugin, library, hook, and user of a hook delivery.
 type DeliveryKey = (String, i64, Permission, Option<i64>);
 
+/// Why a plugin operation failed.
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {
+    /// No plugin is installed with that ID.
     #[error("no such plugin")]
     NotFound,
     /// Not a plugin that can install, in words an admin can act on.
     #[error("{0}")]
     Invalid(String),
+    /// A plugin with that ID is installed already, named by its title.
     #[error("{0} is already installed.")]
     Exists(String),
     /// Settings an admin entered that it will not take, in words they can act on.
@@ -70,11 +73,13 @@ impl From<rusqlite::Error> for PluginError {
 }
 
 impl From<InvalidPlugin> for PluginError {
+    /// A file that is not a plugin, as [`PluginError::Invalid`] with its message.
     fn from(InvalidPlugin(message): InvalidPlugin) -> PluginError {
         PluginError::Invalid(message)
     }
 }
 
+/// The plugins installed on this server, and everything needed to install and run them.
 pub struct Plugins {
     db: Arc<Database>,
     /// `state/plugins`, where installed components are kept.
@@ -137,6 +142,8 @@ impl Plugins {
         })
     }
 
+    /// The runtime plugin code runs on, one thread started on first use. A runtime that could
+    /// not start is logged and answered as an internal error, every time it is asked for.
     fn runtime(&self) -> Result<&Runtime, PluginError> {
         // Built inside `get_or_init`, so racing requests never build a second one to drop.
         let runtime = self.runtime.get_or_init(|| {
@@ -162,6 +169,7 @@ impl Plugins {
         self.runtime()?.spawn(task).await.map_err(unexpected)
     }
 
+    /// Where `id`'s component is kept once installed.
     fn path(&self, id: &str) -> PathBuf {
         self.dir.join(format!("{id}.wasm"))
     }

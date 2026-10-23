@@ -29,6 +29,7 @@ pub struct RunResult {
 }
 
 impl RunResult {
+    /// A run that did nothing, for the reason `summary` gives.
     fn failed(summary: String) -> RunResult {
         RunResult { ok: false, summary, log: Vec::new(), saved: 0, scanning: false }
     }

@@ -36,9 +36,9 @@ pub fn find_or_create_artist(
     Ok(id)
 }
 
-/// The album of `lib` with `title`'s key and `artists_key`, added at `now` if new. `None` is the
-/// unknown album. A new album's artist sort key is empty until the recompute gives it its first
-/// album artist's.
+/// The album of `lib` with `title`'s key and `artists_key`, added at `now` with `sort_key` if
+/// new. `None` is the unknown album. A new album's artist sort key is empty until the recompute
+/// gives it its first album artist's.
 pub fn find_or_create_album(
     tx: &Transaction<'_>,
     lib: i64,

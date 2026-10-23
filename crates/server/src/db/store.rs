@@ -24,6 +24,7 @@ use self::roots::Roots;
 use super::{Database, DbError, libraries};
 use crate::lock::Recover;
 
+/// The scanner's store on the server's database.
 pub struct SqliteStore {
     db: Arc<Database>,
     /// Active roots per library, refreshed on reconfiguration. Shared with the database jobs
@@ -39,12 +40,13 @@ impl SqliteStore {
         Ok(store)
     }
 
+    /// The database the store writes to.
     #[cfg(test)]
     pub fn db(&self) -> &Arc<Database> {
         &self.db
     }
 
-    /// Reload roots from `library_roots`. Call after roots change, before the library's scanner
+    /// Reloads roots from `library_roots`. Call after roots change, before the library's scanner
     /// is reconfigured: a scan of a root the store does not hold is refused.
     pub fn refresh_roots(&self) -> Result<(), DbError> {
         let map = self
@@ -60,11 +62,13 @@ impl SqliteStore {
 
 /// A database error, as the scanner sees it.
 impl From<DbError> for StoreError {
+    /// Keeps the error's message, which is all the scanner reports of it.
     fn from(error: DbError) -> StoreError {
         StoreError(error.to_string())
     }
 }
 
+/// Each method runs in the submodule that owns its tables; the trait says what each does.
 impl Store for SqliteStore {
     fn create_scan(
         &self,
@@ -104,6 +108,7 @@ impl Store for SqliteStore {
     }
 }
 
+/// Each method runs in [`problems`]; the trait says what each does.
 impl ProblemLog for SqliteStore {
     fn record_problem(&self, library: LibraryId, problem: Problem) -> Result<(), StoreError> {
         Ok(problems::record(self, library, problem)?)
@@ -114,6 +119,7 @@ impl ProblemLog for SqliteStore {
     }
 }
 
+/// Each method runs in [`jobs`]; the trait says what each does.
 impl AnalysisStore for SqliteStore {
     fn next_unanalyzed(
         &self,
@@ -134,6 +140,7 @@ impl AnalysisStore for SqliteStore {
     }
 }
 
+/// Each method runs in [`jobs`]; the trait says what each does.
 impl PlaceholderStore for SqliteStore {
     fn next_without_placeholder(
         &self,

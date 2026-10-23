@@ -12,7 +12,9 @@ use super::{HOUR, Received, changes, ran, setup};
 use crate::db::Database;
 use crate::plugins::testing::grant;
 
+/// The summary of a run that found its service out of reach.
 const TIMED_OUT: &str = "the request timed out";
+/// The summary of a run that failed on its own.
 pub(super) const REFUSED: &str = "LRCLIB answered 400";
 
 /// The hooks `received` delivered.

@@ -25,7 +25,7 @@ pub enum Op {
     Delete,
 }
 
-/// Record that `entity` changed. Its earlier row, if any, is replaced so
+/// Records that `entity` changed. Its earlier row, if any, is replaced, so
 /// the feed carries only the latest position for each entity.
 pub fn record(
     conn: &Connection,

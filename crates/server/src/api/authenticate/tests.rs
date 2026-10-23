@@ -7,7 +7,8 @@ use super::super::testing::{
 };
 use crate::db::testing::User;
 
-/// A request with these headers, and its status, headers, and JSON body, if any.
+/// Sends `method` on `uri` with `headers` and no body, and returns the status, headers, and JSON
+/// body, or `Null` if the body is not JSON.
 async fn with_headers(
     app: &axum::Router,
     method: &str,

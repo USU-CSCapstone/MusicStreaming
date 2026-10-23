@@ -1,6 +1,6 @@
 //! Audio delivery: `getPlaybackInfo` and `getAudio` (`api/openapi.yaml`).
 //!
-//! Only direct delivery exists so far: the original file, whole or by byte range. A request the
+//! Only direct delivery exists: the original file, whole or by byte range. A request the
 //! original cannot answer, a lower quality or a codec the client cannot play, needs a transcode,
 //! and answers `422` until transcoding is built.
 

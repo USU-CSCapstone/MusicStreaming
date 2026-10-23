@@ -31,6 +31,7 @@ enum Part {
     Unknown,
 }
 
+/// One way to sort a list.
 pub struct Sort {
     /// Names the list and sort in its cursors, such as `albums.name`.
     pub label: &'static str,
@@ -63,6 +64,7 @@ pub enum Total {
 }
 
 impl Sort {
+    /// The label of this sort in `order`, such as `albums.name.asc`, that its cursors carry.
     fn label(&self, order: Order) -> String {
         let order = match order {
             Order::Asc => "asc",

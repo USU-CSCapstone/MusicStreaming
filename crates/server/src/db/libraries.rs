@@ -8,12 +8,14 @@ use rusqlite::{Connection, Result, params};
 
 use super::{Json, new_id, now_ms};
 
+/// One of a library's root folders.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Root {
     pub id: i64,
     pub path: PathBuf,
 }
 
+/// A library's settings and active roots.
 #[derive(Debug, Clone)]
 pub struct LibraryRow {
     pub id: i64,
@@ -104,8 +106,7 @@ impl LibraryFile {
 
     /// The file's real path, once it opens, refused as [`FileToDecode::open`] refuses it: an
     /// error when it is missing, reached through a symlink, not a regular file, or may not be
-    /// read.
-    /// Touches the filesystem, so call it off the async threads and the database's.
+    /// read. Touches the filesystem, so call it off the async threads and the database's.
     pub fn open(self) -> io::Result<PathBuf> {
         FileToDecode { root: self.root, path: self.path }.open()
     }
@@ -123,7 +124,7 @@ pub fn file(
     Ok(root.map(|root| LibraryFile { path: root.path.join(rel), root: root.path }))
 }
 
-/// Create a library with its roots, and return its id: `id` if given (for tests and imports),
+/// Creates a library with its roots, and returns its id: `id` if given (for tests and imports),
 /// otherwise a new one. Roots are stored as given; callers should pass canonical absolute
 /// paths.
 pub fn create(
@@ -147,7 +148,8 @@ pub fn create(
     Ok(id)
 }
 
-/// Add a root and return its id, or the id of the active root already at `path`.
+/// Adds a root to the library and returns its id. When an active root of any library is
+/// already at `path`, nothing is added and that root's id is returned.
 pub fn add_root(conn: &Connection, library_id: i64, path: &Path) -> Result<i64> {
     conn.query_row(
         "INSERT INTO library_roots (id, library_id, path, created_at) VALUES (?1, ?2, ?3, ?4) \

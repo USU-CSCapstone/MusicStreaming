@@ -94,10 +94,11 @@ END;
 -- ───────────────────────────── Player ─────────────────────────────
 
 -- Where each account's playback was, so it resumes there after the server restarts
--- (requirements/playback.md §6). The state lives in memory while the server runs, and changed
--- states are written every few seconds, all in one write, and as the server stops. A server
--- that starts again has no device connected to be playing, so every account starts stopped
--- where it was (requirements/realtime.md §6), and nothing more than this is kept.
+-- (requirements/playback.md §6). The state lives in memory while the server runs. Changed
+-- states are written together every few seconds, an account playing on through the same track
+-- only every minute, and once more as the server stops (`api/player/saved.rs`). A server that
+-- starts again has no device connected to be playing, so every account starts stopped where it
+-- was (requirements/realtime.md §6), and nothing more than this is kept.
 CREATE TABLE player_states (
     user_id     INTEGER PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
     -- The device's own name for its place in its queue, until the server keeps the queue.

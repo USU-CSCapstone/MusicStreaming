@@ -28,6 +28,7 @@ mod waking;
 
 /// A plugin's answer to an event it handled.
 const HANDLED: Result<(), &str> = Ok(());
+/// An hour, in milliseconds.
 const HOUR: i64 = 60 * 60_000;
 
 /// A delivery to a stand-in plugin: the hook, library, and user it was due for (0 for none, as

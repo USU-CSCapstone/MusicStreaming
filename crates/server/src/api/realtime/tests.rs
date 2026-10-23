@@ -41,6 +41,7 @@ async fn devices(socket: &mut Socket) -> BTreeMap<String, bool> {
     devices.map(|device| (device["id"].as_str().unwrap().to_owned(), connected(device))).collect()
 }
 
+/// The HTTP status a refused connection was answered with.
 fn status(error: Error) -> StatusCode {
     match error {
         Error::Http(response) => response.status(),

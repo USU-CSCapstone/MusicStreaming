@@ -27,6 +27,7 @@ pub const COOKIE: &str = "jewelcase_session";
 /// use is sent it again (`authenticate`), so only one unused that long expires.
 const COOKIE_MAX_AGE_S: u32 = 400 * 24 * 60 * 60;
 
+/// The spec's `Session`: a new device's token, its account, and the device.
 #[derive(Serialize)]
 pub struct Session {
     pub token: String,

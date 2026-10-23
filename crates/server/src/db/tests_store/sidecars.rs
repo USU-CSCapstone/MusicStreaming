@@ -11,7 +11,8 @@ use super::recompute::check;
 use super::{count, libraries, make, scalar, tagged};
 use crate::db::store::SqliteStore;
 
-/// The WAV at `rel` under `root`, tagged with `items` and holding `art` as its front cover.
+/// Writes a small WAV at `rel` under `root`, tagged with `items` and holding `art` as its front
+/// cover.
 fn with_art(root: &Path, rel: &str, items: &[(ItemKey, &str)], art: &[u8]) {
     let path = root.join(rel);
     testing::write_small_wav(&path);

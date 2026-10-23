@@ -8,6 +8,7 @@ use serde::Deserialize;
 use super::AnyId;
 use super::page::Lead;
 
+/// The spec's `ArtistCredit`: how the artist a list is filtered by is credited on its rows.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ArtistCredit {
@@ -22,7 +23,7 @@ pub enum ArtistCredit {
 
 /// How a list's rows are credited to an artist. Each query selects the rows' IDs in a column
 /// named `id`, with one `?` for the artist. Each count is an expression over `artists` that the
-/// scanner keeps equal to the number of rows credited that way.
+/// database's triggers keep equal to the number of rows credited that way.
 pub struct Credits {
     /// Rows whose album lists the artist among its album artists.
     pub owned: &'static str,

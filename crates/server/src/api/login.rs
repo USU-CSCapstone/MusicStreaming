@@ -18,13 +18,15 @@ use super::origin::Origin;
 use super::{AppState, Code, Problem, me, password, session};
 use crate::db::now_ms;
 
+/// The spec's `LoginRequest`.
 #[derive(Deserialize)]
 pub struct LoginRequest {
     username: String,
     password: String,
     device: DeviceRegistration,
-    // `deviceId` reclaims a device logged out by a password change, which nothing can do yet,
-    // so every login registers a new device, as the spec says for an ID that is not one.
+    // `deviceId` is ignored: it reclaims a device logged out by a password change, and no route
+    // changes a password, so every login registers a new device, as the spec says for an ID
+    // that is not one.
 }
 
 /// Logs `username` in on a new device and sets its session cookie, or refuses as the module

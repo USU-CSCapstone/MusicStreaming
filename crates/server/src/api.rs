@@ -144,10 +144,12 @@ pub fn router(
         .route(&format!("{prefix}/"), any(not_found))
 }
 
+/// A `404 not_found` Problem, for a path the API does not have.
 async fn not_found() -> Problem {
     Problem::not_found()
 }
 
+/// A `405 method_not_allowed` Problem, for a path the API has under other methods.
 async fn method_not_allowed() -> Problem {
     Problem::new(Code::MethodNotAllowed)
 }

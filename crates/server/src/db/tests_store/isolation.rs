@@ -6,6 +6,8 @@ use jewelcase_scanner::*;
 use super::{count, libraries, make, record, scalar};
 use crate::db::testing::Image;
 
+/// A batch returning a track, an analysis result and a placeholder, each applied for library 2,
+/// leave library 1's track, waveform and image as they were and feed nothing to library 2.
 #[test]
 fn another_librarys_track_is_left_alone() {
     let tmp = tempfile::tempdir().unwrap();

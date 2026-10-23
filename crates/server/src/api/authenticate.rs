@@ -178,6 +178,7 @@ fn library(params: Result<RawPathParams, RawPathParamsRejection>) -> Option<AnyI
     Some(AnyId::from(id))
 }
 
+/// What [`device`] finds for a token.
 struct Found {
     caller: Caller,
     last_seen_at: i64,

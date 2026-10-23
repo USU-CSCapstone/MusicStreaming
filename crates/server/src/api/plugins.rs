@@ -29,10 +29,12 @@ pub struct PluginList {
     items: Vec<Plugin>,
 }
 
+/// Every installed plugin.
 pub async fn list(State(db): State<Arc<Database>>) -> Result<Json<PluginList>, Problem> {
     Ok(Json(PluginList { items: db.read(representation::all).await? }))
 }
 
+/// One installed plugin, by its ID.
 pub async fn get(
     State(db): State<Arc<Database>>,
     Path(id): Path<String>,
@@ -45,8 +47,8 @@ struct FromUrl {
     url: String,
 }
 
-/// From an uploaded file, or from `{ "url" }` as JSON. Installed disabled everywhere. A file over
-/// the route's body limit is `plugin_invalid`; an upload that breaks off or stalls is
+/// Installs a plugin from an uploaded file, or from `{ "url" }` as JSON, disabled everywhere. A
+/// file over the route's body limit is `plugin_invalid`; an upload that breaks off or stalls is
 /// `validation_failed`.
 pub async fn install(
     State(db): State<Arc<Database>>,
@@ -75,6 +77,8 @@ pub async fn install(
     Ok((StatusCode::CREATED, Json(plugin(&db, id).await?)).into_response())
 }
 
+/// Uninstalls the plugin, keeping its settings and grants for a reinstall
+/// (`requirements/plugins.md` §5).
 pub async fn uninstall(
     State(plugins): State<Arc<Plugins>>,
     Path(id): Path<String>,
@@ -98,6 +102,7 @@ struct LibraryGrants {
     granted: Vec<String>,
 }
 
+/// The permissions `names` names, leaving out any name that is no permission.
 fn permissions(names: &[String]) -> Vec<Permission> {
     names.iter().filter_map(|name| Permission::from_name(name)).collect()
 }
@@ -120,7 +125,8 @@ pub async fn set_permissions(
     Ok(Json(plugin(&db, id).await?))
 }
 
-/// Exempts it from the limit for every plugin on one host (`requirements/plugins.md` §7).
+/// Exempts the plugin from the limit every plugin keeps to on one host
+/// (`requirements/plugins.md` §7).
 pub async fn exempt(
     State(plugins): State<Arc<Plugins>>,
     Path((id, host)): Path<(String, String)>,
@@ -129,7 +135,7 @@ pub async fn exempt(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Ends its exemption from the limit for every plugin on one host.
+/// Ends the plugin's exemption from the limit every plugin keeps to on one host.
 pub async fn unexempt(
     State(plugins): State<Arc<Plugins>>,
     Path((id, host)): Path<(String, String)>,
@@ -260,11 +266,13 @@ pub async fn set_settings(
     get_settings(State(db), Path(id), extract::Query(SettingsLevel { library_id: level_id })).await
 }
 
+/// The plugin `id` as the API shows it, or `404`.
 async fn plugin(db: &Database, id: String) -> Result<Plugin, Problem> {
     db.read(move |conn| representation::get(conn, &id)).await?.ok_or_else(Problem::not_found)
 }
 
 impl From<PluginError> for Problem {
+    /// The problem each plugin error answers as.
     fn from(error: PluginError) -> Problem {
         match error {
             PluginError::NotFound => Problem::not_found(),

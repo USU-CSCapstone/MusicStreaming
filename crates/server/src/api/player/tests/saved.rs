@@ -22,7 +22,7 @@ fn report_to(players: &Players, status: &str, track: i64, position_ms: u32) {
     players.report(&Hub::default(), caller, 7, report.unwrap(), Id(1), Id(track)).unwrap();
 }
 
-/// What `players` saved for the owner, as a restarted server reads it.
+/// The owner's state saved in `db`, as a restarted server reads it, without `positionAt`.
 async fn restarted(db: &Database) -> Value {
     let mut state = serde_json::to_value(Players::load(db).await.unwrap().current(1)).unwrap();
     state.as_object_mut().unwrap().remove("positionAt");

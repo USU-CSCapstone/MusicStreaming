@@ -84,8 +84,10 @@ const STATEMENT_CACHE: usize = 128;
 /// Work for a database thread. It sends its own result back to whoever queued it.
 type Job = Box<dyn FnOnce(&mut Connection) + Send>;
 
+/// Why a database call failed.
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
+    /// SQLite returned an error.
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
     /// The job panicked, or the database has shut down.
@@ -93,6 +95,7 @@ pub enum DbError {
     Aborted,
 }
 
+/// The handle to the database's threads: queues for the writer and for the readers.
 pub struct Database {
     // Fields drop in declaration order: closing both queues first lets every thread finish its
     // loop, and dropping `_threads` then waits for them, so every connection is closed
@@ -390,6 +393,7 @@ impl Drop for Threads {
 mod tests {
     use super::*;
 
+    /// A database in a new temporary directory, which must outlive it.
     fn open() -> (tempfile::TempDir, Database) {
         let temp = tempfile::tempdir().unwrap();
         let database = Database::open(&temp.path().join("jewelcase.db")).unwrap();

@@ -62,8 +62,9 @@ pub enum Reply {
 
 impl Players {
     /// Passes `command` from `caller` on to the connection that carries it out, and answers what
-    /// to tell the sender now: `pending`, or the result of a command sent again that has
-    /// finished.
+    /// to tell the sender now: `pending`, `applied` for a transfer to the device already
+    /// playing, or the result of a command sent again that has finished. Refuses a command that
+    /// is invalid, has no connected device to go to, or would pass [`MAX_WAITING`].
     pub(super) fn command(
         self: &Arc<Self>,
         hub: &Arc<Hub>,
@@ -154,7 +155,8 @@ impl Players {
     }
 
     /// Passes `result`, from `user`'s connection `connection`, back to the sender of the
-    /// command it answers, if it is the connection that command went to.
+    /// command it answers, if it is the connection that command went to. A `pending` answer is
+    /// ignored.
     pub fn answered(&self, hub: &Hub, user: i64, connection: u64, mut result: CommandResult) {
         if result.status == Status::Pending {
             return;

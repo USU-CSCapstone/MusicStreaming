@@ -79,6 +79,7 @@ pub fn manifest(id: &str, permissions: &[Permission]) -> Value {
 /// Installs the plugin `manifest` describes as [`Plugins::install`] leaves it once its file
 /// checks out: disabled everywhere, with only the grants it held before whose requests it makes
 /// again unchanged.
+///
 /// Panics on a manifest the server would refuse, or one installed already.
 pub async fn install(db: &Database, manifest: Value) {
     let problems = manifest::validate(&manifest);

@@ -39,6 +39,7 @@ use crate::db::{Database, now_ms};
 use messages::{ClientMessage, encode};
 use origin::same_origin;
 
+/// How often the server pings each connection.
 const HEARTBEAT: Duration = Duration::from_secs(15);
 
 /// How long a connection may go without a word from its client, pongs included, before it is
@@ -206,6 +207,7 @@ async fn send(socket: &mut WebSocket, message: Message) -> bool {
     matches!(timeout(SILENCE, socket.send(message)).await, Ok(Ok(())))
 }
 
+/// The server's time now, as an RFC 3339 timestamp.
 fn now() -> String {
     rfc3339(now_ms())
 }

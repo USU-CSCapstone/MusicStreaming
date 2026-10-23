@@ -1,5 +1,5 @@
 //! Where a request comes from, for the per-origin sign-in limits (`requirements/users.md`
-//! §3.1), including behind a reverse proxy (`requirements/deployment.md` §7).
+//! §3.1), including behind a reverse proxy (`requirements/deployment.md` §6).
 //!
 //! A peer on a private network or this host may be a proxy, so its `X-Forwarded-For` is
 //! believed: the client is the nearest address in it that is not private. That lets anyone on
@@ -27,7 +27,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Origin {
     type Rejection = Problem;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Origin, Problem> {
-        // `run` serves with connection info, and tests add it, so it is always there.
+        // `serve` adds connection info to every request, and tests add it, so it is always there.
         let peer = ConnectInfo::<SocketAddr>::from_request_parts(parts, state)
             .await
             .map_err(|_| Problem::new(Code::Internal))?;
@@ -54,6 +54,7 @@ fn client(peer: IpAddr, headers: &HeaderMap) -> IpAddr {
     client
 }
 
+/// Whether `ip` is on a private network or this host, where a proxy may be.
 fn private(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => ip.is_private() || ip.is_loopback() || ip.is_link_local(),
@@ -65,6 +66,8 @@ fn private(ip: IpAddr) -> bool {
 mod tests {
     use super::*;
 
+    /// The client [`client`] finds for `peer`, given one `X-Forwarded-For` header per entry of
+    /// `forwarded`.
     fn from(peer: &str, forwarded: &[&str]) -> String {
         let mut headers = HeaderMap::new();
         for value in forwarded {

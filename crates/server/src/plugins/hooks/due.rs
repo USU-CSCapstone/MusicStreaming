@@ -59,6 +59,7 @@ fn hook_granted(hook: Permission) -> String {
     granted(&[hook]) + &granted(hook.needs())
 }
 
+/// The pair is enabled and not waiting to retry a failure at the time `?1`.
 const READY: &str = "p.enabled AND (c.retry_at IS NULL OR c.retry_at <= ?1)";
 
 /// The user `s` who connected the plugin reaches the pair's library, so it never acts with their

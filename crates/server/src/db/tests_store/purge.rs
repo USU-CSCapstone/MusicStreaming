@@ -51,7 +51,7 @@ fn missing_for(root: &Path, store: &SqliteStore, ms: i64) {
         .unwrap();
 }
 
-/// Adds user 1's play of `track`, with its snapshot, and answers the row as stored.
+/// Adds user 1's play of `track`, with its snapshot, and returns the row as stored.
 fn played(store: &SqliteStore, track: i64) -> Vec<Value> {
     store
         .db()

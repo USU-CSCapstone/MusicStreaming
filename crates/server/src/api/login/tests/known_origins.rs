@@ -8,6 +8,7 @@ use super::{PASSWORD, login, server};
 use crate::db::Database;
 use crate::db::testing::User;
 
+/// What a login that must wait answers.
 const WAITS: StatusCode = StatusCode::TOO_MANY_REQUESTS;
 
 /// Adds an active account `username` as `id`, with [`PASSWORD`].

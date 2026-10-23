@@ -57,6 +57,7 @@ pub fn decode(text: &str, label: &str, columns: usize) -> Result<Vec<Value>, Pro
     read(text, label, columns).ok_or_else(|| Problem::invalid("cursor is not valid for this list"))
 }
 
+/// [`decode`], with `None` for anything that is not such a cursor.
 fn read(text: &str, label: &str, columns: usize) -> Option<Vec<Value>> {
     // No length limit is needed here: the server has already read the whole request, and
     // decoding allocates less than it.
@@ -91,16 +92,19 @@ fn put_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), TryFromIntError> {
 struct Reader<'a>(&'a [u8]);
 
 impl<'a> Reader<'a> {
+    /// The next `n` bytes, or `None` if fewer are left.
     fn take(&mut self, n: usize) -> Option<&'a [u8]> {
         let (head, rest) = self.0.split_at_checked(n)?;
         self.0 = rest;
         Some(head)
     }
 
+    /// The next byte.
     fn byte(&mut self) -> Option<u8> {
         Some(self.take(1)?[0])
     }
 
+    /// The next eight bytes, as an integer's or a real's.
     fn eight(&mut self) -> Option<[u8; 8]> {
         self.take(8)?.try_into().ok()
     }
@@ -118,6 +122,7 @@ mod tests {
 
     const LABEL: &str = "albums.name.asc";
 
+    /// Sort values of every SQLite type.
     fn row() -> Vec<Value> {
         vec![
             Value::Blob(b"beatles".to_vec()),
@@ -128,6 +133,7 @@ mod tests {
         ]
     }
 
+    /// The `code` field of `problem`'s body.
     fn code(problem: Problem) -> serde_json::Value {
         serde_json::to_value(problem).unwrap()["code"].clone()
     }

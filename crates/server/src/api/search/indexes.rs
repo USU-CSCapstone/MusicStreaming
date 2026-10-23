@@ -31,6 +31,7 @@ pub struct Indexes {
     libraries: Mutex<HashMap<i64, Arc<Slot>>>,
 }
 
+/// One library's index, once built, and the lock that keeps its builds one at a time.
 #[derive(Default)]
 struct Slot {
     built: RwLock<Option<Built>>,
@@ -38,6 +39,7 @@ struct Slot {
     building: Arc<tokio::sync::Mutex<()>>,
 }
 
+/// A built index, and what decides when to build it again.
 #[derive(Clone)]
 struct Built {
     index: Arc<Index>,

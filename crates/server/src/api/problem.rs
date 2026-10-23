@@ -12,7 +12,7 @@ use super::realtime::Revoked;
 use crate::db::DbError;
 
 /// The spec's `Problem.code`: what went wrong, for clients to act on. Only the codes some
-/// endpoint returns so far; the spec lists the rest, which arrive with their endpoints.
+/// endpoint returns; the spec lists more.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Code {
@@ -77,6 +77,7 @@ pub struct Problem {
 }
 
 impl Problem {
+    /// A problem with `code`, its status, and no explanation.
     pub fn new(code: Code) -> Problem {
         let status = code.status();
         Problem {
@@ -92,6 +93,7 @@ impl Problem {
         }
     }
 
+    /// A `404 not_found`, which is also what anything out of the caller's reach answers.
     pub fn not_found() -> Problem {
         Problem::new(Code::NotFound)
     }
@@ -137,6 +139,7 @@ impl IntoResponse for Problem {
 }
 
 impl From<DbError> for Problem {
+    /// A `500 internal`, with the error logged.
     fn from(error: DbError) -> Problem {
         // The cause stays in the log: it can describe the schema or the host.
         tracing::error!(%error, "database error");

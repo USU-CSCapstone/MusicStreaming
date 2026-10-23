@@ -1,3 +1,6 @@
+//! Running a plugin: what Run now answers and records, a file that cannot compile, and scanning
+//! what a run touched.
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -38,7 +41,7 @@ async fn scanned() -> (TempDir, Arc<Database>, Arc<Plugins>, ScannerThread) {
     .await
     .unwrap();
     let config = db.read(libraries::all).await.unwrap()[0].config();
-    // Started outside the runtime, as `run` starts every scanner.
+    // Started outside the runtime, as `Scanning::start` starts every scanner.
     let store_db = db.clone();
     let (scanner, thread) = tokio::task::spawn_blocking(move || {
         let store = Arc::new(SqliteStore::new(store_db).unwrap());

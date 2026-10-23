@@ -23,6 +23,7 @@ pub struct User {
     has_avatar: bool,
 }
 
+/// The account `id`, as the spec's `User`.
 pub fn user(conn: &Connection, id: i64) -> rusqlite::Result<User> {
     conn.prepare_cached(
         "SELECT id, username, display_name, role, avatar_hash IS NOT NULL FROM users WHERE id = ?1",
@@ -38,6 +39,7 @@ pub fn user(conn: &Connection, id: i64) -> rusqlite::Result<User> {
     })
 }
 
+/// `getMe`: the caller's own account.
 pub async fn get(State(db): State<Arc<Database>>, caller: Caller) -> Result<Json<User>, Problem> {
     Ok(Json(db.read(move |conn| user(conn, caller.user)).await?))
 }

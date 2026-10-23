@@ -18,6 +18,7 @@ use super::Problem;
 const DEFAULT_LIMIT: u32 = 100;
 const MAX_LIMIT: u32 = 1000;
 
+/// A list's `order` parameter.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Order {
@@ -26,6 +27,7 @@ pub enum Order {
     Desc,
 }
 
+/// One page of a list, as the spec's `*Page` schemas send it.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Page<T> {
@@ -44,6 +46,8 @@ pub struct Request {
 }
 
 impl Request {
+    /// Checks a list's parameters: `cursor` must come from this `sort` and `order`, and `limit`
+    /// must be in bounds. Anything else is `422 validation_failed`.
     pub fn new(
         sort: &'static Sort,
         order: Order,
@@ -82,8 +86,8 @@ pub fn limit(limit: Option<u32>) -> Result<u32, Problem> {
 }
 
 /// The library's stored number in `column`, such as `album_count` or `names_version`, which the
-/// scanner keeps current; 0 once the library is gone, as when it was deleted after the request
-/// was let in.
+/// catalog's triggers keep current; 0 once the library is gone, as when it was deleted after the
+/// request was let in.
 pub fn library_number(
     conn: &Connection,
     library: i64,

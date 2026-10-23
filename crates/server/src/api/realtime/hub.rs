@@ -19,6 +19,7 @@ use crate::lock::Recover;
 /// How many messages a connection may have waiting to be sent.
 pub(super) const OUTBOX: usize = 64;
 
+/// Every account's open realtime connections, and the way to send to them.
 #[derive(Default)]
 pub struct Hub {
     /// Each account's open connections. A device may hold several, such as two browser tabs
@@ -178,6 +179,7 @@ impl Presence {
 }
 
 impl Drop for Presence {
+    /// Stops counting the connection, letting go of its outbox.
     fn drop(&mut self) {
         self.hub.retain(self.user, |connection| connection.id != self.id);
     }

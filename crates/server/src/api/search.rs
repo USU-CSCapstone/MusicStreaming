@@ -21,6 +21,7 @@ use super::tracks::{self, TrackSummary};
 use super::{Problem, page};
 use crate::db::{Database, by_ids};
 
+/// The spec's `search` parameters.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SearchQuery {
@@ -41,6 +42,7 @@ pub struct SearchResponse {
     library_empty: bool,
 }
 
+/// One of a `SearchResponse`'s `sections`.
 #[derive(Serialize)]
 struct Section {
     #[serde(rename = "type")]

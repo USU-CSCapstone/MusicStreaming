@@ -81,6 +81,9 @@ fn untagged_files_share_the_unknown_artist_and_album() {
     );
 }
 
+/// A compilation's tracks by several artists make one album, owned by its album artist, which its
+/// track artists only appear on; and an album's type comes from its compilation flag or
+/// release-type tag where it has one, else from its tagged track total.
 #[test]
 fn compilations_and_album_types() {
     let tmp = tempfile::tempdir().unwrap();

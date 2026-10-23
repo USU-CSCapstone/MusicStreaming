@@ -33,8 +33,8 @@ pub struct ImageQuery {
 
 /// The spec's `getImage`: the image resized to the first of [`SIZES`] at or above `size`
 /// ([`DEFAULT_SIZE`] if not given), or to the first that holds the whole image if that is
-/// smaller. An image under a root no longer in its library, or whose
-/// file is missing, is `404`.
+/// smaller. An image under a root no longer in its library, or whose file is missing or reached
+/// through a symlink, is `404`.
 pub async fn get(
     State(db): State<Arc<Database>>,
     State(images): State<Arc<Images>>,

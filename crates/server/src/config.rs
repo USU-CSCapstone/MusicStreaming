@@ -19,6 +19,7 @@ const LOG: &str = "JEWELCASE_LOG";
 
 const SETTINGS: [&str; 5] = [DATA_DIR, MUSIC, PORT, BASE_PATH, LOG];
 
+/// The server's settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     /// The one directory Jewelcase writes to.
@@ -35,6 +36,7 @@ pub struct Config {
 }
 
 impl Default for Config {
+    /// What the server runs with when nothing is set.
     fn default() -> Self {
         Config {
             data_dir: PathBuf::from("/data"),
@@ -96,6 +98,7 @@ impl Config {
     }
 }
 
+/// A directory setting: any path but an empty one.
 fn parse_dir(value: &str) -> Result<PathBuf, &'static str> {
     if value.is_empty() {
         return Err("a directory path");
@@ -103,6 +106,7 @@ fn parse_dir(value: &str) -> Result<PathBuf, &'static str> {
     Ok(PathBuf::from(value))
 }
 
+/// A port setting: 1 to 65535.
 fn parse_port(value: &str) -> Result<u16, &'static str> {
     match value.parse::<u16>() {
         Ok(port) if port > 0 => Ok(port),
@@ -110,6 +114,8 @@ fn parse_port(value: &str) -> Result<u16, &'static str> {
     }
 }
 
+/// A base path setting, without its trailing slash, or empty for the root. Each segment holds
+/// ASCII letters, digits, `-`, `.`, `_` and `~`, and is never `.` or `..`.
 fn parse_base_path(value: &str) -> Result<String, &'static str> {
     const EXPECTED: &str = "a path such as /music: a leading slash, then segments of letters, digits, '-', '.', '_', or '~'";
 
@@ -129,6 +135,7 @@ fn parse_base_path(value: &str) -> Result<String, &'static str> {
     if rest.split('/').all(valid_segment) { Ok(trimmed.to_owned()) } else { Err(EXPECTED) }
 }
 
+/// A log setting: anything `tracing`'s `EnvFilter` accepts.
 fn parse_log(value: &str) -> Result<String, &'static str> {
     match EnvFilter::try_new(value) {
         Ok(_) => Ok(value.to_owned()),
@@ -138,12 +145,14 @@ fn parse_log(value: &str) -> Result<String, &'static str> {
     }
 }
 
+/// Every problem with the configuration, sorted.
 #[derive(Debug)]
 pub struct ConfigError {
     problems: Vec<String>,
 }
 
 impl fmt::Display for ConfigError {
+    /// A heading, then each problem on its own indented line.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "invalid configuration:")?;
         for problem in &self.problems {
@@ -159,6 +168,7 @@ impl std::error::Error for ConfigError {}
 mod tests {
     use super::*;
 
+    /// The configuration `vars` set, as [`Config::from_vars`] reads them.
     fn parse(vars: &[(&str, &str)]) -> Result<Config, ConfigError> {
         Config::from_vars(vars.iter().map(|(k, v)| (OsString::from(k), OsString::from(v))))
     }

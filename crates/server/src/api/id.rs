@@ -7,6 +7,7 @@ use rusqlite::types::ToSqlOutput;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// A database ID, shown as a decimal string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Id(pub i64);
 
@@ -25,6 +26,7 @@ impl<'de> Deserialize<'de> for Id {
     }
 }
 
+/// As a decimal string.
 impl Serialize for Id {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(&self.0)

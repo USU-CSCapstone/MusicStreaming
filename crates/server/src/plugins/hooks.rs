@@ -14,8 +14,9 @@
 //! (`0005_activity.sql`), with a position per user as well.
 //! A failure is retried later from the same place, so nothing is lost to a crash, a restart,
 //! or a service that was briefly down. One that keeps failing is disabled in that library, and
-//! the admin is told why (§11), except in `played`: one user's failing account must not stop
-//! the plugin for everyone, so theirs is retried hourly instead.
+//! the admin is told why (§11), except in the hooks that act for one user (`played`, `playing`,
+//! `searched`): one user's failing account must not stop the plugin for everyone, so theirs
+//! keeps being retried, at most an hour apart, instead.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,6 +49,7 @@ const MAX_FAILURES: i64 = 5;
 const MAX_OUTAGE_MS: i64 = 72 * 60 * 60_000;
 /// The wait after the first failure, doubling after each until [`MAX_BACKOFF_MS`].
 const BACKOFF_MS: i64 = 60_000;
+/// The longest wait between retries.
 const MAX_BACKOFF_MS: i64 = 60 * 60_000;
 
 /// A hook due for a plugin in a library, and how far delivery has got.

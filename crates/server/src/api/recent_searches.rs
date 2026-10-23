@@ -66,6 +66,7 @@ pub struct Create {
     selected: Option<Selected>,
 }
 
+/// The result a search's user acted on, as the request names it.
 #[derive(Deserialize)]
 struct Selected {
     #[serde(rename = "type")]
@@ -76,8 +77,10 @@ struct Selected {
 /// The kinds of result a search returns, and the table each is in.
 const KINDS: [(&str, &str); 3] = [("track", "tracks"), ("album", "albums"), ("artist", "artists")];
 
+/// What [`row`] reads, in order, and the table it reads them from.
 const COLUMNS: &str = "id, query, selected_type, selected_id, searched_at FROM recent_searches";
 
+/// Reads a [`COLUMNS`] row. A selected result of a type no longer in [`KINDS`] reads as none.
 fn row(row: &Row) -> rusqlite::Result<RecentSearch> {
     let kind: Option<String> = row.get(2)?;
     let kind = kind.and_then(|kind| KINDS.iter().find(|(k, _)| *k == kind).map(|(k, _)| *k));

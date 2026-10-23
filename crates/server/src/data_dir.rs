@@ -3,8 +3,8 @@
 //! ```text
 //! data/
 //! ├── jewelcase.lock  # held while a server runs
-//! ├── state/          # database, custom artwork, plugin data — back this up
-//! └── cache/          # transcodes, resized images, compiled plugins, indexes — rebuilt on demand
+//! ├── state/          # the database and installed plugins — back this up
+//! └── cache/          # resized images and compiled plugins — rebuilt on demand
 //! ```
 //!
 //! No library's root may be the data directory, inside it, or around it.
@@ -17,17 +17,19 @@ use anyhow::{Context, bail};
 
 use crate::db::libraries::overlap;
 
+/// The data directory, locked against other servers for as long as this lives.
 pub struct DataDir {
-    /// The root of the data directory
+    /// The data directory itself, canonical.
     root: PathBuf,
-    /// Lock file to prevent multiple servers from using the same data directory
+    /// `jewelcase.lock`, held so a second server on the same directory fails to start.
     _lock: File,
 }
 
 impl DataDir {
-    /// Create data dir layout and lock it for the server's lifetime. `music`, the canonical
-    /// root the first library would have, is checked with [`apart`] before anything is written
-    /// inside the data directory.
+    /// Creates the layout at `root` and locks it for as long as the `DataDir` lives. `music`, the
+    /// canonical root the first library would have, is checked with [`apart`] before anything is
+    /// written inside the data directory. Fails if the directory cannot be created or locked, or
+    /// another server holds it.
     pub fn open(root: &Path, music: Option<&Path>) -> anyhow::Result<DataDir> {
         fs::create_dir_all(root)
             .with_context(|| format!("cannot create the data directory {}", root.display()))?;
@@ -70,17 +72,17 @@ impl DataDir {
         Ok(data_dir)
     }
 
-    /// The root of the data directory
+    /// The data directory itself, canonical.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// Important state that must be preserved
+    /// `state/`: what must be kept, such as the database and the installed plugins.
     pub fn state(&self) -> PathBuf {
         self.root.join("state")
     }
 
-    /// Rebuildable state that can be deleted and reconstructed
+    /// `cache/`: what the server rebuilds if it is deleted.
     pub fn cache(&self) -> PathBuf {
         self.root.join("cache")
     }

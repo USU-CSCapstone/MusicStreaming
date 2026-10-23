@@ -16,8 +16,8 @@ use crate::api::refs::{
 use crate::api::time::serialize_rfc3339;
 use crate::db::Json;
 
-/// The spec's `TrackSummary`, without `personal` until accounts exist. A full `Track` has the
-/// same fields with more `audio`, so the audio type is a parameter.
+/// The spec's `TrackSummary`, without `personal`. A full `Track` has the same fields with more
+/// `audio`, so the audio type is a parameter.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackSummary<A = AudioSummary> {
@@ -176,6 +176,7 @@ pub fn track(conn: &Connection, library: i64, track: i64) -> rusqlite::Result<Op
         .optional()
 }
 
+/// The codec and losslessness from a row of [`SELECT`].
 fn audio_summary(row: &Row) -> rusqlite::Result<AudioSummary> {
     Ok(AudioSummary { codec: row.get(8)?, lossless: row.get(9)? })
 }

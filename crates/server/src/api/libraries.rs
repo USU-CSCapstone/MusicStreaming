@@ -1,7 +1,7 @@
 //! Libraries: `listLibraries` and `getLibrary` (`api/openapi.yaml`).
 //!
 //! Each shows only the libraries the caller reaches (`requirements/users.md` §5): `getLibrary`
-//! through `authenticate`, like every path under a library, and `listLibraries` here.
+//! through `authenticate::require`, like every path under a library, and `listLibraries` here.
 
 use std::sync::Arc;
 
@@ -15,6 +15,7 @@ use super::scope::Scope;
 use super::{Id, Problem};
 use crate::db::{Database, reaches};
 
+/// The spec's `Library`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Library {
@@ -28,18 +29,21 @@ pub struct Library {
     scanning: bool,
 }
 
+/// `listLibraries`' response.
 #[derive(Serialize)]
 pub struct Libraries {
     items: Vec<Library>,
 }
 
-/// The counts are kept current by the scanner, so a library reads as one row.
+/// The columns [`library`] reads. The catalog's triggers keep the counts current, so a library
+/// reads as one row.
 const SELECT: &str = "SELECT id, name, track_count, album_count, artist_count, duration_us, \
      EXISTS (SELECT 1 FROM scans WHERE scans.library_id = libraries.id \
              AND state IN ('queued', 'running')) \
      FROM libraries";
 
-/// Oldest first: with no default library set, clients open the first one (`AccountSettings`).
+/// `listLibraries`: every library the caller reaches, oldest first, since with no default
+/// library set clients open the first one (`AccountSettings`).
 pub async fn list(
     State(db): State<Arc<Database>>,
     caller: Caller,
@@ -70,6 +74,7 @@ pub async fn get(
     .ok_or_else(Problem::not_found)
 }
 
+/// A library from a row of [`SELECT`].
 fn library(row: &Row) -> rusqlite::Result<Library> {
     Ok(Library {
         id: Id(row.get(0)?),

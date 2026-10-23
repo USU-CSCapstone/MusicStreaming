@@ -55,6 +55,7 @@ async fn get_range(app: Router, uri: &str, range: &str) -> Response {
     app.oneshot(request).await.unwrap()
 }
 
+/// `body` parsed as JSON.
 fn json(body: &[u8]) -> Value {
     serde_json::from_slice(body).unwrap()
 }

@@ -53,6 +53,7 @@ pub fn effective(
     })
 }
 
+/// Stores `values` as `id`'s settings at `level`, replacing any stored there.
 pub fn store(
     conn: &Connection,
     id: &str,

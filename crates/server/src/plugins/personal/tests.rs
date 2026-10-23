@@ -1,3 +1,6 @@
+//! Connecting a plugin that acts for a user: who is offered it, how what they set is checked
+//! and kept, and sharing their searches with it.
+
 use jewelcase_plugins::Permission::{LibraryRead, SearchActivity, Searched};
 use serde_json::{Map, Value, json};
 

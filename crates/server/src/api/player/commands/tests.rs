@@ -35,6 +35,7 @@ async fn setup() -> (tempfile::TempDir, Router, std::net::SocketAddr) {
     (temp, app.clone(), serve(app).await)
 }
 
+/// Sends `message` over `socket` as a text frame.
 async fn send(socket: &mut Socket, message: Value) {
     socket.send(Message::text(message.to_string())).await.unwrap();
 }

@@ -11,7 +11,8 @@ use axum::http::{HeaderValue, header};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 
-/// Where the container image puts the build.
+/// Where the server looks for the build: where a production image would put it. With no build
+/// there, `run` serves the API alone.
 pub const DIR: &str = "/usr/share/jewelcase/web";
 
 /// Serves the build in `dir` at the root.

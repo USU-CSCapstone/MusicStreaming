@@ -16,6 +16,7 @@ use crate::db::Database;
 use crate::plugins::Plugins;
 use crate::plugins::testing::plugins;
 
+/// SQLite's message for a full disk: a failure on the server's side, not the plugin's.
 const DISK_FULL: &str = "the database or disk is full";
 
 #[test]

@@ -38,6 +38,7 @@ pub struct Caller {
 impl<S: Send + Sync> FromRequestParts<S> for Caller {
     type Rejection = Problem;
 
+    /// The caller the gate found, or `401` outside the gate.
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Caller, Problem> {
         parts.extensions.get::<Caller>().copied().ok_or_else(|| Problem::new(Code::Unauthenticated))
     }

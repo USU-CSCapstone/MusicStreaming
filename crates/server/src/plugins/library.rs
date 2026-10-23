@@ -10,6 +10,7 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::db::{Database, DbError, Json, by_ids, libraries};
 
+/// One library as a plugin run sees it, for one plugin.
 pub struct RunLibrary {
     db: Arc<Database>,
     plugin: Arc<str>,
@@ -17,6 +18,7 @@ pub struct RunLibrary {
 }
 
 impl RunLibrary {
+    /// `library` in `db`, as `plugin` sees it.
     pub fn new(db: Arc<Database>, plugin: &str, library: i64) -> RunLibrary {
         RunLibrary { db, plugin: plugin.into(), library }
     }
@@ -32,6 +34,7 @@ impl RunLibrary {
     }
 }
 
+/// Logs `error` and answers what the plugin is told instead.
 fn failed(error: DbError) -> String {
     tracing::error!(%error, "cannot serve a plugin's library call");
     "the library could not be read".to_owned()
@@ -127,9 +130,10 @@ fn artist(row: &Row) -> rusqlite::Result<Artist> {
 }
 
 // A method left out here would fall back to the trait's default and answer every plugin
-// `failed`, so clippy refuses one.
+// "not available", so clippy refuses one.
 #[deny(clippy::missing_trait_methods)]
 impl Library for RunLibrary {
+    /// A page of the library's tracks, leaving out those missing since a scan.
     async fn tracks(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Track>, String> {
         let select = format!(
             "SELECT {} FROM tracks t JOIN albums al ON al.id = t.album_id \
@@ -139,6 +143,7 @@ impl Library for RunLibrary {
         self.read(move |conn, library| page(conn, &select, library, after, limit, track)).await
     }
 
+    /// The tracks with `ids` in this library, leaving out those missing since a scan.
     async fn get_tracks(&mut self, ids: Vec<u64>) -> Result<Vec<Track>, String> {
         let rest = "JOIN albums al ON al.id = t.album_id WHERE t.missing_since IS NULL";
         self.read(move |conn, library| {
@@ -147,6 +152,7 @@ impl Library for RunLibrary {
         .await
     }
 
+    /// A page of the library's albums that have tracks.
     async fn albums(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Album>, String> {
         let select = format!(
             "SELECT {} FROM albums al \
@@ -156,6 +162,7 @@ impl Library for RunLibrary {
         self.read(move |conn, library| page(conn, &select, library, after, limit, album)).await
     }
 
+    /// A page of the library's artists that have albums or tracks.
     async fn artists(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Artist>, String> {
         let select = format!(
             "SELECT {} FROM artists ar WHERE ar.library_id = ?1 AND ar.id > ?2 \
@@ -165,6 +172,7 @@ impl Library for RunLibrary {
         self.read(move |conn, library| page(conn, &select, library, after, limit, artist)).await
     }
 
+    /// The albums with `ids` in this library that have tracks.
     async fn get_albums(&mut self, ids: Vec<u64>) -> Result<Vec<Album>, String> {
         let rest = "WHERE al.track_count > 0";
         self.read(move |conn, library| {
@@ -173,6 +181,7 @@ impl Library for RunLibrary {
         .await
     }
 
+    /// The artists with `ids` in this library that have albums or tracks.
     async fn get_artists(&mut self, ids: Vec<u64>) -> Result<Vec<Artist>, String> {
         let rest = "WHERE ar.album_count > 0 OR ar.track_count > 0";
         self.read(move |conn, library| {
@@ -181,6 +190,8 @@ impl Library for RunLibrary {
         .await
     }
 
+    /// `album`'s tracks in this library, by disc and number, leaving out those missing since a
+    /// scan.
     async fn album_tracks(&mut self, album: u64) -> Result<Vec<Track>, String> {
         let select = format!(
             "SELECT {} FROM tracks t JOIN albums al ON al.id = t.album_id \
@@ -194,6 +205,7 @@ impl Library for RunLibrary {
         .await
     }
 
+    /// The albums with tracks that `artist` is an album artist of, oldest first, undated last.
     async fn artist_albums(&mut self, artist: u64) -> Result<Vec<Album>, String> {
         // Album artists only: an artist's discography, not their appearances
         // (`requirements/artists.md` §2).
@@ -209,6 +221,7 @@ impl Library for RunLibrary {
         .await
     }
 
+    /// The library's roots, by ID and path.
     async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
         self.read(|conn, library| {
             let roots = libraries::roots(conn, library)?;
@@ -224,6 +237,7 @@ impl Library for RunLibrary {
         .await
     }
 
+    /// The value the plugin keeps under `key` for this library.
     async fn state_get(&mut self, key: String) -> Result<Option<Vec<u8>>, String> {
         let plugin = self.plugin.clone();
         self.read(move |conn, library| {
@@ -236,6 +250,7 @@ impl Library for RunLibrary {
         .await
     }
 
+    /// Keeps `value` under `key` for this library, replacing any before it.
     async fn state_set(&mut self, key: String, value: Vec<u8>) -> Result<(), String> {
         let (plugin, library) = (self.plugin.clone(), self.library);
         self.db
@@ -252,6 +267,7 @@ impl Library for RunLibrary {
             .map_err(failed)
     }
 
+    /// Forgets the value under `key` for this library.
     async fn state_delete(&mut self, key: String) -> Result<(), String> {
         let (plugin, library) = (self.plugin.clone(), self.library);
         self.db

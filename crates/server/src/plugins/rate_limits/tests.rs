@@ -1,3 +1,5 @@
+//! Host limits for every plugin: which are in force, which a run keeps to, and exemptions.
+
 use std::time::Duration;
 
 use jewelcase_plugins::Permission::{HostRateLimits, Network};
@@ -30,6 +32,7 @@ async fn listed(db: &Database) -> Vec<(String, String, Vec<String>)> {
     limits.into_iter().map(|l| (l.host, l.limit, l.set_by)).collect()
 }
 
+/// A row of [`listed`].
 fn limit(host: &str, limit: &str, set_by: &[&str]) -> (String, String, Vec<String>) {
     (host.into(), limit.into(), set_by.iter().map(|id| id.to_string()).collect())
 }

@@ -1,4 +1,4 @@
--- The library change feed (design/general.md §4).
+-- The library change feed (design/general.md §4, design/database.md §5).
 --
 -- A change row names what changed, never its contents: a client catching up receives each
 -- entity's current representation, read at that moment. Rows are written in the same

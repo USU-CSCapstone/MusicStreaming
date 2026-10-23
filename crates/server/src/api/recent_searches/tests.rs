@@ -28,6 +28,7 @@ async fn listed(app: &Router, token: &str) -> Vec<String> {
     items.iter().map(|item| item["query"].as_str().unwrap().to_owned()).collect()
 }
 
+/// Sends `method` to `uri` as the owner, with no body, and answers the status.
 async fn send(app: &Router, method: &str, uri: &str) -> StatusCode {
     call(app, TOKEN, method, uri, None).await.0
 }

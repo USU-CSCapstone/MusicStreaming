@@ -6,6 +6,7 @@ use super::super::testing::{app, app_before_setup, json, send_json};
 
 const PASSWORD: &str = "correct horse battery staple";
 
+/// A `completeSetup` body for `username` and `password`, on a desktop browser.
 fn setup_request(username: &str, password: &str) -> Value {
     json!({
         "username": username,
@@ -14,6 +15,7 @@ fn setup_request(username: &str, password: &str) -> Value {
     })
 }
 
+/// The `Set-Cookie` value in `headers`, which must be there.
 fn cookie(headers: &HeaderMap) -> &str {
     headers.get(header::SET_COOKIE).expect("a session cookie").to_str().unwrap()
 }

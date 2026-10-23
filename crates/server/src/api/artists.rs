@@ -16,17 +16,19 @@ use super::scope::Scope;
 use super::{Id, Problem};
 use crate::db::Database;
 
+/// The `sort` values `listArtists` supports.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum ArtistSort {
     #[default]
     Name,
     DateAdded,
-    // `playCount` and `lastPlayed` wait for listening history, and answer `422` until then.
+    // The spec's `playCount` and `lastPlayed` are not implemented, so they answer `422`.
 }
 
 impl ArtistSort {
-    /// Each is one of `artists`' indexes after `library_id`.
+    /// The keyset this sort pages by. Each one's columns are one of `artists`' indexes after
+    /// `library_id`.
     fn sort(self) -> &'static Sort {
         match self {
             ArtistSort::Name => &Sort {
