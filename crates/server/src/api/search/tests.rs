@@ -183,7 +183,9 @@ async fn problems() {
         ("/api/v1/libraries/1/search?q=a&sectionLimit=0", StatusCode::UNPROCESSABLE_ENTITY),
         ("/api/v1/libraries/1/search?q=a&sectionLimit=51", StatusCode::UNPROCESSABLE_ENTITY),
         ("/api/v1/libraries/1/search?q=a&types=songs", StatusCode::UNPROCESSABLE_ENTITY),
-        // Filters not built yet are refused rather than ignored.
+        // Filters and sections not built yet are refused rather than ignored.
+        ("/api/v1/libraries/1/search?q=a&types=lyrics", StatusCode::UNPROCESSABLE_ENTITY),
+        ("/api/v1/libraries/1/search?q=a&types=tracks,lyrics", StatusCode::UNPROCESSABLE_ENTITY),
         ("/api/v1/libraries/1/search?q=a&genre=rock", StatusCode::UNPROCESSABLE_ENTITY),
     ] {
         let (actual, content_type, _) = send(app.clone(), "GET", uri).await;

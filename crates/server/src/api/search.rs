@@ -73,23 +73,7 @@ pub async fn search(
     if !(1..=50).contains(&limit) {
         return Err(invalid("sectionLimit must be from 1 to 50"));
     }
-    let mut kinds = Vec::new();
-    for section in query
-        .types
-        .as_deref()
-        .map_or(vec!["tracks", "albums", "artists"], |t| t.split(',').collect())
-    {
-        match section {
-            "tracks" => kinds.push(Kind::Track),
-            "albums" => kinds.push(Kind::Album),
-            "artists" => kinds.push(Kind::Artist),
-            // There are no playlists yet, and lyrics are not indexed yet.
-            "playlists" | "lyrics" => {}
-            _ => {
-                return Err(invalid("types must be tracks, albums, artists, playlists, or lyrics"));
-            }
-        }
-    }
+    let kinds = query.types.as_deref().map_or_else(|| Ok(Kind::ALL.to_vec()), kinds)?;
 
     let (track_count, position) = db
         .try_read(move |conn| -> Result<_, Problem> {
@@ -108,6 +92,28 @@ pub async fn search(
         near_misses: Vec::new(),
         library_empty: track_count == 0,
     }))
+}
+
+/// The kinds to search for the comma-separated section `types`. Playlists add none, since there
+/// are none yet and an empty section is the true answer. Lyrics answer `422` until they are
+/// indexed, as a list answers for a filter it does not support yet.
+fn kinds(types: &str) -> Result<Vec<Kind>, Problem> {
+    let mut kinds = Vec::new();
+    for section in types.split(',') {
+        match section {
+            "tracks" => kinds.push(Kind::Track),
+            "albums" => kinds.push(Kind::Album),
+            "artists" => kinds.push(Kind::Artist),
+            "playlists" => {}
+            "lyrics" => return Err(Problem::invalid("lyrics cannot be searched yet")),
+            _ => {
+                return Err(Problem::invalid(
+                    "types must be tracks, albums, artists, playlists, or lyrics",
+                ));
+            }
+        }
+    }
+    Ok(kinds)
 }
 
 /// How many of `library`'s tracks, albums, and artists match `q`, as a search counts them.
