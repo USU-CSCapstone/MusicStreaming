@@ -20,6 +20,7 @@ pub(crate) const STALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// How often the watchdog checks for stalls.
 const CHECK_EVERY: Duration = Duration::from_secs(1);
 
+/// What the watchdog keeps for one child.
 #[derive(Default)]
 struct Entry {
     /// How long the child has gone without progress, counted as [`Registry::reap_stalled`] says.
@@ -75,7 +76,8 @@ impl Registry {
         stalled
     }
 
-    /// Kills every child, and from now on every child as it registers, for the server's stop.
+    /// Kills every child, and every child that registers afterwards as it registers, for the
+    /// server's stop.
     pub(crate) fn stop(&self) {
         let children = self.children.lock().recover();
         self.stopping.store(true, Ordering::SeqCst);

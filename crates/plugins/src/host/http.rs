@@ -28,7 +28,9 @@ mod guard;
 pub(super) const TIMEOUT: Duration = Duration::from_secs(15);
 /// The largest request or reply body. Either is held in the plugin's memory whole.
 const MAX_BODY: usize = 16 << 20;
+/// The most redirects a request follows in a row.
 const MAX_REDIRECTS: usize = 5;
+/// What every plugin's requests name as their client.
 const USER_AGENT: &str = concat!("Jewelcase/", env!("CARGO_PKG_VERSION"), " (plugin host)");
 
 /// Headers the host sets. `host` above all: it would let a request name one site to the
@@ -93,6 +95,7 @@ fn build(
         .build()
 }
 
+/// `method` as reqwest names it.
 fn method(method: http::Method) -> reqwest::Method {
     match method {
         http::Method::Get => reqwest::Method::GET,
@@ -118,6 +121,10 @@ fn describe(error: reqwest::Error) -> String {
 }
 
 impl<L: Library> http::Host for Run<L> {
+    /// Needs network. Refuses a request it may not send, answers one from the cache where a kept
+    /// reply may be reused, and otherwise waits for its turn and sends it. The reply sets any
+    /// pause its service asks for, marks an outage if it says the service is out of reach, and
+    /// is kept for reuse where it may be.
     async fn send(&mut self, request: http::Request) -> Result<http::Response, http::Error> {
         self.may(Permission::Network)?;
         let allowed = rules::allowed(&request.url, &self.grants.destinations, self.reach);

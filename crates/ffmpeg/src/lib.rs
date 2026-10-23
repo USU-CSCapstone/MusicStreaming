@@ -90,11 +90,12 @@ impl Ffmpeg {
         Ok(Ffmpeg { config: Arc::new(config), registry: Registry::start()? })
     }
 
-    /// Run `ffmpeg -decoders` and check every required decoder is present.
+    /// Read ffmpeg's version, check that ffprobe runs, and list the supported formats whose
+    /// decoder `ffmpeg -decoders` lacks, logging a warning for each wider PCM decoder it lacks.
     ///
-    /// A missing binary is fatal at startup (`requirements/deployment.md` §1);
-    /// a missing decoder is reported once here rather than as scan problems
-    /// later.
+    /// Fails if either binary can't be started or `-decoders` fails: a missing binary is fatal
+    /// at startup (`requirements/deployment.md` §1). A missing decoder is reported once here
+    /// rather than as scan problems later.
     pub fn verify(&self) -> Result<Capabilities, Error> {
         let version_out = Command::new(&self.config.ffmpeg)
             .args(["-hide_banner", "-version"])
@@ -145,7 +146,8 @@ impl Ffmpeg {
         Ok(Capabilities { version, missing })
     }
 
-    /// Read stream properties needed to interpret a raw PCM decode.
+    /// Read the first audio stream's properties, which a raw PCM decode needs. Fails with
+    /// [`Error::NoAudioStream`] if the file has none.
     pub fn probe(&self, path: &Path) -> Result<ProbeInfo, Error> {
         probe::probe(&self.config, &self.registry, path)
     }
@@ -163,9 +165,9 @@ impl Ffmpeg {
         image::decode_image(&self.config, &self.registry, path, max_side)
     }
 
-    /// Kills every background child of this handle and its clones, and from now on each as it
-    /// starts, so the server stops without waiting for a decode to finish. Each fails with
-    /// [`Error::Stopped`].
+    /// Kills every background child of this handle and its clones, and each that starts
+    /// afterwards as it starts, so the server stops without waiting for a decode to finish. Each
+    /// fails with [`Error::Stopped`].
     pub fn stop_background(&self) {
         self.registry.stop();
     }

@@ -1,9 +1,11 @@
 use super::*;
 
+/// A document of `kind` named `name`, made directly rather than through a constructor.
 pub(super) fn doc(kind: Kind, id: i64, name: &str) -> Document {
     Document { kind, id, name: name.to_owned() }
 }
 
+/// An index of a small library: a few artists, albums, and tracks with names that share words.
 fn library() -> Index {
     Index::build([
         doc(Kind::Artist, 1, "Taylor Swift"),

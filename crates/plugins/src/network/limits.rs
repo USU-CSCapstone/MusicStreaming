@@ -35,11 +35,13 @@ const BASE_PAUSE: Duration = Duration::from_secs(1);
 pub enum Scope {
     /// Every plugin's that is not exempt from the host's limit.
     Host,
+    /// One plugin's own.
     Plugin(String),
     /// A plugin's, in runs for one user.
     User(String, i64),
 }
 
+/// Every queue a request waits in, by host and scope.
 #[derive(Default)]
 pub struct Limits {
     queues: Mutex<HashMap<(String, Scope), Queue>>,
@@ -151,10 +153,12 @@ mod tests {
     const SECOND: Duration = Duration::from_secs(1);
     const HOST: &str = "musicbrainz.org";
 
+    /// The scope of `plugin`'s own requests.
     fn own(plugin: &str) -> Scope {
         Scope::Plugin(plugin.into())
     }
 
+    /// The scope of the scrobbler's requests for user `id`.
     fn user(id: i64) -> Scope {
         Scope::User("scrobbler".into(), id)
     }

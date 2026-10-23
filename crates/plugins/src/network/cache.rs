@@ -9,12 +9,13 @@
 //!
 //! A reply is reused only for a request with the same URL and every header the plugin sent,
 //! from a run that can see the same things: the same library, the same user, and the same
-//! grant or not of reading the library and of listening activity. So a reply fetched with a
-//! credential, in a header or in the URL, is reused only by a request carrying that same
-//! credential. And since whether a reply was already cached tells a plugin what another asked,
-//! nothing fetched for one library is reused for another (`requirements/general.md` §3.6), and
-//! nothing fetched by a run that could see a library or someone's listening is reused by one
-//! that could not (`requirements/plugins.md` §4.3).
+//! grant or not of reading the library, of listening activity, and of search activity. So a
+//! reply fetched with a credential, in a header or in the URL, is reused only by a request
+//! carrying that same credential. And since whether a reply was already cached tells a plugin
+//! what another asked, nothing fetched for one library is reused for another
+//! (`requirements/general.md` §3.6), and nothing fetched by a run that could see a library or
+//! someone's listening or searches is reused by one that could not (`requirements/plugins.md`
+//! §4.3).
 //!
 //! A POST, PUT, PATCH, or DELETE that succeeds makes whatever was kept for its URL out of date,
 //! so that is forgotten, whoever fetched it (RFC 9111 §4.4).
@@ -26,7 +27,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::lock::Recover;
 
-/// The largest reply kept.
+/// The largest reply body kept.
 const MAX_ENTRY: usize = 2 << 20;
 /// All replies kept together. The least recently used goes first.
 const MAX_SIZE: usize = 32 << 20;
@@ -87,11 +88,13 @@ impl Key {
         Some(Key { visible, url: url.to_owned(), headers })
     }
 
+    /// The bytes it takes, counted toward [`MAX_SIZE`].
     fn size(&self) -> usize {
         self.url.len() + self.headers.iter().map(|(n, v)| n.len() + v.len()).sum::<usize>()
     }
 }
 
+/// A reply as the host received it, kept or not.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reply {
     pub status: u16,
@@ -125,6 +128,7 @@ impl Reply {
         self
     }
 
+    /// The bytes it takes, counted toward [`MAX_SIZE`].
     fn size(&self) -> usize {
         self.body.len()
             + self.url.len()
@@ -132,6 +136,7 @@ impl Reply {
     }
 }
 
+/// What the cache holds for a request.
 pub enum Lookup {
     /// Fresh: use it without asking. Its `age` says how old it is.
     Fresh(Reply),
@@ -141,11 +146,13 @@ pub enum Lookup {
     Miss,
 }
 
+/// The replies kept, shared by every plugin's runs.
 #[derive(Default)]
 pub struct Cache {
     inner: Mutex<Inner>,
 }
 
+/// The replies kept, and when each was last used, so the least recently used goes first.
 #[derive(Default)]
 struct Inner {
     entries: HashMap<Key, Entry>,
@@ -155,6 +162,7 @@ struct Inner {
     size: usize,
 }
 
+/// One kept reply, with when it was stored, until when it is fresh, and the bytes it takes.
 struct Entry {
     reply: Reply,
     stored: Instant,
@@ -237,6 +245,7 @@ impl Cache {
 }
 
 impl Inner {
+    /// Forgets what is kept for `key`, if anything.
     fn remove(&mut self, key: &Key) {
         if let Some(entry) = self.entries.remove(key) {
             self.used.remove(&entry.used);
@@ -244,6 +253,7 @@ impl Inner {
         }
     }
 
+    /// Marks what is kept for `key` as the most recently used.
     fn touch(&mut self, key: &Key) {
         self.tick += 1;
         let tick = self.tick;
@@ -321,7 +331,8 @@ mod tests {
 
     const SECOND: Duration = Duration::from_secs(1);
 
-    /// What a run in `library` for no user sees, granted neither reading nor listening.
+    /// What a run in `library` for no user sees, granted none of reading the library, listening
+    /// activity, or search activity.
     fn visible(library: i64) -> Visible {
         Visible {
             library,
@@ -332,10 +343,12 @@ mod tests {
         }
     }
 
+    /// The key for a GET of `url` with no headers, by a run that sees `visible(1)`.
     fn key(url: &str) -> Key {
         Key::new(visible(1), url, &[]).unwrap()
     }
 
+    /// A reply of `status` with `headers` and the body `hello`, from an unknown address.
     fn reply(status: u16, headers: &[(&str, &str)]) -> Reply {
         Reply {
             status,
@@ -346,6 +359,7 @@ mod tests {
         }
     }
 
+    /// The reply `lookup` found, if it was fresh.
     fn fresh(lookup: Lookup) -> Option<Reply> {
         match lookup {
             Lookup::Fresh(reply) => Some(reply),

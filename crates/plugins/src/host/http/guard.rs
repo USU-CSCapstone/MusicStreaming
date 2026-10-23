@@ -31,6 +31,8 @@ pub(super) struct Forbidden {
 }
 
 impl<R: Resolve> Resolve for Guard<R> {
+    /// The addresses `lookup` finds for `name` that are in reach, or [`Forbidden`] if it finds
+    /// some and none is.
     fn resolve(&self, name: Name) -> Resolving {
         let host = name.as_str().to_owned();
         let found = self.lookup.resolve(name);
@@ -56,6 +58,7 @@ impl<R: Resolve> Resolve for Guard<R> {
 pub(super) struct System;
 
 impl Resolve for System {
+    /// The addresses the system finds for `name`.
     fn resolve(&self, name: Name) -> Resolving {
         let host = name.as_str().to_owned();
         Box::pin(async move {

@@ -11,6 +11,7 @@ pub(crate) trait Recover<G> {
 }
 
 impl<G> Recover<G> for LockResult<G> {
+    /// The guard, taken out of the poison error if there is one.
     fn recover(self) -> G {
         self.unwrap_or_else(PoisonError::into_inner)
     }

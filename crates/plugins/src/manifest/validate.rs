@@ -172,6 +172,7 @@ fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>
     problems
 }
 
+/// Whether `value` is a string with something in it but whitespace.
 fn non_empty(value: Option<&Value>) -> bool {
     value.and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty())
 }

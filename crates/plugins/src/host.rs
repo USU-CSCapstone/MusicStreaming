@@ -411,6 +411,7 @@ impl<L: Library> Run<L> {
 }
 
 impl<L: Library> WasiView for Run<L> {
+    /// The run's WASI context, which grants nothing, and its resource table.
     fn ctx(&mut self) -> WasiCtxView<'_> {
         WasiCtxView { ctx: &mut self.wasi, table: &mut self.table }
     }
@@ -438,6 +439,8 @@ fn wit(permission: Permission) -> Option<host::Permission> {
 }
 
 impl<L: Library> bindings::jewelcase::plugin::settings::Host for Run<L> {
+    /// The setting `name` in effect for the run, or none if it has no value the contract can
+    /// carry: unset, or not text, a number, or a flag.
     async fn get(&mut self, name: String) -> Option<bindings::jewelcase::plugin::settings::Value> {
         use bindings::jewelcase::plugin::settings::Value;
         match self.grants.settings.get(&name)? {
@@ -453,10 +456,12 @@ impl<L: Library> bindings::jewelcase::plugin::settings::Host for Run<L> {
 impl<L: Library> bindings::jewelcase::plugin::events::Host for Run<L> {}
 
 impl<L: Library> host::Host for Run<L> {
+    /// The permissions this run holds, leaving out hooks.
     async fn granted(&mut self) -> Vec<host::Permission> {
         self.grants.permissions.iter().copied().filter_map(wit).collect()
     }
 
+    /// Keeps `message`, cut to 500 characters, unless the run has logged [`LOG_LINES`] already.
     async fn log(&mut self, message: String) {
         if self.log.len() < LOG_LINES {
             self.log.push(message.chars().take(500).collect());

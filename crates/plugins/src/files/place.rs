@@ -45,7 +45,7 @@ pub(super) fn link_new(from_dir: &Dir, from: &OsStr, to_dir: &Dir, to: &OsStr) -
 /// Renames the folder `from` in `from_dir` to `to` in `to_dir`, failing with `AlreadyExists` if
 /// `to` is there. A folder cannot be linked, so on a filesystem without `RENAME_NOREPLACE` it is
 /// renamed plainly, which still fails over a file or a folder with anything in it, but replaces
-/// an empty one. Either way a folder or file at `to` fails it as `AlreadyExists`, so the failure
+/// an empty folder. Either way, what is at `to` fails it as `AlreadyExists`, so the failure
 /// names `to`.
 pub(super) fn move_folder(
     from_dir: &Dir,

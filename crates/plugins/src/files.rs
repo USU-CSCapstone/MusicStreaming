@@ -1,7 +1,8 @@
 //! The library's folders, as plugins reach them (`requirements/plugins.md` §3): every path is
-//! relative to one of the library's roots. One that is absolute or has `..` is refused as written
-//! (see [`relative`]); every other is opened through a `cap_std` [`Dir`] on the root, which refuses one
-//! that would leave it through a symlink however the folders change during the call.
+//! relative to one of the library's roots. One that is absolute or has `..` is refused as
+//! written (see [`relative`]); every other is opened through a `cap_std` [`Dir`] on the root,
+//! which refuses one that would leave it through a symlink however the folders change during
+//! the call.
 //!
 //! Writes appear whole or not at all: a file is written beside its target under a name no
 //! other call uses, then renamed or linked into place.
@@ -67,11 +68,11 @@ fn split(path: &Path) -> (&Path, &OsStr) {
     (folder.unwrap_or(Path::new(".")), path.file_name().unwrap_or_default())
 }
 
-/// What `folder` holds (the root when it is empty), by name: the first [`PAGE`] entries whose names sort after `after`, or
-/// from the first. Names sort by their UTF-8 bytes, and the folder is read afresh each call, so
-/// an entry added or removed between calls moves no other. One whose name is not UTF-8, which
-/// a plugin could not name, or that is gone before it is described, is left out. Only a page
-/// of names is held at once, however large the folder.
+/// What `folder` holds (the root when it is empty), by name: the first [`PAGE`] entries whose
+/// names sort after `after`, or from the first. Names sort by their UTF-8 bytes, and the folder
+/// is read afresh each call, so an entry added or removed between calls moves no other. One
+/// whose name is not UTF-8, which a plugin could not name, or that is gone before it is
+/// described, is left out. Only a page of names is held at once, however large the folder.
 pub fn entries(root: &Path, folder: &str, after: Option<&str>) -> Result<Vec<Entry>, Error> {
     let dir = if folder.is_empty() { Path::new(".") } else { relative(folder)? };
     let dir = open(root)?.open_dir(dir).map_err(|e| describe(folder, e))?;

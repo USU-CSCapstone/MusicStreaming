@@ -291,8 +291,9 @@ interface events {
     scan-finished(scan-finished),
     /// The schedule came round.
     scheduled,
-    /// An admin is saving new settings, which `settings.get` now answers with. An error is
-    /// shown to them and nothing is saved, so a wrong key is caught as it is entered (§6).
+    /// An admin is saving settings, which `settings.get` answers with during this event. An
+    /// error is shown to them and nothing is saved, so a wrong key is caught as it is entered
+    /// (requirements/plugins.md §6).
     /// A user connecting the plugin is checked the same way, with their personal settings.
     check-settings,
     /// Plays one user who connected the plugin has finished in this library, oldest first.

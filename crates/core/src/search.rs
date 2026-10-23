@@ -45,6 +45,7 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// Every kind, in tie-break order.
     pub const ALL: [Kind; 3] = [Kind::Track, Kind::Album, Kind::Artist];
 }
 
@@ -93,7 +94,8 @@ pub struct Index {
     postings: Vec<Vec<u32>>,
     /// Documents in tie-break order: by kind, then folded name, then ID.
     documents: Vec<Entry>,
-    /// Each document's words as vocabulary indexes, in name order: `words[starts[d]..starts[d + 1]]`.
+    /// Each document's words as vocabulary indexes, in name order:
+    /// `words[starts[d]..starts[d + 1]]`.
     words: Vec<u32>,
     starts: Vec<u32>,
 }

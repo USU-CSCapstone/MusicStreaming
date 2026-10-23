@@ -1,6 +1,6 @@
 //! The imports that reach the library: its catalog (`library`), its folders (`files`), and the
-//! plugin's own state for it (`state`). Each checks its permission before anything else. The
-//! library's own failures reach the plugin as `failed`, in its words.
+//! plugin's own state for it (`state`). Each that needs a permission checks it before anything
+//! else. The library's own failures reach the plugin as `failed`, in its words.
 
 use super::bindings::jewelcase::plugin::{files, library, state};
 use super::{Album, Artist, Error, Library, Run, Track};
@@ -10,49 +10,58 @@ use crate::manifest::Permission;
 /// The most one page, or one `get-tracks`, `get-albums`, or `get-artists`, holds, whatever the
 /// plugin asks for.
 const PAGE_LIMIT: u32 = 500;
-/// The longest state key, and the largest value.
+/// The longest state key, in bytes.
 const MAX_KEY: usize = 512;
+/// The largest state value, in bytes.
 const MAX_VALUE: usize = 1 << 20;
 
 impl<L: Library> library::Host for Run<L> {
+    /// Needs library-read. A page of tracks, at most [`PAGE_LIMIT`] of them.
     async fn tracks(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Track>, Error> {
         self.may(Permission::LibraryRead)?;
         self.library.tracks(after, limit.min(PAGE_LIMIT)).await.map_err(Error::Failed)
     }
 
+    /// Needs library-read. The tracks with the first [`PAGE_LIMIT`] of `ids`.
     async fn get_tracks(&mut self, mut ids: Vec<u64>) -> Result<Vec<Track>, Error> {
         self.may(Permission::LibraryRead)?;
         ids.truncate(PAGE_LIMIT as usize);
         self.library.get_tracks(ids).await.map_err(Error::Failed)
     }
 
+    /// Needs library-read. A page of albums, at most [`PAGE_LIMIT`] of them.
     async fn albums(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Album>, Error> {
         self.may(Permission::LibraryRead)?;
         self.library.albums(after, limit.min(PAGE_LIMIT)).await.map_err(Error::Failed)
     }
 
+    /// Needs library-read. A page of artists, at most [`PAGE_LIMIT`] of them.
     async fn artists(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Artist>, Error> {
         self.may(Permission::LibraryRead)?;
         self.library.artists(after, limit.min(PAGE_LIMIT)).await.map_err(Error::Failed)
     }
 
+    /// Needs library-read. The albums with the first [`PAGE_LIMIT`] of `ids`.
     async fn get_albums(&mut self, mut ids: Vec<u64>) -> Result<Vec<Album>, Error> {
         self.may(Permission::LibraryRead)?;
         ids.truncate(PAGE_LIMIT as usize);
         self.library.get_albums(ids).await.map_err(Error::Failed)
     }
 
+    /// Needs library-read. The artists with the first [`PAGE_LIMIT`] of `ids`.
     async fn get_artists(&mut self, mut ids: Vec<u64>) -> Result<Vec<Artist>, Error> {
         self.may(Permission::LibraryRead)?;
         ids.truncate(PAGE_LIMIT as usize);
         self.library.get_artists(ids).await.map_err(Error::Failed)
     }
 
+    /// Needs library-read. Every track of the album.
     async fn album_tracks(&mut self, album: u64) -> Result<Vec<Track>, Error> {
         self.may(Permission::LibraryRead)?;
         self.library.album_tracks(album).await.map_err(Error::Failed)
     }
 
+    /// Needs library-read. Every album the artist is an album artist of.
     async fn artist_albums(&mut self, artist: u64) -> Result<Vec<Album>, Error> {
         self.may(Permission::LibraryRead)?;
         self.library.artist_albums(artist).await.map_err(Error::Failed)
@@ -68,6 +77,7 @@ async fn blocking<T: Send + 'static>(
 }
 
 impl<L: Library> files::Host for Run<L> {
+    /// Needs any of the file permissions. The IDs of the library's roots.
     async fn roots(&mut self) -> Result<Vec<u64>, Error> {
         let file_permissions =
             [Permission::LibraryRead, Permission::LibraryAdd, Permission::LibraryChange];
@@ -79,6 +89,7 @@ impl<L: Library> files::Host for Run<L> {
         Ok(Run::roots(self).await?.iter().map(|(id, _)| *id).collect())
     }
 
+    /// Needs library-read. A page of what a folder holds.
     async fn entries(
         &mut self,
         root: u64,
@@ -90,6 +101,7 @@ impl<L: Library> files::Host for Run<L> {
         blocking(move || library_files::entries(&root, &folder, after.as_deref())).await
     }
 
+    /// Needs library-read. Up to `length` bytes of a file from `offset`.
     async fn read(
         &mut self,
         root: u64,
@@ -102,6 +114,8 @@ impl<L: Library> files::Host for Run<L> {
         blocking(move || library_files::read(&root, &path, offset, length)).await
     }
 
+    /// Needs library-add to create a file and library-change to replace one. Counts the file as
+    /// written once it is in place.
     async fn write(
         &mut self,
         root: u64,
@@ -122,6 +136,7 @@ impl<L: Library> files::Host for Run<L> {
         Ok(())
     }
 
+    /// Needs library-change. Moves a file or folder, touching both its paths.
     async fn rename(&mut self, root: u64, path: String, to: String) -> Result<(), Error> {
         self.may(Permission::LibraryChange)?;
         let root = self.root(root).await?;
@@ -130,6 +145,7 @@ impl<L: Library> files::Host for Run<L> {
         blocking(move || library_files::rename(&root, &path, &to)).await
     }
 
+    /// Needs library-change. Removes a file or an empty folder.
     async fn delete(&mut self, root: u64, path: String) -> Result<(), Error> {
         self.may(Permission::LibraryChange)?;
         let root = self.root(root).await?;
@@ -147,11 +163,13 @@ fn check_key(key: &str) -> Result<(), Error> {
 }
 
 impl<L: Library> state::Host for Run<L> {
+    /// The value kept under `key`, if any.
     async fn get(&mut self, key: String) -> Result<Option<Vec<u8>>, Error> {
         check_key(&key)?;
         self.library.state_get(key).await.map_err(Error::Failed)
     }
 
+    /// Keeps `value` under `key`, refusing one over [`MAX_VALUE`] bytes.
     async fn set(&mut self, key: String, value: Vec<u8>) -> Result<(), Error> {
         check_key(&key)?;
         if value.len() > MAX_VALUE {
@@ -160,6 +178,7 @@ impl<L: Library> state::Host for Run<L> {
         self.library.state_set(key, value).await.map_err(Error::Failed)
     }
 
+    /// Forgets the value under `key`.
     async fn delete(&mut self, key: String) -> Result<(), Error> {
         check_key(&key)?;
         self.library.state_delete(key).await.map_err(Error::Failed)

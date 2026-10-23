@@ -133,6 +133,7 @@ fn with(network: Arc<Network>, plugin: &str, library: i64) -> Run<Memory> {
     run
 }
 
+/// A GET of `url`, with no headers or body.
 fn get(url: String) -> http::Request {
     http::Request { method: http::Method::Get, url, headers: Vec::new(), body: Vec::new() }
 }

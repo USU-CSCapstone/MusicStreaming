@@ -1,7 +1,7 @@
 //! The addresses a plugin's requests may reach: never loopback, link-local, cloud metadata or
-//! unspecified, and a private one only at a destination that names it, whether the URL names the address or
-//! a name or a redirect leads there, or a kept reply came from it. Each refusal is the
-//! plugin's, so none is an outage.
+//! unspecified, and a private one only at a destination that names it, whether the URL names
+//! the address or a name or a redirect leads there, or a kept reply came from it. Each refusal
+//! is the plugin's, so none is an outage.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::process::Command;
@@ -21,6 +21,7 @@ use crate::network::cache::{Key, Reply};
 struct Fixed(Vec<IpAddr>);
 
 impl Resolve for Fixed {
+    /// Its addresses, whatever the name.
     fn resolve(&self, _: Name) -> Resolving {
         let found: Vec<SocketAddr> = self.0.iter().map(|ip| SocketAddr::new(*ip, 0)).collect();
         Box::pin(std::future::ready(Ok(Box::new(found.into_iter()) as Addrs)))
@@ -85,8 +86,9 @@ async fn a_name_at_loopback_is_refused_and_is_not_an_outage() {
 }
 
 /// The client uses no proxy, even one the environment names: the test above, run again in a
-/// process with a proxy set, still finds the name refused rather than sent on. The proxy's port is closed, so a request sent
-/// there fails at once, and each is bounded by the run's timeouts besides.
+/// process with a proxy set, still finds the name refused rather than sent on. The proxy's port
+/// is closed, so a request sent there fails at once, and each is bounded by the run's timeouts
+/// besides.
 #[test]
 fn a_proxy_in_the_environment_is_not_used() {
     let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
@@ -144,8 +146,8 @@ async fn a_name_reaches_only_its_addresses_in_reach() {
 }
 
 /// A reply kept from a private address is not handed to a plugin that reaches its host only
-/// through `*`: it is fetched again, and the guard refuses that. The test server stands for a host on the LAN:
-/// loopback is private to tests (`testing::reach`).
+/// through `*`: it is fetched again, and the guard refuses that. The test server stands for a
+/// host on the LAN: loopback is private to tests (`testing::reach`).
 #[tokio::test]
 async fn a_reply_kept_from_a_private_address_is_not_reused_through_any_destination() {
     let (port, hits) = server().await;

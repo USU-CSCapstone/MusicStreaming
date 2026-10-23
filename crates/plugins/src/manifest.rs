@@ -23,6 +23,7 @@ pub use permission::{Hook, Permission};
 pub use rate_limit::{Limit, Per, RateLimit, rate_limit_gap};
 pub use validate::validate;
 
+/// The name of the custom section that holds the manifest.
 pub const SECTION: &str = "jewelcase:manifest";
 
 /// The version of the plugin contract (`wit/plugin.wit`) a manifest's `apiVersion` must give.
@@ -31,6 +32,7 @@ pub const API_VERSION: &str = "0.1";
 /// The shortest interval a schedule may ask for.
 const MIN_EVERY_MINUTES: u64 = 5;
 
+/// What a plugin says of itself: who it is, what it asks for, and what can be set for it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
@@ -54,6 +56,7 @@ pub struct Manifest {
     pub personal_settings: Option<Schema>,
 }
 
+/// One permission a manifest asks for, and why.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissionRequest {
     pub permission: Permission,
@@ -95,6 +98,7 @@ impl Manifest {
         limits.filter_map(limit).collect()
     }
 
+    /// The permissions it marks required, which must be granted before it can be enabled.
     pub fn required(&self) -> impl Iterator<Item = Permission> + '_ {
         self.permissions.iter().filter(|r| r.required).map(|r| r.permission)
     }

@@ -14,6 +14,8 @@ const MAX_QUERY_WORDS: usize = 12;
 /// How well one query word matched one document: lower is better, 0 is no match.
 type Quality = u8;
 
+/// The quality of a match with `typos` typos, to a prefix of the word rather than all of it if
+/// `prefix`. `Index::score` reads both back out of it.
 fn quality(typos: u8, prefix: bool) -> Quality {
     1 + typos * 2 + u8::from(prefix)
 }

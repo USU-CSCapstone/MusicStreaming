@@ -26,8 +26,8 @@ const HIGH_PERCENTILE: usize = 95;
 /// full scale.
 pub fn waveform_level(amplitude: f64) -> u8 {
     let steps = (255.0 + f64::from(20 * STEPS_PER_DB) * amplitude.log10()).round();
-    // The float-to-integer `as` saturates and makes NaN 0, so silence, minus infinity, and a
-    // negative amplitude, which gives NaN, both give 0.
+    // The float-to-integer `as` saturates and makes NaN 0, so silence, whose logarithm is minus
+    // infinity, and a negative amplitude, whose logarithm is NaN, both give 0.
     u8::try_from((steps as i64).max(0)).unwrap_or(u8::MAX)
 }
 

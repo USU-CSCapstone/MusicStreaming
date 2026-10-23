@@ -5,6 +5,7 @@
 pub mod cache;
 pub mod limits;
 
+/// The pace each destination is kept to, and the replies kept for reuse.
 #[derive(Default)]
 pub struct Network {
     pub limits: limits::Limits,

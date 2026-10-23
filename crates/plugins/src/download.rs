@@ -7,6 +7,7 @@ use crate::manifest::InvalidPlugin;
 /// The largest plugin file accepted, uploaded or downloaded.
 pub const MAX_SIZE: usize = 50 << 20;
 
+/// How long a download may take, its whole body included.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The file at `url`, over http(s), up to [`MAX_SIZE`].

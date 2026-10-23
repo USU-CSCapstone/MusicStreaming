@@ -20,6 +20,7 @@ pub(crate) const SCHEMA_KEYS: [&str; 2] = ["properties", "required"];
 pub(crate) const SETTING_KEYS: [&str; 6] =
     ["type", "title", "description", "enum", "default", "writeOnly"];
 
+/// The settings a manifest declares under `settings` or `personalSettings`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Schema {
     pub properties: BTreeMap<String, Setting>,
@@ -27,6 +28,7 @@ pub struct Schema {
     pub required: Vec<String>,
 }
 
+/// One setting, as its manifest declares it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Setting {
@@ -45,6 +47,7 @@ pub struct Setting {
     pub write_only: bool,
 }
 
+/// What kind of value a setting takes, as its `type` names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
@@ -55,6 +58,8 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// Whether `value` is of this kind. A whole number is any number with no fraction, so `1.0`
+    /// is one.
     fn accepts(self, value: &Value) -> bool {
         match self {
             Kind::String => value.is_string(),
@@ -64,6 +69,7 @@ impl Kind {
         }
     }
 
+    /// The kind in words an admin reads, such as "a whole number".
     fn described(self) -> &'static str {
         match self {
             Kind::String => "text",
@@ -150,6 +156,8 @@ fn same(a: &Value, b: &Value) -> bool {
     a == b || a.as_f64().zip(b.as_f64()).is_some_and(|(x, y)| x == y)
 }
 
+/// Whether `name` may name a setting: up to 64 ASCII letters, digits, and `_`, starting with a
+/// letter.
 fn valid_name(name: &str) -> bool {
     let mut chars = name.chars();
     name.len() <= 64
@@ -212,6 +220,8 @@ mod tests {
 
     use super::*;
 
+    /// Four settings: a required secret, a required choice with a default, a whole number, and a
+    /// flag.
     fn schema() -> Schema {
         serde_json::from_value(json!({
             "properties": {
@@ -225,6 +235,7 @@ mod tests {
         .unwrap()
     }
 
+    /// The object `v` as the values entered for settings.
     fn values(v: Value) -> Map<String, Value> {
         v.as_object().unwrap().clone()
     }

@@ -29,6 +29,7 @@ impl ProbeInfo {
     }
 }
 
+/// The parts of ffprobe's JSON output that are read.
 #[derive(Deserialize)]
 struct Output {
     #[serde(default)]

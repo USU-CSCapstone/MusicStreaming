@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet};
 use super::{Document, Entry, Index, Kind, words};
 
 impl Index {
+    /// An index of `documents`, ready to search. Each document's name is folded into words as
+    /// [`words`] folds it.
     pub fn build(documents: impl IntoIterator<Item = Document>) -> Index {
         let folded: Vec<(Kind, Vec<String>, i64)> =
             documents.into_iter().map(|doc| (doc.kind, words(&doc.name), doc.id)).collect();
