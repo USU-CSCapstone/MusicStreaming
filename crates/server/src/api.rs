@@ -49,6 +49,7 @@ use axum::extract::FromRef;
 use axum::middleware;
 use axum::routing::{any, get, post};
 
+pub use authenticate::Caller;
 pub use id::{AnyId, Id, Uuid};
 pub use images::Images;
 pub use player::Players;

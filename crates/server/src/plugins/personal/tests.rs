@@ -1,7 +1,7 @@
 use jewelcase_plugins::Permission::{LibraryRead, SearchActivity, Searched};
 use serde_json::{Map, Value, json};
 
-use super::super::testing::{connect, database, enable, grant, install, manifest, plugins};
+use super::super::testing::{caller, connect, database, enable, grant, install, manifest, plugins};
 use super::super::{PluginError, Plugins};
 use super::{SharingError, connectable, disconnect, set_search_sharing, values};
 use crate::db::testing::{User, access};
@@ -30,8 +30,9 @@ async fn scrobbler(plugins: &Plugins, db: &Database) {
     .unwrap();
 }
 
+/// Each plugin `user` (an admin if `admin`) can connect, by name, and whether they connected it.
 async fn listed(db: &Database, user: i64, admin: bool) -> Vec<(String, bool)> {
-    let found = db.read(move |conn| connectable(conn, user, admin)).await.unwrap();
+    let found = db.read(move |conn| connectable(conn, caller(user, admin))).await.unwrap();
     found.into_iter().map(|c| (c.name, c.connected)).collect()
 }
 
@@ -56,7 +57,7 @@ async fn settings_are_checked_before_the_plugin_is_asked() {
     scrobbler(&plugins, &db).await;
     let save = |user: i64, entered: Value| {
         let entered: Map<String, Value> = entered.as_object().unwrap().clone();
-        plugins.save_personal("scrobbler".into(), user, false, entered)
+        plugins.save_personal("scrobbler".into(), caller(user, false), entered)
     };
     let refused = |result: Result<(), PluginError>| match result {
         Err(PluginError::SettingsInvalid(why)) => why,
@@ -65,6 +66,13 @@ async fn settings_are_checked_before_the_plugin_is_asked() {
     assert_eq!(refused(save(7, json!({ "user": "sam" })).await), "token is required.");
     assert_eq!(refused(save(7, json!({ "token": 5 })).await), "token must be text.");
     assert!(matches!(save(8, json!({ "token": "t" })).await, Err(PluginError::NotFound)));
+
+    // A stored shared value of the same name, as an earlier version of the plugin declared,
+    // gives none.
+    let shared = "INSERT INTO plugin_settings (plugin_id, library_id, settings) \
+                  VALUES ('scrobbler', 0, '{\"token\": \"stale\"}')";
+    db.write(move |tx| tx.execute(shared, [])).await.unwrap();
+    assert_eq!(refused(save(7, json!({ "user": "sam" })).await), "token is required.");
 }
 
 #[tokio::test]
@@ -76,7 +84,7 @@ async fn disconnecting_forgets_what_was_set() {
     let stored = db.read(|conn| values(conn, "scrobbler", 7)).await.unwrap();
     assert_eq!(Value::Object(stored), json!({ "token": "t" }));
 
-    db.write(|tx| disconnect(tx, "scrobbler", 7)).await.unwrap();
+    db.write(|tx| disconnect(tx, "scrobbler", caller(7, false))).await.unwrap();
     assert_eq!(listed(&db, 7, false).await, [("Scrobbler".to_owned(), false)]);
     assert!(db.read(|conn| values(conn, "scrobbler", 7)).await.unwrap().is_empty());
 }
@@ -125,13 +133,13 @@ async fn sharers(plugins: &Plugins, db: &Database) {
 /// Each plugin `user` can connect, by ID: whether they connected it, and whether they share
 /// their searches with it.
 async fn connections(db: &Database, user: i64) -> Vec<(String, bool, bool)> {
-    let found = db.read(move |conn| connectable(conn, user, false)).await.unwrap();
+    let found = db.read(move |conn| connectable(conn, caller(user, false))).await.unwrap();
     found.into_iter().map(|c| (c.id, c.connected, c.shares_searches)).collect()
 }
 
 /// Turns sharing `user`'s searches with `id` on or off, as that user rather than an admin.
 async fn share(db: &Database, id: &'static str, user: i64, on: bool) -> Result<(), SharingError> {
-    db.try_write(move |tx| set_search_sharing(tx, id, user, false, on)).await
+    db.try_write(move |tx| set_search_sharing(tx, id, caller(user, false), on)).await
 }
 
 /// Every request to forget written, as (user, library, plugin).
@@ -163,7 +171,7 @@ async fn connecting_shares_nothing_and_sharing_needs_a_connection() {
 
     connect(&db, "first", 7, json!({ "token": "t" }), 100).await;
     assert_eq!(connections(&db, 7).await, [row("first", true, false), row("second", false, false)]);
-    db.write(|tx| disconnect(tx, "first", 7)).await.unwrap();
+    db.write(|tx| disconnect(tx, "first", caller(7, false))).await.unwrap();
     assert_eq!(connections(&db, 7).await, nothing);
     assert!(stopped(&db).await.is_empty(), "nothing to forget when they never shared");
 }
@@ -184,8 +192,8 @@ async fn sharing_is_per_user_and_per_plugin_and_holds_in_every_library() {
     assert!(share(&db, "first", 7, false).await.is_ok());
     assert_eq!(connections(&db, 7).await, [row("first", true, false), row("second", true, true)]);
     assert_eq!(connections(&db, 8).await, [row("first", true, true), row("second", true, false)]);
-    let forget = vec![(7, 1, "first".to_owned()), (7, 2, "first".to_owned())];
-    assert_eq!(stopped(&db).await, forget, "asked to forget in each library it serves");
+    let forget = vec![(7, 1, "first".to_owned())];
+    assert_eq!(stopped(&db).await, forget, "asked to forget only where they reach");
     assert!(share(&db, "first", 7, false).await.is_ok());
     assert_eq!(stopped(&db).await, forget, "once");
 }
@@ -198,13 +206,13 @@ async fn disconnecting_while_sharing_stops_sharing_and_asks_to_forget() {
         connect(&db, "first", user, json!({ "token": "t" }), 100).await;
         assert!(share(&db, "first", user, true).await.is_ok());
     }
-    db.write(|tx| disconnect(tx, "first", 7)).await.unwrap();
+    db.write(|tx| disconnect(tx, "first", caller(7, false))).await.unwrap();
     assert_eq!(
         connections(&db, 7).await,
         [row("first", false, false), row("second", false, false)]
     );
     assert!(db.read(|conn| values(conn, "first", 7)).await.unwrap().is_empty());
-    assert_eq!(stopped(&db).await, [(7, 1, "first".to_owned()), (7, 2, "first".to_owned())]);
+    assert_eq!(stopped(&db).await, [(7, 1, "first".to_owned())], "only where they reach");
     assert_eq!(connections(&db, 8).await, [row("first", true, true), row("second", false, false)]);
 }
 
@@ -256,4 +264,19 @@ async fn connecting_to_a_plugin_no_longer_installed_connects_nothing() {
         .await
         .unwrap();
     assert_eq!(count, 0);
+}
+
+/// An admin reaches every library without being granted any, so a plugin is asked to forget their
+/// searches in each library it serves.
+#[tokio::test]
+async fn an_admin_is_forgotten_in_every_library_the_plugin_serves() {
+    let (temp, db) = database().await;
+    sharers(&plugins(&temp, &db), &db).await;
+    db.write(|tx| User::new(9, "admin").insert(tx)).await.unwrap();
+    connect(&db, "first", 9, json!({ "token": "t" }), 100).await;
+    for on in [true, false] {
+        let set = db.try_write(move |tx| set_search_sharing(tx, "first", caller(9, true), on));
+        assert!(set.await.is_ok());
+    }
+    assert_eq!(stopped(&db).await, [(9, 1, "first".to_owned()), (9, 2, "first".to_owned())]);
 }

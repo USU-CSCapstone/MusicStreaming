@@ -14,7 +14,7 @@ use super::{
 };
 use crate::db::DbError;
 use crate::plugins::personal::disconnect;
-use crate::plugins::testing::{connect, install, manifest};
+use crate::plugins::testing::{caller, connect, install, manifest};
 
 #[tokio::test]
 async fn plays_reach_a_plugin_only_for_users_who_connected_it_and_only_since() {
@@ -68,7 +68,7 @@ async fn a_connection_to_another_plugin_sends_this_one_nothing() {
 
     // Found due just before they disconnected it, so only the other connection is left.
     start(&db, "now", 7, 11, 1000).await;
-    db.write(|tx| disconnect(tx, "plugin", 7)).await.unwrap();
+    db.write(|tx| disconnect(tx, "plugin", caller(7, false))).await.unwrap();
     for hook in [Played, Playing] {
         let due = due_for(hook, 7);
         let (_, nothing) = db.read(move |conn| (due.read)(conn, &due, 1000)).await.unwrap();

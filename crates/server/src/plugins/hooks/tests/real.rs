@@ -11,7 +11,7 @@ use serde_json::json;
 use super::{changes, play};
 use crate::db::Database;
 use crate::db::testing::{User, access};
-use crate::plugins::testing::{connect, database, enable_ungranted, grant, plugins};
+use crate::plugins::testing::{caller, connect, database, enable_ungranted, grant, plugins};
 use crate::plugins::{PluginError, Plugins};
 
 /// Waits for the one delivery under way to finish, and returns its run's summary and the
@@ -155,7 +155,8 @@ async fn delivers_plays_to_a_real_scrobbler() {
     .unwrap();
 
     let token = json!({ "token": "a-token" });
-    let refused = plugins.save_personal(id.clone(), 7, false, token.as_object().unwrap().clone());
+    let refused =
+        plugins.save_personal(id.clone(), caller(7, false), token.as_object().unwrap().clone());
     match refused.await {
         Err(PluginError::SettingsInvalid(why)) => assert_eq!(why, REFUSED),
         other => panic!("{other:?}"),

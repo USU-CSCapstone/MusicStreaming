@@ -14,10 +14,12 @@ use crate::plugins::Plugins;
 use crate::plugins::testing::{connect, database, enable, grant, install, manifest, plugins};
 
 mod changes;
+mod faults;
 mod libraries;
 mod listening;
 mod outages;
 mod real;
+mod reenabling;
 mod reinstall;
 mod scans;
 mod searches;
@@ -106,21 +108,10 @@ fn row(hook: Permission) -> (String, Read) {
     (sql, read)
 }
 
-/// `hook` found due for the stand-in plugin in library 1, for `user`, at position 0 with no
-/// failures.
+/// `hook` found due for the stand-in plugin in library 1, for `user`, at position 0.
 fn due_for(hook: Permission, user: i64) -> Due {
     let (_, read) = row(hook);
-    Due {
-        hook,
-        read,
-        plugin: "plugin".into(),
-        library: 1,
-        position: 0,
-        failures: 0,
-        outages: 0,
-        outage_since: None,
-        user,
-    }
+    Due { hook, read, plugin: "plugin".into(), library: 1, position: 0, user }
 }
 
 /// Every permission that is a hook has one row in the table, and nothing else has one.

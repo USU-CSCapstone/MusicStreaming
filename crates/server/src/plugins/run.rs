@@ -7,20 +7,23 @@ use std::path::{Path, PathBuf};
 use jewelcase_plugins::{Event, Grants, Manifest, Outcome, Permission};
 use jewelcase_scanner::Trigger;
 use rusqlite::{Connection, params};
+use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::library::RunLibrary;
-use super::{PluginError, Plugins, grants, personal, rate_limits, settings};
+use super::{PluginError, Plugins, grants, personal, rate_limits, settings, unexpected};
 use crate::db::now_ms;
 
-/// How a run went, as the admin sees it.
+/// How a run went, as the admin sees it: the spec's `PluginRunResult`.
+#[derive(Serialize)]
 pub struct RunResult {
     pub ok: bool,
     pub summary: String,
     pub log: Vec<String>,
     /// Files it saved into the library.
     pub saved: usize,
-    /// Whether a scan was queued to pick those files up.
+    /// Whether the scanner will pick those up: a scan of their folders is queued.
+    #[serde(rename = "scannerRunning")]
     pub scanning: bool,
 }
 
@@ -58,11 +61,6 @@ impl Plugins {
             scanning: false,
         };
         for (library, permissions) in libraries {
-            let missing = grants::missing(&manifest, &permissions);
-            if !missing.is_empty() {
-                let names: Vec<_> = missing.into_iter().map(Permission::title).collect();
-                return Ok(RunResult::failed(format!("It still needs {}.", names.join(" and "))));
-            }
             let (outcome, scanning) = self
                 .run_in(&id, &manifest, RunFor { library, user: None }, permissions, Event::Run)
                 .await?;
@@ -152,7 +150,7 @@ impl Plugins {
                 host.run(&path, grants, RunLibrary::new(db, &plugin, library), event).await
             })
             .await
-            .map_err(|e| PluginError::Internal(e.to_string()))?;
+            .map_err(unexpected)?;
         if !outcome.refused.is_empty() {
             let refused = &outcome.refused;
             tracing::warn!(plugin = id, library, user, %refused, "refused a plugin");

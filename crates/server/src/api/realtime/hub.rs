@@ -88,7 +88,9 @@ impl Hub {
             }
             // A full outbox loses the message, but the connection still closes, and the
             // device finds it is signed out when it tries to reconnect.
-            let _ = connection.outbox.try_send(message.clone());
+            if let Err(error) = connection.outbox.try_send(message.clone()) {
+                tracing::debug!(%error, "revocation dropped");
+            }
             false
         });
     }

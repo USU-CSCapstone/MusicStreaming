@@ -41,7 +41,7 @@ pub async fn list(
     State(db): State<Arc<Database>>,
     caller: Caller,
 ) -> Result<Json<PersonalPluginList>, Problem> {
-    let found = db.read(move |conn| personal::connectable(conn, caller.user, caller.admin)).await?;
+    let found = db.read(move |conn| personal::connectable(conn, caller)).await?;
     let items = found
         .into_iter()
         .map(|p| PersonalPlugin {
@@ -63,8 +63,7 @@ pub async fn get_settings(
     Path(id): Path<String>,
 ) -> Result<Json<PluginSettings>, Problem> {
     db.try_read(move |conn| {
-        let manifest = personal::manifest(conn, &id, caller.user, caller.admin)?
-            .ok_or_else(Problem::not_found)?;
+        let manifest = personal::manifest(conn, &id, caller)?.ok_or_else(Problem::not_found)?;
         let schema = manifest.personal_settings.unwrap_or_default();
         Ok(Json(PluginSettings::new(schema, personal::values(conn, &id, caller.user)?)))
     })
@@ -79,7 +78,7 @@ pub async fn set_settings(
     Path(id): Path<String>,
     extract::Json(update): extract::Json<SettingsUpdate>,
 ) -> Result<Json<PluginSettings>, Problem> {
-    plugins.save_personal(id.clone(), caller.user, caller.admin, update.values).await?;
+    plugins.save_personal(id.clone(), caller, update.values).await?;
     get_settings(State(db), caller, Path(id)).await
 }
 
@@ -96,11 +95,7 @@ pub async fn set_search_sharing(
     Path(id): Path<String>,
     extract::Json(SearchSharing { sharing }): extract::Json<SearchSharing>,
 ) -> Result<StatusCode, Problem> {
-    let set = db
-        .try_write(move |tx| {
-            personal::set_search_sharing(tx, &id, caller.user, caller.admin, sharing)
-        })
-        .await;
+    let set = db.try_write(move |tx| personal::set_search_sharing(tx, &id, caller, sharing)).await;
     match set {
         Ok(()) => Ok(StatusCode::NO_CONTENT),
         Err(SharingError::Unknown) => Err(Problem::not_found()),
@@ -120,7 +115,7 @@ pub async fn disconnect(
     caller: Caller,
     Path(id): Path<String>,
 ) -> Result<StatusCode, Problem> {
-    db.write(move |tx| personal::disconnect(tx, &id, caller.user)).await?;
+    db.write(move |tx| personal::disconnect(tx, &id, caller)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

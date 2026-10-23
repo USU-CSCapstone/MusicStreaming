@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::{HANDLED, connected, deliver, play, setup, tracks_by_user};
 use crate::db::Database;
 use crate::plugins::personal::set_search_sharing;
-use crate::plugins::testing::{connect, enable, grant, install, manifest};
+use crate::plugins::testing::{caller, connect, enable, grant, install, manifest};
 use crate::plugins::{PluginError, add};
 
 /// How many rows `table` has.
@@ -34,7 +34,7 @@ async fn installed(db: &Database) -> Value {
 async fn a_reinstall_sends_nothing_from_before_and_users_reconnect() {
     let (_temp, db, plugins) = setup().await;
     connected(&plugins, &db, &[ListeningActivity, Played, SearchActivity, Searched]).await;
-    db.try_write(|tx| set_search_sharing(tx, "plugin", 7, false, true)).await.unwrap();
+    db.try_write(|tx| set_search_sharing(tx, "plugin", caller(7, false), true)).await.unwrap();
     play(&db, "a", 7, 11, 200, "finished").await;
     play(&db, "b", 7, 12, 210, "finished").await;
     assert_eq!(tracks_by_user(deliver(&db, 0, HANDLED).await), [(7, vec![11, 12])]);
@@ -78,7 +78,9 @@ async fn a_reinstall_is_not_told_again_to_forget_what_it_was_told_before() {
     let (_temp, db, plugins) = setup().await;
     connected(&plugins, &db, &[SearchActivity, Searched]).await;
     for sharing in [true, false] {
-        db.try_write(move |tx| set_search_sharing(tx, "plugin", 7, false, sharing)).await.unwrap();
+        db.try_write(move |tx| set_search_sharing(tx, "plugin", caller(7, false), sharing))
+            .await
+            .unwrap();
     }
     assert_eq!(deliver(&db, 0, HANDLED).await.len(), 1, "told to forget once");
     // User 7 stops sharing with `other` too, which is then disabled before it is told.
@@ -89,7 +91,9 @@ async fn a_reinstall_is_not_told_again_to_forget_what_it_was_told_before() {
     enable(&plugins, "other", true).await;
     connect(&db, "other", 7, json!({}), 0).await;
     for sharing in [true, false] {
-        db.try_write(move |tx| set_search_sharing(tx, "other", 7, false, sharing)).await.unwrap();
+        db.try_write(move |tx| set_search_sharing(tx, "other", caller(7, false), sharing))
+            .await
+            .unwrap();
     }
     enable(&plugins, "other", false).await;
 

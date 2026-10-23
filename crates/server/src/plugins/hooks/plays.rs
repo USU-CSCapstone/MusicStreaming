@@ -39,7 +39,8 @@ pub fn plays(
         .prepare_cached(&format!(
             "SELECT {}, p.started_at, p.listen_time_ms, p.ended FROM play_events e \
              JOIN plays p ON p.user_id = e.user_id AND p.id = e.play_id \
-             JOIN tracks t ON t.id = p.track_id JOIN albums al ON al.id = t.album_id \
+             JOIN tracks t ON t.id = p.track_id AND t.library_id = e.library_id \
+             JOIN albums al ON al.id = t.album_id \
              WHERE {after} AND e.seq <= ?5 ORDER BY e.seq",
             TRACK_COLUMNS.join(", ")
         ))?

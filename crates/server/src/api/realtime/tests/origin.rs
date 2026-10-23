@@ -20,6 +20,7 @@ async fn a_page_connects_only_from_this_server() {
         ("https://music.example", "x-forwarded-host", "music.example"),
         ("https://music.example", "host", "music.example:443"),
         ("https://music.example:443", "host", "music.example"),
+        ("http://music.example", "host", "music.example:80"),
         ("https://Music.Example:8443", "host", "music.example:8443"),
         ("http://[::1]:8443", "host", "[::1]:8443"),
     ] {

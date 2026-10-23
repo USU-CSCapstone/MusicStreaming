@@ -2,8 +2,8 @@
 //! where a library's differ. A run gets the settings in effect: the library's own, else the
 //! server-wide ones, else the defaults the manifest declares.
 
-use jewelcase_plugins::Event;
 use jewelcase_plugins::settings::Schema;
+use jewelcase_plugins::{Event, Manifest, Permission};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Map, Value};
 
@@ -86,25 +86,39 @@ pub fn merge(
     values
 }
 
+/// Settings about to be saved at one level: an admin's, server-wide or for a library, or one
+/// user's own.
+pub(super) struct Saving {
+    /// The plugin's manifest, for its check run.
+    pub manifest: Manifest,
+    /// The settings saved there: the manifest's `settings` or `personalSettings`.
+    pub schema: Schema,
+    /// The values stored there now.
+    pub stored: Map<String, Value>,
+    /// What a run there gets beneath them: the server-wide settings under a library's, and the
+    /// shared settings in effect beside a user's.
+    pub beneath: Map<String, Value>,
+    /// What the plugin's check run is granted there.
+    pub permissions: Vec<Permission>,
+}
+
 impl Plugins {
-    /// Saves settings an admin `entered` for `id` at `level`: [`SERVER`] or a library's ID. They
-    /// must be of the kinds and among the choices the manifest declares, leave no required
-    /// setting without a value, and pass the plugin's own check, run with them, so a wrong key
-    /// is caught as it is entered rather than at three in the morning (§6). Only then are they
-    /// stored. Stored values at `level` that cannot be read are logged and saved over as if none
-    /// were set, so an admin can mend them by entering every setting again.
+    /// Saves settings an admin `entered` for `id` at `level`: [`SERVER`] or a library's ID, as
+    /// [`Plugins::checked`] accepts them. Stored values at `level` that cannot be read are logged
+    /// and saved over as if none were set, so an admin can mend them by entering every setting
+    /// again.
     pub async fn save_settings(
         &self,
         id: String,
         level: i64,
         entered: Map<String, Value>,
     ) -> Result<(), PluginError> {
-        let (manifest, own, server, permissions) = {
+        let saving = {
             let id = id.clone();
             self.db
                 .try_read(move |conn| -> Result<_, PluginError> {
                     let manifest = grants::manifest(conn, &id)?.ok_or(PluginError::NotFound)?;
-                    let own = match self::level(conn, &id, level) {
+                    let stored = match self::level(conn, &id, level) {
                         Err(error @ rusqlite::Error::FromSqlConversionFailure(..)) => {
                             tracing::warn!(
                                 plugin = id,
@@ -114,47 +128,60 @@ impl Plugins {
                             );
                             Map::new()
                         }
-                        own => own?,
+                        stored => stored?,
                     };
-                    // At the server level, `own` is the server-wide settings.
-                    let server =
+                    // At the server level, `stored` is the server-wide settings.
+                    let beneath =
                         if level == SERVER { Map::new() } else { self::level(conn, &id, SERVER)? };
                     // At the server level, only what is granted to the plugin itself.
                     let permissions = grants::granted(conn, &id, level)?;
-                    Ok((manifest, own, server, permissions))
+                    let schema = manifest.settings.clone().unwrap_or_default();
+                    Ok(Saving { manifest, schema, stored, beneath, permissions })
                 })
                 .await?
         };
-        let schema = manifest.settings.clone().unwrap_or_default();
-        let values = merge(&schema, &own, entered);
+        let run_for = RunFor { library: level, user: None };
+        let values = self.checked(&id, run_for, saving, entered).await?;
+        self.db.write(move |tx| store(tx, &id, level, &values)).await?;
+        Ok(())
+    }
+
+    /// The values to store when `entered` is saved for `id` over what `saving` holds ([`merge`]),
+    /// once they are of the kinds and among the choices its schema declares, leave no required
+    /// setting without a value, and pass the plugin's own check, run for `run_for` with them, what
+    /// is beneath them, and the defaults, so a wrong key is caught as it is entered rather than at
+    /// three in the morning (§6). Server-wide settings may leave a required one to each library,
+    /// and a library's may take one from them; a user's must give every one themselves. Values
+    /// that fail are a [`PluginError::SettingsInvalid`] that says why.
+    pub(super) async fn checked(
+        &self,
+        id: &str,
+        run_for: RunFor,
+        saving: Saving,
+        entered: Map<String, Value>,
+    ) -> Result<Map<String, Value>, PluginError> {
+        let Saving { manifest, schema, stored, beneath, permissions } = saving;
+        let values = merge(&schema, &stored, entered);
         let problems = schema.check(&values);
         if !problems.is_empty() {
             return Err(PluginError::SettingsInvalid(format!("{}.", problems.join("; "))));
         }
-        let mut set = server;
+        let mut set = beneath;
         set.extend(values.clone());
-        let missing = schema.missing(&set);
-        // Server-wide settings may leave a required one to each library; a library's may not.
-        if level != SERVER && !missing.is_empty() {
-            return Err(PluginError::SettingsInvalid(format!(
-                "{} is required.",
-                missing.join(" and ")
-            )));
+        let missing = match run_for {
+            RunFor { user: Some(_), .. } => schema.missing(&values),
+            RunFor { library: SERVER, .. } => Vec::new(),
+            _ => schema.missing(&set),
+        };
+        if !missing.is_empty() {
+            let missing = missing.join(" and ");
+            return Err(PluginError::SettingsInvalid(format!("{missing} is required.")));
         }
         let candidate = schema.with_defaults(&set);
-        let outcome = self
-            .execute(
-                &id,
-                &manifest,
-                RunFor { library: level, user: None },
-                permissions,
-                candidate,
-                Event::CheckSettings,
-            )
-            .await?;
+        let check = Event::CheckSettings;
+        let outcome = self.execute(id, &manifest, run_for, permissions, candidate, check).await?;
         outcome.result.map_err(|error| PluginError::SettingsInvalid(error.to_string()))?;
-        self.db.write(move |tx| store(tx, &id, level, &values)).await?;
-        Ok(())
+        Ok(values)
     }
 }
 

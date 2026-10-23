@@ -17,17 +17,21 @@ pub mod settings;
 pub mod testing;
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use jewelcase_plugins::{Host, InvalidPlugin, Manifest, Permission};
 use jewelcase_scanner::Scanner;
 use rusqlite::{Connection, params};
+use tempfile::NamedTempFile;
 use tokio::runtime::Runtime;
 use tokio::sync::Notify;
+use tokio::task::JoinError;
 
 use crate::db::{Database, DbError, Json, now_ms};
 use library::RunLibrary;
+pub use run::RunResult;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {
@@ -46,9 +50,12 @@ pub enum PluginError {
     PermissionsRequired(Vec<&'static str>),
     #[error(transparent)]
     Db(#[from] DbError),
-    /// The cause is logged; it can describe the host.
+    /// A fault of the server's, in fixed words an admin can read. The cause is logged.
     #[error("{0}")]
-    Internal(String),
+    Internal(&'static str),
+    /// A fault of the server's with nothing safe to say about it. The cause is logged.
+    #[error("an unexpected error")]
+    Unexpected,
 }
 
 impl From<rusqlite::Error> for PluginError {
@@ -113,7 +120,7 @@ impl Plugins {
         let host = self.host.get_or_init(|| Ok(Arc::new(Host::new(self.compiled.as_deref())?)));
         host.as_ref().map(Arc::clone).map_err(|error| {
             tracing::error!(error = %format_args!("{error:#}"), "cannot start the plugin host");
-            PluginError::Internal("Plugins cannot run on this server.".into())
+            PluginError::Internal("Plugins cannot run on this server.")
         })
     }
 
@@ -129,7 +136,7 @@ impl Plugins {
         });
         runtime.as_ref().map_err(|error| {
             tracing::error!(%error, "cannot start the plugin runtime");
-            PluginError::Internal("Plugins cannot run on this server.".into())
+            PluginError::Internal("Plugins cannot run on this server.")
         })
     }
 
@@ -157,30 +164,30 @@ impl Plugins {
         }
         let manifest = jewelcase_plugins::manifest::read(&bytes)?;
         let host = self.host()?;
-        let checker = host.clone();
-        // Compiling is CPU-bound: 10 ms for a Rust plugin, about a second for JavaScript.
-        let (bytes, checked) = tokio::task::spawn_blocking(move || {
-            let checked = checker.check(&bytes);
-            (bytes, checked)
+        let (checker, dir) = (host.clone(), self.dir.clone());
+        // Compiling is CPU-bound: 10 ms for a Rust plugin, about a second for JavaScript. A file
+        // that checks out is then staged where it goes, also off the async threads.
+        let (linked, staged) = tokio::task::spawn_blocking(move || -> Result<_, PluginError> {
+            let linked = checker.check(&bytes).map_err(|e| {
+                PluginError::Invalid(format!("This plugin cannot run here: {e:#}."))
+            })?;
+            std::fs::create_dir_all(&dir).map_err(internal)?;
+            let mut staged = NamedTempFile::new_in(&dir).map_err(internal)?;
+            staged.write_all(&bytes).map_err(internal)?;
+            staged.as_file().sync_all().map_err(internal)?;
+            Ok((linked, staged))
         })
         .await
-        .map_err(|e| PluginError::Internal(e.to_string()))?;
-        let linked = checked
-            .map_err(|e| PluginError::Invalid(format!("This plugin cannot run here: {e:#}.")))?;
-
-        std::fs::create_dir_all(&self.dir).map_err(internal)?;
-        let part = self.dir.join(format!("{}.{}.part", manifest.id, std::process::id()));
-        std::fs::write(&part, &bytes).map_err(internal)?;
+        .map_err(unexpected)??;
         let (target, id) = (self.path(&manifest.id), manifest.id.clone());
-        let staged = part.clone();
         self.db
             .try_write(move |tx| {
                 add(tx, &manifest, source_url.as_deref())?;
-                // Put in place within the transaction, so a row never names a missing file.
-                std::fs::rename(&staged, &target).map_err(internal)
+                // Put in place within the transaction, so a row never names a missing file. A
+                // staged file not put in place is deleted as it is dropped.
+                staged.persist(&target).map(drop).map_err(|error| internal(error.into()))
             })
-            .await
-            .inspect_err(|_| drop(std::fs::remove_file(&part)))?;
+            .await?;
         host.installed(&id, linked);
         Ok(id)
     }
@@ -204,15 +211,15 @@ impl Plugins {
         if removed == 0 {
             return Err(PluginError::NotFound);
         }
-        let file = std::fs::remove_file(path).or_else(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => Ok(()),
-            _ => Err(internal(e)),
-        });
+        let file = tokio::task::spawn_blocking(move || std::fs::remove_file(path)).await;
         // A host not started yet has nothing linked to forget.
         if let Some(Ok(host)) = self.host.get() {
             host.uninstalled(&plugin);
         }
-        file
+        match file.map_err(unexpected)? {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(internal(error)),
+            _ => Ok(()),
+        }
     }
 
     /// Replaces what `id` is granted ([`grants::set`]).
@@ -292,7 +299,15 @@ fn add(
 #[cfg(test)]
 mod tests;
 
+/// [`PluginError::Internal`] for a plugin's file that could not be stored or removed, once
+/// `error` is logged.
 fn internal(error: std::io::Error) -> PluginError {
     tracing::error!(%error, "cannot store a plugin");
-    PluginError::Internal("The plugin could not be stored.".into())
+    PluginError::Internal("The plugin could not be stored.")
+}
+
+/// [`PluginError::Unexpected`] for a task that panicked or was cancelled, once `error` is logged.
+fn unexpected(error: JoinError) -> PluginError {
+    tracing::error!(%error, "a plugin task failed");
+    PluginError::Unexpected
 }

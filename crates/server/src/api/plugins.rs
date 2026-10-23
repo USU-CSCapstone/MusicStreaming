@@ -21,7 +21,7 @@ use super::extract::{self, Path};
 use super::scope::Scope;
 use super::{AnyId, Code, Id, Problem};
 use crate::db::Database;
-use crate::plugins::{PluginError, Plugins, grants, settings};
+use crate::plugins::{PluginError, Plugins, RunResult, grants, settings};
 use representation::Plugin;
 
 #[derive(Serialize)]
@@ -165,32 +165,12 @@ pub async fn set_enabled(
     Ok(Json(plugin(&db, id).await?))
 }
 
-/// The spec's `PluginRunResult`.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RunResult {
-    ok: bool,
-    summary: String,
-    log: Vec<String>,
-    /// Files it saved into the library.
-    saved: usize,
-    /// Whether the scanner will pick those up: a scan of their folders is queued.
-    scanner_running: bool,
-}
-
 /// Runs the plugin once in each library it is enabled in, and answers when it is done.
 pub async fn run(
     State(plugins): State<Arc<Plugins>>,
     Path(id): Path<String>,
 ) -> Result<Json<RunResult>, Problem> {
-    let result = plugins.run(id).await?;
-    Ok(Json(RunResult {
-        ok: result.ok,
-        summary: result.summary,
-        log: result.log,
-        saved: result.saved,
-        scanner_running: result.scanning,
-    }))
+    Ok(Json(plugins.run(id).await?))
 }
 
 #[derive(Deserialize)]
@@ -292,6 +272,7 @@ impl From<PluginError> for Problem {
             }
             PluginError::Db(error) => Problem::from(error),
             PluginError::Internal(detail) => Problem::new(Code::Internal).detail(detail),
+            PluginError::Unexpected => Problem::new(Code::Internal),
         }
     }
 }

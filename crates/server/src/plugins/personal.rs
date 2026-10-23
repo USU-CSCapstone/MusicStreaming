@@ -6,15 +6,17 @@
 //!
 //! Sharing searches takes one step more (`requirements/search.md` §6): a connected user turns
 //! it on for that plugin, and it is off until they do. Turning it off, or disconnecting, asks
-//! the plugin to forget every search it was sent (`requirements/users.md` §7).
+//! the plugin to forget every search it was sent, in each library they reach
+//! (`requirements/users.md` §7).
 
-use jewelcase_plugins::{Event, Manifest, Permission};
+use jewelcase_plugins::{Manifest, Permission};
 use rusqlite::{Connection, OptionalExtension, named_params, params};
 use serde_json::{Map, Value};
 
 use super::run::RunFor;
-use super::settings::{self, SERVER, merge};
+use super::settings::{self, SERVER, Saving};
 use super::{PluginError, Plugins, grants};
+use crate::api::Caller;
 use crate::db::{DbError, Json, now_ms, reaches};
 
 /// Whether `:user` (an admin if `:admin`) reaches a library the plugin `p` is enabled in.
@@ -22,6 +24,15 @@ const REACHED: &str = concat!(
     "EXISTS (SELECT 1 FROM plugin_libraries l WHERE l.plugin_id = p.id AND l.enabled AND ",
     reaches!(admin: ":admin", user: ":user", library: "l.library_id"),
     ")"
+);
+
+/// Asks the plugin `:id` to forget `:user`'s searches at `:at`, in each library it serves that
+/// they (an admin if `:admin`) reach.
+const STOPPED: &str = concat!(
+    "INSERT INTO search_events (user_id, library_id, kind, plugin_id, created_at) \
+     SELECT :user, l.library_id, 'stopped', :id, :at FROM plugin_libraries l \
+     WHERE l.plugin_id = :id AND ",
+    reaches!(admin: ":admin", user: ":user", library: "l.library_id")
 );
 
 /// A plugin the user can connect.
@@ -35,13 +46,9 @@ pub struct Connectable {
     pub shares_searches: bool,
 }
 
-/// Every plugin `user` can connect: each with personal settings, enabled in a library they
+/// Every plugin `caller` can connect: each with personal settings, enabled in a library they
 /// reach, by name.
-pub fn connectable(
-    conn: &Connection,
-    user: i64,
-    admin: bool,
-) -> rusqlite::Result<Vec<Connectable>> {
+pub fn connectable(conn: &Connection, caller: Caller) -> rusqlite::Result<Vec<Connectable>> {
     conn.prepare_cached(&format!(
         "SELECT p.id, json_extract(p.manifest, '$.name') AS name, \
                 json_extract(p.manifest, '$.description'), \
@@ -51,7 +58,7 @@ pub fn connectable(
          WHERE json_extract(p.manifest, '$.personalSettings') IS NOT NULL \
               AND {REACHED} ORDER BY name, p.id"
     ))?
-    .query_map(named_params! { ":user": user, ":admin": admin }, |row| {
+    .query_map(named_params! { ":user": caller.user, ":admin": caller.admin }, |row| {
         Ok(Connectable {
             id: row.get(0)?,
             name: row.get(1)?,
@@ -107,22 +114,22 @@ impl From<rusqlite::Error> for SharingError {
     }
 }
 
-/// Turns sharing `user`'s searches with `id` on or off. On applies from now: nothing searched
-/// before is sent. Off asks it to forget everything it was sent. A failure is a [`SharingError`]
-/// that says why.
+/// Turns sharing `caller`'s searches with `id` on or off. On applies from now: nothing searched
+/// before is sent. Off asks it to forget everything it was sent, in each library it serves that
+/// they reach. A failure is a [`SharingError`] that says why.
 pub fn set_search_sharing(
     conn: &Connection,
     id: &str,
-    user: i64,
-    admin: bool,
+    caller: Caller,
     sharing: bool,
 ) -> Result<(), SharingError> {
-    if manifest(conn, id, user, admin)?.is_none() {
+    if manifest(conn, id, caller)?.is_none() {
         return Err(SharingError::Unknown);
     }
     if !sharing {
-        return Ok(stop_sharing(conn, id, user)?);
+        return Ok(stop_sharing(conn, id, caller)?);
     }
+    let user = caller.user;
     let connected = conn
         .prepare_cached("SELECT 1 FROM plugin_connections WHERE plugin_id = ?1 AND user_id = ?2")?
         .query_row(params![id, user], |_| Ok(()))
@@ -142,31 +149,26 @@ pub fn set_search_sharing(
     Ok(())
 }
 
-/// Stops sharing `user`'s searches with `id`, if they were, and asks it to forget them in every
-/// library it serves.
-fn stop_sharing(conn: &Connection, id: &str, user: i64) -> rusqlite::Result<()> {
+/// Stops sharing `caller`'s searches with `id`, if they were, and asks it to forget them in every
+/// library it serves that they reach.
+fn stop_sharing(conn: &Connection, id: &str, caller: Caller) -> rusqlite::Result<()> {
+    let Caller { user, admin, .. } = caller;
     let stopped = conn.execute(
         "UPDATE plugin_connections SET searches_shared_at = NULL \
          WHERE plugin_id = ?1 AND user_id = ?2 AND searches_shared_at IS NOT NULL",
         params![id, user],
     )?;
     if stopped > 0 {
-        conn.execute(
-            "INSERT INTO search_events (user_id, library_id, kind, plugin_id, created_at) \
-             SELECT ?2, library_id, 'stopped', ?1, ?3 FROM plugin_libraries WHERE plugin_id = ?1",
-            params![id, user, now_ms()],
-        )?;
+        let at = now_ms();
+        let params = named_params! { ":id": id, ":user": user, ":admin": admin, ":at": at };
+        conn.prepare_cached(STOPPED)?.execute(params)?;
     }
     Ok(())
 }
 
-/// The manifest of `id`, if `user` can connect it.
-pub fn manifest(
-    conn: &Connection,
-    id: &str,
-    user: i64,
-    admin: bool,
-) -> rusqlite::Result<Option<Manifest>> {
+/// The manifest of `id`, if `caller` can connect it.
+pub fn manifest(conn: &Connection, id: &str, caller: Caller) -> rusqlite::Result<Option<Manifest>> {
+    let Caller { user, admin, .. } = caller;
     let reached: bool = conn
         .prepare_cached(&format!("SELECT {REACHED} FROM plugins p WHERE p.id = :id"))?
         .query_row(named_params! { ":id": id, ":user": user, ":admin": admin }, |row| row.get(0))
@@ -189,52 +191,32 @@ pub fn values(conn: &Connection, id: &str, user: i64) -> rusqlite::Result<Map<St
 }
 
 impl Plugins {
-    /// Connects `user` to `id`, or changes what they connected it with, from the values they
-    /// `entered`. Checked as an admin's settings are: by kind and choice, for every required
-    /// one, and then by the plugin itself, run with the server-wide settings and these.
+    /// Connects `caller` to `id`, or changes what they connected it with, from the values they
+    /// `entered`, checked as an admin's settings are ([`Plugins::checked`]), with the shared
+    /// settings beside them. A user's own settings must give every required one.
     pub async fn save_personal(
         &self,
         id: String,
-        user: i64,
-        admin: bool,
+        caller: Caller,
         entered: Map<String, Value>,
     ) -> Result<(), PluginError> {
-        let (manifest, mut candidate, stored, permissions) = {
+        let user = caller.user;
+        let saving = {
             let id = id.clone();
             self.db
                 .try_read(move |conn| -> Result<_, PluginError> {
-                    let manifest =
-                        manifest(conn, &id, user, admin)?.ok_or(PluginError::NotFound)?;
-                    let shared =
-                        settings::effective(conn, &id, manifest.settings.as_ref(), SERVER)?;
+                    let manifest = manifest(conn, &id, caller)?.ok_or(PluginError::NotFound)?;
+                    let schema = manifest.personal_settings.clone().unwrap_or_default();
                     let stored = values(conn, &id, user)?;
-                    Ok((manifest, shared, stored, grants::granted(conn, &id, SERVER)?))
+                    let beneath =
+                        settings::effective(conn, &id, manifest.settings.as_ref(), SERVER)?;
+                    let permissions = grants::granted(conn, &id, SERVER)?;
+                    Ok(Saving { manifest, schema, stored, beneath, permissions })
                 })
                 .await?
         };
-        let schema = manifest.personal_settings.clone().unwrap_or_default();
-        let values = merge(&schema, &stored, entered);
-        let problems = schema.check(&values);
-        if !problems.is_empty() {
-            return Err(PluginError::SettingsInvalid(format!("{}.", problems.join("; "))));
-        }
-        let missing = schema.missing(&values);
-        if !missing.is_empty() {
-            let missing = missing.join(" and ");
-            return Err(PluginError::SettingsInvalid(format!("{missing} is required.")));
-        }
-        candidate.extend(schema.with_defaults(&values));
-        let outcome = self
-            .execute(
-                &id,
-                &manifest,
-                RunFor { library: SERVER, user: Some(user) },
-                permissions,
-                candidate,
-                Event::CheckSettings,
-            )
-            .await?;
-        outcome.result.map_err(|error| PluginError::SettingsInvalid(error.to_string()))?;
+        let run_for = RunFor { library: SERVER, user: Some(user) };
+        let values = self.checked(&id, run_for, saving, entered).await?;
         self.db.try_write(move |tx| connect(tx, &id, user, &values, now_ms())).await
     }
 }
@@ -262,13 +244,13 @@ pub(super) fn connect(
     Ok(())
 }
 
-/// Disconnects `user` from `id`: it stops being sent their searches, their settings are
+/// Disconnects `caller` from `id`: it stops being sent their searches, their settings are
 /// forgotten, and it no longer acts for them.
-pub fn disconnect(conn: &Connection, id: &str, user: i64) -> rusqlite::Result<()> {
-    stop_sharing(conn, id, user)?;
+pub fn disconnect(conn: &Connection, id: &str, caller: Caller) -> rusqlite::Result<()> {
+    stop_sharing(conn, id, caller)?;
     conn.execute(
         "DELETE FROM plugin_connections WHERE plugin_id = ?1 AND user_id = ?2",
-        params![id, user],
+        params![id, caller.user],
     )?;
     Ok(())
 }

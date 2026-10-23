@@ -8,6 +8,7 @@ use futures_util::stream;
 use serde_json::{Value, json};
 
 use super::super::testing::{app_with_tracks, respond};
+use super::{PluginError, Problem};
 use crate::db::Database;
 use crate::plugins::settings;
 use crate::plugins::testing::{enable_ungranted, install, manifest};
@@ -430,16 +431,20 @@ async fn installs_and_runs_a_real_plugin() {
     let bytes = install_lyrics(&app).await;
     assert!(temp.path().join("plugins/lrclib-lyrics.wasm").is_file());
     assert!(temp.path().join("compiled/modules").is_dir(), "kept compiled where it was told");
+    // The same plugin in another file: the same with a custom section added at its end.
+    let other = [&bytes[..], &[0, 4, 3, b'x', b'y', b'z']].concat();
     let request = Request::post("/api/v1/admin/plugins")
         .header(header::AUTHORIZATION, ADMIN)
-        .body(Body::from(bytes))
+        .body(Body::from(other))
         .unwrap();
     assert_eq!(respond(app.clone(), request).await.0, StatusCode::CONFLICT, "installed twice");
-    let parts = std::fs::read_dir(temp.path().join("plugins"))
+    let kept: Vec<_> = std::fs::read_dir(temp.path().join("plugins"))
         .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap());
-    let parts: Vec<_> = parts.filter(|name| name.ends_with(".part")).collect();
-    assert!(parts.is_empty(), "the refused upload is not kept: {parts:?}");
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(kept, ["lrclib-lyrics.wasm"], "the refused upload is not kept");
+    let installed = std::fs::read(temp.path().join("plugins/lrclib-lyrics.wasm")).unwrap();
+    assert!(installed == bytes, "the installed file is unchanged");
 
     let grants =
         json!({ "granted": [], "libraries": [{ "libraryId": "1", "granted": ["libraryRead"] }] });
@@ -450,9 +455,10 @@ async fn installs_and_runs_a_real_plugin() {
     let (status, result) = call(&app, ADMIN, "POST", &format!("{PLUGIN}/run"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(result["ok"], false, "{result}");
-    assert_eq!(result["summary"], "It still needs Network access.");
+    let refused = "the plugin reported an error: a permission it needs was not granted";
+    assert_eq!(result["summary"], refused);
     let (_, plugin) = call(&app, ADMIN, "GET", PLUGIN, None).await;
-    assert_eq!(plugin["libraries"][0]["lastRun"], Value::Null, "a refused run is not recorded");
+    assert_eq!(plugin["libraries"][0]["lastRun"]["ok"], false, "{plugin}");
 
     // Settings pass its own check, which it answers by running, and are kept.
     let (status, saved) = check_settings(&app).await;
@@ -555,7 +561,7 @@ async fn settings_show_values_but_never_secrets() {
 
 #[tokio::test]
 async fn settings_are_checked_before_the_plugin_sees_them() {
-    let (_temp, _db, app) = server().await;
+    let (_temp, db, app) = server().await;
     for (body, detail) in [
         (
             json!({ "limit": 2.5, "mode": "slow" }),
@@ -584,4 +590,29 @@ async fn settings_are_checked_before_the_plugin_sees_them() {
         (status, &problem["detail"]),
         (StatusCode::UNPROCESSABLE_ENTITY, &json!("API key is required."))
     );
+
+    // Set server-wide, it is set for the library too, so the plugin is asked: here one installed
+    // without its file, which cannot be loaded.
+    let key = json!({ "apiKey": "k" }).as_object().unwrap().clone();
+    db.write(move |tx| settings::store(tx, "lrclib-lyrics", settings::SERVER, &key)).await.unwrap();
+    let (status, problem) = call(
+        &app,
+        ADMIN,
+        "PUT",
+        &format!("{SETTINGS}?libraryId=1"),
+        Some(json!({ "values": { "limit": 2 } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let detail = problem["detail"].as_str().unwrap();
+    assert!(detail.starts_with("the plugin could not be loaded"), "{detail}");
+}
+
+/// A fault of the server's with nothing safe to say about it, such as a task that panicked,
+/// answers a bare internal problem.
+#[test]
+fn an_unexpected_error_answers_no_detail() {
+    let problem = serde_json::to_value(Problem::from(PluginError::Unexpected)).unwrap();
+    assert_eq!(problem["code"], "internal");
+    assert_eq!(problem.get("detail"), None);
 }

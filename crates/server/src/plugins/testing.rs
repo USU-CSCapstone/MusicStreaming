@@ -8,6 +8,7 @@ use jewelcase_plugins::{Manifest, Permission, manifest};
 use serde_json::{Value, json};
 
 use super::{Plugins, personal};
+use crate::api::Caller;
 use crate::db::Database;
 use crate::db::testing::{Album, Artist, Track, album_artist, library, track_artist};
 
@@ -123,4 +124,9 @@ pub async fn connect(db: &Database, id: &'static str, user: i64, settings: Value
     let Value::Object(settings) = settings else { panic!("settings are a JSON object") };
     let connected = db.try_write(move |tx| personal::connect(tx, id, user, &settings, at)).await;
     connected.unwrap_or_else(|error| panic!("{id} is installed: {error:?}"));
+}
+
+/// User `user` calling from a device with the same ID, as an admin if `admin`.
+pub fn caller(user: i64, admin: bool) -> Caller {
+    Caller { user, device: user, admin }
 }

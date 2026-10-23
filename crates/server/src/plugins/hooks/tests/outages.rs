@@ -3,27 +3,25 @@
 //! lasts 72 hours, with no success or other failure between, disables it.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use jewelcase_plugins::Permission;
 use jewelcase_plugins::Permission::{LibraryRead, TracksChanged};
-use rusqlite::OptionalExtension;
 
 use super::super::{BACKOFF_MS, MAX_FAILURES, Ran};
 use super::{HOUR, Received, changes, ran, setup};
 use crate::db::Database;
-use crate::plugins::testing::{grant, plugins};
+use crate::plugins::testing::grant;
 
 const TIMED_OUT: &str = "the request timed out";
-const REFUSED: &str = "LRCLIB answered 400";
+pub(super) const REFUSED: &str = "LRCLIB answered 400";
 
 /// The hooks `received` delivered.
-fn hooks(received: Vec<Received>) -> Vec<Permission> {
+pub(super) fn hooks(received: Vec<Received>) -> Vec<Permission> {
     received.into_iter().map(|r| r.hook).collect()
 }
 
 /// Whether the plugin is still enabled in library 1.
-async fn enabled(db: &Database) -> bool {
+pub(super) async fn enabled(db: &Database) -> bool {
     db.read(|conn| conn.query_row("SELECT enabled FROM plugin_libraries", [], |row| row.get(0)))
         .await
         .unwrap()
@@ -36,7 +34,7 @@ async fn reason(db: &Database) -> Option<String> {
 }
 
 /// The plugin granted `tracksChanged` in library 1, with a change to deliver.
-async fn changed() -> (tempfile::TempDir, Arc<Database>) {
+pub(super) async fn changed() -> (tempfile::TempDir, Arc<Database>) {
     let (temp, db, plugins) = setup().await;
     grant(&plugins, "plugin", &[], &[LibraryRead, TracksChanged]).await;
     changes(&db, "(1, 'track', 11, 'upsert', 0)").await;
@@ -44,40 +42,11 @@ async fn changed() -> (tempfile::TempDir, Arc<Database>) {
 }
 
 /// Delivers an outage on the hour, each hour from `first` to `last`, each one due by then.
-async fn hourly_outages(db: &Database, first: i64, last: i64) {
+pub(super) async fn hourly_outages(db: &Database, first: i64, last: i64) {
     for hour in first..=last {
         let tried = hooks(ran(db, hour * HOUR, Ran::Unreachable, TIMED_OUT).await);
         assert_eq!(tried, [TracksChanged], "hour {hour}");
     }
-}
-
-#[test]
-fn a_run_that_succeeded_is_handled_whatever_it_met_on_the_way() {
-    assert_eq!(Ran::of(true, false), Ran::Handled);
-    assert_eq!(Ran::of(true, true), Ran::Handled, "a success after a request that had to wait");
-    assert_eq!(Ran::of(false, true), Ran::Unreachable);
-    assert_eq!(Ran::of(false, false), Ran::Failed);
-}
-
-/// A plugin that cannot be loaded, here one installed without its file, reached no service, so
-/// a delivery to it is a failure of its own and no outage. The deadline only bounds a hang.
-#[tokio::test]
-async fn a_plugin_that_cannot_be_loaded_fails_without_an_outage() {
-    let (temp, db) = changed().await;
-    plugins(&temp, &db).dispatch().await;
-    let sql = "SELECT failures, outages FROM plugin_cursors";
-    let recorded = async {
-        loop {
-            let counts = |row: &rusqlite::Row| Ok((row.get(0)?, row.get(1)?));
-            let found = db.read(move |conn| conn.query_row(sql, [], counts).optional());
-            match found.await.unwrap() {
-                Some(counts) => return counts,
-                None => tokio::time::sleep(Duration::from_millis(20)).await,
-            }
-        }
-    };
-    let counts: (i64, i64) = tokio::time::timeout(Duration::from_secs(30), recorded).await.unwrap();
-    assert_eq!(counts, (1, 0));
 }
 
 #[tokio::test]
@@ -121,7 +90,8 @@ async fn an_outage_disables_the_plugin_once_it_has_lasted_72_hours() {
     assert!(enabled(&db).await);
     hourly_outages(&db, 72, 72).await;
     assert!(!enabled(&db).await, "72 hours");
-    let why = "Stopped after it could not reach its service for 72 hours: the request timed out";
+    let why = "Stopped after 72 hours of being unable to run or reach its service: \
+               the request timed out";
     assert_eq!(reason(&db).await.as_deref(), Some(why));
 }
 

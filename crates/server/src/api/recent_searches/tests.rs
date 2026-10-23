@@ -13,7 +13,7 @@ use super::{KEPT, WINDOW_MS};
 use crate::db::testing::{Artist, Track, access, sweep};
 use crate::db::{Database, now_ms};
 use crate::plugins::personal::set_search_sharing;
-use crate::plugins::testing::{connect, enable, grant, install, manifest, plugins};
+use crate::plugins::testing::{caller, connect, enable, grant, install, manifest, plugins};
 
 const URI: &str = "/api/v1/libraries/1/recent-searches";
 
@@ -220,7 +220,7 @@ async fn share_with_a_plugin(temp: &tempfile::TempDir, db: &Arc<Database>) {
     grant(&plugins, "plugin", &[SearchActivity, Searched], &[LibraryRead]).await;
     enable(&plugins, "plugin", true).await;
     connect(db, "plugin", 1, json!({}), 0).await;
-    db.try_write(|tx| set_search_sharing(tx, "plugin", 1, true, true)).await.unwrap();
+    db.try_write(|tx| set_search_sharing(tx, "plugin", caller(1, true), true)).await.unwrap();
 }
 
 /// What a search found: its tracks, albums, and artists.
