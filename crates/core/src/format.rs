@@ -87,6 +87,18 @@ impl Format {
         }
     }
 
+    /// The media type of the format's container, as HTTP's `Content-Type` names it.
+    pub fn media_type(self) -> &'static str {
+        match self {
+            Format::Flac => "audio/flac",
+            Format::Alac | Format::Aac => "audio/mp4",
+            Format::Wav => "audio/wav",
+            Format::Aiff => "audio/aiff",
+            Format::Mp3 => "audio/mpeg",
+            Format::Vorbis | Format::Opus => "audio/ogg",
+        }
+    }
+
     /// Whether the format is lossless.
     pub fn is_lossless(self) -> bool {
         matches!(self, Format::Flac | Format::Alac | Format::Wav | Format::Aiff)
@@ -126,6 +138,22 @@ mod tests {
     fn aiff_is_big_endian() {
         assert_eq!(Format::Aiff.ffmpeg_decoder(), "pcm_s16be");
         assert_eq!(Format::Wav.ffmpeg_decoder(), "pcm_s16le");
+    }
+
+    #[test]
+    fn each_container_has_one_media_type() {
+        let expected = [
+            ("flac", "audio/flac"),
+            ("mp4", "audio/mp4"),
+            ("wav", "audio/wav"),
+            ("aiff", "audio/aiff"),
+            ("mp3", "audio/mpeg"),
+            ("ogg", "audio/ogg"),
+        ];
+        for f in Format::ALL {
+            let (_, media_type) = expected.iter().find(|(c, _)| *c == f.container_name()).unwrap();
+            assert_eq!(f.media_type(), *media_type, "{f:?}");
+        }
     }
 
     #[test]

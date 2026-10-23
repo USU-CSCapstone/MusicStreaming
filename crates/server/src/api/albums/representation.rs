@@ -3,11 +3,15 @@
 //! A list reads every row of a page by position from [`SELECT`], since looking a column up by
 //! name costs several times as much. A single album reads the rest by name.
 
+use std::num::NonZeroI64;
+
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
 use crate::api::Id;
-use crate::api::refs::{Credit, ImageRef, TagRef, artists_json, genres_json, placeholder};
+use crate::api::refs::{
+    Credit, ImageRef, TagRef, artists_json, availability, genres_json, placeholder,
+};
 use crate::api::time::serialize_rfc3339;
 use crate::db::Json;
 
@@ -46,7 +50,7 @@ pub struct Album {
 #[serde(rename_all = "camelCase")]
 struct Disc {
     /// `None` for tracks with no disc tag, which the scanner files as disc 0.
-    number: Option<i64>,
+    number: Option<NonZeroI64>,
     track_count: i64,
     track_total: Option<i64>,
 }
@@ -92,7 +96,7 @@ pub fn album(conn: &Connection, library: i64, album: i64) -> rusqlite::Result<Op
         )?
         .query_map([album], |row| {
             Ok(Disc {
-                number: Some(row.get(0)?).filter(|number| *number != 0),
+                number: NonZeroI64::new(row.get(0)?),
                 track_count: row.get(1)?,
                 track_total: row.get(2)?,
             })
@@ -117,7 +121,7 @@ pub fn summary(row: &Row) -> rusqlite::Result<AlbumSummary> {
         disc_total: row.get(7)?,
         duration_us: row.get(8)?,
         image: ImageRef::new(row.get(9)?, row.get(14)?),
-        availability: if row.get(10)? { "available" } else { "missing" },
+        availability: availability(row.get(10)?),
         added_at: row.get(11)?,
     })
 }

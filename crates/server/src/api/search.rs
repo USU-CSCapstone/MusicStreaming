@@ -101,22 +101,24 @@ fn kinds(types: &str) -> Result<Vec<Kind>, Problem> {
     let mut kinds = Vec::new();
     for section in types.split(',') {
         match section {
-            "tracks" => kinds.push(Kind::Track),
-            "albums" => kinds.push(Kind::Album),
-            "artists" => kinds.push(Kind::Artist),
             "playlists" => {}
             "lyrics" => return Err(Problem::invalid("lyrics cannot be searched yet")),
             _ => {
-                return Err(Problem::invalid(
-                    "types must be tracks, albums, artists, playlists, or lyrics",
-                ));
+                let Some(kind) = Kind::ALL.into_iter().find(|&kind| section_type(kind) == section)
+                else {
+                    return Err(Problem::invalid(
+                        "types must be tracks, albums, artists, playlists, or lyrics",
+                    ));
+                };
+                kinds.push(kind);
             }
         }
     }
     Ok(kinds)
 }
 
-/// How many of `library`'s tracks, albums, and artists match `q`, as a search counts them.
+/// How many of `library`'s tracks, albums, and artists match `q`, as a search counts them, in
+/// the order of `Kind::ALL`.
 pub async fn totals(
     db: &Arc<Database>,
     indexes: &Indexes,
@@ -125,16 +127,19 @@ pub async fn totals(
 ) -> Result<[usize; 3], Problem> {
     let position = db.read(move |conn| indexes::feed_position(conn, library)).await?;
     let index = indexes.index(db, library, position).await?;
-    let mut totals = [0; 3];
-    for section in index.search(q, &[Kind::Track, Kind::Album, Kind::Artist], 1) {
-        let at = match section.kind {
-            Kind::Track => 0,
-            Kind::Album => 1,
-            Kind::Artist => 2,
-        };
-        totals[at] = section.total;
+    let found = index.search(q, &Kind::ALL, 1);
+    Ok(Kind::ALL.map(|kind| {
+        found.iter().find(|section| section.kind == kind).map_or(0, |section| section.total)
+    }))
+}
+
+/// The spec's name for the section of `kind`.
+fn section_type(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Track => "tracks",
+        Kind::Album => "albums",
+        Kind::Artist => "artists",
     }
-    Ok(totals)
 }
 
 /// The summaries of what the index found, as the browse lists show them.
@@ -160,11 +165,7 @@ fn results(conn: &Connection, library: i64, found: Vec<Found>) -> rusqlite::Resu
         };
         // Gone since the index was built: nothing of it is left to show.
         if !items.is_empty() {
-            let kind = match section.kind {
-                Kind::Track => "tracks",
-                Kind::Album => "albums",
-                Kind::Artist => "artists",
-            };
+            let kind = section_type(section.kind);
             sections.push(Section { kind, items, total: section.total });
         }
     }

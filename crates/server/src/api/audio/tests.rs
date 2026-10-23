@@ -62,35 +62,38 @@ fn json(body: &[u8]) -> Value {
 #[tokio::test]
 async fn playback_delivers_the_original() {
     let (_temp, app) = app_with_fixture().await;
-    let (status, _, body) = send(
-        app.clone(),
-        "GET",
-        "/api/v1/libraries/1/tracks/1/playback?quality=original&purpose=download&codecs=opus,aac,mp4",
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        json(&body),
-        json!({
-            "variant": "original",
-            "delivery": "direct",
-            "codec": "aac",
-            "container": "mp4",
-            "bitrateKbps": null,
-            "sampleRateHz": 44100,
-            "bitDepth": null,
-            "channels": 2,
-            "sizeBytes": 10,
-            "transport": "progressive",
-            "loudness": {
-                "trackLufs": -10.5,
-                "trackPeakDbtp": -0.5,
-                "albumLufs": -9.5,
-                "albumPeakDbtp": -0.25,
-            },
-            "gapless": null,
-        })
-    );
+    // The original is a complete file of known size, so every purpose gets it the same way.
+    for purpose in ["&purpose=download", "&purpose=stream", ""] {
+        let uri = format!(
+            "/api/v1/libraries/1/tracks/1/playback?quality=original{purpose}&codecs=opus,aac,mp4"
+        );
+        let (status, _, body) = send(app.clone(), "GET", &uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        assert_eq!(json(&body), original(), "{uri}");
+    }
+}
+
+/// The playback info for the fixture's track as its original file.
+fn original() -> Value {
+    json!({
+        "variant": "original",
+        "delivery": "direct",
+        "codec": "aac",
+        "container": "mp4",
+        "bitrateKbps": null,
+        "sampleRateHz": 44100,
+        "bitDepth": null,
+        "channels": 2,
+        "sizeBytes": 10,
+        "transport": "progressive",
+        "loudness": {
+            "trackLufs": -10.5,
+            "trackPeakDbtp": -0.5,
+            "albumLufs": -9.5,
+            "albumPeakDbtp": -0.25,
+        },
+        "gapless": null,
+    })
 }
 
 #[tokio::test]

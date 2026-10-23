@@ -4,11 +4,15 @@
 //! name costs several times as much. A single track reads the rest by name, with each column
 //! named by `AS`: SQLite leaves unnamed columns' names open.
 
+use std::num::NonZeroI64;
+
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
 use crate::api::Id;
-use crate::api::refs::{Credit, ImageRef, TagRef, artists_json, genres_json, placeholder};
+use crate::api::refs::{
+    AlbumRef, Credit, ImageRef, TagRef, artists_json, availability, genres_json, placeholder,
+};
 use crate::api::time::serialize_rfc3339;
 use crate::db::Json;
 
@@ -21,7 +25,8 @@ pub struct TrackSummary<A = AudioSummary> {
     title: String,
     artists: Vec<Credit>,
     album: AlbumRef,
-    disc_number: Option<i64>,
+    /// `None` for a track with no disc tag, which the scanner files as disc 0.
+    disc_number: Option<NonZeroI64>,
     track_number: Option<i64>,
     duration_us: i64,
     release_date: Option<String>,
@@ -52,15 +57,6 @@ pub struct Track {
     lyrics: String,
     loudness: Option<Loudness>,
     identifiers: serde_json::Map<String, serde_json::Value>,
-}
-
-/// The spec's `AlbumRef`.
-#[derive(Clone, Serialize)]
-pub struct AlbumRef {
-    id: Id,
-    title: Option<String>,
-    artists: Vec<Credit>,
-    image: Option<ImageRef>,
 }
 
 /// The spec's `AudioSummary`.
@@ -184,8 +180,9 @@ fn audio_summary(row: &Row) -> rusqlite::Result<AudioSummary> {
     Ok(AudioSummary { codec: row.get(8)?, lossless: row.get(9)? })
 }
 
+/// A track from a row of [`SELECT`], with `audio` as its audio: the summary in a list, or every
+/// property for a single track.
 fn summary<A>(row: &Row, audio: A) -> rusqlite::Result<TrackSummary<A>> {
-    let disc: i64 = row.get(3)?;
     Ok(TrackSummary {
         id: Id(row.get(0)?),
         title: row.get(1)?,
@@ -196,15 +193,14 @@ fn summary<A>(row: &Row, audio: A) -> rusqlite::Result<TrackSummary<A>> {
             artists: row.get::<_, Json<_>>(16)?.0,
             image: ImageRef::new(row.get(15)?, row.get(17)?),
         },
-        // The scanner files a track with no disc tag as disc 0.
-        disc_number: Some(disc).filter(|disc| *disc != 0),
+        disc_number: NonZeroI64::new(row.get(3)?),
         track_number: row.get(4)?,
         duration_us: row.get(5)?,
         release_date: row.get(6)?,
         genres: row.get::<_, Json<_>>(13)?.0,
         explicit: row.get(7)?,
         audio,
-        availability: if row.get(10)? { "available" } else { "missing" },
+        availability: availability(row.get(10)?),
         added_at: row.get(11)?,
         sort_keys: TrackSortKeys {
             title: key(row, 18)?,

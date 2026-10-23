@@ -8,7 +8,7 @@ mod authenticate;
 mod benchmark;
 mod connections;
 mod credit;
-pub mod cursor;
+mod cursor;
 mod devices;
 #[cfg(test)]
 mod end_to_end;

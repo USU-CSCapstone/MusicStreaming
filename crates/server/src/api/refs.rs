@@ -1,4 +1,5 @@
-//! Small references to other entities, shared by the browse responses.
+//! What the browse responses share: small references to other entities, and the fields every
+//! entity reads alike.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -39,6 +40,20 @@ impl ImageRef {
             placeholder: BASE64.encode(placeholder.unwrap_or_default()),
         })
     }
+}
+
+/// The spec's `AlbumRef`.
+#[derive(Clone, Serialize)]
+pub struct AlbumRef {
+    pub id: Id,
+    pub title: Option<String>,
+    pub artists: Vec<Credit>,
+    pub image: Option<ImageRef>,
+}
+
+/// The spec's `Availability` of a track, or of an album with any track `available`.
+pub fn availability(available: bool) -> &'static str {
+    if available { "available" } else { "missing" }
 }
 
 /// SQL for the placeholder of the image whose ID is the SQL `$image_id`, for [`ImageRef::new`].

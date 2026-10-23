@@ -12,6 +12,7 @@ use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::{HeaderValue, header};
 use axum::response::Response;
+use jewelcase_core::Format;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use tower_http::services::ServeFile;
@@ -25,9 +26,11 @@ use crate::db::{Database, libraries};
 /// The one variant there is: the file as it is on disk.
 const ORIGINAL: &str = "original";
 
-#[derive(Deserialize)]
+/// What the client wants the audio for, which decides its [`Transport`].
+#[derive(Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Purpose {
+    #[default]
     Stream,
     Download,
 }
@@ -41,12 +44,26 @@ enum Quality {
     Low,
 }
 
+/// The spec's `delivery`: only `direct`, the original file, until transcoding is built.
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Delivery {
+    Direct,
+}
+
+/// The spec's `transport`: only `progressive`, one file read start to end, until segmented
+/// transport is built.
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Transport {
+    Progressive,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PlaybackQuery {
-    // The original is a complete file of known size, so it answers both purposes the same.
-    #[expect(dead_code, reason = "accepted and checked, but direct delivery ignores it")]
-    purpose: Option<Purpose>,
+    #[serde(default)]
+    purpose: Purpose,
     quality: Quality,
     /// Comma-separated, most preferred first.
     codecs: Option<String>,
@@ -57,7 +74,7 @@ pub struct PlaybackQuery {
 #[serde(rename_all = "camelCase")]
 pub struct PlaybackInfo {
     variant: &'static str,
-    delivery: &'static str,
+    delivery: Delivery,
     codec: String,
     container: String,
     bitrate_kbps: Option<i64>,
@@ -65,15 +82,15 @@ pub struct PlaybackInfo {
     bit_depth: Option<i64>,
     channels: i64,
     size_bytes: Option<i64>,
-    transport: &'static str,
+    transport: Transport,
     loudness: Option<Loudness>,
     /// Always null: the scanner does not measure encoder delay and padding yet. `()` serializes
     /// as JSON `null`.
     gapless: (),
 }
 
-/// The spec's `getPlaybackInfo`: how the track is delivered at the quality asked for. Only the
-/// original is offered, so another quality, or `codecs` that cannot play it, is `422`.
+/// The spec's `getPlaybackInfo`: how the track's original plays, for the quality, codecs and
+/// purpose asked. What the original cannot answer needs a transcode, and answers `422`.
 pub async fn playback(
     State(db): State<Arc<Database>>,
     Scope { library, .. }: Scope,
@@ -84,6 +101,10 @@ pub async fn playback(
     if query.quality != Quality::Original {
         return transcode("only original quality is available until transcoding is built");
     }
+    // The original is a complete file of known size, so it answers both purposes the same.
+    let transport = match query.purpose {
+        Purpose::Stream | Purpose::Download => Transport::Progressive,
+    };
     let info = db
         .read(move |conn| {
             let sql = format!(
@@ -96,7 +117,7 @@ pub async fn playback(
                 .query_row([library, track], |row| {
                     Ok(PlaybackInfo {
                         variant: ORIGINAL,
-                        delivery: "direct",
+                        delivery: Delivery::Direct,
                         codec: row.get(0)?,
                         container: row.get(1)?,
                         bitrate_kbps: row.get(2)?,
@@ -104,7 +125,7 @@ pub async fn playback(
                         bit_depth: row.get(4)?,
                         channels: row.get(5)?,
                         size_bytes: Some(row.get(6)?),
-                        transport: "progressive",
+                        transport,
                         loudness: loudness(row)?,
                         gapless: (),
                     })
@@ -171,11 +192,14 @@ pub async fn audio(
     let mut response = response.map(Body::new);
     // Private: a track is only for those who can reach its library.
     response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private"));
-    // ServeFile guesses the type from the extension; the probe read it from the content.
-    if response.status().is_success() {
-        response
-            .headers_mut()
-            .insert(header::CONTENT_TYPE, HeaderValue::from_static(mime(&container)));
+    // ServeFile guesses the type from the extension; the probe read the container from the
+    // content. A container no format names keeps the guess.
+    let format = Format::ALL.into_iter().find(|format| format.container_name() == container);
+    if response.status().is_success()
+        && let Some(format) = format
+    {
+        let media_type = HeaderValue::from_static(format.media_type());
+        response.headers_mut().insert(header::CONTENT_TYPE, media_type);
     }
     Ok(response)
 }
@@ -189,19 +213,6 @@ fn unreadable(error: io::Error) -> Problem {
     }
     tracing::error!(%error, "cannot read a track's file");
     Problem::new(Code::Internal)
-}
-
-/// The media type for a container, named as `Format::container_name` names it.
-fn mime(container: &str) -> &'static str {
-    match container {
-        "flac" => "audio/flac",
-        "mp4" => "audio/mp4",
-        "wav" => "audio/wav",
-        "aiff" => "audio/aiff",
-        "mp3" => "audio/mpeg",
-        "ogg" => "audio/ogg",
-        _ => "application/octet-stream",
-    }
 }
 
 #[cfg(test)]
