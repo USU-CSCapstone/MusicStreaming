@@ -15,6 +15,10 @@ use super::library::RunLibrary;
 use super::{PluginError, Plugins, grants, personal, rate_limits, settings};
 use crate::db::now_ms;
 
+/// The last-run summary of a run that failed on the server's side, whose cause goes only to the
+/// log, so a database message never reaches the admin's page.
+const SERVER_FAILED: &str = "the server could not complete the run";
+
 /// How a run went, as the admin sees it: the spec's `PluginRunResult`.
 #[derive(Serialize)]
 pub struct RunResult {
@@ -92,8 +96,9 @@ impl Plugins {
 
     /// Runs `id` in `run_for`'s library with `permissions` to handle `event`, for its user if it
     /// acts for one, with their personal settings beside the shared ones ([`Plugins::execute`]),
-    /// and records its report as the library's last run for admins, or the error that kept it
-    /// from running. A report that cannot be recorded is logged, and changes nothing it answers.
+    /// and records its report as the library's last run for admins. An error on the server's side
+    /// that kept it from running is logged, and recorded as [`SERVER_FAILED`]. A report that
+    /// cannot be recorded is logged, and changes nothing it answers.
     /// Answers the outcome, and whether a scan of what it touched was queued.
     /// Called on the plugin runtime, in the plugin's turn in the library.
     pub(super) async fn run_in(
@@ -121,7 +126,10 @@ impl Plugins {
         };
         let (ok, summary) = match &ran {
             Ok((outcome, _)) => (outcome.result.is_ok(), outcome.report()),
-            Err(error) => (false, error.to_string()),
+            Err(error) => {
+                tracing::error!(plugin = id, library, %error, "a plugin run failed on the server");
+                (false, SERVER_FAILED.to_owned())
+            }
         };
         let plugin = id.to_owned();
         let recorded = self.db.write(move |tx| {

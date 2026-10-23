@@ -46,7 +46,8 @@ use bindings::jewelcase::plugin::host;
 use bindings::{Plugin, PluginPre};
 
 pub use bindings::jewelcase::plugin::events::{
-    Changes, Event, Found, Play, PlayEnd, Playing, ResultKind, ScanFinished, Search, Selected,
+    Changes, Event, Forgotten, Found, Play, PlayEnd, Playing, ResultKind, ScanFinished, Search,
+    Selected,
 };
 pub(crate) use bindings::jewelcase::plugin::files::{Entry, WriteMode};
 pub(crate) use bindings::jewelcase::plugin::host::Error;

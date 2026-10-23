@@ -195,8 +195,8 @@ async fn sharing_is_per_user_and_per_plugin_and_holds_in_every_library() {
     assert!(share(&db, "first", 7, false).await.is_ok());
     assert_eq!(connections(&db, 7).await, [row("first", true, false), row("second", true, true)]);
     assert_eq!(connections(&db, 8).await, [row("first", true, true), row("second", true, false)]);
-    let forget = vec![(7, 1, "first".to_owned())];
-    assert_eq!(stopped(&db).await, forget, "asked to forget only where they reach");
+    let forget = vec![(7, 1, "first".to_owned()), (7, 2, "first".to_owned())];
+    assert_eq!(stopped(&db).await, forget, "asked to forget wherever it serves, reached or not");
     assert!(share(&db, "first", 7, false).await.is_ok());
     assert_eq!(stopped(&db).await, forget, "once");
 }
@@ -215,7 +215,8 @@ async fn disconnecting_while_sharing_stops_sharing_and_asks_to_forget() {
         [row("first", false, false), row("second", false, false)]
     );
     assert!(db.read(|conn| values(conn, "first", 7)).await.unwrap().is_empty());
-    assert_eq!(stopped(&db).await, [(7, 1, "first".to_owned())], "only where they reach");
+    let forget = [(7, 1, "first".to_owned()), (7, 2, "first".to_owned())];
+    assert_eq!(stopped(&db).await, forget, "wherever it serves, reached or not");
     assert_eq!(connections(&db, 8).await, [row("first", true, true), row("second", false, false)]);
 }
 
@@ -267,19 +268,4 @@ async fn connecting_to_a_plugin_no_longer_installed_connects_nothing() {
         .await
         .unwrap();
     assert_eq!(count, 0);
-}
-
-/// An admin reaches every library without being granted any, so a plugin is asked to forget their
-/// searches in each library it serves.
-#[tokio::test]
-async fn an_admin_is_forgotten_in_every_library_the_plugin_serves() {
-    let (temp, db) = database().await;
-    sharers(&plugins(&temp, &db), &db).await;
-    db.write(|tx| User::new(9, "admin").insert(tx)).await.unwrap();
-    connect(&db, "first", 9, json!({ "token": "t" }), 100).await;
-    for on in [true, false] {
-        let set = db.try_write(move |tx| set_search_sharing(tx, "first", caller(9, true), on));
-        assert!(set.await.is_ok());
-    }
-    assert_eq!(stopped(&db).await, [(9, 1, "first".to_owned()), (9, 2, "first".to_owned())]);
 }

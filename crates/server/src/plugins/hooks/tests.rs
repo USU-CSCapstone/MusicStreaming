@@ -15,6 +15,7 @@ use crate::plugins::testing::{connect, database, enable, grant, install, manifes
 
 mod changes;
 mod faults;
+mod forgets;
 mod libraries;
 mod listening;
 mod outages;
@@ -32,13 +33,15 @@ const HANDLED: Result<(), &str> = Ok(());
 const HOUR: i64 = 60 * 60_000;
 
 /// A delivery to a stand-in plugin: the hook, library, and user it was due for (0 for none, as
-/// its cursor stores it), and the event the plugin received, if there was anything to send.
+/// its cursor stores it), the event the plugin received, if there was anything to send, and the
+/// user whose personal settings its run had, if any.
 #[derive(Debug)]
 struct Received {
     hook: Permission,
     library: i64,
     user: i64,
     event: Option<Event>,
+    acting_for: Option<i64>,
 }
 
 /// The catalog of [`database`] with `plugin` installed and enabled in library 1. It asks for
@@ -95,7 +98,8 @@ async fn ran(db: &Database, now: i64, how: Ran, summary: &'static str) -> Vec<Re
             let how = if event.is_none() { Ran::Handled } else { how };
             record(tx, &due, next, how, summary, now)?;
             let (hook, library, user) = (due.hook, due.library, due.user.unwrap_or(0));
-            received.push(Received { hook, library, user, event });
+            let acting_for = event.as_ref().and_then(|event| due.run_for(event).user);
+            received.push(Received { hook, library, user, event, acting_for });
         }
         Ok(received)
     })
@@ -164,6 +168,28 @@ fn tracks_by_user(received: Vec<Received>) -> Vec<(i64, Vec<u64>)> {
         .collect();
     tracks.sort();
     tracks
+}
+
+/// `user` settles on search `search` in `library` at `at`, or, unless `kept`, has removed it.
+async fn noted(db: &Database, user: i64, library: i64, search: i64, kept: bool, at: i64) {
+    db.write(move |tx| {
+        if kept {
+            tx.execute(
+                "INSERT INTO recent_searches (id, user_id, library_id, query, folded, searched_at) \
+                 VALUES (?2, ?4, ?1, 'words ' || ?2, 'words ' || ?2, ?3)",
+                rusqlite::params![library, search, at, user],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO search_events (user_id, library_id, kind, search_id, found_tracks, \
+                                        found_albums, found_artists, created_at) \
+             VALUES (?5, ?1, iif(?3, 'searched', 'forgotten'), ?2, iif(?3, 1, NULL), \
+                     iif(?3, 0, NULL), iif(?3, 0, NULL), ?4)",
+            rusqlite::params![library, search, kept, at, user],
+        )
+    })
+    .await
+    .unwrap();
 }
 
 /// Adds `rows` to the library change feed, each `(library, entity type, entity, op, changed at)`.

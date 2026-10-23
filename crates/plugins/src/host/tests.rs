@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::testing::{self, Memory};
-use super::{CPU_BUDGET, Event, Host, Outcome, RunError, ScanFinished};
+use super::{CPU_BUDGET, Event, Forgotten, Host, Outcome, RunError, ScanFinished};
 
 mod compiled;
 mod limits;
@@ -62,7 +62,8 @@ fn a_spin_traps_at_its_compute_budget() {
 /// time limit, not the wait, ends the run.
 #[tokio::test(start_paused = true)]
 async fn a_run_that_waits_past_the_time_limit_is_stopped() {
-    let (outcome, _) = run(BUDGET, Event::SearchesForgotten(None)).await;
+    let (outcome, _) =
+        run(BUDGET, Event::SearchesForgotten(Forgotten { user: 7, searches: None })).await;
     assert_eq!(outcome.result, Err(RunError::OutOfTime));
     assert_eq!(outcome.summary(), "the plugin ran past its 300 s time limit");
 }

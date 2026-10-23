@@ -6,8 +6,8 @@
 //!
 //! Sharing searches takes one step more (`requirements/search.md` §6): a connected user turns
 //! it on for that plugin, and it is off until they do. Turning it off, or disconnecting, asks
-//! the plugin to forget every search it was sent, in each library they reach
-//! (`requirements/users.md` §7).
+//! the plugin to forget every search it was sent, in each library it serves, whether or not they
+//! still reach it (`requirements/users.md` §7).
 
 use std::sync::Arc;
 
@@ -28,14 +28,10 @@ const REACHED: &str = concat!(
     ")"
 );
 
-/// Asks the plugin `:id` to forget `:user`'s searches at `:at`, in each library it serves that
-/// they (an admin if `:admin`) reach.
-const STOPPED: &str = concat!(
-    "INSERT INTO search_events (user_id, library_id, kind, plugin_id, created_at) \
-     SELECT :user, l.library_id, 'stopped', :id, :at FROM plugin_libraries l \
-     WHERE l.plugin_id = :id AND ",
-    reaches!(admin: ":admin", user: ":user", library: "l.library_id")
-);
+/// Asks the plugin `?1` to forget `?2`'s searches at `?3`, in each library it serves.
+const STOPPED: &str = "INSERT INTO search_events \
+     (user_id, library_id, kind, plugin_id, created_at) \
+     SELECT ?2, library_id, 'stopped', ?1, ?3 FROM plugin_libraries WHERE plugin_id = ?1";
 
 /// A plugin the user can connect.
 pub struct Connectable {
@@ -117,8 +113,8 @@ impl From<rusqlite::Error> for SharingError {
 }
 
 /// Turns sharing `caller`'s searches with `id` on or off. On applies from now: nothing searched
-/// before is sent. Off asks it to forget everything it was sent, in each library it serves that
-/// they reach. A failure is a [`SharingError`] that says why.
+/// before is sent. Off asks it to forget everything it was sent, in each library it serves. A
+/// failure is a [`SharingError`] that says why.
 pub fn set_search_sharing(
     conn: &Connection,
     id: &str,
@@ -128,10 +124,10 @@ pub fn set_search_sharing(
     if manifest(conn, id, caller)?.is_none() {
         return Err(SharingError::Unknown);
     }
-    if !sharing {
-        return Ok(stop_sharing(conn, id, caller)?);
-    }
     let user = caller.user;
+    if !sharing {
+        return Ok(stop_sharing(conn, id, user)?);
+    }
     let connected = conn
         .prepare_cached("SELECT 1 FROM plugin_connections WHERE plugin_id = ?1 AND user_id = ?2")?
         .query_row(params![id, user], |_| Ok(()))
@@ -151,19 +147,16 @@ pub fn set_search_sharing(
     Ok(())
 }
 
-/// Stops sharing `caller`'s searches with `id`, if they were, and asks it to forget them in every
-/// library it serves that they reach.
-fn stop_sharing(conn: &Connection, id: &str, caller: Caller) -> rusqlite::Result<()> {
-    let Caller { user, admin, .. } = caller;
+/// Stops sharing `user`'s searches with `id`, if they were, and asks it to forget them in every
+/// library it serves.
+fn stop_sharing(conn: &Connection, id: &str, user: i64) -> rusqlite::Result<()> {
     let stopped = conn.execute(
         "UPDATE plugin_connections SET searches_shared_at = NULL \
          WHERE plugin_id = ?1 AND user_id = ?2 AND searches_shared_at IS NOT NULL",
         params![id, user],
     )?;
     if stopped > 0 {
-        let at = now_ms();
-        let params = named_params! { ":id": id, ":user": user, ":admin": admin, ":at": at };
-        conn.prepare_cached(STOPPED)?.execute(params)?;
+        conn.prepare_cached(STOPPED)?.execute(params![id, user, now_ms()])?;
     }
     Ok(())
 }
@@ -248,7 +241,7 @@ pub(super) fn connect(
 /// Disconnects `caller` from `id`: it stops being sent their searches, their settings are
 /// forgotten, and it no longer acts for them.
 pub fn disconnect(conn: &Connection, id: &str, caller: Caller) -> rusqlite::Result<()> {
-    stop_sharing(conn, id, caller)?;
+    stop_sharing(conn, id, caller.user)?;
     conn.execute(
         "DELETE FROM plugin_connections WHERE plugin_id = ?1 AND user_id = ?2",
         params![id, caller.user],

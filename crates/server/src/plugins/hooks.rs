@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use jewelcase_plugins::{Permission, RunError};
+use jewelcase_plugins::{Event, Permission, RunError};
 use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::Notify;
 
@@ -62,8 +62,19 @@ struct Due {
     plugin: String,
     library: i64,
     position: i64,
-    /// The user it acts for, in `played`, `playing`, and `searched`. Its cursor stores none as 0.
+    /// The user it is due for, in `played`, `playing`, and `searched`, and acts for except in a
+    /// request to forget ([`Due::run_for`]). Its cursor stores none as 0.
     user: Option<i64>,
+}
+
+impl Due {
+    /// Where a run of `event` is, and who it acts for: the library, and the user, except for a
+    /// request to forget searches, which names its user itself and runs with the shared settings
+    /// alone, so it reaches the plugin even once they can no longer be acted for there.
+    fn run_for(&self, event: &Event) -> RunFor {
+        let forget = matches!(event, Event::SearchesForgotten(_));
+        RunFor { library: self.library, user: self.user.filter(|_| !forget) }
+    }
 }
 
 /// How a delivery went, for its position and retries.
@@ -192,12 +203,13 @@ impl Plugins {
         let (ran, summary) = match event {
             None => (Ran::Handled, String::new()),
             Some(event) => {
-                let run_for = RunFor { library: due.library, user: due.user };
+                let run_for = due.run_for(&event);
                 match self.run_in(&due.plugin, &manifest, run_for, permissions, event).await {
                     Ok((outcome, _)) => {
                         (Ran::of(&outcome.result, outcome.outage), outcome.summary())
                     }
-                    Err(error) => (Ran::Unrun, error.to_string()),
+                    // `run_in` has logged it; an unrun delivery's summary is never shown.
+                    Err(_) => (Ran::Unrun, String::new()),
                 }
             }
         };
@@ -226,8 +238,8 @@ async fn idle(enabled: bool, wake: &Notify) {
 /// position and waits longer each time before trying again; after one on the server's side
 /// ([`Ran::Unrun`]) it waits as long as after the failure before, or [`BACKOFF_MS`] if there was
 /// none, and counts nothing. Failures are counted from the stored row, so a delivery under way
-/// as the plugin is enabled again counts from its fresh start. Unless it is acting for one user,
-/// it disables the plugin in the library once it has failed [`MAX_FAILURES`] times in a row,
+/// as the plugin is enabled again counts from its fresh start. Unless it is due for one user, it
+/// disables the plugin in the library once it has failed [`MAX_FAILURES`] times in a row,
 /// not counting outages ([`Ran::Unreachable`]), or once it has failed to load or reach its
 /// service for [`MAX_OUTAGE_MS`] with no other failure between: a failure of its own shows the
 /// service was reached, or that the plugin is at fault, so it ends the outage.

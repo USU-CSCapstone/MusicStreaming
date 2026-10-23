@@ -1,7 +1,7 @@
 //! The `searched` hook, which tells a plugin the searches of the users who share them with it.
 
-use jewelcase_plugins::Event;
 use jewelcase_plugins::Permission::{LibraryRead, SearchActivity, Searched};
+use jewelcase_plugins::{Event, Forgotten};
 use serde_json::json;
 
 use super::{HANDLED, connected, deliver, one, plan, setup};
@@ -64,8 +64,10 @@ async fn searches_reach_a_plugin_only_from_users_who_share_them_and_only_since()
     let Event::Searched(found) = one(deliver(&db, 0, HANDLED).await, 7) else {
         panic!("not searches")
     };
-    let summary: Vec<_> = found.iter().map(|s| (s.id, s.query.as_str(), s.found.tracks)).collect();
-    assert_eq!(summary, [(2, "a song they do not own", 0)], "theirs; nothing found is still sent");
+    let summary: Vec<_> =
+        found.iter().map(|s| (s.id, s.user, s.query.as_str(), s.found.tracks)).collect();
+    let theirs = [(2, 7, "a song they do not own", 0)];
+    assert_eq!(summary, theirs, "theirs, naming them; nothing found is still sent");
     assert_eq!(found[0].selected.map(|s| s.id), Some(11));
     assert!(deliver(&db, 0, HANDLED).await.is_empty(), "each search is delivered once");
 }
@@ -85,7 +87,10 @@ async fn a_removed_search_is_never_sent_and_a_forget_follows_what_it_names() {
     assert_eq!(found[0].found.tracks, 1, "what it found, as its event noted");
     let forgotten = one(deliver(&db, 0, HANDLED).await, 7);
     assert!(
-        matches!(forgotten, Event::SearchesForgotten(Some(ref ids)) if ids == &[3]),
+        matches!(
+            forgotten,
+            Event::SearchesForgotten(Forgotten { user: 7, searches: Some(ref ids) }) if ids == &[3]
+        ),
         "{forgotten:?}"
     );
 }
@@ -106,7 +111,7 @@ async fn stopping_asks_the_plugin_to_forget_everything_even_once_disconnected() 
 
     let told = one(deliver(&db, 0, HANDLED).await, 7);
     assert!(
-        matches!(told, Event::SearchesForgotten(None)),
+        matches!(told, Event::SearchesForgotten(Forgotten { user: 7, searches: None })),
         "told, though no longer connected, to forget everything, and not sent the search: {told:?}"
     );
 }
@@ -141,13 +146,15 @@ async fn sharing_with_another_plugin_or_by_another_user_shares_nothing() {
     assert_eq!(found.iter().map(|s| s.id).collect::<Vec<_>>(), [2]);
 }
 
+/// Removing a search names it, so a removal needs search activity as the search does.
 #[tokio::test]
 async fn searches_need_search_activity_as_well_as_the_hook() {
     let (_temp, db, plugins) = setup().await;
     let since = sharing(&plugins, &db).await;
     grant(&plugins, "plugin", &[Searched], &[LibraryRead]).await;
     searched(&db, 2, 7, "kept", since, 1).await;
-    assert!(deliver(&db, 0, HANDLED).await.is_empty());
+    forgot(&db, 3, since).await;
+    assert!(deliver(&db, 0, HANDLED).await.is_empty(), "neither a search nor its removal");
 }
 
 /// Without the hook itself, neither a search nor a request to forget reaches the plugin.
@@ -170,7 +177,9 @@ async fn a_request_to_forget_needs_only_the_hook() {
     grant(&plugins, "plugin", &[Searched], &[]).await;
     db.try_write(|tx| set_search_sharing(tx, "plugin", caller(7, false), false)).await.unwrap();
     let told = one(deliver(&db, 0, HANDLED).await, 7);
-    assert!(matches!(told, Event::SearchesForgotten(None)), "{told:?}");
+    let everything =
+        matches!(told, Event::SearchesForgotten(Forgotten { user: 7, searches: None }));
+    assert!(everything, "{told:?}");
 }
 
 #[tokio::test]

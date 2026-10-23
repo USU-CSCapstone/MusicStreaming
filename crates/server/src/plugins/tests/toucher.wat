@@ -47,11 +47,14 @@
   (export $found "found" (type $found-type))
   (type $search-type (record
     (field "id" u64)
+    (field "user" u64)
     (field "query" string)
     (field "found" $found)
     (field "selected" (option $selected))
     (field "searched-at-ms" u64)))
   (export $search "search" (type $search-type))
+  (type $forgotten-type (record (field "user" u64) (field "searches" (option (list u64)))))
+  (export $forgotten "forgotten" (type $forgotten-type))
   (type $event-type (variant
     (case "run")
     (case "tracks-changed" $changes)
@@ -61,7 +64,7 @@
     (case "played" (list $play))
     (case "playing" $playing)
     (case "searched" (list $search))
-    (case "searches-forgotten" (option (list u64)))
+    (case "searches-forgotten" $forgotten)
     (case "albums-changed" $changes)
     (case "artists-changed" $changes)))
   (export $event "event" (type $event-type))

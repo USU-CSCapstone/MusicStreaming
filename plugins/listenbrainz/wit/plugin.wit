@@ -278,11 +278,22 @@ interface events {
   record search {
     /// What `searches-forgotten` names it by.
     id: u64,
+    /// Who searched, as `searches-forgotten` names them.
+    user: u64,
     query: string,
     found: found,
     selected: option<selected>,
     /// When it was searched, in milliseconds since the Unix epoch.
     searched-at-ms: u64,
+  }
+
+  /// Searches a user asked the plugin to forget.
+  record forgotten {
+    /// The user, as `search.user` names them.
+    user: u64,
+    /// The searches to forget, by `search.id`. None means they stopped sharing: forget every
+    /// search of theirs from this library.
+    searches: option<list<u64>>,
   }
 
   variant event {
@@ -308,10 +319,11 @@ interface events {
     /// Searches one user who shares them with the plugin settled on in this library, oldest
     /// first. `settings.get` answers with that user's personal settings, as for `played`.
     searched(list<search>),
-    /// That user removed these searches, by `search.id`: forget them. None means they stopped
-    /// sharing, so forget every search of theirs from this library. What was already sent on
-    /// is not the host's to recall (requirements/users.md §7).
-    searches-forgotten(option<list<u64>>),
+    /// A user asked for searches they shared to be forgotten: forget them. It comes whether or
+    /// not they can still use this library or their account, so `settings.get` answers with the
+    /// shared settings only. What was already sent on is not the host's to recall
+    /// (requirements/users.md §7).
+    searches-forgotten(forgotten),
     /// Albums added, changed, or removed. An album changes when anything it shows does: its
     /// title, artists, artwork, or the tracks on it.
     albums-changed(changes),

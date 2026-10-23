@@ -4,8 +4,9 @@
 //! permissions it needs ([`Permission::needs`]) are granted, it is not waiting to retry a
 //! failure, and there is something past its position: changes of the kind it asked for, a
 //! finished scan, its interval gone by, plays ended by a user who connected it, a play one of
-//! them has just started and is still playing, or searches by a user who shares them with it.
-//! Each user has a position of their own in the personal hooks ([`Hook::Personal`]).
+//! them has just started and is still playing, or searches by a user who shares them with it,
+//! or their requests to forget them. Each user has a position of their own in the personal hooks
+//! ([`Hook::Personal`]).
 
 use jewelcase_plugins::{Event, Hook, Permission};
 use rusqlite::{Connection, params};
@@ -14,7 +15,7 @@ use super::Due;
 use super::changes::{changed, scans};
 use super::playing::{deliverable, playing};
 use super::plays::plays;
-use super::searches::searches;
+use super::searches::{ACTS, searches};
 use crate::db::{Text, reaches};
 
 /// Reads what a due hook delivers at the time given: the position once it is handled, and its
@@ -69,16 +70,6 @@ const CONNECTED_REACHES: &str = concat!(
     reaches!(
         admin: "(SELECT a.role <> 'user' FROM users a WHERE a.id = s.user_id)",
         user: "s.user_id",
-        library: "p.library_id"
-    )
-);
-
-/// The same for the user `u` whose searches are shared or forgotten.
-const SHARER_REACHES: &str = concat!(
-    " AND (SELECT a.status = 'active' FROM users a WHERE a.id = u.user_id) AND ",
-    reaches!(
-        admin: "(SELECT a.role <> 'user' FROM users a WHERE a.id = u.user_id)",
-        user: "u.user_id",
         library: "p.library_id"
     )
 );
@@ -179,8 +170,9 @@ pub(super) fn hooks() -> [(Permission, String, Read); 8] {
         deliverable("p.library_id", "s.user_id", "coalesce(c.position, 0)"),
     );
     // For each user who shares their searches with it, what they searched or removed since; and
-    // for each who stopped, the request to forget. The hook's grant holds for both, but what it
-    // needs holds only for the searches: a request to forget carries nothing of the user's.
+    // for each who stopped, the request to forget. The hook's grant holds for all three, what it
+    // needs only for the searches and removals, and only a search waits for a user it can act for
+    // ([`ACTS`]): a request to forget carries nothing of theirs but who they are.
     let shared = format!(
         "SELECT p.plugin_id, p.library_id, coalesce(c.position, 0) AS position, u.user_id \
          FROM plugin_libraries p \
@@ -191,13 +183,16 @@ pub(super) fn hooks() -> [(Permission, String, Read); 8] {
          LEFT JOIN plugin_connections s ON s.plugin_id = p.plugin_id AND s.user_id = u.user_id \
          LEFT JOIN plugin_cursors c ON c.plugin_id = p.plugin_id \
               AND c.library_id = p.library_id AND c.hook = ?2 AND c.user_id = u.user_id \
-         WHERE {READY}{}{SHARER_REACHES} \
+         WHERE {READY}{} \
          AND EXISTS (SELECT 1 FROM search_events e WHERE e.library_id = p.library_id \
                      AND e.user_id = u.user_id AND e.seq > coalesce(c.position, 0) \
-                     AND ((e.kind <> 'stopped' AND e.created_at >= s.searches_shared_at{}) \
+                     AND ((e.kind = 'searched' AND e.created_at >= s.searches_shared_at{needs} \
+                           AND {ACTS}) \
+                          OR (e.kind = 'forgotten' \
+                              AND e.created_at >= s.searches_shared_at{needs}) \
                           OR (e.kind = 'stopped' AND e.plugin_id = p.plugin_id)))",
         granted(&[Searched]),
-        granted(Searched.needs()),
+        needs = granted(Searched.needs()),
     );
     [
         (TracksChanged, changes(TracksChanged, "track"), |conn, due, _| {

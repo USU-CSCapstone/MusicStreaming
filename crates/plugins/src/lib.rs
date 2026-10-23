@@ -18,8 +18,8 @@ pub mod testing;
 
 pub use download::{MAX_SIZE, download};
 pub use host::{
-    Album, Artist, Changes, Event, Found, Grants, Host, Library, Outcome, Play, PlayEnd, Playing,
-    ResultKind, RunError, ScanFinished, Search, Selected, Track,
+    Album, Artist, Changes, Event, Forgotten, Found, Grants, Host, Library, Outcome, Play, PlayEnd,
+    Playing, ResultKind, RunError, ScanFinished, Search, Selected, Track,
 };
 pub use manifest::{Hook, InvalidPlugin, Manifest, Per, Permission, PermissionRequest, RateLimit};
 pub use rules::destination_allowed;

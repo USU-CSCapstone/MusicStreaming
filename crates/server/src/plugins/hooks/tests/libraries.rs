@@ -4,11 +4,11 @@
 use jewelcase_plugins::Permission::{
     LibraryRead, ListeningActivity, Played, Playing, SearchActivity, Searched,
 };
-use jewelcase_plugins::{Event, Permission};
+use jewelcase_plugins::{Event, Forgotten, Permission};
 
 use serde_json::json;
 
-use super::{HANDLED, Received, connected, deliver, setup};
+use super::{HANDLED, Received, connected, deliver, noted, setup};
 use crate::db::testing::{User, access};
 use crate::db::{Database, now_ms};
 use crate::plugins::personal::set_search_sharing;
@@ -30,28 +30,6 @@ async fn played(db: &Database, user: i64, library: i64, track: i64, at: i64) {
     .unwrap();
 }
 
-/// `user` settles on search `search` in `library` at `at`, or, unless `kept`, has removed it.
-async fn noted(db: &Database, user: i64, library: i64, search: i64, kept: bool, at: i64) {
-    db.write(move |tx| {
-        if kept {
-            tx.execute(
-                "INSERT INTO recent_searches (id, user_id, library_id, query, folded, searched_at) \
-                 VALUES (?2, ?4, ?1, 'words', 'words', ?3)",
-                rusqlite::params![library, search, at, user],
-            )?;
-        }
-        tx.execute(
-            "INSERT INTO search_events (user_id, library_id, kind, search_id, found_tracks, \
-                                        found_albums, found_artists, created_at) \
-             VALUES (?5, ?1, iif(?3, 'searched', 'forgotten'), ?2, iif(?3, 1, NULL), \
-                     iif(?3, 0, NULL), iif(?3, 0, NULL), ?4)",
-            rusqlite::params![library, search, kept, at, user],
-        )
-    })
-    .await
-    .unwrap();
-}
-
 /// Each delivery's hook and library, and the IDs it named: the tracks played or playing, the
 /// searches found or forgotten, or zero for a request to forget everything.
 fn named(received: Vec<Received>) -> Vec<(Permission, i64, Vec<u64>)> {
@@ -59,8 +37,8 @@ fn named(received: Vec<Received>) -> Vec<(Permission, i64, Vec<u64>)> {
         Some(Event::Played(plays)) => plays.iter().map(|p| p.track.id).collect(),
         Some(Event::Playing(playing)) => vec![playing.track.id],
         Some(Event::Searched(found)) => found.iter().map(|s| s.id).collect(),
-        Some(Event::SearchesForgotten(Some(ids))) => ids,
-        Some(Event::SearchesForgotten(None)) => vec![0],
+        Some(Event::SearchesForgotten(Forgotten { searches: Some(ids), .. })) => ids,
+        Some(Event::SearchesForgotten(Forgotten { searches: None, .. })) => vec![0],
         other => panic!("{other:?}"),
     };
     let mut named: Vec<_> =
@@ -102,11 +80,11 @@ async fn a_users_activity_reaches_only_the_library_it_happened_in() {
     assert_eq!(named(deliver(&db, 0, HANDLED).await), forget, "in each library, once");
 }
 
-/// Nothing is delivered for a user in a library they have lost access to: neither what they
-/// played there before, nor what they are playing, nor a request to forget written while they
-/// reached it.
+/// Nothing that acts for a user is delivered in a library they have lost access to: neither what
+/// they played there before, nor what they are playing. A request to forget written while they
+/// reached it is still delivered, as it acts for no one.
 #[tokio::test]
-async fn nothing_is_delivered_for_a_user_where_they_no_longer_reach() {
+async fn only_a_request_to_forget_is_delivered_for_a_user_where_they_no_longer_reach() {
     let (_temp, db, plugins) = setup().await;
     let plugin_wide = [ListeningActivity, Played, Playing, SearchActivity, Searched];
     connected(&plugins, &db, &plugin_wide).await;
@@ -134,7 +112,8 @@ async fn nothing_is_delivered_for_a_user_where_they_no_longer_reach() {
     })
     .await
     .unwrap();
-    assert_eq!(named(deliver(&db, since, HANDLED).await), [(Searched, 1, vec![0])]);
+    let forget = [(Searched, 1, vec![0]), (Searched, 2, vec![0])];
+    assert_eq!(named(deliver(&db, since, HANDLED).await), forget);
 }
 
 /// An admin reaches every library without being granted any, so their activity there is

@@ -22,7 +22,7 @@ mod turns;
 
 /// A plugin written by hand that touches `Album/gone.lrc` in root 1 on any event, and answers
 /// that it is done.
-const TOUCHER: &str = include_str!("tests/toucher.wat");
+pub(super) const TOUCHER: &str = include_str!("tests/toucher.wat");
 
 /// A library of its own, library 1, whose one root is `music` in the temporary folder, with a
 /// scanner, and the plugins over it. The root's ID is 1, so [`TOUCHER`] can name it. The scanner
@@ -150,7 +150,7 @@ async fn a_failed_run_is_answered_and_recorded_as_failed() {
 }
 
 /// A run that fails on the server's side, here on settings it cannot read, answers the error
-/// and is recorded as failed for the admin, with why.
+/// and is recorded as failed for the admin, in fixed words that leave out the database's message.
 #[tokio::test]
 async fn a_run_that_fails_on_the_servers_side_is_recorded_as_failed() {
     let (temp, db) = database().await;
@@ -169,8 +169,8 @@ async fn a_run_that_fails_on_the_servers_side_is_recorded_as_failed() {
     .unwrap();
 
     assert!(matches!(plugins.run("plugin".into()).await, Err(PluginError::Db(_))));
-    let (ok, summary) = last_run(&db).await;
-    assert!(!ok && !summary.is_empty(), "{summary}");
+    let failed = (false, "the server could not complete the run".to_owned());
+    assert_eq!(last_run(&db).await, failed);
 }
 
 /// A run whose report cannot be recorded, here for a disk the database finds full, still

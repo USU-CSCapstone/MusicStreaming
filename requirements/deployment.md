@@ -27,6 +27,7 @@ Everything else has a working default. **A user who sets only these three runs a
 
 - **`docker compose up` is sufficient.** No init command, no migration to run by hand, no shell into the container.
 - **The server is reachable as soon as it starts**, presenting the guided owner setup ([`users.md` §2.1](users.md#21-first-run)). It does not wait on a scan.
+- **Setup is completed right after first start.** Until it is, anyone who reaches the server can claim it as owner, including a web page open in a browser on the same network, through DNS rebinding, so the documentation tells the user to finish setup before doing anything else.
 - **The first scan starts on its own** once a library is configured, and the library is usable while it runs ([`scanning.md` §5](scanning.md#5-behavior)).
 - **A restart is never a fresh start.** Everything in the data directory survives the container being recreated, which is the normal way containers are updated.
 
@@ -69,7 +70,9 @@ Everything else has a working default. **A user who sets only these three runs a
 **Routing traffic to Jewelcase is the user's responsibility**, and the project says so plainly rather than implying more than it does. A homelab user already terminates TLS and routes hostnames for everything else they run, and Jewelcase does not duplicate a reverse proxy badly.
 
 - **Jewelcase works correctly behind a reverse proxy** — correct client addresses for the per-origin sign-in limits ([`users.md` §3.1](users.md#31-protection)), working long-lived connections for realtime ([`realtime.md`](realtime.md)), and correct URLs in what it serves.
+- **Exposure to the internet goes through a reverse proxy.** Jewelcase does not cap connections itself ([`general.md` §3.3](general.md#33-the-host-is-the-limiter)), so it relies on the proxy in front to absorb clients that hold many connections open by reading slowly, and the documentation says so.
 - **Only a proxy the user names is believed** about what it forwards: the client's address, the host the client asked for, and whether it came over HTTPS. Any other peer is taken as the client itself, whatever its headers claim, or anyone could pose as any client. `JEWELCASE_TRUSTED_PROXIES` lists those proxies as addresses or networks (`172.16.0.0/12`), and is loopback alone unless set; a proxy left out makes all its clients one client to the sign-in limits. A proxy in another container is named by its address on the network it shares with Jewelcase, and one on the host by that network's gateway.
+- **Plugins are not granted destinations inside a trusted proxy's range.** A plugin's requests leave from the server, so one that can reach Jewelcase from there could claim any client address in `X-Forwarded-For`, and the documentation warns admins of this.
 - **A session begun over HTTPS stays on HTTPS.** When a trusted proxy says the client came over HTTPS, the session cookie is marked `Secure`, so one plain-HTTP request to the same host never carries it.
 - **Docker's IPv6 proxy is explained.** On a host with IPv6, a published port whose container network has none relays every IPv6 client through Docker's own proxy, from the network's gateway. Those clients then share one address for the sign-in limits, and if the gateway is trusted, any of them can claim to be anyone. The documentation gives the two ways out: publish the port on IPv4 only (`0.0.0.0:8080:8080`), or publish no port and reach Jewelcase only through a proxy on its network.
 - **It never assumes it is at the root of a domain**, or that it is the only thing behind the proxy.
