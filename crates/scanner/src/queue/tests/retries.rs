@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::*;
+use super::super::*;
 use crate::scan::ScanState;
 use crate::testing::{BareStore, library, make_album, wait_until};
 

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use axum::http::StatusCode;
 
-use super::testing::{app, json, send};
+use super::super::testing::{app, json, send};
 use crate::db::store::SqliteStore;
 use crate::db::testing::library;
 use crate::db::testing::scale::{self, summary};

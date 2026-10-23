@@ -23,11 +23,7 @@ use retry::Retry;
 pub use worker::ScannerThread;
 
 mod request;
-#[cfg(test)]
-mod retries;
 mod retry;
-#[cfg(test)]
-mod scan_rows;
 mod worker;
 
 /// The scans waiting to run, first to run first, the one running, and the work waiting to be
@@ -212,6 +208,9 @@ fn coalesce_scopes(mut scopes: Vec<Scope>) -> Vec<Scope> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    mod retries;
+    mod scan_rows;
 
     #[test]
     fn scopes_coalesce() {

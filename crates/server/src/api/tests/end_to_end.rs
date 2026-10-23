@@ -7,7 +7,7 @@ use jewelcase_scanner::describe_image;
 use jewelcase_scanner::testing::{library, make_album, scan_library};
 use serde_json::Value;
 
-use super::testing::{app, ffmpeg, json, send};
+use super::super::testing::{app, ffmpeg, json, send};
 use crate::db::{SqliteStore, libraries};
 
 /// Fails if `value` has a `path` field at any depth (`requirements/general.md` §3.7).

@@ -228,10 +228,4 @@ fn challenge(problem: Problem) -> Response {
 }
 
 #[cfg(test)]
-mod gates;
-#[cfg(test)]
-mod refresh;
-#[cfg(test)]
-mod revoked;
-#[cfg(test)]
 mod tests;

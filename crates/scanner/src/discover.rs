@@ -23,12 +23,16 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use globset::{Glob, GlobSet, GlobSetBuilder};
+use globset::GlobSet;
 use jewelcase_core::Format;
 
 use crate::clock::system_time_ms;
 use crate::confine::not_followed;
 use crate::scope::{Depth, Scope};
+
+mod excludes;
+
+pub use excludes::{compile_excludes, excluded, excluded_scope};
 
 /// An audio candidate: passed the extension filter, not yet opened.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,32 +84,6 @@ pub struct WalkError {
 pub enum WalkItem {
     Directory(Directory),
     Error(WalkError),
-}
-
-/// Compile exclude globs. Patterns are relative to the root
-/// (`requirements/libraries.md` §1).
-pub fn compile_excludes(patterns: &[String]) -> Result<GlobSet, globset::Error> {
-    let mut b = GlobSetBuilder::new();
-    for p in patterns {
-        b.add(Glob::new(p)?);
-    }
-    b.build()
-}
-
-/// Whether `path`, which lies under `root`, matches `excludes` itself. Whether it lies in an
-/// excluded folder is [`excluded_scope`]'s question.
-pub fn excluded(root: &Path, path: &Path, excludes: &GlobSet) -> bool {
-    !excludes.is_empty() && excludes.is_match(path.strip_prefix(root).unwrap_or(path))
-}
-
-/// Whether `scope` lies in an excluded folder: its own folder, or one between it and its root,
-/// matches `excludes`. Nothing in such a scope is indexed. The root itself is never matched, as
-/// the walk never matches it.
-pub fn excluded_scope(scope: &Scope, excludes: &GlobSet) -> bool {
-    let Ok(relative) = scope.path.strip_prefix(&scope.root) else {
-        return false;
-    };
-    relative.ancestors().any(|dir| !dir.as_os_str().is_empty() && excludes.is_match(dir))
 }
 
 /// Why a root is unusable right now (`requirements/scanning.md` §7).

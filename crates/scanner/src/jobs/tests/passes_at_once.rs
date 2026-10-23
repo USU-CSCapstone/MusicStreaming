@@ -4,8 +4,8 @@
 use std::sync::mpsc;
 use std::thread;
 
-use super::tests::setup;
-use super::*;
+use super::super::*;
+use super::setup;
 use crate::testing::BareStore;
 
 /// Longer than any test waits for another thread.

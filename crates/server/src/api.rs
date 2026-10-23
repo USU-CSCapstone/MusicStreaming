@@ -4,14 +4,10 @@ mod albums;
 mod artists;
 mod audio;
 mod authenticate;
-#[cfg(test)]
-mod benchmark;
 mod connections;
 mod credit;
 mod cursor;
 mod devices;
-#[cfg(test)]
-mod end_to_end;
 mod extract;
 mod health;
 mod id;
@@ -160,6 +156,9 @@ mod tests {
     use super::testing::{app, app_before_setup, respond, send, send_json};
     use super::*;
     use crate::db::DbError;
+
+    mod benchmark;
+    mod end_to_end;
 
     #[tokio::test]
     async fn a_large_body_is_refused_before_sign_in() {

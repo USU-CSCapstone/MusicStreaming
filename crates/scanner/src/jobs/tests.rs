@@ -5,8 +5,10 @@ use crate::clock::now_ms;
 use crate::problems::ProblemKind;
 use crate::testing::BareStore;
 
+mod passes_at_once;
+
 /// A root holding the files `a` and `b`, and a store to record problems in.
-pub(super) fn setup() -> (tempfile::TempDir, BareStore, [FileToDecode; 2]) {
+fn setup() -> (tempfile::TempDir, BareStore, [FileToDecode; 2]) {
     let tmp = tempfile::tempdir().unwrap();
     let file = |name: &str| {
         fs::write(tmp.path().join(name), b"x").unwrap();

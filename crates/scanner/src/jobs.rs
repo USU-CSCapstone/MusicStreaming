@@ -299,7 +299,4 @@ impl Retries {
 }
 
 #[cfg(test)]
-mod passes_at_once;
-
-#[cfg(test)]
 mod tests;

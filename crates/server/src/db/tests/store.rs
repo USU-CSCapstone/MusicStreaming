@@ -11,8 +11,8 @@ use jewelcase_scanner::testing::{self, ItemKey};
 use jewelcase_scanner::*;
 use rusqlite::OptionalExtension;
 
-use super::store::SqliteStore;
-use super::{Database, libraries};
+use super::super::store::SqliteStore;
+use super::super::{Database, libraries};
 
 /// The store [`library_store`] makes for the library with its one root at `root`.
 fn make(root: &Path) -> SqliteStore {

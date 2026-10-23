@@ -1,18 +1,20 @@
-//! Every signed-in route against the gates [`super::require`] and [`super::require_admin`]
-//! apply: `401` without a valid token, `403` under `/admin` for a user, and for a library the
-//! caller cannot reach the same `404`, byte for byte, as for one that does not exist
-//! (`requirements/users.md` §10).
+//! Every signed-in route against the gates [`super::super::require`] and
+//! [`super::super::require_admin`] apply: `401` without a valid token, `403` under `/admin` for a
+//! user, and for a library the caller cannot reach the same `404`, byte for byte, as for one that
+//! does not exist (`requirements/users.md` §10).
 
 use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use serde_json::{Value, json};
 
-use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks_at, conn, respond};
+use super::super::super::testing::{
+    TOKEN, add_device, add_user, app_with_tracks_at, conn, respond,
+};
 use crate::db::testing::{Artist, Image, access};
 
-/// Every route behind [`super::require`] or [`super::require_admin`], as a method and a path
-/// under the API prefix with sample IDs. Paths under a library name library 2 and something
+/// Every route behind [`super::super::require`] or [`super::super::require_admin`], as a method and
+/// a path under the API prefix with sample IDs. Paths under a library name library 2 and something
 /// [`server`] puts in it, so a handler reached past the gate would answer differently than for a
 /// library that does not exist.
 /// `search`, `playback` and `audio` leave out their required query, and the image asks for a

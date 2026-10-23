@@ -21,8 +21,6 @@ pub mod retention;
 pub mod store;
 #[cfg(test)]
 pub mod testing;
-#[cfg(test)]
-mod tests_store;
 pub mod waveform;
 
 use std::num::NonZeroUsize;
@@ -404,6 +402,8 @@ impl Drop for Threads {
 mod tests {
     use super::testing::open;
     use super::*;
+
+    mod store;
 
     const INSERT_LIBRARY: &str =
         "INSERT INTO libraries (id, name, created_at) VALUES (?1, 'Music', 0)";

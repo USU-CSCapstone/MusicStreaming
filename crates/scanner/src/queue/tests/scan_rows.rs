@@ -9,7 +9,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
 
-use super::*;
+use super::super::*;
 use crate::scan::ScanState;
 use crate::store::StoreError;
 use crate::testing::{BareStore, Hooked, library, make_album, wait_until};
