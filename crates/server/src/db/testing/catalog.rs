@@ -218,29 +218,41 @@ impl Track {
     }
 }
 
-/// A PNG image file on its library's root, 1 by 1 pixels.
+/// A PNG image file on its library's root.
 pub struct Image {
     pub id: i64,
     pub library: i64,
     pub hash: Vec<u8>,
     pub path: &'static str,
+    /// Its size in pixels, as the scanner read it from the file's header.
+    pub width: u32,
+    pub height: u32,
     /// Its ThumbHash: `None` until the placeholder job runs, empty if it could not decode it.
     pub placeholder: Option<Vec<u8>>,
 }
 
 impl Image {
-    /// Image `id` of `library` at `path`, hashed as its ID's bytes, with no placeholder yet.
+    /// Image `id` of `library` at `path`, 1 by 1 pixels, hashed as its ID's bytes, with no
+    /// placeholder yet.
     pub fn new(id: i64, library: i64, path: &'static str) -> Image {
         let hash = id.to_be_bytes().to_vec();
-        Image { id, library, hash, path, placeholder: None }
+        Image { id, library, hash, path, width: 1, height: 1, placeholder: None }
     }
 
     /// Adds the image.
     pub fn insert(&self, conn: &Connection) -> Result<()> {
         conn.execute(
             "INSERT INTO images (id, library_id, hash, width, height, placeholder, root_id, path) \
-             VALUES (?1, ?2, ?3, 1, 1, ?4, (SELECT id FROM library_roots WHERE library_id = ?2), ?5)",
-            params![self.id, self.library, self.hash, self.placeholder, self.path],
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, (SELECT id FROM library_roots WHERE library_id = ?2), ?7)",
+            params![
+                self.id,
+                self.library,
+                self.hash,
+                self.width,
+                self.height,
+                self.placeholder,
+                self.path
+            ],
         )
         .map(drop)
     }

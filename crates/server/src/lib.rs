@@ -14,7 +14,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use jewelcase_ffmpeg::{Config as FfmpegConfig, Ffmpeg};
 use tokio::net::TcpListener;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::data_dir::{DataDir, apart};
@@ -22,8 +22,16 @@ use crate::db::{Database, libraries};
 use crate::plugins::Plugins;
 use crate::scanning::Scanning;
 
-/// Runs the server until shutdown_signal resolves, then finishes in-flight requests.
+/// Runs the server until SIGINT or SIGTERM, then stops it as [`run_until`] does.
 pub async fn run(config: Config) -> anyhow::Result<()> {
+    run_until(config, shutdown_signal()).await
+}
+
+/// Runs the server until `shutdown` resolves, then stops it in the order that loses least if a
+/// kill cuts the stop short, as `docker stop` does after 10 s: it stops taking connections,
+/// closes the realtime ones and saves where everyone was playing while it waits a few seconds
+/// at most for the requests in progress, and last it stops the libraries' background work.
+async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::Result<()> {
     let music = config.music.as_deref().and_then(resolve_music);
     let data_dir = DataDir::open(&config.data_dir, music.as_deref())
         .with_context(|| format!("cannot use the data directory set by {}", config::DATA_DIR))?;
@@ -64,6 +72,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     };
 
     let images = api::Images::new(data_dir.cache().join("images"), ffmpeg_config);
+    // A sweep that fails costs only disk until the next start, so the server starts anyway.
+    if let Err(error) = images.sweep(&db).await {
+        warn!(error = %format!("{error:#}"), "cannot sweep the image cache");
+    }
     // A cache folder that fails the check costs only a compile per plugin after each restart,
     // so the server starts without it rather than refusing to.
     let compiled = match data_dir.private_cache("plugins") {
@@ -80,8 +92,16 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let saving = players.keep_saved(db.clone());
     let indexes = Arc::new(api::Indexes::default());
     indexes.build_all(&db);
-    let mut app =
-        api::router(&config.base_path, db.clone(), images, indexes, plugins, players.clone());
+    let hub = Arc::new(api::Hub::default());
+    let mut app = api::router(
+        &config.base_path,
+        db.clone(),
+        images,
+        indexes,
+        plugins,
+        players.clone(),
+        hub.clone(),
+    );
     let web = Path::new(web::DIR);
     if !web.is_dir() {
         info!(dir = web::DIR, "no web app there; serving the API only");
@@ -92,11 +112,21 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     } else {
         app = app.merge(web::router(web));
     }
-    serve::serve(listener, app, shutdown_signal()).await;
-    // Where everyone was, as the server stops: not just as of the last periodic save.
-    saving.abort();
-    let _ = saving.await;
-    players.save(&db).await;
+    // Run once the server accepts no more connections. A closed realtime connection acts for no
+    // one, and a report it was checking is dropped, so after the save only a connection whose
+    // upgrade was already under way could still report.
+    let as_it_stops = async {
+        hub.close_all();
+        // The periodic save stops first, leaving a write already begun to finish.
+        saving.abort();
+        if let Err(error) = saving.await
+            && error.is_panic()
+        {
+            error!(%error, "the periodic save of playback state panicked");
+        }
+        players.save(&db).await;
+    };
+    serve::serve(listener, app, shutdown, as_it_stops).await;
     tokio::task::spawn_blocking(move || scanning.stop()).await?;
 
     info!("stopped");
@@ -177,10 +207,20 @@ mod tests {
     use std::fs;
     use std::time::Duration;
 
-    use tokio::time::timeout;
+    use futures_util::StreamExt;
+    use rusqlite::OptionalExtension;
+    use serde_json::json;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpStream;
+    use tokio::time::{Instant, sleep, timeout};
+    use tokio_tungstenite::tungstenite::Message;
 
     use super::*;
+    use crate::api::testing::player::{report, start_playing};
+    use crate::api::testing::socket::connect_with;
+    use crate::api::testing::{TOKEN, add_device};
     use crate::db::testing;
+    use crate::serve::DRAIN_TIMEOUT;
 
     /// How long `run` gets to refuse: a server that does not stop has started serving.
     const REFUSED: Duration = Duration::from_secs(10);
@@ -257,5 +297,86 @@ mod tests {
         let db = Database::open(&data_dir.state().join("jewelcase.db")).unwrap();
         let error = create_first_library(&db, &temp.path().join("unmounted")).await.unwrap_err();
         assert!(format!("{error:#}").contains(config::MUSIC), "{error:#}");
+    }
+
+    /// A copy of an image no library holds is deleted before the server takes requests.
+    #[tokio::test]
+    async fn the_image_cache_is_swept_as_the_server_starts() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        let cache = DataDir::open(&data, None).unwrap().cache().to_owned();
+        let unheld = cache.join("images/1/01/01-64.jpg");
+        fs::create_dir_all(unheld.parent().unwrap()).unwrap();
+        fs::write(&unheld, "").unwrap();
+        let ran = timeout(REFUSED, run_until(config(&data, None), std::future::ready(())));
+        ran.await.unwrap().unwrap();
+        assert!(!unheld.exists(), "a copy of an image no library holds is kept");
+    }
+
+    /// As the server stops, it closes each realtime connection with a Close frame and saves where
+    /// its account was playing at once, rather than once the requests in progress are answered.
+    #[tokio::test]
+    async fn a_stop_saves_players_and_closes_connections_while_a_request_hangs() {
+        let temp = tempfile::tempdir().unwrap();
+        let (data, music) = (temp.path().join("data"), temp.path().join("music"));
+        fs::create_dir(&music).unwrap();
+        let state = DataDir::open(&data, None).unwrap().state().join("jewelcase.db");
+        Database::open(&state)
+            .unwrap()
+            .write(move |tx| {
+                testing::User::new(1, "owner").insert(tx)?;
+                add_device(tx, 1, 1, TOKEN);
+                testing::library(tx, 1, "Music", &music)?;
+                testing::Album::new(101, 1).insert(tx)?;
+                testing::Track::new(1, 1, 101).insert(tx)
+            })
+            .await
+            .unwrap();
+        // A port free a moment ago, since the test must know it.
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let address = SocketAddr::from(([127, 0, 0, 1], port));
+        let (stop, stopping) = tokio::sync::oneshot::channel();
+        let server = run_until(Config { port, ..config(&data, None) }, async {
+            stopping.await.unwrap();
+        });
+
+        let client = async {
+            for _ in 0..100 {
+                if TcpStream::connect(address).await.is_ok() {
+                    break;
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+            let mut socket = connect_with(address, TOKEN).await;
+            start_playing(&mut socket, "1").await;
+            report(&mut socket, "1", "playing", json!({ "positionMs": 60_000 })).await;
+            // Part of a header holds the drain open, once the server has the connection.
+            let mut hanging = TcpStream::connect(address).await.unwrap();
+            hanging.write_all(b"GET /api/v1/health HTTP/1.1\r\n").await.unwrap();
+            sleep(Duration::from_millis(200)).await;
+            stop.send(()).unwrap();
+            let stopped = Instant::now();
+
+            loop {
+                match timeout(Duration::from_secs(1), socket.next()).await.unwrap() {
+                    Some(Ok(Message::Close(_))) => break,
+                    Some(Ok(_)) => {}
+                    other => panic!("closed without a Close frame: {other:?}"),
+                }
+            }
+            let conn = rusqlite::Connection::open(&state).unwrap();
+            let saved = "SELECT position_ms FROM player_states WHERE user_id = 1";
+            loop {
+                let position = conn.query_row(saved, [], |r| r.get::<_, u32>(0)).optional();
+                if position.unwrap().is_some_and(|position| position >= 60_000) {
+                    break;
+                }
+                assert!(stopped.elapsed() < DRAIN_TIMEOUT / 2, "not saved before the drain");
+                sleep(Duration::from_millis(10)).await;
+            }
+            hanging
+        };
+        let (ran, _hanging) = tokio::join!(timeout(DRAIN_TIMEOUT + REFUSED, server), client);
+        ran.unwrap().unwrap();
     }
 }

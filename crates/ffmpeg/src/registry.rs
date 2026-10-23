@@ -29,10 +29,13 @@ struct Entry {
     stalled: Arc<AtomicBool>,
 }
 
-/// Tracks every live background ffmpeg child so the watchdog can kill stalls.
+/// Tracks every live background ffmpeg child so the watchdog can kill stalls, and so the server
+/// can kill them all as it stops.
 #[derive(Default)]
 pub(crate) struct Registry {
     children: Mutex<HashMap<Pid, Entry>>,
+    /// Set by [`Registry::stop`], under the lock on `children`.
+    stopping: AtomicBool,
 }
 
 impl Registry {
@@ -63,8 +66,28 @@ impl Registry {
     pub(crate) fn register(&self, pid: Pid) -> Arc<AtomicBool> {
         let entry = Entry::default();
         let stalled = entry.stalled.clone();
-        self.children.lock().unwrap().insert(pid, entry);
+        let mut children = self.children.lock().unwrap();
+        // Checked under the lock `stop` holds, so a child that registers as it runs is killed
+        // by one or the other.
+        if self.stopping() {
+            send(pid, Signal::KILL);
+        }
+        children.insert(pid, entry);
         stalled
+    }
+
+    /// Kills every child, and from now on every child as it registers, for the server's stop.
+    pub(crate) fn stop(&self) {
+        let children = self.children.lock().unwrap();
+        self.stopping.store(true, Ordering::SeqCst);
+        for &pid in children.keys() {
+            send(pid, Signal::KILL);
+        }
+    }
+
+    /// Whether [`Registry::stop`] has run.
+    pub(crate) fn stopping(&self) -> bool {
+        self.stopping.load(Ordering::SeqCst)
     }
 
     /// Record that the child `pid` made progress, restarting its stall clock.

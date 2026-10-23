@@ -35,21 +35,30 @@ const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// allows for a slow or briefly lost link, and a slow but steady upload keeps going.
 const BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long the shutdown waits for the requests in progress: inside the 10 s `docker stop`
-/// allows before it kills the server, with time left to save what the server holds.
-const DRAIN_TIMEOUT: Duration = Duration::from_secs(8);
+/// How long the shutdown waits for the requests in progress. An API request takes milliseconds,
+/// so one still running after this is a stream or an upload, which its client resumes. It is a
+/// third of the 10 s `docker stop` allows before it kills the server. The save runs alongside
+/// it, one write that may wait behind a scan's batch, and the rest is left for the background
+/// stop after it, which waits for each scanner's file in hand.
+pub(crate) const DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Serves `app` on `listener` until `shutdown` resolves. Then it stops accepting, closes
-/// connections that have no request yet, and returns once the requests in progress are
-/// answered, counting a header or body still arriving, or after [`DRAIN_TIMEOUT`], leaving any
-/// still open to the runtime's end.
+/// Serves `app` on `listener` until `shutdown` resolves. Then it closes the listener, so a new
+/// connection is refused, closes connections that have no request yet, and runs `as_it_stops`
+/// while it waits for the requests in progress, counting a header or body still arriving. It
+/// returns once `as_it_stops` is done and the requests are answered or [`DRAIN_TIMEOUT`] has
+/// passed, leaving any still open to the runtime's end.
 ///
 /// Over HTTP/1.1, each connection closes after its response, so no connection sits idle where
 /// a pooling proxy could send a request on it just as it closes. The exception is an HTTP/1.0
 /// request that asks for keep-alive: hyper replaces the `close` with `Connection: keep-alive`,
 /// so that connection stays open until [`HEADER_READ_TIMEOUT`] passes with no next request. A
 /// connection upgraded to a WebSocket belongs to its handler, so it is not waited for.
-pub async fn serve(listener: TcpListener, app: Router, shutdown: impl Future<Output = ()>) {
+pub async fn serve(
+    listener: TcpListener,
+    app: Router,
+    shutdown: impl Future<Output = ()>,
+    as_it_stops: impl Future<Output = ()>,
+) {
     // Each is set only on a response whose handler has not set its own.
     let header = |name: HeaderName, value: &'static str| {
         SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value))
@@ -116,10 +125,12 @@ pub async fn serve(listener: TcpListener, app: Router, shutdown: impl Future<Out
             }
         });
     }
+    drop(listener);
     // Each connection holds a receiver until it ends.
     drop(stopping);
     stop.send_replace(());
-    if timeout(DRAIN_TIMEOUT, stop.closed()).await.is_err() {
+    let (drained, ()) = tokio::join!(timeout(DRAIN_TIMEOUT, stop.closed()), as_it_stops);
+    if drained.is_err() {
         warn!("stopping with requests still in progress after {DRAIN_TIMEOUT:?}");
     }
 }

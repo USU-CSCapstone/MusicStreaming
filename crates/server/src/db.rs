@@ -371,9 +371,12 @@ pub fn now_ms() -> i64 {
 struct Threads(Vec<JoinHandle<()>>);
 
 impl Drop for Threads {
+    /// Waits for each thread, logging one that panicked.
     fn drop(&mut self) {
         for thread in self.0.drain(..) {
-            let _ = thread.join();
+            if thread.join().is_err() {
+                error!("a database thread panicked");
+            }
         }
     }
 }

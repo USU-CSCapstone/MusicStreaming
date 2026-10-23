@@ -242,3 +242,22 @@ fn parses_the_state_and_cpu_ticks_past_a_name_with_spaces_and_parentheses() {
     assert_eq!(parse_stat(stat), Some(("S", 12)));
     assert_eq!(parse_stat("42 (a) S 1 42"), None);
 }
+
+/// Stopping kills a decode in flight, which fails as stopped rather than as a broken file, and
+/// kills each child that starts after it.
+#[test]
+fn stopping_kills_every_child_and_each_that_starts_after() {
+    let ffmpeg = lingering();
+    let info =
+        ProbeInfo { sample_rate: 8000, channels: 1, channel_layout: None, duration_secs: None };
+    // The input never exists, so the script would run for about 7 seconds.
+    let input = Path::new("/nonexistent/input");
+    let mut stream = ffmpeg.decode_pcm(input, &info).unwrap();
+    let stopping = Instant::now();
+    ffmpeg.stop_background();
+    let read = stream.read_frames(&mut Vec::new(), 1);
+    assert!(matches!(read, Err(Error::Stopped)), "{read:?}");
+    let probed = ffmpeg.probe(input);
+    assert!(matches!(probed, Err(Error::Stopped)), "{probed:?}");
+    assert!(stopping.elapsed() < Duration::from_secs(2), "{:?}", stopping.elapsed());
+}

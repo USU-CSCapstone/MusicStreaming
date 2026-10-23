@@ -126,6 +126,19 @@ fn a_pass_that_backed_off_is_idle_whatever_it_did() {
     assert!(RunReport::default().idle());
 }
 
+/// A decoder the server killed as it stops says nothing of the file: the pass backs off with
+/// nothing recorded, even for a file that failed once before in a way that may pass.
+#[test]
+fn a_decoder_stopped_with_the_server_is_no_verdict() {
+    let (_tmp, store, [a, _]) = setup();
+    let retries = Retries::new(RETRY_AFTER);
+    let lib = 1;
+    assert_eq!(retries.failed(&store, lib, &a, stall(&a)).unwrap(), Outcome::BackOff);
+    let stopped = Failure::from_ffmpeg(&a.path, &jewelcase_ffmpeg::Error::Stopped);
+    assert_eq!(retries.failed(&store, lib, &a, stopped).unwrap(), Outcome::BackOff);
+    assert!(store.problems().is_empty());
+}
+
 #[test]
 fn a_decoder_killed_by_a_signal_may_pass() {
     let path = Path::new("/music/a.flac");

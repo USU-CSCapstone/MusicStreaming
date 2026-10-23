@@ -15,8 +15,9 @@ use crate::db::testing::{Artist, Image, access};
 /// under the API prefix with sample IDs. Paths under a library name library 2 and something
 /// [`server`] puts in it, so a handler reached past the gate would answer differently than for a
 /// library that does not exist.
-/// `search`, `playback` and `audio` leave out their required query, so there a handler reached
-/// past the gate answers `422`.
+/// `search`, `playback` and `audio` leave out their required query, and the image asks for a
+/// size out of range, since its file is not there, so there a handler reached past the gate
+/// answers `422`.
 pub(super) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/auth/logout"),
     ("GET", "/me"),
@@ -48,7 +49,7 @@ pub(super) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/libraries/2/recent-searches"),
     ("DELETE", "/libraries/2/recent-searches"),
     ("DELETE", "/libraries/2/recent-searches/20"),
-    ("GET", "/libraries/2/images/20"),
+    ("GET", "/libraries/2/images/20?size=15"),
     ("GET", "/admin/plugins"),
     ("POST", "/admin/plugins"),
     ("GET", "/admin/plugins/lrclib-lyrics"),
@@ -168,7 +169,7 @@ async fn a_library_out_of_reach_answers_exactly_as_one_that_does_not_exist() {
     for base in BASES {
         let (temp, app) = server(base).await;
         // Every sample ID a GET names is there: the owner, who reaches library 2, finds each one.
-        // The GETs of `search`, `playback` and `audio` answer `422`, for their missing query.
+        // The GETs of `search`, `playback`, `audio` and the image answer `422`, for their query.
         for &(method, path) in ROUTES
             .iter()
             .filter(|(method, path)| *method == "GET" && path.starts_with("/libraries/2"))

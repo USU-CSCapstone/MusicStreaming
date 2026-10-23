@@ -60,6 +60,8 @@ pub fn from_ffmpeg(path: &Path, e: &jewelcase_ffmpeg::Error) -> Problem {
             ProblemKind::CorruptAudio
         }
         F::Spawn { .. } => ProblemKind::Unreadable,
+        // Not reached: `Failure::from_ffmpeg` takes a stopped decoder as `Host` before asking.
+        F::Stopped => ProblemKind::Unreadable,
         F::Io(io) => io_kind(io),
     };
     Problem { path: path.to_path_buf(), kind, detail: e.to_string(), seen_at: now_ms() }

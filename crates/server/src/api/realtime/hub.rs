@@ -2,9 +2,9 @@
 //! and the way to reach them.
 //!
 //! The hub closes a connection by letting go of its outbox: the connection sends what is
-//! already queued, then closes. A client that falls [`OUTBOX`] messages behind is closed that
-//! way rather than queued for without end. On reconnecting it receives current state, which is
-//! all it would have caught up to (§6).
+//! already queued, then a Close frame. A client that falls [`OUTBOX`] messages behind is closed
+//! that way rather than queued for without end. On reconnecting it receives current state, which
+//! is all it would have caught up to (§6).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -95,6 +95,13 @@ impl Hub {
         });
     }
 
+    /// Closes every connection, as the server stops: each sends what is already queued, then a
+    /// Close frame, so its client hears the server is going rather than finding the connection
+    /// lost.
+    pub fn close_all(&self) {
+        self.lock().clear();
+    }
+
     /// Waits for `user`'s turn to read and send a device list, which lasts until the guard
     /// drops. `None` if a list is already waiting for its turn: that one is read after this
     /// call, so it is current enough, and connections coming and going send one list rather
@@ -152,7 +159,7 @@ impl Presence {
 
     /// Whether the hub still counts this connection. One it has closed only sends what was
     /// queued, and must not act for its client.
-    pub(super) fn is_open(&self) -> bool {
+    pub(crate) fn is_open(&self) -> bool {
         !self.messages.is_closed()
     }
 }

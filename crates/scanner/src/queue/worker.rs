@@ -76,10 +76,11 @@ impl Scanner {
 }
 
 impl ScannerThread {
-    /// Asks the thread to stop without waiting for it. The running scan stops after the file in
-    /// hand and stays running at its last flushed cursor, and queued scans stay queued, so the
-    /// next [`Scanner::start`] resumes them as it would after a crash.
-    pub(crate) fn stop(&self) {
+    /// Asks the thread to stop without waiting for it, so that several libraries' threads can
+    /// be asked before any is waited for; dropping this then waits. The running scan stops after
+    /// the file in hand and stays running at its last flushed cursor, and queued scans stay
+    /// queued, so the next [`Scanner::start`] resumes them as it would after a crash.
+    pub fn stop(&self) {
         let queue = self.inner.queue.lock().unwrap();
         self.inner.shutdown.store(true, Ordering::SeqCst);
         drop(queue);

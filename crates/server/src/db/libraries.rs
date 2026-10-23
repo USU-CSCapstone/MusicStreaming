@@ -89,6 +89,7 @@ pub fn scanned(conn: &Connection, library_id: i64) -> Result<bool> {
 
 /// A track's or image's file where its row places it: under one of its library's active roots,
 /// and refused before it is opened if a symlink leads there (`requirements/scanning.md` §5).
+#[derive(Clone)]
 pub struct LibraryFile {
     root: PathBuf,
     path: PathBuf,

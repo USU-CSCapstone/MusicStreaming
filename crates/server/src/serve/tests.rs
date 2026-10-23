@@ -2,6 +2,7 @@
 //! timer.
 
 use std::convert::Infallible;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,7 +15,7 @@ use axum::routing::{get, post};
 use futures_util::stream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep, timeout};
 use tower_http::services::ServeDir;
@@ -39,7 +40,8 @@ async fn start(app: Router) -> (SocketAddr, Arc<Notify>, JoinHandle<()>) {
     let address = listener.local_addr().unwrap();
     let stop = Arc::new(Notify::new());
     let stopped = stop.clone();
-    let server = tokio::spawn(serve(listener, app, async move { stopped.notified().await }));
+    let server =
+        tokio::spawn(serve(listener, app, async move { stopped.notified().await }, async {}));
     (address, stop, server)
 }
 
@@ -223,4 +225,28 @@ async fn shutdown_waits_for_a_request_in_progress() {
     let response = response(stream).await;
     assert!(response.starts_with("HTTP/1.1 200 OK\r\n"), "{response}");
     assert!(response.ends_with("\r\n\r\ndone"), "{response}");
+}
+
+/// The listener closes as the server stops, before `as_it_stops` runs, so a connection made
+/// while it runs is refused at once rather than served or left waiting.
+#[tokio::test]
+async fn a_connection_made_as_the_server_stops_is_refused() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, stopped) = oneshot::channel::<()>();
+    let (began, beginning) = oneshot::channel::<()>();
+    let (finish, finishing) = oneshot::channel::<()>();
+    let as_it_stops = async move {
+        began.send(()).unwrap();
+        finishing.await.unwrap();
+    };
+    let shutdown = async move { stopped.await.unwrap() };
+    let server = tokio::spawn(serve(listener, routes(), shutdown, as_it_stops));
+    stop.send(()).unwrap();
+    beginning.await.unwrap();
+    let connected = timeout(Duration::from_millis(500), TcpStream::connect(address)).await;
+    let refused = connected.unwrap().unwrap_err();
+    assert_eq!(refused.kind(), ErrorKind::ConnectionRefused);
+    finish.send(()).unwrap();
+    timeout(Duration::from_secs(1), server).await.unwrap().unwrap();
 }

@@ -8,9 +8,10 @@
 //! - **A file that cannot be opened**, because it is gone, out of reach or not permitted: never
 //!   given a result. It is recorded as a problem and skipped for [`RETRY_AFTER`]. Once it
 //!   decodes, its `Unreadable` or `PermissionDenied` problem is cleared.
-//! - **Anything else**: an unavailable root, a decoder that cannot start, a first failure that
-//!   may pass, or a store error. The pass ends and the job backs off, so an outage never
-//!   strips results, and a failure of the store never counts against a file.
+//! - **Anything else**: an unavailable root, a decoder that cannot start or that the server
+//!   killed as it stops, a first failure that may pass, or a store error. The pass ends and the
+//!   job backs off, so an outage never strips results, and a failure of the store never counts
+//!   against a file.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -65,7 +66,7 @@ pub enum Failure {
     /// This attempt failed, and the next may not: a stall, a decoder killed by a signal, or
     /// output that broke off.
     Attempt(Problem),
-    /// No decoder could start.
+    /// No decoder could start, or the server stopped it.
     Host,
 }
 
@@ -74,7 +75,7 @@ impl Failure {
     pub fn from_ffmpeg(path: &Path, error: &jewelcase_ffmpeg::Error) -> Failure {
         use jewelcase_ffmpeg::Error as F;
         match error {
-            F::Spawn { .. } => Failure::Host,
+            F::Spawn { .. } | F::Stopped => Failure::Host,
             F::Stalled | F::Io(_) | F::Killed { .. } => {
                 Failure::Attempt(problems::from_ffmpeg(path, error))
             }

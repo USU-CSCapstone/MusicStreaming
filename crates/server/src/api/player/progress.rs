@@ -87,7 +87,9 @@ impl Players {
     }
 }
 
-/// Checks `report` from `caller` over the connection `presence` and applies it.
+/// Checks `report` from `caller` over the connection `presence` and applies it, unless the hub
+/// closed the connection while it was checked, as when the server stops: a closed connection
+/// acts for no one, so the report is dropped.
 pub async fn apply(
     state: &AppState,
     caller: Caller,
@@ -123,6 +125,9 @@ pub async fn apply(
     });
     if !reachable.await? {
         return Err(Problem::not_found());
+    }
+    if !presence.is_open() {
+        return Ok(());
     }
     state.players.report(&state.hub, caller, presence.id(), report, Id(library), Id(track))
 }
