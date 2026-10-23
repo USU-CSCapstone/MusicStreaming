@@ -30,6 +30,7 @@ pub use hub::{Hub, Presence};
 pub use messages::{Revoked, ServerMessage};
 
 use super::devices;
+use super::origin::Origin;
 use super::player::{self, PlayerCommand};
 use super::scope::Caller;
 use super::session::device_signed_in;
@@ -54,10 +55,11 @@ const MAX_MESSAGE: usize = 64 * 1024;
 pub async fn open(
     State(state): State<AppState>,
     caller: Caller,
+    from: Origin,
     headers: HeaderMap,
     upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
 ) -> Result<Response, Problem> {
-    if !same_origin(&headers) {
+    if !same_origin(&headers, &from) {
         return Err(Problem::new(Code::Forbidden)
             .detail("A realtime connection from a page must come from this server's own pages."));
     }

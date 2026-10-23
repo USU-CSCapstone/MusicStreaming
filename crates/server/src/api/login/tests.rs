@@ -4,7 +4,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
-use axum::http::{HeaderMap, Request, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};
 use serde_json::{Value, json};
 
 use super::super::testing::{app_before_setup, call, respond, send_json};
@@ -28,6 +28,20 @@ async fn server() -> (tempfile::TempDir, Arc<Database>, Router) {
     (temp, db, app)
 }
 
+/// A request to log in from `peer`.
+fn login_request(peer: &str, username: &str, password: &str) -> Request<Body> {
+    let body = json!({
+        "username": username,
+        "password": password,
+        "device": { "name": "Firefox on Linux", "type": "desktop", "platform": "web" }
+    });
+    Request::post("/api/v1/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .extension(ConnectInfo(SocketAddr::new(peer.parse::<IpAddr>().unwrap(), 4000)))
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
 /// Logs in from `peer`, and returns the status, headers, and JSON body.
 async fn login(
     app: &Router,
@@ -35,16 +49,7 @@ async fn login(
     username: &str,
     password: &str,
 ) -> (StatusCode, HeaderMap, Value) {
-    let body = json!({
-        "username": username,
-        "password": password,
-        "device": { "name": "Firefox on Linux", "type": "desktop", "platform": "web" }
-    });
-    let request = Request::post("/api/v1/auth/login")
-        .header(header::CONTENT_TYPE, "application/json")
-        .extension(ConnectInfo(SocketAddr::new(peer.parse::<IpAddr>().unwrap(), 4000)))
-        .body(Body::from(body.to_string()))
-        .unwrap();
+    let request = login_request(peer, username, password);
     let (status, headers, body) = respond(app.clone(), request).await;
     (status, headers, serde_json::from_slice(&body).unwrap())
 }
@@ -76,6 +81,27 @@ async fn logs_in_on_a_new_device() {
         .await
         .unwrap();
     assert_eq!(devices, 2, "setup's and this one");
+}
+
+#[tokio::test]
+async fn the_cookie_is_secure_only_behind_a_trusted_proxy_that_says_https() {
+    let (_temp, _db, app) = server().await;
+    for (peer, proto, secure) in [
+        ("127.0.0.1", "https", true),
+        ("127.0.0.1", "http", false),
+        ("203.0.113.5", "https", false),
+    ] {
+        let mut request = login_request(peer, "sam", PASSWORD);
+        request.headers_mut().insert("x-forwarded-proto", HeaderValue::from_static(proto));
+        let (status, headers, _) = respond(app.clone(), request).await;
+        assert_eq!(status, StatusCode::OK, "{peer} {proto}");
+        let cookie = headers[header::SET_COOKIE].to_str().unwrap();
+        assert_eq!(
+            cookie.ends_with("; SameSite=Strict; Secure"),
+            secure,
+            "{peer} {proto}: {cookie}"
+        );
+    }
 }
 
 #[tokio::test]

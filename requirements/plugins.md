@@ -137,7 +137,7 @@ That is the trade, made knowingly when write access is granted, library by libra
 
 - **Plugins declare their own configuration**, and it is presented consistently however unusual the plugin.
 - **Per plugin, per library** where the two differ, so one library can use a different source than another.
-- **Credentials are stored securely and never displayed again** after entry, never logged, and never returned by the API.
+- **Credentials are never returned by the API and never logged**, so once entered they are never shown again. They are kept in the data directory, in a folder the server creates readable by its own user alone (0700). They are not encrypted: the plugin must be able to read them, so a key would sit beside them and add little.
 - **Where a source is personal, credentials are per user.** A plugin serving a household must not force everyone onto one account.
 - **Configuration is validated when it is entered.** A wrong key is reported immediately, not silently at three in the morning during a scan.
 

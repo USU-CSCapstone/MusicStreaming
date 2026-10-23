@@ -3,11 +3,15 @@
 //! Every setting has a working default. Anything invalid, including an unrecognized
 //! `JEWELCASE_*` variable, fails startup with every problem listed at once.
 
+mod trusted_proxies;
+
 use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
 
 use tracing_subscriber::EnvFilter;
+
+pub use trusted_proxies::TrustedProxies;
 
 const PREFIX: &str = "JEWELCASE_";
 
@@ -16,8 +20,9 @@ pub const MUSIC: &str = "JEWELCASE_MUSIC";
 const PORT: &str = "JEWELCASE_PORT";
 const BASE_PATH: &str = "JEWELCASE_BASE_PATH";
 const LOG: &str = "JEWELCASE_LOG";
+const TRUSTED_PROXIES: &str = "JEWELCASE_TRUSTED_PROXIES";
 
-const SETTINGS: [&str; 5] = [DATA_DIR, MUSIC, PORT, BASE_PATH, LOG];
+const SETTINGS: [&str; 6] = [DATA_DIR, MUSIC, PORT, BASE_PATH, LOG, TRUSTED_PROXIES];
 
 /// The server's settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +38,8 @@ pub struct Config {
     pub base_path: String,
     /// A `tracing` filter directive, such as `info` or `jewelcase_server=debug`.
     pub log: String,
+    /// The reverse proxies whose `X-Forwarded-*` headers are believed.
+    pub trusted_proxies: TrustedProxies,
 }
 
 impl Default for Config {
@@ -44,6 +51,7 @@ impl Default for Config {
             port: 8080,
             base_path: String::new(),
             log: "info".to_owned(),
+            trusted_proxies: TrustedProxies::default(),
         }
     }
 }
@@ -76,6 +84,9 @@ impl Config {
                 PORT => parse_port(&value).map(|port| config.port = port),
                 BASE_PATH => parse_base_path(&value).map(|path| config.base_path = path),
                 LOG => parse_log(&value).map(|log| config.log = log),
+                TRUSTED_PROXIES => {
+                    trusted_proxies::parse(&value).map(|proxies| config.trusted_proxies = proxies)
+                }
                 _ => {
                     problems.push(format!(
                         "{key} is not a Jewelcase setting; the settings are {}",
@@ -186,6 +197,7 @@ mod tests {
             ("JEWELCASE_PORT", "4533"),
             ("JEWELCASE_BASE_PATH", "/music"),
             ("JEWELCASE_LOG", "jewelcase_server=debug"),
+            ("JEWELCASE_TRUSTED_PROXIES", "172.16.0.0/12"),
         ])
         .unwrap();
         assert_eq!(
@@ -196,6 +208,7 @@ mod tests {
                 port: 4533,
                 base_path: "/music".to_owned(),
                 log: "jewelcase_server=debug".to_owned(),
+                trusted_proxies: trusted_proxies::parse("172.16.0.0/12").unwrap(),
             }
         );
     }
@@ -229,15 +242,20 @@ mod tests {
             ("JEWELCASE_PORT", "http"),
             ("JEWELCASE_DATADIR", "/data"),
             ("JEWELCASE_LOG", "info,[[["),
+            ("JEWELCASE_TRUSTED_PROXIES", "localhost"),
         ])
         .unwrap_err();
         let message = error.to_string();
-        assert_eq!(error.problems.len(), 3, "{message}");
+        assert_eq!(error.problems.len(), 4, "{message}");
         assert!(message.contains("JEWELCASE_DATADIR is not a Jewelcase setting"), "{message}");
         assert!(
             message.contains("JEWELCASE_PORT is \"http\"; expected a port number"),
             "{message}"
         );
         assert!(message.contains("JEWELCASE_LOG is"), "{message}");
+        assert!(
+            message.contains("JEWELCASE_TRUSTED_PROXIES is \"localhost\"; expected addresses"),
+            "{message}"
+        );
     }
 }

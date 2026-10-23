@@ -86,11 +86,11 @@ pub struct SetupRequest {
 }
 
 /// Creates the owner and logs it in on this device, setting the session cookie, as a sign-in
-/// from `origin` that succeeded (`login::limits`). Once an owner exists this is `404`, as if the
-/// endpoint were not there.
+/// that succeeded from the client `from` names (`login::limits`). Once an owner exists this is
+/// `404`, as if the endpoint were not there.
 pub async fn complete(
     State(state): State<AppState>,
-    Origin(origin): Origin,
+    from: Origin,
     extract::Json(request): extract::Json<SetupRequest>,
 ) -> Result<Response, Problem> {
     if state.setup.done(&state.db).await? {
@@ -119,14 +119,14 @@ pub async fn complete(
                  VALUES (?1, ?2, ?3, 'owner', ?4, ?5)",
                 params![user, username, display_name, password, now],
             )?;
-            let attempt = limits::record(tx, &username, Some(user), origin, now)?;
+            let attempt = limits::record(tx, &username, Some(user), from.client, now)?;
             limits::succeeded(tx, attempt)?;
             Ok(session::register(tx, user, &device, token)?)
         })
         .await?;
     state.setup.0.store(true, Ordering::Relaxed);
 
-    let cookie = session::cookie(&state.prefix, &session.token)?;
+    let cookie = session::cookie(&state.prefix, &session.token, &from)?;
     Ok((StatusCode::CREATED, [(header::SET_COOKIE, cookie)], Json(session)).into_response())
 }
 

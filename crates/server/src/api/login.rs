@@ -34,7 +34,7 @@ pub struct LoginRequest {
 /// docs describe.
 pub async fn login(
     State(state): State<AppState>,
-    Origin(origin): Origin,
+    from: Origin,
     extract::Json(request): extract::Json<LoginRequest>,
 ) -> Result<Response, Problem> {
     let LoginRequest { username, password, device } = request;
@@ -46,14 +46,14 @@ pub async fn login(
         .db
         .try_write(move |tx| {
             let now = now_ms();
-            let wait = limits::wait_ms(tx, &username, origin, now)?;
+            let wait = limits::wait_ms(tx, &username, from.client, now)?;
             if wait > 0 {
                 // Not recorded: a write per refusal would let anyone keep the disk busy.
                 return Err(Problem::rate_limited(wait));
             }
             let account = account(tx, &username)?;
             let user = account.as_ref().map(|(id, _, _)| *id);
-            let id = limits::record(tx, &username, user, origin, now)?;
+            let id = limits::record(tx, &username, user, from.client, now)?;
             Ok((id, account))
         })
         .await?;
@@ -76,7 +76,7 @@ pub async fn login(
         })
         .await?;
     devices::changed(state.db.clone(), state.hub.clone(), user);
-    let cookie = session::cookie(&state.prefix, &session.token)?;
+    let cookie = session::cookie(&state.prefix, &session.token, &from)?;
     Ok((StatusCode::OK, [(header::SET_COOKIE, cookie)], Json(session)).into_response())
 }
 

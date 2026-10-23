@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 
 use super::devices::{self, Device, DeviceRegistration};
 use super::me::{self, User};
+use super::origin::Origin;
 use super::realtime::Revoked;
 use super::scope::Caller;
 use super::{AppState, Code, Problem};
@@ -92,11 +93,13 @@ pub async fn logout(State(state): State<AppState>, caller: Caller) -> Result<Res
 }
 
 /// The `Set-Cookie` value that has a browser send `token` with every request to the API at
-/// `prefix`, and nowhere else. Scripts cannot read it, and other sites cannot send it. Fails, as
-/// `cookie_header` does, only if `prefix` or `token` holds a character a header can't.
-pub fn cookie(prefix: &str, token: &str) -> Result<HeaderValue, Problem> {
+/// `prefix`, and nowhere else. Scripts cannot read it, and other sites cannot send it. A client
+/// that came over https, as `from` says, sends it only over https. Fails, as `cookie_header`
+/// does, only if `prefix` or `token` holds a character a header can't.
+pub fn cookie(prefix: &str, token: &str, from: &Origin) -> Result<HeaderValue, Problem> {
+    let secure = if from.https { "; Secure" } else { "" };
     cookie_header(format!(
-        "{COOKIE}={token}; Path={prefix}; Max-Age={COOKIE_MAX_AGE_S}; HttpOnly; SameSite=Strict"
+        "{COOKIE}={token}; Path={prefix}; Max-Age={COOKIE_MAX_AGE_S}; HttpOnly; SameSite=Strict{secure}"
     ))
 }
 

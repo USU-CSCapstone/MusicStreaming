@@ -69,7 +69,7 @@ pub fn add_signed_out_device(
 pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
     let (temp, db) = crate::db::testing::open();
     let state = AppState { prefix: prefix(base_path), ..state(&temp, db.clone()) };
-    // A client with a public address, unless a request carries its own `ConnectInfo`.
+    // A client that is not a trusted proxy, unless a request carries its own `ConnectInfo`.
     let peer = SocketAddr::from(([203, 0, 113, 1], 50_000));
     (temp, db, router(state).layer(MockConnectInfo(peer)))
 }
@@ -85,6 +85,7 @@ pub(crate) fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
         hub: Arc::default(),
         players: Arc::default(),
         prefix: prefix(""),
+        trusted_proxies: Arc::default(),
         db,
     }
 }

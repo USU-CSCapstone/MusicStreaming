@@ -23,6 +23,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use rusqlite::{Connection, OptionalExtension};
 
+use super::origin::Origin;
 use super::realtime::Revoked;
 use super::scope::{Caller, Scope};
 use super::session::{self, COOKIE, token_hash};
@@ -43,10 +44,11 @@ const LAST_SEEN_EVERY: Duration = Duration::from_secs(5 * 60);
 pub async fn require(
     State(state): State<AppState>,
     params: Result<RawPathParams, RawPathParamsRejection>,
+    from: Origin,
     request: Request,
     next: Next,
 ) -> Response {
-    gate(state, params, request, next, false).await
+    gate(state, params, from, request, next, false).await
 }
 
 /// [`require`] for the routes under `/admin`, which also answers `403` unless the account is an
@@ -54,10 +56,11 @@ pub async fn require(
 pub async fn require_admin(
     State(state): State<AppState>,
     params: Result<RawPathParams, RawPathParamsRejection>,
+    from: Origin,
     request: Request,
     next: Next,
 ) -> Response {
-    gate(state, params, request, next, true).await
+    gate(state, params, from, request, next, true).await
 }
 
 /// [`require`], and with `admin_only`, [`require_admin`]. A request it passes refreshes its
@@ -67,6 +70,7 @@ pub async fn require_admin(
 async fn gate(
     state: AppState,
     params: Result<RawPathParams, RawPathParamsRejection>,
+    from: Origin,
     mut request: Request,
     next: Next,
     admin_only: bool,
@@ -124,7 +128,7 @@ async fn gate(
     // The cookie is sent again whenever `last_seen_at` is refreshed, so a web session in use
     // never reaches its `Max-Age` (`requirements/users.md` §4).
     let refresh = match token {
-        Token::Cookie(secret) if stale => match session::cookie(&state.prefix, secret) {
+        Token::Cookie(secret) if stale => match session::cookie(&state.prefix, secret, &from) {
             Ok(cookie) => Some(cookie),
             Err(problem) => return problem.into_response(),
         },

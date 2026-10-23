@@ -105,6 +105,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         hub: hub.clone(),
         players: players.clone(),
         prefix: api::prefix(&config.base_path),
+        trusted_proxies: Arc::new(config.trusted_proxies.clone()),
     });
     let web = Path::new(web::DIR);
     if !web.is_dir() {

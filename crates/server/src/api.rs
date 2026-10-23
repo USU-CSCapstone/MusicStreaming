@@ -56,6 +56,7 @@ pub use scope::Caller;
 pub use search::Indexes;
 use setup::Setup;
 
+use crate::config::TrustedProxies;
 use crate::db::Database;
 use crate::plugins::Plugins;
 
@@ -82,6 +83,8 @@ pub struct AppState {
     pub players: Arc<Players>,
     /// Where the API is mounted, as [`prefix`] gives it.
     pub prefix: Arc<str>,
+    /// The proxies whose forwarded headers are believed ([`origin::Origin`]).
+    pub trusted_proxies: Arc<TrustedProxies>,
 }
 
 /// Where the API is mounted under `base_path`: `{base_path}/api/v1`.
