@@ -78,7 +78,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     plugins.start_hooks();
     let players = Arc::new(api::Players::load(&db).await?);
     let saving = players.keep_saved(db.clone());
-    let mut app = api::router(&config.base_path, db.clone(), images, plugins, players.clone());
+    let indexes = Arc::new(api::Indexes::default());
+    indexes.build_all(&db);
+    let mut app =
+        api::router(&config.base_path, db.clone(), images, indexes, plugins, players.clone());
     let web = Path::new(web::DIR);
     if !web.is_dir() {
         info!(dir = web::DIR, "no web app there; serving the API only");
@@ -115,9 +118,21 @@ fn resolve_music(music: &Path) -> Option<PathBuf> {
 }
 
 /// Creates a library from `JEWELCASE_MUSIC` on first start, when there are none yet
-/// (`requirements/deployment.md` §2).
+/// (`requirements/deployment.md` §2). Once there are, the setting changes nothing, so it warns
+/// when the music it names is no library's root.
 async fn create_first_library(db: &Database, music: &Path) -> anyhow::Result<()> {
-    if !db.read(libraries::all).await?.is_empty() {
+    let libraries = db.read(libraries::all).await?;
+    if !libraries.is_empty() {
+        // Music that cannot be resolved has been warned of already (`resolve_music`).
+        if let Ok(music) = music.canonicalize()
+            && !libraries.iter().flat_map(|library| &library.roots).any(|root| root.path == music)
+        {
+            warn!(
+                setting = config::MUSIC,
+                music = %music.display(),
+                "no library has this music as a root; the setting only creates the first library"
+            );
+        }
         return Ok(());
     }
     let music = music
@@ -209,6 +224,30 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         assert_eq!(resolve_music(temp.path()), Some(temp.path().canonicalize().unwrap()));
         assert_eq!(resolve_music(&temp.path().join("unmounted")), None);
+    }
+
+    #[tokio::test]
+    async fn music_that_is_no_librarys_root_is_warned_of() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = DataDir::open(&temp.path().join("data"), None).unwrap();
+        let db = Database::open(&data_dir.state().join("jewelcase.db")).unwrap();
+        let (music, other) = (temp.path().join("music"), temp.path().join("other"));
+        fs::create_dir(&music).unwrap();
+        fs::create_dir(&other).unwrap();
+        create_first_library(&db, &music).await.unwrap();
+
+        let log = temp.path().join("log");
+        let writer = fs::File::create(&log).unwrap();
+        let _logging = tracing::subscriber::set_default(
+            tracing_subscriber::fmt().with_writer(writer).with_ansi(false).finish(),
+        );
+        // The library's own root, written another way.
+        create_first_library(&db, &temp.path().join("other/../music")).await.unwrap();
+        assert_eq!(fs::read_to_string(&log).unwrap(), "", "the library's own root");
+        create_first_library(&db, &other).await.unwrap();
+        let logged = fs::read_to_string(&log).unwrap();
+        assert!(logged.contains("WARN") && logged.contains(config::MUSIC), "{logged}");
+        assert_eq!(db.read(libraries::all).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

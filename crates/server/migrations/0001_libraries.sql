@@ -15,6 +15,9 @@ CREATE TABLE libraries (
     album_count           INTEGER NOT NULL DEFAULT 0,
     artist_count          INTEGER NOT NULL DEFAULT 0,
     duration_us           INTEGER NOT NULL DEFAULT 0,
+    -- Bumped whenever a track, album or artist is added, deleted or renamed, so the search index
+    -- knows when to rebuild (0007_catalog_counts.sql)
+    names_version         INTEGER NOT NULL DEFAULT 0,
     created_at            INTEGER NOT NULL
 ) STRICT;
 

@@ -47,10 +47,13 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The configuration the process's environment sets.
     pub fn from_env() -> Result<Config, ConfigError> {
         Config::from_vars(std::env::vars_os())
     }
 
+    /// The configuration `vars` set, or every problem with them. Variables without the
+    /// `JEWELCASE_` prefix are not Jewelcase's, and are ignored.
     pub fn from_vars(
         vars: impl IntoIterator<Item = (OsString, OsString)>,
     ) -> Result<Config, ConfigError> {
@@ -61,13 +64,6 @@ impl Config {
             let Some(key) = key.to_str().filter(|key| key.starts_with(PREFIX)) else {
                 continue;
             };
-            if !SETTINGS.contains(&key) {
-                problems.push(format!(
-                    "{key} is not a Jewelcase setting; the settings are {}",
-                    SETTINGS.join(", ")
-                ));
-                continue;
-            }
             let Ok(value) = value.into_string() else {
                 problems.push(format!("{key} is not valid UTF-8"));
                 continue;
@@ -78,7 +74,13 @@ impl Config {
                 PORT => parse_port(&value).map(|port| config.port = port),
                 BASE_PATH => parse_base_path(&value).map(|path| config.base_path = path),
                 LOG => parse_log(&value).map(|log| config.log = log),
-                _ => unreachable!("every setting is handled"),
+                _ => {
+                    problems.push(format!(
+                        "{key} is not a Jewelcase setting; the settings are {}",
+                        SETTINGS.join(", ")
+                    ));
+                    continue;
+                }
             };
             if let Err(expected) = result {
                 problems.push(format!("{key} is {value:?}; expected {expected}"));

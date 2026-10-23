@@ -95,7 +95,8 @@ END;
 
 CREATE TRIGGER tracks_added AFTER INSERT ON tracks
 BEGIN
-    UPDATE libraries SET track_count = track_count + 1, duration_us = duration_us + NEW.duration_us
+    UPDATE libraries SET track_count = track_count + 1, duration_us = duration_us + NEW.duration_us,
+        names_version = names_version + 1
     WHERE id = NEW.library_id;
     UPDATE artists SET owned_track_count = owned_track_count + 1
     WHERE id IN (SELECT artist_id FROM album_artists WHERE album_id = NEW.album_id);
@@ -114,7 +115,8 @@ CREATE TRIGGER tracks_removed BEFORE DELETE ON tracks
 BEGIN
     DELETE FROM track_artists WHERE track_id = OLD.id;
     DELETE FROM track_tags WHERE track_id = OLD.id;
-    UPDATE libraries SET track_count = track_count - 1, duration_us = duration_us - OLD.duration_us
+    UPDATE libraries SET track_count = track_count - 1, duration_us = duration_us - OLD.duration_us,
+        names_version = names_version + 1
     WHERE id = OLD.library_id;
     UPDATE artists SET owned_track_count = owned_track_count - 1
     WHERE id IN (SELECT artist_id FROM album_artists WHERE album_id = OLD.album_id);
@@ -384,22 +386,44 @@ END;
 
 -- ───────────────────────────── Library totals ─────────────────────────────
 
+-- A library's names_version counts the changes to what search indexes: a track, album or artist
+-- added or deleted (tracks_added, tracks_removed, and the album and artist triggers below), or
+-- renamed.
+CREATE TRIGGER tracks_renamed AFTER UPDATE OF title ON tracks WHEN NEW.title IS NOT OLD.title
+BEGIN
+    UPDATE libraries SET names_version = names_version + 1 WHERE id = NEW.library_id;
+END;
+
+CREATE TRIGGER albums_renamed AFTER UPDATE OF title ON albums WHEN NEW.title IS NOT OLD.title
+BEGIN
+    UPDATE libraries SET names_version = names_version + 1 WHERE id = NEW.library_id;
+END;
+
+CREATE TRIGGER artists_renamed AFTER UPDATE OF name ON artists WHEN NEW.name IS NOT OLD.name
+BEGIN
+    UPDATE libraries SET names_version = names_version + 1 WHERE id = NEW.library_id;
+END;
+
 CREATE TRIGGER albums_added AFTER INSERT ON albums
 BEGIN
-    UPDATE libraries SET album_count = album_count + 1 WHERE id = NEW.library_id;
+    UPDATE libraries SET album_count = album_count + 1, names_version = names_version + 1
+    WHERE id = NEW.library_id;
 END;
 
 CREATE TRIGGER albums_removed AFTER DELETE ON albums
 BEGIN
-    UPDATE libraries SET album_count = album_count - 1 WHERE id = OLD.library_id;
+    UPDATE libraries SET album_count = album_count - 1, names_version = names_version + 1
+    WHERE id = OLD.library_id;
 END;
 
 CREATE TRIGGER artists_added AFTER INSERT ON artists
 BEGIN
-    UPDATE libraries SET artist_count = artist_count + 1 WHERE id = NEW.library_id;
+    UPDATE libraries SET artist_count = artist_count + 1, names_version = names_version + 1
+    WHERE id = NEW.library_id;
 END;
 
 CREATE TRIGGER artists_removed AFTER DELETE ON artists
 BEGIN
-    UPDATE libraries SET artist_count = artist_count - 1 WHERE id = OLD.library_id;
+    UPDATE libraries SET artist_count = artist_count - 1, names_version = names_version + 1
+    WHERE id = OLD.library_id;
 END;

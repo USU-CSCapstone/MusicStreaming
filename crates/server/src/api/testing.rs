@@ -68,8 +68,9 @@ pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, R
     let images = Images::new(temp.path().join("cache"), Config::default());
     // A client with a public address, unless a request carries its own `ConnectInfo`.
     let peer = SocketAddr::from(([203, 0, 113, 1], 50_000));
-    let app = router(base_path, db.clone(), images, plugins(&temp, &db), Arc::default())
-        .layer(MockConnectInfo(peer));
+    let app =
+        router(base_path, db.clone(), images, Arc::default(), plugins(&temp, &db), Arc::default())
+            .layer(MockConnectInfo(peer));
     (temp, db, app)
 }
 
@@ -77,7 +78,7 @@ pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, R
 pub(super) fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
     let images = Images::new(temp.path().join("cache"), Config::default());
     let plugins = plugins(temp, &db);
-    AppState::new(db, images, plugins, Arc::default(), "/api/v1")
+    AppState::new(db, images, Arc::default(), plugins, Arc::default(), "/api/v1")
 }
 
 /// [`app`] with library 1 holding tracks 1 and 2, and library 2 holding track 3, each called

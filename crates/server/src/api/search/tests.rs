@@ -131,16 +131,7 @@ async fn what_is_gone_since_the_index_was_built_is_left_out() {
     let uri = "/api/v1/libraries/1/search?q=untitled";
     let (_, body) = json(&app, uri).await;
     assert_eq!(sections(&body), [("tracks".to_owned(), vec!["1006".to_owned()])]);
-    db.write(|tx| {
-        tx.execute_batch(
-            "DELETE FROM track_artists WHERE track_id = 1006;
-             DELETE FROM tracks WHERE id = 1006;
-             INSERT INTO library_changes (library_id, entity_type, entity_id, op, changed_at)
-             VALUES (1, 'track', 1006, 'delete', 0);",
-        )
-    })
-    .await
-    .unwrap();
+    db.write(|tx| tx.execute_batch("DELETE FROM tracks WHERE id = 1006")).await.unwrap();
     // The search that notices the change answers from the index that still names the track.
     let (status, body) = json(&app, uri).await;
     assert_eq!(status, StatusCode::OK);
@@ -155,12 +146,7 @@ async fn the_index_follows_the_library() {
     assert_eq!(body["sections"], json!([]));
     db.write(|tx| {
         let title = "Octopus's Garden".into();
-        Track { title, sort_key: b"o".to_vec(), ..Track::new(1007, 1, 101) }.insert(tx)?;
-        tx.execute(
-            "INSERT INTO library_changes (library_id, entity_type, entity_id, op, changed_at)
-             VALUES (1, 'track', 1007, 'upsert', 0)",
-            [],
-        )
+        Track { title, sort_key: b"o".to_vec(), ..Track::new(1007, 1, 101) }.insert(tx)
     })
     .await
     .unwrap();

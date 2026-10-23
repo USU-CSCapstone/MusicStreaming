@@ -322,10 +322,10 @@ async fn only_a_noted_search_keeps_what_it_found_and_keeps_all_of_it() {
     assert!(insert("'forgotten', 5, 0, NULL, NULL").await.is_err(), "a forget with a count");
 }
 
-/// Library 1's search index is built the first time anything searches it, and rebuilt only once
-/// the library's change feed moves. Adding a track here leaves the feed where it was, so an
-/// index built while the owner's search was recorded would never be rebuilt, and the search that
-/// follows would miss the track.
+/// Library 1's search index is built the first time anything searches it, and a search after a
+/// change answers from the index it has while another is built. So an index built while the
+/// owner's search was recorded would answer the search that follows, and miss the track added
+/// in between.
 #[tokio::test]
 async fn a_search_is_not_counted_for_a_user_who_shares_nothing() {
     let (_temp, db, app) = app_with_tracks().await;

@@ -75,13 +75,9 @@ pub async fn search(
     }
     let kinds = query.types.as_deref().map_or_else(|| Ok(Kind::ALL.to_vec()), kinds)?;
 
-    let (track_count, position) = db
-        .try_read(move |conn| -> Result<_, Problem> {
-            let track_count = page::library_count(conn, library, "track_count")?;
-            Ok((track_count, indexes::feed_position(conn, library)?))
-        })
-        .await?;
-    let index = indexes.index(&db, library, position).await?;
+    let track_count =
+        db.read(move |conn| page::library_count(conn, library, "track_count")).await?;
+    let index = indexes.index(&db, library).await?;
     let found = index.search(&query.q, &kinds, limit);
     let sections = db.read(move |conn| results(conn, library, found)).await?;
 
@@ -125,8 +121,7 @@ pub async fn totals(
     library: i64,
     q: &str,
 ) -> Result<[usize; 3], Problem> {
-    let position = db.read(move |conn| indexes::feed_position(conn, library)).await?;
-    let index = indexes.index(db, library, position).await?;
+    let index = indexes.index(db, library).await?;
     let found = index.search(q, &Kind::ALL, 1);
     Ok(Kind::ALL.map(|kind| {
         found.iter().find(|section| section.kind == kind).map_or(0, |section| section.total)

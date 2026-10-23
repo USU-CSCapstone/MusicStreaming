@@ -54,7 +54,7 @@ pub use images::Images;
 pub use player::Players;
 pub use problem::{Code, Problem};
 use realtime::Hub;
-use search::Indexes;
+pub use search::Indexes;
 use setup::Setup;
 
 use crate::db::Database;
@@ -77,11 +77,12 @@ struct AppState {
 }
 
 impl AppState {
-    /// The state of an API mounted at `prefix`, before any search index is built, setup is
-    /// seen done, or a realtime connection opens.
+    /// The state of an API mounted at `prefix`, before setup is seen done or a realtime
+    /// connection opens.
     fn new(
         db: Arc<Database>,
         images: Images,
+        indexes: Arc<Indexes>,
         plugins: Arc<Plugins>,
         players: Arc<Players>,
         prefix: &str,
@@ -89,7 +90,7 @@ impl AppState {
         AppState {
             db,
             images: Arc::new(images),
-            indexes: Arc::default(),
+            indexes,
             setup: Arc::default(),
             plugins,
             hub: Arc::default(),
@@ -104,11 +105,12 @@ pub fn router(
     base_path: &str,
     db: Arc<Database>,
     images: Images,
+    indexes: Arc<Indexes>,
     plugins: Arc<Plugins>,
     players: Arc<Players>,
 ) -> Router {
     let prefix = format!("{base_path}/api/v1");
-    let state = AppState::new(db, images, plugins, players, &prefix);
+    let state = AppState::new(db, images, indexes, plugins, players, &prefix);
     // These answer `401` without a token.
     let signed_in = Router::new()
         .route("/auth/logout", post(session::logout))

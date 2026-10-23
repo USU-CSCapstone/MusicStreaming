@@ -81,8 +81,9 @@ pub fn limit(limit: Option<u32>) -> Result<usize, Problem> {
     }
 }
 
-/// The library's stored count in `column`, such as `album_count`, which the scanner keeps
-/// current; 0 once the library is gone, as when it was deleted after the request was let in.
+/// The library's stored number in `column`, such as `album_count` or `names_version`, which the
+/// scanner keeps current; 0 once the library is gone, as when it was deleted after the request
+/// was let in.
 pub fn library_count(
     conn: &Connection,
     library: i64,
