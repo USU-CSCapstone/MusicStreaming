@@ -37,14 +37,14 @@ pub fn find_or_create_artist(
 }
 
 /// The album of `lib` with `title`'s key and `artists_key`, added at `now` if new. `None` is the
-/// unknown album.
+/// unknown album. A new album's artist sort key is empty until the recompute gives it its first
+/// album artist's.
 pub fn find_or_create_album(
     tx: &Transaction<'_>,
     lib: i64,
     title: Option<&str>,
     artists_key: &str,
     sort_key: &str,
-    artist_sort_key: &str,
     now: i64,
 ) -> Result<i64> {
     let title_key = title.map(name_key).unwrap_or_default();
@@ -60,7 +60,7 @@ pub fn find_or_create_album(
     let id = new_id()?;
     tx.prepare_cached(
         "INSERT INTO albums (id, library_id, title, title_key, artists_key, sort_key, \
-         artist_sort_key, added_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         artist_sort_key, added_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, x'', ?7)",
     )?
     .execute(params![
         id,
@@ -69,13 +69,13 @@ pub fn find_or_create_album(
         title_key,
         artists_key,
         sort_key.as_bytes(),
-        artist_sort_key.as_bytes(),
         now
     ])?;
     Ok(id)
 }
 
-/// The genre of `lib` whose tag key `name` folds to, added if new.
+/// The genre of `lib` whose tag key `name` folds to, added if new. A new genre's sort key is
+/// empty until the recompute gives it its displayed name's.
 pub fn find_or_create_tag(tx: &Transaction<'_>, lib: i64, name: &str) -> Result<i64> {
     let key = tag_key(name);
     if let Some(id) = tx
@@ -87,13 +87,12 @@ pub fn find_or_create_tag(tx: &Transaction<'_>, lib: i64, name: &str) -> Result<
     {
         return Ok(id);
     }
-    let sort_key = sort_key(name, None);
     let id = new_id()?;
     tx.prepare_cached(
         "INSERT INTO tags (id, library_id, type, name, name_key, sort_key) \
-         VALUES (?1, ?2, 'genre', ?3, ?4, ?5)",
+         VALUES (?1, ?2, 'genre', ?3, ?4, x'')",
     )?
-    .execute(params![id, lib, name.trim(), key, sort_key.as_bytes()])?;
+    .execute(params![id, lib, name.trim(), key])?;
     Ok(id)
 }
 

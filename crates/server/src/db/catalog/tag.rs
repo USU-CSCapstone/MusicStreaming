@@ -1,6 +1,6 @@
 //! A tag's name and sort key, from the spellings its tracks carry (`design/database.md` §3).
 
-use jewelcase_core::sort_key;
+use jewelcase_core::tag_sort_key;
 use rusqlite::{OptionalExtension, Result, Transaction, params};
 
 use crate::db::feed::{self, Entity, Op};
@@ -25,6 +25,6 @@ pub(super) fn refresh_tag(tx: &Transaction<'_>, lib: i64, tag: i64, now: i64) ->
     }
     let name = name.unwrap_or_default();
     tx.prepare_cached("UPDATE tags SET name = ?2, sort_key = ?3 WHERE id = ?1")?
-        .execute(params![tag, name, sort_key(&name, None).into_bytes()])?;
+        .execute(params![tag, name, tag_sort_key(&name).into_bytes()])?;
     feed::record(tx, lib, Entity::Tag, tag, Op::Upsert, now)
 }

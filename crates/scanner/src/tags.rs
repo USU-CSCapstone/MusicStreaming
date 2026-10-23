@@ -5,13 +5,12 @@
 //! scheme-independent key; the mapper below handles what survives that
 //! abstraction. Nothing outside this module knows what an ID3 frame is.
 
-use std::collections::HashSet;
 use std::fs::File;
 use std::io;
 use std::panic;
 use std::path::Path;
 
-use jewelcase_core::{Format, name_key};
+use jewelcase_core::Format;
 use lofty::config::ParseOptions;
 use lofty::error::{FileParseError, UnknownFormatError, UnsupportedTagError};
 use lofty::file::{AudioFile, FileType, TaggedFile, TaggedFileExt};
@@ -203,16 +202,13 @@ fn strings(tags: &[&Tag], key: &ItemKey) -> Vec<String> {
     Vec::new()
 }
 
-/// The record labels: the label tag's values, then the publisher tag's, in tagged order, each
-/// once by its name key with its first spelling. ID3v2 has one frame for both, `TPUB`, which lofty
-/// reads as the publisher; Vorbis comments have `LABEL` (or `ORGANIZATION`) and `PUBLISHER`, and
-/// MP4 has `----:com.apple.iTunes:LABEL`.
+/// The record labels: the label tag's values, else the publisher tag's, in tagged order, each
+/// once by its name key with its first spelling ([`strings`]). ID3v2 has one frame for both,
+/// `TPUB`, which lofty reads as the publisher; Vorbis comments have `LABEL` (or `ORGANIZATION`)
+/// and `PUBLISHER`, and MP4 has `----:com.apple.iTunes:LABEL`.
 fn labels(tags: &[&Tag]) -> Vec<String> {
-    let mut labels = strings(tags, &ItemKey::Label);
-    labels.extend(strings(tags, &ItemKey::Publisher));
-    let mut seen = HashSet::new();
-    labels.retain(|label| seen.insert(name_key(label)));
-    labels
+    let labels = strings(tags, &ItemKey::Label);
+    if labels.is_empty() { strings(tags, &ItemKey::Publisher) } else { labels }
 }
 
 /// Parse a number that may be packed as `n/total`.
@@ -299,7 +295,6 @@ fn map_tags(file: &TaggedFile) -> TagSet {
     out.title_sort = first_string(&tags, &ItemKey::TrackTitleSortOrder);
     out.artist_sort = first_string(&tags, &ItemKey::TrackArtistSortOrder);
     out.album_sort = first_string(&tags, &ItemKey::AlbumTitleSortOrder);
-    out.album_artist_sort = first_string(&tags, &ItemKey::AlbumArtistSortOrder);
     out
 }
 
@@ -309,19 +304,26 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn labels_come_from_label_then_publisher_once_each() {
+    /// A Vorbis comment holding `items`.
+    fn tagged(items: &[(ItemKey, &str)]) -> Tag {
         let mut tag = Tag::new(TagType::VorbisComments);
-        for (key, value) in [
+        for &(key, value) in items {
+            assert!(tag.push(TagItem::new(key, ItemValue::Text(value.into()))));
+        }
+        tag
+    }
+
+    #[test]
+    fn labels_come_from_the_label_tag_else_the_publisher_tag_once_each() {
+        let both = tagged(&[
             (ItemKey::Publisher, "Warner"),
             (ItemKey::Label, "Sub Pop"),
             (ItemKey::Label, "SUB POP;Domino"),
-            (ItemKey::Publisher, "sub pop"),
-        ] {
-            assert!(tag.push(TagItem::new(key, ItemValue::Text(value.into()))));
-        }
-        assert_eq!(labels(&[&tag]), ["Sub Pop", "Domino", "Warner"]);
-        assert!(labels(&[&Tag::new(TagType::VorbisComments)]).is_empty());
+        ]);
+        assert_eq!(labels(&[&both]), ["Sub Pop", "Domino"]);
+        let publisher = tagged(&[(ItemKey::Publisher, "Warner;WARNER")]);
+        assert_eq!(labels(&[&publisher]), ["Warner"]);
+        assert!(labels(&[&tagged(&[])]).is_empty());
     }
 
     #[test]

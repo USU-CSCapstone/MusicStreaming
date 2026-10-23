@@ -81,7 +81,7 @@ CREATE TABLE albums (
     sort_key              BLOB    NOT NULL,
     artist_sort_key       BLOB    NOT NULL,
     type                  TEXT    NOT NULL DEFAULT 'album' CHECK (type IN ('album', 'ep', 'single', 'compilation')),
-    -- The labels of the album's first track that has any, in the order design/database.md §3 gives
+    -- The label set most of the album's tracks carry, as design/database.md §3 resolves it
     labels                TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(labels) AND json_type(labels) = 'array'),
     image_id              INTEGER,
     -- The album's first track with an artist image and its first with a biography, in the order
@@ -163,6 +163,9 @@ CREATE TABLE tracks (
     id              INTEGER PRIMARY KEY,
     library_id      INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
     album_id        INTEGER NOT NULL,
+    -- The album artists' ids in the order this file lists them, each once; resolved onto
+    -- album_artists
+    album_artist_ids TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(album_artist_ids) AND json_type(album_artist_ids) = 'array'),
     -- The album's title as written in this file
     album_title     TEXT    CHECK (album_title <> ''),
     root_id         INTEGER NOT NULL,
@@ -247,7 +250,7 @@ CREATE INDEX tracks_by_image ON tracks (library_id, image_id) WHERE image_id IS 
 CREATE INDEX tracks_by_artist_image ON tracks (library_id, artist_image_id)
     WHERE artist_image_id IS NOT NULL;
 CREATE INDEX tracks_by_biography ON tracks (library_id, biography_id) WHERE biography_id IS NOT NULL;
--- An album's tracks offering art, an artist image, a biography or labels, each kind in the order
+-- An album's tracks offering art, an artist image or a biography, each kind in the order
 -- design/database.md §3 gives, so an album reads the first of each from one entry
 CREATE INDEX tracks_with_art ON tracks (album_id, missing_since IS NOT NULL, image_embedded DESC,
     disc_number, ifnull(track_number, 9223372036854775807), path, id) WHERE image_id IS NOT NULL;
@@ -255,8 +258,6 @@ CREATE INDEX tracks_with_artist_image ON tracks (album_id, missing_since IS NOT 
     ifnull(track_number, 9223372036854775807), path, id) WHERE artist_image_id IS NOT NULL;
 CREATE INDEX tracks_with_biography ON tracks (album_id, missing_since IS NOT NULL, disc_number,
     ifnull(track_number, 9223372036854775807), path, id) WHERE biography_id IS NOT NULL;
-CREATE INDEX tracks_with_labels ON tracks (album_id, missing_since IS NOT NULL, disc_number,
-    ifnull(track_number, 9223372036854775807), path, id) WHERE labels <> '[]';
 -- An album's analyzed tracks with the columns its loudness reads, so computing it reads no
 -- table rows
 CREATE INDEX tracks_analyzed ON tracks (album_id, duration_us, loudness_lufs, peak_dbtp)

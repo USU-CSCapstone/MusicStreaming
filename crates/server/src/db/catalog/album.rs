@@ -1,38 +1,29 @@
 //! An album's links, resolved fields, counts, type and loudness (`design/database.md` §3). All
-//! but the loudness come from its groups and the heads of its tracks' indexes, so they cost the
-//! same however many tracks the album holds; the loudness reads each analyzed track's entry in
-//! `tracks_analyzed`.
+//! but the loudness come from its groups, so they cost what its groups do however many tracks the
+//! album holds; the loudness reads each analyzed track's entry in `tracks_analyzed`.
 
 use jewelcase_scanner::release_kind;
 use rusqlite::{OptionalExtension, Result, Transaction, params};
 
 use crate::db::feed::{self, Entity, Op};
 
-/// `album_artists` from the album's first track in album order, and `album_discs` from its
-/// groups. Album artists already in place are left alone, so the counts their triggers keep don't
-/// churn.
+/// `album_artists` in the order most of the album's tracks list them ([`most_used`]), and
+/// `album_discs` from its groups. Album artists already in place are left alone, so the counts
+/// their triggers keep don't churn.
 pub(super) fn refresh_album_links(tx: &Transaction<'_>, lib: i64, album: i64) -> Result<()> {
-    // Every track of an album shares its artists_key, so any one track's album-artist credits
-    // are the album's, and the head of `tracks_by_album_order` is the one read. An album with no
-    // track left loses them all.
-    let first: Option<i64> = tx
-        .prepare_cached(
-            "SELECT id FROM tracks WHERE album_id = ?1 \
-             ORDER BY disc_number, ifnull(track_number, 9223372036854775807), id LIMIT 1",
-        )?
-        .query_row([album], |r| r.get(0))
-        .optional()?;
+    // Every track of an album shares its artists_key, so its tracks list the same album artists,
+    // only in different orders. An album with no track left loses them all.
+    let listed = most_used(tx, "album_artist_ids", album)?;
     tx.prepare_cached(
         "DELETE FROM album_artists WHERE album_id = ?1 AND (position, artist_id) NOT IN \
-         (SELECT position, artist_id FROM track_album_artists WHERE track_id = ?2)",
+         (SELECT key, value FROM json_each(?2))",
     )?
-    .execute(params![album, first])?;
+    .execute(params![album, listed])?;
     tx.prepare_cached(
         "INSERT INTO album_artists (library_id, album_id, position, artist_id) \
-         SELECT ?1, ?2, position, artist_id FROM track_album_artists WHERE track_id = ?3 \
-         ORDER BY position ON CONFLICT DO NOTHING",
+         SELECT ?1, ?2, key, value FROM json_each(?3) ORDER BY key ON CONFLICT DO NOTHING",
     )?
-    .execute(params![lib, album, first])?;
+    .execute(params![lib, album, listed])?;
     tx.prepare_cached("DELETE FROM album_discs WHERE album_id = ?1")?.execute([album])?;
     tx.prepare_cached(
         "INSERT INTO album_discs (library_id, album_id, disc_number, track_count, track_total) \
@@ -57,11 +48,10 @@ fn most_used(tx: &Transaction<'_>, column: &str, album: i64) -> Result<Option<St
 
 /// The album's resolved fields and counts from its groups, or its deletion when none is left.
 pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i64) -> Result<()> {
-    let (count, available, duration, disc_total, largest_disc_total, disc_count, any_compilation): (
+    let (count, available, duration, disc_total, disc_count, any_compilation): (
         i64,
         i64,
         i64,
-        Option<i64>,
         Option<i64>,
         i64,
         i64,
@@ -69,11 +59,11 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
         .prepare_cached(
             "SELECT COALESCE(SUM(track_count), 0), COALESCE(SUM(available_count), 0), \
              COALESCE(SUM(duration_us), 0), NULLIF(MAX(disc_total), -1), \
-             NULLIF(MAX(track_total), -1), COUNT(DISTINCT disc_number), \
-             COALESCE(MAX(compilation), 0) FROM album_groups WHERE album_id = ?1",
+             COUNT(DISTINCT disc_number), COALESCE(MAX(compilation), 0) \
+             FROM album_groups WHERE album_id = ?1",
         )?
         .query_row([album], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
         })?;
     if count == 0 {
         tx.prepare_cached("DELETE FROM albums WHERE id = ?1")?.execute([album])?;
@@ -97,17 +87,20 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
         .optional()?;
     let release_date = most_used(tx, "release_date", album)?;
     let release_type = most_used(tx, "release_type", album)?;
-    let album_type = album_type(release_type.as_deref(), any_compilation != 0, largest_disc_total);
+    // The spec's `trackTotal`: the sum of the totals of the discs present, which
+    // `refresh_album_links` has just written.
+    let track_total: Option<i64> = tx
+        .prepare_cached("SELECT SUM(track_total) FROM album_discs WHERE album_id = ?1")?
+        .query_row([album], |r| r.get(0))?;
+    let album_type = album_type(release_type.as_deref(), any_compilation != 0, track_total);
+    let labels = most_used(tx, "labels", album)?;
 
-    // The track total is the spec's `trackTotal`: the sum of the totals of the discs present,
-    // which `refresh_album_links` has just written.
     tx.prepare_cached(
         "UPDATE albums SET title = ?2, sort_key = COALESCE(?3, sort_key), \
          artist_sort_key = COALESCE(?4, artist_sort_key), type = ?5, release_date = ?6, \
-         disc_total = ?7, \
-         track_total = (SELECT SUM(track_total) FROM album_discs WHERE album_id = ?1), \
-         disc_count = ?8, track_count = ?9, available_track_count = ?10, duration_us = ?11 \
-         WHERE id = ?1",
+         disc_total = ?7, track_total = ?8, disc_count = ?9, track_count = ?10, \
+         available_track_count = ?11, duration_us = ?12, \
+         labels = ifnull(?13, '[]') WHERE id = ?1",
     )?
     .execute(params![
         album,
@@ -117,10 +110,12 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
         album_type,
         release_date,
         disc_total,
+        track_total,
         disc_count,
         count,
         available,
-        duration
+        duration,
+        labels
     ])?;
     recompute_album_loudness(tx, album)?;
     feed::record(tx, lib, Entity::Album, album, Op::Upsert, now)?;
@@ -128,11 +123,12 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
 }
 
 /// `requirements/albums.md` §3: the release-type tag is authoritative where it names a type
-/// ([`release_kind`]), the compilation flag overrides size inference, and the default is album.
+/// ([`release_kind`]), the compilation flag overrides size inference from the album's
+/// `track_total`, and the default is album.
 fn album_type(
     release_type: Option<&str>,
     compilation: bool,
-    largest_disc_total: Option<i64>,
+    track_total: Option<i64>,
 ) -> &'static str {
     if let Some(kind) = release_type.and_then(release_kind) {
         return kind;
@@ -140,7 +136,7 @@ fn album_type(
     if compilation {
         return "compilation";
     }
-    match largest_disc_total {
+    match track_total {
         Some(1..=3) => "single",
         Some(4..=6) => "ep",
         _ => "album",

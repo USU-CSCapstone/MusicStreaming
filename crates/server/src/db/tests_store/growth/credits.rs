@@ -105,37 +105,53 @@ fn a_batch_for_a_large_artist_costs_what_one_for_a_small_artist_does() {
     }
 }
 
-/// Track `i` of album `album`, numbered `i + 2`, by `artists`, who are its album artists too, in
-/// that order.
+/// Track `i` of album `album` by `artists`, who are its album artists too, in that order.
 fn listed(root: &Path, album: &str, artists: &[&str], i: usize) -> TrackRecord {
     let mut rec = track(root, album, i);
     rec.tags.artists = artists.iter().map(|&artist| artist.to_owned()).collect();
     rec.tags.album_artists = rec.tags.artists.clone();
-    rec.tags.track_number = Some(i as u32 + 2);
     rec
 }
 
-/// A new first track that lists an album's artists in another order moves their rows, which
+/// Tracks that make another listing of an album's artists the most used move their rows, which
 /// recounts their appearances, owned tracks and albums from the album's credits and groups.
 #[test]
 fn relisting_a_large_albums_artists_costs_what_relisting_a_small_ones_does() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     let store = make(&root);
+    // Each album's tracks list its artists one way, and one track fewer the other way.
+    let mostly = |album: &str, [ann, bob]: [&str; 2], i: usize, size: usize| {
+        let artists = if i < size / 2 { [ann, bob] } else { [bob, ann] };
+        listed(&root, album, &artists, i)
+    };
     for start in (0..1000).step_by(250) {
-        let upserts = (start..start + 250).map(|i| listed(&root, "Duo L", &["Ann L", "Bob L"], i));
+        let upserts = (start..start + 250)
+            .filter(|&i| i < 999)
+            .map(|i| mostly("Duo L", ["Ann L", "Bob L"], i, 1000));
         store.apply(1, Batch { upserts: upserts.collect(), ..Batch::default() }).unwrap();
     }
-    let upserts = (0..16).map(|i| listed(&root, "Duo S", &["Ann S", "Bob S"], i)).collect();
+    let upserts = (0..15).map(|i| mostly("Duo S", ["Ann S", "Bob S"], i, 16)).collect();
     store.apply(1, Batch { upserts, ..Batch::default() }).unwrap();
 
-    let first = |album: &str, artists: &[&str]| {
-        let mut rec = listed(&root, album, artists, 5000);
-        rec.tags.track_number = Some(1);
-        Batch { upserts: vec![rec], ..Batch::default() }
+    // Two more tracks listing them the other way make that listing the most used.
+    let more = |album: &str, artists: &[&str]| Batch {
+        upserts: (5000..5002).map(|i| listed(&root, album, artists, i)).collect(),
+        ..Batch::default()
     };
-    let large = cost(&store, first("Duo L", &["Bob L", "Ann L"]));
-    let small = cost(&store, first("Duo S", &["Bob S", "Ann S"]));
+    let large = cost(&store, more("Duo L", &["Bob L", "Ann L"]));
+    let small = cost(&store, more("Duo S", &["Bob S", "Ann S"]));
     // Reading the large album's tracks even once would take 1,000 steps more.
     assert!(large < small + 500, "{large} steps against {small}");
+    let first = |album: &'static str| {
+        let sql = "SELECT a.name FROM album_artists aa JOIN artists a ON a.id = aa.artist_id \
+                   JOIN albums al ON al.id = aa.album_id WHERE al.title = ?1 AND aa.position = 0";
+        store
+            .db()
+            .read_blocking(move |conn| conn.query_row(sql, [album], |r| r.get::<_, String>(0)))
+    };
+    assert_eq!(
+        (first("Duo L").unwrap(), first("Duo S").unwrap()),
+        ("Bob L".into(), "Bob S".into())
+    );
 }

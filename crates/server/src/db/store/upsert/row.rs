@@ -7,6 +7,7 @@ use jewelcase_scanner::{Lyrics, TagSet, TrackRecord};
 use rusqlite::types::Null;
 use rusqlite::{OptionalExtension, Result, ToSql, Transaction};
 
+use super::Credits;
 use crate::db::store::roots::relative;
 use crate::db::store::sidecars::sidecar_rows;
 use crate::db::{Json, new_id};
@@ -14,8 +15,9 @@ use crate::db::{Json, new_id};
 /// The track columns a scan sets, both when it inserts the row and when it updates it. Each binds
 /// by name, as `:column`. The insert also sets `id`, `library_id` and `added_at`, which an update
 /// keeps.
-const COLUMNS: [&str; 36] = [
+const COLUMNS: [&str; 37] = [
     "album_id",
+    "album_artist_ids",
     "album_title",
     "root_id",
     "path",
@@ -77,16 +79,17 @@ static UPSERT: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
-/// Upserts `rec` as a track of `lib` on album `album_id` under root `root_id` ([`UPSERT`]), with
-/// the art and sidecars it resolved and, when new, added at `now`. Returns its id, drawn when
-/// `rec` has none, or `None` when `rec` names another library's track. A track that existed and is back at analyzer version 0
-/// loses its waveform.
+/// Upserts `rec` as a track of `lib` under root `root_id` ([`UPSERT`]), on the album `credits`
+/// place it on and listing their album artists in order, with the art and sidecars it resolved
+/// and, when new, added at `now`. Returns its id, drawn when `rec` has none, or `None` when `rec`
+/// names another library's track. A track that existed and is back at analyzer version 0 loses
+/// its waveform.
 pub(super) fn write_row(
     tx: &Transaction<'_>,
     lib: i64,
     root_id: i64,
     rec: &TrackRecord,
-    album_id: i64,
+    credits: &Credits<'_>,
     now: i64,
 ) -> Result<Option<i64>> {
     let sidecars = sidecar_rows(tx, lib, root_id, rec)?;
@@ -100,11 +103,13 @@ pub(super) fn write_row(
         Some(id) => id,
         None => new_id()?,
     };
+    let album_artist_ids: Vec<i64> = credits.album_artists.iter().map(|&(id, _)| id).collect();
     let values: [(&str, &dyn ToSql); COLUMNS.len() + 3] = [
         (":id", &id),
         (":library_id", &lib),
         (":added_at", &now),
-        (":album_id", &album_id),
+        (":album_id", &credits.album_id),
+        (":album_artist_ids", &Json(album_artist_ids)),
         (":album_title", &rec.tags.album),
         (":root_id", &root_id),
         (":path", &relative(&rec.root, &rec.path)),

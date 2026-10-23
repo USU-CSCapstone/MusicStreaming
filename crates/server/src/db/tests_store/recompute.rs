@@ -1,9 +1,11 @@
 //! Every derived value the triggers and the scanner keep, as stored and as recomputed from the
-//! tracks and their credits, and the change feed's record of what changed.
+//! tracks and their credits, and the change feed's record of what changed. An album's artists are
+//! those of a track listing them as most of its tracks do (`leads`), ties broken by the listing's
+//! JSON spelling.
 
 use std::collections::BTreeMap;
 
-use jewelcase_core::sort_key;
+use jewelcase_core::{sort_key, tag_sort_key};
 use rusqlite::types::Value;
 use rusqlite::{Connection, Result};
 
@@ -26,24 +28,28 @@ const CHECKS: &[(&str, &str, &str)] = &[
         "artists",
         "SELECT id, name, album_count, track_count, appearance_count, available_track_count, \
          owned_track_count, any_album_count FROM artists ORDER BY id",
-        "WITH firsts (id) AS (SELECT (SELECT id FROM tracks f WHERE f.album_id = a.album_id \
-                    ORDER BY disc_number, ifnull(track_number, 9223372036854775807), id LIMIT 1) \
+        "WITH listed AS (SELECT t.id, t.album_id, '[' || (SELECT group_concat(artist_id, ',' \
+                    ORDER BY position) FROM track_album_artists WHERE track_id = t.id) || ']' \
+                    AS listing FROM tracks t), \
+         leads (id) AS (SELECT (SELECT id FROM listed l WHERE l.album_id = a.album_id \
+                    ORDER BY (SELECT COUNT(*) FROM listed m WHERE m.album_id = l.album_id \
+                              AND m.listing IS l.listing) DESC, listing, id LIMIT 1) \
                     FROM (SELECT DISTINCT album_id FROM tracks) a), \
-         listed AS (SELECT t.album_id, tam.artist_id FROM track_album_artists tam \
-                    JOIN tracks t ON t.id = tam.track_id WHERE t.id IN firsts) \
+         owners AS (SELECT t.album_id, tam.artist_id FROM track_album_artists tam \
+                    JOIN tracks t ON t.id = tam.track_id WHERE t.id IN leads) \
          SELECT a.id, (SELECT artist_name FROM (SELECT artist_name FROM track_artists WHERE artist_id = a.id \
                        UNION ALL SELECT artist_name FROM track_album_artists WHERE artist_id = a.id) \
                        WHERE artist_name IS NOT NULL GROUP BY artist_name \
                        ORDER BY COUNT(*) DESC, artist_name LIMIT 1), \
-         (SELECT COUNT(*) FROM listed WHERE artist_id = a.id), \
+         (SELECT COUNT(*) FROM owners WHERE artist_id = a.id), \
          (SELECT COUNT(*) FROM track_artists WHERE artist_id = a.id), \
          (SELECT COUNT(*) FROM track_artists ta JOIN tracks t ON t.id = ta.track_id WHERE ta.artist_id = a.id \
-          AND NOT EXISTS (SELECT 1 FROM listed l WHERE l.album_id = t.album_id AND l.artist_id = a.id)), \
+          AND NOT EXISTS (SELECT 1 FROM owners o WHERE o.album_id = t.album_id AND o.artist_id = a.id)), \
          (SELECT COUNT(*) FROM track_artists ta JOIN tracks t ON t.id = ta.track_id \
           WHERE ta.artist_id = a.id AND t.missing_since IS NULL), \
-         (SELECT COUNT(*) FROM listed l JOIN tracks t ON t.album_id = l.album_id \
-          WHERE l.artist_id = a.id), \
-         (SELECT COUNT(*) FROM (SELECT album_id FROM listed WHERE artist_id = a.id UNION \
+         (SELECT COUNT(*) FROM owners o JOIN tracks t ON t.album_id = o.album_id \
+          WHERE o.artist_id = a.id), \
+         (SELECT COUNT(*) FROM (SELECT album_id FROM owners WHERE artist_id = a.id UNION \
           SELECT t.album_id FROM track_artists ta JOIN tracks t ON t.id = ta.track_id \
           WHERE ta.artist_id = a.id)) \
          FROM artists a WHERE a.id IN (SELECT artist_id FROM track_artists \
@@ -69,12 +75,14 @@ const CHECKS: &[(&str, &str, &str)] = &[
     (
         "album groups",
         "SELECT album_id, disc_number, title, sort_key, release_date, release_type, track_total, \
-         disc_total, compilation, track_count, available_count, duration_us \
-         FROM album_groups ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9",
+         disc_total, compilation, labels, album_artist_ids, track_count, available_count, \
+         duration_us FROM album_groups ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11",
         "SELECT album_id, disc_number, ifnull(album_title, ''), album_sort_key, ifnull(release_date, ''), \
          ifnull(release_type, ''), ifnull(track_total, -1), ifnull(disc_total, -1), compilation, \
-         COUNT(*), SUM(missing_since IS NULL), SUM(duration_us) \
-         FROM tracks GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9 ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9",
+         ifnull(nullif(labels, '[]'), ''), album_artist_ids, COUNT(*), SUM(missing_since IS NULL), \
+         SUM(duration_us) \
+         FROM tracks GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11 \
+         ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11",
     ),
     (
         "album artist sort keys",
@@ -102,9 +110,8 @@ const CHECKS: &[(&str, &str, &str)] = &[
         "album labels",
         "SELECT id, labels FROM albums ORDER BY id",
         "SELECT DISTINCT album_id, ifnull((SELECT labels FROM tracks WHERE album_id = t.album_id \
-                                           AND labels <> '[]' ORDER BY missing_since IS NOT NULL, \
-                                           disc_number, ifnull(track_number, 9223372036854775807), \
-                                           path, id LIMIT 1), '[]') \
+                    AND labels <> '[]' GROUP BY labels ORDER BY COUNT(*) DESC, labels LIMIT 1), \
+                    '[]') \
          FROM tracks t ORDER BY album_id",
     ),
     (
@@ -123,11 +130,15 @@ const CHECKS: &[(&str, &str, &str)] = &[
     (
         "album artists",
         "SELECT album_id, position, artist_id FROM album_artists ORDER BY album_id, position",
-        "SELECT t.album_id, tam.position, tam.artist_id FROM track_album_artists tam \
-         JOIN tracks t ON t.id = tam.track_id \
-         WHERE t.id IN (SELECT (SELECT id FROM tracks f WHERE f.album_id = a.album_id \
-                    ORDER BY disc_number, ifnull(track_number, 9223372036854775807), id LIMIT 1) \
-                    FROM (SELECT DISTINCT album_id FROM tracks) a) ORDER BY 1, 2",
+        "WITH listed AS (SELECT t.id, t.album_id, '[' || (SELECT group_concat(artist_id, ',' \
+                    ORDER BY position) FROM track_album_artists WHERE track_id = t.id) || ']' \
+                    AS listing FROM tracks t), \
+         leads (id) AS (SELECT (SELECT id FROM listed l WHERE l.album_id = a.album_id \
+                    ORDER BY (SELECT COUNT(*) FROM listed m WHERE m.album_id = l.album_id \
+                              AND m.listing IS l.listing) DESC, listing, id LIMIT 1) \
+                    FROM (SELECT DISTINCT album_id FROM tracks) a) \
+         SELECT t.album_id, tam.position, tam.artist_id FROM track_album_artists tam \
+         JOIN tracks t ON t.id = tam.track_id WHERE t.id IN leads ORDER BY 1, 2",
     ),
     (
         "album discs",
@@ -185,7 +196,8 @@ const CHECKS: &[(&str, &str, &str)] = &[
     (
         "sort keys",
         // An artist's most-used tagged sort key unless it is empty, else a name, which `check`
-        // turns into its sort key; names are checked above.
+        // turns into its sort key, an artist's without a leading article and a tag's with it;
+        // names are checked above.
         "SELECT 'artist', id, sort_key FROM artists UNION ALL SELECT 'tag', id, sort_key FROM tags ORDER BY 1, 2",
         "SELECT 'artist', a.id, COALESCE(NULLIF((SELECT t.artist_sort_key FROM track_artists ta \
           JOIN tracks t ON t.id = ta.track_id WHERE ta.artist_id = a.id AND ta.position = 0 \
@@ -221,7 +233,11 @@ pub fn check(store: &SqliteStore, step: &str) {
                     Value::Text(name) => name.clone(),
                     _ => String::new(),
                 };
-                row[2] = Value::Blob(sort_key(&name, None).into_bytes());
+                let key = match &row[0] {
+                    Value::Text(kind) if kind == "tag" => tag_sort_key(&name),
+                    _ => sort_key(&name, None),
+                };
+                row[2] = Value::Blob(key.into_bytes());
             }
         }
         assert_eq!(stored, scratch, "{what} after {step}");

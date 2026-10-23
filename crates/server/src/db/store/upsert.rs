@@ -1,6 +1,8 @@
 //! Writing one scanned file: its track row, credits, genres, lyrics, and the art and sidecars it
 //! resolved, in the batch's transaction.
 
+use std::collections::HashSet;
+
 use jewelcase_core::artists_key;
 use jewelcase_scanner::{Lyrics, TrackRecord};
 use rusqlite::{Result, Transaction, params};
@@ -15,7 +17,8 @@ use row::write_row;
 mod row;
 
 /// A track's artist and album-artist credits, each an artist's id and its name as tagged (`None`
-/// for the unknown artist), and the album they place the track on.
+/// for the unknown artist), and the album they place the track on. Each album artist is listed
+/// once, where the file first names it.
 struct Credits<'a> {
     artists: Vec<(i64, Option<&'a str>)>,
     album_artists: Vec<(i64, Option<&'a str>)>,
@@ -51,7 +54,7 @@ pub fn upsert_track(
     touched.albums.insert(credits.album_id);
     touched.artists.extend(credits.artists.iter().chain(&credits.album_artists).map(|&(id, _)| id));
 
-    let Some(id) = write_row(tx, lib, root_id, rec, credits.album_id, now)? else {
+    let Some(id) = write_row(tx, lib, root_id, rec, &credits, now)? else {
         tracing::error!(path = %rec.path.display(), "track of another library; skipped");
         return Ok(());
     };
@@ -61,7 +64,7 @@ pub fn upsert_track(
 }
 
 /// Finds or makes the artists `rec` credits, then its album artists as the scanner resolves them,
-/// then the album they place it on.
+/// each once, then the album they place it on.
 fn credits<'a>(
     tx: &Transaction<'_>,
     lib: i64,
@@ -69,7 +72,9 @@ fn credits<'a>(
     now: i64,
 ) -> Result<Credits<'a>> {
     let artists = artist_ids(tx, lib, &rec.tags.artists, now)?;
-    let album_artists = artist_ids(tx, lib, rec.tags.album_artists_or_primary(), now)?;
+    let mut album_artists = artist_ids(tx, lib, rec.tags.album_artists_or_primary(), now)?;
+    let mut listed = HashSet::new();
+    album_artists.retain(|&(id, _)| listed.insert(id));
     let artists_key = artists_key(album_artists.iter().map(|(_, name)| name.unwrap_or("")));
     let album_id = find_or_create_album(
         tx,
@@ -77,7 +82,6 @@ fn credits<'a>(
         rec.tags.album.as_deref(),
         &artists_key,
         &rec.sort.album,
-        &rec.sort.album_artist,
         now,
     )?;
     Ok(Credits { artists, album_artists, album_id })
@@ -125,7 +129,7 @@ fn replace_links(
     }
     let mut album_artists = tx.prepare_cached(
         "INSERT INTO track_album_artists (library_id, track_id, position, artist_id, artist_name) \
-         VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
+         VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
     for (pos, (artist_id, name)) in credits.album_artists.iter().enumerate() {
         album_artists.execute(params![lib, id, pos as i64, artist_id, name.map(str::trim)])?;

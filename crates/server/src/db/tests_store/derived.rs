@@ -38,7 +38,8 @@ impl Rng {
 
 const ARTISTS: &[&str] = &["Alpha", "alpha", " ALPHA ", "Beta", "beta", "Gamma", "Ünï", "ünï"];
 const ALBUMS: &[&str] = &["Red", "red", " RED", "Blue", "Green"];
-const GENRES: &[&str] = &["Rock", "rock", " Rock ", "Jazz", "jazz", "Hip Hop", "Hip-Hop", "Pop"];
+const GENRES: &[&str] =
+    &["Rock", "rock", " Rock ", "Jazz", "jazz", "Hip Hop", "Hip-Hop", "Pop", "A Cappella"];
 const SORTS: &[&str] = &["", "alpha", "beta", "zeta"];
 const LABELS: &[&str] = &["Sub Pop", "Domino", "Matador"];
 const TYPES: &[&str] = &["ep", "single", "album; compilation"];

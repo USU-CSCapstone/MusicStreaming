@@ -115,7 +115,7 @@ pub struct TagSet {
     /// The release-type tag, authoritative for album type
     /// (`requirements/albums.md` §3).
     pub release_type: Option<String>,
-    /// Record labels: the label tag's, then the publisher tag's, in tagged order, each once by its
+    /// Record labels: the label tag's, else the publisher tag's, in tagged order, each once by its
     /// name key with its first spelling (`design/scanning.md` §4).
     pub labels: Vec<String>,
     /// Explicit-content flag where tagged (`requirements/tracks.md` §6).
@@ -131,7 +131,6 @@ pub struct TagSet {
     pub title_sort: Option<String>,
     pub artist_sort: Option<String>,
     pub album_sort: Option<String>,
-    pub album_artist_sort: Option<String>,
 }
 
 impl TagSet {

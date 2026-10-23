@@ -110,37 +110,37 @@ fn an_album_takes_its_most_used_release_type_ties_broken_by_bytes() {
 }
 
 #[test]
-fn the_album_artists_are_in_the_order_its_first_track_lists_them() {
+fn the_album_artists_are_in_the_order_most_of_its_tracks_list_them() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     let store = make(&root);
-    // The first track has the highest ID, and the others list the album artists the other way
-    // round: the second, track 1 of a later disc, and one with no number, last on its disc.
-    let credited = |i: usize, id: TrackId, album_artists: [&str; 2]| {
+    let credited = |i: usize, album_artists: [&str; 2]| {
         let mut rec = track(&root, i);
-        rec.id = Some(id);
         rec.tags.album_artists = album_artists.map(str::to_owned).to_vec();
         rec
     };
-    let mut later_disc = credited(2, 50, ["Alpha", "Beta"]);
-    later_disc.tags.disc_number = Some(2);
-    later_disc.tags.track_number = Some(1);
-    let mut unnumbered = credited(3, 10, ["Alpha", "Beta"]);
-    unnumbered.tags.track_number = None;
-    let first = credited(0, 200, ["Beta", "Alpha"]);
-    let upserts = vec![first, credited(1, 100, ["Alpha", "Beta"]), later_disc, unnumbered];
-    store.apply(1, Batch { upserts, ..Batch::default() }).unwrap();
-    check(&store, "the four tracks");
-    let names: Vec<String> = store
-        .db()
-        .read_blocking(|conn| {
-            conn.prepare(
-                "SELECT a.name FROM album_artists aa JOIN artists a ON a.id = aa.artist_id \
-                 ORDER BY aa.position",
-            )?
-            .query_map([], |r| r.get(0))?
-            .collect()
-        })
-        .unwrap();
-    assert_eq!(names, ["Beta", "Alpha"]);
+    let names = |upserts: Vec<TrackRecord>, step: &str| -> Vec<String> {
+        store.apply(1, Batch { upserts, ..Batch::default() }).unwrap();
+        check(&store, step);
+        store
+            .db()
+            .read_blocking(|conn| {
+                conn.prepare(
+                    "SELECT a.name FROM album_artists aa JOIN artists a ON a.id = aa.artist_id \
+                     ORDER BY aa.position",
+                )?
+                .query_map([], |r| r.get(0))?
+                .collect()
+            })
+            .unwrap()
+    };
+    // One track lists them one way, and two the other.
+    let upserts = vec![
+        credited(0, ["Beta", "Alpha"]),
+        credited(1, ["Alpha", "Beta"]),
+        credited(2, ["Alpha", "Beta"]),
+    ];
+    assert_eq!(names(upserts, "three tracks"), ["Alpha", "Beta"]);
+    let more = vec![credited(3, ["Beta", "Alpha"]), credited(4, ["Beta", "Alpha"])];
+    assert_eq!(names(more, "two more the first way"), ["Beta", "Alpha"]);
 }

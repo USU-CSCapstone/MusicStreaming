@@ -15,8 +15,8 @@ Shared behavior follows [`conventions.md`](conventions.md).
 
 - Same title and same album artists means the same album, regardless of location on disk. An album split across two folders, or two drives, is one album.
 - Different album titles in one folder are different albums. Folder structure carries no weight.
-- **Album artists are a list**, semicolon-separated as track artists are. The full set participates in identity.
-- **An absent album-artist tag means the track's primary (first) artist**, so a guest on one track neither splits the album nor gains it in their discography ([`artists.md` §2](artists.md#2-ownership-discography-vs-appearances)). Untagged albums whose tracks have different primary artists split by primary artist.
+- **Album artists are a list**, semicolon-separated as track artists are. The full set participates in identity, regardless of order: tracks tagged `A;B` and `B;A` are one album.
+- **An absent album-artist tag means the track's primary (first) artist**, except on a compilation ([`scanning.md` §2](scanning.md#2-tags-are-the-only-truth)). So a guest on one track neither splits the album nor gains it in their discography ([`artists.md` §2](artists.md#2-ownership-discography-vs-appearances)). Untagged albums whose tracks have different primary artists split by primary artist.
 - **Editions are distinguished by title, and by nothing else.** An original, a remaster, and a deluxe edition sharing one title and one set of album artists are one album, and their tracks merge. Separating them means tagging them apart — `Nevermind` and `Nevermind (Deluxe Edition)`. Jewelcase reads no edition, catalogue-number, or release-ID tag to do it automatically, because doing so would split albums for users who never asked.
 
 ---
@@ -24,11 +24,12 @@ Shared behavior follows [`conventions.md`](conventions.md).
 ## 2. Metadata
 
 - **Title**
-- **Album artists** — ordered, as tagged ([`artists.md` §2](artists.md#2-ownership-discography-vs-appearances))
+- **Album artists** — ordered as most of the album's tracks list them ([`artists.md` §2](artists.md#2-ownership-discography-vs-appearances))
 - **Release year or date**, at tag precision
 - **Total tracks** and **total discs**, from tags rather than counted from what is present ([§3](#3-type), [§4](#4-track-listing--completeness))
 - **Type** ([§3](#3-type))
 - **Genres** ([`tags.md`](tags.md))
+- **Labels** — from the label tag, else the publisher tag
 - **Total duration** and **track count** of the tracks present, shown wherever an album appears
 
 ---
@@ -38,7 +39,7 @@ Shared behavior follows [`conventions.md`](conventions.md).
 Albums are classified so an artist's discography can be split into meaningful sections.
 
 1. **The release-type tag**, where present, is authoritative.
-2. **Otherwise, infer from the tagged total-track count:**
+2. **Otherwise, infer from the tagged total-track count**, summed across the album's discs:
 
    | Total tracks | Type |
    |---|---|

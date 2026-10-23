@@ -98,10 +98,6 @@ pub(super) fn process_file(
             read.tags.artist_sort.as_deref(),
         ),
         album: sort_key(read.tags.album.as_deref().unwrap_or(""), read.tags.album_sort.as_deref()),
-        album_artist: sort_key(
-            read.tags.album_artists.first().map(String::as_str).unwrap_or(""),
-            read.tags.album_artist_sort.as_deref(),
-        ),
     };
 
     let record = TrackRecord {

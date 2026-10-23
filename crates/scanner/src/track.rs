@@ -32,7 +32,6 @@ pub struct SortKeys {
     pub title: String,
     pub artist: String,
     pub album: String,
-    pub album_artist: String,
 }
 
 /// Everything the scanner knows about one file, ready to persist.

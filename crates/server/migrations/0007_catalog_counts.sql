@@ -57,7 +57,8 @@ END;
 -- many tracks it holds, how many of them are not missing, and their duration, so an album
 -- resolves from its groups rather than from every track. Most albums have a group per disc. A
 -- key can't hold NULL, so a value a track lacks is '' or -1 here, values the checks on tracks
--- keep any track from holding.
+-- keep any track from holding. labels and album_artist_ids copy the track's JSON arrays as
+-- written, except that a track with no labels has ''.
 CREATE TABLE album_groups (
     library_id      INTEGER NOT NULL,
     album_id        INTEGER NOT NULL,
@@ -69,11 +70,13 @@ CREATE TABLE album_groups (
     track_total     INTEGER NOT NULL,
     disc_total      INTEGER NOT NULL,
     compilation     INTEGER NOT NULL,
+    labels          TEXT    NOT NULL,
+    album_artist_ids TEXT    NOT NULL,
     track_count     INTEGER NOT NULL,
     available_count INTEGER NOT NULL,
     duration_us     INTEGER NOT NULL,
     PRIMARY KEY (album_id, disc_number, title, sort_key, release_date, release_type, track_total,
-                 disc_total, compilation),
+                 disc_total, compilation, labels, album_artist_ids),
     FOREIGN KEY (library_id, album_id) REFERENCES albums (library_id, id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
 
@@ -82,9 +85,10 @@ WHEN NEW.track_count = 0
 BEGIN
     DELETE FROM album_groups
     WHERE (album_id, disc_number, title, sort_key, release_date, release_type, track_total,
-           disc_total, compilation)
+           disc_total, compilation, labels, album_artist_ids)
         = (NEW.album_id, NEW.disc_number, NEW.title, NEW.sort_key, NEW.release_date,
-           NEW.release_type, NEW.track_total, NEW.disc_total, NEW.compilation);
+           NEW.release_type, NEW.track_total, NEW.disc_total, NEW.compilation, NEW.labels,
+           NEW.album_artist_ids);
 END;
 
 -- ───────────────────────────── Tracks ─────────────────────────────
@@ -98,7 +102,8 @@ BEGIN
     INSERT INTO album_groups VALUES (NEW.library_id, NEW.album_id, NEW.disc_number,
         ifnull(NEW.album_title, ''), NEW.album_sort_key, ifnull(NEW.release_date, ''),
         ifnull(NEW.release_type, ''), ifnull(NEW.track_total, -1), ifnull(NEW.disc_total, -1),
-        NEW.compilation, 1, NEW.missing_since IS NULL, NEW.duration_us)
+        NEW.compilation, ifnull(nullif(NEW.labels, '[]'), ''), NEW.album_artist_ids, 1,
+        NEW.missing_since IS NULL, NEW.duration_us)
     ON CONFLICT DO UPDATE SET track_count = track_count + 1,
         available_count = available_count + excluded.available_count,
         duration_us = duration_us + excluded.duration_us;
@@ -117,30 +122,34 @@ BEGIN
         available_count = available_count - (OLD.missing_since IS NULL),
         duration_us = duration_us - OLD.duration_us
     WHERE (album_id, disc_number, title, sort_key, release_date, release_type, track_total,
-           disc_total, compilation)
+           disc_total, compilation, labels, album_artist_ids)
         = (OLD.album_id, OLD.disc_number, ifnull(OLD.album_title, ''), OLD.album_sort_key,
            ifnull(OLD.release_date, ''), ifnull(OLD.release_type, ''), ifnull(OLD.track_total, -1),
-           ifnull(OLD.disc_total, -1), OLD.compilation);
+           ifnull(OLD.disc_total, -1), OLD.compilation, ifnull(nullif(OLD.labels, '[]'), ''),
+           OLD.album_artist_ids);
 END;
 
 -- A track leaves its old group for the one its new album, disc, tags, availability and duration
 -- put it in.
 CREATE TRIGGER tracks_regrouped AFTER UPDATE OF album_id, disc_number, album_title, album_sort_key,
-    release_date, release_type, track_total, disc_total, compilation, missing_since, duration_us
+    release_date, release_type, track_total, disc_total, compilation, labels, album_artist_ids,
+    missing_since, duration_us
 ON tracks
 BEGIN
     UPDATE album_groups SET track_count = track_count - 1,
         available_count = available_count - (OLD.missing_since IS NULL),
         duration_us = duration_us - OLD.duration_us
     WHERE (album_id, disc_number, title, sort_key, release_date, release_type, track_total,
-           disc_total, compilation)
+           disc_total, compilation, labels, album_artist_ids)
         = (OLD.album_id, OLD.disc_number, ifnull(OLD.album_title, ''), OLD.album_sort_key,
            ifnull(OLD.release_date, ''), ifnull(OLD.release_type, ''), ifnull(OLD.track_total, -1),
-           ifnull(OLD.disc_total, -1), OLD.compilation);
+           ifnull(OLD.disc_total, -1), OLD.compilation, ifnull(nullif(OLD.labels, '[]'), ''),
+           OLD.album_artist_ids);
     INSERT INTO album_groups VALUES (NEW.library_id, NEW.album_id, NEW.disc_number,
         ifnull(NEW.album_title, ''), NEW.album_sort_key, ifnull(NEW.release_date, ''),
         ifnull(NEW.release_type, ''), ifnull(NEW.track_total, -1), ifnull(NEW.disc_total, -1),
-        NEW.compilation, 1, NEW.missing_since IS NULL, NEW.duration_us)
+        NEW.compilation, ifnull(nullif(NEW.labels, '[]'), ''), NEW.album_artist_ids, 1,
+        NEW.missing_since IS NULL, NEW.duration_us)
     ON CONFLICT DO UPDATE SET track_count = track_count + 1,
         available_count = available_count + excluded.available_count,
         duration_us = duration_us + excluded.duration_us;

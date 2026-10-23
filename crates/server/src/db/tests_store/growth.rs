@@ -138,7 +138,6 @@ fn offering(root: &Path, artist: &str, album: &str, i: usize) -> TrackRecord {
     rec.path = root.join(format!("{artist}/{album}/{i:05}.flac"));
     rec.tags.artists = vec![artist.to_owned()];
     rec.sort.artist = artist.to_lowercase();
-    rec.sort.album_artist = artist.to_lowercase();
     rec.artist_image = Some(SidecarImage {
         path: root.join(format!("{artist}/artist.jpg")),
         info: ImageInfo { hash: artist.as_bytes().to_vec(), width: 1, height: 1 },

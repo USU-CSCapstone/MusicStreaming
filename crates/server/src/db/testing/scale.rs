@@ -50,12 +50,7 @@ pub fn records(root: &Path, tracks: usize) -> impl Iterator<Item = TrackRecord> 
         let path = root.join(format!("Unsorted/{:05}/{n:06}.flac", n / 25));
         let unknown = sort_key("", None);
         let title = sort_key(&format!("{n:06}"), None);
-        let sort = SortKeys {
-            title,
-            artist: unknown.clone(),
-            album: unknown.clone(),
-            album_artist: unknown,
-        };
+        let sort = SortKeys { title, artist: unknown.clone(), album: unknown };
         record(root, &path, n << 8, TagSet::default(), sort, stamp)
     });
     tagged.chain(untagged)
@@ -79,7 +74,6 @@ fn tagged(root: &Path, artist: u64, album: u64, number: u64, stamp: SidecarStamp
         title: sort_key(&title, None),
         artist: sort_key(&artist_name, None),
         album: sort_key(&album_title, None),
-        album_artist: sort_key(&artist_name, None),
     };
     let tags = TagSet {
         title: Some(title),

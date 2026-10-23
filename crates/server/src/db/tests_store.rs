@@ -1,8 +1,10 @@
 //! The SQLite store against the scanner's pipeline suite, plus the
 //! derived-data rules the schema assigns to the scanner and the scanning benchmarks.
 
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use jewelcase_core::Format;
 use jewelcase_scanner::testing;
@@ -42,6 +44,7 @@ mod suite {
     jewelcase_scanner::store_suite!(super::library_store);
 }
 
+mod album_artists;
 mod albums;
 mod artist_sort;
 mod artists;
@@ -87,6 +90,14 @@ fn tagged(root: &Path, rel: &str, items: &[(ItemKey, &str)]) {
     testing::tag_wav_with(&p, items);
 }
 
+/// Retags the file at `rel` under `root` with `items`, dated later so the next scan reads it.
+fn retag(root: &Path, rel: &str, items: &[(ItemKey, &str)]) {
+    let path = root.join(rel);
+    testing::tag_wav_with(&path, items);
+    let later = SystemTime::now() + Duration::from_secs(5);
+    File::open(&path).unwrap().set_modified(later).unwrap();
+}
+
 /// Synthetic record `i` under `root`, as the scanner makes for a new file: ten tracks to an
 /// album, ten albums to an artist, and three genres.
 fn record(root: &Path, i: usize) -> TrackRecord {
@@ -127,7 +138,6 @@ fn record(root: &Path, i: usize) -> TrackRecord {
             title: format!("track {i}"),
             artist: format!("artist {}", i / 100),
             album: format!("album {}", i / 10),
-            album_artist: format!("artist {}", i / 100),
         },
     }
 }

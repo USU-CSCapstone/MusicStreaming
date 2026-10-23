@@ -20,7 +20,13 @@ pub fn sort_key(display: &str, sort_tag: Option<&str>) -> String {
         Some(tag) if !tag.is_empty() => tag,
         _ => strip_article(display.trim()),
     };
-    collapse_spaces(&fold_accents(&name_key(source)))
+    tag_sort_key(source)
+}
+
+/// Build the sort key for a tag, such as a genre: its name folded as [`sort_key`] folds one,
+/// with any leading article kept, so "A Cappella" files under A.
+pub fn tag_sort_key(name: &str) -> String {
+    collapse_spaces(&fold_accents(&name_key(name)))
 }
 
 #[cfg(test)]
@@ -34,6 +40,13 @@ mod tests {
         assert_eq!(sort_key("An Horse", None), "horse");
         assert_eq!(sort_key("The\tBeatles", None), "beatles");
         assert_eq!(sort_key("THE  BEATLES", None), "beatles");
+    }
+
+    #[test]
+    fn tags_keep_their_articles() {
+        assert_eq!(tag_sort_key("A Cappella"), "a cappella");
+        assert_eq!(tag_sort_key("  The  Blues "), "the blues");
+        assert_eq!(tag_sort_key("Électro"), "electro");
     }
 
     #[test]
