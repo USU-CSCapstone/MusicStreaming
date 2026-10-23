@@ -11,7 +11,7 @@ use serde::Deserialize;
 pub use representation::{Artist, ArtistSummary, SELECT, summary};
 
 use super::extract::{Path, Query};
-use super::page::{Order, Page, Request, Sort, Source, Unknown};
+use super::page::{Order, Page, Request, Sort, Table, Unknown};
 use super::scope::Scope;
 use super::{Id, Problem};
 use crate::db::Database;
@@ -64,9 +64,11 @@ pub async fn list(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<ArtistSummary>>, Problem> {
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
-    let source = source(library);
     let page = db
-        .read(move |conn| request.read(conn, library, "artist_count", false, &source, summary))
+        .read(move |conn| {
+            let source = ARTISTS.source(conn, library, None, Vec::new())?;
+            request.read(conn, &source, summary)
+        })
         .await?;
     Ok(Json(page))
 }
@@ -83,15 +85,9 @@ pub async fn get(
         .ok_or_else(Problem::not_found)
 }
 
-fn source(library: i64) -> Source {
-    Source {
-        select: SELECT,
-        from: "artists ar".to_owned(),
-        joins: "",
-        filter: "ar.library_id = ?".to_owned(),
-        params: vec![library.into()],
-    }
-}
+/// The artists a list reads.
+const ARTISTS: Table =
+    Table { name: "artists", alias: "ar", select: SELECT, joins: "", count: "artist_count" };
 
 #[cfg(test)]
 mod tests;

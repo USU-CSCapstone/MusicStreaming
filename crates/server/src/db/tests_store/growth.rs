@@ -10,6 +10,7 @@ use jewelcase_scanner::*;
 use super::{make, record};
 use crate::db::store::SqliteStore;
 
+mod credits;
 mod problems;
 
 /// Track `i` of album `album` under `root`, with embedded art and a label, by one artist.
@@ -28,9 +29,16 @@ fn track(root: &Path, album: &str, i: usize) -> TrackRecord {
     rec
 }
 
-/// How many virtual-machine steps SQLite takes applying `batch` to library 1, triggers' included,
-/// counted by a progress handler called at every step on the writer connection `apply` uses.
+/// How many virtual-machine steps SQLite takes applying `batch` to library 1, triggers' included.
 fn cost(store: &SqliteStore, batch: Batch) -> u64 {
+    steps(store, || {
+        store.apply(1, batch).unwrap();
+    })
+}
+
+/// How many virtual-machine steps SQLite takes running `write`, counted by a progress handler
+/// called at every step on the writer connection.
+fn steps(store: &SqliteStore, write: impl FnOnce()) -> u64 {
     let steps = Arc::new(AtomicU64::new(0));
     let counter = steps.clone();
     let count = move || {
@@ -39,7 +47,7 @@ fn cost(store: &SqliteStore, batch: Batch) -> u64 {
     };
     let db = store.db();
     db.write_blocking(move |tx| tx.progress_handler(1, Some(count))).unwrap();
-    store.apply(1, batch).unwrap();
+    write();
     db.write_blocking(|tx| tx.progress_handler(0, None::<fn() -> bool>)).unwrap();
     steps.load(Ordering::Relaxed)
 }

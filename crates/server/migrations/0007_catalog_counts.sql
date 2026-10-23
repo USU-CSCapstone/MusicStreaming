@@ -93,6 +93,8 @@ CREATE TRIGGER tracks_added AFTER INSERT ON tracks
 BEGIN
     UPDATE libraries SET track_count = track_count + 1, duration_us = duration_us + NEW.duration_us
     WHERE id = NEW.library_id;
+    UPDATE artists SET owned_track_count = owned_track_count + 1
+    WHERE id IN (SELECT artist_id FROM album_artists WHERE album_id = NEW.album_id);
     INSERT INTO album_groups VALUES (NEW.library_id, NEW.album_id, NEW.disc_number,
         ifnull(NEW.album_title, ''), NEW.album_sort_key, ifnull(NEW.release_date, ''),
         ifnull(NEW.release_type, ''), ifnull(NEW.track_total, -1), ifnull(NEW.disc_total, -1),
@@ -109,6 +111,8 @@ BEGIN
     DELETE FROM track_tags WHERE track_id = OLD.id;
     UPDATE libraries SET track_count = track_count - 1, duration_us = duration_us - OLD.duration_us
     WHERE id = OLD.library_id;
+    UPDATE artists SET owned_track_count = owned_track_count - 1
+    WHERE id IN (SELECT artist_id FROM album_artists WHERE album_id = OLD.album_id);
     UPDATE album_groups SET track_count = track_count - 1,
         available_count = available_count - (OLD.missing_since IS NULL),
         duration_us = duration_us - OLD.duration_us
@@ -157,8 +161,9 @@ BEGIN
     WHERE id IN (SELECT artist_id FROM track_artists WHERE track_id = NEW.id);
 END;
 
--- The track's genres move to its new album, and its artists' credits become or stop being
--- appearances, by whether each album lists them.
+-- The track's genres and credits move to its new album, its artists' credits become or stop
+-- being appearances, by whether each album lists them, and it moves to the owned tracks of the
+-- new album's artists.
 CREATE TRIGGER tracks_album AFTER UPDATE OF album_id ON tracks WHEN NEW.album_id <> OLD.album_id
 BEGIN
     UPDATE album_tags SET track_count = track_count - 1
@@ -171,6 +176,16 @@ BEGIN
         + (NOT EXISTS (SELECT 1 FROM album_artists WHERE album_id = NEW.album_id AND artist_id = artists.id))
         - (NOT EXISTS (SELECT 1 FROM album_artists WHERE album_id = OLD.album_id AND artist_id = artists.id))
     WHERE id IN (SELECT artist_id FROM track_artists WHERE track_id = NEW.id);
+    UPDATE album_credits SET track_count = track_count - 1
+    WHERE album_id = OLD.album_id
+      AND artist_id IN (SELECT artist_id FROM track_artists WHERE track_id = NEW.id);
+    INSERT INTO album_credits (library_id, album_id, artist_id, track_count)
+    SELECT library_id, NEW.album_id, artist_id, 1 FROM track_artists WHERE track_id = NEW.id
+    ON CONFLICT (album_id, artist_id) DO UPDATE SET track_count = track_count + 1;
+    UPDATE artists SET owned_track_count = owned_track_count - 1
+    WHERE id IN (SELECT artist_id FROM album_artists WHERE album_id = OLD.album_id);
+    UPDATE artists SET owned_track_count = owned_track_count + 1
+    WHERE id IN (SELECT artist_id FROM album_artists WHERE album_id = NEW.album_id);
 END;
 
 CREATE TRIGGER tracks_artist_sort_key AFTER UPDATE OF artist_sort_key ON tracks
@@ -188,8 +203,8 @@ END;
 -- ───────────────────────────── Track credits ─────────────────────────────
 
 -- A credit counts toward the artist's tracks, available tracks while the track isn't missing,
--- appearances while the track's album doesn't list the artist, its spelling, the track's sort
--- key when it is the first credit, and each of the track's genres.
+-- appearances while the track's album doesn't list the artist, its credits on the album, its
+-- spelling, the track's sort key when it is the first credit, and each of the track's genres.
 CREATE TRIGGER track_artists_added AFTER INSERT ON track_artists
 BEGIN
     UPDATE artists
@@ -199,6 +214,9 @@ BEGIN
         appearance_count = appearance_count + (SELECT count(*) FROM tracks t WHERE t.id = NEW.track_id
             AND NOT EXISTS (SELECT 1 FROM album_artists WHERE album_id = t.album_id AND artist_id = NEW.artist_id))
     WHERE id = NEW.artist_id;
+    INSERT INTO album_credits (library_id, album_id, artist_id, track_count)
+    SELECT NEW.library_id, album_id, NEW.artist_id, 1 FROM tracks WHERE id = NEW.track_id
+    ON CONFLICT (album_id, artist_id) DO UPDATE SET track_count = track_count + 1;
     INSERT INTO artist_spellings (library_id, artist_id, name, uses)
     SELECT NEW.library_id, NEW.artist_id, NEW.artist_name, 1 WHERE NEW.artist_name IS NOT NULL
     ON CONFLICT (artist_id, name) DO UPDATE SET uses = uses + 1;
@@ -220,6 +238,8 @@ BEGIN
         appearance_count = appearance_count - (SELECT count(*) FROM tracks t WHERE t.id = OLD.track_id
             AND NOT EXISTS (SELECT 1 FROM album_artists WHERE album_id = t.album_id AND artist_id = OLD.artist_id))
     WHERE id = OLD.artist_id;
+    UPDATE album_credits SET track_count = track_count - 1
+    WHERE album_id = (SELECT album_id FROM tracks WHERE id = OLD.track_id) AND artist_id = OLD.artist_id;
     UPDATE artist_spellings SET uses = uses - 1
     WHERE artist_id = OLD.artist_id AND name = OLD.artist_name;
     UPDATE artist_sort_keys SET uses = uses - 1
@@ -272,13 +292,19 @@ END;
 
 -- ───────────────────────────── Album and artist links ─────────────────────────────
 
--- The artist's credits on the album's tracks stop being appearances while the album lists them.
+-- While the album lists the artist, the artist's credits on its tracks stop being appearances,
+-- its tracks are the artist's own, and it counts among the artist's albums under any credit
+-- whether or not a track credits the artist.
 CREATE TRIGGER album_artists_added AFTER INSERT ON album_artists
 BEGIN
     UPDATE artists
     SET album_count = album_count + 1,
-        appearance_count = appearance_count - (SELECT count(*) FROM tracks t CROSS JOIN track_artists ta
-            ON ta.track_id = t.id WHERE t.album_id = NEW.album_id AND ta.artist_id = NEW.artist_id)
+        appearance_count = appearance_count - ifnull((SELECT track_count FROM album_credits
+            WHERE album_id = NEW.album_id AND artist_id = NEW.artist_id), 0),
+        owned_track_count = owned_track_count
+            + (SELECT ifnull(sum(track_count), 0) FROM album_groups WHERE album_id = NEW.album_id),
+        any_album_count = any_album_count + (NOT EXISTS (SELECT 1 FROM album_credits
+            WHERE album_id = NEW.album_id AND artist_id = NEW.artist_id))
     WHERE id = NEW.artist_id;
 END;
 
@@ -286,9 +312,35 @@ CREATE TRIGGER album_artists_removed AFTER DELETE ON album_artists
 BEGIN
     UPDATE artists
     SET album_count = album_count - 1,
-        appearance_count = appearance_count + (SELECT count(*) FROM tracks t CROSS JOIN track_artists ta
-            ON ta.track_id = t.id WHERE t.album_id = OLD.album_id AND ta.artist_id = OLD.artist_id)
+        appearance_count = appearance_count + ifnull((SELECT track_count FROM album_credits
+            WHERE album_id = OLD.album_id AND artist_id = OLD.artist_id), 0),
+        owned_track_count = owned_track_count
+            - (SELECT ifnull(sum(track_count), 0) FROM album_groups WHERE album_id = OLD.album_id),
+        any_album_count = any_album_count - (NOT EXISTS (SELECT 1 FROM album_credits
+            WHERE album_id = OLD.album_id AND artist_id = OLD.artist_id))
     WHERE id = OLD.artist_id;
+END;
+
+-- An album a track credits the artist on counts among the artist's albums under any credit
+-- unless the album lists the artist, which counts it already.
+CREATE TRIGGER album_credits_added AFTER INSERT ON album_credits
+BEGIN
+    UPDATE artists SET any_album_count = any_album_count + 1
+    WHERE id = NEW.artist_id AND NOT EXISTS (SELECT 1 FROM album_artists
+        WHERE album_id = NEW.album_id AND artist_id = NEW.artist_id);
+END;
+
+CREATE TRIGGER album_credits_unused AFTER UPDATE OF track_count ON album_credits
+WHEN NEW.track_count = 0
+BEGIN
+    DELETE FROM album_credits WHERE album_id = NEW.album_id AND artist_id = NEW.artist_id;
+END;
+
+CREATE TRIGGER album_credits_removed AFTER DELETE ON album_credits
+BEGIN
+    UPDATE artists SET any_album_count = any_album_count - 1
+    WHERE id = OLD.artist_id AND NOT EXISTS (SELECT 1 FROM album_artists
+        WHERE album_id = OLD.album_id AND artist_id = OLD.artist_id);
 END;
 
 CREATE TRIGGER album_tags_added AFTER INSERT ON album_tags

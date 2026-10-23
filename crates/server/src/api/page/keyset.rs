@@ -44,6 +44,15 @@ pub struct Source {
     pub joins: &'static str,
     pub filter: String,
     pub params: Vec<Value>,
+    pub total: Total,
+}
+
+/// Where a page's `total` comes from.
+pub enum Total {
+    /// A count the scanner keeps, read as the source was made.
+    Stored(i64),
+    /// The source's rows, counted for every page, where no stored count covers its filters.
+    Counted,
 }
 
 impl Sort {

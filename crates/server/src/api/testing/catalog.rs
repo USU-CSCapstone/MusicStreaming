@@ -33,10 +33,10 @@ pub async fn app() -> (tempfile::TempDir, Arc<Database>, Router) {
 ///   disc, number, or date). Each track was added at its ID in milliseconds.
 ///
 /// Library 2, "Other", holds an artist, an album, and a track of its own, each called
-/// "Elsewhere". Some counts are set by hand: the albums' as for whole albums, of which the
-/// catalog holds only some tracks, and The Beatles' as asserted, with Pop, which none of these
-/// tracks carries. The other artists', the tags' and the libraries' follow these rows. Abbey
-/// Road's discs list only disc 1.
+/// "Elsewhere". The albums' counts are set by hand, as for whole albums, of which the catalog
+/// holds only some tracks, and so is The Beatles' genre Pop, which none of these tracks carries.
+/// The artists', the tags' and the libraries' counts follow these rows. Abbey Road's discs list
+/// only disc 1.
 fn insert(tx: &Transaction) -> Result<()> {
     library(tx, 1, "Music", "/music")?;
     library(tx, 2, "Other", "/other")?;
@@ -131,9 +131,7 @@ fn insert(tx: &Transaction) -> Result<()> {
                (31, 1, 'genre', 'Pop', 'pop', CAST('pop' AS BLOB));
            INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES (1, 1001, 30, 'rock');
            INSERT INTO artist_tags (library_id, artist_id, tag_id, track_count) VALUES (1, 10, 31, 1);
-           UPDATE artists SET image_id = 40, biography = 'Four lads from Liverpool.',
-                              album_count = 2, track_count = 30, appearance_count = 1
-               WHERE id = 10;
+           UPDATE artists SET image_id = 40, biography = 'Four lads from Liverpool.' WHERE id = 10;
            UPDATE albums SET disc_total = 1, track_total = 17, labels = '["Apple"]' WHERE id = 101;
            UPDATE albums SET track_total = 12 WHERE id = 103;
            UPDATE tracks SET explicit = 1, isrc = 'GBAYE0601690', lyrics_kind = 'synced',

@@ -53,6 +53,10 @@ CREATE TABLE artists (
     track_count      INTEGER NOT NULL DEFAULT 0,
     appearance_count INTEGER NOT NULL DEFAULT 0,
     available_track_count INTEGER NOT NULL DEFAULT 0,
+    -- Tracks on the albums it is an album artist of
+    owned_track_count INTEGER NOT NULL DEFAULT 0,
+    -- Albums it is an album artist of or credited on a track of
+    any_album_count  INTEGER NOT NULL DEFAULT 0,
     added_at         INTEGER NOT NULL,
     UNIQUE (library_id, name_key),
     UNIQUE (library_id, id),
@@ -128,6 +132,20 @@ CREATE TABLE album_artists (
 ) STRICT, WITHOUT ROWID;
 
 CREATE INDEX album_artists_by_artist ON album_artists (artist_id, album_id);
+
+-- How many of the album's tracks credit each artist (track_artists), so an artist's albums are
+-- read without their tracks. A row goes with the last of them (0007_catalog_counts.sql).
+CREATE TABLE album_credits (
+    library_id  INTEGER NOT NULL,
+    album_id    INTEGER NOT NULL,
+    artist_id   INTEGER NOT NULL,
+    track_count INTEGER NOT NULL,
+    PRIMARY KEY (album_id, artist_id),
+    FOREIGN KEY (library_id, album_id) REFERENCES albums (library_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (library_id, artist_id) REFERENCES artists (library_id, id) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX album_credits_by_artist ON album_credits (artist_id, album_id);
 
 CREATE TABLE album_discs (
     library_id  INTEGER NOT NULL,

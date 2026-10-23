@@ -33,7 +33,7 @@ async fn pages_through_every_sort_with_the_unknown_artist_last() {
     assert_eq!(
         page["items"][0],
         json!({ "id": "10", "name": "The Beatles", "image": { "id": "40", "placeholder": "" },
-                "albumCount": 2, "trackCount": 30, "addedAt": "1970-01-01T00:00:03.000Z" })
+                "albumCount": 1, "trackCount": 5, "addedAt": "1970-01-01T00:00:03.000Z" })
     );
 }
 
@@ -73,7 +73,7 @@ async fn gets_an_artist_with_its_biography_and_genres() {
         artist,
         json!({
             "id": "10", "name": "The Beatles", "image": { "id": "40", "placeholder": "" },
-            "albumCount": 2, "trackCount": 30, "addedAt": "1970-01-01T00:00:03.000Z",
+            "albumCount": 1, "trackCount": 5, "addedAt": "1970-01-01T00:00:03.000Z",
             "biography": "Four lads from Liverpool.",
             "genres": [{ "id": "31", "name": "Pop" }, { "id": "30", "name": "Rock" }],
             "appearanceCount": 1,
@@ -142,7 +142,7 @@ async fn every_sort_reads_from_an_index() {
     .unwrap();
     db.read(|conn| {
         for sort in [ArtistSort::Name, ArtistSort::DateAdded] {
-            page::assert_indexed(conn, &source(1), sort.sort())?;
+            page::assert_indexed(conn, &ARTISTS.source(conn, 1, None, Vec::new())?, sort.sort())?;
         }
         Ok(())
     })

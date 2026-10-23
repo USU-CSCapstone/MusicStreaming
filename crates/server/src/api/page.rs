@@ -1,15 +1,17 @@
 //! What every browse list shares: its parameters, its response, and its total.
-//! The queries themselves are keyset paging (`keyset`).
+//! The queries themselves are keyset paging (`keyset`) over the rows a filter picks (`filter`).
 
+mod filter;
 mod keyset;
 
 use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
+pub use filter::{Check, Lead, Table};
 #[cfg(test)]
 pub use keyset::assert_indexed;
-pub use keyset::{Sort, Source, Unknown};
+pub use keyset::{Sort, Source, Total, Unknown};
 
 use super::Problem;
 
@@ -53,22 +55,16 @@ impl Request {
         Ok(Request { sort, order, after, limit })
     }
 
-    /// Reads the page of `source` in `library`. Its total is the library's `stored` count, such
-    /// as `album_count`, unless it is `filtered`. `library` is one the caller reaches, which
-    /// `authenticate` has checked.
+    /// Reads the page of `source`, with its total as `source` says.
     pub fn read<T>(
         self,
         conn: &Connection,
-        library: i64,
-        stored: &'static str,
-        filtered: bool,
         source: &Source,
         map: impl FnMut(&Row) -> rusqlite::Result<T>,
     ) -> rusqlite::Result<Page<T>> {
-        let total = if filtered {
-            keyset::count(conn, source)?
-        } else {
-            library_count(conn, library, stored)?
+        let total = match source.total {
+            Total::Stored(total) => total,
+            Total::Counted => keyset::count(conn, source)?,
         };
         let (items, next_cursor) = keyset::fetch(conn, source, &self, map)?;
         Ok(Page { items, next_cursor, total })

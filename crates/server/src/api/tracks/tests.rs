@@ -136,6 +136,39 @@ async fn filters_by_artist_credit() {
     }
 }
 
+/// An artist filter's total is the artist's stored count, read rather than counted, so a stored
+/// count that disagreed with the rows would show; an album filter, alone or with an artist,
+/// counts its rows.
+#[tokio::test]
+async fn an_artist_filters_total_is_its_stored_count() {
+    let (_temp, db, app) = catalog::app().await;
+    /// The `total` of library 1's track list for `query`.
+    async fn total(app: &axum::Router, query: &str) -> Value {
+        json(app, &format!("/api/v1/libraries/1/tracks?{query}")).await.1["total"].clone()
+    }
+    for (query, expected) in [
+        ("artistId=10&artistCredit=owned", 4),
+        ("artistId=10&artistCredit=featured", 1),
+        ("artistId=10", 5),
+        ("artistId=10&albumId=102", 1),
+        ("albumId=101", 4),
+        ("artistId=20", 0),
+        ("artistId=nobody", 0),
+    ] {
+        assert_eq!(total(&app, query).await, expected, "{query}");
+    }
+    let wrong = "UPDATE artists SET owned_track_count = 40, appearance_count = 2 WHERE id = 10";
+    db.write(move |tx| tx.execute(wrong, [])).await.unwrap();
+    for (query, expected) in [
+        ("artistId=10&artistCredit=owned", 40),
+        ("artistId=10&artistCredit=featured", 2),
+        ("artistId=10", 42),
+        ("artistId=10&albumId=102", 1),
+    ] {
+        assert_eq!(total(&app, query).await, expected, "{query}");
+    }
+}
+
 #[tokio::test]
 async fn summaries_and_full_tracks() {
     let (_temp, _db, app) = catalog::app().await;
@@ -285,10 +318,10 @@ async fn every_sort_reads_from_an_index() {
             TrackSort::ReleaseDate,
             TrackSort::Duration,
         ] {
-            let source = source(1, None, None, ArtistCredit::Any);
+            let source = source(conn, 1, None, None, ArtistCredit::Any)?;
             page::assert_indexed(conn, &source, sort.sort())?;
         }
-        let one_album = source(1, Some(AnyId(Some(7))), None, ArtistCredit::Any);
+        let one_album = source(conn, 1, Some(AnyId(Some(7))), None, ArtistCredit::Any)?;
         page::assert_indexed(conn, &one_album, &WITHIN_ALBUM)?;
         Ok(())
     })
@@ -301,7 +334,7 @@ async fn every_sort_reads_from_an_index() {
 async fn a_track_row_reads_its_album_once() {
     let (_temp, db, _app) = catalog::app().await;
     db.read(|conn| {
-        let source = source(1, None, None, ArtistCredit::Any);
+        let source = source(conn, 1, None, None, ArtistCredit::Any)?;
         let sql = format!(
             "EXPLAIN QUERY PLAN SELECT {} FROM {} {} WHERE {}",
             SELECT.join(", "),

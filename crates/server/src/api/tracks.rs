@@ -6,15 +6,16 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use rusqlite::Connection;
 use serde::Deserialize;
 
 pub use representation::{
     JOINS, LOUDNESS, Loudness, SELECT, Track, TrackSummary, list_summary, loudness,
 };
 
-use super::credit::ArtistCredit;
+use super::credit::{ArtistCredit, Credits};
 use super::extract::{Path, Query};
-use super::page::{Order, Page, Request, Sort, Source, Unknown};
+use super::page::{Check, Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
 use super::{AnyId, Id, Problem};
 use crate::db::Database;
@@ -120,11 +121,11 @@ pub async fn list(
         (sort, _) => sort.sort(),
     };
     let request = Request::new(sort, query.order, query.cursor, query.limit)?;
-    let filtered = query.album_id.is_some() || query.artist_id.is_some();
-    let source = source(library, query.album_id, query.artist_id, query.artist_credit);
+    let (album, artist, credit) = (query.album_id, query.artist_id, query.artist_credit);
     let page = db
         .read(move |conn| {
-            request.read(conn, library, "track_count", filtered, &source, list_summary)
+            let source = source(conn, library, album, artist, credit)?;
+            request.read(conn, &source, list_summary)
         })
         .await?;
     Ok(Json(page))
@@ -142,38 +143,35 @@ pub async fn get(
         .ok_or_else(Problem::not_found)
 }
 
-/// Tracks whose album this artist is an album artist of.
-const OWNED: &str = "SELECT tracks.id AS track_id FROM album_artists \
-     JOIN tracks ON tracks.album_id = album_artists.album_id WHERE album_artists.artist_id = ?";
-/// Tracks credited to this artist.
-const ON_TRACKS: &str = "SELECT track_id FROM track_artists WHERE artist_id = ?";
+/// The tracks a list reads.
+const TRACKS: Table =
+    Table { name: "tracks", alias: "t", select: SELECT, joins: JOINS, count: "track_count" };
+
+/// How tracks are credited to an artist.
+const CREDITS: Credits = Credits {
+    owned: "SELECT tracks.id FROM album_artists \
+         JOIN tracks ON tracks.album_id = album_artists.album_id WHERE album_artists.artist_id = ?",
+    on_tracks: "SELECT track_id AS id FROM track_artists WHERE artist_id = ?",
+    owned_count: "owned_track_count",
+    featured_count: "appearance_count",
+    any_count: "owned_track_count + appearance_count",
+};
 
 /// The tracks `list` pages through in `library`: every one, or those on `album` and credited
 /// to `artist` as `credit` says.
 fn source(
+    conn: &Connection,
     library: i64,
     album: Option<AnyId>,
     artist: Option<AnyId>,
     credit: ArtistCredit,
-) -> Source {
-    let (from, mut params) = match artist {
-        None => ("tracks t".to_owned(), Vec::new()),
-        Some(artist) => {
-            let (credited, params) = credit.query(OWNED, ON_TRACKS, artist);
-            // An artist's tracks are few next to the library's, so the query starts from them
-            // and sorts them; `CROSS JOIN` fixes that order.
-            let from =
-                format!("({credited}) credited CROSS JOIN tracks t ON t.id = credited.track_id");
-            (from, params)
-        }
-    };
-    let mut filter = "t.library_id = ?".to_owned();
-    params.push(library.into());
-    if let Some(album) = album {
-        filter += " AND t.album_id = ?";
-        params.push(album.0.into());
-    }
-    Source { select: SELECT, from, joins: JOINS, filter, params }
+) -> rusqlite::Result<Source> {
+    let lead = artist.map(|artist| credit.lead(conn, library, &CREDITS, artist)).transpose()?;
+    let checks = album.map(|album| Check {
+        condition: "t.album_id = ?".to_owned(),
+        params: vec![album.0.into()],
+    });
+    TRACKS.source(conn, library, lead, checks.into_iter().collect())
 }
 
 #[cfg(test)]

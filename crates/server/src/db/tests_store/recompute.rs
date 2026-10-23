@@ -24,8 +24,8 @@ const CHECKS: &[(&str, &str, &str)] = &[
     ),
     (
         "artists",
-        "SELECT id, name, album_count, track_count, appearance_count, available_track_count \
-         FROM artists ORDER BY id",
+        "SELECT id, name, album_count, track_count, appearance_count, available_track_count, \
+         owned_track_count, any_album_count FROM artists ORDER BY id",
         "WITH firsts (id) AS (SELECT (SELECT id FROM tracks f WHERE f.album_id = a.album_id \
                     ORDER BY disc_number, ifnull(track_number, 9223372036854775807), id LIMIT 1) \
                     FROM (SELECT DISTINCT album_id FROM tracks) a), \
@@ -40,7 +40,12 @@ const CHECKS: &[(&str, &str, &str)] = &[
          (SELECT COUNT(*) FROM track_artists ta JOIN tracks t ON t.id = ta.track_id WHERE ta.artist_id = a.id \
           AND NOT EXISTS (SELECT 1 FROM listed l WHERE l.album_id = t.album_id AND l.artist_id = a.id)), \
          (SELECT COUNT(*) FROM track_artists ta JOIN tracks t ON t.id = ta.track_id \
-          WHERE ta.artist_id = a.id AND t.missing_since IS NULL) \
+          WHERE ta.artist_id = a.id AND t.missing_since IS NULL), \
+         (SELECT COUNT(*) FROM listed l JOIN tracks t ON t.album_id = l.album_id \
+          WHERE l.artist_id = a.id), \
+         (SELECT COUNT(*) FROM (SELECT album_id FROM listed WHERE artist_id = a.id UNION \
+          SELECT t.album_id FROM track_artists ta JOIN tracks t ON t.id = ta.track_id \
+          WHERE ta.artist_id = a.id)) \
          FROM artists a WHERE a.id IN (SELECT artist_id FROM track_artists \
                                        UNION SELECT artist_id FROM track_album_artists) ORDER BY a.id",
     ),
@@ -134,6 +139,12 @@ const CHECKS: &[(&str, &str, &str)] = &[
         "SELECT library_id, album_id, tag_id, track_count FROM album_tags ORDER BY 2, 3",
         "SELECT t.library_id, t.album_id, tt.tag_id, COUNT(*) FROM track_tags tt \
          JOIN tracks t ON t.id = tt.track_id GROUP BY 2, 3 ORDER BY 2, 3",
+    ),
+    (
+        "album credits",
+        "SELECT library_id, album_id, artist_id, track_count FROM album_credits ORDER BY 2, 3",
+        "SELECT t.library_id, t.album_id, ta.artist_id, COUNT(*) FROM track_artists ta \
+         JOIN tracks t ON t.id = ta.track_id GROUP BY 2, 3 ORDER BY 2, 3",
     ),
     (
         "artist tags",

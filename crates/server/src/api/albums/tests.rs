@@ -64,6 +64,25 @@ async fn filters_by_artist_credit() {
     }
 }
 
+/// A list's total is the library's stored count, or an artist filter's the artist's, read
+/// rather than counted, so a stored count that disagreed with the rows would show.
+#[tokio::test]
+async fn totals_are_stored_counts() {
+    let (_temp, db, app) = catalog::app().await;
+    let wrong = "UPDATE artists SET album_count = 7, any_album_count = 9 WHERE id = 11; \
+                 UPDATE libraries SET album_count = 40 WHERE id = 1";
+    db.write(move |tx| tx.execute_batch(wrong)).await.unwrap();
+    for (query, expected) in [
+        ("", 40),
+        ("artistId=11&artistCredit=owned", 7),
+        ("artistId=11&artistCredit=featured", 2),
+        ("artistId=11", 9),
+    ] {
+        let (_, page) = json(&app, &format!("/api/v1/libraries/1/albums?{query}")).await;
+        assert_eq!(page["total"], expected, "{query}");
+    }
+}
+
 #[tokio::test]
 async fn gets_an_album_with_its_discs() {
     let (_temp, _db, app) = catalog::app().await;
@@ -171,7 +190,7 @@ async fn every_sort_reads_from_an_index() {
             AlbumSort::ReleaseDate,
             AlbumSort::Duration,
         ] {
-            page::assert_indexed(conn, &source(1, None, ArtistCredit::Any), sort.sort())?;
+            page::assert_indexed(conn, &source(conn, 1, None, ArtistCredit::Any)?, sort.sort())?;
         }
         Ok(())
     })
