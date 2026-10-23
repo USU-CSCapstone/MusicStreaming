@@ -58,6 +58,10 @@ const SWEEP_EVERY: Duration = Duration::from_secs(3600);
 /// every table to be large (`design/database.md` §4).
 const STATISTICS_FROM_TRACKS: i64 = 1_000;
 
+/// Gathers query-planner statistics where they are missing (0x10000 checks every table, 0x2
+/// analyzes), within SQLite's analysis limit (0x10), so even a large database opens quickly.
+const OPTIMIZE_ON_OPEN: &str = "PRAGMA optimize = 0x10012";
+
 /// How long after the database opens the writer first sweeps, so a server restarted more often
 /// than [`SWEEP_EVERY`] still sweeps, without adding to its startup.
 const FIRST_SWEEP: Duration = Duration::from_secs(300);
@@ -124,9 +128,8 @@ impl Database {
         writer.pragma_update(None, "journal_size_limit", JOURNAL_SIZE_LIMIT)?;
 
         let schema_version = migrations::migrate(&mut writer, migrations::MIGRATIONS)?;
-        // Gathers query-planner statistics where they are missing, once the libraries are large
-        // enough to describe (design/database.md §4).
-        gather_statistics(&writer, "PRAGMA optimize = 0x10002")?;
+        // Once the libraries are large enough to describe (design/database.md §4).
+        gather_statistics(&writer, OPTIMIZE_ON_OPEN)?;
 
         let reader_count = thread::available_parallelism().map_or(4, NonZeroUsize::get).max(2);
         let mut readers = Vec::with_capacity(reader_count);

@@ -6,6 +6,7 @@ use serde::Deserialize;
 use super::{PlayerState, Players, Status};
 use crate::api::realtime::{Hub, Presence, ServerMessage};
 use crate::api::scope::Caller;
+use crate::api::session::device_signed_in;
 use crate::api::{AnyId, AppState, Id, Problem};
 use crate::db::{now_ms, reaches};
 
@@ -117,7 +118,9 @@ pub async fn apply(
         conn.prepare_cached(concat!(
             "SELECT EXISTS (SELECT 1 FROM devices d JOIN users u ON u.id = d.user_id \
              JOIN tracks t ON t.id = ?2 AND t.library_id = ?1 \
-             WHERE d.id = ?3 AND d.revoked_reason IS NULL AND u.status = 'active' AND ",
+             WHERE d.id = ?3 AND ",
+            device_signed_in!(),
+            " AND ",
             reaches!(admin: "u.role <> 'user'", user: "u.id", library: "?1"),
             ")"
         ))?

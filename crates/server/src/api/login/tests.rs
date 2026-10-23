@@ -130,6 +130,7 @@ async fn attempts_are_recorded() {
     assert_eq!(
         rows,
         [
+            row("sam", true, "203.0.113.1", true),
             row("sam", true, "203.0.113.5", false),
             row("Ghost", false, "198.51.100.7", false),
             row("sam", true, "203.0.113.5", true),

@@ -6,14 +6,6 @@ use serde_json::Map;
 use super::super::settings::SERVER;
 use super::*;
 
-/// The last run recorded in library 1: whether it went well, and its report.
-async fn last_run(db: &Database) -> (bool, String) {
-    let sql = "SELECT last_run_ok, last_run_summary FROM plugin_libraries WHERE library_id = 1";
-    db.read(move |conn| conn.query_row(sql, [], |row| Ok((row.get(0)?, row.get(1)?))))
-        .await
-        .unwrap()
-}
-
 /// One scan covers every folder a run touched, however many.
 #[tokio::test]
 async fn a_run_queues_one_scan_of_every_folder_it_touched() {

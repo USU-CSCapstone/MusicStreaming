@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use super::devices::DeviceRegistration;
 use super::extract::Json;
+use super::login::limits;
+use super::origin::Origin;
 use super::{AppState, Code, Problem, me, password, session};
 use crate::db::{Database, new_id, now_ms};
 
@@ -77,10 +79,12 @@ pub struct SetupRequest {
     device: DeviceRegistration,
 }
 
-/// Creates the owner and logs it in on this device, setting the session cookie. Once an owner
-/// exists this is `404`, as if the endpoint were not there.
+/// Creates the owner and logs it in on this device, setting the session cookie, as a sign-in
+/// from `origin` that succeeded (`login::limits`). Once an owner exists this is `404`, as if the
+/// endpoint were not there.
 pub async fn complete(
     State(state): State<AppState>,
+    Origin(origin): Origin,
     Json(request): Json<SetupRequest>,
 ) -> Result<Response, Problem> {
     if state.setup.done(&state.db).await? {
@@ -109,6 +113,8 @@ pub async fn complete(
                  VALUES (?1, ?2, ?3, 'owner', ?4, ?5)",
                 params![user, username, display_name, password, now],
             )?;
+            let attempt = limits::record(tx, &username, Some(user), origin, now)?;
+            limits::succeeded(tx, attempt)?;
             Ok(session::register(tx, user, &device, token)?)
         })
         .await?;

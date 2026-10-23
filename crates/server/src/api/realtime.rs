@@ -32,6 +32,7 @@ pub use messages::{Revoked, ServerMessage};
 use super::devices;
 use super::player::{self, PlayerCommand};
 use super::scope::Caller;
+use super::session::device_signed_in;
 use super::time::rfc3339;
 use super::{AppState, Code, Id, Problem};
 use crate::db::{Database, now_ms};
@@ -71,8 +72,10 @@ pub async fn open(
 async fn signed_in(db: &Database, device: i64) -> Result<bool, Problem> {
     let found = db.read(move |conn| {
         conn.query_row(
-            "SELECT 1 FROM devices d JOIN users u ON u.id = d.user_id \
-             WHERE d.id = ?1 AND d.revoked_reason IS NULL AND u.status = 'active'",
+            concat!(
+                "SELECT 1 FROM devices d JOIN users u ON u.id = d.user_id WHERE d.id = ?1 AND ",
+                device_signed_in!()
+            ),
             [device],
             |_| Ok(()),
         )

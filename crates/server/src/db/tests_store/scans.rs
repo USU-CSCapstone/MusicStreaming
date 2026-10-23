@@ -28,13 +28,16 @@ fn saved_scan(root: &Path) -> (SqliteStore, Scan) {
     (store, scan)
 }
 
-/// A save of a scan row names its library, so a scan that names another library changes no row.
+/// A save of a scan row names its library, so a scan that names another library changes no row,
+/// and fails, as a save of a scan with no row does.
 #[test]
 fn a_scan_row_is_saved_only_in_its_library() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, scan) = saved_scan(&tmp.path().join("lib"));
     let elsewhere = Scan { library: 2, state: ScanState::Completed, ..scan.clone() };
-    store.update_scan(&elsewhere).unwrap();
+    assert!(store.update_scan(&elsewhere).is_err(), "saved in another library");
+    let unknown = Scan { id: scan.id + 1, state: ScanState::Completed, ..scan.clone() };
+    assert!(store.update_scan(&unknown).is_err(), "saved with no row");
     assert_eq!(store.scans(1).unwrap(), [scan]);
 }
 

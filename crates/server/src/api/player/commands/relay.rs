@@ -15,8 +15,11 @@ use crate::api::scope::Caller;
 use crate::api::{AnyId, Code, Id, Problem};
 use crate::lock::Recover;
 
-/// How long a connection has to answer a command before it counts as failed.
-pub(super) const ANSWER_WITHIN: Duration = Duration::from_secs(5);
+/// How long a connection has to answer a command before it counts as failed, in milliseconds.
+const ANSWER_WITHIN_MS: u16 = 5_000;
+
+/// [`ANSWER_WITHIN_MS`] as a duration.
+pub(super) const ANSWER_WITHIN: Duration = Duration::from_millis(ANSWER_WITHIN_MS as u64);
 
 /// How many of an account's commands may wait for an answer at once, so a flood of them
 /// cannot fill the outbox of the connection they go to and close it.
@@ -132,8 +135,10 @@ impl Players {
             (to, true)
         };
         if commands.waiting.len() >= MAX_WAITING {
+            // By then the oldest waiting command has been answered or has failed.
+            let wait = i64::from(ANSWER_WITHIN_MS);
             let reason = "Too many commands are waiting for a device to answer.";
-            return Err(Problem::new(Code::RateLimited).detail(reason));
+            return Err(Problem::rate_limited(wait).detail(reason));
         }
         // Sent while holding `accounts`: if sending closes the connection it goes to, its
         // `disconnected` waits for that lock, finds this command waiting, and fails it at once.

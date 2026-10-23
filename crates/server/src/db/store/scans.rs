@@ -75,13 +75,13 @@ impl SqliteStore {
 
 /// Writes what changes as a scan runs: its state, cursor, progress, and times, and the folder it
 /// is in, if any, as one of `roots` and the path relative to it. Only a row in the scan's own
-/// library is changed.
+/// library is changed: a scan with no row there is an error, so its writes are not committed.
 pub(super) fn save(tx: &Transaction, roots: &Roots, scan: &Scan) -> Result<()> {
     let progress = &scan.progress;
     let current = progress.current_path.as_ref();
     let (current_root, current_path) =
         current.and_then(|path| roots.locate(scan.library, path)).unzip();
-    tx.prepare_cached(
+    let changed = tx.prepare_cached(
         "UPDATE scans SET state = ?2, cursor_scope = ?3, cursor_dir = ?4, files_seen = ?5, \
          files_processed = ?6, added = ?7, updated = ?8, moved = ?9, missing = ?10, problems = ?11, \
          current_root_id = ?12, current_path = ?13, started_at = ?14, finished_at = ?15 \
@@ -105,7 +105,7 @@ pub(super) fn save(tx: &Transaction, roots: &Roots, scan: &Scan) -> Result<()> {
         scan.finished_at,
         scan.library,
     ])?;
-    Ok(())
+    if changed == 1 { Ok(()) } else { Err(rusqlite::Error::StatementChangedRows(changed)) }
 }
 
 /// The library's scans that `rest`, such as an `ORDER BY`, selects, with their paths under

@@ -4,7 +4,7 @@
 //! password wrong, or the account suspended, and each takes one password check's time. Past
 //! the limits ([`limits`]) an attempt is `429 rate_limited` without its password being checked.
 
-mod limits;
+pub(super) mod limits;
 
 use axum::extract::State;
 use axum::http::{StatusCode, header};

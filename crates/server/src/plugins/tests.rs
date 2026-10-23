@@ -90,6 +90,14 @@ fn let_in(mut loading: File) {
     loading.write_all(TOUCHER.as_bytes()).unwrap();
 }
 
+/// The last run recorded in library 1: whether it went well, and its report.
+async fn last_run(db: &Database) -> (bool, String) {
+    let sql = "SELECT last_run_ok, last_run_summary FROM plugin_libraries WHERE library_id = 1";
+    db.read(move |conn| conn.query_row(sql, [], |row| Ok((row.get(0)?, row.get(1)?))))
+        .await
+        .unwrap()
+}
+
 /// The watch scans of library 1 queued so far, by the paths of their scopes.
 async fn watch_scans(db: &Database) -> Vec<Vec<String>> {
     let sql = "SELECT (SELECT json_group_array(json_extract(s.value, '$.path')) \
@@ -135,12 +143,31 @@ async fn a_failed_run_is_answered_and_recorded_as_failed() {
     assert!(!result.ok);
     let summary = result.summary;
     assert!(summary.starts_with("the plugin could not be loaded: "), "{summary}");
-    let sql = "SELECT last_run_ok, last_run_summary FROM plugin_libraries";
-    let recorded: (bool, String) = db
-        .read(move |conn| conn.query_row(sql, [], |row| Ok((row.get(0)?, row.get(1)?))))
-        .await
-        .unwrap();
-    assert_eq!(recorded, (false, format!("{summary} (about 0 ms of compute)")));
+    assert_eq!(last_run(&db).await, (false, format!("{summary} (about 0 ms of compute)")));
+}
+
+/// A run that fails on the server's side, here on settings it cannot read, answers the error
+/// and is recorded as failed for the admin, with why.
+#[tokio::test]
+async fn a_run_that_fails_on_the_servers_side_is_recorded_as_failed() {
+    let (temp, db) = database().await;
+    let plugins = plugins(&temp, &db);
+    install(&db, manifest("plugin", &[LibraryRead])).await;
+    grant(&plugins, "plugin", &[], &[LibraryRead]).await;
+    enable(&plugins, "plugin", true).await;
+    db.write(|tx| {
+        tx.execute_batch(
+            "PRAGMA ignore_check_constraints = ON; \
+             INSERT INTO plugin_settings (plugin_id, settings) VALUES ('plugin', 'not JSON'); \
+             PRAGMA ignore_check_constraints = OFF;",
+        )
+    })
+    .await
+    .unwrap();
+
+    assert!(matches!(plugins.run("plugin".into()).await, Err(PluginError::Db(_))));
+    let (ok, summary) = last_run(&db).await;
+    assert!(!ok && !summary.is_empty(), "{summary}");
 }
 
 /// A component that carries a valid manifest, but whose one core module declares a function of

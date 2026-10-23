@@ -127,6 +127,12 @@ async fn an_unacceptable_request_creates_nothing() {
     bad_device["device"]["type"] = json!("toaster");
     let mut blank_name = setup_request("Sam", PASSWORD);
     blank_name["displayName"] = json!("  ");
+    let mut long_name = setup_request("Sam", PASSWORD);
+    long_name["displayName"] = json!("é".repeat(101));
+    let mut long_device = setup_request("Sam", PASSWORD);
+    long_device["device"]["name"] = json!("é".repeat(101));
+    let mut blank_platform = setup_request("Sam", PASSWORD);
+    blank_platform["device"]["platform"] = json!(" ");
     let cases = [
         (setup_request("Sam", "hunter22"), "weak_password"),
         (setup_request("jewelcaseowner", "jewelcaseowner"), "weak_password"),
@@ -135,6 +141,9 @@ async fn an_unacceptable_request_creates_nothing() {
         (setup_request(&"s".repeat(33), PASSWORD), "validation_failed"),
         (bad_device, "validation_failed"),
         (blank_name, "validation_failed"),
+        (long_name, "validation_failed"),
+        (long_device, "validation_failed"),
+        (blank_platform, "validation_failed"),
         (json!({ "username": "Sam", "password": PASSWORD }), "validation_failed"),
     ];
     for (request, code) in cases {
@@ -143,4 +152,16 @@ async fn an_unacceptable_request_creates_nothing() {
         assert_eq!(problem["code"], code, "{request}: {problem}");
     }
     assert_eq!(json(&app, "/api/v1/server").await.1["setupRequired"], true);
+}
+
+/// Names are counted in characters, so 100 of them pass however many bytes they take.
+#[tokio::test]
+async fn names_of_a_hundred_characters_are_accepted() {
+    let (_temp, _db, app) = app_before_setup("");
+    let mut request = setup_request("Sam", PASSWORD);
+    request["displayName"] = json!("é".repeat(100));
+    request["device"]["name"] = json!("é".repeat(100));
+    let (status, _, session) = send_json(app, "POST", "/api/v1/setup", &request).await;
+    assert_eq!(status, StatusCode::CREATED, "{session}");
+    assert_eq!(session["user"]["displayName"], request["displayName"]);
 }

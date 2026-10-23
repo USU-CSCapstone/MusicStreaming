@@ -8,7 +8,8 @@
 //!
 //! At an origin the account has signed in from, while that success is kept (30 days,
 //! `crate::db::retention`), the account's limit counts only that origin's failures, so failures
-//! from elsewhere cannot keep its owner out there.
+//! from elsewhere cannot keep its owner out there. Setup signs the owner in from where it is
+//! done, so that counts too.
 
 use std::net::{IpAddr, Ipv6Addr};
 
@@ -83,6 +84,7 @@ pub fn record(
     .query_row(params![now, username, user, origin_key(origin)], |row| row.get(0))
 }
 
+/// Marks the attempt [`record`] returned as `attempt` as one that succeeded.
 pub fn succeeded(conn: &Connection, attempt: i64) -> rusqlite::Result<()> {
     conn.execute("UPDATE login_attempts SET succeeded = 1 WHERE id = ?1", [attempt]).map(drop)
 }

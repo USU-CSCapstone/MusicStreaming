@@ -97,7 +97,8 @@ impl PlayerCommand {
     /// Reads `value` as a command, or answers why it cannot be carried out if it names itself
     /// with a `commandId`, so its sender is not left believing it was (§5).
     pub fn read(value: Value) -> Result<PlayerCommand, Option<CommandResult>> {
-        let id = value.get("commandId").and_then(Value::as_str).map(str::to_owned);
+        // In lowercase, as `Uuid` reads an ID, so it matches every other result's.
+        let id = value.get("commandId").and_then(Value::as_str).map(str::to_ascii_lowercase);
         serde_json::from_value(value).map_err(|_| {
             let reason = Some("Not a command this server carries out.");
             id.map(|id| CommandResult::new(id, Status::Failed, reason))

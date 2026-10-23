@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use axum::Router;
+use axum::http::header;
+use axum::response::IntoResponse;
 use futures_util::SinkExt;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
@@ -11,7 +13,8 @@ use super::super::super::testing::player::{command_id, progress_report, start_pl
 use super::super::super::testing::socket::{Socket, connect_with, next, next_of, serve};
 use super::super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, conn};
 use super::super::Players;
-use super::relay::MAX_WAITING;
+use super::relay::{MAX_WAITING, Reply};
+use super::{PlayerCommand, Status};
 use crate::api::Id;
 use crate::db::testing::access;
 
@@ -144,6 +147,25 @@ async fn an_account_can_have_only_so_many_commands_waiting() {
     }
     assert_eq!(command(99), json!("failed"));
     assert_eq!(command(0), json!("pending"), "sent again, it is still the one waiting");
+    // The refusal carries when to try again, which an HTTP sender gets as `Retry-After`.
+    let play = serde_json::from_value(json!({ "type": "play", "commandId": command_id(98) }));
+    let Err(refused) = players.command(&hub, OWNER, Reply::Connection(8), play.unwrap()) else {
+        panic!("a command past the limit is passed on");
+    };
+    assert_eq!(refused.into_response().headers()[header::RETRY_AFTER], "5");
+}
+
+/// A command refused as unreadable is answered with its ID in lowercase, as every other result
+/// is.
+#[test]
+fn an_unreadable_command_is_answered_with_its_id_in_lowercase() {
+    let id = "ABCDEF00-0000-4000-8000-000000000001";
+    let rewind = json!({ "type": "rewind", "commandId": id });
+    let Err(Some(result)) = PlayerCommand::read(rewind) else {
+        panic!("an unknown command with an ID is answered");
+    };
+    assert!(result.status == Status::Failed);
+    assert_eq!(result.command_id, id.to_ascii_lowercase());
 }
 
 #[tokio::test]

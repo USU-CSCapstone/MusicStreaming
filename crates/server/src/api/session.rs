@@ -34,6 +34,15 @@ pub struct Session {
     device: Device,
 }
 
+/// SQL that is true where the device `d` is still signed in and its account `u`, joined on
+/// `u.id = d.user_id`, may still sign in.
+macro_rules! device_signed_in {
+    () => {
+        "d.revoked_reason IS NULL AND u.status = 'active'"
+    };
+}
+pub(super) use device_signed_in;
+
 /// A new, random token.
 pub fn new_token() -> Result<String, Problem> {
     let mut bytes = [0; 32];

@@ -4,7 +4,7 @@ use jewelcase_scanner::*;
 
 use super::{make, record};
 use crate::db::store::SqliteStore;
-use crate::db::{Database, STATISTICS_FROM_TRACKS, optimize};
+use crate::db::{Database, STATISTICS_FROM_TRACKS, libraries, optimize};
 
 /// How many rows of planner statistics describe the tracks after running [`optimize`], as the
 /// writer's hourly sweep does.
@@ -72,4 +72,35 @@ fn opening_gathers_statistics_only_for_a_library_of_real_size() {
     }
     drop(store);
     assert!(stored_statistics(&Database::open(&path).unwrap()) > 0, "{tracks} tracks");
+}
+
+/// Opening gathers statistics within SQLite's analysis limit, so a first open of a large
+/// database reads only part of each index. Past the limit, a limited analysis skips the rest of
+/// each run of equal keys, so it finds fewer rows per key than a full one counts.
+#[test]
+fn opening_gathers_statistics_within_the_analysis_limit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("jewelcase.db");
+    drop(Database::open(&path).unwrap());
+    // Filled while the database is closed, so nothing analyzes it before it opens again.
+    let mut conn = rusqlite::Connection::open(&path).unwrap();
+    let tx = conn.transaction().unwrap();
+    libraries::create(&tx, Some(1), "Music", &[], &[]).unwrap();
+    tx.execute_batch(
+        "UPDATE libraries SET track_count = 1000; \
+         CREATE TABLE large (n INTEGER); CREATE INDEX large_n ON large (n); \
+         WITH RECURSIVE n(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM n WHERE n < 10000) \
+         INSERT INTO large SELECT n % 10 FROM n;",
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    drop(conn);
+
+    let stat: String = Database::open(&path)
+        .unwrap()
+        .read_blocking(|conn| {
+            conn.query_row("SELECT stat FROM sqlite_stat1 WHERE idx = 'large_n'", [], |r| r.get(0))
+        })
+        .unwrap();
+    assert_ne!(stat, "10000 1000", "counted in full");
 }

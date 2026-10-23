@@ -178,6 +178,15 @@ async fn a_report_is_checked_against_the_account_as_it_is_now() {
     conn.execute(revoke, []).unwrap();
     start_playing(&mut phone, "2").await;
     assert_eq!(player(&app, TOKEN).await["activeDeviceId"], json!("1"));
+
+    // Suspended the same way. Its report is refused, and answered with its state.
+    let mut user2 = connect_with(address, "user2").await;
+    next_of(&mut user2, "player").await;
+    conn.execute("UPDATE users SET status = 'suspended' WHERE id = 2", []).unwrap();
+    let start = progress_report("3", "playing", json!({ "start": true }));
+    let start = json!({ "type": "progress", "report": start });
+    user2.send(Message::text(start.to_string())).await.unwrap();
+    assert_eq!(next_of(&mut user2, "player").await["state"]["status"], json!("stopped"));
 }
 
 #[tokio::test]

@@ -91,9 +91,9 @@ impl Plugins {
 
     /// Runs `id` in `run_for`'s library with `permissions` to handle `event`, for its user if it
     /// acts for one, with their personal settings beside the shared ones ([`Plugins::execute`]),
-    /// and records its report as the library's last run for admins. Answers the outcome, and
-    /// whether a scan of what it touched was queued. Called on the plugin runtime, in the
-    /// plugin's turn in the library.
+    /// and records its report as the library's last run for admins, or the error that kept it
+    /// from running. Answers the outcome, and whether a scan of what it touched was queued.
+    /// Called on the plugin runtime, in the plugin's turn in the library.
     pub(super) async fn run_in(
         &self,
         id: &str,
@@ -105,20 +105,23 @@ impl Plugins {
         let RunFor { library, user } = run_for;
         let (plugin, schema) = (id.to_owned(), manifest.settings.clone());
         let personal_schema = manifest.personal_settings.clone().unwrap_or_default();
-        let settings = self
-            .db
-            .read(move |conn| {
-                let mut settings = settings::effective(conn, &plugin, schema.as_ref(), library)?;
-                if let Some(user) = user {
-                    let own = personal::values(conn, &plugin, user)?;
-                    settings.extend(personal_schema.with_defaults(&own));
-                }
-                Ok(settings)
-            })
-            .await?;
-        let (outcome, scanning) =
-            self.execute(id, manifest, run_for, permissions, settings, event).await?;
-        let (plugin, ok, summary) = (id.to_owned(), outcome.result.is_ok(), outcome.report());
+        let settings = self.db.read(move |conn| {
+            let mut settings = settings::effective(conn, &plugin, schema.as_ref(), library)?;
+            if let Some(user) = user {
+                let own = personal::values(conn, &plugin, user)?;
+                settings.extend(personal_schema.with_defaults(&own));
+            }
+            Ok(settings)
+        });
+        let ran = match settings.await {
+            Ok(settings) => self.execute(id, manifest, run_for, permissions, settings, event).await,
+            Err(error) => Err(error.into()),
+        };
+        let (ok, summary) = match &ran {
+            Ok((outcome, _)) => (outcome.result.is_ok(), outcome.report()),
+            Err(error) => (false, error.to_string()),
+        };
+        let plugin = id.to_owned();
         self.db
             .write(move |tx| {
                 tx.execute(
@@ -128,7 +131,7 @@ impl Plugins {
                 )
             })
             .await?;
-        Ok((outcome, scanning))
+        ran
     }
 
     /// Runs `id` in `run_for`'s library, for its user if it acts for one, with exactly these
@@ -190,7 +193,10 @@ impl Plugins {
             !scopes.is_empty() && scanner.request(Trigger::Watch, scopes).is_some()
         })
         .await
-        .unwrap_or(false)
+        .unwrap_or_else(|error| {
+            tracing::error!(library, %error, "queuing a scan of what a plugin touched failed");
+            false
+        })
     }
 }
 

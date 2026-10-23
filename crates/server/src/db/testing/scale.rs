@@ -8,6 +8,7 @@ use jewelcase_core::{Format, sort_key};
 use jewelcase_scanner::testing::stamp_without_sidecars;
 use jewelcase_scanner::*;
 
+use crate::db::OPTIMIZE_ON_OPEN;
 use crate::db::store::SqliteStore;
 
 /// How many tracks a benchmark generates: `BUDGET_TRACKS`, or 500,000.
@@ -134,7 +135,7 @@ pub fn fill(store: &SqliteStore, records: impl Iterator<Item = TrackRecord>) -> 
         store.apply(1, Batch { upserts, ..Batch::default() }).unwrap();
         times.push(started.elapsed());
     }
-    store.db().write_blocking(|tx| tx.execute_batch("PRAGMA optimize = 0x10002")).unwrap();
+    store.db().write_blocking(|tx| tx.execute_batch(OPTIMIZE_ON_OPEN)).unwrap();
     times
 }
 

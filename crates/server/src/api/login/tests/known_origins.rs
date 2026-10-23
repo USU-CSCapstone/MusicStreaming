@@ -43,6 +43,16 @@ async fn the_owner_gets_in_where_they_signed_in_before_while_locked_out_elsewher
     assert_eq!(login(&app, "2001:db8:1:2::20", "SAM", PASSWORD).await.0, StatusCode::OK);
 }
 
+/// Setting up signs the owner in, so the origin they set up from is one they signed in from.
+#[tokio::test]
+async fn the_owner_gets_in_where_they_set_up_while_locked_out_elsewhere() {
+    // `server` sets up from the test app's own address.
+    let (_temp, _db, app) = server().await;
+    lock(&app, "198.51.100.7", "sam").await;
+    assert_eq!(login(&app, "198.51.100.7", "sam", PASSWORD).await.0, WAITS);
+    assert_eq!(login(&app, "203.0.113.1", "sam", PASSWORD).await.0, StatusCode::OK);
+}
+
 #[tokio::test]
 async fn failures_where_the_account_signed_in_before_lock_it_there() {
     let (_temp, _db, app) = server().await;

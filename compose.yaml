@@ -26,9 +26,17 @@ services:
       - data:/data
       - target:/target
       - cargo-registry:/usr/local/cargo/registry
-    # Healthy once it accepts connections, which on a first start is after a minutes-long build.
+    # Healthy once `/api/v1/health` answers 200, which on a first start is after a minutes-long
+    # build. The image has no HTTP client, so bash asks for it itself.
     healthcheck:
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8080
+          && printf 'GET /api/v1/health HTTP/1.0\r\n\r\n' >&3
+          && head -n 1 <&3 | grep -q ' 200 '
       start_period: 10m
       start_interval: 1s
       interval: 10s
