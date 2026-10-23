@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 
 use rustix::process::{Pid, Signal, kill_process};
 
+use crate::lock::Recover;
+
 /// How long a child may go without progress before the watchdog kills it, counted as
 /// [`Registry::reap_stalled`] says. A PCM decode makes progress with every read of its output; a
 /// probe or an image decode records none, so for them this bounds the whole run.
@@ -40,24 +42,21 @@ pub(crate) struct Registry {
 
 impl Registry {
     /// Create an empty pool and start its watchdog thread, which checks for stalls every second
-    /// until the registry is dropped.
-    pub(crate) fn start() -> Arc<Registry> {
+    /// until the registry is dropped. Fails if the thread can't start.
+    pub(crate) fn start() -> io::Result<Arc<Registry>> {
         let registry = Arc::new(Registry::default());
         let weak = Arc::downgrade(&registry);
-        std::thread::Builder::new()
-            .name("ffmpeg-watchdog".into())
-            .spawn(move || {
-                let mut checked = Instant::now();
-                loop {
-                    std::thread::sleep(CHECK_EVERY);
-                    let Some(registry) = weak.upgrade() else { break };
-                    let now = Instant::now();
-                    registry.reap_stalled(now - checked, sample);
-                    checked = now;
-                }
-            })
-            .expect("spawn ffmpeg watchdog");
-        registry
+        std::thread::Builder::new().name("ffmpeg-watchdog".into()).spawn(move || {
+            let mut checked = Instant::now();
+            loop {
+                std::thread::sleep(CHECK_EVERY);
+                let Some(registry) = weak.upgrade() else { break };
+                let now = Instant::now();
+                registry.reap_stalled(now - checked, sample);
+                checked = now;
+            }
+        })?;
+        Ok(registry)
     }
 
     /// Add the child `pid` to the pool. Returns the flag the watchdog sets if it kills the child
@@ -66,7 +65,7 @@ impl Registry {
     pub(crate) fn register(&self, pid: Pid) -> Arc<AtomicBool> {
         let entry = Entry::default();
         let stalled = entry.stalled.clone();
-        let mut children = self.children.lock().unwrap();
+        let mut children = self.children.lock().recover();
         // Checked under the lock `stop` holds, so a child that registers as it runs is killed
         // by one or the other.
         if self.stopping() {
@@ -78,7 +77,7 @@ impl Registry {
 
     /// Kills every child, and from now on every child as it registers, for the server's stop.
     pub(crate) fn stop(&self) {
-        let children = self.children.lock().unwrap();
+        let children = self.children.lock().recover();
         self.stopping.store(true, Ordering::SeqCst);
         for &pid in children.keys() {
             send(pid, Signal::KILL);
@@ -92,7 +91,7 @@ impl Registry {
 
     /// Record that the child `pid` made progress, restarting its stall clock.
     pub(crate) fn progress(&self, pid: Pid) {
-        if let Some(entry) = self.children.lock().unwrap().get_mut(&pid) {
+        if let Some(entry) = self.children.lock().recover().get_mut(&pid) {
             entry.without_progress = Duration::ZERO;
         }
     }
@@ -100,7 +99,7 @@ impl Registry {
     /// Remove the child `pid` from the pool. After this returns, nothing here signals that pid
     /// again.
     pub(crate) fn unregister(&self, pid: Pid) {
-        self.children.lock().unwrap().remove(&pid);
+        self.children.lock().recover().remove(&pid);
     }
 
     /// Add to each child's time without progress, and kill every child whose time passes
@@ -112,7 +111,7 @@ impl Registry {
     /// Any other child is blocked, and adds `elapsed`, so one blocked for good is killed. So does
     /// a child that cannot be sampled, as none can off Linux.
     fn reap_stalled(&self, elapsed: Duration, sample: impl Fn(Pid) -> io::Result<Sample>) {
-        for (pid, entry) in self.children.lock().unwrap().iter_mut() {
+        for (pid, entry) in self.children.lock().recover().iter_mut() {
             let added = match sample(*pid) {
                 Ok(Sample { running, cpu }) => {
                     let used = cpu.saturating_sub(std::mem::replace(&mut entry.cpu, cpu));

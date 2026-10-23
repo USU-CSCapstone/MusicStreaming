@@ -105,7 +105,7 @@ fn analysis_results_reach_tracks_albums_and_waveforms() {
     let store = Arc::new(make(&root));
     let lib = testing::library(&root);
     testing::scan_library(store.as_ref(), &lib);
-    let ffmpeg = jewelcase_ffmpeg::Ffmpeg::new(jewelcase_ffmpeg::Config::default());
+    let ffmpeg = jewelcase_ffmpeg::Ffmpeg::new(jewelcase_ffmpeg::Config::default()).unwrap();
     let analyzer = jewelcase_scanner::Analyzer::new(ffmpeg, store.clone());
     let report = analyzer.run_once(lib.id, 10);
     assert_eq!(report.done, 1);

@@ -34,7 +34,7 @@ fn another_librarys_track_is_left_alone() {
     // No RMS levels: the path that deletes a waveform. The file is as picked, so only the library
     // stops the write.
     let result = AnalysisResult { integrated_lufs: Some(-9.0), ..AnalysisResult::empty(1) };
-    let stamp = |sql| scalar::<i64>(&store, sql).unwrap() as u64;
+    let stamp = |sql| scalar::<u64>(&store, sql).unwrap();
     let (size, mtime_ms) =
         (stamp("SELECT file_size FROM tracks"), stamp("SELECT file_mtime FROM tracks"));
     store.store_analysis(other, PickedTrack { id: track, size, mtime_ms }, result).unwrap();

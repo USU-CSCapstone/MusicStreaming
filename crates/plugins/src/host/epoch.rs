@@ -6,6 +6,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
+use crate::lock::Recover;
+
 /// How often the epoch advances, and so how often a running plugin is checked. A tick is a sleep
 /// that runs a little long, at about 1.05 ms.
 const TICK: Duration = Duration::from_millis(1);
@@ -62,13 +64,13 @@ impl Epoch {
 impl Shared {
     /// The state, locked.
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().expect("epoch lock")
+        self.state.lock().recover()
     }
 
     /// Sleeps until a run is live or the [`Epoch`] is dropped, and answers whether a run is.
     fn wait_for_a_run(&self) -> bool {
         let idle = |state: &mut State| state.live == 0 && !state.closed;
-        let state = self.wake.wait_while(self.lock(), idle).expect("epoch lock");
+        let state = self.wake.wait_while(self.lock(), idle).recover();
         !state.closed
     }
 }

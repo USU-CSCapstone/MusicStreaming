@@ -27,7 +27,7 @@ fn track(path: &str, size: &str) {
 /// Probes and decodes the track at `path` to the end, returning the frames decoded. Panics if
 /// the decode is not over after 10,000 reads, far more than a one-second track needs.
 fn decode(path: &Path) -> Result<usize, Error> {
-    let ffmpeg = Ffmpeg::new(Config::default());
+    let ffmpeg = Ffmpeg::new(Config::default())?;
     let info = ffmpeg.probe(path)?;
     let mut stream = ffmpeg.decode_pcm(path, &info)?;
     let (mut block, mut frames) = (Vec::new(), 0);
@@ -42,7 +42,7 @@ fn decode(path: &Path) -> Result<usize, Error> {
 
 /// The size of the picture at `path` once decoded to fit 8×8, or why it couldn't be.
 fn picture(path: &Path) -> Result<(usize, usize), Error> {
-    Ffmpeg::new(Config::default()).decode_image(path, 8).map(|rgba| (rgba.width, rgba.height))
+    Ffmpeg::new(Config::default())?.decode_image(path, 8).map(|rgba| (rgba.width, rgba.height))
 }
 
 /// Asserts that `result` is ffmpeg's refusal of a picture past the pixel cap.

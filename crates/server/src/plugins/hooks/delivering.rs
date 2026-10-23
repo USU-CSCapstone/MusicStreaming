@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use super::Due;
+use crate::lock::Recover;
 use crate::plugins::{DeliveryKey as Key, Plugins};
 
 /// A delivery under way, holding its key in `Plugins::delivering` until it is dropped, even by a
@@ -15,7 +16,7 @@ pub(super) struct Delivering {
 impl Delivering {
     /// Claims `key` for one delivery, or answers `None` if one is already under way.
     pub(super) fn claim(plugins: &Arc<Plugins>, key: Key) -> Option<Delivering> {
-        let claimed = plugins.delivering.lock().expect("delivery lock").insert(key.clone());
+        let claimed = plugins.delivering.lock().recover().insert(key.clone());
         claimed.then(|| Delivering { plugins: plugins.clone(), key })
     }
 
@@ -28,6 +29,6 @@ impl Delivering {
 impl Drop for Delivering {
     /// Lets the key go, so the next delivery can start.
     fn drop(&mut self) {
-        self.plugins.delivering.lock().expect("delivery lock").remove(&self.key);
+        self.plugins.delivering.lock().recover().remove(&self.key);
     }
 }

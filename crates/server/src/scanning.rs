@@ -153,7 +153,8 @@ mod tests {
             })
             .unwrap();
 
-            let scanning = Scanning::start(&db, &Ffmpeg::new(FfmpegConfig::default())).unwrap();
+            let scanning =
+                Scanning::start(&db, &Ffmpeg::new(FfmpegConfig::default()).unwrap()).unwrap();
             let trigger = db.read_blocking(|conn| {
                 let startup = "SELECT trigger FROM scans WHERE library_id = 1 AND id != 1";
                 conn.query_row(startup, [], |r| r.get::<_, String>(0))
@@ -181,7 +182,8 @@ mod tests {
 
         // Its placeholder is decoded by a stand-in that runs until it is killed.
         let stand_in = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/stalling-ffmpeg.sh");
-        let ffmpeg = Ffmpeg::new(FfmpegConfig { ffmpeg: stand_in.clone(), ffprobe: stand_in });
+        let ffmpeg =
+            Ffmpeg::new(FfmpegConfig { ffmpeg: stand_in.clone(), ffprobe: stand_in }).unwrap();
         let scanning = Scanning::start(&db, &ffmpeg).unwrap();
         let started = temp.path().join("music/cover.png.started");
         for _ in 0..500 {

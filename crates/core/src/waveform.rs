@@ -25,10 +25,10 @@ const HIGH_PERCENTILE: usize = 95;
 /// each half decibel below it, and 0 for silence and anything quieter than about 127 dB below
 /// full scale.
 pub fn waveform_level(amplitude: f64) -> u8 {
-    let steps = 255.0 + f64::from(20 * STEPS_PER_DB) * amplitude.log10();
-    // Silence is minus infinity, which the clamp makes 0; NaN, from a negative amplitude, casts
-    // to 0.
-    steps.round().clamp(0.0, 255.0) as u8
+    let steps = (255.0 + f64::from(20 * STEPS_PER_DB) * amplitude.log10()).round();
+    // The float-to-integer `as` saturates and makes NaN 0, so silence, minus infinity, and a
+    // negative amplitude, which gives NaN, both give 0.
+    u8::try_from((steps as i64).max(0)).unwrap_or(u8::MAX)
 }
 
 /// The heights, 0 to 255, a client draws for bins with the RMS levels `rms`, one per bin.
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn a_louder_bin_never_draws_lower() {
-        let rms: Vec<u8> = (0..512).map(|i| (i * 97 % 256) as u8).collect();
+        let rms: Vec<u8> = (0..512).map(|i| u8::try_from(i * 97 % 256).unwrap()).collect();
         let shaped = shape_waveform(&rms);
         let mut pairs: Vec<(u8, u8)> = rms.into_iter().zip(shaped).collect();
         pairs.sort();

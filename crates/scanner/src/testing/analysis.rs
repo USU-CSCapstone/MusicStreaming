@@ -25,7 +25,7 @@ pub fn queue_drains_and_broken_files_do_not_repeat<S: InspectStore + 'static>(ma
     let indexed = store.inspect_tracks(lib.id).len();
     assert!(indexed >= 1);
 
-    let analyzer = Analyzer::new(Ffmpeg::new(Config::default()), store.clone());
+    let analyzer = Analyzer::new(Ffmpeg::new(Config::default()).unwrap(), store.clone());
     let first = analyzer.run_once(lib.id, 10);
     assert_eq!(first.done + first.failed, indexed);
     assert!(first.done >= 1);

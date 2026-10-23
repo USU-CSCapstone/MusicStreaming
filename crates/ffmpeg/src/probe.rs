@@ -21,9 +21,11 @@ pub struct ProbeInfo {
 }
 
 impl ProbeInfo {
-    /// Frames the decode should yield, when duration is known.
+    /// Frames the decode should yield, when duration is known. A negative or NaN duration, which
+    /// [`crate::Ffmpeg::probe`] never gives, estimates 0.
     pub fn estimated_frames(&self) -> Option<u64> {
-        self.duration_secs.map(|d| (d * self.sample_rate as f64).round() as u64)
+        let frames = |seconds: f64| (seconds * f64::from(self.sample_rate)).round() as i64;
+        self.duration_secs.map(|d| u64::try_from(frames(d)).unwrap_or(0))
     }
 }
 
@@ -86,4 +88,22 @@ pub(crate) fn probe(
         .and_then(|d| d.parse::<f64>().ok())
         .filter(|d| d.is_finite() && *d >= 0.0);
     Ok(ProbeInfo { sample_rate, channels, channel_layout: stream.channel_layout, duration_secs })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frames_are_estimated_from_the_duration() {
+        let info = |duration_secs| ProbeInfo {
+            sample_rate: 44_100,
+            channels: 2,
+            channel_layout: None,
+            duration_secs: Some(duration_secs),
+        };
+        assert_eq!(info(1.5).estimated_frames(), Some(66_150));
+        assert_eq!(info(-1.0).estimated_frames(), Some(0));
+        assert_eq!(info(f64::NAN).estimated_frames(), Some(0));
+    }
 }

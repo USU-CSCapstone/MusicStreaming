@@ -18,6 +18,7 @@ mod decode;
 mod error;
 mod image;
 mod input;
+mod lock;
 mod pooled;
 mod priority;
 mod probe;
@@ -84,9 +85,9 @@ pub struct Ffmpeg {
 
 impl Ffmpeg {
     /// Create the handle and start the watchdog thread. Does not touch the
-    /// binaries; call [`Ffmpeg::verify`] for that.
-    pub fn new(config: Config) -> Ffmpeg {
-        Ffmpeg { config: Arc::new(config), registry: Registry::start() }
+    /// binaries; call [`Ffmpeg::verify`] for that. Fails if the thread can't start.
+    pub fn new(config: Config) -> std::io::Result<Ffmpeg> {
+        Ok(Ffmpeg { config: Arc::new(config), registry: Registry::start()? })
     }
 
     /// Run `ffmpeg -decoders` and check every required decoder is present.

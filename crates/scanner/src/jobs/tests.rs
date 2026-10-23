@@ -147,3 +147,26 @@ fn a_decoder_killed_by_a_signal_may_pass() {
     let rejected = jewelcase_ffmpeg::Error::Failed { status: Some(1), stderr: String::new() };
     assert!(matches!(Failure::from_ffmpeg(path, &rejected), Failure::Content(_)));
 }
+
+/// A pass that panics while the files in hand are locked poisons that lock, and one that panics
+/// holding a claim gives its file back as it unwinds; later passes still take and give back files.
+#[test]
+fn a_panicking_pass_leaves_the_files_in_hand_usable() {
+    let (_tmp, _store, [a, b]) = setup();
+    let retries = Retries::new(RETRY_AFTER);
+    std::thread::scope(|scope| {
+        let fetch = scope.spawn(|| retries.take::<()>(1, |_| panic!("the fetch panics")).is_ok());
+        assert!(fetch.join().is_err(), "the fetch did not panic");
+        assert!(retries.in_hand.is_poisoned());
+        let holding = scope.spawn(|| {
+            let _claims = retries.take(1, |_| Ok(vec![((), a.clone())])).unwrap();
+            panic!("the decode panics");
+        });
+        assert!(holding.join().is_err(), "the decode did not panic");
+    });
+    assert!(retries.in_hand().is_empty(), "a file stayed in hand");
+    let taken = retries.take(1, |_| Ok(vec![((), b.clone())])).unwrap();
+    assert_eq!(taken.len(), 1);
+    drop(taken);
+    assert!(retries.in_hand().is_empty());
+}

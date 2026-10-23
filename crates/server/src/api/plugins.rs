@@ -200,9 +200,18 @@ async fn level(db: &Database, query: SettingsLevel) -> Result<i64, Problem> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginSettings {
-    schema: serde_json::Value,
+    schema: ObjectSchema,
     values: serde_json::Map<String, serde_json::Value>,
     secrets_set: Vec<String>,
+}
+
+/// A settings schema as JSON Schema has it: an object of its properties.
+#[derive(Serialize)]
+struct ObjectSchema {
+    #[serde(flatten)]
+    schema: Schema,
+    #[serde(rename = "type")]
+    kind: &'static str,
 }
 
 impl PluginSettings {
@@ -211,10 +220,7 @@ impl PluginSettings {
         let secrets_set =
             schema.secrets().filter(|name| values.contains_key(*name)).map(str::to_owned).collect();
         values.retain(|name, _| !schema.secrets().any(|secret| secret == name));
-        // As JSON Schema has it, an object of these properties.
-        let mut schema = serde_json::to_value(&schema).expect("a schema serializes");
-        schema["type"] = "object".into();
-        PluginSettings { schema, values, secrets_set }
+        PluginSettings { schema: ObjectSchema { schema, kind: "object" }, values, secrets_set }
     }
 }
 

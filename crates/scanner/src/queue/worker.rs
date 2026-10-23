@@ -10,6 +10,7 @@ use std::time::Instant;
 use super::retry::Retry;
 use super::{Inner, Queue, Scanner};
 use crate::library::LibraryConfig;
+use crate::lock::Recover;
 use crate::scan::{ScanContext, ScanOptions, ScanState, run_scan};
 use crate::store::Store;
 use crate::worker::Worker;
@@ -60,7 +61,7 @@ impl Scanner {
             shutdown: AtomicBool::new(false),
         });
         {
-            let mut q = inner.queue.lock().unwrap();
+            let mut q = inner.queue.lock().recover();
             for mut scan in interrupted {
                 scan.state = ScanState::Queued;
                 q.queued.push_back(scan);
@@ -81,7 +82,7 @@ impl ScannerThread {
     /// the file in hand and stays running at its last flushed cursor, and queued scans stay
     /// queued, so the next [`Scanner::start`] resumes them as it would after a crash.
     pub fn stop(&self) {
-        let queue = self.inner.queue.lock().unwrap();
+        let queue = self.inner.queue.lock().recover();
         self.inner.shutdown.store(true, Ordering::SeqCst);
         drop(queue);
         self.inner.wake.notify_all();
@@ -101,7 +102,7 @@ impl Drop for ScannerThread {
 fn run(inner: &Inner) {
     loop {
         let mut scan = {
-            let mut q = inner.queue.lock().unwrap();
+            let mut q = inner.queue.lock().recover();
             loop {
                 if inner.shutdown.load(Ordering::SeqCst) {
                     return;
@@ -109,7 +110,7 @@ fn run(inner: &Inner) {
                 if let Some((trigger, mut scopes)) = q.retry.take_due(Instant::now()) {
                     drop(q);
                     // A reconfiguration may have removed a root since the work was left undone.
-                    let library = inner.library.read().unwrap();
+                    let library = inner.library.read().recover();
                     scopes.retain(|scope| library.roots.contains(&scope.root));
                     drop(library);
                     if scopes.is_empty() {
@@ -120,7 +121,7 @@ fn run(inner: &Inner) {
                     } else {
                         inner.request(trigger, scopes);
                     }
-                    q = inner.queue.lock().unwrap();
+                    q = inner.queue.lock().recover();
                     continue;
                 }
                 if let Some(mut s) = q.queued.pop_front() {
@@ -135,13 +136,13 @@ fn run(inner: &Inner) {
                 q = match q.retry.due() {
                     Some(due) => {
                         let wait = due.saturating_duration_since(Instant::now());
-                        inner.wake.wait_timeout(q, wait).unwrap().0
+                        inner.wake.wait_timeout(q, wait).recover().0
                     }
-                    None => inner.wake.wait(q).unwrap(),
+                    None => inner.wake.wait(q).recover(),
                 };
             }
         };
-        let library = inner.library.read().unwrap().clone();
+        let library = inner.library.read().recover().clone();
         let ctx = ScanContext {
             store: inner.store.as_ref(),
             library: &library,
@@ -157,7 +158,7 @@ fn run(inner: &Inner) {
             tracing::info!(scan = scan.id, state = ?scan.state, progress = ?scan.progress, "scan finished");
         }
         {
-            let mut q = inner.queue.lock().unwrap();
+            let mut q = inner.queue.lock().recover();
             q.running = None;
             q.retry.ended(&scan, undone, Instant::now());
         }

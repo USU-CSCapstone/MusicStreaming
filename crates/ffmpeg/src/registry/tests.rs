@@ -1,19 +1,20 @@
 use std::cell::Cell;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::thread::sleep;
 
 use rustix::process::getpid;
 use rustix::time::{ClockId, clock_gettime};
 
 use super::*;
+use crate::pooled::Pooled;
 use crate::{Config, Error, Ffmpeg, ProbeInfo};
 
 /// An `Ffmpeg` whose ffmpeg and ffprobe are `tests/lingering.sh`.
 fn lingering() -> Ffmpeg {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lingering.sh");
-    Ffmpeg::new(Config { ffmpeg: script.clone(), ffprobe: script })
+    Ffmpeg::new(Config { ffmpeg: script.clone(), ffprobe: script }).unwrap()
 }
 
 /// The pids `registry` holds.
@@ -221,7 +222,7 @@ fn the_watchdog_kills_a_child_spinning_without_progress() {
 fn samples_a_processs_cpu_time() {
     let process_cpu = || {
         let now = clock_gettime(ClockId::ProcessCPUTime);
-        Duration::new(now.tv_sec as u64, now.tv_nsec as u32)
+        Duration::new(u64::try_from(now.tv_sec).unwrap(), u32::try_from(now.tv_nsec).unwrap())
     };
     let start = Instant::now();
     // This process spins until it has used enough CPU time for a wrong unit to show.
@@ -260,4 +261,30 @@ fn stopping_kills_every_child_and_each_that_starts_after() {
     let probed = ffmpeg.probe(input);
     assert!(matches!(probed, Err(Error::Stopped)), "{probed:?}");
     assert!(stopping.elapsed() < Duration::from_secs(2), "{:?}", stopping.elapsed());
+}
+
+/// Whether a process still runs whose command line is `args`: one that is gone, or that ended
+/// and waits to be reaped, does not.
+fn runs(args: &[&str]) -> bool {
+    let cmdline: Vec<u8> = args.iter().flat_map(|arg| [arg.as_bytes(), b"\0"].concat()).collect();
+    std::fs::read_dir("/proc").unwrap().flatten().any(|entry| {
+        let pid = entry.path();
+        let stat = std::fs::read_to_string(pid.join("stat")).unwrap_or_default();
+        std::fs::read(pid.join("cmdline")).is_ok_and(|read| read == cmdline)
+            && stat.rsplit_once(") ").is_some_and(|(_, rest)| !rest.starts_with('Z'))
+    })
+}
+
+/// A child refused once it has spawned is killed and leaves the pool.
+#[test]
+fn a_child_whose_standard_error_is_not_piped_is_refused_and_killed() {
+    let registry = Registry::start().unwrap();
+    // A duration no other test sleeps for, so that the child is told apart by its arguments.
+    let args = ["sleep", "30.0417"];
+    let mut command = Command::new(args[0]);
+    command.arg(args[1]).stdout(Stdio::piped());
+    let Err(Error::Io(error)) = Pooled::spawn(&registry, &mut command) else { panic!("spawned") };
+    assert_eq!(error.to_string(), "ffmpeg's standard error was not piped");
+    assert!(!runs(&args), "the child still runs");
+    assert!(registered(&registry).is_empty(), "the child is still in the pool");
 }

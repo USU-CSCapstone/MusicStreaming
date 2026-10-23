@@ -20,6 +20,7 @@ use rusqlite::Connection;
 
 use crate::api::page::library_number;
 use crate::db::{Database, DbError};
+use crate::lock::Recover;
 
 /// A rebuild waits this many times as long as the last one took.
 const REBUILD_SPACING: u32 = 10;
@@ -81,14 +82,14 @@ impl Indexes {
     pub async fn index(&self, db: &Arc<Database>, library: i64) -> Result<Arc<Index>, DbError> {
         let versions = db.read(versions).await?;
         let (slot, version) = {
-            let mut libraries = self.libraries.lock().unwrap();
+            let mut libraries = self.libraries.lock().recover();
             libraries.retain(|id, _| versions.contains_key(id));
             let Some(&version) = versions.get(&library) else {
                 return Ok(Arc::default());
             };
             (libraries.entry(library).or_default().clone(), version)
         };
-        let built = slot.built.read().unwrap().clone();
+        let built = slot.built.read().recover().clone();
         if let Some(built) = built {
             if built.due(version)
                 && let Ok(guard) = slot.building.clone().try_lock_owned()
@@ -96,7 +97,7 @@ impl Indexes {
                 let (db, slot) = (db.clone(), slot.clone());
                 tokio::spawn(async move {
                     match build(&db, library).await {
-                        Ok(built) => *slot.built.write().unwrap() = Some(built),
+                        Ok(built) => *slot.built.write().recover() = Some(built),
                         Err(error) => {
                             tracing::warn!(%error, library, "cannot rebuild a search index")
                         }
@@ -108,12 +109,12 @@ impl Indexes {
         }
         // The first search waits for the index, and so does any that arrives meanwhile.
         let _guard = slot.building.lock().await;
-        if let Some(built) = slot.built.read().unwrap().clone() {
+        if let Some(built) = slot.built.read().recover().clone() {
             return Ok(built.index);
         }
         let built = build(db, library).await?;
         let index = built.index.clone();
-        *slot.built.write().unwrap() = Some(built);
+        *slot.built.write().recover() = Some(built);
         Ok(index)
     }
 }
@@ -125,7 +126,7 @@ fn versions(conn: &Connection) -> rusqlite::Result<HashMap<i64, i64>> {
         .collect()
 }
 
-/// Reads the library's names and indexes them.
+/// Reads the library's names and indexes them. A build that panics is [`DbError::Aborted`].
 async fn build(db: &Database, library: i64) -> Result<Built, DbError> {
     let started = Instant::now();
     let (version, documents) = db
@@ -136,9 +137,11 @@ async fn build(db: &Database, library: i64) -> Result<Built, DbError> {
         })
         .await?;
     // A second of CPU at full scale, so off the async workers.
-    let index = tokio::task::spawn_blocking(move || Index::build(documents))
-        .await
-        .expect("building a search index does not panic");
+    let index =
+        tokio::task::spawn_blocking(move || Index::build(documents)).await.map_err(|error| {
+            tracing::error!(%error, library, "building a search index did not complete");
+            DbError::Aborted
+        })?;
     Ok(Built { index: Arc::new(index), version, ready: Instant::now(), took: started.elapsed() })
 }
 

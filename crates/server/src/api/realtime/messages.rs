@@ -64,6 +64,13 @@ pub enum Revoked {
     LoggedOut,
 }
 
-pub(super) fn encode(message: &ServerMessage) -> Message {
-    Message::text(serde_json::to_string(message).expect("server messages serialize"))
+/// `message` as the text frame that carries it, or `None`, logged, if it can't be serialized.
+pub(super) fn encode(message: &ServerMessage) -> Option<Message> {
+    match serde_json::to_string(message) {
+        Ok(text) => Some(Message::text(text)),
+        Err(error) => {
+            tracing::error!(%error, "cannot serialize a realtime message");
+            None
+        }
+    }
 }

@@ -34,7 +34,7 @@ pub fn placeholders_fill_once_per_image<S: InspectStore + 'static>(make: Factory
     let red = pending.iter().find(|(_, file)| file.path == cover).unwrap().0.clone();
     let broken = pending.iter().find(|(hash, _)| *hash != red).unwrap().0.clone();
 
-    let ffmpeg = jewelcase_ffmpeg::Ffmpeg::new(jewelcase_ffmpeg::Config::default());
+    let ffmpeg = jewelcase_ffmpeg::Ffmpeg::new(jewelcase_ffmpeg::Config::default()).unwrap();
     let placeholders = crate::placeholders::Placeholders::new(ffmpeg, store.clone());
     let report = placeholders.run_once(lib.id, 10);
     assert_eq!((report.done, report.failed), (1, 1));

@@ -8,6 +8,7 @@
 mod download;
 mod files;
 mod host;
+mod lock;
 pub mod manifest;
 mod network;
 mod rules;

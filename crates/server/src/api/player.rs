@@ -35,6 +35,7 @@ use super::realtime::{Hub, Presence, ServerMessage};
 use super::scope::Caller;
 use super::time::serialize_rfc3339;
 use crate::db::now_ms;
+use crate::lock::Recover;
 pub use commands::{CommandResult, PlayerCommand, send as send_command};
 pub use progress::{ProgressReport, apply};
 
@@ -154,8 +155,9 @@ impl Players {
         hub.broadcast(user, &ServerMessage::Player { state: state.clone() });
     }
 
+    /// Each account's playback state, locked.
     fn lock(&self) -> MutexGuard<'_, HashMap<i64, PlayerState>> {
-        self.accounts.lock().expect("player lock")
+        self.accounts.lock().recover()
     }
 }
 

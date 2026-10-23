@@ -5,6 +5,14 @@ members = ["crates/*"]
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+[workspace.lints.clippy]
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+unused_result_ok = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
+manual_let_else = "deny"
+
 # Password hashing is deliberately slow; unoptimized, one hash takes about half a second, which
 # makes tests and a debug server's logins crawl.
 [profile.dev.package.argon2]

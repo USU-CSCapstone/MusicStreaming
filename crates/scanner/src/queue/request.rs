@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use super::{Inner, coalesce_scopes};
 use crate::clock::now_ms;
+use crate::lock::Recover;
 use crate::scan::{Scan, ScanId, ScanState, Trigger};
 use crate::scope::Scope;
 
@@ -15,10 +16,10 @@ impl Inner {
     /// work without a queued row.
     pub(super) fn request(&self, trigger: Trigger, scopes: Vec<Scope>) -> Option<ScanId> {
         let scopes = coalesce_scopes(scopes);
-        if let Some(id) = self.queue.lock().unwrap().covering(&scopes) {
+        if let Some(id) = self.queue.lock().recover().covering(&scopes) {
             return Some(id);
         }
-        let library = self.library.read().unwrap().id;
+        let library = self.library.read().recover().id;
         let scan = match self.store.create_scan(library, trigger, &scopes) {
             Ok(scan) => scan,
             Err(error) => {
@@ -26,14 +27,14 @@ impl Inner {
                     library, ?trigger, %error,
                     "scan not queued; retrying after a wait"
                 );
-                self.queue.lock().unwrap().retry.add(trigger, scopes, Instant::now());
+                self.queue.lock().recover().retry.add(trigger, scopes, Instant::now());
                 // The worker may be waiting with no time limit, and must wait for the retry's.
                 self.wake.notify_all();
                 return None;
             }
         };
         let (id, replaced) = {
-            let mut q = self.queue.lock().unwrap();
+            let mut q = self.queue.lock().recover();
             match q.covering(&scan.scopes) {
                 // A request that raced this one queued a scan covering it while this one's row
                 // was written, so that row is saved cancelled.

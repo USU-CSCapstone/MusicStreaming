@@ -14,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use super::bindings::jewelcase::plugin::http;
 use super::{Library, Run};
+use crate::lock::Recover;
 use crate::manifest::{Per, Permission};
 use crate::network::cache::{self, Key, Lookup, Reply, Visible};
 use crate::network::limits::Scope;
@@ -46,7 +47,7 @@ impl<L: Library> Run<L> {
     /// It is made under the kept client's lock, so runs that start together make one.
     fn client(&self) -> Result<reqwest::Client, String> {
         let destinations = &self.grants.destinations;
-        let mut kept = self.client.lock().expect("client lock");
+        let mut kept = self.client.lock().recover();
         if let Some((kept_to, client)) = &*kept
             && kept_to == destinations
         {

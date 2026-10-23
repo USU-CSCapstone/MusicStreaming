@@ -19,7 +19,7 @@ fn sine_measures_as_expected() {
     let flac = tmp.path().join("sine.flac");
     encode(&wav, &flac, &["-c:a", "flac"]);
 
-    let ffmpeg = Ffmpeg::new(Config::default());
+    let ffmpeg = Ffmpeg::new(Config::default()).unwrap();
     let caps = ffmpeg.verify().expect("ffmpeg verify");
     assert!(caps.missing.is_empty(), "missing decoders: {:?}", caps.missing);
 

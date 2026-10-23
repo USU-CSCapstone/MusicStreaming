@@ -77,19 +77,24 @@ pub async fn logout(State(state): State<AppState>, caller: Caller) -> Result<Res
         tracing::error!(%error, "logging out did not complete");
         Problem::new(Code::Internal)
     })??;
-    let forget = cookie_header(format!("{COOKIE}=; Path={}; Max-Age=0", state.prefix));
+    let forget = cookie_header(format!("{COOKIE}=; Path={}; Max-Age=0", state.prefix))?;
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, forget)]).into_response())
 }
 
 /// The `Set-Cookie` value that has a browser send `token` with every request to the API at
-/// `prefix`, and nowhere else. Scripts cannot read it, and other sites cannot send it.
-pub fn cookie(prefix: &str, token: &str) -> HeaderValue {
+/// `prefix`, and nowhere else. Scripts cannot read it, and other sites cannot send it. Fails, as
+/// `cookie_header` does, only if `prefix` or `token` holds a character a header can't.
+pub fn cookie(prefix: &str, token: &str) -> Result<HeaderValue, Problem> {
     cookie_header(format!(
         "{COOKIE}={token}; Path={prefix}; Max-Age={COOKIE_MAX_AGE_S}; HttpOnly; SameSite=Strict"
     ))
 }
 
-fn cookie_header(cookie: String) -> HeaderValue {
-    // Tokens are base64url and the base path is limited to URL-safe characters (`config`).
-    HeaderValue::try_from(cookie).expect("a cookie of header-safe characters")
+/// `cookie` as a `Set-Cookie` value. Tokens are base64url and the base path is limited to
+/// URL-safe characters (`config`), so it fails only if one of them is not.
+fn cookie_header(cookie: String) -> Result<HeaderValue, Problem> {
+    HeaderValue::try_from(cookie).map_err(|error| {
+        tracing::error!(%error, "cannot make a cookie");
+        Problem::new(Code::Internal)
+    })
 }

@@ -114,7 +114,7 @@ pub async fn complete(
         .await?;
     state.setup.0.store(true, Ordering::Relaxed);
 
-    let cookie = session::cookie(&state.prefix, &session.token);
+    let cookie = session::cookie(&state.prefix, &session.token)?;
     Ok((StatusCode::CREATED, [(header::SET_COOKIE, cookie)], axum::Json(session)).into_response())
 }
 

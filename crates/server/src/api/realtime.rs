@@ -92,7 +92,9 @@ async fn serve(mut socket: WebSocket, state: AppState, caller: Caller) {
     if !matches!(signed_in(&state.db, caller.device).await, Ok(true)) {
         // Closed rather than dropped, so its client gives up at once and asks why.
         send(&mut socket, Message::Close(None)).await;
-    } else if send(&mut socket, encode(&hello)).await {
+    } else if let Some(hello) = encode(&hello)
+        && send(&mut socket, hello).await
+    {
         // Every connection of the account, this one included, learns it is connected.
         devices::changed(state.db.clone(), state.hub.clone(), caller.user);
         let mut heartbeat = interval_at(Instant::now() + HEARTBEAT, HEARTBEAT);
@@ -103,7 +105,9 @@ async fn serve(mut socket: WebSocket, state: AppState, caller: Caller) {
                     heard = Instant::now();
                     let Message::Text(text) = message else { continue };
                     let reply = handle(&state, caller, &presence, &text).await;
-                    if let Some(reply) = reply && !send(&mut socket, encode(&reply)).await {
+                    if let Some(reply) = reply.as_ref().and_then(encode)
+                        && !send(&mut socket, reply).await
+                    {
                         break;
                     }
                 }

@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use crate::jobs::RunReport;
 use crate::library::LibraryId;
+use crate::lock::Recover;
 use crate::worker::{Stop, Worker};
 
 /// One library's background job: a pass over its queue, run again at once after a pass that did
@@ -124,7 +125,7 @@ impl Schedule {
     /// is free, some library always runs fewer than its share.
     fn run_next(&self) -> Option<Duration> {
         let job = {
-            let mut due = self.due.lock().unwrap();
+            let mut due = self.due.lock().recover();
             let now = Instant::now();
             let count = self.jobs.len();
             let open = |due: &Due, job: usize| {
@@ -151,7 +152,7 @@ impl Schedule {
                 true
             }
         };
-        let mut due = self.due.lock().unwrap();
+        let mut due = self.due.lock().recover();
         *due.running.entry(*library).or_default() -= 1;
         if idle_pass {
             due.at[job] = Instant::now() + *idle;

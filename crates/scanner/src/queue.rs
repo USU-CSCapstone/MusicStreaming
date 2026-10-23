@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
 use crate::library::LibraryConfig;
+use crate::lock::Recover;
 use crate::scan::{Scan, ScanId, ScanOptions, Trigger};
 use crate::scope::{Depth, Scope};
 use crate::store::Store;
@@ -74,7 +75,7 @@ impl Scanner {
     /// Scan every root (`Trigger::Initial`, `Scheduled`, `Reconfigure`, ...). `None` as for
     /// [`Scanner::request`].
     pub fn scan_library(&self, trigger: Trigger) -> Option<ScanId> {
-        let roots = self.inner.library.read().unwrap().roots.clone();
+        let roots = self.inner.library.read().recover().roots.clone();
         self.request(trigger, roots.into_iter().map(Scope::root).collect())
     }
 
@@ -87,19 +88,19 @@ impl Scanner {
 
     /// The root containing `path`, if any.
     pub fn root_for(&self, path: &std::path::Path) -> Option<std::path::PathBuf> {
-        self.inner.library.read().unwrap().roots.iter().find(|r| path.starts_with(r)).cloned()
+        self.inner.library.read().recover().roots.iter().find(|r| path.starts_with(r)).cloned()
     }
 
     /// The library's exclude patterns, as configured.
     pub(crate) fn excludes(&self) -> Vec<String> {
-        self.inner.library.read().unwrap().excludes.clone()
+        self.inner.library.read().recover().excludes.clone()
     }
 
     /// Whether the index holds a track not yet missing, or a problem, under `folder`, which
     /// may no longer exist. When the store cannot say, the error is logged and the answer is
     /// yes, which costs the watcher only a scan of the folder.
     pub fn indexes_under(&self, folder: &std::path::Path) -> bool {
-        let library = self.inner.library.read().unwrap().id;
+        let library = self.inner.library.read().recover().id;
         self.inner.store.indexes_under(library, folder).unwrap_or_else(|error| {
             tracing::error!(library, folder = %folder.display(), %error, "index not checked");
             true
@@ -109,7 +110,7 @@ impl Scanner {
     /// Replace the library configuration and reconcile
     /// (`requirements/scanning.md` §7). `None` as for [`Scanner::request`].
     pub fn reconfigure(&self, library: LibraryConfig) -> Option<ScanId> {
-        *self.inner.library.write().unwrap() = library;
+        *self.inner.library.write().recover() = library;
         self.scan_library(Trigger::Reconfigure)
     }
 
@@ -119,7 +120,7 @@ impl Scanner {
     /// queue, and this returns false.
     pub fn cancel(&self, id: ScanId) -> bool {
         let (ahead, scan) = {
-            let mut q = self.inner.queue.lock().unwrap();
+            let mut q = self.inner.queue.lock().recover();
             if q.running.as_ref().is_some_and(|s| s.id == id) {
                 self.inner.cancel_running.store(true, Ordering::SeqCst);
                 return true;
@@ -142,7 +143,7 @@ impl Scanner {
         }
         // Back where it was: after the last scan still queued that was ahead of it, whatever has
         // left the queue meanwhile.
-        let mut q = self.inner.queue.lock().unwrap();
+        let mut q = self.inner.queue.lock().recover();
         let position = q.queued.iter().rposition(|s| ahead.contains(&s.id)).map_or(0, |p| p + 1);
         q.queued.insert(position, scan);
         drop(q);
@@ -150,24 +151,27 @@ impl Scanner {
         false
     }
 
+    /// The scan running now, if any.
     pub fn running(&self) -> Option<Scan> {
-        self.inner.queue.lock().unwrap().running.clone()
+        self.inner.queue.lock().recover().running.clone()
     }
 
+    /// The scans waiting to run, first to run first.
     pub fn queued(&self) -> Vec<Scan> {
-        self.inner.queue.lock().unwrap().queued.iter().cloned().collect()
+        self.inner.queue.lock().recover().queued.iter().cloned().collect()
     }
 
+    /// Whether no scan is running or queued.
     pub fn is_idle(&self) -> bool {
-        let q = self.inner.queue.lock().unwrap();
+        let q = self.inner.queue.lock().recover();
         q.running.is_none() && q.queued.is_empty()
     }
 
     /// Block until the queue is empty and nothing is running.
     pub fn wait_idle(&self) {
-        let mut q = self.inner.queue.lock().unwrap();
+        let mut q = self.inner.queue.lock().recover();
         while q.running.is_some() || !q.queued.is_empty() {
-            q = self.inner.wake.wait(q).unwrap();
+            q = self.inner.wake.wait(q).recover();
         }
     }
 
@@ -175,7 +179,7 @@ impl Scanner {
     /// worker queues it, and returns whether any waits.
     #[cfg(feature = "testing")]
     pub fn retry_in(&self, wait: std::time::Duration) -> bool {
-        let waits = self.inner.queue.lock().unwrap().retry.hurry(std::time::Instant::now() + wait);
+        let waits = self.inner.queue.lock().recover().retry.hurry(std::time::Instant::now() + wait);
         self.inner.wake.notify_all();
         waits
     }

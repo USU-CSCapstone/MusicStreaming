@@ -128,7 +128,10 @@ pub fn fetch<T>(
 
     let next = if left == 0 {
         rows.pop();
-        rows.last().map(|(_, key)| cursor::encode(&request.sort.label(request.order), key))
+        let next =
+            rows.last().map(|(_, key)| cursor::encode(&request.sort.label(request.order), key));
+        next.transpose()
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?
     } else {
         None
     };

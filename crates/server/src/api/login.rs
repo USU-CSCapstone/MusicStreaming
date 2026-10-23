@@ -73,7 +73,7 @@ pub async fn login(
         })
         .await?;
     devices::changed(state.db.clone(), state.hub.clone(), user);
-    let cookie = session::cookie(&state.prefix, &session.token);
+    let cookie = session::cookie(&state.prefix, &session.token)?;
     Ok((StatusCode::OK, [(header::SET_COOKIE, cookie)], axum::Json(session)).into_response())
 }
 

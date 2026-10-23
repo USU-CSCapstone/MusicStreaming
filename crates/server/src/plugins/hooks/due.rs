@@ -111,10 +111,11 @@ pub fn all(conn: &Connection, now: i64) -> rusqlite::Result<Vec<Due>> {
 
 /// Whether `due` is still due at `now`, for the same user and from the same position, found by
 /// its hook's query again: the plugin may have been disabled, a grant revoked, its user's access
-/// to the library ended, or the plugin installed again since.
+/// to the library ended, or the plugin installed again since. Every `due` comes from a row of
+/// [`hooks`], so its hook always has a query; one without would never be due.
 pub fn still(conn: &Connection, due: &Due, now: i64) -> rusqlite::Result<bool> {
     let row = hooks().into_iter().find(|(hook, ..)| *hook == due.hook);
-    let (hook, sql, _) = row.expect("each hook has a row");
+    let Some((hook, sql, _)) = row else { return Ok(false) };
     let found = format!(
         "SELECT EXISTS (SELECT 1 FROM ({sql}) \
          WHERE plugin_id = ?3 AND library_id = ?4 AND position = ?5 AND user_id = ?6)"

@@ -101,7 +101,7 @@ fn origin_key(origin: IpAddr) -> String {
 /// doubling with each failure up to [`MAX_WAIT_MS`].
 fn wait((failures, latest): (i64, Option<i64>), free: i64, now: i64) -> i64 {
     let Some(latest) = latest.filter(|_| failures >= free) else { return 0 };
-    let doublings = (failures - free).min(20) as u32;
+    let doublings = (failures - free).clamp(0, 20);
     let wait = (1000_i64 << doublings).min(MAX_WAIT_MS);
     (latest + wait - now).max(0)
 }

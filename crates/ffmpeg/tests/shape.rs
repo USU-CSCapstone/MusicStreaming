@@ -11,7 +11,7 @@ use jewelcase_ffmpeg::{Config, Ffmpeg, ProbeInfo};
 /// Probes and decodes `path` to the end, returning the probe and every sample, interleaved.
 /// Panics if the decode is not over after 10,000 reads, far more than any test file here needs.
 fn decode(path: &Path) -> (ProbeInfo, Vec<f32>) {
-    let ffmpeg = Ffmpeg::new(Config::default());
+    let ffmpeg = Ffmpeg::new(Config::default()).unwrap();
     let info = ffmpeg.probe(path).unwrap();
     let mut stream = ffmpeg.decode_pcm(path, &info).unwrap();
     let (mut block, mut samples) = (Vec::new(), Vec::new());

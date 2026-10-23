@@ -32,7 +32,7 @@ pub fn write_sine_wav(path: &Path, hz: f32, amplitude: f32, seconds: f32) {
     };
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut w = hound::WavWriter::create(path, spec).unwrap();
-    let n = (seconds * spec.sample_rate as f32) as u32;
+    let n = (seconds * spec.sample_rate as f32) as i64;
     for i in 0..n {
         let t = i as f32 / spec.sample_rate as f32;
         let v = (amplitude * (2.0 * std::f32::consts::PI * hz * t).sin() * i16::MAX as f32) as i16;

@@ -26,7 +26,7 @@ fn nice_of(name: &str) -> Vec<i32> {
 fn the_pools_threads_run_at_low_priority() {
     let own = nice_in(&std::fs::read_to_string("/proc/thread-self/stat").unwrap());
     let lowered = (own + 10).min(19);
-    let ffmpeg = Ffmpeg::new(Config::default());
+    let ffmpeg = Ffmpeg::new(Config::default()).unwrap();
     let store = Arc::new(BareStore::default());
     let analyzer = Arc::new(Analyzer::new(ffmpeg.clone(), store.clone()));
     let placeholders = Arc::new(Placeholders::new(ffmpeg, store));

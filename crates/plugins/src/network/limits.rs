@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::lock::Recover;
+
 /// The longest a request waits for its turn before it is refused instead. A run has five
 /// minutes in all.
 const MAX_WAIT: Duration = Duration::from_secs(60);
@@ -62,7 +64,7 @@ impl Limits {
         queues: &[(Scope, Duration)],
         now: Instant,
     ) -> Result<Instant, Duration> {
-        let mut kept = self.queues.lock().expect("limits lock");
+        let mut kept = self.queues.lock().recover();
         let key = |scope: &Scope| (host.to_owned(), scope.clone());
         let turns = queues.iter().filter_map(|(scope, _)| kept.get(&key(scope)));
         let start = turns.map(|queue| queue.next).fold(now, Instant::max);
@@ -94,7 +96,7 @@ impl Limits {
         clock: SystemTime,
     ) {
         let key = (host.to_owned(), scope.clone());
-        let mut kept = self.queues.lock().expect("limits lock");
+        let mut kept = self.queues.lock().recover();
         if !matches!(status, 429 | 503) {
             if let Some(queue) = kept.get_mut(&key) {
                 queue.throttled = 0;

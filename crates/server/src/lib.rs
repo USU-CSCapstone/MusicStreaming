@@ -2,6 +2,7 @@ mod api;
 pub mod config;
 mod data_dir;
 mod db;
+mod lock;
 mod plugins;
 mod scanning;
 mod serve;
@@ -14,6 +15,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use jewelcase_ffmpeg::{Config as FfmpegConfig, Ffmpeg};
 use tokio::net::TcpListener;
+use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info, warn};
 
 use crate::config::Config;
@@ -50,7 +52,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
     roots_apart(&db, &data_dir).await?;
 
     let ffmpeg_config = FfmpegConfig::default();
-    let ffmpeg = Ffmpeg::new(ffmpeg_config.clone());
+    let ffmpeg = Ffmpeg::new(ffmpeg_config.clone()).context("could not start ffmpeg's watchdog")?;
     let caps = ffmpeg.verify().context("ffmpeg is required and could not be run")?;
     if caps.missing.is_empty() {
         info!(version = caps.version, "ffmpeg ok");
@@ -184,20 +186,18 @@ async fn roots_apart(db: &Database, data_dir: &DataDir) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Wait for SIGINT or SIGTERM and return
+/// Waits for SIGINT or SIGTERM. It listens for them only once first polled, so until the server
+/// serves, either signal ends the process as it would any other. If it can't listen, it logs
+/// that and returns at once, so the server stops rather than run with no way to stop it cleanly.
 async fn shutdown_signal() {
-    let interrupt = async {
-        tokio::signal::ctrl_c().await.expect("cannot listen for SIGINT");
-    };
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("cannot listen for SIGTERM")
-            .recv()
-            .await;
-    };
-    tokio::select! {
-        () = interrupt => {}
-        () = terminate => {}
+    match (signal(SignalKind::interrupt()), signal(SignalKind::terminate())) {
+        (Ok(mut interrupt), Ok(mut terminate)) => {
+            tokio::select! {
+                _ = interrupt.recv() => {}
+                _ = terminate.recv() => {}
+            }
+        }
+        (Err(error), _) | (_, Err(error)) => error!(%error, "cannot listen for SIGINT and SIGTERM"),
     }
     info!("shutting down");
 }

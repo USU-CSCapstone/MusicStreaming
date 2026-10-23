@@ -13,6 +13,7 @@ use crate::api::player::{Players, Status as PlayStatus};
 use crate::api::realtime::{Hub, ServerMessage};
 use crate::api::scope::Caller;
 use crate::api::{AnyId, Code, Id, Problem};
+use crate::lock::Recover;
 
 /// How long a connection has to answer a command before it counts as failed.
 pub(super) const ANSWER_WITHIN: Duration = Duration::from_secs(5);
@@ -79,7 +80,7 @@ impl Players {
         let id = command.command_id.as_str().to_owned();
         let pending = CommandResult::new(id.clone(), Status::Pending, None);
         let accounts = self.lock();
-        let mut all = self.commands.lock().expect("player commands lock");
+        let mut all = self.commands.lock().recover();
         let commands = all.entry(caller.user).or_default();
         // Sent again, as by a client unsure the first arrived, perhaps from a new connection:
         // it is carried out once, and how it went goes to where it was sent from last.
@@ -200,7 +201,7 @@ impl Players {
         mut ends: impl FnMut(&str, &Waiting) -> bool,
         result: impl Fn(String) -> CommandResult,
     ) {
-        let mut all = self.commands.lock().expect("player commands lock");
+        let mut all = self.commands.lock().recover();
         let Some(commands) = all.get_mut(&user) else { return };
         for (id, waiting) in commands.waiting.extract_if(|id, waiting| ends(id, waiting)) {
             waiting.timer.abort();

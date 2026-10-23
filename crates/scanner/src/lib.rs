@@ -27,6 +27,7 @@ mod identity;
 mod image;
 mod jobs;
 mod library;
+mod lock;
 mod lrc;
 mod multi_value;
 mod placeholders;

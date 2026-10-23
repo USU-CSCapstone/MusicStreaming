@@ -131,9 +131,9 @@ impl InspectStore for SqliteStore {
                 channels: if channels == 0 {
                     None
                 } else {
-                    Some(channels as u8)
+                    Some(u8::try_from(channels).unwrap())
                 },
-                sample_rate: if rate == 0 { None } else { Some(rate as u32) },
+                sample_rate: if rate == 0 { None } else { Some(u32::try_from(rate).unwrap()) },
                 analyzed,
                 measured,
             });

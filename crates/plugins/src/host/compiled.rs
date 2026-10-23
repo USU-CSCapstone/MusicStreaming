@@ -12,6 +12,7 @@ use wasmtime::component::Component;
 
 use super::http::KeptClient;
 use super::{Host, Library, PluginPre, Run};
+use crate::lock::Recover;
 
 /// Each plugin's entry, by ID.
 pub(super) type Cache<L> = Mutex<HashMap<String, Arc<Entry<L>>>>;
@@ -34,13 +35,13 @@ impl<L: Library> Host<L> {
     /// code.
     pub fn installed(&self, id: &str, linked: PluginPre<Run<L>>) {
         let entry = Entry { linked: OnceCell::from(linked), client: Arc::default() };
-        self.compiled.lock().expect("cache lock").insert(id.to_owned(), Arc::new(entry));
+        self.compiled.lock().recover().insert(id.to_owned(), Arc::new(entry));
     }
 
     /// Forgets plugin `id`'s linked component and its HTTP client. Called once it is
     /// uninstalled.
     pub fn uninstalled(&self, id: &str) {
-        self.compiled.lock().expect("cache lock").remove(id);
+        self.compiled.lock().recover().remove(id);
     }
 
     /// Plugin `id`, installed at `file`, compiled and linked, and where its HTTP client is kept.
@@ -54,13 +55,8 @@ impl<L: Library> Host<L> {
         file: &Path,
     ) -> wasmtime::Result<(PluginPre<Run<L>>, Arc<KeptClient>)> {
         let empty = || Arc::new(Entry { linked: OnceCell::new(), client: Arc::default() });
-        let entry = self
-            .compiled
-            .lock()
-            .expect("cache lock")
-            .entry(id.to_owned())
-            .or_insert_with(empty)
-            .clone();
+        let entry =
+            self.compiled.lock().recover().entry(id.to_owned()).or_insert_with(empty).clone();
         let link = || async {
             // Compiling is CPU-bound, up to a second for a JavaScript plugin that the disk
             // cache does not have.

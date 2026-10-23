@@ -168,7 +168,7 @@ fn a_problem_the_store_cannot_record_leaves_the_file_untried() {
     let lib = testing::library(&root);
     testing::scan_library(store.as_ref(), &lib);
     fs::remove_file(root.join("A/X/01 - Track 1.wav")).unwrap();
-    let analyzer = Analyzer::new(Ffmpeg::new(Config::default()), store.clone());
+    let analyzer = Analyzer::new(Ffmpeg::new(Config::default()).unwrap(), store.clone());
 
     fail(&store, "BEFORE INSERT ON scan_problems");
     assert_eq!(analyzer.run_once(lib.id, 10), RunReport { backed_off: true, ..Default::default() });
@@ -190,7 +190,7 @@ fn a_problem_the_store_cannot_clear_leaves_the_file_unanalyzed() {
     testing::scan_library(store.as_ref(), &lib);
     let (file, away) = (root.join("A/X/01 - Track 1.wav"), tmp.path().join("away.wav"));
     fs::rename(&file, &away).unwrap();
-    let analyzer = Analyzer::new(Ffmpeg::new(Config::default()), store.clone())
+    let analyzer = Analyzer::new(Ffmpeg::new(Config::default()).unwrap(), store.clone())
         .with_retry_after(Duration::ZERO);
     assert_eq!(analyzer.run_once(lib.id, 10), RunReport { skipped: 1, ..Default::default() });
     assert_eq!(store.inspect_problems(lib.id).len(), 1);

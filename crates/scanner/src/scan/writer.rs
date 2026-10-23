@@ -115,9 +115,10 @@ fn fit(options: &ScanOptions, limit: usize, size: usize, took: Duration) -> usiz
         return limit;
     }
     // The float-to-integer `as` saturates: an infinite ratio, from a batch applied in no
-    // measurable time, gives `usize::MAX`.
-    let fit = options.batch_time.div_duration_f64(took) * size as f64;
-    (fit as usize).clamp(options.min_batch.min(options.batch_size), options.batch_size)
+    // measurable time, gives `i64::MAX`, past any `batch_size`.
+    let fit = (options.batch_time.div_duration_f64(took) * size as f64) as i64;
+    let fit = usize::try_from(fit.max(0)).unwrap_or(usize::MAX);
+    fit.clamp(options.min_batch.min(options.batch_size), options.batch_size)
 }
 
 #[cfg(test)]

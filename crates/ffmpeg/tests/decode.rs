@@ -11,7 +11,8 @@ fn decode(path: &str) -> Result<Vec<f32>, Error> {
     let ffmpeg = Ffmpeg::new(Config {
         ffmpeg: Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake-ffmpeg.sh"),
         ..Config::default()
-    });
+    })
+    .unwrap();
     let info =
         ProbeInfo { sample_rate: 44_100, channels: 2, channel_layout: None, duration_secs: None };
     let mut stream = ffmpeg.decode_pcm(Path::new(path), &info)?;

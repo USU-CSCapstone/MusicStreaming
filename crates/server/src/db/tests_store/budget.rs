@@ -80,7 +80,7 @@ fn benchmark_scanning_budgets() {
     let started = Instant::now();
     let progress = testing::scan_library(&store, &lib).progress;
     let mut rescan = [started.elapsed()];
-    assert_eq!(progress.files_seen, tracks as i64);
+    assert_eq!(progress.files_seen, i64::try_from(tracks).unwrap());
     assert_eq!((progress.added, progress.updated, progress.missing), (0, 0, 0));
     eprintln!("unchanged rescan: {}", summary(&mut rescan, None));
 

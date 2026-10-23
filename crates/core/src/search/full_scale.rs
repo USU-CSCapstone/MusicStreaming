@@ -25,7 +25,7 @@ fn benchmark_full_scale() {
     let mut word = || {
         // Zipf-like: small indexes are far more common.
         let r = (next() % 1_000_000) as f64 / 1_000_000.0;
-        let i = ((vocabulary.len() as f64).powf(r) - 1.0) as usize;
+        let i = usize::try_from(((vocabulary.len() as f64).powf(r) - 1.0) as i64).unwrap();
         vocabulary[i.min(vocabulary.len() - 1)].clone()
     };
     let mut documents = Vec::new();
@@ -33,7 +33,7 @@ fn benchmark_full_scale() {
         [(Kind::Track, 500_000, 4), (Kind::Album, 50_000, 3), (Kind::Artist, 20_000, 2)]
     {
         for id in 0..count {
-            let n = 1 + (id % words) as usize;
+            let n = 1 + usize::try_from(id % words).unwrap();
             let name = (0..n).map(|_| word()).collect::<Vec<_>>().join(" ");
             documents.push(doc(kind, id, &name));
         }

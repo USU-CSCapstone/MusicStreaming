@@ -24,6 +24,8 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::lock::Recover;
+
 /// The largest reply kept.
 const MAX_ENTRY: usize = 2 << 20;
 /// All replies kept together. The least recently used goes first.
@@ -162,8 +164,10 @@ struct Entry {
 }
 
 impl Cache {
+    /// What is kept for `key` at `now`. A stale reply with nothing to check it by is forgotten,
+    /// and is a miss.
     pub fn lookup(&self, key: &Key, now: Instant) -> Lookup {
-        let mut inner = self.inner.lock().expect("cache lock");
+        let mut inner = self.inner.lock().recover();
         let Some(entry) = inner.entries.get(key) else { return Lookup::Miss };
         let (fresh, reply) = (now < entry.fresh_until, entry.reply.clone());
         if !fresh && conditions(&reply).is_empty() {
@@ -178,7 +182,7 @@ impl Cache {
     /// Keeps `reply` for `key` if it says it may be kept, and otherwise forgets anything
     /// kept for `key` before. `clock` is the wall-clock time, for `Expires`.
     pub fn store(&self, key: Key, reply: Reply, now: Instant, clock: SystemTime) {
-        let mut inner = self.inner.lock().expect("cache lock");
+        let mut inner = self.inner.lock().recover();
         inner.remove(&key);
         let Some(lifetime) = lifetime(&reply, clock) else { return };
         // The key is held twice: by the entry, and by the index of when each was last used.
@@ -224,7 +228,7 @@ impl Cache {
     /// there has succeeded (RFC 9111 §4.4). Such requests are rare, so looking through every
     /// reply costs little.
     pub fn invalidate(&self, url: &str) {
-        let mut inner = self.inner.lock().expect("cache lock");
+        let mut inner = self.inner.lock().recover();
         let keys: Vec<Key> = inner.entries.keys().filter(|key| key.url == url).cloned().collect();
         for key in keys {
             inner.remove(&key);

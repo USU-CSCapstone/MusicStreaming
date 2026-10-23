@@ -75,7 +75,7 @@ impl PcmStream {
         }
         // A pipe may hand over less than a frame, which is not yet a frame to return.
         while self.held < frame_bytes {
-            match self.child.stdout().read(&mut self.buf[self.held..end]) {
+            match self.child.stdout()?.read(&mut self.buf[self.held..end]) {
                 Ok(0) => return self.child.finish().map(|()| 0),
                 Ok(n) => self.held += n,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}

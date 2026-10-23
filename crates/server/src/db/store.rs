@@ -22,6 +22,7 @@ use jewelcase_scanner::*;
 
 use self::roots::Roots;
 use super::{Database, DbError, libraries};
+use crate::lock::Recover;
 
 pub struct SqliteStore {
     db: Arc<Database>,
@@ -52,7 +53,7 @@ impl SqliteStore {
             .into_iter()
             .map(|lib| (lib.id, lib.roots))
             .collect();
-        *self.roots.0.write().unwrap() = map;
+        *self.roots.0.write().recover() = map;
         Ok(())
     }
 }

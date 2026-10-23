@@ -67,7 +67,8 @@ fn jobs_with_work_take_turns_on_one_thread() {
 #[test]
 fn jobs_with_work_take_turns() {
     let passes: [_; 3] = std::array::from_fn(|_| Arc::new(AtomicUsize::new(0)));
-    let jobs = (0..3).map(|i| counted(i + 1, &passes[i as usize], LONG, BUSY)).collect();
+    let jobs =
+        (1..).zip(&passes).map(|(library, passes)| counted(library, passes, LONG, BUSY)).collect();
     let pool = Pool::start(jobs, 1).unwrap();
     let least = || passes.iter().map(|p| p.load(Ordering::SeqCst)).min().unwrap();
     wait_for("passes of every job", || least() >= 20);

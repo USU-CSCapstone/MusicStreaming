@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::OwnedMutexGuard;
 
+use crate::lock::Recover;
+
 /// A plugin's turn to run in a library, held until it is dropped.
 pub(super) type Turn = OwnedMutexGuard<()>;
 
@@ -21,7 +23,7 @@ impl Turns {
     /// Waits for `plugin`'s turn in `library`.
     pub(super) async fn take(&self, plugin: &str, library: i64) -> Turn {
         let pair = {
-            let mut pairs = self.0.lock().expect("turns lock");
+            let mut pairs = self.0.lock().recover();
             pairs.entry((plugin.to_owned(), library)).or_default().clone()
         };
         pair.lock_owned().await
@@ -30,7 +32,7 @@ impl Turns {
     /// How many runs hold or wait for `plugin`'s turn in `library`.
     #[cfg(test)]
     pub(super) fn waiting(&self, plugin: &str, library: i64) -> usize {
-        let pairs = self.0.lock().expect("turns lock");
+        let pairs = self.0.lock().recover();
         // Each run holding or waiting for the turn keeps the pair, beside the map's own.
         pairs.get(&(plugin.to_owned(), library)).map_or(0, |pair| Arc::strong_count(pair) - 1)
     }

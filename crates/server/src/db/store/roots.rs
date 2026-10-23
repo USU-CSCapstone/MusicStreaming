@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use crate::db::libraries::Root;
+use crate::lock::Recover;
 
 /// Each library's active roots.
 #[derive(Default)]
@@ -14,7 +15,7 @@ pub struct Roots(pub RwLock<HashMap<i64, Vec<Root>>>);
 impl Roots {
     /// The root containing `path`, and the path relative to it.
     pub fn locate(&self, library: i64, path: &Path) -> Option<(i64, String)> {
-        let roots = self.0.read().unwrap();
+        let roots = self.0.read().recover();
         let root = roots
             .get(&library)?
             .iter()
@@ -23,8 +24,9 @@ impl Roots {
         Some((root.id, relative(&root.path, path)))
     }
 
+    /// The ID of `library`'s active root at `root`, if it is one.
     pub fn root_by_path(&self, library: i64, root: &Path) -> Option<i64> {
-        self.0.read().unwrap().get(&library)?.iter().find(|r| r.path == root).map(|r| r.id)
+        self.0.read().recover().get(&library)?.iter().find(|r| r.path == root).map(|r| r.id)
     }
 
     /// The absolute path of `rel` under root `root_id` of `library`, if it is one of its active
@@ -35,7 +37,7 @@ impl Roots {
 
     /// The path of root `root_id` of `library`, if it is one of its active roots.
     pub fn root(&self, library: i64, root_id: i64) -> Option<PathBuf> {
-        let roots = self.0.read().unwrap();
+        let roots = self.0.read().recover();
         roots.get(&library)?.iter().find(|r| r.id == root_id).map(|r| r.path.clone())
     }
 }

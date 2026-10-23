@@ -16,12 +16,13 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crate::confine::is_refused;
 use crate::discover::check_root;
 use crate::library::LibraryId;
+use crate::lock::Recover;
 use crate::problems::{self, Problem};
 use crate::store::{FileToDecode, ProblemLog, StoreError};
 
@@ -140,7 +141,7 @@ impl Retries {
     /// found unopenable during the pass, so none of them crowds out the rest. Forgets the files
     /// whose wait is over.
     fn fetch(&self, limit: usize, in_hand: usize) -> usize {
-        let mut waiting = self.waiting.lock().unwrap();
+        let mut waiting = self.waiting.lock().recover();
         let now = Instant::now();
         waiting.retain(|_, until| *until > now);
         limit.saturating_add(in_hand).saturating_add(waiting.len().saturating_mul(2))
@@ -150,7 +151,7 @@ impl Retries {
     /// which may panic; the set is whole whatever panicked, so a poisoned lock is taken as it
     /// is, and a [`Claim`] dropped while a thread unwinds never panics again.
     fn in_hand(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
-        self.in_hand.lock().unwrap_or_else(PoisonError::into_inner)
+        self.in_hand.lock().recover()
     }
 
     /// Fetches files with `next`, given how many to fetch, and takes those that are neither
@@ -225,7 +226,7 @@ impl Retries {
 
     /// Whether `file` is still waiting to be tried again.
     fn waiting(&self, file: &FileToDecode) -> bool {
-        self.waiting.lock().unwrap().get(&file.path).is_some_and(|until| Instant::now() < *until)
+        self.waiting.lock().recover().get(&file.path).is_some_and(|until| Instant::now() < *until)
     }
 
     /// Clears any problem saying `file` could not be opened ([`problems::UNOPENED`]), whoever
@@ -238,8 +239,8 @@ impl Retries {
         file: &FileToDecode,
     ) -> Result<(), StoreError> {
         store.clear_unopened(library, &file.path)?;
-        self.struck.lock().unwrap().remove(&file.path);
-        self.waiting.lock().unwrap().remove(&file.path);
+        self.struck.lock().recover().remove(&file.path);
+        self.waiting.lock().recover().remove(&file.path);
         Ok(())
     }
 
@@ -258,7 +259,7 @@ impl Retries {
         };
         tracing::warn!(path = %file.path.display(), kind = ?problem.kind, "cannot decode: {}", problem.detail);
         store.record_problem(library, problem)?;
-        let mut waiting = self.waiting.lock().unwrap();
+        let mut waiting = self.waiting.lock().recover();
         if outcome == Outcome::Skipped {
             waiting.insert(file.path.clone(), Instant::now() + self.retry_after);
         } else {
@@ -279,7 +280,7 @@ impl Retries {
             Failure::Open(error) => error,
             Failure::Attempt(problem) => {
                 check_root(&file.root).ok()?;
-                let mut struck = self.struck.lock().unwrap();
+                let mut struck = self.struck.lock().recover();
                 if struck.insert(file.path.clone()) {
                     return None;
                 }

@@ -14,6 +14,7 @@ use axum::extract::ws::Message;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use super::{Revoked, ServerMessage, encode};
+use crate::lock::Recover;
 
 /// How many messages a connection may have waiting to be sent.
 pub(super) const OUTBOX: usize = 64;
@@ -69,16 +70,18 @@ impl Hub {
     }
 
     /// Sends `message` to every connection of `user`, closing any whose outbox is full. The
-    /// `serve` of each it closes sends the device list once it ends.
+    /// `serve` of each it closes sends the device list once it ends. A message that can't be
+    /// serialized goes to none.
     pub fn broadcast(&self, user: i64, message: &ServerMessage) {
-        let message = encode(message);
+        let Some(message) = encode(message) else { return };
         self.retain(user, |connection| connection.outbox.try_send(message.clone()).is_ok());
     }
 
     /// Sends `message` to `user`'s connection `id`, if it is still open, closing it if its
-    /// outbox is full. Its `serve` sends the device list once it ends.
+    /// outbox is full. Its `serve` sends the device list once it ends. A message that can't be
+    /// serialized is not sent.
     pub fn send(&self, user: i64, id: u64, message: &ServerMessage) {
-        let message = encode(message);
+        let Some(message) = encode(message) else { return };
         self.retain(user, |connection| {
             connection.id != id || connection.outbox.try_send(message.clone()).is_ok()
         });
@@ -86,6 +89,7 @@ impl Hub {
 
     /// Tells every connection `device` of `user` holds that it was signed out, and closes it.
     /// Call it once the sign-out is committed: a connection that joins after this checks then.
+    /// A message that can't be serialized is not sent, but the connections still close.
     pub fn revoke(&self, user: i64, device: i64, reason: Revoked) {
         let message = encode(&ServerMessage::SessionRevoked { reason });
         self.retain(user, |connection| {
@@ -94,7 +98,9 @@ impl Hub {
             }
             // A full outbox loses the message, but the connection still closes, and the
             // device finds it is signed out when it tries to reconnect.
-            if let Err(error) = connection.outbox.try_send(message.clone()) {
+            if let Some(message) = &message
+                && let Err(error) = connection.outbox.try_send(message.clone())
+            {
                 tracing::debug!(%error, "revocation dropped");
             }
             false
@@ -115,7 +121,7 @@ impl Hub {
     pub async fn device_list_turn(&self, user: i64) -> Option<tokio::sync::OwnedMutexGuard<()>> {
         let turns = &self.device_lists;
         let turn = {
-            let mut turns = turns.lock().expect("device list lock");
+            let mut turns = turns.lock().recover();
             let DeviceListTurn { turn, waiting } = turns.entry(user).or_default();
             if std::mem::replace(waiting, true) {
                 return None;
@@ -124,7 +130,7 @@ impl Hub {
         };
         let guard = turn.lock_owned().await;
         // Before the list is read, so a change after this has a list of its own.
-        turns.lock().expect("device list lock").entry(user).or_default().waiting = false;
+        turns.lock().recover().entry(user).or_default().waiting = false;
         Some(guard)
     }
 
@@ -138,8 +144,9 @@ impl Hub {
         }
     }
 
+    /// Each account's open connections, locked.
     fn lock(&self) -> MutexGuard<'_, HashMap<i64, Vec<Connection>>> {
-        self.accounts.lock().expect("realtime hub lock")
+        self.accounts.lock().recover()
     }
 }
 

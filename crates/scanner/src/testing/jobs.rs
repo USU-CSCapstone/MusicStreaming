@@ -19,7 +19,7 @@ use crate::problems::{Problem, ProblemKind};
 
 /// An analyzer over `store` that runs ffmpeg with `config`.
 fn analyzer<S: InspectStore + 'static>(store: &Arc<S>, config: Config) -> Analyzer {
-    Analyzer::new(Ffmpeg::new(config), store.clone())
+    Analyzer::new(Ffmpeg::new(config).unwrap(), store.clone())
 }
 
 /// Whether the track at `path` has an analysis result.
@@ -113,7 +113,7 @@ pub fn a_root_going_away_pauses_without_writing<S: InspectStore + 'static>(make:
     let store = Arc::new(make(&lib));
     scan_library(store.as_ref(), &lib);
     let analyzer = analyzer(&store, Config::default());
-    let placeholders = Placeholders::new(Ffmpeg::new(Config::default()), store.clone());
+    let placeholders = Placeholders::new(Ffmpeg::new(Config::default()).unwrap(), store.clone());
     assert_eq!(analyzer.run_once(lib.id, 1), report(1, 0, 0));
 
     let away = tmp.path().join("away");
@@ -216,7 +216,7 @@ pub fn a_cover_moved_away_waits_until_it_returns<S: InspectStore + 'static>(make
     let store = Arc::new(make(&lib));
     scan_library(store.as_ref(), &lib);
     let hash = store.next_without_placeholder(lib.id, 10).unwrap().remove(0).0;
-    let placeholders = Placeholders::new(Ffmpeg::new(Config::default()), store.clone())
+    let placeholders = Placeholders::new(Ffmpeg::new(Config::default()).unwrap(), store.clone())
         .with_retry_after(Duration::ZERO);
 
     fs::rename(&cover, tmp.path().join("cover.png")).unwrap();
@@ -286,7 +286,7 @@ pub fn a_link_is_judged_once<S: InspectStore + 'static>(make: Factory<S>) {
     }
     fs::remove_file(tmp.path().join("gone.wav")).unwrap();
     let analyzer = analyzer(&store, Config::default());
-    let placeholders = Placeholders::new(Ffmpeg::new(Config::default()), store.clone());
+    let placeholders = Placeholders::new(Ffmpeg::new(Config::default()).unwrap(), store.clone());
 
     assert_eq!(analyzer.run_once(lib.id, 10), report(1, 3, 0));
     assert_eq!(analyzer.run_once(lib.id, 10), RunReport::default(), "not tried again");

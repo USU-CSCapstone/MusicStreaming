@@ -45,6 +45,8 @@ pub(crate) use reach::reaches;
 use retention::Sweep;
 pub use store::SqliteStore;
 
+use crate::lock::Recover;
+
 /// How often the writer sweeps away what is no longer kept (`design/database.md` §9), then
 /// gathers query-planner statistics, which the planner needs to choose indexes (§4).
 const SWEEP_EVERY: Duration = Duration::from_secs(3600);
@@ -169,7 +171,7 @@ impl Database {
             threads.push(spawn(&format!("db-reader-{index}"), move || {
                 loop {
                     // The lock is held only while waiting, and released before the job runs.
-                    let job = jobs.lock().expect("reader queue lock poisoned").recv();
+                    let job = jobs.lock().recover().recv();
                     let Ok(job) = job else { break };
                     run(job, &mut conn);
                 }

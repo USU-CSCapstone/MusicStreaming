@@ -11,6 +11,6 @@ fn an_animated_image_decodes_to_its_first_frame() {
     let path = dir.path().join("animated.gif");
     // Two frames, a tenth of a second each.
     run(&["-f", "lavfi", "-i", "color=red:s=32x32:d=0.2:r=10", path.to_str().unwrap()]);
-    let rgba = Ffmpeg::new(Config::default()).decode_image(&path, 8).unwrap();
+    let rgba = Ffmpeg::new(Config::default()).unwrap().decode_image(&path, 8).unwrap();
     assert_eq!((rgba.width, rgba.height), (8, 8));
 }

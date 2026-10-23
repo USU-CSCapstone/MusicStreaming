@@ -73,8 +73,13 @@ pub async fn verify(password: String, stored: Option<String>) -> Result<bool, Pr
     off_thread(move || {
         let stored = stored.as_deref().and_then(|stored| PasswordHash::new(stored).ok());
         let known = stored.is_some();
-        let hash = stored
-            .unwrap_or_else(|| PasswordHash::new(DUMMY).expect("the dummy hash is well formed"));
+        let hash = match stored {
+            Some(hash) => hash,
+            None => PasswordHash::new(DUMMY).map_err(|error| {
+                tracing::error!(%error, "cannot read the dummy password hash");
+                Problem::new(Code::Internal)
+            })?,
+        };
         let matches = Argon2::default().verify_password(password.as_bytes(), &hash).is_ok();
         Ok(known && matches)
     })
@@ -82,10 +87,14 @@ pub async fn verify(password: String, stored: Option<String>) -> Result<bool, Pr
 }
 
 /// Runs CPU-bound password work off the async threads, as many at once as [`HASHING`] allows.
+/// Fails with an internal error if the work can't be started or doesn't finish.
 async fn off_thread<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, Problem> + Send + 'static,
 ) -> Result<T, Problem> {
-    let permit = HASHING.acquire().await.expect("the semaphore is never closed");
+    let permit = HASHING.acquire().await.map_err(|error| {
+        tracing::error!(%error, "cannot wait to hash a password");
+        Problem::new(Code::Internal)
+    })?;
     tokio::task::spawn_blocking(move || {
         // Held by the work itself, which runs to the end even if the request is dropped.
         let _permit = permit;
