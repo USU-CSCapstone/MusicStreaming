@@ -23,8 +23,10 @@ use lofty::tag::{ItemKey, Tag, TagType};
 use crate::audio::{AudioProperties, duration_ms};
 use crate::{Lyrics, PartialDate, TagSet, multi_value};
 
+/// Why stage 3 could not read a file.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {
+    /// The file could not be opened or read.
     #[error("{0}")]
     Io(#[from] io::Error),
     /// The content is a known container with a codec Jewelcase does not play.
@@ -122,6 +124,8 @@ fn sniff_mp4(file: &mut File) -> io::Result<bool> {
     Ok(n >= 8 && &head[4..8] == b"ftyp")
 }
 
+/// The [`ReadError`] a lofty parse error is: unrecognized or unsupported content where its causes
+/// or message say so, a permission error as I/O, and anything else malformed.
 fn map_parse_error(e: FileParseError) -> ReadError {
     use std::error::Error as _;
     let mut source = e.source();
@@ -162,8 +166,8 @@ fn front_cover(file: &TaggedFile) -> Option<&[u8]> {
 // The mapper
 
 /// Tags in the order fields are taken from them: the format's primary tag
-/// first, then the rest in lofty's order. ID3v1 and RIFF INFO are last
-/// resorts because they truncate.
+/// first, then ID3v2, Vorbis comments and MP4, then APE, then the rest, and
+/// ID3v1 last, since it truncates. Tags of one rank keep lofty's order.
 fn ordered_tags(file: &TaggedFile) -> Vec<&Tag> {
     let mut tags: Vec<&Tag> = file.tags().iter().collect();
     let rank = |t: &Tag| match t.tag_type() {
@@ -219,10 +223,12 @@ fn number_pair(raw: &str) -> (Option<u32>, Option<u32>) {
     (n, total)
 }
 
+/// Whether a flag tag's value is set.
 fn flag(raw: &str) -> bool {
     matches!(raw.trim(), "1" | "true" | "True" | "TRUE" | "yes")
 }
 
+/// The canonical [`TagSet`] of `file`'s tags.
 fn map_tags(file: &TaggedFile) -> TagSet {
     let tags = ordered_tags(file);
     let mut out = TagSet::default();
@@ -242,8 +248,8 @@ fn map_tags(file: &TaggedFile) -> TagSet {
     }
     out.compilation = first_string(&tags, &ItemKey::FlagCompilation).is_some_and(|v| flag(&v));
 
-    // Track and disc: separate keys where the scheme has them, `n/total`
-    // packed where it does not. Whichever is present wins.
+    // Track and disc: `n/total` packed where the scheme has no separate total
+    // key; a separate total, where present, wins over a packed one.
     if let Some(raw) = first_string(&tags, &ItemKey::TrackNumber) {
         let (n, total) = number_pair(&raw);
         out.track_number = n;
@@ -265,9 +271,9 @@ fn map_tags(file: &TaggedFile) -> TagSet {
         out.disc_total = Some(total);
     }
 
-    // Date at tag precision: recording date, release date, bare year, in
-    // that order. ID3v2.3's TYER+TDAT and v2.4's TDRC both arrive as
-    // RecordingDate through lofty.
+    // Date at tag precision: recording date, release date, bare year, then
+    // original release date. ID3v2.3's TYER+TDAT and v2.4's TDRC both arrive
+    // as RecordingDate through lofty.
     out.release_date =
         [ItemKey::RecordingDate, ItemKey::ReleaseDate, ItemKey::Year, ItemKey::OriginalReleaseDate]
             .iter()

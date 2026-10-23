@@ -81,6 +81,7 @@ fn waits_until_it_opens<S: InspectStore + 'static>(
 /// A file moved away after the scan, under a root that is still there, gets no result until it
 /// returns.
 pub fn a_missing_file_waits_until_it_returns<S: InspectStore + 'static>(make: Factory<S>) {
+    /// Where `file` is moved to while it is away.
     fn away(file: &Path) -> PathBuf {
         file.with_extension("away")
     }

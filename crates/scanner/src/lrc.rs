@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 /// far more than any song's lyrics need.
 const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 
+/// One timed line of synced lyrics: its text, and when it starts in milliseconds from the start
+/// of the track.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncedLine {

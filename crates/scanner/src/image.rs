@@ -6,6 +6,7 @@ use std::panic;
 use imagesize::{ImageResult, ImageSize};
 use sha2::{Digest, Sha256};
 
+/// What the store keeps of an image: its content hash and its size in pixels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageInfo {
     /// SHA-256 of the bytes.

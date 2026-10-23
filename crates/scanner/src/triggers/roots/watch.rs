@@ -97,9 +97,9 @@ impl RootWatch {
 /// Watches, with `add`, the folder of `scope` and every folder below it that the scan walks,
 /// each before it is listed, so a folder made in it meanwhile is still seen. What the scan
 /// leaves out is not watched: an excluded folder, a link, and below the root, a folder that is
-/// gone or cannot be read, which goes into `unreadable`, as the scan reports it. Any other
-/// failure leaves that folder and those below it unwatched, and the first is returned once the
-/// walk ends, except the OS limit on watches, which ends the walk at once, since every later
+/// gone, and one that cannot be read, which goes into `unreadable`, as the scan reports it. Any
+/// other failure leaves that folder and those below it unwatched, and the first is returned once
+/// the walk ends, except the OS limit on watches, which ends the walk at once, since every later
 /// folder would meet it too. The root is never passed over: it must be watched.
 fn watch_folders(
     scope: &Scope,

@@ -35,6 +35,7 @@ const BLOCK_FRAMES: usize = 8192;
 /// How long the background analysis waits after a pass that backed off or found nothing to do.
 const IDLE: Duration = Duration::from_secs(30);
 
+/// Why one file's analysis failed.
 #[derive(Debug, thiserror::Error)]
 pub enum AnalysisError {
     #[error(transparent)]
@@ -49,7 +50,7 @@ pub struct AnalysisResult {
     pub analyzer_version: u32,
     /// Integrated loudness, LUFS. `None` for silence.
     pub integrated_lufs: Option<f64>,
-    /// True peak across channels, dBTP.
+    /// True peak across channels, dBTP. `None` for silence.
     pub true_peak_dbtp: Option<f64>,
     /// The RMS level of each waveform bin, on the scale of `jewelcase_core::waveform_level`.
     pub waveform: Vec<u8>,

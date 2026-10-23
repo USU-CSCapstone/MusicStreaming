@@ -30,6 +30,8 @@ mod retry;
 mod scan_rows;
 mod worker;
 
+/// The scans waiting to run, first to run first, the one running, and the work waiting to be
+/// retried.
 struct Queue {
     queued: VecDeque<Scan>,
     running: Option<Scan>,
@@ -44,12 +46,15 @@ impl Queue {
     }
 }
 
+/// What a library's [`Scanner`] handles and its thread share.
 struct Inner {
     store: Arc<dyn Store>,
     library: RwLock<LibraryConfig>,
     options: ScanOptions,
     queue: Mutex<Queue>,
+    /// Notified whenever the queue changes, and once a shutdown is asked for.
     wake: Condvar,
+    /// Set to cancel the running scan; cleared as each scan starts.
     cancel_running: AtomicBool,
     /// Set once, under the queue lock, so a worker about to wait for work sees it or is woken.
     shutdown: AtomicBool,

@@ -11,12 +11,13 @@ use crate::store::IndexedFile;
 use crate::tags;
 use crate::track::{Artwork, ArtworkSource, SortKeys, TrackId, TrackRecord, filename_title};
 
-/// Per-file result of the pipeline (`design/scanning.md` §2).
+/// Per-file result of the pipeline (`design/scanning.md` §2). `Added` and `Updated` carry the
+/// record of a file read: one the index holds no track for, or one it does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileOutcome {
     /// A file the index holds as it is, which the scan has nothing to write for.
     Unchanged,
-    /// A missing track whose file is back, byte-identical.
+    /// A missing track whose file is back with the size, mtime and sidecar stamp the index holds.
     Returned {
         track_id: TrackId,
     },
@@ -24,8 +25,9 @@ pub enum FileOutcome {
     Updated(Box<TrackRecord>),
     /// A file with no track that could not be read.
     Problem(Problem),
-    /// A known track's file, there but unreadable, with its `problem`. `changed` is whether the
-    /// file's size or mtime differs from the index, or the index has forgotten its mtime.
+    /// A known track's file, there but unreadable, with its `problem`. `missing` is whether the
+    /// track was marked missing, and `changed` whether the file's size or mtime differs from the
+    /// index, or the index has forgotten its mtime.
     Unread {
         track_id: TrackId,
         missing: bool,

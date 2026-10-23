@@ -25,25 +25,32 @@ fn a_panicked_worker_is_logged_once() {
 struct Errors(AtomicUsize);
 
 impl Subscriber for Errors {
+    /// Every span and event.
     fn enabled(&self, _: &Metadata<'_>) -> bool {
         true
     }
 
+    /// The same id for every span, which nothing reads.
     fn new_span(&self, _: &Attributes<'_>) -> Id {
         Id::from_u64(1)
     }
 
+    /// Ignored.
     fn record(&self, _: &Id, _: &Record<'_>) {}
 
+    /// Ignored.
     fn record_follows_from(&self, _: &Id, _: &Id) {}
 
+    /// Counts the event if it is an error.
     fn event(&self, event: &Event<'_>) {
         if *event.metadata().level() == Level::ERROR {
             self.0.fetch_add(1, Ordering::SeqCst);
         }
     }
 
+    /// Ignored.
     fn enter(&self, _: &Id) {}
 
+    /// Ignored.
     fn exit(&self, _: &Id) {}
 }

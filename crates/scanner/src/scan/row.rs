@@ -31,8 +31,9 @@ pub enum ScanState {
     Running,
     Completed,
     Cancelled,
-    /// A root did not answer; the index under it was left untouched
-    /// (`requirements/scanning.md` §7).
+    /// Ended short of its work, and never resumes: a root did not answer, leaving the index under
+    /// it untouched (`requirements/scanning.md` §7), or the store failed, the scan panicked, or an
+    /// exclude pattern did not compile.
     Suspended,
 }
 
@@ -43,6 +44,8 @@ pub struct ScanProgress {
     pub files_processed: i64,
     pub added: i64,
     pub updated: i64,
+    /// Always 0: a moved file is a missing track and a new one until track identity is built
+    /// (`design/scanning.md` §6).
     pub moved: i64,
     pub missing: i64,
     pub problems: i64,

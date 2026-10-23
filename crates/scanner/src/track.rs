@@ -74,7 +74,7 @@ impl TrackRecord {
 }
 
 /// The title for a file with no title tag: its filename without the extension, or
-/// "Untitled" when it has none (`requirements/scanning.md` §2).
+/// "Untitled" when the path has no filename (`requirements/scanning.md` §2).
 pub fn filename_title(path: &Path) -> String {
     path.file_stem()
         .map(|s| s.to_string_lossy().into_owned())

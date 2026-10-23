@@ -41,6 +41,7 @@ impl BareStore {
 }
 
 impl Store for BareStore {
+    /// A queued scan, numbered one past the last.
     fn create_scan(
         &self,
         library: LibraryId,
@@ -54,6 +55,7 @@ impl Store for BareStore {
         Ok(scan)
     }
 
+    /// Replaces the row with `scan`'s id, failing if there is none.
     fn update_scan(&self, scan: &Scan) -> Result<(), StoreError> {
         let mut scans = self.scans.lock().unwrap();
         let row = scans.iter_mut().find(|row| row.id == scan.id);
@@ -66,35 +68,42 @@ impl Store for BareStore {
         Ok(Vec::new())
     }
 
+    /// Nothing: it holds no track.
     fn indexed_in(&self, _: LibraryId, _: &Path) -> Result<IndexedFolder, StoreError> {
         Ok(IndexedFolder::default())
     }
 
+    /// Drops the batch, marking nothing missing.
     fn apply(&self, _: LibraryId, _: Batch) -> Result<i64, StoreError> {
         Ok(0)
     }
 
+    /// None, though it keeps the problems recorded through [`ProblemLog`].
     fn problems_under(&self, _: LibraryId, _: &Scope) -> Result<Vec<PathBuf>, StoreError> {
         Ok(Vec::new())
     }
 
+    /// No, though it keeps the problems recorded through [`ProblemLog`].
     fn indexes_under(&self, _: LibraryId, _: &Path) -> Result<bool, StoreError> {
         Ok(false)
     }
 }
 
 impl ProblemLog for BareStore {
+    /// Keeps `problem`, beside any already recorded for its path.
     fn record_problem(&self, _: LibraryId, problem: Problem) -> Result<(), StoreError> {
         self.problems.lock().unwrap().push(problem);
         Ok(())
     }
 
+    /// Nothing: it clears no problem.
     fn clear_unopened(&self, _: LibraryId, _: &Path) -> Result<(), StoreError> {
         Ok(())
     }
 }
 
 impl AnalysisStore for BareStore {
+    /// None: it holds no track.
     fn next_unanalyzed(
         &self,
         _: LibraryId,
@@ -104,6 +113,7 @@ impl AnalysisStore for BareStore {
         Ok(Vec::new())
     }
 
+    /// Drops the result.
     fn store_analysis(
         &self,
         _: LibraryId,
@@ -115,6 +125,7 @@ impl AnalysisStore for BareStore {
 }
 
 impl PlaceholderStore for BareStore {
+    /// None: it holds no image.
     fn next_without_placeholder(
         &self,
         _: LibraryId,
@@ -123,6 +134,7 @@ impl PlaceholderStore for BareStore {
         Ok(Vec::new())
     }
 
+    /// Drops the placeholder.
     fn store_placeholder(&self, _: LibraryId, _: &[u8], _: Vec<u8>) -> Result<(), StoreError> {
         Ok(())
     }

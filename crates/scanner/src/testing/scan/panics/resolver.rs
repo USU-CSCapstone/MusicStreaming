@@ -18,6 +18,7 @@ pub(super) const PANICS: &[u8] = b"JEWELCASE PANICS";
 pub(super) enum Panics {}
 
 impl From<Panics> for TaggedFile {
+    /// Never called: no [`Panics`] value exists.
     fn from(file: Panics) -> TaggedFile {
         match file {}
     }
@@ -35,32 +36,39 @@ impl AudioFile for Panics {
         panic!("index out of bounds in /srv/private/music.flac");
     }
 
+    /// Never called.
     fn save_to<F: FileLike>(&self, _: &mut F, _: WriteOptions) -> Result<(), FileEncodingError> {
         match *self {}
     }
 
+    /// Never called.
     fn properties(&self) -> &() {
         match *self {}
     }
 
+    /// Never called.
     fn contains_tag(&self) -> bool {
         match *self {}
     }
 
+    /// Never called.
     fn contains_tag_type(&self, _: TagType) -> bool {
         match *self {}
     }
 }
 
 impl FileResolver for Panics {
+    /// None, so no file is taken for one by its name.
     fn extension() -> Option<&'static str> {
         None
     }
 
+    /// ID3v2, never used, since reading the file panics first.
     fn primary_tag_type() -> TagType {
         TagType::Id3v2
     }
 
+    /// No tag type is supported.
     fn tag_support(_: TagType) -> TagSupport {
         TagSupport::Unsupported
     }

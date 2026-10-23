@@ -15,7 +15,7 @@ use crate::track::TrackId;
 pub enum Identity {
     /// Never seen before.
     New,
-    /// Same track (by whatever identity means today), content or tags changed.
+    /// The track the index holds at the file's path.
     Updated { track_id: TrackId },
 }
 

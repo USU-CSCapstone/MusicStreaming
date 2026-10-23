@@ -45,6 +45,8 @@ pub struct ScanOptions {
 }
 
 impl Default for ScanOptions {
+    /// The design's values (`design/scanning.md` §7): batches of 16 to 250 outcomes, each sized
+    /// to apply in about 50 ms, flushed at least every 2 seconds.
     fn default() -> Self {
         ScanOptions {
             batch_size: 250,
@@ -185,8 +187,8 @@ fn scan_scopes(
         // A scope reached through a symlink below the root, as the watcher or a plugin may
         // name one, is skipped whole with a problem: nothing is walked and nothing reconciled.
         // One that no longer exists, or lies in an excluded folder, goes on to a walk that lists
-        // its folder as empty, so reconcile marks what was indexed under it missing. Excluded content is
-        // never reported, so a link in an excluded folder is not either.
+        // its folder as empty, so reconcile marks what was indexed under it missing. Excluded
+        // content is never reported, so a link in an excluded folder is not either.
         if scope.path.exists()
             && !excluded_scope(&scope, &excludes)
             && let Err(error) = without_links(&scope.root, &scope.path)

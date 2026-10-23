@@ -93,6 +93,7 @@ impl<'a> Hooked<'a> {
 }
 
 impl Store for Hooked<'_> {
+    /// The inner store's new scan, once the scan-write hook passes.
     fn create_scan(
         &self,
         library: LibraryId,
@@ -102,6 +103,8 @@ impl Store for Hooked<'_> {
         (self.on_scan_write)()?;
         self.inner.create_scan(library, trigger, scopes)
     }
+    /// Saves `scan` in the inner store once the scan-write hook passes, then, for a running
+    /// scan while [`Hooked::hold`] is in force, waits for [`Hooked::release`].
     fn update_scan(&self, scan: &Scan) -> Result<(), StoreError> {
         (self.on_scan_write)()?;
         self.inner.update_scan(scan)?;
@@ -111,17 +114,21 @@ impl Store for Hooked<'_> {
         }
         Ok(())
     }
+    /// The inner store's, with no hook.
     fn interrupted_scans(&self, library: LibraryId) -> Result<Vec<Scan>, StoreError> {
         self.inner.interrupted_scans(library)
     }
+    /// The inner store's, once the folder hook passes `dir`.
     fn indexed_in(&self, library: LibraryId, dir: &Path) -> Result<IndexedFolder, StoreError> {
         (self.on_folder)(dir)?;
         self.inner.indexed_in(library, dir)
     }
+    /// Applies `batch` to the inner store once the apply hook passes it.
     fn apply(&self, library: LibraryId, batch: Batch) -> Result<i64, StoreError> {
         (self.on_apply)(&batch)?;
         self.inner.apply(library, batch)
     }
+    /// The inner store's, once the under hook passes.
     fn problems_under(
         &self,
         library: LibraryId,
@@ -130,6 +137,7 @@ impl Store for Hooked<'_> {
         (self.on_under)()?;
         self.inner.problems_under(library, scope)
     }
+    /// The inner store's, once the under hook passes.
     fn indexes_under(&self, library: LibraryId, folder: &Path) -> Result<bool, StoreError> {
         (self.on_under)()?;
         self.inner.indexes_under(library, folder)

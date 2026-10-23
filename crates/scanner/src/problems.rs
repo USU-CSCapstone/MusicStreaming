@@ -67,6 +67,7 @@ pub fn from_ffmpeg(path: &Path, e: &jewelcase_ffmpeg::Error) -> Problem {
     Problem { path: path.to_path_buf(), kind, detail: e.to_string(), seen_at: now_ms() }
 }
 
+/// The kind of problem an I/O error is: permission denied, or otherwise unreadable.
 fn io_kind(e: &io::Error) -> ProblemKind {
     match e.kind() {
         io::ErrorKind::PermissionDenied => ProblemKind::PermissionDenied,
@@ -81,6 +82,8 @@ pub fn group_key(kind: ProblemKind, root: &Path, detail: &str) -> String {
     format!("{kind:?}|{}|{}", root.display(), normalize_detail(detail))
 }
 
+/// `detail` lowercased, with each word containing a path separator dropped and each run of digits
+/// replaced by `#`.
 fn normalize_detail(detail: &str) -> String {
     let mut out = String::with_capacity(detail.len());
     let mut in_digits = false;

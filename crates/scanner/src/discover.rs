@@ -76,6 +76,7 @@ pub struct WalkError {
     pub error: io::Error,
 }
 
+/// What a walk yields: a directory's listing, or a directory it could not list.
 pub enum WalkItem {
     Directory(Directory),
     Error(WalkError),
@@ -180,6 +181,7 @@ impl<'a> Walk<'a> {
     }
 }
 
+/// Where a directory sits relative to the resume cursor.
 enum Position {
     /// Already persisted by the interrupted run; do not yield or descend.
     Done,
@@ -200,6 +202,7 @@ fn compare_components(a: &Path, b: &Path) -> Ordering {
 impl Iterator for Walk<'_> {
     type Item = WalkItem;
 
+    /// The next directory in sorted pre-order, or the next one that could not be listed.
     fn next(&mut self) -> Option<WalkItem> {
         loop {
             let dir = self.stack.pop()?;
@@ -304,11 +307,13 @@ mod tests {
 
     use super::*;
 
+    /// Writes a one-byte file at `p`, making the folders above it.
     fn touch(p: &Path) {
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, b"x").unwrap();
     }
 
+    /// The path of each directory a walk of `scope` lists.
     fn dirs(scope: &Scope, excludes: &GlobSet, resume: Option<&Path>) -> Vec<PathBuf> {
         Walk::new(scope, excludes, resume)
             .filter_map(|i| match i {
