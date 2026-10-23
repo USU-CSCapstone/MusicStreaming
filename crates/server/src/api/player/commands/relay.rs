@@ -15,8 +15,7 @@ use crate::api::realtime::{Hub, ServerMessage};
 use crate::api::{AnyId, Code, Id, Problem};
 
 /// How long a connection has to answer a command before it counts as failed.
-const ANSWER_WITHIN: Duration =
-    if cfg!(test) { Duration::from_secs(2) } else { Duration::from_secs(5) };
+pub(super) const ANSWER_WITHIN: Duration = Duration::from_secs(5);
 
 /// How many of an account's commands may wait for an answer at once, so a flood of them
 /// cannot fill the outbox of the connection they go to and close it.
@@ -43,6 +42,8 @@ struct Waiting {
     reply: Reply,
     /// The connection it went to, the only one whose answer counts.
     to: u64,
+    /// Whether that connection was the one playing, as for all but a transfer to another device.
+    to_playing: bool,
     /// Fails it if no answer comes.
     timer: AbortHandle,
 }
@@ -90,7 +91,7 @@ impl Players {
             return Ok(pending);
         }
         let state = accounts.get(&caller.user);
-        let to = if let Action::Transfer { .. } = command.action {
+        let (to, to_playing) = if let Action::Transfer { .. } = command.action {
             let Some(AnyId(device)) = command.device_id else {
                 return Err(Problem::invalid("transfer must name its deviceId."));
             };
@@ -106,7 +107,7 @@ impl Players {
                 match active.active_connection {
                     Some(to) if play && active.status != PlayStatus::Playing => {
                         command.action = Action::Play;
-                        to
+                        (to, true)
                     }
                     _ => return Ok(CommandResult::new(id, Status::Applied, None)),
                 }
@@ -116,7 +117,7 @@ impl Players {
                 let Some(to) = newest else {
                     return Err(unavailable("That device is not connected."));
                 };
-                to
+                (to, false)
             }
         } else {
             let playing =
@@ -127,7 +128,7 @@ impl Players {
             if command.device_id.is_some_and(|AnyId(id)| id.map(Id) != Some(device)) {
                 return Err(unavailable("That device is not the one playing."));
             }
-            to
+            (to, true)
         };
         if commands.waiting.len() >= MAX_WAITING {
             let reason = "Too many commands are waiting for a device to answer.";
@@ -142,7 +143,7 @@ impl Players {
             tokio::time::sleep(ANSWER_WITHIN).await;
             players.fail(&timer_hub, user, &timer_id, "The device did not answer.");
         });
-        commands.waiting.insert(id, Waiting { reply, to, timer: timer.abort_handle() });
+        commands.waiting.insert(id, Waiting { reply, to, to_playing, timer: timer.abort_handle() });
         Ok(pending)
     }
 
@@ -165,6 +166,22 @@ impl Players {
     pub(in crate::api::player) fn fail_commands_to(&self, hub: &Hub, user: i64, connection: u64) {
         let failed = |id| CommandResult::new(id, Status::Failed, Some("The device went away."));
         self.end(hub, user, |_, waiting| waiting.to == connection, failed);
+    }
+
+    /// Fails at once every command of `user`'s that went to the connection playing, unless that
+    /// is `connection`, which has just started playback: carried out late, it could leave two
+    /// devices playing (`requirements/realtime.md` §2), even from a connection that has stopped
+    /// since. A transfer to another device is left to finish: that device was sent it, and may
+    /// yet take over.
+    pub(in crate::api::player) fn fail_commands_taken_over_by(
+        &self,
+        hub: &Hub,
+        user: i64,
+        connection: u64,
+    ) {
+        let failed = |id| CommandResult::new(id, Status::Failed, Some("Playback was taken over."));
+        let ends = |_: &str, waiting: &Waiting| waiting.to_playing && waiting.to != connection;
+        self.end(hub, user, ends, failed);
     }
 
     /// Tells the sender of `user`'s command `id`, if it still waits, that it failed for
@@ -207,7 +224,9 @@ fn deliver(hub: &Hub, user: i64, reply: Reply, result: CommandResult) {
     match reply {
         Reply::Connection(id) => hub.send(user, id, &ServerMessage::CommandResult { result }),
         Reply::Request(request) => {
-            let _ = request.send(result);
+            if request.send(result).is_err() {
+                tracing::debug!("command result dropped: its HTTP request is gone");
+            }
         }
     }
 }

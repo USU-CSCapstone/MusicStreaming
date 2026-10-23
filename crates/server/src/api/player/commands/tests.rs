@@ -1,21 +1,27 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use futures_util::SinkExt;
 use serde_json::{Value, json};
+use tokio::sync::oneshot;
+use tokio::time::{Instant, timeout};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::super::super::authenticate::Caller;
 use super::super::super::realtime::Hub;
-use super::super::super::testing::player::{command_id, progress_report};
+use super::super::super::testing::player::{command_id, progress_report, report, start_playing};
 use super::super::super::testing::socket::{Socket, connect_with, next, next_of, serve};
 use super::super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, respond};
 use super::super::Players;
-use super::relay::MAX_WAITING;
+use super::Reply;
+use super::relay::{ANSWER_WITHIN, MAX_WAITING};
 use crate::api::Id;
 use crate::db::testing::access;
+
+const OWNER: Caller = Caller { user: 1, device: 1, admin: true };
 
 /// Library 1's tracks, served, with the owner on device 1 as [`TOKEN`] and device 2 as
 /// `phone`, and user 2 on device 3 as `stranger`.
@@ -30,14 +36,6 @@ async fn setup() -> (tempfile::TempDir, Router, std::net::SocketAddr) {
 
 async fn send(socket: &mut Socket, message: Value) {
     socket.send(Message::text(message.to_string())).await.unwrap();
-}
-
-/// Starts playback on `socket`, device `device`, and returns once the server has it.
-async fn play(socket: &mut Socket, device: &str) {
-    let report = progress_report(device, "playing", json!({ "start": true }));
-    send(socket, json!({ "type": "progress", "report": report })).await;
-    send(socket, json!({ "type": "ping" })).await;
-    next_of(socket, "pong").await;
 }
 
 /// The next result `socket` is sent for the command `command_id`, skipping others'.
@@ -61,7 +59,7 @@ async fn a_command_reaches_the_device_playing_and_its_answer_comes_back() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    play(&mut desk, "1").await;
+    start_playing(&mut desk, "1").await;
 
     let seek = json!({ "type": "seek", "commandId": command_id(1), "positionMs": 30000 });
     let told = command(&mut phone, seek.clone()).await;
@@ -78,7 +76,7 @@ async fn only_the_device_it_went_to_answers_a_command() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    play(&mut desk, "1").await;
+    start_playing(&mut desk, "1").await;
     command(&mut phone, json!({ "type": "pause", "commandId": command_id(1) })).await;
 
     let claimed = json!({ "commandId": command_id(1), "status": "applied" });
@@ -100,7 +98,7 @@ async fn a_command_with_nowhere_to_go_fails_at_once() {
 
     let nothing = (json!("failed"), json!("Nothing is playing."));
     assert_eq!(reason(command(&mut phone, pause(1)).await), nothing);
-    play(&mut desk, "1").await;
+    start_playing(&mut desk, "1").await;
     assert_eq!(reason(command(&mut stranger, pause(2)).await), nothing, "another account's");
 
     let elsewhere =
@@ -127,15 +125,27 @@ async fn a_command_with_nowhere_to_go_fails_at_once() {
     }
 }
 
-#[tokio::test]
+/// Players with the owner playing over connection 7, and the hub they tell.
+fn playing() -> (Arc<Players>, Arc<Hub>) {
+    let (players, hub) = (Arc::new(Players::default()), Arc::new(Hub::default()));
+    let report = serde_json::from_value(progress_report("1", "playing", json!({ "start": true })));
+    players.report(&hub, OWNER, 7, report.unwrap(), Id(1), Id(1)).unwrap();
+    (players, hub)
+}
+
+// Paused time, which runs ahead whenever every task waits: no socket here waits on it.
+#[tokio::test(start_paused = true)]
 async fn a_command_the_device_playing_does_not_answer_fails() {
-    let (_temp, _app, address) = setup().await;
-    let mut desk = connect_with(address, TOKEN).await;
-    let mut phone = connect_with(address, "phone").await;
-    play(&mut desk, "1").await;
-    let told = command(&mut phone, json!({ "type": "next", "commandId": command_id(1) })).await;
-    assert_eq!(told["status"], json!("pending"));
-    let result = result_of(&mut phone, &json!(command_id(1))).await;
+    let (players, hub) = playing();
+    let next = serde_json::from_value(json!({ "type": "next", "commandId": command_id(1) }));
+    let (reply, answer) = oneshot::channel();
+    let sent = Instant::now();
+    let told = players.command(&hub, OWNER, Reply::Request(reply), next.unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(told).unwrap()["status"], json!("pending"));
+    let within = ANSWER_WITHIN + Duration::from_secs(1);
+    let result = timeout(within, answer).await.expect("in its time").unwrap();
+    let result = serde_json::to_value(result).unwrap();
+    assert!(sent.elapsed() >= ANSWER_WITHIN, "not before its time");
     assert_eq!(
         (&result["status"], &result["reason"]),
         (&json!("failed"), &json!("The device did not answer."))
@@ -144,13 +154,10 @@ async fn a_command_the_device_playing_does_not_answer_fails() {
 
 #[tokio::test]
 async fn an_account_can_have_only_so_many_commands_waiting() {
-    let (players, hub) = (Arc::new(Players::default()), Arc::new(Hub::default()));
-    let caller = Caller { user: 1, device: 1, admin: true };
-    let report = serde_json::from_value(progress_report("1", "playing", json!({ "start": true })));
-    players.report(&hub, caller, 7, report.unwrap(), Id(1), Id(1)).unwrap();
+    let (players, hub) = playing();
     let command = |n: u32| {
         let command = serde_json::from_value(json!({ "type": "play", "commandId": command_id(n) }));
-        let result = players.command_from_connection(&hub, caller, 8, command.unwrap());
+        let result = players.command_from_connection(&hub, OWNER, 8, command.unwrap());
         serde_json::to_value(result).unwrap()["status"].clone()
     };
     for n in 0..MAX_WAITING as u32 {
@@ -177,7 +184,7 @@ async fn a_command_this_server_does_not_carry_out_fails_at_once() {
 async fn a_command_sent_again_after_reconnecting_is_answered_on_the_new_connection() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
-    play(&mut desk, "1").await;
+    start_playing(&mut desk, "1").await;
     let mut phone = connect_with(address, "phone").await;
     let pause = json!({ "type": "pause", "commandId": command_id(1) });
     command(&mut phone, pause.clone()).await;
@@ -198,8 +205,8 @@ async fn two_accounts_may_use_the_same_command_id() {
     access(&conn, 2, 1).unwrap();
     let mut desk = connect_with(address, TOKEN).await;
     let mut stranger = connect_with(address, "stranger").await;
-    play(&mut desk, "1").await;
-    play(&mut stranger, "3").await;
+    start_playing(&mut desk, "1").await;
+    start_playing(&mut stranger, "3").await;
     let pause = json!({ "type": "pause", "commandId": command_id(1) });
     for socket in [&mut desk, &mut stranger] {
         assert_eq!(command(socket, pause.clone()).await["status"], json!("pending"));
@@ -212,11 +219,76 @@ async fn commands_waiting_on_a_device_that_goes_away_fail_at_once() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    play(&mut desk, "1").await;
+    start_playing(&mut desk, "1").await;
     command(&mut phone, json!({ "type": "pause", "commandId": command_id(1) })).await;
     desk.close(None).await.unwrap();
     let result = result_of(&mut phone, &json!(command_id(1))).await;
     assert_eq!(result["reason"], json!("The device went away."));
+}
+
+#[tokio::test]
+async fn commands_waiting_on_a_device_taken_over_from_fail_at_once() {
+    let (temp, _app, address) = setup().await;
+    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    add_device(&conn, 1, 4, "laptop");
+    let mut desk = connect_with(address, TOKEN).await;
+    let mut phone = connect_with(address, "phone").await;
+    let mut laptop = connect_with(address, "laptop").await;
+    start_playing(&mut desk, "1").await;
+    let pause = |n| json!({ "type": "pause", "commandId": command_id(n) });
+
+    // The device playing reports, even starting again, and is still the one to answer.
+    command(&mut phone, pause(1)).await;
+    start_playing(&mut desk, "1").await;
+    let applied = json!({ "commandId": command_id(1), "status": "applied" });
+    send(&mut desk, json!({ "type": "commandResult", "result": applied })).await;
+    assert_eq!(result_of(&mut phone, &json!(command_id(1))).await, applied);
+
+    command(&mut phone, pause(2)).await;
+    start_playing(&mut laptop, "4").await;
+    let failed = json!({
+        "commandId": command_id(2), "status": "failed", "reason": "Playback was taken over.",
+    });
+    assert_eq!(result_of(&mut phone, &json!(command_id(2))).await, failed);
+    // Its answer, too late, counts for nothing.
+    let late = json!({ "commandId": command_id(2), "status": "applied" });
+    send(&mut desk, json!({ "type": "commandResult", "result": late })).await;
+    send(&mut desk, json!({ "type": "ping" })).await;
+    next_of(&mut desk, "pong").await;
+    assert_eq!(command(&mut phone, pause(2)).await, failed, "answered again, not carried out");
+
+    // Reports that do not start leave commands waiting: one refused from the device taken over
+    // from, and one from the device playing while a transfer elsewhere waits.
+    command(&mut phone, pause(3)).await;
+    report(&mut desk, "1", "playing", json!({})).await;
+    let applied = json!({ "commandId": command_id(3), "status": "applied" });
+    send(&mut laptop, json!({ "type": "commandResult", "result": applied })).await;
+    assert_eq!(result_of(&mut phone, &json!(command_id(3))).await, applied);
+    let transfer = json!({ "type": "transfer", "commandId": command_id(4), "deviceId": "1" });
+    command(&mut phone, transfer).await;
+    report(&mut laptop, "4", "playing", json!({})).await;
+    let applied = json!({ "commandId": command_id(4), "status": "applied" });
+    send(&mut desk, json!({ "type": "commandResult", "result": applied })).await;
+    assert_eq!(result_of(&mut phone, &json!(command_id(4))).await, applied);
+}
+
+#[tokio::test]
+async fn commands_waiting_on_a_device_that_stopped_fail_once_playback_starts_elsewhere() {
+    let (temp, _app, address) = setup().await;
+    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    add_device(&conn, 1, 4, "laptop");
+    let mut desk = connect_with(address, TOKEN).await;
+    let mut phone = connect_with(address, "phone").await;
+    let mut laptop = connect_with(address, "laptop").await;
+    start_playing(&mut desk, "1").await;
+    command(&mut phone, json!({ "type": "play", "commandId": command_id(1) })).await;
+    report(&mut desk, "1", "stopped", json!({})).await;
+    start_playing(&mut laptop, "4").await;
+    let result = result_of(&mut phone, &json!(command_id(1))).await;
+    assert_eq!(
+        (&result["status"], &result["reason"]),
+        (&json!("failed"), &json!("Playback was taken over."))
+    );
 }
 
 /// Sends `command` over HTTP, logged in with `token`.
@@ -234,7 +306,7 @@ async fn post(app: &Router, token: &str, command: Value) -> (StatusCode, Value) 
 async fn a_command_over_http_is_answered_with_how_it_went() {
     let (_temp, app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
-    play(&mut desk, "1").await;
+    start_playing(&mut desk, "1").await;
     let pause = json!({ "type": "pause", "commandId": command_id(1) });
     let sent = tokio::spawn({
         let (app, pause) = (app.clone(), pause.clone());
@@ -254,7 +326,7 @@ async fn a_command_over_http_with_nowhere_to_go_is_refused() {
     assert_eq!((status, &problem["code"]), (StatusCode::CONFLICT, &json!("device_unavailable")));
 
     let mut desk = connect_with(address, TOKEN).await;
-    play(&mut desk, "1").await;
+    start_playing(&mut desk, "1").await;
     for invalid in [
         json!({ "type": "setVolume", "commandId": command_id(2), "deviceId": "1", "volume": 2 }),
         json!({ "type": "rewind", "commandId": command_id(3) }),
@@ -270,7 +342,7 @@ async fn a_command_sent_again_after_it_was_answered_is_answered_again_not_carrie
     let (_temp, app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    play(&mut desk, "1").await;
+    start_playing(&mut desk, "1").await;
     let next = json!({ "type": "next", "commandId": command_id(1) });
     command(&mut phone, next.clone()).await;
     next_of(&mut desk, "execute").await;
@@ -286,7 +358,7 @@ async fn a_command_sent_again_after_it_was_answered_is_answered_again_not_carrie
 async fn a_command_id_names_the_same_command_in_capitals() {
     let (_temp, app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
-    play(&mut desk, "1").await;
+    start_playing(&mut desk, "1").await;
     let id = "abcdef00-0000-4000-8000-000000000001";
     let shouted = json!({ "type": "next", "commandId": id.to_uppercase() });
     let first = tokio::spawn({
@@ -307,7 +379,7 @@ async fn a_device_may_answer_a_command_with_its_id_in_capitals() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    play(&mut desk, "1").await;
+    start_playing(&mut desk, "1").await;
     let id = "abcdef00-0000-4000-8000-000000000002";
     command(&mut phone, json!({ "type": "pause", "commandId": id })).await;
     next_of(&mut desk, "execute").await;
@@ -321,7 +393,7 @@ async fn a_device_may_answer_a_command_with_its_id_in_capitals() {
 async fn a_command_sent_again_while_it_waits_is_answered_where_it_was_sent_last() {
     let (_temp, app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
-    play(&mut desk, "1").await;
+    start_playing(&mut desk, "1").await;
     let pause = json!({ "type": "pause", "commandId": command_id(1) });
     let first = tokio::spawn({
         let (app, pause) = (app.clone(), pause.clone());
@@ -345,7 +417,7 @@ async fn a_transfer_goes_to_the_device_it_names_and_its_answer_comes_back() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    play(&mut desk, "1").await;
+    start_playing(&mut desk, "1").await;
 
     let transfer = json!({ "type": "transfer", "commandId": command_id(1), "deviceId": "2" });
     assert_eq!(command(&mut desk, transfer).await["status"], json!("pending"));
@@ -354,11 +426,13 @@ async fn a_transfer_goes_to_the_device_it_names_and_its_answer_comes_back() {
         sent,
         json!({ "type": "transfer", "commandId": command_id(1), "deviceId": "2", "play": true })
     );
+    // It takes over, as a client carrying it out does, before it answers.
+    start_playing(&mut phone, "2").await;
     let applied = json!({ "commandId": command_id(1), "status": "applied" });
     send(&mut phone, json!({ "type": "commandResult", "result": applied })).await;
     assert_eq!(result_of(&mut desk, &json!(command_id(1))).await, applied);
 
-    let here = json!({ "type": "transfer", "commandId": command_id(2), "deviceId": "1" });
+    let here = json!({ "type": "transfer", "commandId": command_id(2), "deviceId": "2" });
     assert_eq!(command(&mut desk, here).await["status"], json!("applied"), "already there");
 }
 
@@ -367,23 +441,48 @@ async fn a_transfer_to_play_where_it_is_paused_plays_it() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    play(&mut desk, "1").await;
-    let report = progress_report("1", "paused", json!({}));
-    send(&mut desk, json!({ "type": "progress", "report": report })).await;
-    send(&mut desk, json!({ "type": "ping" })).await;
-    next_of(&mut desk, "pong").await;
+    start_playing(&mut desk, "1").await;
+    report(&mut desk, "1", "paused", json!({})).await;
 
     let transfer = json!({ "type": "transfer", "commandId": command_id(1), "deviceId": "1" });
     assert_eq!(command(&mut phone, transfer).await["status"], json!("pending"));
     let sent = next_of(&mut desk, "execute").await["command"].clone();
     assert_eq!(sent, json!({ "type": "play", "commandId": command_id(1), "deviceId": "1" }));
+
+    // Sent to the connection playing, it fails once playback starts on another.
+    let mut tab = connect_with(address, TOKEN).await;
+    start_playing(&mut tab, "1").await;
+    let result = result_of(&mut phone, &json!(command_id(1))).await;
+    assert_eq!(result["reason"], json!("Playback was taken over."));
+}
+
+#[tokio::test]
+async fn a_transfer_already_sent_is_left_to_finish_when_playback_starts_elsewhere() {
+    let (temp, _app, address) = setup().await;
+    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    add_device(&conn, 1, 4, "laptop");
+    let mut desk = connect_with(address, TOKEN).await;
+    let mut phone = connect_with(address, "phone").await;
+    let mut laptop = connect_with(address, "laptop").await;
+    start_playing(&mut desk, "1").await;
+    let transfer = json!({ "type": "transfer", "commandId": command_id(1), "deviceId": "4" });
+    assert_eq!(command(&mut phone, transfer).await["status"], json!("pending"));
+    next_of(&mut laptop, "execute").await;
+
+    // The desk reconnects and starts again on its new connection, before the laptop takes over.
+    let mut desk_again = connect_with(address, TOKEN).await;
+    start_playing(&mut desk_again, "1").await;
+    start_playing(&mut laptop, "4").await;
+    let applied = json!({ "commandId": command_id(1), "status": "applied" });
+    send(&mut laptop, json!({ "type": "commandResult", "result": applied })).await;
+    assert_eq!(result_of(&mut phone, &json!(command_id(1))).await, applied);
 }
 
 #[tokio::test]
 async fn a_transfer_wakes_a_device_once_playback_stopped() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
-    play(&mut desk, "1").await;
+    start_playing(&mut desk, "1").await;
     desk.close(None).await.unwrap();
     let mut phone = connect_with(address, "phone").await;
     let mut laptop = connect_with(address, TOKEN).await;
@@ -409,7 +508,7 @@ async fn a_transfer_needs_a_device_of_the_account_that_is_connected_and_somethin
     let reason = |result: Value| result["reason"].as_str().unwrap_or_default().to_owned();
 
     assert_eq!(reason(command(&mut desk, transfer(1, "4")).await), "Nothing has played to move.");
-    play(&mut desk, "1").await;
+    start_playing(&mut desk, "1").await;
     for (n, device) in [(2, "4"), (3, "3"), (4, "nonsense")] {
         let result = command(&mut desk, transfer(n, device)).await;
         assert_eq!(reason(result), "That device is not connected.", "{device}");

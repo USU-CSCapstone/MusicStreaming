@@ -4,15 +4,15 @@ use std::time::{Duration, Instant};
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::SinkExt;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::super::authenticate::Caller;
 use super::super::realtime::Hub;
-use super::super::testing::player::progress_report;
+use super::super::testing::player::{progress_report, report, start_playing};
 use super::super::testing::socket::{Socket, connect_with, next, next_of, serve};
-use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, respond};
+use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, eventually, respond};
 use super::{Id, Players};
 use crate::db::Database;
 use crate::db::testing::access;
@@ -28,18 +28,6 @@ async fn setup() -> (tempfile::TempDir, Router, SocketAddr) {
     access(&conn, 2, 1).unwrap();
     let address = serve(app.clone()).await;
     (temp, app, address)
-}
-
-/// Reports from `device` over `socket` that track 1 in library 1 is at `status` 1000 ms in,
-/// changed by `changes`, and returns once the server has handled it: a connection handles its
-/// messages in order, so that is when the ping sent after it is answered.
-async fn report(socket: &mut Socket, device: &str, status: &str, mut changes: Value) {
-    changes.as_object_mut().unwrap().entry("positionMs").or_insert(json!(1000));
-    let progress =
-        json!({ "type": "progress", "report": progress_report(device, status, changes) });
-    socket.send(Message::text(progress.to_string())).await.unwrap();
-    socket.send(Message::text(r#"{"type":"ping"}"#)).await.unwrap();
-    next_of(socket, "pong").await;
 }
 
 /// `getPlayer`, logged in with `token`.
@@ -167,7 +155,7 @@ async fn reports_are_checked() {
     let elsewhere = json!({ "start": true, "libraryId": "2", "trackId": "3" });
     report(&mut user2, "3", "playing", elsewhere).await;
     assert_eq!(player(&app, "user2").await["status"], json!("stopped"), "library 2");
-    report(&mut user2, "3", "playing", json!({ "start": true })).await;
+    start_playing(&mut user2, "3").await;
     assert_eq!(player(&app, "user2").await["status"], json!("playing"), "library 1");
 }
 
@@ -176,7 +164,7 @@ async fn of_a_devices_connections_only_the_one_playing_reports() {
     let (_temp, app, address) = setup().await;
     let mut tab = connect_with(address, TOKEN).await;
     let mut other_tab = connect_with(address, TOKEN).await;
-    report(&mut tab, "1", "playing", json!({ "start": true })).await;
+    start_playing(&mut tab, "1").await;
     report(&mut other_tab, "1", "playing", json!({ "start": true, "trackId": "2" })).await;
     report(&mut tab, "1", "playing", json!({})).await;
     assert_eq!(player(&app, TOKEN).await["trackId"], json!("2"), "the tab that started");
@@ -195,7 +183,7 @@ async fn a_report_is_checked_against_the_account_as_it_is_now() {
     let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
     let revoke = "UPDATE devices SET revoked_reason = 'credentials_changed' WHERE id = 2";
     conn.execute(revoke, []).unwrap();
-    report(&mut phone, "2", "playing", json!({ "start": true })).await;
+    start_playing(&mut phone, "2").await;
     assert_eq!(player(&app, TOKEN).await["activeDeviceId"], json!("1"));
 }
 
@@ -358,7 +346,7 @@ async fn losing_the_playing_connection_stops_playback_where_it_got_to() {
     let mut phone = connect_with(address, "phone").await;
     next_of(&mut phone, "player").await; // As it was on connecting: stopped at nothing.
     let reported = Instant::now();
-    report(&mut desk, "1", "playing", json!({ "start": true })).await;
+    start_playing(&mut desk, "1").await;
     desk.close(None).await.unwrap();
 
     let state = state_with(&mut phone, "stopped").await;
@@ -368,7 +356,7 @@ async fn losing_the_playing_connection_stops_playback_where_it_got_to() {
     assert_eq!(player(&app, TOKEN).await, state);
 
     // Any device can carry on from there.
-    report(&mut phone, "2", "playing", json!({ "start": true })).await;
+    start_playing(&mut phone, "2").await;
     assert_eq!(player(&app, TOKEN).await["activeDeviceId"], json!("2"));
 }
 
@@ -379,7 +367,7 @@ async fn a_connection_that_drops_played_until_it_dropped() {
     let mut phone = connect_with(address, "phone").await;
     next_of(&mut phone, "player").await; // As it was on connecting: stopped at nothing.
     let reported = Instant::now();
-    report(&mut desk, "1", "playing", json!({ "start": true })).await;
+    start_playing(&mut desk, "1").await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     // Gone without a close frame, as when the network changes under it.
     drop(desk);
@@ -420,16 +408,25 @@ async fn a_paused_place_is_kept_exactly_and_other_connections_closing_change_not
 
 #[tokio::test]
 async fn an_old_connection_closing_after_its_device_took_over_again_changes_nothing() {
-    let (_temp, app, address) = setup().await;
+    let (temp, app, address) = setup().await;
     let mut old = connect_with(address, TOKEN).await;
-    report(&mut old, "1", "playing", json!({ "start": true })).await;
+    start_playing(&mut old, "1").await;
     // Reconnected while the old connection lingers, and took over on the new one.
     let mut new = connect_with(address, TOKEN).await;
     report(&mut new, "1", "playing", json!({ "start": true, "trackId": "2" })).await;
+    // Once the server has let a connection go, it records when its device was last seen. Seen
+    // in 2100 until then, so only that write lowers it: a request skips refreshing a device
+    // seen so recently.
+    let conn = rusqlite::Connection::open(temp.path().join("jewelcase.db")).unwrap();
+    let later = 4_102_444_800_000_i64;
+    conn.execute("UPDATE devices SET last_seen_at = ?1 WHERE id = 1", [later]).unwrap();
     old.close(None).await.unwrap();
-    while old.next().await.is_some() {}
-    // Nothing can be waited on when nothing changes: give the server time to let go.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let let_go = async || {
+        let seen = "SELECT last_seen_at FROM devices WHERE id = 1";
+        let at: i64 = conn.query_row(seen, [], |row| row.get(0)).unwrap();
+        (at < later).then_some(())
+    };
+    eventually("the old connection to be let go", let_go).await;
     let state = player(&app, TOKEN).await;
     assert_eq!((&state["status"], &state["trackId"]), (&json!("playing"), &json!("2")));
 }
