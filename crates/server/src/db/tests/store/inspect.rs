@@ -36,7 +36,7 @@ impl InspectStore for SqliteStore {
         let mut stmt = conn
             .prepare(
                 "SELECT t.id, t.root_id, t.path, t.missing_since IS NOT NULL, t.title, t.album_title, t.sort_key, \
-                 t.artist_sort_key, t.codec, t.container, t.channels, t.sample_rate_hz, t.analyzer_version > 0, \
+                 t.file_artist_sort_key, t.codec, t.container, t.channels, t.sample_rate_hz, t.analyzer_version > 0, \
                  t.loudness_lufs IS NOT NULL, \
                  (SELECT image_id FROM albums a WHERE a.id = t.album_id) IS NOT NULL, \
                  EXISTS (SELECT 1 FROM track_artists ta JOIN artists ar ON ar.id = ta.artist_id \

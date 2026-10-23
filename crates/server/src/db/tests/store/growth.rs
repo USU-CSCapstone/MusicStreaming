@@ -12,6 +12,7 @@ use crate::db::store::SqliteStore;
 
 mod credits;
 mod problems;
+mod sort_keys;
 
 /// Track `i` of album `album` under `root`, with embedded art and a label, by one artist.
 fn track(root: &Path, album: &str, i: usize) -> TrackRecord {

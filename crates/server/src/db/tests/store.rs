@@ -67,7 +67,9 @@ mod scans;
 mod sidecars;
 mod statistics;
 mod totals;
+mod track_sort;
 mod track_totals;
+mod walked;
 
 /// The count `sql` selects from `store`.
 fn count(store: &SqliteStore, sql: &'static str) -> i64 {

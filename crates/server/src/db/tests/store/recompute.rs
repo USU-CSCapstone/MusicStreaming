@@ -63,21 +63,21 @@ const CHECKS: &[(&str, &str, &str)] = &[
                          AND album_title IS NOT NULL GROUP BY album_title \
                          ORDER BY COUNT(*) DESC, album_title LIMIT 1) AS title FROM tracks t GROUP BY album_id) \
          SELECT album_id, (SELECT title FROM titled WHERE album_id = t.album_id), \
-         (SELECT MIN(album_sort_key) FROM tracks WHERE album_id = t.album_id \
+         (SELECT MIN(file_album_sort_key) FROM tracks WHERE album_id = t.album_id \
           AND album_title IS (SELECT title FROM titled WHERE album_id = t.album_id)), \
          (SELECT release_date FROM tracks WHERE album_id = t.album_id AND release_date IS NOT NULL \
           GROUP BY release_date ORDER BY COUNT(*) DESC, release_date LIMIT 1), \
          COUNT(*), SUM(missing_since IS NULL), SUM(duration_us), MAX(disc_total), \
          (SELECT SUM(total) FROM (SELECT MAX(track_total) AS total FROM tracks \
-                                  WHERE album_id = t.album_id GROUP BY disc_number)), \
-         COUNT(DISTINCT disc_number) FROM tracks t GROUP BY album_id ORDER BY album_id",
+                                  WHERE album_id = t.album_id GROUP BY max(disc_number, 1))), \
+         COUNT(DISTINCT max(disc_number, 1)) FROM tracks t GROUP BY album_id ORDER BY album_id",
     ),
     (
         "album groups",
         "SELECT album_id, disc_number, title, sort_key, release_date, release_type, track_total, \
          disc_total, compilation, labels, album_artist_ids, track_count, available_count, \
          duration_us FROM album_groups ORDER BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11",
-        "SELECT album_id, disc_number, ifnull(album_title, ''), album_sort_key, ifnull(release_date, ''), \
+        "SELECT album_id, disc_number, ifnull(album_title, ''), file_album_sort_key, ifnull(release_date, ''), \
          ifnull(release_type, ''), ifnull(track_total, -1), ifnull(disc_total, -1), compilation, \
          ifnull(nullif(labels, '[]'), ''), album_artist_ids, COUNT(*), SUM(missing_since IS NULL), \
          SUM(duration_us) \
@@ -90,6 +90,14 @@ const CHECKS: &[(&str, &str, &str)] = &[
         "SELECT al.id, (SELECT a.sort_key FROM album_artists aa JOIN artists a ON a.id = aa.artist_id \
                         WHERE aa.album_id = al.id AND aa.position = 0) \
          FROM albums al ORDER BY al.id",
+    ),
+    (
+        "track sort keys",
+        "SELECT id, album_sort_key, artist_sort_key FROM tracks ORDER BY id",
+        "SELECT t.id, (SELECT sort_key FROM albums WHERE id = t.album_id), \
+         (SELECT a.sort_key FROM track_artists ta JOIN artists a ON a.id = ta.artist_id \
+          WHERE ta.track_id = t.id AND ta.position = 0) \
+         FROM tracks t ORDER BY t.id",
     ),
     (
         "album art and offers",
@@ -185,7 +193,7 @@ const CHECKS: &[(&str, &str, &str)] = &[
     (
         "artist sort keys",
         "SELECT library_id, artist_id, sort_key, uses FROM artist_sort_keys ORDER BY 2, 3",
-        "SELECT ta.library_id, ta.artist_id, t.artist_sort_key, COUNT(*) FROM track_artists ta \
+        "SELECT ta.library_id, ta.artist_id, t.file_artist_sort_key, COUNT(*) FROM track_artists ta \
          JOIN tracks t ON t.id = ta.track_id WHERE ta.position = 0 GROUP BY 2, 3 ORDER BY 2, 3",
     ),
     (
@@ -199,9 +207,10 @@ const CHECKS: &[(&str, &str, &str)] = &[
         // turns into its sort key, an artist's without a leading article and a tag's with it;
         // names are checked above.
         "SELECT 'artist', id, sort_key FROM artists UNION ALL SELECT 'tag', id, sort_key FROM tags ORDER BY 1, 2",
-        "SELECT 'artist', a.id, COALESCE(NULLIF((SELECT t.artist_sort_key FROM track_artists ta \
+        "SELECT 'artist', a.id, COALESCE(NULLIF((SELECT t.file_artist_sort_key FROM track_artists ta \
           JOIN tracks t ON t.id = ta.track_id WHERE ta.artist_id = a.id AND ta.position = 0 \
-          GROUP BY t.artist_sort_key ORDER BY COUNT(*) DESC, t.artist_sort_key LIMIT 1), x''), a.name) \
+          GROUP BY t.file_artist_sort_key ORDER BY COUNT(*) DESC, t.file_artist_sort_key LIMIT 1), \
+          x''), a.name) \
          FROM artists a UNION ALL SELECT 'tag', id, name FROM tags ORDER BY 1, 2",
     ),
     (

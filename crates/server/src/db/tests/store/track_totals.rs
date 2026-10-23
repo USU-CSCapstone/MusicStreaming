@@ -84,3 +84,34 @@ fn a_double_album_of_two_short_discs_is_an_album() {
         .unwrap();
     assert_eq!(album, ("album".to_owned(), 10));
 }
+
+/// A track with no disc number counts as disc 1, so three tracks tagged with a total of 3, one of
+/// them with no disc number, are one disc of three: a single, not an EP of six
+/// (`requirements/albums.md` §3).
+#[test]
+fn a_track_with_no_disc_number_counts_as_disc_one() {
+    let (tmp, db) = open();
+    let root = tmp.path().join("lib");
+    let made = root.clone();
+    db.write_blocking(move |tx| libraries::create(tx, Some(1), "Music", &[&made], &[]).map(drop))
+        .unwrap();
+    let store = SqliteStore::new(db).unwrap();
+    let upserts = (0..3).map(|i| {
+        let mut rec = record(&root, i);
+        rec.tags.album = Some("Three".into());
+        rec.tags.disc_number = (i > 0).then_some(1);
+        rec.tags.track_total = Some(3);
+        rec
+    });
+    store.apply(1, Batch { upserts: upserts.collect(), ..Batch::default() }).unwrap();
+    check(&store, "the upserts");
+    let album = store
+        .db()
+        .read_blocking(|conn| {
+            conn.query_row("SELECT type, track_total, disc_count FROM albums", [], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
+            })
+        })
+        .unwrap();
+    assert_eq!(album, ("single".to_owned(), 3, 1));
+}

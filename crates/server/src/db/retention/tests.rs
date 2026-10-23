@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use rusqlite::{Connection, Result, params};
 
-use super::catalog::TRACK_CHUNK;
+use super::catalog::{MISSING, TRACK_CHUNK};
 use super::{CHUNK, Sweep, WINDOW_MS};
 use crate::db::Database;
 use crate::db::testing::{self, Album, Artist, Image, Track, User, library, sweep};
@@ -230,11 +230,17 @@ fn unused_art_and_biographies_go() {
     assert_eq!(column(&db, "SELECT id FROM biographies ORDER BY id"), [1, 7]);
 }
 
+/// Marks every root as walked whole by a scan that completed after starting at `at`.
+fn walked(conn: &Connection, at: i64) -> Result<()> {
+    conn.execute("UPDATE library_roots SET walked_at = ?1", [at]).map(drop)
+}
+
 /// Tracks missing past the window are purged, each recorded as deleted in its own library's
 /// feed; those missing for less, for exactly the window, and those present, stay.
 #[test]
 fn missing_tracks_go_after_the_window_in_each_library() {
     let (_temp, db) = open(|conn| {
+        walked(conn, NOW)?;
         Album::new(10, 1).insert(conn)?;
         Album::new(11, 2).insert(conn)?;
         for (id, library, album, missing) in [
@@ -264,6 +270,44 @@ fn missing_tracks_go_after_the_window_in_each_library() {
     assert_eq!(deleted, [(1, 1), (2, 5)]);
 }
 
+/// A track missing past the window stays until a scan of its whole root that started once the
+/// window was up has completed: not while no scan has, nor after one that started a moment
+/// before (`requirements/scanning.md` §8). A track missing for less stays, though a scan's start
+/// lies a window after its mark, as when the clock was ahead as the scan started.
+#[test]
+fn a_missing_track_waits_for_a_scan_after_the_window() {
+    let (_temp, db) = open(|conn| {
+        Album::new(10, 1).insert(conn)?;
+        Track { missing_since: Some(OLD - DAY), ..Track::new(1, 1, 10) }.insert(conn)?;
+        Track { missing_since: Some(RECENT), ..Track::new(2, 1, 10) }.insert(conn)
+    });
+    let tracks = "SELECT id FROM tracks ORDER BY id";
+    sweep(&db, NOW);
+    assert_eq!(column(&db, tracks), [1, 2], "no scan has completed");
+    db.write_blocking(|tx| walked(tx, OLD - DAY + WINDOW_MS)).unwrap();
+    sweep(&db, NOW);
+    assert_eq!(column(&db, tracks), [1, 2], "the scan started as the window ended");
+    db.write_blocking(|tx| walked(tx, RECENT + WINDOW_MS + 1)).unwrap();
+    sweep(&db, NOW);
+    assert_eq!(column(&db, tracks), [2]);
+}
+
+/// The purge reads each root's marks through `tracks_missing`, so marks under a root not yet
+/// walked again cost nothing to the roots that were.
+#[test]
+fn the_purge_reads_the_marks_root_by_root() {
+    let (_temp, db) = open(|_| Ok(()));
+    let plan: Vec<String> = db
+        .read_blocking(|conn| {
+            conn.prepare(&format!("EXPLAIN QUERY PLAN {MISSING}"))?
+                .query_map(params![1, 0, 1, 0], |r| r.get(3))?
+                .collect()
+        })
+        .unwrap();
+    let by_root = "COVERING INDEX tracks_missing (root_id=? AND missing_since<?)";
+    assert!(plan.iter().any(|step| step.contains(by_root)), "{plan:?}");
+}
+
 /// A sweep with more to delete than a chunk deletes it a chunk at a time: with no time to
 /// spare, each step purges at most [`TRACK_CHUNK`] tracks and looks at no more than [`CHUNK`]
 /// images, and the sweep ends with what is used still there: the present tracks, and the image
@@ -272,6 +316,7 @@ fn missing_tracks_go_after_the_window_in_each_library() {
 fn a_large_sweep_goes_a_chunk_at_a_time() {
     let n = i64::try_from(CHUNK).unwrap() * 2 + 50;
     let (_temp, db) = open(move |conn| {
+        walked(conn, NOW)?;
         Album::new(10, 1).insert(conn)?;
         for id in 1..=n {
             let missing = (id % 2 == 1).then_some(OLD);

@@ -1,5 +1,6 @@
-//! The catalog's part of the sweep: tracks missing for longer than the window
-//! (`requirements/scanning.md` §8), and the art and biographies nothing points at.
+//! The catalog's part of the sweep: tracks missing for longer than the window, once a later scan
+//! has found them still missing (`requirements/scanning.md` §8), and the art and biographies
+//! nothing points at.
 
 use rusqlite::{Result, Transaction, params};
 
@@ -23,13 +24,20 @@ const IMAGE_USED: &str = "EXISTS (SELECT 1 FROM tracks t \
 const BIOGRAPHY_USED: &str = "EXISTS (SELECT 1 FROM tracks t \
                                   WHERE t.library_id = r.library_id AND t.biography_id = r.id)";
 
+/// Up to `?3` tracks of library `?1` missing since before `?2`, and since more than `?4` before
+/// the start of the last completed scan of their whole root, so none under a root no such scan
+/// has walked; read root by root through `tracks_missing`.
+pub(super) const MISSING: &str = "SELECT t.id FROM library_roots r JOIN tracks t ON t.root_id = r.id \
+     WHERE r.library_id = ?1 AND t.missing_since < min(?2, r.walked_at - ?4) LIMIT ?3";
+
 /// The most tracks one chunk purges: the smallest batch a scan writes (`design/scanning.md` §7).
 /// A track costs about 1 ms with its recompute in a release build, more on a Pi and on a large
 /// album, so a step stops close to its time (`design/database.md` §9).
 pub(super) const TRACK_CHUNK: usize = 16;
 
-/// Purges up to [`TRACK_CHUNK`] tracks missing for longer than the window, recording each in the
-/// feed, and brings the albums, artists and tags they counted toward up to date in the same
+/// Purges up to [`TRACK_CHUNK`] tracks missing for longer than the window and still missing after
+/// a completed scan of their whole root that started once the window was up, recording each in
+/// the feed, and brings the albums, artists and tags they counted toward up to date in the same
 /// transaction, which deletes those they were the last of and records that too. Albums point at
 /// tracks through deferred foreign keys, which only that recompute satisfies before the commit.
 /// A play of a purged track keeps its snapshot, since `plays.track_id` has no foreign key.
@@ -37,14 +45,14 @@ pub(super) const TRACK_CHUNK: usize = 16;
 /// Returns whether none is left. Playlists are not modelled yet (`design/database.md` §10); a
 /// track in one is to be kept.
 pub(super) fn tracks(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
-    let mut missing = tx.prepare_cached(
-        "SELECT id FROM tracks WHERE library_id = ?1 AND missing_since < ?2 LIMIT ?3",
-    )?;
+    let mut missing = tx.prepare_cached(MISSING)?;
     let mut delete = tx.prepare_cached("DELETE FROM tracks WHERE id = ?1")?;
     let mut purged = 0;
     for library in libraries(tx)? {
         let ids: Vec<i64> = missing
-            .query_map(params![library, now - WINDOW_MS, TRACK_CHUNK - purged], |r| r.get(0))?
+            .query_map(params![library, now - WINDOW_MS, TRACK_CHUNK - purged, WINDOW_MS], |r| {
+                r.get(0)
+            })?
             .collect::<Result<_>>()?;
         let mut touched = Touched::default();
         for &id in &ids {

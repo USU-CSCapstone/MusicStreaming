@@ -1,10 +1,9 @@
-//! Scan rows the store is slow to write, or cannot write: the queue answers while a request or
-//! cancel writes, requests racing for the same work queue it once, a request the store cannot
-//! record is retried, and a cancel the store cannot save leaves its scan queued where it was
-//! (`design/scanning.md` §9).
+//! Scan rows the store is slow to write, or cannot write: the queue answers while a request
+//! writes, requests racing for the same work queue it once, and a request the store cannot record
+//! is retried (`design/scanning.md` §9).
 
 use std::path::Path;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
@@ -135,8 +134,8 @@ fn state(rows: &BareStore, id: ScanId) -> ScanState {
     rows.scans().into_iter().find(|s| s.id == id).unwrap().state
 }
 
-/// While a request, a cancel, or a request replacing a queued scan waits on the store to write a
-/// scan row, the queue still says what runs: the write holds up only the call making it.
+/// While a request waits on the store to write a scan row, its own or that of a queued scan it
+/// replaces, the queue still says what runs: the write holds up only the call making it.
 #[test]
 fn the_queue_answers_while_a_scan_row_is_written() {
     let tmp = tempfile::tempdir().unwrap();
@@ -151,14 +150,7 @@ fn the_queue_answers_while_a_scan_row_is_written() {
     gate.release();
     let requested = requesting.join().unwrap().unwrap();
 
-    gate.hold(1);
-    let cancelling = in_thread(&scanner, move |s| s.cancel(queued));
-    gate.wait_held();
-    assert_eq!(running_within_bound(&scanner), Ok(Some(running)));
-    gate.release();
-    assert!(cancelling.join().unwrap());
-
-    // The new scan's row first, then the replaced scan's, held up.
+    // The new scan's row first, then the first replaced scan's, held up.
     gate.hold(2);
     let replacing = in_thread(&scanner, |s| s.scan_library(Trigger::Manual));
     gate.wait_held();
@@ -236,74 +228,4 @@ fn a_request_the_store_cannot_record_is_retried() {
     let [row] = rows.scans().try_into().unwrap();
     assert_eq!((row.trigger, row.state), (Trigger::Manual, ScanState::Completed));
     assert_eq!(row.scopes, [Scope::root(&root)]);
-}
-
-/// A queued scan whose row the store cannot save cancelled is not cancelled: it stays queued,
-/// between the scans queued before and after it, and runs.
-#[test]
-fn a_cancel_the_store_cannot_save_leaves_the_scan_queued_where_it_was() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    let (store, rows, gate) = gated();
-    let (scanner, thread, running, queued) = parked(&root, &store, &rows);
-    let c = scanner.request(Trigger::Manual, folder(&root, "C")).unwrap();
-    let d = scanner.request(Trigger::Manual, folder(&root, "D")).unwrap();
-
-    gate.fail(1);
-    assert!(!scanner.cancel(c));
-    let ids: Vec<ScanId> = scanner.queued().iter().map(|s| s.id).collect();
-    assert_eq!(ids, [queued, c, d]);
-    store.release();
-    scanner.wait_idle();
-    drop(thread);
-    let states = [running, queued, c, d].map(|id| state(&rows, id));
-    assert_eq!(states, [ScanState::Completed; 4]);
-}
-
-/// A scan put back after a failed cancel goes after the last scan still queued that was ahead
-/// of it, though one ahead of it left the queue while the cancel was writing.
-#[test]
-fn a_scan_put_back_goes_after_what_is_still_ahead_of_it() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    let (store, rows, gate) = gated();
-    let (scanner, thread, _, queued) = parked(&root, &store, &rows);
-    let c = scanner.request(Trigger::Manual, folder(&root, "C")).unwrap();
-    let d = scanner.request(Trigger::Manual, folder(&root, "D")).unwrap();
-
-    gate.hold(1);
-    gate.fail(1);
-    let cancelling = in_thread(&scanner, move |s| s.cancel(c));
-    gate.wait_held();
-    assert!(scanner.cancel(queued));
-    gate.release();
-    assert!(!cancelling.join().unwrap());
-    let ids: Vec<ScanId> = scanner.queued().iter().map(|s| s.id).collect();
-    assert_eq!(ids, [c, d]);
-    store.release();
-    scanner.wait_idle();
-    drop(thread);
-}
-
-/// A scan put back after a failed cancel runs, though the worker had found the queue empty and
-/// gone to wait while the cancel was writing.
-#[test]
-fn a_scan_put_back_after_a_failed_cancel_runs() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    let (store, rows, gate) = gated();
-    let (scanner, thread, running, queued) = parked(&root, &store, &rows);
-
-    gate.hold(1);
-    gate.fail(1);
-    let cancelling = in_thread(&scanner, move |s| s.cancel(queued));
-    gate.wait_held();
-    store.release();
-    let idle = || scanner.is_idle() && state(&rows, running) == ScanState::Completed;
-    wait_until("the running scan never ended", idle);
-    gate.release();
-    assert!(!cancelling.join().unwrap());
-    let ran = || state(&rows, queued) == ScanState::Completed;
-    wait_until("the scan put back never ran", ran);
-    drop(thread);
 }

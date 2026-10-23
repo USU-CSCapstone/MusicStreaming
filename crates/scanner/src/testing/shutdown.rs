@@ -1,5 +1,5 @@
-//! Scenarios for stopping the scanner: a shutdown leaves its scans to resume, and a cancel ends
-//! a scan for good (`design/scanning.md` §9).
+//! Scenarios for stopping the scanner: a shutdown leaves its scans to resume
+//! (`design/scanning.md` §9).
 
 use std::sync::Arc;
 
@@ -53,43 +53,4 @@ pub fn a_shutdown_leaves_its_scans_to_resume<S: InspectStore + 'static>(make: Fa
     assert_eq!(row(queued).state, ScanState::Completed);
     let paths: Vec<_> = live(store.as_ref(), &lib).into_iter().map(|t| t.path).collect();
     assert_eq!(paths, [root.join("B/Y/01 - Track 1.wav"), root.join("C/Z/01 - Track 1.wav")]);
-}
-
-/// A cancelled scan ends cancelled, even when a shutdown follows before it stops, and the next
-/// start resumes neither. Each scan is held by the store before it reads anything.
-pub fn a_cancelled_scan_stays_cancelled<S: InspectStore + 'static>(make: Factory<S>) {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    make_album(&root, "A", "X", 1);
-    make_album(&root, "B", "Y", 1);
-    let lib = library(&root);
-    let store: Arc<S> = Arc::new(make(&lib));
-    let parked = Arc::new(Hooked::new(store.clone()));
-    let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
-
-    parked.hold();
-    let cancelled = scanner.scan_library(Trigger::Manual).unwrap();
-    wait_until_running(&scanner, cancelled);
-    assert!(scanner.cancel(cancelled));
-    parked.release();
-    scanner.wait_idle();
-
-    parked.hold();
-    let then_shut_down = scanner.scan_library(Trigger::Manual).unwrap();
-    wait_until_running(&scanner, then_shut_down);
-    assert!(scanner.cancel(then_shut_down));
-    thread.stop();
-    parked.release();
-    drop(thread);
-
-    let (restarted, restarted_thread) = Scanner::start(store.clone(), lib.clone()).unwrap();
-    restarted.wait_idle();
-    drop(restarted_thread);
-    let scans = store.inspect_scans(lib.id);
-    for id in [cancelled, then_shut_down] {
-        let scan = scans.iter().find(|s| s.id == id).unwrap();
-        assert_eq!(scan.state, ScanState::Cancelled, "{scan:?}");
-        assert!(scan.finished_at.is_some());
-    }
-    assert!(live(store.as_ref(), &lib).is_empty());
 }

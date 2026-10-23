@@ -119,16 +119,10 @@ pub fn scan_once(
     trigger: Trigger,
     scopes: Vec<Scope>,
 ) -> Scan {
-    let cancel = AtomicBool::new(false);
     let options = ScanOptions::default();
     let mut scan = store.create_scan(lib.id, trigger, &scopes).unwrap();
-    let ctx = ScanContext {
-        store,
-        library: lib,
-        cancel: &cancel,
-        shutdown: &AtomicBool::new(false),
-        options: &options,
-    };
+    let ctx =
+        ScanContext { store, library: lib, shutdown: &AtomicBool::new(false), options: &options };
     run_scan(&ctx, &mut scan);
     scan
 }

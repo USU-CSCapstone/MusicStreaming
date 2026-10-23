@@ -11,8 +11,8 @@
 //! again after a wait ([`retry`]).
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Condvar, Mutex};
 
 use crate::library::LibraryConfig;
 use crate::lock::Recover;
@@ -45,13 +45,11 @@ impl Queue {
 /// What a library's [`Scanner`] handles and its thread share.
 struct Inner {
     store: Arc<dyn Store>,
-    library: RwLock<LibraryConfig>,
+    library: LibraryConfig,
     options: ScanOptions,
     queue: Mutex<Queue>,
     /// Notified whenever the queue changes, and once a shutdown is asked for.
     wake: Condvar,
-    /// Set to cancel the running scan; cleared as each scan starts.
-    cancel_running: AtomicBool,
     /// Set once, under the queue lock, so a worker about to wait for work sees it or is woken.
     shutdown: AtomicBool,
 }
@@ -73,76 +71,32 @@ impl Scanner {
         self.inner.request(trigger, scopes)
     }
 
-    /// Scan every root (`Trigger::Initial`, `Scheduled`, `Reconfigure`, ...). `None` as for
+    /// Scan every root (`Trigger::Initial`, `Scheduled`, ...). `None` as for
     /// [`Scanner::request`].
     pub fn scan_library(&self, trigger: Trigger) -> Option<ScanId> {
-        let roots = self.inner.library.read().recover().roots.clone();
+        let roots = self.inner.library.roots.clone();
         self.request(trigger, roots.into_iter().map(Scope::root).collect())
     }
 
     /// The root containing `path`, if any.
     pub fn root_for(&self, path: &std::path::Path) -> Option<std::path::PathBuf> {
-        self.inner.library.read().recover().roots.iter().find(|r| path.starts_with(r)).cloned()
+        self.inner.library.roots.iter().find(|r| path.starts_with(r)).cloned()
     }
 
     /// The library's exclude patterns, as configured.
     pub(crate) fn excludes(&self) -> Vec<String> {
-        self.inner.library.read().recover().excludes.clone()
+        self.inner.library.excludes.clone()
     }
 
     /// Whether the index holds a track not yet missing, or a problem, under `folder`, which
     /// may no longer exist. When the store cannot say, the error is logged and the answer is
     /// yes, which costs the watcher only a scan of the folder.
     pub fn indexes_under(&self, folder: &std::path::Path) -> bool {
-        let library = self.inner.library.read().recover().id;
+        let library = self.inner.library.id;
         self.inner.store.indexes_under(library, folder).unwrap_or_else(|error| {
             tracing::error!(library, folder = %folder.display(), %error, "index not checked");
             true
         })
-    }
-
-    /// Replace the library configuration and reconcile
-    /// (`requirements/scanning.md` §7). `None` as for [`Scanner::request`].
-    pub fn reconfigure(&self, library: LibraryConfig) -> Option<ScanId> {
-        *self.inner.library.write().recover() = library;
-        self.scan_library(Trigger::Reconfigure)
-    }
-
-    /// Cancel a queued or running scan, returning whether it is cancelled. A running scan stops
-    /// after the file in hand and ends cancelled, even if a shutdown follows; everything persisted
-    /// stays persisted. A queued scan whose row the store cannot save cancelled goes back in the
-    /// queue, and this returns false.
-    pub fn cancel(&self, id: ScanId) -> bool {
-        let (ahead, scan) = {
-            let mut q = self.inner.queue.lock().recover();
-            if q.running.as_ref().is_some_and(|s| s.id == id) {
-                self.inner.cancel_running.store(true, Ordering::SeqCst);
-                return true;
-            }
-            let Some(position) = q.queued.iter().position(|s| s.id == id) else {
-                return false;
-            };
-            let ahead: Vec<ScanId> = q.queued.iter().take(position).map(|s| s.id).collect();
-            let Some(scan) = q.queued.remove(position) else {
-                return false;
-            };
-            (ahead, scan)
-        };
-        // An idle check waiting on the queue sees it empty now, or still running. Only a stopped
-        // worker leaves a scan queued with nothing running for longer than it takes to start it,
-        // so this matters only to an idle check after a shutdown.
-        self.inner.wake.notify_all();
-        if self.inner.cancelled(&scan) {
-            return true;
-        }
-        // Back where it was: after the last scan still queued that was ahead of it, whatever has
-        // left the queue meanwhile.
-        let mut q = self.inner.queue.lock().recover();
-        let position = q.queued.iter().rposition(|s| ahead.contains(&s.id)).map_or(0, |p| p + 1);
-        q.queued.insert(position, scan);
-        drop(q);
-        self.inner.wake.notify_all();
-        false
     }
 
     /// The scan running now, if any.

@@ -180,16 +180,18 @@ impl Track {
         }
     }
 
-    /// Adds the track, on its library's root.
+    /// Adds the track, on its library's root, its file giving the artist and album sort keys it
+    /// copies.
     pub fn insert(&self, conn: &Connection) -> Result<()> {
         conn.prepare_cached(
             "INSERT INTO tracks (id, library_id, album_id, root_id, path, file_size, file_mtime, \
-             missing_since, title, sort_key, artist_sort_key, album_sort_key, disc_number, \
-             track_number, release_date, codec, container, lossless, sample_rate_hz, bit_depth, \
-             channels, duration_us, loudness_lufs, peak_dbtp, added_at) \
+             missing_since, title, sort_key, artist_sort_key, album_sort_key, \
+             file_artist_sort_key, file_album_sort_key, disc_number, track_number, release_date, \
+             codec, container, lossless, sample_rate_hz, bit_depth, channels, duration_us, \
+             loudness_lufs, peak_dbtp, added_at) \
              VALUES (?1, ?2, ?3, (SELECT id FROM library_roots WHERE library_id = ?2), ?4, ?5, 0, \
-                     ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 44100, ?17, 2, ?18, ?19, \
-                     ?20, ?21)",
+                     ?6, ?7, ?8, ?9, ?10, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 44100, ?17, 2, \
+                     ?18, ?19, ?20, ?21)",
         )?
         .execute(params![
             self.id,

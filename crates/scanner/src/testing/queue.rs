@@ -10,7 +10,6 @@ use super::{
     write_small_wav,
 };
 use crate::clock::now_ms;
-use crate::library::LibraryConfig;
 use crate::queue::Scanner;
 use crate::scan::{Cursor, Scan, ScanState, Trigger};
 use crate::scope::{Depth, Scope};
@@ -68,15 +67,6 @@ pub fn queue_runs_resumes_and_coalesces<S: InspectStore + 'static>(make: Factory
         behind,
         "it joins the one queued behind"
     );
-    let dropped = scanner
-        .request(Trigger::Manual, vec![Scope::folder(&root, root.join("B"), Depth::Subtree)])
-        .unwrap();
-    assert!(scanner.cancel(dropped));
-    assert!(scanner.queued().iter().all(|s| s.id != dropped), "{:?}", scanner.queued());
-    assert!(!scanner.cancel(dropped), "a cancelled scan is gone");
-    let stored = store.inspect_scans(lib.id).into_iter().find(|s| s.id == dropped).unwrap();
-    assert_eq!(stored.state, ScanState::Cancelled);
-    assert!(stored.finished_at.is_some());
     let a = scanner
         .request(Trigger::Manual, vec![Scope::folder(&root, root.join("A"), Depth::Subtree)])
         .unwrap();
@@ -133,39 +123,6 @@ pub fn a_resumed_scan_takes_no_new_work<S: InspectStore + 'static>(make: Factory
     let state = |id| scans.iter().find(|s| s.id == id).unwrap().state;
     assert_eq!(state(waiting.id), ScanState::Cancelled, "the startup scan replaced it");
     assert_eq!(state(startup), ScanState::Completed);
-}
-
-/// A reconfiguration while a library scan runs queues a scan of its own, which applies the
-/// new excludes: tracks under an added exclude end up missing. The library is indexed first,
-/// so the outcome holds whichever configuration the parked scan read when it started.
-pub fn a_reconfigure_during_a_scan_applies_its_excludes<S: InspectStore + 'static>(
-    make: Factory<S>,
-) {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    make_album(&root, "A", "X", 1);
-    make_album(&root, "backup", "X", 1);
-    let lib = library(&root);
-    let store: Arc<S> = Arc::new(make(&lib));
-    let parked = Arc::new(Hooked::new(store.clone()));
-    let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
-    scanner.scan_library(Trigger::Initial).unwrap();
-    scanner.wait_idle();
-    parked.hold();
-    let running = scanner.scan_library(Trigger::Scheduled).unwrap();
-    wait_until_running(&scanner, running);
-
-    let excluding = LibraryConfig { excludes: vec!["backup".into(), "backup/**".into()], ..lib };
-    let reconfigured = scanner.reconfigure(excluding.clone()).unwrap();
-    assert_ne!(reconfigured, running, "a scan that has started takes no new work");
-    parked.release();
-    scanner.wait_idle();
-    drop(thread);
-
-    let tracks = store.inspect_tracks(excluding.id);
-    let missing = |path: &str| tracks.iter().find(|t| t.path == root.join(path)).unwrap().missing;
-    assert!(!missing("A/X/01 - Track 1.wav"));
-    assert!(missing("backup/X/01 - Track 1.wav"));
 }
 
 /// A scan of the [`library`] at `root` that a previous process left running after the folder

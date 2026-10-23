@@ -16,7 +16,7 @@ CREATE TABLE artist_spellings (
     FOREIGN KEY (library_id, artist_id) REFERENCES artists (library_id, id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
 
--- How many of the tracks crediting the artist first carry each tracks.artist_sort_key
+-- How many of the tracks crediting the artist first carry each tracks.file_artist_sort_key
 CREATE TABLE artist_sort_keys (
     library_id INTEGER NOT NULL,
     artist_id  INTEGER NOT NULL,
@@ -101,7 +101,7 @@ BEGIN
     UPDATE artists SET owned_track_count = owned_track_count + 1
     WHERE id IN (SELECT artist_id FROM album_artists WHERE album_id = NEW.album_id);
     INSERT INTO album_groups VALUES (NEW.library_id, NEW.album_id, NEW.disc_number,
-        ifnull(NEW.album_title, ''), NEW.album_sort_key, ifnull(NEW.release_date, ''),
+        ifnull(NEW.album_title, ''), NEW.file_album_sort_key, ifnull(NEW.release_date, ''),
         ifnull(NEW.release_type, ''), ifnull(NEW.track_total, -1), ifnull(NEW.disc_total, -1),
         NEW.compilation, ifnull(nullif(NEW.labels, '[]'), ''), NEW.album_artist_ids, 1,
         NEW.missing_since IS NULL, NEW.duration_us)
@@ -125,7 +125,7 @@ BEGIN
         duration_us = duration_us - OLD.duration_us
     WHERE (album_id, disc_number, title, sort_key, release_date, release_type, track_total,
            disc_total, compilation, labels, album_artist_ids)
-        = (OLD.album_id, OLD.disc_number, ifnull(OLD.album_title, ''), OLD.album_sort_key,
+        = (OLD.album_id, OLD.disc_number, ifnull(OLD.album_title, ''), OLD.file_album_sort_key,
            ifnull(OLD.release_date, ''), ifnull(OLD.release_type, ''), ifnull(OLD.track_total, -1),
            ifnull(OLD.disc_total, -1), OLD.compilation, ifnull(nullif(OLD.labels, '[]'), ''),
            OLD.album_artist_ids);
@@ -133,9 +133,9 @@ END;
 
 -- A track leaves its old group for the one its new album, disc, tags, availability and duration
 -- put it in.
-CREATE TRIGGER tracks_regrouped AFTER UPDATE OF album_id, disc_number, album_title, album_sort_key,
-    release_date, release_type, track_total, disc_total, compilation, labels, album_artist_ids,
-    missing_since, duration_us
+CREATE TRIGGER tracks_regrouped AFTER UPDATE OF album_id, disc_number, album_title,
+    file_album_sort_key, release_date, release_type, track_total, disc_total, compilation, labels,
+    album_artist_ids, missing_since, duration_us
 ON tracks
 BEGIN
     UPDATE album_groups SET track_count = track_count - 1,
@@ -143,12 +143,12 @@ BEGIN
         duration_us = duration_us - OLD.duration_us
     WHERE (album_id, disc_number, title, sort_key, release_date, release_type, track_total,
            disc_total, compilation, labels, album_artist_ids)
-        = (OLD.album_id, OLD.disc_number, ifnull(OLD.album_title, ''), OLD.album_sort_key,
+        = (OLD.album_id, OLD.disc_number, ifnull(OLD.album_title, ''), OLD.file_album_sort_key,
            ifnull(OLD.release_date, ''), ifnull(OLD.release_type, ''), ifnull(OLD.track_total, -1),
            ifnull(OLD.disc_total, -1), OLD.compilation, ifnull(nullif(OLD.labels, '[]'), ''),
            OLD.album_artist_ids);
     INSERT INTO album_groups VALUES (NEW.library_id, NEW.album_id, NEW.disc_number,
-        ifnull(NEW.album_title, ''), NEW.album_sort_key, ifnull(NEW.release_date, ''),
+        ifnull(NEW.album_title, ''), NEW.file_album_sort_key, ifnull(NEW.release_date, ''),
         ifnull(NEW.release_type, ''), ifnull(NEW.track_total, -1), ifnull(NEW.disc_total, -1),
         NEW.compilation, ifnull(nullif(NEW.labels, '[]'), ''), NEW.album_artist_ids, 1,
         NEW.missing_since IS NULL, NEW.duration_us)
@@ -199,16 +199,24 @@ BEGIN
     WHERE id IN (SELECT artist_id FROM album_artists WHERE album_id = NEW.album_id);
 END;
 
-CREATE TRIGGER tracks_artist_sort_key AFTER UPDATE OF artist_sort_key ON tracks
-WHEN NEW.artist_sort_key <> OLD.artist_sort_key
+CREATE TRIGGER tracks_artist_sort_key AFTER UPDATE OF file_artist_sort_key ON tracks
+WHEN NEW.file_artist_sort_key <> OLD.file_artist_sort_key
 BEGIN
     UPDATE artist_sort_keys SET uses = uses - 1
     WHERE artist_id = (SELECT artist_id FROM track_artists WHERE track_id = NEW.id AND position = 0)
-      AND sort_key = OLD.artist_sort_key;
+      AND sort_key = OLD.file_artist_sort_key;
     INSERT INTO artist_sort_keys (library_id, artist_id, sort_key, uses)
-    SELECT library_id, artist_id, NEW.artist_sort_key, 1 FROM track_artists
+    SELECT library_id, artist_id, NEW.file_artist_sort_key, 1 FROM track_artists
     WHERE track_id = NEW.id AND position = 0
     ON CONFLICT (artist_id, sort_key) DO UPDATE SET uses = uses + 1;
+END;
+
+-- A track copies its album's sort key and follows a change to it, which costs the album's tracks
+-- and runs only when the key changes. Its first artist's key is followed by the artist's
+-- recompute, in follow_artist_sort_key (design/database.md §3).
+CREATE TRIGGER albums_sort_key AFTER UPDATE OF sort_key ON albums WHEN NEW.sort_key <> OLD.sort_key
+BEGIN
+    UPDATE tracks SET album_sort_key = NEW.sort_key WHERE album_id = NEW.id;
 END;
 
 -- ───────────────────────────── Track credits ─────────────────────────────
@@ -232,7 +240,7 @@ BEGIN
     SELECT NEW.library_id, NEW.artist_id, NEW.artist_name, 1 WHERE NEW.artist_name IS NOT NULL
     ON CONFLICT (artist_id, name) DO UPDATE SET uses = uses + 1;
     INSERT INTO artist_sort_keys (library_id, artist_id, sort_key, uses)
-    SELECT NEW.library_id, NEW.artist_id, artist_sort_key, 1 FROM tracks
+    SELECT NEW.library_id, NEW.artist_id, file_artist_sort_key, 1 FROM tracks
     WHERE id = NEW.track_id AND NEW.position = 0
     ON CONFLICT (artist_id, sort_key) DO UPDATE SET uses = uses + 1;
     INSERT INTO artist_tags (library_id, artist_id, tag_id, track_count)
@@ -255,7 +263,7 @@ BEGIN
     WHERE artist_id = OLD.artist_id AND name = OLD.artist_name;
     UPDATE artist_sort_keys SET uses = uses - 1
     WHERE OLD.position = 0 AND artist_id = OLD.artist_id
-      AND sort_key = (SELECT artist_sort_key FROM tracks WHERE id = OLD.track_id);
+      AND sort_key = (SELECT file_artist_sort_key FROM tracks WHERE id = OLD.track_id);
     UPDATE artist_tags SET track_count = track_count - 1
     WHERE artist_id = OLD.artist_id AND tag_id IN (SELECT tag_id FROM track_tags WHERE track_id = OLD.track_id);
 END;

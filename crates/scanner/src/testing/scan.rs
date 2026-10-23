@@ -33,10 +33,9 @@ pub use resume::*;
 pub use undone::*;
 pub use unlistable::*;
 
-/// The flags that cancel a scan, or shut it down, from inside it.
+/// The flag that shuts a scan down from inside it.
 #[derive(Default)]
 struct Stops {
-    cancel: AtomicBool,
     shutdown: AtomicBool,
 }
 
@@ -56,8 +55,8 @@ fn batches_of(batch_size: usize) -> ScanOptions {
     }
 }
 
-/// Runs `scan`, already saved to `store`, with `options`, cancelled or shut down once `stops`
-/// says so, and returns what it left undone for a retry.
+/// Runs `scan`, already saved to `store`, with `options`, shut down once `stops` says so, and
+/// returns what it left undone for a retry.
 fn run(
     store: &dyn Store,
     lib: &LibraryConfig,
@@ -65,13 +64,7 @@ fn run(
     options: &ScanOptions,
     stops: &Stops,
 ) -> Undone {
-    let ctx = ScanContext {
-        store,
-        library: lib,
-        cancel: &stops.cancel,
-        shutdown: &stops.shutdown,
-        options,
-    };
+    let ctx = ScanContext { store, library: lib, shutdown: &stops.shutdown, options };
     run_scan(&ctx, scan)
 }
 

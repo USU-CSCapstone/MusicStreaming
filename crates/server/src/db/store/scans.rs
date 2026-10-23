@@ -75,7 +75,9 @@ impl SqliteStore {
 
 /// Writes what changes as a scan runs: its state, cursor, progress, and times, and the folder it
 /// is in, if any, as one of `roots` and the path relative to it. Only a row in the scan's own
-/// library is changed: a scan with no row there is an error, so its writes are not committed.
+/// library is changed: a scan with no row there is an error, so its writes are not committed. A
+/// completed scan marks each root it walked whole as walked when it started, which lets the sweep
+/// purge what it found still missing there (`design/database.md` §9).
 pub(super) fn save(tx: &Transaction, roots: &Roots, scan: &Scan) -> Result<()> {
     let progress = &scan.progress;
     let current = progress.current_path.as_ref();
@@ -105,7 +107,18 @@ pub(super) fn save(tx: &Transaction, roots: &Roots, scan: &Scan) -> Result<()> {
         scan.finished_at,
         scan.library,
     ])?;
-    if changed == 1 { Ok(()) } else { Err(rusqlite::Error::StatementChangedRows(changed)) }
+    if changed != 1 {
+        return Err(rusqlite::Error::StatementChangedRows(changed));
+    }
+    if scan.state == ScanState::Completed {
+        let mut walked =
+            tx.prepare_cached("UPDATE library_roots SET walked_at = ?2 WHERE id = ?1")?;
+        let whole = scan.scopes.iter().filter(|s| s.covers(&Scope::root(&s.root)));
+        for root in whole.filter_map(|s| roots.root_by_path(scan.library, &s.root)) {
+            walked.execute(params![root, scan.started_at])?;
+        }
+    }
+    Ok(())
 }
 
 /// The library's scans that `rest`, such as an `ORDER BY`, selects, with their paths under

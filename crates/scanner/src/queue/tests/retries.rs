@@ -93,30 +93,3 @@ fn a_scan_covering_the_waiting_work_takes_it_over() {
     let row = store.scans().into_iter().find(|s| s.id == scheduled).unwrap();
     assert_eq!(row.state, ScanState::Completed);
 }
-
-/// Work waiting to be retried in a root a reconfiguration has removed since is not queued when
-/// its wait has passed, nor is an empty scan in its place. The worker takes the work with the
-/// queue empty; the library scan queued once it has shows the worker has finished with it, since
-/// the worker queues a retry before taking the next scan.
-#[test]
-fn a_root_removed_from_the_library_is_not_retried() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (lib, nas, _) = nas_gone(tmp.path());
-    let store = Arc::new(BareStore::default());
-    let (scanner, thread) = scanner(&store, &lib);
-    scanner.scan_library(Trigger::Initial).unwrap();
-    scanner.wait_idle();
-
-    let roots = lib.roots.iter().filter(|root| **root != nas).cloned().collect();
-    scanner.reconfigure(LibraryConfig { roots, ..lib.clone() }).unwrap();
-    scanner.wait_idle();
-    assert!(scanner.retry_in(Duration::ZERO), "the root no longer waits");
-    wait_until("the worker never took the work", || !scanner.retry_in(Duration::ZERO));
-    scanner.scan_library(Trigger::Manual).unwrap();
-    scanner.wait_idle();
-    drop(thread);
-    let rows = store.scans();
-    let in_nas = |scan: &Scan| scan.scopes.iter().any(|scope| scope.root == nas);
-    assert_eq!(rows.iter().filter(|scan| in_nas(scan)).count(), 1, "{rows:?}");
-    assert_eq!(rows.len(), 3, "{rows:?}");
-}

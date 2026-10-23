@@ -1,6 +1,6 @@
 //! How an album resolves from its tracks: groups that hold several tracks, as each kind of change
-//! moves tracks in and out of them, against a recompute from scratch; the most-used release type;
-//! and the order of the album artists.
+//! moves tracks in and out of them, against a recompute from scratch; the release type most of its
+//! tracks carry; and the order of the album artists.
 
 use std::path::Path;
 
@@ -76,14 +76,19 @@ fn delete(store: &SqliteStore, id: TrackId) {
         .unwrap();
 }
 
+/// An album takes the type more than half its tracks name in their release-type tags, however
+/// each spells it. Where none does, as when one track in three is tagged a single or two are
+/// tagged apart, its tagged total of 10 makes it an album (`requirements/albums.md` §3).
 #[test]
-fn an_album_takes_its_most_used_release_type_ties_broken_by_bytes() {
+fn an_album_takes_the_release_type_most_of_its_tracks_carry() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     let store = make(&root);
-    let albums: [(&str, &[&str]); 3] = [
-        ("Mostly EP", &["ep", "ep", "single"]),
+    let albums: [(&str, &[&str]); 5] = [
+        ("Mostly EP", &["EP", "ep", "single"]),
+        ("Mostly compilation", &["Album; Compilation", "album; compilation", ""]),
         ("Mostly single", &["single", "single", "ep"]),
+        ("One single", &["single", "", ""]),
         ("Tied", &["single", "ep"]),
     ];
     let mut upserts = Vec::new();
@@ -92,7 +97,7 @@ fn an_album_takes_its_most_used_release_type_ties_broken_by_bytes() {
             let mut rec = record(&root, i);
             rec.path = root.join(format!("{album}/{i}.flac"));
             rec.tags.album = Some(album.to_owned());
-            rec.tags.release_type = Some(kind.to_string());
+            rec.tags.release_type = Some(kind.to_string()).filter(|kind| !kind.is_empty());
             upserts.push(rec);
         }
     }
@@ -105,7 +110,13 @@ fn an_album_takes_its_most_used_release_type_ties_broken_by_bytes() {
                 .collect()
         })
         .unwrap();
-    let expected = [("Mostly EP", "ep"), ("Mostly single", "single"), ("Tied", "ep")];
+    let expected = [
+        ("Mostly EP", "ep"),
+        ("Mostly compilation", "compilation"),
+        ("Mostly single", "single"),
+        ("One single", "album"),
+        ("Tied", "album"),
+    ];
     assert_eq!(types, expected.map(|(a, t)| (a.to_owned(), t.to_owned())));
 }
 

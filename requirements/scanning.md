@@ -126,7 +126,7 @@ This is a hard requirement, not a best effort. Reorganizing a music collection i
 A track no longer on disk is **marked missing, not removed** — visible, clearly unavailable, unplayable.
 
 - **Retained indefinitely if referenced by any playlist.** If the file returns, the track reconnects with nothing lost.
-- **Removed after 30 days** otherwise. Playlist membership is the only reference that extends retention — a kept queue ([`queue.md` §6](queue.md#6-sessions)) expires on its own schedule and does not pin a track, and a copy downloaded to a device does not either ([`offline.md` §9](offline.md#9-download-lifecycle)).
+- **Removed after 30 days** otherwise, once a scan started after those 30 days has completed and found it still missing. Playlist membership is the only reference that extends retention — a kept queue ([`queue.md` §6](queue.md#6-sessions)) expires on its own schedule and does not pin a track, and a copy downloaded to a device does not either ([`offline.md` §9](offline.md#9-download-lifecycle)).
 - **Admins can clean up immediately**, without waiting out the retention period.
 
 Retention is deliberately generous: an unmounted NAS must not quietly dismantle everyone's playlists, and a stale record costs far less than a destroyed one.

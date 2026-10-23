@@ -1,10 +1,12 @@
-//! The hourly sweep's purge of tracks missing for 30 days (`requirements/scanning.md` §8):
-//! what they leave of the catalog follows in the same transaction, and the feed says so.
+//! The hourly sweep's purge of tracks missing for 30 days and still missing after a later scan
+//! (`requirements/scanning.md` §8): what they leave of the catalog follows in the same
+//! transaction, and the feed says so.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use jewelcase_scanner::testing::{self, InspectStore, ItemKey};
+use jewelcase_scanner::{Depth, ScanState, Scope, Trigger};
 use rusqlite::Connection;
 use rusqlite::types::Value;
 
@@ -143,4 +145,49 @@ fn a_track_missing_inside_the_window_is_kept() {
     assert_eq!(count(&store, "SELECT count(*) FROM images"), 1);
     assert_eq!(count(&store, "SELECT count(*) FROM biographies"), 1);
     assert_eq!(store.feed_head(1), head);
+}
+
+/// Moves the missing marks and the roots' last whole walks `ms` into the past, as if that long
+/// had passed since.
+fn aged(store: &SqliteStore, ms: i64) {
+    store
+        .db()
+        .write_blocking(move |tx| {
+            tx.execute("UPDATE tracks SET missing_since = missing_since - ?1", [ms])?;
+            tx.execute("UPDATE library_roots SET walked_at = walked_at - ?1", [ms])
+        })
+        .unwrap();
+}
+
+/// A track missing past the window is purged only once a scan of its whole root that started
+/// after the window was up completes, still not finding it: not after the scan that marked it, nor
+/// a scan of a folder, nor a scan of the root that suspends because the root lists empty, as an
+/// unmounted share's does (`requirements/scanning.md` §7).
+#[test]
+fn a_track_missing_past_the_window_waits_for_a_later_scan_of_its_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (root, store) = scanned(tmp.path());
+    missing_for(&root, &store, 0);
+    aged(&store, WINDOW_MS + 60_000);
+    let (lib, tracks) = (testing::library(&root), "SELECT count(*) FROM tracks");
+    sweep(store.db(), now_ms());
+    assert_eq!(count(&store, tracks), 3, "the scan that marked them started before the window");
+
+    let folder = Scope::folder(&root, root.join("C"), Depth::Subtree);
+    testing::scan_once(&store, &lib, Trigger::Manual, vec![folder]);
+    sweep(store.db(), now_ms());
+    assert_eq!(count(&store, tracks), 3, "a scan of a folder");
+
+    let away = tmp.path().join("away");
+    fs::rename(&root, &away).unwrap();
+    fs::create_dir(&root).unwrap();
+    assert_eq!(testing::scan_library(&store, &lib).state, ScanState::Suspended);
+    sweep(store.db(), now_ms());
+    assert_eq!(count(&store, tracks), 3, "a scan of the root listing empty");
+
+    fs::remove_dir(&root).unwrap();
+    fs::rename(&away, &root).unwrap();
+    assert_eq!(testing::scan_library(&store, &lib).state, ScanState::Completed);
+    sweep(store.db(), now_ms());
+    assert_eq!(count(&store, tracks), 1);
 }

@@ -2,6 +2,8 @@
 //! but the loudness come from its groups, so they cost what its groups do however many tracks the
 //! album holds; the loudness reads each analyzed track's entry in `tracks_analyzed`.
 
+use std::collections::HashMap;
+
 use jewelcase_scanner::release_kind;
 use rusqlite::{OptionalExtension, Result, Transaction, params};
 
@@ -46,7 +48,8 @@ fn most_used(tx: &Transaction<'_>, column: &str, album: i64) -> Result<Option<St
     .optional()
 }
 
-/// The album's resolved fields and counts from its groups, or its deletion when none is left.
+/// The album's resolved fields and counts from its groups, or its deletion when none is left. A
+/// track with no disc number counts as disc 1 (`requirements/albums.md` §3).
 pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i64) -> Result<()> {
     let (count, available, duration, disc_total, disc_count, any_compilation): (
         i64,
@@ -59,7 +62,7 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
         .prepare_cached(
             "SELECT COALESCE(SUM(track_count), 0), COALESCE(SUM(available_count), 0), \
              COALESCE(SUM(duration_us), 0), NULLIF(MAX(disc_total), -1), \
-             COUNT(DISTINCT disc_number), COALESCE(MAX(compilation), 0) \
+             COUNT(DISTINCT max(disc_number, 1)), COALESCE(MAX(compilation), 0) \
              FROM album_groups WHERE album_id = ?1",
         )?
         .query_row([album], |r| {
@@ -86,13 +89,29 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
         .query_row([album], |r| r.get(0))
         .optional()?;
     let release_date = most_used(tx, "release_date", album)?;
-    let release_type = most_used(tx, "release_type", album)?;
+    // The album type that more than half the album's tracks name in their release-type tags,
+    // however each spells it, if any.
+    let mut kinds: HashMap<&str, i64> = HashMap::new();
+    let mut stmt = tx.prepare_cached(
+        "SELECT release_type, SUM(track_count) FROM album_groups \
+         WHERE album_id = ?1 AND release_type <> '' GROUP BY release_type",
+    )?;
+    for row in stmt.query_map([album], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+        let (tag, tracks) = row?;
+        if let Some(kind) = release_kind(&tag) {
+            *kinds.entry(kind).or_default() += tracks;
+        }
+    }
+    let kind = kinds.into_iter().find(|&(_, tracks)| tracks * 2 > count).map(|(kind, _)| kind);
     // The spec's `trackTotal`: the sum of the totals of the discs present, which
     // `refresh_album_links` has just written.
     let track_total: Option<i64> = tx
-        .prepare_cached("SELECT SUM(track_total) FROM album_discs WHERE album_id = ?1")?
+        .prepare_cached(
+            "SELECT SUM(total) FROM (SELECT MAX(track_total) AS total FROM album_discs \
+             WHERE album_id = ?1 GROUP BY max(disc_number, 1))",
+        )?
         .query_row([album], |r| r.get(0))?;
-    let album_type = album_type(release_type.as_deref(), any_compilation != 0, track_total);
+    let album_type = album_type(kind, any_compilation != 0, track_total);
     let labels = most_used(tx, "labels", album)?;
 
     tx.prepare_cached(
@@ -122,15 +141,15 @@ pub(super) fn recompute_album(tx: &Transaction<'_>, lib: i64, album: i64, now: i
     Ok(())
 }
 
-/// `requirements/albums.md` §3: the release-type tag is authoritative where it names a type
-/// ([`release_kind`]), the compilation flag overrides size inference from the album's
-/// `track_total`, and the default is album.
+/// `requirements/albums.md` §3: `kind`, the type more than half the album's tracks name
+/// in their release-type tags ([`release_kind`]), is authoritative, the compilation flag
+/// overrides size inference from the album's `track_total`, and the default is album.
 fn album_type(
-    release_type: Option<&str>,
+    kind: Option<&'static str>,
     compilation: bool,
     track_total: Option<i64>,
 ) -> &'static str {
-    if let Some(kind) = release_type.and_then(release_kind) {
+    if let Some(kind) = kind {
         return kind;
     }
     if compilation {
@@ -178,7 +197,7 @@ mod tests {
     #[test]
     fn album_types_follow_the_requirement() {
         assert_eq!(album_type(Some("album"), false, Some(3)), "album", "tag beats size");
-        assert_eq!(album_type(Some("album; compilation"), false, None), "compilation");
+        assert_eq!(album_type(Some("compilation"), false, None), "compilation");
         assert_eq!(album_type(Some("ep"), false, None), "ep");
         assert_eq!(album_type(None, true, Some(12)), "compilation", "flag beats size");
         assert_eq!(album_type(None, false, Some(2)), "single");

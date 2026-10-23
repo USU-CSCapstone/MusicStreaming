@@ -85,32 +85,6 @@ pub fn a_panic_suspends_the_scan_and_the_worker_runs_the_next<S: InspectStore + 
     assert_eq!(store.inspect_tracks(lib.id).len(), 2);
 }
 
-/// A scan cancelled just before a panic ends cancelled rather than suspended, so it never resumes,
-/// at its last flushed cursor after A/X.
-pub fn a_panic_after_a_cancel_ends_cancelled<S: InspectStore + 'static>(make: Factory<S>) {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    make_album(&root, "A", "X", 1);
-    make_album(&root, "B", "Y", 1);
-    let lib = library(&root);
-    let store = Arc::new(make(&lib));
-    let stops = Stops::default();
-    let panic_at = root.join("B/Y");
-    let on_folder = |path: &Path| {
-        if path == panic_at {
-            stops.cancel.store(true, Ordering::SeqCst);
-            panic!("a store bug after the admin cancelled");
-        }
-        Ok(())
-    };
-    let hooked = Hooked::new(store.clone()).on_folder(on_folder);
-    let mut scan = new_scan(&hooked, &lib);
-    run(&hooked, &lib, &mut scan, &batches_of(1), &stops);
-
-    let row = only_row(store.as_ref(), &lib);
-    assert_eq!((row.state, &row.cursor), (ScanState::Cancelled, &after(&root, "A/X")), "{row:?}");
-}
-
 /// A batch the store fails to persist, B/Y's, suspends the scan at the last one it did, A/X's,
 /// with the progress the store holds and no current path.
 pub fn a_failed_batch_suspends_at_the_last_persisted_cursor<S: InspectStore + 'static>(

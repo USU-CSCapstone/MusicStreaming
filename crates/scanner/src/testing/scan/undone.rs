@@ -44,30 +44,27 @@ pub fn a_failed_batch_leaves_the_scopes_from_its_cursor_undone<S: InspectStore +
     assert_eq!(undone, Undone { unanswered: Vec::new(), failed: vec![Scope::root(&b)] });
 }
 
-/// A scan whose first root does not answer leaves nothing undone when a shutdown or a cancel
-/// stops it in a later root: a shutdown leaves its row running, for the next start to resume,
-/// and a cancelled scan's work is not wanted.
+/// A scan whose first root does not answer leaves nothing undone when a shutdown stops it in a
+/// later root: its row stays running, for the next start to resume.
 pub fn a_stopped_scan_leaves_nothing_undone<S: InspectStore + 'static>(make: Factory<S>) {
-    for (stopped, state) in [(true, ScanState::Running), (false, ScanState::Cancelled)] {
-        let tmp = tempfile::tempdir().unwrap();
-        let (a, b, mut lib) = two_roots(tmp.path());
-        let gone = tmp.path().join("gone");
-        lib.roots.push(gone.clone());
-        let store = Arc::new(make(&lib));
-        let stops = Stops::default();
-        let stop_at = b.join("B/Y");
-        let on_folder = |path: &Path| {
-            if path == stop_at {
-                let stop = if stopped { &stops.shutdown } else { &stops.cancel };
-                stop.store(true, Ordering::SeqCst);
-            }
-            Ok(())
-        };
-        let hooked = Hooked::new(store.clone()).on_folder(on_folder);
-        let scopes = [Scope::root(&gone), Scope::root(&a), Scope::root(&b)];
-        let mut scan = hooked.create_scan(lib.id, Trigger::Manual, &scopes).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let (a, b, mut lib) = two_roots(tmp.path());
+    let gone = tmp.path().join("gone");
+    lib.roots.push(gone.clone());
+    let store = Arc::new(make(&lib));
+    let stops = Stops::default();
+    let stop_at = b.join("B/Y");
+    let on_folder = |path: &Path| {
+        if path == stop_at {
+            stops.shutdown.store(true, Ordering::SeqCst);
+        }
+        Ok(())
+    };
+    let hooked = Hooked::new(store.clone()).on_folder(on_folder);
+    let scopes = [Scope::root(&gone), Scope::root(&a), Scope::root(&b)];
+    let mut scan = hooked.create_scan(lib.id, Trigger::Manual, &scopes).unwrap();
 
-        let undone = run(&hooked, &lib, &mut scan, &batches_of(1), &stops);
-        assert_eq!((only_row(store.as_ref(), &lib).state, undone), (state, Undone::default()));
-    }
+    let undone = run(&hooked, &lib, &mut scan, &batches_of(1), &stops);
+    let state = only_row(store.as_ref(), &lib).state;
+    assert_eq!((state, undone), (ScanState::Running, Undone::default()));
 }

@@ -26,8 +26,8 @@ const COLUMNS: [&str; 37] = [
     "missing_since",
     "title",
     "sort_key",
-    "artist_sort_key",
-    "album_sort_key",
+    "file_artist_sort_key",
+    "file_album_sort_key",
     "disc_number",
     "track_number",
     "track_total",
@@ -56,17 +56,20 @@ const COLUMNS: [&str; 37] = [
 ];
 
 /// Inserts track `:id` with [`COLUMNS`], or updates it with them when it is a track of
-/// `:library_id`, returning its id and analyzer version. An update whose file size or mtime
-/// changed clears the analysis. Unqualified column names on the right of the update's `=` are
-/// the row's values before it.
+/// `:library_id`, returning its id and analyzer version. Either way the track copies the sort
+/// keys of its album and of `:artist_id`, its first artist, and the copies then follow changes
+/// to those keys (`design/database.md` §3). An update whose file size or mtime changed clears the analysis.
+/// Unqualified column names on the right of the update's `=` are the row's values before it.
 static UPSERT: LazyLock<String> = LazyLock::new(|| {
     let columns = COLUMNS.join(", ");
     let values = COLUMNS.map(|c| format!(":{c}")).join(", ");
     let updates = COLUMNS.map(|c| format!("{c} = excluded.{c}")).join(", ");
     format!(
-        "INSERT INTO tracks (id, library_id, added_at, {columns}) \
-         VALUES (:id, :library_id, :added_at, {values}) \
+        "INSERT INTO tracks (id, library_id, added_at, album_sort_key, artist_sort_key, {columns}) \
+         VALUES (:id, :library_id, :added_at, (SELECT sort_key FROM albums WHERE id = :album_id), \
+                 (SELECT sort_key FROM artists WHERE id = :artist_id), {values}) \
          ON CONFLICT (id) DO UPDATE SET \
+         album_sort_key = excluded.album_sort_key, artist_sort_key = excluded.artist_sort_key, \
          analyzer_version = CASE WHEN file_size IS excluded.file_size AND file_mtime IS excluded.file_mtime \
          THEN analyzer_version ELSE 0 END, \
          loudness_lufs = CASE WHEN file_size IS excluded.file_size AND file_mtime IS excluded.file_mtime \
@@ -104,10 +107,12 @@ pub(super) fn write_row(
         None => new_id()?,
     };
     let album_artist_ids: Vec<i64> = credits.album_artists.iter().map(|&(id, _)| id).collect();
-    let values: [(&str, &dyn ToSql); COLUMNS.len() + 3] = [
+    let first_artist = credits.artists.first().map(|&(artist_id, _)| artist_id);
+    let values: [(&str, &dyn ToSql); COLUMNS.len() + 4] = [
         (":id", &id),
         (":library_id", &lib),
         (":added_at", &now),
+        (":artist_id", &first_artist),
         (":album_id", &credits.album_id),
         (":album_artist_ids", &Json(album_artist_ids)),
         (":album_title", &rec.tags.album),
@@ -118,8 +123,8 @@ pub(super) fn write_row(
         (":missing_since", &Null),
         (":title", &rec.display_title()),
         (":sort_key", &rec.sort.title.as_bytes()),
-        (":artist_sort_key", &rec.sort.artist.as_bytes()),
-        (":album_sort_key", &rec.sort.album.as_bytes()),
+        (":file_artist_sort_key", &rec.sort.artist.as_bytes()),
+        (":file_album_sort_key", &rec.sort.album.as_bytes()),
         (":disc_number", &rec.tags.disc_number.unwrap_or(0)),
         (":track_number", &rec.tags.track_number),
         (":track_total", &rec.tags.track_total),

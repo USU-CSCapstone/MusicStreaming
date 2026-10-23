@@ -9,7 +9,7 @@ use crate::store::{Batch, StoreError};
 
 /// Why a scan leaves its walk early.
 pub(super) enum Halt {
-    /// The queue asked it to stop, to cancel or to shut down. `checkpoint` does not flush the
+    /// The queue asked it to stop for a shutdown. `checkpoint` does not flush the
     /// batch in hand; the caller does.
     Stop,
     /// The store failed, and the scan has ended at its last persisted cursor.
@@ -88,8 +88,7 @@ impl Writer {
         Halt::Ended
     }
 
-    /// Ends `scan` at the cursor and progress the store holds and saves its row: suspended, or
-    /// cancelled if a cancel was asked for, since a cancelled scan's work is not wanted.
+    /// Ends `scan` at the cursor and progress the store holds and saves its row, suspended.
     /// [`super::run_scan`] says what of a suspended scan's work is retried. A row that cannot be
     /// saved is logged and stays as the store last held it, queued or running, so the next start
     /// resumes the scan from there.
@@ -97,7 +96,7 @@ impl Writer {
         scan.cursor = self.persisted.0.clone();
         scan.progress = self.persisted.1.clone();
         scan.progress.current_path = None;
-        scan.state = if ctx.cancelled() { ScanState::Cancelled } else { ScanState::Suspended };
+        scan.state = ScanState::Suspended;
         scan.finished_at = Some(now_ms());
         if let Err(error) = ctx.store.update_scan(scan) {
             tracing::error!(scan = scan.id, %error, "scan row not saved as it ended");

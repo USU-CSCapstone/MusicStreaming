@@ -11,7 +11,8 @@ use crate::db::feed::{self, Entity, Op};
 /// and its image and biography from its albums ([`art::artist`]), or its deletion when no track
 /// credits it. Whether one does is read from the credits themselves, so a wrong count can never
 /// delete a credited artist. The unknown artist has no image or biography. A changed sort key
-/// reaches the albums the artist heads ([`follow_artist_sort_key`]).
+/// reaches the albums the artist heads and the tracks crediting it first
+/// ([`follow_artist_sort_key`]).
 pub(super) fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i64) -> Result<()> {
     let Some((credited, name, tagged_sort, old_sort)) = tx
         .prepare_cached(
@@ -50,10 +51,12 @@ pub(super) fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i
     feed::record(tx, lib, Entity::Artist, artist, Op::Upsert, now)
 }
 
-/// Gives every album `artist` heads, as its first album artist, the artist's `sort_key`, and
-/// records each album that changes in the feed. Albums the batch touched take it again as they
-/// are recomputed; this reaches the rest. It costs the artist's albums, so the caller runs it
-/// only when the artist's key changes.
+/// Gives every album `artist` heads, as its first album artist, and every track crediting it
+/// first the artist's `sort_key`, and records each of those albums in the feed. Albums the
+/// batch touched take it again as they are recomputed; this reaches the rest. It costs the
+/// artist's albums and tracks, so the caller runs it only when the artist's key changes. Each row
+/// is written by id, so no planner statistics can turn it into a scan of every album or track
+/// (`design/database.md` §4).
 fn follow_artist_sort_key(
     tx: &Transaction<'_>,
     lib: i64,
@@ -61,13 +64,23 @@ fn follow_artist_sort_key(
     sort_key: &[u8],
     now: i64,
 ) -> Result<()> {
-    let mut stmt = tx.prepare_cached(
-        "UPDATE albums SET artist_sort_key = ?2 WHERE artist_sort_key <> ?2 AND id IN \
-         (SELECT album_id FROM album_artists WHERE artist_id = ?1 AND position = 0) RETURNING id",
+    let mut albums = tx.prepare_cached(
+        "SELECT album_id FROM album_artists WHERE artist_id = ?1 AND position = 0",
     )?;
-    let albums = stmt.query_map(params![artist, sort_key], |r| r.get::<_, i64>(0))?;
-    for album in albums.collect::<Result<Vec<_>>>()? {
+    let mut album_key =
+        tx.prepare_cached("UPDATE albums SET artist_sort_key = ?2 WHERE id = ?1")?;
+    for album in albums.query_map([artist], |r| r.get::<_, i64>(0))? {
+        let album = album?;
+        album_key.execute(params![album, sort_key])?;
         feed::record(tx, lib, Entity::Album, album, Op::Upsert, now)?;
+    }
+    let mut tracks = tx.prepare_cached(
+        "SELECT track_id FROM track_artists WHERE artist_id = ?1 AND position = 0",
+    )?;
+    let mut track_key =
+        tx.prepare_cached("UPDATE tracks SET artist_sort_key = ?2 WHERE id = ?1")?;
+    for track in tracks.query_map([artist], |r| r.get::<_, i64>(0))? {
+        track_key.execute(params![track?, sort_key])?;
     }
     Ok(())
 }

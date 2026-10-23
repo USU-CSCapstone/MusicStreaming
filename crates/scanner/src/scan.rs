@@ -61,23 +61,16 @@ impl Default for ScanOptions {
 pub struct ScanContext<'a> {
     pub store: &'a dyn Store,
     pub library: &'a LibraryConfig,
-    /// Set by the queue to stop the scan after the file in hand and end it cancelled.
-    pub cancel: &'a AtomicBool,
-    /// Set by the queue to stop the scan at the same point but leave it running at its last
+    /// Set by the queue to stop the scan after the file in hand and leave it running at its last
     /// flushed cursor, so the next start resumes it.
     pub shutdown: &'a AtomicBool,
     pub options: &'a ScanOptions,
 }
 
 impl ScanContext<'_> {
-    /// Whether the queue has asked the scan to stop, to cancel it or to shut down.
+    /// Whether the queue has asked the scan to stop for a shutdown.
     fn stopping(&self) -> bool {
-        self.cancelled() || self.shutdown.load(Ordering::SeqCst)
-    }
-
-    /// Whether the queue has asked the scan to stop and end cancelled.
-    fn cancelled(&self) -> bool {
-        self.cancel.load(Ordering::SeqCst)
+        self.shutdown.load(Ordering::SeqCst)
     }
 }
 
@@ -90,7 +83,7 @@ pub struct Undone {
     pub failed: Vec<Scope>,
 }
 
-/// Run `scan` to completion, cancellation, or suspension, or until a shutdown, which leaves it
+/// Run `scan` to completion or suspension, or until a shutdown, which leaves it
 /// running at its last flushed cursor for the next start to resume. A panic ends it at that
 /// cursor through [`Writer::suspend`], so the caller carries on. The scan row is updated on every
 /// flush; `scan` is left in the state the row holds, unless the store could not save it.
@@ -242,21 +235,13 @@ fn scan_scopes(
         writer.flush(ctx, scan)?;
     }
 
-    // A shutdown leaves the row as the last flush wrote it, running at its cursor, unless the
-    // scan was cancelled too.
-    let cancelled = ctx.cancelled();
-    if ctx.shutdown.load(Ordering::SeqCst) && !cancelled {
+    // A shutdown leaves the row as the last flush wrote it, running at its cursor.
+    if ctx.stopping() {
         return Ok(());
     }
     // A scan that ends never resumes, so it counts the unlisted folders it carries.
     scan.progress.problems += unlisted_folders;
-    scan.state = if cancelled {
-        ScanState::Cancelled
-    } else if !unanswered.is_empty() {
-        ScanState::Suspended
-    } else {
-        ScanState::Completed
-    };
+    scan.state = if !unanswered.is_empty() { ScanState::Suspended } else { ScanState::Completed };
     scan.finished_at = Some(now_ms());
     scan.progress.current_path = None;
     writer.save(ctx, scan)
@@ -297,8 +282,7 @@ fn root_answers(root: &Path) -> bool {
 /// partway walks and reconciles it again from the start on resume. A track added or updated
 /// before the stop is found unchanged then, so its counts go to the progress at once. The files
 /// seen, the problem files and the entry problems would be counted again, so they go in only
-/// once `dir` is complete, or when the scan stops in it never to resume: cancelled, or its root
-/// gone.
+/// once `dir` is complete, or when the scan stops in it never to resume, its root gone.
 fn process_directory(
     ctx: &ScanContext<'_>,
     scan: &mut Scan,
@@ -378,12 +362,7 @@ fn process_directory(
         };
     }
     // Whether no resume walks `dir` again, so its counts go in here.
-    let last_walk = match halted {
-        Ok(()) | Err(Halt::Unanswered) => true,
-        Err(Halt::Stop) => ctx.cancelled(),
-        Err(Halt::Ended) => false,
-    };
-    if last_walk {
+    if matches!(halted, Ok(()) | Err(Halt::Unanswered)) {
         scan.progress.files_seen += seen;
         scan.progress.files_processed += problem_files;
         scan.progress.problems += problem_files + entry_problems;

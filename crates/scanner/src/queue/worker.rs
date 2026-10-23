@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
 use super::retry::Retry;
@@ -49,7 +49,7 @@ impl Scanner {
         });
         let inner = Arc::new(Inner {
             store,
-            library: RwLock::new(library),
+            library,
             options,
             queue: Mutex::new(Queue {
                 queued: VecDeque::new(),
@@ -57,7 +57,6 @@ impl Scanner {
                 retry: Retry::new(),
             }),
             wake: Condvar::new(),
-            cancel_running: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
         });
         {
@@ -68,8 +67,8 @@ impl Scanner {
             }
         }
         let running = inner.clone();
-        // The thread waits on the queue's condvar, not on its `Stop`, since requests, cancels and
-        // retries already wake it there, and a running scan checks the `shutdown` flag before each
+        // The thread waits on the queue's condvar, not on its `Stop`, since requests and retries
+        // already wake it there, and a running scan checks the `shutdown` flag before each
         // file; `ScannerThread::stop` sets that flag.
         let thread = Worker::spawn("scanner", move |_| run(&running))?;
         Ok((Scanner { inner: inner.clone() }, ScannerThread { inner, thread }))
@@ -107,28 +106,16 @@ fn run(inner: &Inner) {
                 if inner.shutdown.load(Ordering::SeqCst) {
                     return;
                 }
-                if let Some((trigger, mut scopes)) = q.retry.take_due(Instant::now()) {
+                if let Some((trigger, scopes)) = q.retry.take_due(Instant::now()) {
                     drop(q);
-                    // A reconfiguration may have removed a root since the work was left undone.
-                    let library = inner.library.read().recover();
-                    scopes.retain(|scope| library.roots.contains(&scope.root));
-                    drop(library);
-                    if scopes.is_empty() {
-                        tracing::debug!(
-                            ?trigger,
-                            "work left undone not retried; its roots have left the library"
-                        );
-                    } else {
-                        inner.request(trigger, scopes);
-                    }
+                    inner.request(trigger, scopes);
                     q = inner.queue.lock().recover();
                     continue;
                 }
                 if let Some(mut s) = q.queued.pop_front() {
                     // Running from the moment it leaves the queue, under the same lock, so a
-                    // request, cancel, or idle check always finds it in one place or the other.
+                    // request or idle check always finds it in one place or the other.
                     s.state = ScanState::Running;
-                    inner.cancel_running.store(false, Ordering::SeqCst);
                     q.retry.started(&s);
                     q.running = Some(s.clone());
                     break s;
@@ -142,11 +129,9 @@ fn run(inner: &Inner) {
                 };
             }
         };
-        let library = inner.library.read().recover().clone();
         let ctx = ScanContext {
             store: inner.store.as_ref(),
-            library: &library,
-            cancel: &inner.cancel_running,
+            library: &inner.library,
             shutdown: &inner.shutdown,
             options: &inner.options,
         };

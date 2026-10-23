@@ -38,8 +38,8 @@ Shared behavior follows [`conventions.md`](conventions.md).
 
 Albums are classified so an artist's discography can be split into meaningful sections.
 
-1. **The release-type tag**, where present, is authoritative.
-2. **Otherwise, infer from the tagged total-track count**, summed across the album's discs:
+1. **The release-type tag** is authoritative where more than half of the album's tracks name the same type, however each spells it.
+2. **Otherwise, infer from the tagged total-track count**, summed across the album's discs, a track with no disc number counting as disc 1:
 
    | Total tracks | Type |
    |---|---|

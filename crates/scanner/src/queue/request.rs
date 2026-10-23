@@ -19,7 +19,7 @@ impl Inner {
         if let Some(id) = self.queue.lock().recover().covering(&scopes) {
             return Some(id);
         }
-        let library = self.library.read().recover().id;
+        let library = self.library.id;
         let scan = match self.store.create_scan(library, trigger, &scopes) {
             Ok(scan) => scan,
             Err(error) => {
@@ -57,16 +57,13 @@ impl Inner {
         Some(id)
     }
 
-    /// Saves `scan`, already taken off the queue, as cancelled, returning whether the store
-    /// could. A row that cannot be saved is logged and stays queued in the store, so the next
-    /// start runs the scan even if the caller drops it.
-    pub(super) fn cancelled(&self, scan: &Scan) -> bool {
+    /// Saves `scan`, already taken off the queue, as cancelled. A row that cannot be saved is
+    /// logged and stays queued in the store, so the next start runs the scan.
+    fn cancelled(&self, scan: &Scan) {
         let ended =
             Scan { state: ScanState::Cancelled, finished_at: Some(now_ms()), ..scan.clone() };
-        let saved = self.store.update_scan(&ended);
-        if let Err(error) = &saved {
+        if let Err(error) = self.store.update_scan(&ended) {
             tracing::error!(scan = scan.id, %error, "cancelled scan not saved");
         }
-        saved.is_ok()
     }
 }

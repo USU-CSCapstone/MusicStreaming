@@ -27,7 +27,7 @@ use crate::lock::Recover;
 /// The scanner's store on the server's database.
 pub struct SqliteStore {
     db: Arc<Database>,
-    /// Active roots per library, refreshed on reconfiguration. Shared with the database jobs
+    /// Active roots per library, refreshed when they change. Shared with the database jobs
     /// that need them.
     roots: Arc<Roots>,
 }
@@ -46,8 +46,8 @@ impl SqliteStore {
         &self.db
     }
 
-    /// Reloads roots from `library_roots`. Call after roots change, before the library's scanner
-    /// is reconfigured: a scan of a root the store does not hold is refused.
+    /// Reloads roots from `library_roots`. Call after roots change: a scan of a root the store
+    /// does not hold is refused.
     pub fn refresh_roots(&self) -> Result<(), DbError> {
         let map = self
             .db

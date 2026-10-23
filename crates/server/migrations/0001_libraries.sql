@@ -27,6 +27,9 @@ CREATE TABLE library_roots (
     path       TEXT    NOT NULL,
     created_at INTEGER NOT NULL,
     removed_at INTEGER,
+    -- When the last completed scan of the whole root started, which confirms what it found
+    -- missing there (design/database.md §9); NULL until one has
+    walked_at  INTEGER,
     -- Target for the foreign keys of tracks, images, scans and scan problems.
     UNIQUE (library_id, id)
 ) STRICT;

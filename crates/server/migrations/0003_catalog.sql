@@ -178,8 +178,14 @@ CREATE TABLE tracks (
     missing_since   INTEGER,
     title           TEXT    NOT NULL,
     sort_key        BLOB    NOT NULL,
+    -- The first artist's and the album's sort keys, copied so tracks sort by them through one
+    -- index, and followed as they change (design/database.md §3)
     artist_sort_key BLOB    NOT NULL,
     album_sort_key  BLOB    NOT NULL,
+    -- The first artist's and the album's sort keys as this file gives them, from which the
+    -- artist's and the album's are resolved
+    file_artist_sort_key BLOB NOT NULL,
+    file_album_sort_key  BLOB NOT NULL,
     disc_number     INTEGER NOT NULL DEFAULT 0 CHECK (disc_number >= 0),
     track_number    INTEGER,
     track_total     INTEGER CHECK (track_total >= 0),
@@ -239,7 +245,8 @@ CREATE INDEX tracks_by_added ON tracks (library_id, added_at, id);
 CREATE INDEX tracks_by_release ON tracks (library_id, release_date, album_sort_key, album_id, disc_number, ifnull(track_number, 9223372036854775807), id);
 -- Browsing tracks by duration (requirements/conventions.md §4), as albums_by_duration does albums
 CREATE INDEX tracks_by_duration ON tracks (library_id, duration_us, id);
-CREATE INDEX tracks_missing ON tracks (library_id, missing_since) WHERE missing_since IS NOT NULL;
+-- The sweep's purge, root by root, since a root's last whole walk decides what may go
+CREATE INDEX tracks_missing ON tracks (root_id, missing_since) WHERE missing_since IS NOT NULL;
 -- The analysis queue in the order it is worked: tracks never analyzed before those an older
 -- analyzer did, and newest first within each, so a pick reads the head of one range and sorts
 -- nothing.

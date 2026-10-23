@@ -88,31 +88,6 @@ pub fn an_unlistable_folder_is_counted_once_across_resumes<S: InspectStore + 'st
     assert_eq!(counts, (6, 2), "{:?}", resumed.progress);
 }
 
-/// A cancel in C, as the batch holding its second track is stored, counts B, which could not be
-/// listed, though the cursor has not passed it, since a cancelled scan never resumes.
-pub fn a_cancel_counts_an_unlistable_folder_it_passed<S: InspectStore + 'static>(make: Factory<S>) {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    let Some(_locked) = unlistable_folders(&root) else { return };
-    let lib = library(&root);
-    let store = Arc::new(make(&lib));
-    let stops = Stops::default();
-    let cancel_at = track(&root, "C", 2);
-    let on_apply = |batch: &Batch| {
-        if batch.upserts.iter().any(|t| t.path == cancel_at) {
-            stops.cancel.store(true, Ordering::SeqCst);
-        }
-        Ok(())
-    };
-    let hooked = Hooked::new(store.clone()).on_apply(on_apply);
-    let mut scan = new_scan(&hooked, &lib);
-    run(&hooked, &lib, &mut scan, &batches_of(1), &stops);
-
-    let row = only_row(store.as_ref(), &lib);
-    assert_eq!(row.state, ScanState::Cancelled);
-    assert_eq!((row.progress.files_seen, row.progress.problems), (3, 1), "{:?}", row.progress);
-}
-
 /// An unlistable folder met in a scope whose root went before reconcile counts once a later scope
 /// moves the cursor past it, and one met as a scope's walk ends counts then, each once. The first
 /// root completes, counting B, D, and its symlink L; the second goes as its walk is flushed,

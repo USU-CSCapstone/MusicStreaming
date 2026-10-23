@@ -11,12 +11,14 @@ use super::{cost, ids, steps, track};
 use crate::db::catalog::{self, Touched};
 use crate::db::store::SqliteStore;
 
-/// Track `i` of album `album` by `owner`, crediting `guest` on it too when there is one.
+/// Track `i` of album `album` by `owner`, under the owner's own sort key, crediting `guest` on it
+/// too when there is one.
 fn credited(root: &Path, owner: &str, album: &str, guest: Option<&str>, i: usize) -> TrackRecord {
     let mut rec = track(root, album, i);
     rec.path = root.join(format!("{owner}/{album}/{i:05}.flac"));
     rec.tags.artists = std::iter::once(owner).chain(guest).map(str::to_owned).collect();
     rec.tags.album_artists = vec![owner.to_owned()];
+    rec.sort.artist = owner.to_lowercase();
     rec
 }
 
