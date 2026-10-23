@@ -7,6 +7,7 @@ use super::super::testing::{add_device, add_user, app_with_tracks, owner_request
 use crate::db::Database;
 use crate::db::testing::access;
 
+mod checks;
 mod keys;
 mod outlives;
 mod snapshot;
@@ -180,29 +181,39 @@ async fn a_malformed_report_records_nothing() {
     let (_temp, db, app) = app_with_tracks().await;
     let mut other = report("2", 0, Value::Null);
     other["playId"] = json!("0e3f4b1a-1c2d-4e5f-8a9b-0c1d2e3f4a5b");
+    let external = json!({ "type": "external", "sourceId": "s", "externalId": "e" });
     for (field, value) in [
         ("playId", json!("not-a-uuid")),
         ("startedAt", json!("yesterday")),
+        ("startedAt", json!("now")),
+        ("startedAt", json!("2460000")),
+        ("startedAt", json!("2026-10-02")),
+        ("startedAt", json!("2026-10-02T12:00:00")),
         ("trackId", Value::Null),
+        ("external", external),
         ("context", json!({})),
+        ("context", json!({ "type": "album" })),
+        ("reason", json!({ "type": "radio", "seed": { "trackId": "1" } })),
         ("origin", json!("radio")),
         ("end", json!("paused")),
         ("listenTimeMs", json!(-1)),
     ] {
         let mut bad = report("1", 0, Value::Null);
-        bad[field] = value;
+        bad[field] = value.clone();
         let status = report_as_owner(&app, json!([other, bad])).await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{field}");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{field}: {value}");
     }
     assert!(plays(&db).await.is_empty());
 }
 
-/// A report's `context` and `reason` are stored as compact JSON, and its `origin` by name.
+/// A report's `context` and `reason` are stored as compact JSON holding only what the spec
+/// defines, and its `origin` by name.
 #[tokio::test]
-async fn context_origin_and_reason_are_stored_as_reported() {
+async fn context_origin_and_reason_are_stored_as_the_spec_defines_them() {
     let (_temp, db, app) = app_with_tracks().await;
     let mut played = report("1", 0, Value::Null);
-    played["reason"] = json!({ "type": "radio", "seed": { "trackId": "1" } });
+    played["context"]["label"] = json!("Blue");
+    played["reason"] = json!({ "kind": "radioSeed", "text": "Radio from Blue", "extra": 1 });
     assert_eq!(report_as_owner(&app, json!([played])).await, StatusCode::NO_CONTENT);
     let stored: (String, String, String) = db
         .read(|conn| {
@@ -214,9 +225,9 @@ async fn context_origin_and_reason_are_stored_as_reported() {
     assert_eq!(
         stored,
         (
-            r#"{"id":"101","type":"album"}"#.to_owned(),
+            r#"{"type":"album","id":"101"}"#.to_owned(),
             "context".to_owned(),
-            r#"{"seed":{"trackId":"1"},"type":"radio"}"#.to_owned()
+            r#"{"kind":"radioSeed","text":"Radio from Blue"}"#.to_owned()
         )
     );
 }

@@ -5,17 +5,22 @@
 //! (`requirements/analytics.md` §1, §6). Reports can arrive out of order, as an offline device
 //! catches up while a newer one is sent, so listen time never goes back and an end is kept.
 
+mod context;
+
 use std::sync::Arc;
 
 use axum::extract::State;
 use axum::http::StatusCode;
 use rusqlite::{Transaction, params};
 use serde::Deserialize;
-use serde_json::Value;
+use serde::de::IgnoredAny;
+
+use context::{Context, Reason};
 
 use super::authenticate::Caller;
 use super::extract::Json;
 use super::refs::credits_json;
+use super::time::Timestamp;
 use super::{AnyId, Problem, Uuid};
 use crate::db::plays::{End, Origin};
 use crate::db::{self, Database, Text, now_ms, reaches};
@@ -26,19 +31,20 @@ pub struct Plays {
 }
 
 /// The spec's `PlayReport`. Its `deviceId` is not read: a play is the device's that reports it.
+/// Of `external` only its presence is read, since a play of an external track is not recorded.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlayReport {
     play_id: Uuid,
     library_id: AnyId,
     track_id: Option<AnyId>,
-    external: Option<Value>,
-    started_at: String,
+    external: Option<IgnoredAny>,
+    started_at: Timestamp,
     listen_time_ms: u32,
     end: Option<End>,
-    context: Value,
+    context: Context,
     origin: Origin,
-    reason: Option<Value>,
+    reason: Option<Reason>,
 }
 
 /// A report checked and ready to record.
@@ -48,71 +54,62 @@ struct Play {
     /// out of reach.
     library: AnyId,
     track: AnyId,
-    started_at: String,
+    /// Milliseconds after the Unix epoch, no later than when the report was heard.
+    started_at: i64,
     listen_time_ms: u32,
     end: Option<End>,
-    context: Value,
+    context: Context,
     origin: Origin,
-    reason: Option<Value>,
+    reason: Option<Reason>,
 }
 
 /// Records every report, or none if one is malformed. A play of a track that is not in a
 /// library the caller reaches is left out: there is nothing to record it against, and saying
-/// so would tell them what another library holds (`requirements/users.md` §10).
+/// so would tell them what another library holds (`requirements/users.md` §10). A play of an
+/// external track is left out too, as plays outside a library are not recorded.
 pub async fn record(
     State(db): State<Arc<Database>>,
     caller: Caller,
     Json(Plays { items }): Json<Plays>,
 ) -> Result<StatusCode, Problem> {
-    let plays = items.into_iter().map(checked).collect::<Result<Vec<_>, _>>()?;
-    let unparsed = db.write(move |tx| save(tx, caller, &plays)).await?;
-    if let Some(at) = unparsed {
-        return Err(Problem::invalid(format!("startedAt {at:?} is not a date and time.")));
-    }
+    let now = now_ms();
+    let plays = items
+        .into_iter()
+        .filter_map(|report| checked(report, now).transpose())
+        .collect::<Result<Vec<_>, _>>()?;
+    db.write(move |tx| save(tx, caller, &plays, now)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `report` as a play to record, or the Problem that makes it malformed. A `null` reason is
-/// none.
-fn checked(report: PlayReport) -> Result<Play, Problem> {
-    if report.external.is_some() {
-        return Err(Problem::invalid("Plays from outside a library are not recorded yet."));
-    }
-    let Some(track) = report.track_id else {
-        return Err(Problem::invalid("A play needs a trackId."));
+/// `report` as a play to record, `None` for an external track's, or the Problem that makes it
+/// malformed. A `startedAt` after `now` is taken as `now`: a device's clock can run ahead, and
+/// the play is still the user's.
+fn checked(report: PlayReport, now: i64) -> Result<Option<Play>, Problem> {
+    let track = match (report.track_id, report.external) {
+        (Some(track), None) => track,
+        (None, Some(_)) => return Ok(None),
+        _ => return Err(Problem::invalid("A play names exactly one of trackId and external.")),
     };
-    if !report.context.get("type").is_some_and(Value::is_string) {
-        return Err(Problem::invalid("context must be an object with a type."));
-    }
-    Ok(Play {
+    Ok(Some(Play {
         id: report.play_id,
         library: report.library_id,
         track,
-        started_at: report.started_at,
+        started_at: report.started_at.0.min(now),
         listen_time_ms: report.listen_time_ms,
         end: report.end,
         context: report.context,
         origin: report.origin,
-        reason: report.reason.filter(|r| !r.is_null()),
-    })
+        reason: report.reason,
+    }))
 }
 
-/// Records `plays` for `caller`, unless one's `startedAt` is not a date and time: then it
-/// records nothing and answers that. A `playId` names a play among the caller's own, so
-/// another user's play under the same ID is a different play and never changes. Each play
-/// keeps a snapshot of its track, which history shows and statistics count once the track or
-/// its library is gone (`requirements/analytics.md` §8): its title, duration, release date,
-/// artists, album and genres, with the keys the catalog matches them by.
-fn save(tx: &Transaction, caller: Caller, plays: &[Play]) -> rusqlite::Result<Option<String>> {
-    // SQLite reads the time, offset and all, and answers `NULL` for anything it cannot.
-    let mut parse = tx.prepare_cached("SELECT CAST(unixepoch(?1, 'subsec') * 1000 AS INTEGER)")?;
-    let mut started = Vec::with_capacity(plays.len());
-    for play in plays {
-        match parse.query_row([&play.started_at], |row| row.get::<_, Option<i64>>(0))? {
-            Some(at) => started.push(at),
-            None => return Ok(Some(play.started_at.clone())),
-        }
-    }
+/// Records `plays` for `caller`, as heard at `now`. A `playId` names a play among the
+/// caller's own, so another user's play under the same ID is a different play and never
+/// changes. Each play keeps a snapshot of its track, which history shows and statistics count
+/// once the track or its library is gone (`requirements/analytics.md` §8): its title,
+/// duration, release date, artists, album and genres, with the keys the catalog matches them
+/// by.
+fn save(tx: &Transaction, caller: Caller, plays: &[Play], now: i64) -> rusqlite::Result<()> {
     // Each report refreshes the snapshot, so a play reported again after a retag takes the
     // new tags; once the track or its library is gone no report finds it, and the play keeps
     // the last ones. A report naming a track other than the play's changes nothing of it.
@@ -144,15 +141,14 @@ fn save(tx: &Transaction, caller: Caller, plays: &[Play]) -> rusqlite::Result<Op
              ended = coalesce(excluded.ended, ended), updated_at = excluded.updated_at \
          WHERE plays.track_id = excluded.track_id"
     ))?;
-    let now = now_ms();
-    for (play, started_at) in plays.iter().zip(started) {
+    for play in plays {
         upsert.execute(params![
             play.id.as_str(),
             caller.user,
             caller.device,
             play.library,
             play.track,
-            started_at,
+            play.started_at,
             play.listen_time_ms,
             play.end.map(Text),
             db::Json(&play.context),
@@ -162,7 +158,7 @@ fn save(tx: &Transaction, caller: Caller, plays: &[Play]) -> rusqlite::Result<Op
             caller.admin,
         ])?;
     }
-    Ok(None)
+    Ok(())
 }
 
 #[cfg(test)]

@@ -61,7 +61,7 @@ use crate::db::Database;
 use crate::plugins::Plugins;
 
 /// What handlers share. Each takes the part it needs, such as `State<Arc<Database>>`.
-#[derive(Clone)]
+#[derive(Clone, FromRef)]
 struct AppState {
     db: Arc<Database>,
     images: Arc<Images>,
@@ -96,42 +96,6 @@ impl AppState {
             players,
             prefix: prefix.into(),
         }
-    }
-}
-
-impl FromRef<AppState> for Arc<Database> {
-    fn from_ref(state: &AppState) -> Arc<Database> {
-        state.db.clone()
-    }
-}
-
-impl FromRef<AppState> for Arc<Indexes> {
-    fn from_ref(state: &AppState) -> Arc<Indexes> {
-        state.indexes.clone()
-    }
-}
-
-impl FromRef<AppState> for Arc<Plugins> {
-    fn from_ref(state: &AppState) -> Arc<Plugins> {
-        state.plugins.clone()
-    }
-}
-
-impl FromRef<AppState> for Arc<Hub> {
-    fn from_ref(state: &AppState) -> Arc<Hub> {
-        state.hub.clone()
-    }
-}
-
-impl FromRef<AppState> for Arc<Players> {
-    fn from_ref(state: &AppState) -> Arc<Players> {
-        state.players.clone()
-    }
-}
-
-impl FromRef<AppState> for Arc<Images> {
-    fn from_ref(state: &AppState) -> Arc<Images> {
-        state.images.clone()
     }
 }
 
