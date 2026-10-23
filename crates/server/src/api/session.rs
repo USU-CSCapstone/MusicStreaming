@@ -2,10 +2,12 @@
 //! and `logout` (`requirements/users.md` §4).
 //!
 //! A token is shown once and stored only as its SHA-256 hash (`design/database.md`). It is
-//! 256 random bits, so a fast hash is enough; a slow one would only slow every request.
+//! 256 random bits, so a fast hash is enough; a slow one would only slow every request. The
+//! web client is never shown it: the cookie carries its session, out of reach of script.
 
+use axum::Json;
 use axum::extract::State;
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL;
@@ -13,6 +15,7 @@ use rusqlite::Transaction;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use super::authenticate::CLIENT;
 use super::devices::{self, Device, DeviceRegistration};
 use super::me::{self, User};
 use super::origin::Origin;
@@ -28,10 +31,13 @@ pub const COOKIE: &str = "jewelcase_session";
 /// use is sent it again (`authenticate`), so only one unused that long expires.
 const COOKIE_MAX_AGE_S: u32 = 400 * 24 * 60 * 60;
 
-/// The spec's `Session`: a new device's token, its account, and the device.
+/// The spec's `Session`: a new device's account, the device, and, for any client but the web
+/// client, its token.
 #[derive(Serialize)]
 pub struct Session {
-    pub token: String,
+    /// Set by [`Session::respond`]; left out of the JSON when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
     user: User,
     device: Device,
 }
@@ -60,15 +66,37 @@ pub fn token_hash(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
 
-/// Registers `device` for `user`, signed in with `token`, and returns its session.
+/// Registers `device` for `user`, signed in with the token whose [`token_hash`] is `hash`, and
+/// returns its session without the token, which [`Session::respond`] adds.
 pub fn register(
     tx: &Transaction,
     user: i64,
     device: &DeviceRegistration,
-    token: String,
+    hash: &[u8; 32],
 ) -> rusqlite::Result<Session> {
-    let device = devices::register(tx, user, device, &token_hash(&token))?;
-    Ok(Session { token, user: me::user(tx, user)?, device })
+    let device = devices::register(tx, user, device, hash)?;
+    Ok(Session { token: None, user: me::user(tx, user)?, device })
+}
+
+impl Session {
+    /// The `status` response to a sign-in with `token`: this session as JSON, and the [`cookie`]
+    /// for `prefix` and `from`. The body carries `token` too unless the request's `headers` hold
+    /// `X-Jewelcase-Client`, as the web client's do, so no script on its page sees the token.
+    /// Fails as [`cookie`] does.
+    pub fn respond(
+        mut self,
+        token: String,
+        status: StatusCode,
+        prefix: &str,
+        from: &Origin,
+        headers: &HeaderMap,
+    ) -> Result<Response, Problem> {
+        let cookie = cookie(prefix, &token, from)?;
+        if !headers.contains_key(CLIENT) {
+            self.token = Some(token);
+        }
+        Ok((status, [(header::SET_COOKIE, cookie)], Json(self)).into_response())
+    }
 }
 
 /// `logout`: removes the calling device, closes its realtime connections, and tells a browser

@@ -6,10 +6,9 @@
 
 pub(super) mod limits;
 
-use axum::Json;
 use axum::extract::State;
-use axum::http::{StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::Response;
 use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 
@@ -30,11 +29,12 @@ pub struct LoginRequest {
     // that is not one.
 }
 
-/// Logs `username` in on a new device and sets its session cookie, or refuses as the module
-/// docs describe.
+/// Logs `username` in on a new device, answering as [`session::Session::respond`] does, or
+/// refuses as the module docs describe.
 pub async fn login(
     State(state): State<AppState>,
     from: Origin,
+    headers: HeaderMap,
     extract::Json(request): extract::Json<LoginRequest>,
 ) -> Result<Response, Problem> {
     let LoginRequest { username, password, device } = request;
@@ -68,16 +68,16 @@ pub async fn login(
     };
 
     let token = session::new_token()?;
+    let hash = session::token_hash(&token);
     let session = state
         .db
         .write(move |tx| {
             limits::succeeded(tx, attempt)?;
-            session::register(tx, user, &device, token)
+            session::register(tx, user, &device, &hash)
         })
         .await?;
     devices::changed(state.db.clone(), state.hub.clone(), user);
-    let cookie = session::cookie(&state.prefix, &session.token, &from)?;
-    Ok((StatusCode::OK, [(header::SET_COOKIE, cookie)], Json(session)).into_response())
+    session.respond(token, StatusCode::OK, &state.prefix, &from, &headers)
 }
 
 /// The account `username` names: its ID, password, and whether it may sign in.

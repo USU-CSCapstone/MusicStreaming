@@ -254,7 +254,7 @@ export function createApi(dataDir: string) {
 		}
 		if (req.method === 'POST' && path === '/auth/login') {
 			res.setHeader('Content-Type', 'application/json');
-			return res.end(JSON.stringify({ token: 'mock', user: MOCK_USER, device: MOCK_DEVICE }));
+			return res.end(JSON.stringify({ user: MOCK_USER, device: MOCK_DEVICE }));
 		}
 		const recentPath = /^\/libraries\/([^/]+)\/recent-searches(?:\/([^/]+))?$/.exec(path);
 		if (recentPath) return recent(req, res, recentPath[1], recentPath[2]);

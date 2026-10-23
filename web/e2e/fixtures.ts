@@ -166,9 +166,8 @@ const device = { name: 'Chrome on Linux', type: 'desktop' as const, platform: 'w
 /** The ID the server gives this browser's device. */
 const deviceId = '2';
 
-/** The session a successful setup or login returns. */
+/** The session a successful setup or login returns to the web client, which gets no token. */
 const session = (request: SetupRequest): Session => ({
-	token: 'token',
 	user: {
 		id: '1',
 		username: request.username,

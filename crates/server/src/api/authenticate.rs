@@ -30,8 +30,10 @@ use super::session::{self, COOKIE, token_hash};
 use super::{AnyId, AppState, Code, Problem};
 use crate::db::{Text, now_ms, reaches};
 
-/// The header a cookie-authenticated write must carry.
-const CLIENT: &str = "x-jewelcase-client";
+/// The header the web client sends with every write. A write authenticated by cookie must
+/// carry it, and a sign-in that carries it gets no token in its body
+/// ([`session::Session::respond`]).
+pub(super) const CLIENT: &str = "x-jewelcase-client";
 
 /// How stale a device's `last_seen_at` may get before a request refreshes it. Coarse, so that
 /// using a device does not cost a write per request.

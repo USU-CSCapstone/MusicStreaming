@@ -7,9 +7,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::Json;
 use axum::extract::{Request, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
@@ -85,12 +85,13 @@ pub struct SetupRequest {
     device: DeviceRegistration,
 }
 
-/// Creates the owner and logs it in on this device, setting the session cookie, as a sign-in
-/// that succeeded from the client `from` names (`login::limits`). Once an owner exists this is
-/// `404`, as if the endpoint were not there.
+/// Creates the owner and logs it in on this device, answering as [`session::Session::respond`]
+/// does. It counts as a sign-in that succeeded from the client `from` names (`login::limits`).
+/// Once an owner exists this is `404`, as if the endpoint were not there.
 pub async fn complete(
     State(state): State<AppState>,
     from: Origin,
+    headers: HeaderMap,
     extract::Json(request): extract::Json<SetupRequest>,
 ) -> Result<Response, Problem> {
     if state.setup.done(&state.db).await? {
@@ -104,6 +105,7 @@ pub async fn complete(
     let password = password::hash_new(password, vec![username.clone(), display_name.clone()]);
     let password = password.await?;
     let token = session::new_token()?;
+    let hash = session::token_hash(&token);
 
     let session = state
         .db
@@ -121,13 +123,12 @@ pub async fn complete(
             )?;
             let attempt = limits::record(tx, &username, Some(user), from.client, now)?;
             limits::succeeded(tx, attempt)?;
-            Ok(session::register(tx, user, &device, token)?)
+            Ok(session::register(tx, user, &device, &hash)?)
         })
         .await?;
     state.setup.0.store(true, Ordering::Relaxed);
 
-    let cookie = session::cookie(&state.prefix, &session.token, &from)?;
-    Ok((StatusCode::CREATED, [(header::SET_COOKIE, cookie)], Json(session)).into_response())
+    session.respond(token, StatusCode::CREATED, &state.prefix, &from, &headers)
 }
 
 #[cfg(test)]

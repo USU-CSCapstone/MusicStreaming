@@ -3273,8 +3273,12 @@ export interface components {
          */
         ReclaimedDeviceId: string;
         Session: {
-            /** @description Shown once. Long-lived; idleness never expires it (`requirements/users.md` §4). */
-            token: string;
+            /**
+             * @description Shown once. Long-lived; idleness never expires it (`requirements/users.md` §4).
+             *     Absent when the request carried `X-Jewelcase-Client`: the session cookie signs
+             *     that client in, so no script on its page ever sees the token.
+             */
+            token?: string;
             user: components["schemas"]["User"];
             device: components["schemas"]["Device"];
         };
@@ -5553,7 +5557,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Logged in. Also sets the session cookie for browser clients. */
+            /** @description Logged in. Also sets the session cookie. */
             200: {
                 headers: {
                     [name: string]: unknown;

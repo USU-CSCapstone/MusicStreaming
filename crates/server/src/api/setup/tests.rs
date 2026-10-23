@@ -1,8 +1,9 @@
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::body::Body;
+use axum::http::{HeaderMap, Request, StatusCode, header};
 use serde_json::{Value, json};
 
 use super::super::session::token_hash;
-use super::super::testing::{app, app_before_setup, json, send_json};
+use super::super::testing::{app, app_before_setup, json, respond, send_json};
 
 const PASSWORD: &str = "correct horse battery staple";
 
@@ -85,6 +86,25 @@ async fn setup_creates_the_owner_and_logs_it_in() {
     let (status, _, problem) =
         send_json(app, "POST", "/api/v1/setup", &setup_request("Other", PASSWORD)).await;
     assert_eq!((status, &problem["code"]), (StatusCode::NOT_FOUND, &json!("not_found")));
+}
+
+#[tokio::test]
+async fn the_web_client_gets_the_cookie_and_no_token_in_the_body() {
+    let (_temp, _db, app) = app_before_setup("");
+    let request = Request::post("/api/v1/setup")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-jewelcase-client", "web")
+        .body(Body::from(setup_request("Sam", PASSWORD).to_string()))
+        .unwrap();
+    let (status, headers, body) = respond(app.clone(), request).await;
+    let session: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(status, StatusCode::CREATED, "{session}");
+    assert_eq!(session.get("token"), None, "{session}");
+    assert_eq!(session["user"]["username"], "Sam");
+
+    let pair = cookie(&headers).split(';').next().unwrap();
+    let me = Request::get("/api/v1/me").header(header::COOKIE, pair).body(Body::empty());
+    assert_eq!(respond(app, me.unwrap()).await.0, StatusCode::OK, "{}", cookie(&headers));
 }
 
 #[tokio::test]

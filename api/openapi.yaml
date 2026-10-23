@@ -16,9 +16,10 @@ info:
     **Authentication.** Login registers a device and returns an opaque token. Send it as
     `Authorization: Bearer <token>`. The web client may instead rely on the
     `jewelcase_session` cookie set at login; cookie-authenticated requests that change
-    state must carry an `X-Jewelcase-Client` header or they are refused. Any authenticated
-    endpoint may answer `401` — see `Problem.reason` for whether a device keeps its
-    downloads (`requirements/offline.md` §9).
+    state must carry an `X-Jewelcase-Client` header or they are refused. A login or
+    setup that carries that header is signed in by the cookie alone and gets no token in its
+    body. Any authenticated endpoint may answer `401` — see `Problem.reason` for whether a device
+    keeps its downloads (`requirements/offline.md` §9).
 
     **Scope.** Paths under `/libraries/{libraryId}` are scoped to that library. Anything
     the caller cannot reach answers `404`, exactly as if it did not exist; an action the
@@ -195,7 +196,7 @@ paths:
             schema: { $ref: '#/components/schemas/LoginRequest' }
       responses:
         '200':
-          description: Logged in. Also sets the session cookie for browser clients.
+          description: Logged in. Also sets the session cookie.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Session' }
@@ -4438,11 +4439,14 @@ components:
 
     Session:
       type: object
-      required: [token, user, device]
+      required: [user, device]
       properties:
         token:
           type: string
-          description: Shown once. Long-lived; idleness never expires it (`requirements/users.md` §4).
+          description: |
+            Shown once. Long-lived; idleness never expires it (`requirements/users.md` §4).
+            Absent when the request carried `X-Jewelcase-Client`: the session cookie signs
+            that client in, so no script on its page ever sees the token.
         user: { $ref: '#/components/schemas/User' }
         device: { $ref: '#/components/schemas/Device' }
 

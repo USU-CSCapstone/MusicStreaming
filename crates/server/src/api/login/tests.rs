@@ -83,6 +83,29 @@ async fn logs_in_on_a_new_device() {
     assert_eq!(devices, 2, "setup's and this one");
 }
 
+/// `X-Jewelcase-Client` marks the web client, which the cookie alone signs in.
+#[tokio::test]
+async fn only_a_client_without_the_client_header_gets_the_token_in_the_body() {
+    let (_temp, _db, app) = server().await;
+    for (client, gets_token) in [(None, true), (Some("web"), false)] {
+        let mut request = login_request("203.0.113.5", "sam", PASSWORD);
+        if let Some(client) = client {
+            request.headers_mut().insert("x-jewelcase-client", HeaderValue::from_static(client));
+        }
+        let (status, headers, body) = respond(app.clone(), request).await;
+        let session: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status, StatusCode::OK, "{session}");
+        assert_eq!(session.get("token").is_some(), gets_token, "{client:?}: {session}");
+        assert_eq!(session["user"]["username"], "sam");
+
+        // Either way, the cookie signs the browser in.
+        let cookie = headers[header::SET_COOKIE].to_str().unwrap();
+        let pair = cookie.split(';').next().unwrap();
+        let me = Request::get("/api/v1/me").header(header::COOKIE, pair).body(Body::empty());
+        assert_eq!(respond(app.clone(), me.unwrap()).await.0, StatusCode::OK, "{cookie}");
+    }
+}
+
 #[tokio::test]
 async fn the_cookie_is_secure_only_behind_a_trusted_proxy_that_says_https() {
     let (_temp, _db, app) = server().await;
