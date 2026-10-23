@@ -12,6 +12,8 @@
 //! [`Hub::revoke`] it, which tells its connections and closes them.
 
 mod hub;
+mod messages;
+mod origin;
 
 use std::time::Duration;
 
@@ -19,21 +21,22 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::http::uri::Authority;
-use axum::http::{HeaderMap, header};
+use axum::http::HeaderMap;
 use axum::response::Response;
 use rusqlite::OptionalExtension;
-use serde::{Deserialize, Serialize};
 use tokio::time::{Instant, interval_at, timeout};
 
 pub use hub::{Hub, Presence};
+pub use messages::{Revoked, ServerMessage};
 
 use super::authenticate::Caller;
-use super::devices::{self, Device};
-use super::player::{self, CommandResult, PlayerCommand, PlayerState, ProgressReport};
+use super::devices;
+use super::player::{self, PlayerCommand};
 use super::time::rfc3339;
 use super::{AppState, Code, Id, Problem};
 use crate::db::{Database, now_ms};
+use messages::{ClientMessage, encode};
+use origin::same_origin;
 
 const HEARTBEAT: Duration = Duration::from_secs(15);
 
@@ -44,66 +47,6 @@ const SILENCE: Duration = Duration::from_secs(40);
 /// Client messages are commands and reports of a few hundred bytes. A bound well above that
 /// keeps a client from making the server buffer the default 64 MiB.
 const MAX_MESSAGE: usize = 64 * 1024;
-
-/// Set by proxies that change `Host` (`requirements/deployment.md` §6).
-const FORWARDED_HOST: &str = "x-forwarded-host";
-
-/// The spec's `RealtimeClientMessage`, as far as it is built.
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-enum ClientMessage {
-    Ping,
-    Progress {
-        report: ProgressReport,
-    },
-    /// Read in two steps, so one that is not a command it carries out can still be answered.
-    PlayerCommand {
-        command: serde_json::Value,
-    },
-    CommandResult {
-        result: CommandResult,
-    },
-}
-
-/// The spec's `RealtimeServerMessage`, as far as it is built.
-#[derive(Serialize)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum ServerMessage {
-    Hello {
-        device_id: Id,
-        server_time: String,
-    },
-    Pong {
-        server_time: String,
-    },
-    Devices {
-        devices: Vec<Device>,
-    },
-    Player {
-        state: PlayerState,
-    },
-    /// A command for the connection playing to carry out.
-    Execute {
-        command: PlayerCommand,
-    },
-    CommandResult {
-        result: CommandResult,
-    },
-    SessionRevoked {
-        reason: Revoked,
-    },
-}
-
-/// Why a device was signed out: the spec's `reason` in `sessionRevoked` and in a
-/// `session_revoked` Problem, stored by the same name in `devices.revoked_reason`.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Revoked {
-    /// The account's credentials changed: the device keeps its downloads.
-    CredentialsChanged,
-    /// Signed out: the device removes its downloads.
-    LoggedOut,
-}
 
 /// `openRealtime`: upgrades to a WebSocket for the calling device.
 pub async fn open(
@@ -136,31 +79,6 @@ async fn signed_in(db: &Database, device: i64) -> Result<bool, Problem> {
         .optional()
     });
     Ok(found.await?.is_some())
-}
-
-/// Whether the request is not from a page, which sends no `Origin`, or is from a page this
-/// server served: one whose origin names the host and port the request was sent to.
-fn same_origin(headers: &HeaderMap) -> bool {
-    let Some(origin) = headers.get(header::ORIGIN) else { return true };
-    let origin = origin.to_str().ok().and_then(|origin| origin.split_once("://"));
-    let Some((scheme, origin)) = origin else { return false };
-    let Ok(origin) = origin.parse::<Authority>() else { return false };
-    // A port left out, by the page or a proxy, is the default for the page's scheme. A proxy on
-    // another port that drops it refuses every page, rather than letting in another server's.
-    let default = match scheme {
-        "http" | "ws" => Some(80),
-        "https" | "wss" => Some(443),
-        _ => None,
-    };
-    let port = origin.port_u16().or(default);
-    // A proxy that lists several hosts puts the one the client asked for first.
-    let host = |name| {
-        let host = headers.get(name)?.to_str().ok()?.split(',').next()?;
-        host.trim().parse::<Authority>().ok()
-    };
-    [host(header::HOST.as_str()), host(FORWARDED_HOST)].into_iter().flatten().any(|host| {
-        host.host().eq_ignore_ascii_case(origin.host()) && host.port_u16().or(default) == port
-    })
 }
 
 /// Holds `socket` open for `caller` until either side closes it or it goes silent.
@@ -279,10 +197,6 @@ async fn handle(
 /// Sends `message`, and whether it went within [`SILENCE`].
 async fn send(socket: &mut WebSocket, message: Message) -> bool {
     matches!(timeout(SILENCE, socket.send(message)).await, Ok(Ok(())))
-}
-
-fn encode(message: &ServerMessage) -> Message {
-    Message::text(serde_json::to_string(message).expect("server messages serialize"))
 }
 
 fn now() -> String {
