@@ -5,6 +5,10 @@
 //! Limits count failures in `login_attempts` by the name tried, so an unknown username is
 //! limited exactly like a real one. A success clears the account's failures but not the
 //! origin's, so a sweep cannot reset its own count by signing into an account it holds.
+//!
+//! At an origin the account has signed in from, while that success is kept (30 days,
+//! `crate::db::retention`), the account's limit counts only that origin's failures, so failures
+//! from elsewhere cannot keep its owner out there.
 
 use std::net::{IpAddr, Ipv6Addr};
 
@@ -29,22 +33,37 @@ pub fn wait_ms(
     origin: IpAddr,
     now: i64,
 ) -> rusqlite::Result<i64> {
-    let since = now - WINDOW_MS;
+    let (since, key) = (now - WINDOW_MS, origin_key(origin));
+    // At an origin the account has signed in from, only that origin's failures count; with
+    // `None`, failures from every origin do.
+    let only_from = signed_in_from(conn, username, &key)?.then_some(&key);
     let account = conn
         .prepare_cached(
             "SELECT count(*), max(attempted_at) FROM login_attempts \
-             WHERE username_attempted = ?1 AND succeeded = 0 AND attempted_at > coalesce( \
+             WHERE username_attempted = ?1 AND succeeded = 0 AND (?3 IS NULL OR origin = ?3) \
+             AND attempted_at > coalesce( \
              (SELECT max(attempted_at) FROM login_attempts \
               WHERE username_attempted = ?1 AND succeeded = 1 AND attempted_at > ?2), ?2)",
         )?
-        .query_row(params![username, since], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        .query_row(params![username, since, only_from], |row| Ok((row.get(0)?, row.get(1)?)))?;
     let origin = conn
         .prepare_cached(
             "SELECT count(*), max(attempted_at) FROM login_attempts \
              WHERE origin = ?1 AND succeeded = 0 AND attempted_at > ?2",
         )?
-        .query_row(params![origin_key(origin), since], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        .query_row(params![key, since], |row| Ok((row.get(0)?, row.get(1)?)))?;
     Ok(wait(account, ACCOUNT_FREE, now).max(wait(origin, ORIGIN_FREE, now)))
+}
+
+/// Whether the active account `username` names has a kept successful sign-in from `origin`, an
+/// [`origin_key`]. A suspended account, or a name whose earlier holder signed in there, counts
+/// as never having signed in, so it waits as an unknown name does (`requirements/users.md` §10).
+fn signed_in_from(conn: &Connection, username: &str, origin: &str) -> rusqlite::Result<bool> {
+    conn.prepare_cached(
+        "SELECT EXISTS (SELECT 1 FROM login_attempts WHERE origin = ?2 AND succeeded = 1 \
+         AND user_id = (SELECT id FROM users WHERE username = ?1 AND status = 'active'))",
+    )?
+    .query_row(params![username, origin], |row| row.get(0))
 }
 
 /// Records an attempt as failed until it proves otherwise, and returns its ID. Recorded before

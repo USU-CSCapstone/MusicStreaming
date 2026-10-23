@@ -153,7 +153,7 @@ Migrations are the exception: they run with foreign keys off, because rebuilding
 | Rows | Kept |
 |---|---|
 | `scans` | 30 days after they finished. Each library keeps its last finished scan, which the admin sees, and its last completed one, which says the library has been scanned, so its next startup scan is not taken for its first (`design/scanning.md` §9). Unfinished scans stay. |
-| `login_attempts` | 30 days, through `login_attempts_age`, so admins can still see an account under pressure. |
+| `login_attempts` | 30 days, through `login_attempts_age`, so admins can still see an account under pressure. While an account's success from an origin is kept, its limit there counts only that origin's failures (`login_attempts_signed_in`), so failures elsewhere cannot lock its owner out there. Anyone who shares that origin, or claims it from the private network (`api/origin.rs`), still gets only the account's free attempts there. |
 | `play_events` ends | 30 days, delivered or not, through `play_events_ended_age`. Starts over an hour old go as each new play is recorded (§6), so they stay few. |
 | `recent_searches`, and `search_events` other than `stopped` | 30 days (`requirements/search.md` §6). Until the sweep reaches them, the list of recent searches leaves out those past the window. |
 | `search_events` `stopped` | Until the plugin's `searched` position for that user in that library reaches it, however long that takes, or the plugin is uninstalled. |

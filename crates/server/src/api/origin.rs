@@ -3,7 +3,12 @@
 //!
 //! A peer on a private network or this host may be a proxy, so its `X-Forwarded-For` is
 //! believed: the client is the nearest address in it that is not private. That lets anyone on
-//! the private network claim any origin, and the per-account limits still hold them.
+//! the private network claim any origin. At an origin an account has signed in from, that
+//! account's limit counts only the origin's failures (`login::limits`), so whoever claims or
+//! shares one, such as everyone behind the owner's carrier-grade NAT or on their campus network,
+//! still gets only the account's few free guesses at its password there. Once a name is locked
+//! out elsewhere, they can also tell there whether it is an active account that has signed in
+//! from that origin: its password is still checked (401), where any other name waits (429).
 
 use std::net::{IpAddr, SocketAddr};
 

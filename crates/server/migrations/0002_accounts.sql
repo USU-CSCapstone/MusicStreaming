@@ -51,8 +51,11 @@ CREATE TABLE login_attempts (
     succeeded          INTEGER NOT NULL CHECK (succeeded IN (0, 1))
 ) STRICT;
 
--- Per-account limits count by the name tried, so unknown usernames lock out exactly as real ones do.
-CREATE INDEX login_attempts_by_username ON login_attempts (username_attempted, attempted_at);
-CREATE INDEX login_attempts_by_origin ON login_attempts (origin, attempted_at);
+-- Per-account limits count by the name tried, so unknown usernames lock out exactly as real ones do,
+-- and also by origin at one the account has signed in from. Per-origin limits count by origin.
+CREATE INDEX login_attempts_by_username ON login_attempts (username_attempted, succeeded, attempted_at, origin);
+CREATE INDEX login_attempts_by_origin ON login_attempts (origin, succeeded, attempted_at);
+-- Where each account has signed in from, so its limit there counts only that origin's failures.
+CREATE INDEX login_attempts_signed_in ON login_attempts (origin, user_id) WHERE succeeded = 1;
 -- For the hourly sweep, which deletes attempts once they are 30 days old (design/database.md §9).
 CREATE INDEX login_attempts_age ON login_attempts (attempted_at);

@@ -11,6 +11,8 @@ use super::super::testing::{app_before_setup, respond, send_json};
 use crate::db::Database;
 use crate::db::testing::User;
 
+mod known_origins;
+
 const PASSWORD: &str = "correct horse battery staple";
 
 /// A server whose owner is `sam` with [`PASSWORD`], set up the way a person would.
