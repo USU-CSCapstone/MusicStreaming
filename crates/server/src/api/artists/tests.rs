@@ -144,7 +144,7 @@ async fn every_sort_reads_from_an_index() {
     .unwrap();
     db.read(|conn| {
         for sort in [ArtistSort::Name, ArtistSort::DateAdded] {
-            page::assert_indexed(conn, &ARTISTS.source(conn, 1, None, Vec::new())?, sort.sort())?;
+            page::assert_indexed(conn, &ARTISTS.source(conn, 1, None, None)?, sort.sort())?;
         }
         Ok(())
     })

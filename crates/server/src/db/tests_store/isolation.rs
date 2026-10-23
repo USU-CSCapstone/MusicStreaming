@@ -61,8 +61,7 @@ fn another_librarys_track_is_left_alone() {
     assert_eq!(store.feed_head(other), 0);
 }
 
-/// A batch applied for another library marks none of this one's tracks missing, whether it names
-/// a track or a folder holding one.
+/// A batch applied for another library marks none of this one's tracks missing.
 #[test]
 fn another_librarys_batch_marks_nothing_missing() {
     let tmp = tempfile::tempdir().unwrap();
@@ -80,7 +79,7 @@ fn another_librarys_batch_marks_nothing_missing() {
     let (track, head): (TrackId, i64) =
         (scalar(&store, "SELECT id FROM tracks").unwrap(), store.feed_head(lib.id));
 
-    let batch = Batch { missing: vec![track], vanished: vec![root.join("A")], ..Batch::default() };
+    let batch = Batch { missing: vec![track], ..Batch::default() };
     assert_eq!(store.apply(2, batch).unwrap(), 0);
     assert!(store.inspect_tracks(lib.id).iter().all(|t| !t.missing));
     assert_eq!((store.feed_head(lib.id), store.feed_head(2)), (head, 0));

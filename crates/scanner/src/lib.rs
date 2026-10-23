@@ -48,6 +48,7 @@ mod worker;
 
 pub use analysis::{ANALYZER_VERSION, AnalysisResult, Analyzer};
 pub use audio::AudioProperties;
+pub use clock::now_ms;
 pub use confine::without_links;
 pub use image::{ImageInfo, describe as describe_image};
 pub use jobs::RunReport;
@@ -57,9 +58,7 @@ pub use placeholders::Placeholders;
 pub use pool::{Job, Pool};
 pub use problems::{Problem, ProblemKind, UNOPENED, group_key as problem_group_key};
 pub use queue::{Scanner, ScannerThread};
-pub use scan::{
-    Cursor, Scan, ScanContext, ScanId, ScanOptions, ScanProgress, ScanState, Trigger, run_scan,
-};
+pub use scan::{Cursor, Scan, ScanId, ScanOptions, ScanProgress, ScanState, Trigger};
 pub use scope::{Depth, Scope};
 pub use sidecar::{Biography, SidecarImage, SidecarStamp};
 pub use store::{

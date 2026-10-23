@@ -27,7 +27,7 @@ use jewelcase_core::words;
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use serde::{Deserialize, Serialize};
 
-use super::extract::{Json as Body, Path};
+use super::extract::{self, Path};
 use super::scope::Scope;
 use super::search::{Indexes, totals};
 use super::time::serialize_rfc3339;
@@ -152,7 +152,7 @@ pub async fn record(
     State(db): State<Arc<Database>>,
     State(indexes): State<Arc<Indexes>>,
     Scope { user, library }: Scope,
-    Body(Create { query, selected }): Body<Create>,
+    extract::Json(Create { query, selected }): extract::Json<Create>,
 ) -> Result<(StatusCode, Json<RecentSearch>), Problem> {
     let query = query.trim().to_owned();
     if query.len() > MAX_QUERY {

@@ -32,13 +32,11 @@ pub fn by_ids<T>(
 #[cfg(test)]
 mod tests {
     use super::by_ids;
-    use crate::db::Database;
-    use crate::db::testing::{Album, library};
+    use crate::db::testing::{Album, library, open};
 
     /// Reads the IDs of albums `ids` in library 1 that meet `rest`.
     fn album_ids(rest: &'static str, ids: &[i64]) -> Vec<i64> {
-        let temp = tempfile::tempdir().unwrap();
-        let db = Database::open(&temp.path().join("jewelcase.db")).unwrap();
+        let (_temp, db) = open();
         db.write_blocking(|tx| {
             library(tx, 1, "Music", "/music")?;
             library(tx, 2, "Other", "/other")?;

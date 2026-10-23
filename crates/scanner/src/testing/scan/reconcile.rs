@@ -122,6 +122,44 @@ pub fn a_scan_stopped_partway_through_a_folder_marks_nothing_there<S: InspectSto
     assert_eq!(live(store.as_ref(), &lib).len(), 4);
 }
 
+/// A scan stopped partway through marking a folder gone from its parent's listing leaves its
+/// cursor before the parent, so the resume lists the parent again and marks the rest: here the
+/// stop comes as the first batch marking any of Gone's six tracks is stored.
+pub fn a_scan_stopped_partway_through_marking_marks_the_rest_on_resume<
+    S: InspectStore + 'static,
+>(
+    make: Factory<S>,
+) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    make_album(&root, "A", "X", 1);
+    make_album(&root, "Gone/P", "Q", 3);
+    make_album(&root, "Gone/R", "S", 3);
+    let lib = library(&root);
+    let store = Arc::new(make(&lib));
+    scan_flushing_often(store.as_ref(), &lib);
+    fs::remove_dir_all(root.join("Gone")).unwrap();
+    let stops = Stops::default();
+    let hooked = Hooked::new(store.clone()).on_apply(|batch: &Batch| {
+        if !batch.missing.is_empty() {
+            stops.shutdown.store(true, Ordering::SeqCst);
+        }
+        Ok(())
+    });
+
+    let mut scan = new_scan(&hooked, &lib);
+    run(&hooked, &lib, &mut scan, &batches_of(1), &stops);
+    let mut stopped = row(store.as_ref(), &lib, scan.id);
+    let marked = store.inspect_tracks(lib.id).iter().filter(|t| t.missing).count();
+    assert_eq!(stopped.state, ScanState::Running);
+    assert!((1..=5).contains(&marked), "{marked} marked before the stop");
+    run(store.as_ref(), &lib, &mut stopped, &batches_of(1), &Stops::default());
+
+    let resumed = row(store.as_ref(), &lib, scan.id);
+    assert_eq!((resumed.state, resumed.progress.missing), (ScanState::Completed, 6));
+    assert_eq!(live(store.as_ref(), &lib).len(), 1);
+}
+
 /// A folder that cannot be listed keeps its tracks though the scan that met it resumes after a
 /// shutdown, forgetting what it could not read: B/Y's parent still lists it. Skipped, saying so,
 /// where permissions do not stop this user reading, as for root.

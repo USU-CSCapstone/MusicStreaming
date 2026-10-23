@@ -4,6 +4,7 @@
 //! arguments, so a test that renames a row and depends on its order sets its keys too.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use rusqlite::{Connection, Result, params};
 
@@ -14,6 +15,13 @@ mod catalog;
 pub mod scale;
 
 pub use catalog::{Album, Artist, Image, Track, album_artist, scattered_key, track_artist};
+
+/// A database in a new temporary directory, which must outlive it.
+pub fn open() -> (tempfile::TempDir, Arc<Database>) {
+    let temp = tempfile::tempdir().unwrap();
+    let db = Database::open(&temp.path().join("jewelcase.db")).unwrap();
+    (temp, Arc::new(db))
+}
 
 /// Adds library `id` called `name`, with its one root at `root`.
 pub fn library(conn: &Connection, id: i64, name: &str, root: impl AsRef<Path>) -> Result<()> {

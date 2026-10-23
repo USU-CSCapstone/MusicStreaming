@@ -1,6 +1,7 @@
 //! The hourly sweep: each kind of row goes once it is older than the window and stays until
 //! then, each library on its own, and a large sweep runs a chunk at a time.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use rusqlite::{Connection, Result, params};
@@ -8,7 +9,7 @@ use rusqlite::{Connection, Result, params};
 use super::catalog::TRACK_CHUNK;
 use super::{CHUNK, Sweep, WINDOW_MS};
 use crate::db::Database;
-use crate::db::testing::{Album, Artist, Image, Track, User, library, sweep};
+use crate::db::testing::{self, Album, Artist, Image, Track, User, library, sweep};
 
 /// A day, in milliseconds.
 const DAY: i64 = 24 * 60 * 60 * 1000;
@@ -22,9 +23,8 @@ const RECENT: i64 = NOW - 29 * DAY;
 /// A database with libraries 1 and 2 and user 1, after `setup`.
 fn open(
     setup: impl FnOnce(&Connection) -> Result<()> + Send + 'static,
-) -> (tempfile::TempDir, Database) {
-    let temp = tempfile::tempdir().unwrap();
-    let db = Database::open(&temp.path().join("jewelcase.db")).unwrap();
+) -> (tempfile::TempDir, Arc<Database>) {
+    let (temp, db) = testing::open();
     db.write_blocking(|tx| {
         library(tx, 1, "One", "/one")?;
         library(tx, 2, "Two", "/two")?;

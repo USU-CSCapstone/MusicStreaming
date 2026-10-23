@@ -99,7 +99,7 @@ pub fn allowed(
     if host.ends_with('.') {
         return Err(format!("{host} ends with a dot; name the host without it"));
     }
-    if !reaches(host, destinations) {
+    if !destination_allowed(host, destinations) {
         return Err(format!("{host} is not one of this plugin's approved destinations"));
     }
     // The parser writes an IPv6 address in brackets, and an IPv4 one in dotted decimal.
@@ -111,7 +111,7 @@ pub fn allowed(
 }
 
 /// Whether `destinations` let a plugin reach `host`: one names it, or is `*`.
-pub fn reaches(host: &str, destinations: &[String]) -> bool {
+pub fn destination_allowed(host: &str, destinations: &[String]) -> bool {
     destinations.iter().any(|d| d == "*") || names(host, destinations)
 }
 

@@ -118,8 +118,9 @@ fn a_scan_the_store_cannot_record_is_not_queued() {
     parked.hold();
     let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
     scanner.scan_library(Trigger::Manual).unwrap();
-    testing::wait_until(&scanner, "no scan started", |scanner| scanner.running().is_some());
-    let folder = scanner.scan_folder(Trigger::Watch, &root.join("A")).unwrap();
+    testing::wait_until("no scan started", || scanner.running().is_some());
+    let scope = Scope::folder(&root, root.join("A"), Depth::Subtree);
+    let folder = scanner.request(Trigger::Watch, vec![scope]).unwrap();
 
     fail(&store, "BEFORE INSERT ON scans");
     assert_eq!(scanner.scan_library(Trigger::Manual), None);

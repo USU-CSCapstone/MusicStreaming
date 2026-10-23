@@ -1,13 +1,17 @@
 //! Planner statistics wait for a library of real size (`design/database.md` §4).
 
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+
 use jewelcase_scanner::*;
 
 use super::{make, record};
 use crate::db::store::SqliteStore;
-use crate::db::{Database, STATISTICS_FROM_TRACKS, libraries, optimize};
+use crate::db::{Database, FIRST_SWEEP, STATISTICS_FROM_TRACKS, libraries, optimize};
 
 /// How many rows of planner statistics describe the tracks after running [`optimize`], as the
-/// writer's hourly sweep does.
+/// writer does every few minutes.
 fn track_statistics(store: &SqliteStore) -> i64 {
     store
         .db()
@@ -35,7 +39,7 @@ fn stored_statistics(db: &Database) -> i64 {
     .unwrap()
 }
 
-/// The sweep gathers no statistics for a library of one track, which would describe its tables
+/// The writer gathers no statistics for a library of one track, which would describe its tables
 /// as a row each once they have grown, and gathers them for one of [`STATISTICS_FROM_TRACKS`].
 #[test]
 fn statistics_wait_for_a_library_of_real_size() {
@@ -103,4 +107,68 @@ fn opening_gathers_statistics_within_the_analysis_limit() {
         })
         .unwrap();
     assert_ne!(stat, "10000 1000", "counted in full");
+}
+
+/// How the writer would run the `tracks_added` trigger's update of the artists a track on album
+/// `?1` counts toward.
+fn owned_count_plan(db: &Database) -> String {
+    let explain = "EXPLAIN QUERY PLAN UPDATE artists SET owned_track_count = owned_track_count + 1 \
+                   WHERE id IN (SELECT artist_id FROM album_artists WHERE album_id = ?1)";
+    db.write_blocking(move |tx| {
+        let mut plan = tx.prepare(explain)?;
+        let steps = plan.query_map([0], |r| r.get::<_, String>(3))?;
+        steps.collect::<rusqlite::Result<Vec<_>>>().map(|steps| steps.join("; "))
+    })
+    .unwrap()
+}
+
+/// How many rows `db`'s statistics give `artists`, or 0 while they do not describe it.
+fn described_artists(db: &Database) -> i64 {
+    let sql =
+        "SELECT ifnull(max(CAST(stat AS INTEGER)), 0) FROM sqlite_stat1 WHERE tbl = 'artists'";
+    db.read_blocking(move |conn| conn.query_row(sql, [], |r| r.get(0))).unwrap()
+}
+
+/// Statistics gathered while 1,200 tracks have 12 artists describe `artists` as a few rows, which
+/// sends each new track's trigger to read every artist. Once 200 more artists arrive, the writer
+/// gathers them again in its periodic optimize, with nothing else asked of it, and the trigger
+/// looks artists up.
+#[test]
+fn a_table_grown_tenfold_is_described_again_while_the_server_runs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    let store = make(&root);
+    let upserts = |range: std::ops::Range<usize>, newcomers: bool| {
+        let records = range.map(|i| {
+            let mut record = record(&root, i);
+            if newcomers {
+                record.tags.artists = vec![format!("Newcomer {i}")];
+                record.tags.album_artists = record.tags.artists.clone();
+            }
+            record
+        });
+        Batch { upserts: records.collect(), ..Batch::default() }
+    };
+    for start in (0..1_200).step_by(250) {
+        store.apply(1, upserts(start..(start + 250).min(1_200), false)).unwrap();
+    }
+    drop(store);
+    // Opening it again gathers statistics for the 1,200 tracks, and the writer gathers them again
+    // every half second, after the new artists have arrived.
+    let path = tmp.path().join("state/jewelcase.db");
+    let every = Duration::from_millis(500);
+    let db = Arc::new(Database::open_timed(&path, FIRST_SWEEP, every).unwrap());
+    let store = SqliteStore::new(db.clone()).unwrap();
+    store.apply(1, upserts(1_200..1_400, true)).unwrap();
+
+    // Read from the readers, so the writer is given no job to run its optimize after.
+    for _ in 0..1_500 {
+        if described_artists(&db) > 200 {
+            let plan = owned_count_plan(&db);
+            assert!(!plan.contains("SCAN artists"), "{plan}");
+            return;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("the statistics still describe {} artists after 30 s", described_artists(&db));
 }

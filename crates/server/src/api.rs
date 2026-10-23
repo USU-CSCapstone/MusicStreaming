@@ -73,56 +73,29 @@ const SIGNED_OUT_BODY_DEADLINE: Duration = Duration::from_secs(30);
 
 /// What handlers share. Each takes the part it needs, such as `State<Arc<Database>>`.
 #[derive(Clone, FromRef)]
-struct AppState {
-    db: Arc<Database>,
-    images: Arc<Images>,
-    indexes: Arc<Indexes>,
-    setup: Arc<Setup>,
-    plugins: Arc<Plugins>,
+pub struct AppState {
+    pub db: Arc<Database>,
+    pub images: Arc<Images>,
+    pub indexes: Arc<Indexes>,
+    /// Whether setup is seen done; a default one has not seen it yet.
+    pub setup: Arc<Setup>,
+    pub plugins: Arc<Plugins>,
     /// The open realtime connections.
-    hub: Arc<Hub>,
+    pub hub: Arc<Hub>,
     /// Each account's playback state.
-    players: Arc<Players>,
-    /// Where the API is mounted, `{base_path}/api/v1`.
-    prefix: Arc<str>,
+    pub players: Arc<Players>,
+    /// Where the API is mounted, as [`prefix`] gives it.
+    pub prefix: Arc<str>,
 }
 
-impl AppState {
-    /// The state of an API mounted at `prefix`, before setup is seen done.
-    fn new(
-        db: Arc<Database>,
-        images: Images,
-        indexes: Arc<Indexes>,
-        plugins: Arc<Plugins>,
-        players: Arc<Players>,
-        hub: Arc<Hub>,
-        prefix: &str,
-    ) -> AppState {
-        AppState {
-            db,
-            images: Arc::new(images),
-            indexes,
-            setup: Arc::default(),
-            plugins,
-            hub,
-            players,
-            prefix: prefix.into(),
-        }
-    }
+/// Where the API is mounted under `base_path`: `{base_path}/api/v1`.
+pub fn prefix(base_path: &str) -> Arc<str> {
+    format!("{base_path}/api/v1").into()
 }
 
-/// The API's routes, nested under `{base_path}/api/v1`.
-pub fn router(
-    base_path: &str,
-    db: Arc<Database>,
-    images: Images,
-    indexes: Arc<Indexes>,
-    plugins: Arc<Plugins>,
-    players: Arc<Players>,
-    hub: Arc<Hub>,
-) -> Router {
-    let prefix = format!("{base_path}/api/v1");
-    let state = AppState::new(db, images, indexes, plugins, players, hub, &prefix);
+/// The API's routes, nested under `state`'s prefix.
+pub fn router(state: AppState) -> Router {
+    let prefix = state.prefix.clone();
     // These answer `401` without a token.
     let signed_in = Router::new()
         .route("/auth/logout", post(session::logout))

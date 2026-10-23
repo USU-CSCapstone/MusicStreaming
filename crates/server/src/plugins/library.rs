@@ -129,9 +129,6 @@ fn artist(row: &Row) -> rusqlite::Result<Artist> {
     })
 }
 
-// A method left out here would fall back to the trait's default and answer every plugin
-// "not available", so clippy refuses one.
-#[deny(clippy::missing_trait_methods)]
 impl Library for RunLibrary {
     /// A page of the library's tracks, leaving out those missing since a scan.
     async fn tracks(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Track>, String> {

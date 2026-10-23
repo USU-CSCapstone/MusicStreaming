@@ -6,6 +6,7 @@
 
 pub(super) mod limits;
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -13,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 
 use super::devices::{self, DeviceRegistration};
-use super::extract::Json;
+use super::extract;
 use super::origin::Origin;
 use super::{AppState, Code, Problem, me, password, session};
 use crate::db::now_ms;
@@ -34,7 +35,7 @@ pub struct LoginRequest {
 pub async fn login(
     State(state): State<AppState>,
     Origin(origin): Origin,
-    Json(request): Json<LoginRequest>,
+    extract::Json(request): extract::Json<LoginRequest>,
 ) -> Result<Response, Problem> {
     let LoginRequest { username, password, device } = request;
     // No account can have another name, and this keeps megabyte names out of the records.
@@ -76,7 +77,7 @@ pub async fn login(
         .await?;
     devices::changed(state.db.clone(), state.hub.clone(), user);
     let cookie = session::cookie(&state.prefix, &session.token)?;
-    Ok((StatusCode::OK, [(header::SET_COOKIE, cookie)], axum::Json(session)).into_response())
+    Ok((StatusCode::OK, [(header::SET_COOKIE, cookie)], Json(session)).into_response())
 }
 
 /// The account `username` names: its ID, password, and whether it may sign in.

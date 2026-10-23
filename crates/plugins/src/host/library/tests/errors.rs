@@ -3,15 +3,12 @@
 
 use super::*;
 
-/// A library nothing can be read from: every call answers its default, "not available".
-struct Unreadable;
-
-impl Library for Unreadable {}
-
 #[tokio::test]
 async fn a_library_that_cannot_be_read_answers_failed_with_its_reason() {
-    let failed = Answer::Failed(format!("{:?}", Error::Failed("not available".into())));
-    let run = &mut testing::run(Unreadable, &Permission::ALL);
+    let failed =
+        Answer::Failed(format!("{:?}", Error::Failed("the library could not be read".into())));
+    let unreadable = Memory { unreadable: true, ..Memory::default() };
+    let run = &mut testing::run(unreadable, &Permission::ALL);
     for (import, ..) in GATED.iter().filter(|(import, ..)| *import != "http.send") {
         assert_eq!(call(run, import).await, failed, "{import}");
     }

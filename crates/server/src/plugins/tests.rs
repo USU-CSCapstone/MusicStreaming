@@ -28,10 +28,9 @@ const TOUCHER: &str = include_str!("tests/toucher.wat");
 /// scanner, and the plugins over it. The root's ID is 1, so [`TOUCHER`] can name it. The scanner
 /// runs until its thread is dropped, which [`stop`] does.
 async fn scanned() -> (TempDir, Arc<Database>, Arc<Plugins>, ScannerThread) {
-    let temp = tempfile::tempdir().unwrap();
+    let (temp, db) = crate::db::testing::open();
     let music = temp.path().join("music");
     std::fs::create_dir_all(music.join("Album")).unwrap();
-    let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
     db.write(move |tx| {
         libraries::create(tx, Some(1), "Music", &[], &[])?;
         tx.execute(

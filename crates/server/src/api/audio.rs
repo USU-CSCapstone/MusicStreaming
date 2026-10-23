@@ -13,6 +13,7 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderValue, header};
 use axum::response::Response;
 use jewelcase_core::Format;
+use jewelcase_scanner::without_links;
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use tower_http::services::ServeFile;
@@ -183,7 +184,7 @@ pub async fn audio(
         .await?;
 
     // Checked on every request, since a file can become a symlink after the scan saw it.
-    let path = tokio::task::spawn_blocking(move || file.resolve())
+    let path = tokio::task::spawn_blocking(move || without_links(&file.root, &file.path))
         .await
         .map_err(|_| Problem::new(Code::Internal))?
         .map_err(unreadable)?;

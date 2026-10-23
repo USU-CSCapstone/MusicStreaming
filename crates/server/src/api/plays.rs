@@ -17,7 +17,7 @@ use serde::de::IgnoredAny;
 
 use context::{Context, Reason};
 
-use super::extract::Json;
+use super::extract;
 use super::refs::credits_json;
 use super::scope::Caller;
 use super::time::Timestamp;
@@ -71,7 +71,7 @@ struct Play {
 pub async fn record(
     State(db): State<Arc<Database>>,
     caller: Caller,
-    Json(Plays { items }): Json<Plays>,
+    extract::Json(Plays { items }): extract::Json<Plays>,
 ) -> Result<StatusCode, Problem> {
     let now = now_ms();
     let plays = items

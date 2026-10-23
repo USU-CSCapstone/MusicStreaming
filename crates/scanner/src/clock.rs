@@ -8,8 +8,8 @@ pub fn system_time_ms(t: SystemTime) -> u64 {
     since_epoch_ms(t).unsigned_abs()
 }
 
-/// The current wall-clock time in milliseconds since the Unix epoch, as scans and problems
-/// record it.
+/// The current wall-clock time in milliseconds since the Unix epoch, as the database records
+/// times.
 pub fn now_ms() -> i64 {
     since_epoch_ms(SystemTime::now())
 }

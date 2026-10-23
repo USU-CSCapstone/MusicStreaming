@@ -122,8 +122,8 @@ mod tests {
     use rusqlite::Connection;
 
     use super::*;
+    use crate::db::libraries;
     use crate::db::testing::library;
-    use crate::db::{Database, libraries};
 
     /// The id of library `lib`'s first root.
     fn root(conn: &Connection, lib: i64) -> Result<i64> {
@@ -142,8 +142,7 @@ mod tests {
     /// library are that library's own row.
     #[test]
     fn an_image_found_by_hash_follows_its_file_within_its_library() {
-        let temp = tempfile::tempdir().unwrap();
-        let db = Database::open(&temp.path().join("jewelcase.db")).unwrap();
+        let (_temp, db) = crate::db::testing::open();
         let info = ImageInfo { hash: vec![7; 32], width: 2, height: 1 };
         let (roots, ids, renamed, moved) = db
             .write_blocking(move |tx| {

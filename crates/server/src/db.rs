@@ -31,7 +31,7 @@ use std::path::Path;
 use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
@@ -40,6 +40,7 @@ use tracing::{error, info, warn};
 
 pub use by_ids::by_ids;
 pub use columns::{Json, Text};
+pub use jewelcase_scanner::now_ms;
 pub use new_id::new_id;
 pub(crate) use reach::reaches;
 use retention::Sweep;
@@ -47,9 +48,14 @@ pub use store::SqliteStore;
 
 use crate::lock::Recover;
 
-/// How often the writer sweeps away what is no longer kept (`design/database.md` §9), then
-/// gathers query-planner statistics, which the planner needs to choose indexes (§4).
+/// How often the writer sweeps away what is no longer kept (`design/database.md` §9).
 const SWEEP_EVERY: Duration = Duration::from_secs(3600);
+
+/// How often the writer gathers query-planner statistics again ([`OPTIMIZE`]), so a table that
+/// grows tenfold during a scan, such as the artists of a library scanned for the first time, is
+/// described again within minutes rather than read whole by every statement that touches it
+/// (`design/database.md` §4).
+const OPTIMIZE_EVERY: Duration = Duration::from_secs(120);
 
 /// The fewest tracks, across every library, for which the writer gathers query-planner
 /// statistics. Statistics from a smaller library describe tables of a few rows, which lead the
@@ -58,9 +64,11 @@ const SWEEP_EVERY: Duration = Duration::from_secs(3600);
 /// every table to be large (`design/database.md` §4).
 const STATISTICS_FROM_TRACKS: i64 = 1_000;
 
-/// Gathers query-planner statistics where they are missing (0x10000 checks every table, 0x2
-/// analyzes), within SQLite's analysis limit (0x10), so even a large database opens quickly.
-const OPTIMIZE_ON_OPEN: &str = "PRAGMA optimize = 0x10012";
+/// Gathers query-planner statistics for every table that lacks them or has grown or shrunk
+/// tenfold since they were gathered (0x10000 checks every table, 0x2 analyzes), within SQLite's
+/// analysis limit (0x10), so even a large database opens quickly. When no table needs it, it
+/// only reads each table's size.
+const OPTIMIZE: &str = "PRAGMA optimize = 0x10012";
 
 /// How long after the database opens the writer first sweeps, so a server restarted more often
 /// than [`SWEEP_EVERY`] still sweeps, without adding to its startup.
@@ -108,11 +116,16 @@ pub struct Database {
 impl Database {
     /// Opens or creates the database, brings its schema up to date, and starts its threads.
     pub fn open(path: &Path) -> anyhow::Result<Database> {
-        Database::open_sweeping(path, FIRST_SWEEP)
+        Database::open_timed(path, FIRST_SWEEP, OPTIMIZE_EVERY)
     }
 
-    /// [`open`](Self::open), with the writer's first sweep `first_sweep` after it opens.
-    fn open_sweeping(path: &Path, first_sweep: Duration) -> anyhow::Result<Database> {
+    /// [`open`](Self::open), with the writer's first sweep `first_sweep` after it opens, and
+    /// statistics gathered every `optimize_every`.
+    fn open_timed(
+        path: &Path,
+        first_sweep: Duration,
+        optimize_every: Duration,
+    ) -> anyhow::Result<Database> {
         let mut writer = Connection::open(path)
             .with_context(|| format!("cannot open the database {}", path.display()))?;
         configure(&writer)?;
@@ -132,7 +145,7 @@ impl Database {
 
         let schema_version = migrations::migrate(&mut writer, migrations::MIGRATIONS)?;
         // Once the libraries are large enough to describe (design/database.md §4).
-        gather_statistics(&writer, OPTIMIZE_ON_OPEN)?;
+        gather_statistics(&writer)?;
 
         let reader_count = thread::available_parallelism().map_or(4, NonZeroUsize::get).max(2);
         let mut readers = Vec::with_capacity(reader_count);
@@ -156,18 +169,22 @@ impl Database {
         threads.push(spawn("db-writer", move || {
             let mut conn = writer;
             let mut next_sweep = Instant::now() + first_sweep;
+            let mut next_optimize = Instant::now() + optimize_every;
             loop {
-                match writer_jobs.recv_timeout(next_sweep.saturating_duration_since(Instant::now()))
-                {
+                let next = next_sweep.min(next_optimize);
+                match writer_jobs.recv_timeout(next.saturating_duration_since(Instant::now())) {
                     Ok(job) => run(job, &mut conn),
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
-                // On the writer between jobs, so it never contends with a write for the lock.
+                // On the writer between jobs, so neither contends with a write for the lock.
                 if Instant::now() >= next_sweep {
                     sweep(&mut conn, &writer_jobs, Sweep::new(now_ms(), retention::STEP_TIME));
-                    optimize(&conn);
                     next_sweep = Instant::now() + SWEEP_EVERY;
+                }
+                if Instant::now() >= next_optimize {
+                    optimize(&conn);
+                    next_optimize = Instant::now() + optimize_every;
                 }
             }
             optimize(&conn);
@@ -316,18 +333,18 @@ fn sweep(conn: &mut Connection, jobs: &mpsc::Receiver<Job>, sweep: Sweep) {
 /// Gathers query-planner statistics through [`gather_statistics`] (`design/database.md` §4),
 /// logging a failure rather than returning it.
 fn optimize(conn: &Connection) {
-    if let Err(error) = gather_statistics(conn, "PRAGMA optimize") {
+    if let Err(error) = gather_statistics(conn) {
         warn!(%error, "cannot optimize the database");
     }
 }
 
-/// Runs `optimize`, a `PRAGMA optimize` statement, when the libraries together hold at least
-/// [`STATISTICS_FROM_TRACKS`] tracks, and does nothing otherwise.
-fn gather_statistics(conn: &Connection, optimize: &str) -> rusqlite::Result<()> {
+/// Runs [`OPTIMIZE`] when the libraries together hold at least [`STATISTICS_FROM_TRACKS`]
+/// tracks, and does nothing otherwise.
+fn gather_statistics(conn: &Connection) -> rusqlite::Result<()> {
     let tracks: i64 =
         conn.query_row("SELECT ifnull(SUM(track_count), 0) FROM libraries", [], |r| r.get(0))?;
     if tracks >= STATISTICS_FROM_TRACKS {
-        conn.execute_batch(optimize)?;
+        conn.execute_batch(OPTIMIZE)?;
     }
     Ok(())
 }
@@ -369,12 +386,6 @@ fn spawn(name: &str, body: impl FnOnce() + Send + 'static) -> anyhow::Result<Joi
         .with_context(|| format!("cannot start the {name} thread"))
 }
 
-/// The current wall-clock time in milliseconds since the Unix epoch, as the schema keeps times.
-pub fn now_ms() -> i64 {
-    let since_epoch = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH);
-    since_epoch.map_or(0, |elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
-}
-
 /// Waits for the database threads when dropped.
 struct Threads(Vec<JoinHandle<()>>);
 
@@ -391,14 +402,8 @@ impl Drop for Threads {
 
 #[cfg(test)]
 mod tests {
+    use super::testing::open;
     use super::*;
-
-    /// A database in a new temporary directory, which must outlive it.
-    fn open() -> (tempfile::TempDir, Database) {
-        let temp = tempfile::tempdir().unwrap();
-        let database = Database::open(&temp.path().join("jewelcase.db")).unwrap();
-        (temp, database)
-    }
 
     const INSERT_LIBRARY: &str =
         "INSERT INTO libraries (id, name, created_at) VALUES (?1, 'Music', 0)";
@@ -592,7 +597,7 @@ mod tests {
                 )
             })
             .unwrap();
-        let _db = Database::open_sweeping(&path, Duration::ZERO).unwrap();
+        let _db = Database::open_timed(&path, Duration::ZERO, OPTIMIZE_EVERY).unwrap();
         let attempts = "SELECT count(*) FROM login_attempts";
         for _ in 0..500 {
             if count(&path, attempts) == 0 {

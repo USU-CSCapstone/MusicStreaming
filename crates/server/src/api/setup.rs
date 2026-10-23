@@ -5,6 +5,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use axum::Json;
 use axum::extract::{Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::Next;
@@ -13,7 +14,7 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use super::devices::DeviceRegistration;
-use super::extract::Json;
+use super::extract;
 use super::login::limits;
 use super::origin::Origin;
 use super::{AppState, Code, Problem, me, password, session};
@@ -65,8 +66,8 @@ pub struct ServerInfo {
 }
 
 /// `getServerInfo`: the server's version, the API's, and whether setup is still to be done.
-pub async fn server_info(State(state): State<AppState>) -> Result<axum::Json<ServerInfo>, Problem> {
-    Ok(axum::Json(ServerInfo {
+pub async fn server_info(State(state): State<AppState>) -> Result<Json<ServerInfo>, Problem> {
+    Ok(Json(ServerInfo {
         version: env!("CARGO_PKG_VERSION"),
         // The version in the API's path.
         api_version: "1",
@@ -90,7 +91,7 @@ pub struct SetupRequest {
 pub async fn complete(
     State(state): State<AppState>,
     Origin(origin): Origin,
-    Json(request): Json<SetupRequest>,
+    extract::Json(request): extract::Json<SetupRequest>,
 ) -> Result<Response, Problem> {
     if state.setup.done(&state.db).await? {
         return Err(Problem::not_found());
@@ -126,7 +127,7 @@ pub async fn complete(
     state.setup.0.store(true, Ordering::Relaxed);
 
     let cookie = session::cookie(&state.prefix, &session.token)?;
-    Ok((StatusCode::CREATED, [(header::SET_COOKIE, cookie)], axum::Json(session)).into_response())
+    Ok((StatusCode::CREATED, [(header::SET_COOKIE, cookie)], Json(session)).into_response())
 }
 
 #[cfg(test)]

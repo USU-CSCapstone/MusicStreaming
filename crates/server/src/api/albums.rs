@@ -133,7 +133,7 @@ fn source(
     credit: ArtistCredit,
 ) -> rusqlite::Result<Source> {
     let lead = artist.map(|artist| credit.lead(conn, library, &CREDITS, artist)).transpose()?;
-    ALBUMS.source(conn, library, lead, Vec::new())
+    ALBUMS.source(conn, library, lead, None)
 }
 
 #[cfg(test)]

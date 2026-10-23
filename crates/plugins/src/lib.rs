@@ -22,4 +22,4 @@ pub use host::{
     ResultKind, RunError, ScanFinished, Search, Selected, Track,
 };
 pub use manifest::{Hook, InvalidPlugin, Manifest, Per, Permission, PermissionRequest, RateLimit};
-pub use rules::reaches;
+pub use rules::destination_allowed;

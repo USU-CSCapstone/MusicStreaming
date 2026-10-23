@@ -3,14 +3,13 @@
 //! token does (`requirements/users.md` §10).
 
 use axum::Router;
-use axum::body::Body;
-use axum::http::{HeaderMap, Request, StatusCode, header};
+use axum::http::{StatusCode, header};
 use serde_json::{Value, json};
 
 use super::super::testing::{
-    add_signed_out_device, app, app_before_setup, app_with_tracks, conn, respond, send_json,
+    add_signed_out_device, app, app_before_setup, app_with_tracks, conn, send_json,
 };
-use super::gates::ROUTES;
+use super::gates::{ROUTES, send};
 use crate::db::testing::User;
 
 const PASSWORD: &str = "correct horse battery staple";
@@ -28,19 +27,6 @@ async fn server() -> (tempfile::TempDir, Router) {
     add_signed_out_device(&conn, 2, 4, "logged-out", "logged_out");
     add_signed_out_device(&conn, 3, 3, "suspended", "credentials_changed");
     (temp, app)
-}
-
-/// The status, headers, and body of `method` on `path` under the API, sent with `header` and
-/// no body.
-async fn send(
-    app: &Router,
-    method: &str,
-    path: &str,
-    header: (&str, &str),
-) -> (StatusCode, HeaderMap, Vec<u8>) {
-    let request = Request::builder().method(method).uri(format!("/api/v1{path}"));
-    let request = request.header(header.0, header.1).body(Body::empty()).unwrap();
-    respond(app.clone(), request).await
 }
 
 /// `token` as a bearer token and as the session cookie, the latter without
@@ -61,7 +47,7 @@ async fn a_signed_out_devices_token_is_told_why_on_every_route() {
             // and be refused a cookie write without the client header.
             for &(method, path) in ROUTES {
                 let at = format!("{method} {path} by {name} {token}");
-                let (status, headers, body) = send(&app, method, path, (name, &value)).await;
+                let (status, headers, body) = send(&app, "", method, path, &[(name, &value)]).await;
                 assert_eq!(status, StatusCode::UNAUTHORIZED, "{at}");
                 assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), expected, "{at}");
                 assert_eq!(headers[header::WWW_AUTHENTICATE], "Bearer", "{at}");
@@ -78,8 +64,8 @@ async fn a_suspended_accounts_signed_out_device_looks_unknown() {
     {
         for &(method, path) in ROUTES {
             let at = format!("{method} {path} by {name}");
-            let answer = send(&app, method, path, (name, &suspended)).await;
-            assert_eq!(answer, send(&app, method, path, (name, &unknown)).await, "{at}");
+            let answer = send(&app, "", method, path, &[(name, &suspended)]).await;
+            assert_eq!(answer, send(&app, "", method, path, &[(name, &unknown)]).await, "{at}");
             let problem: Value = serde_json::from_slice(&answer.2).unwrap();
             assert_eq!(problem["code"], "unauthenticated", "{at}");
         }
@@ -101,8 +87,8 @@ async fn signing_in_again_leaves_the_old_token_signed_out() {
     let (status, _, session) = send_json(app.clone(), "POST", "/api/v1/auth/login", &login).await;
     assert_eq!(status, StatusCode::OK);
     let new = format!("Bearer {}", session["token"].as_str().unwrap());
-    assert_eq!(send(&app, "GET", "/me", ("authorization", &new)).await.0, StatusCode::OK);
-    let (status, _, body) = send(&app, "GET", "/me", ("authorization", &old)).await;
+    assert_eq!(send(&app, "", "GET", "/me", &[("authorization", &new)]).await.0, StatusCode::OK);
+    let (status, _, body) = send(&app, "", "GET", "/me", &[("authorization", &old)]).await;
     let problem: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!((status, &problem["code"]), (StatusCode::UNAUTHORIZED, &json!("session_revoked")));
 }

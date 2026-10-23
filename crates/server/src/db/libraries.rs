@@ -1,9 +1,8 @@
 //! Library rows and their roots, as the scanner needs them, and where a library's files are.
 
-use std::io;
 use std::path::{Path, PathBuf};
 
-use jewelcase_scanner::{FileToDecode, LibraryConfig, without_links};
+use jewelcase_scanner::{FileToDecode, LibraryConfig};
 use rusqlite::{Connection, Result, params};
 
 use super::{Json, new_id, now_ms};
@@ -89,39 +88,17 @@ pub fn scanned(conn: &Connection, library_id: i64) -> Result<bool> {
     )
 }
 
-/// A track's or image's file where its row places it: under one of its library's active roots,
-/// and refused before it is opened if a symlink leads there (`requirements/scanning.md` §5).
-#[derive(Clone)]
-pub struct LibraryFile {
-    root: PathBuf,
-    path: PathBuf,
-}
-
-impl LibraryFile {
-    /// The file's real path. `NotFound` when it is missing or reached through a symlink. Touches
-    /// the filesystem, so call it off the async threads and the database's.
-    pub fn resolve(&self) -> io::Result<PathBuf> {
-        without_links(&self.root, &self.path)
-    }
-
-    /// The file's real path, once it opens, refused as [`FileToDecode::open`] refuses it: an
-    /// error when it is missing, reached through a symlink, not a regular file, or may not be
-    /// read. Touches the filesystem, so call it off the async threads and the database's.
-    pub fn open(self) -> io::Result<PathBuf> {
-        FileToDecode { root: self.root, path: self.path }.open()
-    }
-}
-
-/// The file at `rel` under root `root_id` of `library`, or `None` when that root is not one of
-/// the library's active roots.
+/// The track's or image's file at `rel` under root `root_id` of `library`, where its row places
+/// it, or `None` when that root is not one of the library's active roots. A symlink that leads
+/// there is refused before the file is opened (`requirements/scanning.md` §5).
 pub fn file(
     conn: &Connection,
     library: i64,
     root_id: i64,
     rel: &str,
-) -> Result<Option<LibraryFile>> {
+) -> Result<Option<FileToDecode>> {
     let root = roots(conn, library)?.into_iter().find(|r| r.id == root_id);
-    Ok(root.map(|root| LibraryFile { path: root.path.join(rel), root: root.path }))
+    Ok(root.map(|root| FileToDecode { path: root.path.join(rel), root: root.path }))
 }
 
 /// Creates a library with its roots, and returns its id: `id` if given (for tests and imports),
@@ -168,13 +145,11 @@ pub fn overlap(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Database;
 
     /// A library created without an id is given a drawn one, and that is its row's id.
     #[test]
     fn a_library_created_without_an_id_is_given_a_drawn_one() {
-        let temp = tempfile::tempdir().unwrap();
-        let db = Database::open(&temp.path().join("jewelcase.db")).unwrap();
+        let (_temp, db) = crate::db::testing::open();
         let (id, stored) = db
             .write_blocking(|tx| {
                 let id = create(tx, None, "Music", &[Path::new("/music")], &[])?;

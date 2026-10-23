@@ -1,18 +1,14 @@
 //! The analysis queue against a real database: its order, and that a pick sorts nothing.
 
-use std::sync::Arc;
-
 use rusqlite::Connection;
 
 use super::{SqliteStore, UNANALYZED, next_unanalyzed};
-use crate::db::Database;
-use crate::db::testing::{Album, Track, library};
+use crate::db::testing::{self, Album, Track, library};
 
 /// A store whose library 1 holds album 1 with `tracks`, each `(id, analyzer version, added
 /// at, missing)`, and the directory its database lives in.
 fn store(tracks: &[(i64, i64, i64, bool)]) -> (tempfile::TempDir, SqliteStore) {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Arc::new(Database::open(&dir.path().join("jewelcase.db")).unwrap());
+    let (dir, db) = testing::open();
     let tracks = tracks.to_vec();
     let root = dir.path().join("music");
     db.write_blocking(move |tx| {

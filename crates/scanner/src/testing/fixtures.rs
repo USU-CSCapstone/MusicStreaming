@@ -153,10 +153,10 @@ pub(super) fn live(store: &dyn InspectStore, lib: &LibraryConfig) -> Vec<Inspect
 /// so the store need not keep them.
 pub type Factory<S> = fn(&LibraryConfig) -> S;
 
-/// Blocks until `condition` holds for `scanner`, failing the test with `what` after 30 seconds.
-pub fn wait_until(scanner: &Scanner, what: &str, condition: impl Fn(&Scanner) -> bool) {
+/// Blocks until `condition` holds, failing the test with `what` after 30 seconds.
+pub fn wait_until(what: &str, condition: impl Fn() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(30);
-    while !condition(scanner) {
+    while !condition() {
         assert!(Instant::now() < deadline, "{what}");
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -164,8 +164,8 @@ pub fn wait_until(scanner: &Scanner, what: &str, condition: impl Fn(&Scanner) ->
 
 /// Blocks until `scanner` is running the scan `id`, failing the test after 30 seconds.
 pub(super) fn wait_until_running(scanner: &Scanner, id: ScanId) {
-    let started = |scanner: &Scanner| scanner.running().is_some_and(|scan| scan.id == id);
-    wait_until(scanner, &format!("scan {id} never started"), started);
+    let started = || scanner.running().is_some_and(|scan| scan.id == id);
+    wait_until(&format!("scan {id} never started"), started);
 }
 
 /// Encode `wav` to `out` with the given ffmpeg codec arguments. Panics if ffmpeg is not on

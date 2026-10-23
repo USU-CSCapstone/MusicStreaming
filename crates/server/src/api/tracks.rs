@@ -168,11 +168,11 @@ fn source(
     credit: ArtistCredit,
 ) -> rusqlite::Result<Source> {
     let lead = artist.map(|artist| credit.lead(conn, library, &CREDITS, artist)).transpose()?;
-    let checks = album.map(|album| Check {
+    let check = album.map(|album| Check {
         condition: "t.album_id = ?".to_owned(),
         params: vec![album.0.into()],
     });
-    TRACKS.source(conn, library, lead, checks.into_iter().collect())
+    TRACKS.source(conn, library, lead, check)
 }
 
 #[cfg(test)]

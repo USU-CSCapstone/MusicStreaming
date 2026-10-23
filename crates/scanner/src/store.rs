@@ -60,10 +60,9 @@ pub struct Batch {
     pub upserts: Vec<TrackRecord>,
     /// Missing tracks whose files are back unchanged, or back and unreadable: clear the mark.
     pub returned: Vec<TrackId>,
-    /// Tracks whose files their folder no longer lists: mark them missing.
+    /// Tracks whose files their folder no longer lists, or under a folder its parent no longer
+    /// lists: mark them missing.
     pub missing: Vec<TrackId>,
-    /// Folders their parent no longer lists: mark every track under them missing.
-    pub vanished: Vec<PathBuf>,
     /// Tracks whose files changed but could not be read: forget each one's mtime, so no file
     /// matches it and every scan reads the file until one reads it, and reset its analysis,
     /// which measured other audio.
@@ -80,13 +79,9 @@ pub struct Batch {
 }
 
 impl Batch {
-    /// How many tracks, folders and problems the batch writes, which is what sizes it.
+    /// How many tracks and problems the batch writes, which is what sizes it.
     pub fn size(&self) -> usize {
-        self.upserts.len()
-            + self.returned.len()
-            + self.missing.len()
-            + self.vanished.len()
-            + self.problems.len()
+        self.upserts.len() + self.returned.len() + self.missing.len() + self.problems.len()
     }
 }
 
@@ -105,8 +100,8 @@ pub struct PickedTrack {
     pub mtime_ms: u64,
 }
 
-/// A file a background job decodes, as the store recorded it. A job reaches it only through
-/// [`FileToDecode::open`].
+/// A library file as the store recorded it: one a background job decodes, which it reaches only
+/// through [`FileToDecode::open`], or one the server serves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileToDecode {
     /// The library root the file lies under.

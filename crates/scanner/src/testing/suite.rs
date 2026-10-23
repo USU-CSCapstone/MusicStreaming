@@ -102,6 +102,7 @@ macro_rules! store_suite {
             a_folder_gone_from_its_parents_listing_takes_its_tracks,
             an_unlistable_folder_keeps_its_tracks_across_a_resume,
             a_scan_stopped_partway_through_a_folder_marks_nothing_there,
+            a_scan_stopped_partway_through_marking_marks_the_rest_on_resume,
             queue_drains_and_broken_files_do_not_repeat,
         );
         #[test]

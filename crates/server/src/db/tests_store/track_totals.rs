@@ -1,15 +1,14 @@
 //! An album's track total: the sum of its discs' tagged totals, as the spec's `trackTotal` gives
 //! it, and the type inferred from it (`design/database.md` §3).
 
-use std::sync::Arc;
-
 use jewelcase_scanner::*;
 use rusqlite::Result;
 
 use super::recompute::check;
 use super::record;
+use crate::db::libraries;
 use crate::db::store::SqliteStore;
-use crate::db::{Database, libraries};
+use crate::db::testing::open;
 
 /// Each album's title and stored track total, by title.
 fn totals(store: &SqliteStore) -> Vec<(String, Option<i64>)> {
@@ -27,9 +26,8 @@ fn totals(store: &SqliteStore) -> Vec<(String, Option<i64>)> {
 /// a disc with no total adds nothing; and an album with none has none.
 #[test]
 fn an_albums_track_total_sums_its_discs() {
-    let tmp = tempfile::tempdir().unwrap();
+    let (tmp, db) = open();
     let root = tmp.path().join("lib");
-    let db = Arc::new(Database::open(&tmp.path().join("jewelcase.db")).unwrap());
     let made = root.clone();
     db.write_blocking(move |tx| libraries::create(tx, Some(1), "Music", &[&made], &[]).map(drop))
         .unwrap();
@@ -61,9 +59,8 @@ fn an_albums_track_total_sums_its_discs() {
 /// though either disc alone would be an EP (`requirements/albums.md` §3).
 #[test]
 fn a_double_album_of_two_short_discs_is_an_album() {
-    let tmp = tempfile::tempdir().unwrap();
+    let (tmp, db) = open();
     let root = tmp.path().join("lib");
-    let db = Arc::new(Database::open(&tmp.path().join("jewelcase.db")).unwrap());
     let made = root.clone();
     db.write_blocking(move |tx| libraries::create(tx, Some(1), "Music", &[&made], &[]).map(drop))
         .unwrap();

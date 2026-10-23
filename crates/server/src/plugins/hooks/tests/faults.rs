@@ -12,6 +12,7 @@ use rusqlite::OptionalExtension;
 use super::super::{BACKOFF_MS, Delivering, MAX_FAILURES, Ran};
 use super::outages::{REFUSED, changed, enabled, hooks};
 use super::{HOUR, ran};
+use crate::api::testing::eventually;
 use crate::db::Database;
 use crate::plugins::Plugins;
 use crate::plugins::testing::plugins;
@@ -38,17 +39,11 @@ fn only_a_failure_of_the_plugins_code_counts_against_it() {
 async fn dispatched(plugins: &Arc<Plugins>, db: &Database) -> (i64, i64, bool) {
     plugins.dispatch().await;
     let sql = "SELECT failures, outages, retry_at IS NOT NULL FROM plugin_cursors";
-    let recorded = async {
-        loop {
-            let row = |row: &rusqlite::Row| Ok((row.get(0)?, row.get(1)?, row.get(2)?));
-            let found = db.read(move |conn| conn.query_row(sql, [], row).optional());
-            match found.await.unwrap() {
-                Some(row) => return row,
-                None => tokio::time::sleep(Duration::from_millis(20)).await,
-            }
-        }
-    };
-    tokio::time::timeout(Duration::from_secs(30), recorded).await.unwrap()
+    eventually("the delivery is recorded", async || {
+        let row = |row: &rusqlite::Row| Ok((row.get(0)?, row.get(1)?, row.get(2)?));
+        db.read(move |conn| conn.query_row(sql, [], row).optional()).await.unwrap()
+    })
+    .await
 }
 
 /// A plugin that cannot be loaded, here one installed without its file, is retried as an

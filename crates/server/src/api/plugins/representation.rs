@@ -1,7 +1,7 @@
 //! The spec's `Plugin`: what an installed plugin is, what it asks for, and what it has been
 //! granted and where it is enabled, in every library on the server.
 
-use jewelcase_plugins::{Manifest, Permission, PermissionRequest, reaches};
+use jewelcase_plugins::{Manifest, Permission, PermissionRequest, destination_allowed};
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
@@ -177,7 +177,7 @@ fn view(conn: &Connection, r: Stored, limits: &[HostLimit]) -> rusqlite::Result<
     let destinations = r.manifest.destinations();
     let host_limits = limits
         .iter()
-        .filter(|l| reaches(&l.host, destinations))
+        .filter(|l| destination_allowed(&l.host, destinations))
         .map(|l| PluginHostLimit {
             host: l.host.clone(),
             limit: l.limit.clone(),

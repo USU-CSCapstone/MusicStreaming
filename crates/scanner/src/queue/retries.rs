@@ -30,8 +30,8 @@ fn scanner(store: &Arc<BareStore>, lib: &LibraryConfig) -> (Scanner, ScannerThre
 /// worker queues for it once the wait has passed to end, as the second of `store`'s scans.
 fn retried(scanner: &Scanner, store: &BareStore, wait: Duration) {
     assert!(scanner.retry_in(wait), "nothing waits to be retried");
-    let ended = |_: &Scanner| store.scans().get(1).is_some_and(|s| s.finished_at.is_some());
-    wait_until(scanner, "the retry never ended", ended);
+    let ended = || store.scans().get(1).is_some_and(|s| s.finished_at.is_some());
+    wait_until("the retry never ended", ended);
 }
 
 /// A library scan that suspends because a root has gone leaves that root alone to retry, with
@@ -111,8 +111,7 @@ fn a_root_removed_from_the_library_is_not_retried() {
     scanner.reconfigure(LibraryConfig { roots, ..lib.clone() }).unwrap();
     scanner.wait_idle();
     assert!(scanner.retry_in(Duration::ZERO), "the root no longer waits");
-    let taken = |s: &Scanner| !s.retry_in(Duration::ZERO);
-    wait_until(&scanner, "the worker never took the work", taken);
+    wait_until("the worker never took the work", || !scanner.retry_in(Duration::ZERO));
     scanner.scan_library(Trigger::Manual).unwrap();
     scanner.wait_idle();
     drop(thread);

@@ -1,6 +1,6 @@
 //! The hourly sweep, which deletes what is kept only for a while (`design/database.md` §9).
 //!
-//! The writer runs it beside `PRAGMA optimize`, first a few minutes after the database opens.
+//! The writer runs it every hour, first a few minutes after the database opens.
 //! Rows go once they are older than [`WINDOW_MS`]: finished scans, but each library's last
 //! finished and last completed; login attempts; ended plays' events for the `played` hook;
 //! recent searches and what the `searched` hook noted of them; and tracks missing that long,

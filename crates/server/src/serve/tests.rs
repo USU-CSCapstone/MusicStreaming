@@ -69,7 +69,9 @@ async fn closed(mut stream: TcpStream) {
     assert_eq!(String::from_utf8_lossy(&rest), "");
 }
 
-#[tokio::test(start_paused = true)]
+// On real time: paused time can pass both timeouts before the kernel hands the server the
+// connection, or the part of a header that was sent.
+#[tokio::test]
 async fn a_connection_that_sends_part_of_a_header_is_closed_after_the_timeout() {
     let (address, _stop, _server) = start(routes()).await;
     let opened = Instant::now();
@@ -77,7 +79,9 @@ async fn a_connection_that_sends_part_of_a_header_is_closed_after_the_timeout() 
     assert!(opened.elapsed() >= HEADER_READ_TIMEOUT, "{:?}", opened.elapsed());
 }
 
-#[tokio::test(start_paused = true)]
+// On real time: paused time can pass both timeouts before the kernel hands the server the
+// connection, or the part of a header that was sent.
+#[tokio::test]
 async fn a_connection_that_sends_nothing_is_closed_after_the_timeout() {
     let (address, _stop, _server) = start(routes()).await;
     let opened = Instant::now();

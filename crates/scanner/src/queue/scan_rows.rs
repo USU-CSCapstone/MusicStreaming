@@ -103,8 +103,8 @@ fn parked(
     let running = scanner.request(Trigger::Manual, folder(root, "A")).unwrap();
     let queued = scanner.request(Trigger::Manual, folder(root, "B")).unwrap();
     let saved_running =
-        |_: &Scanner| rows.scans().iter().any(|s| s.id == running && s.state == ScanState::Running);
-    wait_until(&scanner, "the scan of A never started", saved_running);
+        || rows.scans().iter().any(|s| s.id == running && s.state == ScanState::Running);
+    wait_until("the scan of A never started", saved_running);
     (scanner, thread, running, queued)
 }
 
@@ -230,8 +230,8 @@ fn a_request_the_store_cannot_record_is_retried() {
     gate.fail(1);
     assert_eq!(scanner.scan_library(Trigger::Manual), None);
     assert!(scanner.retry_in(Duration::ZERO), "the request waits to be retried");
-    let ended = |_: &Scanner| rows.scans().first().is_some_and(|s| s.finished_at.is_some());
-    wait_until(&scanner, "the retry never ended", ended);
+    let ended = || rows.scans().first().is_some_and(|s| s.finished_at.is_some());
+    wait_until("the retry never ended", ended);
     drop(thread);
     let [row] = rows.scans().try_into().unwrap();
     assert_eq!((row.trigger, row.state), (Trigger::Manual, ScanState::Completed));
@@ -299,11 +299,11 @@ fn a_scan_put_back_after_a_failed_cancel_runs() {
     let cancelling = in_thread(&scanner, move |s| s.cancel(queued));
     gate.wait_held();
     store.release();
-    let idle = |s: &Scanner| s.is_idle() && state(&rows, running) == ScanState::Completed;
-    wait_until(&scanner, "the running scan never ended", idle);
+    let idle = || scanner.is_idle() && state(&rows, running) == ScanState::Completed;
+    wait_until("the running scan never ended", idle);
     gate.release();
     assert!(!cancelling.join().unwrap());
-    let ran = |_: &Scanner| state(&rows, queued) == ScanState::Completed;
-    wait_until(&scanner, "the scan put back never ran", ran);
+    let ran = || state(&rows, queued) == ScanState::Completed;
+    wait_until("the scan put back never ran", ran);
     drop(thread);
 }

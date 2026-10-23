@@ -1,5 +1,5 @@
-//! The batch a scan fills, and the checkpoint before each directory and file where the batch is
-//! flushed and the scan stops if asked (`design/scanning.md` §7, §9).
+//! The batch a scan fills, and the checkpoint before each directory, file and missing mark where
+//! the batch is flushed and the scan stops if asked (`design/scanning.md` §7, §9).
 
 use std::time::{Duration, Instant};
 
@@ -44,9 +44,9 @@ impl Writer {
         }
     }
 
-    /// Called before each directory and each file. Flushes the batch once it holds as many
-    /// outcomes as it was sized for or has waited `batch_interval`, and then stops the scan if the
-    /// queue has asked. Short of those it costs a few atomic loads and a clock read.
+    /// Called before each directory, file and missing mark. Flushes the batch once it holds as
+    /// many outcomes as it was sized for or has waited `batch_interval`, and then stops the scan if
+    /// the queue has asked. Short of those it costs a few atomic loads and a clock read.
     pub fn checkpoint(&mut self, ctx: &ScanContext<'_>, scan: &mut Scan) -> Result<(), Halt> {
         if self.batch.size() >= self.limit
             || self.last_flush.elapsed() >= ctx.options.batch_interval

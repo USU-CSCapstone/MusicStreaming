@@ -135,11 +135,10 @@ mod tests {
             (Some("completed"), "scheduled"),
         ];
         for (earlier, expected) in cases {
-            let temp = tempfile::tempdir().unwrap();
+            let (temp, db) = testing::open();
             let (music, other) = (temp.path().join("music"), temp.path().join("other"));
             fs::create_dir(&music).unwrap();
             fs::create_dir(&other).unwrap();
-            let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
             db.write_blocking(move |tx| {
                 testing::library(tx, 1, "Music", &music)?;
                 testing::library(tx, 2, "Other", &other)?;
@@ -167,13 +166,12 @@ mod tests {
     /// A stop kills a background decode in flight rather than waiting for it to end.
     #[test]
     fn a_stop_kills_a_background_decode_in_flight() {
-        let temp = tempfile::tempdir().unwrap();
+        let (temp, db) = testing::open();
         let music = temp.path().join("music");
         fs::create_dir(&music).unwrap();
         fs::write(music.join("cover.png"), PNG).unwrap();
         // Its own hash, so the startup scan finds the same image.
         let hash = jewelcase_scanner::describe_image(PNG).unwrap().hash;
-        let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
         db.write_blocking(move |tx| {
             testing::library(tx, 1, "Music", &music)?;
             testing::Image { hash, ..testing::Image::new(1, 1, "cover.png") }.insert(tx)

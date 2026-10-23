@@ -16,8 +16,7 @@ use crate::db::testing::{Album, Artist, Track, album_artist, library, track_arti
 /// artist 301, Aurora Lane, who is credited on track 11; and album 102, "Empty", with no tracks.
 /// Library 2 holds track 21 on album 201, by artist 401, Far Shore. Nothing is installed.
 pub async fn database() -> (tempfile::TempDir, Arc<Database>) {
-    let temp = tempfile::tempdir().unwrap();
-    let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
+    let (temp, db) = crate::db::testing::open();
     db.write(|tx| {
         library(tx, 1, "Music", "/music")?;
         library(tx, 2, "Other", "/other")?;

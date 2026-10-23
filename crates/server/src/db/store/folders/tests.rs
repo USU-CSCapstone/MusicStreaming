@@ -2,20 +2,17 @@
 //! path order and sorts nothing.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use jewelcase_scanner::IndexedFolder;
 use rusqlite::{Connection, Row, params};
 
 use super::{SqliteStore, indexed_in, select};
-use crate::db::Database;
-use crate::db::testing::{Album, Track, library};
+use crate::db::testing::{self, Album, Track, library};
 
 /// A store whose library 1 holds a track at each of `paths` under its root, the last one missing,
 /// with that root, and the directory everything lives in.
 fn store(paths: &[&'static str]) -> (tempfile::TempDir, PathBuf, SqliteStore) {
-    let dir = tempfile::tempdir().unwrap();
-    let db = Arc::new(Database::open(&dir.path().join("jewelcase.db")).unwrap());
+    let (dir, db) = testing::open();
     let root = dir.path().join("music");
     let (made, paths) = (root.clone(), paths.to_vec());
     db.write_blocking(move |tx| {

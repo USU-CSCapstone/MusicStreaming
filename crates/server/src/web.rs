@@ -31,34 +31,23 @@ pub fn router(dir: &Path) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
     use super::*;
 
-    use jewelcase_ffmpeg::Config;
-
-    use crate::api::{self, Images};
-    use crate::db::Database;
-    use crate::plugins::testing::plugins;
+    use crate::api;
 
     /// The API with the web app beside it, as `run` serves them, and a build of three files.
     fn app() -> (tempfile::TempDir, Router) {
-        let temp = tempfile::tempdir().unwrap();
+        let (temp, db) = crate::db::testing::open();
         let web = temp.path().join("web");
         std::fs::create_dir_all(web.join("_app/immutable")).unwrap();
         std::fs::write(web.join("index.html"), "<html>app</html>").unwrap();
         std::fs::write(web.join("robots.txt"), "robots").unwrap();
         std::fs::write(web.join("_app/immutable/entry.abc.js"), "js").unwrap();
-        let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
-        let images = Images::new(temp.path().join("cache"), Config::default());
-        let plugins = plugins(&temp, &db);
-        let app =
-            api::router("", db, images, Arc::default(), plugins, Arc::default(), Arc::default())
-                .merge(router(&web));
+        let app = api::router(api::testing::state(&temp, db)).merge(router(&web));
         (temp, app)
     }
 

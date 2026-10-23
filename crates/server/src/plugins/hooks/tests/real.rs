@@ -2,13 +2,12 @@
 //! it answers is recorded. Neither is granted the network it requires, so neither reaches its
 //! service; both are enabled as only the database allows.
 
-use std::time::Duration;
-
 use jewelcase_plugins::Permission::{LibraryRead, ListeningActivity, Played, TracksChanged};
 use rusqlite::OptionalExtension;
 use serde_json::json;
 
 use super::{changes, play};
+use crate::api::testing::eventually;
 use crate::db::Database;
 use crate::db::testing::{User, access};
 use crate::plugins::testing::{caller, connect, database, enable_ungranted, grant, plugins};
@@ -19,27 +18,20 @@ use crate::plugins::{PluginError, Plugins};
 /// summary, so both are in place once the cursor is. The deadline only bounds a hang: plugins
 /// compile and run slowly on a busy machine.
 async fn delivered(db: &Database) -> (Option<String>, i64, i64) {
-    let recorded = async {
-        loop {
-            let found = db
-                .read(|conn| {
-                    conn.query_row(
-                        "SELECT l.last_run_summary, c.failures, c.user_id FROM plugin_cursors c \
-                         JOIN plugin_libraries l USING (plugin_id, library_id)",
-                        [],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                    )
-                    .optional()
-                })
-                .await
-                .unwrap();
-            match found {
-                Some(found) => return found,
-                None => tokio::time::sleep(Duration::from_millis(20)).await,
-            }
-        }
-    };
-    tokio::time::timeout(Duration::from_secs(30), recorded).await.expect("delivered within 30 s")
+    eventually("delivered", async || {
+        db.read(|conn| {
+            conn.query_row(
+                "SELECT l.last_run_summary, c.failures, c.user_id FROM plugin_cursors c \
+                 JOIN plugin_libraries l USING (plugin_id, library_id)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+        })
+        .await
+        .unwrap()
+    })
+    .await
 }
 
 /// A recorded run's report without the compute it spent, which varies, once checked to end
@@ -118,16 +110,10 @@ async fn a_fifth_failure_in_a_row_disables_a_real_plugin_with_why() {
 
     plugins.dispatch().await;
     let sql = "SELECT disabled_reason FROM plugin_libraries WHERE disabled_reason IS NOT NULL";
-    let disabled = async {
-        loop {
-            let reason = db.read(|conn| conn.query_row(sql, [], |row| row.get(0)).optional());
-            match reason.await.unwrap() {
-                Some(reason) => return reason,
-                None => tokio::time::sleep(Duration::from_millis(20)).await,
-            }
-        }
-    };
-    let reason: String = tokio::time::timeout(Duration::from_secs(30), disabled).await.unwrap();
+    let reason: String = eventually("disabled", async || {
+        db.read(|conn| conn.query_row(sql, [], |row| row.get(0)).optional()).await.unwrap()
+    })
+    .await;
     assert_eq!(reason, format!("Stopped after failing 5 times in a row: {LOOKUP_REFUSED}"));
 }
 

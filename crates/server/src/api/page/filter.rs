@@ -37,21 +37,22 @@ pub struct Check {
 }
 
 impl Table {
-    /// The rows of the table in `library`, or those of `lead`, that meet every one of `checks`.
-    /// The total is the library's stored count, or the lead's size, and is counted only where
-    /// there are checks. `library` comes from the caller's `Scope`, so the caller reaches it.
+    /// The rows of the table in `library`, or those of `lead`, that meet `check` if there is
+    /// one. The total is the library's stored count, or the lead's size, and is counted only
+    /// where there is a check. `library` comes from the caller's `Scope`, so the caller reaches
+    /// it.
     pub fn source(
         &self,
         conn: &Connection,
         library: i64,
         lead: Option<Lead>,
-        checks: Vec<Check>,
+        check: Option<Check>,
     ) -> rusqlite::Result<Source> {
         let (name, alias) = (self.name, self.alias);
-        let total = match (&lead, checks.is_empty()) {
-            (None, true) => Total::Stored(library_number(conn, library, self.count)?),
-            (Some(lead), true) => Total::Stored(lead.size),
-            (_, false) => Total::Counted,
+        let total = match (&lead, &check) {
+            (None, None) => Total::Stored(library_number(conn, library, self.count)?),
+            (Some(lead), None) => Total::Stored(lead.size),
+            (_, Some(_)) => Total::Counted,
         };
         let (from, mut params) = match lead {
             // The page sorts the lead's rows rather than walking the sort's index for them;
@@ -63,7 +64,7 @@ impl Table {
         };
         let mut filter = format!("{alias}.library_id = ?");
         params.push(library.into());
-        for Check { condition, params: more } in checks {
+        if let Some(Check { condition, params: more }) = check {
             filter += &format!(" AND {condition}");
             params.extend(more);
         }

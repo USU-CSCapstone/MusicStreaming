@@ -84,13 +84,6 @@ impl Scanner {
         self.request(trigger, roots.into_iter().map(Scope::root).collect())
     }
 
-    /// Scan one folder inside a root, recursively. `None` when no root holds `path`, or as for
-    /// [`Scanner::request`].
-    pub fn scan_folder(&self, trigger: Trigger, path: &std::path::Path) -> Option<ScanId> {
-        let root = self.root_for(path)?;
-        self.request(trigger, vec![Scope::folder(root, path, Depth::Subtree)])
-    }
-
     /// The root containing `path`, if any.
     pub fn root_for(&self, path: &std::path::Path) -> Option<std::path::PathBuf> {
         self.inner.library.read().recover().roots.iter().find(|r| path.starts_with(r)).cloned()
@@ -157,6 +150,7 @@ impl Scanner {
     }
 
     /// The scan running now, if any.
+    #[cfg(feature = "testing")]
     pub fn running(&self) -> Option<Scan> {
         self.inner.queue.lock().recover().running.clone()
     }
@@ -167,12 +161,14 @@ impl Scanner {
     }
 
     /// Whether no scan is running or queued.
+    #[cfg(feature = "testing")]
     pub fn is_idle(&self) -> bool {
         let q = self.inner.queue.lock().recover();
         q.running.is_none() && q.queued.is_empty()
     }
 
     /// Block until the queue is empty and nothing is running.
+    #[cfg(feature = "testing")]
     pub fn wait_idle(&self) {
         let mut q = self.inner.queue.lock().recover();
         while q.running.is_some() || !q.queued.is_empty() {

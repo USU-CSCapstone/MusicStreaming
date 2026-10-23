@@ -287,11 +287,11 @@ fn root_answers(root: &Path) -> bool {
 /// Runs every audio candidate in `dir` through stages 2 to 5 into the writer's batch, with a
 /// checkpoint before each, against what the index holds in `dir`, read once for all of them.
 /// Then reconciles `dir` (stage 7): the tracks in it whose files it no longer lists, and every
-/// track under a folder it no longer lists, go missing with the batch, once the root is found
-/// still answering. Clears any problem on `dir` itself if it listed, and records a problem for
-/// each symlink the walk skipped and each entry it could not read. Returns [`Halt::Stop`] if the
-/// scan is asked to stop partway, [`Halt::Unanswered`] if the root no longer answers, or
-/// [`Halt::Ended`] once a store failure has ended it.
+/// track under a folder it no longer lists, go missing through the batch ([`reconcile::mark`]),
+/// once the root is found still answering. Clears any problem on `dir` itself if it listed, and
+/// records a problem for each symlink the walk skipped and each entry it could not read. Returns
+/// [`Halt::Stop`] if the scan is asked to stop partway, [`Halt::Unanswered`] if the root no
+/// longer answers, or [`Halt::Ended`] once a store failure has ended it.
 ///
 /// The caller moves the cursor past `dir` only once all of it is processed, so a scan stopped
 /// partway walks and reconciles it again from the start on resume. A track added or updated
@@ -371,12 +371,11 @@ fn process_directory(
         // A root that went during the walk lists every folder after it as gone, so nothing is
         // marked missing unless it still answers (`requirements/scanning.md` §7).
         let marks = !missing.is_empty() || !vanished.is_empty();
-        if marks && !root_answers(&scope.root) {
-            halted = Err(Halt::Unanswered);
+        halted = if marks && !root_answers(&scope.root) {
+            Err(Halt::Unanswered)
         } else {
-            writer.batch.missing.extend(missing);
-            writer.batch.vanished.extend(vanished);
-        }
+            reconcile::mark(ctx, scan, writer, missing, vanished)
+        };
     }
     // Whether no resume walks `dir` again, so its counts go in here.
     let last_walk = match halted {

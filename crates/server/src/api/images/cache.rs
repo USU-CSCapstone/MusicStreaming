@@ -15,13 +15,13 @@ use std::process::Output;
 use std::time::Duration;
 
 use jewelcase_ffmpeg::Config;
+use jewelcase_scanner::FileToDecode;
 use rusqlite::Connection;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
 use tokio::sync::Semaphore;
 
 use crate::db::Database;
-use crate::db::libraries::LibraryFile;
 
 /// A resize that takes longer than this is killed: the image is broken or the host is stuck.
 /// Since it may be the host, a timeout is not remembered the way a failure is.
@@ -54,7 +54,7 @@ impl Images {
         library: i64,
         hash: &[u8],
         size: u32,
-        source: LibraryFile,
+        source: FileToDecode,
     ) -> anyhow::Result<Option<PathBuf>> {
         anyhow::ensure!(!hash.is_empty(), "the image has no content hash");
         let hex = hex(hash);
@@ -134,7 +134,7 @@ async fn made(path: &Path, failed: &Path) -> anyhow::Result<bool> {
 
 /// The real path of `source` once it opens, or `None` when it is missing or reached through a
 /// symlink.
-async fn open(source: LibraryFile) -> anyhow::Result<Option<PathBuf>> {
+async fn open(source: FileToDecode) -> anyhow::Result<Option<PathBuf>> {
     match tokio::task::spawn_blocking(move || source.open()).await? {
         Ok(real) => Ok(Some(real)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),

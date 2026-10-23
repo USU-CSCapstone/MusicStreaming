@@ -1,10 +1,12 @@
-//! Stage 7 on one folder: what its listing says has gone from what the index holds in it
-//! (`design/scanning.md` §8).
+//! Stage 7 on one folder: what its listing says has gone from what the index holds in it, and
+//! marking that missing (`design/scanning.md` §8).
 
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use super::writer::{Halt, Writer};
+use super::{Scan, ScanContext};
 use crate::discover::Directory;
 use crate::store::IndexedFolder;
 use crate::track::TrackId;
@@ -37,6 +39,34 @@ pub(super) fn unlisted(dir: &Directory, indexed: IndexedFolder) -> (Vec<TrackId>
         files.map(|(_, file)| file.track_id).collect(),
         folders.map(|name| dir.path.join(name)).collect(),
     )
+}
+
+/// Puts `missing` in the writer's batch, and every track not missing yet under each folder of
+/// `vanished`, at any depth, read from the index a folder at a time ([`crate::Store::indexed_in`]),
+/// one track at a time with a checkpoint before each. So marks fill batches as any other outcome
+/// does, however much a folder held (`design/scanning.md` §7). Fails as the checkpoint does, or
+/// with [`Halt::Ended`] once a store failure has ended the scan.
+pub(super) fn mark(
+    ctx: &ScanContext<'_>,
+    scan: &mut Scan,
+    writer: &mut Writer,
+    missing: Vec<TrackId>,
+    mut vanished: Vec<PathBuf>,
+) -> Result<(), Halt> {
+    for id in missing {
+        writer.checkpoint(ctx, scan)?;
+        writer.batch.missing.push(id);
+    }
+    while let Some(folder) = vanished.pop() {
+        let indexed = ctx.store.indexed_in(ctx.library.id, &folder);
+        let indexed = indexed.map_err(|e| writer.fail(ctx, scan, &e))?;
+        vanished.extend(indexed.folders.iter().map(|name| folder.join(name)));
+        for file in indexed.files.into_values().filter(|file| !file.missing) {
+            writer.checkpoint(ctx, scan)?;
+            writer.batch.missing.push(file.track_id);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

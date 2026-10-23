@@ -13,7 +13,7 @@ use serde_json::Value;
 use tower::ServiceExt;
 
 use super::session::token_hash;
-use super::{AppState, Images, router};
+use super::{AppState, Images, prefix, router};
 use crate::db::Database;
 use crate::db::testing::{Album, Device, Track, User, library};
 use crate::plugins::testing::plugins;
@@ -67,30 +67,26 @@ pub fn add_signed_out_device(
 
 /// The API over a fresh database, as a new server first starts: with no owner.
 pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
-    let temp = tempfile::tempdir().unwrap();
-    let db = Arc::new(Database::open(&temp.path().join("jewelcase.db")).unwrap());
-    let images = Images::new(temp.path().join("cache"), Config::default());
+    let (temp, db) = crate::db::testing::open();
+    let state = AppState { prefix: prefix(base_path), ..state(&temp, db.clone()) };
     // A client with a public address, unless a request carries its own `ConnectInfo`.
     let peer = SocketAddr::from(([203, 0, 113, 1], 50_000));
-    let plugins = plugins(&temp, &db);
-    let app = router(
-        base_path,
-        db.clone(),
-        images,
-        Arc::default(),
-        plugins,
-        Arc::default(),
-        Arc::default(),
-    )
-    .layer(MockConnectInfo(peer));
-    (temp, db, app)
+    (temp, db, router(state).layer(MockConnectInfo(peer)))
 }
 
-/// What the API's handlers share, over `db` in `temp`, mounted at the root.
-pub(super) fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
-    let images = Images::new(temp.path().join("cache"), Config::default());
-    let plugins = plugins(temp, &db);
-    AppState::new(db, images, Arc::default(), plugins, Arc::default(), Arc::default(), "/api/v1")
+/// What the API's handlers share, over `db` in `temp`, mounted at the root, before setup is seen
+/// done.
+pub(crate) fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
+    AppState {
+        images: Arc::new(Images::new(temp.path().join("cache"), Config::default())),
+        indexes: Arc::default(),
+        setup: Arc::default(),
+        plugins: plugins(temp, &db),
+        hub: Arc::default(),
+        players: Arc::default(),
+        prefix: prefix(""),
+        db,
+    }
 }
 
 /// [`app`] with library 1 holding tracks 1 and 2, and library 2 holding track 3, each called

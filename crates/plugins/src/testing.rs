@@ -21,6 +21,15 @@ pub struct Memory {
     pub state: State,
     /// Reading the page of tracks after this one fails, as a database error would.
     pub fail_after: Option<u64>,
+    /// Every call fails, as for a library nothing can be read from.
+    pub unreadable: bool,
+}
+
+impl Memory {
+    /// Fails when the library is [`Memory::unreadable`].
+    fn readable(&self) -> Result<(), String> {
+        if self.unreadable { Err("the library could not be read".into()) } else { Ok(()) }
+    }
 }
 
 /// The first `limit` of `items` with an ID after `after`, as a page is read. `items` must be in
@@ -38,6 +47,7 @@ fn by_id<T: Clone>(items: &[T], id: fn(&T) -> u64, ids: &[u64]) -> Vec<T> {
 impl Library for Memory {
     /// A page of its tracks, failing for the page after `fail_after`.
     async fn tracks(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Track>, String> {
+        self.readable()?;
         if after.is_some() && after == self.fail_after {
             return Err("the library could not be read".into());
         }
@@ -46,36 +56,43 @@ impl Library for Memory {
 
     /// Its tracks with these IDs, in the order asked for.
     async fn get_tracks(&mut self, ids: Vec<u64>) -> Result<Vec<Track>, String> {
+        self.readable()?;
         Ok(by_id(&self.tracks, |t| t.id, &ids))
     }
 
     /// A page of its albums.
     async fn albums(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Album>, String> {
+        self.readable()?;
         Ok(page(&self.albums, |a| a.id, after, limit))
     }
 
     /// A page of its artists.
     async fn artists(&mut self, after: Option<u64>, limit: u32) -> Result<Vec<Artist>, String> {
+        self.readable()?;
         Ok(page(&self.artists, |a| a.id, after, limit))
     }
 
     /// Its albums with these IDs, in the order asked for.
     async fn get_albums(&mut self, ids: Vec<u64>) -> Result<Vec<Album>, String> {
+        self.readable()?;
         Ok(by_id(&self.albums, |a| a.id, &ids))
     }
 
     /// Its artists with these IDs, in the order asked for.
     async fn get_artists(&mut self, ids: Vec<u64>) -> Result<Vec<Artist>, String> {
+        self.readable()?;
         Ok(by_id(&self.artists, |a| a.id, &ids))
     }
 
     /// Its tracks on the album, in catalog order.
     async fn album_tracks(&mut self, album: u64) -> Result<Vec<Track>, String> {
+        self.readable()?;
         Ok(self.tracks.iter().filter(|t| t.album_id == album).cloned().collect())
     }
 
     /// The albums that credit the artist by name.
     async fn artist_albums(&mut self, artist: u64) -> Result<Vec<Album>, String> {
+        self.readable()?;
         let name = self.artists.iter().find(|a| a.id == artist).and_then(|a| a.name.clone());
         let credits = |album: &&Album| name.as_ref().is_some_and(|n| album.artists.contains(n));
         Ok(self.albums.iter().filter(credits).cloned().collect())
@@ -83,22 +100,26 @@ impl Library for Memory {
 
     /// Its one root, ID 1, at `root`.
     async fn roots(&mut self) -> Result<Vec<(u64, PathBuf)>, String> {
+        self.readable()?;
         Ok(vec![(1, self.root.clone())])
     }
 
     /// The value its shared state keeps under `key`.
     async fn state_get(&mut self, key: String) -> Result<Option<Vec<u8>>, String> {
+        self.readable()?;
         Ok(self.state.lock().unwrap().get(&key).cloned())
     }
 
     /// Keeps `value` under `key` in its shared state.
     async fn state_set(&mut self, key: String, value: Vec<u8>) -> Result<(), String> {
+        self.readable()?;
         self.state.lock().unwrap().insert(key, value);
         Ok(())
     }
 
     /// Forgets `key` in its shared state.
     async fn state_delete(&mut self, key: String) -> Result<(), String> {
+        self.readable()?;
         self.state.lock().unwrap().remove(&key);
         Ok(())
     }

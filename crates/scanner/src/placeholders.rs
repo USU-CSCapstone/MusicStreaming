@@ -38,6 +38,7 @@ impl Placeholders {
     }
 
     /// Skips an image whose file cannot be opened for `retry_after`, rather than an hour.
+    #[cfg(feature = "testing")]
     pub fn with_retry_after(mut self, retry_after: Duration) -> Placeholders {
         self.retries = Retries::new(retry_after);
         self

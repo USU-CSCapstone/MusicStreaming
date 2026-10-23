@@ -1,30 +1,28 @@
 //! Recording scan problems against a real database.
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 
 use jewelcase_scanner::{Problem, ProblemKind};
 
 use super::{clear_unopened, record};
-use crate::db::Database;
 use crate::db::store::SqliteStore;
-use crate::db::testing::library;
+use crate::db::testing::{library, open};
 
-/// A store in `dir` holding library 1, and that library's one root, `dir/music`.
-fn store(dir: &Path) -> (SqliteStore, PathBuf) {
-    let db = Arc::new(Database::open(&dir.join("jewelcase.db")).unwrap());
-    let root = dir.join("music");
+/// A store holding library 1, and that library's one root, `music` in the directory the store
+/// lives in, which must outlive it.
+fn store() -> (tempfile::TempDir, SqliteStore, PathBuf) {
+    let (dir, db) = open();
+    let root = dir.path().join("music");
     let music = root.clone();
     db.write_blocking(move |tx| library(tx, 1, "Music", music)).unwrap();
-    (SqliteStore::new(db).unwrap(), root)
+    (dir, SqliteStore::new(db).unwrap(), root)
 }
 
 /// A problem recorded again in the same group, with a detail that reads differently, keeps one
 /// row, which takes the new detail and time.
 #[test]
 fn a_problem_seen_again_in_its_group_takes_the_new_detail_and_time() {
-    let dir = tempfile::tempdir().unwrap();
-    let (store, root) = store(dir.path());
+    let (_dir, store, root) = store();
     let path = root.join("a/one.flac");
     let problem = |detail: &str, seen_at| Problem {
         path: path.clone(),
@@ -60,8 +58,7 @@ fn a_problem_seen_again_in_its_group_takes_the_new_detail_and_time() {
 /// the problems it still holds.
 #[test]
 fn a_group_goes_only_with_its_last_problem_whatever_its_count() {
-    let dir = tempfile::tempdir().unwrap();
-    let (store, root) = store(dir.path());
+    let (_dir, store, root) = store();
     let problem = |name: &str| Problem {
         path: root.join(name),
         kind: ProblemKind::Unreadable,
@@ -90,8 +87,7 @@ fn a_group_goes_only_with_its_last_problem_whatever_its_count() {
 /// follow, and a group it leaves empty goes.
 #[test]
 fn a_problem_moves_between_groups_counted_out_of_one_and_into_the_other() {
-    let dir = tempfile::tempdir().unwrap();
-    let (store, root) = store(dir.path());
+    let (_dir, store, root) = store();
     let problem = |name: &str, kind| Problem {
         path: root.join(name),
         kind,

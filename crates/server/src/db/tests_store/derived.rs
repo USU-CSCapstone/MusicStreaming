@@ -3,15 +3,15 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use jewelcase_scanner::*;
 
 use super::recompute::{assert_fed, check, snapshot};
 use super::record;
 use crate::db::catalog::{self, Touched};
+use crate::db::libraries;
 use crate::db::store::SqliteStore;
-use crate::db::{Database, libraries};
+use crate::db::testing::open;
 
 /// A small seeded generator (Marsaglia's xorshift64), so every run makes the same sequence.
 struct Rng(u64);
@@ -106,9 +106,8 @@ fn tracks(store: &SqliteStore) -> BTreeMap<PathBuf, (TrackId, i64, bool)> {
 
 #[test]
 fn derived_values_equal_a_recompute_after_every_change() {
-    let tmp = tempfile::tempdir().unwrap();
+    let (tmp, db) = open();
     let [a, b, c]: [PathBuf; 3] = ["a", "b", "c"].map(|r| tmp.path().join(r));
-    let db = Arc::new(Database::open(&tmp.path().join("jewelcase.db")).unwrap());
     let roots = (a.clone(), b.clone(), c.clone());
     db.write_blocking(move |tx| {
         libraries::create(tx, Some(1), "Two roots", &[&roots.0, &roots.1], &[])?;
@@ -160,15 +159,14 @@ fn derived_values_equal_a_recompute_after_every_change() {
             // files, which go missing.
             5 => {
                 let root = rng.pick(&[&a, &b]).as_path();
-                let batch = if rng.chance(50) {
+                let on_root = present.iter().filter(|(p, _)| p.starts_with(root));
+                let missing = if rng.chance(50) {
                     let folder = root.join((rng.next() % 3).to_string());
-                    Batch { vanished: vec![folder], ..Batch::default() }
+                    on_root.filter(|(p, _)| p.starts_with(&folder)).map(|(_, id)| *id).collect()
                 } else {
-                    let on_root = present.iter().filter(|(p, _)| p.starts_with(root));
-                    let missing = on_root.filter(|_| rng.chance(50)).map(|(_, id)| *id).collect();
-                    Batch { missing, ..Batch::default() }
+                    on_root.filter(|_| rng.chance(50)).map(|(_, id)| *id).collect()
                 };
-                store.apply(one, batch).unwrap();
+                store.apply(one, Batch { missing, ..Batch::default() }).unwrap();
             }
             // Missing files coming back, one unchanged and the others changed but unreadable.
             6 => {

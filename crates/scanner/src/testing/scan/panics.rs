@@ -66,10 +66,10 @@ pub fn a_panic_suspends_the_scan_and_the_worker_runs_the_next<S: InspectStore + 
 
     let idle = "the scanner never went idle";
     let panicked = scanner.scan_library(Trigger::Manual).unwrap();
-    wait_until(&scanner, idle, Scanner::is_idle);
+    wait_until(idle, || scanner.is_idle());
     assert!(!scanner.retry_in(Duration::ZERO), "a panic left work to retry");
     let next = scanner.scan_library(Trigger::Manual).unwrap();
-    wait_until(&scanner, idle, Scanner::is_idle);
+    wait_until(idle, || scanner.is_idle());
     drop(thread);
 
     assert_eq!(store.inspect_scans(lib.id).len(), 2);

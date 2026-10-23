@@ -53,7 +53,8 @@ impl<'a> Hooked<'a> {
     }
 
     /// Runs `hook` with each folder before what the index holds in it is read
-    /// ([`Store::indexed_in`]), which a scan does as it starts on the folder.
+    /// ([`Store::indexed_in`]), which a scan does as it starts on the folder, and for each folder
+    /// under one gone from its parent's listing, as it marks what that folder held missing.
     pub fn on_folder(
         self,
         hook: impl Fn(&Path) -> Result<(), StoreError> + Send + Sync + 'a,

@@ -96,15 +96,16 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
     let indexes = Arc::new(api::Indexes::default());
     indexes.build_all(&db);
     let hub = Arc::new(api::Hub::default());
-    let mut app = api::router(
-        &config.base_path,
-        db.clone(),
-        images,
+    let mut app = api::router(api::AppState {
+        db: db.clone(),
+        images: Arc::new(images),
         indexes,
-        plugins.clone(),
-        players.clone(),
-        hub.clone(),
-    );
+        setup: Arc::default(),
+        plugins: plugins.clone(),
+        hub: hub.clone(),
+        players: players.clone(),
+        prefix: api::prefix(&config.base_path),
+    });
     let web = Path::new(web::DIR);
     if !web.is_dir() {
         info!(dir = web::DIR, "no web app there; serving the API only");

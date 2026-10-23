@@ -68,7 +68,7 @@ pub async fn list(
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
     let page = db
         .read(move |conn| {
-            let source = ARTISTS.source(conn, library, None, Vec::new())?;
+            let source = ARTISTS.source(conn, library, None, None)?;
             request.read(conn, &source, summary)
         })
         .await?;

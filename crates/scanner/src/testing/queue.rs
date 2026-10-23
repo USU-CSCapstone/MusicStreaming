@@ -118,7 +118,7 @@ pub fn a_resumed_scan_takes_no_new_work<S: InspectStore + 'static>(make: Factory
     let parked = Arc::new(Hooked::new(store.clone()));
     parked.hold();
     let (scanner, thread) = Scanner::start(parked.clone(), lib.clone()).unwrap();
-    wait_until(&scanner, "no resumed scan started", |scanner| scanner.running().is_some());
+    wait_until("no resumed scan started", || scanner.running().is_some());
     let [waiting] = scanner.queued().try_into().unwrap();
     let added = root.join("A/X/02 - Added.wav");
     write_small_wav(&added);

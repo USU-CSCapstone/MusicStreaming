@@ -1,7 +1,6 @@
 //! Library totals, which triggers keep, against what a scan of the tracks gives.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use jewelcase_scanner::testing::{InspectStore, duration_ms};
@@ -9,8 +8,9 @@ use jewelcase_scanner::*;
 use rusqlite::Result;
 
 use super::{count, make, record, scalar};
+use crate::db::libraries;
 use crate::db::store::SqliteStore;
-use crate::db::{Database, libraries};
+use crate::db::testing::open;
 
 /// Each library's stored totals beside the same totals counted from its tracks and credits.
 const TOTALS: &str = "SELECT l.id, l.track_count, l.album_count, l.artist_count, l.duration_us, \
@@ -88,9 +88,8 @@ fn upsert(store: &SqliteStore, lib: LibraryId, upserts: Vec<TrackRecord>) {
 
 #[test]
 fn library_totals_equal_a_track_scan() {
-    let tmp = tempfile::tempdir().unwrap();
+    let (tmp, db) = open();
     let [a, b, other]: [PathBuf; 3] = ["a", "b", "other"].map(|r| tmp.path().join(r));
-    let db = Arc::new(Database::open(&tmp.path().join("jewelcase.db")).unwrap());
     let roots = (a.clone(), b.clone(), other.clone());
     db.write_blocking(move |tx| {
         libraries::create(tx, Some(1), "Two roots", &[&roots.0, &roots.1], &[])?;
@@ -125,12 +124,9 @@ fn library_totals_equal_a_track_scan() {
     assert_totals_match_tracks(&store, "retags and a move");
     assert_eq!(count(&store, "SELECT COUNT(*) FROM albums WHERE library_id = 1"), 4);
 
-    // Everything on root b goes missing except one track, and stays counted: two tracks gone
-    // from their folder, and the two in a folder gone from its parent.
-    let on_b = |i| id_at(&store, &track(&b, i, "").path);
-    let missing = vec![on_b(4), on_b(5)];
-    let vanished = vec![b.join("Artist 0/Album 1")];
-    assert_eq!(store.apply(1, Batch { missing, vanished, ..Batch::default() }).unwrap(), 4);
+    // Everything on root b goes missing except one track, and stays counted.
+    let missing = [4, 5, 10, 14].map(|i| id_at(&store, &track(&b, i, "").path)).to_vec();
+    assert_eq!(store.apply(1, Batch { missing, ..Batch::default() }).unwrap(), 4);
     assert_totals_match_tracks(&store, "tracks going missing");
 
     // Two come back, one is retagged into the compilation while missing, and one stays missing.
