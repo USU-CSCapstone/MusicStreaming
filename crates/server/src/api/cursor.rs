@@ -7,8 +7,6 @@
 //! not signed either: a forged cursor can only choose where a page starts, and the query still
 //! runs within the caller's scope.
 
-use std::num::TryFromIntError;
-
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64URL;
 use rusqlite::types::Value;
@@ -23,10 +21,9 @@ const BLOB: u8 = 4;
 
 /// Makes the cursor for the page after the row whose sort values are `after`. `label` names
 /// the list and sort, such as `albums.name.asc`, so a cursor is only accepted where it came from.
-/// Fails if a value is 4 GiB or longer, which SQLite never stores.
-pub fn encode(label: &str, after: &[Value]) -> Result<String, TryFromIntError> {
+pub fn encode(label: &str, after: &[Value]) -> String {
     let mut bytes = Vec::new();
-    put_bytes(&mut bytes, label.as_bytes())?;
+    put_bytes(&mut bytes, label.as_bytes());
     for value in after {
         match value {
             Value::Null => bytes.push(NULL),
@@ -40,15 +37,15 @@ pub fn encode(label: &str, after: &[Value]) -> Result<String, TryFromIntError> {
             }
             Value::Text(t) => {
                 bytes.push(TEXT);
-                put_bytes(&mut bytes, t.as_bytes())?;
+                put_bytes(&mut bytes, t.as_bytes());
             }
             Value::Blob(b) => {
                 bytes.push(BLOB);
-                put_bytes(&mut bytes, b)?;
+                put_bytes(&mut bytes, b);
             }
         }
     }
-    Ok(BASE64URL.encode(bytes))
+    BASE64URL.encode(bytes)
 }
 
 /// Reads a cursor made by [`encode`] with the same `label` and `columns` sort values. Anything
@@ -80,11 +77,11 @@ fn read(text: &str, label: &str, columns: usize) -> Option<Vec<Value>> {
     reader.0.is_empty().then_some(values)
 }
 
-/// Appends `bytes` to `out` after their length. Fails if they are 4 GiB or longer.
-fn put_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), TryFromIntError> {
-    out.extend(u32::try_from(bytes.len())?.to_be_bytes());
+/// Appends `bytes` to `out` after their length.
+fn put_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
+    let len = u32::try_from(bytes.len()).expect("a sort value is under 4 GiB");
+    out.extend(len.to_be_bytes());
     out.extend(bytes);
-    Ok(())
 }
 
 /// Reads a cursor's bytes from the front. Every read is checked against what is left, so a
@@ -140,7 +137,7 @@ mod tests {
 
     #[test]
     fn round_trips_every_sort_value() {
-        let cursor = encode(LABEL, &row()).unwrap();
+        let cursor = encode(LABEL, &row());
         let url_safe = |b: u8| b.is_ascii_alphanumeric() || b == b'-' || b == b'_';
         assert!(cursor.bytes().all(url_safe), "{cursor}");
         assert_eq!(decode(&cursor, LABEL, 5).unwrap(), row());
@@ -150,14 +147,13 @@ mod tests {
     fn stays_compact_for_long_titles() {
         let title =
             "symphony no. 9 in d minor, op. 125 'choral': iv. presto — allegro assai".repeat(4);
-        let cursor =
-            encode(LABEL, &[Value::Blob(title.clone().into_bytes()), Value::Integer(1)]).unwrap();
+        let cursor = encode(LABEL, &[Value::Blob(title.clone().into_bytes()), Value::Integer(1)]);
         assert!(cursor.len() < title.len() * 4 / 3 + 100, "{} chars", cursor.len());
     }
 
     #[test]
     fn is_only_accepted_where_it_came_from() {
-        let cursor = encode(LABEL, &row()).unwrap();
+        let cursor = encode(LABEL, &row());
         for (label, columns) in
             [("albums.name.desc", 5), ("tracks.name.asc", 5), (LABEL, 4), (LABEL, 6)]
         {
@@ -169,20 +165,20 @@ mod tests {
     #[test]
     fn rejects_anything_malformed() {
         let bytes = |cursor: String| BASE64URL.decode(cursor).unwrap();
-        let valid = bytes(encode(LABEL, &row()).unwrap());
+        let valid = bytes(encode(LABEL, &row()));
         // A cursor with the right label and then `value`, one bad value.
         let label_then =
-            |value: &[u8]| BASE64URL.encode([&bytes(encode(LABEL, &[]).unwrap()), value].concat());
+            |value: &[u8]| BASE64URL.encode([&bytes(encode(LABEL, &[])), value].concat());
         let cases = [
             (String::new(), 5),
             ("abc".to_owned(), 5),
             ("é".to_owned(), 5),
-            (encode(LABEL, &row()).unwrap() + "=", 5), // padded
-            ("ab+/".to_owned(), 5),                    // not the URL-safe alphabet
+            (encode(LABEL, &row()) + "=", 5), // padded
+            ("ab+/".to_owned(), 5),           // not the URL-safe alphabet
             (BASE64URL.encode(&valid[..valid.len() - 1]), 5), // truncated
             (BASE64URL.encode([&valid[..], &[0]].concat()), 5), // trailing bytes
-            (label_then(&[9]), 1),                     // unknown type
-            (label_then(&[3, 0, 0, 0, 1, 0xff]), 1),   // text that is not UTF-8
+            (label_then(&[9]), 1),            // unknown type
+            (label_then(&[3, 0, 0, 0, 1, 0xff]), 1), // text that is not UTF-8
             (label_then(&[4, 0xff, 0xff, 0xff, 0xff]), 1), // a length past the end
         ];
         for (text, columns) in cases {

@@ -128,7 +128,7 @@ pub async fn complete(
         .await?;
     state.setup.0.store(true, Ordering::Relaxed);
 
-    session.respond(token, StatusCode::CREATED, &state.prefix, &from, &headers)
+    Ok(session.respond(token, StatusCode::CREATED, &state.prefix, &from, &headers))
 }
 
 #[cfg(test)]

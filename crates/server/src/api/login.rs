@@ -77,7 +77,7 @@ pub async fn login(
         })
         .await?;
     devices::changed(state.db.clone(), state.hub.clone(), user);
-    session.respond(token, StatusCode::OK, &state.prefix, &from, &headers)
+    Ok(session.respond(token, StatusCode::OK, &state.prefix, &from, &headers))
 }
 
 /// The account `username` names: its ID, password, and whether it may sign in.

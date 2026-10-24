@@ -82,7 +82,6 @@ impl Session {
     /// The `status` response to a sign-in with `token`: this session as JSON, and the [`cookie`]
     /// for `prefix` and `from`. The body carries `token` too unless the request's `headers` hold
     /// `X-Jewelcase-Client`, as the web client's do, so no script on its page sees the token.
-    /// Fails as [`cookie`] does.
     pub fn respond(
         mut self,
         token: String,
@@ -90,12 +89,12 @@ impl Session {
         prefix: &str,
         from: &Origin,
         headers: &HeaderMap,
-    ) -> Result<Response, Problem> {
-        let cookie = cookie(prefix, &token, from)?;
+    ) -> Response {
+        let cookie = cookie(prefix, &token, from);
         if !headers.contains_key(CLIENT) {
             self.token = Some(token);
         }
-        Ok((status, [(header::SET_COOKIE, cookie)], Json(self)).into_response())
+        (status, [(header::SET_COOKIE, cookie)], Json(self)).into_response()
     }
 }
 
@@ -116,15 +115,14 @@ pub async fn logout(State(state): State<AppState>, caller: Caller) -> Result<Res
         tracing::error!(%error, "logging out did not complete");
         Problem::new(Code::Internal)
     })??;
-    let forget = cookie_header(format!("{COOKIE}=; Path={}; Max-Age=0", state.prefix))?;
+    let forget = cookie_header(format!("{COOKIE}=; Path={}; Max-Age=0", state.prefix));
     Ok((StatusCode::NO_CONTENT, [(header::SET_COOKIE, forget)]).into_response())
 }
 
 /// The `Set-Cookie` value that has a browser send `token` with every request to the API at
 /// `prefix`, and nowhere else. Scripts cannot read it, and other sites cannot send it. A client
-/// that came over https, as `from` says, sends it only over https. Fails, as `cookie_header`
-/// does, only if `prefix` or `token` holds a character a header can't.
-pub fn cookie(prefix: &str, token: &str, from: &Origin) -> Result<HeaderValue, Problem> {
+/// that came over https, as `from` says, sends it only over https.
+pub fn cookie(prefix: &str, token: &str, from: &Origin) -> HeaderValue {
     let secure = if from.https { "; Secure" } else { "" };
     cookie_header(format!(
         "{COOKIE}={token}; Path={prefix}; Max-Age={COOKIE_MAX_AGE_S}; HttpOnly; SameSite=Strict{secure}"
@@ -132,10 +130,7 @@ pub fn cookie(prefix: &str, token: &str, from: &Origin) -> Result<HeaderValue, P
 }
 
 /// `cookie` as a `Set-Cookie` value. Tokens are base64url and the base path is limited to
-/// URL-safe characters (`config`), so it fails only if one of them is not.
-fn cookie_header(cookie: String) -> Result<HeaderValue, Problem> {
-    HeaderValue::try_from(cookie).map_err(|error| {
-        tracing::error!(%error, "cannot make a cookie");
-        Problem::new(Code::Internal)
-    })
+/// URL-safe characters (`config`), so every header character is valid.
+fn cookie_header(cookie: String) -> HeaderValue {
+    HeaderValue::try_from(cookie).expect("a cookie of header-safe characters")
 }

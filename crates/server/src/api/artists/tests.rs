@@ -111,8 +111,7 @@ async fn bad_parameters_are_validation_problems() {
     let album_cursor = crate::api::cursor::encode(
         "albums.name.asc",
         &[rusqlite::types::Value::Blob(b"beatles".to_vec()), rusqlite::types::Value::Integer(10)],
-    )
-    .unwrap();
+    );
     for query in [
         "limit=0".to_owned(),
         "sort=releaseDate".to_owned(),

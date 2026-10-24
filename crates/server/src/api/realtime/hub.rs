@@ -71,18 +71,16 @@ impl Hub {
     }
 
     /// Sends `message` to every connection of `user`, closing any whose outbox is full. The
-    /// `serve` of each it closes sends the device list once it ends. A message that can't be
-    /// serialized goes to none.
+    /// `serve` of each it closes sends the device list once it ends.
     pub fn broadcast(&self, user: i64, message: &ServerMessage) {
-        let Some(message) = encode(message) else { return };
+        let message = encode(message);
         self.retain(user, |connection| connection.outbox.try_send(message.clone()).is_ok());
     }
 
     /// Sends `message` to `user`'s connection `id`, if it is still open, closing it if its
-    /// outbox is full. Its `serve` sends the device list once it ends. A message that can't be
-    /// serialized is not sent.
+    /// outbox is full. Its `serve` sends the device list once it ends.
     pub fn send(&self, user: i64, id: u64, message: &ServerMessage) {
-        let Some(message) = encode(message) else { return };
+        let message = encode(message);
         self.retain(user, |connection| {
             connection.id != id || connection.outbox.try_send(message.clone()).is_ok()
         });
@@ -90,7 +88,6 @@ impl Hub {
 
     /// Tells every connection `device` of `user` holds that it was signed out, and closes it.
     /// Call it once the sign-out is committed: a connection that joins after this checks then.
-    /// A message that can't be serialized is not sent, but the connections still close.
     pub fn revoke(&self, user: i64, device: i64, reason: Revoked) {
         let message = encode(&ServerMessage::SessionRevoked { reason });
         self.retain(user, |connection| {
@@ -99,9 +96,7 @@ impl Hub {
             }
             // A full outbox loses the message, but the connection still closes, and the
             // device finds it is signed out when it tries to reconnect.
-            if let Some(message) = &message
-                && let Err(error) = connection.outbox.try_send(message.clone())
-            {
+            if let Err(error) = connection.outbox.try_send(message.clone()) {
                 tracing::debug!(%error, "revocation dropped");
             }
             false

@@ -165,17 +165,13 @@ impl Plugins {
     /// plugin's turn there and once one of the [`Plugins::hook_slots`] is free. The turn comes
     /// first, so a delivery waiting for it holds no slot another plugin or library could use; it
     /// holds its turn while it waits for a slot. One no longer due once it has both, such as
-    /// for a plugin disabled meanwhile or the hooks stopped, runs nothing and records nothing. If
-    /// the slots are closed, it logs that and delivers nothing. One whose outcome cannot be
-    /// recorded lets its turn and slot go, then waits [`BACKOFF_MS`] still holding its claim, so
-    /// the same delivery, whose side effects may have happened, is not run again at the next
-    /// poll.
+    /// for a plugin disabled meanwhile or the hooks stopped, runs nothing and records nothing. One
+    /// whose outcome cannot be recorded lets its turn and slot go, then waits [`BACKOFF_MS`]
+    /// still holding its claim, so the same delivery, whose side effects may have happened, is
+    /// not run again at the next poll.
     async fn deliver(&self, due: Due) {
         let turn = self.turns.take(&due.plugin, due.library).await;
-        let Ok(slot) = self.hook_slots.acquire().await else {
-            tracing::error!(plugin = %due.plugin, "the hook slots are closed; nothing delivered");
-            return;
-        };
+        let slot = self.hook_slots.acquire().await.expect("the hook slots are never closed");
         if self.hooks_stopped.load(Ordering::Relaxed) {
             return;
         }

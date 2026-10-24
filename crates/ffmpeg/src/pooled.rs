@@ -17,9 +17,10 @@ use crate::{Error, Registry};
 /// The child always leaves the pool before it is reaped: once reaped, its pid may be given to
 /// another process, which the pool's signals must never reach.
 pub(crate) struct Pooled {
-    /// The child, holding its standard output.
     child: Child,
     pid: Pid,
+    /// The child's standard output, taken from `child` by [`Pooled::spawn`].
+    stdout: ChildStdout,
     /// The thread draining standard error, which yields its last bytes. `None` only while
     /// [`Pooled::spawn`] starts it, and once [`Pooled::finish`] has joined it.
     drain: Option<JoinHandle<io::Result<Vec<u8>>>>,
@@ -30,26 +31,33 @@ pub(crate) struct Pooled {
 
 impl Pooled {
     /// Spawn `command`, register the child and start draining its standard error. `command` must
-    /// pipe its standard output and standard error. Fails if the child can't be spawned, its
-    /// standard error isn't piped, or the drain thread can't start.
+    /// pipe its standard output and standard error, or this panics. Fails if the child can't be
+    /// spawned or the drain thread can't start.
     pub(crate) fn spawn(registry: &Arc<Registry>, command: &mut Command) -> Result<Pooled, Error> {
-        let child = command
+        let mut child = command
             .spawn()
             .map_err(|source| Error::Spawn { binary: command.get_program().into(), source })?;
         let pid = Pid::from_child(&child);
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
         let stalled = registry.register(pid);
-        let mut pooled =
-            Pooled { child, pid, drain: None, registry: registry.clone(), stalled, reaped: false };
-        // Built first so that if standard error is not piped or its drain can't start, dropping
-        // `pooled` kills the child.
-        let stderr = pooled.child.stderr.take().ok_or_else(|| unpiped("standard error"))?;
+        let mut pooled = Pooled {
+            child,
+            pid,
+            stdout,
+            drain: None,
+            registry: registry.clone(),
+            stalled,
+            reaped: false,
+        };
+        // Built first so that if the drain thread can't start, dropping `pooled` kills the child.
         pooled.drain = Some(tail(stderr)?);
         Ok(pooled)
     }
 
-    /// The child's standard output. Fails if its command did not pipe it.
-    pub(crate) fn stdout(&mut self) -> io::Result<&mut ChildStdout> {
-        self.child.stdout.as_mut().ok_or_else(|| unpiped("standard output"))
+    /// The child's standard output.
+    pub(crate) fn stdout(&mut self) -> &mut ChildStdout {
+        &mut self.stdout
     }
 
     /// Restart the child's stall clock.
@@ -62,19 +70,16 @@ impl Pooled {
         self.reaped
     }
 
-    /// Unregister the child, reap it and join its stderr drain. Call it when its standard output
-    /// has ended. Fails with [`Error::Stalled`] if the watchdog killed the child. If it ended
-    /// unsuccessfully, fails with [`Error::Stopped`] once the server is stopping, and otherwise
-    /// with the end of what it wrote to standard error. A later call is harmless: it answers from
-    /// the same exit, with no standard error left to read.
+    /// Unregister the child, reap it and join its stderr drain. Call it once, when its standard
+    /// output has ended. Fails with [`Error::Stalled`] if the watchdog killed the child. If it
+    /// ended unsuccessfully, fails with [`Error::Stopped`] once the server is stopping, and
+    /// otherwise with the end of what it wrote to standard error.
     pub(crate) fn finish(&mut self) -> Result<(), Error> {
         self.registry.unregister(self.pid);
         self.reaped = true;
         let status = self.child.wait();
-        // The drain is gone only once this has run, and there is nothing more to read.
-        let stderr = self.drain.take().map_or(Ok(Vec::new()), |drain| {
-            drain.join().unwrap_or_else(|_| Err(io::Error::other("ffmpeg's stderr drain panicked")))
-        });
+        let drain = self.drain.take().expect("finish runs once");
+        let stderr = drain.join().expect("stderr drain panicked");
         let status = status?;
         if self.stalled.load(Ordering::SeqCst) {
             return Err(Error::Stalled);
@@ -94,7 +99,7 @@ impl Pooled {
     /// can't be read, or as [`Pooled::finish`] does.
     pub(crate) fn output(mut self) -> Result<Vec<u8>, Error> {
         let mut out = Vec::new();
-        self.stdout()?.read_to_end(&mut out)?;
+        self.stdout.read_to_end(&mut out)?;
         self.finish()?;
         Ok(out)
     }
@@ -115,11 +120,3 @@ impl Drop for Pooled {
         }
     }
 }
-
-/// The error for a child whose `stream` the command didn't pipe.
-fn unpiped(stream: &str) -> io::Error {
-    io::Error::other(format!("ffmpeg's {stream} was not piped"))
-}
-
-#[cfg(test)]
-mod tests;

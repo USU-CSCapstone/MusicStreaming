@@ -13,13 +13,14 @@
 //! has signed in from that origin: its password is still checked (401), where any other name
 //! waits (429).
 
+use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 
 use axum::extract::{ConnectInfo, FromRequestParts};
 use axum::http::HeaderMap;
 use axum::http::request::Parts;
 
-use super::{AppState, Code, Problem};
+use super::AppState;
 use crate::config::TrustedProxies;
 
 const FORWARDED_FOR: &str = "x-forwarded-for";
@@ -36,13 +37,14 @@ pub struct Origin {
 }
 
 impl FromRequestParts<AppState> for Origin {
-    type Rejection = Problem;
+    type Rejection = Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Origin, Problem> {
+    /// The [`Origin`] of the request, from its connection info and headers. Never rejects.
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Origin, Infallible> {
         // `serve` adds connection info to every request, and tests add it, so it is always there.
         let peer = ConnectInfo::<SocketAddr>::from_request_parts(parts, state)
             .await
-            .map_err(|_| Problem::new(Code::Internal))?;
+            .expect("every request carries connection info");
         Ok(Origin::new(peer.ip(), &parts.headers, &state.trusted_proxies))
     }
 }

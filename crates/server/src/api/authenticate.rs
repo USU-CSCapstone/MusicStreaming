@@ -130,10 +130,7 @@ async fn gate(
     // The cookie is sent again whenever `last_seen_at` is refreshed, so a web session in use
     // never reaches its `Max-Age` (`requirements/users.md` §4).
     let refresh = match token {
-        Token::Cookie(secret) if stale => match session::cookie(&state.prefix, secret, &from) {
-            Ok(cookie) => Some(cookie),
-            Err(problem) => return problem.into_response(),
-        },
+        Token::Cookie(secret) if stale => Some(session::cookie(&state.prefix, secret, &from)),
         _ => None,
     };
     request.extensions_mut().insert(caller);
