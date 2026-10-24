@@ -9,7 +9,6 @@ mod roots;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 use std::{fs, io};
@@ -22,22 +21,11 @@ use crate::queue::Scanner;
 use crate::scan::Trigger;
 use crate::scope::{Depth, Scope};
 use crate::sidecar::is_sidecar_name;
-use crate::worker::Worker;
+use crate::worker::{Stop, Worker};
 use roots::Roots;
 
 /// How often the watcher checks that each root is still the directory it watches.
 const CHECK_ROOTS: Duration = Duration::from_secs(10);
-
-/// How long dropping an [`FsWatcher`] waits for the watcher's thread to finish.
-const STOP_WAIT: Duration = Duration::from_secs(1);
-
-/// Live filesystem watching with per-directory debouncing, until it is dropped.
-#[must_use = "dropping it stops the watcher"]
-pub struct FsWatcher {
-    stop: Arc<AtomicBool>,
-    /// Disconnected once the watcher's thread has finished.
-    finished: mpsc::Receiver<()>,
-}
 
 /// When the watcher acts.
 struct Timing {
@@ -47,54 +35,33 @@ struct Timing {
     check: Duration,
 }
 
-impl FsWatcher {
-    /// Watches every root of `scanner`'s library, from a thread of its own, so this returns
-    /// before the watches are set up. What the library's excludes match as this starts is not
-    /// watched. Changes are grouped by directory over `debounce` and enqueued as one scope each.
-    /// Fails if the thread cannot be started.
-    pub fn start(scanner: Scanner, roots: &[PathBuf], debounce: Duration) -> io::Result<FsWatcher> {
-        let timing = Timing { debounce, check: CHECK_ROOTS };
-        // Every scan suspends on a pattern that does not compile, so watching the folders it
-        // meant to leave out indexes none of them.
-        let excludes = compile_excludes(&scanner.excludes()).unwrap_or_else(|error| {
-            tracing::warn!(%error, "an exclude pattern does not compile, so every folder is watched");
-            GlobSet::empty()
-        });
-        FsWatcher::spawn(scanner, roots.to_vec(), Arc::new(excludes), timing)
-    }
-
-    /// [`FsWatcher::start`] with `excludes` compiled and `timing` given, which tests shorten.
-    fn spawn(
-        scanner: Scanner,
-        roots: Vec<PathBuf>,
-        excludes: Arc<GlobSet>,
-        timing: Timing,
-    ) -> io::Result<FsWatcher> {
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop2 = stop.clone();
-        let (done, finished) = mpsc::channel();
-        std::thread::Builder::new().name("scanner-watch".into()).spawn(move || {
-            let (tx, rx) = mpsc::channel();
-            let roots = Roots::start(scanner.clone(), &roots, tx, excludes, &timing);
-            debounce_loop(scanner, roots, rx, stop2, timing.debounce);
-            drop(done);
-        })?;
-        Ok(FsWatcher { stop, finished })
-    }
+/// Watches every root of `scanner`'s library, from a thread of its own, so this returns
+/// before the watches are set up. What the library's excludes match as this starts is not
+/// watched. Changes are grouped by directory over `debounce` and enqueued as one scope each.
+/// Fails if the thread cannot be started. Dropping the worker stops the watcher.
+pub fn watch(scanner: Scanner, roots: &[PathBuf], debounce: Duration) -> io::Result<Worker> {
+    let timing = Timing { debounce, check: CHECK_ROOTS };
+    // Every scan suspends on a pattern that does not compile, so watching the folders it
+    // meant to leave out indexes none of them.
+    let excludes = compile_excludes(&scanner.excludes()).unwrap_or_else(|error| {
+        tracing::warn!(%error, "an exclude pattern does not compile, so every folder is watched");
+        GlobSet::empty()
+    });
+    spawn_watch(scanner, roots.to_vec(), Arc::new(excludes), timing)
 }
 
-impl Drop for FsWatcher {
-    /// Stops the watcher, waiting up to [`STOP_WAIT`] for its thread, so the scanner it holds
-    /// is let go before the process ends. A thread still setting a watch up, or held by a root
-    /// that does not answer, as a hard-mounted share that has gone away, is left to finish
-    /// alone: all it can still do is queue a scan, which a stopped scanner keeps for its next
-    /// start.
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Err(RecvTimeoutError::Timeout) = self.finished.recv_timeout(STOP_WAIT) {
-            tracing::warn!("the watcher is busy, so it is left to stop on its own");
-        }
-    }
+/// [`watch`] with `excludes` compiled and `timing` given, which tests shorten.
+fn spawn_watch(
+    scanner: Scanner,
+    roots: Vec<PathBuf>,
+    excludes: Arc<GlobSet>,
+    timing: Timing,
+) -> io::Result<Worker> {
+    Worker::spawn("scanner-watch", move |stop| {
+        let (tx, rx) = mpsc::channel();
+        let roots = Roots::start(scanner.clone(), &roots, tx, excludes, &timing, &stop);
+        debounce_loop(scanner, roots, rx, &stop, timing.debounce);
+    })
 }
 
 /// A watcher that sends every event to `tx`, until the watcher's thread has finished with them.
@@ -116,25 +83,25 @@ struct Pending {
 }
 
 /// Queues the scopes `rx`'s events dirty, each once its folder's changes have gathered for
-/// `debounce`, and keeps `roots` watched, until `stop` is set.
+/// `debounce`, and keeps `roots` watched, until `stop` is asked.
 fn debounce_loop(
     scanner: Scanner,
     mut roots: Roots,
     rx: mpsc::Receiver<notify::Result<notify::Event>>,
-    stop: Arc<AtomicBool>,
+    stop: &Stop,
     debounce: Duration,
 ) {
     let mut pending: HashMap<PathBuf, Pending> = HashMap::new();
     let mut rescan_all = false;
-    while !stop.load(Ordering::SeqCst) {
+    while !stop.asked() {
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(Ok(event)) => {
                 if event.need_rescan() {
                     rescan_all = true;
-                    roots.watch_all();
+                    roots.watch_all(stop);
                 }
                 for path in event.paths {
-                    roots.watch_shown(&event.kind, &path);
+                    roots.watch_shown(&event.kind, &path, stop);
                     for (dir, depth) in classify(&event.kind, &path) {
                         pending
                             .entry(dir)
@@ -154,7 +121,7 @@ fn debounce_loop(
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
-        roots.check(Instant::now());
+        roots.check(Instant::now(), stop);
 
         if rescan_all {
             pending.clear();

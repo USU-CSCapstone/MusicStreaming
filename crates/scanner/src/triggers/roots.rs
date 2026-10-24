@@ -19,6 +19,7 @@ use super::Timing;
 use crate::queue::Scanner;
 use crate::scan::Trigger;
 use crate::scope::Scope;
+use crate::worker::Stop;
 pub(super) use watch::RootWatch;
 
 /// Where every root's watch sends its events.
@@ -43,18 +44,19 @@ pub(super) struct Roots {
 
 impl Roots {
     /// Watches each of `paths` in turn, leaving out what `excludes` match and logging how much
-    /// of each is covered.
+    /// of each is covered. Stops walking once `stop` is asked.
     pub(super) fn start(
         scanner: Scanner,
         paths: &[PathBuf],
         events: Events,
         excludes: Arc<GlobSet>,
         timing: &Timing,
+        stop: &Stop,
     ) -> Roots {
         let roots = paths
             .iter()
             .map(|path| {
-                let watch = RootWatch::start(path, &excludes, &events);
+                let watch = RootWatch::start(path, &excludes, &events, stop);
                 report(path, &watch);
                 Root { path: path.clone(), watch }
             })
@@ -67,8 +69,8 @@ impl Roots {
     /// inode, is no longer the one it watches, as when a share is mounted over it or unmounted
     /// from under it, and queues a scan of it unless it cannot be read, since what changed in it
     /// unwatched was missed. A root that cannot be read has no identity, so it is watched
-    /// afresh and scanned once it can be.
-    pub(super) fn check(&mut self, now: Instant) {
+    /// afresh and scanned once it can be. Stops walking once `stop` is asked.
+    pub(super) fn check(&mut self, now: Instant, stop: &Stop) {
         if now < self.next_check {
             return;
         }
@@ -80,7 +82,7 @@ impl Roots {
             // Ends the old OS watches first, so they stop counting against the OS limit.
             // Dropping the watcher ends them on notify's own thread, a moment after this.
             root.watch.watcher = None;
-            root.watch = RootWatch::start(&root.path, &self.excludes, &self.events);
+            root.watch = RootWatch::start(&root.path, &self.excludes, &self.events, stop);
             report(&root.path, &root.watch);
             if root.watch.identity.is_some() {
                 self.scanner.request(Trigger::Watch, vec![Scope::root(root.path.clone())]);

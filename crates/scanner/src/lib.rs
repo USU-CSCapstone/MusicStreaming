@@ -67,5 +67,5 @@ pub use store::{
 pub use tag_set::{Lyrics, PartialDate, TagSet, release_kind};
 pub use tags::{ReadError, read as read_tags};
 pub use track::{Artwork, ArtworkSource, SortKeys, TrackId, TrackRecord};
-pub use triggers::{FsWatcher, scan_every};
+pub use triggers::{scan_every, watch};
 pub use worker::{Stop, Worker};

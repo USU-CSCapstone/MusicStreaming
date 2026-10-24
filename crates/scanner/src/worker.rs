@@ -21,6 +21,17 @@ pub struct Worker {
 pub struct Stop(Receiver<()>);
 
 impl Stop {
+    /// A stop and the sender whose drop makes it say so.
+    pub(crate) fn new() -> (Sender<()>, Stop) {
+        let (sender, receiver) = mpsc::channel();
+        (sender, Stop(receiver))
+    }
+
+    /// Whether the worker has been asked to stop.
+    pub fn asked(&self) -> bool {
+        self.wait(Duration::ZERO)
+    }
+
     /// Waits up to `timeout`, returning early once the worker is asked to stop. Returns whether
     /// it has been.
     pub fn wait(&self, timeout: Duration) -> bool {
@@ -37,9 +48,9 @@ impl Worker {
     where
         F: FnOnce(Stop) + Send + 'static,
     {
-        let (stop, stopping) = mpsc::channel();
+        let (stop, stopping) = Stop::new();
         let thread = thread::Builder::new().name(name.into()).spawn(move || {
-            if panic::catch_unwind(AssertUnwindSafe(|| body(Stop(stopping)))).is_err() {
+            if panic::catch_unwind(AssertUnwindSafe(|| body(stopping))).is_err() {
                 panicked();
             }
         })?;

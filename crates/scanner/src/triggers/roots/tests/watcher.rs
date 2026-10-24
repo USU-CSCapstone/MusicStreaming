@@ -1,27 +1,21 @@
 //! The roots as the watcher's own thread keeps them.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use super::*;
 use crate::library::LibraryConfig;
-use crate::triggers::{FsWatcher, debounce_loop};
+use crate::triggers::{debounce_loop, spawn_watch, watch};
+use crate::worker::Worker;
 
-/// Runs the watcher's loop over `roots` and `rx` on a thread of its own, until the returned
-/// function is called, which stops it.
+/// Runs the watcher's loop over `roots` and `rx` on a worker, which stops when dropped.
 fn looping(
     scanner: &Scanner,
     roots: Roots,
     rx: mpsc::Receiver<notify::Result<notify::Event>>,
-) -> impl FnOnce() {
-    let stop = Arc::new(AtomicBool::new(false));
-    let (scanner, flag) = (scanner.clone(), stop.clone());
-    let thread = std::thread::spawn(move || {
-        debounce_loop(scanner, roots, rx, flag, Duration::from_millis(20));
-    });
-    move || {
-        stop.store(true, Ordering::SeqCst);
-        thread.join().unwrap();
-    }
+) -> Worker {
+    let scanner = scanner.clone();
+    Worker::spawn("test-watch", move |stop| {
+        debounce_loop(scanner, roots, rx, &stop, Duration::from_millis(20));
+    })
+    .unwrap()
 }
 
 /// Stopping an idle watcher waits for its thread to end, so what the thread holds, such as the
@@ -32,7 +26,7 @@ fn stopping_an_idle_watcher_waits_for_its_thread() {
     let root = tmp.path().to_path_buf();
     let (scanner, thread, store) = scanner(&root);
     let watcher =
-        FsWatcher::spawn(scanner.clone(), vec![root.clone()], Arc::default(), timing()).unwrap();
+        spawn_watch(scanner.clone(), vec![root.clone()], Arc::default(), timing()).unwrap();
     // The watcher has started once it sees a change.
     seen(&store, &root, &root, 0);
     drop(watcher);
@@ -50,7 +44,7 @@ fn a_root_replaced_under_its_path_is_watched_afresh() {
     fs::create_dir(&root).unwrap();
     let (scanner, thread, store) = scanner(&root);
     let watcher =
-        FsWatcher::spawn(scanner.clone(), vec![root.clone()], Arc::default(), timing()).unwrap();
+        spawn_watch(scanner.clone(), vec![root.clone()], Arc::default(), timing()).unwrap();
     let before = seen(&store, &root, &root, 0);
     replace(&root, &tmp.path().join("old"));
     seen(&store, &root, &root, before);
@@ -69,7 +63,7 @@ fn what_the_library_excludes_is_not_watched() {
     let library = LibraryConfig { excludes: vec!["skip".into()], ..library(&root) };
     let (scanner, thread) = Scanner::start(store.clone(), library).unwrap();
     let debounce = Duration::from_millis(20);
-    let watcher = FsWatcher::start(scanner.clone(), slice::from_ref(&root), debounce).unwrap();
+    let watcher = watch(scanner.clone(), slice::from_ref(&root), debounce).unwrap();
     let watching = seen(&store, &root, &root, 0);
     // A watch delivers events in order, so a scope for this write, were `skip` watched, would be
     // queued by the time the root's next write is scanned.
@@ -88,14 +82,16 @@ fn a_watch_error_rescans_the_library() {
     let root = tmp.path().to_path_buf();
     let (scanner, thread, store) = scanner(&root);
     let (tx, rx) = mpsc::channel();
+    let (_alive, stop) = Stop::new();
     let roots = Roots::start(
         scanner.clone(),
         slice::from_ref(&root),
         tx.clone(),
         Arc::default(),
         &timing(),
+        &stop,
     );
-    let stop = looping(&scanner, roots, rx);
+    let looping = looping(&scanner, roots, rx);
     tx.send(Err(notify::Error::generic("lost"))).unwrap();
     let library = Scope::root(root);
     let rescan = |scan: &Scan| scan.trigger == Trigger::Watch && scan.scopes.contains(&library);
@@ -104,6 +100,6 @@ fn a_watch_error_rescans_the_library() {
         assert!(Instant::now() < deadline, "no rescan: {:?}", scans(&store));
         std::thread::sleep(Duration::from_millis(20));
     }
-    stop();
+    drop(looping);
     drop(thread);
 }

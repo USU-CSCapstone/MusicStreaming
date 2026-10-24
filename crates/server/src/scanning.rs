@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::Context;
 use jewelcase_ffmpeg::Ffmpeg;
 use jewelcase_scanner::{
-    Analyzer, FsWatcher, Placeholders, Pool, Scanner, ScannerThread, Trigger, Worker, scan_every,
+    Analyzer, Placeholders, Pool, Scanner, ScannerThread, Trigger, Worker, scan_every, watch,
 };
 use tracing::{info, warn};
 
@@ -29,7 +29,7 @@ pub struct Scanning {
 struct Library {
     id: i64,
     scanner: Scanner,
-    watcher: Option<FsWatcher>,
+    watcher: Option<Worker>,
     schedule: Option<Worker>,
     thread: ScannerThread,
 }
@@ -51,9 +51,8 @@ impl Scanning {
             let config = lib.config();
             let (scanner, thread) = Scanner::start(store.clone(), config.clone())?;
             scanner.scan_library(startup_trigger(db, lib.id)?);
-            let watcher = lib
-                .watch
-                .then(|| FsWatcher::start(scanner.clone(), &config.roots, Duration::from_secs(2)));
+            let watcher =
+                lib.watch.then(|| watch(scanner.clone(), &config.roots, Duration::from_secs(2)));
             let schedule = lib.scan_interval_minutes.map(|minutes| {
                 scan_every(scanner.clone(), Duration::from_mins(minutes.unsigned_abs()))
             });

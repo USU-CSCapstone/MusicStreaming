@@ -25,7 +25,8 @@ type Walked = (Vec<PathBuf>, notify::Result<()>);
 fn walk(scope: &Scope, add: impl Fn(&Path) -> notify::Result<()>) -> Walked {
     let excludes = compile_excludes(&["skip".into()]).unwrap();
     let mut tried = Vec::new();
-    let result = watch_folders(scope, &excludes, |folder| {
+    let (_alive, stop) = Stop::new();
+    let result = watch_folders(scope, &excludes, &stop, |folder| {
         tried.push(folder.to_path_buf());
         add(folder)
     });
@@ -139,4 +140,24 @@ fn the_limit_on_watches_ends_the_walk() {
     let (tried, result) = walk(&Scope::root(tmp.path()), limited);
     assert!(limit(&result.unwrap_err()));
     assert_eq!(tried.len(), 2, "{tried:?}");
+}
+
+/// A walk whose stop is asked as it watches the first folder ends there, leaving the other
+/// folders of a long tree unwatched.
+#[test]
+fn a_stop_ends_the_walk_between_folders() {
+    let tmp = tempfile::tempdir().unwrap();
+    for n in 0..100 {
+        fs::create_dir_all(tmp.path().join(format!("{n}/inner"))).unwrap();
+    }
+    let (alive, stop) = Stop::new();
+    let mut alive = Some(alive);
+    let mut tried = 0;
+    let result = watch_folders(&Scope::root(tmp.path()), &GlobSet::empty(), &stop, |_| {
+        tried += 1;
+        drop(alive.take());
+        Ok(())
+    });
+    assert!(result.is_ok());
+    assert_eq!(tried, 1, "the walk went on after the stop");
 }

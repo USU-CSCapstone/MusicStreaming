@@ -5,7 +5,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::sync::mpsc::Receiver;
 
 use super::*;
-use crate::triggers::FsWatcher;
+use crate::triggers::spawn_watch;
 
 /// Writes a file into `folder`, and returns the paths of every event up to the first for that
 /// file, failing past [`PATIENCE`].
@@ -55,7 +55,8 @@ fn a_folder_that_cannot_be_read_leaves_the_rest_watched() {
         return;
     }
     let (tx, rx) = mpsc::channel();
-    let watch = watched(&root, &tx);
+    let (_alive, stop) = Stop::new();
+    let watch = watched(&root, &tx, &stop);
     unlock(&locked);
     assert!(watch.coverage.is_ok(), "{:?}", watch.coverage);
     for sibling in &siblings {
@@ -74,9 +75,10 @@ fn no_folder_is_watched_through_a_link() {
     let (early, later) = (root.join("early"), root.join("later"));
     symlink(&outside, &early).unwrap();
     let (tx, rx) = mpsc::channel();
-    let mut watch = watched(&root, &tx);
+    let (_alive, stop) = Stop::new();
+    let mut watch = watched(&root, &tx, &stop);
     symlink(&outside, &later).unwrap();
-    watch.watch_folder(&root, &later).unwrap();
+    watch.watch_folder(&root, &later, &stop).unwrap();
     // Once the event in the root arrives, any for this earlier write would have arrived too.
     fs::write(outside.join("01.flac"), b"x").unwrap();
     let paths = events_until(&rx, &root);
@@ -94,7 +96,7 @@ fn folders_that_appear_later_are_watched() {
     fs::create_dir_all(tmp.path().join("outside/a/b")).unwrap();
     let (scanner, thread, store) = scanner(&root);
     let watcher =
-        FsWatcher::spawn(scanner.clone(), vec![root.clone()], Arc::default(), timing()).unwrap();
+        spawn_watch(scanner.clone(), vec![root.clone()], Arc::default(), timing()).unwrap();
     let mut last = seen(&store, &root, &root, 0);
     fs::create_dir(root.join("new")).unwrap();
     last = seen(&store, &root, &root.join("new"), last);
@@ -113,11 +115,12 @@ fn dropped_events_have_every_root_walked_again() {
     let (scanner, thread, _) = scanner(&root);
     let (tx, rx) = mpsc::channel();
     let paths = slice::from_ref(&root);
-    let mut roots = Roots::start(scanner.clone(), paths, tx, Arc::default(), &timing());
+    let (_alive, stop) = Stop::new();
+    let mut roots = Roots::start(scanner.clone(), paths, tx, Arc::default(), &timing(), &stop);
     // Made without its event reaching `roots`, as if the OS dropped it.
     let late = root.join("late/deep");
     fs::create_dir_all(&late).unwrap();
-    roots.watch_all();
+    roots.watch_all(&stop);
     events_until(&rx, &late);
     drop(roots);
     drop(thread);

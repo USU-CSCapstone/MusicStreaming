@@ -6,33 +6,34 @@ use notify::EventKind;
 use notify::event::{CreateKind, ModifyKind, RenameMode};
 
 use super::{Roots, report};
+use crate::worker::Stop;
 
 impl Roots {
     /// Watches what an event of `kind` at `path` may show that is not yet watched: a folder
-    /// made or moved in, with the folders below it.
-    pub(in crate::triggers) fn watch_shown(&mut self, kind: &EventKind, path: &Path) {
+    /// made or moved in, with the folders below it. Stops walking once `stop` is asked.
+    pub(in crate::triggers) fn watch_shown(&mut self, kind: &EventKind, path: &Path, stop: &Stop) {
         if matches!(
             kind,
             EventKind::Create(CreateKind::Folder)
                 | EventKind::Modify(ModifyKind::Name(RenameMode::To))
         ) {
-            self.watch_new(path);
+            self.watch_new(path, stop);
         }
     }
 
     /// Watches `folder`, which has just appeared in a root, with each folder below it.
-    pub(super) fn watch_new(&mut self, folder: &Path) {
+    pub(super) fn watch_new(&mut self, folder: &Path, stop: &Stop) {
         if let Some(index) = self.holding(folder) {
-            self.watch_in(index, folder);
+            self.watch_in(index, folder, stop);
         }
     }
 
     /// Walks every root again, watching each folder not yet watched, as one made while the OS
-    /// dropped events.
-    pub(in crate::triggers) fn watch_all(&mut self) {
+    /// dropped events. Stops walking once `stop` is asked.
+    pub(in crate::triggers) fn watch_all(&mut self, stop: &Stop) {
         for index in 0..self.roots.len() {
             let path = self.roots[index].path.clone();
-            self.watch_in(index, &path);
+            self.watch_in(index, &path, stop);
         }
     }
 
@@ -43,9 +44,9 @@ impl Roots {
 
     /// Watches `folder` in the root at `index` ([`RootWatch::watch_folder`]). A folder that
     /// cannot be watched leaves the root not wholly watched, which is logged once.
-    fn watch_in(&mut self, index: usize, folder: &Path) {
+    fn watch_in(&mut self, index: usize, folder: &Path, stop: &Stop) {
         let root = &mut self.roots[index];
-        let Err(error) = root.watch.watch_folder(&root.path, folder) else {
+        let Err(error) = root.watch.watch_folder(&root.path, folder, stop) else {
             return;
         };
         if root.watch.coverage.is_ok() {

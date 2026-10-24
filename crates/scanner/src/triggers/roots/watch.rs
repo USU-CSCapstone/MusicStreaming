@@ -14,6 +14,7 @@ use crate::confine::without_links;
 use crate::discover::{excluded, excluded_scope, gone};
 use crate::scope::{Depth, Scope};
 use crate::triggers::watcher;
+use crate::worker::Stop;
 
 /// One root's watch, as it was set up.
 pub(in crate::triggers) struct RootWatch {
@@ -29,17 +30,19 @@ pub(in crate::triggers) struct RootWatch {
 
 impl RootWatch {
     /// Watches `root` and each folder below it that the scan walks, leaving out what `excludes`
-    /// match ([`watch_folders`]), and sends the events to `events`.
+    /// match ([`watch_folders`], which ends early once `stop` is asked), and sends the events to
+    /// `events`.
     pub(in crate::triggers) fn start(
         root: &Path,
         excludes: &Arc<GlobSet>,
         events: &Events,
+        stop: &Stop,
     ) -> RootWatch {
         let identity = identity(root);
         let excludes = excludes.clone();
         match watcher(events.clone()) {
             Ok(mut watcher) => {
-                let coverage = watch_folders(&Scope::root(root), &excludes, |folder| {
+                let coverage = watch_folders(&Scope::root(root), &excludes, stop, |folder| {
                     watcher.watch(folder, RecursiveMode::NonRecursive)
                 });
                 RootWatch { watcher: Some(watcher), identity, coverage, excludes }
@@ -52,7 +55,12 @@ impl RootWatch {
     /// [`RootWatch::start`] does the root's. Anything but a folder the scan walks is left alone:
     /// a file, a link or a path through one, and what cannot be read, which the scan reports.
     /// Without a watcher this does nothing.
-    pub(super) fn watch_folder(&mut self, root: &Path, folder: &Path) -> notify::Result<()> {
+    pub(super) fn watch_folder(
+        &mut self,
+        root: &Path,
+        folder: &Path,
+        stop: &Stop,
+    ) -> notify::Result<()> {
         let Some(watcher) = &mut self.watcher else {
             return Ok(());
         };
@@ -60,7 +68,7 @@ impl RootWatch {
             return Ok(());
         }
         let scope = Scope::folder(root, folder, Depth::Subtree);
-        watch_folders(&scope, &self.excludes, |folder| {
+        watch_folders(&scope, &self.excludes, stop, |folder| {
             watcher.watch(folder, RecursiveMode::NonRecursive)
         })
     }
@@ -72,16 +80,20 @@ impl RootWatch {
 /// gone, and one that cannot be read, as the scan reports it. Any other failure leaves that
 /// folder and those below it unwatched, and the first is returned once the walk ends, except
 /// the OS limit on watches, which ends the walk at once, since every later folder would meet
-/// it too. The root is never passed over: it must be watched.
+/// it too. The root is never passed over: it must be watched. The walk ends between folders
+/// once `stop` is asked, leaving the rest unwatched.
 fn watch_folders(
     scope: &Scope,
     excludes: &GlobSet,
+    stop: &Stop,
     mut add: impl FnMut(&Path) -> notify::Result<()>,
 ) -> notify::Result<()> {
     let mut covered = Ok(());
     let mut stack =
         if excluded_scope(scope, excludes) { Vec::new() } else { vec![scope.path.clone()] };
-    while let Some(folder) = stack.pop() {
+    while !stop.asked()
+        && let Some(folder) = stack.pop()
+    {
         let listed = add(&folder).and_then(|()| {
             folders_in(&scope.root, &folder, excludes)
                 .map_err(|error| notify::Error::io(error).add_path(folder.clone()))

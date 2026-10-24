@@ -6,6 +6,7 @@ use crate::queue::ScannerThread;
 use crate::scan::Scan;
 use crate::scope::Depth;
 use crate::testing::{BareStore, library};
+use crate::worker::Stop;
 
 mod coverage;
 mod watcher;
@@ -38,14 +39,14 @@ fn seconds() -> Timing {
 }
 
 /// A real watch of `root` that leaves nothing out.
-fn watched(root: &Path, events: &Events) -> RootWatch {
-    RootWatch::start(root, &Arc::default(), events)
+fn watched(root: &Path, events: &Events, stop: &Stop) -> RootWatch {
+    RootWatch::start(root, &Arc::default(), events, stop)
 }
 
 /// The roots of the library with its one root at `root`, watched as `timing` says.
-fn roots_at(scanner: &Scanner, root: &Path, timing: &Timing) -> Roots {
+fn roots_at(scanner: &Scanner, root: &Path, timing: &Timing, stop: &Stop) -> Roots {
     let paths = [root.to_path_buf()];
-    Roots::start(scanner.clone(), &paths, mpsc::channel().0, Arc::default(), timing)
+    Roots::start(scanner.clone(), &paths, mpsc::channel().0, Arc::default(), timing, stop)
 }
 
 /// The scopes of the scans in `store`.
@@ -80,14 +81,15 @@ fn seen(store: &BareStore, root: &Path, folder: &Path, after: i64) -> i64 {
 
 #[test]
 fn a_watch_covers_the_whole_root_or_says_why_not() {
+    let (_alive, stop) = Stop::new();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");
     fs::create_dir_all(root.join("a/b")).unwrap();
     let events = mpsc::channel().0;
-    let watch = watched(&root, &events);
+    let watch = watched(&root, &events, &stop);
     assert!(watch.coverage.is_ok());
     assert_eq!(watch.identity, identity(&root));
-    let missing = watched(&tmp.path().join("missing"), &events);
+    let missing = watched(&tmp.path().join("missing"), &events, &stop);
     assert!(matches!(missing.coverage.unwrap_err().kind, ErrorKind::PathNotFound));
     assert_eq!(missing.identity, None);
 }
@@ -96,20 +98,21 @@ fn a_watch_covers_the_whole_root_or_says_why_not() {
 /// it was not watched was missed; one still the same directory is left alone.
 #[test]
 fn a_root_whose_directory_is_replaced_is_watched_afresh_and_scanned() {
+    let (_alive, stop) = Stop::new();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");
     fs::create_dir(&root).unwrap();
     let (scanner, thread, store) = scanner(&root);
-    let mut roots = roots_at(&scanner, &root, &seconds());
+    let mut roots = roots_at(&scanner, &root, &seconds(), &stop);
     let start = Instant::now();
-    roots.check(start + Duration::from_millis(1500));
+    roots.check(start + Duration::from_millis(1500), &stop);
     assert_eq!(scoped(&store), Vec::<Vec<Scope>>::new(), "an unchanged root was scanned");
 
     replace(&root, &tmp.path().join("aside"));
-    roots.check(start + Duration::from_millis(3000));
+    roots.check(start + Duration::from_millis(3000), &stop);
     assert_eq!(scoped(&store), [vec![Scope::root(root.clone())]]);
     assert_eq!(roots.roots[0].watch.identity, identity(&root));
-    roots.check(start + Duration::from_millis(4500));
+    roots.check(start + Duration::from_millis(4500), &stop);
     assert_eq!(scans(&store).len(), 1, "the root was scanned again as it was");
     drop(roots);
     drop(thread);
@@ -119,23 +122,24 @@ fn a_root_whose_directory_is_replaced_is_watched_afresh_and_scanned() {
 /// scanned only once a directory is there again.
 #[test]
 fn a_root_that_is_gone_is_scanned_once_it_returns() {
+    let (_alive, stop) = Stop::new();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");
     let aside = tmp.path().join("aside");
     fs::create_dir(&root).unwrap();
     let (scanner, thread, store) = scanner(&root);
-    let mut roots = roots_at(&scanner, &root, &seconds());
+    let mut roots = roots_at(&scanner, &root, &seconds(), &stop);
     let start = Instant::now();
 
     fs::rename(&root, &aside).unwrap();
     for second in [2, 4] {
-        roots.check(start + Duration::from_secs(second));
+        roots.check(start + Duration::from_secs(second), &stop);
     }
     assert_eq!(roots.roots[0].watch.identity, None);
     assert_eq!(scans(&store), [], "a root that is gone was scanned");
 
     fs::create_dir(&root).unwrap();
-    roots.check(start + Duration::from_secs(6));
+    roots.check(start + Duration::from_secs(6), &stop);
     assert_eq!(scoped(&store), [vec![Scope::root(root.clone())]]);
     drop(roots);
     drop(thread);
@@ -145,15 +149,16 @@ fn a_root_that_is_gone_is_scanned_once_it_returns() {
 /// file where the directory was, which cannot be listed.
 #[test]
 fn a_partial_watch_still_queues_the_scan() {
+    let (_alive, stop) = Stop::new();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");
     fs::create_dir(&root).unwrap();
     let (scanner, thread, store) = scanner(&root);
-    let mut roots = roots_at(&scanner, &root, &seconds());
+    let mut roots = roots_at(&scanner, &root, &seconds(), &stop);
 
     fs::rename(&root, tmp.path().join("aside")).unwrap();
     fs::write(&root, b"x").unwrap();
-    roots.check(Instant::now() + Duration::from_secs(2));
+    roots.check(Instant::now() + Duration::from_secs(2), &stop);
     assert!(roots.roots[0].watch.coverage.is_err(), "the watch covered a file's folders");
     assert_eq!(scoped(&store), [vec![Scope::root(root.clone())]]);
     drop(roots);
@@ -164,17 +169,18 @@ fn a_partial_watch_still_queues_the_scan() {
 /// the next.
 #[test]
 fn roots_are_checked_once_per_interval() {
+    let (_alive, stop) = Stop::new();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");
     fs::create_dir(&root).unwrap();
     let (scanner, thread, store) = scanner(&root);
-    let mut roots = roots_at(&scanner, &root, &seconds());
+    let mut roots = roots_at(&scanner, &root, &seconds(), &stop);
     let start = Instant::now();
-    roots.check(start + Duration::from_millis(1500));
+    roots.check(start + Duration::from_millis(1500), &stop);
     replace(&root, &tmp.path().join("aside"));
-    roots.check(start + Duration::from_millis(2000));
+    roots.check(start + Duration::from_millis(2000), &stop);
     assert_eq!(scans(&store), [], "a root was checked twice in one interval");
-    roots.check(start + Duration::from_millis(3000));
+    roots.check(start + Duration::from_millis(3000), &stop);
     assert_eq!(scans(&store).len(), 1);
     drop(roots);
     drop(thread);
