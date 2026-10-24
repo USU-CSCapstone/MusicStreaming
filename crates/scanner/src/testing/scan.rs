@@ -10,7 +10,7 @@ use std::time::Duration;
 use super::{Factory, Hooked, InspectStore, library, make_album, write_small_wav};
 use crate::library::LibraryConfig;
 use crate::scan::{
-    Cursor, Scan, ScanContext, ScanOptions, ScanProgress, ScanState, Trigger, Undone, run_scan,
+    Cursor, Scan, ScanContext, ScanOptions, ScanProgress, ScanState, Trigger, run_scan,
 };
 use crate::scope::Scope;
 use crate::store::{Batch, Store, StoreError};
@@ -22,7 +22,6 @@ mod failures;
 mod panics;
 mod reconcile;
 mod resume;
-mod undone;
 mod unlistable;
 pub use checkpoints::*;
 pub use excludes::*;
@@ -30,7 +29,6 @@ pub use failures::*;
 pub use panics::*;
 pub use reconcile::*;
 pub use resume::*;
-pub use undone::*;
 pub use unlistable::*;
 
 /// The flag that shuts a scan down from inside it.
@@ -52,18 +50,19 @@ fn batches_of(batch_size: usize) -> ScanOptions {
         batch_interval: Duration::MAX,
         batch_time: Duration::MAX,
         min_batch: 1,
+        ..Default::default()
     }
 }
 
 /// Runs `scan`, already saved to `store`, with `options`, shut down once `stops` says so, and
-/// returns what it left undone for a retry.
+/// returns the scopes whose root did not answer, which a retry may cure.
 fn run(
     store: &dyn Store,
     lib: &LibraryConfig,
     scan: &mut Scan,
     options: &ScanOptions,
     stops: &Stops,
-) -> Undone {
+) -> Vec<Scope> {
     let ctx = ScanContext { store, library: lib, shutdown: &stops.shutdown, options };
     run_scan(&ctx, scan)
 }
@@ -166,10 +165,10 @@ pub fn a_root_gone_before_reconcile_suspends_and_marks_nothing<S: InspectStore +
     fs::remove_file(track(&root, "A/X", 2)).unwrap();
 
     let mut scan = new_scan(&hooked, &lib);
-    let undone = run(&hooked, &lib, &mut scan, &batches_of(1), &Stops::default());
+    let unanswered = run(&hooked, &lib, &mut scan, &batches_of(1), &Stops::default());
     assert!(root.exists());
     assert_eq!(scan.state, ScanState::Suspended);
-    assert_eq!(undone, Undone { unanswered: vec![Scope::root(&root)], failed: Vec::new() });
+    assert_eq!(unanswered, [Scope::root(&root)]);
     assert_eq!((scan.progress.files_seen, scan.progress.missing), (1, 0), "{:?}", scan.progress);
     assert!(store.inspect_tracks(lib.id).iter().all(|t| !t.missing));
 }

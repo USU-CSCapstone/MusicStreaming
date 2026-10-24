@@ -1,18 +1,21 @@
-//! A suspended scan's work is queued again after a wait, unless what suspended it would suspend
-//! the retry too (`design/scanning.md` §9). [`Scanner::retry_in`] shortens the wait, whose
-//! length `retry`'s own tests check, and the worker queues the work once it has passed.
+//! A scan suspended by an unavailable root is requested again after a fixed wait, and one
+//! suspended for any other reason is not (`design/scanning.md` §9).
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use super::super::*;
 use crate::scan::ScanState;
-use crate::testing::{BareStore, library, make_album, wait_until};
+use crate::store::StoreError;
+use crate::testing::{BareStore, Hooked, library, make_album, wait_until};
+
+/// How long the retry waits in the test that checks the wait.
+const WAIT: Duration = Duration::from_millis(600);
 
 /// A library of two roots, `nas` and `kept`, with one album each, where `nas` has gone, as an
-/// unmounted share does, and the path it has gone to. `nas` sorts first, so a scan has walked
-/// nothing when it finds it gone.
+/// unmounted share does, and the path it has gone to.
 fn nas_gone(tmp: &Path) -> (LibraryConfig, PathBuf, PathBuf) {
     let (nas, kept, away) = (tmp.join("1-nas"), tmp.join("2-kept"), tmp.join("away"));
     make_album(&kept, "A", "X", 1);
@@ -21,38 +24,30 @@ fn nas_gone(tmp: &Path) -> (LibraryConfig, PathBuf, PathBuf) {
     (LibraryConfig { roots: vec![nas.clone(), kept.clone()], ..library(&kept) }, nas, away)
 }
 
-/// A scanner of `lib` over `store`, and the owner of its thread.
-fn scanner(store: &Arc<BareStore>, lib: &LibraryConfig) -> (Scanner, ScannerThread) {
-    Scanner::start(store.clone(), lib.clone()).unwrap()
-}
-
-/// Shortens the wait of the work `scanner` holds to retry to `wait`, and waits for the scan the
-/// worker queues for it once the wait has passed to end, as the second of `store`'s scans.
-fn retried(scanner: &Scanner, store: &BareStore, wait: Duration) {
-    assert!(scanner.retry_in(wait), "nothing waits to be retried");
-    let ended = || store.scans().get(1).is_some_and(|s| s.finished_at.is_some());
-    wait_until("the retry never ended", ended);
-}
-
-/// A library scan that suspends because a root has gone leaves that root alone to retry, with
-/// the scan's trigger, and once the root is back, the retry indexes it. The worker queues the
-/// retry when its own timer says the wait has passed, with nothing else to wake it.
+/// A scan that suspends because a root has gone is requested again with its trigger, for the
+/// scopes of the roots that did not answer, once the wait has passed and not before, and once the
+/// root is back, the retry indexes it.
 #[test]
-fn a_root_that_did_not_answer_is_retried() {
+fn a_root_that_did_not_answer_is_retried_after_the_wait() {
     let tmp = tempfile::tempdir().unwrap();
     let (lib, nas, away) = nas_gone(tmp.path());
     let store = Arc::new(BareStore::default());
-    let (scanner, thread) = scanner(&store, &lib);
-    let suspended = scanner.scan_library(Trigger::Initial).unwrap();
+    let options = ScanOptions { retry_wait: WAIT, ..Default::default() };
+    let (scanner, thread) = Scanner::start_with(store.clone(), lib, options).unwrap();
+    let suspended_at = Instant::now();
+    let first = scanner.scan_library(Trigger::Initial).unwrap();
     scanner.wait_idle();
+    assert_eq!(store.scans().len(), 1, "the retry came before the wait had passed");
 
     fs::rename(&away, &nas).unwrap();
-    retried(&scanner, &store, Duration::from_millis(100));
+    let ended = || store.scans().get(1).is_some_and(|s| s.finished_at.is_some());
+    wait_until("the retry never ended", ended);
+    assert!(suspended_at.elapsed() >= WAIT, "the retry came before the wait had passed");
     drop(thread);
-    let [first, retry] = store.scans().try_into().unwrap();
-    assert_eq!((first.id, first.state), (suspended, ScanState::Suspended));
+    let [suspended, retry] = store.scans().try_into().unwrap();
+    assert_eq!((suspended.id, suspended.state), (first, ScanState::Suspended));
     assert_eq!((retry.trigger, retry.state), (Trigger::Initial, ScanState::Completed));
-    assert_eq!(retry.scopes, [Scope::root(&nas)]);
+    assert_eq!(retry.scopes, [Scope::root(&nas)], "only the root that did not answer");
     assert_eq!(retry.progress.added, 1, "the retry indexed the root: {:?}", retry.progress);
 }
 
@@ -64,32 +59,33 @@ fn a_pattern_that_does_not_compile_is_not_retried() {
     make_album(&root, "A", "X", 1);
     let lib = LibraryConfig { excludes: vec!["[".into()], ..library(&root) };
     let store = Arc::new(BareStore::default());
-    let (scanner, thread) = scanner(&store, &lib);
+    let options = ScanOptions { retry_wait: Duration::ZERO, ..Default::default() };
+    let (scanner, thread) = Scanner::start_with(store.clone(), lib, options).unwrap();
     scanner.scan_library(Trigger::Manual).unwrap();
     scanner.wait_idle();
 
-    assert!(!scanner.retry_in(Duration::ZERO));
+    thread::sleep(Duration::from_millis(200));
     drop(thread);
     let [row] = store.scans().try_into().unwrap();
     assert_eq!(row.state, ScanState::Suspended);
 }
 
-/// A scan that starts covering the work waiting to be retried does that work, so the work no
-/// longer waits and is not walked a second time.
+/// A scan suspended by a store failure is not retried.
 #[test]
-fn a_scan_covering_the_waiting_work_takes_it_over() {
+fn a_store_failure_is_not_retried() {
     let tmp = tempfile::tempdir().unwrap();
-    let (lib, nas, away) = nas_gone(tmp.path());
+    let root = tmp.path().join("lib");
+    make_album(&root, "A", "X", 1);
     let store = Arc::new(BareStore::default());
-    let (scanner, thread) = scanner(&store, &lib);
-    scanner.scan_library(Trigger::Initial).unwrap();
+    let failing = Hooked::new(store.clone()).on_apply(|_| Err(StoreError("disk full".into())));
+    let options = ScanOptions { retry_wait: Duration::ZERO, ..Default::default() };
+    let (scanner, thread) =
+        Scanner::start_with(Arc::new(failing), library(&root), options).unwrap();
+    scanner.scan_library(Trigger::Manual).unwrap();
     scanner.wait_idle();
 
-    fs::rename(&away, &nas).unwrap();
-    let scheduled = scanner.scan_library(Trigger::Scheduled).unwrap();
-    scanner.wait_idle();
-    assert!(!scanner.retry_in(Duration::ZERO));
+    thread::sleep(Duration::from_millis(200));
     drop(thread);
-    let row = store.scans().into_iter().find(|s| s.id == scheduled).unwrap();
-    assert_eq!(row.state, ScanState::Completed);
+    let [row] = store.scans().try_into().unwrap();
+    assert_eq!(row.state, ScanState::Suspended);
 }

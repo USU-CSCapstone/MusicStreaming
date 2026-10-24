@@ -7,34 +7,52 @@
 //! takes no new work, since its walk may already have passed that work, so a
 //! trigger repeated during a scan queues one follow-up scan, not one each time.
 //! The queue decides under its lock and writes scan rows after, so a busy store
-//! holds up only the caller writing. Work a suspended scan left undone is queued
-//! again after a wait ([`retry`]).
+//! holds up only the caller writing. A scan suspended by an unavailable root is requested again
+//! after a fixed wait ([`Retry`]).
 
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Instant;
 
 use crate::library::LibraryConfig;
 use crate::scan::{Scan, ScanId, ScanOptions, Trigger};
 use crate::scope::{Depth, Scope};
 use crate::store::Store;
 use jewelcase_core::Recover;
-use retry::Retry;
 pub use worker::ScannerThread;
 
 mod request;
-mod retry;
 mod worker;
 
-/// The scans waiting to run, first to run first, the one running, and the work waiting to be
-/// retried.
+/// The scopes of a suspended scan whose root did not answer, requested again with its trigger
+/// once `due` has passed.
+struct Retry {
+    due: Instant,
+    trigger: Trigger,
+    scopes: Vec<Scope>,
+}
+
+/// The scans waiting to run, first to run first, the one running, and the retry waiting, if any.
 struct Queue {
     queued: VecDeque<Scan>,
     running: Option<Scan>,
-    retry: Retry,
+    retry: Option<Retry>,
 }
 
 impl Queue {
+    /// Holds `scopes`, whose root did not answer a scan with `trigger`, to be requested again at
+    /// `due`. A retry already waiting takes them in and keeps its time and trigger.
+    fn retry_later(&mut self, trigger: Trigger, scopes: Vec<Scope>, due: Instant) {
+        match &mut self.retry {
+            Some(retry) => {
+                retry.scopes.extend(scopes);
+                retry.scopes = coalesce_scopes(std::mem::take(&mut retry.scopes));
+            }
+            None => self.retry = Some(Retry { due, trigger, scopes: coalesce_scopes(scopes) }),
+        }
+    }
+
     /// The queued scan, not yet started, that already covers `scopes`, which a request for them
     /// joins.
     fn covering(&self, scopes: &[Scope]) -> Option<ScanId> {
@@ -66,7 +84,7 @@ impl Scanner {
     /// that has not started and already covers it, or a new one, never the
     /// running scan or a resumed one. A new scan cancels the queued scans it
     /// covers. `None` when the store cannot record a new scan: the error is logged and the
-    /// work is queued again after a wait, as a suspended scan's is.
+    /// work waits for the next trigger.
     pub fn request(&self, trigger: Trigger, scopes: Vec<Scope>) -> Option<ScanId> {
         self.inner.request(trigger, scopes)
     }
@@ -114,15 +132,6 @@ impl Scanner {
             q = self.inner.wake.wait(q).recover();
         }
     }
-
-    /// Shortens the wait of the work waiting to be retried to `wait` from now, after which the
-    /// worker queues it, and returns whether any waits.
-    #[cfg(feature = "testing")]
-    pub fn retry_in(&self, wait: std::time::Duration) -> bool {
-        let waits = self.inner.queue.lock().recover().retry.hurry(std::time::Instant::now() + wait);
-        self.inner.wake.notify_all();
-        waits
-    }
 }
 
 /// Drop scopes covered by other scopes in the same request, returning the rest sorted by root
@@ -151,9 +160,23 @@ fn coalesce_scopes(mut scopes: Vec<Scope>) -> Vec<Scope> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     mod retries;
     mod scan_rows;
+
+    /// A second suspension while a retry waits joins it and leaves its time.
+    #[test]
+    fn a_second_suspension_joins_the_waiting_retry() {
+        let (a, b) = (PathBuf::from("/a"), PathBuf::from("/b"));
+        let mut queue = Queue { queued: VecDeque::new(), running: None, retry: None };
+        let first = Instant::now();
+        queue.retry_later(Trigger::Initial, vec![Scope::root(&a)], first);
+        queue.retry_later(Trigger::Manual, vec![Scope::root(&b)], first + Duration::from_secs(60));
+        let retry = queue.retry.unwrap();
+        assert_eq!((retry.due, retry.trigger), (first, Trigger::Initial));
+        assert_eq!(retry.scopes, [Scope::root(&a), Scope::root(&b)]);
+    }
 
     #[test]
     fn scopes_coalesce() {

@@ -1,6 +1,6 @@
 //! Scan rows the store is slow to write, or cannot write: the queue answers while a request
 //! writes, requests racing for the same work queue it once, and a request the store cannot record
-//! is retried (`design/scanning.md` §9).
+//! is dropped (`design/scanning.md` §9).
 
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -209,23 +209,21 @@ fn a_request_joining_a_queued_scan_writes_no_row() {
     drop(thread);
 }
 
-/// A request the store cannot record waits to be queued again, as a suspended scan's work does,
-/// and once recorded runs.
+/// A request the store cannot record is not queued and is not retried: its work waits for the
+/// next trigger.
 #[test]
-fn a_request_the_store_cannot_record_is_retried() {
+fn a_request_the_store_cannot_record_is_dropped() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 1);
     let (store, rows, gate) = gated();
-    let (scanner, thread) = Scanner::start(store.clone(), library(&root)).unwrap();
+    let options = ScanOptions { retry_wait: Duration::ZERO, ..Default::default() };
+    let (scanner, thread) = Scanner::start_with(store.clone(), library(&root), options).unwrap();
 
     gate.fail(1);
     assert_eq!(scanner.scan_library(Trigger::Manual), None);
-    assert!(scanner.retry_in(Duration::ZERO), "the request waits to be retried");
-    let ended = || rows.scans().first().is_some_and(|s| s.finished_at.is_some());
-    wait_until("the retry never ended", ended);
+    thread::sleep(Duration::from_millis(200));
+    assert!(scanner.is_idle());
+    assert!(rows.scans().is_empty());
     drop(thread);
-    let [row] = rows.scans().try_into().unwrap();
-    assert_eq!((row.trigger, row.state), (Trigger::Manual, ScanState::Completed));
-    assert_eq!(row.scopes, [Scope::root(&root)]);
 }

@@ -43,7 +43,7 @@ pub fn a_parser_panic_is_a_problem_and_the_scan_completes<S: InspectStore>(make:
 
 /// A panic outside parsing, here in the store as B/Y's index is read, suspends the scan at
 /// its last flushed cursor with the progress the store holds, after A/X, and the worker goes on
-/// to run the next scan, which completes. Nothing waits to be retried.
+/// to run the next scan, which completes.
 pub fn a_panic_suspends_the_scan_and_the_worker_runs_the_next<S: InspectStore + 'static>(
     make: Factory<S>,
 ) {
@@ -67,7 +67,6 @@ pub fn a_panic_suspends_the_scan_and_the_worker_runs_the_next<S: InspectStore + 
     let idle = "the scanner never went idle";
     let panicked = scanner.scan_library(Trigger::Manual).unwrap();
     wait_until(idle, || scanner.is_idle());
-    assert!(!scanner.retry_in(Duration::ZERO), "a panic left work to retry");
     let next = scanner.scan_library(Trigger::Manual).unwrap();
     wait_until(idle, || scanner.is_idle());
     drop(thread);

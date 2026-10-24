@@ -26,8 +26,9 @@ mod writer;
 
 pub use row::{Cursor, Scan, ScanId, ScanProgress, ScanState, Trigger};
 
-/// When a scan flushes its batch. The scanner always runs with the defaults, the design's
-/// starting points; tests choose others to flush at the points they check.
+/// When a scan flushes its batch and when one that found a root unavailable is retried. The
+/// scanner always runs with the defaults, the design's starting points; tests choose others to
+/// act at the points they check.
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
     /// Flush a batch at this many outcomes at most...
@@ -42,17 +43,21 @@ pub struct ScanOptions {
     /// what a batch costs, such as its commit and the albums it touches, does not shrink with it.
     /// A scan's first batch is this size.
     pub min_batch: usize,
+    /// How long a scan suspended by an unavailable root waits before its scopes are requested
+    /// again.
+    pub retry_wait: Duration,
 }
 
 impl Default for ScanOptions {
     /// The design's values (`design/scanning.md` §7): batches of 16 to 250 outcomes, each sized
-    /// to apply in about 50 ms, flushed at least every 2 seconds.
+    /// to apply in about 50 ms, flushed at least every 2 seconds, and a retry after 15 minutes.
     fn default() -> Self {
         ScanOptions {
             batch_size: 250,
             batch_interval: Duration::from_secs(2),
             batch_time: Duration::from_millis(50),
             min_batch: 16,
+            retry_wait: Duration::from_secs(15 * 60),
         }
     }
 }
@@ -74,54 +79,41 @@ impl ScanContext<'_> {
     }
 }
 
-/// What a suspended scan left undone, by why, for a new scan to retry whole.
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct Undone {
-    /// Each scope whose root did not answer, before its walk or before its reconcile.
-    pub unanswered: Vec<Scope>,
-    /// After a store failure, each scope from the last persisted cursor on.
-    pub failed: Vec<Scope>,
-}
-
 /// Run `scan` to completion or suspension, or until a shutdown, which leaves it
 /// running at its last flushed cursor for the next start to resume. A panic ends it at that
 /// cursor through [`Writer::suspend`], so the caller carries on. The scan row is updated on every
 /// flush; `scan` is left in the state the row holds, unless the store could not save it.
 ///
-/// Returns what a suspended scan left undone, and nothing for any other end. That leaves out what
-/// a panic or an exclude pattern that does not compile left unwalked, since a retry would panic
-/// or suspend again, but not a root found not answering before a panic.
-pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) -> Undone {
+/// Returns the scopes whose root did not answer, before their walk or before their reconcile,
+/// when the scan suspended for that, for a retry to request again. A store failure, a panic or an
+/// exclude pattern that does not compile would only recur, so they return none, as does any scan
+/// that does not suspend.
+pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) -> Vec<Scope> {
     let mut writer = Writer::new(scan, ctx.options);
     let mut unanswered = Vec::new();
     // Asserted unwind safe because a panic can leave `scan`'s cursor and progress ahead of the
     // store, and `suspend` replaces both from what the writer last persisted, which changes only
     // as a whole, after a flush, and sets the state itself; a batch left half filled is dropped.
-    // `unanswered` only grows, so a panic leaves it naming the roots that did not answer so far.
     // Everything else the scan touches is shared through `ctx` and keeps its own guarantees: the
     // store commits a batch whole or not at all.
     let walked = panic::catch_unwind(AssertUnwindSafe(|| {
         scan_scopes(ctx, scan, &mut writer, &mut unanswered)
     }));
-    let failed = match walked {
-        // Completed, stopped, or suspended with the roots that did not answer in `unanswered`.
-        Ok(Ok(())) => Vec::new(),
-        // Ended by a store failure that `Writer::fail` has handled.
-        Ok(Err(_)) => from_cursor(scan).map(|(_, scope)| scope).collect(),
-        Err(_) => {
-            tracing::error!(
-                scan = scan.id,
-                "scan panicked; ending it at its last flushed cursor, without a retry of what it \
-                 left, which would panic again"
-            );
-            writer.suspend(ctx, scan);
-            Vec::new()
-        }
-    };
-    if scan.state != ScanState::Suspended {
-        return Undone::default();
+    if walked.is_err() {
+        tracing::error!(
+            scan = scan.id,
+            "scan panicked; ending it at its last flushed cursor, without a retry, which would \
+             panic again"
+        );
+        writer.suspend(ctx, scan);
+        return Vec::new();
     }
-    Undone { unanswered, failed }
+    // An error is a store failure that `Writer::fail` has handled.
+    if matches!(walked, Ok(Ok(()))) && scan.state == ScanState::Suspended {
+        unanswered
+    } else {
+        Vec::new()
+    }
 }
 
 /// The scopes of `scan` from the one its cursor is in on, or all of them when it has no cursor,
@@ -131,8 +123,8 @@ fn from_cursor(scan: &Scan) -> impl Iterator<Item = (i64, Scope)> + use<> {
     (0..).zip(scan.scopes.clone()).skip_while(move |(i, _)| *i < from)
 }
 
-/// [`run_scan`] without the panic guard, flushing through `writer` and adding each scope whose
-/// root does not answer to `unanswered`. Fails with [`Halt::Ended`] once a store failure has
+/// [`run_scan`] without the panic guard, flushing through `writer` and adding to `unanswered` each
+/// scope whose root does not answer. Fails with [`Halt::Ended`] once a store failure has
 /// ended the scan through [`Writer::fail`].
 fn scan_scopes(
     ctx: &ScanContext<'_>,

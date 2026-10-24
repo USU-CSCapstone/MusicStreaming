@@ -2,7 +2,6 @@
 //! (`design/scanning.md` §9).
 
 use std::collections::VecDeque;
-use std::time::Instant;
 
 use super::{Inner, coalesce_scopes};
 use crate::clock::now_ms;
@@ -23,13 +22,7 @@ impl Inner {
         let scan = match self.store.create_scan(library, trigger, &scopes) {
             Ok(scan) => scan,
             Err(error) => {
-                tracing::error!(
-                    library, ?trigger, %error,
-                    "scan not queued; retrying after a wait"
-                );
-                self.queue.lock().recover().retry.add(trigger, scopes, Instant::now());
-                // The worker may be waiting with no time limit, and must wait for the retry's.
-                self.wake.notify_all();
+                tracing::error!(library, ?trigger, %error, "scan not queued");
                 return None;
             }
         };

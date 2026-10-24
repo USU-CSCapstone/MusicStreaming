@@ -124,15 +124,14 @@ pub fn unlistable_folders_count_once_the_cursor_passes_their_scope<S: InspectSto
     let link = Scope::folder(&kept, kept.join("A/L"), Depth::Subtree);
     let scopes = [Scope::root(&kept), Scope::root(&gone), link];
     let mut scan = hooked.create_scan(lib.id, Trigger::Manual, &scopes).unwrap();
-    let undone = run(&hooked, &lib, &mut scan, &batches_of(1000), &Stops::default());
+    let unanswered = run(&hooked, &lib, &mut scan, &batches_of(1000), &Stops::default());
     // Put back, so the locked folders are found to restore.
     fs::rename(&away, &gone).unwrap();
 
     let row = only_row(store.as_ref(), &lib);
     assert_eq!(row.state, ScanState::Suspended);
     assert_eq!(row.progress.problems, 6, "{:?}", row.progress);
-    assert_eq!(undone.unanswered, [Scope::root(&gone)]);
-    assert_eq!(undone.failed, []);
+    assert_eq!(unanswered, [Scope::root(&gone)]);
 }
 
 /// A scope whose root goes as its walk is flushed ends the scan suspended with the cursor still
@@ -166,13 +165,12 @@ pub fn a_root_gone_after_its_walk_counts_its_last_unlistable_folder_as_the_scan_
     };
     let hooked = Hooked::new(store.clone()).on_apply(on_apply).on_folder(on_folder);
     let mut scan = new_scan(&hooked, &lib);
-    let undone = run(&hooked, &lib, &mut scan, &batches_of(1000), &Stops::default());
+    let unanswered = run(&hooked, &lib, &mut scan, &batches_of(1000), &Stops::default());
     // Put back, so the locked folders are found to restore.
     fs::rename(&away, &root).unwrap();
 
     let row = only_row(store.as_ref(), &lib);
     let ended = (row.state, &row.cursor, row.progress.problems);
     assert_eq!(ended, (ScanState::Suspended, &after(&root, "C/Z"), 2), "{row:?}");
-    assert_eq!(undone.unanswered, [Scope::root(&root)]);
-    assert_eq!(undone.failed, []);
+    assert_eq!(unanswered, [Scope::root(&root)]);
 }

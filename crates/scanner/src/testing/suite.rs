@@ -83,8 +83,6 @@ macro_rules! store_suite {
             a_scan_shut_down_partway_through_a_folder_resumes_counting_each_file_once,
             a_scan_suspended_partway_through_a_folder_resumes_counting_each_file_once,
             a_known_file_that_cannot_be_read_is_counted_once_across_a_resume,
-            a_failed_batch_leaves_the_scopes_from_its_cursor_undone,
-            a_stopped_scan_leaves_nothing_undone,
             an_unlistable_folder_is_counted_once_across_resumes,
             unlistable_folders_count_once_the_cursor_passes_their_scope,
             a_root_gone_after_its_walk_counts_its_last_unlistable_folder_as_the_scan_ends,

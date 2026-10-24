@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
-use super::retry::Retry;
 use super::{Inner, Queue, Scanner};
 use crate::library::LibraryConfig;
 use crate::scan::{ScanContext, ScanOptions, ScanState, run_scan};
@@ -51,11 +50,7 @@ impl Scanner {
             store,
             library,
             options,
-            queue: Mutex::new(Queue {
-                queued: VecDeque::new(),
-                running: None,
-                retry: Retry::new(),
-            }),
+            queue: Mutex::new(Queue { queued: VecDeque::new(), running: None, retry: None }),
             wake: Condvar::new(),
             shutdown: AtomicBool::new(false),
         });
@@ -67,8 +62,8 @@ impl Scanner {
             }
         }
         let running = inner.clone();
-        // The thread waits on the queue's condvar, not on its `Stop`, since requests and retries
-        // already wake it there, and a running scan checks the `shutdown` flag before each
+        // The thread waits on the queue's condvar, not on its `Stop`, since requests already wake
+        // it there and its wait ends when a retry is due, and a running scan checks the `shutdown` flag before each
         // file; `ScannerThread::stop` sets that flag.
         let thread = Worker::spawn("scanner", move |_| run(&running))?;
         Ok((Scanner { inner: inner.clone() }, ScannerThread { inner, thread }))
@@ -96,8 +91,8 @@ impl Drop for ScannerThread {
     }
 }
 
-/// Runs the library's scans one at a time, and queues the work waiting to be retried once it is
-/// due, until a shutdown.
+/// Runs the library's scans one at a time, and requests the scopes of the scan waiting to be
+/// retried once its wait has passed, until a shutdown.
 fn run(inner: &Inner) {
     loop {
         let mut scan = {
@@ -106,9 +101,9 @@ fn run(inner: &Inner) {
                 if inner.shutdown.load(Ordering::SeqCst) {
                     return;
                 }
-                if let Some((trigger, scopes)) = q.retry.take_due(Instant::now()) {
+                if let Some(retry) = q.retry.take_if(|r| r.due <= Instant::now()) {
                     drop(q);
-                    inner.request(trigger, scopes);
+                    inner.request(retry.trigger, retry.scopes);
                     q = inner.queue.lock().recover();
                     continue;
                 }
@@ -116,11 +111,10 @@ fn run(inner: &Inner) {
                     // Running from the moment it leaves the queue, under the same lock, so a
                     // request or idle check always finds it in one place or the other.
                     s.state = ScanState::Running;
-                    q.retry.started(&s);
                     q.running = Some(s.clone());
                     break s;
                 }
-                q = match q.retry.due() {
+                q = match q.retry.as_ref().map(|r| r.due) {
                     Some(due) => {
                         let wait = due.saturating_duration_since(Instant::now());
                         inner.wake.wait_timeout(q, wait).recover().0
@@ -136,7 +130,7 @@ fn run(inner: &Inner) {
             options: &inner.options,
         };
         tracing::info!(scan = scan.id, trigger = ?scan.trigger, scopes = scan.scopes.len(), "scan starting");
-        let undone = run_scan(&ctx, &mut scan);
+        let unanswered = run_scan(&ctx, &mut scan);
         if scan.state == ScanState::Running {
             tracing::info!(scan = scan.id, progress = ?scan.progress, "scan stopped for shutdown");
         } else {
@@ -145,7 +139,11 @@ fn run(inner: &Inner) {
         {
             let mut q = inner.queue.lock().recover();
             q.running = None;
-            q.retry.ended(&scan, undone, Instant::now());
+            if !unanswered.is_empty() {
+                tracing::info!(scan = scan.id, "a root did not answer; retrying after a wait");
+                let due = Instant::now() + inner.options.retry_wait;
+                q.retry_later(scan.trigger, unanswered, due);
+            }
         }
         inner.wake.notify_all();
     }
