@@ -1,17 +1,13 @@
-use std::cell::Cell;
 use std::slice;
 use std::sync::{Arc, mpsc};
-
-use std::collections::BTreeSet;
 
 use super::*;
 use crate::queue::ScannerThread;
 use crate::scan::Scan;
+use crate::scope::Depth;
 use crate::testing::{BareStore, library};
-use fakes::{FailsAt, limit_error, seen};
 
 mod coverage;
-mod fakes;
 mod watcher;
 
 /// How long a test waits for what it expects before it fails.
@@ -29,22 +25,16 @@ fn scans(store: &BareStore) -> Vec<Scan> {
     store.scans()
 }
 
-/// Short waits throughout, and a fallback schedule of `fallback`.
-fn timing(fallback: Option<Duration>) -> Timing {
+/// Short waits throughout.
+fn timing() -> Timing {
     let quick = Duration::from_millis(20);
-    Timing { debounce: quick, check: quick, fallback }
+    Timing { debounce: quick, check: quick }
 }
 
-/// Checks once a second, and scans every hour while the library is not wholly watched.
+/// Checks once a second.
 fn seconds() -> Timing {
     let second = Duration::from_secs(1);
-    Timing { debounce: second, check: second, fallback: Some(MAX_BACKOFF) }
-}
-
-/// A watch with no watcher, of the directory `identity`, covering what `coverage` says.
-fn fake(identity: Option<(u64, u64)>, coverage: notify::Result<()>) -> RootWatch {
-    let (excludes, unreadable) = (Arc::default(), BTreeSet::new());
-    RootWatch { watcher: None, identity, coverage, excludes, unreadable }
+    Timing { debounce: second, check: second }
 }
 
 /// A real watch of `root` that leaves nothing out.
@@ -52,19 +42,40 @@ fn watched(root: &Path, events: &Events) -> RootWatch {
     RootWatch::start(root, &Arc::default(), events)
 }
 
-/// The watch of a root stopped by the OS limit on watches before it covered anything.
-fn limited(root: &Path, _: &Events) -> RootWatch {
-    fake(identity(root), Err(notify::Error::new(ErrorKind::MaxFilesWatch)))
+/// The roots of the library with its one root at `root`, watched as `timing` says.
+fn roots_at(scanner: &Scanner, root: &Path, timing: &Timing) -> Roots {
+    let paths = [root.to_path_buf()];
+    Roots::start(scanner.clone(), &paths, mpsc::channel().0, Arc::default(), timing)
 }
 
-/// A watch of some other directory, so every check finds the root lost.
-fn elsewhere(_: &Path, _: &Events) -> RootWatch {
-    fake(Some((0, 0)), Ok(()))
+/// The scopes of the scans in `store`.
+fn scoped(store: &BareStore) -> Vec<Vec<Scope>> {
+    scans(store).into_iter().map(|scan| scan.scopes).collect()
 }
 
-/// The backoff of the one root in `roots`.
-fn backoff<W>(roots: &Roots<W>) -> Duration {
-    roots.roots[0].backoff
+/// Replaces the directory at `root` with a new one, as a share mounted over it would.
+fn replace(root: &Path, aside: &Path) {
+    fs::rename(root, aside).unwrap();
+    fs::create_dir(root).unwrap();
+}
+
+/// Writes files into `folder`, in `root`, until a watcher scan newer than scan `after` covers
+/// just that folder, and returns that scan's id.
+fn seen(store: &BareStore, root: &Path, folder: &Path, after: i64) -> i64 {
+    let scope = vec![Scope::folder(root, folder, Depth::Directory)];
+    let deadline = Instant::now() + PATIENCE;
+    let mut n = 0;
+    loop {
+        fs::write(folder.join(format!("{n}.txt")), b"x").unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let scans = scans(store);
+        if let Some(scan) = scans.iter().find(|s| s.id > after && s.scopes == scope) {
+            break scan.id;
+        }
+        let folder = folder.display();
+        assert!(Instant::now() < deadline, "no watcher scan of {folder} after {after}: {scans:?}");
+        n += 1;
+    }
 }
 
 #[test]
@@ -81,241 +92,90 @@ fn a_watch_covers_the_whole_root_or_says_why_not() {
     assert_eq!(missing.identity, None);
 }
 
+/// A root whose directory is replaced is watched afresh and scanned, since what changed while
+/// it was not watched was missed; one still the same directory is left alone.
 #[test]
-fn a_library_not_wholly_watched_is_scanned_on_the_fallback_schedule() {
+fn a_root_whose_directory_is_replaced_is_watched_afresh_and_scanned() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = vec![tmp.path().to_path_buf()];
-    let (scanner, thread, store) = scanner(tmp.path());
-    let start = |watch: fn(&Path, &Events) -> RootWatch, fallback| {
-        Roots::start(scanner.clone(), &root, mpsc::channel().0, watch, &timing(fallback))
-    };
-    let every = Some(Duration::from_millis(20));
-    let whole = start(watched, every);
-    assert!(whole.fallback.is_none(), "a library wholly watched needs no fallback");
-    drop(whole);
-    let scheduled = start(limited, None);
-    assert!(scheduled.fallback.is_none(), "a library with a schedule keeps to it");
-    drop(scheduled);
-
-    let partial = start(limited, every);
-    let deadline = Instant::now() + PATIENCE;
-    while !scans(&store).iter().any(|scan| scan.trigger == Trigger::Scheduled) {
-        assert!(Instant::now() < deadline, "no fallback scan");
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    drop(partial);
-    // Dropping the roots ends the fallback schedule, which would otherwise scan every 20 ms.
-    scanner.wait_idle();
-    let stopped = scans(&store).len();
-    std::thread::sleep(Duration::from_millis(600));
-    assert_eq!(scans(&store).len(), stopped, "the fallback schedule outlived the stop");
-    drop(thread);
-}
-
-#[test]
-fn a_root_watched_afresh_is_scanned_and_one_whose_watch_fails_is_not() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().to_path_buf();
+    let root = tmp.path().join("root");
+    fs::create_dir(&root).unwrap();
     let (scanner, thread, store) = scanner(&root);
-    let roots_at = slice::from_ref(&root);
+    let mut roots = roots_at(&scanner, &root, &seconds());
     let start = Instant::now();
-    let mut roots =
-        Roots::start(scanner.clone(), roots_at, mpsc::channel().0, elsewhere, &seconds());
-    assert_eq!(scans(&store), []);
     roots.check(start + Duration::from_millis(1500));
-    let scopes: Vec<Vec<Scope>> = scans(&store).into_iter().map(|scan| scan.scopes).collect();
-    assert_eq!(scopes, [vec![Scope::root(root.clone())]]);
-    drop(roots);
-    // So a later request cannot join that scan.
-    scanner.wait_idle();
+    assert_eq!(scoped(&store), Vec::<Vec<Scope>>::new(), "an unchanged root was scanned");
 
-    let tries = Cell::new(0);
-    // Lost at once, then fails each time it is watched afresh.
-    let failing = |_: &Path, _: &Events| {
-        tries.set(tries.get() + 1);
-        let coverage = if tries.get() == 1 { Ok(()) } else { Err(notify::Error::generic("no")) };
-        fake(Some((0, 0)), coverage)
-    };
-    let mut roots = Roots::start(scanner.clone(), roots_at, mpsc::channel().0, failing, &seconds());
-    let scanned = scans(&store).len();
-    roots.check(start + Duration::from_millis(1500));
-    assert_eq!(tries.get(), 2);
-    assert_eq!(scans(&store).len(), scanned, "a failed watch was scanned");
+    replace(&root, &tmp.path().join("aside"));
+    roots.check(start + Duration::from_millis(3000));
+    assert_eq!(scoped(&store), [vec![Scope::root(root.clone())]]);
+    assert_eq!(roots.roots[0].watch.identity, identity(&root));
+    roots.check(start + Duration::from_millis(4500));
+    assert_eq!(scans(&store).len(), 1, "the root was scanned again as it was");
     drop(roots);
     drop(thread);
 }
 
-/// A watch that fails is tried again after a wait that doubles each time, until it covers the
-/// root, which ends the fallback schedule; once the root is found as watched, the wait is
-/// short again. One stopped by the OS limit on watches is not tried again.
+/// A root that disappears, as an unmounted share does, is watched afresh with no identity, and
+/// scanned only once a directory is there again.
 #[test]
-fn a_failed_watch_is_tried_again_after_a_growing_wait() {
+fn a_root_that_is_gone_is_scanned_once_it_returns() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = vec![tmp.path().to_path_buf()];
-    let (scanner, thread, _) = scanner(tmp.path());
-    let tries = Cell::new(0);
-    // Fails twice, then covers the root.
-    let flaky = |root: &Path, _: &Events| {
-        tries.set(tries.get() + 1);
-        let coverage = if tries.get() < 3 { Err(notify::Error::generic("flaky")) } else { Ok(()) };
-        fake(identity(root), coverage)
-    };
+    let root = tmp.path().join("root");
+    let aside = tmp.path().join("aside");
+    fs::create_dir(&root).unwrap();
+    let (scanner, thread, store) = scanner(&root);
+    let mut roots = roots_at(&scanner, &root, &seconds());
     let start = Instant::now();
-    let mut roots = Roots::start(scanner.clone(), &root, mpsc::channel().0, flaky, &seconds());
-    assert!(roots.fallback.is_some());
-    for (after, expected) in [(1500, 2), (3000, 2), (4000, 3), (9000, 3)] {
-        roots.check(start + Duration::from_millis(after));
-        assert_eq!(tries.get(), expected, "{after} ms after the start");
-    }
-    assert!(roots.fallback.is_none(), "the fallback schedule outlived the failure");
-    assert_eq!(backoff(&roots), Duration::from_secs(8), "the wait was reset too soon");
-    roots.check(start + Duration::from_secs(12));
-    assert_eq!(backoff(&roots), seconds().check, "the wait outlived the failure");
-    drop(roots);
 
-    let limited_tries = Cell::new(0);
-    let counted = |root: &Path, events: &Events| {
-        limited_tries.set(limited_tries.get() + 1);
-        limited(root, events)
-    };
-    let mut roots = Roots::start(scanner.clone(), &root, mpsc::channel().0, counted, &seconds());
-    roots.check(start + 2 * MAX_BACKOFF);
-    assert_eq!(limited_tries.get(), 1, "a watch the OS limit stopped was tried again");
+    fs::rename(&root, &aside).unwrap();
+    for second in [2, 4] {
+        roots.check(start + Duration::from_secs(second));
+    }
+    assert_eq!(roots.roots[0].watch.identity, None);
+    assert_eq!(scans(&store), [], "a root that is gone was scanned");
+
+    fs::create_dir(&root).unwrap();
+    roots.check(start + Duration::from_secs(6));
+    assert_eq!(scoped(&store), [vec![Scope::root(root.clone())]]);
     drop(roots);
     drop(thread);
 }
 
-/// A fresh watch that meets the OS limit, as it may while the watches it replaced are let go,
-/// is tried once more, and only once.
+/// A root found changed is scanned even when its fresh watch covers only part of it, here a
+/// file where the directory was, which cannot be listed.
 #[test]
-fn a_fresh_watch_that_meets_the_limit_is_tried_once_more() {
+fn a_partial_watch_still_queues_the_scan() {
     let tmp = tempfile::tempdir().unwrap();
-    let root = vec![tmp.path().to_path_buf()];
-    let (scanner, thread, _) = scanner(tmp.path());
-    let tries = Cell::new(0);
-    // Lost at once, then each fresh watch meets the limit.
-    let limited_afresh = |root: &Path, events: &Events| {
-        tries.set(tries.get() + 1);
-        if tries.get() == 1 { elsewhere(root, events) } else { limited(root, events) }
-    };
-    let start = Instant::now();
-    let mut roots =
-        Roots::start(scanner.clone(), &root, mpsc::channel().0, limited_afresh, &seconds());
-    for after in [1500, 4000] {
-        roots.check(start + Duration::from_millis(after));
-    }
-    assert_eq!(tries.get(), 3, "the fresh watch was not tried once more");
-    for n in 1..=5 {
-        roots.check(start + n * 2 * MAX_BACKOFF);
-    }
-    assert_eq!(tries.get(), 3, "the limit was tried more than once more");
+    let root = tmp.path().join("root");
+    fs::create_dir(&root).unwrap();
+    let (scanner, thread, store) = scanner(&root);
+    let mut roots = roots_at(&scanner, &root, &seconds());
+
+    fs::rename(&root, tmp.path().join("aside")).unwrap();
+    fs::write(&root, b"x").unwrap();
+    roots.check(Instant::now() + Duration::from_secs(2));
+    assert!(roots.roots[0].watch.coverage.is_err(), "the watch covered a file's folders");
+    assert_eq!(scoped(&store), [vec![Scope::root(root.clone())]]);
     drop(roots);
     drop(thread);
 }
 
-#[test]
-fn the_wait_between_tries_stops_growing_at_its_cap() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = vec![tmp.path().to_path_buf()];
-    let (scanner, thread, _) = scanner(tmp.path());
-    let failing = |root: &Path, _: &Events| fake(identity(root), Err(notify::Error::generic("no")));
-    let start = Instant::now();
-    let mut roots = Roots::start(scanner.clone(), &root, mpsc::channel().0, failing, &seconds());
-    for n in 1..=20 {
-        roots.check(start + n * 2 * MAX_BACKOFF);
-    }
-    assert_eq!(backoff(&roots), MAX_BACKOFF);
-    drop(roots);
-    drop(thread);
-}
-
-/// A root whose directory keeps changing, as a flapping mount would, is watched afresh and
-/// scanned less and less often, not at every check.
-#[test]
-fn a_flapping_root_is_scanned_less_and_less_often() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = vec![tmp.path().to_path_buf()];
-    let (scanner, thread, store) = scanner(tmp.path());
-    let tries = Cell::new(0);
-    let counted = |root: &Path, events: &Events| {
-        tries.set(tries.get() + 1);
-        elsewhere(root, events)
-    };
-    let start = Instant::now();
-    let mut roots = Roots::start(scanner.clone(), &root, mpsc::channel().0, counted, &seconds());
-    for second in 1..=60 {
-        roots.check(start + Duration::from_millis(second * 1000 + 500));
-    }
-    // Watched at the start, then 1.5, 3.5, 7.5, 15.5 and 31.5 seconds after it.
-    assert_eq!(tries.get(), 6);
-    assert!(scans(&store).len() <= 5, "{} scans", scans(&store).len());
-    drop(roots);
-    drop(thread);
-}
-
-/// Replaces the directory at `root` with a new one, as a share mounted over it would.
-fn replace(root: &Path, aside: &Path) {
-    fs::rename(root, aside).unwrap();
-    fs::create_dir(root).unwrap();
-}
-
-/// Roots are looked at once per check: one lost within the interval after a check waits for
+/// Roots are looked at once per check: one replaced within the interval after a check waits for
 /// the next.
 #[test]
 fn roots_are_checked_once_per_interval() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");
     fs::create_dir(&root).unwrap();
-    let (scanner, thread, _) = scanner(&root);
-    let tries = Cell::new(0);
-    let counted = |root: &Path, _: &Events| {
-        tries.set(tries.get() + 1);
-        fake(identity(root), Ok(()))
-    };
+    let (scanner, thread, store) = scanner(&root);
+    let mut roots = roots_at(&scanner, &root, &seconds());
     let start = Instant::now();
-    let roots_at = slice::from_ref(&root);
-    let mut roots = Roots::start(scanner.clone(), roots_at, mpsc::channel().0, counted, &seconds());
     roots.check(start + Duration::from_millis(1500));
     replace(&root, &tmp.path().join("aside"));
     roots.check(start + Duration::from_millis(2000));
-    assert_eq!(tries.get(), 1, "a root was checked twice in one interval");
-    roots.check(start + Duration::from_millis(2500));
-    assert_eq!(tries.get(), 2);
+    assert_eq!(scans(&store), [], "a root was checked twice in one interval");
+    roots.check(start + Duration::from_millis(3000));
+    assert_eq!(scans(&store).len(), 1);
     drop(roots);
-    drop(thread);
-}
-
-/// A mount that comes and goes every other check is watched afresh, and scanned, only a few
-/// times: one check that finds it as watched does not cut the wait short.
-#[test]
-fn a_root_that_comes_and_goes_is_scanned_only_a_few_times() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("root");
-    let (mounted, unmounted) = (tmp.path().join("mounted"), tmp.path().join("unmounted"));
-    fs::create_dir(&root).unwrap();
-    fs::create_dir(&unmounted).unwrap();
-    let (scanner, thread, store) = scanner(&root);
-    let tries = Cell::new(0);
-    let counted = |root: &Path, _: &Events| {
-        tries.set(tries.get() + 1);
-        fake(identity(root), Ok(()))
-    };
-    let start = Instant::now();
-    let roots_at = slice::from_ref(&root);
-    let mut roots = Roots::start(scanner.clone(), roots_at, mpsc::channel().0, counted, &seconds());
-    for check in 1..=60 {
-        if check % 2 == 0 {
-            // Swaps the two directories, so the root alternates between them.
-            let (out, back) =
-                if check % 4 == 0 { (&unmounted, &mounted) } else { (&mounted, &unmounted) };
-            fs::rename(&root, out).unwrap();
-            fs::rename(back, &root).unwrap();
-        }
-        roots.check(start + Duration::from_millis(check * 1000 + 500));
-    }
-    assert!(tries.get() <= 6, "watched {} times", tries.get());
-    drop(roots);
-    scanner.wait_idle();
-    assert!(scans(&store).len() <= 5, "{} scans", scans(&store).len());
     drop(thread);
 }

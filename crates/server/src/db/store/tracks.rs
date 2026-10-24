@@ -1,14 +1,10 @@
-//! Tracks as the scanner sees them: applying a batch, and whether anything is indexed under a
-//! folder.
-
-use std::path::Path;
+//! Tracks as the scanner sees them: applying a batch.
 
 use jewelcase_scanner::Batch;
 use rusqlite::{Result, Transaction, params};
 
 use super::SqliteStore;
 use super::problems::{clear_problem, record_problem};
-use super::roots::bounds_under;
 use super::scans;
 use super::upsert::upsert_track;
 use crate::db::catalog::{self, Touched};
@@ -104,26 +100,4 @@ fn track_changed(
 ) -> Result<()> {
     touched.track(tx, lib, id)?;
     feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)
-}
-
-/// Whether a track not yet missing, or a problem, lies under `folder`, at any depth.
-pub fn indexes_under(store: &SqliteStore, lib: i64, folder: &Path) -> Result<bool, DbError> {
-    let Some((root_id, rel)) = store.roots.locate(lib, folder) else {
-        return Ok(false);
-    };
-    store.db.read_blocking(move |conn| {
-        let tracks = "SELECT 1 FROM tracks WHERE root_id = ?1 AND missing_since IS NULL";
-        let problems = "SELECT 1 FROM scan_problems WHERE root_id = ?1";
-        match bounds_under(&rel) {
-            None => conn
-                .prepare_cached(&format!("SELECT EXISTS ({tracks}) OR EXISTS ({problems})"))?
-                .query_row(params![root_id], |r| r.get(0)),
-            Some([lower, upper]) => conn
-                .prepare_cached(&format!(
-                    "SELECT EXISTS ({tracks} AND path >= ?2 AND path < ?3) \
-                     OR EXISTS ({problems} AND path >= ?2 AND path < ?3)"
-                ))?
-                .query_row(params![root_id, lower, upper], |r| r.get(0)),
-        }
-    })
 }

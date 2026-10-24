@@ -160,8 +160,6 @@ pub trait Store: Send + Sync {
     /// scope directly in it ([`Scope::contains_file`]).
     fn problems_under(&self, library: LibraryId, scope: &Scope)
     -> Result<Vec<PathBuf>, StoreError>;
-    /// Whether a track not yet missing, or a problem, lies under `folder`, at any depth.
-    fn indexes_under(&self, library: LibraryId, folder: &Path) -> Result<bool, StoreError>;
 }
 
 /// Where a background job records what it made of a file it could not decode, and clears the

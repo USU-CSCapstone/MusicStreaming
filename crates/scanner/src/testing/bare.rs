@@ -82,11 +82,6 @@ impl Store for BareStore {
     fn problems_under(&self, _: LibraryId, _: &Scope) -> Result<Vec<PathBuf>, StoreError> {
         Ok(Vec::new())
     }
-
-    /// No, though it keeps the problems recorded through [`ProblemLog`].
-    fn indexes_under(&self, _: LibraryId, _: &Path) -> Result<bool, StoreError> {
-        Ok(false)
-    }
 }
 
 impl ProblemLog for BareStore {

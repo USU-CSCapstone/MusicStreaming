@@ -90,28 +90,6 @@ pub fn a_scope_at_a_file_reconciles_nothing<S: InspectStore>(make: Factory<S>) {
     assert_eq!(problems, [broken]);
 }
 
-/// What the watcher asks of a folder renamed away: whether a live track or a problem lies under
-/// it, at any depth, not counting the folder's own path or a sibling whose name extends it.
-pub fn indexes_under_sees_live_tracks_and_problems<S: InspectStore>(make: Factory<S>) {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    make_album(&root, "A", "X", 1);
-    make_album(&root, "A 2", "X", 1);
-    fs::create_dir_all(root.join("B")).unwrap();
-    fs::write(root.join("B/broken.flac"), b"not audio").unwrap();
-    let lib = library(&root);
-    let store = make(&lib);
-    scan_library(&store, &lib);
-    let under = |path: &str| store.indexes_under(lib.id, &root.join(path)).unwrap();
-    assert!(under("A") && under("A/X") && under("B"));
-    assert!(!under("A/X/01 - Track 1.wav") && !under("B/broken.flac") && !under("C"));
-
-    fs::remove_dir_all(root.join("A")).unwrap();
-    scan_library(&store, &lib);
-    assert!(!under("A"), "its tracks are missing");
-    assert!(under("A 2"));
-}
-
 /// A Subtree scope on a folder marks missing only the deleted files inside it.
 pub fn folder_scope_reconciles_only_inside_itself<S: InspectStore>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();

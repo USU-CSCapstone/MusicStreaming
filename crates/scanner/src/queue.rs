@@ -88,17 +88,6 @@ impl Scanner {
         self.inner.library.excludes.clone()
     }
 
-    /// Whether the index holds a track not yet missing, or a problem, under `folder`, which
-    /// may no longer exist. When the store cannot say, the error is logged and the answer is
-    /// yes, which costs the watcher only a scan of the folder.
-    pub fn indexes_under(&self, folder: &std::path::Path) -> bool {
-        let library = self.inner.library.id;
-        self.inner.store.indexes_under(library, folder).unwrap_or_else(|error| {
-            tracing::error!(library, folder = %folder.display(), %error, "index not checked");
-            true
-        })
-    }
-
     /// The scan running now, if any.
     #[cfg(feature = "testing")]
     pub fn running(&self) -> Option<Scan> {

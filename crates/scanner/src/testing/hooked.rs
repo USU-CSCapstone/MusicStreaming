@@ -62,7 +62,7 @@ impl<'a> Hooked<'a> {
         Hooked { on_folder: Box::new(hook), ..self }
     }
 
-    /// Runs `hook` before each [`Store::problems_under`] and [`Store::indexes_under`].
+    /// Runs `hook` before each [`Store::problems_under`].
     pub fn on_under(
         self,
         hook: impl Fn() -> Result<(), StoreError> + Send + Sync + 'a,
@@ -137,10 +137,5 @@ impl Store for Hooked<'_> {
     ) -> Result<Vec<PathBuf>, StoreError> {
         (self.on_under)()?;
         self.inner.problems_under(library, scope)
-    }
-    /// The inner store's, once the under hook passes.
-    fn indexes_under(&self, library: LibraryId, folder: &Path) -> Result<bool, StoreError> {
-        (self.on_under)()?;
-        self.inner.indexes_under(library, folder)
     }
 }

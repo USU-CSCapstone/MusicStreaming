@@ -95,10 +95,6 @@ impl Store for SqliteStore {
         Ok(tracks::apply(self, library, batch)?)
     }
 
-    fn indexes_under(&self, library: LibraryId, folder: &Path) -> Result<bool, StoreError> {
-        Ok(tracks::indexes_under(self, library, folder)?)
-    }
-
     fn problems_under(
         &self,
         library: LibraryId,

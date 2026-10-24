@@ -14,9 +14,6 @@ use tracing::{info, warn};
 
 use crate::db::{Database, SqliteStore, libraries};
 
-/// How often a library without a schedule of its own is scanned while part of it is not watched.
-const FALLBACK_SCHEDULE: Duration = Duration::from_hours(24);
-
 /// Everything running for every library, until [`Scanning::stop`].
 pub struct Scanning {
     libraries: Vec<Library>,
@@ -52,12 +49,11 @@ impl Scanning {
         let mut jobs = Vec::with_capacity(2 * libs.len());
         for lib in &libs {
             let config = lib.config();
-            let fallback = lib.scan_interval_minutes.is_none().then_some(FALLBACK_SCHEDULE);
             let (scanner, thread) = Scanner::start(store.clone(), config.clone())?;
             scanner.scan_library(startup_trigger(db, lib.id)?);
-            let watcher = lib.watch.then(|| {
-                FsWatcher::start(scanner.clone(), &config.roots, Duration::from_secs(2), fallback)
-            });
+            let watcher = lib
+                .watch
+                .then(|| FsWatcher::start(scanner.clone(), &config.roots, Duration::from_secs(2)));
             let schedule = lib.scan_interval_minutes.map(|minutes| {
                 scan_every(scanner.clone(), Duration::from_mins(minutes.unsigned_abs()))
             });

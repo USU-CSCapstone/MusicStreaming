@@ -2,7 +2,6 @@
 //! (`requirements/scanning.md` §10).
 
 use super::*;
-use crate::queue::Scanner;
 
 /// A read of what the index holds in B/Y that fails suspends the scan at A/X, the last folder
 /// persisted with a track added there, before anything more is written: B/Y's files are never
@@ -73,19 +72,4 @@ pub fn a_problem_list_the_store_fails_suspends_the_scan_counting_what_it_marked_
     assert_eq!(missing.map(|t| t.path).collect::<Vec<_>>(), [track(&root, "A/X", 2)]);
     let scan = scan_flushing_often(store.as_ref(), &lib);
     assert_eq!((scan.state, scan.progress.missing), (ScanState::Completed, 0));
-}
-
-/// When the store cannot say whether anything is indexed under a folder, the scanner answers
-/// yes, so the watcher scans the folder rather than miss a change in it.
-pub fn a_folder_the_store_cannot_check_counts_as_indexed<S: InspectStore + 'static>(
-    make: Factory<S>,
-) {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("lib");
-    make_album(&root, "A", "X", 1);
-    let store = Hooked::new(Arc::new(make(&library(&root))))
-        .on_under(|| Err(StoreError("disk I/O error".into())));
-    let (scanner, thread) = Scanner::start(Arc::new(store), library(&root)).unwrap();
-    assert!(scanner.indexes_under(&root.join("A")));
-    drop(thread);
 }
