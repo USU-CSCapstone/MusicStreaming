@@ -41,7 +41,8 @@ pub enum ServerMessage {
     Player {
         state: PlayerState,
     },
-    /// A command for the connection playing to carry out.
+    /// A command for the connection playing to carry out, or a `setVolume` or `transfer` for
+    /// the device it names.
     Execute {
         command: PlayerCommand,
     },

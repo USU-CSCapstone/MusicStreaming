@@ -12,7 +12,7 @@ async fn a_transfer_goes_to_the_device_it_names_and_its_answer_comes_back() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
 
     let transfer = json!({ "type": "transfer", "commandId": command_id(1), "deviceId": "2" });
     assert_eq!(command(&mut desk, transfer).await["status"], json!("pending"));
@@ -22,7 +22,7 @@ async fn a_transfer_goes_to_the_device_it_names_and_its_answer_comes_back() {
         json!({ "type": "transfer", "commandId": command_id(1), "deviceId": "2", "play": true })
     );
     // It takes over, as a client carrying it out does, before it answers.
-    start_playing(&mut phone, "2").await;
+    start_playing(&mut phone).await;
     let applied = json!({ "commandId": command_id(1), "status": "applied" });
     send(&mut phone, json!({ "type": "commandResult", "result": applied })).await;
     assert_eq!(result_of(&mut desk, &json!(command_id(1))).await, applied);
@@ -36,8 +36,8 @@ async fn a_transfer_to_play_where_it_is_paused_plays_it() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    start_playing(&mut desk, "1").await;
-    report(&mut desk, "1", "paused", json!({})).await;
+    start_playing(&mut desk).await;
+    report(&mut desk, "paused", json!({})).await;
 
     let transfer = json!({ "type": "transfer", "commandId": command_id(1), "deviceId": "1" });
     assert_eq!(command(&mut phone, transfer).await["status"], json!("pending"));
@@ -46,7 +46,7 @@ async fn a_transfer_to_play_where_it_is_paused_plays_it() {
 
     // Sent to the connection playing, it fails once playback starts on another.
     let mut tab = connect_with(address, TOKEN).await;
-    start_playing(&mut tab, "1").await;
+    start_playing(&mut tab).await;
     let result = result_of(&mut phone, &json!(command_id(1))).await;
     assert_eq!(result["reason"], json!("Playback was taken over."));
 }
@@ -59,15 +59,15 @@ async fn a_transfer_already_sent_is_left_to_finish_when_playback_starts_elsewher
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
     let mut laptop = connect_with(address, "laptop").await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     let transfer = json!({ "type": "transfer", "commandId": command_id(1), "deviceId": "4" });
     assert_eq!(command(&mut phone, transfer).await["status"], json!("pending"));
     next_of(&mut laptop, "execute").await;
 
     // The desk reconnects and starts again on its new connection, before the laptop takes over.
     let mut desk_again = connect_with(address, TOKEN).await;
-    start_playing(&mut desk_again, "1").await;
-    start_playing(&mut laptop, "4").await;
+    start_playing(&mut desk_again).await;
+    start_playing(&mut laptop).await;
     let applied = json!({ "commandId": command_id(1), "status": "applied" });
     send(&mut laptop, json!({ "type": "commandResult", "result": applied })).await;
     assert_eq!(result_of(&mut phone, &json!(command_id(1))).await, applied);
@@ -77,7 +77,7 @@ async fn a_transfer_already_sent_is_left_to_finish_when_playback_starts_elsewher
 async fn a_transfer_wakes_a_device_once_playback_stopped() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     desk.close(None).await.unwrap();
     let mut phone = connect_with(address, "phone").await;
     let mut laptop = connect_with(address, TOKEN).await;
@@ -103,7 +103,7 @@ async fn a_transfer_needs_a_device_of_the_account_that_is_connected_and_somethin
     let reason = |result: Value| result["reason"].as_str().unwrap_or_default().to_owned();
 
     assert_eq!(reason(command(&mut desk, transfer(1, "4")).await), "Nothing has played to move.");
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     for (n, device) in [(2, "4"), (3, "3"), (4, "nonsense")] {
         let result = command(&mut desk, transfer(n, device)).await;
         assert_eq!(reason(result), "That device is not connected.", "{device}");

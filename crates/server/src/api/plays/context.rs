@@ -1,11 +1,22 @@
 //! A play report's `context` and `reason`, as the spec's `Context` and `Reason`
 //! (`api/openapi.yaml`). A play stores them as JSON written back from these types, so it keeps
 //! only what the spec defines: fields it does not name are dropped, and a missing field, a value
-//! of the wrong type or a name outside one of its enums makes the report malformed.
+//! of the wrong type or a name outside one of its enums makes the report malformed. So does a
+//! string or list past its limit, which bounds what one play stores.
 
 use serde::{Deserialize, Serialize};
 
+use crate::api::bounded::{BoundedString, BoundedVec};
 use crate::api::time::Timestamp;
+
+/// An ID, name or other short string: at most 100 characters.
+type Short = BoundedString<100>;
+
+/// A search query or a reason's text: at most 500 characters.
+type Long = BoundedString<500>;
+
+/// A list: at most 100 items.
+type List<T> = BoundedVec<T, 100>;
 
 /// The spec's `Context`: what a play was played from. IDs are kept as given, since the spec
 /// calls them opaque.
@@ -18,15 +29,15 @@ pub enum Context {
     Tag(Entity),
     Mix(Entity),
     Artist {
-        id: String,
+        id: Short,
         #[serde(default)]
         scope: ArtistScope,
     },
     Search {
-        query: String,
+        query: Long,
         section: Section,
         #[serde(skip_serializing_if = "Option::is_none")]
-        within: Option<String>,
+        within: Option<Short>,
         #[serde(skip_serializing_if = "Option::is_none")]
         filter: Option<BrowseFilter>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,24 +49,24 @@ pub enum Context {
         seed: EntityRef,
     },
     External {
-        source_id: String,
-        item_id: String,
+        source_id: Short,
+        item_id: Short,
     },
 }
 
 /// A track, album, playlist, tag or mix context: the spec's `EntityContext`.
 #[derive(Deserialize, Serialize)]
 pub struct Entity {
-    id: String,
+    id: Short,
 }
 
 /// The spec's `Reason`: why a recommendation or automatic track is there.
 #[derive(Deserialize, Serialize)]
 pub struct Reason {
     kind: ReasonKind,
-    text: String,
+    text: Long,
     #[serde(skip_serializing_if = "Option::is_none")]
-    refs: Option<Vec<EntityRef>>,
+    refs: Option<List<EntityRef>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     since: Option<Timestamp>,
 }
@@ -82,7 +93,7 @@ pub enum ReasonKind {
 pub struct EntityRef {
     #[serde(rename = "type")]
     kind: EntityType,
-    id: String,
+    id: Short,
 }
 
 /// The spec's `EntityType`.
@@ -130,7 +141,7 @@ pub struct View {
 #[derive(Deserialize, Serialize)]
 pub struct Sort {
     #[serde(skip_serializing_if = "Option::is_none")]
-    field: Option<String>,
+    field: Option<Short>,
     #[serde(skip_serializing_if = "Option::is_none")]
     order: Option<Order>,
 }
@@ -148,7 +159,7 @@ pub enum Order {
 #[serde(rename_all = "camelCase")]
 pub struct BrowseFilter {
     #[serde(skip_serializing_if = "Option::is_none")]
-    genres: Option<Vec<String>>,
+    genres: Option<List<Short>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     genre_match: Option<GenreMatch>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -156,7 +167,7 @@ pub struct BrowseFilter {
     #[serde(skip_serializing_if = "Option::is_none")]
     year_to: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    album_types: Option<Vec<AlbumType>>,
+    album_types: Option<List<AlbumType>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     availability: Option<Availability>,
     #[serde(skip_serializing_if = "Option::is_none")]

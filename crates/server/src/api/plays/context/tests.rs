@@ -144,3 +144,55 @@ fn every_name_the_spec_allows_is_kept() {
         assert_eq!(stored::<Context>(context.clone()), Some(context), "{field}");
     }
 }
+
+/// `context` with the string or list at `pointer` replaced by `value`, then whether it is kept.
+fn kept_with(mut context: Value, pointer: &str, value: Value) -> bool {
+    *context.pointer_mut(pointer).unwrap() = value;
+    stored::<Context>(context).is_some()
+}
+
+/// IDs, names and other short strings are at most 100 characters, a query 500, and a list at
+/// most 100 items, so no report stores more than that.
+#[test]
+fn a_context_is_kept_up_to_its_limits_and_refused_past_them() {
+    let short = |n| json!("é".repeat(n));
+    let list = |n| json!(vec!["g"; n]);
+    let search = json!({ "type": "search", "query": "q", "section": "tracks", "within": "w",
+                         "filter": { "genres": [], "albumTypes": [] }, "sort": { "field": "f" } });
+    let cases = [
+        (json!({ "type": "album", "id": "1" }), "/id", 100, short as fn(usize) -> Value),
+        (json!({ "type": "artist", "id": "7" }), "/id", 100, short),
+        (search.clone(), "/query", 500, short),
+        (search.clone(), "/within", 100, short),
+        (search.clone(), "/sort/field", 100, short),
+        (search.clone(), "/filter/genres", 100, list),
+        (search.clone(), "/filter/genres", 100, |n| json!(["é".repeat(n)])),
+        (search, "/filter/albumTypes", 100, |n| json!(vec!["ep"; n])),
+        (
+            json!({ "type": "radio", "seed": { "type": "track", "id": "1" } }),
+            "/seed/id",
+            100,
+            short,
+        ),
+        (json!({ "type": "external", "sourceId": "s", "itemId": "i" }), "/sourceId", 100, short),
+        (json!({ "type": "external", "sourceId": "s", "itemId": "i" }), "/itemId", 100, short),
+    ];
+    for (context, pointer, limit, value) in cases {
+        assert!(kept_with(context.clone(), pointer, value(limit)), "{context} {pointer} at limit");
+        assert!(!kept_with(context.clone(), pointer, value(limit + 1)), "{context} {pointer}");
+    }
+}
+
+/// A reason's text is at most 500 characters, and it names at most 100 entities, each by an ID
+/// of at most 100.
+#[test]
+fn a_reason_is_kept_up_to_its_limits_and_refused_past_them() {
+    let entity = |id: String| json!({ "type": "track", "id": id });
+    let reason =
+        |text: String, refs: Vec<Value>| json!({ "kind": "mood", "text": text, "refs": refs });
+    let kept = |reason: Value| stored::<Reason>(reason).is_some();
+    assert!(kept(reason("é".repeat(500), vec![entity("é".repeat(100)); 100])));
+    assert!(!kept(reason("é".repeat(501), vec![])), "text");
+    assert!(!kept(reason("t".into(), vec![entity("1".into()); 101])), "refs");
+    assert!(!kept(reason("t".into(), vec![entity("é".repeat(101))])), "a ref's ID");
+}

@@ -819,7 +819,8 @@ export interface paths {
          * Record plays
          * @description Upserts by `playId`. A device reports a play when it starts and again as listen
          *     time accumulates and when it ends; offline plays arrive later with their original
-         *     times. Never counted twice (`requirements/analytics.md` §1, §6).
+         *     times. Never counted twice (`requirements/analytics.md` §1, §6). At most 500 reports
+         *     a request; a device with more sends them in turn.
          */
         post: operations["recordPlays"];
         delete?: never;
@@ -1740,8 +1741,9 @@ export interface components {
         /**
          * @description Transport control, targeting any of the caller's devices. Last command wins. Sent over
          *     the realtime connection as `playerCommand`, and passed on to the target as `execute`.
-         *     Every command but `transfer` goes to the connection playing, and one whose `deviceId`
-         *     names any other device fails. `transfer` goes to the device it names.
+         *     Every command but `setVolume` and `transfer` goes to the connection playing, and one
+         *     whose `deviceId` names any other device fails. `setVolume` and `transfer` go to the
+         *     device they name.
          */
         PlayerCommand: components["schemas"]["TransportCommand"] | components["schemas"]["SeekCommand"] | components["schemas"]["VolumeCommand"] | components["schemas"]["TransferCommand"];
         /** @description Goes to the device playing, so it fails when nothing is; `transfer` wakes an idle device (`requirements/realtime.md` §3). */
@@ -1764,7 +1766,13 @@ export interface components {
             commandId: components["schemas"]["CommandId"];
             positionMs: number;
         };
-        /** @description Volume belongs to the device (`requirements/realtime.md` §3). The target applies it locally and confirms with a `commandResult`. */
+        /**
+         * @description Volume belongs to the device (`requirements/realtime.md` §3), so this goes to the device
+         *     named, playing or not: to the connection playing if it is that device's, and otherwise
+         *     to the device's newest connection. The target applies it locally and confirms with a
+         *     `commandResult`. Playback starting elsewhere meanwhile does not fail it.
+         *     `device_unavailable` when the device is not connected.
+         */
         VolumeCommand: {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -1822,9 +1830,10 @@ export interface components {
         /**
          * @description Sent by the playing device, or one taking playback over (`start`), over its realtime
          *     connection, which it needs anyway to be controlled and to hear that another device
-         *     took over. A report that is refused — invalid, from any connection but the active
-         *     one, or of a track out of the caller's reach — is answered with the current state;
-         *     one that does not parse is ignored. A `buffering` report is recorded as `paused` at
+         *     took over. A report is the device's whose connection sends it. A report that is
+         *     refused — invalid, from any connection but the active one, or of a track out of the
+         *     caller's reach — is answered with the current state; one that does not parse is
+         *     ignored. A `buffering` report is recorded as `paused` at
          *     its position, so other devices are not shown running ahead.
          *
          *     Until the server keeps the queue, a report names its track, and `itemId` is the
@@ -1832,8 +1841,6 @@ export interface components {
          *     characters. `libraryId` and `trackId` give way to the queue's item when it does.
          */
         ProgressReport: {
-            /** @description The reporting device's own. */
-            deviceId: string;
             itemId: string;
             libraryId: string;
             trackId: string;
@@ -1863,7 +1870,8 @@ export interface components {
         /**
          * @description Every track that starts is a play; `listenTimeMs` is audio actually heard
          *     (`requirements/analytics.md` §1). Exactly one of `trackId` or `external` is set. A
-         *     play of a track no longer in a library the caller reaches is left out.
+         *     play of a track no longer in a library the caller reaches is left out. A play is
+         *     recorded on the device whose token reports it.
          */
         PlayReport: {
             /**
@@ -1890,8 +1898,6 @@ export interface components {
             origin: components["schemas"]["QueueOrigin"];
             /** @description With `automatic` — why radio or endless play chose it. */
             reason?: components["schemas"]["Reason"] | null;
-            /** @description Ignored. A play is recorded on the device whose token reports it. */
-            deviceId?: string;
         };
         ExternalTrackRef: {
             /** @constant */
@@ -3456,7 +3462,7 @@ export interface operations {
                     "application/json": components["schemas"]["CommandResult"];
                 };
             };
-            /** @description `device_unavailable` — the target device is not connected or nothing has played; for a command other than `transfer`, nothing is playing or the device named is not the one playing. */
+            /** @description `device_unavailable` — the target device is not connected (`setVolume`, `transfer`); for `transfer`, also when nothing has played; for any other command, nothing is playing or the device named is not the one playing. */
             409: {
                 headers: {
                     [name: string]: unknown;

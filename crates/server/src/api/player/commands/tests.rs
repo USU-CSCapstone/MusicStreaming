@@ -21,6 +21,7 @@ use crate::db::testing::access;
 mod failing;
 mod http;
 mod transfer;
+mod volume;
 
 const OWNER: Caller = Caller { user: 1, device: 1, admin: true };
 
@@ -61,7 +62,7 @@ async fn a_command_reaches_the_device_playing_and_its_answer_comes_back() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
 
     let seek = json!({ "type": "seek", "commandId": command_id(1), "positionMs": 30000 });
     let told = command(&mut phone, seek.clone()).await;
@@ -78,7 +79,7 @@ async fn only_the_device_it_went_to_answers_a_command() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     command(&mut phone, json!({ "type": "pause", "commandId": command_id(1) })).await;
 
     let claimed = json!({ "commandId": command_id(1), "status": "applied" });
@@ -100,11 +101,10 @@ async fn a_command_with_nowhere_to_go_fails_at_once() {
 
     let nothing = (json!("failed"), json!("Nothing is playing."));
     assert_eq!(reason(command(&mut phone, pause(1)).await), nothing);
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     assert_eq!(reason(command(&mut stranger, pause(2)).await), nothing, "another account's");
 
-    let elsewhere =
-        json!({ "type": "setVolume", "commandId": command_id(3), "deviceId": "2", "volume": 0.5 });
+    let elsewhere = json!({ "type": "pause", "commandId": command_id(3), "deviceId": "2" });
     let not_playing = (json!("failed"), json!("That device is not the one playing."));
     assert_eq!(reason(command(&mut phone, elsewhere).await), not_playing);
     let loud =
@@ -112,8 +112,7 @@ async fn a_command_with_nowhere_to_go_fails_at_once() {
     assert_eq!(command(&mut phone, loud).await["status"], json!("failed"));
     let unnamed = json!({ "type": "pause", "commandId": "not-a-uuid" });
     assert_eq!(command(&mut phone, unnamed).await["status"], json!("failed"));
-    let misnamed =
-        json!({ "type": "setVolume", "commandId": command_id(5), "deviceId": "x", "volume": 0.5 });
+    let misnamed = json!({ "type": "pause", "commandId": command_id(5), "deviceId": "x" });
     assert_eq!(reason(command(&mut phone, misnamed).await), not_playing, "a malformed deviceId");
 
     // None of them reached the device playing.
@@ -130,7 +129,7 @@ async fn a_command_with_nowhere_to_go_fails_at_once() {
 /// Players with the owner playing over connection 7, and the hub they tell.
 fn playing() -> (Arc<Players>, Arc<Hub>) {
     let (players, hub) = (Arc::new(Players::default()), Arc::new(Hub::default()));
-    let report = serde_json::from_value(progress_report("1", "playing", json!({ "start": true })));
+    let report = serde_json::from_value(progress_report("playing", json!({ "start": true })));
     players.report(&hub, OWNER, 7, report.unwrap(), Id(1), Id(1)).unwrap();
     (players, hub)
 }
@@ -186,7 +185,7 @@ async fn a_command_this_server_does_not_carry_out_fails_at_once() {
 async fn a_command_sent_again_after_reconnecting_is_answered_on_the_new_connection() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     let mut phone = connect_with(address, "phone").await;
     let pause = json!({ "type": "pause", "commandId": command_id(1) });
     command(&mut phone, pause.clone()).await;
@@ -207,8 +206,8 @@ async fn two_accounts_may_use_the_same_command_id() {
     access(&conn, 2, 1).unwrap();
     let mut desk = connect_with(address, TOKEN).await;
     let mut stranger = connect_with(address, "stranger").await;
-    start_playing(&mut desk, "1").await;
-    start_playing(&mut stranger, "3").await;
+    start_playing(&mut desk).await;
+    start_playing(&mut stranger).await;
     let pause = json!({ "type": "pause", "commandId": command_id(1) });
     for socket in [&mut desk, &mut stranger] {
         assert_eq!(command(socket, pause.clone()).await["status"], json!("pending"));

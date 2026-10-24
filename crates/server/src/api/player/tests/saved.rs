@@ -17,7 +17,7 @@ use crate::db::testing::access;
 /// `status` and `position_ms`.
 fn report_to(players: &Players, status: &str, track: i64, position_ms: u32) {
     let changes = json!({ "trackId": track.to_string(), "positionMs": position_ms, "start": true });
-    let report = serde_json::from_value(progress_report("1", status, changes));
+    let report = serde_json::from_value(progress_report(status, changes));
     let caller = Caller { user: 1, device: 1, admin: true };
     players.report(&Hub::default(), caller, 7, report.unwrap(), Id(1), Id(track)).unwrap();
 }
@@ -125,11 +125,8 @@ async fn one_accounts_place_failing_to_save_keeps_no_one_elses_from_saving() {
     let players = Players::default();
     report_to(&players, "paused", 1, 1000);
     let caller = Caller { user: 2, device: 2, admin: false };
-    let report = serde_json::from_value(progress_report(
-        "2",
-        "paused",
-        json!({ "libraryId": "9", "start": true }),
-    ));
+    let changes = json!({ "libraryId": "9", "start": true });
+    let report = serde_json::from_value(progress_report("paused", changes));
     // A library deleted after the report was taken.
     players.report(&Hub::default(), caller, 8, report.unwrap(), Id(9), Id(1)).unwrap();
     players.save(&db).await;

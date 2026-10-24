@@ -13,11 +13,10 @@ use crate::db::{now_ms, reaches};
 /// Longer item IDs are refused, so no one keeps megabytes in memory as their place in a queue.
 const MAX_ITEM_ID: usize = 100;
 
-/// The spec's `ProgressReport`.
+/// The spec's `ProgressReport`. A report is the device's whose connection sends it.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressReport {
-    device_id: AnyId,
     item_id: String,
     library_id: AnyId,
     track_id: AnyId,
@@ -41,7 +40,8 @@ impl Players {
     /// Applies `report` from `caller` over `connection`, already checked, and sends the new
     /// state to the account's connections. Refuses a report from any connection but the active
     /// one unless it starts playback; one that starts fails the commands waiting on another
-    /// connection that was playing, but leaves a transfer to another device to finish.
+    /// connection that was playing, but leaves a `setVolume` or a transfer to another device to
+    /// finish.
     pub(super) fn report(
         &self,
         hub: &Hub,
@@ -97,9 +97,6 @@ pub async fn apply(
     presence: &Presence,
     report: ProgressReport,
 ) -> Result<(), Problem> {
-    if report.device_id.0 != Some(caller.device) {
-        return Err(Problem::invalid("deviceId must be the reporting device's."));
-    }
     if report.item_id.is_empty() || report.item_id.chars().count() > MAX_ITEM_ID {
         return Err(Problem::invalid(format!("itemId must be 1 to {MAX_ITEM_ID} characters.")));
     }

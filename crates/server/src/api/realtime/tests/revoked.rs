@@ -47,7 +47,7 @@ async fn a_revoked_connection_acts_for_no_one() {
     let revoked = state.players.connect(&state.hub, 1, OWNER.device);
     let progress = |start: bool| {
         let changes = json!({ "positionMs": if start { 0 } else { 5000 }, "start": start });
-        json!({ "type": "progress", "report": progress_report("1", "playing", changes) })
+        json!({ "type": "progress", "report": progress_report("playing", changes) })
     };
     // The connection plays, and is sent a command from the phone to carry out.
     let play = progress(true).to_string();

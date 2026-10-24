@@ -1,7 +1,7 @@
 // Carrying out commands from the user's other devices (`requirements/realtime.md` §3). The
-// server sends one only to the connection playing, or a transfer to the device it moves playback
-// to, which carries it out and says whether it did, so the device that sent it shows what really
-// happened (§5).
+// server sends one only to the connection playing, or a volume or transfer to the device it
+// names, playing or not, which carries it out and says whether it did, so the device that sent
+// it shows what really happened (§5).
 
 import type { PlayerCommand } from './api/types';
 

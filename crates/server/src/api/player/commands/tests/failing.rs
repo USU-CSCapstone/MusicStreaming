@@ -37,7 +37,7 @@ async fn commands_waiting_on_a_device_that_goes_away_fail_at_once() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     command(&mut phone, json!({ "type": "pause", "commandId": command_id(1) })).await;
     desk.close(None).await.unwrap();
     let result = result_of(&mut phone, &json!(command_id(1))).await;
@@ -52,18 +52,18 @@ async fn commands_waiting_on_a_device_taken_over_from_fail_at_once() {
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
     let mut laptop = connect_with(address, "laptop").await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     let pause = |n| json!({ "type": "pause", "commandId": command_id(n) });
 
     // The device playing reports, even starting again, and is still the one to answer.
     command(&mut phone, pause(1)).await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     let applied = json!({ "commandId": command_id(1), "status": "applied" });
     send(&mut desk, json!({ "type": "commandResult", "result": applied })).await;
     assert_eq!(result_of(&mut phone, &json!(command_id(1))).await, applied);
 
     command(&mut phone, pause(2)).await;
-    start_playing(&mut laptop, "4").await;
+    start_playing(&mut laptop).await;
     let failed = json!({
         "commandId": command_id(2), "status": "failed", "reason": "Playback was taken over.",
     });
@@ -78,13 +78,13 @@ async fn commands_waiting_on_a_device_taken_over_from_fail_at_once() {
     // Reports that do not start leave commands waiting: one refused from the device taken over
     // from, and one from the device playing while a transfer elsewhere waits.
     command(&mut phone, pause(3)).await;
-    report(&mut desk, "1", "playing", json!({})).await;
+    report(&mut desk, "playing", json!({})).await;
     let applied = json!({ "commandId": command_id(3), "status": "applied" });
     send(&mut laptop, json!({ "type": "commandResult", "result": applied })).await;
     assert_eq!(result_of(&mut phone, &json!(command_id(3))).await, applied);
     let transfer = json!({ "type": "transfer", "commandId": command_id(4), "deviceId": "1" });
     command(&mut phone, transfer).await;
-    report(&mut laptop, "4", "playing", json!({})).await;
+    report(&mut laptop, "playing", json!({})).await;
     let applied = json!({ "commandId": command_id(4), "status": "applied" });
     send(&mut desk, json!({ "type": "commandResult", "result": applied })).await;
     assert_eq!(result_of(&mut phone, &json!(command_id(4))).await, applied);
@@ -98,10 +98,10 @@ async fn commands_waiting_on_a_device_that_stopped_fail_once_playback_starts_els
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
     let mut laptop = connect_with(address, "laptop").await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     command(&mut phone, json!({ "type": "play", "commandId": command_id(1) })).await;
-    report(&mut desk, "1", "stopped", json!({})).await;
-    start_playing(&mut laptop, "4").await;
+    report(&mut desk, "stopped", json!({})).await;
+    start_playing(&mut laptop).await;
     let result = result_of(&mut phone, &json!(command_id(1))).await;
     assert_eq!(
         (&result["status"], &result["reason"]),

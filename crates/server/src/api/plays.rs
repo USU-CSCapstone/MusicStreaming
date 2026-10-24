@@ -4,6 +4,8 @@
 //! time under the `playId` its device chose, so it is recorded once however often it arrives
 //! (`requirements/analytics.md` §1, §6). Reports can arrive out of order, as an offline device
 //! catches up while a newer one is sent, so listen time never goes back and an end is kept.
+//! A request holds at most 500 reports, so none holds the single writer for long; a device
+//! with more to send sends them in turn.
 
 mod context;
 
@@ -17,6 +19,7 @@ use serde::de::IgnoredAny;
 
 use context::{Context, Reason};
 
+use super::bounded::BoundedVec;
 use super::extract;
 use super::refs::credits_json;
 use super::scope::Caller;
@@ -28,11 +31,11 @@ use crate::db::{self, Database, Text, now_ms, reaches};
 /// The spec's `recordPlays` body.
 #[derive(Deserialize)]
 pub struct Plays {
-    items: Vec<PlayReport>,
+    items: BoundedVec<PlayReport, 500>,
 }
 
-/// The spec's `PlayReport`. Its `deviceId` is not read: a play is the device's that reports it.
-/// Of `external` only its presence is read, since a play of an external track is not recorded.
+/// The spec's `PlayReport`. A play is the device's that reports it. Of `external` only its
+/// presence is read, since a play of an external track is not recorded.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlayReport {
@@ -75,6 +78,7 @@ pub async fn record(
 ) -> Result<StatusCode, Problem> {
     let now = now_ms();
     let plays = items
+        .0
         .into_iter()
         .filter_map(|report| checked(report, now).transpose())
         .collect::<Result<Vec<_>, _>>()?;

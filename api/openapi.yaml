@@ -1077,7 +1077,7 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
         '409':
-          description: '`device_unavailable` — the target device is not connected or nothing has played; for a command other than `transfer`, nothing is playing or the device named is not the one playing.'
+          description: '`device_unavailable` — the target device is not connected (`setVolume`, `transfer`); for `transfer`, also when nothing has played; for any other command, nothing is playing or the device named is not the one playing.'
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -1091,7 +1091,8 @@ paths:
       description: |
         Upserts by `playId`. A device reports a play when it starts and again as listen
         time accumulates and when it ends; offline plays arrive later with their original
-        times. Never counted twice (`requirements/analytics.md` §1, §6).
+        times. Never counted twice (`requirements/analytics.md` §1, §6). At most 500 reports
+        a request; a device with more sends them in turn.
       operationId: recordPlays
       requestBody:
         required: true
@@ -1103,6 +1104,7 @@ paths:
               properties:
                 items:
                   type: array
+                  maxItems: 500
                   items: { $ref: '#/components/schemas/PlayReport' }
       responses:
         '204': { description: Recorded. }
@@ -1755,7 +1757,7 @@ components:
       required: [type, id]
       properties:
         type: { $ref: '#/components/schemas/EntityType' }
-        id: { $ref: '#/components/schemas/Id' }
+        id: { $ref: '#/components/schemas/Id', maxLength: 100 }
 
     Playable:
       description: Something that can be queued or added to a playlist — library content or an external track.
@@ -1802,9 +1804,11 @@ components:
           enum: [becauseYouListened, similarTo, notHeardSince, neverPlayed, anniversary, collaborator, radioSeed, endlessPlay, timeOfDay, decade, mood]
         text:
           type: string
+          maxLength: 500
           description: Localized to the account's language, ready to show.
         refs:
           type: array
+          maxItems: 100
           items: { $ref: '#/components/schemas/EntityRef' }
         since: { type: string, format: date-time }
 
@@ -2611,14 +2615,14 @@ components:
         type:
           type: string
           enum: [track, album, playlist, tag, mix]
-        id: { $ref: '#/components/schemas/Id' }
+        id: { $ref: '#/components/schemas/Id', maxLength: 100 }
 
     ArtistContext:
       type: object
       required: [type, id]
       properties:
         type: { const: artist }
-        id: { $ref: '#/components/schemas/Id' }
+        id: { $ref: '#/components/schemas/Id', maxLength: 100 }
         scope:
           type: string
           enum: [all, discography, appearances, topTracks]
@@ -2629,18 +2633,19 @@ components:
       required: [type, query, section]
       properties:
         type: { const: search }
-        query: { type: string }
+        query: { type: string, maxLength: 500 }
         section:
           type: string
           enum: [tracks, lyrics]
         within:
           type: string
+          maxLength: 100
           pattern: '^(artist|album|playlist):.+$'
         filter: { $ref: '#/components/schemas/BrowseFilter' }
         sort:
           type: object
           properties:
-            field: { type: string }
+            field: { type: string, maxLength: 100 }
             order:
               type: string
               enum: [asc, desc]
@@ -2651,7 +2656,8 @@ components:
       properties:
         genres:
           type: array
-          items: { type: string }
+          maxItems: 100
+          items: { type: string, maxLength: 100 }
         genreMatch:
           type: string
           enum: [all, any]
@@ -2659,6 +2665,7 @@ components:
         yearTo: { type: integer }
         albumTypes:
           type: array
+          maxItems: 100
           items: { $ref: '#/components/schemas/AlbumType' }
         availability: { $ref: '#/components/schemas/Availability' }
         played:
@@ -2680,7 +2687,7 @@ components:
         sort:
           type: object
           properties:
-            field: { type: string }
+            field: { type: string, maxLength: 100 }
             order:
               type: string
               enum: [asc, desc]
@@ -2700,8 +2707,8 @@ components:
       required: [type, sourceId, itemId]
       properties:
         type: { const: external }
-        sourceId: { type: string }
-        itemId: { type: string }
+        sourceId: { type: string, maxLength: 100 }
+        itemId: { type: string, maxLength: 100 }
 
     # ───────────────────────────── Queue ─────────────────────────────
     QueueOrigin:
@@ -2753,8 +2760,9 @@ components:
       description: |
         Transport control, targeting any of the caller's devices. Last command wins. Sent over
         the realtime connection as `playerCommand`, and passed on to the target as `execute`.
-        Every command but `transfer` goes to the connection playing, and one whose `deviceId`
-        names any other device fails. `transfer` goes to the device it names.
+        Every command but `setVolume` and `transfer` goes to the connection playing, and one
+        whose `deviceId` names any other device fails. `setVolume` and `transfer` go to the
+        device they name.
       oneOf:
         - $ref: '#/components/schemas/TransportCommand'
         - $ref: '#/components/schemas/SeekCommand'
@@ -2795,7 +2803,12 @@ components:
     VolumeCommand:
       type: object
       required: [type, commandId, deviceId, volume]
-      description: Volume belongs to the device (`requirements/realtime.md` §3). The target applies it locally and confirms with a `commandResult`.
+      description: |
+        Volume belongs to the device (`requirements/realtime.md` §3), so this goes to the device
+        named, playing or not: to the connection playing if it is that device's, and otherwise
+        to the device's newest connection. The target applies it locally and confirms with a
+        `commandResult`. Playback starting elsewhere meanwhile does not fail it.
+        `device_unavailable` when the device is not connected.
       properties:
         type: { const: setVolume }
         commandId: { $ref: '#/components/schemas/CommandId' }
@@ -2850,22 +2863,20 @@ components:
     ProgressReport:
       type: object
       x-status: draft
-      required: [deviceId, itemId, libraryId, trackId, status, positionMs]
+      required: [itemId, libraryId, trackId, status, positionMs]
       description: |
         Sent by the playing device, or one taking playback over (`start`), over its realtime
         connection, which it needs anyway to be controlled and to hear that another device
-        took over. A report that is refused — invalid, from any connection but the active
-        one, or of a track out of the caller's reach — is answered with the current state;
-        one that does not parse is ignored. A `buffering` report is recorded as `paused` at
+        took over. A report is the device's whose connection sends it. A report that is
+        refused — invalid, from any connection but the active one, or of a track out of the
+        caller's reach — is answered with the current state; one that does not parse is
+        ignored. A `buffering` report is recorded as `paused` at
         its position, so other devices are not shown running ahead.
 
         Until the server keeps the queue, a report names its track, and `itemId` is the
         device's own name for its place in its queue, opaque to the server, at most 100
         characters. `libraryId` and `trackId` give way to the queue's item when it does.
       properties:
-        deviceId:
-          type: string
-          description: The reporting device's own.
         itemId: { type: string, minLength: 1, maxLength: 100, x-status: draft }
         libraryId: { type: string }
         trackId: { type: string }
@@ -2903,7 +2914,8 @@ components:
       description: |
         Every track that starts is a play; `listenTimeMs` is audio actually heard
         (`requirements/analytics.md` §1). Exactly one of `trackId` or `external` is set. A
-        play of a track no longer in a library the caller reaches is left out.
+        play of a track no longer in a library the caller reaches is left out. A play is
+        recorded on the device whose token reports it.
       properties:
         playId:
           type: string
@@ -2931,9 +2943,6 @@ components:
           oneOf:
             - $ref: '#/components/schemas/Reason'
             - type: 'null'
-        deviceId:
-          type: string
-          description: Ignored. A play is recorded on the device whose token reports it.
 
     # ───────────────────────────── External ─────────────────────────────
     ExternalTrackRef:

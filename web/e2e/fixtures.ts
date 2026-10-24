@@ -558,17 +558,17 @@ export async function serveRealtime(page: Page) {
 			}
 			const report = message.type === 'progress' ? message.report : null;
 			const starts = report?.start && report.status !== 'stopped';
-			if (report && (starts || report.deviceId === state.activeDeviceId)) {
+			if (report && (starts || deviceId === state.activeDeviceId)) {
 				state = {
 					...state,
 					status: report.status === 'buffering' ? 'paused' : report.status,
-					activeDeviceId: report.status === 'stopped' ? null : report.deviceId,
+					activeDeviceId: report.status === 'stopped' ? null : deviceId,
 					itemId: report.itemId,
 					libraryId: report.libraryId,
 					trackId: report.trackId,
 					positionMs: report.positionMs,
 					positionAt: now(),
-					volume: report.volume ?? (report.deviceId === state.activeDeviceId ? state.volume : null)
+					volume: report.volume ?? (deviceId === state.activeDeviceId ? state.volume : null)
 				};
 				send({ type: 'player', state });
 			}

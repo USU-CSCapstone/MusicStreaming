@@ -1,21 +1,24 @@
 //! Remote control: player commands from any of an account's devices, carried out by the
-//! connection playing (`requirements/realtime.md` §3, §5).
+//! connection playing, or by the device named for `setVolume` and `transfer`
+//! (`requirements/realtime.md` §3, §5).
 //!
 //! A command arrives as `playerCommand` over a realtime connection, or over HTTP from a client
 //! without one. The server passes it on to the playing connection as `execute`, which reports
 //! a `commandResult`. Over a realtime connection the sender is answered `pending` at once and
 //! the result follows; over HTTP the answer is the result. If none comes within a few seconds,
-//! or the connection closes first, the command failed; one sent to the connection playing also
-//! fails if playback starts on another first. Commands reach the one playing connection in the
-//! order they arrive, so the last wins (§7).
+//! or the connection closes first, the command failed. One for whatever plays, as all but
+//! `setVolume` and a transfer to another device are, also fails if playback starts on another
+//! connection first. Commands reach the one playing connection in the order they arrive, so the
+//! last wins (§7).
 //!
 //! The results of an account's latest commands are kept, so one sent again, by a client unsure
 //! the first arrived, is carried out once and answered with how it went.
 //!
-//! Every command goes to the connection playing but `transfer` (Shift), which goes to the
-//! device it names, to take playback over from wherever it is, or from where it stopped; so it
-//! also wakes a device that is idle (§3). The server does not keep the queue, so that device
-//! picks up only the track and where it was in it; nothing after it comes along.
+//! Every command goes to the connection playing but `transfer` (Shift) and `setVolume`, which
+//! go to the device they name. A transfer takes playback over from wherever it is, or from where
+//! it stopped; so it also wakes a device that is idle (§3). The server does not keep the queue,
+//! so that device picks up only the track and where it was in it; nothing after it comes along.
+//! Volume belongs to the device, so `setVolume` reaches one that is not playing too.
 
 mod relay;
 

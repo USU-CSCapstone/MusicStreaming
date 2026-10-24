@@ -12,7 +12,7 @@
 import type { PlayerState, ProgressReport } from './api/types';
 
 /** Where the player is, as a report gives it. */
-export type Snapshot = Omit<ProgressReport, 'deviceId' | 'start' | 'at'>;
+export type Snapshot = Omit<ProgressReport, 'start' | 'at'>;
 
 /** What a player does about a state from the server. */
 export type Action = 'stop' | 'report' | null;
@@ -57,16 +57,15 @@ export class Progress {
 	}
 
 	/**
-	 * Reports `now` from device `deviceId`, if the server would take it. A takeover the server
-	 * refuses anyway, as for a track no longer in reach, is not tried again: the device is
-	 * stopped by the first state naming another once it could have been confirmed, or plays on
-	 * unreported.
+	 * Reports `now`, if the server would take it. A takeover the server refuses anyway, as for
+	 * a track no longer in reach, is not tried again: the device is stopped by the first state
+	 * naming another once it could have been confirmed, or plays on unreported.
 	 */
-	report(deviceId: string, now: Snapshot) {
+	report(now: Snapshot) {
 		if (!this.#start && !this.#active) return;
 		// The server takes no stop as a takeover.
 		const start = this.#start && now.status !== 'stopped';
-		if (!this.#send({ ...now, deviceId, start })) return;
+		if (!this.#send({ ...now, start })) return;
 		if (start) {
 			this.#start = this.#byUser = false;
 			this.#startedAt = Date.now();

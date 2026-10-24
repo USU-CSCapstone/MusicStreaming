@@ -217,9 +217,9 @@ class Player {
 
 	/**
 	 * The player as another device controls it: as the user here would, but taking nothing
-	 * over, since only the connection playing is sent commands, and a command still on its
-	 * way when another device took over must not take playback back. A track loading counts
-	 * as playing.
+	 * over, since commands other than a volume or a transfer naming this device go only to the
+	 * connection playing, and a command still on its way when another device took over must not
+	 * take playback back. A track loading counts as playing.
 	 */
 	#remote: Controls = {
 		loaded: () => this.current !== null,
@@ -280,7 +280,7 @@ class Player {
 			: this.#loading || this.#buffering
 				? 'buffering'
 				: 'playing';
-		this.#progress.report(realtime.deviceId, {
+		this.#progress.report({
 			// Its place in the context, until the server keeps the queue.
 			itemId: String(this.index),
 			libraryId: this.libraryId,

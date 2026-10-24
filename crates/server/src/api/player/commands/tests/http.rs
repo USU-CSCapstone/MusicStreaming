@@ -18,7 +18,7 @@ async fn post(app: &Router, token: &str, command: Value) -> (StatusCode, Value) 
 async fn a_command_over_http_is_answered_with_how_it_went() {
     let (_temp, app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     let pause = json!({ "type": "pause", "commandId": command_id(1) });
     let sent = tokio::spawn({
         let (app, pause) = (app.clone(), pause.clone());
@@ -38,7 +38,7 @@ async fn a_command_over_http_with_nowhere_to_go_is_refused() {
     assert_eq!((status, &problem["code"]), (StatusCode::CONFLICT, &json!("device_unavailable")));
 
     let mut desk = connect_with(address, TOKEN).await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     for invalid in [
         json!({ "type": "setVolume", "commandId": command_id(2), "deviceId": "1", "volume": 2 }),
         json!({ "type": "rewind", "commandId": command_id(3) }),
@@ -54,7 +54,7 @@ async fn a_command_sent_again_after_it_was_answered_is_answered_again_not_carrie
     let (_temp, app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     let next = json!({ "type": "next", "commandId": command_id(1) });
     command(&mut phone, next.clone()).await;
     next_of(&mut desk, "execute").await;
@@ -70,7 +70,7 @@ async fn a_command_sent_again_after_it_was_answered_is_answered_again_not_carrie
 async fn a_command_id_names_the_same_command_in_capitals() {
     let (_temp, app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     let id = "abcdef00-0000-4000-8000-000000000001";
     let shouted = json!({ "type": "next", "commandId": id.to_uppercase() });
     let first = tokio::spawn({
@@ -91,7 +91,7 @@ async fn a_device_may_answer_a_command_with_its_id_in_capitals() {
     let (_temp, _app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     let id = "abcdef00-0000-4000-8000-000000000002";
     command(&mut phone, json!({ "type": "pause", "commandId": id })).await;
     next_of(&mut desk, "execute").await;
@@ -105,7 +105,7 @@ async fn a_device_may_answer_a_command_with_its_id_in_capitals() {
 async fn a_command_sent_again_while_it_waits_is_answered_where_it_was_sent_last() {
     let (_temp, app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     let pause = json!({ "type": "pause", "commandId": command_id(1) });
     let first = tokio::spawn({
         let (app, pause) = (app.clone(), pause.clone());

@@ -32,7 +32,7 @@ async fn losing_the_playing_connection_stops_playback_where_it_got_to() {
     let mut phone = connect_with(address, "phone").await;
     next_of(&mut phone, "player").await; // As it was on connecting: stopped at nothing.
     let reported = Instant::now();
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     desk.close(None).await.unwrap();
 
     let state = state_with(&mut phone, "stopped").await;
@@ -42,7 +42,7 @@ async fn losing_the_playing_connection_stops_playback_where_it_got_to() {
     assert_eq!(player(&app, TOKEN).await, state);
 
     // Any device can carry on from there.
-    start_playing(&mut phone, "2").await;
+    start_playing(&mut phone).await;
     assert_eq!(player(&app, TOKEN).await["activeDeviceId"], json!("2"));
 }
 
@@ -53,7 +53,7 @@ async fn a_connection_that_drops_played_until_it_dropped() {
     let mut phone = connect_with(address, "phone").await;
     next_of(&mut phone, "player").await; // As it was on connecting: stopped at nothing.
     let reported = Instant::now();
-    start_playing(&mut desk, "1").await;
+    start_playing(&mut desk).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     // Gone without a close frame, as when the network changes under it.
     drop(desk);
@@ -68,7 +68,7 @@ async fn a_paused_place_is_kept_exactly_and_other_connections_closing_change_not
     let (_temp, app, address) = setup().await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut phone = connect_with(address, "phone").await;
-    report(&mut desk, "1", "paused", json!({ "start": true })).await;
+    report(&mut desk, "paused", json!({ "start": true })).await;
 
     phone.close(None).await.unwrap();
     // The phone's connection is let go before its device list is sent.
@@ -96,10 +96,10 @@ async fn a_paused_place_is_kept_exactly_and_other_connections_closing_change_not
 async fn an_old_connection_closing_after_its_device_took_over_again_changes_nothing() {
     let (temp, app, address) = setup().await;
     let mut old = connect_with(address, TOKEN).await;
-    start_playing(&mut old, "1").await;
+    start_playing(&mut old).await;
     // Reconnected while the old connection lingers, and took over on the new one.
     let mut new = connect_with(address, TOKEN).await;
-    report(&mut new, "1", "playing", json!({ "start": true, "trackId": "2" })).await;
+    report(&mut new, "playing", json!({ "start": true, "trackId": "2" })).await;
     // Once the server has let a connection go, it records when its device was last seen. Seen
     // in 2100 until then, so only that write lowers it: a request skips refreshing a device
     // seen so recently.

@@ -46,8 +46,9 @@ struct Waiting {
     reply: Reply,
     /// The connection it went to, the only one whose answer counts.
     to: u64,
-    /// Whether that connection was the one playing, as for all but a transfer to another device.
-    to_playing: bool,
+    /// Whether it went to whatever connection plays, as all but `setVolume` and a transfer to
+    /// another device do, which go to the device they name.
+    for_playback: bool,
     /// Fails it if no answer comes.
     timer: AbortHandle,
 }
@@ -64,7 +65,10 @@ impl Players {
     /// Passes `command` from `caller` on to the connection that carries it out, and answers what
     /// to tell the sender now: `pending`, `applied` for a transfer to the device already
     /// playing, or the result of a command sent again that has finished. Refuses a command that
-    /// is invalid, has no connected device to go to, or would pass [`MAX_WAITING`].
+    /// is invalid, has no connected device to go to, or would pass [`MAX_WAITING`]. A
+    /// `setVolume` goes to the device it names, playing or not, since volume belongs to the
+    /// device (`requirements/realtime.md` §3): to the connection playing if it is that device's,
+    /// and otherwise to the device's newest.
     pub(super) fn command(
         self: &Arc<Self>,
         hub: &Arc<Hub>,
@@ -96,7 +100,7 @@ impl Players {
             return Ok(pending);
         }
         let state = accounts.get(&caller.user);
-        let (to, to_playing) = if let Action::Transfer { .. } = command.action {
+        let (to, for_playback) = if let Action::Transfer { .. } = command.action {
             let Some(AnyId(device)) = command.device_id else {
                 return Err(Problem::invalid("transfer must name its deviceId."));
             };
@@ -124,6 +128,16 @@ impl Players {
                 };
                 (to, false)
             }
+        } else if let Action::SetVolume { .. } = command.action {
+            let device = command.device_id.and_then(|AnyId(id)| id).map(Id);
+            let playing = state
+                .filter(|state| device.is_some() && state.active_device_id == device)
+                .and_then(|state| state.active_connection);
+            let newest = || device.and_then(|device| hub.newest(caller.user, device.0));
+            let Some(to) = playing.or_else(newest) else {
+                return Err(unavailable("That device is not connected."));
+            };
+            (to, false)
         } else {
             let playing =
                 state.and_then(|state| Some((state.active_connection?, state.active_device_id?)));
@@ -150,7 +164,9 @@ impl Players {
             tokio::time::sleep(ANSWER_WITHIN).await;
             players.fail(&timer_hub, user, &timer_id, "The device did not answer.");
         });
-        commands.waiting.insert(id, Waiting { reply, to, to_playing, timer: timer.abort_handle() });
+        commands
+            .waiting
+            .insert(id, Waiting { reply, to, for_playback, timer: timer.abort_handle() });
         Ok(pending)
     }
 
@@ -176,11 +192,12 @@ impl Players {
         self.end(hub, user, |_, waiting| waiting.to == connection, failed);
     }
 
-    /// Fails at once every command of `user`'s that went to the connection playing, unless that
-    /// is `connection`, which has just started playback: carried out late, it could leave two
-    /// devices playing (`requirements/realtime.md` §2), even from a connection that has stopped
-    /// since. A transfer to another device is left to finish: that device was sent it, and may
-    /// yet take over.
+    /// Fails at once every command of `user`'s that went to whatever connection plays, unless
+    /// that is `connection`, which has just started playback: carried out late, it could leave
+    /// two devices playing (`requirements/realtime.md` §2), even from a connection that has
+    /// stopped since. A `setVolume` or a transfer to another device is left to finish on the
+    /// connection it went to, even if another connection of that device takes over meanwhile:
+    /// it went to the device it names, which may yet carry it out.
     pub(in crate::api::player) fn fail_commands_taken_over_by(
         &self,
         hub: &Hub,
@@ -188,7 +205,7 @@ impl Players {
         connection: u64,
     ) {
         let failed = |id| CommandResult::new(id, Status::Failed, Some("Playback was taken over."));
-        let ends = |_: &str, waiting: &Waiting| waiting.to_playing && waiting.to != connection;
+        let ends = |_: &str, waiting: &Waiting| waiting.for_playback && waiting.to != connection;
         self.end(hub, user, ends, failed);
     }
 

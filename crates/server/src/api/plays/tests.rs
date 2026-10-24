@@ -6,6 +6,7 @@ use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, call, 
 use crate::db::Database;
 use crate::db::testing::access;
 
+mod bounds;
 mod checks;
 mod keys;
 mod outlives;
@@ -23,8 +24,7 @@ fn report(track: &str, listened: u32, end: Value) -> Value {
         "listenTimeMs": listened,
         "end": end,
         "context": { "type": "album", "id": "101" },
-        "origin": "context",
-        "deviceId": "1"
+        "origin": "context"
     })
 }
 

@@ -151,8 +151,8 @@ async fn a_stop_saves_players_and_closes_connections_while_a_request_hangs() {
             sleep(Duration::from_millis(100)).await;
         }
         let mut socket = connect_with(address, TOKEN).await;
-        start_playing(&mut socket, "1").await;
-        report(&mut socket, "1", "playing", json!({ "positionMs": 60_000 })).await;
+        start_playing(&mut socket).await;
+        report(&mut socket, "playing", json!({ "positionMs": 60_000 })).await;
         // Part of a header holds the drain open, once the server has the connection.
         let mut hanging = TcpStream::connect(address).await.unwrap();
         hanging.write_all(b"GET /api/v1/health HTTP/1.1\r\n").await.unwrap();
