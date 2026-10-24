@@ -111,10 +111,10 @@ tags:
     description: Tracks, albums, artists, and tags (`requirements/conventions.md` §4).
   - name: Media
     description: Artwork, lyrics, waveforms, and audio delivery.
-  - name: Playlists
-    description: Saved playlists (`requirements/playlists.md`).
   - name: Search
     description: Library search and recent searches (`requirements/search.md`).
+  - name: Playlists
+    description: Saved playlists (`requirements/playlists.md`).
   - name: Player
     description: Playback state, remote control, and Shift (`requirements/realtime.md`).
   - name: Listening
@@ -449,8 +449,8 @@ paths:
         - $ref: '#/components/parameters/YearTo'
         - $ref: '#/components/parameters/Availability'
         - $ref: '#/components/parameters/Played'
-        - $ref: '#/components/parameters/PlayedBefore'
-        - $ref: '#/components/parameters/PlayedAfter'
+        - $ref: '#/components/parameters/LastPlayedBefore'
+        - $ref: '#/components/parameters/LastPlayedAfter'
         - $ref: '#/components/parameters/MinPlayCount'
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
@@ -517,8 +517,8 @@ paths:
         - $ref: '#/components/parameters/YearTo'
         - $ref: '#/components/parameters/Availability'
         - $ref: '#/components/parameters/Played'
-        - $ref: '#/components/parameters/PlayedBefore'
-        - $ref: '#/components/parameters/PlayedAfter'
+        - $ref: '#/components/parameters/LastPlayedBefore'
+        - $ref: '#/components/parameters/LastPlayedAfter'
         - $ref: '#/components/parameters/MinPlayCount'
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
@@ -571,8 +571,8 @@ paths:
         - $ref: '#/components/parameters/GenreMatch'
         - $ref: '#/components/parameters/Availability'
         - $ref: '#/components/parameters/Played'
-        - $ref: '#/components/parameters/PlayedBefore'
-        - $ref: '#/components/parameters/PlayedAfter'
+        - $ref: '#/components/parameters/LastPlayedBefore'
+        - $ref: '#/components/parameters/LastPlayedAfter'
         - $ref: '#/components/parameters/MinPlayCount'
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
@@ -684,7 +684,7 @@ paths:
       x-status: draft
       parameters:
         - $ref: '#/components/parameters/Purpose'
-        - $ref: '#/components/parameters/QualityParam'
+        - $ref: '#/components/parameters/Quality'
         - $ref: '#/components/parameters/Codecs'
       responses:
         '200':
@@ -752,8 +752,8 @@ paths:
         - $ref: '#/components/parameters/YearFrom'
         - $ref: '#/components/parameters/YearTo'
         - $ref: '#/components/parameters/Played'
-        - $ref: '#/components/parameters/PlayedBefore'
-        - $ref: '#/components/parameters/PlayedAfter'
+        - $ref: '#/components/parameters/LastPlayedBefore'
+        - $ref: '#/components/parameters/LastPlayedAfter'
         - $ref: '#/components/parameters/MinPlayCount'
         - name: sectionLimit
           in: query
@@ -1065,11 +1065,10 @@ paths:
       tags: [Player]
       summary: Control playback on any device
       description: |
-        Play, pause, seek, skip, volume, transfer, and wake, targeting any of the caller's
-        devices (`requirements/realtime.md` §3). Last command wins. For clients without a
-        realtime connection; clients with one send `playerCommand` there instead. Answers once
-        the target has carried the command out or failed to: `applied` or `failed`, or
-        `pending` to an earlier request for a command sent again (see `CommandResult`).
+        Sends a `PlayerCommand`, for clients without a realtime connection; clients with one
+        send `playerCommand` there instead. Answers once the target has carried the command out
+        or failed to: `applied` or `failed`, or `pending` to an earlier request for a command
+        sent again (see `CommandResult`).
       operationId: sendPlayerCommand
       requestBody:
         required: true
@@ -1127,19 +1126,14 @@ paths:
       tags: [Realtime]
       summary: Open the realtime connection
       description: |
-        Upgrades to a WebSocket. Authenticates like any other request, by bearer token or
-        session cookie. A request with an `Origin` — one from a web page — is refused `403`
-        unless that origin's host and port match those it was sent to, as `Host` says or, from
-        a trusted proxy, `X-Forwarded-Host`, so another site's page, or another server's on the
-        same host, cannot open a connection with the user's cookie. The trusted proxies are those
-        `JEWELCASE_TRUSTED_PROXIES` names, or loopback when it is unset.
-        A port left out on either side is the default for the origin's scheme, so a proxy on
-        any other port must pass it on (with nginx, `$http_host` rather than `$host`).
-        Messages are JSON objects matching `RealtimeClientMessage` and
-        `RealtimeServerMessage`, each at most 64 KiB; a message whose `type` the server
-        does not know is ignored. The server pings every 15 seconds and closes a connection
-        it has heard nothing from, pongs included, for 40 seconds. A reconnecting client
-        receives current playback state (`requirements/realtime.md` §6).
+        Upgrades to a WebSocket, authenticated like any other request. A request from a web page,
+        one with an `Origin`, is refused `403` unless that origin's host and port are the ones
+        the request was sent to, as `Host` or a trusted proxy's `X-Forwarded-Host` gives them
+        (`requirements/deployment.md` §6). Messages are JSON objects matching
+        `RealtimeClientMessage` and `RealtimeServerMessage`, each at most 64 KiB; a message
+        whose `type` the server does not know is ignored. The server pings every 15 seconds and
+        closes a connection it has heard nothing from, pongs included, for 40 seconds. A
+        reconnecting client receives current playback state (`requirements/realtime.md` §6).
       operationId: openRealtime
       x-messages:
         client: { $ref: '#/components/schemas/RealtimeClientMessage' }
@@ -1506,12 +1500,12 @@ components:
       schema:
         type: string
         enum: [never, ever]
-    PlayedBefore:
+    LastPlayedBefore:
       name: lastPlayedBefore
       in: query
       description: Last played before this time — "not played since". Planned.
       schema: { type: string, format: date-time }
-    PlayedAfter:
+    LastPlayedAfter:
       name: lastPlayedAfter
       in: query
       description: Planned.
@@ -1554,7 +1548,7 @@ components:
         type: string
         enum: [stream, download]
         default: stream
-    QualityParam:
+    Quality:
       name: quality
       in: query
       required: true
@@ -1731,6 +1725,14 @@ components:
         - $ref: '#/components/schemas/EntityRef'
         - $ref: '#/components/schemas/ExternalTrackRef'
 
+    ExternalTrackRef:
+      type: object
+      required: [type, sourceId, externalId]
+      properties:
+        type: { const: external }
+        sourceId: { type: string }
+        externalId: { type: string }
+
     ImageRef:
       type: object
       required: [id, placeholder]
@@ -1745,7 +1747,7 @@ components:
             correctly-coloured stand-in (`requirements/offline.md` §1.1). `null` until the server
             has made one, and for an image it could not decode.
 
-    ArtistCredit:
+    ArtistRef:
       type: object
       required: [id, name]
       properties:
@@ -1756,7 +1758,9 @@ components:
 
     Personal:
       type: object
-      description: Personal data on an entity (`requirements/conventions.md` §1). Never shared between accounts.
+      description: |
+        The caller's own listening on an entity (`requirements/conventions.md` §1), never shared
+        between accounts. Planned.
       required: [playCount, lastPlayedAt]
       properties:
         playCount: { type: integer }
@@ -1902,11 +1906,6 @@ components:
           type: boolean
           description: Whether this is the calling device. Present only in `/me` responses.
 
-    Quality:
-      type: string
-      enum: [original, high, medium, low]
-      description: '`original` never transcodes. Bitrates for the others are defined by the audio design.'
-
     # ───────────────────────────── Libraries ─────────────────────────────
     Library:
       type: object
@@ -1933,7 +1932,7 @@ components:
           description: '`null` for the unknown album.'
         artists:
           type: array
-          items: { $ref: '#/components/schemas/ArtistCredit' }
+          items: { $ref: '#/components/schemas/ArtistRef' }
         image:
           description: The album's one cover, shown for every track on it (`requirements/albums.md` §5).
           oneOf:
@@ -1960,7 +1959,7 @@ components:
         artists:
           type: array
           description: Ordered; the first is primary (`requirements/conventions.md` §7).
-          items: { $ref: '#/components/schemas/ArtistCredit' }
+          items: { $ref: '#/components/schemas/ArtistRef' }
         album:
           description: '`null` only for an external track that is on no album.'
           oneOf:
@@ -1988,15 +1987,11 @@ components:
               type: array
               items: { $ref: '#/components/schemas/TagRef' }
             audio:
+              $ref: '#/components/schemas/AudioSummary'
               description: Enough to tell a FLAC from an MP3 at a glance (`requirements/tracks.md` §4). The full `Track` extends it.
-              allOf:
-                - $ref: '#/components/schemas/AudioSummary'
             addedAt: { type: string, format: date-time }
             sortKeys: { $ref: '#/components/schemas/TrackSortKeys' }
-            personal:
-              description: The caller's own listening. Planned.
-              allOf:
-                - $ref: '#/components/schemas/Personal'
+            personal: { $ref: '#/components/schemas/Personal' }
 
     TrackSortKeys:
       type: object
@@ -2110,6 +2105,11 @@ components:
         albumLufs: { type: [number, 'null'] }
         albumPeakDbtp: { type: [number, 'null'] }
 
+    Quality:
+      type: string
+      enum: [original, high, medium, low]
+      description: '`original` never transcodes. Bitrates for the others are defined by the audio design.'
+
     PlaybackInfo:
       type: object
       x-status: draft
@@ -2204,10 +2204,7 @@ components:
             durationUs: { $ref: '#/components/schemas/DurationUs' }
             availability: { $ref: '#/components/schemas/Availability' }
             addedAt: { type: string, format: date-time }
-            personal:
-              description: The caller's own listening. Planned.
-              allOf:
-                - $ref: '#/components/schemas/Personal'
+            personal: { $ref: '#/components/schemas/Personal' }
 
     Album:
       allOf:
@@ -2252,7 +2249,7 @@ components:
     ArtistBase:
       description: What any source can say about an artist. `ArtistSummary` adds what only the library knows.
       allOf:
-        - $ref: '#/components/schemas/ArtistCredit'
+        - $ref: '#/components/schemas/ArtistRef'
         - type: object
           required: [image]
           properties:
@@ -2275,10 +2272,7 @@ components:
               type: integer
               description: Owned and featured tracks.
             addedAt: { type: string, format: date-time }
-            personal:
-              description: The caller's own listening. Planned.
-              allOf:
-                - $ref: '#/components/schemas/Personal'
+            personal: { $ref: '#/components/schemas/Personal' }
 
     Artist:
       allOf:
@@ -2425,19 +2419,15 @@ components:
               type: integer
               description: Every track in the playlist, missing ones included (`requirements/playlists.md` §3).
             durationUs:
+              $ref: '#/components/schemas/DurationUs'
               description: Of every track in the playlist, missing ones included.
-              allOf:
-                - $ref: '#/components/schemas/DurationUs'
             pinned: { type: boolean }
             createdAt: { type: string, format: date-time }
             modifiedAt: { type: string, format: date-time }
             version:
               type: integer
               description: Advances with every change; edits apply only against the version they were made on.
-            personal:
-              description: The caller's own listening. Planned.
-              allOf:
-                - $ref: '#/components/schemas/Personal'
+            personal: { $ref: '#/components/schemas/Personal' }
 
     PlaylistPage:
       allOf:
@@ -2662,9 +2652,8 @@ components:
       properties:
         type: { const: radio }
         seed:
+          $ref: '#/components/schemas/EntityRef'
           description: Track, album, artist, playlist, or genre tag (`requirements/recommendations.md` §4).
-          allOf:
-            - $ref: '#/components/schemas/EntityRef'
 
     ExternalContext:
       type: object
@@ -2673,12 +2662,6 @@ components:
         type: { const: external }
         sourceId: { type: string, maxLength: 100 }
         itemId: { type: string, maxLength: 100 }
-
-    # ───────────────────────────── Queue ─────────────────────────────
-    QueueOrigin:
-      type: string
-      enum: [manual, context, automatic]
-      description: '`automatic` marks radio and endless-play additions (`requirements/queue.md` §5).'
 
     # ───────────────────────────── Player ─────────────────────────────
     PlayerState:
@@ -2692,10 +2675,9 @@ components:
           type: [string, 'null']
           description: |
             The one device holding playback for the account, playing or paused
-            (`requirements/realtime.md` §2). `null` when stopped or before anything has played.
-            The single source of truth for which device is active. When the connection it
-            plays over closes, playback stops where it got to, and any device can carry on
-            from there (§6).
+            (`requirements/realtime.md` §2); `null` when stopped or before anything has played.
+            When the connection it plays over closes, playback stops where it got to, and any
+            device can carry on from there (§6).
         itemId:
           type: [string, 'null']
           x-status: draft
@@ -2721,11 +2703,21 @@ components:
 
     PlayerCommand:
       description: |
-        Transport control, targeting any of the caller's devices. Last command wins. Sent over
-        the realtime connection as `playerCommand`, and passed on to the target as `execute`.
-        Every command but `setVolume` and `transfer` goes to the connection playing, and one
-        whose `deviceId` names any other device fails. `setVolume` and `transfer` go to the
-        device they name.
+        Transport control, targeting any of the caller's devices (`requirements/realtime.md` §3).
+        Last command wins. Sent over the realtime connection as `playerCommand`, and passed on
+        to the target as `execute`. `setVolume` and `transfer` go to the device they name; every
+        other command goes to the connection playing. Each command's own fields are in the
+        schema its `type` maps to.
+      type: object
+      required: [type, commandId]
+      properties:
+        type: { type: string }
+        commandId: { $ref: '#/components/schemas/CommandId' }
+        deviceId:
+          type: string
+          description: |
+            The target device. For a command that goes to the connection playing it may be left
+            out, and the command fails if it names any other device.
       oneOf:
         - $ref: '#/components/schemas/TransportCommand'
         - $ref: '#/components/schemas/SeekCommand'
@@ -2744,59 +2736,45 @@ components:
 
     TransportCommand:
       type: object
-      required: [type, commandId]
-      description: Goes to the device playing, so it fails when nothing is; `transfer` wakes an idle device (`requirements/realtime.md` §3).
+      description: Fails when nothing is playing; `transfer` wakes an idle device (`requirements/realtime.md` §3).
       properties:
         type:
           type: string
           enum: [play, pause, next, previous]
-        commandId: { $ref: '#/components/schemas/CommandId' }
-        deviceId:
-          type: string
-          description: Target device. Defaults to the active device.
 
     SeekCommand:
       type: object
-      required: [type, commandId, positionMs]
+      required: [positionMs]
       properties:
         type: { const: seek }
-        commandId: { $ref: '#/components/schemas/CommandId' }
         positionMs: { type: integer, minimum: 0 }
 
     VolumeCommand:
       type: object
-      required: [type, commandId, deviceId, volume]
+      required: [deviceId, volume]
       description: |
         Volume belongs to the device (`requirements/realtime.md` §3), so this goes to the device
-        named, playing or not: to the connection playing if it is that device's, and otherwise
-        to the device's newest connection. The target applies it locally and confirms with a
-        `commandResult`. Playback starting elsewhere meanwhile does not fail it.
-        `device_unavailable` when the device is not connected.
+        named, playing or not: to its connection playing, or else its newest. Playback starting
+        elsewhere meanwhile does not fail it. `device_unavailable` when the device is not
+        connected.
       properties:
         type: { const: setVolume }
-        commandId: { $ref: '#/components/schemas/CommandId' }
         deviceId: { type: string }
         volume: { type: number, minimum: 0, maximum: 1 }
 
     TransferCommand:
       type: object
-      required: [type, commandId, deviceId]
+      required: [deviceId]
       x-status: draft
       description: |
-        Shift — move playback to another device. Sent to the device named (its newest
-        connection), which takes the track and position from the latest `player` state it
-        received (`libraryId`, `trackId`, and `positionMs`, moved on from `positionAt` while
-        playing) and takes playback over with a `start` report; the device that was playing
-        stops, as for any takeover. So it also wakes an idle device, picking up where
-        playback stopped. Moving it to the device already holding it is `applied` at once,
-        or, when it is paused there and `play` is true, plays it. The device answers once it
-        has taken over, not once its audio plays, which may take longer to load than a
-        command has to answer in. The queue comes along once the server keeps it; the
-        device's volume stays its own. `device_unavailable` when the device is not connected
-        or nothing has played.
+        Shift: moves playback to the device named, which also wakes an idle one. Its newest
+        connection takes the track and position from the latest `player` state it received and
+        takes playback over with a `start` report, answering once it has, not once its audio
+        plays. To the device already holding playback it is `applied` at once, or plays there if
+        paused and `play` is true. The device's volume stays its own. `device_unavailable` when
+        the device is not connected or nothing has played.
       properties:
         type: { const: transfer }
-        commandId: { $ref: '#/components/schemas/CommandId' }
         deviceId: { type: string }
         play:
           type: boolean
@@ -2812,16 +2790,14 @@ components:
           type: string
           enum: [pending, applied, failed]
           description: |
-            `pending` until the target device confirms. A failure is always reported
-            (`requirements/realtime.md` §5): at once when nothing is playing, or the command
-            is invalid or not one the server carries out; when the target's connection
-            closes; when playback starts on another connection, as when another device takes
-            it over, before a command for whatever plays is carried out; and after 5 seconds
-            when the target has not answered. Over HTTP, the failures at once are `409`, `422`,
-            and `429` problems instead. A command sent again with the same `commandId` is
-            carried out once: while it waits its result goes to where it was sent from last,
-            and once it has finished, the result of any of the account's latest 32 commands is
-            answered again. An account has at most 16 commands waiting at a time.
+            `pending` until the target confirms. Every failure is reported
+            (`requirements/realtime.md` §5): at once when the command is invalid or nothing is
+            playing, which over HTTP is a `409`, `422`, or `429` problem instead; when the
+            target's connection closes, or playback moves to another connection before a command
+            for whatever plays is carried out; and after 5 seconds without an answer. A command
+            sent again with the same `commandId` is carried out once: while it waits, its result
+            goes where it was sent from last, and once finished it is answered again for any of
+            the account's latest 32 commands. At most 16 of an account's commands wait at a time.
         reason: { type: string }
 
     ProgressReport:
@@ -2829,17 +2805,14 @@ components:
       x-status: draft
       required: [itemId, libraryId, trackId, status, positionMs]
       description: |
-        Sent by the playing device, or one taking playback over (`start`), over its realtime
-        connection, which it needs anyway to be controlled and to hear that another device
-        took over. A report is the device's whose connection sends it. A report that is
-        refused — invalid, from any connection but the active one, or of a track out of the
-        caller's reach — is answered with the current state; one that does not parse is
-        ignored. A `buffering` report is recorded as `paused` at
-        its position, so other devices are not shown running ahead.
+        Sent over the realtime connection by the playing device, or one taking playback over
+        (`start`); a report is the device's whose connection sends it. A report that is refused
+        — invalid, from any connection but the active one, or of a track out of the caller's
+        reach — is answered with the current state; one that does not parse is ignored.
+        `buffering` is recorded as `paused` at its position.
 
         Until the server keeps the queue, a report names its track, and `itemId` is the
-        device's own name for its place in its queue, opaque to the server, at most 100
-        characters. `libraryId` and `trackId` give way to the queue's item when it does.
+        device's own name for its place in its queue, opaque to the server.
       properties:
         itemId: { type: string, minLength: 1, maxLength: 100, x-status: draft }
         libraryId: { type: string }
@@ -2848,19 +2821,16 @@ components:
           type: boolean
           default: false
           description: |
-            Set when the user starts playback on this connection. It takes over from the
-            device playing (`requirements/realtime.md` §2). A report without it from any
-            connection but the active one is refused, so a device taken over from cannot
-            take playback back with reports sent before it heard. A device stops playing only
-            when the state names another device active; a device holding several
-            connections, such as browser tabs, plays in one at a time. A `stopped` report
-            never takes over.
+            Set when the user starts playback on this connection, taking over from the device
+            playing (`requirements/realtime.md` §2). Without it, a report from any connection but
+            the active one is refused, and a `stopped` report never takes over. A device stops
+            playing only when the state names another device active; with several connections,
+            such as browser tabs, it plays in one at a time.
 
-            A new connection is never the active one. A device still playing when it
-            connects, after a dropped connection or a server restart, waits for the state it
-            is sent on connecting: if that names another device it stops, and otherwise it
-            sets `start` on its next report. A device that is playing also sets `start`
-            whenever a state it receives names no active device.
+            A new connection is never the active one: a device still playing when it connects
+            waits for the state it is sent, stops if that names another device, and otherwise
+            sets `start` on its next report. A playing device also sets `start` whenever a state
+            it receives names no active device.
         status:
           type: string
           enum: [playing, paused, stopped, buffering]
@@ -2872,6 +2842,11 @@ components:
           description: The device's current volume, so remote controls show it (`requirements/realtime.md` §3).
 
     # ───────────────────────────── Listening ─────────────────────────────
+    QueueOrigin:
+      type: string
+      enum: [manual, context, automatic]
+      description: '`automatic` marks radio and endless-play additions (`requirements/queue.md` §5).'
+
     PlayReport:
       type: object
       required: [playId, libraryId, startedAt, listenTimeMs, context, origin]
@@ -2909,15 +2884,6 @@ components:
             - $ref: '#/components/schemas/Reason'
             - type: 'null'
 
-    # ───────────────────────────── External ─────────────────────────────
-    ExternalTrackRef:
-      type: object
-      required: [type, sourceId, externalId]
-      properties:
-        type: { const: external }
-        sourceId: { type: string }
-        externalId: { type: string }
-
     # ───────────────────────────── Plugins ─────────────────────────────
     PluginSettings:
       type: object
@@ -2933,12 +2899,21 @@ components:
         values:
           type: object
           description: |
-            The values set at this level, secrets omitted. A library's own override the
-            server-wide ones, which override the defaults.
+            The values set here, secrets omitted: the caller's own, a library's, or the
+            server-wide ones. A library's override the server-wide ones, which override the
+            defaults.
         secretsSet:
           type: array
           description: Names of secret fields that have a value. Their values are never returned.
           items: { type: string }
+
+    PluginSettingsUpdate:
+      type: object
+      required: [values]
+      properties:
+        values:
+          type: object
+          description: Omitted secret fields keep their stored value; `null` clears one.
 
     PersonalPlugin:
       type: object
@@ -2964,14 +2939,6 @@ components:
       required: [sharing]
       properties:
         sharing: { type: boolean }
-
-    PluginSettingsUpdate:
-      type: object
-      required: [values]
-      properties:
-        values:
-          type: object
-          description: Omitted secret fields keep their stored value; `null` clears one.
 
     Plugin:
       type: object
@@ -3070,25 +3037,20 @@ components:
       type: string
       enum: [libraryRead, libraryAdd, libraryChange, network, listeningActivity, tracksChanged, scanFinished, schedule, played, playing, searchActivity, searched, albumsChanged, artistsChanged, hostRateLimits]
       description: |
-        What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryAdd` creates files
-        that do not exist yet; `libraryChange` replaces, renames, and deletes files that do. The
-        three library permissions are granted per library; `network` and `listeningActivity`
-        once per plugin. Hooks, which decide when a plugin runs, are requested and granted the
-        same way (`requirements/plugins.md` §8): `tracksChanged` runs it, per library, as tracks
-        are added, changed, or removed, and `scanFinished` when a scan of the library finishes;
-        `albumsChanged` and `artistsChanged` run it, per library, as albums or artists do. All
-        four need `libraryRead` there too. `schedule` runs it at the interval its request names,
-        in every library it is enabled in. `played` runs it, granted once per plugin, as each
-        user who connected it (`listMyPlugins`) finishes playing something; it needs
-        `listeningActivity`, and `libraryRead` in the library played from. `playing` runs it the
-        same way as each of them starts something, while it is still playing; it needs what
-        `played` does. `searchActivity`, granted once per plugin, is the searches of users who
-        turn on sharing them with it (`setMySearchSharing`); the `searched` hook runs it as each
-        of them settles on a search or removes one, and needs `searchActivity` and
-        `libraryRead` (`requirements/search.md` §6).
-        `hostRateLimits`, granted once per plugin, makes its rate limits that say
-        `"per": "host"` ones every plugin's requests to that host keep to, so it can slow the
-        others; without it, they count only its own requests.
+        What a plugin can ask for (`requirements/plugins.md` §4.1, §8). Hooks decide when it
+        runs, and each needs the permissions named with it.
+        - Per library: `libraryRead`; `libraryAdd`, creating files that do not exist yet;
+          `libraryChange`, replacing, renaming, and deleting files that do; and the hooks
+          `tracksChanged`, `albumsChanged`, and `artistsChanged`, run as those change, and
+          `scanFinished`, as a scan finishes, which each need `libraryRead`.
+        - Per plugin: `network`; `listeningActivity`; `searchActivity`, the searches of users
+          who share them with it (`setMySearchSharing`); and `hostRateLimits`, under which its
+          `"per": "host"` rate limits bind every plugin's requests to that host, not only its own.
+        - Per plugin, hooks: `schedule`, at its `everyMinutes`, in every library it is enabled
+          in; `played` and `playing`, as each user who connected it finishes or starts playing
+          something, needing `listeningActivity`, and `libraryRead` in the library played from;
+          and `searched`, as each user sharing searches with it settles on or removes one,
+          needing `searchActivity` and `libraryRead`.
 
     PermissionRequest:
       type: object

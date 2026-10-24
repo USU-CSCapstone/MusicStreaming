@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::Id;
 
-/// The spec's `ArtistCredit`. Read from [`artists_json!`]'s `[id, name]`.
+/// The spec's `ArtistRef`. Read from [`artists_json!`]'s `[id, name]`.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Credit {
     pub id: Id,

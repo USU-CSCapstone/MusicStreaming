@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import type { ArtistCredit } from '$lib/api/types';
+	import type { ArtistRef } from '$lib/api/types';
 	import { artistName } from '$lib/format';
 
 	// Every credit is a link, first artist first (`requirements/conventions.md` §3, §7).
-	let { artists }: { artists: ArtistCredit[] } = $props();
+	let { artists }: { artists: ArtistRef[] } = $props();
 </script>
 
 <span class="artists">

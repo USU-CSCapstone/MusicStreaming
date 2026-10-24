@@ -6,7 +6,7 @@ import type {
 	Album,
 	AlbumSummary,
 	Artist,
-	ArtistCredit,
+	ArtistRef,
 	ArtistSummary,
 	ImageRef,
 	Library,
@@ -94,7 +94,7 @@ export class Catalog {
 
 	// ───────────────────────────── Credits ─────────────────────────────
 
-	albumArtists(albumId: bigint): ArtistCredit[] {
+	albumArtists(albumId: bigint): ArtistRef[] {
 		return this.db
 			.all(
 				`SELECT a.id, a.name FROM album_artists aa JOIN artists a ON a.id = aa.artist_id
@@ -104,7 +104,7 @@ export class Catalog {
 			.map((r) => ({ id: id(r.id), name: str(r.name) }));
 	}
 
-	trackArtists(trackId: bigint): ArtistCredit[] {
+	trackArtists(trackId: bigint): ArtistRef[] {
 		return this.db
 			.all(
 				`SELECT a.id, a.name FROM track_artists ta JOIN artists a ON a.id = ta.artist_id

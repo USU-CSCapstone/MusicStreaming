@@ -791,11 +791,10 @@ export interface paths {
         put?: never;
         /**
          * Control playback on any device
-         * @description Play, pause, seek, skip, volume, transfer, and wake, targeting any of the caller's
-         *     devices (`requirements/realtime.md` §3). Last command wins. For clients without a
-         *     realtime connection; clients with one send `playerCommand` there instead. Answers once
-         *     the target has carried the command out or failed to: `applied` or `failed`, or
-         *     `pending` to an earlier request for a command sent again (see `CommandResult`).
+         * @description Sends a `PlayerCommand`, for clients without a realtime connection; clients with one
+         *     send `playerCommand` there instead. Answers once the target has carried the command out
+         *     or failed to: `applied` or `failed`, or `pending` to an earlier request for a command
+         *     sent again (see `CommandResult`).
          */
         post: operations["sendPlayerCommand"];
         delete?: never;
@@ -836,19 +835,14 @@ export interface paths {
         };
         /**
          * Open the realtime connection
-         * @description Upgrades to a WebSocket. Authenticates like any other request, by bearer token or
-         *     session cookie. A request with an `Origin` — one from a web page — is refused `403`
-         *     unless that origin's host and port match those it was sent to, as `Host` says or, from
-         *     a trusted proxy, `X-Forwarded-Host`, so another site's page, or another server's on the
-         *     same host, cannot open a connection with the user's cookie. The trusted proxies are those
-         *     `JEWELCASE_TRUSTED_PROXIES` names, or loopback when it is unset.
-         *     A port left out on either side is the default for the origin's scheme, so a proxy on
-         *     any other port must pass it on (with nginx, `$http_host` rather than `$host`).
-         *     Messages are JSON objects matching `RealtimeClientMessage` and
-         *     `RealtimeServerMessage`, each at most 64 KiB; a message whose `type` the server
-         *     does not know is ignored. The server pings every 15 seconds and closes a connection
-         *     it has heard nothing from, pongs included, for 40 seconds. A reconnecting client
-         *     receives current playback state (`requirements/realtime.md` §6).
+         * @description Upgrades to a WebSocket, authenticated like any other request. A request from a web page,
+         *     one with an `Origin`, is refused `403` unless that origin's host and port are the ones
+         *     the request was sent to, as `Host` or a trusted proxy's `X-Forwarded-Host` gives them
+         *     (`requirements/deployment.md` §6). Messages are JSON objects matching
+         *     `RealtimeClientMessage` and `RealtimeServerMessage`, each at most 64 KiB; a message
+         *     whose `type` the server does not know is ignored. The server pings every 15 seconds and
+         *     closes a connection it has heard nothing from, pongs included, for 40 seconds. A
+         *     reconnecting client receives current playback state (`requirements/realtime.md` §6).
          */
         get: operations["openRealtime"];
         put?: never;
@@ -1109,6 +1103,12 @@ export interface components {
         };
         /** @description Something that can be queued or added to a playlist — library content or an external track. */
         Playable: components["schemas"]["EntityRef"] | components["schemas"]["ExternalTrackRef"];
+        ExternalTrackRef: {
+            /** @constant */
+            type: "external";
+            sourceId: string;
+            externalId: string;
+        };
         ImageRef: {
             /** @description Fetch from `getImage`. Changes whenever the image does. */
             id: string;
@@ -1119,12 +1119,15 @@ export interface components {
              */
             placeholder: string | null;
         };
-        ArtistCredit: {
+        ArtistRef: {
             id: components["schemas"]["Id"];
             /** @description `null` for the unknown artist. */
             name: string | null;
         };
-        /** @description Personal data on an entity (`requirements/conventions.md` §1). Never shared between accounts. */
+        /**
+         * @description The caller's own listening on an entity (`requirements/conventions.md` §1), never shared
+         *     between accounts. Planned.
+         */
         Personal: {
             playCount: number;
             /** Format: date-time */
@@ -1218,11 +1221,6 @@ export interface components {
             /** @description Whether this is the calling device. Present only in `/me` responses. */
             current?: boolean;
         };
-        /**
-         * @description `original` never transcodes. Bitrates for the others are defined by the audio design.
-         * @enum {string}
-         */
-        Quality: "original" | "high" | "medium" | "low";
         Library: {
             id: components["schemas"]["Id"];
             name: string;
@@ -1237,7 +1235,7 @@ export interface components {
             id: components["schemas"]["Id"];
             /** @description `null` for the unknown album. */
             title: string | null;
-            artists: components["schemas"]["ArtistCredit"][];
+            artists: components["schemas"]["ArtistRef"][];
             /** @description The album's one cover, shown for every track on it (`requirements/albums.md` §5). */
             image: components["schemas"]["ImageRef"] | null;
         };
@@ -1252,7 +1250,7 @@ export interface components {
             /** @description Falls back to the filename for untagged files. */
             title: string;
             /** @description Ordered; the first is primary (`requirements/conventions.md` §7). */
-            artists: components["schemas"]["ArtistCredit"][];
+            artists: components["schemas"]["ArtistRef"][];
             /** @description `null` only for an external track that is on no album. */
             album: components["schemas"]["AlbumRef"] | null;
             discNumber: number | null;
@@ -1271,7 +1269,6 @@ export interface components {
             /** Format: date-time */
             addedAt?: string;
             sortKeys: components["schemas"]["TrackSortKeys"];
-            /** @description The caller's own listening. Planned. */
             personal?: components["schemas"]["Personal"];
         };
         /**
@@ -1347,6 +1344,11 @@ export interface components {
             albumLufs: number | null;
             albumPeakDbtp: number | null;
         };
+        /**
+         * @description `original` never transcodes. Bitrates for the others are defined by the audio design.
+         * @enum {string}
+         */
+        Quality: "original" | "high" | "medium" | "low";
         /** @description Exactly what the listener will hear (`requirements/playback.md` §1). */
         PlaybackInfo: {
             /** @description Pass to the audio endpoint. */
@@ -1419,7 +1421,6 @@ export interface components {
             availability: components["schemas"]["Availability"];
             /** Format: date-time */
             addedAt?: string;
-            /** @description The caller's own listening. Planned. */
             personal?: components["schemas"]["Personal"];
         };
         Album: components["schemas"]["AlbumSummary"] & {
@@ -1442,7 +1443,7 @@ export interface components {
             items: components["schemas"]["AlbumSummary"][];
         };
         /** @description What any source can say about an artist. `ArtistSummary` adds what only the library knows. */
-        ArtistBase: components["schemas"]["ArtistCredit"] & {
+        ArtistBase: components["schemas"]["ArtistRef"] & {
             source?: components["schemas"]["Source"];
             image: components["schemas"]["ImageRef"] | null;
         };
@@ -1453,7 +1454,6 @@ export interface components {
             trackCount: number;
             /** Format: date-time */
             addedAt?: string;
-            /** @description The caller's own listening. Planned. */
             personal?: components["schemas"]["Personal"];
         };
         Artist: components["schemas"]["ArtistSummary"] & {
@@ -1540,7 +1540,6 @@ export interface components {
             modifiedAt: string;
             /** @description Advances with every change; edits apply only against the version they were made on. */
             version: number;
-            /** @description The caller's own listening. Planned. */
             personal?: components["schemas"]["Personal"];
         };
         PlaylistPage: components["schemas"]["PageInfo"] & {
@@ -1693,20 +1692,14 @@ export interface components {
             sourceId: string;
             itemId: string;
         };
-        /**
-         * @description `automatic` marks radio and endless-play additions (`requirements/queue.md` §5).
-         * @enum {string}
-         */
-        QueueOrigin: "manual" | "context" | "automatic";
         PlayerState: {
             /** @enum {string} */
             status: "playing" | "paused" | "stopped";
             /**
              * @description The one device holding playback for the account, playing or paused
-             *     (`requirements/realtime.md` §2). `null` when stopped or before anything has played.
-             *     The single source of truth for which device is active. When the connection it
-             *     plays over closes, playback stops where it got to, and any device can carry on
-             *     from there (§6).
+             *     (`requirements/realtime.md` §2); `null` when stopped or before anything has played.
+             *     When the connection it plays over closes, playback stops where it got to, and any
+             *     device can carry on from there (§6).
              */
             activeDeviceId: string | null;
             /**
@@ -1729,23 +1722,28 @@ export interface components {
             volume: number | null;
         };
         /**
-         * @description Transport control, targeting any of the caller's devices. Last command wins. Sent over
-         *     the realtime connection as `playerCommand`, and passed on to the target as `execute`.
-         *     Every command but `setVolume` and `transfer` goes to the connection playing, and one
-         *     whose `deviceId` names any other device fails. `setVolume` and `transfer` go to the
-         *     device they name.
+         * @description Transport control, targeting any of the caller's devices (`requirements/realtime.md` §3).
+         *     Last command wins. Sent over the realtime connection as `playerCommand`, and passed on
+         *     to the target as `execute`. `setVolume` and `transfer` go to the device they name; every
+         *     other command goes to the connection playing. Each command's own fields are in the
+         *     schema its `type` maps to.
          */
-        PlayerCommand: components["schemas"]["TransportCommand"] | components["schemas"]["SeekCommand"] | components["schemas"]["VolumeCommand"] | components["schemas"]["TransferCommand"];
-        /** @description Goes to the device playing, so it fails when nothing is; `transfer` wakes an idle device (`requirements/realtime.md` §3). */
+        PlayerCommand: {
+            type: string;
+            commandId: components["schemas"]["CommandId"];
+            /**
+             * @description The target device. For a command that goes to the connection playing it may be left
+             *     out, and the command fails if it names any other device.
+             */
+            deviceId?: string;
+        } & (components["schemas"]["TransportCommand"] | components["schemas"]["SeekCommand"] | components["schemas"]["VolumeCommand"] | components["schemas"]["TransferCommand"]);
+        /** @description Fails when nothing is playing; `transfer` wakes an idle device (`requirements/realtime.md` §3). */
         TransportCommand: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
             type: "play" | "pause" | "next" | "previous";
-            commandId: components["schemas"]["CommandId"];
-            /** @description Target device. Defaults to the active device. */
-            deviceId?: string;
         };
         SeekCommand: {
             /**
@@ -1753,15 +1751,13 @@ export interface components {
              * @enum {string}
              */
             type: "seek";
-            commandId: components["schemas"]["CommandId"];
             positionMs: number;
         };
         /**
          * @description Volume belongs to the device (`requirements/realtime.md` §3), so this goes to the device
-         *     named, playing or not: to the connection playing if it is that device's, and otherwise
-         *     to the device's newest connection. The target applies it locally and confirms with a
-         *     `commandResult`. Playback starting elsewhere meanwhile does not fail it.
-         *     `device_unavailable` when the device is not connected.
+         *     named, playing or not: to its connection playing, or else its newest. Playback starting
+         *     elsewhere meanwhile does not fail it. `device_unavailable` when the device is not
+         *     connected.
          */
         VolumeCommand: {
             /**
@@ -1769,22 +1765,16 @@ export interface components {
              * @enum {string}
              */
             type: "setVolume";
-            commandId: components["schemas"]["CommandId"];
             deviceId: string;
             volume: number;
         };
         /**
-         * @description Shift — move playback to another device. Sent to the device named (its newest
-         *     connection), which takes the track and position from the latest `player` state it
-         *     received (`libraryId`, `trackId`, and `positionMs`, moved on from `positionAt` while
-         *     playing) and takes playback over with a `start` report; the device that was playing
-         *     stops, as for any takeover. So it also wakes an idle device, picking up where
-         *     playback stopped. Moving it to the device already holding it is `applied` at once,
-         *     or, when it is paused there and `play` is true, plays it. The device answers once it
-         *     has taken over, not once its audio plays, which may take longer to load than a
-         *     command has to answer in. The queue comes along once the server keeps it; the
-         *     device's volume stays its own. `device_unavailable` when the device is not connected
-         *     or nothing has played.
+         * @description Shift: moves playback to the device named, which also wakes an idle one. Its newest
+         *     connection takes the track and position from the latest `player` state it received and
+         *     takes playback over with a `start` report, answering once it has, not once its audio
+         *     plays. To the device already holding playback it is `applied` at once, or plays there if
+         *     paused and `play` is true. The device's volume stays its own. `device_unavailable` when
+         *     the device is not connected or nothing has played.
          */
         TransferCommand: {
             /**
@@ -1792,7 +1782,6 @@ export interface components {
              * @enum {string}
              */
             type: "transfer";
-            commandId: components["schemas"]["CommandId"];
             deviceId: string;
             /**
              * @description Continue playing on arrival, or arrive paused.
@@ -1803,52 +1792,44 @@ export interface components {
         CommandResult: {
             commandId: components["schemas"]["CommandId"];
             /**
-             * @description `pending` until the target device confirms. A failure is always reported
-             *     (`requirements/realtime.md` §5): at once when nothing is playing, or the command
-             *     is invalid or not one the server carries out; when the target's connection
-             *     closes; when playback starts on another connection, as when another device takes
-             *     it over, before a command for whatever plays is carried out; and after 5 seconds
-             *     when the target has not answered. Over HTTP, the failures at once are `409`, `422`,
-             *     and `429` problems instead. A command sent again with the same `commandId` is
-             *     carried out once: while it waits its result goes to where it was sent from last,
-             *     and once it has finished, the result of any of the account's latest 32 commands is
-             *     answered again. An account has at most 16 commands waiting at a time.
+             * @description `pending` until the target confirms. Every failure is reported
+             *     (`requirements/realtime.md` §5): at once when the command is invalid or nothing is
+             *     playing, which over HTTP is a `409`, `422`, or `429` problem instead; when the
+             *     target's connection closes, or playback moves to another connection before a command
+             *     for whatever plays is carried out; and after 5 seconds without an answer. A command
+             *     sent again with the same `commandId` is carried out once: while it waits, its result
+             *     goes where it was sent from last, and once finished it is answered again for any of
+             *     the account's latest 32 commands. At most 16 of an account's commands wait at a time.
              * @enum {string}
              */
             status: "pending" | "applied" | "failed";
             reason?: string;
         };
         /**
-         * @description Sent by the playing device, or one taking playback over (`start`), over its realtime
-         *     connection, which it needs anyway to be controlled and to hear that another device
-         *     took over. A report is the device's whose connection sends it. A report that is
-         *     refused — invalid, from any connection but the active one, or of a track out of the
-         *     caller's reach — is answered with the current state; one that does not parse is
-         *     ignored. A `buffering` report is recorded as `paused` at
-         *     its position, so other devices are not shown running ahead.
+         * @description Sent over the realtime connection by the playing device, or one taking playback over
+         *     (`start`); a report is the device's whose connection sends it. A report that is refused
+         *     — invalid, from any connection but the active one, or of a track out of the caller's
+         *     reach — is answered with the current state; one that does not parse is ignored.
+         *     `buffering` is recorded as `paused` at its position.
          *
          *     Until the server keeps the queue, a report names its track, and `itemId` is the
-         *     device's own name for its place in its queue, opaque to the server, at most 100
-         *     characters. `libraryId` and `trackId` give way to the queue's item when it does.
+         *     device's own name for its place in its queue, opaque to the server.
          */
         ProgressReport: {
             itemId: string;
             libraryId: string;
             trackId: string;
             /**
-             * @description Set when the user starts playback on this connection. It takes over from the
-             *     device playing (`requirements/realtime.md` §2). A report without it from any
-             *     connection but the active one is refused, so a device taken over from cannot
-             *     take playback back with reports sent before it heard. A device stops playing only
-             *     when the state names another device active; a device holding several
-             *     connections, such as browser tabs, plays in one at a time. A `stopped` report
-             *     never takes over.
+             * @description Set when the user starts playback on this connection, taking over from the device
+             *     playing (`requirements/realtime.md` §2). Without it, a report from any connection but
+             *     the active one is refused, and a `stopped` report never takes over. A device stops
+             *     playing only when the state names another device active; with several connections,
+             *     such as browser tabs, it plays in one at a time.
              *
-             *     A new connection is never the active one. A device still playing when it
-             *     connects, after a dropped connection or a server restart, waits for the state it
-             *     is sent on connecting: if that names another device it stops, and otherwise it
-             *     sets `start` on its next report. A device that is playing also sets `start`
-             *     whenever a state it receives names no active device.
+             *     A new connection is never the active one: a device still playing when it connects
+             *     waits for the state it is sent, stops if that names another device, and otherwise
+             *     sets `start` on its next report. A playing device also sets `start` whenever a state
+             *     it receives names no active device.
              * @default false
              */
             start: boolean;
@@ -1858,6 +1839,11 @@ export interface components {
             /** @description The device's current volume, so remote controls show it (`requirements/realtime.md` §3). */
             volume?: number;
         };
+        /**
+         * @description `automatic` marks radio and endless-play additions (`requirements/queue.md` §5).
+         * @enum {string}
+         */
+        QueueOrigin: "manual" | "context" | "automatic";
         /**
          * @description Every track that starts is a play; `listenTimeMs` is audio actually heard
          *     (`requirements/analytics.md` §1). Exactly one of `trackId` or `external` is set. A
@@ -1891,12 +1877,6 @@ export interface components {
             /** @description With `automatic` — why radio or endless play chose it. */
             reason?: components["schemas"]["Reason"] | null;
         };
-        ExternalTrackRef: {
-            /** @constant */
-            type: "external";
-            sourceId: string;
-            externalId: string;
-        };
         PluginSettings: {
             /**
              * @description JSON Schema the plugin declares for its settings, so every plugin is configured the
@@ -1906,12 +1886,17 @@ export interface components {
              */
             schema: Record<string, never>;
             /**
-             * @description The values set at this level, secrets omitted. A library's own override the
-             *     server-wide ones, which override the defaults.
+             * @description The values set here, secrets omitted: the caller's own, a library's, or the
+             *     server-wide ones. A library's override the server-wide ones, which override the
+             *     defaults.
              */
             values: Record<string, never>;
             /** @description Names of secret fields that have a value. Their values are never returned. */
             secretsSet: string[];
+        };
+        PluginSettingsUpdate: {
+            /** @description Omitted secret fields keep their stored value; `null` clears one. */
+            values: Record<string, never>;
         };
         PersonalPlugin: {
             id: string;
@@ -1929,10 +1914,6 @@ export interface components {
         };
         SearchSharing: {
             sharing: boolean;
-        };
-        PluginSettingsUpdate: {
-            /** @description Omitted secret fields keep their stored value; `null` clears one. */
-            values: Record<string, never>;
         };
         Plugin: {
             id: string;
@@ -2005,25 +1986,20 @@ export interface components {
             }[];
         };
         /**
-         * @description What a plugin can ask for (`requirements/plugins.md` §4.1). `libraryAdd` creates files
-         *     that do not exist yet; `libraryChange` replaces, renames, and deletes files that do. The
-         *     three library permissions are granted per library; `network` and `listeningActivity`
-         *     once per plugin. Hooks, which decide when a plugin runs, are requested and granted the
-         *     same way (`requirements/plugins.md` §8): `tracksChanged` runs it, per library, as tracks
-         *     are added, changed, or removed, and `scanFinished` when a scan of the library finishes;
-         *     `albumsChanged` and `artistsChanged` run it, per library, as albums or artists do. All
-         *     four need `libraryRead` there too. `schedule` runs it at the interval its request names,
-         *     in every library it is enabled in. `played` runs it, granted once per plugin, as each
-         *     user who connected it (`listMyPlugins`) finishes playing something; it needs
-         *     `listeningActivity`, and `libraryRead` in the library played from. `playing` runs it the
-         *     same way as each of them starts something, while it is still playing; it needs what
-         *     `played` does. `searchActivity`, granted once per plugin, is the searches of users who
-         *     turn on sharing them with it (`setMySearchSharing`); the `searched` hook runs it as each
-         *     of them settles on a search or removes one, and needs `searchActivity` and
-         *     `libraryRead` (`requirements/search.md` §6).
-         *     `hostRateLimits`, granted once per plugin, makes its rate limits that say
-         *     `"per": "host"` ones every plugin's requests to that host keep to, so it can slow the
-         *     others; without it, they count only its own requests.
+         * @description What a plugin can ask for (`requirements/plugins.md` §4.1, §8). Hooks decide when it
+         *     runs, and each needs the permissions named with it.
+         *     - Per library: `libraryRead`; `libraryAdd`, creating files that do not exist yet;
+         *       `libraryChange`, replacing, renaming, and deleting files that do; and the hooks
+         *       `tracksChanged`, `albumsChanged`, and `artistsChanged`, run as those change, and
+         *       `scanFinished`, as a scan finishes, which each need `libraryRead`.
+         *     - Per plugin: `network`; `listeningActivity`; `searchActivity`, the searches of users
+         *       who share them with it (`setMySearchSharing`); and `hostRateLimits`, under which its
+         *       `"per": "host"` rate limits bind every plugin's requests to that host, not only its own.
+         *     - Per plugin, hooks: `schedule`, at its `everyMinutes`, in every library it is enabled
+         *       in; `played` and `playing`, as each user who connected it finishes or starts playing
+         *       something, needing `listeningActivity`, and `libraryRead` in the library played from;
+         *       and `searched`, as each user sharing searches with it settles on or removes one,
+         *       needing `searchActivity` and `libraryRead`.
          * @enum {string}
          */
         PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played" | "playing" | "searchActivity" | "searched" | "albumsChanged" | "artistsChanged" | "hostRateLimits";
@@ -2228,9 +2204,9 @@ export interface components {
         /** @description Filter by whether the caller has ever played the item. Planned. */
         Played: "never" | "ever";
         /** @description Last played before this time — "not played since". Planned. */
-        PlayedBefore: string;
+        LastPlayedBefore: string;
         /** @description Planned. */
-        PlayedAfter: string;
+        LastPlayedAfter: string;
         /** @description Planned. */
         MinPlayCount: number;
         /** @description Search text, from the first character typed. */
@@ -2244,7 +2220,7 @@ export interface components {
         /** @description `download` asks for a complete file of known size; `stream` may use segmented transport. */
         Purpose: "stream" | "download";
         /** @description The quality the client wants, chosen from its own settings (`requirements/users.md` §6.1). */
-        QualityParam: components["schemas"]["Quality"];
+        Quality: components["schemas"]["Quality"];
         /**
          * @description Codecs and containers the client can play, most preferred first, in ffmpeg's names such
          *     as `flac`, `aac`, and `mp4`. The original plays directly only when both its codec and its
@@ -2664,9 +2640,9 @@ export interface operations {
                 /** @description Filter by whether the caller has ever played the item. Planned. */
                 played?: components["parameters"]["Played"];
                 /** @description Last played before this time — "not played since". Planned. */
-                lastPlayedBefore?: components["parameters"]["PlayedBefore"];
+                lastPlayedBefore?: components["parameters"]["LastPlayedBefore"];
                 /** @description Planned. */
-                lastPlayedAfter?: components["parameters"]["PlayedAfter"];
+                lastPlayedAfter?: components["parameters"]["LastPlayedAfter"];
                 /** @description Planned. */
                 minPlayCount?: components["parameters"]["MinPlayCount"];
                 cursor?: components["parameters"]["Cursor"];
@@ -2744,9 +2720,9 @@ export interface operations {
                 /** @description Filter by whether the caller has ever played the item. Planned. */
                 played?: components["parameters"]["Played"];
                 /** @description Last played before this time — "not played since". Planned. */
-                lastPlayedBefore?: components["parameters"]["PlayedBefore"];
+                lastPlayedBefore?: components["parameters"]["LastPlayedBefore"];
                 /** @description Planned. */
-                lastPlayedAfter?: components["parameters"]["PlayedAfter"];
+                lastPlayedAfter?: components["parameters"]["LastPlayedAfter"];
                 /** @description Planned. */
                 minPlayCount?: components["parameters"]["MinPlayCount"];
                 cursor?: components["parameters"]["Cursor"];
@@ -2811,9 +2787,9 @@ export interface operations {
                 /** @description Filter by whether the caller has ever played the item. Planned. */
                 played?: components["parameters"]["Played"];
                 /** @description Last played before this time — "not played since". Planned. */
-                lastPlayedBefore?: components["parameters"]["PlayedBefore"];
+                lastPlayedBefore?: components["parameters"]["LastPlayedBefore"];
                 /** @description Planned. */
-                lastPlayedAfter?: components["parameters"]["PlayedAfter"];
+                lastPlayedAfter?: components["parameters"]["LastPlayedAfter"];
                 /** @description Planned. */
                 minPlayCount?: components["parameters"]["MinPlayCount"];
                 cursor?: components["parameters"]["Cursor"];
@@ -2969,7 +2945,7 @@ export interface operations {
                 /** @description `download` asks for a complete file of known size; `stream` may use segmented transport. */
                 purpose?: components["parameters"]["Purpose"];
                 /** @description The quality the client wants, chosen from its own settings (`requirements/users.md` §6.1). */
-                quality: components["parameters"]["QualityParam"];
+                quality: components["parameters"]["Quality"];
                 /**
                  * @description Codecs and containers the client can play, most preferred first, in ffmpeg's names such
                  *     as `flac`, `aac`, and `mp4`. The original plays directly only when both its codec and its
@@ -3073,9 +3049,9 @@ export interface operations {
                 /** @description Filter by whether the caller has ever played the item. Planned. */
                 played?: components["parameters"]["Played"];
                 /** @description Last played before this time — "not played since". Planned. */
-                lastPlayedBefore?: components["parameters"]["PlayedBefore"];
+                lastPlayedBefore?: components["parameters"]["LastPlayedBefore"];
                 /** @description Planned. */
-                lastPlayedAfter?: components["parameters"]["PlayedAfter"];
+                lastPlayedAfter?: components["parameters"]["LastPlayedAfter"];
                 /** @description Planned. */
                 minPlayCount?: components["parameters"]["MinPlayCount"];
                 /** @description Results shown per section before expanding. */
