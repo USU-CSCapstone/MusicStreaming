@@ -14,7 +14,7 @@ use axum::extract::ws::Message;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use super::{Revoked, ServerMessage, encode};
-use crate::lock::Recover;
+use jewelcase_core::Recover;
 
 /// How many messages a connection may have waiting to be sent.
 pub(super) const OUTBOX: usize = 64;

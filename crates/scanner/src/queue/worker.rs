@@ -10,10 +10,10 @@ use std::time::Instant;
 use super::retry::Retry;
 use super::{Inner, Queue, Scanner};
 use crate::library::LibraryConfig;
-use crate::lock::Recover;
 use crate::scan::{ScanContext, ScanOptions, ScanState, run_scan};
 use crate::store::Store;
 use crate::worker::Worker;
+use jewelcase_core::Recover;
 
 /// The one owner of a library's scanner thread. Dropping it stops the thread as
 /// [`ScannerThread::stop`] does and waits for it to finish.

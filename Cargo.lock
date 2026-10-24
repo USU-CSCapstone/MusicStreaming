@@ -1484,6 +1484,7 @@ dependencies = [
  "cap-std",
  "fastrand",
  "httpdate",
+ "jewelcase-core",
  "jewelcase-plugins",
  "reqwest",
  "rustix",

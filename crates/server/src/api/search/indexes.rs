@@ -20,7 +20,7 @@ use rusqlite::Connection;
 
 use crate::api::page::library_number;
 use crate::db::{Database, DbError};
-use crate::lock::Recover;
+use jewelcase_core::Recover;
 
 /// A rebuild waits this many times as long as the last one took.
 const REBUILD_SPACING: u32 = 10;

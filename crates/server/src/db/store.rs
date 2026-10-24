@@ -22,7 +22,7 @@ use jewelcase_scanner::*;
 
 use self::roots::Roots;
 use super::{Database, DbError, libraries};
-use crate::lock::Recover;
+use jewelcase_core::Recover;
 
 /// The scanner's store on the server's database.
 pub struct SqliteStore {

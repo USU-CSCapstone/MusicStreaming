@@ -35,8 +35,8 @@ use super::realtime::{Hub, Presence, ServerMessage};
 use super::scope::Caller;
 use super::time::serialize_rfc3339;
 use crate::db::now_ms;
-use crate::lock::Recover;
 pub use commands::{CommandResult, PlayerCommand, send as send_command};
+use jewelcase_core::Recover;
 pub use progress::{ProgressReport, apply};
 
 /// Each account's playback state, for those that have played anything.

@@ -44,7 +44,7 @@ pub(crate) use reach::reaches;
 use retention::Sweep;
 pub use store::SqliteStore;
 
-use crate::lock::Recover;
+use jewelcase_core::Recover;
 
 /// How often the writer sweeps away what is no longer kept (`design/database.md` §9).
 const SWEEP_EVERY: Duration = Duration::from_secs(3600);

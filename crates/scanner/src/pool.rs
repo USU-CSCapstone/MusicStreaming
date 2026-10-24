@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 
 use crate::jobs::RunReport;
 use crate::library::LibraryId;
-use crate::lock::Recover;
 use crate::worker::{Stop, Worker};
+use jewelcase_core::Recover;
 
 /// One library's background job: a pass over its queue, run again at once after a pass that did
 /// something, and after a wait otherwise.

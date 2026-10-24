@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use super::Due;
-use crate::lock::Recover;
 use crate::plugins::{DeliveryKey as Key, Plugins};
+use jewelcase_core::Recover;
 
 /// A delivery under way, holding its key in `Plugins::delivering` until it is dropped, even by a
 /// panic.

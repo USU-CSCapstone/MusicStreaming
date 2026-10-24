@@ -22,9 +22,9 @@ use std::time::{Duration, Instant};
 use crate::confine::is_refused;
 use crate::discover::check_root;
 use crate::library::LibraryId;
-use crate::lock::Recover;
 use crate::problems::{self, Problem};
 use crate::store::{FileToDecode, ProblemLog, StoreError};
+use jewelcase_core::Recover;
 
 /// How long a file that cannot be opened is skipped before it is tried again.
 pub const RETRY_AFTER: Duration = Duration::from_hours(1);

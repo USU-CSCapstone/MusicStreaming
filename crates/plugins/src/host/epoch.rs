@@ -6,7 +6,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
 
-use crate::lock::Recover;
+use jewelcase_core::Recover;
 
 /// How often the epoch advances, and so how often a running plugin is checked. A tick is a sleep
 /// that runs a little long, at about 1.05 ms.

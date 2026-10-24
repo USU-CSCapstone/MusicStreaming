@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::OwnedMutexGuard;
 
 use super::settings::SERVER;
-use crate::lock::Recover;
+use jewelcase_core::Recover;
 
 /// A plugin's turn to run, held until it is dropped.
 pub(super) type Turn = OwnedMutexGuard<()>;

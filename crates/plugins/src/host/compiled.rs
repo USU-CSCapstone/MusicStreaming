@@ -12,7 +12,7 @@ use wasmtime::component::Component;
 
 use super::http::KeptClient;
 use super::{Host, Library, PluginPre, Run};
-use crate::lock::Recover;
+use jewelcase_core::Recover;
 
 /// Each plugin's entry, by ID.
 pub(super) type Cache<L> = Mutex<HashMap<String, Arc<Entry<L>>>>;

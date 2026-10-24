@@ -13,7 +13,7 @@ use crate::api::player::{Players, Status as PlayStatus};
 use crate::api::realtime::{Hub, ServerMessage};
 use crate::api::scope::Caller;
 use crate::api::{AnyId, Code, Id, Problem};
-use crate::lock::Recover;
+use jewelcase_core::Recover;
 
 /// How long a connection has to answer a command before it counts as failed, in milliseconds.
 const ANSWER_WITHIN_MS: u16 = 5_000;

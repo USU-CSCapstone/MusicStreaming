@@ -18,7 +18,6 @@ mod decode;
 mod error;
 mod image;
 mod input;
-mod lock;
 mod pooled;
 mod priority;
 mod probe;

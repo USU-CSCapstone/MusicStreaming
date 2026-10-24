@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use rustix::process::{Pid, Signal, kill_process};
 
-use crate::lock::Recover;
+use jewelcase_core::Recover;
 
 /// How long a child may go without progress before the watchdog kills it, counted as
 /// [`Registry::reap_stalled`] says. A PCM decode makes progress with every read of its output; a

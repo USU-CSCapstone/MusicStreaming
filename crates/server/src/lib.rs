@@ -2,7 +2,6 @@ mod api;
 pub mod config;
 mod data_dir;
 mod db;
-mod lock;
 mod plugins;
 mod scanning;
 mod serve;

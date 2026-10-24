@@ -14,12 +14,12 @@ use std::time::{Duration, Instant, SystemTime};
 
 use super::bindings::jewelcase::plugin::http;
 use super::{Library, Run};
-use crate::lock::Recover;
 use crate::manifest::{Per, Permission};
 use crate::network::cache::{self, Key, Lookup, Reply, Visible};
 use crate::network::limits::Scope;
 use crate::rules::{self, Reach};
 use guard::{Guard, System};
+use jewelcase_core::Recover;
 use reqwest::dns::Resolve;
 
 mod guard;

@@ -15,10 +15,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::library::LibraryConfig;
-use crate::lock::Recover;
 use crate::scan::{Scan, ScanId, ScanOptions, Trigger};
 use crate::scope::{Depth, Scope};
 use crate::store::Store;
+use jewelcase_core::Recover;
 use retry::Retry;
 pub use worker::ScannerThread;
 

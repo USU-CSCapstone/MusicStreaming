@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 use crate::db::libraries::Root;
-use crate::lock::Recover;
+use jewelcase_core::Recover;
 
 /// Each library's active roots.
 #[derive(Default)]

@@ -3,7 +3,7 @@
 use std::sync::{LockResult, PoisonError};
 
 /// The guard a lock gave, poisoned or not.
-pub(crate) trait Recover<G> {
+pub trait Recover<G> {
     /// The guard, even if another thread panicked while it held the lock, so that one panic stays
     /// with its thread instead of failing every later user of the lock. The data is as that
     /// thread left it.

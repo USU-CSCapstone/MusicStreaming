@@ -25,7 +25,7 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::lock::Recover;
+use jewelcase_core::Recover;
 
 /// The largest reply body kept.
 const MAX_ENTRY: usize = 2 << 20;

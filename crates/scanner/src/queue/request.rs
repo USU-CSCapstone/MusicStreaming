@@ -6,9 +6,9 @@ use std::time::Instant;
 
 use super::{Inner, coalesce_scopes};
 use crate::clock::now_ms;
-use crate::lock::Recover;
 use crate::scan::{Scan, ScanId, ScanState, Trigger};
 use crate::scope::Scope;
+use jewelcase_core::Recover;
 
 impl Inner {
     /// [`Scanner::request`](super::Scanner::request). The new scan's row is written before the

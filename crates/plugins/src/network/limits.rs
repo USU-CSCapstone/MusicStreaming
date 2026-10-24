@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::lock::Recover;
+use jewelcase_core::Recover;
 
 /// The longest a request waits for its turn before it is refused instead. A run has five
 /// minutes in all.

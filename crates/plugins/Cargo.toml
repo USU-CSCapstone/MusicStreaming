@@ -7,6 +7,7 @@ edition = "2024"
 cap-std = "4.0.3"
 fastrand = "2"
 httpdate = "1.0.3"
+jewelcase-core = { version = "0.1.0", path = "../core" }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 rustix = { version = "1", features = ["fs"] }
 serde = { version = "1", features = ["derive"] }
