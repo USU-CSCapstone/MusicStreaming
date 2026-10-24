@@ -40,9 +40,11 @@ const playingOn = (activeDeviceId: string): PlayerState => ({
 	status: 'playing',
 	activeDeviceId,
 	itemId: '0',
+	libraryId: '11',
 	trackId: '41',
 	positionMs: 0,
-	positionAt: new Date().toISOString()
+	positionAt: new Date().toISOString(),
+	volume: null
 });
 
 beforeEach(() => {

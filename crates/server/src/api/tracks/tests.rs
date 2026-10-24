@@ -199,26 +199,15 @@ async fn summaries_and_full_tracks() {
     expected["lyrics"] = json!("synced");
     expected["loudness"] = json!({ "trackLufs": -10.25, "trackPeakDbtp": -0.5,
                                    "albumLufs": -9.5, "albumPeakDbtp": -0.3 });
-    expected["identifiers"] = json!({ "isrc": "GBAYE0601690", "musicbrainz_recordingid": "abc" });
+    // Its ISRC and other identifiers are stored for plugins, never served
+    // (`requirements/general.md` §3.7).
     assert_eq!(track, expected);
 
     let (_, untagged) = json(&app, "/api/v1/libraries/1/tracks/1006").await;
     assert_eq!(untagged["discNumber"], Value::Null);
     assert_eq!(untagged["album"]["title"], Value::Null);
     assert_eq!(untagged["loudness"], Value::Null);
-    assert_eq!(untagged["identifiers"], json!({ "isrc": null }));
     assert_eq!(untagged["sortKeys"], json!({ "title": "untitled", "artist": "", "album": "" }));
-}
-
-/// Identifiers that cannot be read are a server error rather than none. SQLite takes a number
-/// too large for serde as JSON.
-#[tokio::test]
-async fn identifiers_that_cannot_be_read_are_an_error() {
-    let (_temp, db, app) = catalog::app().await;
-    let unreadable = "UPDATE tracks SET identifiers = '{\"musicbrainz_recordingid\": 1e400}'";
-    db.write(move |tx| tx.execute(unreadable, [])).await.unwrap();
-    let (status, problem) = json(&app, "/api/v1/libraries/1/tracks/1001").await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{problem}");
 }
 
 #[tokio::test]
@@ -242,6 +231,24 @@ async fn images_carry_their_placeholders() {
     assert_eq!(album["image"], cover);
     let (_, artist) = json(&app, "/api/v1/libraries/1/artists/10").await;
     assert_eq!(artist["image"], json!({ "id": "40", "placeholder": "ECAw" }));
+}
+
+/// An image's placeholder is `null` both before the placeholder job has made one and once it
+/// has found the image cannot be decoded.
+#[tokio::test]
+async fn an_image_without_a_placeholder_has_null_for_one() {
+    let (_temp, db, app) = catalog::app().await;
+    // Abbey Road's cover has none made yet; the photo of The Beatles could not be decoded.
+    db.write(|tx| {
+        Image::new(41, 1, "cover.jpg").insert(tx)?;
+        tx.execute("UPDATE albums SET image_id = 41 WHERE id = 101", [])
+    })
+    .await
+    .unwrap();
+    let (_, track) = json(&app, "/api/v1/libraries/1/tracks/1001").await;
+    assert_eq!(track["album"]["image"], json!({ "id": "41", "placeholder": null }));
+    let (_, artist) = json(&app, "/api/v1/libraries/1/artists/10").await;
+    assert_eq!(artist["image"], json!({ "id": "40", "placeholder": null }));
 }
 
 #[tokio::test]

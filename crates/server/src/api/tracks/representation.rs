@@ -56,7 +56,6 @@ pub struct Track {
     summary: TrackSummary<AudioProperties>,
     lyrics: String,
     loudness: Option<Loudness>,
-    identifiers: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The spec's `AudioSummary`.
@@ -147,8 +146,8 @@ pub fn track(conn: &Connection, library: i64, track: i64) -> rusqlite::Result<Op
     let sql = format!(
         "SELECT {}, t.container AS container, t.bitrate_kbps AS bitrate_kbps, \
          t.sample_rate_hz AS sample_rate_hz, t.bit_depth AS bit_depth, t.channels AS channels, \
-         t.file_size AS file_size, t.lyrics_kind AS lyrics_kind, {LOUDNESS}, t.isrc AS isrc, \
-         t.identifiers AS identifiers FROM tracks t {JOINS} WHERE t.library_id = ?1 AND t.id = ?2",
+         t.file_size AS file_size, t.lyrics_kind AS lyrics_kind, {LOUDNESS} \
+         FROM tracks t {JOINS} WHERE t.library_id = ?1 AND t.id = ?2",
         SELECT.join(", ")
     );
     conn.prepare_cached(&sql)?
@@ -162,15 +161,10 @@ pub fn track(conn: &Connection, library: i64, track: i64) -> rusqlite::Result<Op
                 channels: row.get("channels")?,
                 file_size_bytes: row.get("file_size")?,
             };
-            // `isrc`, then every other identifier tag as read (`requirements/tracks.md` §6).
-            let Json(mut identifiers) =
-                row.get::<_, Json<serde_json::Map<String, serde_json::Value>>>("identifiers")?;
-            identifiers.insert("isrc".to_owned(), row.get::<_, Option<String>>("isrc")?.into());
             Ok(Track {
                 summary: summary(row, audio)?,
                 lyrics: row.get("lyrics_kind")?,
                 loudness: loudness(row)?,
-                identifiers,
             })
         })
         .optional()

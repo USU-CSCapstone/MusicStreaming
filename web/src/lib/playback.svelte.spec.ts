@@ -46,6 +46,7 @@ function state(device: string | null, trackId: string, changes: Partial<PlayerSt
 			trackId,
 			positionMs: 10_000,
 			positionAt: new Date(Date.now() + 2000).toISOString(),
+			volume: null,
 			...changes
 		}
 	});

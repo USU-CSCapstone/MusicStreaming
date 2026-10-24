@@ -27,17 +27,20 @@ pub struct TagRef {
 pub struct ImageRef {
     id: Id,
     /// The image's ThumbHash in base64, from which a client draws a blurred stand-in before the
-    /// image arrives (`requirements/offline.md` §1.1). Empty until the placeholder job has made
-    /// one, and for an image it could not decode.
-    placeholder: String,
+    /// image arrives (`requirements/offline.md` §1.1). `None`, sent as `null`, until the
+    /// placeholder job has made one, and for an image it could not decode.
+    placeholder: Option<String>,
 }
 
 impl ImageRef {
-    /// The image with this ID, if there is one, and its [`placeholder!`] column.
+    /// The image with this ID, if there is one, and its [`placeholder!`] column, which is NULL
+    /// before the placeholder job has run and empty when it could not decode the image.
     pub fn new(image_id: Option<i64>, placeholder: Option<Vec<u8>>) -> Option<ImageRef> {
         image_id.map(|id| ImageRef {
             id: Id(id),
-            placeholder: BASE64.encode(placeholder.unwrap_or_default()),
+            placeholder: placeholder
+                .filter(|hash| !hash.is_empty())
+                .map(|hash| BASE64.encode(hash)),
         })
     }
 }

@@ -101,7 +101,7 @@ class Player {
 		const status = reason === null ? 'applied' : 'failed';
 		realtime.send({
 			type: 'commandResult',
-			result: { commandId: command.commandId, status, reason }
+			result: { commandId: command.commandId, status, reason: reason ?? undefined }
 		});
 	}
 

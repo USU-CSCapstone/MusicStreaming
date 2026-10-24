@@ -55,9 +55,9 @@ export class PlaylistError extends Error {
 
 const notFound = () => new PlaylistError(404, 'not_found', 'No such playlist.');
 
-/** `validation_failed`, pointing at the part of the request body that is wrong. */
+/** `validation_failed`, whose `detail` ends by pointing at the part of the body that is wrong. */
 const invalid = (field: string, message: string) =>
-	new PlaylistError(422, 'validation_failed', message, { errors: [{ field, message }] });
+	new PlaylistError(422, 'validation_failed', field ? `${message} (at ${field})` : message);
 
 const isObject = (v: unknown): v is Record<string, unknown> =>
 	typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -279,7 +279,7 @@ export class PlaylistStore {
 		// A mosaic of the albums inside, composed by `media.ts` (`requirements/playlists.md` §6).
 		// Its ID carries the version, as an image's ID changes whenever the image does.
 		playlist.image = items.length
-			? { id: `mosaic-${playlist.version}-${playlist.id}`, placeholder: '' }
+			? { id: `mosaic-${playlist.version}-${playlist.id}`, placeholder: null }
 			: null;
 	}
 

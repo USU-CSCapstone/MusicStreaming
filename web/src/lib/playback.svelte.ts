@@ -176,7 +176,7 @@ class Playback {
 		return commandId;
 	}
 
-	#answered(result: { commandId: string; status: string; reason?: string | null }) {
+	#answered(result: { commandId: string; status: string; reason?: string }) {
 		if (result.status === 'pending' || !this.#waiting.delete(result.commandId)) return;
 		if (result.commandId === this.moving?.commandId) this.moving = null;
 		if (result.status === 'failed') {

@@ -58,8 +58,8 @@ export function likeAnywhere(text: string): string {
 // ───────────────────────────── Shared pieces ─────────────────────────────
 
 export function imageRef(imageId: unknown): ImageRef | null {
-	// `placeholder` is draft in the API and NULL in the scanner until the image job exists.
-	return imageId === null || imageId === undefined ? null : { id: id(imageId), placeholder: '' };
+	// The mock makes no placeholders, which the API sends as `null` until one is made.
+	return imageId === null || imageId === undefined ? null : { id: id(imageId), placeholder: null };
 }
 
 export class Catalog {

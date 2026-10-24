@@ -35,7 +35,8 @@ function state(device: string | null, status: PlayerState['status'] = 'playing')
 		libraryId: '11',
 		trackId: '41',
 		positionMs: 10_000,
-		positionAt: new Date().toISOString()
+		positionAt: new Date().toISOString(),
+		volume: null
 	};
 	fake.listeners.forEach((listener) => listener({ type: 'player', state }));
 }

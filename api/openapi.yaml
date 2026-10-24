@@ -14,44 +14,63 @@ info:
 
     ## Conventions
 
+    **Planned.** An operation whose description starts with **Planned:** is not served yet:
+    the server answers `404` or `405` to it, and for most of them the web client's
+    development mock answers in its place. A parameter, value, or property marked planned is
+    not built yet either: the server answers `422` to a planned parameter or value in a
+    request, and never sends a planned property or value.
+
     **Base path.** Paths are relative to `{basePath}/api/v1`. A server may sit under any
     prefix behind a reverse proxy; clients never assume the domain root.
 
     **Authentication.** Login registers a device and returns an opaque token. Send it as
     `Authorization: Bearer <token>`. The web client may instead rely on the
-    `jewelcase_session` cookie set at login; cookie-authenticated requests that change
-    state must carry an `X-Jewelcase-Client` header or they are refused. A login or
-    setup that carries that header is signed in by the cookie alone and gets no token in its
-    body. Any authenticated endpoint may answer `401` — see `Problem.reason` for whether a device
-    keeps its downloads (`requirements/offline.md` §9).
+    `jewelcase_session` cookie set at setup or login; a cookie-authenticated request that
+    changes state must carry an `X-Jewelcase-Client` header or it is refused with `403`. A
+    login or setup that carries that header is signed in by the cookie alone and gets no
+    token in its body. Any authenticated endpoint may answer `401` — see `Problem.reason` for
+    whether a device keeps its downloads (`requirements/offline.md` §9).
 
     **Scope.** Paths under `/libraries/{libraryId}` are scoped to that library. Anything
-    the caller cannot reach answers `404`, exactly as if it did not exist; an action the
-    caller's role forbids answers `403` (`requirements/users.md` §10). Identifiers in a
-    request select within the caller's scope and never widen it.
+    the caller cannot reach answers `404`, exactly as if it did not exist; every operation
+    under `/admin` answers `403` to an account that is not an admin or the owner, whatever
+    its path names (`requirements/users.md` §10). Identifiers in a request select within the
+    caller's scope and never widen it.
 
-    **Personal data.** `/me` is the caller's own account. Admins read other accounts'
-    data under `/admin/users/{userId}`, which is read-only by construction — no endpoint
-    lets anyone act as another user (`requirements/users.md` §8). Content schemas keep
-    per-user data in a `personal` object: the caller's own, or the viewed account's under
-    `/admin/users/{userId}`. Responses carrying it are `Cache-Control: private`. Shared
-    catalog data never carries it; devices receive it through the account feed.
+    **Personal data.** `/me` is the caller's own account. Content schemas keep the caller's
+    own listening in a `personal` object, which is planned.
 
-    **Optimistic writes.** Writes clients apply locally before confirmation — queue and
-    player commands, plays — carry a client-generated ID in the body (`commandId`,
-    `playId`). The server applies each ID once however often it arrives (for player
-    commands, see `CommandResult`), and IDs of anything those writes create are derived
-    from it, so a device and the server agree without a round trip. Playlists need neither:
-    the server assigns a playlist's ID, and edits name its tracks by position at a version.
-    Other state-changing writes accept an `Idempotency-Key` header with the same guarantee.
+    **Optimistic writes.** Writes clients apply locally before confirmation — player
+    commands and plays — carry a client-generated ID in the body (`commandId`, `playId`).
+    The server applies each ID once however often it arrives (for player commands, see
+    `CommandResult`), so a device and the server agree without a round trip. Playlists need
+    neither: the server assigns a playlist's ID, and edits name its tracks by position at a
+    version; creating and editing one take an `Idempotency-Key`, so a retry is not applied
+    twice.
 
-    **Pagination.** Lists are cursor-paged: pass the previous page's `nextCursor` as
-    `cursor`. `limit` defaults to 100 and may be up to 1000 — a bound on one transfer,
-    never on a collection. Lists report `total`.
+    **Pagination.** The lists that can grow without bound — tracks, albums, artists,
+    playlists, and a playlist's items — are cursor-paged: pass the previous page's
+    `nextCursor` as `cursor`, with the same `sort` and `order`; the last page's `nextCursor`
+    is `null`. `limit` defaults to 100 and may be up to 1000 — a bound on one transfer,
+    never on a collection. Each page reports the list's `total`. Every other list is one
+    `items` array.
 
-    **Errors.** `application/problem+json` (RFC 9457) with a machine-readable `code`. A method
-    a path does not support is `405 method_not_allowed`. An unexpected failure is
-    `500 internal`; its cause is logged on the server, never sent.
+    **Absent and null.** In a response, a property whose type allows `null` is always sent,
+    as `null` when it has no value; a property a response may leave out is never `null`.
+
+    **Errors.** `application/problem+json` (RFC 9457) with a machine-readable `code`, and a
+    `detail` that says what was wrong where there is more to say. Besides what each
+    operation lists, any operation may answer:
+    - `401` and `403` as **Authentication** and **Scope** say;
+    - `404 not_found` for something its path names that does not exist or is out of the
+      caller's reach, or a path parameter that is not an ID at all;
+    - `422 validation_failed` for a request it cannot accept: a body or query parameter that
+      is malformed or out of bounds, or a query parameter the operation does not take, a
+      planned one included;
+    - `405 method_not_allowed` for a method its path does not support;
+    - `503 setup_required` until first-run setup is done (`completeSetup`);
+    - `500 internal` for an unexpected failure, whose cause is logged on the server, never
+      sent.
 
     **Units.** Track and collection durations are integer microseconds (`durationUs`) so
     totals never drift; positions and listen time are integer milliseconds. Timestamps
@@ -61,16 +80,13 @@ info:
     **Unknown values.** An untagged album or artist is a real entity whose `title` or
     `name` is `null`; clients render it as unknown (`requirements/scanning.md` §2).
 
-    **Draft shapes.** `x-status: draft` marks schemas and operations whose final form
-    waits on an open design decision (`design/general.md` §11): stream format, waveform
-    and image-placeholder encodings, compact catalog encoding, and plugin surfaces.
+    **Draft shapes.** `x-status: draft` marks what is served but may still change shape:
+    audio delivery, which waits on its design (`design/general.md` §11); the waveform, whose
+    bin count is still open (`design/scanning.md`); and the player's fields that name a track
+    until the server keeps the queue.
 
     **Realtime.** `GET /realtime` upgrades to a WebSocket carrying
     `RealtimeClientMessage` and `RealtimeServerMessage`.
-
-    **Plugin routes.** Plugins may register their own routes under
-    `/libraries/{libraryId}/plugins/{pluginId}/`, reachable only where the plugin is
-    enabled. Those are documented by each plugin, not here.
 servers:
   - url: '{basePath}/api/v1'
     variables:
@@ -165,8 +181,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Session' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '422':
+          description: '`weak_password` — the password is too easy to guess; `detail` says why.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   /auth/login:
@@ -194,6 +213,13 @@ paths:
               schema: { $ref: '#/components/schemas/Session' }
         '401':
           description: '`invalid_credentials`, whatever the cause.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: |
+            `validation_failed` — `username` is not a valid `Username`, or `device` is malformed,
+            so no account was looked up.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -265,16 +291,14 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PluginSettings' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
     put:
       tags: [Account]
       summary: Connect a plugin, or change what it is connected with
       description: |
         Every required setting must have a value. Validated by the plugin when entered, run with
-        these and the server-wide settings; an invalid value answers
-        `422 plugin_settings_invalid`. The plugin receives the caller's listening from then on,
-        never what came before.
+        these and the server-wide settings. The plugin receives the caller's listening from then
+        on, never what came before.
       operationId: setMyPluginSettings
       requestBody:
         required: true
@@ -287,8 +311,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PluginSettings' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '422': { $ref: '#/components/responses/PluginSettingsInvalid' }
         default: { $ref: '#/components/responses/Problem' }
     delete:
       tags: [Account]
@@ -312,7 +335,7 @@ paths:
         each search the caller settles on from then, never one before. Off, or disconnecting,
         asks it to forget every search it was sent; what it already sent on is not recalled
         (`requirements/users.md` §7). Turning it on needs the caller to have connected the
-        plugin, and the plugin to ask for searches (`asksForSearches`), or answers `422`.
+        plugin, and the plugin to ask for searches (`asksForSearches`).
       operationId: setMySearchSharing
       requestBody:
         required: true
@@ -321,8 +344,11 @@ paths:
             schema: { $ref: '#/components/schemas/SearchSharing' }
       responses:
         '204': { description: Set. }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '422':
+          description: '`validation_failed` — turned on before the caller connected the plugin, or for one that does not ask for searches.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Devices ─────────────────────────────
@@ -380,7 +406,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Library' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Browse ─────────────────────────────
@@ -394,8 +419,8 @@ paths:
         Any filtered list of the library's tracks. Filters compose (`requirements/tags.md` §7).
         An album's track listing is `albumId` with `sort=album`: disc then track order, missing
         tracks in position (`requirements/albums.md` §4). Whether a track is owned or featured
-        for an artist follows from its `album.artists`. Playlists, mixes, and queues are ordered
-        item lists, not track filters, and have their own item endpoints.
+        for an artist follows from its `album.artists`. A playlist is an ordered item list, not
+        a track filter, and has its own item endpoint (`listPlaylistItems`).
       operationId: listTracks
       parameters:
         - name: sort
@@ -405,7 +430,8 @@ paths:
             ranking — listening weighted by completion, not play count alone — falling back to a
             sensible order for tracks never played, so it is never empty
             (`requirements/artists.md` §3.3, `requirements/analytics.md` §4). An artist's top
-            tracks are `artistId` with `sort=top`.
+            tracks are `artistId` with `sort=top`. `playCount`, `lastPlayed`, and `top` are
+            planned.
           schema:
             type: string
             enum: [name, artist, album, dateAdded, playCount, lastPlayed, releaseDate, duration, top]
@@ -434,7 +460,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TrackPage' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/tracks/{trackId}:
@@ -451,7 +476,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Track' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/albums:
@@ -461,15 +485,17 @@ paths:
       tags: [Browse]
       summary: Browse albums
       description: |
-        Any filtered list of the library's albums. An artist's discography is `artistId` with
-        `artistCredit=owned`, grouped by `type` with empty sections omitted, newest first by
-        default (`requirements/artists.md` §3.1). Their appearances are `artistCredit=featured`;
-        the tracks on each come from `listTracks` with `artistId`, `artistCredit=featured`, and
-        `sort=album` (`requirements/artists.md` §3.2).
+        Any filtered list of the library's albums, by name unless `sort` and `order` say
+        otherwise. For an artist's discography a client asks for `artistId` with
+        `artistCredit=owned`, `sort=releaseDate`, and `order=desc`, and groups the albums by
+        their `type`, leaving out empty groups (`requirements/artists.md` §3.1). Their
+        appearances are `artistCredit=featured`; the tracks on each come from `listTracks` with
+        `artistId`, `artistCredit=featured`, and `sort=album` (`requirements/artists.md` §3.2).
       operationId: listAlbums
       parameters:
         - name: sort
           in: query
+          description: '`playCount` and `lastPlayed` are planned.'
           schema:
             type: string
             enum: [name, artist, dateAdded, playCount, lastPlayed, releaseDate, duration]
@@ -479,7 +505,7 @@ paths:
         - $ref: '#/components/parameters/ArtistCredit'
         - name: type
           in: query
-          description: Filter by album type (`requirements/albums.md` §6).
+          description: Filter by album type (`requirements/albums.md` §6). Planned.
           style: form
           explode: false
           schema:
@@ -502,7 +528,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AlbumPage' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/albums/{albumId}:
@@ -523,7 +548,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Album' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/artists:
@@ -537,6 +561,7 @@ paths:
       parameters:
         - name: sort
           in: query
+          description: '`playCount` and `lastPlayed` are planned.'
           schema:
             type: string
             enum: [name, dateAdded, playCount, lastPlayed]
@@ -557,7 +582,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ArtistPage' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/artists/{artistId}:
@@ -574,7 +598,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Artist' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Media ─────────────────────────────
@@ -590,15 +613,18 @@ paths:
       tags: [Media]
       summary: Get an image
       description: |
-        Album, artist, and playlist images, resized to the requested size and
-        format-negotiated by `Accept` (`requirements/conventions.md` §5). Immutable and
-        cacheable indefinitely, because its ID changes whenever the image does.
+        Album and artist images as JPEG, resized to the requested size
+        (`requirements/conventions.md` §5). Immutable and cacheable indefinitely, because its ID
+        changes whenever the image does.
       operationId: getImage
       parameters:
         - $ref: '#/components/parameters/ImageSize'
       responses:
         '200': { $ref: '#/components/responses/Image' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        '206': { $ref: '#/components/responses/Image' }
+        '304': { description: Not modified (`If-None-Match` or `If-Modified-Since`). }
+        '412': { description: Precondition failed (`If-Match` or `If-Unmodified-Since`). }
+        '416': { description: Range not satisfiable. }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/tracks/{trackId}/lyrics:
@@ -616,7 +642,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Lyrics' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/tracks/{trackId}/waveform:
@@ -628,8 +653,7 @@ paths:
       summary: Get a waveform
       description: |
         Fetched on demand for the track playing and with downloads, never synced wholesale
-        (`requirements/playback.md` §3). Deterministic for the same audio, so cacheable until the
-        track's audio changes.
+        (`requirements/playback.md` §3).
       operationId: getWaveform
       responses:
         '200':
@@ -641,7 +665,6 @@ paths:
           description: |
             Not yet analyzed. Clients show a plain progress bar, and fetch again once the track's
             `loudness` becomes non-null.
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/tracks/{trackId}/playback:
@@ -656,6 +679,7 @@ paths:
         can decode: the original whenever the client can play it at or below `quality`
         (`requirements/playback.md` §1). The client picks `quality` from its own settings for
         the connection it is on, or for downloads. Describes exactly what the listener will hear.
+        A track marked missing answers `404`.
       operationId: getPlaybackInfo
       x-status: draft
       parameters:
@@ -668,7 +692,14 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PlaybackInfo' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: |
+            `validation_failed` — the original cannot be played as asked: a `quality` other than
+            `original`, or `codecs` that leave out its codec or container, needs a transcode, and
+            transcoding is not built yet.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/tracks/{trackId}/audio:
@@ -680,15 +711,14 @@ paths:
       summary: Stream or download audio
       description: |
         Serves a variant chosen by `getPlaybackInfo`, with byte ranges for seeking and
-        resumable downloads. A new stream on a saturated host is refused with
-        `503 capacity_exceeded`; streams already playing are never degraded
-        (`requirements/performance.md` §7).
+        resumable downloads. A track marked missing answers `404`.
       operationId: getAudio
       x-status: draft
       parameters:
         - name: variant
           in: query
           required: true
+          description: As `getPlaybackInfo` gave it; any other answers `404`.
           schema: { type: string }
         - name: Range
           in: header
@@ -696,9 +726,9 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/Audio' }
         '206': { $ref: '#/components/responses/Audio' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        '304': { description: Not modified (`If-None-Match` or `If-Modified-Since`). }
+        '412': { description: Precondition failed (`If-Match` or `If-Unmodified-Since`). }
         '416': { description: Range not satisfiable. }
-        '503': { $ref: '#/components/responses/CapacityExceeded' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Search ─────────────────────────────
@@ -709,10 +739,10 @@ paths:
       tags: [Search]
       summary: Search a library
       description: |
-        Names and lyrics, with typo tolerance, diacritic and case folding, word-order
-        independence, and exact-match precedence (`requirements/search.md` §3). Results
-        are identical to on-device search over the same corpus (`requirements/search.md` §2.1).
-        External sources are searched separately so they never delay these results.
+        Names, with typo tolerance, diacritic and case folding, word-order independence, and
+        exact-match precedence (`requirements/search.md` §3). Results are identical to on-device
+        search over the same corpus (`requirements/search.md` §2.1). Playlists are not searched
+        until they are built, so no playlists section comes back.
       operationId: search
       parameters:
         - $ref: '#/components/parameters/Query'
@@ -735,7 +765,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SearchResponse' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/recent-searches:
@@ -761,7 +790,6 @@ paths:
                   items:
                     type: array
                     items: { $ref: '#/components/schemas/RecentSearch' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
     post:
       tags: [Search]
@@ -773,8 +801,6 @@ paths:
         ID. `422` for a query with nothing to search for or over 500 bytes, or a `selected`
         that is not a track, album, or artist in this library.
       operationId: recordRecentSearch
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -786,7 +812,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RecentSearch' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
     delete:
       tags: [Search]
@@ -794,7 +819,6 @@ paths:
       operationId: clearRecentSearches
       responses:
         '204': { description: Cleared. }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/recent-searches/{recentSearchId}:
@@ -810,7 +834,6 @@ paths:
       operationId: deleteRecentSearch
       responses:
         '204': { description: Removed. }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Playlists ─────────────────────────────
@@ -842,7 +865,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PlaylistPage' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
     post:
       tags: [Playlists]
@@ -868,8 +890,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Playlist' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationFailed' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/playlists/{playlistId}:
@@ -887,7 +907,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Playlist' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
     patch:
       tags: [Playlists]
@@ -914,9 +933,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Playlist' }
-        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/VersionConflict' }
-        '422': { $ref: '#/components/responses/ValidationFailed' }
         default: { $ref: '#/components/responses/Problem' }
     delete:
       tags: [Playlists]
@@ -925,7 +942,6 @@ paths:
       operationId: deletePlaylist
       responses:
         '204': { description: Deleted. }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/playlists/{playlistId}/items:
@@ -950,7 +966,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PlaylistItemPage' }
-        '404': { $ref: '#/components/responses/NotFound' }
         '410':
           description: '`cursor_expired` — the playlist changed since the first page; start again.'
           content:
@@ -994,7 +1009,6 @@ paths:
                     type: array
                     description: Tracks from the request already in the playlist.
                     items: { type: string }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/playlists/{playlistId}/image:
@@ -1020,7 +1034,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Playlist' }
-        '404': { $ref: '#/components/responses/NotFound' }
         '415': { $ref: '#/components/responses/UnsupportedMedia' }
         default: { $ref: '#/components/responses/Problem' }
     delete:
@@ -1030,7 +1043,6 @@ paths:
       operationId: deletePlaylistImage
       responses:
         '204': { description: Reverted. }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Player ─────────────────────────────
@@ -1070,7 +1082,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CommandResult' }
-        '422': { $ref: '#/components/responses/ValidationFailed' }
         '429':
           description: '`rate_limited` — too many of the account''s commands are waiting for the target.'
           content:
@@ -1108,7 +1119,6 @@ paths:
                   items: { $ref: '#/components/schemas/PlayReport' }
       responses:
         '204': { description: Recorded. }
-        '422': { $ref: '#/components/responses/ValidationFailed' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Realtime ─────────────────────────────
@@ -1119,11 +1129,12 @@ paths:
       description: |
         Upgrades to a WebSocket. Authenticates like any other request, by bearer token or
         session cookie. A request with an `Origin` — one from a web page — is refused `403`
-        unless that origin's host and port match those it was sent to, as `Host` or
-        `X-Forwarded-Host`, so another site's page, or another server's on the same host,
-        cannot open a connection with the user's cookie. A port left out on either side is
-        the default for the origin's scheme, so a proxy on any other port must pass it on
-        (with nginx, `$http_host` rather than `$host`).
+        unless that origin's host and port match those it was sent to, as `Host` says or, from
+        a trusted proxy, `X-Forwarded-Host`, so another site's page, or another server's on the
+        same host, cannot open a connection with the user's cookie. The trusted proxies are those
+        `JEWELCASE_TRUSTED_PROXIES` names, or loopback when it is unset.
+        A port left out on either side is the default for the origin's scheme, so a proxy on
+        any other port must pass it on (with nginx, `$http_host` rather than `$host`).
         Messages are JSON objects matching `RealtimeClientMessage` and
         `RealtimeServerMessage`, each at most 64 KiB; a message whose `type` the server
         does not know is ignored. The server pings every 15 seconds and closes a connection
@@ -1140,7 +1151,11 @@ paths:
           schema: { type: string, const: websocket }
       responses:
         '101': { description: Switching to WebSocket. }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403':
+          description: '`forbidden` — the request comes from a page whose origin is not this server.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Admin: plugins ─────────────────────────────
@@ -1161,7 +1176,6 @@ paths:
                   items:
                     type: array
                     items: { $ref: '#/components/schemas/Plugin' }
-        '403': { $ref: '#/components/responses/Forbidden' }
         default: { $ref: '#/components/responses/Problem' }
     post:
       tags: [Admin]
@@ -1171,8 +1185,6 @@ paths:
         disabled for every library. Settings from a previous install are restored, and grants
         only for requests made again unchanged.
       operationId: adminInstallPlugin
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -1193,9 +1205,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Plugin' }
-        '403': { $ref: '#/components/responses/Forbidden' }
         '409':
-          description: '`plugin_exists` — a plugin with its `id` is installed; update it instead.'
+          description: '`plugin_exists` — a plugin with its `id` is installed; uninstall it first.'
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -1219,8 +1230,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Plugin' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
     delete:
       tags: [Admin]
@@ -1232,8 +1241,6 @@ paths:
       operationId: adminUninstallPlugin
       responses:
         '204': { description: Uninstalled. }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   /admin/plugins/{pluginId}/libraries/{libraryId}:
@@ -1263,8 +1270,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Plugin' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: '`permissions_required` — `detail` names what it still needs.'
           content:
@@ -1295,8 +1300,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Plugin' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   /admin/plugins/{pluginId}/exemptions/{host}:
@@ -1305,7 +1308,7 @@ paths:
       - name: host
         in: path
         required: true
-        description: One host name, such as `musicbrainz.org`; no `*` or patterns. Kept lowercase.
+        description: One host name, such as `musicbrainz.org`. Kept lowercase. Anything else, such as `*` or a pattern, answers `422`.
         schema: { type: string }
     put:
       tags: [Admin]
@@ -1318,9 +1321,6 @@ paths:
       operationId: adminExemptPlugin
       responses:
         '204': { description: Exempt. }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationFailed' }
         default: { $ref: '#/components/responses/Problem' }
     delete:
       tags: [Admin]
@@ -1331,9 +1331,6 @@ paths:
       operationId: adminUnexemptPlugin
       responses:
         '204': { description: Not exempt. }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationFailed' }
         default: { $ref: '#/components/responses/Problem' }
 
   /admin/plugins/{pluginId}/run:
@@ -1348,15 +1345,12 @@ paths:
         scanned, as the scanner is the only way into the library (`requirements/general.md`
         §3.2).
       operationId: adminRunPlugin
-      x-status: draft
       responses:
         '200':
           description: The run finished, whether or not the plugin succeeded.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PluginRunResult' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
 
   /admin/plugins/{pluginId}/settings:
@@ -1377,8 +1371,6 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PluginSettings' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
         default: { $ref: '#/components/responses/Problem' }
     put:
       tags: [Admin]
@@ -1396,9 +1388,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PluginSettings' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '422': { $ref: '#/components/responses/PluginSettingsInvalid' }
         default: { $ref: '#/components/responses/Problem' }
 
 components:
@@ -1411,7 +1401,10 @@ components:
       type: apiKey
       in: cookie
       name: jewelcase_session
-      description: Set at login for browser clients. State-changing requests must also send `X-Jewelcase-Client`.
+      description: |
+        Set at setup or login for browser clients, and sent again from time to time as the
+        session is used, so one in use never expires; a response that sends it again is
+        `Cache-Control: private`. State-changing requests must also send `X-Jewelcase-Client`.
 
   parameters:
     LibraryId:
@@ -1477,7 +1470,7 @@ components:
     Genre:
       name: genre
       in: query
-      description: Tag IDs of type `genre`.
+      description: Tag IDs of type `genre`. Planned.
       style: form
       explode: false
       schema:
@@ -1486,7 +1479,7 @@ components:
     GenreMatch:
       name: genreMatch
       in: query
-      description: Whether items must carry all or any of the given genres.
+      description: Whether items must carry all or any of the given genres. Planned.
       schema:
         type: string
         enum: [all, any]
@@ -1494,35 +1487,39 @@ components:
     YearFrom:
       name: yearFrom
       in: query
+      description: Planned.
       schema: { type: integer }
     YearTo:
       name: yearTo
       in: query
+      description: Planned.
       schema: { type: integer }
     Availability:
       name: availability
       in: query
-      description: Server availability (`requirements/conventions.md` §6). Playability on a device is the client's to filter.
+      description: Server availability (`requirements/conventions.md` §6). Playability on a device is the client's to filter. Planned.
       schema: { $ref: '#/components/schemas/Availability' }
     Played:
       name: played
       in: query
-      description: Filter by whether the caller has ever played the item.
+      description: Filter by whether the caller has ever played the item. Planned.
       schema:
         type: string
         enum: [never, ever]
     PlayedBefore:
       name: lastPlayedBefore
       in: query
-      description: Last played before this time — "not played since".
+      description: Last played before this time — "not played since". Planned.
       schema: { type: string, format: date-time }
     PlayedAfter:
       name: lastPlayedAfter
       in: query
+      description: Planned.
       schema: { type: string, format: date-time }
     MinPlayCount:
       name: minPlayCount
       in: query
+      description: Planned.
       schema: { type: integer, minimum: 0 }
     Query:
       name: q
@@ -1533,7 +1530,7 @@ components:
     SearchTypes:
       name: types
       in: query
-      description: Sections to include. Defaults to all.
+      description: Sections to include. Defaults to all but `lyrics`, which is planned.
       style: form
       explode: false
       schema:
@@ -1542,13 +1539,13 @@ components:
     Within:
       name: within
       in: query
-      description: 'Narrow to a container, as `artist:ID`, `album:ID`, or `playlist:ID` (`requirements/search.md` §5).'
+      description: 'Narrow to a container, as `artist:ID`, `album:ID`, or `playlist:ID` (`requirements/search.md` §5). Planned.'
       schema: { type: string, pattern: '^(artist|album|playlist):.+$' }
     ImageSize:
       name: size
       in: query
-      description: Longest edge in pixels. The server rounds up to a fixed set of sizes.
-      schema: { type: integer, minimum: 16, maximum: 4096 }
+      description: Longest edge in pixels. The server rounds up to one of a fixed set of sizes, and never enlarges an image.
+      schema: { type: integer, minimum: 16, maximum: 4096, default: 512 }
     Purpose:
       name: purpose
       in: query
@@ -1588,18 +1585,8 @@ components:
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
-    NotFound:
-      description: '`not_found` — nonexistent, or out of the caller''s reach.'
-      content:
-        application/problem+json:
-          schema: { $ref: '#/components/schemas/Problem' }
-    Forbidden:
-      description: '`forbidden` — the caller''s role does not permit this.'
-      content:
-        application/problem+json:
-          schema: { $ref: '#/components/schemas/Problem' }
-    ValidationFailed:
-      description: The request was understood but not acceptable; see `code` and `errors`.
+    PluginSettingsInvalid:
+      description: '`plugin_settings_invalid` — a value does not fit the plugin''s settings, a required one is missing, or the plugin refused them; `detail` says why.'
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -1616,30 +1603,24 @@ components:
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
-    CapacityExceeded:
-      description: '`capacity_exceeded` — the host is full. `detail` explains; admins see why in activity.'
-      headers:
-        Retry-After:
-          schema: { type: integer }
-      content:
-        application/problem+json:
-          schema: { $ref: '#/components/schemas/Problem' }
     UnsupportedMedia:
       description: '`unsupported_media` — not an accepted image type.'
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
     Image:
-      description: The image, format-negotiated by `Accept`.
+      description: The image as JPEG, whole or a range.
       headers:
         Cache-Control:
-          schema: { type: string }
+          schema: { type: string, const: 'private, max-age=31536000, immutable' }
       content:
-        image/*:
+        image/jpeg:
           schema: { type: string, format: binary }
     Audio:
       description: Audio bytes, whole or a range.
       headers:
+        Cache-Control:
+          schema: { type: string, const: private }
         Accept-Ranges:
           schema: { type: string, const: bytes }
         Content-Range:
@@ -1662,6 +1643,7 @@ components:
           description: Human-readable, safe to show. Never contains credentials or plugin internals.
         code:
           type: string
+          description: '`version_conflict`, `cursor_expired`, and `unsupported_media` come only from planned operations.'
           enum:
             - unauthenticated
             - session_revoked
@@ -1672,21 +1654,14 @@ components:
             - method_not_allowed
             - validation_failed
             - weak_password
-            - breached_password
             - plugin_invalid
             - plugin_exists
             - permissions_required
-            - username_taken
             - version_conflict
-            - capacity_exceeded
             - cursor_expired
             - setup_required
             - unsupported_media
-            - root_overlap
-            - root_unavailable
             - device_unavailable
-            - source_unavailable
-            - source_timeout
             - plugin_settings_invalid
             - internal
         reason:
@@ -1696,15 +1671,6 @@ components:
             With `session_revoked`. `credentials_changed` — the device keeps its downloads and
             logs in again with its `deviceId`; `logged_out` — the device removes them
             (`requirements/offline.md` §9).
-        errors:
-          type: array
-          description: Field-level problems, with `validation_failed` and `plugin_settings_invalid`.
-          items:
-            type: object
-            required: [field, message]
-            properties:
-              field: { type: string, description: JSON Pointer into the request body. }
-              message: { type: string }
         currentVersion:
           type: integer
           description: With `version_conflict`.
@@ -1730,7 +1696,7 @@ components:
     CommandId:
       type: string
       format: uuid
-      description: Client-generated. Identifies the write for idempotency and seeds the IDs of items it creates.
+      description: Client-generated. Identifies the command, so it is carried out once.
 
     PartialDate:
       type: string
@@ -1771,11 +1737,13 @@ components:
       properties:
         id:
           type: string
-          description: Fetch from `getImage`, or `getExternalImage` for content with a `source`. Changes whenever the image does.
+          description: Fetch from `getImage`. Changes whenever the image does.
         placeholder:
-          type: string
-          x-status: draft
-          description: A few bytes, base64, decoding to a recognizable correctly-coloured stand-in (`requirements/offline.md` §1.1). Empty when there is none, as for external images.
+          type: [string, 'null']
+          description: |
+            The image's ThumbHash in base64, a few bytes that decode to a recognizable
+            correctly-coloured stand-in (`requirements/offline.md` §1.1). `null` until the server
+            has made one, and for an image it could not decode.
 
     ArtistCredit:
       type: object
@@ -1820,11 +1788,6 @@ components:
         status:
           type: string
           enum: [ok, unavailable]
-        checks:
-          type: object
-          additionalProperties:
-            type: string
-            enum: [ok, failing]
 
     ServerInfo:
       type: object
@@ -1844,9 +1807,15 @@ components:
       properties:
         name:
           type: string
-          description: A recognizable default, such as "Firefox on Linux", which the user can change.
+          minLength: 1
+          maxLength: 100
+          description: A recognizable default, such as "Firefox on Linux", which the user can change. Not blank.
         type: { $ref: '#/components/schemas/DeviceType' }
-        platform: { type: string, description: 'For example `web`, `android`.' }
+        platform:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: For example `web`, `android`. Not blank.
 
     Username:
       type: string
@@ -1859,14 +1828,18 @@ components:
       properties:
         username: { $ref: '#/components/schemas/Username' }
         password: { type: string, format: password }
-        displayName: { type: string }
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Not blank. Defaults to the username.
         device: { $ref: '#/components/schemas/DeviceRegistration' }
 
     LoginRequest:
       type: object
       required: [username, password, device]
       properties:
-        username: { type: string }
+        username: { $ref: '#/components/schemas/Username' }
         password: { type: string, format: password }
         device: { $ref: '#/components/schemas/DeviceRegistration' }
         deviceId: { $ref: '#/components/schemas/ReclaimedDeviceId' }
@@ -1908,7 +1881,7 @@ components:
         role: { $ref: '#/components/schemas/Role' }
         hasAvatar:
           type: boolean
-          description: Whether to fetch the avatar image, or show initials without a request.
+          description: Whether the account has an avatar image; clients show initials when it has none. Always `false` until avatars are built.
 
     # ───────────────────────────── Devices ─────────────────────────────
     Device:
@@ -1976,7 +1949,7 @@ components:
 
     TrackBase:
       type: object
-      required: [id, title, artists, album, durationUs, availability]
+      required: [id, title, artists, album, discNumber, trackNumber, durationUs, releaseDate, availability]
       description: What any source can say about a track. `TrackSummary` adds what only the library knows.
       properties:
         source: { $ref: '#/components/schemas/Source' }
@@ -2021,7 +1994,7 @@ components:
             addedAt: { type: string, format: date-time }
             sortKeys: { $ref: '#/components/schemas/TrackSortKeys' }
             personal:
-              description: The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed.
+              description: The caller's own listening. Planned.
               allOf:
                 - $ref: '#/components/schemas/Personal'
 
@@ -2056,7 +2029,7 @@ components:
       allOf:
         - $ref: '#/components/schemas/AudioSummary'
         - type: object
-          required: [container, sampleRateHz, channels, fileSizeBytes]
+          required: [container, bitrateKbps, sampleRateHz, bitDepth, channels, fileSizeBytes]
           properties:
             container: { type: string }
             bitrateKbps: { type: [integer, 'null'] }
@@ -2069,7 +2042,7 @@ components:
       allOf:
         - $ref: '#/components/schemas/TrackSummary'
         - type: object
-          required: [audio, lyrics, loudness, identifiers]
+          required: [audio, lyrics, loudness]
           properties:
             audio: { $ref: '#/components/schemas/AudioProperties' }
             lyrics:
@@ -2084,17 +2057,6 @@ components:
               oneOf:
                 - $ref: '#/components/schemas/Loudness'
                 - type: 'null'
-            identifiers:
-              type: object
-              description: |
-                Identifiers read from tags (`requirements/tracks.md` §6). `isrc` is the one the core
-                models. Any other identifier tag — a service's recording or release ID, for example —
-                passes through as an extra property keyed by its tag name as read, lowercased. The
-                core gives these no meaning and has no dedicated fields for any service; plugins
-                interpret them.
-              properties:
-                isrc: { type: [string, 'null'] }
-              additionalProperties: { type: string }
 
     TrackPage:
       allOf:
@@ -2108,7 +2070,7 @@ components:
 
     Lyrics:
       type: object
-      required: [kind]
+      required: [kind, lines, plain]
       properties:
         kind:
           type: string
@@ -2125,13 +2087,13 @@ components:
               text: { type: string }
         plain:
           type: [string, 'null']
-          description: Present with `plain`, and with `synced` where a plain version also exists.
+          description: With `plain`.
 
     Waveform:
       type: object
       x-status: draft
       required: [pointCount, data]
-      description: Deterministic for the same audio, derived from the original file (`requirements/playback.md` §3).
+      description: Derived from the original file (`requirements/playback.md` §3).
       properties:
         pointCount: { type: integer }
         data:
@@ -2151,7 +2113,7 @@ components:
     PlaybackInfo:
       type: object
       x-status: draft
-      required: [variant, delivery, codec, container, sampleRateHz, channels, transport]
+      required: [variant, delivery, codec, container, bitrateKbps, sampleRateHz, bitDepth, channels, sizeBytes, transport, loudness, gapless]
       description: Exactly what the listener will hear (`requirements/playback.md` §1).
       properties:
         variant:
@@ -2160,6 +2122,7 @@ components:
         delivery:
           type: string
           enum: [direct, transcoded]
+          description: '`transcoded` is planned.'
         codec: { type: string }
         container: { type: string }
         bitrateKbps: { type: [integer, 'null'] }
@@ -2173,7 +2136,7 @@ components:
         transport:
           type: string
           enum: [progressive, segmented]
-          description: Set by the audio-delivery design.
+          description: Set by the audio-delivery design. `segmented` is planned.
         loudness:
           description: Measured on the original, so it applies to every variant.
           oneOf:
@@ -2181,7 +2144,7 @@ components:
             - type: 'null'
         gapless:
           type: [object, 'null']
-          description: Samples to trim so consecutive tracks join exactly (`requirements/playback.md` §4).
+          description: Samples to trim so consecutive tracks join exactly (`requirements/playback.md` §4). Always `null` until it is measured.
           properties:
             leadingSamples: { type: integer }
             trailingSamples: { type: integer }
@@ -2197,6 +2160,7 @@ components:
       allOf:
         - $ref: '#/components/schemas/AlbumRef'
         - type: object
+          required: [releaseDate]
           properties:
             source: { $ref: '#/components/schemas/Source' }
             releaseDate:
@@ -2241,7 +2205,7 @@ components:
             availability: { $ref: '#/components/schemas/Availability' }
             addedAt: { type: string, format: date-time }
             personal:
-              description: The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed.
+              description: The caller's own listening. Planned.
               allOf:
                 - $ref: '#/components/schemas/Personal'
 
@@ -2312,7 +2276,7 @@ components:
               description: Owned and featured tracks.
             addedAt: { type: string, format: date-time }
             personal:
-              description: The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed.
+              description: The caller's own listening. Planned.
               allOf:
                 - $ref: '#/components/schemas/Personal'
 
@@ -2352,7 +2316,7 @@ components:
         track: { $ref: '#/components/schemas/TrackSummary' }
         line:
           type: object
-          required: [text]
+          required: [text, startMs]
           properties:
             text: { type: string }
             startMs: { type: [integer, 'null'] }
@@ -2391,7 +2355,7 @@ components:
             - type: 'null'
         sections:
           type: array
-          description: Ordered by how well each matches; ties break tracks, then albums, then artists.
+          description: Ordered by how well each matches; ties break tracks, then albums, then artists. A section with no match is left out.
           items:
             type: object
             required: [type, items, total]
@@ -2403,7 +2367,7 @@ components:
               total: { type: integer }
         nearMisses:
           type: array
-          description: Suggested queries when little or nothing matched (`requirements/search.md` §8).
+          description: Suggested queries when little or nothing matched (`requirements/search.md` §8). Always empty until suggestions are built.
           items: { type: string }
         libraryEmpty:
           type: boolean
@@ -2411,7 +2375,7 @@ components:
 
     RecentSearch:
       type: object
-      required: [id, query, searchedAt]
+      required: [id, query, selected, searchedAt]
       properties:
         id: { $ref: '#/components/schemas/Id' }
         query: { type: string }
@@ -2471,7 +2435,7 @@ components:
               type: integer
               description: Advances with every change; edits apply only against the version they were made on.
             personal:
-              description: The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed.
+              description: The caller's own listening. Planned.
               allOf:
                 - $ref: '#/components/schemas/Personal'
 
@@ -2719,7 +2683,7 @@ components:
     # ───────────────────────────── Player ─────────────────────────────
     PlayerState:
       type: object
-      required: [status, activeDeviceId, itemId, positionMs, positionAt]
+      required: [status, activeDeviceId, itemId, libraryId, trackId, positionMs, positionAt, volume]
       properties:
         status:
           type: string
@@ -2744,9 +2708,8 @@ components:
           description: The library of `trackId`, until the server keeps the queue, which names it.
         trackId: { type: [string, 'null'] }
         external:
-          oneOf:
-            - $ref: '#/components/schemas/ExternalTrackRef'
-            - type: 'null'
+          $ref: '#/components/schemas/ExternalTrackRef'
+          description: The external track playing. Planned.
         positionMs: { type: integer }
         positionAt:
           type: string
@@ -2852,13 +2815,14 @@ components:
             `pending` until the target device confirms. A failure is always reported
             (`requirements/realtime.md` §5): at once when nothing is playing, or the command
             is invalid or not one the server carries out; when the target's connection
-            closes; and after 5 seconds when the target has not answered. Over HTTP, the
-            failures at once are `409`, `422`, and `429` problems instead. A command sent
-            again with the same `commandId` is carried out once: while it waits its result
-            goes to where it was sent from last, and once it has finished, the result of any
-            of the account's latest 32 commands is answered again. An account has at most 16
-            commands waiting at a time.
-        reason: { type: [string, 'null'] }
+            closes; when playback starts on another connection, as when another device takes
+            it over, before a command for whatever plays is carried out; and after 5 seconds
+            when the target has not answered. Over HTTP, the failures at once are `409`, `422`,
+            and `429` problems instead. A command sent again with the same `commandId` is
+            carried out once: while it waits its result goes to where it was sent from last,
+            and once it has finished, the result of any of the account's latest 32 commands is
+            answered again. An account has at most 16 commands waiting at a time.
+        reason: { type: string }
 
     ProgressReport:
       type: object
@@ -2915,7 +2879,8 @@ components:
         Every track that starts is a play; `listenTimeMs` is audio actually heard
         (`requirements/analytics.md` §1). Exactly one of `trackId` or `external` is set. A
         play of a track no longer in a library the caller reaches is left out. A play is
-        recorded on the device whose token reports it.
+        recorded on the device whose token reports it. A play of an external track is accepted
+        but not recorded.
       properties:
         playId:
           type: string
@@ -3070,7 +3035,15 @@ components:
                     properties:
                       at: { type: string, format: date-time }
                       ok: { type: boolean }
-                      summary: { type: string, description: 'The plugin''s own summary, or why it failed.' }
+                      summary:
+                        type: string
+                        description: |
+                          The plugin's own summary, or why the run failed, followed in brackets by
+                          what the run was refused and about how much compute it spent, such as
+                          `Saved 3. (refused Network access, a.example; about 42 ms of compute)`.
+                          A run the server could not complete says only
+                          `the server could not complete the run`; its cause is logged on the
+                          server.
                   - type: 'null'
         hostLimits:
           type: array
@@ -3177,7 +3150,7 @@ components:
       required: [ok, summary, log, saved, scannerRunning]
       properties:
         ok: { type: boolean }
-        summary: { type: string, description: 'The plugin''s own one-line summary, or why the run failed.' }
+        summary: { type: string, description: 'The plugin''s own one-line summary, or why the run failed, for each library it ran in, in turn.' }
         log:
           type: array
           description: Progress lines the plugin logged, in order.

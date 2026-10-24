@@ -13,6 +13,9 @@ import { type PlaylistLibrary, PlaylistStore, playlistRoute } from './playlists'
 const LIB = 1n;
 const OTHER = 2n;
 
+/** The part of the request body a `validation_failed` problem's `detail` points at. */
+const field = (problem: Problem) => /\(at (.*)\)$/.exec(problem.detail ?? '')?.[1] ?? '';
+
 const track = (n: number): TrackSummary => ({
 	id: String(n),
 	title: `Track ${n}`,
@@ -146,19 +149,16 @@ describe('creating', () => {
 	it('refuses what is not a playlist, pointing at the field', () => {
 		const refused = (body: object) => call<Problem>('POST', '/playlists', body).body;
 		expect(refused({})).toMatchObject({ status: 422, code: 'validation_failed' });
-		expect(refused({ title: ' ' }).errors).toEqual([
-			{ field: '/title', message: 'A playlist needs a title.' }
-		]);
-		expect(
-			refused({
-				title: 'x',
-				items: [
-					{ type: 'track', id: '1' },
-					{ type: 'track', id: '9' }
-				]
-			}).errors?.[0].field
-		).toBe('/items/1');
-		expect(refused({ title: 'x', fromMix: 'm' }).errors?.[0].field).toBe('/fromMix');
+		expect(refused({ title: ' ' }).detail).toBe('A playlist needs a title. (at /title)');
+		const twoTracks = {
+			title: 'x',
+			items: [
+				{ type: 'track', id: '1' },
+				{ type: 'track', id: '9' }
+			]
+		};
+		expect(field(refused(twoTracks))).toBe('/items/1');
+		expect(field(refused({ title: 'x', fromMix: 'm' }))).toBe('/fromMix');
 	});
 
 	it('refuses tracks from another library', () => {
@@ -229,22 +229,22 @@ describe('editing', () => {
 			]
 		});
 		expect(out.status).toBe(422);
-		expect(out.body.errors?.[0].field).toBe('/ops');
+		expect(field(out.body)).toBe('/ops');
 		expect(store.get(LIB, 'pl-seed')).toMatchObject({ title: 'Seed', version: 1, trackCount: 2 });
 	});
 
 	it('refuses malformed edits', () => {
-		const field = (body: object) => edit(body).body.errors?.[0].field;
-		expect(field({ title: 'No version' })).toBe('/baseVersion');
-		expect(field({ baseVersion: 1 })).toBe('');
-		expect(field({ baseVersion: 1, title: '' })).toBe('/title');
-		expect(field({ baseVersion: 1, pinned: 'yes' })).toBe('/pinned');
-		expect(field({ baseVersion: 1, ops: [] })).toBe('/ops');
-		expect(field({ baseVersion: 1, ops: [{ op: 'shuffle' }] })).toBe('/ops/0/op');
-		expect(field({ baseVersion: 1, ops: [{ op: 'remove', positions: 0 }] })).toBe(
+		const at = (body: object) => field(edit(body).body);
+		expect(at({ title: 'No version' })).toBe('/baseVersion');
+		expect(at({ baseVersion: 1 })).toBe('');
+		expect(at({ baseVersion: 1, title: '' })).toBe('/title');
+		expect(at({ baseVersion: 1, pinned: 'yes' })).toBe('/pinned');
+		expect(at({ baseVersion: 1, ops: [] })).toBe('/ops');
+		expect(at({ baseVersion: 1, ops: [{ op: 'shuffle' }] })).toBe('/ops/0/op');
+		expect(at({ baseVersion: 1, ops: [{ op: 'remove', positions: 0 }] })).toBe(
 			'/ops/0/positions'
 		);
-		expect(field({ baseVersion: 1, ops: [{ op: 'add', items: [{ type: 'mix', id: '1' }] }] })).toBe(
+		expect(at({ baseVersion: 1, ops: [{ op: 'add', items: [{ type: 'mix', id: '1' }] }] })).toBe(
 			'/ops/0/items/0'
 		);
 	});

@@ -33,7 +33,7 @@ async fn pages_through_every_sort_with_the_unknown_artist_last() {
     assert_eq!(page["total"], 4);
     assert_eq!(
         page["items"][0],
-        json!({ "id": "10", "name": "The Beatles", "image": { "id": "40", "placeholder": "" },
+        json!({ "id": "10", "name": "The Beatles", "image": { "id": "40", "placeholder": null },
                 "albumCount": 1, "trackCount": 5, "addedAt": "1970-01-01T00:00:03.000Z" })
     );
 }
@@ -73,7 +73,7 @@ async fn gets_an_artist_with_its_biography_and_genres() {
     assert_eq!(
         artist,
         json!({
-            "id": "10", "name": "The Beatles", "image": { "id": "40", "placeholder": "" },
+            "id": "10", "name": "The Beatles", "image": { "id": "40", "placeholder": null },
             "albumCount": 1, "trackCount": 5, "addedAt": "1970-01-01T00:00:03.000Z",
             "biography": "Four lads from Liverpool.",
             "genres": [{ "id": "31", "name": "Pop" }, { "id": "30", "name": "Rock" }],

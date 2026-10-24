@@ -17,8 +17,11 @@ const state = (device: string | null): PlayerState => ({
 	status: device ? 'playing' : 'stopped',
 	activeDeviceId: device,
 	itemId: '0',
+	libraryId: null,
+	trackId: null,
 	positionMs: 0,
-	positionAt: new Date().toISOString()
+	positionAt: new Date().toISOString(),
+	volume: null
 });
 
 let sent: ProgressReport[];

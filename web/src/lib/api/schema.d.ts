@@ -169,9 +169,8 @@ export interface paths {
         /**
          * Connect a plugin, or change what it is connected with
          * @description Every required setting must have a value. Validated by the plugin when entered, run with
-         *     these and the server-wide settings; an invalid value answers
-         *     `422 plugin_settings_invalid`. The plugin receives the caller's listening from then on,
-         *     never what came before.
+         *     these and the server-wide settings. The plugin receives the caller's listening from then
+         *     on, never what came before.
          */
         put: operations["setMyPluginSettings"];
         post?: never;
@@ -202,7 +201,7 @@ export interface paths {
          *     each search the caller settles on from then, never one before. Off, or disconnecting,
          *     asks it to forget every search it was sent; what it already sent on is not recalled
          *     (`requirements/users.md` §7). Turning it on needs the caller to have connected the
-         *     plugin, and the plugin to ask for searches (`asksForSearches`), or answers `422`.
+         *     plugin, and the plugin to ask for searches (`asksForSearches`).
          */
         put: operations["setMySearchSharing"];
         post?: never;
@@ -285,8 +284,8 @@ export interface paths {
          * @description Any filtered list of the library's tracks. Filters compose (`requirements/tags.md` §7).
          *     An album's track listing is `albumId` with `sort=album`: disc then track order, missing
          *     tracks in position (`requirements/albums.md` §4). Whether a track is owned or featured
-         *     for an artist follows from its `album.artists`. Playlists, mixes, and queues are ordered
-         *     item lists, not track filters, and have their own item endpoints.
+         *     for an artist follows from its `album.artists`. A playlist is an ordered item list, not
+         *     a track filter, and has its own item endpoint (`listPlaylistItems`).
          */
         get: operations["listTracks"];
         put?: never;
@@ -328,11 +327,12 @@ export interface paths {
         };
         /**
          * Browse albums
-         * @description Any filtered list of the library's albums. An artist's discography is `artistId` with
-         *     `artistCredit=owned`, grouped by `type` with empty sections omitted, newest first by
-         *     default (`requirements/artists.md` §3.1). Their appearances are `artistCredit=featured`;
-         *     the tracks on each come from `listTracks` with `artistId`, `artistCredit=featured`, and
-         *     `sort=album` (`requirements/artists.md` §3.2).
+         * @description Any filtered list of the library's albums, by name unless `sort` and `order` say
+         *     otherwise. For an artist's discography a client asks for `artistId` with
+         *     `artistCredit=owned`, `sort=releaseDate`, and `order=desc`, and groups the albums by
+         *     their `type`, leaving out empty groups (`requirements/artists.md` §3.1). Their
+         *     appearances are `artistCredit=featured`; the tracks on each come from `listTracks` with
+         *     `artistId`, `artistCredit=featured`, and `sort=album` (`requirements/artists.md` §3.2).
          */
         get: operations["listAlbums"];
         put?: never;
@@ -423,9 +423,9 @@ export interface paths {
         };
         /**
          * Get an image
-         * @description Album, artist, and playlist images, resized to the requested size and
-         *     format-negotiated by `Accept` (`requirements/conventions.md` §5). Immutable and
-         *     cacheable indefinitely, because its ID changes whenever the image does.
+         * @description Album and artist images as JPEG, resized to the requested size
+         *     (`requirements/conventions.md` §5). Immutable and cacheable indefinitely, because its ID
+         *     changes whenever the image does.
          */
         get: operations["getImage"];
         put?: never;
@@ -472,8 +472,7 @@ export interface paths {
         /**
          * Get a waveform
          * @description Fetched on demand for the track playing and with downloads, never synced wholesale
-         *     (`requirements/playback.md` §3). Deterministic for the same audio, so cacheable until the
-         *     track's audio changes.
+         *     (`requirements/playback.md` §3).
          */
         get: operations["getWaveform"];
         put?: never;
@@ -500,6 +499,7 @@ export interface paths {
          *     can decode: the original whenever the client can play it at or below `quality`
          *     (`requirements/playback.md` §1). The client picks `quality` from its own settings for
          *     the connection it is on, or for downloads. Describes exactly what the listener will hear.
+         *     A track marked missing answers `404`.
          */
         get: operations["getPlaybackInfo"];
         put?: never;
@@ -523,9 +523,7 @@ export interface paths {
         /**
          * Stream or download audio
          * @description Serves a variant chosen by `getPlaybackInfo`, with byte ranges for seeking and
-         *     resumable downloads. A new stream on a saturated host is refused with
-         *     `503 capacity_exceeded`; streams already playing are never degraded
-         *     (`requirements/performance.md` §7).
+         *     resumable downloads. A track marked missing answers `404`.
          */
         get: operations["getAudio"];
         put?: never;
@@ -547,10 +545,10 @@ export interface paths {
         };
         /**
          * Search a library
-         * @description Names and lyrics, with typo tolerance, diacritic and case folding, word-order
-         *     independence, and exact-match precedence (`requirements/search.md` §3). Results
-         *     are identical to on-device search over the same corpus (`requirements/search.md` §2.1).
-         *     External sources are searched separately so they never delay these results.
+         * @description Names, with typo tolerance, diacritic and case folding, word-order independence, and
+         *     exact-match precedence (`requirements/search.md` §3). Results are identical to on-device
+         *     search over the same corpus (`requirements/search.md` §2.1). Playlists are not searched
+         *     until they are built, so no playlists section comes back.
          */
         get: operations["search"];
         put?: never;
@@ -840,11 +838,12 @@ export interface paths {
          * Open the realtime connection
          * @description Upgrades to a WebSocket. Authenticates like any other request, by bearer token or
          *     session cookie. A request with an `Origin` — one from a web page — is refused `403`
-         *     unless that origin's host and port match those it was sent to, as `Host` or
-         *     `X-Forwarded-Host`, so another site's page, or another server's on the same host,
-         *     cannot open a connection with the user's cookie. A port left out on either side is
-         *     the default for the origin's scheme, so a proxy on any other port must pass it on
-         *     (with nginx, `$http_host` rather than `$host`).
+         *     unless that origin's host and port match those it was sent to, as `Host` says or, from
+         *     a trusted proxy, `X-Forwarded-Host`, so another site's page, or another server's on the
+         *     same host, cannot open a connection with the user's cookie. The trusted proxies are those
+         *     `JEWELCASE_TRUSTED_PROXIES` names, or loopback when it is unset.
+         *     A port left out on either side is the default for the origin's scheme, so a proxy on
+         *     any other port must pass it on (with nginx, `$http_host` rather than `$host`).
          *     Messages are JSON objects matching `RealtimeClientMessage` and
          *     `RealtimeServerMessage`, each at most 64 KiB; a message whose `type` the server
          *     does not know is ignored. The server pings every 15 seconds and closes a connection
@@ -964,7 +963,7 @@ export interface paths {
             header?: never;
             path: {
                 pluginId: components["parameters"]["PluginId"];
-                /** @description One host name, such as `musicbrainz.org`; no `*` or patterns. Kept lowercase. */
+                /** @description One host name, such as `musicbrainz.org`. Kept lowercase. Anything else, such as `*` or a pattern, answers `422`. */
                 host: string;
             };
             cookie?: never;
@@ -1058,8 +1057,11 @@ export interface components {
             status: number;
             /** @description Human-readable, safe to show. Never contains credentials or plugin internals. */
             detail?: string;
-            /** @enum {string} */
-            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "breached_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "username_taken" | "version_conflict" | "capacity_exceeded" | "cursor_expired" | "setup_required" | "unsupported_media" | "root_overlap" | "root_unavailable" | "device_unavailable" | "source_unavailable" | "source_timeout" | "plugin_settings_invalid" | "internal";
+            /**
+             * @description `version_conflict`, `cursor_expired`, and `unsupported_media` come only from planned operations.
+             * @enum {string}
+             */
+            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "version_conflict" | "cursor_expired" | "setup_required" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
             /**
              * @description With `session_revoked`. `credentials_changed` — the device keeps its downloads and
              *     logs in again with its `deviceId`; `logged_out` — the device removes them
@@ -1067,12 +1069,6 @@ export interface components {
              * @enum {string}
              */
             reason?: "credentials_changed" | "logged_out";
-            /** @description Field-level problems, with `validation_failed` and `plugin_settings_invalid`. */
-            errors?: {
-                /** @description JSON Pointer into the request body. */
-                field: string;
-                message: string;
-            }[];
             /** @description With `version_conflict`. */
             currentVersion?: number;
         };
@@ -1090,7 +1086,7 @@ export interface components {
         Source: string;
         /**
          * Format: uuid
-         * @description Client-generated. Identifies the write for idempotency and seeds the IDs of items it creates.
+         * @description Client-generated. Identifies the command, so it is carried out once.
          */
         CommandId: string;
         /** @description A date at tag precision. */
@@ -1114,10 +1110,14 @@ export interface components {
         /** @description Something that can be queued or added to a playlist — library content or an external track. */
         Playable: components["schemas"]["EntityRef"] | components["schemas"]["ExternalTrackRef"];
         ImageRef: {
-            /** @description Fetch from `getImage`, or `getExternalImage` for content with a `source`. Changes whenever the image does. */
+            /** @description Fetch from `getImage`. Changes whenever the image does. */
             id: string;
-            /** @description A few bytes, base64, decoding to a recognizable correctly-coloured stand-in (`requirements/offline.md` §1.1). Empty when there is none, as for external images. */
-            placeholder: string;
+            /**
+             * @description The image's ThumbHash in base64, a few bytes that decode to a recognizable
+             *     correctly-coloured stand-in (`requirements/offline.md` §1.1). `null` until the server
+             *     has made one, and for an image it could not decode.
+             */
+            placeholder: string | null;
         };
         ArtistCredit: {
             id: components["schemas"]["Id"];
@@ -1143,9 +1143,6 @@ export interface components {
         Health: {
             /** @enum {string} */
             status: "ok" | "unavailable";
-            checks?: {
-                [key: string]: "ok" | "failing";
-            };
         };
         ServerInfo: {
             version: string;
@@ -1155,10 +1152,10 @@ export interface components {
         /** @enum {string} */
         DeviceType: "phone" | "tablet" | "desktop" | "tv";
         DeviceRegistration: {
-            /** @description A recognizable default, such as "Firefox on Linux", which the user can change. */
+            /** @description A recognizable default, such as "Firefox on Linux", which the user can change. Not blank. */
             name: string;
             type: components["schemas"]["DeviceType"];
-            /** @description For example `web`, `android`. */
+            /** @description For example `web`, `android`. Not blank. */
             platform?: string;
         };
         /** @description ASCII letters, digits, `_` and `-`. Unique regardless of case; shown as chosen. */
@@ -1167,11 +1164,12 @@ export interface components {
             username: components["schemas"]["Username"];
             /** Format: password */
             password: string;
+            /** @description Not blank. Defaults to the username. */
             displayName?: string;
             device: components["schemas"]["DeviceRegistration"];
         };
         LoginRequest: {
-            username: string;
+            username: components["schemas"]["Username"];
             /** Format: password */
             password: string;
             device: components["schemas"]["DeviceRegistration"];
@@ -1202,7 +1200,7 @@ export interface components {
             username: string;
             displayName: string;
             role: components["schemas"]["Role"];
-            /** @description Whether to fetch the avatar image, or show initials without a request. */
+            /** @description Whether the account has an avatar image; clients show initials when it has none. Always `false` until avatars are built. */
             hasAvatar: boolean;
         };
         /** @description What the account's active device is playing is in `PlayerState`. */
@@ -1257,10 +1255,10 @@ export interface components {
             artists: components["schemas"]["ArtistCredit"][];
             /** @description `null` only for an external track that is on no album. */
             album: components["schemas"]["AlbumRef"] | null;
-            discNumber?: number | null;
-            trackNumber?: number | null;
+            discNumber: number | null;
+            trackNumber: number | null;
             durationUs: components["schemas"]["DurationUs"];
-            releaseDate?: components["schemas"]["PartialDate"] | null;
+            releaseDate: components["schemas"]["PartialDate"] | null;
             explicit?: boolean;
             availability: components["schemas"]["Availability"];
         };
@@ -1273,7 +1271,7 @@ export interface components {
             /** Format: date-time */
             addedAt?: string;
             sortKeys: components["schemas"]["TrackSortKeys"];
-            /** @description The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed. */
+            /** @description The caller's own listening. Planned. */
             personal?: components["schemas"]["Personal"];
         };
         /**
@@ -1298,9 +1296,9 @@ export interface components {
         };
         AudioProperties: components["schemas"]["AudioSummary"] & {
             container: string;
-            bitrateKbps?: number | null;
+            bitrateKbps: number | null;
             sampleRateHz: number;
-            bitDepth?: number | null;
+            bitDepth: number | null;
             channels: number;
             /** Format: int64 */
             fileSizeBytes: number;
@@ -1316,18 +1314,6 @@ export interface components {
              *     can now be fetched.
              */
             loudness: components["schemas"]["Loudness"] | null;
-            /**
-             * @description Identifiers read from tags (`requirements/tracks.md` §6). `isrc` is the one the core
-             *     models. Any other identifier tag — a service's recording or release ID, for example —
-             *     passes through as an extra property keyed by its tag name as read, lowercased. The
-             *     core gives these no meaning and has no dedicated fields for any service; plugins
-             *     interpret them.
-             */
-            identifiers: {
-                isrc?: string | null;
-            } & {
-                [key: string]: string;
-            };
         };
         TrackPage: components["schemas"]["PageInfo"] & {
             items: components["schemas"]["TrackSummary"][];
@@ -1339,14 +1325,14 @@ export interface components {
              */
             kind: "none" | "plain" | "synced";
             /** @description With `synced`. */
-            lines?: {
+            lines: {
                 startMs: number;
                 text: string;
             }[] | null;
-            /** @description Present with `plain`, and with `synced` where a plain version also exists. */
-            plain?: string | null;
+            /** @description With `plain`. */
+            plain: string | null;
         };
-        /** @description Deterministic for the same audio, derived from the original file (`requirements/playback.md` §3). */
+        /** @description Derived from the original file (`requirements/playback.md` §3). */
         Waveform: {
             pointCount: number;
             /** @description Base64 of one unsigned byte per point, already shaped for legibility. */
@@ -1365,28 +1351,31 @@ export interface components {
         PlaybackInfo: {
             /** @description Pass to the audio endpoint. */
             variant: string;
-            /** @enum {string} */
+            /**
+             * @description `transcoded` is planned.
+             * @enum {string}
+             */
             delivery: "direct" | "transcoded";
             codec: string;
             container: string;
-            bitrateKbps?: number | null;
+            bitrateKbps: number | null;
             sampleRateHz: number;
-            bitDepth?: number | null;
+            bitDepth: number | null;
             channels: number;
             /**
              * Format: int64
              * @description Known for direct delivery and for downloads.
              */
-            sizeBytes?: number | null;
+            sizeBytes: number | null;
             /**
-             * @description Set by the audio-delivery design.
+             * @description Set by the audio-delivery design. `segmented` is planned.
              * @enum {string}
              */
             transport: "progressive" | "segmented";
             /** @description Measured on the original, so it applies to every variant. */
-            loudness?: components["schemas"]["Loudness"] | null;
-            /** @description Samples to trim so consecutive tracks join exactly (`requirements/playback.md` §4). */
-            gapless?: {
+            loudness: components["schemas"]["Loudness"] | null;
+            /** @description Samples to trim so consecutive tracks join exactly (`requirements/playback.md` §4). Always `null` until it is measured. */
+            gapless: {
                 leadingSamples?: number;
                 trailingSamples?: number;
             } | null;
@@ -1399,7 +1388,7 @@ export interface components {
         /** @description What any source can say about an album. `AlbumSummary` adds what only the library knows. */
         AlbumBase: components["schemas"]["AlbumRef"] & {
             source?: components["schemas"]["Source"];
-            releaseDate?: components["schemas"]["PartialDate"] | null;
+            releaseDate: components["schemas"]["PartialDate"] | null;
             type?: components["schemas"]["AlbumType"];
         };
         /**
@@ -1430,7 +1419,7 @@ export interface components {
             availability: components["schemas"]["Availability"];
             /** Format: date-time */
             addedAt?: string;
-            /** @description The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed. */
+            /** @description The caller's own listening. Planned. */
             personal?: components["schemas"]["Personal"];
         };
         Album: components["schemas"]["AlbumSummary"] & {
@@ -1464,7 +1453,7 @@ export interface components {
             trackCount: number;
             /** Format: date-time */
             addedAt?: string;
-            /** @description The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed. */
+            /** @description The caller's own listening. Planned. */
             personal?: components["schemas"]["Personal"];
         };
         Artist: components["schemas"]["ArtistSummary"] & {
@@ -1482,7 +1471,7 @@ export interface components {
             track: components["schemas"]["TrackSummary"];
             line: {
                 text: string;
-                startMs?: number | null;
+                startMs: number | null;
             };
             /** @description Lines of context before the match. */
             before: string[];
@@ -1502,13 +1491,13 @@ export interface components {
             query: string;
             /** @description The single best match, also present in its section (`requirements/search.md` §4). */
             top: components["schemas"]["SearchResult"] | null;
-            /** @description Ordered by how well each matches; ties break tracks, then albums, then artists. */
+            /** @description Ordered by how well each matches; ties break tracks, then albums, then artists. A section with no match is left out. */
             sections: {
                 type: components["schemas"]["SearchSectionType"];
                 items: components["schemas"]["SearchResult"][];
                 total: number;
             }[];
-            /** @description Suggested queries when little or nothing matched (`requirements/search.md` §8). */
+            /** @description Suggested queries when little or nothing matched (`requirements/search.md` §8). Always empty until suggestions are built. */
             nearMisses: string[];
             /** @description Distinguishes "no music yet" from "nothing matches". */
             libraryEmpty: boolean;
@@ -1517,7 +1506,7 @@ export interface components {
             id: components["schemas"]["Id"];
             query: string;
             /** @description The result acted on, if any. */
-            selected?: components["schemas"]["EntityRef"] | null;
+            selected: components["schemas"]["EntityRef"] | null;
             /** Format: date-time */
             searchedAt: string;
         };
@@ -1551,7 +1540,7 @@ export interface components {
             modifiedAt: string;
             /** @description Advances with every change; edits apply only against the version they were made on. */
             version: number;
-            /** @description The caller's own listening — the viewed account's under `/admin/users/{userId}`. Absent from catalog parts and the library feed. */
+            /** @description The caller's own listening. Planned. */
             personal?: components["schemas"]["Personal"];
         };
         PlaylistPage: components["schemas"]["PageInfo"] & {
@@ -1726,9 +1715,10 @@ export interface components {
              */
             itemId: string | null;
             /** @description The library of `trackId`, until the server keeps the queue, which names it. */
-            libraryId?: string | null;
-            trackId?: string | null;
-            external?: components["schemas"]["ExternalTrackRef"] | null;
+            libraryId: string | null;
+            trackId: string | null;
+            /** @description The external track playing. Planned. */
+            external?: components["schemas"]["ExternalTrackRef"];
             positionMs: number;
             /**
              * Format: date-time
@@ -1736,7 +1726,7 @@ export interface components {
              */
             positionAt: string;
             /** @description The active device's volume, as it last reported. Changed with `setVolume`. */
-            volume?: number | null;
+            volume: number | null;
         };
         /**
          * @description Transport control, targeting any of the caller's devices. Last command wins. Sent over
@@ -1816,16 +1806,17 @@ export interface components {
              * @description `pending` until the target device confirms. A failure is always reported
              *     (`requirements/realtime.md` §5): at once when nothing is playing, or the command
              *     is invalid or not one the server carries out; when the target's connection
-             *     closes; and after 5 seconds when the target has not answered. Over HTTP, the
-             *     failures at once are `409`, `422`, and `429` problems instead. A command sent
-             *     again with the same `commandId` is carried out once: while it waits its result
-             *     goes to where it was sent from last, and once it has finished, the result of any
-             *     of the account's latest 32 commands is answered again. An account has at most 16
-             *     commands waiting at a time.
+             *     closes; when playback starts on another connection, as when another device takes
+             *     it over, before a command for whatever plays is carried out; and after 5 seconds
+             *     when the target has not answered. Over HTTP, the failures at once are `409`, `422`,
+             *     and `429` problems instead. A command sent again with the same `commandId` is
+             *     carried out once: while it waits its result goes to where it was sent from last,
+             *     and once it has finished, the result of any of the account's latest 32 commands is
+             *     answered again. An account has at most 16 commands waiting at a time.
              * @enum {string}
              */
             status: "pending" | "applied" | "failed";
-            reason?: string | null;
+            reason?: string;
         };
         /**
          * @description Sent by the playing device, or one taking playback over (`start`), over its realtime
@@ -1871,7 +1862,8 @@ export interface components {
          * @description Every track that starts is a play; `listenTimeMs` is audio actually heard
          *     (`requirements/analytics.md` §1). Exactly one of `trackId` or `external` is set. A
          *     play of a track no longer in a library the caller reaches is left out. A play is
-         *     recorded on the device whose token reports it.
+         *     recorded on the device whose token reports it. A play of an external track is accepted
+         *     but not recorded.
          */
         PlayReport: {
             /**
@@ -1985,7 +1977,14 @@ export interface components {
                     /** Format: date-time */
                     at: string;
                     ok: boolean;
-                    /** @description The plugin's own summary, or why it failed. */
+                    /**
+                     * @description The plugin's own summary, or why the run failed, followed in brackets by
+                     *     what the run was refused and about how much compute it spent, such as
+                     *     `Saved 3. (refused Network access, a.example; about 42 ms of compute)`.
+                     *     A run the server could not complete says only
+                     *     `the server could not complete the run`; its cause is logged on the
+                     *     server.
+                     */
                     summary: string;
                 } | null;
             }[];
@@ -2065,7 +2064,7 @@ export interface components {
         };
         PluginRunResult: {
             ok: boolean;
-            /** @description The plugin's own one-line summary, or why the run failed. */
+            /** @description The plugin's own one-line summary, or why the run failed, for each library it ran in, in turn. */
             summary: string;
             /** @description Progress lines the plugin logged, in order. */
             log: string[];
@@ -2139,26 +2138,8 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `not_found` — nonexistent, or out of the caller's reach. */
-        NotFound: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/problem+json": components["schemas"]["Problem"];
-            };
-        };
-        /** @description `forbidden` — the caller's role does not permit this. */
-        Forbidden: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/problem+json": components["schemas"]["Problem"];
-            };
-        };
-        /** @description The request was understood but not acceptable; see `code` and `errors`. */
-        ValidationFailed: {
+        /** @description `plugin_settings_invalid` — a value does not fit the plugin's settings, a required one is missing, or the plugin refused them; `detail` says why. */
+        PluginSettingsInvalid: {
             headers: {
                 [name: string]: unknown;
             };
@@ -2185,16 +2166,6 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `capacity_exceeded` — the host is full. `detail` explains; admins see why in activity. */
-        CapacityExceeded: {
-            headers: {
-                "Retry-After"?: number;
-                [name: string]: unknown;
-            };
-            content: {
-                "application/problem+json": components["schemas"]["Problem"];
-            };
-        };
         /** @description `unsupported_media` — not an accepted image type. */
         UnsupportedMedia: {
             headers: {
@@ -2204,19 +2175,20 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description The image, format-negotiated by `Accept`. */
+        /** @description The image as JPEG, whole or a range. */
         Image: {
             headers: {
-                "Cache-Control"?: string;
+                "Cache-Control"?: "private, max-age=31536000, immutable";
                 [name: string]: unknown;
             };
             content: {
-                "image/*": string;
+                "image/jpeg": string;
             };
         };
         /** @description Audio bytes, whole or a range. */
         Audio: {
             headers: {
+                "Cache-Control"?: "private";
                 "Accept-Ranges"?: "bytes";
                 "Content-Range"?: string;
                 [name: string]: unknown;
@@ -2243,27 +2215,31 @@ export interface components {
          */
         ArtistCredit: "any" | "owned" | "featured";
         Order: "asc" | "desc";
-        /** @description Tag IDs of type `genre`. */
+        /** @description Tag IDs of type `genre`. Planned. */
         Genre: string[];
-        /** @description Whether items must carry all or any of the given genres. */
+        /** @description Whether items must carry all or any of the given genres. Planned. */
         GenreMatch: "all" | "any";
+        /** @description Planned. */
         YearFrom: number;
+        /** @description Planned. */
         YearTo: number;
-        /** @description Server availability (`requirements/conventions.md` §6). Playability on a device is the client's to filter. */
+        /** @description Server availability (`requirements/conventions.md` §6). Playability on a device is the client's to filter. Planned. */
         Availability: components["schemas"]["Availability"];
-        /** @description Filter by whether the caller has ever played the item. */
+        /** @description Filter by whether the caller has ever played the item. Planned. */
         Played: "never" | "ever";
-        /** @description Last played before this time — "not played since". */
+        /** @description Last played before this time — "not played since". Planned. */
         PlayedBefore: string;
+        /** @description Planned. */
         PlayedAfter: string;
+        /** @description Planned. */
         MinPlayCount: number;
         /** @description Search text, from the first character typed. */
         Query: string;
-        /** @description Sections to include. Defaults to all. */
+        /** @description Sections to include. Defaults to all but `lyrics`, which is planned. */
         SearchTypes: components["schemas"]["SearchSectionType"][];
-        /** @description Narrow to a container, as `artist:ID`, `album:ID`, or `playlist:ID` (`requirements/search.md` §5). */
+        /** @description Narrow to a container, as `artist:ID`, `album:ID`, or `playlist:ID` (`requirements/search.md` §5). Planned. */
         Within: string;
-        /** @description Longest edge in pixels. The server rounds up to a fixed set of sizes. */
+        /** @description Longest edge in pixels. The server rounds up to one of a fixed set of sizes, and never enlarges an image. */
         ImageSize: number;
         /** @description `download` asks for a complete file of known size; `stream` may use segmented transport. */
         Purpose: "stream" | "download";
@@ -2356,8 +2332,15 @@ export interface operations {
                     "application/json": components["schemas"]["Session"];
                 };
             };
-            404: components["responses"]["NotFound"];
-            422: components["responses"]["ValidationFailed"];
+            /** @description `weak_password` — the password is too easy to guess; `detail` says why. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             default: components["responses"]["Problem"];
         };
     };
@@ -2385,6 +2368,18 @@ export interface operations {
             };
             /** @description `invalid_credentials`, whatever the cause. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /**
+             * @description `validation_failed` — `username` is not a valid `Username`, or `device` is malformed,
+             *     so no account was looked up.
+             */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2479,7 +2474,6 @@ export interface operations {
                     "application/json": components["schemas"]["PluginSettings"];
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -2507,8 +2501,7 @@ export interface operations {
                     "application/json": components["schemas"]["PluginSettings"];
                 };
             };
-            404: components["responses"]["NotFound"];
-            422: components["responses"]["ValidationFailed"];
+            422: components["responses"]["PluginSettingsInvalid"];
             default: components["responses"]["Problem"];
         };
     };
@@ -2555,8 +2548,15 @@ export interface operations {
                 };
                 content?: never;
             };
-            404: components["responses"]["NotFound"];
-            422: components["responses"]["ValidationFailed"];
+            /** @description `validation_failed` — turned on before the caller connected the plugin, or for one that does not ask for searches. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             default: components["responses"]["Problem"];
         };
     };
@@ -2626,7 +2626,6 @@ export interface operations {
                     "application/json": components["schemas"]["Library"];
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -2638,7 +2637,8 @@ export interface operations {
                  *     ranking — listening weighted by completion, not play count alone — falling back to a
                  *     sensible order for tracks never played, so it is never empty
                  *     (`requirements/artists.md` §3.3, `requirements/analytics.md` §4). An artist's top
-                 *     tracks are `artistId` with `sort=top`.
+                 *     tracks are `artistId` with `sort=top`. `playCount`, `lastPlayed`, and `top` are
+                 *     planned.
                  */
                 sort?: "name" | "artist" | "album" | "dateAdded" | "playCount" | "lastPlayed" | "releaseDate" | "duration" | "top";
                 order?: components["parameters"]["Order"];
@@ -2651,19 +2651,23 @@ export interface operations {
                  *     on a track but not an album artist; `any` — either (`requirements/artists.md` §2).
                  */
                 artistCredit?: components["parameters"]["ArtistCredit"];
-                /** @description Tag IDs of type `genre`. */
+                /** @description Tag IDs of type `genre`. Planned. */
                 genre?: components["parameters"]["Genre"];
-                /** @description Whether items must carry all or any of the given genres. */
+                /** @description Whether items must carry all or any of the given genres. Planned. */
                 genreMatch?: components["parameters"]["GenreMatch"];
+                /** @description Planned. */
                 yearFrom?: components["parameters"]["YearFrom"];
+                /** @description Planned. */
                 yearTo?: components["parameters"]["YearTo"];
-                /** @description Server availability (`requirements/conventions.md` §6). Playability on a device is the client's to filter. */
+                /** @description Server availability (`requirements/conventions.md` §6). Playability on a device is the client's to filter. Planned. */
                 availability?: components["parameters"]["Availability"];
-                /** @description Filter by whether the caller has ever played the item. */
+                /** @description Filter by whether the caller has ever played the item. Planned. */
                 played?: components["parameters"]["Played"];
-                /** @description Last played before this time — "not played since". */
+                /** @description Last played before this time — "not played since". Planned. */
                 lastPlayedBefore?: components["parameters"]["PlayedBefore"];
+                /** @description Planned. */
                 lastPlayedAfter?: components["parameters"]["PlayedAfter"];
+                /** @description Planned. */
                 minPlayCount?: components["parameters"]["MinPlayCount"];
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
@@ -2685,7 +2689,6 @@ export interface operations {
                     "application/json": components["schemas"]["TrackPage"];
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -2710,13 +2713,13 @@ export interface operations {
                     "application/json": components["schemas"]["Track"];
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
     listAlbums: {
         parameters: {
             query?: {
+                /** @description `playCount` and `lastPlayed` are planned. */
                 sort?: "name" | "artist" | "dateAdded" | "playCount" | "lastPlayed" | "releaseDate" | "duration";
                 order?: components["parameters"]["Order"];
                 /** @description Only items this artist is credited on. See `artistCredit`. */
@@ -2726,21 +2729,25 @@ export interface operations {
                  *     on a track but not an album artist; `any` — either (`requirements/artists.md` §2).
                  */
                 artistCredit?: components["parameters"]["ArtistCredit"];
-                /** @description Filter by album type (`requirements/albums.md` §6). */
+                /** @description Filter by album type (`requirements/albums.md` §6). Planned. */
                 type?: components["schemas"]["AlbumType"][];
-                /** @description Tag IDs of type `genre`. */
+                /** @description Tag IDs of type `genre`. Planned. */
                 genre?: components["parameters"]["Genre"];
-                /** @description Whether items must carry all or any of the given genres. */
+                /** @description Whether items must carry all or any of the given genres. Planned. */
                 genreMatch?: components["parameters"]["GenreMatch"];
+                /** @description Planned. */
                 yearFrom?: components["parameters"]["YearFrom"];
+                /** @description Planned. */
                 yearTo?: components["parameters"]["YearTo"];
-                /** @description Server availability (`requirements/conventions.md` §6). Playability on a device is the client's to filter. */
+                /** @description Server availability (`requirements/conventions.md` §6). Playability on a device is the client's to filter. Planned. */
                 availability?: components["parameters"]["Availability"];
-                /** @description Filter by whether the caller has ever played the item. */
+                /** @description Filter by whether the caller has ever played the item. Planned. */
                 played?: components["parameters"]["Played"];
-                /** @description Last played before this time — "not played since". */
+                /** @description Last played before this time — "not played since". Planned. */
                 lastPlayedBefore?: components["parameters"]["PlayedBefore"];
+                /** @description Planned. */
                 lastPlayedAfter?: components["parameters"]["PlayedAfter"];
+                /** @description Planned. */
                 minPlayCount?: components["parameters"]["MinPlayCount"];
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
@@ -2762,7 +2769,6 @@ export interface operations {
                     "application/json": components["schemas"]["AlbumPage"];
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -2787,26 +2793,28 @@ export interface operations {
                     "application/json": components["schemas"]["Album"];
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
     listArtists: {
         parameters: {
             query?: {
+                /** @description `playCount` and `lastPlayed` are planned. */
                 sort?: "name" | "dateAdded" | "playCount" | "lastPlayed";
                 order?: components["parameters"]["Order"];
-                /** @description Tag IDs of type `genre`. */
+                /** @description Tag IDs of type `genre`. Planned. */
                 genre?: components["parameters"]["Genre"];
-                /** @description Whether items must carry all or any of the given genres. */
+                /** @description Whether items must carry all or any of the given genres. Planned. */
                 genreMatch?: components["parameters"]["GenreMatch"];
-                /** @description Server availability (`requirements/conventions.md` §6). Playability on a device is the client's to filter. */
+                /** @description Server availability (`requirements/conventions.md` §6). Playability on a device is the client's to filter. Planned. */
                 availability?: components["parameters"]["Availability"];
-                /** @description Filter by whether the caller has ever played the item. */
+                /** @description Filter by whether the caller has ever played the item. Planned. */
                 played?: components["parameters"]["Played"];
-                /** @description Last played before this time — "not played since". */
+                /** @description Last played before this time — "not played since". Planned. */
                 lastPlayedBefore?: components["parameters"]["PlayedBefore"];
+                /** @description Planned. */
                 lastPlayedAfter?: components["parameters"]["PlayedAfter"];
+                /** @description Planned. */
                 minPlayCount?: components["parameters"]["MinPlayCount"];
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];
@@ -2828,7 +2836,6 @@ export interface operations {
                     "application/json": components["schemas"]["ArtistPage"];
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -2853,14 +2860,13 @@ export interface operations {
                     "application/json": components["schemas"]["Artist"];
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
     getImage: {
         parameters: {
             query?: {
-                /** @description Longest edge in pixels. The server rounds up to a fixed set of sizes. */
+                /** @description Longest edge in pixels. The server rounds up to one of a fixed set of sizes, and never enlarges an image. */
                 size?: components["parameters"]["ImageSize"];
             };
             header?: never;
@@ -2874,7 +2880,28 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["Image"];
-            404: components["responses"]["NotFound"];
+            206: components["responses"]["Image"];
+            /** @description Not modified (`If-None-Match` or `If-Modified-Since`). */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Precondition failed (`If-Match` or `If-Unmodified-Since`). */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Range not satisfiable. */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             default: components["responses"]["Problem"];
         };
     };
@@ -2899,7 +2926,6 @@ export interface operations {
                     "application/json": components["schemas"]["Lyrics"];
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -2934,7 +2960,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -2971,13 +2996,26 @@ export interface operations {
                     "application/json": components["schemas"]["PlaybackInfo"];
                 };
             };
-            404: components["responses"]["NotFound"];
+            /**
+             * @description `validation_failed` — the original cannot be played as asked: a `quality` other than
+             *     `original`, or `codecs` that leave out its codec or container, needs a transcode, and
+             *     transcoding is not built yet.
+             */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             default: components["responses"]["Problem"];
         };
     };
     getAudio: {
         parameters: {
             query: {
+                /** @description As `getPlaybackInfo` gave it; any other answers `404`. */
                 variant: string;
             };
             header?: {
@@ -2993,7 +3031,20 @@ export interface operations {
         responses: {
             200: components["responses"]["Audio"];
             206: components["responses"]["Audio"];
-            404: components["responses"]["NotFound"];
+            /** @description Not modified (`If-None-Match` or `If-Modified-Since`). */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Precondition failed (`If-Match` or `If-Unmodified-Since`). */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Range not satisfiable. */
             416: {
                 headers: {
@@ -3001,7 +3052,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            503: components["responses"]["CapacityExceeded"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3010,19 +3060,23 @@ export interface operations {
             query: {
                 /** @description Search text, from the first character typed. */
                 q: components["parameters"]["Query"];
-                /** @description Sections to include. Defaults to all. */
+                /** @description Sections to include. Defaults to all but `lyrics`, which is planned. */
                 types?: components["parameters"]["SearchTypes"];
-                /** @description Narrow to a container, as `artist:ID`, `album:ID`, or `playlist:ID` (`requirements/search.md` §5). */
+                /** @description Narrow to a container, as `artist:ID`, `album:ID`, or `playlist:ID` (`requirements/search.md` §5). Planned. */
                 within?: components["parameters"]["Within"];
-                /** @description Tag IDs of type `genre`. */
+                /** @description Tag IDs of type `genre`. Planned. */
                 genre?: components["parameters"]["Genre"];
+                /** @description Planned. */
                 yearFrom?: components["parameters"]["YearFrom"];
+                /** @description Planned. */
                 yearTo?: components["parameters"]["YearTo"];
-                /** @description Filter by whether the caller has ever played the item. */
+                /** @description Filter by whether the caller has ever played the item. Planned. */
                 played?: components["parameters"]["Played"];
-                /** @description Last played before this time — "not played since". */
+                /** @description Last played before this time — "not played since". Planned. */
                 lastPlayedBefore?: components["parameters"]["PlayedBefore"];
+                /** @description Planned. */
                 lastPlayedAfter?: components["parameters"]["PlayedAfter"];
+                /** @description Planned. */
                 minPlayCount?: components["parameters"]["MinPlayCount"];
                 /** @description Results shown per section before expanding. */
                 sectionLimit?: number;
@@ -3044,7 +3098,6 @@ export interface operations {
                     "application/json": components["schemas"]["SearchResponse"];
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3070,17 +3123,13 @@ export interface operations {
                     };
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
     recordRecentSearch: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Client-generated. A repeated key returns the original result without applying twice. */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
-            };
+            header?: never;
             path: {
                 libraryId: components["parameters"]["LibraryId"];
             };
@@ -3101,7 +3150,6 @@ export interface operations {
                     "application/json": components["schemas"]["RecentSearch"];
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3123,7 +3171,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3146,7 +3193,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3177,7 +3223,6 @@ export interface operations {
                     "application/json": components["schemas"]["PlaylistPage"];
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3208,8 +3253,6 @@ export interface operations {
                     "application/json": components["schemas"]["Playlist"];
                 };
             };
-            404: components["responses"]["NotFound"];
-            422: components["responses"]["ValidationFailed"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3234,7 +3277,6 @@ export interface operations {
                     "application/json": components["schemas"]["Playlist"];
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3257,7 +3299,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3289,9 +3330,7 @@ export interface operations {
                     "application/json": components["schemas"]["Playlist"];
                 };
             };
-            404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
-            422: components["responses"]["ValidationFailed"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3319,7 +3358,6 @@ export interface operations {
                     "application/json": components["schemas"]["PlaylistItemPage"];
                 };
             };
-            404: components["responses"]["NotFound"];
             /** @description `cursor_expired` — the playlist changed since the first page; start again. */
             410: {
                 headers: {
@@ -3362,7 +3400,6 @@ export interface operations {
                     };
                 };
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3391,7 +3428,6 @@ export interface operations {
                     "application/json": components["schemas"]["Playlist"];
                 };
             };
-            404: components["responses"]["NotFound"];
             415: components["responses"]["UnsupportedMedia"];
             default: components["responses"]["Problem"];
         };
@@ -3415,7 +3451,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3471,7 +3506,6 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            422: components["responses"]["ValidationFailed"];
             /** @description `rate_limited` — too many of the account's commands are waiting for the target. */
             429: {
                 headers: {
@@ -3506,7 +3540,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            422: components["responses"]["ValidationFailed"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3528,7 +3561,15 @@ export interface operations {
                 };
                 content?: never;
             };
-            403: components["responses"]["Forbidden"];
+            /** @description `forbidden` — the request comes from a page whose origin is not this server. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             default: components["responses"]["Problem"];
         };
     };
@@ -3552,17 +3593,13 @@ export interface operations {
                     };
                 };
             };
-            403: components["responses"]["Forbidden"];
             default: components["responses"]["Problem"];
         };
     };
     adminInstallPlugin: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description Client-generated. A repeated key returns the original result without applying twice. */
-                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -3585,8 +3622,7 @@ export interface operations {
                     "application/json": components["schemas"]["Plugin"];
                 };
             };
-            403: components["responses"]["Forbidden"];
-            /** @description `plugin_exists` — a plugin with its `id` is installed; update it instead. */
+            /** @description `plugin_exists` — a plugin with its `id` is installed; uninstall it first. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -3627,8 +3663,6 @@ export interface operations {
                     "application/json": components["schemas"]["Plugin"];
                 };
             };
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3650,8 +3684,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3682,8 +3714,6 @@ export interface operations {
                     "application/json": components["schemas"]["Plugin"];
                 };
             };
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
             /** @description `permissions_required` — `detail` names what it still needs. */
             409: {
                 headers: {
@@ -3720,8 +3750,6 @@ export interface operations {
                     "application/json": components["schemas"]["Plugin"];
                 };
             };
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3731,7 +3759,7 @@ export interface operations {
             header?: never;
             path: {
                 pluginId: components["parameters"]["PluginId"];
-                /** @description One host name, such as `musicbrainz.org`; no `*` or patterns. Kept lowercase. */
+                /** @description One host name, such as `musicbrainz.org`. Kept lowercase. Anything else, such as `*` or a pattern, answers `422`. */
                 host: string;
             };
             cookie?: never;
@@ -3745,9 +3773,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            422: components["responses"]["ValidationFailed"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3757,7 +3782,7 @@ export interface operations {
             header?: never;
             path: {
                 pluginId: components["parameters"]["PluginId"];
-                /** @description One host name, such as `musicbrainz.org`; no `*` or patterns. Kept lowercase. */
+                /** @description One host name, such as `musicbrainz.org`. Kept lowercase. Anything else, such as `*` or a pattern, answers `422`. */
                 host: string;
             };
             cookie?: never;
@@ -3771,9 +3796,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            422: components["responses"]["ValidationFailed"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3797,8 +3819,6 @@ export interface operations {
                     "application/json": components["schemas"]["PluginRunResult"];
                 };
             };
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3825,8 +3845,6 @@ export interface operations {
                     "application/json": components["schemas"]["PluginSettings"];
                 };
             };
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
             default: components["responses"]["Problem"];
         };
     };
@@ -3857,9 +3875,7 @@ export interface operations {
                     "application/json": components["schemas"]["PluginSettings"];
                 };
             };
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            422: components["responses"]["ValidationFailed"];
+            422: components["responses"]["PluginSettingsInvalid"];
             default: components["responses"]["Problem"];
         };
     };

@@ -23,7 +23,10 @@ const track = {
 	title: 'Brain Stew',
 	artists: [{ id: '21', name: 'Green Day' }],
 	album: { id: '31', title: 'Insomniac', artists: [], image: null },
+	discNumber: null,
+	trackNumber: null,
 	durationUs: 193_000_000,
+	releaseDate: null,
 	explicit: false,
 	audio: { codec: 'mp3', lossless: false },
 	availability: 'available',
@@ -84,7 +87,8 @@ describe('LyricsPanel.svelte', () => {
 			libraryId: '11',
 			trackId: track.id,
 			positionMs: 0,
-			positionAt: new Date().toISOString()
+			positionAt: new Date().toISOString(),
+			volume: null
 		};
 		await expect.element(page.getByRole('button', { name: 'Sleep' })).toBeDisabled();
 	});
