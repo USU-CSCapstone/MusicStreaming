@@ -1,6 +1,6 @@
 //! Stages 2 to 5 on one file (`design/scanning.md` §2).
 
-use jewelcase_core::sort_key;
+use jewelcase_core::{name_key, sort_key};
 
 use crate::discover::{Candidate, Directory};
 use crate::identity::{self, Identity};
@@ -8,6 +8,7 @@ use crate::problems::{self, Problem};
 use crate::scope::Scope;
 use crate::sidecar::{SidecarResolver, Sidecars};
 use crate::store::IndexedFile;
+use crate::tag_set::TagSet;
 use crate::tags;
 use crate::track::{Artwork, ArtworkSource, SortKeys, TrackId, TrackRecord, filename_title};
 
@@ -76,12 +77,11 @@ pub(super) fn process_file(
     let lyrics_sidecar = if read.tags.lyrics.is_none() { stamped.read_lyrics() } else { None };
 
     let title = read.tags.title.clone().unwrap_or_else(|| filename_title(&candidate.path));
+    let (artist, album_artist) = artist_sort_keys(&read.tags);
     let sort = SortKeys {
         title: sort_key(&title, read.tags.title_sort.as_deref()),
-        artist: sort_key(
-            read.tags.artists.first().map(String::as_str).unwrap_or(""),
-            read.tags.artist_sort.as_deref(),
-        ),
+        artist,
+        album_artist,
         album: sort_key(read.tags.album.as_deref().unwrap_or(""), read.tags.album_sort.as_deref()),
     };
 
@@ -107,4 +107,25 @@ pub(super) fn process_file(
             FileOutcome::Updated(Box::new(TrackRecord { id: Some(track_id), ..record }))
         }
     }
+}
+
+/// The sort keys the file's first artist and first album artist vote for their artists' sort
+/// keys with. Where they are the same artist, both votes use one tag, `ARTISTSORT` else
+/// `ALBUMARTISTSORT`, so a file never votes against itself; an album artist that falls back to
+/// the primary artist is always that case. Otherwise each uses its own tag, and the unknown
+/// artist, such as a compilation's, uses none.
+fn artist_sort_keys(tags: &TagSet) -> (String, String) {
+    let names = tags.album_artists_or_primary();
+    let first = tags.artists.first().map_or("", String::as_str);
+    let album_first = names.first().map(String::as_str);
+    let own = tags.artist_sort.as_deref();
+    let (artist_tag, album_tag) = match album_first {
+        None => (own, None),
+        Some(name) if name_key(name) == name_key(first) => {
+            let shared = own.or(tags.album_artist_sort.as_deref());
+            (shared, shared)
+        }
+        Some(_) => (own, tags.album_artist_sort.as_deref()),
+    };
+    (sort_key(first, artist_tag), sort_key(album_first.unwrap_or(""), album_tag))
 }

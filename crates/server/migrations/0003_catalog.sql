@@ -163,10 +163,11 @@ CREATE TABLE tracks (
     -- index, and followed as they change (design/database.md §3)
     artist_sort_key BLOB    NOT NULL,
     album_sort_key  BLOB    NOT NULL,
-    -- The first artist's and the album's sort keys as this file gives them, from which the
-    -- artist's and the album's are resolved
-    file_artist_sort_key BLOB NOT NULL,
-    file_album_sort_key  BLOB NOT NULL,
+    -- The first artist's, the first album artist's and the album's sort keys as this file gives
+    -- them, from which the artists' and the album's are resolved
+    file_artist_sort_key       BLOB NOT NULL,
+    file_album_artist_sort_key BLOB NOT NULL,
+    file_album_sort_key        BLOB NOT NULL,
     disc_number     INTEGER NOT NULL DEFAULT 0 CHECK (disc_number >= 0),
     track_number    INTEGER,
     track_total     INTEGER CHECK (track_total >= 0),

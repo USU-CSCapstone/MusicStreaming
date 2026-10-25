@@ -23,6 +23,7 @@ fn track(
     rec.tags.album_artists = Vec::new();
     rec.sort.album = album_sort.to_owned();
     rec.sort.artist = artist_sort.to_owned();
+    rec.sort.album_artist = artist_sort.to_owned();
     rec
 }
 

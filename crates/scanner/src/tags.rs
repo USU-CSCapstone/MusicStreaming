@@ -301,6 +301,7 @@ fn map_tags(file: &TaggedFile) -> TagSet {
     out.title_sort = first_string(&tags, &ItemKey::TrackTitleSortOrder);
     out.artist_sort = first_string(&tags, &ItemKey::TrackArtistSortOrder);
     out.album_sort = first_string(&tags, &ItemKey::AlbumTitleSortOrder);
+    out.album_artist_sort = first_string(&tags, &ItemKey::AlbumArtistSortOrder);
     out
 }
 

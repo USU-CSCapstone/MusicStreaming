@@ -22,6 +22,7 @@ fn a_changed_sort_key_costs_the_tracks_that_copy_it() {
         rec.tags.artists = vec!["Zed".to_owned()];
         rec.sort.album = sort.to_owned();
         rec.sort.artist = sort.to_owned();
+        rec.sort.album_artist = sort.to_owned();
         rec
     };
     let upserts = (0..16).map(|i| mine(i, "mine")).collect();
@@ -39,6 +40,7 @@ fn a_changed_sort_key_costs_the_tracks_that_copy_it() {
                 let mut rec = track(&root, &format!("Other {i}"), i);
                 rec.tags.artists = vec![format!("Other {i}")];
                 rec.sort.artist = format!("other {i}");
+                rec.sort.album_artist = format!("other {i}");
                 rec
             })
             .collect();

@@ -31,6 +31,7 @@ pub struct Artwork {
 pub struct SortKeys {
     pub title: String,
     pub artist: String,
+    pub album_artist: String,
     pub album: String,
 }
 

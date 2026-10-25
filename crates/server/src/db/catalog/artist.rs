@@ -38,7 +38,8 @@ pub(super) fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i
         tx.prepare_cached("DELETE FROM artists WHERE id = ?1")?.execute([artist])?;
         return feed::record(tx, lib, Entity::Artist, artist, Op::Delete, now);
     }
-    // The tagged sort value where this artist is the primary credit, else derived from the name.
+    // The most-used sort key of the files crediting this artist first, as an artist or album
+    // artist, else one derived from the name.
     let sort_key = tagged_sort
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| sort_key(name.as_deref().unwrap_or(""), None).into_bytes());

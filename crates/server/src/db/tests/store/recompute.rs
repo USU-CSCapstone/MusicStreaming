@@ -184,8 +184,11 @@ const CHECKS: &[(&str, &str, &str)] = &[
     (
         "artist sort keys",
         "SELECT library_id, artist_id, sort_key, uses FROM artist_sort_keys ORDER BY 2, 3",
-        "SELECT ta.library_id, ta.artist_id, t.file_artist_sort_key, COUNT(*) FROM track_artists ta \
-         JOIN tracks t ON t.id = ta.track_id WHERE ta.position = 0 GROUP BY 2, 3 ORDER BY 2, 3",
+        "SELECT library_id, artist_id, sort_key, COUNT(*) FROM \
+         (SELECT ta.library_id, ta.artist_id, t.file_artist_sort_key AS sort_key FROM track_artists ta \
+          JOIN tracks t ON t.id = ta.track_id WHERE ta.position = 0 \
+          UNION ALL SELECT ta.library_id, ta.artist_id, t.file_album_artist_sort_key FROM track_album_artists ta \
+          JOIN tracks t ON t.id = ta.track_id WHERE ta.position = 0) GROUP BY 2, 3 ORDER BY 2, 3",
     ),
     (
         "tag spellings",
@@ -198,9 +201,12 @@ const CHECKS: &[(&str, &str, &str)] = &[
         // turns into its sort key, an artist's without a leading article and a tag's with it;
         // names are checked above.
         "SELECT 'artist', id, sort_key FROM artists UNION ALL SELECT 'tag', id, sort_key FROM tags ORDER BY 1, 2",
-        "SELECT 'artist', a.id, COALESCE(NULLIF((SELECT t.file_artist_sort_key FROM track_artists ta \
-          JOIN tracks t ON t.id = ta.track_id WHERE ta.artist_id = a.id AND ta.position = 0 \
-          GROUP BY t.file_artist_sort_key ORDER BY COUNT(*) DESC, t.file_artist_sort_key LIMIT 1), \
+        "SELECT 'artist', a.id, COALESCE(NULLIF((SELECT sort_key FROM \
+          (SELECT ta.artist_id, t.file_artist_sort_key AS sort_key FROM track_artists ta \
+           JOIN tracks t ON t.id = ta.track_id WHERE ta.position = 0 \
+           UNION ALL SELECT ta.artist_id, t.file_album_artist_sort_key FROM track_album_artists ta \
+           JOIN tracks t ON t.id = ta.track_id WHERE ta.position = 0) \
+          WHERE artist_id = a.id GROUP BY sort_key ORDER BY COUNT(*) DESC, sort_key LIMIT 1), \
           x''), a.name) \
          FROM artists a UNION ALL SELECT 'tag', id, name FROM tags ORDER BY 1, 2",
     ),

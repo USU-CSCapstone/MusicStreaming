@@ -16,7 +16,8 @@ CREATE TABLE artist_spellings (
     FOREIGN KEY (library_id, artist_id) REFERENCES artists (library_id, id) ON DELETE CASCADE
 ) STRICT, WITHOUT ROWID;
 
--- How many of the tracks crediting the artist first carry each tracks.file_artist_sort_key
+-- How many of the tracks crediting the artist first, as artist or as album artist, carry each
+-- tracks.file_artist_sort_key or tracks.file_album_artist_sort_key
 CREATE TABLE artist_sort_keys (
     library_id INTEGER NOT NULL,
     artist_id  INTEGER NOT NULL,
@@ -108,10 +109,12 @@ BEGIN
         duration_us = duration_us + excluded.duration_us;
 END;
 
--- A track's artist credits and genres go before it, since the counts they feed read the track.
+-- A track's artist credits, album artist credits and genres go before it, since the counts they
+-- feed read the track.
 CREATE TRIGGER tracks_removed BEFORE DELETE ON tracks
 BEGIN
     DELETE FROM track_artists WHERE track_id = OLD.id;
+    DELETE FROM track_album_artists WHERE track_id = OLD.id;
     DELETE FROM track_tags WHERE track_id = OLD.id;
     UPDATE libraries SET track_count = track_count - 1, duration_us = duration_us - OLD.duration_us,
         names_version = names_version + 1
@@ -196,6 +199,18 @@ BEGIN
     ON CONFLICT (artist_id, sort_key) DO UPDATE SET uses = uses + 1;
 END;
 
+CREATE TRIGGER tracks_album_artist_sort_key AFTER UPDATE OF file_album_artist_sort_key ON tracks
+WHEN NEW.file_album_artist_sort_key <> OLD.file_album_artist_sort_key
+BEGIN
+    UPDATE artist_sort_keys SET uses = uses - 1
+    WHERE artist_id = (SELECT artist_id FROM track_album_artists WHERE track_id = NEW.id AND position = 0)
+      AND sort_key = OLD.file_album_artist_sort_key;
+    INSERT INTO artist_sort_keys (library_id, artist_id, sort_key, uses)
+    SELECT library_id, artist_id, NEW.file_album_artist_sort_key, 1 FROM track_album_artists
+    WHERE track_id = NEW.id AND position = 0
+    ON CONFLICT (artist_id, sort_key) DO UPDATE SET uses = uses + 1;
+END;
+
 -- A track copies its album's sort key and follows a change to it, which costs the album's tracks
 -- and runs only when the key changes. Its first artist's key is followed by the artist's
 -- recompute, in follow_artist_sort_key (design/database.md §3).
@@ -250,17 +265,23 @@ BEGIN
 END;
 
 CREATE TRIGGER track_album_artists_added AFTER INSERT ON track_album_artists
-WHEN NEW.artist_name IS NOT NULL
 BEGIN
     INSERT INTO artist_spellings (library_id, artist_id, name, uses)
-    VALUES (NEW.library_id, NEW.artist_id, NEW.artist_name, 1)
+    SELECT NEW.library_id, NEW.artist_id, NEW.artist_name, 1 WHERE NEW.artist_name IS NOT NULL
     ON CONFLICT (artist_id, name) DO UPDATE SET uses = uses + 1;
+    INSERT INTO artist_sort_keys (library_id, artist_id, sort_key, uses)
+    SELECT NEW.library_id, NEW.artist_id, file_album_artist_sort_key, 1 FROM tracks
+    WHERE id = NEW.track_id AND NEW.position = 0
+    ON CONFLICT (artist_id, sort_key) DO UPDATE SET uses = uses + 1;
 END;
 
 CREATE TRIGGER track_album_artists_removed AFTER DELETE ON track_album_artists
 BEGIN
     UPDATE artist_spellings SET uses = uses - 1
     WHERE artist_id = OLD.artist_id AND name = OLD.artist_name;
+    UPDATE artist_sort_keys SET uses = uses - 1
+    WHERE OLD.position = 0 AND artist_id = OLD.artist_id
+      AND sort_key = (SELECT file_album_artist_sort_key FROM tracks WHERE id = OLD.track_id);
 END;
 
 -- ───────────────────────────── Track genres ─────────────────────────────

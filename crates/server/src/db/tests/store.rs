@@ -138,6 +138,7 @@ fn record(root: &Path, i: usize) -> TrackRecord {
         sort: SortKeys {
             title: format!("track {i}"),
             artist: format!("artist {}", i / 100),
+            album_artist: format!("artist {}", i / 100),
             album: format!("album {}", i / 10),
         },
     }

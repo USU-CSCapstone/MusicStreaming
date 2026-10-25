@@ -130,6 +130,7 @@ pub struct TagSet {
     // Sort tags (`requirements/conventions.md` §4).
     pub title_sort: Option<String>,
     pub artist_sort: Option<String>,
+    pub album_artist_sort: Option<String>,
     pub album_sort: Option<String>,
 }
 

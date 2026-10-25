@@ -18,6 +18,7 @@ fn credited(root: &Path, owner: &str, album: &str, guest: Option<&str>, i: usize
     rec.tags.artists = std::iter::once(owner).chain(guest).map(str::to_owned).collect();
     rec.tags.album_artists = vec![owner.to_owned()];
     rec.sort.artist = owner.to_lowercase();
+    rec.sort.album_artist = owner.to_lowercase();
     rec
 }
 

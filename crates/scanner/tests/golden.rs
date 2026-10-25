@@ -44,6 +44,7 @@ fn expected() -> TagSet {
         has_embedded_art: true,
         title_sort: Some("Smells Like Teen Spirit".into()),
         artist_sort: Some("Nirvana".into()),
+        album_artist_sort: Some("Nirvana, The".into()),
         album_sort: Some("Nevermind".into()),
     }
 }
@@ -86,6 +87,7 @@ fn write_tags(path: &Path, tag_type: TagType) {
     tag.insert(text(ItemKey::TrackTitleSortOrder, e.title_sort.as_deref().unwrap()));
     tag.insert(text(ItemKey::TrackArtistSortOrder, e.artist_sort.as_deref().unwrap()));
     tag.insert(text(ItemKey::AlbumTitleSortOrder, e.album_sort.as_deref().unwrap()));
+    tag.insert(text(ItemKey::AlbumArtistSortOrder, e.album_artist_sort.as_deref().unwrap()));
     tag.push_picture(
         Picture::unchecked(PNG.to_vec())
             .pic_type(PictureType::CoverFront)

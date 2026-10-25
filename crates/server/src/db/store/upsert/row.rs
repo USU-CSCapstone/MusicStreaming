@@ -15,7 +15,7 @@ use crate::db::{Json, new_id};
 /// The track columns a scan sets, both when it inserts the row and when it updates it. Each binds
 /// by name, as `:column`. The insert also sets `id`, `library_id` and `added_at`, which an update
 /// keeps.
-const COLUMNS: [&str; 37] = [
+const COLUMNS: [&str; 38] = [
     "album_id",
     "album_artist_ids",
     "album_title",
@@ -27,6 +27,7 @@ const COLUMNS: [&str; 37] = [
     "title",
     "sort_key",
     "file_artist_sort_key",
+    "file_album_artist_sort_key",
     "file_album_sort_key",
     "disc_number",
     "track_number",
@@ -124,6 +125,7 @@ pub(super) fn write_row(
         (":title", &rec.display_title()),
         (":sort_key", &rec.sort.title.as_bytes()),
         (":file_artist_sort_key", &rec.sort.artist.as_bytes()),
+        (":file_album_artist_sort_key", &rec.sort.album_artist.as_bytes()),
         (":file_album_sort_key", &rec.sort.album.as_bytes()),
         (":disc_number", &rec.tags.disc_number.unwrap_or(0)),
         (":track_number", &rec.tags.track_number),

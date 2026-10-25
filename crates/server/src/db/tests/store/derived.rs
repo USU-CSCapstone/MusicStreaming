@@ -82,6 +82,7 @@ fn random(rng: &mut Rng, root: &Path, path: PathBuf) -> TrackRecord {
         rng.chance(70).then(|| PartialDate::parse(rng.pick(&["1999", "2001-05"]))).flatten();
     rec.tags.release_type = rng.chance(40).then(|| rng.pick(TYPES).to_string());
     rec.sort.artist = rng.pick(SORTS).to_string();
+    rec.sort.album_artist = rng.pick(SORTS).to_string();
     rec.sort.album = rng.pick(SORTS).to_string();
     rec.properties.duration_ms = 1000 * (1 + rng.next() % 300);
     rec
