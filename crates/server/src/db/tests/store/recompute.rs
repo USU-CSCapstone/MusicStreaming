@@ -188,7 +188,8 @@ const CHECKS: &[(&str, &str, &str)] = &[
          (SELECT ta.library_id, ta.artist_id, t.file_artist_sort_key AS sort_key FROM track_artists ta \
           JOIN tracks t ON t.id = ta.track_id WHERE ta.position = 0 \
           UNION ALL SELECT ta.library_id, ta.artist_id, t.file_album_artist_sort_key FROM track_album_artists ta \
-          JOIN tracks t ON t.id = ta.track_id WHERE ta.position = 0) GROUP BY 2, 3 ORDER BY 2, 3",
+          JOIN tracks t ON t.id = ta.track_id WHERE ta.position = 0 \
+          AND t.file_album_artist_sort_key <> x'') GROUP BY 2, 3 ORDER BY 2, 3",
     ),
     (
         "tag spellings",
@@ -205,7 +206,8 @@ const CHECKS: &[(&str, &str, &str)] = &[
           (SELECT ta.artist_id, t.file_artist_sort_key AS sort_key FROM track_artists ta \
            JOIN tracks t ON t.id = ta.track_id WHERE ta.position = 0 \
            UNION ALL SELECT ta.artist_id, t.file_album_artist_sort_key FROM track_album_artists ta \
-           JOIN tracks t ON t.id = ta.track_id WHERE ta.position = 0) \
+           JOIN tracks t ON t.id = ta.track_id WHERE ta.position = 0 \
+           AND t.file_album_artist_sort_key <> x'') \
           WHERE artist_id = a.id GROUP BY sort_key ORDER BY COUNT(*) DESC, sort_key LIMIT 1), \
           x''), a.name) \
          FROM artists a UNION ALL SELECT 'tag', id, name FROM tags ORDER BY 1, 2",

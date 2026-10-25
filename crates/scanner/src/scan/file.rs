@@ -112,20 +112,22 @@ pub(super) fn process_file(
 /// The sort keys the file's first artist and first album artist vote for their artists' sort
 /// keys with. Where they are the same artist, both votes use one tag, `ARTISTSORT` else
 /// `ALBUMARTISTSORT`, so a file never votes against itself; an album artist that falls back to
-/// the primary artist is always that case. Otherwise each uses its own tag, and the unknown
-/// artist, such as a compilation's, uses none.
+/// the primary artist is always that case. Otherwise the artist uses `ARTISTSORT` and the album
+/// artist `ALBUMARTISTSORT`. An album artist with no tag to use, the same artist included, or the
+/// unknown artist, gets the empty key, which casts no vote: only a tag may vote as album artist.
 fn artist_sort_keys(tags: &TagSet) -> (String, String) {
-    let names = tags.album_artists_or_primary();
     let first = tags.artists.first().map_or("", String::as_str);
-    let album_first = names.first().map(String::as_str);
     let own = tags.artist_sort.as_deref();
-    let (artist_tag, album_tag) = match album_first {
-        None => (own, None),
+    let album = tags.album_artists_or_primary().first().map(String::as_str);
+    match album {
+        None => (sort_key(first, own), String::new()),
         Some(name) if name_key(name) == name_key(first) => {
             let shared = own.or(tags.album_artist_sort.as_deref());
-            (shared, shared)
+            (sort_key(first, shared), shared.map_or_else(String::new, |t| sort_key(name, Some(t))))
         }
-        Some(_) => (own, tags.album_artist_sort.as_deref()),
-    };
-    (sort_key(first, artist_tag), sort_key(album_first.unwrap_or(""), album_tag))
+        Some(name) => {
+            let tagged = tags.album_artist_sort.as_deref();
+            (sort_key(first, own), tagged.map_or_else(String::new, |t| sort_key(name, Some(t))))
+        }
+    }
 }

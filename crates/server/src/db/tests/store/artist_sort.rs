@@ -143,3 +143,55 @@ fn the_unknown_album_artist_of_a_compilation_has_no_sort_tag() {
         store.db().read_blocking(move |conn| conn.query_row(sql, [], |r| r.get(0))).unwrap();
     assert_eq!(key, b"");
 }
+
+/// Credits as album artist without `ALBUMARTISTSORT` don't outvote the artist's `ARTISTSORT`.
+#[test]
+fn untagged_album_artist_credits_do_not_outvote_an_artist_sort_tag() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    for n in 1..=2 {
+        let tags = [
+            (ItemKey::TrackArtist, "Ludwig van Beethoven"),
+            (ItemKey::TrackArtistSortOrder, "Beethoven, Ludwig van"),
+            (ItemKey::AlbumTitle, "Sonatas"),
+        ];
+        tagged(&root, &format!("Sonatas/{n}.wav"), &tags);
+    }
+    for n in 1..=5 {
+        let tags = [
+            (ItemKey::TrackArtist, "Orchestra"),
+            (ItemKey::AlbumArtist, "Ludwig van Beethoven"),
+            (ItemKey::AlbumTitle, "Symphonies"),
+        ];
+        tagged(&root, &format!("Symphonies/{n}.wav"), &tags);
+    }
+    let store = make(&root);
+    testing::scan_library(&store, &testing::library(&root));
+    check(&store, "the scan");
+    assert_eq!(artist_key(&store, "Ludwig van Beethoven"), b"beethoven, ludwig van");
+}
+
+/// An untagged file crediting the artist as both artist and album artist counts once, so it
+/// doesn't outvote the tag the artist has where another heads the album.
+#[test]
+fn an_untagged_own_album_counts_once_against_an_artist_sort_tag() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    for n in 1..=3 {
+        let tags = [
+            (ItemKey::TrackArtist, "Ludwig van Beethoven"),
+            (ItemKey::TrackArtistSortOrder, "Beethoven, Ludwig van"),
+            (ItemKey::AlbumArtist, "Various"),
+            (ItemKey::AlbumTitle, "Mix"),
+        ];
+        tagged(&root, &format!("Mix/{n}.wav"), &tags);
+    }
+    for n in 1..=2 {
+        let tags = [(ItemKey::TrackArtist, "Ludwig van Beethoven"), (ItemKey::AlbumTitle, "Own")];
+        tagged(&root, &format!("Own/{n}.wav"), &tags);
+    }
+    let store = make(&root);
+    testing::scan_library(&store, &testing::library(&root));
+    check(&store, "the scan");
+    assert_eq!(artist_key(&store, "Ludwig van Beethoven"), b"beethoven, ludwig van");
+}

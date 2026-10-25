@@ -17,7 +17,8 @@ CREATE TABLE artist_spellings (
 ) STRICT, WITHOUT ROWID;
 
 -- How many of the tracks crediting the artist first, as artist or as album artist, carry each
--- tracks.file_artist_sort_key or tracks.file_album_artist_sort_key
+-- tracks.file_artist_sort_key or tracks.file_album_artist_sort_key. An empty file_album_artist_sort_key
+-- is no vote: the album artist has no sort tag of its own to give.
 CREATE TABLE artist_sort_keys (
     library_id INTEGER NOT NULL,
     artist_id  INTEGER NOT NULL,
@@ -203,11 +204,12 @@ CREATE TRIGGER tracks_album_artist_sort_key AFTER UPDATE OF file_album_artist_so
 WHEN NEW.file_album_artist_sort_key <> OLD.file_album_artist_sort_key
 BEGIN
     UPDATE artist_sort_keys SET uses = uses - 1
-    WHERE artist_id = (SELECT artist_id FROM track_album_artists WHERE track_id = NEW.id AND position = 0)
+    WHERE OLD.file_album_artist_sort_key <> x''
+      AND artist_id = (SELECT artist_id FROM track_album_artists WHERE track_id = NEW.id AND position = 0)
       AND sort_key = OLD.file_album_artist_sort_key;
     INSERT INTO artist_sort_keys (library_id, artist_id, sort_key, uses)
     SELECT library_id, artist_id, NEW.file_album_artist_sort_key, 1 FROM track_album_artists
-    WHERE track_id = NEW.id AND position = 0
+    WHERE track_id = NEW.id AND position = 0 AND NEW.file_album_artist_sort_key <> x''
     ON CONFLICT (artist_id, sort_key) DO UPDATE SET uses = uses + 1;
 END;
 
@@ -271,7 +273,7 @@ BEGIN
     ON CONFLICT (artist_id, name) DO UPDATE SET uses = uses + 1;
     INSERT INTO artist_sort_keys (library_id, artist_id, sort_key, uses)
     SELECT NEW.library_id, NEW.artist_id, file_album_artist_sort_key, 1 FROM tracks
-    WHERE id = NEW.track_id AND NEW.position = 0
+    WHERE id = NEW.track_id AND NEW.position = 0 AND file_album_artist_sort_key <> x''
     ON CONFLICT (artist_id, sort_key) DO UPDATE SET uses = uses + 1;
 END;
 
@@ -281,7 +283,8 @@ BEGIN
     WHERE artist_id = OLD.artist_id AND name = OLD.artist_name;
     UPDATE artist_sort_keys SET uses = uses - 1
     WHERE OLD.position = 0 AND artist_id = OLD.artist_id
-      AND sort_key = (SELECT file_album_artist_sort_key FROM tracks WHERE id = OLD.track_id);
+      AND sort_key = (SELECT file_album_artist_sort_key FROM tracks WHERE id = OLD.track_id)
+      AND sort_key <> x'';
 END;
 
 -- ───────────────────────────── Track genres ─────────────────────────────
