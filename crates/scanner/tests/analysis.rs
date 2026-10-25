@@ -5,7 +5,7 @@ use std::sync::Arc;
 use jewelcase_core::waveform_level;
 use jewelcase_ffmpeg::{Config, Ffmpeg};
 use jewelcase_scanner::testing::{BareStore, encode, write_sine_wav};
-use jewelcase_scanner::{ANALYZER_VERSION, Analyzer};
+use jewelcase_scanner::{ANALYZER_VERSION, Analyzer, Stop};
 
 #[test]
 fn sine_measures_as_expected() {
@@ -26,7 +26,7 @@ fn sine_measures_as_expected() {
     let analyzer = Analyzer::new(ffmpeg, Arc::new(BareStore::default()));
 
     for path in [&wav, &flac] {
-        let r = analyzer.analyze_file(path).expect("analyze");
+        let r = analyzer.analyze_file(path, &Stop::never()).expect("analyze");
         let lufs = r.integrated_lufs.expect("loudness");
         assert!((lufs - -6.7).abs() < 1.0, "{}: {lufs} LUFS", path.display());
         let peak = r.true_peak_dbtp.expect("peak");

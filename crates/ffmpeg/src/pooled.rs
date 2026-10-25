@@ -71,9 +71,8 @@ impl Pooled {
     }
 
     /// Unregister the child, reap it and join its stderr drain. Call it once, when its standard
-    /// output has ended. Fails with [`Error::Stalled`] if the watchdog killed the child. If it
-    /// ended unsuccessfully, fails with [`Error::Stopped`] once the server is stopping, and
-    /// otherwise with the end of what it wrote to standard error.
+    /// output has ended. Fails with [`Error::Stalled`] if the watchdog killed the child, and
+    /// with the end of what it wrote to standard error if it ended unsuccessfully.
     pub(crate) fn finish(&mut self) -> Result<(), Error> {
         self.registry.unregister(self.pid);
         self.reaped = true;
@@ -86,9 +85,6 @@ impl Pooled {
         }
         let stderr = stderr?;
         if !status.success() {
-            if self.registry.stopping() {
-                return Err(Error::Stopped);
-            }
             let stderr = String::from_utf8_lossy(&stderr).trim().to_owned();
             return Err(Error::exited(status, stderr));
         }

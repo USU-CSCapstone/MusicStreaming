@@ -15,6 +15,7 @@ use crate::jobs::{Failure, RETRY_AFTER, Retries, RunReport};
 use crate::library::LibraryId;
 use crate::pool::Job;
 use crate::store::{FileToDecode, PlaceholderStore};
+use crate::worker::Stop;
 
 /// ThumbHash encodes at most 100 pixels a side, and gains nothing from more.
 const MAX_SIDE: u32 = 100;
@@ -51,12 +52,15 @@ impl Placeholders {
     }
 
     /// Fills up to `limit` placeholders, skipping images whose files are waiting to be tried
-    /// again. A failure is handled as `jobs` describes; a verdict is stored empty, and
-    /// new content is a new image, which gets a new try.
-    pub fn run_once(&self, library: LibraryId, limit: usize) -> RunReport {
+    /// again, and stopping between images once `stop` is asked. A failure is handled as `jobs`
+    /// describes; a verdict is stored empty, and new content is a new image, which gets a new try.
+    pub fn run_once(&self, library: LibraryId, limit: usize, stop: &Stop) -> RunReport {
         let store = self.store.as_ref();
         let next = |fetch| store.next_without_placeholder(library, fetch);
         let decode = |file: &FileToDecode| {
+            if stop.asked() {
+                return Err(Failure::Host);
+            }
             let path = file.open().map_err(Failure::Open)?;
             self.placeholder(&path).map_err(|error| Failure::from_ffmpeg(&file.path, &error))
         };
@@ -68,8 +72,8 @@ impl Placeholders {
     }
 
     /// The background job that fills `library`'s placeholders in the pool, waiting [`IDLE`]
-    /// when idle or backing off.
+    /// when idle or backing off, and giving up between images once the pool stops.
     pub fn job(self: Arc<Self>, library: LibraryId) -> Job {
-        Job::new(library, IDLE, move || self.run_once(library, 32))
+        Job::new(library, IDLE, move |stop| self.run_once(library, 32, stop))
     }
 }

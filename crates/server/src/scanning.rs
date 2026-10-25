@@ -19,8 +19,6 @@ pub struct Scanning {
     libraries: Vec<Library>,
     /// The threads that run every library's analysis and placeholders.
     background: Pool,
-    /// The ffmpeg those threads run, to kill as everything stops.
-    ffmpeg: Ffmpeg,
 }
 
 /// One library's scanner and everything running for it. Fields drop in the order declared, so
@@ -69,7 +67,7 @@ impl Scanning {
             jobs.push(Arc::new(Placeholders::new(ffmpeg.clone(), store.clone())).job(config.id));
         }
         let background = Pool::start(jobs, Pool::size_for_host())?;
-        Ok(Scanning { libraries: running, background, ffmpeg: ffmpeg.clone() })
+        Ok(Scanning { libraries: running, background })
     }
 
     /// Each library's scanner, for queuing scans from elsewhere, such as of what a plugin saved.
@@ -77,13 +75,12 @@ impl Scanning {
         self.libraries.iter().map(|lib| (lib.id, lib.scanner.clone())).collect()
     }
 
-    /// Stops everything at once: kills the background ffmpeg children, so no decode runs on to
-    /// the end of its file, and asks every scanner to stop after the file in hand before waiting
+    /// Stops everything at once: asks every scanner to stop after the file in hand before waiting
     /// for any, so the libraries stop together rather than one after another. Then it waits for
-    /// the background jobs, and for each library's triggers and scanner. Blocks, so call it
-    /// outside the async runtime.
+    /// the background jobs, which give up between reads and so finish within a probe or an
+    /// image decode, and for each library's triggers and scanner. Blocks, so call it outside the
+    /// async runtime.
     pub fn stop(self) {
-        self.ffmpeg.stop_background();
         for lib in &self.libraries {
             lib.thread.stop();
         }
@@ -109,11 +106,8 @@ fn startup_trigger(db: &Database, library: i64) -> anyhow::Result<Trigger> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::Path;
-    use std::time::Instant;
 
     use jewelcase_ffmpeg::Config as FfmpegConfig;
-    use jewelcase_scanner::testing::PNG;
     use rusqlite::params;
 
     use super::*;
@@ -156,38 +150,5 @@ mod tests {
             scanning.stop();
             assert_eq!(trigger.unwrap(), expected, "after a scan {earlier:?}");
         }
-    }
-
-    /// A stop kills a background decode in flight rather than waiting for it to end.
-    #[test]
-    fn a_stop_kills_a_background_decode_in_flight() {
-        let (temp, db) = testing::open();
-        let music = temp.path().join("music");
-        fs::create_dir(&music).unwrap();
-        fs::write(music.join("cover.png"), PNG).unwrap();
-        // Its own hash, so the startup scan finds the same image.
-        let hash = jewelcase_scanner::describe_image(PNG).unwrap().hash;
-        db.write_blocking(move |tx| {
-            testing::library(tx, 1, "Music", &music)?;
-            testing::Image { hash, ..testing::Image::new(1, 1, "cover.png") }.insert(tx)
-        })
-        .unwrap();
-
-        // Its placeholder is decoded by a stand-in that runs until it is killed.
-        let stand_in = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/stalling-ffmpeg.sh");
-        let ffmpeg =
-            Ffmpeg::new(FfmpegConfig { ffmpeg: stand_in.clone(), ffprobe: stand_in }).unwrap();
-        let scanning = Scanning::start(&db, &ffmpeg).unwrap();
-        let started = temp.path().join("music/cover.png.started");
-        for _ in 0..500 {
-            if started.exists() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(started.exists(), "the placeholder's decode never started");
-        let stopping = Instant::now();
-        scanning.stop();
-        assert!(stopping.elapsed() < Duration::from_secs(5), "{:?}", stopping.elapsed());
     }
 }

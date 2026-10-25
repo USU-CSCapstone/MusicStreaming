@@ -52,6 +52,7 @@ macro_rules! store_suite {
             a_cover_moved_away_waits_until_it_returns,
             a_pipe_is_refused_without_blocking,
             a_decoder_that_cannot_start_backs_off,
+            a_stop_ends_an_analysis_between_reads,
             a_root_going_away_pauses_without_writing,
             a_file_that_always_fails_does_not_block_the_next,
             a_link_is_refused_and_waits,

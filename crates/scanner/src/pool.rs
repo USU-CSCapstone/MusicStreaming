@@ -29,17 +29,18 @@ pub struct Job {
     /// How long the job waits after a pass that backed off or did nothing ([`RunReport::idle`]),
     /// or panicked.
     idle: Duration,
-    pass: Box<dyn Fn() -> RunReport + Send + Sync>,
+    pass: Box<dyn Fn(&Stop) -> RunReport + Send + Sync>,
 }
 
 impl Job {
     /// A job of `library` that runs `pass`, waiting `idle` after a pass that backed off, did
     /// nothing or panicked. Passes may run on several threads at once, so `pass` must not take a
-    /// file that a pass running beside it has in hand.
+    /// file that a pass running beside it has in hand. `pass` is given the [`Stop`] of the thread
+    /// running it, and must return soon after it is asked.
     pub fn new(
         library: LibraryId,
         idle: Duration,
-        pass: impl Fn() -> RunReport + Send + Sync + 'static,
+        pass: impl Fn(&Stop) -> RunReport + Send + Sync + 'static,
     ) -> Job {
         Job { library, idle, pass: Box::new(pass) }
     }
@@ -99,7 +100,7 @@ struct Due {
 /// One pool thread: lowers its priority, then runs due jobs until it is asked to stop.
 fn run(schedule: &Schedule, stop: &Stop) {
     jewelcase_ffmpeg::lower_thread_priority();
-    while let Some(wait) = schedule.run_next() {
+    while let Some(wait) = schedule.run_next(stop) {
         if stop.wait(wait) {
             break;
         }
@@ -118,12 +119,12 @@ impl Schedule {
         Schedule { jobs, per_library: size, threads, due: Mutex::new(due) }
     }
 
-    /// Runs a pass of the first job due whose library is running fewer than its share of
-    /// passes, looking from the one after the job last taken, and returns a wait of zero; or,
-    /// when no such job is due, returns how long until one is. A pass that panics is logged, and
+    /// Runs a pass, given `stop`, of the first job due whose library is running fewer than its
+    /// share of passes, looking from the one after the job last taken, and returns a wait of
+    /// zero; or, when no such job is due, returns how long until one is. A pass that panics is logged, and
     /// its job waits as after an idle pass. Returns `None` when there are no jobs: while a thread
     /// is free, some library always runs fewer than its share.
-    fn run_next(&self) -> Option<Duration> {
+    fn run_next(&self, stop: &Stop) -> Option<Duration> {
         let job = {
             let mut due = self.due.lock().recover();
             let now = Instant::now();
@@ -142,7 +143,7 @@ impl Schedule {
         };
         let Job { library, idle, pass } = &self.jobs[job];
         // The panic itself is reported by the panic hook as it happens.
-        let idle_pass = match panic::catch_unwind(AssertUnwindSafe(pass)) {
+        let idle_pass = match panic::catch_unwind(AssertUnwindSafe(|| pass(stop))) {
             Ok(report) => report.idle(),
             Err(_) => {
                 tracing::error!(

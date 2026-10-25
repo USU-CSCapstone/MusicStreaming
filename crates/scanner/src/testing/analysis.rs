@@ -7,6 +7,7 @@ use jewelcase_ffmpeg::{Config, Ffmpeg};
 
 use super::{Factory, InspectStore, library, scan_library, write_sine_wav};
 use crate::analysis::Analyzer;
+use crate::worker::Stop;
 
 /// One pass analyzes every indexed track, judging a broken one, and the next finds nothing left:
 /// a broken file is not decoded again. The good file's loudness is measured.
@@ -26,10 +27,10 @@ pub fn queue_drains_and_broken_files_do_not_repeat<S: InspectStore + 'static>(ma
     assert!(indexed >= 1);
 
     let analyzer = Analyzer::new(Ffmpeg::new(Config::default()).unwrap(), store.clone());
-    let first = analyzer.run_once(lib.id, 10);
+    let first = analyzer.run_once(lib.id, 10, &Stop::never());
     assert_eq!(first.done + first.failed, indexed);
     assert!(first.done >= 1);
-    let second = analyzer.run_once(lib.id, 10);
+    let second = analyzer.run_once(lib.id, 10, &Stop::never());
     assert_eq!(second.done + second.failed, 0, "nothing left to do");
     let tracks = store.inspect_tracks(lib.id);
     assert!(tracks.into_iter().find(|t| t.path.ends_with("ok.wav")).unwrap().measured);

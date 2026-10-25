@@ -172,9 +172,15 @@ fn a_problem_the_store_cannot_record_leaves_the_file_untried() {
     let analyzer = Analyzer::new(Ffmpeg::new(Config::default()).unwrap(), store.clone());
 
     fail(&store, "BEFORE INSERT ON scan_problems");
-    assert_eq!(analyzer.run_once(lib.id, 10), RunReport { backed_off: true, ..Default::default() });
+    assert_eq!(
+        analyzer.run_once(lib.id, 10, &Stop::never()),
+        RunReport { backed_off: true, ..Default::default() }
+    );
     heal(&store);
-    assert_eq!(analyzer.run_once(lib.id, 10), RunReport { skipped: 1, ..Default::default() });
+    assert_eq!(
+        analyzer.run_once(lib.id, 10, &Stop::never()),
+        RunReport { skipped: 1, ..Default::default() }
+    );
     assert_eq!(store.inspect_problems(lib.id).len(), 1);
 }
 
@@ -193,13 +199,19 @@ fn a_problem_the_store_cannot_clear_leaves_the_file_unanalyzed() {
     fs::rename(&file, &away).unwrap();
     let analyzer = Analyzer::new(Ffmpeg::new(Config::default()).unwrap(), store.clone())
         .with_retry_after(Duration::ZERO);
-    assert_eq!(analyzer.run_once(lib.id, 10), RunReport { skipped: 1, ..Default::default() });
+    assert_eq!(
+        analyzer.run_once(lib.id, 10, &Stop::never()),
+        RunReport { skipped: 1, ..Default::default() }
+    );
     assert_eq!(store.inspect_problems(lib.id).len(), 1);
 
     fs::rename(&away, &file).unwrap();
     fail(&store, "BEFORE DELETE ON scan_problems");
-    assert!(analyzer.run_once(lib.id, 10).backed_off);
+    assert!(analyzer.run_once(lib.id, 10, &Stop::never()).backed_off);
     heal(&store);
-    assert_eq!(analyzer.run_once(lib.id, 10), RunReport { done: 1, ..Default::default() });
+    assert_eq!(
+        analyzer.run_once(lib.id, 10, &Stop::never()),
+        RunReport { done: 1, ..Default::default() }
+    );
     assert!(store.inspect_problems(lib.id).is_empty());
 }

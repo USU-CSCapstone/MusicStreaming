@@ -107,9 +107,9 @@ fn analysis_results_reach_tracks_albums_and_waveforms() {
     testing::scan_library(store.as_ref(), &lib);
     let ffmpeg = jewelcase_ffmpeg::Ffmpeg::new(jewelcase_ffmpeg::Config::default()).unwrap();
     let analyzer = jewelcase_scanner::Analyzer::new(ffmpeg, store.clone());
-    let report = analyzer.run_once(lib.id, 10);
+    let report = analyzer.run_once(lib.id, 10, &Stop::never());
     assert_eq!(report.done, 1);
-    assert_eq!(analyzer.run_once(lib.id, 10).done, 0, "nothing left");
+    assert_eq!(analyzer.run_once(lib.id, 10, &Stop::never()).done, 0, "nothing left");
     let lufs: f64 = scalar(&store, "SELECT loudness_lufs FROM tracks").unwrap();
     assert!((lufs - -6.7).abs() < 1.0, "{lufs}");
     assert_eq!(

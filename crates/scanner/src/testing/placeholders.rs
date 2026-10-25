@@ -4,6 +4,7 @@ use std::fs;
 use std::sync::Arc;
 
 use super::{Factory, InspectStore, library, make_album, scan_library};
+use crate::worker::Stop;
 
 /// Each distinct image gets one placeholder: a few bytes of ThumbHash for one ffmpeg decodes, and
 /// an empty one for one it cannot, which is not tried again.
@@ -36,10 +37,13 @@ pub fn placeholders_fill_once_per_image<S: InspectStore + 'static>(make: Factory
 
     let ffmpeg = jewelcase_ffmpeg::Ffmpeg::new(jewelcase_ffmpeg::Config::default()).unwrap();
     let placeholders = crate::placeholders::Placeholders::new(ffmpeg, store.clone());
-    let report = placeholders.run_once(lib.id, 10);
+    let report = placeholders.run_once(lib.id, 10, &Stop::never());
     assert_eq!((report.done, report.failed), (1, 1));
     assert!(store.next_without_placeholder(lib.id, 10).unwrap().is_empty());
-    assert!(placeholders.run_once(lib.id, 10).idle(), "a broken image is not retried");
+    assert!(
+        placeholders.run_once(lib.id, 10, &Stop::never()).idle(),
+        "a broken image is not retried"
+    );
 
     let hash = store.inspect_placeholder(lib.id, &red).unwrap();
     assert!(hash.len() < 40, "a few bytes: {}", hash.len());

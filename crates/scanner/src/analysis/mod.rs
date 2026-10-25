@@ -20,6 +20,7 @@ use crate::library::LibraryId;
 use crate::pool::Job;
 use crate::problems::{Problem, ProblemKind};
 use crate::store::{AnalysisStore, FileToDecode};
+use crate::worker::Stop;
 use waveform::WaveformBuilder;
 
 /// Bumped whenever any sink's output changes; tracks below it are reprocessed
@@ -42,6 +43,9 @@ pub enum AnalysisError {
     Ffmpeg(#[from] jewelcase_ffmpeg::Error),
     #[error("loudness meter: {0}")]
     Meter(#[from] ebur128::Error),
+    /// The worker was asked to stop, and the analysis gave up between two reads.
+    #[error("stopped")]
+    Stopped,
 }
 
 /// Result of analyzing one track (`design/scanning.md` §12).
@@ -90,8 +94,10 @@ impl Analyzer {
         self
     }
 
-    /// Analyze one file, independent of the store. The unit the tests use.
-    pub fn analyze_file(&self, path: &Path) -> Result<AnalysisResult, AnalysisError> {
+    /// Analyze one file, independent of the store. The unit the tests use. Checks `stop` before
+    /// every read of the decode, and fails with [`AnalysisError::Stopped`] once it is asked,
+    /// dropping the stream, which kills its child.
+    pub fn analyze_file(&self, path: &Path, stop: &Stop) -> Result<AnalysisResult, AnalysisError> {
         let info: ProbeInfo = self.ffmpeg.probe(path)?;
         let mut stream = self.ffmpeg.decode_pcm(path, &info)?;
         let channels = info.channels as usize;
@@ -102,6 +108,9 @@ impl Analyzer {
         let mut block: Vec<f32> = Vec::with_capacity(BLOCK_FRAMES * channels);
         let mut mono: Vec<f32> = Vec::with_capacity(BLOCK_FRAMES);
         loop {
+            if stop.asked() {
+                return Err(AnalysisError::Stopped);
+            }
             let frames = stream.read_frames(&mut block, BLOCK_FRAMES)?;
             if frames == 0 {
                 break;
@@ -129,22 +138,24 @@ impl Analyzer {
     }
 
     /// Analyze up to `limit` tracks that need it, skipping those whose files are waiting to be
-    /// tried again. A failure is handled as `jobs` describes.
-    pub fn run_once(&self, library: LibraryId, limit: usize) -> RunReport {
+    /// tried again. A failure is handled as `jobs` describes. Once `stop` is asked, the track in
+    /// hand is given up with nothing stored, and no further track is started.
+    pub fn run_once(&self, library: LibraryId, limit: usize, stop: &Stop) -> RunReport {
         let store = self.store.as_ref();
         let next = |fetch| store.next_unanalyzed(library, ANALYZER_VERSION, fetch);
         let keep = |track, result: Option<AnalysisResult>| {
             store.store_analysis(library, track, result.unwrap_or_else(failed_result))
         };
-        let decode = |file: &FileToDecode| self.analyze(file);
+        let decode = |file: &FileToDecode| self.analyze(file, stop);
         let pass = self.retries.pass(store, library, limit, next, decode, keep);
         pass.unwrap_or_else(RunReport::store_failed)
     }
 
-    /// Analyze `file`, if it opens.
-    fn analyze(&self, file: &FileToDecode) -> Result<AnalysisResult, Failure> {
+    /// Analyze `file`, if it opens, giving up as [`Failure::Host`] once `stop` is asked.
+    fn analyze(&self, file: &FileToDecode, stop: &Stop) -> Result<AnalysisResult, Failure> {
         let path = file.open().map_err(Failure::Open)?;
-        self.analyze_file(&path).map_err(|error| match error {
+        self.analyze_file(&path, stop).map_err(|error| match error {
+            AnalysisError::Stopped => Failure::Host,
             AnalysisError::Ffmpeg(error) => Failure::from_ffmpeg(&file.path, &error),
             AnalysisError::Meter(error) => Failure::Content(Problem {
                 path: file.path.clone(),
@@ -156,9 +167,9 @@ impl Analyzer {
     }
 
     /// The background job that analyzes `library` in the pool, waiting [`IDLE`] when idle or
-    /// backing off. One track a pass, so a stop waits for one track at most.
+    /// backing off. One track a pass, which gives up between reads once the pool stops.
     pub fn job(self: Arc<Self>, library: LibraryId) -> Job {
-        Job::new(library, IDLE, move || self.run_once(library, 1))
+        Job::new(library, IDLE, move |stop| self.run_once(library, 1, stop))
     }
 }
 

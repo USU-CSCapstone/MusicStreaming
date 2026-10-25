@@ -163,13 +163,6 @@ impl Ffmpeg {
     pub fn decode_image(&self, path: &Path, max_side: u32) -> Result<Rgba, Error> {
         image::decode_image(&self.config, &self.registry, path, max_side)
     }
-
-    /// Kills every background child of this handle and its clones, and each that starts
-    /// afterwards as it starts, so the server stops without waiting for a decode to finish. Each
-    /// fails with [`Error::Stopped`].
-    pub fn stop_background(&self) {
-        self.registry.stop();
-    }
 }
 
 /// The audio decoders named in the table printed by `ffmpeg -decoders`.

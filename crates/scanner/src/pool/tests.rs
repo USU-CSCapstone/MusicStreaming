@@ -19,7 +19,7 @@ fn counted(
     report: RunReport,
 ) -> Job {
     let passes = passes.clone();
-    Job::new(library, idle, move || {
+    Job::new(library, idle, move |_| {
         passes.fetch_add(1, Ordering::SeqCst);
         report.clone()
     })
@@ -31,7 +31,7 @@ fn counted(
 fn a_job_waits_only_when_idle() {
     let passes = Arc::new(AtomicUsize::new(0));
     let counter = passes.clone();
-    let job = Job::new(1, LONG, move || {
+    let job = Job::new(1, LONG, move |_| {
         if counter.fetch_add(1, Ordering::SeqCst) < 3 { BUSY } else { RunReport::default() }
     });
     let pool = Pool::start(vec![job], 1).unwrap();
@@ -111,7 +111,7 @@ fn one_job_runs_on_every_thread() {
     let running = Arc::new(Running::default());
     let job = Job::new(1, LONG, {
         let running = running.clone();
-        move || running.pass(2, Duration::from_millis(100))
+        move |_| running.pass(2, Duration::from_millis(100))
     });
     let pool = Pool::start(vec![job], 3).unwrap();
     wait_until("three passes at once", || running.most() == 3);
@@ -125,9 +125,9 @@ fn a_library_busy_alone_runs_on_the_whole_size() {
     let running = Arc::new(Running::default());
     let busy = Job::new(1, LONG, {
         let running = running.clone();
-        move || running.pass(1, Duration::from_millis(100))
+        move |_| running.pass(1, Duration::from_millis(100))
     });
-    let idle = Job::new(2, LONG, RunReport::default);
+    let idle = Job::new(2, LONG, |_| RunReport::default());
     let pool = Pool::start(vec![busy, idle], 2).unwrap();
     wait_until("two passes at once", || running.most() == 2);
     drop(pool);
@@ -141,7 +141,7 @@ fn no_more_passes_run_at_once_than_threads() {
     let passes = Arc::new(AtomicUsize::new(0));
     let job = |library| {
         let (running, passes) = (running.clone(), passes.clone());
-        Job::new(library, LONG, move || {
+        Job::new(library, LONG, move |_| {
             passes.fetch_add(1, Ordering::SeqCst);
             running.pass(3, Duration::from_millis(20))
         })
@@ -160,7 +160,7 @@ fn dropping_the_pool_stops_its_threads_together() {
     let running = Arc::new(Running::default());
     let job = Job::new(1, LONG, {
         let running = running.clone();
-        move || running.pass(10, pass)
+        move |_| running.pass(10, pass)
     });
     let pool = Pool::start(vec![job], 2).unwrap();
     wait_until("two passes at once", || running.most() == 2);
@@ -197,7 +197,7 @@ fn a_panicking_pass_costs_no_thread() {
     let started = Instant::now();
     let panicking = Job::new(1, Duration::from_millis(200), {
         let panicked = panicked.clone();
-        move || {
+        move |_| {
             panicked.fetch_add(1, Ordering::SeqCst);
             panic!("a decoder bug");
         }
@@ -244,7 +244,7 @@ fn a_hung_library_leaves_a_thread_for_the_others() {
     let (gate, passes) = (Arc::new(Gate::default()), Arc::new(AtomicUsize::new(0)));
     let hung = || {
         let gate = gate.clone();
-        Job::new(1, LONG, move || gate.pass())
+        Job::new(1, LONG, move |_| gate.pass())
     };
     let pool = Pool::start(vec![hung(), hung(), healthy(&passes)], 2).unwrap();
     wait_until("passes of the healthy job", || passes.load(Ordering::SeqCst) >= 20);
@@ -257,19 +257,23 @@ fn a_hung_library_leaves_a_thread_for_the_others() {
 #[test]
 fn the_spare_thread_waits_while_a_library_has_its_share() {
     let gate = Arc::new(Gate::default());
-    let idle = Job::new(2, LONG, RunReport::default);
+    let idle = Job::new(2, LONG, |_| RunReport::default());
     let busy = Job::new(1, LONG, {
         let gate = gate.clone();
-        move || gate.pass()
+        move |_| gate.pass()
     });
     let schedule = Schedule::new(vec![idle, busy], 1);
     assert_eq!(schedule.threads, 2);
-    assert_eq!(schedule.run_next(), Some(Duration::ZERO), "the idle library's first pass");
+    assert_eq!(
+        schedule.run_next(&Stop::never()),
+        Some(Duration::ZERO),
+        "the idle library's first pass"
+    );
     thread::scope(|scope| {
-        let busy = scope.spawn(|| schedule.run_next());
+        let busy = scope.spawn(|| schedule.run_next(&Stop::never()));
         let running = || schedule.due.lock().unwrap().running.get(&1).copied();
         wait_until("the busy library's pass", || running() == Some(1));
-        let wait = schedule.run_next().unwrap();
+        let wait = schedule.run_next(&Stop::never()).unwrap();
         gate.open();
         assert!(wait > LONG / 2, "waits {wait:?}");
         assert_eq!(busy.join().unwrap(), Some(Duration::ZERO));

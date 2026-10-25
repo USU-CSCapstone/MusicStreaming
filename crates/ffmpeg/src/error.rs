@@ -24,9 +24,6 @@ pub enum Error {
     /// probe or image decode that ran that long.
     #[error("ffmpeg stalled for {STALL_TIMEOUT:?} and was killed")]
     Stalled,
-    /// Killed as the server stops ([`crate::Ffmpeg::stop_background`]).
-    #[error("ffmpeg was stopped with the server")]
-    Stopped,
     #[error("ffprobe output could not be parsed: {0}")]
     Probe(String),
     #[error("image output could not be parsed: {0}")]

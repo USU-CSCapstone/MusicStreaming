@@ -18,13 +18,23 @@ pub struct Worker {
 
 /// How a worker's thread learns that it should stop: its worker drops the sender of a channel
 /// on which nothing is ever sent.
-pub struct Stop(Receiver<()>);
+pub struct Stop {
+    receiver: Receiver<()>,
+    /// Held by [`Stop::never`], so that its channel never disconnects.
+    _keepalive: Option<Sender<()>>,
+}
 
 impl Stop {
     /// A stop and the sender whose drop makes it say so.
     pub(crate) fn new() -> (Sender<()>, Stop) {
         let (sender, receiver) = mpsc::channel();
-        (sender, Stop(receiver))
+        (sender, Stop { receiver, _keepalive: None })
+    }
+
+    /// A stop that is never asked, for work that no worker runs, such as a test's.
+    pub fn never() -> Stop {
+        let (sender, receiver) = mpsc::channel();
+        Stop { receiver, _keepalive: Some(sender) }
     }
 
     /// Whether the worker has been asked to stop.
@@ -35,7 +45,7 @@ impl Stop {
     /// Waits up to `timeout`, returning early once the worker is asked to stop. Returns whether
     /// it has been.
     pub fn wait(&self, timeout: Duration) -> bool {
-        matches!(self.0.recv_timeout(timeout), Err(RecvTimeoutError::Disconnected))
+        matches!(self.receiver.recv_timeout(timeout), Err(RecvTimeoutError::Disconnected))
     }
 }
 
