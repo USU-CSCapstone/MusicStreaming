@@ -137,37 +137,42 @@ async fn filters_by_artist_credit() {
     }
 }
 
-/// An artist filter's total is the artist's stored count, read rather than counted, so a stored
-/// count that disagreed with the rows would show; an album filter, alone or with an artist,
-/// counts its rows.
+/// An artist filter's total is the artist's owned and featured tracks, counted from its album
+/// credits; an album filter, alone or with an artist, counts its rows.
 #[tokio::test]
-async fn an_artist_filters_total_is_its_stored_count() {
+async fn an_artist_filters_total_is_its_credited_tracks() {
     let (_temp, db, app) = catalog::app().await;
+    // A second track of Kid A that credits The Beatles makes two featured tracks on one featured
+    // album.
+    db.write(|tx| {
+        Track::new(1007, 1, 102).insert(tx)?;
+        tx.execute_batch(
+            "INSERT INTO track_artists (library_id, track_id, position, artist_id) \
+             VALUES (1, 1007, 0, 11), (1, 1007, 1, 10)",
+        )
+    })
+    .await
+    .unwrap();
     /// The `total` of library 1's track list for `query`.
     async fn total(app: &axum::Router, query: &str) -> Value {
         json(app, &format!("/api/v1/libraries/1/tracks?{query}")).await.1["total"].clone()
     }
     for (query, expected) in [
         ("artistId=10&artistCredit=owned", 4),
-        ("artistId=10&artistCredit=featured", 1),
-        ("artistId=10", 5),
-        ("artistId=10&albumId=102", 1),
+        ("artistId=10&artistCredit=featured", 2),
+        ("artistId=10", 6),
+        ("artistId=10&albumId=102", 2),
         ("albumId=101", 4),
         ("artistId=20", 0),
         ("artistId=nobody", 0),
     ] {
         assert_eq!(total(&app, query).await, expected, "{query}");
     }
-    let wrong = "UPDATE artists SET owned_track_count = 40, appearance_count = 2 WHERE id = 10";
-    db.write(move |tx| tx.execute(wrong, [])).await.unwrap();
-    for (query, expected) in [
-        ("artistId=10&artistCredit=owned", 40),
-        ("artistId=10&artistCredit=featured", 2),
-        ("artistId=10", 42),
-        ("artistId=10&albumId=102", 1),
-    ] {
-        assert_eq!(total(&app, query).await, expected, "{query}");
-    }
+    let (_, albums) =
+        json(&app, "/api/v1/libraries/1/albums?artistId=10&artistCredit=featured").await;
+    assert_eq!(albums["total"], 1, "two tracks on one album are one album");
+    let (_, artist) = json(&app, "/api/v1/libraries/1/artists/10").await;
+    assert_eq!(artist["appearanceCount"], 2);
 }
 
 #[tokio::test]

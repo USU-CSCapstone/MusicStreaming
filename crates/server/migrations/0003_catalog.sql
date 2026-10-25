@@ -51,12 +51,7 @@ CREATE TABLE artists (
     biography        TEXT,
     album_count      INTEGER NOT NULL DEFAULT 0,
     track_count      INTEGER NOT NULL DEFAULT 0,
-    appearance_count INTEGER NOT NULL DEFAULT 0,
     available_track_count INTEGER NOT NULL DEFAULT 0,
-    -- Tracks on the albums it is an album artist of
-    owned_track_count INTEGER NOT NULL DEFAULT 0,
-    -- Albums it is an album artist of or credited on a track of
-    any_album_count  INTEGER NOT NULL DEFAULT 0,
     added_at         INTEGER NOT NULL,
     UNIQUE (library_id, name_key),
     UNIQUE (library_id, id),

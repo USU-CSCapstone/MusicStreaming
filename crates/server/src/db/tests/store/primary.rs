@@ -22,21 +22,21 @@ fn a_guest_on_an_untagged_album_owns_none_of_it() {
 
     assert_eq!(count(&store, "SELECT COUNT(*) FROM albums"), 1);
     assert_eq!(scalar::<String>(&store, "SELECT artists_key FROM albums"), Some("a".into()));
-    // Albums owned, albums appeared on, and biography.
-    let artist = |name: &'static str| -> (i64, i64, Option<String>) {
+    // Albums owned and biography.
+    let artist = |name: &'static str| -> (i64, Option<String>) {
         store
             .db()
             .read_blocking(move |conn| {
                 conn.query_row(
-                    "SELECT album_count, appearance_count, biography FROM artists WHERE name = ?1",
+                    "SELECT album_count, biography FROM artists WHERE name = ?1",
                     [name],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
             })
             .unwrap()
     };
-    assert_eq!(artist("A"), (1, 0, Some("A's story".into())));
-    assert_eq!(artist("B"), (0, 1, None));
+    assert_eq!(artist("A"), (1, Some("A's story".into())));
+    assert_eq!(artist("B"), (0, None));
 }
 
 /// Tracks by different artists of an album whose release type says compilation, with no album

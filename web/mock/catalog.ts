@@ -429,7 +429,14 @@ export class Catalog {
 	}
 
 	artist(lib: bigint, artistId: bigint): Artist | null {
-		const row = this.db.get('SELECT * FROM artists WHERE library_id = ? AND id = ?', lib, artistId);
+		const row = this.db.get(
+			`SELECT *, (SELECT ifnull(sum(ac.track_count), 0) FROM album_credits ac
+			   WHERE ac.artist_id = artists.id AND NOT EXISTS (SELECT 1 FROM album_artists aa
+			     WHERE aa.album_id = ac.album_id AND aa.artist_id = ac.artist_id)) AS appearance_count
+			 FROM artists WHERE library_id = ? AND id = ?`,
+			lib,
+			artistId
+		);
 		if (!row) return null;
 		return {
 			...this.#artistSummary(row),

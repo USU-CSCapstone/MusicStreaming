@@ -109,19 +109,6 @@ fn opening_gathers_statistics_within_the_analysis_limit() {
     assert_ne!(stat, "10000 1000", "counted in full");
 }
 
-/// How the writer would run the `tracks_added` trigger's update of the artists a track on album
-/// `?1` counts toward.
-fn owned_count_plan(db: &Database) -> String {
-    let explain = "EXPLAIN QUERY PLAN UPDATE artists SET owned_track_count = owned_track_count + 1 \
-                   WHERE id IN (SELECT artist_id FROM album_artists WHERE album_id = ?1)";
-    db.write_blocking(move |tx| {
-        let mut plan = tx.prepare(explain)?;
-        let steps = plan.query_map([0], |r| r.get::<_, String>(3))?;
-        steps.collect::<rusqlite::Result<Vec<_>>>().map(|steps| steps.join("; "))
-    })
-    .unwrap()
-}
-
 /// How many rows `db`'s statistics give `artists`, or 0 while they do not describe it.
 fn described_artists(db: &Database) -> i64 {
     let sql =
@@ -129,10 +116,9 @@ fn described_artists(db: &Database) -> i64 {
     db.read_blocking(move |conn| conn.query_row(sql, [], |r| r.get(0))).unwrap()
 }
 
-/// Statistics gathered while 1,200 tracks have 12 artists describe `artists` as a few rows, which
-/// sends each new track's trigger to read every artist. Once 200 more artists arrive, the writer
-/// gathers them again in its periodic optimize, with nothing else asked of it, and the trigger
-/// looks artists up.
+/// Statistics gathered while 1,200 tracks have 12 artists describe `artists` as a few rows. Once
+/// 200 more artists arrive, the writer gathers them again in its periodic optimize, with nothing
+/// else asked of it.
 #[test]
 fn a_table_grown_tenfold_is_described_again_while_the_server_runs() {
     let tmp = tempfile::tempdir().unwrap();
@@ -164,8 +150,6 @@ fn a_table_grown_tenfold_is_described_again_while_the_server_runs() {
     // Read from the readers, so the writer is given no job to run its optimize after.
     for _ in 0..1_500 {
         if described_artists(&db) > 200 {
-            let plan = owned_count_plan(&db);
-            assert!(!plan.contains("SCAN artists"), "{plan}");
             return;
         }
         thread::sleep(Duration::from_millis(20));

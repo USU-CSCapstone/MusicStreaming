@@ -26,8 +26,7 @@ const CHECKS: &[(&str, &str, &str)] = &[
     ),
     (
         "artists",
-        "SELECT id, name, album_count, track_count, appearance_count, available_track_count, \
-         owned_track_count, any_album_count FROM artists ORDER BY id",
+        "SELECT id, name, album_count, track_count, available_track_count FROM artists ORDER BY id",
         "WITH listed AS (SELECT t.id, t.album_id, '[' || (SELECT group_concat(artist_id, ',' \
                     ORDER BY position) FROM track_album_artists WHERE track_id = t.id) || ']' \
                     AS listing FROM tracks t), \
@@ -43,15 +42,8 @@ const CHECKS: &[(&str, &str, &str)] = &[
                        ORDER BY COUNT(*) DESC, artist_name LIMIT 1), \
          (SELECT COUNT(*) FROM owners WHERE artist_id = a.id), \
          (SELECT COUNT(*) FROM track_artists WHERE artist_id = a.id), \
-         (SELECT COUNT(*) FROM track_artists ta JOIN tracks t ON t.id = ta.track_id WHERE ta.artist_id = a.id \
-          AND NOT EXISTS (SELECT 1 FROM owners o WHERE o.album_id = t.album_id AND o.artist_id = a.id)), \
          (SELECT COUNT(*) FROM track_artists ta JOIN tracks t ON t.id = ta.track_id \
-          WHERE ta.artist_id = a.id AND t.missing_since IS NULL), \
-         (SELECT COUNT(*) FROM owners o JOIN tracks t ON t.album_id = o.album_id \
-          WHERE o.artist_id = a.id), \
-         (SELECT COUNT(*) FROM (SELECT album_id FROM owners WHERE artist_id = a.id UNION \
-          SELECT t.album_id FROM track_artists ta JOIN tracks t ON t.id = ta.track_id \
-          WHERE ta.artist_id = a.id)) \
+          WHERE ta.artist_id = a.id AND t.missing_since IS NULL) \
          FROM artists a WHERE a.id IN (SELECT artist_id FROM track_artists \
                                        UNION SELECT artist_id FROM track_album_artists) ORDER BY a.id",
     ),

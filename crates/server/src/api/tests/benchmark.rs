@@ -54,6 +54,7 @@ async fn benchmark_list_pages() {
     for artist in artists {
         pages.push(format!("{lists}/tracks?artistId={artist}&limit=100"));
         pages.push(format!("{lists}/albums?artistId={artist}&limit=100"));
+        pages.push(format!("{lists}/artists/{artist}"));
     }
     for uri in pages {
         let (_, first) = json(&app, &uri).await;

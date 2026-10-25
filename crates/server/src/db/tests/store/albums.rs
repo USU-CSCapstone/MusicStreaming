@@ -153,10 +153,6 @@ fn compilations_and_album_types() {
         "the tag beats the size"
     );
     // A and B appear on Hits but do not own it (`requirements/artists.md` §2).
-    assert_eq!(
-        scalar::<i64>(&store, "SELECT appearance_count FROM artists WHERE name = 'A'"),
-        Some(1)
-    );
     assert_eq!(scalar::<i64>(&store, "SELECT album_count FROM artists WHERE name = 'A'"), Some(0));
     assert_eq!(
         scalar::<i64>(&store, "SELECT album_count FROM artists WHERE name = 'Various Artists'"),

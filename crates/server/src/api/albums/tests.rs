@@ -65,19 +65,20 @@ async fn filters_by_artist_credit() {
     }
 }
 
-/// A list's total is the library's stored count, or an artist filter's the artist's, read
-/// rather than counted, so a stored count that disagreed with the rows would show.
+/// A list's total is the library's stored count, or an artist filter's the artist's stored count
+/// of owned albums plus the albums it is only credited on, so a stored count that disagreed with
+/// the rows would show in the owned part.
 #[tokio::test]
 async fn totals_are_stored_counts() {
     let (_temp, db, app) = catalog::app().await;
-    let wrong = "UPDATE artists SET album_count = 7, any_album_count = 9 WHERE id = 11; \
+    let wrong = "UPDATE artists SET album_count = 7 WHERE id = 11; \
                  UPDATE libraries SET album_count = 40 WHERE id = 1";
     db.write(move |tx| tx.execute_batch(wrong)).await.unwrap();
     for (query, expected) in [
         ("", 40),
         ("artistId=11&artistCredit=owned", 7),
-        ("artistId=11&artistCredit=featured", 2),
-        ("artistId=11", 9),
+        ("artistId=11&artistCredit=featured", 1),
+        ("artistId=11", 8),
     ] {
         let (_, page) = json(&app, &format!("/api/v1/libraries/1/albums?{query}")).await;
         assert_eq!(page["total"], expected, "{query}");

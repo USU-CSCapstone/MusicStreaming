@@ -115,13 +115,18 @@ pub async fn get(
 const ALBUMS: Table =
     Table { name: "albums", alias: "al", select: SELECT, joins: "", count: "album_count" };
 
+/// An expression over `artists` (aliased `ar`) counting the albums a track credits the artist on
+/// but whose album artists do not list it.
+const FEATURED_ALBUMS: &str = "(SELECT count(*) FROM album_credits ac WHERE ac.artist_id = ar.id \
+     AND NOT EXISTS (SELECT 1 FROM album_artists aa \
+                     WHERE aa.album_id = ac.album_id AND aa.artist_id = ac.artist_id))";
+
 /// How albums are credited to an artist.
 const CREDITS: Credits = Credits {
     owned: "SELECT album_id AS id FROM album_artists WHERE artist_id = ?",
     on_tracks: "SELECT album_id AS id FROM album_credits WHERE artist_id = ?",
     owned_count: "album_count",
-    featured_count: "any_album_count - album_count",
-    any_count: "any_album_count",
+    featured_count: FEATURED_ALBUMS,
 };
 
 /// The albums `list` pages through in `library`: every one, or those credited to `artist` as

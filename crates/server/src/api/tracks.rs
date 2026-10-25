@@ -153,10 +153,20 @@ const CREDITS: Credits = Credits {
     owned: "SELECT tracks.id FROM album_artists \
          JOIN tracks ON tracks.album_id = album_artists.album_id WHERE album_artists.artist_id = ?",
     on_tracks: "SELECT track_id AS id FROM track_artists WHERE artist_id = ?",
-    owned_count: "owned_track_count",
-    featured_count: "appearance_count",
-    any_count: "owned_track_count + appearance_count",
+    owned_count: OWNED_TRACKS,
+    featured_count: FEATURED_TRACKS,
 };
+
+/// An expression over `artists` (aliased `ar`) counting the tracks on the albums that list the
+/// artist.
+const OWNED_TRACKS: &str = "(SELECT ifnull(sum(g.track_count), 0) FROM album_artists aa \
+     JOIN album_groups g ON g.album_id = aa.album_id WHERE aa.artist_id = ar.id)";
+
+/// An expression over `artists` (aliased `ar`) counting the tracks that credit the artist on
+/// albums that do not list it.
+pub const FEATURED_TRACKS: &str = "(SELECT ifnull(sum(ac.track_count), 0) FROM album_credits ac \
+     WHERE ac.artist_id = ar.id AND NOT EXISTS (SELECT 1 FROM album_artists aa \
+         WHERE aa.album_id = ac.album_id AND aa.artist_id = ac.artist_id))";
 
 /// The tracks `list` pages through in `library`: every one, or those on `album` and credited
 /// to `artist` as `credit` says.

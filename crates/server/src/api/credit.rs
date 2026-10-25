@@ -22,8 +22,9 @@ pub enum ArtistCredit {
 }
 
 /// How a list's rows are credited to an artist. Each query selects the rows' IDs in a column
-/// named `id`, with one `?` for the artist. Each count is an expression over `artists` that the
-/// database's triggers keep equal to the number of rows credited that way.
+/// named `id`, with one `?` for the artist. Each count is an expression over `artists`, aliased
+/// `ar`, giving the number of rows credited that way, counted from the credit tables or read from a
+/// stored count.
 pub struct Credits {
     /// Rows whose album lists the artist among its album artists.
     pub owned: &'static str,
@@ -31,12 +32,11 @@ pub struct Credits {
     pub on_tracks: &'static str,
     pub owned_count: &'static str,
     pub featured_count: &'static str,
-    pub any_count: &'static str,
 }
 
 impl ArtistCredit {
     /// The rows `credits` credits to `artist` this way, for a page to start from. Their number
-    /// is the artist's stored count, 0 for an artist `library` does not hold.
+    /// is the artist's count of them, 0 for an artist `library` does not hold.
     pub fn lead(
         self,
         conn: &Connection,
@@ -44,17 +44,21 @@ impl ArtistCredit {
         credits: &Credits,
         artist: AnyId,
     ) -> rusqlite::Result<Lead> {
-        let Credits { owned, on_tracks, .. } = credits;
+        let Credits { owned, on_tracks, owned_count, featured_count } = credits;
         let (ids, count, times) = match self {
-            ArtistCredit::Owned => (owned.to_string(), credits.owned_count, 1),
+            ArtistCredit::Owned => (owned.to_string(), owned_count.to_string(), 1),
             ArtistCredit::Featured => {
-                (format!("{on_tracks} EXCEPT {owned}"), credits.featured_count, 2)
+                (format!("{on_tracks} EXCEPT {owned}"), featured_count.to_string(), 2)
             }
-            ArtistCredit::Any => (format!("{owned} UNION {on_tracks}"), credits.any_count, 2),
+            ArtistCredit::Any => (
+                format!("{owned} UNION {on_tracks}"),
+                format!("{owned_count} + {featured_count}"),
+                2,
+            ),
         };
         let size = conn
             .prepare_cached(&format!(
-                "SELECT {count} FROM artists WHERE id = ?1 AND library_id = ?2"
+                "SELECT {count} FROM artists ar WHERE ar.id = ?1 AND ar.library_id = ?2"
             ))?
             .query_row((artist, library), |row| row.get(0))
             .optional()?;
