@@ -22,14 +22,12 @@ mod failures;
 mod panics;
 mod reconcile;
 mod resume;
-mod unlistable;
 pub use checkpoints::*;
 pub use excludes::*;
 pub use failures::*;
 pub use panics::*;
 pub use reconcile::*;
 pub use resume::*;
-pub use unlistable::*;
 
 /// The flag that shuts a scan down from inside it.
 #[derive(Default)]
@@ -171,6 +169,42 @@ pub fn a_root_gone_before_reconcile_suspends_and_marks_nothing<S: InspectStore +
     assert_eq!(unanswered, [Scope::root(&root)]);
     assert_eq!((scan.progress.files_seen, scan.progress.missing), (1, 0), "{:?}", scan.progress);
     assert!(store.inspect_tracks(lib.id).iter().all(|t| !t.missing));
+}
+
+/// A scope whose root goes as its walk is flushed ends the scan suspended with the scope returned
+/// for a retry, which no resume from the cursor would walk again.
+pub fn a_root_gone_after_its_walk_suspends_and_returns_its_scope<S: InspectStore + 'static>(
+    make: Factory<S>,
+) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    make_album(&root, "A", "X", 1);
+    make_album(&root, "C", "Z", 2);
+    let lib = library(&root);
+    let store = Arc::new(make(&lib));
+    let (away, last) = (tmp.path().join("away"), root.join("C/Z"));
+    // The root goes at the first flush after the scan starts on its last folder, as its walk
+    // ends.
+    let walked = AtomicBool::new(false);
+    let on_folder = |path: &Path| {
+        if path == last {
+            walked.store(true, Ordering::SeqCst);
+        }
+        Ok(())
+    };
+    let on_apply = |_: &Batch| {
+        if walked.load(Ordering::SeqCst) && root.exists() {
+            fs::rename(&root, &away).unwrap();
+        }
+        Ok(())
+    };
+    let hooked = Hooked::new(store.clone()).on_apply(on_apply).on_folder(on_folder);
+    let mut scan = new_scan(&hooked, &lib);
+    let unanswered = run(&hooked, &lib, &mut scan, &batches_of(1000), &Stops::default());
+
+    let row = only_row(store.as_ref(), &lib);
+    assert_eq!((row.state, &row.cursor), (ScanState::Suspended, &after(&root, "C/Z")), "{row:?}");
+    assert_eq!(unanswered, [Scope::root(&root)]);
 }
 
 /// The text of `track`'s biography, if it has one.

@@ -5,10 +5,24 @@
 use std::fs::Permissions;
 use std::os::unix::fs::PermissionsExt;
 
-use super::unlistable::Locked;
 use super::*;
 use crate::scope::Depth;
 use crate::testing::{live, scan_library, scan_once, tag_wav};
+
+/// Folders made unlistable, listable again when dropped, so the temporary directory can be
+/// removed even after a failed assertion.
+struct Locked(Vec<PathBuf>);
+
+impl Drop for Locked {
+    /// Restores each folder's mode, reporting any it cannot.
+    fn drop(&mut self) {
+        for folder in &self.0 {
+            if let Err(error) = fs::set_permissions(folder, Permissions::from_mode(0o755)) {
+                eprintln!("could not restore {}: {error}", folder.display());
+            }
+        }
+    }
+}
 
 /// `store`, keeping a copy of every batch applied through it in `batches` for a test to read.
 fn recording<'a>(store: Arc<dyn Store>, batches: &'a Mutex<Vec<Batch>>) -> Hooked<'a> {

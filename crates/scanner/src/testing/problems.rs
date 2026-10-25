@@ -145,7 +145,8 @@ pub fn a_folder_problem_clears_once_it_lists<S: InspectStore>(make: Factory<S>) 
         eprintln!("skipped: permissions do not stop this user reading a folder (running as root?)");
         return;
     }
-    scan_library(&store, &lib);
+    let scan = scan_library(&store, &lib);
+    assert_eq!(scan.progress.problems, 1);
     fs::set_permissions(&folder, fs::Permissions::from_mode(0o755)).unwrap();
     let problems: Vec<PathBuf> =
         store.inspect_problems(lib.id).into_iter().map(|p| p.path).collect();

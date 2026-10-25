@@ -148,11 +148,6 @@ fn scan_scopes(
     }
     writer.save(ctx, scan)?;
 
-    // Folders the walk could not list since the cursor last moved, which may lie in an earlier
-    // scope left unreconciled. Each is counted as a problem once the cursor moves past it or the
-    // scan ends, since until then a resume lists it again.
-    let mut unlisted_folders = 0;
-
     for (scope_index, scope) in from_cursor(scan) {
         if ctx.stopping() {
             break;
@@ -179,7 +174,7 @@ fn scan_scopes(
             && let Err(error) = without_links(&scope.root, &scope.path)
         {
             writer.batch.problems.push(problems::from_io(&scope.path, &error));
-            scan.progress.problems += 1 + std::mem::take(&mut unlisted_folders);
+            scan.progress.problems += 1;
             scan.cursor = Some(Cursor { scope_index: scope_index + 1, after_directory: None });
             writer.flush(ctx, scan)?;
             continue;
@@ -190,12 +185,11 @@ fn scan_scopes(
             match item {
                 WalkItem::Error(err) => {
                     writer.batch.problems.push(problems::from_io(&err.path, &err.error));
-                    unlisted_folders += 1;
+                    scan.progress.problems += 1;
                 }
                 WalkItem::Directory(dir) => {
                     process_directory(ctx, scan, &scope, &dir, &mut sidecars, writer)?;
                     scan.cursor = Some(Cursor { scope_index, after_directory: Some(dir.path) });
-                    scan.progress.problems += std::mem::take(&mut unlisted_folders);
                 }
             }
             Ok(())
@@ -213,9 +207,8 @@ fn scan_scopes(
         // Stage 7 runs on each folder as the walk lists it (`process_directory`). What remains
         // is clearing the problems at paths that no longer exist, only after a complete walk of a
         // root that still answers.
-        // A root that has gone leaves the cursor in this scope, so the unlisted folders stay
-        // uncounted until a later scope moves the cursor or the scan ends, and the scope is left
-        // for a retry to walk again, since a later scope may move the cursor past it.
+        // A root that has gone leaves the scope for a retry to walk again, since a later scope
+        // may move the cursor past it.
         if walked.is_err() || !root_answers(&scope.root) {
             unanswered.push(scope);
             continue;
@@ -223,7 +216,6 @@ fn scan_scopes(
         let gone = gone_problems(ctx, &scope).map_err(|e| writer.fail(ctx, scan, &e))?;
         writer.batch.cleared = gone;
         scan.cursor = Some(Cursor { scope_index: scope_index + 1, after_directory: None });
-        scan.progress.problems += std::mem::take(&mut unlisted_folders);
         writer.flush(ctx, scan)?;
     }
 
@@ -231,8 +223,6 @@ fn scan_scopes(
     if ctx.stopping() {
         return Ok(());
     }
-    // A scan that ends never resumes, so it counts the unlisted folders it carries.
-    scan.progress.problems += unlisted_folders;
     scan.state = if !unanswered.is_empty() { ScanState::Suspended } else { ScanState::Completed };
     scan.finished_at = Some(now_ms());
     scan.progress.current_path = None;
@@ -271,10 +261,9 @@ fn root_answers(root: &Path) -> bool {
 /// longer answers, or [`Halt::Ended`] once a store failure has ended it.
 ///
 /// The caller moves the cursor past `dir` only once all of it is processed, so a scan stopped
-/// partway walks and reconciles it again from the start on resume. A track added or updated
-/// before the stop is found unchanged then, so its counts go to the progress at once. The files
-/// seen, the problem files and the entry problems would be counted again, so they go in only
-/// once `dir` is complete, or when the scan stops in it never to resume, its root gone.
+/// partway walks and reconciles it again from the start on resume. Everything is counted as it
+/// is met, so after a resume the counts for that folder may be too high (`design/scanning.md`
+/// §13).
 fn process_directory(
     ctx: &ScanContext<'_>,
     scan: &mut Scan,
@@ -289,14 +278,12 @@ fn process_directory(
     if dir.listed {
         writer.batch.cleared.push(dir.path.clone());
     }
-    let mut entry_problems = 0;
     for file in dir.skipped_links.iter().chain(&dir.unreadable) {
         writer.batch.problems.push(problems::from_io(&file.path, &file.error));
-        entry_problems += 1;
+        scan.progress.problems += 1;
     }
     sidecars.offer_listing(&dir.path, &dir.files);
     let mut resolved = None;
-    let (mut seen, mut problem_files) = (0, 0);
     let mut halted = Ok(());
 
     for candidate in &dir.candidates {
@@ -304,7 +291,7 @@ fn process_directory(
         if halted.is_err() {
             break;
         }
-        seen += 1;
+        scan.progress.files_seen += 1;
         let known = indexed.take(&candidate.path);
         let outcome = process_file(scope, dir, candidate, known, sidecars, &mut resolved);
         let batch = &mut writer.batch;
@@ -327,7 +314,8 @@ fn process_directory(
                 batch.upserts.push(*record);
             }
             FileOutcome::Problem(problem) => {
-                problem_files += 1;
+                scan.progress.files_processed += 1;
+                scan.progress.problems += 1;
                 batch.problems.push(problem);
             }
         }
@@ -342,12 +330,6 @@ fn process_directory(
         } else {
             reconcile::mark(ctx, scan, writer, missing, vanished)
         };
-    }
-    // Whether no resume walks `dir` again, so its counts go in here.
-    if matches!(halted, Ok(()) | Err(Halt::Unanswered)) {
-        scan.progress.files_seen += seen;
-        scan.progress.files_processed += problem_files;
-        scan.progress.problems += problem_files + entry_problems;
     }
     halted
 }
