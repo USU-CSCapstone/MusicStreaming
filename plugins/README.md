@@ -90,7 +90,7 @@ fine for events and background work, and not for a whole-library pass someone is
 
 A run has 5 minutes, so work over the whole library never tries to finish in one. It does a
 part, keeps its place in `state`, and carries on next run. lrclib's pass
-([`src/pass.rs`](lrclib-lyrics/src/pass.rs)) is the pattern:
+([`src/plugin/pass.rs`](lrclib-lyrics/src/plugin/pass.rs)) is the pattern:
 
 - **A cursor.** It reads the library 500 tracks at a time, each page after the last ID of the
   one before. After each lookup it saves that track's ID under `cursor`, so a run cut short
@@ -138,10 +138,11 @@ Keep the logic in plain Rust that doesn't touch the bindings, and only the glue 
 `#[cfg(target_arch = "wasm32")] mod plugin` holding `generate!()`, the `Guest` impl, and
 `export!`. Then `cargo test` runs the logic on your machine.
 
-- **Put the imports behind a trait.** lrclib's pass takes a [`Store`](lrclib-lyrics/src/pass.rs)
-  of tracks and `state`. In a run that's the imports
-  ([`src/plugin/imports.rs`](lrclib-lyrics/src/plugin/imports.rs)); in its tests, a store in
-  memory ([`src/pass/tests.rs`](lrclib-lyrics/src/pass/tests.rs)).
+- **Test the pass through the host.** lrclib's pass calls the imports directly, so it runs only
+  in the host. Its tests run the packed plugin against an in-memory library and state
+  ([`crates/plugins/tests/lyrics_passes.rs`](../crates/plugins/tests/lyrics_passes.rs), and
+  `host/tests/lyrics.rs` beside the host with replies set up in advance), and keep what is
+  plain logic, such as what a lookup comes to, in native unit tests.
 - **Pass requests in as a function.** ListenBrainz's `listens::submit` takes the call that posts
   a batch, and its tests ([`src/listens/tests.rs`](listenbrainz/src/listens/tests.rs)) answer
   as a ListenBrainz that refuses or fails.

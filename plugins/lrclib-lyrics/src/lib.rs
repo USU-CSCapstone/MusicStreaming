@@ -3,7 +3,6 @@
 
 pub mod failure;
 pub mod lrclib;
-pub mod pass;
 pub mod progress;
 
 /// Where lyrics for the track at `path` go: beside it, with the scanner's name for them,
@@ -21,15 +20,13 @@ pub fn lyrics_path(path: &str, synced: bool) -> String {
 
 #[cfg(target_arch = "wasm32")]
 mod plugin {
-    mod imports;
+    mod pass;
 
     use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-    use crate::failure::{Failure, ImportError};
+    use crate::failure::Failure;
     use crate::lrclib::{self, Found, Query};
-    use crate::pass;
     use crate::progress::{self, Saving, Seen, TIME_PER_RUN};
-    use imports::Imports;
 
     // Reads the contract from the host's copy (plugins/README.md).
     wit_bindgen::generate!({ path: "../../crates/plugins/wit", world: "plugin" });
@@ -61,19 +58,17 @@ mod plugin {
             headers: Vec::new(),
             body: Vec::new(),
         };
-        let reply = http::send(&request).map_err(|e| Failure::from(ImportError::from(e)))?;
+        let reply = http::send(&request).map_err(Failure::from)?;
         Ok((reply.status, String::from_utf8_lossy(&reply.body).into_owned()))
     }
 
-    /// The contract's error as [`ImportError`], which says what each comes to.
-    impl From<Error> for ImportError {
-        fn from(error: Error) -> ImportError {
+    /// What a failed import comes to: everything but a refusal may work later, so it stops the
+    /// run.
+    impl From<Error> for Failure {
+        fn from(error: Error) -> Failure {
             match error {
-                Error::NotGranted => ImportError::NotGranted,
-                Error::Refused(why) => ImportError::Refused(why),
-                Error::Failed(why) => ImportError::Failed(why),
-                Error::RateLimited(ms) => ImportError::RateLimited(ms),
-                Error::TimedOut => ImportError::TimedOut,
+                Error::Refused(why) => Failure::Failed(why),
+                other => Failure::Unavailable(String::from(other)),
             }
         }
     }
@@ -81,7 +76,14 @@ mod plugin {
     /// Why an import did not do what it was asked, as the run's log and summary say it.
     impl From<Error> for String {
         fn from(error: Error) -> String {
-            ImportError::from(error).to_string()
+            match error {
+                Error::NotGranted => "a permission it needs was not granted".into(),
+                Error::Refused(why) | Error::Failed(why) => why,
+                Error::RateLimited(ms) => {
+                    format!("the service cannot be asked again for {} s", ms.div_ceil(1000))
+                }
+                Error::TimedOut => "the request timed out".into(),
+            }
         }
     }
 
@@ -96,11 +98,10 @@ mod plugin {
         let (status, body) = fetch(&lrclib::get_url(&q))?;
         let exact = lrclib::parse_get(status, &body)?;
         // The exact match may only have plain lyrics; a search often turns up synced ones.
-        if exact.as_ref().is_some_and(|r| {
-            r.synced_lyrics
-                .as_deref()
-                .is_some_and(|s| !s.trim().is_empty())
-        }) {
+        if exact
+            .as_ref()
+            .is_some_and(|r| r.synced_lyrics.as_deref().is_some_and(|s| !s.trim().is_empty()))
+        {
             return Ok(lrclib::best(exact.as_ref(), &[], q.duration_s));
         }
         let (status, body) = fetch(&lrclib::search_url(&q))?;
@@ -130,7 +131,7 @@ mod plugin {
                 // What a change had no time for, then the library a part at a time, from where
                 // the last run stopped: every track without lyrics, except misses not due yet.
                 Event::Run | Event::Scheduled => {
-                    let walked = pass::resume(&mut Imports, now, saving, deadline, look)?;
+                    let walked = pass::resume(now, deadline, look)?;
                     n.had_lyrics += walked.had_lyrics;
                     if walked.finished {
                         String::new()
@@ -141,7 +142,7 @@ mod plugin {
                 // The tracks that were added or changed, which is every track at first.
                 Event::TracksChanged(changes) => {
                     let (changed, removed) = (&changes.changed, &changes.removed);
-                    match pass::changed(&mut Imports, changed, removed, now, deadline, look)? {
+                    match pass::changed(changed, removed, now, deadline, look)? {
                         0 => String::new(),
                         left => format!(
                             " It ran out of time with {left} to go, which the next run looks up first."

@@ -6,9 +6,8 @@ the scanner picks them up. Without write access it reports what it found and sav
 It looks up each track as it is added. **Run now**, and the schedule each hour, carry on
 through the library from where the last run stopped, looking up each track without lyrics. A
 track it saved nothing for, because lrclib.net had nothing, only plain lyrics when synced ones
-are asked for, or adding files wasn't granted, is looked up again a month later, or sooner once
-adding files is granted or plain lyrics are wanted again, the next time the pass reaches it. Only
-LRCLIB's `404` counts as having nothing. When it can't be asked now, because it asks to wait,
+are asked for, or adding files wasn't granted, is looked up again a month later, the next time
+the pass reaches it, whatever changes meanwhile. Only LRCLIB's `404` counts as having nothing. When it can't be asked now, because it asks to wait,
 answers `429` or a `5xx`, doesn't answer in time, or can't be reached, the run stops there with
 an error and records nothing for that track: the pass looks it up first next time, and a change
 is delivered again. The server retries it with a growing wait, and disables the plugin only after

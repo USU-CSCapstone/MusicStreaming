@@ -6,8 +6,7 @@ use std::time::Duration;
 
 use crate::lrclib::Found;
 
-/// How long a track that a lookup saved nothing for waits before it is looked up again, unless
-/// what kept it from being saved changes first.
+/// How long a track that a lookup saved nothing for waits before it is looked up again.
 pub const RETRY_AFTER_S: u64 = 30 * 24 * 60 * 60;
 
 /// How long into a run it stops starting lookups, in the pass or for a change. A lookup is at
@@ -37,22 +36,12 @@ pub struct Saving {
     pub synced_only: bool,
 }
 
-/// Why a lookup saved nothing.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Why {
-    /// LRCLIB had no lyrics: nothing found, or an instrumental.
-    Nothing,
-    /// It found lyrics, but adding files was not granted.
-    Unsaved,
-    /// It found only plain lyrics, and only synced ones are wanted.
-    PlainOnly,
-}
-
 /// What looking a track up came to, for what the plugin remembers of it.
 #[derive(Debug, PartialEq)]
 pub enum Seen {
-    /// Nothing was saved, for this reason.
-    Missed(Why),
+    /// Nothing was saved: LRCLIB had nothing, only plain lyrics when synced ones are wanted, or
+    /// adding files was not granted. The track waits [`RETRY_AFTER_S`].
+    Missed,
     /// Nothing more to look for: it has lyrics, or they were saved.
     Settled,
     /// The lookup or the save failed, so what was remembered of it stands, and the pass tries
@@ -60,71 +49,19 @@ pub enum Seen {
     Failed,
 }
 
-/// What a lookup that answered `found` comes to: settled only when it has lyrics to save, and
-/// otherwise a miss that says why.
+/// What a lookup that answered `found` comes to: settled only when it has lyrics to save.
 pub fn seen(found: &Found, saving: Saving) -> Seen {
     match found {
-        Found::Plain(_) if saving.synced_only => Seen::Missed(Why::PlainOnly),
+        Found::Plain(_) if saving.synced_only => Seen::Missed,
         Found::Synced(_) | Found::Plain(_) if saving.can_write => Seen::Settled,
-        Found::Synced(_) | Found::Plain(_) => Seen::Missed(Why::Unsaved),
-        Found::Instrumental | Found::Nothing => Seen::Missed(Why::Nothing),
+        _ => Seen::Missed,
     }
 }
 
-/// A track a lookup saved nothing for: when it may be looked up again, in seconds since the
-/// Unix epoch, and why.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Miss {
-    pub retry_at: u64,
-    pub why: Why,
-}
-
-impl Miss {
-    /// A miss at `now`, for `why`: looked up again after [`RETRY_AFTER_S`].
-    pub fn new(now: u64, why: Why) -> Miss {
-        Miss { retry_at: now + RETRY_AFTER_S, why }
-    }
-
-    /// Whether this run looks the track up again at `now`: once it is due, or as soon as what
-    /// kept it from being saved has changed.
-    pub fn due(self, now: u64, saving: Saving) -> bool {
-        self.retry_at <= now
-            || match self.why {
-                Why::Nothing => false,
-                Why::Unsaved => saving.can_write,
-                Why::PlainOnly => !saving.synced_only,
-            }
-    }
-
-    /// The miss as it is stored: [`encode`]d `retry_at`, then a byte for why.
-    pub fn encode(self) -> Vec<u8> {
-        let why = match self.why {
-            Why::Nothing => 0,
-            Why::Unsaved => 1,
-            Why::PlainOnly => 2,
-        };
-        let mut bytes = encode(self.retry_at);
-        bytes.push(why);
-        bytes
-    }
-
-    /// A miss [`Miss::encode`] stored.
-    pub fn decode(bytes: &[u8]) -> Result<Miss, String> {
-        let (why, retry_at) = bytes.split_last().ok_or("a stored miss is empty")?;
-        let why = match why {
-            0 => Why::Nothing,
-            1 => Why::Unsaved,
-            2 => Why::PlainOnly,
-            other => return Err(format!("a stored miss has no reason {other}")),
-        };
-        Ok(Miss { retry_at: decode(retry_at)?, why })
-    }
-}
-
-/// Whether the pass looks up a track without lyrics at `now`: one never missed, or a miss that
-/// is [`Miss::due`].
-pub fn wanted(miss: Option<Miss>, now: u64, saving: Saving) -> bool {
-    miss.is_none_or(|m| m.due(now, saving))
+/// Whether the pass looks up a track without lyrics at `now`, given when it was last missed:
+/// one never missed, or one whose wait is over.
+pub fn is_due(missed_at: Option<u64>, now: u64) -> bool {
+    missed_at.is_none_or(|at| at.saturating_add(RETRY_AFTER_S) <= now)
 }
 
 /// The key a miss on track `id` is kept under.
@@ -132,7 +69,7 @@ pub fn miss_key(id: u64) -> String {
     format!("miss/{id}")
 }
 
-/// A track ID or a time, as it is stored.
+/// A track ID or the time of a miss, as it is stored.
 pub fn encode(n: u64) -> Vec<u8> {
     n.to_le_bytes().to_vec()
 }

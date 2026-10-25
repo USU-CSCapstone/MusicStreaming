@@ -10,13 +10,6 @@ use common::{grants, plugin, track};
 use jewelcase_plugins::testing::Memory;
 use jewelcase_plugins::{Changes, Event, Grants, Host, Outcome, Permission, RunError};
 
-/// The reason a miss is stored with when nothing was found.
-const NOTHING: u8 = 0;
-/// The reason a miss is stored with when lyrics were found but adding files was not granted.
-const UNSAVED: u8 = 1;
-/// The reason a miss is stored with when only plain lyrics were found and synced ones are wanted.
-const PLAIN_ONLY: u8 = 2;
-
 /// A library of tracks `ids`, without lyrics, and empty state.
 fn library(ids: impl IntoIterator<Item = u64>) -> Memory {
     let tracks = ids.into_iter().map(|id| track(id, &format!("Track {id}"))).collect();
@@ -46,25 +39,27 @@ fn looked_up(outcome: &Outcome) -> Vec<u64> {
 }
 
 /// What the plugin keeps under `key`, as the number it stores first: the cursor's track, or when
-/// a miss is due.
+/// a miss was made.
 fn kept(library: &Memory, key: &str) -> Option<u64> {
     let state = library.state.lock().unwrap();
     state.get(key).map(|bytes| u64::from_le_bytes(bytes[..8].try_into().unwrap()))
 }
 
-/// Records a miss on track `id`, due again at `at`, for reason `why`.
-fn miss(library: &Memory, id: u64, at: u64, why: u8) {
-    let mut value = at.to_le_bytes().to_vec();
-    value.push(why);
-    library.state.lock().unwrap().insert(format!("miss/{id}"), value);
+/// Records a miss on track `id`, made at `at` seconds since the Unix epoch.
+fn miss(library: &Memory, id: u64, at: u64) {
+    library.state.lock().unwrap().insert(format!("miss/{id}"), at.to_le_bytes().to_vec());
 }
+
+/// A time long enough ago for a miss to be due again, and one so late that it never is.
+const LONG_AGO: u64 = 0;
+const NEVER_DUE: u64 = u64::MAX / 2;
 
 #[tokio::test]
 async fn misses_are_looked_up_again_only_once_due() {
     let mut library = library(1..=4);
     library.tracks[3].has_lyrics = true;
-    miss(&library, 1, 0, NOTHING);
-    miss(&library, 2, u64::MAX, NOTHING);
+    miss(&library, 1, LONG_AGO);
+    miss(&library, 2, NEVER_DUE);
 
     for event in [Event::Run, Event::Scheduled] {
         let outcome = run_offline(&library, event).await;
@@ -74,15 +69,15 @@ async fn misses_are_looked_up_again_only_once_due() {
         assert!(!summary.contains("more to do"), "{summary}");
     }
     let misses = (kept(&library, "miss/1"), kept(&library, "miss/2"), kept(&library, "miss/3"));
-    assert_eq!(misses, (Some(0), Some(u64::MAX), None), "a failed lookup changes nothing");
+    assert_eq!(misses, (Some(LONG_AGO), Some(NEVER_DUE), None), "a failed lookup changes nothing");
     assert_eq!(kept(&library, "cursor"), None, "the end: the next run starts over");
 }
 
 #[tokio::test]
 async fn a_run_stops_after_ten_thousand_checks_and_the_next_carries_on() {
     let library = library(1..=10_002);
-    (1..=10_000).for_each(|id| miss(&library, id, u64::MAX, NOTHING));
-    miss(&library, 10_001, 0, NOTHING);
+    (1..=10_000).for_each(|id| miss(&library, id, NEVER_DUE));
+    miss(&library, 10_001, LONG_AGO);
 
     let first = run_offline(&library, Event::Run).await;
     assert!(first.log.is_empty(), "{:?}", first.log);
@@ -105,38 +100,14 @@ async fn a_change_settles_or_keeps_a_miss_and_a_removal_forgets_it() {
     let mut library = library([5, 6]);
     library.tracks[0].has_lyrics = true;
     for id in [5, 6, 9] {
-        miss(&library, id, 0, NOTHING);
+        miss(&library, id, LONG_AGO);
     }
     let changes = Changes { changed: vec![5, 6], removed: vec![9] };
     let outcome = run_offline(&library, Event::TracksChanged(changes)).await;
     assert!(outcome.result.is_ok(), "{}", outcome.summary());
     assert_eq!(kept(&library, "miss/5"), None, "it has lyrics now");
-    assert_eq!(kept(&library, "miss/6"), Some(0), "its lookup failed");
+    assert_eq!(kept(&library, "miss/6"), Some(LONG_AGO), "its lookup failed");
     assert_eq!(kept(&library, "miss/9"), None, "it left the library");
-}
-
-#[tokio::test]
-async fn a_miss_is_looked_up_again_once_its_reason_is_gone() {
-    let library = library(1..=3);
-    miss(&library, 1, u64::MAX, NOTHING);
-    miss(&library, 2, u64::MAX, UNSAVED);
-    miss(&library, 3, u64::MAX, PLAIN_ONLY);
-    // Synced lyrics only, and adding files granted or not.
-    let synced_only = |adding: &[Permission]| {
-        let mut grants = offline();
-        grants.permissions.extend_from_slice(adding);
-        grants.settings.insert("syncedOnly".into(), true.into());
-        grants
-    };
-
-    let unchanged = run(&library, synced_only(&[]), Event::Run).await;
-    assert_eq!(looked_up(&unchanged), Vec::<u64>::new(), "no reason has gone");
-
-    let can_write = run(&library, synced_only(&[Permission::LibraryAdd]), Event::Run).await;
-    assert_eq!(looked_up(&can_write), [2], "it may add files now");
-
-    let plain_wanted = run_offline(&library, Event::Run).await;
-    assert_eq!(looked_up(&plain_wanted), [3], "plain lyrics are wanted now");
 }
 
 #[tokio::test]
