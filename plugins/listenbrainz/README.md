@@ -14,7 +14,7 @@ a refused batch is split in halves and sent again until only the plays it refuse
 each client application for at most one call a second, and says a request with a valid user
 token may get a higher limit. Its manifest keeps each connected user's requests to one a second,
 apart from other users', which paces the halves sent again too.
-Its contract is its own copy of the host's, [`wit/plugin.wit`](wit/plugin.wit), and
+Its contract is the host's, [`crates/plugins/wit`](../../crates/plugins/wit), and
 `manifest.json` is what the Plugins page shows. How to write one like it is in
 [`plugins/README.md`](../README.md).
 

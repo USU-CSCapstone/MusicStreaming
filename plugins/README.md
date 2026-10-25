@@ -19,17 +19,15 @@ The contract is `jewelcase:plugin@0.1.0`, one WIT file:
 plugin can call, the events it is sent, and its one export, `handle(event)`, which returns a
 one-line summary or a reason it failed.
 
-**A plugin keeps its own copy, in `wit/plugin.wit`**, so cargo builds it outside this
-repository (packing it still needs a Jewelcase checkout, below). Copy the file in, and the Rust
-bindings read it from there by default:
+The examples' Rust bindings read it from there:
 
 ```rust
-wit_bindgen::generate!();
+wit_bindgen::generate!({ path: "../../crates/plugins/wit", world: "plugin" });
 ```
 
-Copy it again when the contract changes. The manifest's `apiVersion`, `"0.1"`, names the
-version you copied. The examples' copies are checked against the host's by
-`crates/plugins/tests/vendored_contract.rs`.
+To copy a plugin out of this repository, copy `crates/plugins/wit` beside it too and edit that
+path. The manifest's `apiVersion`, `"0.1"`, names the contract version you copied; copy it
+again when the contract changes.
 
 ## The manifest
 
