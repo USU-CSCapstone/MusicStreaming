@@ -24,9 +24,9 @@ const PAM: [&str; 4] = ["-c:v", "pam", "-pix_fmt", "rgba"];
 pub(crate) const JPEG: [&str; 4] = ["-c:v", "mjpeg", "-q:v", "3"];
 
 /// The command that decodes the image at `path`, or the picture attached to an audio file,
-/// scales it to fit `max_side` without enlarging it, and writes it to its piped standard output,
-/// encoded by `codec` ([`JPEG`] or the PAM [`decode_image`] reads). Its standard error is piped
-/// too, and it reads no input.
+/// scales it to fit `max_side` without enlarging it, and writes it to its standard output,
+/// encoded by `codec` ([`JPEG`] or the PAM [`decode_image`] reads). It reads no input. The caller
+/// pipes its output.
 pub(crate) fn command(config: &Config, path: &Path, max_side: u32, codec: [&str; 4]) -> Command {
     // The `min` keeps a small image from being enlarged.
     let scale = format!(
@@ -39,9 +39,7 @@ pub(crate) fn command(config: &Config, path: &Path, max_side: u32, codec: [&str;
         .args(["-map", "0:v:0", "-frames:v", "1", "-vf", &scale, "-f", "image2pipe"])
         .args(codec)
         .arg("pipe:1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stdin(Stdio::null());
     command
 }
 

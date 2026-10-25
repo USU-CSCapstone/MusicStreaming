@@ -1,7 +1,7 @@
 //! A child process in the pool, from spawn to reap.
 
 use std::io::{self, Read};
-use std::process::{Child, ChildStdout, Command};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
@@ -30,11 +30,13 @@ pub(crate) struct Pooled {
 }
 
 impl Pooled {
-    /// Spawn `command`, register the child and start draining its standard error. `command` must
-    /// pipe its standard output and standard error, or this panics. Fails if the child can't be
-    /// spawned or the drain thread can't start.
+    /// Spawn `command` with its standard output and standard error piped, register the child and
+    /// start draining its standard error. Fails if the child can't be spawned or the drain thread
+    /// can't start.
     pub(crate) fn spawn(registry: &Arc<Registry>, command: &mut Command) -> Result<Pooled, Error> {
         let mut child = command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|source| Error::Spawn { binary: command.get_program().into(), source })?;
         let pid = Pid::from_child(&child);

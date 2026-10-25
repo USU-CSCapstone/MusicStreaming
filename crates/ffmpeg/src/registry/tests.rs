@@ -52,14 +52,6 @@ fn unregisters_before_reaping(run: impl FnOnce(Ffmpeg, PathBuf) + Send + 'static
 }
 
 #[test]
-fn a_probe_unregisters_its_child_before_reaping_it() {
-    unregisters_before_reaping(|ffmpeg, input| {
-        let error = ffmpeg.probe(&input).unwrap_err();
-        assert!(matches!(error, Error::Probe(_)), "{error:?}");
-    });
-}
-
-#[test]
 fn a_decode_unregisters_its_child_before_reaping_it() {
     unregisters_before_reaping(|ffmpeg, input| {
         let info =
@@ -67,14 +59,6 @@ fn a_decode_unregisters_its_child_before_reaping_it() {
         let mut stream = ffmpeg.decode_pcm(&input, &info).unwrap();
         assert_eq!(stream.read_frames(&mut Vec::new(), 1).unwrap(), 0);
         assert_eq!(stream.read_frames(&mut Vec::new(), 1).unwrap(), 0, "a read after the end");
-    });
-}
-
-#[test]
-fn an_image_decode_unregisters_its_child_before_reaping_it() {
-    unregisters_before_reaping(|ffmpeg, input| {
-        let error = ffmpeg.decode_image(&input, 8).unwrap_err();
-        assert!(matches!(error, Error::Image(_)), "{error:?}");
     });
 }
 

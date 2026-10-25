@@ -36,9 +36,7 @@ pub(crate) fn decode_pcm(
             .args(["-map", "0:a:0", "-vn", "-sn", "-dn"])
             .args(shape(info))
             .args(["-f", "f32le", "-c:a", "pcm_f32le", "pipe:1"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped()),
+            .stdin(Stdio::null()),
     )?;
     Ok(PcmStream { child, channels: info.channels as usize, buf: Vec::new(), held: 0 })
 }

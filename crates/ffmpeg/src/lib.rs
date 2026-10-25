@@ -25,7 +25,7 @@ mod registry;
 mod stderr;
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use jewelcase_core::Format;
@@ -55,9 +55,11 @@ impl Default for Config {
 impl Config {
     /// The command that scales the image at `path`, or the picture attached to an audio file, to
     /// fit `max_side` pixels and writes it to standard output as JPEG, for serving. Interactive,
-    /// so the caller spawns it outside the pool.
+    /// so the caller spawns it outside the pool. Its standard output and standard error are piped.
     pub fn resize_command(&self, path: &Path, max_side: u32) -> Command {
-        image::command(self, path, max_side, image::JPEG)
+        let mut command = image::command(self, path, max_side, image::JPEG);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        command
     }
 
     // `transcode` is the playback design's to specify; it is interactive too, so it will build a

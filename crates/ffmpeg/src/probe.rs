@@ -62,9 +62,7 @@ pub(crate) fn probe(
         Command::new(&config.ffprobe)
             .args(["-v", "error", "-print_format", "json", "-show_streams", "-show_format"])
             .args(input(path))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped()),
+            .stdin(Stdio::null()),
     )?;
     let out = child.output()?;
     let parsed: Output = serde_json::from_slice(&out).map_err(|e| Error::Probe(e.to_string()))?;
