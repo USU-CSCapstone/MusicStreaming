@@ -153,7 +153,7 @@ fn scan_scopes(
             Some(c) if c.scope_index == scope_index => c.after_directory.clone(),
             _ => None,
         };
-        let mut sidecars = SidecarResolver::new(&scope.root);
+        let mut sidecars = SidecarResolver::new(&scope.root, excludes.clone());
 
         // A scope reached through a symlink below the root, as the watcher or a plugin may
         // name one, is skipped whole with a problem: nothing is walked and nothing reconciled.

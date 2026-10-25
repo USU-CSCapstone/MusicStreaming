@@ -15,6 +15,7 @@ macro_rules! store_suite {
             an_empty_lyrics_file_writes_nothing,
             sidecars_beside_unchanged_tracks_come_and_go,
             a_folder_scan_under_sidecars_finds_its_tracks_unchanged,
+            a_folder_scan_leaves_out_an_excluded_sidecar_as_a_whole_scan_does,
             a_changed_file_is_analyzed_again,
             a_lyrics_file_alone_keeps_the_analysis,
             a_result_for_replaced_audio_is_not_stored,

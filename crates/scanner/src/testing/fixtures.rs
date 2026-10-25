@@ -8,6 +8,7 @@ use std::process::Command;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
+use globset::GlobSet;
 use lofty::config::WriteOptions;
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::*;
@@ -61,7 +62,7 @@ pub const PNG: &[u8] = &[
 /// finds them unchanged.
 pub fn stamp_without_sidecars(dir: &Path) -> SidecarStamp {
     let audio = dir.join("track.flac");
-    SidecarResolver::new(dir).stamp(dir, &audio, &BTreeMap::new()).stamp
+    SidecarResolver::new(dir, GlobSet::empty()).stamp(dir, &audio, &BTreeMap::new()).stamp
 }
 
 /// Give the WAV at `path` an ID3v2 tag holding `title`, `artist` and `album`, replacing the ID3v2

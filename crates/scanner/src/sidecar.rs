@@ -17,10 +17,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use globset::GlobSet;
 use sha2::{Digest, Sha256};
 
 use self::locate::{Found, Located, LyricsNames};
-use crate::discover::FileStat;
+use crate::discover::{FileStat, excluded};
 use crate::image::ImageInfo;
 use crate::{Lyrics, image};
 
@@ -116,6 +117,8 @@ pub fn is_sidecar_name(name: &OsStr) -> bool {
 /// Resolver for one scan of one root.
 pub struct SidecarResolver {
     root: PathBuf,
+    /// The scan's excludes: a listed file they match is no sidecar, as in the walk's listings.
+    excludes: GlobSet,
     /// Per listed directory not yet located: the sidecars in it (not inherited).
     local: HashMap<PathBuf, Located>,
     /// Per directory: the sidecars that apply to it after the walk.
@@ -129,10 +132,12 @@ pub struct SidecarResolver {
 }
 
 impl SidecarResolver {
-    /// A resolver for a scan of the root at `root`, with nothing located or read yet.
-    pub fn new(root: impl Into<PathBuf>) -> SidecarResolver {
+    /// A resolver for a scan of the root at `root` that applies `excludes`, with nothing located
+    /// or read yet.
+    pub fn new(root: impl Into<PathBuf>, excludes: GlobSet) -> SidecarResolver {
         SidecarResolver {
             root: root.into(),
+            excludes,
             local: HashMap::new(),
             applied: HashMap::new(),
             lyrics_names: None,
@@ -217,9 +222,9 @@ impl SidecarResolver {
     }
 
     /// The sidecars in `dir`, taken from its offered listing. A directory the walk did not list
-    /// (it lists top-down, so this is an ancestor of a folder-scoped scan) is listed here, its
-    /// regular files only, as discovery lists, and only its sidecars are stat'ed. Called once
-    /// per directory, since [`Self::locate`] memoizes what it returns.
+    /// (it lists top-down, so this is an ancestor of a folder-scoped or resumed scan) is listed
+    /// here, its regular files the excludes leave in, as discovery lists, and only its sidecars
+    /// are stat'ed. Called once per directory, since [`Self::locate`] memoizes what it returns.
     fn local_for(&mut self, dir: &Path) -> Located {
         if let Some(local) = self.local.remove(dir) {
             return local;
@@ -229,6 +234,7 @@ impl SidecarResolver {
                 let names: Vec<OsString> = entries
                     .filter_map(|e| e.ok())
                     .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+                    .filter(|e| !excluded(&self.root, &e.path(), &self.excludes))
                     .map(|e| e.file_name())
                     .collect();
                 Located::pick(dir, names.iter().map(OsString::as_os_str), |_, path| Found::at(path))

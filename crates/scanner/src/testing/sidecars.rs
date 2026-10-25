@@ -77,3 +77,27 @@ pub fn a_folder_scan_under_sidecars_finds_its_tracks_unchanged<S: InspectStore>(
     assert_eq!((scan.progress.files_seen, scan.progress.updated), (2, 0), "{:?}", scan.progress);
     assert_eq!(store.feed_head(lib.id), head, "nothing written");
 }
+
+/// An exclude that matches a sidecar's name leaves that sidecar out of a folder-scoped scan as it
+/// does of a whole one: here `A/cover.png` is excluded, so the root's cover applies to both, and
+/// the folder scan finds its tracks unchanged and writes nothing.
+pub fn a_folder_scan_leaves_out_an_excluded_sidecar_as_a_whole_scan_does<S: InspectStore>(
+    make: Factory<S>,
+) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    make_album(&root, "A", "X", 2);
+    fs::write(root.join("cover.png"), PNG).unwrap();
+    fs::write(root.join("A/cover.png"), [PNG, b"A"].concat()).unwrap();
+    fs::write(root.join("A/artist.txt"), "A band.").unwrap();
+    let mut lib = library(&root);
+    lib.excludes = vec!["A/cover.png".into()];
+    let store = make(&lib);
+    scan_library(&store, &lib);
+    let head = store.feed_head(lib.id);
+
+    let scope = Scope::folder(&root, root.join("A/X"), Depth::Directory);
+    let scan = scan_once(&store, &lib, Trigger::Watch, vec![scope]);
+    assert_eq!((scan.progress.files_seen, scan.progress.updated), (2, 0), "{:?}", scan.progress);
+    assert_eq!(store.feed_head(lib.id), head, "nothing written");
+}
