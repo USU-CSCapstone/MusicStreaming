@@ -79,10 +79,6 @@ CREATE TABLE albums (
     -- The label set most of the album's tracks carry, as design/database.md §3 resolves it
     labels                TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(labels) AND json_type(labels) = 'array'),
     image_id              INTEGER,
-    -- The album's first track with an artist image and its first with a biography, in the order
-    -- design/database.md §3 gives, among which its artists choose
-    artist_image_track_id INTEGER,
-    biography_track_id    INTEGER,
     release_date          TEXT    CHECK (release_date GLOB '[0-9][0-9][0-9][0-9]' OR release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]' OR release_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
     disc_total            INTEGER,
     -- The sum of album_discs.track_total; NULL when no disc has one
@@ -96,12 +92,7 @@ CREATE TABLE albums (
     added_at              INTEGER NOT NULL,
     UNIQUE (library_id, title_key, artists_key),
     UNIQUE (library_id, id),
-    FOREIGN KEY (library_id, image_id) REFERENCES images (library_id, id),
-    -- Deferred, so a track can go before the recompute in its transaction points the album past it
-    FOREIGN KEY (library_id, artist_image_track_id) REFERENCES tracks (library_id, id)
-        DEFERRABLE INITIALLY DEFERRED,
-    FOREIGN KEY (library_id, biography_track_id) REFERENCES tracks (library_id, id)
-        DEFERRABLE INITIALLY DEFERRED
+    FOREIGN KEY (library_id, image_id) REFERENCES images (library_id, id)
 ) STRICT;
 
 CREATE INDEX albums_by_name ON albums (library_id, sort_key, id);
@@ -110,10 +101,6 @@ CREATE INDEX albums_by_added ON albums (library_id, added_at, id);
 CREATE INDEX albums_by_release ON albums (library_id, release_date, sort_key, id);
 CREATE INDEX albums_by_duration ON albums (library_id, duration_us, id);
 CREATE INDEX albums_by_image ON albums (library_id, image_id);
-CREATE INDEX albums_by_artist_image_track ON albums (library_id, artist_image_track_id)
-    WHERE artist_image_track_id IS NOT NULL;
-CREATE INDEX albums_by_biography_track ON albums (library_id, biography_track_id)
-    WHERE biography_track_id IS NOT NULL;
 
 CREATE TABLE album_artists (
     library_id INTEGER NOT NULL,
@@ -251,14 +238,16 @@ CREATE INDEX tracks_by_image ON tracks (library_id, image_id) WHERE image_id IS 
 CREATE INDEX tracks_by_artist_image ON tracks (library_id, artist_image_id)
     WHERE artist_image_id IS NOT NULL;
 CREATE INDEX tracks_by_biography ON tracks (library_id, biography_id) WHERE biography_id IS NOT NULL;
--- An album's tracks offering art, an artist image or a biography, each kind in the order
--- design/database.md §3 gives, so an album reads the first of each from one entry
+-- An album's tracks offering art, in the order design/database.md §3 gives, so an album reads
+-- the first from one entry
 CREATE INDEX tracks_with_art ON tracks (album_id, missing_since IS NOT NULL, image_embedded DESC,
     disc_number, ifnull(track_number, 9223372036854775807), path, id) WHERE image_id IS NOT NULL;
-CREATE INDEX tracks_with_artist_image ON tracks (album_id, missing_since IS NOT NULL, disc_number,
-    ifnull(track_number, 9223372036854775807), path, id) WHERE artist_image_id IS NOT NULL;
-CREATE INDEX tracks_with_biography ON tracks (album_id, missing_since IS NOT NULL, disc_number,
-    ifnull(track_number, 9223372036854775807), path, id) WHERE biography_id IS NOT NULL;
+-- An album's present tracks offering an artist image or a biography, which an artist's query
+-- names (INDEXED BY) so it reads one entry per album whatever the planner's statistics
+CREATE INDEX tracks_with_artist_image ON tracks (album_id, artist_image_id)
+    WHERE artist_image_id IS NOT NULL AND missing_since IS NULL;
+CREATE INDEX tracks_with_biography ON tracks (album_id, biography_id)
+    WHERE biography_id IS NOT NULL AND missing_since IS NULL;
 -- An album's analyzed tracks with the columns its loudness reads, so computing it reads no
 -- table rows
 CREATE INDEX tracks_analyzed ON tracks (album_id, duration_us, loudness_lufs, peak_dbtp)

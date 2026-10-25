@@ -81,8 +81,7 @@ fn play(conn: &Connection) -> rusqlite::Result<Vec<Value>> {
 
 /// Tracks missing for longer than the window are purged with what they alone made: album Y and
 /// artist C, B's image and biography, which only the purged track offered, and the image and
-/// biography rows. Album X points past the purged track, which its deferred foreign keys need
-/// before the commit. Every change is in the feed, the tracks' deletion included, and a play of
+/// biography rows. Every change is in the feed, the tracks' deletion included, and a play of
 /// a purged track keeps its snapshot (`requirements/scanning.md` §8.1).
 #[test]
 fn a_track_missing_past_the_window_is_purged_with_what_it_alone_made() {
@@ -97,8 +96,6 @@ fn a_track_missing_past_the_window_is_purged_with_what_it_alone_made() {
         })
         .unwrap();
     missing_for(&root, &store, WINDOW_MS + 60_000);
-    let artist_image = "SELECT count(*) FROM albums WHERE artist_image_track_id IS NOT NULL";
-    assert_eq!(count(&store, artist_image), 1, "album X still points at its missing track");
     let before = snapshot(&store);
     let before_play = played(&store, purged[0]);
 
@@ -108,7 +105,6 @@ fn a_track_missing_past_the_window_is_purged_with_what_it_alone_made() {
     assert_eq!(count(&store, "SELECT count(*) FROM tracks"), 1);
     assert_eq!(scalar::<String>(&store, "SELECT group_concat(title) FROM albums").unwrap(), "X");
     assert_eq!(scalar::<String>(&store, "SELECT group_concat(name) FROM artists").unwrap(), "B");
-    assert_eq!(count(&store, artist_image), 0);
     assert_eq!(count(&store, "SELECT count(image_id) + count(biography) FROM artists"), 0);
     assert_eq!(count(&store, "SELECT count(*) FROM images"), 0);
     assert_eq!(count(&store, "SELECT count(*) FROM biographies"), 0);

@@ -143,63 +143,48 @@ fn a_replaced_or_removed_cover_reaches_the_album() {
     assert_eq!(count(&store, "SELECT COUNT(image_id) FROM tracks"), 0);
 }
 
-/// An artist's image and biography are those of the lowest-numbered track crediting them as album
-/// artist, follow a change to its sidecars, and fall to the next track's when they go.
+/// An artist shows the image and biography of one of the albums it is an album artist of that
+/// offers them.
 #[test]
-fn an_artists_image_and_biography_follow_its_lowest_track() {
+fn an_artist_shows_one_of_its_albums_offers() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
-    let tags = |album, track| {
-        [(ItemKey::TrackArtist, "B"), (ItemKey::AlbumTitle, album), (ItemKey::TrackNumber, track)]
-    };
-    tagged(&root, "B/Y/1.wav", &tags("Y", "2"));
-    tagged(&root, "B/Z/1.wav", &tags("Z", "1"));
-    let sidecar = |rel: &str, bytes: &[u8]| fs::write(root.join(rel), bytes).unwrap();
-    sidecar("B/Y/artist.txt", b"From Y.");
-    sidecar("B/Y/artist.png", &png("Y"));
-    sidecar("B/Z/artist.txt", b"From Z.");
-    sidecar("B/Z/artist.png", &png("Z"));
+    let tags = |album| [(ItemKey::TrackArtist, "B"), (ItemKey::AlbumTitle, album)];
+    for album in ["Y", "Z"] {
+        tagged(&root, &format!("B/{album}/1.wav"), &tags(album));
+        fs::write(root.join(format!("B/{album}/artist.txt")), format!("From {album}.")).unwrap();
+        fs::write(root.join(format!("B/{album}/artist.png")), png(album)).unwrap();
+    }
     let store = make(&root);
     let lib = testing::library(&root);
+    scan(&store, &lib, "the first scan");
     let shown =
         "SELECT a.biography || ' ' || i.path FROM artists a JOIN images i ON i.id = a.image_id";
-    scan(&store, &lib, "the first scan");
-    assert_eq!(scalar::<String>(&store, shown).as_deref(), Some("From Z. B/Z/artist.png"));
-
-    sidecar("B/Z/artist.txt", b"From Z, rewritten.");
-    scan(&store, &lib, "the biography rewritten");
-    assert_eq!(
-        scalar::<String>(&store, shown).as_deref(),
-        Some("From Z, rewritten. B/Z/artist.png")
-    );
-
-    fs::remove_file(root.join("B/Z/artist.txt")).unwrap();
-    fs::remove_file(root.join("B/Z/artist.png")).unwrap();
-    scan(&store, &lib, "Z's sidecars removed");
-    assert_eq!(scalar::<String>(&store, shown).as_deref(), Some("From Y. B/Y/artist.png"));
+    let shown = scalar::<String>(&store, shown);
+    assert!(matches!(shown.as_deref(), Some("From Y. B/Y/artist.png" | "From Z. B/Z/artist.png")));
 }
 
-/// Of the artist images an album artist's albums offer, the earliest track's applies: track 1
-/// before track 256, whose path sorts first, and on the same track number a path before the
-/// longer path it starts.
+/// An artist's image comes from a present track, so one on an album whose track went missing
+/// gives way to another album's.
 #[test]
-fn an_artists_image_comes_from_its_albums_earliest_track() {
+fn an_artists_image_comes_from_a_present_track() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
-    let tags = |album, track| {
-        [(ItemKey::TrackArtist, "B"), (ItemKey::AlbumTitle, album), (ItemKey::TrackNumber, track)]
-    };
-    for (folder, album, track) in
-        [("B/0", "R", "256"), ("B/X", "P", "1"), ("B/X/1.wav.d", "Q", "1")]
-    {
-        tagged(&root, &format!("{folder}/1.wav"), &tags(album, track));
+    for (folder, album) in [("B/P", "P"), ("B/Q", "Q")] {
+        let tags = [(ItemKey::TrackArtist, "B"), (ItemKey::AlbumTitle, album)];
+        tagged(&root, &format!("{folder}/1.wav"), &tags);
         fs::write(root.join(folder).join("artist.png"), png(album)).unwrap();
     }
     let store = make(&root);
     let lib = testing::library(&root);
     scan(&store, &lib, "the first scan");
     let shown = "SELECT i.path FROM artists a JOIN images i ON i.id = a.image_id";
-    assert_eq!(scalar::<String>(&store, shown).as_deref(), Some("B/X/artist.png"));
+    assert!(scalar::<String>(&store, shown).is_some());
+
+    fs::remove_dir_all(root.join("B/P")).unwrap();
+    scan(&store, &lib, "album P gone");
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM tracks WHERE missing_since IS NOT NULL"), 1);
+    assert_eq!(scalar::<String>(&store, shown).as_deref(), Some("B/Q/artist.png"));
 }
 
 /// Two libraries holding the same cover and biography each keep their own rows, and a cover

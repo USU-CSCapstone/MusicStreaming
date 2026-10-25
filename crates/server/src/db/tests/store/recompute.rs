@@ -92,18 +92,12 @@ const CHECKS: &[(&str, &str, &str)] = &[
          FROM tracks t ORDER BY t.id",
     ),
     (
-        "album art and offers",
-        "SELECT id, image_id, artist_image_track_id, biography_track_id FROM albums ORDER BY id",
+        "album art",
+        "SELECT id, image_id FROM albums ORDER BY id",
         "SELECT DISTINCT album_id, (SELECT image_id FROM tracks WHERE album_id = t.album_id \
                                     AND image_id IS NOT NULL ORDER BY missing_since IS NOT NULL, \
                                     image_embedded DESC, disc_number, \
-                                    ifnull(track_number, 9223372036854775807), path, id LIMIT 1), \
-         (SELECT id FROM tracks WHERE album_id = t.album_id AND artist_image_id IS NOT NULL \
-          ORDER BY missing_since IS NOT NULL, disc_number, ifnull(track_number, 9223372036854775807), \
-          path, id LIMIT 1), \
-         (SELECT id FROM tracks WHERE album_id = t.album_id AND biography_id IS NOT NULL \
-          ORDER BY missing_since IS NOT NULL, disc_number, ifnull(track_number, 9223372036854775807), \
-          path, id LIMIT 1) \
+                                    ifnull(track_number, 9223372036854775807), path, id LIMIT 1) \
          FROM tracks t ORDER BY album_id",
     ),
     (
@@ -115,17 +109,22 @@ const CHECKS: &[(&str, &str, &str)] = &[
          FROM tracks t ORDER BY album_id",
     ),
     (
+        // An artist takes those of any present track on an album it is an album artist of, so
+        // the stored value is checked to be one of them, or none when there is none.
         "artist images and biographies",
-        "SELECT id, image_id, biography FROM artists ORDER BY id",
-        "WITH credited AS (SELECT c.artist_id, t.* FROM track_album_artists c JOIN tracks t ON t.id = c.track_id) \
+        "WITH offers AS (SELECT aa.artist_id, t.artist_image_id, t.biography_id FROM album_artists aa \
+                         JOIN artists n ON n.id = aa.artist_id AND n.name IS NOT NULL \
+                         JOIN tracks t ON t.album_id = aa.album_id AND t.missing_since IS NULL) \
          SELECT a.id, \
-         (SELECT artist_image_id FROM credited WHERE artist_id = a.id AND artist_image_id IS NOT NULL \
-          AND a.name IS NOT NULL ORDER BY missing_since IS NOT NULL, disc_number, \
-          ifnull(track_number, 9223372036854775807), path, id LIMIT 1), \
-         (SELECT b.text FROM credited JOIN biographies b ON b.id = credited.biography_id \
-          WHERE credited.artist_id = a.id AND a.name IS NOT NULL ORDER BY missing_since IS NOT NULL, \
-          disc_number, ifnull(track_number, 9223372036854775807), path, credited.id LIMIT 1) \
+         CASE WHEN a.image_id IS NULL THEN NOT EXISTS (SELECT 1 FROM offers o WHERE o.artist_id = a.id \
+                                                       AND o.artist_image_id IS NOT NULL) \
+              ELSE a.image_id IN (SELECT artist_image_id FROM offers o WHERE o.artist_id = a.id) END, \
+         CASE WHEN a.biography IS NULL THEN NOT EXISTS (SELECT 1 FROM offers o WHERE o.artist_id = a.id \
+                                                        AND o.biography_id IS NOT NULL) \
+              ELSE a.biography IN (SELECT b.text FROM offers o JOIN biographies b ON b.id = o.biography_id \
+                                   WHERE o.artist_id = a.id) END \
          FROM artists a ORDER BY a.id",
+        "SELECT id, 1, 1 FROM artists ORDER BY id",
     ),
     (
         "album artists",

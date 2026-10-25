@@ -147,9 +147,10 @@ fn offering(root: &Path, artist: &str, album: &str, i: usize) -> TrackRecord {
     rec
 }
 
-/// The statements that resolve an artist's art and an album's artist sort key read by id, so
-/// planner statistics gathered before any album offered an artist image, over a library of two
-/// tracks, don't send them through the whole library.
+/// The statement that resolves an artist's image and biography stops at the first album that
+/// offers one and reads only the tracks that do, so planner statistics gathered before any track
+/// offered an artist image, over a library of two tracks, don't send it through the whole
+/// library. An artist offered nothing is the case that would show it, having no match to stop at.
 #[test]
 fn early_statistics_leave_a_batch_costing_what_it_changes() {
     let tmp = tempfile::tempdir().unwrap();
@@ -157,24 +158,19 @@ fn early_statistics_leave_a_batch_costing_what_it_changes() {
     let store = make(&root);
     // Planner statistics gathered over two tracks of one album by one artist, offering it
     // nothing. The writer gathers none for a library this small (`STATISTICS_FROM_TRACKS`); the
-    // test does, to show the plans hold even on statistics that small.
+    // test does, to show the plan holds even on statistics that small.
     let upserts = (0..2).map(|i| track(&root, "Plain", i)).collect();
     store.apply(1, Batch { upserts, ..Batch::default() }).unwrap();
     store.db().write_blocking(|tx| tx.execute_batch("ANALYZE")).unwrap();
-    // Zed sorts after every artist to come, so a walk of the artists by name meets it last.
-    let upserts = (0..16).map(|i| offering(&root, "Zed", "Mine", i)).collect();
+    let upserts = (0..16).map(|i| track(&root, "Mine", i)).collect();
     store.apply(1, Batch { upserts, ..Batch::default() }).unwrap();
 
-    // Rereading 16 tracks of the artist's one album, changed, before and after 1,000 albums of
-    // other artists that each offer theirs an image and a biography.
+    // Rereading 16 tracks of an album whose artist is offered no image or biography, before and
+    // after 1,000 albums of other artists that each offer theirs.
     let mine = ids(&store, "Mine");
     let changed = || {
         let upserts = (0..16)
-            .map(|i| TrackRecord {
-                id: Some(mine[i]),
-                size: 7,
-                ..offering(&root, "Zed", "Mine", i)
-            })
+            .map(|i| TrackRecord { id: Some(mine[i]), size: 7, ..track(&root, "Mine", i) })
             .collect();
         Batch { upserts, ..Batch::default() }
     };
@@ -186,7 +182,7 @@ fn early_statistics_leave_a_batch_costing_what_it_changes() {
         store.apply(1, Batch { upserts, ..Batch::default() }).unwrap();
     }
     let among = cost(&store, changed());
-    // Reading every album that offers an artist image, or every artist, even once, would take at
+    // Reading every track that offers an artist image, or every artist, even once, would take at
     // least 1,000 steps more.
     assert!(among < alone + 500, "{among} steps against {alone}");
 }

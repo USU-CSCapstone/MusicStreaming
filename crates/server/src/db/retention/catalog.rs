@@ -38,8 +38,7 @@ pub(super) const TRACK_CHUNK: usize = 16;
 /// Purges up to [`TRACK_CHUNK`] tracks missing for longer than the window and still missing after
 /// a completed scan of their whole root that started once the window was up, recording each in
 /// the feed, and brings the albums, artists and tags they counted toward up to date in the same
-/// transaction, which deletes those they were the last of and records that too. Albums point at
-/// tracks through deferred foreign keys, which only that recompute satisfies before the commit.
+/// transaction, which deletes those they were the last of and records that too.
 /// A play of a purged track keeps its snapshot, since `plays.track_id` has no foreign key.
 ///
 /// Returns whether none is left. Playlists are not modelled yet (`design/database.md` §10); a
