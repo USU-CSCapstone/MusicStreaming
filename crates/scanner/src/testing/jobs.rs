@@ -235,9 +235,10 @@ pub fn a_cover_moved_away_waits_until_it_returns<S: InspectStore + 'static>(make
     assert!(store.inspect_problems(lib.id).is_empty());
 }
 
-/// A track replaced by a pipe after the scan is judged without opening it, which would block
-/// the pool's thread, and its shutdown, until something wrote to the pipe.
-pub fn a_pipe_is_judged_without_blocking<S: InspectStore + 'static>(make: Factory<S>) {
+/// A track replaced by a pipe after the scan is refused without opening it, which would block
+/// the pool's thread, and its shutdown, until something wrote to the pipe. It waits like any
+/// file that does not open.
+pub fn a_pipe_is_refused_without_blocking<S: InspectStore + 'static>(make: Factory<S>) {
     let (_tmp, store, lib, file) = album(make);
     fs::remove_file(&file).unwrap();
     assert!(Command::new("mkfifo").arg(&file).status().unwrap().success());
@@ -245,7 +246,7 @@ pub fn a_pipe_is_judged_without_blocking<S: InspectStore + 'static>(make: Factor
     let (sent, received) = mpsc::channel();
     std::thread::spawn(move || sent.send(analyzer.run_once(lib, 10)));
     let report = received.recv_timeout(Duration::from_secs(30)).expect("the pass blocked");
-    assert_eq!(report, self::report(1, 1, 0));
+    assert_eq!(report, self::report(1, 0, 1));
     let problems = store.inspect_problems(lib);
     assert_eq!(
         problems.iter().map(|p| (&p.path, p.detail.as_str())).collect::<Vec<_>>(),
@@ -266,8 +267,8 @@ pub fn a_decoder_that_cannot_start_backs_off<S: InspectStore + 'static>(make: Fa
 }
 
 /// A file that becomes a symlink after the scan is never decoded through it, whether the link
-/// leads inside the library, out of it, or nowhere: it is judged at once and recorded.
-pub fn a_link_is_judged_once<S: InspectStore + 'static>(make: Factory<S>) {
+/// leads inside the library, out of it, or nowhere: it is refused, recorded and left waiting.
+pub fn a_link_is_refused_and_waits<S: InspectStore + 'static>(make: Factory<S>) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     make_album(&root, "A", "X", 4);
@@ -289,10 +290,10 @@ pub fn a_link_is_judged_once<S: InspectStore + 'static>(make: Factory<S>) {
     let analyzer = analyzer(&store, Config::default());
     let placeholders = Placeholders::new(Ffmpeg::new(Config::default()).unwrap(), store.clone());
 
-    assert_eq!(analyzer.run_once(lib.id, 10), report(1, 3, 0));
-    assert_eq!(analyzer.run_once(lib.id, 10), RunReport::default(), "not tried again");
-    assert_eq!(placeholders.run_once(lib.id, 10), report(0, 1, 0));
-    assert_eq!(placeholders.run_once(lib.id, 10), RunReport::default(), "not tried again");
+    assert_eq!(analyzer.run_once(lib.id, 10), report(1, 0, 3));
+    assert_eq!(analyzer.run_once(lib.id, 10), RunReport::default(), "waiting");
+    assert_eq!(placeholders.run_once(lib.id, 10), report(0, 0, 1));
+    assert_eq!(placeholders.run_once(lib.id, 10), RunReport::default(), "waiting");
     let problems = store.inspect_problems(lib.id);
     assert!(problems.iter().all(|p| p.detail == "symlinks are not followed"), "{problems:?}");
     let mut paths: Vec<_> = problems.into_iter().map(|p| p.path).collect();

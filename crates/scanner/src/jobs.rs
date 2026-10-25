@@ -1,13 +1,14 @@
 //! What the background decodes, analysis and placeholders, make of a file they could not decode
 //! (`design/scanning.md` §12):
 //!
-//! - **A verdict on the file**: a decoder's error on a file that opens, a symlink or something
-//!   other than a regular file refused, or a second failure of the file of a kind that may
-//!   pass, such as a stall, with no success between. It is stored as an empty result, so the
-//!   file is not decoded on every pass, and recorded as a scan problem.
-//! - **A file that cannot be opened**, because it is gone, out of reach or not permitted: never
-//!   given a result. It is recorded as a problem and skipped for [`RETRY_AFTER`]. Once it
-//!   decodes, its `Unreadable` or `PermissionDenied` problem is cleared.
+//! - **A verdict on the file**: a decoder's error on a file that opens, or a second failure of
+//!   the file of a kind that may pass, such as a stall, with no success between. It is stored
+//!   as an empty result, so the file is not decoded on every pass, and recorded as a scan
+//!   problem.
+//! - **A file that cannot be opened**, because it is gone, out of reach, not permitted, a
+//!   symlink or not a regular file: never given a result. It is recorded as a problem and
+//!   skipped for [`RETRY_AFTER`]. Once it decodes, its `Unreadable` or `PermissionDenied`
+//!   problem is cleared.
 //! - **Anything else**: an unavailable root, a decoder that cannot start or that the server
 //!   killed as it stops, a first failure that may pass, or a store error. The pass ends and the
 //!   job backs off, so an outage never strips results, and a failure of the store never counts
@@ -19,7 +20,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use crate::confine::is_refused;
 use crate::discover::check_root;
 use crate::library::LibraryId;
 use crate::problems::{self, Problem};
@@ -289,9 +289,6 @@ impl Retries {
             }
         };
         let problem = problems::from_io(&file.path, &error);
-        if is_refused(&error) {
-            return Some((Outcome::Verdict, problem));
-        }
         // An unavailable root hides every file under it: nothing to record about this one.
         check_root(&file.root).ok()?;
         Some((Outcome::Skipped, problem))
