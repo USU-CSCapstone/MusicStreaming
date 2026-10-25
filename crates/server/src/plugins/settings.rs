@@ -173,12 +173,13 @@ impl Plugins {
     /// is beneath them, and the defaults, so a wrong key is caught as it is entered rather than at
     /// three in the morning (§6). The check runs in the plugin's turn in the library, or a user's
     /// in a turn of that user's, so no user runs more than one check of a plugin at once, with what
-    /// a run there is granted, and not at all in a library it is disabled in, as a disabled plugin
-    /// runs nothing (`requirements/plugins.md` §5). One uninstalled by its turn is a
-    /// [`PluginError::NotFound`]; uninstalling does not wait for a user's turn. A caller that stops
-    /// waiting for its turn leaves the queue; a check that has started goes on to its end, and what
-    /// it touched is scanned, as after any run. Server-wide settings may leave a required one to
-    /// each library, and a library's may take one from them; a user's must give every one
+    /// the library grants, even where the plugin is disabled: the one run an admin's action makes
+    /// there (`requirements/plugins.md` §5), so a wrong value is caught as it is entered. A user's
+    /// check is always at the server level, where nothing is disabled. One uninstalled by its turn
+    /// is a [`PluginError::NotFound`]; uninstalling does not wait for a user's turn. A caller that
+    /// stops waiting for its turn leaves the queue; a check that has started goes on to its end,
+    /// and what it touched is scanned, as after any run. Server-wide settings may leave a required
+    /// one to each library, and a library's may take one from them; a user's must give every one
     /// themselves. Values that fail are a [`PluginError::SettingsInvalid`] that says why.
     pub(super) async fn checked(
         self: &Arc<Plugins>,
@@ -216,15 +217,14 @@ impl Plugins {
             let granted = plugins.db.try_read(move |conn| -> Result<_, PluginError> {
                 // Uninstalled while it waited for its turn, or before a user's check began.
                 grants::manifest(conn, &plugin)?.ok_or(PluginError::NotFound)?;
-                Ok(grants::for_run(conn, &plugin, library)?)
+                Ok(grants::granted(conn, &plugin, library)?)
             });
-            let Some(permissions) = granted.await? else { return Ok(None) };
+            let permissions = granted.await?;
             let check = Event::CheckSettings;
-            plugins.execute(&id, &manifest, run_for, permissions, candidate, check).await.map(Some)
+            plugins.execute(&id, &manifest, run_for, permissions, candidate, check).await
         });
-        if let Some((outcome, _)) = checked.await?? {
-            outcome.result.map_err(|error| PluginError::SettingsInvalid(error.to_string()))?;
-        }
+        let (outcome, _) = checked.await??;
+        outcome.result.map_err(|error| PluginError::SettingsInvalid(error.to_string()))?;
         Ok(values)
     }
 }

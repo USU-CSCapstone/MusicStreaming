@@ -42,11 +42,11 @@ async fn a_run_left_waiting_is_still_scanned_and_recorded() {
     stop(thread).await;
 }
 
-/// A settings check runs nothing in a library the plugin is disabled in, as a disabled plugin
-/// runs nothing (`requirements/plugins.md` §5), even where it is enabled in another; server-wide,
-/// and where it is enabled, it is checked. This plugin has no file, so a check of it fails.
+/// An admin's settings save runs the plugin's check wherever it is saved, even in a library the
+/// plugin is disabled in (`requirements/plugins.md` §5), and refuses what the plugin rejects. This
+/// plugin has no file, so a check of it fails.
 #[tokio::test]
-async fn a_check_runs_only_where_the_plugin_is_enabled() {
+async fn an_admins_check_runs_even_where_the_plugin_is_disabled() {
     let (temp, db) = database().await;
     let plugins = plugins(&temp, &db);
     install(&db, manifest("plugin", &[LibraryRead])).await;
@@ -57,15 +57,15 @@ async fn a_check_runs_only_where_the_plugin_is_enabled() {
             if why.starts_with("the plugin could not be loaded"))
     };
 
-    save(1).await.unwrap();
+    assert!(unloadable(save(1).await));
     assert!(unloadable(save(SERVER).await));
     plugins.set_enabled("plugin".into(), 2, true).await.unwrap();
-    save(1).await.unwrap();
+    assert!(unloadable(save(1).await));
     assert!(unloadable(save(2).await));
     enable(&plugins, "plugin", true).await;
     assert!(unloadable(save(1).await));
     enable(&plugins, "plugin", false).await;
-    save(1).await.unwrap();
+    assert!(unloadable(save(1).await));
 }
 
 /// What a settings check touched in the library is scanned, as after any run.

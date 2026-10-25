@@ -126,7 +126,7 @@ That is the trade, made knowingly when write access is granted, library by libra
 
 - **Installation is trivial** — a file or a URL, from the admin interface, with no restart and no shell.
 - **Enabled per library, independently** ([`libraries.md`](libraries.md)). A plugin may serve one library and never see another.
-- **Disabling is immediate and complete.** A disabled plugin runs nothing, sees nothing, and reaches nothing.
+- **Disabling is immediate and complete.** A disabled plugin runs nothing, sees nothing, and reaches nothing. The one exception is the check of its settings an admin's save makes, so that a wrong value is still reported as it is entered ([§6](#6-configuration--credentials)).
 - **Uninstalling leaves the library alone.** Files a plugin wrote are ordinary files and stay; content it merely *sourced* disappears with it ([§10](#10-external-content-sources)).
 - **Updates are the admin's choice**, never automatic — code that may hold write access must not change underneath a running server. An update never widens its own access ([§4.2](#42-asking-and-approving)).
 - **Configuration and granted permissions survive a reinstall**, so removing a plugin to fix something does not mean setting it up again. A grant survives only for a request made again unchanged, and a changed one is asked again ([§4.2](#42-asking-and-approving)); users connect again.

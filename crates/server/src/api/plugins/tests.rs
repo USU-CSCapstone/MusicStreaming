@@ -537,8 +537,15 @@ async fn settings_show_values_but_never_secrets() {
 /// hidden once a reinstalled manifest no longer marks it one.
 #[tokio::test]
 async fn settings_saved_as_secrets_stay_hidden_after_a_reinstall() {
-    let (_temp, db, app) = server().await;
-    // In a library it is disabled in, so the plugin, which has no file, is not asked.
+    let (temp, db, app) = server().await;
+    // The real lyrics file, which accepts any settings, under this test's manifest.
+    let file = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm"
+    );
+    std::fs::create_dir_all(temp.path().join("plugins")).unwrap();
+    std::fs::copy(file, temp.path().join("plugins/lrclib-lyrics.wasm"))
+        .expect("run plugins/lrclib-lyrics/build.sh first");
     let library = format!("{SETTINGS}?libraryId=1");
     let values = json!({ "values": { "apiKey": "s3cret", "limit": 4, "mode": "careful" } });
     let (status, saved) = call(&app, TOKEN, "PUT", &library, Some(values)).await;
