@@ -157,21 +157,10 @@ fn resolve_music(music: &Path) -> Option<PathBuf> {
 }
 
 /// Creates a library from `JEWELCASE_MUSIC` on first start, when there are none yet
-/// (`requirements/deployment.md` §2). Once there are, the setting changes nothing, so it warns
-/// when the music it names is no library's root.
+/// (`requirements/deployment.md` §2). Once there are, the setting changes nothing. Fails on a
+/// first start when the music cannot be resolved.
 async fn create_first_library(db: &Database, music: &Path) -> anyhow::Result<()> {
-    let libraries = db.read(libraries::all).await?;
-    if !libraries.is_empty() {
-        // Music that cannot be resolved has been warned of already (`resolve_music`).
-        if let Ok(music) = music.canonicalize()
-            && !libraries.iter().flat_map(|library| &library.roots).any(|root| root.path == music)
-        {
-            warn!(
-                setting = config::MUSIC,
-                music = %music.display(),
-                "no library has this music as a root; the setting only creates the first library"
-            );
-        }
+    if !db.read(libraries::all).await?.is_empty() {
         return Ok(());
     }
     let music = music

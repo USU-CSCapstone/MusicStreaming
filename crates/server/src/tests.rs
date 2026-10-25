@@ -63,7 +63,7 @@ fn music_not_there_yet_is_not_checked() {
 }
 
 #[tokio::test]
-async fn music_that_is_no_librarys_root_is_warned_of() {
+async fn the_music_setting_creates_the_first_library_and_never_a_second() {
     let temp = tempfile::tempdir().unwrap();
     let data_dir = DataDir::open(&temp.path().join("data"), None).unwrap();
     let db = Database::open(&data_dir.state().join("jewelcase.db")).unwrap();
@@ -71,18 +71,8 @@ async fn music_that_is_no_librarys_root_is_warned_of() {
     fs::create_dir(&music).unwrap();
     fs::create_dir(&other).unwrap();
     create_first_library(&db, &music).await.unwrap();
-
-    let log = temp.path().join("log");
-    let writer = fs::File::create(&log).unwrap();
-    let _logging = tracing::subscriber::set_default(
-        tracing_subscriber::fmt().with_writer(writer).with_ansi(false).finish(),
-    );
-    // The library's own root, written another way.
-    create_first_library(&db, &temp.path().join("other/../music")).await.unwrap();
-    assert_eq!(fs::read_to_string(&log).unwrap(), "", "the library's own root");
+    create_first_library(&db, &music).await.unwrap();
     create_first_library(&db, &other).await.unwrap();
-    let logged = fs::read_to_string(&log).unwrap();
-    assert!(logged.contains("WARN") && logged.contains(config::MUSIC), "{logged}");
     assert_eq!(db.read(libraries::all).await.unwrap().len(), 1);
 }
 

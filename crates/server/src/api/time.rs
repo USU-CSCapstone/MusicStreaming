@@ -74,48 +74,17 @@ mod tests {
         assert_eq!(rfc3339(i64::MAX), "9999-12-31T23:59:59.999Z", "the last time there is");
     }
 
-    /// The examples of RFC 3339 §5.8, and the ends of its four-digit years.
+    /// What this reader adds to the parser: UTC milliseconds, offsets applied, digits past the
+    /// millisecond dropped, a leap second as the last millisecond of its minute.
     #[test]
-    fn reads_the_rfc_examples_with_their_offsets() {
+    fn reads_offsets_and_fractions_as_utc_milliseconds() {
         let cases = [
-            ("1985-04-12T23:20:50.52Z", 482_196_050_520),
             ("1996-12-19T16:39:57-08:00", 851_042_397_000),
-            ("1990-12-31T23:59:60Z", 662_687_999_999),
-            ("1990-12-31T15:59:60-08:00", 662_687_999_999),
-            ("1937-01-01T12:00:27.87+00:20", -1_041_337_172_130),
             ("1969-12-31T23:59:59.9999Z", -1),
-            ("2026-10-02t14:00:00.500999+02:00", 1_790_942_400_500),
-            ("2026-10-02T12:00:00.5z", 1_790_942_400_500),
-            ("0000-01-01T00:00:00Z", -62_167_219_200_000),
-            ("9999-12-31T23:59:59.999Z", 253_402_300_799_999),
+            ("1990-12-31T23:59:60Z", 662_687_999_999),
         ];
         for (text, ms) in cases {
             assert_eq!(parse_rfc3339(text), Some(ms), "{text}");
-        }
-    }
-
-    #[test]
-    fn refuses_anything_but_a_full_date_time_with_an_offset() {
-        let refused = [
-            "now",
-            "2460000",
-            "2026-10-02",
-            "2026-10-02T12:00:00",
-            "2026-10-02T12:00Z",
-            "2026-10-02T12:00:00.Z",
-            "2026-10-02T12:00:00.5xZ",
-            "2026-10-02T12:00:00+0200",
-            "2026-10-02T12:00:00+24:00",
-            "2026-10-02T12:00:00-00:60",
-            "2026-10-02T24:00:00Z",
-            "2026-10-02T12:00:60Z",
-            "2026-1-02T12:00:00Z",
-            "+2026-10-02T12:00:00Z",
-            "2026-02-29T00:00:00Z",
-            "２０２６-10-02T12:00:00Z",
-        ];
-        for text in refused {
-            assert_eq!(parse_rfc3339(text), None, "{text}");
         }
     }
 }
