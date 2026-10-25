@@ -37,7 +37,7 @@ pub fn an_unchanged_rescan_writes_nothing<S: InspectStore + 'static>(make: Facto
     let scan = scan_flushing_often(&hooked, &lib);
     assert_eq!((scan.state, scan.progress.files_seen), (ScanState::Completed, 5));
     for batch in batches.lock().unwrap().drain(..) {
-        assert_eq!((batch.size(), batch.changed_unread.len()), (0, 0), "{batch:?}");
+        assert_eq!(batch.size(), 0, "{batch:?}");
     }
     assert_eq!(store.feed_head(lib.id), head);
 

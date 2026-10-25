@@ -11,10 +11,9 @@ use crate::db::catalog::{self, Touched};
 use crate::db::feed::{self, Entity, Op};
 use crate::db::{DbError, now_ms};
 
-/// Writes `batch` in one transaction: its tracks, returned files, tracks gone, files changed but
-/// unread, problems, the derived data they touch, and the scan row it carries, with the row's
-/// missing count raised by the tracks the batch marked missing that were not already. Returns
-/// that number.
+/// Writes `batch` in one transaction: its tracks, returned files, tracks gone, problems, the
+/// derived data they touch, and the scan row it carries, with the row's missing count raised by
+/// the tracks the batch marked missing that were not already. Returns that number.
 pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<i64, DbError> {
     let roots = store.roots.clone();
     store.db.write_blocking(move |tx| {
@@ -47,9 +46,6 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<i64, DbError
                 track_changed(tx, lib, id, now, &mut touched)?;
             }
         }
-        for &id in &batch.changed_unread {
-            forget_stamp(tx, lib, id, now, &mut touched)?;
-        }
         for path in &batch.cleared {
             clear_problem(&roots, tx, lib, path)?;
         }
@@ -63,30 +59,6 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<i64, DbError
         }
         Ok(marked)
     })
-}
-
-/// Applies [`Batch::changed_unread`] to track `id` of `lib`: forgets its mtime and resets its
-/// analysis to version 0 with no loudness, peak or waveform. A track this changes is recorded in
-/// the feed at `now` and added to `touched`, so its album's loudness follows; one already
-/// forgotten, or another library's, is left alone.
-fn forget_stamp(
-    tx: &Transaction<'_>,
-    lib: i64,
-    id: i64,
-    now: i64,
-    touched: &mut Touched,
-) -> Result<()> {
-    let changed = tx
-        .prepare_cached(
-            "UPDATE tracks SET file_mtime = NULL, analyzer_version = 0, loudness_lufs = NULL, \
-             peak_dbtp = NULL WHERE id = ?1 AND library_id = ?2 AND file_mtime IS NOT NULL",
-        )?
-        .execute(params![id, lib])?;
-    if changed == 0 {
-        return Ok(());
-    }
-    tx.prepare_cached("DELETE FROM track_waveforms WHERE track_id = ?1")?.execute([id])?;
-    track_changed(tx, lib, id, now, touched)
 }
 
 /// Records in the feed at `now` that track `id` of `lib` changed, and adds what it points at to

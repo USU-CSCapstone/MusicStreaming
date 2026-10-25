@@ -168,12 +168,10 @@ fn derived_values_equal_a_recompute_after_every_change() {
                 };
                 store.apply(one, Batch { missing, ..Batch::default() }).unwrap();
             }
-            // Missing files coming back, one unchanged and the others changed but unreadable.
+            // Missing files coming back unchanged.
             6 => {
                 let returned: Vec<TrackId> = missing.iter().take(3).map(|(_, id)| *id).collect();
-                let changed_unread = returned.iter().skip(1).copied().collect();
-                let batch = Batch { returned, changed_unread, ..Batch::default() };
-                store.apply(one, batch).unwrap();
+                store.apply(one, Batch { returned, ..Batch::default() }).unwrap();
             }
             // A missing file back with new tags.
             7 if !missing.is_empty() => {

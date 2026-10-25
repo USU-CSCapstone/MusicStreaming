@@ -25,8 +25,7 @@ use crate::track::{TrackId, TrackRecord};
 pub struct IndexedFile {
     pub track_id: TrackId,
     pub size: u64,
-    /// `None` while the store has forgotten it ([`Batch::changed_unread`]), so no file matches.
-    pub mtime_ms: Option<u64>,
+    pub mtime_ms: u64,
     pub missing: bool,
     /// The stamp of the sidecars it resolved when last read, so a sidecar added, changed or
     /// removed beside an unchanged file is noticed (`requirements/scanning.md` §7).
@@ -58,15 +57,11 @@ impl IndexedFolder {
 pub struct Batch {
     /// New and updated tracks.
     pub upserts: Vec<TrackRecord>,
-    /// Missing tracks whose files are back unchanged, or back and unreadable: clear the mark.
+    /// Missing tracks whose files are back unchanged: clear the mark.
     pub returned: Vec<TrackId>,
     /// Tracks whose files their folder no longer lists, or under a folder its parent no longer
     /// lists: mark them missing.
     pub missing: Vec<TrackId>,
-    /// Tracks whose files changed but could not be read: forget each one's mtime, so no file
-    /// matches it and every scan reads the file until one reads it, and reset its analysis,
-    /// which measured other audio.
-    pub changed_unread: Vec<TrackId>,
     pub problems: Vec<Problem>,
     /// Paths that scanned or listed successfully, or no longer exist: clear any problems
     /// recorded for them. Applied before `problems`, so a path in both keeps the problem this
@@ -176,9 +171,7 @@ pub trait ProblemLog: Send + Sync {
 /// The analysis queue and its results (`design/scanning.md` §12).
 pub trait AnalysisStore: ProblemLog {
     /// Tracks whose results come from an analyzer older than `analyzer_version`, most useful
-    /// first, each with its file. A track never analyzed is at version 0. A track whose mtime is
-    /// forgotten waits for a scan to read its file, so analysis does not open the file and clear
-    /// its problem first.
+    /// first, each with its file. A track never analyzed is at version 0.
     fn next_unanalyzed(
         &self,
         library: LibraryId,

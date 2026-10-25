@@ -93,13 +93,8 @@ mod tests {
 
     /// What the index holds in `/m/A`: track 7 at `a.flac`, and the folder `Sub`.
     fn indexed() -> IndexedFolder {
-        let file = IndexedFile {
-            track_id: 7,
-            size: 1,
-            mtime_ms: Some(1),
-            missing: false,
-            sidecar_stamp: 0,
-        };
+        let file =
+            IndexedFile { track_id: 7, size: 1, mtime_ms: 1, missing: false, sidecar_stamp: 0 };
         IndexedFolder {
             files: HashMap::from([("a.flac".into(), file)]),
             folders: vec!["Sub".into()],

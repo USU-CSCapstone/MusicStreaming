@@ -330,16 +330,6 @@ fn process_directory(
                 problem_files += 1;
                 batch.problems.push(problem);
             }
-            FileOutcome::Unread { track_id, missing, changed, problem } => {
-                problem_files += 1;
-                batch.problems.push(problem);
-                if missing {
-                    batch.returned.push(track_id);
-                }
-                if changed {
-                    batch.changed_unread.push(track_id);
-                }
-            }
         }
     }
     if halted.is_ok() {

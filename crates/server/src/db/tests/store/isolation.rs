@@ -31,7 +31,7 @@ fn another_librarys_track_is_left_alone() {
     let track: TrackId = scalar(&store, "SELECT id FROM tracks").unwrap();
 
     let other: LibraryId = 2;
-    let batch = Batch { returned: vec![track], changed_unread: vec![track], ..Batch::default() };
+    let batch = Batch { returned: vec![track], ..Batch::default() };
     store.apply(other, batch).unwrap();
     // No RMS levels: the path that deletes a waveform. The file is as picked, so only the library
     // stops the write.

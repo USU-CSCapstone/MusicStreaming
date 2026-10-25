@@ -13,7 +13,7 @@ use crate::db::{catalog, waveform};
 /// The analysis queue: library `?1`'s tracks analyzed below version `?2`, at most `?3` of them,
 /// in the order of `tracks_unanalyzed`, so each pick reads the head of one index range.
 const UNANALYZED: &str = "SELECT id, file_size, file_mtime, root_id, path FROM tracks \
-     WHERE library_id = ?1 AND missing_since IS NULL AND file_mtime IS NOT NULL \
+     WHERE library_id = ?1 AND missing_since IS NULL \
      AND analyzer_version < ?2 \
      ORDER BY analyzer_version, added_at DESC, id LIMIT ?3";
 

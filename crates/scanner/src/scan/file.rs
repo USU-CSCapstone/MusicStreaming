@@ -23,17 +23,8 @@ pub enum FileOutcome {
     },
     Added(Box<TrackRecord>),
     Updated(Box<TrackRecord>),
-    /// A file with no track that could not be read.
+    /// A file that could not be read. A track the index holds for it stays as it is.
     Problem(Problem),
-    /// A known track's file, there but unreadable, with its `problem`. `missing` is whether the
-    /// track was marked missing, and `changed` whether the file's size or mtime differs from the
-    /// index, or the index has forgotten its mtime.
-    Unread {
-        track_id: TrackId,
-        missing: bool,
-        changed: bool,
-        problem: Problem,
-    },
 }
 
 /// Runs `candidate`, one of `dir`'s files, through stages 2 to 5, given what the index holds
@@ -51,7 +42,7 @@ pub(super) fn process_file(
     let stamped = sidecars.stamp(&dir.path, &candidate.path, &dir.files);
     if let Some(ix) = &indexed
         && ix.size == candidate.size
-        && ix.mtime_ms == Some(candidate.mtime_ms)
+        && ix.mtime_ms == candidate.mtime_ms
         && ix.sidecar_stamp == stamped.stamp
     {
         return if ix.missing {
@@ -66,15 +57,7 @@ pub(super) fn process_file(
         Ok(r) => r,
         Err(e) => {
             let problem = problems::from_read_error(&candidate.path, &e);
-            return match indexed {
-                Some(ix) => FileOutcome::Unread {
-                    track_id: ix.track_id,
-                    missing: ix.missing,
-                    changed: (ix.size, ix.mtime_ms) != (candidate.size, Some(candidate.mtime_ms)),
-                    problem,
-                },
-                None => FileOutcome::Problem(problem),
-            };
+            return FileOutcome::Problem(problem);
         }
     };
 

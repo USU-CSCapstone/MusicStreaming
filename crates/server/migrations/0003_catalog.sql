@@ -172,9 +172,8 @@ CREATE TABLE tracks (
     path            TEXT    NOT NULL,
     file_size       INTEGER NOT NULL,
     -- The file's mtime, for detecting changes without opening the file (requirements/scanning.md §5,
-    -- design/scanning.md §2). NULL while the file has changed and not been read since
-    -- (design/scanning.md §8).
-    file_mtime      INTEGER,
+    -- design/scanning.md §2).
+    file_mtime      INTEGER NOT NULL,
     missing_since   INTEGER,
     title           TEXT    NOT NULL,
     sort_key        BLOB    NOT NULL,
@@ -251,7 +250,7 @@ CREATE INDEX tracks_missing ON tracks (root_id, missing_since) WHERE missing_sin
 -- analyzer did, and newest first within each, so a pick reads the head of one range and sorts
 -- nothing.
 CREATE INDEX tracks_unanalyzed ON tracks (library_id, analyzer_version, added_at DESC, id)
-    WHERE missing_since IS NULL AND file_mtime IS NOT NULL;
+    WHERE missing_since IS NULL;
 -- For the foreign keys' checks as an image or biography is deleted
 CREATE INDEX tracks_by_image ON tracks (library_id, image_id) WHERE image_id IS NOT NULL;
 CREATE INDEX tracks_by_artist_image ON tracks (library_id, artist_image_id)
