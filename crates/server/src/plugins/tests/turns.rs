@@ -1,12 +1,15 @@
 //! One run at a time for each plugin in each library: Run now, hook deliveries, and settings
-//! checks each hold the plugin's turn there while it runs, and uninstalling waits for them.
+//! checks each hold the plugin's turn there while it runs, and uninstalling waits for them. A
+//! user's personal settings checks take that user's turn instead.
 
 use futures_util::FutureExt;
 use jewelcase_plugins::Permission::Schedule;
 use serde_json::{Map, json};
 
 use super::super::settings::SERVER;
+use super::super::testing::caller;
 use super::*;
+use crate::db::testing::User;
 
 /// Whether `future` is still waiting once it is polled. It is dropped either way.
 pub(super) fn waits(future: impl Future) -> bool {
@@ -230,5 +233,38 @@ async fn a_settings_check_holds_its_turn_to_its_end() {
     let_in(loading);
     ended(&plugins).await;
     assert_eq!(watch_scans(&db).await, [["Album"]]);
+    stop(thread).await;
+}
+
+/// A user's personal settings check holds a turn of that user's, keyed by the negated user ID,
+/// so a second check of the same plugin by the same user waits for the first to end.
+#[tokio::test]
+async fn a_users_second_personal_check_waits_for_the_first() {
+    let (_temp, db, plugins, thread) = scanned().await;
+    let mut asks = manifest("plugin", &[]);
+    asks["personalSettings"] = json!({ "properties": { "token": { "type": "string" } } });
+    install(&db, asks).await;
+    enable(&plugins, "plugin", true).await;
+    db.write(|tx| User::new(7, "admin").insert(tx)).await.unwrap();
+    std::fs::create_dir_all(plugins.path("plugin").parent().unwrap()).unwrap();
+    gate(&plugins.path("plugin"));
+    let check = || {
+        let plugins = plugins.clone();
+        let entered = json!({ "token": "t" }).as_object().unwrap().clone();
+        tokio::spawn(async move {
+            plugins.save_personal("plugin".into(), caller(7, true), entered).await
+        })
+    };
+
+    let first = check();
+    let loading = loading(plugins.path("plugin")).await;
+    let second = check();
+    queued(&plugins, -7, 2).await;
+
+    let_in(loading);
+    for check in [first, second] {
+        let checked = tokio::time::timeout(Duration::from_secs(30), check).await;
+        checked.expect("the check ends within 30 s").unwrap().unwrap();
+    }
     stop(thread).await;
 }

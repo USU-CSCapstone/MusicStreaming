@@ -171,15 +171,15 @@ impl Plugins {
     /// once they are of the kinds and among the choices its schema declares, leave no required
     /// setting without a value, and pass the plugin's own check, run for `run_for` with them, what
     /// is beneath them, and the defaults, so a wrong key is caught as it is entered rather than at
-    /// three in the morning (§6). The check runs in the plugin's turn in the library, or at once
-    /// for a user's, which has no state to share, with what a run there is granted, and not at
-    /// all in a library it is disabled in, as a disabled plugin runs nothing
-    /// (`requirements/plugins.md` §5). One uninstalled by its turn, or before a user's check starts,
-    /// is a [`PluginError::NotFound`]. A caller that stops waiting for its turn leaves the queue;
-    /// a check that has started goes on to its end, and what it touched is scanned, as after any
-    /// run. Server-wide settings may leave a required one to each library, and a library's may
-    /// take one from them; a user's must give every one themselves. Values that fail are a
-    /// [`PluginError::SettingsInvalid`] that says why.
+    /// three in the morning (§6). The check runs in the plugin's turn in the library, or a user's
+    /// in a turn of that user's, so no user runs more than one check of a plugin at once, with what
+    /// a run there is granted, and not at all in a library it is disabled in, as a disabled plugin
+    /// runs nothing (`requirements/plugins.md` §5). One uninstalled by its turn is a
+    /// [`PluginError::NotFound`]; uninstalling does not wait for a user's turn. A caller that stops
+    /// waiting for its turn leaves the queue; a check that has started goes on to its end, and what
+    /// it touched is scanned, as after any run. Server-wide settings may leave a required one to
+    /// each library, and a library's may take one from them; a user's must give every one
+    /// themselves. Values that fail are a [`PluginError::SettingsInvalid`] that says why.
     pub(super) async fn checked(
         self: &Arc<Plugins>,
         id: &str,
@@ -205,10 +205,10 @@ impl Plugins {
             return Err(PluginError::SettingsInvalid(format!("{missing} is required.")));
         }
         let candidate = schema.with_defaults(&set);
-        let turn = match run_for.user {
-            Some(_) => None,
-            None => Some(self.turns.take(id, run_for.library).await),
-        };
+        // A user's check takes a turn of that user's, keyed by the negated user ID, which no
+        // library ID or `SERVER` can be, so each user runs one check of a plugin at a time.
+        let queue = run_for.user.map_or(run_for.library, |user| -user);
+        let turn = self.turns.take(id, queue).await;
         let (plugins, id) = (self.clone(), id.to_owned());
         let checked = self.spawn(async move {
             let _turn = turn;
