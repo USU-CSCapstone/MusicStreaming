@@ -1945,7 +1945,7 @@ export interface components {
                 libraryId: string;
                 enabled: boolean;
                 /**
-                 * @description Disabled by the server: after a hook failed five times in a row
+                 * @description Disabled by the server: after one of its hooks had been failing for 72 hours
                  *     (`requirements/plugins.md` §11), or when a required permission was revoked.
                  */
                 autoDisabled: boolean;

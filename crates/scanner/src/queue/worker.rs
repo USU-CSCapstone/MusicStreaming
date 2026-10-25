@@ -36,7 +36,7 @@ impl Scanner {
         Scanner::start_with(store, library, ScanOptions::default())
     }
 
-    /// [`Scanner::start`], with scans batching as `options` say.
+    /// [`Scanner::start`], with scans batching and retrying as `options` say.
     pub(crate) fn start_with(
         store: Arc<dyn Store>,
         library: LibraryConfig,

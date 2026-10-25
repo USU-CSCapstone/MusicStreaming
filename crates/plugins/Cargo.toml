@@ -14,8 +14,8 @@ serde_json = "1"
 thiserror = "2"
 tokio = { version = "1.53.1", features = ["net", "rt", "sync", "time"] }
 wasmparser = "0.258"
-# wasmtime's defaults but its disk cache, which loads native code that whoever can write
-# its folder could replace (`design/plugins.md` §2).
+# wasmtime's default features minus `cache`, listed only to leave out the disk cache's
+# dependencies; nothing turns the cache on (`design/plugins.md` §2).
 wasmtime = { version = "49.0.1", default-features = false, features = [
     "anyhow",
     "async",
