@@ -58,12 +58,12 @@ impl Plugins {
         Ok(id)
     }
 
-    /// Uninstalls `id`, once each of its runs under way, personal settings checks included, has
-    /// ended: its row goes, the host forgets it, and its file is removed, all in one write. Files
-    /// it wrote stay, and so do its grants and settings, for a reinstall
-    /// (`requirements/plugins.md` §5). Its users' connections go with it, and so do the requests
-    /// to forget their searches meant for it, so after a reinstall, which starts every position
-    /// over, users connect again and nothing from before is sent twice.
+    /// Uninstalls `id`, once each of its runs under way has ended: its row goes, the host forgets
+    /// it, and its file is removed, all in one write. Files it wrote stay, and so do its grants
+    /// and settings, for a reinstall (`requirements/plugins.md` §5). Its users' connections go
+    /// with it, and so do the requests to forget their searches meant for it, so after a
+    /// reinstall, which starts every position over, users connect again and nothing from before
+    /// is sent twice.
     pub async fn uninstall(&self, id: String) -> Result<(), PluginError> {
         // Its turn in every library and at the server level, taken in order and held until it is
         // gone, so no run of it is under way meanwhile, and one waiting finds it gone.
@@ -77,8 +77,6 @@ impl Plugins {
         for level in levels.await? {
             turns.push(self.turns.take(&id, level).await);
         }
-        // Held with the server-level turn, so no personal check starts until it is gone.
-        turns.extend(self.turns.take_every_personal(&id).await);
         let path = self.path(&id);
         // A host not started yet has nothing linked to forget.
         let host = self.host.get().and_then(|host| host.as_ref().ok()).cloned();

@@ -171,12 +171,12 @@ impl Plugins {
     /// once they are of the kinds and among the choices its schema declares, leave no required
     /// setting without a value, and pass the plugin's own check, run for `run_for` with them, what
     /// is beneath them, and the defaults, so a wrong key is caught as it is entered rather than at
-    /// three in the morning (§6). The check runs in the plugin's turn in the library, or a user's
-    /// in a turn of that user's ([`super::turns::Turns::take_personal`]), with what a run there
-    /// is granted, and not at all in a library it is disabled in, as a disabled plugin runs
-    /// nothing (`requirements/plugins.md` §5). One uninstalled by its turn is a
-    /// [`PluginError::NotFound`]. A caller that stops waiting for its turn leaves the queue; a
-    /// check that has started goes on to its end, and what it touched is scanned, as after any
+    /// three in the morning (§6). The check runs in the plugin's turn in the library, or at once
+    /// for a user's, which has no state to share, with what a run there is granted, and not at
+    /// all in a library it is disabled in, as a disabled plugin runs nothing
+    /// (`requirements/plugins.md` §5). One uninstalled by its turn, or before a user's check starts,
+    /// is a [`PluginError::NotFound`]. A caller that stops waiting for its turn leaves the queue;
+    /// a check that has started goes on to its end, and what it touched is scanned, as after any
     /// run. Server-wide settings may leave a required one to each library, and a library's may
     /// take one from them; a user's must give every one themselves. Values that fail are a
     /// [`PluginError::SettingsInvalid`] that says why.
@@ -206,15 +206,15 @@ impl Plugins {
         }
         let candidate = schema.with_defaults(&set);
         let turn = match run_for.user {
-            Some(user) => self.turns.take_personal(id, user).await,
-            None => self.turns.take(id, run_for.library).await,
+            Some(_) => None,
+            None => Some(self.turns.take(id, run_for.library).await),
         };
         let (plugins, id) = (self.clone(), id.to_owned());
         let checked = self.spawn(async move {
             let _turn = turn;
             let (plugin, library) = (id.clone(), run_for.library);
             let granted = plugins.db.try_read(move |conn| -> Result<_, PluginError> {
-                // Uninstalled while it waited for its turn.
+                // Uninstalled while it waited for its turn, or before a user's check began.
                 grants::manifest(conn, &plugin)?.ok_or(PluginError::NotFound)?;
                 Ok(grants::for_run(conn, &plugin, library)?)
             });

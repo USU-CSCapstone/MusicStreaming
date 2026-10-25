@@ -52,14 +52,16 @@ async fn run_now_holds_its_turn_and_uninstalling_waits_for_it() {
     assert!(waits(plugins.turns.take("plugin", 1)), "its turn in library 1 is taken");
     assert!(!waits(plugins.turns.take("plugin", 2)), "another library's is not");
     assert!(!waits(plugins.turns.take("other", 1)), "nor another plugin's");
-    assert!(waits(plugins.uninstall("plugin".into())));
-    // Done once any write the uninstall queued is.
-    db.write(|_| Ok(())).await.unwrap();
+    let uninstall = tokio::spawn({
+        let plugins = plugins.clone();
+        async move { plugins.uninstall("plugin".into()).await }
+    });
+    queued(&plugins, 1, 2).await;
     assert!(installed(&db).await, "uninstalling waits for the run");
 
     let_in(loading);
     assert!(run.await.unwrap().unwrap().ok);
-    plugins.uninstall("plugin".into()).await.unwrap();
+    uninstall.await.unwrap().unwrap();
     assert!(!installed(&db).await);
     stop(thread).await;
 }

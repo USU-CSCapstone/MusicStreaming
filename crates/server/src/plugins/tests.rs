@@ -16,7 +16,6 @@ use super::testing::{database, enable, grant, install, manifest, plugins};
 use super::{PluginError, Plugins};
 use crate::db::{Database, SqliteStore, libraries};
 
-mod personal_turns;
 mod scans;
 mod turns;
 
