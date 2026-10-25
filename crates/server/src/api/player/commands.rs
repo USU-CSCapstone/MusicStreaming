@@ -6,10 +6,8 @@
 //! without one. The server passes it on to the playing connection as `execute`, which reports
 //! a `commandResult`. Over a realtime connection the sender is answered `pending` at once and
 //! the result follows; over HTTP the answer is the result. If none comes within a few seconds,
-//! or the connection closes first, the command failed. One for whatever plays, as all but
-//! `setVolume` and a transfer to another device are, also fails if playback starts on another
-//! connection first. Commands reach the one playing connection in the order they arrive, so the
-//! last wins (§7).
+//! or the connection closes first, the command failed. Commands reach the one playing
+//! connection in the order they arrive, so the last wins (§7).
 //!
 //! The results of an account's latest commands are kept, so one sent again, by a client unsure
 //! the first arrived, is carried out once and answered with how it went.

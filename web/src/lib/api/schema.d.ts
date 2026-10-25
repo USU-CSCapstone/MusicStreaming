@@ -1795,8 +1795,7 @@ export interface components {
              * @description `pending` until the target confirms. Every failure is reported
              *     (`requirements/realtime.md` §5): at once when the command is invalid or nothing is
              *     playing, which over HTTP is a `409`, `422`, or `429` problem instead; when the
-             *     target's connection closes, or playback moves to another connection before a command
-             *     for whatever plays is carried out; and after 5 seconds without an answer. A command
+             *     target's connection closes; and after 5 seconds without an answer. A command
              *     sent again with the same `commandId` is carried out once: while it waits, its result
              *     goes where it was sent from last, and once finished it is answered again for any of
              *     the account's latest 32 commands. At most 16 of an account's commands wait at a time.

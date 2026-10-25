@@ -84,21 +84,3 @@ async fn a_volume_for_a_device_not_connected_fails_at_once() {
     }
     assert!(!executed(&mut desk).await, "not even the device playing");
 }
-
-/// Volume is the device's whoever plays, so playback starting elsewhere leaves it to finish.
-#[tokio::test]
-async fn a_volume_is_left_to_finish_when_playback_starts_elsewhere() {
-    let (temp, _app, address) = setup().await;
-    add_device(&conn(&temp), 1, 4, "laptop");
-    let mut desk = connect_with(address, TOKEN).await;
-    let mut phone = connect_with(address, "phone").await;
-    let mut laptop = connect_with(address, "laptop").await;
-    start_playing(&mut desk).await;
-    assert_eq!(command(&mut phone, volume(1, "1")).await["status"], json!("pending"));
-    next_of(&mut desk, "execute").await;
-
-    start_playing(&mut laptop).await;
-    let applied = json!({ "commandId": command_id(1), "status": "applied" });
-    send(&mut desk, json!({ "type": "commandResult", "result": applied })).await;
-    assert_eq!(result_of(&mut phone, &json!(command_id(1))).await, applied);
-}

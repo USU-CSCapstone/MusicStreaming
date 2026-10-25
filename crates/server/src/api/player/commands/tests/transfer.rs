@@ -43,34 +43,6 @@ async fn a_transfer_to_play_where_it_is_paused_plays_it() {
     assert_eq!(command(&mut phone, transfer).await["status"], json!("pending"));
     let sent = next_of(&mut desk, "execute").await["command"].clone();
     assert_eq!(sent, json!({ "type": "play", "commandId": command_id(1), "deviceId": "1" }));
-
-    // Sent to the connection playing, it fails once playback starts on another.
-    let mut tab = connect_with(address, TOKEN).await;
-    start_playing(&mut tab).await;
-    let result = result_of(&mut phone, &json!(command_id(1))).await;
-    assert_eq!(result["reason"], json!("Playback was taken over."));
-}
-
-#[tokio::test]
-async fn a_transfer_already_sent_is_left_to_finish_when_playback_starts_elsewhere() {
-    let (temp, _app, address) = setup().await;
-    let conn = conn(&temp);
-    add_device(&conn, 1, 4, "laptop");
-    let mut desk = connect_with(address, TOKEN).await;
-    let mut phone = connect_with(address, "phone").await;
-    let mut laptop = connect_with(address, "laptop").await;
-    start_playing(&mut desk).await;
-    let transfer = json!({ "type": "transfer", "commandId": command_id(1), "deviceId": "4" });
-    assert_eq!(command(&mut phone, transfer).await["status"], json!("pending"));
-    next_of(&mut laptop, "execute").await;
-
-    // The desk reconnects and starts again on its new connection, before the laptop takes over.
-    let mut desk_again = connect_with(address, TOKEN).await;
-    start_playing(&mut desk_again).await;
-    start_playing(&mut laptop).await;
-    let applied = json!({ "commandId": command_id(1), "status": "applied" });
-    send(&mut laptop, json!({ "type": "commandResult", "result": applied })).await;
-    assert_eq!(result_of(&mut phone, &json!(command_id(1))).await, applied);
 }
 
 #[tokio::test]

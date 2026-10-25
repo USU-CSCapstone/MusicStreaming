@@ -46,9 +46,6 @@ struct Waiting {
     reply: Reply,
     /// The connection it went to, the only one whose answer counts.
     to: u64,
-    /// Whether it went to whatever connection plays, as all but `setVolume` and a transfer to
-    /// another device do, which go to the device they name.
-    for_playback: bool,
     /// Fails it if no answer comes.
     timer: AbortHandle,
 }
@@ -100,7 +97,7 @@ impl Players {
             return Ok(pending);
         }
         let state = accounts.get(&caller.user);
-        let (to, for_playback) = if let Action::Transfer { .. } = command.action {
+        let to = if let Action::Transfer { .. } = command.action {
             let Some(AnyId(device)) = command.device_id else {
                 return Err(Problem::invalid("transfer must name its deviceId."));
             };
@@ -116,7 +113,7 @@ impl Players {
                 match active.active_connection {
                     Some(to) if play && active.status != PlayStatus::Playing => {
                         command.action = Action::Play;
-                        (to, true)
+                        to
                     }
                     _ => return Ok(CommandResult::new(id, Status::Applied, None)),
                 }
@@ -126,7 +123,7 @@ impl Players {
                 let Some(to) = newest else {
                     return Err(unavailable("That device is not connected."));
                 };
-                (to, false)
+                to
             }
         } else if let Action::SetVolume { .. } = command.action {
             let device = command.device_id.and_then(|AnyId(id)| id).map(Id);
@@ -137,7 +134,7 @@ impl Players {
             let Some(to) = playing.or_else(newest) else {
                 return Err(unavailable("That device is not connected."));
             };
-            (to, false)
+            to
         } else {
             let playing =
                 state.and_then(|state| Some((state.active_connection?, state.active_device_id?)));
@@ -147,7 +144,7 @@ impl Players {
             if command.device_id.is_some_and(|AnyId(id)| id.map(Id) != Some(device)) {
                 return Err(unavailable("That device is not the one playing."));
             }
-            (to, true)
+            to
         };
         if commands.waiting.len() >= MAX_WAITING {
             // By then the oldest waiting command has been answered or has failed.
@@ -164,9 +161,7 @@ impl Players {
             tokio::time::sleep(ANSWER_WITHIN).await;
             players.fail(&timer_hub, user, &timer_id, "The device did not answer.");
         });
-        commands
-            .waiting
-            .insert(id, Waiting { reply, to, for_playback, timer: timer.abort_handle() });
+        commands.waiting.insert(id, Waiting { reply, to, timer: timer.abort_handle() });
         Ok(pending)
     }
 
@@ -190,23 +185,6 @@ impl Players {
     pub(in crate::api::player) fn fail_commands_to(&self, hub: &Hub, user: i64, connection: u64) {
         let failed = |id| CommandResult::new(id, Status::Failed, Some("The device went away."));
         self.end(hub, user, |_, waiting| waiting.to == connection, failed);
-    }
-
-    /// Fails at once every command of `user`'s that went to whatever connection plays, unless
-    /// that is `connection`, which has just started playback: carried out late, it could leave
-    /// two devices playing (`requirements/realtime.md` §2), even from a connection that has
-    /// stopped since. A `setVolume` or a transfer to another device is left to finish on the
-    /// connection it went to, even if another connection of that device takes over meanwhile:
-    /// it went to the device it names, which may yet carry it out.
-    pub(in crate::api::player) fn fail_commands_taken_over_by(
-        &self,
-        hub: &Hub,
-        user: i64,
-        connection: u64,
-    ) {
-        let failed = |id| CommandResult::new(id, Status::Failed, Some("Playback was taken over."));
-        let ends = |_: &str, waiting: &Waiting| waiting.for_playback && waiting.to != connection;
-        self.end(hub, user, ends, failed);
     }
 
     /// Tells the sender of `user`'s command `id`, if it still waits, that it failed for

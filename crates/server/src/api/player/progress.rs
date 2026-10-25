@@ -39,9 +39,7 @@ enum Reported {
 impl Players {
     /// Applies `report` from `caller` over `connection`, already checked, and sends the new
     /// state to the account's connections. Refuses a report from any connection but the active
-    /// one unless it starts playback; one that starts fails the commands waiting on another
-    /// connection that was playing, but leaves a `setVolume` or a transfer to another device to
-    /// finish.
+    /// one unless it starts playback.
     pub(super) fn report(
         &self,
         hub: &Hub,
@@ -57,9 +55,6 @@ impl Players {
         let active = accounts.get(&user).and_then(|state| state.active_connection);
         if !starts && active != Some(connection) {
             return Err(Problem::invalid("Only the playing connection reports, unless it starts."));
-        }
-        if starts {
-            self.fail_commands_taken_over_by(hub, user, connection);
         }
         let state = accounts.entry(user).or_insert_with(PlayerState::stopped);
         // Nothing advances while buffering, so other devices are not shown running ahead.
