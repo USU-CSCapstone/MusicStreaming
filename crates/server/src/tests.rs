@@ -175,8 +175,8 @@ async fn a_stop_saves_players_and_closes_connections_while_a_request_hangs() {
             assert!(stopped.elapsed() < DRAIN_TIMEOUT / 2, "not saved before the drain");
             sleep(Duration::from_millis(10)).await;
         }
-        // The connections were closed after the hooks were stopped, so this wakes the hook loop
-        // to a plugin due to run, which it must not start.
+        // The connections were closed after the hooks were stopped, so this enables a plugin
+        // due to run, which the hook loop must not start.
         enabling.write_all(b"true}").await.unwrap();
         let mut answer = String::new();
         let answered = timeout(Duration::from_secs(1), enabling.read_to_string(&mut answer));

@@ -24,7 +24,6 @@ use std::time::Duration;
 
 use jewelcase_plugins::{Event, Permission};
 use rusqlite::{Connection, OptionalExtension, params};
-use tokio::sync::Notify;
 
 mod changes;
 mod delivering;
@@ -39,7 +38,8 @@ use crate::db::{Text, now_ms};
 use delivering::Delivering;
 
 /// How often the dispatcher looks for hooks that are due.
-const POLL: Duration = Duration::from_secs(5);
+/// Shorter under test, so the server's stop test polls during its drain.
+const POLL: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 5 });
 /// Changes delivered in one event. Small enough that a plugin making a request per track
 /// finishes a batch well within a run's time limit.
 const BATCH: i64 = 100;
@@ -89,18 +89,17 @@ enum Ran {
 }
 
 impl Plugins {
-    /// Starts delivering hook events in the background, until the plugins are dropped: every
-    /// [`POLL`] while a plugin is enabled in any library, and otherwise not until an admin
-    /// enables one. The loop runs on the Tokio runtime it is called on, so this panics outside
-    /// one, and only finds what is due; the deliveries run on the plugin runtime, which the first
-    /// one starts.
+    /// Starts delivering hook events in the background, until the plugins are dropped: it looks
+    /// for what is due every [`POLL`], so a hook just enabled is delivered within one. The loop
+    /// runs on the Tokio runtime it is called on, so this panics outside one, and only finds
+    /// what is due; the deliveries run on the plugin runtime, which the first one starts.
     pub fn start_hooks(self: &Arc<Plugins>) {
-        let (plugins, wake) = (Arc::downgrade(self), self.wake_hooks.clone());
+        let plugins = Arc::downgrade(self);
         tokio::spawn(async move {
             while let Some(plugins) = plugins.upgrade() {
-                let enabled = plugins.dispatch().await;
+                plugins.dispatch().await;
                 drop(plugins);
-                idle(enabled, &wake).await;
+                tokio::time::sleep(POLL).await;
             }
         });
     }
@@ -113,33 +112,22 @@ impl Plugins {
 
     /// Starts each delivery that is due and not already under way. One plugin, library, hook,
     /// and user has at most one delivery at a time, and each waits for the plugin's turn in the
-    /// library ([`Plugins::deliver`]). Answers false if no plugin is enabled in any library, so
-    /// nothing can be due until one is, and, starting nothing, once the hooks are stopped
+    /// library ([`Plugins::deliver`]). Starts nothing once the hooks are stopped
     /// ([`Plugins::stop_hooks`]).
-    pub async fn dispatch(self: &Arc<Plugins>) -> bool {
+    pub async fn dispatch(self: &Arc<Plugins>) {
         if self.hooks_stopped.load(Ordering::Relaxed) {
-            return false;
+            return;
         }
-        let read = self.db.read(|conn| {
-            let enabled = due::any_enabled(conn)?;
-            enabled.then(|| due::all(conn, now_ms())).transpose()
-        });
-        let due = match read.await {
-            Ok(Some(due)) => due,
-            Ok(None) => return false,
-            Err(error) => {
-                // A failed read is no sign that nothing is enabled, so polling goes on.
-                tracing::error!(%error, "cannot find hook events to deliver");
-                return true;
-            }
+        let due = match self.db.read(|conn| due::all(conn, now_ms())).await {
+            Ok(due) => due,
+            Err(error) => return tracing::error!(%error, "cannot find hook events to deliver"),
         };
         for due in due {
-            let Ok(runtime) = self.runtime() else { return true };
+            let Ok(runtime) = self.runtime() else { return };
             let key = (due.plugin.clone(), due.library, due.hook, due.user);
             let Some(delivering) = Delivering::claim(self, key) else { continue };
             runtime.spawn(delivering.deliver(due));
         }
-        true
     }
 
     /// Delivers what is due to one plugin in one library, and records how it went, in the
@@ -199,16 +187,6 @@ impl Plugins {
             drop(turn);
             tokio::time::sleep(Duration::from_millis(BACKOFF_MS.unsigned_abs())).await;
         }
-    }
-}
-
-/// Waits until the hook loop should dispatch again: [`POLL`] after a dispatch that found a plugin
-/// `enabled`, and otherwise until `wake` is notified, as when an admin enables one.
-async fn idle(enabled: bool, wake: &Notify) {
-    if enabled {
-        tokio::time::sleep(POLL).await;
-    } else {
-        wake.notified().await;
     }
 }
 

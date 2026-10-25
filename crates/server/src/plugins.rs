@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use jewelcase_plugins::{Host, InvalidPlugin, Permission};
 use jewelcase_scanner::Scanner;
 use tokio::runtime::Runtime;
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::Semaphore;
 use tokio::task::JoinError;
 
 use crate::db::{Database, DbError};
@@ -99,9 +99,6 @@ pub struct Plugins {
     /// hold a store each beside playback. Run now and settings checks, which someone is waiting
     /// on, take none.
     hook_slots: Semaphore,
-    /// Wakes the hook loop, which sleeps while no plugin is enabled anywhere: notified when an
-    /// admin enables one, and when the plugins are dropped.
-    wake_hooks: Arc<Notify>,
     /// Set as the server stops, after which no hook delivery starts.
     hooks_stopped: AtomicBool,
 }
@@ -121,7 +118,6 @@ impl Plugins {
             hook_slots: Semaphore::new(
                 std::thread::available_parallelism().map_or(1, NonZeroUsize::get),
             ),
-            wake_hooks: Arc::default(),
             hooks_stopped: AtomicBool::new(false),
         }
     }
@@ -183,8 +179,7 @@ impl Plugins {
             .await
     }
 
-    /// Enables or disables `id` in `library`. Enabling needs every required permission, and
-    /// wakes the hook loop.
+    /// Enables or disables `id` in `library`. Enabling needs every required permission.
     pub async fn set_enabled(
         &self,
         id: String,
@@ -202,18 +197,13 @@ impl Plugins {
             let missing = missing.into_iter().map(Permission::title).collect();
             return Err(PluginError::PermissionsRequired(missing));
         }
-        if enabled {
-            self.wake_hooks.notify_one();
-        }
         Ok(())
     }
 }
 
 impl Drop for Plugins {
-    /// Ends the hook loop and the plugin runtime.
+    /// Ends the plugin runtime. The hook loop ends at its next poll, finding the plugins gone.
     fn drop(&mut self) {
-        // The hook loop, woken, finds the plugins gone and ends.
-        self.wake_hooks.notify_one();
         // Dropping a runtime waits for its threads, which is not allowed on an async thread.
         if let Some(Ok(runtime)) = self.runtime.take() {
             runtime.shutdown_background();

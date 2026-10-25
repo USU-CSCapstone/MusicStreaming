@@ -1,13 +1,18 @@
 //! A delivery that waits for the plugin's turn is found due again once it has it, for the same
-//! user.
+//! user. The hook loop polls for deliveries, and nothing starts once the hooks are stopped.
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use jewelcase_plugins::Permission::{LibraryRead, ListeningActivity, Played, TracksChanged};
-use rusqlite::params;
+use jewelcase_plugins::Permission::{
+    LibraryRead, ListeningActivity, Played, Schedule, TracksChanged,
+};
+use rusqlite::{OptionalExtension, params};
 use serde_json::json;
 use tokio::sync::oneshot;
 
+use super::super::{Delivering, POLL};
+use super::failing::changed;
 use super::{changes, connected, play, setup};
 use crate::db::Database;
 use crate::plugins::Plugins;
@@ -116,4 +121,89 @@ async fn a_delivery_from_a_position_since_forgotten_runs_nothing() {
     let cursors: i64 =
         db.read(move |conn| conn.query_row(sql, [], |row| row.get(0))).await.unwrap();
     assert_eq!(cursors, 0, "nothing recorded from the old position");
+}
+
+/// The summary of the last run in library 1, if there was one.
+async fn last_run(db: &Database) -> Option<String> {
+    let sql = "SELECT last_run_summary FROM plugin_libraries WHERE library_id = 1";
+    let read = db.read(move |conn| conn.query_row(sql, [], |row| row.get(0)).optional());
+    read.await.unwrap().flatten()
+}
+
+/// Once the hooks are stopped, as the server stops, a dispatch starts nothing, even with a
+/// delivery due.
+#[tokio::test]
+async fn a_dispatch_once_the_hooks_are_stopped_starts_nothing() {
+    let (_temp, _db, plugins) = setup().await;
+    grant(&plugins, "plugin", &[Schedule], &[]).await;
+    plugins.stop_hooks();
+    plugins.dispatch().await;
+    assert!(plugins.delivering.lock().unwrap().is_empty(), "a delivery started");
+}
+
+/// A dispatch with nothing due starts no plugin runtime.
+#[tokio::test]
+async fn a_dispatch_with_nothing_due_starts_no_runtime() {
+    let (_temp, _db, plugins) = setup().await;
+    plugins.dispatch().await;
+    assert!(plugins.runtime.get().is_none(), "it started the plugin runtime");
+}
+
+/// A delivery that waits for a hook slot as the hooks are stopped runs nothing once it has one,
+/// and records nothing. The deadlines only bound a hang.
+#[tokio::test]
+async fn a_delivery_waiting_as_the_hooks_stop_runs_nothing() {
+    let (temp, db) = changed().await;
+    let plugins = plugins(&temp, &db);
+    let all = u32::try_from(plugins.hook_slots.available_permits()).unwrap();
+    let slots = plugins.hook_slots.acquire_many(all).await.unwrap();
+    plugins.dispatch().await;
+    queued(&plugins, 1).await;
+
+    plugins.stop_hooks();
+    drop(slots);
+    let key = ("plugin".to_owned(), 1, TracksChanged, None);
+    let ended = async {
+        while Delivering::claim(&plugins, key.clone()).is_none() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(30), ended).await.expect("it ends");
+    assert_eq!(last_run(&db).await, None, "it ran");
+    let sql = "SELECT count(*) FROM plugin_cursors";
+    let recorded: i64 =
+        db.read(move |conn| conn.query_row(sql, [], |row| row.get(0))).await.unwrap();
+    assert_eq!(recorded, 0, "it recorded an outcome");
+}
+
+/// The loop, started with nothing enabled, delivers within a poll of a plugin being enabled: this
+/// one is scheduled, so it is due at once, and has no file, so its run fails as soon as it
+/// starts, and is recorded. The clock is paused and moved on a poll at a time.
+#[tokio::test(start_paused = true)]
+async fn the_hook_loop_delivers_within_a_poll_of_a_plugin_being_enabled() {
+    let (temp, db) = database().await;
+    let mut scheduled = manifest("plugin", &[Schedule]);
+    scheduled["permissions"][0]["everyMinutes"] = json!(60);
+    install(&db, scheduled).await;
+    let plugins = plugins(&temp, &db);
+    grant(&plugins, "plugin", &[Schedule], &[]).await;
+    plugins.start_hooks();
+    // The loop holds a strong reference through a dispatch: wait for the first to end, so the
+    // delivery must come from a later poll.
+    while Arc::strong_count(&plugins) == 1 {
+        tokio::task::yield_now().await;
+    }
+    while Arc::strong_count(&plugins) > 1 {
+        last_run(&db).await;
+    }
+    enable(&plugins, "plugin", true).await;
+    for _ in 0..1000 {
+        tokio::time::advance(POLL).await;
+        // Time moves a poll at a time, so give the delivery's blocking work real time.
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        if last_run(&db).await.is_some() {
+            return;
+        }
+    }
+    panic!("nothing was delivered");
 }

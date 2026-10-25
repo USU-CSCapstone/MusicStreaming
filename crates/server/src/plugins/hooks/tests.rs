@@ -25,7 +25,6 @@ mod reinstall;
 mod scans;
 mod searches;
 mod turns;
-mod waking;
 
 /// A plugin's answer to an event it handled.
 const HANDLED: Result<(), &str> = Ok(());
