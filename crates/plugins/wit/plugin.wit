@@ -142,7 +142,8 @@ interface files {
   entries: func(root: u64, folder: string, after: option<string>) -> result<list<entry>, error>;
   /// Needs library-read. Up to `length` bytes from `offset`; fewer at the end of the file.
   read: func(root: u64, path: string, offset: u64, length: u32) -> result<list<u8>, error>;
-  /// Writes a whole file, making the folders it is in. It appears whole or not at all.
+  /// Writes a whole file, making the folders it is in. A replace appears whole or not at all; a
+  /// create may be left cut short if the server stops while it writes.
   write: func(root: u64, path: string, contents: list<u8>, mode: write-mode) -> result<_, error>;
   /// Needs library-change. Moves a file or folder to `to`, a path that does not exist yet.
   rename: func(root: u64, path: string, to: string) -> result<_, error>;

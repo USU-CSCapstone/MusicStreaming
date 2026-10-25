@@ -19,7 +19,7 @@ Its companions are [`hooks.md`](hooks.md), covering what runs a plugin, and [`ex
 | `library` | `tracks`, `get-tracks`, `albums`, `artists` | `libraryRead` | 500 per page; pages continue from the last ID |
 | `library` | `get-albums`, `get-artists`, `album-tracks`, `artist-albums` (§1.1) | `libraryRead` | 500 per list by ID; an album's tracks and an artist's albums whole |
 | `files` | `roots`, `entries`, `read` | `libraryRead` (`roots`: any library permission) | 500 entries per call, continuing from the last name; 8 MB per read |
-| `files` | `write` (`create`) | `libraryAdd` | 32 MB, written whole or not at all |
+| `files` | `write` (`create`) | `libraryAdd` | 32 MB; never replaces a file, and may be left cut short if the server stops mid-write |
 | `files` | `write` (`replace`), `rename`, `delete` | `libraryChange` | 32 MB; a folder is deleted only when empty |
 | `http` | `send` | `network`, to declared destinations only, redirects included | 16 MB bodies, 15 s per request, 5 redirects; a declared pace and a shared cache (below) |
 | `state` | `get`, `set`, `delete` | — (per plugin and library) | 512 B keys, 1 MB values |

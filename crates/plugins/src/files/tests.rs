@@ -5,7 +5,6 @@ use super::*;
 use crate::host::WriteMode::{Create, Replace};
 
 mod entries;
-mod place;
 mod races;
 
 /// A library holding `Album/01.flac` in a temporary folder: that folder, and the library's root.
@@ -99,6 +98,20 @@ fn creating_never_replaces_and_replacing_needs_a_file() {
     assert_eq!(names(&root, "Album", None), ["01.flac", "01.lrc"], "no staged files left behind");
 }
 
+/// A link at the name, even a dangling one, is not written through or replaced by a create.
+#[test]
+fn creating_never_follows_a_link_at_its_name() {
+    let (temp, root) = library();
+    let outside = temp.path().join("planted");
+    symlink(&outside, root.join("Album/dangling")).unwrap();
+    symlink("01.flac", root.join("Album/inner")).unwrap();
+    assert!(failed(write(&root, "Album/dangling", b"x", Create), "already exists"));
+    assert!(failed(write(&root, "Album/inner", b"x", Create), "already exists"));
+    assert!(!outside.exists(), "nothing is made where the link leads");
+    assert_eq!(fs::read(root.join("Album/01.flac")).unwrap(), b"audio");
+    assert!(root.join("Album/dangling").is_symlink() && root.join("Album/inner").is_symlink());
+}
+
 #[test]
 fn writes_make_their_folders() {
     let (_temp, root) = library();
@@ -108,6 +121,8 @@ fn writes_make_their_folders() {
     let longest = format!("Album/{}", "n".repeat(250));
     write(&root, &longest, b"long", Create).unwrap();
     assert_eq!(fs::read(root.join(&longest)).unwrap(), b"long");
+    write(&root, &longest, b"longer", Replace).unwrap();
+    assert_eq!(fs::read(root.join(&longest)).unwrap(), b"longer");
     let listed = entries(&root, "", None).unwrap();
     assert!(listed.iter().any(|e| e.name == "New Artist" && e.directory));
     assert_eq!(fs::read(root.join("notes.txt")).unwrap(), b"at the root");
@@ -127,6 +142,13 @@ fn renames_and_deletes_within_the_root() {
     write(&root, "Album/cover.jpg", b"jpeg", Create).unwrap();
     let clobber = rename(&root, "Album/01.flac", "Album/cover.jpg");
     assert!(failed(clobber, "Album/cover.jpg already exists"));
+    symlink("nowhere", root.join("Album/dangling")).unwrap();
+    assert!(failed(rename(&root, "Album/01.flac", "Album/dangling"), "already exists"));
+    fs::create_dir(root.join("Empty")).unwrap();
+    assert!(failed(rename(&root, "Album", "Empty"), "Empty already exists"));
+    assert!(root.join("Album/01.flac").is_file(), "a refused rename leaves its source");
+    fs::remove_file(root.join("Album/dangling")).unwrap();
+    fs::remove_dir(root.join("Empty")).unwrap();
     assert!(failed(rename(&root, "Album/nothing", "Other/01.flac"), "does not exist"));
     assert!(!root.join("Other").exists(), "a missing source makes no folders");
     assert!(refused(rename(&root, "Album", "Album/Inside")));

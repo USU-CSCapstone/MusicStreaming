@@ -4,8 +4,8 @@
 //! which refuses one that would leave it through a symlink however the folders change during
 //! the call.
 //!
-//! Writes appear whole or not at all: a file is written beside its target under a name no
-//! other call uses, then renamed or linked into place.
+//! A replaced file appears whole or not at all: it is written beside its target under a name no
+//! other call uses, then renamed over it.
 //!
 //! A path the host will not use is `refused`; one the filesystem turns down is `failed`.
 
@@ -19,9 +19,6 @@ use cap_std::ambient_authority;
 use cap_std::fs::Dir;
 
 use crate::host::{Entry, Error};
-use place::{Placed, move_folder, place_new};
-
-mod place;
 mod write;
 
 pub use write::write;
@@ -121,8 +118,8 @@ pub fn read(root: &Path, path: &str, offset: u64, length: u32) -> Result<Vec<u8>
     Ok(out)
 }
 
-/// Moves `from` to `to`, which must not exist, making the folders `to` is in (see [`move_folder`]
-/// for the one case where an empty folder at `to` is replaced).
+/// Moves `from` to `to`, which must not exist, making the folders `to` is in. Something that
+/// appears at `to` between the check and the move is replaced.
 pub fn rename(root: &Path, from: &str, to: &str) -> Result<(), Error> {
     let (source, target) = (relative(from)?, relative(to)?);
     if target.starts_with(source) {
@@ -132,35 +129,15 @@ pub fn rename(root: &Path, from: &str, to: &str) -> Result<(), Error> {
     let root_dir = open(root)?;
     let from_dir = root_dir.open_dir(from_folder).map_err(|e| describe(from, e))?;
     // Looked at first so a missing source makes no folders.
-    let meta = from_dir.symlink_metadata(from_name).map_err(|e| describe(from, e))?;
+    from_dir.symlink_metadata(from_name).map_err(|e| describe(from, e))?;
     root_dir.create_dir_all(to_folder).map_err(|e| describe(to, e))?;
     let to_dir = root_dir.open_dir(to_folder).map_err(|e| describe(to, e))?;
-    let placed = if meta.is_dir() {
-        move_folder(&from_dir, from_name, &to_dir, to_name).map(|()| Placed::Moved)
-    } else {
-        place_new(&from_dir, from_name, &to_dir, to_name)
-    };
-    let placed = placed.map_err(|e| match e.kind() {
-        ErrorKind::AlreadyExists => describe(to, e),
-        _ => describe(from, e),
-    })?;
-    moved(from, to, placed, || from_dir.remove_file(from_name))
-}
-
-/// Finishes moving `from` to `to` once it was `placed`: a file linked to its new name has its
-/// old name removed with `remove`, and a removal that fails is reported.
-fn moved(
-    from: &str,
-    to: &str,
-    placed: Placed,
-    remove: impl FnOnce() -> io::Result<()>,
-) -> Result<(), Error> {
-    match placed {
-        Placed::Moved => Ok(()),
-        Placed::Linked => remove().map_err(|e| {
-            Error::Failed(format!("{to} was made, but {from} could not be removed: {}", e.kind()))
-        }),
+    match to_dir.symlink_metadata(to_name) {
+        Ok(_) => return Err(Error::Failed(reason(to, &ErrorKind::AlreadyExists.into()))),
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => return Err(describe(to, e)),
     }
+    from_dir.rename(from_name, &to_dir, to_name).map_err(|e| describe(from, e))
 }
 
 /// Removes the file or empty folder at `path`, or a link there rather than what it leads to.
