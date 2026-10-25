@@ -32,7 +32,7 @@ pub(super) const MISSING: &str = "SELECT t.id FROM library_roots r JOIN tracks t
 
 /// The most tracks one chunk purges: half a scan batch (`design/scanning.md` §7).
 /// A track costs about 1 ms with its recompute in a release build, more on a Pi and on a large
-/// album, so a step stops close to its time (`design/database.md` §9).
+/// album, so a write stays about as short as a scan batch (`design/database.md` §9).
 pub(super) const TRACK_CHUNK: usize = 16;
 
 /// Purges up to [`TRACK_CHUNK`] tracks missing for longer than the window and still missing after
@@ -81,7 +81,7 @@ pub(super) fn biographies(tx: &Transaction<'_>, _: i64, after: &mut i64) -> Resu
 /// Looks at the next [`CHUNK`] rows of `table` by ID after `after`, deletes those of which
 /// `used` is false (it names the row `r`), moves `after` to the last, and returns whether there
 /// were fewer, so the table is done. Each call reads only its own rows, so a large table costs a
-/// step at a time.
+/// chunk at a time.
 fn unused(tx: &Transaction<'_>, table: &str, used: &str, after: &mut i64) -> Result<bool> {
     let (last, seen): (Option<i64>, usize) = tx
         .prepare_cached(&format!(

@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use rusqlite::{Connection, Result, params};
 
-use super::catalog::{MISSING, TRACK_CHUNK};
-use super::{CHUNK, Sweep, WINDOW_MS};
+use super::catalog::{self, MISSING, TRACK_CHUNK};
+use super::{CHUNK, WINDOW_MS, scans, start};
 use crate::db::Database;
 use crate::db::testing::{self, Album, Artist, Image, Track, User, library, sweep};
 
@@ -308,10 +308,10 @@ fn the_purge_reads_the_marks_root_by_root() {
     assert!(plan.iter().any(|step| step.contains(by_root)), "{plan:?}");
 }
 
-/// A sweep with more to delete than a chunk deletes it a chunk at a time: with no time to
-/// spare, each step purges at most [`TRACK_CHUNK`] tracks and looks at no more than [`CHUNK`]
-/// images, and the sweep ends with what is used still there: the present tracks, and the image
-/// each of them shows.
+/// A sweep with more to delete than a chunk deletes it a chunk at a time: one write of a stage
+/// purges at most [`TRACK_CHUNK`] tracks, or looks at no more than [`CHUNK`] images, and the
+/// sweep ends with what is used still there: the present tracks, and the image each of them
+/// shows.
 #[test]
 fn a_large_sweep_goes_a_chunk_at_a_time() {
     let n = i64::try_from(CHUNK).unwrap() * 2 + 50;
@@ -325,29 +325,85 @@ fn a_large_sweep_goes_a_chunk_at_a_time() {
         }
         conn.execute("UPDATE tracks SET image_id = id WHERE missing_since IS NULL", []).map(drop)
     });
-    let left = |db: &Database| {
-        let sql = "SELECT (SELECT count(*) FROM tracks), (SELECT count(*) FROM images)";
-        db.read_blocking(move |conn| conn.query_row(sql, [], |r| Ok([r.get(0)?, r.get(1)?])))
-            .unwrap()
-    };
-    let mut counts: Vec<[i64; 2]> = vec![left(&db)];
-    let mut rest = Some(Sweep::new(NOW, Duration::ZERO));
-    while let Some(sweep) = rest {
-        assert!(counts.len() < 100, "the sweep does not end: {counts:?}");
-        rest = db.write_blocking(move |tx| sweep.step(tx)).unwrap();
-        counts.push(left(&db));
-    }
-    let most = |kind: usize| counts.windows(2).map(|pair| pair[0][kind] - pair[1][kind]).max();
-    assert_eq!(most(0), Some(i64::try_from(TRACK_CHUNK).unwrap()), "{counts:?}");
-    assert!(most(1) <= Some(i64::try_from(CHUNK).unwrap()), "{counts:?}");
+    let tracks = "SELECT count(*) FROM tracks";
+    let before = column(&db, tracks)[0];
+    let done = db.write_blocking(|tx| catalog::tracks(tx, NOW, &mut 0)).unwrap();
+    assert!(!done);
+    assert_eq!(before - column(&db, tracks)[0], i64::try_from(TRACK_CHUNK).unwrap());
+    let images = "SELECT count(*) FROM images";
+    let before = column(&db, images)[0];
+    let done = db.write_blocking(|tx| catalog::images(tx, NOW, &mut 0)).unwrap();
+    assert!(!done);
+    assert_eq!(before - column(&db, images)[0], i64::try_from(CHUNK).unwrap() / 2);
+
+    sweep(&db, NOW);
     let even = (2..=n).step_by(2).collect::<Vec<_>>();
     assert_eq!(column(&db, "SELECT id FROM tracks ORDER BY id"), even);
     assert_eq!(column(&db, "SELECT id FROM images ORDER BY id"), even);
 }
 
-/// One step deletes no more than [`CHUNK`] old scans in all, however many libraries hold them.
+/// Writes queued while a large purge is under way run between its chunks, not after the whole
+/// purge: the writes see its progress.
+#[tokio::test]
+async fn a_long_purge_leaves_the_writer_free_between_chunks() {
+    let n = 128;
+    // The helpers that set a database up block, so they run outside the runtime.
+    let (_temp, db) = tokio::task::spawn_blocking(move || {
+        open(move |conn| {
+            walked(conn, NOW)?;
+            Album::new(10, 1).insert(conn)?;
+            for id in 1..=n {
+                Track { missing_since: Some(OLD), ..Track::new(id, 1, 10) }.insert(conn)?;
+            }
+            Ok(())
+        })
+    })
+    .await
+    .unwrap();
+    let mut purging = tokio::spawn({
+        let db = Arc::clone(&db);
+        async move { super::sweep(&db, NOW).await }
+    });
+    // Writes queued as it runs each see the tracks it has purged so far.
+    let mut seen = std::collections::BTreeSet::new();
+    while !purging.is_finished() {
+        let left: i64 = db
+            .write(|tx| tx.query_row("SELECT count(*) FROM tracks", [], |r| r.get(0)))
+            .await
+            .unwrap();
+        seen.insert(left);
+    }
+    (&mut purging).await.unwrap();
+    assert!(seen.len() > 2, "the writer was not free between chunks: saw {seen:?}");
+    assert_eq!(
+        db.read(|c| c.query_row("SELECT count(*) FROM tracks", [], |r| r.get::<_, i64>(0)))
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+/// A kind of row that cannot be swept is passed over, and the kinds after it are swept.
 #[test]
-fn a_step_deletes_a_chunk_of_scans_across_libraries() {
+fn a_kind_that_fails_is_passed_over() {
+    let (_temp, db) = open(|conn| {
+        conn.execute_batch(
+            "INSERT INTO login_attempts (attempted_at, username_attempted, origin, succeeded) \
+             VALUES (0, 'user1', '192.0.2.1', 0); \
+             INSERT INTO recent_searches (user_id, library_id, query, folded, searched_at) \
+             VALUES (1, 1, 'q', 'q', 0); \
+             CREATE TRIGGER poison BEFORE DELETE ON login_attempts \
+             BEGIN SELECT RAISE(ABORT, 'poison'); END;",
+        )
+    });
+    sweep(&db, NOW);
+    assert_eq!(column(&db, "SELECT count(*) FROM login_attempts"), [1]);
+    assert_eq!(column(&db, "SELECT count(*) FROM recent_searches"), [0]);
+}
+
+/// One write deletes no more than [`CHUNK`] old scans in all, however many libraries hold them.
+#[test]
+fn a_chunk_deletes_no_more_scans_than_the_chunk_across_libraries() {
     let n = i64::try_from(CHUNK).unwrap() * 6 / 10;
     let (_temp, db) = open(move |conn| {
         for library in [1, 2] {
@@ -357,9 +413,42 @@ fn a_step_deletes_a_chunk_of_scans_across_libraries() {
         }
         Ok(())
     });
-    let scans = "SELECT count(*) FROM scans";
-    db.write_blocking(|tx| Sweep::new(NOW, Duration::ZERO).step(tx).map(drop)).unwrap();
-    assert_eq!(column(&db, scans), [2 * n + 2 - i64::try_from(CHUNK).unwrap()]);
+    let count = "SELECT count(*) FROM scans";
+    db.write_blocking(|tx| scans(tx, NOW, &mut 0).map(drop)).unwrap();
+    assert_eq!(column(&db, count), [2 * n + 2 - i64::try_from(CHUNK).unwrap()]);
     sweep(&db, NOW);
-    assert_eq!(column(&db, scans), [2], "each library's last");
+    assert_eq!(column(&db, count), [2], "each library's last");
+}
+
+/// The task sweeps on its own once its first sweep's time comes, and stops when aborted.
+#[tokio::test]
+async fn the_task_sweeps_on_its_own() {
+    let (_temp, db) = tokio::task::spawn_blocking(|| {
+        open(|conn| {
+            conn.execute(
+                "INSERT INTO login_attempts (attempted_at, username_attempted, origin, \
+                 succeeded) VALUES (0, 'user1', '192.0.2.1', 0)",
+                [],
+            )
+            .map(drop)
+        })
+    })
+    .await
+    .unwrap();
+    let task = start(Arc::clone(&db), Duration::ZERO);
+    let swept = async {
+        loop {
+            let left: i64 = db
+                .read(|c| c.query_row("SELECT count(*) FROM login_attempts", [], |r| r.get(0)))
+                .await
+                .unwrap();
+            if left == 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), swept).await.expect("not swept after 10 s");
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
 }

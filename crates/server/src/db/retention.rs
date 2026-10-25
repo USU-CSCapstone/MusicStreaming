@@ -1,6 +1,6 @@
 //! The hourly sweep, which deletes what is kept only for a while (`design/database.md` §9).
 //!
-//! The writer runs it every hour, first a few minutes after the database opens.
+//! A task runs it every hour, first a few minutes after the server starts.
 //! Rows go once they are older than [`WINDOW_MS`]: finished scans, but each library's last
 //! finished and last completed; login attempts; ended plays' events for the `played` hook;
 //! recent searches and what the `searched` hook noted of them; and tracks missing that long,
@@ -8,16 +8,20 @@
 //! kept until it is delivered instead, however old it is. Art and biographies that nothing
 //! points at go whatever their age.
 //!
-//! The sweep runs as a chain of transactions ([`Sweep::step`]), each holding the writer for
-//! about [`STEP_TIME`], so a write queued behind it waits for one step, never the whole sweep.
-//! A step sweeps one kind of row, so a kind that fails can be passed over ([`Sweep::next`]).
+//! The sweep is one write per chunk of rows ([`sweep`]), so a write queued behind it waits for
+//! one chunk, never the whole sweep. A kind of row that fails is passed over until the next
+//! sweep.
 
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::task::JoinHandle;
+use tracing::warn;
 
 use jewelcase_plugins::Permission;
 use rusqlite::{Result, Transaction, params};
 
-use super::Text;
+use super::{Database, Text, now_ms};
 
 mod catalog;
 #[cfg(test)]
@@ -26,15 +30,18 @@ mod tests;
 /// How long a row is kept: 30 days.
 pub const WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
-/// About how long one step of the sweep holds the writer: as long as a scan batch does
-/// (`design/scanning.md` §7), so an interactive write waits no longer behind it.
-pub const STEP_TIME: Duration = Duration::from_millis(50);
+/// How long after the server starts the first sweep runs, so a server restarted more often than
+/// [`EVERY`] still sweeps, without adding to its startup.
+pub const FIRST_SWEEP: Duration = Duration::from_secs(300);
 
-/// The most rows one statement of the sweep deletes or looks at, so a step can stop on time.
+/// How often the sweep runs.
+const EVERY: Duration = Duration::from_secs(3600);
+
+/// The most rows one statement of the sweep deletes or looks at, so a write stays short.
 /// Tracks go in smaller chunks ([`catalog::tracks`]).
 const CHUNK: usize = 100;
 
-/// One kind of row to sweep. Given the sweep's time and where it is in its table, it deletes a
+/// One kind of row to sweep. Given the sweep's time and where it is in its table, it deletes one
 /// chunk of rows and returns whether the kind is done.
 type Stage = fn(&Transaction<'_>, i64, &mut i64) -> Result<bool>;
 
@@ -52,48 +59,41 @@ const STAGES: [Stage; 9] = [
     catalog::biographies,
 ];
 
-/// A sweep under way.
-#[derive(Clone, Copy)]
-pub struct Sweep {
-    /// When it started: rows older than [`WINDOW_MS`] before this go.
-    now: i64,
-    /// About how long each step runs.
-    step_time: Duration,
-    /// The index in [`STAGES`] of the kind it is sweeping.
-    stage: usize,
-    /// Where that kind is in its table, for those that walk it by ID.
-    after: i64,
-}
-
-impl Sweep {
-    /// A sweep at `now`, in steps of about `step_time`. A zero step time sweeps one chunk of
-    /// one kind of row per step.
-    pub fn new(now: i64, step_time: Duration) -> Sweep {
-        Sweep { now, step_time, stage: 0, after: i64::MIN }
-    }
-
-    /// Sweeps one kind of row in `tx`, for about the step time or until the kind is done, and
-    /// returns the rest of the sweep, if any.
-    pub fn step(mut self, tx: &Transaction<'_>) -> Result<Option<Sweep>> {
-        let started = Instant::now();
-        let Some(stage) = STAGES.get(self.stage) else { return Ok(None) };
+/// Sweeps every kind of row at `now`, one write per chunk, until none has more to delete. A
+/// kind whose write fails, or panics, is logged and passed over until the next sweep, so one row
+/// that cannot go never holds up the others.
+pub async fn sweep(db: &Database, now: i64) {
+    for stage in STAGES {
+        let mut after = i64::MIN;
         loop {
-            if stage(tx, self.now, &mut self.after)? {
-                return Ok(self.next());
-            }
-            if started.elapsed() >= self.step_time {
-                return Ok(Some(self));
+            let chunk = db
+                .write(move |tx| {
+                    let mut at = after;
+                    stage(tx, now, &mut at).map(|done| (done, at))
+                })
+                .await;
+            match chunk {
+                Ok((true, _)) => break,
+                Ok((false, at)) => after = at,
+                Err(error) => {
+                    warn!(%error, "cannot sweep part of the database");
+                    break;
+                }
             }
         }
     }
+}
 
-    /// The rest of the sweep after the kind of row it is sweeping, if any: where a step leaves
-    /// it once the kind is done, and where its writer moves it past a step that failed.
-    pub fn next(mut self) -> Option<Sweep> {
-        self.stage += 1;
-        self.after = i64::MIN;
-        (self.stage < STAGES.len()).then_some(self)
-    }
+/// Starts the task that sweeps `first` after it starts and every hour after, and returns its
+/// handle. Aborting it stops the sweep before its next chunk.
+pub fn start(db: Arc<Database>, first: Duration) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        tokio::time::sleep(first).await;
+        loop {
+            sweep(&db, now_ms()).await;
+            tokio::time::sleep(EVERY).await;
+        }
+    })
 }
 
 /// Every library's ID.

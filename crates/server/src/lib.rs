@@ -92,6 +92,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
     plugins.start_hooks();
     let players = Arc::new(api::Players::load(&db).await?);
     let saving = players.keep_saved(db.clone());
+    let retention = db::retention::start(db.clone(), db::retention::FIRST_SWEEP);
     let indexes = Arc::new(api::Indexes::default());
     indexes.build_all(&db);
     let hub = Arc::new(api::Hub::default());
@@ -124,6 +125,9 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         hub.close_all();
         // The periodic save stops first, leaving a write already begun to finish.
         saving.abort();
+        // The sweep stops before its next chunk, leaving one already begun to finish.
+        retention.abort();
+        let _ = retention.await;
         if let Err(error) = saving.await
             && error.is_panic()
         {

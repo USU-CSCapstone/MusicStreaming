@@ -26,7 +26,7 @@ pub mod waveform;
 use std::num::NonZeroUsize;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
-use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -41,13 +41,9 @@ pub use columns::{Json, Text};
 pub use jewelcase_scanner::now_ms;
 pub use new_id::new_id;
 pub(crate) use reach::reaches;
-use retention::Sweep;
 pub use store::SqliteStore;
 
 use jewelcase_core::Recover;
-
-/// How often the writer sweeps away what is no longer kept (`design/database.md` §9).
-const SWEEP_EVERY: Duration = Duration::from_secs(3600);
 
 /// How often the writer gathers query-planner statistics again ([`OPTIMIZE`]), so a table that
 /// grows tenfold during a scan, such as the artists of a library scanned for the first time, is
@@ -67,10 +63,6 @@ const STATISTICS_FROM_TRACKS: i64 = 1_000;
 /// analysis limit (0x10), so even a large database opens quickly. When no table needs it, it
 /// only reads each table's size.
 const OPTIMIZE: &str = "PRAGMA optimize = 0x10012";
-
-/// How long after the database opens the writer first sweeps, so a server restarted more often
-/// than [`SWEEP_EVERY`] still sweeps, without adding to its startup.
-const FIRST_SWEEP: Duration = Duration::from_secs(300);
 
 /// How much of the database file each reader maps into memory, in bytes, so its reads come from
 /// the operating system's page cache, which every reader shares, rather than being copied into
@@ -114,16 +106,6 @@ pub struct Database {
 impl Database {
     /// Opens or creates the database, brings its schema up to date, and starts its threads.
     pub fn open(path: &Path) -> anyhow::Result<Database> {
-        Database::open_timed(path, FIRST_SWEEP, OPTIMIZE_EVERY)
-    }
-
-    /// [`open`](Self::open), with the writer's first sweep `first_sweep` after it opens, and
-    /// statistics gathered every `optimize_every`.
-    fn open_timed(
-        path: &Path,
-        first_sweep: Duration,
-        optimize_every: Duration,
-    ) -> anyhow::Result<Database> {
         let mut writer = Connection::open(path)
             .with_context(|| format!("cannot open the database {}", path.display()))?;
         configure(&writer)?;
@@ -166,23 +148,18 @@ impl Database {
         let mut threads = Vec::with_capacity(reader_count + 1);
         threads.push(spawn("db-writer", move || {
             let mut conn = writer;
-            let mut next_sweep = Instant::now() + first_sweep;
-            let mut next_optimize = Instant::now() + optimize_every;
+            let mut next_optimize = Instant::now() + OPTIMIZE_EVERY;
             loop {
-                let next = next_sweep.min(next_optimize);
-                match writer_jobs.recv_timeout(next.saturating_duration_since(Instant::now())) {
+                let wait = next_optimize.saturating_duration_since(Instant::now());
+                match writer_jobs.recv_timeout(wait) {
                     Ok(job) => run(job, &mut conn),
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
-                // On the writer between jobs, so neither contends with a write for the lock.
-                if Instant::now() >= next_sweep {
-                    sweep(&mut conn, &writer_jobs, Sweep::new(now_ms(), retention::STEP_TIME));
-                    next_sweep = Instant::now() + SWEEP_EVERY;
-                }
+                // On the writer between jobs, so it does not contend with a write for the lock.
                 if Instant::now() >= next_optimize {
                     optimize(&conn);
-                    next_optimize = Instant::now() + optimize_every;
+                    next_optimize = Instant::now() + OPTIMIZE_EVERY;
                 }
             }
             optimize(&conn);
@@ -294,37 +271,6 @@ where
         let value = f(&tx)?;
         tx.commit()?;
         Ok(value)
-    }
-}
-
-/// Runs `sweep` on the writer a step at a time, and between steps the jobs queued meanwhile, so
-/// none waits for more than a step. A step that fails or panics is rolled back, and the sweep
-/// passes over the kind of row it was sweeping until the next sweep, so one row that cannot go
-/// never holds up the others. The database shutting down ends the sweep.
-fn sweep(conn: &mut Connection, jobs: &mpsc::Receiver<Job>, sweep: Sweep) {
-    let mut rest = Some(sweep);
-    while let Some(sweep) = rest {
-        let step = panic::catch_unwind(AssertUnwindSafe(|| {
-            in_transaction(move |tx| sweep.step(tx))(conn)
-        }));
-        rest = match step {
-            Ok(Ok(rest)) => rest,
-            Ok(Err(error)) => {
-                warn!(%error, "cannot sweep part of the database");
-                sweep.next()
-            }
-            Err(_) => {
-                error!("a database sweep panicked");
-                sweep.next()
-            }
-        };
-        loop {
-            match jobs.try_recv() {
-                Ok(job) => run(job, conn),
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return,
-            }
-        }
     }
 }
 
@@ -537,105 +483,6 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
-    }
-
-    /// A job queued as the writer sweeps runs after the step in progress, not after the whole
-    /// sweep: one queued before it starts finds the first chunk of old scans gone and the rest
-    /// still there.
-    #[test]
-    fn a_job_runs_between_the_steps_of_a_sweep() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("jewelcase.db");
-        Database::open(&path)
-            .unwrap()
-            .write_blocking(|tx| {
-                testing::library(tx, 1, "Music", "/music")?;
-                for id in 1..=250 {
-                    tx.execute(
-                        "INSERT INTO scans (id, library_id, trigger, state, scopes, created_at, \
-                         finished_at) VALUES (?1, 1, 'manual', 'completed', '[]', ?1, ?1)",
-                        [id],
-                    )?;
-                }
-                Ok(())
-            })
-            .unwrap();
-        let mut conn = Connection::open(&path).unwrap();
-        configure(&conn).unwrap();
-        let scans = |conn: &Connection| {
-            conn.query_row("SELECT count(*) FROM scans", [], |r| r.get::<_, i64>(0)).unwrap()
-        };
-        let (jobs, queued) = mpsc::channel::<Job>();
-        let (seen, found) = mpsc::channel();
-        jobs.send(Box::new(move |conn| seen.send(scans(conn)).unwrap())).unwrap();
-
-        let now = retention::WINDOW_MS + 1000;
-        sweep(&mut conn, &queued, Sweep::new(now, Duration::ZERO));
-
-        let found = found.try_recv().unwrap();
-        assert!(1 < found && found < 250, "{found} scans left");
-        assert_eq!(scans(&conn), 1, "the last is kept");
-    }
-
-    /// The count that `sql`, a `count(*)` query, finds in the database at `path`.
-    fn count(path: &Path, sql: &str) -> i64 {
-        Connection::open(path).unwrap().query_row(sql, [], |r| r.get(0)).unwrap()
-    }
-
-    /// The writer sweeps on its own once the first sweep's time comes after it opens.
-    #[test]
-    fn the_writer_sweeps_on_its_own() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("jewelcase.db");
-        Database::open(&path)
-            .unwrap()
-            .write_blocking(|tx| {
-                tx.execute(
-                    "INSERT INTO login_attempts (attempted_at, username_attempted, origin, \
-                     succeeded) VALUES (0, 'user', '192.0.2.1', 0)",
-                    [],
-                )
-            })
-            .unwrap();
-        let _db = Database::open_timed(&path, Duration::ZERO, OPTIMIZE_EVERY).unwrap();
-        let attempts = "SELECT count(*) FROM login_attempts";
-        for _ in 0..500 {
-            if count(&path, attempts) == 0 {
-                return;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-        panic!("the writer has not swept after 10 s");
-    }
-
-    /// A kind of row that cannot be swept is passed over, and the kinds after it are swept.
-    #[test]
-    fn a_sweep_passes_over_a_kind_that_fails() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("jewelcase.db");
-        Database::open(&path)
-            .unwrap()
-            .write_blocking(|tx| {
-                testing::library(tx, 1, "Music", "/music")?;
-                testing::User::new(1, "owner").insert(tx)?;
-                tx.execute_batch(
-                    "INSERT INTO login_attempts (attempted_at, username_attempted, origin, \
-                     succeeded) VALUES (0, 'user1', '192.0.2.1', 0); \
-                     INSERT INTO recent_searches (user_id, library_id, query, folded, \
-                     searched_at) VALUES (1, 1, 'q', 'q', 0); \
-                     CREATE TRIGGER poison BEFORE DELETE ON login_attempts \
-                     BEGIN SELECT RAISE(ABORT, 'poison'); END;",
-                )
-            })
-            .unwrap();
-        let mut conn = Connection::open(&path).unwrap();
-        configure(&conn).unwrap();
-        let (_jobs, queued) = mpsc::channel::<Job>();
-
-        sweep(&mut conn, &queued, Sweep::new(retention::WINDOW_MS + 1000, Duration::ZERO));
-
-        assert_eq!(count(&path, "SELECT count(*) FROM login_attempts"), 1);
-        assert_eq!(count(&path, "SELECT count(*) FROM recent_searches"), 0);
     }
 
     #[test]

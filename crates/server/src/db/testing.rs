@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use rusqlite::{Connection, Result, params};
 
-use super::retention::{STEP_TIME, Sweep};
 use super::{Database, libraries};
 
 mod catalog;
@@ -28,12 +27,11 @@ pub fn library(conn: &Connection, id: i64, name: &str, root: impl AsRef<Path>) -
     libraries::create(conn, Some(id), name, &[root.as_ref()], &[]).map(drop)
 }
 
-/// Sweeps `db` as its writer does each hour, at `now`, to the end.
+/// Sweeps `db` as the hourly task does, at `now`, to the end. Blocks the calling thread, which
+/// must not be in the async runtime.
 pub fn sweep(db: &Database, now: i64) {
-    let mut rest = Some(Sweep::new(now, STEP_TIME));
-    while let Some(sweep) = rest {
-        rest = db.write_blocking(move |tx| sweep.step(tx)).unwrap();
-    }
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    runtime.block_on(super::retention::sweep(db, now));
 }
 
 /// Grants `user` access to `library`.
