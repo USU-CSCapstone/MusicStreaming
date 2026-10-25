@@ -36,7 +36,8 @@ async fn a_lookup_that_cannot_be_answered_now_ends_the_run_with_an_error() {
         assert_eq!(outcome.result, Err(not_granted()));
         assert!(outcome.log.is_empty(), "{:?}", outcome.log);
         assert!(outcome.touched.is_empty());
-        assert!(library.state.lock().unwrap().is_empty(), "no place moved on, no miss");
+        let state = library.state.lock().unwrap();
+        assert_eq!(state.keys().collect::<Vec<_>>(), ["mode"], "no place moved on, no miss");
     }
 }
 

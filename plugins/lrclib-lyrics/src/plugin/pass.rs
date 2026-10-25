@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use super::jewelcase::plugin::library::{self, Track};
 use super::jewelcase::plugin::state;
-use crate::progress::{self, CHECKS_PER_RUN, CURSOR, MAX_NEXT, NEXT, Seen};
+use crate::progress::{self, CHECKS_PER_RUN, CURSOR, MAX_NEXT, MODE, NEXT, Saving, Seen};
 
 /// Tracks read from the library at a time: the most the host gives.
 const PAGE: usize = 500;
@@ -18,13 +18,28 @@ pub struct Walked {
     pub had_lyrics: u32,
 }
 
+/// Notes that this run saves as `saving`, and answers when that mode last changed: now if the
+/// last run's differed, so misses from before are due again. Keeps the mode only when it
+/// differs, and reads it once, since each state call costs a tick.
+pub fn mode_since(saving: Saving, now: u64) -> Result<u64, String> {
+    let kept = state::get(MODE)?.and_then(|bytes| progress::decode_mode(&bytes));
+    let since = progress::mode_since(kept, saving, now);
+    if kept != Some((saving, since)) {
+        state::set(MODE, &progress::encode_mode(saving, since))?;
+    }
+    Ok(since)
+}
+
 /// Goes on with the pass, looking up with `look` first the tracks a change left for it
 /// ([`catch_up`]), then, from where it last stopped, each track without lyrics, except misses
-/// still waiting. It stops starting lookups at `deadline`, and stops after [`CHECKS_PER_RUN`]
-/// checks. Its place is kept after each lookup, so a run cut short loses nothing it did. An
-/// error from `look` ends it before that track, so the next run looks it up first.
+/// still waiting: those made since the saving mode last changed (`mode_since`), less than
+/// [`progress::RETRY_AFTER_S`] ago. It stops starting lookups at `deadline`, and stops after
+/// [`CHECKS_PER_RUN`] checks. Its place is kept after each lookup, so a run cut short loses
+/// nothing it did. An error from `look` ends it before that track, so the next run looks it up
+/// first.
 pub fn resume(
     now: u64,
+    mode_since: u64,
     deadline: Instant,
     mut look: impl FnMut(&Track) -> Result<Seen, String>,
 ) -> Result<Walked, String> {
@@ -46,7 +61,7 @@ pub fn resume(
                 continue;
             }
             checks += 1;
-            if progress::is_due(missed_at(t.id)?, now) {
+            if progress::is_due(missed_at(t.id)?, now, mode_since) {
                 note(t.id, look(t)?, now)?;
                 state::set(CURSOR, &progress::encode(t.id))?;
                 // Read only after a lookup: reading the clock is a host call, which costs a tick.

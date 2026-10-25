@@ -25,12 +25,15 @@ pub const CURSOR: &str = "cursor";
 /// The key the tracks a change had no time for are kept under, for the pass to look up first.
 pub const NEXT: &str = "next";
 
+/// The key the saving mode the last run had is kept under, with when it last changed.
+pub const MODE: &str = "mode";
+
 /// The most tracks kept under [`NEXT`]. Any past it are still found by the pass in its turn.
 pub const MAX_NEXT: usize = 1000;
 
 /// What this run saves: whether it was granted adding files, and whether only synced lyrics
 /// are wanted.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Saving {
     pub can_write: bool,
     pub synced_only: bool,
@@ -58,10 +61,38 @@ pub fn seen(found: &Found, saving: Saving) -> Seen {
     }
 }
 
-/// Whether the pass looks up a track without lyrics at `now`, given when it was last missed:
-/// one never missed, or one whose wait is over.
-pub fn is_due(missed_at: Option<u64>, now: u64) -> bool {
-    missed_at.is_none_or(|at| at.saturating_add(RETRY_AFTER_S) <= now)
+/// Whether the pass looks up a track without lyrics at `now`, given when it was last missed and
+/// when the saving mode last changed: one never missed, one missed before the mode changed (what
+/// it found might be saved now), or one whose wait is over.
+pub fn is_due(missed_at: Option<u64>, now: u64, mode_since: u64) -> bool {
+    missed_at.is_none_or(|at| at < mode_since || at.saturating_add(RETRY_AFTER_S) <= now)
+}
+
+/// When the saving mode last changed, given the mode kept from the last run with when it began
+/// and the mode now: unchanged keeps its time (but never one past `now`, which a clock that was
+/// set ahead leaves), a different one starts at `now`, and none kept counts as changed at 0, so
+/// the misses of an earlier version stand.
+pub fn mode_since(kept: Option<(Saving, u64)>, saving: Saving, now: u64) -> u64 {
+    match kept {
+        Some((was, since)) if was == saving => since.min(now),
+        Some(_) => now,
+        None => 0,
+    }
+}
+
+/// A saving mode and when it began, as stored under [`MODE`].
+pub fn encode_mode(saving: Saving, since: u64) -> Vec<u8> {
+    let mut bytes = encode(since);
+    bytes.extend([u8::from(saving.can_write), u8::from(saving.synced_only)]);
+    bytes
+}
+
+/// What [`encode_mode`] stored, or none if the bytes are not that.
+pub fn decode_mode(bytes: &[u8]) -> Option<(Saving, u64)> {
+    let (since, flags) = bytes.split_first_chunk::<8>()?;
+    let [can_write, synced_only] = flags else { return None };
+    let saving = Saving { can_write: *can_write != 0, synced_only: *synced_only != 0 };
+    Some((saving, u64::from_le_bytes(*since)))
 }
 
 /// The key a miss on track `id` is kept under.

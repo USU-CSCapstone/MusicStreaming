@@ -131,7 +131,8 @@ mod plugin {
                 // What a change had no time for, then the library a part at a time, from where
                 // the last run stopped: every track without lyrics, except misses not due yet.
                 Event::Run | Event::Scheduled => {
-                    let walked = pass::resume(now, deadline, look)?;
+                    let mode_since = pass::mode_since(saving, now)?;
+                    let walked = pass::resume(now, mode_since, deadline, look)?;
                     n.had_lyrics += walked.had_lyrics;
                     if walked.finished {
                         String::new()
@@ -141,6 +142,8 @@ mod plugin {
                 }
                 // The tracks that were added or changed, which is every track at first.
                 Event::TracksChanged(changes) => {
+                    // The mode is noted here too, so misses this run makes count as made under it.
+                    pass::mode_since(saving, now)?;
                     let (changed, removed) = (&changes.changed, &changes.removed);
                     match pass::changed(changed, removed, now, deadline, look)? {
                         0 => String::new(),

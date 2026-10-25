@@ -21,6 +21,13 @@ fn offline() -> Grants {
     grants(&[Permission::LibraryRead, Permission::Network], &["example.invalid"])
 }
 
+/// [`offline`] grants with adding files and no `syncedOnly`, so plain lyrics are wanted.
+fn offline_adding() -> Grants {
+    let mut grants = offline();
+    grants.permissions.push(Permission::LibraryAdd);
+    grants
+}
+
 /// Runs the plugin on `library` with `grants`, on `event`.
 async fn run(library: &Memory, grants: Grants, event: Event) -> Outcome {
     Host::new().unwrap().run(plugin(), grants, library.clone(), event).await
@@ -136,4 +143,46 @@ async fn a_run_looks_up_first_the_tracks_a_change_had_no_time_for() {
     let changes = Changes { changed: vec![2], removed: vec![] };
     let outcome = run_offline(&library, Event::TracksChanged(changes)).await;
     assert_eq!(looked_up(&outcome), [3, 2], "a change looks them up first too");
+}
+
+/// [`offline`] grants with synced lyrics only, and adding files if `adding`.
+fn synced_only(adding: bool) -> Grants {
+    let mut grants = offline();
+    if adding {
+        grants.permissions.push(Permission::LibraryAdd);
+    }
+    grants.settings.insert("syncedOnly".into(), true.into());
+    grants
+}
+
+/// Makes the grants of one saving mode.
+type Mode = fn() -> Grants;
+
+#[tokio::test]
+async fn a_miss_is_looked_up_again_once_the_saving_mode_changes() {
+    let now = || {
+        let since_epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+        since_epoch.unwrap().as_secs()
+    };
+    // Each change runs from a fresh library, where the first run keeps its mode as old as can be,
+    // so the misses made a moment later can be due only for a change of mode.
+    let changes: [(Mode, Mode, &str); 2] = [
+        (|| synced_only(false), || synced_only(true), "it may add files now"),
+        (|| synced_only(true), offline_adding, "plain lyrics are wanted now"),
+    ];
+    for (before, after, why) in changes {
+        let library = library(1..=2);
+        run(&library, before(), Event::Run).await;
+        (1..=2).for_each(|id| miss(&library, id, now() - 100));
+
+        let unchanged = run(&library, before(), Event::Run).await;
+        assert_eq!(looked_up(&unchanged), Vec::<u64>::new(), "the mode is the same");
+
+        let changed = run(&library, after(), Event::Run).await;
+        assert_eq!(looked_up(&changed), [1, 2], "{why}");
+
+        (1..=2).for_each(|id| miss(&library, id, now()));
+        let again = run(&library, after(), Event::Run).await;
+        assert_eq!(looked_up(&again), Vec::<u64>::new(), "the mode is the same again");
+    }
 }
