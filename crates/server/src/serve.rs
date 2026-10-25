@@ -1,9 +1,9 @@
-//! Serves the app over HTTP/1, closing each connection after its response. A client that sends
-//! nothing, or stops partway through a request's header or body, loses its connection after a
-//! timeout. One that keeps a body trickling in keeps its connection, and a file descriptor with
-//! it, until a route's own limits end it: the routes open before sign-in allow a body 30 s in
-//! all (`api`). Nothing caps how many connections are open at once. The shutdown waits for
-//! requests in progress only up to a deadline.
+//! Serves the app over HTTP/1, keeping a connection open for the client's next request. A client
+//! that sends nothing, between requests too, or stops partway through a request's header or
+//! body, loses its connection after a timeout. One that keeps a body trickling in keeps its
+//! connection, and a file descriptor with it, until a route's own limits end it: the routes open
+//! before sign-in allow a body 30 s in all (`api`). Nothing caps how many connections are open
+//! at once. The shutdown waits for requests in progress only up to a deadline.
 //!
 //! Every response tells a browser to take it as the type it says, to show it framed only by
 //! the server's own pages, and to tell other sites nothing of the page that linked to them.
@@ -15,9 +15,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::ConnectInfo;
-use axum::http::header::{
-    CONNECTION, CONTENT_SECURITY_POLICY, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS,
-};
+use axum::http::header::{CONTENT_SECURITY_POLICY, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS};
 use axum::http::{HeaderName, HeaderValue};
 use hyper::server::conn::http1;
 use hyper_util::rt::{TokioIo, TokioTimer};
@@ -30,7 +28,8 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::RequestBodyTimeoutLayer;
 use tracing::{debug, warn};
 
-/// How long a client has to send a request's header once its connection opens.
+/// How long a client has to send a request's header once its connection opens or its last
+/// response is sent, so it is also how long an idle connection stays open.
 const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The longest a request's body may go without a byte arriving while its handler reads it. It
@@ -50,11 +49,7 @@ pub(crate) const DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
 /// returns once `as_it_stops` is done and the requests are answered or [`DRAIN_TIMEOUT`] has
 /// passed, leaving any still open to the runtime's end.
 ///
-/// Over HTTP/1.1, each connection closes after its response, so no connection sits idle where
-/// a pooling proxy could send a request on it just as it closes. The exception is an HTTP/1.0
-/// request that asks for keep-alive: hyper replaces the `close` with `Connection: keep-alive`,
-/// so that connection stays open until [`HEADER_READ_TIMEOUT`] passes with no next request. A
-/// connection upgraded to a WebSocket belongs to its handler, so it is not waited for.
+/// A connection upgraded to a WebSocket belongs to its handler, so it is not waited for.
 pub async fn serve(
     listener: TcpListener,
     app: Router,
@@ -65,16 +60,11 @@ pub async fn serve(
     let header = |name: HeaderName, value: &'static str| {
         SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value))
     };
-    let app = app
-        .layer(RequestBodyTimeoutLayer::new(BODY_READ_TIMEOUT))
-        // Not hyper's `keep_alive(false)`: that sets `Connection: close` on a WebSocket's `101`
-        // too, which then fails to upgrade.
-        .layer(header(CONNECTION, "close"))
-        .layer((
-            header(X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            header(CONTENT_SECURITY_POLICY, "frame-ancestors 'self'"),
-            header(REFERRER_POLICY, "same-origin"),
-        ));
+    let app = app.layer(RequestBodyTimeoutLayer::new(BODY_READ_TIMEOUT)).layer((
+        header(X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        header(CONTENT_SECURITY_POLICY, "frame-ancestors 'self'"),
+        header(REFERRER_POLICY, "same-origin"),
+    ));
     let mut http = http1::Builder::new();
     http.timer(TokioTimer::new()).header_read_timeout(HEADER_READ_TIMEOUT);
     let (stop, stopping) = watch::channel(());

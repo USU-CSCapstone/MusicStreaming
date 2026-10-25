@@ -54,7 +54,7 @@ async fn send(address: SocketAddr, request: &[u8]) -> TcpStream {
 }
 
 /// Everything the server sends on `stream`, which it must close within a second: sooner than
-/// any of its timeouts.
+/// any of its timeouts. The request must ask for `Connection: close`.
 async fn response(mut stream: TcpStream) -> String {
     let mut response = String::new();
     timeout(Duration::from_secs(1), stream.read_to_string(&mut response)).await.unwrap().unwrap();
@@ -90,10 +90,39 @@ async fn a_connection_that_sends_nothing_is_closed_after_the_timeout() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn each_connection_closes_after_its_response() {
+async fn a_connection_serves_a_second_request_after_its_response() {
     let (address, _stop, _server) = start(routes()).await;
-    let response = response(send(address, b"GET / HTTP/1.1\r\nHost: jewelcase\r\n\r\n").await);
-    assert!(response.await.starts_with("HTTP/1.1 200 OK\r\n"));
+    let request = b"GET / HTTP/1.1\r\nHost: jewelcase\r\n\r\n";
+    let mut stream = send(address, request).await;
+    let client = stream.local_addr().unwrap().to_string();
+    for _ in 0..2 {
+        // Each body is the client's address, so a response is whole once it ends with it.
+        let mut response = Vec::new();
+        while !response.ends_with(client.as_bytes()) {
+            let mut buffer = [0; 512];
+            let read = timeout(Duration::from_secs(1), stream.read(&mut buffer));
+            let read = read.await.unwrap().unwrap();
+            assert_ne!(read, 0, "closed: {}", String::from_utf8_lossy(&response));
+            response.extend_from_slice(&buffer[..read]);
+        }
+        assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
+        stream.write_all(request).await.unwrap();
+    }
+}
+
+// On real time, as the other header timeout tests are.
+#[tokio::test]
+async fn an_idle_connection_stays_open_for_a_while_and_is_closed_by_the_timeout() {
+    let (address, _stop, _server) = start(routes()).await;
+    let mut stream = send(address, b"GET / HTTP/1.1\r\nHost: jewelcase\r\n\r\n").await;
+    let mut buffer = [0; 512];
+    assert_ne!(stream.read(&mut buffer).await.unwrap(), 0);
+    // Still open: the read waits out its limit instead of ending.
+    let idle = timeout(Duration::from_secs(1), stream.read(&mut buffer)).await;
+    assert!(idle.is_err(), "closed or sent more: {idle:?}");
+    let idle_since = Instant::now();
+    closed(stream).await;
+    assert!(idle_since.elapsed() <= HEADER_READ_TIMEOUT + Duration::from_secs(1));
 }
 
 #[tokio::test(start_paused = true)]
@@ -117,7 +146,8 @@ async fn every_response_says_how_a_browser_may_use_it() {
         .fallback_service(ServeDir::new(web.path()));
     let (address, _stop, _server) = start(app).await;
     let get = |path: &str| {
-        let request = format!("GET {path} HTTP/1.1\r\nHost: jewelcase\r\n\r\n");
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: jewelcase\r\nConnection: close\r\n\r\n");
         async move { response(send(address, request.as_bytes()).await).await }
     };
     // A handler's answer, a file's, and a file's that is not there.
@@ -147,7 +177,8 @@ async fn a_streamed_response_arrives_in_full() {
         || stream::iter((0..64).map(|_| Ok::<_, Infallible>(Bytes::from(vec![7; 16_384]))));
     let app = Router::new().route("/", get(move || async move { Body::from_stream(chunks()) }));
     let (address, _stop, _server) = start(app).await;
-    let mut stream = send(address, b"GET / HTTP/1.1\r\nHost: jewelcase\r\n\r\n").await;
+    let request = b"GET / HTTP/1.1\r\nHost: jewelcase\r\nConnection: close\r\n\r\n";
+    let mut stream = send(address, request).await;
     let mut response = Vec::new();
     timeout(Duration::from_secs(1), stream.read_to_end(&mut response)).await.unwrap().unwrap();
     assert!(response.starts_with(b"HTTP/1.1 200 OK\r\n"));
@@ -223,7 +254,8 @@ async fn shutdown_waits_for_a_request_in_progress() {
         }),
     );
     let (address, stop, mut server) = start(app).await;
-    let stream = send(address, b"GET / HTTP/1.1\r\nHost: jewelcase\r\n\r\n").await;
+    let request = b"GET / HTTP/1.1\r\nHost: jewelcase\r\nConnection: close\r\n\r\n";
+    let stream = send(address, request).await;
     sleep(Duration::from_secs(1)).await;
     stop.notify_one();
     timeout(DRAIN_TIMEOUT - Duration::from_secs(1), &mut server).await.unwrap_err();

@@ -63,7 +63,9 @@ fn serving(port: u16) {
     loop {
         if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
             stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-            stream.write_all(b"GET /api/v1/health HTTP/1.1\r\nHost: jewelcase\r\n\r\n").unwrap();
+            let request =
+                b"GET /api/v1/health HTTP/1.1\r\nHost: jewelcase\r\nConnection: close\r\n\r\n";
+            stream.write_all(request).unwrap();
             let mut response = String::new();
             if stream.read_to_string(&mut response).is_ok() && response.starts_with("HTTP/1.1 200")
             {
