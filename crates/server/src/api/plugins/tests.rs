@@ -375,13 +375,13 @@ async fn a_run_needs_a_library_it_is_enabled_in() {
     );
 }
 
+/// The packed lyrics plugin, which `plugins/lrclib-lyrics/build.sh` makes.
+const LYRICS_WASM: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm");
+
 /// Installs the real lyrics plugin through the API, and returns its file's bytes.
 async fn install_lyrics(app: &Router) -> Vec<u8> {
-    let file = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm"
-    );
-    let bytes = std::fs::read(file).expect("run plugins/lrclib-lyrics/build.sh first");
+    let bytes = std::fs::read(LYRICS_WASM).expect("run plugins/lrclib-lyrics/build.sh first");
     let request = owner_request("POST", "/api/v1/admin/plugins")
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .body(Body::from(bytes.clone()))
@@ -539,12 +539,8 @@ async fn settings_show_values_but_never_secrets() {
 async fn settings_saved_as_secrets_stay_hidden_after_a_reinstall() {
     let (temp, db, app) = server().await;
     // The real lyrics file, which accepts any settings, under this test's manifest.
-    let file = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../plugins/lrclib-lyrics/target/lrclib-lyrics.wasm"
-    );
     std::fs::create_dir_all(temp.path().join("plugins")).unwrap();
-    std::fs::copy(file, temp.path().join("plugins/lrclib-lyrics.wasm"))
+    std::fs::copy(LYRICS_WASM, temp.path().join("plugins/lrclib-lyrics.wasm"))
         .expect("run plugins/lrclib-lyrics/build.sh first");
     let library = format!("{SETTINGS}?libraryId=1");
     let values = json!({ "values": { "apiKey": "s3cret", "limit": 4, "mode": "careful" } });

@@ -62,10 +62,10 @@ pub fn seen(found: &Found, saving: Saving) -> Seen {
 }
 
 /// Whether the pass looks up a track without lyrics at `now`, given when it was last missed and
-/// when the saving mode last changed: one never missed, one missed before the mode changed (what
-/// it found might be saved now), or one whose wait is over.
+/// when the saving mode last changed: one never missed, one missed before the mode changed or in
+/// the same second (what it found might be saved now), or one whose wait is over.
 pub fn is_due(missed_at: Option<u64>, now: u64, mode_since: u64) -> bool {
-    missed_at.is_none_or(|at| at < mode_since || at.saturating_add(RETRY_AFTER_S) <= now)
+    missed_at.is_none_or(|at| at <= mode_since || at.saturating_add(RETRY_AFTER_S) <= now)
 }
 
 /// When the saving mode last changed, given the mode kept from the last run with when it began

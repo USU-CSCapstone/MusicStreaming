@@ -30,8 +30,8 @@ fn a_miss_waits_thirty_days() {
 #[test]
 fn a_miss_from_before_the_mode_changed_is_due() {
     assert!(is_due(Some(999), 1_000, 1_000));
-    assert!(!is_due(Some(1_000), 1_000, 1_000), "made under the new mode");
-    assert!(!is_due(Some(1_001), 1_002, 1_000));
+    assert!(is_due(Some(1_000), 1_000, 1_000), "the same second may be before the change");
+    assert!(!is_due(Some(1_001), 1_002, 1_000), "made under the new mode");
 }
 
 #[test]

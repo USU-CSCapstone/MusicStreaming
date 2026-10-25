@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use globset::GlobSet;
+
 use super::*;
 use crate::SyncedLine;
 use crate::clock::system_time_ms;
@@ -26,16 +28,15 @@ fn listing(dir: &Path) -> BTreeMap<OsString, FileStat> {
         .collect()
 }
 
-/// A resolver for `root` whose scan excludes `patterns`.
-fn resolver(root: &Path, patterns: &[&str]) -> SidecarResolver {
-    let patterns: Vec<String> = patterns.iter().map(|p| p.to_string()).collect();
-    SidecarResolver::new(root, compile_excludes(&patterns).unwrap())
+/// A resolver for `root` whose scan excludes nothing.
+fn resolver(root: &Path) -> SidecarResolver {
+    SidecarResolver::new(root, GlobSet::empty())
 }
 
 /// What a fresh scan of `root` stamps the track at `audio` with, with every directory from the
 /// root down to it listed as a walk lists them.
 fn stamped(root: &Path, audio: &Path) -> Stamped {
-    let mut r = resolver(root, &[]);
+    let mut r = resolver(root);
     let dir = audio.parent().unwrap();
     for ancestor in dir.ancestors().take_while(|a| a.starts_with(root)) {
         r.offer_listing(ancestor, &listing(ancestor));
@@ -66,7 +67,7 @@ fn nearest_wins_and_walk_stops_at_root() {
     // Above the root: must never be seen.
     touch(&tmp.path().join("artist.png"), PNG);
 
-    let mut r = resolver(&root, &[]);
+    let mut r = resolver(&root);
     let album = r.resolve(&root.join("Artist/Album"));
     assert_eq!(album.cover.unwrap().path, root.join("Artist/Album/cover.jpg"));
     assert_eq!(album.artist_image.unwrap().path, root.join("Artist/artist.jpg"));
@@ -87,7 +88,7 @@ fn a_cover_that_is_not_an_image_is_no_art() {
     let root = tmp.path().join("lib");
     touch(&root.join("cover.png"), PNG);
     touch(&root.join("A/cover.jpg"), b"not an image");
-    let mut r = resolver(&root, &[]);
+    let mut r = resolver(&root);
     assert_eq!(r.resolve(&root.join("A")).cover, None);
 }
 
@@ -120,7 +121,7 @@ fn symlinked_sidecars_are_not_read() {
     symlink(root.join("words.lrc"), root.join("A/01.lrc")).unwrap();
     symlink(root.join("cover.png"), root.join("A/cover.png")).unwrap();
 
-    let mut r = resolver(&root, &[]);
+    let mut r = resolver(&root);
     let found = r.resolve(&root.join("A"));
     assert_eq!(found.biography, None);
     assert_eq!(found.cover.unwrap().path, root.join("cover.png"), "the real one above");
@@ -196,13 +197,13 @@ fn an_unlisted_ancestor_locates_as_a_listed_one() {
     symlink(tmp.path().join("elsewhere.png"), root.join("A/cover.jpg")).unwrap();
 
     let dir = audio.parent().unwrap();
-    let mut scoped = resolver(&root, &[]);
+    let mut scoped = resolver(&root);
     scoped.offer_listing(dir, &listing(dir));
     assert_eq!(scoped.stamp(dir, &audio, &listing(dir)).stamp, stamp(&root, &audio));
     assert_eq!(scoped.resolve(dir).cover.unwrap().path, root.join("A/cover.png"));
 
     fs::remove_file(root.join("A/cover.png")).unwrap();
-    let mut scoped = resolver(&root, &[]);
+    let mut scoped = resolver(&root);
     scoped.offer_listing(dir, &listing(dir));
     assert_eq!(scoped.stamp(dir, &audio, &listing(dir)).stamp, stamp(&root, &audio));
     assert_eq!(
@@ -227,14 +228,14 @@ fn of_biographies_differing_in_case_the_first_usable_applies() {
         touch(&root.join("A/ARTIST.TXT"), upper);
         touch(&root.join("A/artist.txt"), lower);
         let dir = audio.parent().unwrap();
-        let mut scoped = resolver(&root, &[]);
+        let mut scoped = resolver(&root);
         scoped.offer_listing(dir, &listing(dir));
         assert_eq!(scoped.stamp(dir, &audio, &listing(dir)).stamp, stamp(&root, &audio));
         assert_eq!(
             scoped.resolve(dir).biography.map(|b| b.text.to_string()).as_deref(),
             Some(expected)
         );
-        let mut listed = resolver(&root, &[]);
+        let mut listed = resolver(&root);
         listed.offer_listing(&root.join("A"), &listing(&root.join("A")));
         assert_eq!(
             listed.resolve(dir).biography.map(|b| b.text.to_string()).as_deref(),
@@ -250,7 +251,7 @@ fn a_png_cover_comes_before_a_gif() {
     let root = tmp.path().join("lib");
     touch(&root.join("A/cover.gif"), &[PNG, b"gif"].concat());
     touch(&root.join("A/cover.png"), PNG);
-    let mut r = resolver(&root, &[]);
+    let mut r = resolver(&root);
     r.offer_listing(&root.join("A"), &listing(&root.join("A")));
     assert_eq!(r.resolve(&root.join("A")).cover.unwrap().path, root.join("A/cover.png"));
 }
@@ -265,7 +266,7 @@ fn lyrics_are_found_in_each_folder_in_turn() {
     touch(&a, b"x");
     touch(&b, b"x");
     touch(&root.join("B/01.LRC"), b"[00:01.00]bee");
-    let mut r = resolver(&root, &[]);
+    let mut r = resolver(&root);
     let (dir_a, dir_b) = (root.join("A"), root.join("B"));
     assert_eq!(r.stamp(&dir_a, &a, &listing(&dir_a)).read_lyrics(), None);
     let lines = vec![SyncedLine { start_ms: 1_000, text: "bee".into() }];
