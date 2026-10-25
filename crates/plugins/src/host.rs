@@ -12,8 +12,7 @@ use std::time::Duration;
 
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{
-    Cache, CacheConfig, Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline,
-    bail, ensure,
+    Config, Engine, Store, StoreLimits, StoreLimitsBuilder, UpdateDeadline, bail, ensure,
 };
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
@@ -188,17 +187,11 @@ pub struct Host<L: Library> {
 
 impl<L: Library> Host<L> {
     /// The engine, and a thread advancing its epoch while a run is live, which ends with the
-    /// host. With `cache`, an absolute directory for wasmtime's alone that no other user can
-    /// write, compiled code is kept there too, so a restart loads it rather than compiling
-    /// again. Fails if the engine, the thread, or the cache cannot be started.
-    pub fn new(cache: Option<&Path>) -> wasmtime::Result<Host<L>> {
+    /// host. Compiled code is kept in memory only, never on disk, where whoever could write it
+    /// would run code as the server. Fails if the engine or the thread cannot be started.
+    pub fn new() -> wasmtime::Result<Host<L>> {
         let mut config = Config::new();
         config.epoch_interruption(true);
-        if let Some(directory) = cache {
-            let mut settings = CacheConfig::new();
-            settings.with_directory(directory);
-            config.cache(Some(Cache::new(settings)?));
-        }
         let engine = Engine::new(&config)?;
         let ticked = engine.clone();
         let epoch = Epoch::start(move || ticked.increment_epoch())?;

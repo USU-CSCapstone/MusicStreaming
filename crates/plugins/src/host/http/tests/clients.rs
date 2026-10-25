@@ -61,7 +61,7 @@ async fn changed_destinations_get_a_client_that_keeps_to_them() {
 async fn a_run_under_way_at_uninstall_leaves_no_client_behind() {
     let (port, _) = server().await;
     let file = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/host/tests/sandbox.wat"));
-    let host = Host::<Memory>::new(None).unwrap();
+    let host = Host::<Memory>::new().unwrap();
     let mut under_way = run();
     let (_, client) = host.compiled("test", file).await.unwrap();
     under_way.client = client;

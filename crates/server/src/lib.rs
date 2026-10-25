@@ -78,17 +78,8 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
     if let Err(error) = images.sweep(&db).await {
         warn!(error = %format!("{error:#}"), "cannot sweep the image cache");
     }
-    // A cache folder that fails the check costs only a compile per plugin after each restart,
-    // so the server starts without it rather than refusing to.
-    let compiled = match data_dir.private_cache("plugins") {
-        Ok(dir) => Some(dir),
-        Err(error) => {
-            warn!(error = %format!("{error:#}"), "plugins will be compiled again after each restart");
-            None
-        }
-    };
     let installed = data_dir.state().join("plugins");
-    let plugins = Arc::new(Plugins::new(db.clone(), installed, compiled, scanning.scanners()));
+    let plugins = Arc::new(Plugins::new(db.clone(), installed, scanning.scanners()));
     plugins.start_hooks();
     let players = Arc::new(api::Players::load(&db).await?);
     let saving = players.keep_saved(db.clone());

@@ -3,7 +3,7 @@
 //!
 //! What is installed and granted lives in the database (`0006_plugins.sql`); each plugin's
 //! code is `state/plugins/<id>.wasm`, kept compiled in memory once installed or first run, and
-//! by wasmtime in `cache/plugins` across restarts. Plugin code runs on its own executor, never
+//! compiled again after a restart. Plugin code runs on its own executor, never
 //! on the threads serving requests (`design/plugins.md` §2).
 
 pub mod grants;
@@ -85,9 +85,6 @@ pub struct Plugins {
     db: Arc<Database>,
     /// `state/plugins`, where installed components are kept.
     dir: PathBuf,
-    /// `cache/plugins`, wasmtime's own, where it keeps them compiled across restarts, or `None`
-    /// to compile them again after each restart.
-    compiled: Option<PathBuf>,
     /// Each library's scanner, to pick up what a plugin saves.
     scanners: HashMap<i64, Scanner>,
     /// Each started on first use, the host by an install or a run and the runtime by a run, and
@@ -110,19 +107,12 @@ pub struct Plugins {
 }
 
 impl Plugins {
-    /// The plugins over `db`, installed in `dir`, kept compiled in `compiled` if given (a
-    /// directory only the server's user can write, from `DataDir::private_cache`), with each
-    /// library's scanner in `scanners` to pick up what a plugin saves.
-    pub fn new(
-        db: Arc<Database>,
-        dir: PathBuf,
-        compiled: Option<PathBuf>,
-        scanners: HashMap<i64, Scanner>,
-    ) -> Plugins {
+    /// The plugins over `db`, installed in `dir`, with each library's scanner in `scanners` to
+    /// pick up what a plugin saves.
+    pub fn new(db: Arc<Database>, dir: PathBuf, scanners: HashMap<i64, Scanner>) -> Plugins {
         Plugins {
             db,
             dir,
-            compiled,
             scanners,
             host: OnceLock::new(),
             runtime: OnceLock::new(),
@@ -139,7 +129,7 @@ impl Plugins {
     /// The plugin host, started on first use. A host that could not start is logged and
     /// answered as an internal error, every time it is asked for.
     fn host(&self) -> Result<Arc<Host<RunLibrary>>, PluginError> {
-        let host = self.host.get_or_init(|| Ok(Arc::new(Host::new(self.compiled.as_deref())?)));
+        let host = self.host.get_or_init(|| Ok(Arc::new(Host::new()?)));
         host.as_ref().map(Arc::clone).map_err(|error| {
             tracing::error!(error = %format_args!("{error:#}"), "cannot start the plugin host");
             PluginError::Internal("Plugins cannot run on this server.")

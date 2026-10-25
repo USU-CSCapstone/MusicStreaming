@@ -29,7 +29,7 @@ async fn run(host: &Host<Memory>, file: &Path) -> Outcome {
 async fn a_second_run_does_not_compile_again() {
     let temp = tempfile::tempdir().unwrap();
     let file = plugin(temp.path(), "done");
-    let host = Host::new(None).unwrap();
+    let host = Host::new().unwrap();
     assert_eq!(run(&host, &file).await.result, Ok("done".to_owned()));
     std::fs::remove_file(&file).unwrap();
     assert_eq!(run(&host, &file).await.result, Ok("done".to_owned()));
@@ -38,7 +38,7 @@ async fn a_second_run_does_not_compile_again() {
 #[tokio::test]
 async fn a_compile_that_failed_is_tried_again() {
     let temp = tempfile::tempdir().unwrap();
-    let host = Host::new(None).unwrap();
+    let host = Host::new().unwrap();
     let file = temp.path().join("test.wat");
     let missing = run(&host, &file).await;
     let Err(RunError::Unloadable(why)) = &missing.result else { panic!("{}", missing.summary()) };
@@ -56,7 +56,7 @@ async fn an_unreadable_plugin_is_unloadable_without_its_path() {
     let temp = tempfile::tempdir().unwrap();
     let file = temp.path().join("test.wat");
     std::fs::write(&file, [0xff, 0x00, 0x61]).unwrap();
-    let outcome = run(&Host::new(None).unwrap(), &file).await;
+    let outcome = run(&Host::new().unwrap(), &file).await;
     assert!(matches!(outcome.result, Err(RunError::Unloadable(_))), "{}", outcome.summary());
     assert!(!outcome.summary().contains("test.wat"), "{}", outcome.summary());
 }
@@ -70,7 +70,7 @@ async fn a_plugin_that_does_not_link_is_unloadable() {
     let host = "jewelcase:plugin/host@0.3.0";
     let log = r#"(export "log" (func (param "message" string)))"#;
     std::fs::write(&file, format!(r#"(component (import "{host}" (instance {log})))"#)).unwrap();
-    let outcome = run(&Host::new(None).unwrap(), &file).await;
+    let outcome = run(&Host::new().unwrap(), &file).await;
     let Err(RunError::Unloadable(why)) = &outcome.result else { panic!("{}", outcome.summary()) };
     assert!(why.contains(host), "{why}");
 }
@@ -79,7 +79,7 @@ async fn a_plugin_that_does_not_link_is_unloadable() {
 async fn runs_that_start_together_share_one_compile() {
     let temp = tempfile::tempdir().unwrap();
     let file = plugin(temp.path(), "done");
-    let host = Host::<Memory>::new(None).unwrap();
+    let host = Host::<Memory>::new().unwrap();
     let (a, b) = tokio::join!(host.compiled("test", &file), host.compiled("test", &file));
     let ((a, _), (b, _)) = (a.unwrap(), b.unwrap());
     assert!(Component::same(a.instance_pre().component(), b.instance_pre().component()));
@@ -89,7 +89,7 @@ async fn runs_that_start_together_share_one_compile() {
 async fn uninstalling_forgets_the_compiled_plugin() {
     let temp = tempfile::tempdir().unwrap();
     let file = plugin(temp.path(), "done");
-    let host = Host::new(None).unwrap();
+    let host = Host::new().unwrap();
     assert!(run(&host, &file).await.result.is_ok());
     std::fs::remove_file(&file).unwrap();
     host.uninstalled("test");
@@ -101,7 +101,7 @@ async fn uninstalling_forgets_the_compiled_plugin() {
 async fn installing_again_runs_the_new_code() {
     let temp = tempfile::tempdir().unwrap();
     let file = plugin(temp.path(), "done");
-    let host = Host::new(None).unwrap();
+    let host = Host::new().unwrap();
     assert_eq!(run(&host, &file).await.result, Ok("done".to_owned()));
     let file = plugin(temp.path(), "anew");
     let linked = host.check(&std::fs::read(&file).unwrap()).unwrap();
@@ -127,7 +127,7 @@ async fn keep_client(host: &Host<Memory>, file: &Path) {
 async fn uninstalling_forgets_the_client() {
     let temp = tempfile::tempdir().unwrap();
     let file = plugin(temp.path(), "done");
-    let host = Host::new(None).unwrap();
+    let host = Host::new().unwrap();
     keep_client(&host, &file).await;
     host.uninstalled("test");
     assert!(!keeps_client(&host, &file).await);
@@ -137,23 +137,8 @@ async fn uninstalling_forgets_the_client() {
 async fn installing_again_forgets_the_client() {
     let temp = tempfile::tempdir().unwrap();
     let file = plugin(temp.path(), "done");
-    let host = Host::new(None).unwrap();
+    let host = Host::new().unwrap();
     keep_client(&host, &file).await;
     host.installed("test", host.check(&std::fs::read(&file).unwrap()).unwrap());
     assert!(!keeps_client(&host, &file).await);
-}
-
-/// wasmtime keeps what it compiles in the directory it is given, in a folder for its version
-/// and a file named by a hash of the plugin and the engine's settings. Its worker writes a
-/// `.stats` file beside it later, so only files without an extension are counted.
-#[test]
-fn compiled_code_is_kept_in_the_directory_given() {
-    let temp = tempfile::tempdir().unwrap();
-    let (dir, file) = (temp.path().join("compiled"), plugin(temp.path(), "done"));
-    let host = Host::<Memory>::new(Some(&dir)).unwrap();
-    host.check(&std::fs::read(&file).unwrap()).unwrap();
-    let versions = std::fs::read_dir(dir.join("modules")).unwrap();
-    let files = versions.flat_map(|version| std::fs::read_dir(version.unwrap().path()).unwrap());
-    let compiled = files.filter(|file| file.as_ref().unwrap().path().extension().is_none());
-    assert_eq!(compiled.count(), 1);
 }

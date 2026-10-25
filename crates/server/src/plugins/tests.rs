@@ -52,7 +52,6 @@ async fn scanned() -> (TempDir, Arc<Database>, Arc<Plugins>, ScannerThread) {
     let plugins = Arc::new(Plugins::new(
         db.clone(),
         temp.path().join("plugins"),
-        Some(temp.path().join("compiled")),
         HashMap::from([(1, scanner)]),
     ));
     (temp, db, plugins, thread)

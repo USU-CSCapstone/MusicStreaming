@@ -406,7 +406,6 @@ async fn installs_and_runs_a_real_plugin() {
     let (temp, db, app) = app_with_tracks().await;
     let bytes = install_lyrics(&app).await;
     assert!(temp.path().join("plugins/lrclib-lyrics.wasm").is_file());
-    assert!(temp.path().join("compiled/modules").is_dir(), "kept compiled where it was told");
     // The same plugin in another file: the same with a custom section added at its end.
     let other = [&bytes[..], &[0, 4, 3, b'x', b'y', b'z']].concat();
     let request = owner_request("POST", "/api/v1/admin/plugins").body(Body::from(other)).unwrap();

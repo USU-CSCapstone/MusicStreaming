@@ -30,7 +30,7 @@ fn offline() -> Grants {
 
 /// Runs the plugin on `library` with `grants`, on `event`.
 async fn run(library: &Memory, grants: Grants, event: Event) -> Outcome {
-    Host::new(None).unwrap().run(plugin(), grants, library.clone(), event).await
+    Host::new().unwrap().run(plugin(), grants, library.clone(), event).await
 }
 
 /// Runs the plugin on `library` with [`offline`] grants, on `event`.

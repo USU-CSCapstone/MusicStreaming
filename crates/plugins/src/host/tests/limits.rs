@@ -15,7 +15,7 @@ fn component(module: &str, count: usize) -> String {
 /// Instantiates `component(module, count)` in the store a run gets, returning why it was refused
 /// if it was.
 async fn instantiate(module: &str, count: usize) -> Result<(), String> {
-    let host = Host::new(None).expect("host");
+    let host = Host::new().expect("host");
     let component =
         Component::new(&host.engine, component(module, count)).expect("component compiles");
     let mut store = host.store(testing::grants(&[]), Memory::default(), Default::default());
@@ -27,7 +27,7 @@ async fn instantiate(module: &str, count: usize) -> Result<(), String> {
 /// of these components fit the plugin world, so the check always refuses them; what matters is
 /// why.
 fn refused_at_install(wat: &str) -> String {
-    let host = Host::<Memory>::new(None).expect("host");
+    let host = Host::<Memory>::new().expect("host");
     let Err(refused) = host.check(wat.as_bytes()) else { panic!("{wat} was let in") };
     format!("{refused:#}")
 }
@@ -82,7 +82,7 @@ async fn a_plugin_past_the_instance_cap_crashes_when_run() {
     let file = temp.path().join("test.wat");
     std::fs::write(&file, include_str!("sandbox.wat").replace("(core instance $wasi", &wasi))
         .unwrap();
-    let host = Host::new(None).expect("host");
+    let host = Host::new().expect("host");
     let event = Event::Searched(Vec::new());
     let outcome = host.run(&file, testing::grants(&[]), Memory::default(), event).await;
     let crashed = |why: &str| why.contains("instance count too high");

@@ -22,7 +22,7 @@ const BUDGET: u64 = 100;
 /// long the run took, timed after the fixture compiled.
 async fn run(budget: u64, event: Event) -> (Outcome, Duration) {
     let file = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/host/tests/sandbox.wat"));
-    let host = Host { budget, ..Host::new(None).expect("host") };
+    let host = Host { budget, ..Host::new().expect("host") };
     let grants = testing::grants(&[]);
     host.compiled(&grants.plugin, file).await.expect("fixture compiles");
     let started = Instant::now();

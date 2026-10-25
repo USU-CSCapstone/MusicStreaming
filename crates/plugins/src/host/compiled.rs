@@ -1,7 +1,6 @@
 //! Each installed plugin compiled and linked once (`design/plugins.md` §2): kept in memory by ID,
 //! with its HTTP client, until it is uninstalled or installed again, since compiling is what
-//! costs and hooks run a plugin often. The engine's disk cache, when it has one, keeps the
-//! compiled code across restarts.
+//! costs and hooks run a plugin often. Nothing is kept on disk, so a restart compiles again.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -58,8 +57,7 @@ impl<L: Library> Host<L> {
         let entry =
             self.compiled.lock().recover().entry(id.to_owned()).or_insert_with(empty).clone();
         let link = || async {
-            // Compiling is CPU-bound, up to a second for a JavaScript plugin that the disk
-            // cache does not have.
+            // Compiling is CPU-bound, up to a second for a JavaScript plugin.
             let (engine, file) = (self.engine.clone(), file.to_path_buf());
             let compiled =
                 tokio::task::spawn_blocking(move || Component::new(&engine, std::fs::read(file)?));

@@ -30,7 +30,7 @@ async fn run(host: &Host<Memory>) -> Outcome {
 
 #[tokio::test]
 async fn a_lookup_refused_as_rate_limited_ends_the_run_as_an_outage() {
-    let host = Host::new(None).unwrap();
+    let host = Host::new().unwrap();
     let plugin = Scope::Plugin("lrclib-lyrics".into());
     let (now, clock) = (Instant::now(), SystemTime::now());
     host.network.limits.answered("lrclib.net", &plugin, 429, Some("3600"), now, clock);
@@ -48,7 +48,7 @@ async fn a_lookup_refused_as_rate_limited_ends_the_run_as_an_outage() {
 /// which ends the run, though it is no outage.
 #[tokio::test]
 async fn a_lookup_that_failed_ends_the_run() {
-    let host = Host::new(None).unwrap();
+    let host = Host::new().unwrap();
     let visible = Visible {
         library: 1,
         user: None,

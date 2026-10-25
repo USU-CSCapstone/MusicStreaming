@@ -32,7 +32,7 @@ The core stack and system architecture. Subsystem designs build on this file and
   ```
   data/
   ├── state/   # database, custom artwork, plugin data — back this up
-  └── cache/   # transcodes, resized images, compiled plugins, indexes — rebuilt on demand
+  └── cache/   # transcodes, resized images, indexes — rebuilt on demand
   ```
   The server creates `state/` and `cache/` readable by its own user only, and refuses to start when the data directory and a library's root are the same directory or one holds the other.
 - **A stop does first what a kill would lose.** `docker stop` sends SIGTERM and kills the server 10 s later. On SIGTERM or SIGINT the server stops taking connections. As it starts waiting, at most 3 s, for the requests in progress, it closes each realtime connection with a Close frame and saves where every account was playing. An API request takes milliseconds, so what is left at the deadline is a stream or an upload, which its client resumes. Last it asks every library's scanner and background job to stop after the file in hand or between reads of a decode ([`scanning.md` §11](scanning.md#11-ffmpeg)), before waiting for any, so the libraries stop together. A second SIGTERM or SIGINT during the stop ends the process at once, with exit code 130.

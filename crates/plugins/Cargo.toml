@@ -15,7 +15,35 @@ serde_json = "1"
 thiserror = "2"
 tokio = { version = "1.53.1", features = ["net", "rt", "sync", "time"] }
 wasmparser = "0.258"
-wasmtime = "49.0.1"
+# wasmtime's defaults but its disk cache, which loads native code that whoever can write
+# its folder could replace (`design/plugins.md` §2).
+wasmtime = { version = "49.0.1", default-features = false, features = [
+    "anyhow",
+    "async",
+    "backtrace",
+    "gc",
+    "gc-copying",
+    "gc-drc",
+    "gc-null",
+    "wat",
+    "profiling",
+    "parallel-compilation",
+    "cranelift",
+    "pooling-allocator",
+    "demangle",
+    "addr2line",
+    "coredump",
+    "debug-builtins",
+    "runtime",
+    "component-model",
+    "component-model-async",
+    "threads",
+    "stack-switching",
+    "std",
+    "debug",
+    "compile-time-builtins",
+    "wit-parser",
+] }
 wasmtime-wasi = "49.0.1"
 
 [features]
