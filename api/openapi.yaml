@@ -1717,7 +1717,7 @@ components:
       required: [type, id]
       properties:
         type: { $ref: '#/components/schemas/EntityType' }
-        id: { $ref: '#/components/schemas/Id', maxLength: 100 }
+        id: { $ref: '#/components/schemas/Id' }
 
     Playable:
       description: Something that can be queued or added to a playlist — library content or an external track.
@@ -1780,7 +1780,6 @@ components:
           description: Localized to the account's language, ready to show.
         refs:
           type: array
-          maxItems: 100
           items: { $ref: '#/components/schemas/EntityRef' }
         since: { type: string, format: date-time }
 
@@ -2569,14 +2568,14 @@ components:
         type:
           type: string
           enum: [track, album, playlist, tag, mix]
-        id: { $ref: '#/components/schemas/Id', maxLength: 100 }
+        id: { $ref: '#/components/schemas/Id' }
 
     ArtistContext:
       type: object
       required: [type, id]
       properties:
         type: { const: artist }
-        id: { $ref: '#/components/schemas/Id', maxLength: 100 }
+        id: { $ref: '#/components/schemas/Id' }
         scope:
           type: string
           enum: [all, discography, appearances, topTracks]
@@ -2587,19 +2586,18 @@ components:
       required: [type, query, section]
       properties:
         type: { const: search }
-        query: { type: string, maxLength: 500 }
+        query: { type: string }
         section:
           type: string
           enum: [tracks, lyrics]
         within:
           type: string
-          maxLength: 100
           pattern: '^(artist|album|playlist):.+$'
         filter: { $ref: '#/components/schemas/BrowseFilter' }
         sort:
           type: object
           properties:
-            field: { type: string, maxLength: 100 }
+            field: { type: string }
             order:
               type: string
               enum: [asc, desc]
@@ -2610,8 +2608,7 @@ components:
       properties:
         genres:
           type: array
-          maxItems: 100
-          items: { type: string, maxLength: 100 }
+          items: { type: string }
         genreMatch:
           type: string
           enum: [all, any]
@@ -2619,7 +2616,6 @@ components:
         yearTo: { type: integer }
         albumTypes:
           type: array
-          maxItems: 100
           items: { $ref: '#/components/schemas/AlbumType' }
         availability: { $ref: '#/components/schemas/Availability' }
         played:
@@ -2641,7 +2637,7 @@ components:
         sort:
           type: object
           properties:
-            field: { type: string, maxLength: 100 }
+            field: { type: string }
             order:
               type: string
               enum: [asc, desc]
@@ -2660,8 +2656,8 @@ components:
       required: [type, sourceId, itemId]
       properties:
         type: { const: external }
-        sourceId: { type: string, maxLength: 100 }
-        itemId: { type: string, maxLength: 100 }
+        sourceId: { type: string }
+        itemId: { type: string }
 
     # ───────────────────────────── Player ─────────────────────────────
     PlayerState:
@@ -2854,7 +2850,9 @@ components:
         (`requirements/analytics.md` §1). Exactly one of `trackId` or `external` is set. A
         play of a track no longer in a library the caller reaches is left out. A play is
         recorded on the device whose token reports it. A play of an external track is accepted
-        but not recorded.
+        but not recorded. `context` and `reason` are kept as sent: the server checks that
+        `context` is an object with a string `type` and that `reason` is an object, and that each
+        serializes to at most 4 KiB.
       properties:
         playId:
           type: string

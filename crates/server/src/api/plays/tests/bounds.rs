@@ -1,5 +1,5 @@
 //! How much one `recordPlays` request may hold: at most 500 reports, each with a `context` and
-//! `reason` of bounded size, so no request holds the single writer for long. And that a report's
+//! `reason` of at most 4 KiB, so no request holds the single writer for long. And that a report's
 //! `deviceId` is not read, as a play is the reporting device's.
 
 use axum::http::StatusCode;
@@ -28,15 +28,25 @@ async fn a_request_holds_at_most_500_reports() {
 }
 
 #[tokio::test]
-async fn an_over_long_context_or_reason_is_refused() {
+async fn a_context_or_reason_that_is_oversized_or_the_wrong_shape_is_refused() {
     let (_temp, db, app) = app_with_tracks().await;
-    let mut long_id = report("1", 0, Value::Null);
-    long_id["context"]["id"] = json!("1".repeat(101));
-    let mut long_text = report("1", 0, Value::Null);
-    long_text["reason"] = json!({ "kind": "mood", "text": "t".repeat(501) });
-    for bad in [long_id, long_text] {
+    let big = "x".repeat(4096);
+    let with = |field: &str, value: Value| {
+        let mut played = report("1", 0, Value::Null);
+        played[field] = value;
+        played
+    };
+    let bad = [
+        with("context", json!({ "type": "album", "id": big })),
+        with("context", json!({ "id": "101" })),
+        with("context", json!({ "type": 1 })),
+        with("context", json!("album")),
+        with("reason", json!({ "kind": "mood", "text": big })),
+        with("reason", json!("mood")),
+    ];
+    for bad in bad {
         let status = report_as_owner(&app, json!([bad])).await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{bad:.80}");
     }
     assert!(plays(&db).await.is_empty());
 }

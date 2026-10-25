@@ -186,8 +186,7 @@ async fn a_malformed_report_records_nothing() {
         ("trackId", Value::Null),
         ("external", external),
         ("context", json!({})),
-        ("context", json!({ "type": "album" })),
-        ("reason", json!({ "type": "radio", "seed": { "trackId": "1" } })),
+        ("reason", json!("radio")),
         ("origin", json!("radio")),
         ("end", json!("paused")),
         ("listenTimeMs", json!(-1)),
@@ -200,28 +199,29 @@ async fn a_malformed_report_records_nothing() {
     assert!(plays(&db).await.is_empty());
 }
 
-/// A report's `context` and `reason` are stored as compact JSON holding only what the spec
-/// defines, and its `origin` by name.
+/// A report's `context` and `reason` are stored as sent, whatever fields they hold, and its
+/// `origin` by name.
 #[tokio::test]
-async fn context_origin_and_reason_are_stored_as_the_spec_defines_them() {
+async fn context_origin_and_reason_are_stored_as_sent() {
     let (_temp, db, app) = app_with_tracks().await;
     let mut played = report("1", 0, Value::Null);
-    played["context"]["label"] = json!("Blue");
-    played["reason"] = json!({ "kind": "radioSeed", "text": "Radio from Blue", "extra": 1 });
-    assert_eq!(report_as_owner(&app, json!([played])).await, StatusCode::NO_CONTENT);
-    let stored: (String, String, String) = db
+    played["context"] = json!({
+        "type": "search", "query": "q", "section": "tracks", "within": "artist:1",
+        "filter": { "genres": ["rock"], "yearFrom": 1990 },
+        "sort": { "field": "title", "order": "asc" }, "label": "Blue"
+    });
+    played["reason"] = json!({
+        "kind": "mood", "text": "Calm", "refs": [{ "type": "track", "id": "1" }], "extra": 1
+    });
+    assert_eq!(report_as_owner(&app, json!([played.clone()])).await, StatusCode::NO_CONTENT);
+    let (context, origin, reason): (String, String, String) = db
         .read(|conn| {
             let sql = "SELECT context, origin, reason FROM plays";
             conn.query_row(sql, [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
         })
         .await
         .unwrap();
-    assert_eq!(
-        stored,
-        (
-            r#"{"type":"album","id":"101"}"#.to_owned(),
-            "context".to_owned(),
-            r#"{"kind":"radioSeed","text":"Radio from Blue"}"#.to_owned()
-        )
-    );
+    assert_eq!(serde_json::from_str::<Value>(&context).unwrap(), played["context"]);
+    assert_eq!(origin, "context");
+    assert_eq!(serde_json::from_str::<Value>(&reason).unwrap(), played["reason"]);
 }

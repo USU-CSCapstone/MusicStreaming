@@ -1848,7 +1848,9 @@ export interface components {
          *     (`requirements/analytics.md` §1). Exactly one of `trackId` or `external` is set. A
          *     play of a track no longer in a library the caller reaches is left out. A play is
          *     recorded on the device whose token reports it. A play of an external track is accepted
-         *     but not recorded.
+         *     but not recorded. `context` and `reason` are kept as sent: the server checks that
+         *     `context` is an object with a string `type` and that `reason` is an object, and that each
+         *     serializes to at most 4 KiB.
          */
         PlayReport: {
             /**

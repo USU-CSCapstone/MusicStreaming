@@ -4,7 +4,6 @@ mod albums;
 mod artists;
 mod audio;
 mod authenticate;
-mod bounded;
 mod connections;
 mod credit;
 mod cursor;

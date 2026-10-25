@@ -4,10 +4,8 @@
 //! time under the `playId` its device chose, so it is recorded once however often it arrives
 //! (`requirements/analytics.md` §1, §6). Reports can arrive out of order, as an offline device
 //! catches up while a newer one is sent, so listen time never goes back and an end is kept.
-//! A request holds at most 500 reports, so none holds the single writer for long; a device
-//! with more to send sends them in turn.
-
-mod context;
+//! A request holds at most 500 reports, and a report's `context` and `reason` at most 4 KiB each,
+//! so none holds the single writer for long; a device with more to send sends them in turn.
 
 use std::sync::Arc;
 
@@ -16,26 +14,25 @@ use axum::http::StatusCode;
 use rusqlite::{Transaction, params};
 use serde::Deserialize;
 use serde::de::IgnoredAny;
+use serde_json::Value;
 
-use context::{Context, Reason};
-
-use super::bounded::BoundedVec;
 use super::extract;
 use super::refs::credits_json;
 use super::scope::Caller;
 use super::time::Timestamp;
 use super::{AnyId, Problem, Uuid};
 use crate::db::plays::{End, Origin};
-use crate::db::{self, Database, Text, now_ms, reaches};
+use crate::db::{Database, Text, now_ms, reaches};
 
 /// The spec's `recordPlays` body.
 #[derive(Deserialize)]
 pub struct Plays {
-    items: BoundedVec<PlayReport, 500>,
+    items: Vec<PlayReport>,
 }
 
 /// The spec's `PlayReport`. A play is the device's that reports it. Of `external` only its
-/// presence is read, since a play of an external track is not recorded.
+/// presence is read, since a play of an external track is not recorded. `context` and `reason`
+/// are kept as sent once [`checked`] has looked at their type and size.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PlayReport {
@@ -46,9 +43,9 @@ struct PlayReport {
     started_at: Timestamp,
     listen_time_ms: u32,
     end: Option<End>,
-    context: Context,
+    context: Value,
     origin: Origin,
-    reason: Option<Reason>,
+    reason: Option<Value>,
 }
 
 /// A report checked and ready to record.
@@ -62,12 +59,21 @@ struct Play {
     started_at: i64,
     listen_time_ms: u32,
     end: Option<End>,
-    context: Context,
+    /// The report's `context` as JSON text.
+    context: String,
     origin: Origin,
-    reason: Option<Reason>,
+    /// The report's `reason` as JSON text.
+    reason: Option<String>,
 }
 
-/// Records every report, or none if one is malformed. A play of a track that is not in a
+/// The most reports one request holds.
+const MAX_REPORTS: usize = 500;
+
+/// The most bytes a report's `context` or `reason` takes as JSON.
+const MAX_JSON_BYTES: usize = 4096;
+
+/// Records every report, or none if one is malformed or the request holds more than
+/// [`MAX_REPORTS`]. A play of a track that is not in a
 /// library the caller reaches is left out: there is nothing to record it against, and saying
 /// so would tell them what another library holds (`requirements/users.md` §10). A play of an
 /// external track is left out too, as plays outside a library are not recorded.
@@ -76,9 +82,11 @@ pub async fn record(
     caller: Caller,
     extract::Json(Plays { items }): extract::Json<Plays>,
 ) -> Result<StatusCode, Problem> {
+    if items.len() > MAX_REPORTS {
+        return Err(Problem::invalid("A request holds at most 500 plays."));
+    }
     let now = now_ms();
     let plays = items
-        .0
         .into_iter()
         .filter_map(|report| checked(report, now).transpose())
         .collect::<Result<Vec<_>, _>>()?;
@@ -87,7 +95,7 @@ pub async fn record(
 }
 
 /// `report` as a play to record, `None` for an external track's, or the Problem that makes it
-/// malformed. A `startedAt` after `now` is taken as `now`: a device's clock can run ahead, and
+/// malformed, including a `context` or `reason` that [`json_text`] refuses. A `startedAt` after `now` is taken as `now`: a device's clock can run ahead, and
 /// the play is still the user's. One before 1970 is taken as 1970, where stored times begin.
 fn checked(report: PlayReport, now: i64) -> Result<Option<Play>, Problem> {
     let track = match (report.track_id, report.external) {
@@ -95,6 +103,9 @@ fn checked(report: PlayReport, now: i64) -> Result<Option<Play>, Problem> {
         (None, Some(_)) => return Ok(None),
         _ => return Err(Problem::invalid("A play names exactly one of trackId and external.")),
     };
+    let context = json_text(&report.context, "context", true)?;
+    let reason =
+        report.reason.as_ref().map(|reason| json_text(reason, "reason", false)).transpose()?;
     Ok(Some(Play {
         id: report.play_id,
         library: report.library_id,
@@ -102,10 +113,25 @@ fn checked(report: PlayReport, now: i64) -> Result<Option<Play>, Problem> {
         started_at: report.started_at.0.clamp(0, now),
         listen_time_ms: report.listen_time_ms,
         end: report.end,
-        context: report.context,
+        context,
         origin: report.origin,
-        reason: report.reason,
+        reason,
     }))
+}
+
+/// `value` as JSON text, if it is an object (with a string `type` when `typed`) of at most
+/// [`MAX_JSON_BYTES`]. Otherwise the Problem naming `field`.
+fn json_text(value: &Value, field: &str, typed: bool) -> Result<String, Problem> {
+    let object = value.as_object();
+    if object.is_none_or(|object| typed && !object.get("type").is_some_and(Value::is_string)) {
+        let needs = if typed { "an object with a string type" } else { "an object" };
+        return Err(Problem::invalid(format!("A play's {field} is {needs}.")));
+    }
+    let text = value.to_string();
+    if text.len() > MAX_JSON_BYTES {
+        return Err(Problem::invalid(format!("A play's {field} is at most 4 KiB.")));
+    }
+    Ok(text)
 }
 
 /// Records `plays` for `caller`, as heard at `now`. A `playId` names a play among the
@@ -156,9 +182,9 @@ fn save(tx: &Transaction, caller: Caller, plays: &[Play], now: i64) -> rusqlite:
             play.started_at,
             play.listen_time_ms,
             play.end.map(Text),
-            db::Json(&play.context),
+            play.context,
             Text(play.origin),
-            play.reason.as_ref().map(db::Json),
+            play.reason,
             now,
             caller.admin,
         ])?;

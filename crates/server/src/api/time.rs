@@ -3,7 +3,7 @@
 //! which requests' RFC 3339 times are read into.
 
 use serde::de::Error;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serializer};
 use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcDateTime};
 
@@ -31,8 +31,7 @@ pub fn serialize_rfc3339<S: Serializer>(ms: &i64, serializer: S) -> Result<S::Ok
     serializer.serialize_str(&rfc3339(*ms))
 }
 
-/// A date and time a request gives in RFC 3339, as milliseconds after the Unix epoch. It is
-/// written back as [`rfc3339`], in UTC.
+/// A date and time a request gives in RFC 3339, as milliseconds after the Unix epoch.
 pub struct Timestamp(pub i64);
 
 impl<'de> Deserialize<'de> for Timestamp {
@@ -42,13 +41,6 @@ impl<'de> Deserialize<'de> for Timestamp {
         parse_rfc3339(&text)
             .map(Timestamp)
             .ok_or_else(|| D::Error::custom("not an RFC 3339 date and time"))
-    }
-}
-
-impl Serialize for Timestamp {
-    /// As [`rfc3339`].
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serialize_rfc3339(&self.0, serializer)
     }
 }
 
