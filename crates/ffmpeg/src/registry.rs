@@ -12,21 +12,18 @@ use rustix::process::{Pid, Signal, kill_process};
 
 use jewelcase_core::Recover;
 
-/// How long a child may go without progress before the watchdog kills it, counted as
-/// [`Registry::reap_stalled`] says. A PCM decode makes progress with every read of its output; a
-/// probe or an image decode records none, so for them this bounds the whole run.
-pub(crate) const STALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a child may go without progress, by the wall clock, before the watchdog kills it. A
+/// PCM decode makes progress with every read of its output; a probe or an image decode records
+/// none, so for them this bounds the whole run.
+pub(crate) const STALL_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How often the watchdog checks for stalls.
 const CHECK_EVERY: Duration = Duration::from_secs(1);
 
 /// What the watchdog keeps for one child.
-#[derive(Default)]
 struct Entry {
-    /// How long the child has gone without progress, counted as [`Registry::reap_stalled`] says.
-    without_progress: Duration,
-    /// The CPU time the child had used when the watchdog last looked.
-    cpu: Duration,
+    /// When the child registered, or last made progress.
+    last_progress: Instant,
     /// Set when the watchdog killed it, so the reader can report a stall
     /// rather than a generic failure.
     stalled: Arc<AtomicBool>,
@@ -48,13 +45,10 @@ impl Registry {
         let registry = Arc::new(Registry::default());
         let weak = Arc::downgrade(&registry);
         std::thread::Builder::new().name("ffmpeg-watchdog".into()).spawn(move || {
-            let mut checked = Instant::now();
             loop {
                 std::thread::sleep(CHECK_EVERY);
                 let Some(registry) = weak.upgrade() else { break };
-                let now = Instant::now();
-                registry.reap_stalled(now - checked, sample);
-                checked = now;
+                registry.reap_stalled(Instant::now());
             }
         })?;
         Ok(registry)
@@ -64,8 +58,8 @@ impl Registry {
     /// as stalled. The caller must [`Registry::unregister`] the child before reaping it, as
     /// [`crate::pooled::Pooled`] does.
     pub(crate) fn register(&self, pid: Pid) -> Arc<AtomicBool> {
-        let entry = Entry::default();
-        let stalled = entry.stalled.clone();
+        let stalled = Arc::new(AtomicBool::new(false));
+        let entry = Entry { last_progress: Instant::now(), stalled: stalled.clone() };
         let mut children = self.children.lock().recover();
         // Checked under the lock `stop` holds, so a child that registers as it runs is killed
         // by one or the other.
@@ -94,7 +88,7 @@ impl Registry {
     /// Record that the child `pid` made progress, restarting its stall clock.
     pub(crate) fn progress(&self, pid: Pid) {
         if let Some(entry) = self.children.lock().recover().get_mut(&pid) {
-            entry.without_progress = Duration::ZERO;
+            entry.last_progress = Instant::now();
         }
     }
 
@@ -104,65 +98,17 @@ impl Registry {
         self.children.lock().recover().remove(&pid);
     }
 
-    /// Add to each child's time without progress, and kill every child whose time passes
-    /// [`STALL_TIMEOUT`], marking it stalled. `elapsed` is the time since the last check, and
-    /// `sample` reads a child's state and CPU time.
-    ///
-    /// A child that is running, or waiting for a CPU, or whose CPU time rose, adds the CPU time it
-    /// used, up to `elapsed`, so one starved of the CPU by busier work is not taken for stalled.
-    /// Any other child is blocked, and adds `elapsed`, so one blocked for good is killed. So does
-    /// a child that cannot be sampled, as none can off Linux.
-    fn reap_stalled(&self, elapsed: Duration, sample: impl Fn(Pid) -> io::Result<Sample>) {
-        for (pid, entry) in self.children.lock().recover().iter_mut() {
-            let added = match sample(*pid) {
-                Ok(Sample { running, cpu }) => {
-                    let used = cpu.saturating_sub(std::mem::replace(&mut entry.cpu, cpu));
-                    if running || !used.is_zero() { used.min(elapsed) } else { elapsed }
-                }
-                Err(error) => {
-                    tracing::debug!(pid = pid.as_raw_pid(), %error, "ffmpeg not sampled");
-                    elapsed
-                }
-            };
-            entry.without_progress += added;
-            if entry.without_progress > STALL_TIMEOUT {
+    /// Kill every child that has made no progress for longer than [`STALL_TIMEOUT`] as of `now`,
+    /// marking it stalled.
+    fn reap_stalled(&self, now: Instant) {
+        for (pid, entry) in self.children.lock().recover().iter() {
+            if now.saturating_duration_since(entry.last_progress) > STALL_TIMEOUT {
                 tracing::warn!(pid = pid.as_raw_pid(), "ffmpeg stalled; killing");
                 entry.stalled.store(true, Ordering::SeqCst);
                 send(*pid, Signal::KILL);
             }
         }
     }
-}
-
-/// What the watchdog reads of a child.
-#[derive(Debug, PartialEq)]
-struct Sample {
-    /// Whether its main thread is running or waiting for a CPU (state `R`). Other threads, such
-    /// as a decoder's, show only in its CPU time.
-    running: bool,
-    /// The CPU time the process and all its threads have used.
-    cpu: Duration,
-}
-
-/// Samples the process `pid` from `/proc/<pid>/stat`. Fails off Linux, which has no `/proc`.
-fn sample(pid: Pid) -> io::Result<Sample> {
-    let stat = std::fs::read_to_string(format!("/proc/{}/stat", pid.as_raw_pid()))?;
-    let (state, ticks) = parse_stat(&stat)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "unexpected /proc/<pid>/stat"))?;
-    let per_second = rustix::param::clock_ticks_per_second();
-    let cpu = Duration::from_nanos(ticks.saturating_mul(1_000_000_000) / per_second);
-    Ok(Sample { running: state == "R", cpu })
-}
-
-/// The state, field 3, of a `/proc/<pid>/stat` line, and its user and system times, fields 14
-/// and 15 (`proc_pid_stat(5)`), added together, in clock ticks.
-fn parse_stat(stat: &str) -> Option<(&str, u64)> {
-    // The name, field 2, is in parentheses and may hold spaces and parentheses itself.
-    let (_, fields) = stat.rsplit_once(") ")?;
-    let mut fields = fields.split(' ');
-    let state = fields.next()?;
-    let mut times = fields.skip(10).map(str::parse::<u64>);
-    Some((state, times.next()?.ok()? + times.next()?.ok()?))
 }
 
 /// Send `signal` to the registered child `pid`, logging a failure. Callers hold the registry's

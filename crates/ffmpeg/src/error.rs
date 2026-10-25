@@ -21,7 +21,7 @@ pub enum Error {
     #[error("ffmpeg was killed by signal {signal}: {stderr}")]
     Killed { signal: i32, stderr: String },
     /// Killed by the watchdog: a PCM decode that produced nothing for `STALL_TIMEOUT`, or a
-    /// probe or image decode that ran that long, as the watchdog counts time (`registry.rs`).
+    /// probe or image decode that ran that long.
     #[error("ffmpeg stalled for {STALL_TIMEOUT:?} and was killed")]
     Stalled,
     /// Killed as the server stops ([`crate::Ffmpeg::stop_background`]).
