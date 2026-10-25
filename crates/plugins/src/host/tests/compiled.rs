@@ -43,7 +43,6 @@ async fn a_compile_that_failed_is_tried_again() {
     let missing = run(&host, &file).await;
     let Err(RunError::Unloadable(why)) = &missing.result else { panic!("{}", missing.summary()) };
     assert!(why.contains("No such file") && !why.contains("test.wat"), "{why}");
-    assert!(!missing.outage);
     assert_eq!(missing.summary(), format!("the plugin could not be loaded: {why}"));
     let file = plugin(temp.path(), "done");
     assert_eq!(run(&host, &file).await.result, Ok("done".to_owned()));

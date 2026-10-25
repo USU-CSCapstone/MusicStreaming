@@ -9,7 +9,7 @@ what an author needs to know. The design behind it is
 
 The two plugins here are the examples to copy:
 - [`lrclib-lyrics`](lrclib-lyrics/) works through the whole library in parts, writes files, and
-  retries outages.
+  retries when its service is down.
 - [`listenbrainz`](listenbrainz/) acts for each user who connects it, with their own token.
 
 ## The contract
@@ -122,17 +122,15 @@ Every import that can fail answers one error
 
 **To retry, return `Err` from `handle`** before recording that item as done. A hook's position
 moves only when a run succeeds, so the same batch, or the same place in your pass, comes again
-after 1 minute, doubling to an hour. **Run now** is not retried. Treat a service's own `429` or
+after a wait that grows (below). **Run now** is not retried. Treat a service's own `429` or
 `5xx` answer the same way. lrclib stops on everything except `refused`, and on those answers;
 only its `404` counts as having nothing ([`src/failure.rs`](lrclib-lyrics/src/failure.rs)).
 
-**Five failures in a row disable the plugin** in that library, with the reason shown to admins.
-A failure the host saw as an **outage** doesn't count toward the five: one after a request was
-`rate-limited`, `timed-out`, could not connect, or was answered `429` or a `5xx`. The host sees
-that for itself, so you need not report it. Outages back off the same way, and only 72 hours of
-them in a row disable the plugin. A success, or any other failure, ends the outage. A hook run
-for one user (`played`, `playing`, `searched`) backs off the same way, but never disables the
-plugin for anyone else ([`design/plugins.md` §7](../design/plugins.md#7-running-plugins)).
+**72 hours of failing disable the plugin** in that library, with the reason shown to admins,
+whatever the cause: a failure counts the same whether the service is down or the plugin is at
+fault. The wait before a retry is as long as it has been failing, from a minute to an hour. A
+success clears it, so the wait and the 72 hours start again. A hook run for one user (`played`,
+`playing`, `searched`) backs off the same way, but never disables the plugin for anyone else ([`design/plugins.md` §7](../design/plugins.md#7-running-plugins)).
 
 ## Testing natively
 

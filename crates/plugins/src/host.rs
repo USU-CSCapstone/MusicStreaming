@@ -224,8 +224,8 @@ impl<L: Library> Host<L> {
         let result = call(&pre, &mut store, &event).await;
         // The store owned the run's state while the plugin ran; what it logged, saved, was
         // refused, and spent is read back from it.
-        let Run { log, written, touched, outage, refused, ticks, .. } = store.into_data();
-        Outcome { result, log, written, touched, outage, refused, ticks }
+        let Run { log, written, touched, refused, ticks, .. } = store.into_data();
+        Outcome { result, log, written, touched, refused, ticks }
     }
 
     /// A fresh store for one run over `library` with `grants`, with its caps and compute budget,
@@ -252,7 +252,6 @@ impl<L: Library> Host<L> {
             log: Vec::new(),
             written: 0,
             touched: Vec::new(),
-            outage: false,
             refused: Refused::default(),
             timeout: http::TIMEOUT,
             reach: rules::reach,
@@ -334,8 +333,6 @@ pub struct Run<L> {
     log: Vec<String>,
     written: usize,
     touched: Vec<PathBuf>,
-    /// Whether a request found its service out of reach ([`Outcome::outage`]).
-    outage: bool,
     /// What the host refused it ([`Outcome::refused`]).
     refused: Refused,
     /// How long a request waits for its reply once sent.

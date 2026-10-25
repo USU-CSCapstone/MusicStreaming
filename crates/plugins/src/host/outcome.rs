@@ -5,9 +5,8 @@ use std::path::PathBuf;
 
 use super::WALL_BUDGET;
 
-/// How a run went, and what it did on the way. A failed run may still have logged, written files
-/// the scanner must look at again, or found its service out of reach, which decides whether its
-/// failure counts against the plugin, so all of that is kept whichever way it ended.
+/// How a run went, and what it did on the way. A failed run may still have logged or written files
+/// the scanner must look at again, so all of that is kept whichever way it ended.
 pub struct Outcome {
     /// The plugin's own summary, or why the run failed.
     pub result: Result<String, RunError>,
@@ -18,11 +17,6 @@ pub struct Outcome {
     /// Every path it created, replaced, moved, or deleted, or set out to, for the scanner to look
     /// at again.
     pub touched: Vec<PathBuf>,
-    /// Whether a request found its service out of reach: held back as `rate-limited`,
-    /// `timed-out`, unable to connect, or answered `429` or a `5xx`. A run that failed after one
-    /// may have failed only for that, so the server retries it without counting it among the
-    /// plugin's own failures.
-    pub outage: bool,
     /// What the host refused it for want of a permission or an approved destination.
     pub refused: Refused,
     /// The ticks of compute it spent, each about a millisecond of its code running.
@@ -33,7 +27,7 @@ impl Outcome {
     /// A run that failed with `error` before the plugin's code ran.
     pub(super) fn failed(error: RunError) -> Outcome {
         let (log, touched, refused) = (Vec::new(), Vec::new(), Refused::default());
-        Outcome { result: Err(error), log, written: 0, touched, outage: false, refused, ticks: 0 }
+        Outcome { result: Err(error), log, written: 0, touched, refused, ticks: 0 }
     }
 
     /// The plugin's own summary, or why the run failed.

@@ -14,11 +14,11 @@ use crate::plugins::Plugins;
 use crate::plugins::testing::{connect, database, enable, grant, install, manifest, plugins};
 
 mod changes;
+mod failing;
 mod faults;
 mod forgets;
 mod libraries;
 mod listening;
-mod outages;
 mod real;
 mod reenabling;
 mod reinstall;

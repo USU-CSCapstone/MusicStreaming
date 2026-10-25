@@ -6,8 +6,8 @@ use jewelcase_plugins::Permission::{
 };
 use jewelcase_plugins::{Event, Permission};
 
+use super::super::BACKOFF_MS;
 use super::super::changes::batch;
-use super::super::{BACKOFF_MS, MAX_FAILURES};
 use super::{HANDLED, HOUR, Received, changes, deliver, setup};
 use crate::plugins::testing::{enable, grant};
 
@@ -132,7 +132,7 @@ async fn album_and_artist_hooks_hear_only_their_own_kind_in_their_own_library() 
 }
 
 #[tokio::test]
-async fn failures_wait_longer_each_time_then_disable_the_plugin_there() {
+async fn failures_wait_longer_each_time_then_72_hours_of_them_disable_the_plugin_there() {
     const FAILED: Result<(), &str> = Err("LRCLIB answered 503");
     let (_temp, db, plugins) = setup().await;
     grant(&plugins, "plugin", &[], &[LibraryRead, TracksChanged]).await;
@@ -142,13 +142,13 @@ async fn failures_wait_longer_each_time_then_disable_the_plugin_there() {
     assert_eq!(named(deliver(&db, 0, FAILED).await), track(11));
     assert!(deliver(&db, BACKOFF_MS - 1, FAILED).await.is_empty(), "waiting to retry");
     assert_eq!(named(deliver(&db, BACKOFF_MS, FAILED).await), track(11), "from the same place");
-    let third = 3 * BACKOFF_MS;
-    assert!(deliver(&db, third - 1, FAILED).await.is_empty(), "waiting twice as long");
-    assert_eq!(named(deliver(&db, third, FAILED).await), track(11));
-    for failure in 4..=MAX_FAILURES {
-        assert_eq!(named(deliver(&db, failure * HOUR, FAILED).await), track(11), "{failure}");
+    let second = 2 * BACKOFF_MS;
+    assert!(deliver(&db, second - 1, FAILED).await.is_empty(), "waiting for the minute failing");
+    assert_eq!(named(deliver(&db, second, FAILED).await), track(11));
+    for hour in 1..=72 {
+        assert_eq!(named(deliver(&db, hour * HOUR, FAILED).await), track(11), "{hour}");
     }
-    assert!(deliver(&db, 6 * HOUR, HANDLED).await.is_empty(), "disabled");
+    assert!(deliver(&db, 73 * HOUR, HANDLED).await.is_empty(), "disabled");
     let (enabled, reason): (bool, String) = db
         .read(|conn| {
             conn.query_row("SELECT enabled, disabled_reason FROM plugin_libraries", [], |row| {
@@ -158,15 +158,15 @@ async fn failures_wait_longer_each_time_then_disable_the_plugin_there() {
         .await
         .unwrap();
     assert!(!enabled);
-    assert_eq!(reason, "Stopped after failing 5 times in a row: LRCLIB answered 503");
+    assert_eq!(reason, "Stopped after 72 hours of failing: LRCLIB answered 503");
 
     enable(&plugins, "plugin", true).await;
-    let later = 7 * HOUR;
+    let later = 74 * HOUR;
     assert_eq!(named(deliver(&db, later, HANDLED).await), track(11), "enabled again");
     changes(&db, "(1, 'track', 12, 'upsert', 0)").await;
     assert_eq!(named(deliver(&db, later, FAILED).await), track(12), "moved on");
     let first_wait = later + BACKOFF_MS;
     assert!(deliver(&db, first_wait - 1, FAILED).await.is_empty());
     let again = named(deliver(&db, first_wait, FAILED).await);
-    assert_eq!(again, track(12), "a success cleared the failures");
+    assert_eq!(again, track(12), "a success cleared the failing");
 }

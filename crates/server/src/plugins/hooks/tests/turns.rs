@@ -31,13 +31,12 @@ async fn ended(plugins: &Plugins) {
     drop(turn.await.expect("the runs end within 30 s"));
 }
 
-/// User `user`'s position, failures, and outages in `played` in library 1, if recorded.
-async fn cursor(db: &Database, user: i64) -> Option<(i64, i64, i64)> {
-    let sql = "SELECT position, failures, outages FROM plugin_cursors \
+/// User `user`'s position, and whether it is failing, in `played` in library 1, if recorded.
+async fn cursor(db: &Database, user: i64) -> Option<(i64, bool)> {
+    let sql = "SELECT position, failing_since IS NOT NULL FROM plugin_cursors \
                WHERE hook = 'played' AND library_id = 1 AND user_id = ?1";
     db.read(move |conn| {
-        let found =
-            conn.query_row(sql, params![user], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)));
+        let found = conn.query_row(sql, params![user], |row| Ok((row.get(0)?, row.get(1)?)));
         rusqlite::OptionalExtension::optional(found)
     })
     .await
@@ -64,7 +63,7 @@ async fn a_delivery_for_a_user_who_lost_the_library_meanwhile_runs_nothing() {
     ended(&plugins).await;
 
     assert_eq!(cursor(&db, 7).await, None, "nothing recorded for user 7");
-    assert_eq!(cursor(&db, 8).await, Some((0, 0, 1)), "user 8's run could not load");
+    assert_eq!(cursor(&db, 8).await, Some((0, true)), "user 8's run could not load");
 }
 
 /// A delivery found due from a position its plugin no longer has, as after the plugin is

@@ -29,13 +29,12 @@ async fn run(host: &Host<Memory>) -> Outcome {
 }
 
 #[tokio::test]
-async fn a_lookup_refused_as_rate_limited_ends_the_run_as_an_outage() {
+async fn a_lookup_refused_as_rate_limited_ends_the_run() {
     let host = Host::new().unwrap();
     let plugin = Scope::Plugin("lrclib-lyrics".into());
     let (now, clock) = (Instant::now(), SystemTime::now());
     host.network.limits.answered("lrclib.net", &plugin, 429, Some("3600"), now, clock);
     let outcome = run(&host).await;
-    assert!(outcome.outage, "{}", outcome.summary());
     let Err(RunError::Reported(why)) = &outcome.result else { panic!("{}", outcome.summary()) };
     // The pause less however long the run took to reach the request.
     let paused = "the service cannot be asked again for ";
@@ -45,7 +44,7 @@ async fn a_lookup_refused_as_rate_limited_ends_the_run_as_an_outage() {
 }
 
 /// A reply kept from a redirect to a host the plugin may not reach fails its lookup as `failed`,
-/// which ends the run, though it is no outage.
+/// which ends the run.
 #[tokio::test]
 async fn a_lookup_that_failed_ends_the_run() {
     let host = Host::new().unwrap();
@@ -68,7 +67,6 @@ async fn a_lookup_that_failed_ends_the_run() {
     };
     host.network.cache.store(key, reply, Instant::now(), SystemTime::now());
     let outcome = run(&host).await;
-    assert!(!outcome.outage, "{}", outcome.summary());
     let Err(RunError::Reported(why)) = &outcome.result else { panic!("{}", outcome.summary()) };
     assert!(why.contains("redirected elsewhere"), "{why}");
 }

@@ -14,14 +14,14 @@ use crate::plugins::testing::{caller, connect, database, enable_ungranted, grant
 use crate::plugins::{PluginError, Plugins};
 
 /// Waits for the one delivery under way to finish, and returns its run's summary and the
-/// failures and user its cursor records. A delivery records its cursor last, after the run's
+/// whether it is failing and the user its cursor records. A delivery records its cursor last, after the run's
 /// summary, so both are in place once the cursor is. The deadline only bounds a hang: plugins
 /// compile and run slowly on a busy machine.
-async fn delivered(db: &Database) -> (Option<String>, i64, i64) {
+async fn delivered(db: &Database) -> (Option<String>, bool, i64) {
     eventually("delivered", async || {
         db.read(|conn| {
             conn.query_row(
-                "SELECT l.last_run_summary, c.failures, c.user_id FROM plugin_cursors c \
+                "SELECT l.last_run_summary, c.failing_since IS NOT NULL, c.user_id FROM plugin_cursors c \
                  JOIN plugin_libraries l USING (plugin_id, library_id)",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -78,8 +78,8 @@ async fn delivers_changes_to_a_real_plugin() {
     lyrics(&plugins, &db, UPSERT).await;
 
     plugins.dispatch().await;
-    let (report, failures, user) = delivered(&db).await;
-    assert_eq!((failures, user), (1, 0), "one failure, to retry");
+    let (report, failing, user) = delivered(&db).await;
+    assert_eq!((failing, user), (true, 0), "failing, to retry");
     assert_eq!(uncounted(report), format!("{LOOKUP_REFUSED} (refused Network access; "));
 }
 
@@ -92,20 +92,20 @@ async fn a_real_plugin_that_succeeds_is_recorded_with_its_compute() {
     lyrics(&plugins, &db, "(1, 'track', 11, 'delete', 0)").await;
 
     plugins.dispatch().await;
-    let (report, failures, _) = delivered(&db).await;
-    assert_eq!(failures, 0);
+    let (report, failing, _) = delivered(&db).await;
+    assert!(!failing);
     assert_eq!(uncounted(report), "Found lyrics for 0 of 0 tracks (0 synced, 0 plain). (");
 }
 
-/// A fifth failure in a row disables the real plugin in the library, with its run's summary as
-/// the reason. The deadline only bounds a hang.
+/// A failure after 72 hours of failing disables the real plugin in the library, with its run's
+/// summary as the reason. The deadline only bounds a hang.
 #[tokio::test]
-async fn a_fifth_failure_in_a_row_disables_a_real_plugin_with_why() {
+async fn a_failure_after_72_hours_of_failing_disables_a_real_plugin_with_why() {
     let (temp, db) = database().await;
     let plugins = plugins(&temp, &db);
     lyrics(&plugins, &db, UPSERT).await;
-    let failed = "INSERT INTO plugin_cursors (plugin_id, library_id, hook, failures) \
-                  VALUES ('lrclib-lyrics', 1, 'tracksChanged', 4)";
+    let failed = "INSERT INTO plugin_cursors (plugin_id, library_id, hook, failing_since) \
+                  VALUES ('lrclib-lyrics', 1, 'tracksChanged', 0)";
     db.write(move |tx| tx.execute_batch(failed)).await.unwrap();
 
     plugins.dispatch().await;
@@ -114,7 +114,7 @@ async fn a_fifth_failure_in_a_row_disables_a_real_plugin_with_why() {
         db.read(|conn| conn.query_row(sql, [], |row| row.get(0)).optional()).await.unwrap()
     })
     .await;
-    assert_eq!(reason, format!("Stopped after failing 5 times in a row: {LOOKUP_REFUSED}"));
+    assert_eq!(reason, format!("Stopped after 72 hours of failing: {LOOKUP_REFUSED}"));
 }
 
 /// The real ListenBrainz plugin: checking user 7's token and delivering their play both reach
@@ -154,7 +154,7 @@ async fn delivers_plays_to_a_real_scrobbler() {
     db.write(|tx| tx.execute_batch("UPDATE plays SET listen_time_ms = 180000")).await.unwrap();
 
     plugins.dispatch().await;
-    let (report, failures, user) = delivered(&db).await;
-    assert_eq!((failures, user), (1, 7), "kept for user 7 to send again");
+    let (report, failing, user) = delivered(&db).await;
+    assert_eq!((failing, user), (true, 7), "kept for user 7 to send again");
     assert_eq!(uncounted(report), format!("{REFUSED} (refused Network access; "));
 }

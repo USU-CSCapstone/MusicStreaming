@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use jewelcase_plugins::{Event, Permission, RunError};
+use jewelcase_plugins::{Event, Permission};
 use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::Notify;
 
@@ -43,12 +43,10 @@ const POLL: Duration = Duration::from_secs(5);
 /// Changes delivered in one event. Small enough that a plugin making a request per track
 /// finishes a batch well within a run's time limit.
 const BATCH: i64 = 100;
-/// Failures in a row before a plugin is disabled in a library.
-const MAX_FAILURES: i64 = 5;
-/// How long a plugin may fail to load or reach its service, with no other failure between,
-/// before it is disabled in a library.
-const MAX_OUTAGE_MS: i64 = 72 * 60 * 60_000;
-/// The wait after the first failure, doubling after each until [`MAX_BACKOFF_MS`].
+/// How long a plugin may fail, with no success between, before it is disabled in a library.
+const MAX_FAILING_MS: i64 = 72 * 60 * 60_000;
+/// The shortest wait after a failure. The wait is as long as the plugin has been failing, up to
+/// [`MAX_BACKOFF_MS`].
 const BACKOFF_MS: i64 = 60_000;
 /// The longest wait between retries.
 const MAX_BACKOFF_MS: i64 = 60 * 60_000;
@@ -82,29 +80,12 @@ impl Due {
 enum Ran {
     /// Handled, or nothing to hand the plugin, so the position moves on.
     Handled,
-    /// Failed, so it is tried again later, and counts toward disabling the plugin.
+    /// Failed, so it is tried again later. It disables the plugin once failures have gone on
+    /// for [`MAX_FAILING_MS`].
     Failed,
-    /// Failed after the plugin found a service out of reach (`Outcome::outage`), or could not be
-    /// loaded, so it is tried again later. It disables the plugin only once that has lasted
-    /// [`MAX_OUTAGE_MS`].
-    Unreachable,
     /// Failed on the server's side, such as for a full disk. It is tried again later, and counts
     /// toward nothing.
     Unrun,
-}
-
-impl Ran {
-    /// How a run went, given its `result` and whether it found a service out of reach on the
-    /// way: one that succeeded is handled, even after a request that had to wait, and one that
-    /// could not be loaded is treated as an outage.
-    fn of(result: &Result<String, RunError>, outage: bool) -> Ran {
-        match (result, outage) {
-            (Ok(_), _) => Ran::Handled,
-            (Err(RunError::Unloadable(_)), _) => Ran::Unreachable,
-            (Err(_), true) => Ran::Unreachable,
-            (Err(_), false) => Ran::Failed,
-        }
-    }
 }
 
 impl Plugins {
@@ -202,7 +183,8 @@ impl Plugins {
                 let run_for = due.run_for(&event);
                 match self.run_in(&due.plugin, &manifest, run_for, permissions, event).await {
                     Ok((outcome, _)) => {
-                        (Ran::of(&outcome.result, outcome.outage), outcome.summary())
+                        let ran = if outcome.result.is_ok() { Ran::Handled } else { Ran::Failed };
+                        (ran, outcome.summary())
                     }
                     // `run_in` has logged it; an unrun delivery's summary is never shown.
                     Err(_) => (Ran::Unrun, String::new()),
@@ -230,15 +212,13 @@ async fn idle(enabled: bool, wake: &Notify) {
     }
 }
 
-/// Moves the position on to `next` once the delivery is handled. After a failure it keeps the
-/// position and waits longer each time before trying again; after one on the server's side
-/// ([`Ran::Unrun`]) it waits as long as after the failure before, or [`BACKOFF_MS`] if there was
-/// none, and counts nothing. Failures are counted from the stored row, so a delivery under way
-/// as the plugin is enabled again counts from its fresh start. Unless it is due for one user, it
-/// disables the plugin in the library once it has failed [`MAX_FAILURES`] times in a row,
-/// not counting outages ([`Ran::Unreachable`]), or once it has failed to load or reach its
-/// service for [`MAX_OUTAGE_MS`] with no other failure between: a failure of its own shows the
-/// service was reached, or that the plugin is at fault, so it ends the outage.
+/// Moves the position on to `next` once the delivery is handled, which also clears the plugin's
+/// failing. After a failure it keeps the position and waits as long as the plugin has been
+/// failing before trying again, at least [`BACKOFF_MS`] and at most [`MAX_BACKOFF_MS`]; after
+/// one on the server's side ([`Ran::Unrun`]) it waits the same but does not start or extend the
+/// failing. The failing is read from the stored row, so a delivery under way as the plugin is
+/// enabled again counts from its fresh start. Unless it is due for one user, it disables the
+/// plugin in the library once it has been failing for [`MAX_FAILING_MS`].
 fn record(
     conn: &Connection,
     due: &Due,
@@ -249,54 +229,42 @@ fn record(
 ) -> rusqlite::Result<()> {
     let (plugin, library, hook) = (&due.plugin, due.library, Text(due.hook));
     let user = due.user.unwrap_or(0);
-    let (failures, outages, since): (i64, i64, Option<i64>) = conn
+    let since: Option<i64> = conn
         .prepare_cached(
-            "SELECT failures, outages, outage_since FROM plugin_cursors \
+            "SELECT failing_since FROM plugin_cursors \
              WHERE plugin_id = ?1 AND library_id = ?2 AND hook = ?3 AND user_id = ?4",
         )?
-        .query_row(params![plugin, library, hook, user], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })
+        .query_row(params![plugin, library, hook, user], |row| row.get(0))
         .optional()?
-        .unwrap_or_default();
-    let (failures, outages, outage_since) = match ran {
+        .flatten();
+    let failing_since = match ran {
         Ran::Handled => {
             conn.execute(
                 "INSERT INTO plugin_cursors (plugin_id, library_id, hook, user_id, position) \
                  VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (plugin_id, library_id, hook, user_id) \
-                 DO UPDATE SET position = excluded.position, failures = 0, outages = 0, \
-                 outage_since = NULL, retry_at = NULL",
+                 DO UPDATE SET position = excluded.position, failing_since = NULL, \
+                 retry_at = NULL",
                 params![plugin, library, hook, user, next],
             )?;
             return Ok(());
         }
-        Ran::Failed => (failures + 1, outages, None),
-        Ran::Unreachable => (failures, outages + 1, Some(since.unwrap_or(now))),
-        Ran::Unrun => (failures, outages, since),
+        Ran::Failed => Some(since.unwrap_or(now)),
+        Ran::Unrun => since,
     };
-    let tries = failures + outages;
-    let backoff = (BACKOFF_MS << (tries - 1).clamp(0, 10)).min(MAX_BACKOFF_MS);
+    let failing_for = now - failing_since.unwrap_or(now);
+    let backoff = failing_for.clamp(BACKOFF_MS, MAX_BACKOFF_MS);
     conn.execute(
-        "INSERT INTO plugin_cursors \
-             (plugin_id, library_id, hook, user_id, failures, outages, outage_since, retry_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+        "INSERT INTO plugin_cursors (plugin_id, library_id, hook, user_id, failing_since, retry_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
          ON CONFLICT (plugin_id, library_id, hook, user_id) \
-         DO UPDATE SET failures = excluded.failures, outages = excluded.outages, \
-         outage_since = excluded.outage_since, retry_at = excluded.retry_at",
-        params![plugin, library, hook, user, failures, outages, outage_since, now + backoff],
+         DO UPDATE SET failing_since = excluded.failing_since, retry_at = excluded.retry_at",
+        params![plugin, library, hook, user, failing_since, now + backoff],
     )?;
-    let stopped = match (ran, outage_since) {
-        (Ran::Failed, _) if failures >= MAX_FAILURES => {
-            format!("Stopped after failing {failures} times in a row: {summary}")
-        }
-        (Ran::Unreachable, Some(since)) if now - since >= MAX_OUTAGE_MS => {
-            let hours = MAX_OUTAGE_MS / (60 * 60_000);
-            format!(
-                "Stopped after {hours} hours of being unable to run or reach its service: {summary}"
-            )
-        }
-        _ => return Ok(()),
-    };
+    if ran != Ran::Failed || failing_for < MAX_FAILING_MS {
+        return Ok(());
+    }
+    let hours = MAX_FAILING_MS / (60 * 60_000);
+    let stopped = format!("Stopped after {hours} hours of failing: {summary}");
     if due.user.is_none() {
         conn.execute(
             "UPDATE plugin_libraries SET enabled = 0, disabled_reason = ?3 \

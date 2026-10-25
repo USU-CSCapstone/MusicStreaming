@@ -110,7 +110,7 @@ pub fn set(
 
 /// Enables or disables `id` in `library`. Enabling answers the required permissions still
 /// missing there, if any, and changes nothing. Otherwise it gives the plugin's hooks there a
-/// fresh start: the failures and outages that may have disabled it are cleared, and what waits
+/// fresh start: the failing that may have disabled it is cleared, and what waits
 /// to be retried is due at once. Enabling it where it is already enabled does the same.
 pub fn set_enabled(
     conn: &Connection,
@@ -125,7 +125,7 @@ pub fn set_enabled(
             return Ok(missing);
         }
         conn.execute(
-            "UPDATE plugin_cursors SET failures = 0, outages = 0, outage_since = NULL, \
+            "UPDATE plugin_cursors SET failing_since = NULL, \
              retry_at = NULL WHERE plugin_id = ?1 AND library_id = ?2",
             params![id, library],
         )?;

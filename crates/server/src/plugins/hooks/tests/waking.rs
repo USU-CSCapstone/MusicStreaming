@@ -11,7 +11,7 @@ use tokio::sync::Notify;
 use tokio::time::{Instant, timeout};
 
 use super::super::{Delivering, POLL, idle};
-use super::outages::changed;
+use super::failing::changed;
 use super::setup;
 use crate::api::testing::eventually;
 use crate::db::Database;

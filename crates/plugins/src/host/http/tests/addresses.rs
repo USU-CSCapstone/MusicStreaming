@@ -1,7 +1,6 @@
 //! The addresses a plugin's requests may reach: never loopback, link-local, cloud metadata or
 //! unspecified, and a private one only at a destination that names it, whether the URL names
-//! the address or a name or a redirect leads there, or a kept reply came from it. Each refusal
-//! is the plugin's, so none is an outage.
+//! the address or a name or a redirect leads there, or a kept reply came from it.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::process::Command;
@@ -65,13 +64,12 @@ async fn a_url_naming_loopback_is_refused_before_it_is_sent() {
         let refused = run.send(get(url)).await.unwrap_err();
         let why = format!("{named} is an address no plugin may reach");
         assert!(matches!(&refused, Error::Refused(r) if *r == why), "{refused:?}");
-        assert!(!run.outage);
     }
     assert!(hits.lock().unwrap().is_empty(), "the server is never asked");
 }
 
 #[tokio::test]
-async fn a_name_at_loopback_is_refused_and_is_not_an_outage() {
+async fn a_name_at_loopback_is_refused() {
     let (port, hits) = server().await;
     let mut run = guarded(&["loopback.test"], rules::reach, &[Ipv4Addr::LOCALHOST.into()]);
     for scheme in ["http", "https"] {
@@ -81,7 +79,6 @@ async fn a_name_at_loopback_is_refused_and_is_not_an_outage() {
         assert!(matches!(&refused, Error::Refused(r) if r == why), "{scheme}: {refused:?}");
     }
     assert_eq!(run.refused.named, ["loopback.test"], "recorded once");
-    assert!(!run.outage);
     assert!(hits.lock().unwrap().is_empty(), "the server is never asked");
 }
 
@@ -93,7 +90,7 @@ async fn a_name_at_loopback_is_refused_and_is_not_an_outage() {
 fn a_proxy_in_the_environment_is_not_used() {
     let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
     let proxy = format!("http://{closed}");
-    let test = "host::http::tests::addresses::a_name_at_loopback_is_refused_and_is_not_an_outage";
+    let test = "host::http::tests::addresses::a_name_at_loopback_is_refused";
     let child = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", test])
         .envs([("HTTP_PROXY", &proxy), ("HTTPS_PROXY", &proxy)])
@@ -122,7 +119,6 @@ async fn a_redirect_to_loopback_is_refused() {
     assert!(matches!(&refused, Error::Refused(r) if r == why), "{refused:?}");
     // Only the name the resolver refused is the plugin's to answer for.
     assert_eq!(run.refused.named, ["localhost"]);
-    assert!(!run.outage);
 }
 
 #[tokio::test]

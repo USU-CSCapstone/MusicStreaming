@@ -1,16 +1,15 @@
-//! Only failures of the plugin's own code count toward disabling it: one on the server's side is
-//! retried without counting, and a plugin that cannot be loaded is treated as an outage. A
-//! delivery lets the next one start once it ends, even by a panic.
+//! A failure on the server's side is retried without counting toward disabling the plugin, but a
+//! plugin that cannot be loaded fails like any other. A delivery lets the next one start once it
+//! ends, even by a panic.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use jewelcase_plugins::Permission::TracksChanged;
-use jewelcase_plugins::RunError;
 use rusqlite::OptionalExtension;
 
-use super::super::{BACKOFF_MS, Delivering, MAX_FAILURES, Ran};
-use super::outages::{REFUSED, changed, enabled, hooks};
+use super::super::{BACKOFF_MS, Delivering, Ran};
+use super::failing::{REFUSED, changed, enabled, hooks};
 use super::{HOUR, ran};
 use crate::api::testing::eventually;
 use crate::db::Database;
@@ -20,39 +19,25 @@ use crate::plugins::testing::plugins;
 /// SQLite's message for a full disk: a failure on the server's side, not the plugin's.
 const DISK_FULL: &str = "the database or disk is full";
 
-#[test]
-fn only_a_failure_of_the_plugins_code_counts_against_it() {
-    use RunError::*;
-    assert_eq!(Ran::of(&Ok(String::new()), false), Ran::Handled);
-    assert_eq!(Ran::of(&Ok(String::new()), true), Ran::Handled, "after a request that waited");
-    for error in [OutOfCompute, OutOfTime, Crashed("trap".into()), Reported("400".into())] {
-        assert_eq!(Ran::of(&Err(error), false), Ran::Failed);
-    }
-    assert_eq!(Ran::of(&Err(Reported("503".into())), true), Ran::Unreachable);
-    for outage in [false, true] {
-        assert_eq!(Ran::of(&Err(Unloadable(DISK_FULL.into())), outage), Ran::Unreachable);
-    }
-}
-
-/// Dispatches once, and answers the first delivery's failures and outages as recorded, and
-/// whether it waits to be retried. The deadline only bounds a hang.
-async fn dispatched(plugins: &Arc<Plugins>, db: &Database) -> (i64, i64, bool) {
+/// Dispatches once, and answers whether the first delivery is recorded as failing, and whether
+/// it waits to be retried. The deadline only bounds a hang.
+async fn dispatched(plugins: &Arc<Plugins>, db: &Database) -> (bool, bool) {
     plugins.dispatch().await;
-    let sql = "SELECT failures, outages, retry_at IS NOT NULL FROM plugin_cursors";
+    let sql = "SELECT failing_since IS NOT NULL, retry_at IS NOT NULL FROM plugin_cursors";
     eventually("the delivery is recorded", async || {
-        let row = |row: &rusqlite::Row| Ok((row.get(0)?, row.get(1)?, row.get(2)?));
+        let row = |row: &rusqlite::Row| Ok((row.get(0)?, row.get(1)?));
         db.read(move |conn| conn.query_row(sql, [], row).optional()).await.unwrap()
     })
     .await
 }
 
-/// A plugin that cannot be loaded, here one installed without its file, is retried as an
-/// outage is, so it is disabled and reported once that has lasted long enough, rather than
+/// A plugin that cannot be loaded, here one installed without its file, fails and is retried
+/// like any other, so it is disabled and reported once that has lasted long enough, rather than
 /// retried forever.
 #[tokio::test]
-async fn a_plugin_that_cannot_be_loaded_is_retried_as_an_outage() {
+async fn a_plugin_that_cannot_be_loaded_is_failing() {
     let (temp, db) = changed().await;
-    assert_eq!(dispatched(&plugins(&temp, &db), &db).await, (0, 1, true));
+    assert_eq!(dispatched(&plugins(&temp, &db), &db).await, (true, true));
 }
 
 /// A run the server fails to start, here for settings it cannot read, is retried without
@@ -63,7 +48,7 @@ async fn a_run_the_server_fails_is_retried_without_counting() {
     let unreadable = "INSERT INTO plugin_settings (plugin_id, library_id, settings) \
                       VALUES ('plugin', 0, '{\"limit\": 1e400}')";
     db.write(move |tx| tx.execute(unreadable, [])).await.unwrap();
-    assert_eq!(dispatched(&plugins(&temp, &db), &db).await, (0, 0, true));
+    assert_eq!(dispatched(&plugins(&temp, &db), &db).await, (false, true));
 }
 
 #[tokio::test]
@@ -73,21 +58,18 @@ async fn a_failure_on_the_servers_side_backs_off_but_never_counts() {
     assert_eq!(hooks(ran(&db, 0, Ran::Unrun, DISK_FULL).await), tried);
     assert!(ran(&db, BACKOFF_MS - 1, Ran::Unrun, DISK_FULL).await.is_empty(), "waiting");
     let mut now = BACKOFF_MS;
-    for attempt in 1..=2 * MAX_FAILURES {
+    for attempt in 1..=75 {
         assert_eq!(hooks(ran(&db, now, Ran::Unrun, DISK_FULL).await), tried, "{attempt}");
         now += HOUR;
     }
     assert!(enabled(&db).await, "the server's failures alone never disable it");
 
-    // Nor do they break a run of the plugin's own failures.
-    for failure in 1..MAX_FAILURES {
-        assert_eq!(hooks(ran(&db, now, Ran::Failed, REFUSED).await), tried, "{failure}");
-        assert_eq!(hooks(ran(&db, now + HOUR, Ran::Unrun, DISK_FULL).await), tried);
-        now += 2 * HOUR;
-    }
-    assert!(enabled(&db).await, "four failures of its own");
+    // Nor do they count as the plugin failing: its own failure only now begins.
     assert_eq!(hooks(ran(&db, now, Ran::Failed, REFUSED).await), tried);
-    assert!(!enabled(&db).await, "the fifth failure of its own in a row");
+    assert_eq!(hooks(ran(&db, now + 72 * HOUR, Ran::Unrun, DISK_FULL).await), tried);
+    assert!(enabled(&db).await, "the server's failure disables nothing");
+    assert_eq!(hooks(ran(&db, now + 73 * HOUR, Ran::Failed, REFUSED).await), tried);
+    assert!(!enabled(&db).await, "nor does it end the failing");
 }
 
 /// A delivery that panics still lets its key go, so the next one can start.

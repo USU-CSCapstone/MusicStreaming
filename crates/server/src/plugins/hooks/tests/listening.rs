@@ -6,7 +6,6 @@ use jewelcase_plugins::Permission::{ListeningActivity, Played, Playing};
 use jewelcase_plugins::PlayEnd::{Finished, Skipped};
 use serde_json::json;
 
-use super::super::MAX_FAILURES;
 use super::super::playing::FRESH_MS;
 use super::super::plays::plays;
 use super::{
@@ -82,7 +81,7 @@ async fn one_users_failures_never_disable_the_plugin() {
     connected(&plugins, &db, &[ListeningActivity, Played]).await;
     play(&db, "a", 7, 11, 200, "finished").await;
     let mut now = 0;
-    for attempt in 1..=MAX_FAILURES + 2 {
+    for attempt in 0..=73 {
         let tried = one(deliver(&db, now, Err("Invalid token")).await, 7);
         assert!(matches!(tried, Event::Played(_)), "attempt {attempt} still reaches it");
         now += HOUR;

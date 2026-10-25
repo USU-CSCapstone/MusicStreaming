@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use super::super::http::{Error, Host as _};
 use super::{body, get, run, server};
 
@@ -90,41 +88,4 @@ async fn a_request_body_is_at_most_16_mb() {
     request.headers.push(("Host".into(), "1".into()));
     let refused = run().send(request).await.unwrap_err();
     assert!(matches!(&refused, Error::Refused(why) if why.starts_with("Host")), "{refused:?}");
-}
-
-/// Only a request that found its service out of reach marks the run's outage: one answered
-/// `429` or a `5xx`, refused as `rate-limited`, unable to connect, or without a reply in time.
-/// Another answer, a refusal, and a failure after connecting do not.
-#[tokio::test]
-async fn only_a_service_out_of_reach_marks_an_outage() {
-    let (port, _) = server().await;
-    let url = |path: &str| format!("http://127.0.0.1:{port}{path}");
-    let mut run = run();
-    assert_eq!(run.send(get(url("/none"))).await.unwrap().status, 404);
-    let elsewhere = run.send(get("http://example.invalid/".into())).await.unwrap_err();
-    assert!(matches!(elsewhere, Error::Refused(_)), "{elsewhere:?}");
-    let redirected = run.send(get(url("/away"))).await.unwrap_err();
-    assert!(matches!(redirected, Error::Failed(_)), "{redirected:?}");
-    assert!(!run.outage, "nothing so far found the service out of reach");
-    assert_eq!(run.send(get(url("/busy"))).await.unwrap().status, 429);
-    assert!(run.outage, "answered too busy");
-
-    let mut run = super::run();
-    assert_eq!(run.send(get(url("/down"))).await.unwrap().status, 500);
-    assert!(run.outage, "answered failing");
-    assert_eq!(run.send(get(url("/none"))).await.unwrap().status, 404);
-    assert!(run.outage, "a later answer does not take it back");
-
-    let mut run = super::run();
-    run.timeout = Duration::from_millis(50);
-    let slow = run.send(get(url("/slow"))).await.unwrap_err();
-    assert!(matches!(slow, Error::TimedOut), "{slow:?}");
-    assert!(run.outage, "no reply in time");
-
-    // A port nothing listens on any more refuses the connection.
-    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let mut run = super::run();
-    let refused = run.send(get(format!("http://127.0.0.1:{closed}/"))).await.unwrap_err();
-    assert!(matches!(refused, Error::Failed(_)), "{refused:?}");
-    assert!(run.outage);
 }

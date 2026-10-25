@@ -123,8 +123,7 @@ fn describe(error: reqwest::Error) -> String {
 impl<L: Library> http::Host for Run<L> {
     /// Needs network. Refuses a request it may not send, answers one from the cache where a kept
     /// reply may be reused, and otherwise waits for its turn and sends it. The reply sets any
-    /// pause its service asks for, marks an outage if it says the service is out of reach, and
-    /// is kept for reuse where it may be.
+    /// pause its service asks for, and is kept for reuse where it may be.
     async fn send(&mut self, request: http::Request) -> Result<http::Response, http::Error> {
         self.may(Permission::Network)?;
         let allowed = rules::allowed(&request.url, &self.grants.destinations, self.reach);
@@ -171,7 +170,6 @@ impl<L: Library> http::Host for Run<L> {
         let turn = self.network.limits.turn(&host, &self.queues(&host), Instant::now());
         // Rounded up, so a plugin that waits that long finds its turn has come.
         let turn = turn.map_err(|wait| {
-            self.outage = true;
             let ms = wait.as_micros().div_ceil(1000);
             http::Error::RateLimited(u64::try_from(ms).unwrap_or(u64::MAX))
         })?;
@@ -189,21 +187,14 @@ impl<L: Library> http::Host for Run<L> {
         // The wait for a turn is not the service's slowness, so only the request is timed.
         let reply = match tokio::time::timeout(self.timeout, fetch(builder)).await {
             Ok(Ok(reply)) => reply,
-            Ok(Err(NoReply { error, unreachable, forbidden })) => {
-                self.outage |= unreachable;
+            Ok(Err(NoReply { error, forbidden })) => {
                 if let Some(host) = forbidden {
                     self.refused.add(&host);
                 }
                 return Err(error);
             }
-            Err(_) => {
-                self.outage = true;
-                return Err(http::Error::TimedOut);
-            }
+            Err(_) => return Err(http::Error::TimedOut),
         };
-        // A service that answers it is too busy or failing is as out of reach as one that
-        // does not answer.
-        self.outage |= matches!(reply.status, 429 | 500..=599);
         let (now, clock) = (Instant::now(), SystemTime::now());
         let retry_after = reply.header("retry-after");
         // Redirects have been followed, so the answer is from where the last one led.
@@ -296,15 +287,9 @@ impl<L: Library> Run<L> {
     }
 }
 
-/// Why a request has no reply, and whether that is because its service could not be reached
-/// at all: any failure before a connection was made, such as no address for it, a refused
-/// connection, no route to it, the 10 s connect timeout, or a failed TLS handshake. Each is
-/// treated as an outage, so a lasting DNS or TLS problem disables the plugin only after the
-/// 72 hours an outage may last, not after five failures. A name refused for its address is
-/// the plugin's doing, not an outage.
+/// Why a request has no reply.
 struct NoReply {
     error: http::Error,
-    unreachable: bool,
     /// The name refused for its address, if that is why.
     forbidden: Option<String>,
 }
@@ -312,7 +297,7 @@ struct NoReply {
 impl From<String> for NoReply {
     /// A failure after the service was reached, such as a reply cut short.
     fn from(why: String) -> NoReply {
-        NoReply { error: http::Error::Failed(why), unreachable: false, forbidden: None }
+        NoReply { error: http::Error::Failed(why), forbidden: None }
     }
 }
 
@@ -321,11 +306,9 @@ async fn fetch(builder: reqwest::RequestBuilder) -> Result<Reply, NoReply> {
     let mut res = builder.send().await.map_err(|e| match guard::forbidden(&e) {
         Some(refused) => NoReply {
             error: http::Error::Refused(refused.to_string()),
-            unreachable: false,
             forbidden: Some(refused.host.clone()),
         },
         None => NoReply {
-            unreachable: e.is_connect(),
             error: http::Error::Failed(format!("request failed: {}", describe(e))),
             forbidden: None,
         },
