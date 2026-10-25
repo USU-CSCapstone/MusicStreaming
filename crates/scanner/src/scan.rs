@@ -36,27 +36,18 @@ pub struct ScanOptions {
     /// ...or after this long, whichever comes first, so progress is visible
     /// and content appears within seconds.
     pub batch_interval: Duration,
-    /// How long a batch should hold the store's writer, which interactive writes wait behind.
-    /// Each batch is sized to apply in about this long at the rate the last one applied...
-    pub batch_time: Duration,
-    /// ...but holds at least this many outcomes, or `batch_size` if that is fewer, since part of
-    /// what a batch costs, such as its commit and the albums it touches, does not shrink with it.
-    /// A scan's first batch is this size.
-    pub min_batch: usize,
     /// How long a scan suspended by an unavailable root waits before its scopes are requested
     /// again.
     pub retry_wait: Duration,
 }
 
 impl Default for ScanOptions {
-    /// The design's values (`design/scanning.md` §7): batches of 16 to 250 outcomes, each sized
-    /// to apply in about 50 ms, flushed at least every 2 seconds, and a retry after 15 minutes.
+    /// The design's values (`design/scanning.md` §7): batches of 32 outcomes, flushed at least
+    /// every 2 seconds, and a retry after 15 minutes.
     fn default() -> Self {
         ScanOptions {
-            batch_size: 250,
+            batch_size: 32,
             batch_interval: Duration::from_secs(2),
-            batch_time: Duration::from_millis(50),
-            min_batch: 16,
             retry_wait: Duration::from_secs(15 * 60),
         }
     }
@@ -89,7 +80,7 @@ impl ScanContext<'_> {
 /// exclude pattern that does not compile would only recur, so they return none, as does any scan
 /// that does not suspend.
 pub fn run_scan(ctx: &ScanContext<'_>, scan: &mut Scan) -> Vec<Scope> {
-    let mut writer = Writer::new(scan, ctx.options);
+    let mut writer = Writer::new(scan);
     let mut unanswered = Vec::new();
     // Asserted unwind safe because a panic can leave `scan`'s cursor and progress ahead of the
     // store, and `suspend` replaces both from what the writer last persisted, which changes only

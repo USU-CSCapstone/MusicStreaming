@@ -40,16 +40,9 @@ fn new_scan(store: &dyn Store, lib: &LibraryConfig) -> Scan {
     store.create_scan(lib.id, Trigger::Manual, &[Scope::root(&lib.roots[0])]).unwrap()
 }
 
-/// Batches of `batch_size` outcomes after a first of one, never flushed on a timer or sized by
-/// how long they take to apply.
+/// Batches of `batch_size` outcomes, never flushed on a timer.
 fn batches_of(batch_size: usize) -> ScanOptions {
-    ScanOptions {
-        batch_size,
-        batch_interval: Duration::MAX,
-        batch_time: Duration::MAX,
-        min_batch: 1,
-        ..Default::default()
-    }
+    ScanOptions { batch_size, batch_interval: Duration::MAX, ..Default::default() }
 }
 
 /// Runs `scan`, already saved to `store`, with `options`, shut down once `stops` says so, and
@@ -121,7 +114,7 @@ pub fn a_stop_flushes_the_batch_in_hand<S: InspectStore + 'static>(make: Factory
         Ok(())
     });
     let mut scan = new_scan(&hooked, &lib);
-    let options = ScanOptions { min_batch: 1000, ..batches_of(1000) };
+    let options = batches_of(1000);
     run(&hooked, &lib, &mut scan, &options, &stops);
 
     let row = only_row(store.as_ref(), &lib);

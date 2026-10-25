@@ -15,7 +15,7 @@ fn two_folders(root: &Path) {
 }
 
 /// A shutdown asked for as the batch holding B/Y's second track is stored leaves the row running
-/// at B, the last folder completed, with three tracks stored. The resumed scan ends with each of
+/// at B, the last folder completed, with four tracks stored. The resumed scan ends with each of
 /// the five tracks stored once and both problems recorded.
 pub fn a_scan_shut_down_partway_through_a_folder_resumes_storing_each_track_once<
     S: InspectStore + 'static,
@@ -41,7 +41,7 @@ pub fn a_scan_shut_down_partway_through_a_folder_resumes_storing_each_track_once
 
     let mut row = only_row(store.as_ref(), &lib);
     assert_eq!((row.state, &row.cursor), (ScanState::Running, &after(&root, "B")));
-    assert_eq!(store.inspect_tracks(lib.id).len(), 3);
+    assert_eq!(store.inspect_tracks(lib.id).len(), 4);
 
     run(&hooked, &lib, &mut row, &batches_of(2), &Stops::default());
 

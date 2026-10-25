@@ -124,7 +124,7 @@ fn record(
     }
 }
 
-/// Applies `records` to library 1 of `store` in batches of a scan's largest size, as a cold scan
+/// Applies `records` to library 1 of `store` in batches of a scan's size, as a cold scan
 /// does, and returns how long each batch held the writer. Then gathers planner statistics, as
 /// the server does when it opens the database.
 pub fn fill(store: &SqliteStore, records: impl Iterator<Item = TrackRecord>) -> Vec<Duration> {
