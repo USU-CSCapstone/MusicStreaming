@@ -89,3 +89,13 @@ async fn a_request_body_is_at_most_16_mb() {
     let refused = run().send(request).await.unwrap_err();
     assert!(matches!(&refused, Error::Refused(why) if why.starts_with("Host")), "{refused:?}");
 }
+
+/// A request with no reply within the run's timeout ends `timed-out`.
+#[tokio::test]
+async fn a_request_with_no_reply_in_time_times_out() {
+    let (port, _) = server().await;
+    let mut run = run();
+    run.timeout = std::time::Duration::from_millis(50);
+    let slow = run.send(get(format!("http://127.0.0.1:{port}/slow"))).await.unwrap_err();
+    assert!(matches!(slow, Error::TimedOut), "{slow:?}");
+}
