@@ -110,24 +110,22 @@ pub(super) fn process_file(
 }
 
 /// The sort keys the file's first artist and first album artist vote for their artists' sort
-/// keys with. Where they are the same artist, both votes use one tag, `ARTISTSORT` else
-/// `ALBUMARTISTSORT`, so a file never votes against itself; an album artist that falls back to
-/// the primary artist is always that case. Otherwise the artist uses `ARTISTSORT` and the album
-/// artist `ALBUMARTISTSORT`. An album artist with no tag to use, the same artist included, or the
-/// unknown artist, gets the empty key, which casts no vote: only a tag may vote as album artist.
+/// keys with. A file votes at most once for an artist: where its first album artist is its first
+/// artist, as it always is when the album artist falls back to the primary artist, the one vote
+/// is as artist, with `ARTISTSORT` else `ALBUMARTISTSORT`. Otherwise the artist votes with
+/// `ARTISTSORT` and the album artist with `ALBUMARTISTSORT`. An album artist that doesn't vote,
+/// for want of a tag or being the same artist, or the unknown artist, gets the empty key, which
+/// casts no vote, so only a tag can outvote an artist's own.
 fn artist_sort_keys(tags: &TagSet) -> (String, String) {
     let first = tags.artists.first().map_or("", String::as_str);
-    let own = tags.artist_sort.as_deref();
-    let album = tags.album_artists_or_primary().first().map(String::as_str);
-    match album {
-        None => (sort_key(first, own), String::new()),
+    let (own, album_tag) = (tags.artist_sort.as_deref(), tags.album_artist_sort.as_deref());
+    match tags.album_artists_or_primary().first().map(String::as_str) {
         Some(name) if name_key(name) == name_key(first) => {
-            let shared = own.or(tags.album_artist_sort.as_deref());
-            (sort_key(first, shared), shared.map_or_else(String::new, |t| sort_key(name, Some(t))))
+            (sort_key(first, own.or(album_tag)), String::new())
         }
         Some(name) => {
-            let tagged = tags.album_artist_sort.as_deref();
-            (sort_key(first, own), tagged.map_or_else(String::new, |t| sort_key(name, Some(t))))
+            (sort_key(first, own), album_tag.map_or_else(String::new, |t| sort_key(name, Some(t))))
         }
+        None => (sort_key(first, own), String::new()),
     }
 }

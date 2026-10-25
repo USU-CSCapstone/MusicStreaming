@@ -9,11 +9,12 @@ use super::recompute::check;
 use super::{make, record, tagged};
 use crate::db::store::SqliteStore;
 
-/// Record `i` under `root`, as [`record`] makes it, with the artist sort tag `sort`.
+/// Record `i` under `root`, as [`record`] makes it, with the artist sort tag `sort`. Its album
+/// artist is its artist, so, as the scanner gives it, it votes only as artist.
 fn track(root: &Path, i: usize, sort: &str) -> TrackRecord {
     let mut rec = record(root, i);
     rec.sort.artist = sort.into();
-    rec.sort.album_artist = sort.into();
+    rec.sort.album_artist = String::new();
     rec
 }
 
@@ -94,7 +95,7 @@ fn without_album_artists_the_primary_artist_sorts_by_its_artist_sort_tag() {
     assert_eq!(album_key(&store, "One"), b"alone");
 }
 
-/// A file whose album artist is its artist votes for one key with both credits: `ARTISTSORT`, or
+/// A file whose album artist is its artist votes once, as artist, with `ARTISTSORT`, or
 /// `ALBUMARTISTSORT` when that is the only tag, never the name against the tag. The tags sort
 /// after the names so a tie by bytes would pick the name.
 #[test]

@@ -17,8 +17,9 @@ CREATE TABLE artist_spellings (
 ) STRICT, WITHOUT ROWID;
 
 -- How many of the tracks crediting the artist first, as artist or as album artist, carry each
--- tracks.file_artist_sort_key or tracks.file_album_artist_sort_key. An empty file_album_artist_sort_key
--- is no vote: the album artist has no sort tag of its own to give.
+-- tracks.file_artist_sort_key or tracks.file_album_artist_sort_key. An empty
+-- file_album_artist_sort_key is no vote: the album artist has no tag to give, or is the first
+-- artist, which votes once as artist.
 CREATE TABLE artist_sort_keys (
     library_id INTEGER NOT NULL,
     artist_id  INTEGER NOT NULL,
