@@ -1,8 +1,9 @@
 //! The real lyrics plugin (`plugins/lrclib-lyrics`), granted the network to lrclib.net, with
-//! what the host would answer its first request set up beforehand, so nothing is sent.
+//! what the host would answer its requests set up beforehand, so nothing is sent.
 //!
 //! Needs the packed plugin: run `plugins/lrclib-lyrics/build.sh` first.
 
+use std::net::Ipv4Addr;
 use std::path::Path;
 use std::time::{Instant, SystemTime};
 
@@ -37,7 +38,9 @@ async fn run(host: &Host<Memory>) -> Outcome {
     run_in(host, &library()).await
 }
 
-/// Keeps `status` and `body` as the reply to a request for `url`, as the host would have it.
+/// Keeps `status` and `body` as the reply to a request for `url`, as the host would have it
+/// from a public address, and pauses the plugin's requests to lrclib.net for an hour, so a
+/// request it does not answer fails rather than reaching LRCLIB.
 fn answer(host: &Host<Memory>, url: &str, status: u16, body: &str) {
     let visible = Visible {
         library: 1,
@@ -51,10 +54,14 @@ fn answer(host: &Host<Memory>, url: &str, status: u16, body: &str) {
         headers: vec![("cache-control".into(), "max-age=600".into())],
         body: body.as_bytes().to_vec().into(),
         url: url.into(),
-        addr: None,
+        // A documentation address (RFC 5737): public, so the reply may be reused.
+        addr: Some(Ipv4Addr::new(192, 0, 2, 1).into()),
     };
     let key = Key::new(visible, url, &[]).unwrap();
-    host.network.cache.store(key, reply, Instant::now(), SystemTime::now());
+    let (now, clock) = (Instant::now(), SystemTime::now());
+    host.network.cache.store(key, reply, now, clock);
+    let plugin = Scope::Plugin("lrclib-lyrics".into());
+    host.network.limits.answered("lrclib.net", &plugin, 429, Some("3600"), now, clock);
 }
 
 #[tokio::test]
