@@ -6,9 +6,9 @@
 //! replaces them. A scan that has started, running or resumed from a cursor,
 //! takes no new work, since its walk may already have passed that work, so a
 //! trigger repeated during a scan queues one follow-up scan, not one each time.
-//! The queue writes a new scan's row under its lock, so a busy store holds up the other callers of
-//! the queue for one write. A scan suspended by an unavailable root is requested again
-//! after a fixed wait ([`Retry`]).
+//! The queue writes a new scan's row under its lock, so a busy store holds up the other
+//! callers of the queue for one write. A scan suspended by an unavailable root is requested
+//! again after a fixed wait ([`Retry`]).
 
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;

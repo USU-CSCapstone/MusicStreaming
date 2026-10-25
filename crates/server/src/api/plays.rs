@@ -73,10 +73,10 @@ const MAX_REPORTS: usize = 500;
 const MAX_JSON_BYTES: usize = 4096;
 
 /// Records every report, or none if one is malformed or the request holds more than
-/// [`MAX_REPORTS`]. A play of a track that is not in a
-/// library the caller reaches is left out: there is nothing to record it against, and saying
-/// so would tell them what another library holds (`requirements/users.md` §10). A play of an
-/// external track is left out too, as plays outside a library are not recorded.
+/// [`MAX_REPORTS`]. A play of a track that is not in a library the caller reaches is left out:
+/// there is nothing to record it against, and saying so would tell them what another library
+/// holds (`requirements/users.md` §10). A play of an external track is left out too, as plays
+/// outside a library are not recorded.
 pub async fn record(
     State(db): State<Arc<Database>>,
     caller: Caller,
@@ -95,8 +95,9 @@ pub async fn record(
 }
 
 /// `report` as a play to record, `None` for an external track's, or the Problem that makes it
-/// malformed, including a `context` or `reason` that [`json_text`] refuses. A `startedAt` after `now` is taken as `now`: a device's clock can run ahead, and
-/// the play is still the user's. One before 1970 is taken as 1970, where stored times begin.
+/// malformed, including a `context` or `reason` that [`json_text`] refuses. A `startedAt` after
+/// `now` is taken as `now`: a device's clock can run ahead, and the play is still the user's. One
+/// before 1970 is taken as 1970, where stored times begin.
 fn checked(report: PlayReport, now: i64) -> Result<Option<Play>, Problem> {
     let track = match (report.track_id, report.external) {
         (Some(track), None) => track,

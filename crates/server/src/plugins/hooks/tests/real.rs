@@ -13,10 +13,10 @@ use crate::db::testing::{User, access};
 use crate::plugins::testing::{caller, connect, database, enable_ungranted, grant, plugins};
 use crate::plugins::{PluginError, Plugins};
 
-/// Waits for the one delivery under way to finish, and returns its run's summary and the
-/// whether it is failing and the user its cursor records. A delivery records its cursor last, after the run's
-/// summary, so both are in place once the cursor is. The deadline only bounds a hang: plugins
-/// compile and run slowly on a busy machine.
+/// Waits for the one delivery under way to finish, and returns its run's summary, whether its
+/// cursor is failing, and the user the cursor records. A delivery records its cursor last, after
+/// the run's summary, so all three are in place once the cursor is. The deadline only bounds a
+/// hang: plugins compile and run slowly on a busy machine.
 async fn delivered(db: &Database) -> (Option<String>, bool, i64) {
     eventually("delivered", async || {
         db.read(|conn| {

@@ -77,7 +77,8 @@ fn read(text: &str, label: &str, columns: usize) -> Option<Vec<Value>> {
     reader.0.is_empty().then_some(values)
 }
 
-/// Appends `bytes` to `out` after their length.
+/// Appends `bytes` to `out` after their length. Panics if they are 4 GiB or longer, which SQLite
+/// never stores.
 fn put_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
     let len = u32::try_from(bytes.len()).expect("a sort value is under 4 GiB");
     out.extend(len.to_be_bytes());

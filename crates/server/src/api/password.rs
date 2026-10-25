@@ -68,7 +68,8 @@ pub async fn hash_new(password: String, inputs: Vec<String>) -> Result<String, P
 }
 
 /// Whether `password` matches the `stored` PHC string. With none stored, or one that cannot be
-/// read, it is checked against a dummy hash and never matches, in the same time.
+/// read, it is checked against a dummy hash and never matches, in the same time. Fails as
+/// [`off_thread`] does.
 pub async fn verify(password: String, stored: Option<String>) -> Result<bool, Problem> {
     off_thread(move || {
         let stored = stored.as_deref().and_then(|stored| PasswordHash::new(stored).ok());

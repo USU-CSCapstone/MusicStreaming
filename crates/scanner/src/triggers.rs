@@ -76,7 +76,8 @@ fn watcher(tx: mpsc::Sender<notify::Result<notify::Event>>) -> notify::Result<Re
     )
 }
 
-/// Pending work per directory: whether anything in it needs the subtree.
+/// A directory's queued change: how deep its scope goes, and when it was first seen, from which
+/// the debounce is counted.
 struct Pending {
     depth: Depth,
     first_seen: Instant,

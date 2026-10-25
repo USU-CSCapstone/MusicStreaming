@@ -428,6 +428,11 @@ export class Catalog {
 		);
 	}
 
+	/**
+	 * The artist with its genres and biography, or null if the library has none by that ID.
+	 * `appearanceCount` counts the tracks on albums that credit the artist without making them an
+	 * album artist.
+	 */
 	artist(lib: bigint, artistId: bigint): Artist | null {
 		const row = this.db.get(
 			`SELECT *, (SELECT ifnull(sum(ac.track_count), 0) FROM album_credits ac

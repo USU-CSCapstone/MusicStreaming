@@ -50,8 +50,9 @@ fn miss(library: &Memory, id: u64, at: u64) {
     library.state.lock().unwrap().insert(format!("miss/{id}"), at.to_le_bytes().to_vec());
 }
 
-/// A time long enough ago for a miss to be due again, and one so late that it never is.
+/// A miss time long enough ago for the miss to be due again.
 const LONG_AGO: u64 = 0;
+/// A miss time so late that the miss is never due.
 const NEVER_DUE: u64 = u64::MAX / 2;
 
 #[tokio::test]

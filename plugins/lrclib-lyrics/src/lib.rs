@@ -218,6 +218,8 @@ mod plugin {
         files::write(t.root, &path, contents.as_bytes(), WriteMode::Create).map_err(String::from)
     }
 
+    /// The run's one-paragraph result from its counts `n`; `saved` is whether adding files was
+    /// granted, which decides whether it says lyrics were saved or only found.
     fn summary(n: &Tally, saved: bool) -> String {
         let found = n.synced + n.plain;
         let mut s = format!(

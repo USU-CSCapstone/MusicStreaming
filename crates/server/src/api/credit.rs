@@ -30,7 +30,9 @@ pub struct Credits {
     pub owned: &'static str,
     /// Rows a track credits the artist on.
     pub on_tracks: &'static str,
+    /// The count of rows in `owned`.
     pub owned_count: &'static str,
+    /// The count of rows in `on_tracks` but not `owned`.
     pub featured_count: &'static str,
 }
 

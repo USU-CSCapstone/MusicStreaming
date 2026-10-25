@@ -147,7 +147,7 @@ fn note(id: u64, seen: Seen, now: u64) -> Result<(), String> {
     Ok(())
 }
 
-/// When track `id` was last missed, if it was. A record of an older format counts as none.
+/// When track `id` was last missed, if it was. A stored value that is not a number counts as none.
 fn missed_at(id: u64) -> Result<Option<u64>, String> {
     let kept = state::get(&progress::miss_key(id))?;
     Ok(kept.and_then(|bytes| progress::decode(&bytes).ok()))

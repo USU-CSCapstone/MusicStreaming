@@ -63,8 +63,8 @@ impl Scanner {
         }
         let running = inner.clone();
         // The thread waits on the queue's condvar, not on its `Stop`, since requests already wake
-        // it there and its wait ends when a retry is due, and a running scan checks the `shutdown` flag before each
-        // file; `ScannerThread::stop` sets that flag.
+        // it there and its wait ends when a retry is due, and a running scan checks the
+        // `shutdown` flag before each file; `ScannerThread::stop` sets that flag.
         let thread = Worker::spawn("scanner", move |_| run(&running))?;
         Ok((Scanner { inner: inner.clone() }, ScannerThread { inner, thread }))
     }

@@ -130,7 +130,7 @@ pub fn cookie(prefix: &str, token: &str, from: &Origin) -> HeaderValue {
 }
 
 /// `cookie` as a `Set-Cookie` value. Tokens are base64url and the base path is limited to
-/// URL-safe characters (`config`), so every header character is valid.
+/// URL-safe characters (`config`), so every header character is valid. Panics if one is not.
 fn cookie_header(cookie: String) -> HeaderValue {
     HeaderValue::try_from(cookie).expect("a cookie of header-safe characters")
 }

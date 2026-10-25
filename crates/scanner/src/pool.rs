@@ -121,9 +121,9 @@ impl Schedule {
 
     /// Runs a pass, given `stop`, of the first job due whose library is running fewer than its
     /// share of passes, looking from the one after the job last taken, and returns a wait of
-    /// zero; or, when no such job is due, returns how long until one is. A pass that panics is logged, and
-    /// its job waits as after an idle pass. Returns `None` when there are no jobs: while a thread
-    /// is free, some library always runs fewer than its share.
+    /// zero; or, when no such job is due, returns how long until one is. A pass that panics is
+    /// logged, and its job waits as after an idle pass. Returns `None` when there are no jobs:
+    /// while a thread is free, some library always runs fewer than its share.
     fn run_next(&self, stop: &Stop) -> Option<Duration> {
         let job = {
             let mut due = self.due.lock().recover();

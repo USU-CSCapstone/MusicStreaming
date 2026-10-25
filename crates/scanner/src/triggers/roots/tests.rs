@@ -26,13 +26,13 @@ fn scans(store: &BareStore) -> Vec<Scan> {
     store.scans()
 }
 
-/// Short waits throughout.
+/// Debounce and check intervals of 20 ms each, so a test waits only a moment.
 fn timing() -> Timing {
     let quick = Duration::from_millis(20);
     Timing { debounce: quick, check: quick }
 }
 
-/// Checks once a second.
+/// Debounce and check intervals of one second each, for tests that give `Roots::check` times.
 fn seconds() -> Timing {
     let second = Duration::from_secs(1);
     Timing { debounce: second, check: second }
