@@ -6,34 +6,16 @@ use rusqlite::Error::ToSqlConversionFailure;
 /// A random id for a new row: a positive 63-bit integer from the system's random source. Fails
 /// only when that source cannot be read.
 pub fn new_id() -> rusqlite::Result<i64> {
-    loop {
-        let bits = getrandom::u64().map_err(|error| ToSqlConversionFailure(Box::new(error)))?;
-        if let Some(id) = positive(bits) {
-            return Ok(id);
-        }
-    }
-}
-
-/// `bits` shifted right one place, which clears the sign bit, as an id, or `None` when that
-/// leaves zero.
-fn positive(bits: u64) -> Option<i64> {
-    Some((bits >> 1).cast_signed()).filter(|&id| id > 0)
+    let bits = getrandom::u64().map_err(|error| ToSqlConversionFailure(Box::new(error)))?;
+    // Shifting clears the sign bit. Zero, one draw in 2⁶³, is taken as one.
+    Ok((bits >> 1).cast_signed().max(1))
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
-    use super::{new_id, positive};
-
-    #[test]
-    fn an_id_is_any_positive_63_bit_integer() {
-        assert_eq!(positive(0), None);
-        assert_eq!(positive(1), None);
-        assert_eq!(positive(2), Some(1));
-        assert_eq!(positive(1 << 63), Some(1 << 62));
-        assert_eq!(positive(u64::MAX), Some(i64::MAX));
-    }
+    use super::new_id;
 
     /// Drawn ids are positive and distinct, and use the top of the range: the chance that a
     /// thousand all fall in its lower half is 2⁻¹⁰⁰⁰.
