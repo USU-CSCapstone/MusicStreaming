@@ -201,6 +201,8 @@ BEGIN
     ON CONFLICT (artist_id, sort_key) DO UPDATE SET uses = uses + 1;
 END;
 
+-- The track's key moves its vote as album artist to the new key, as tracks_artist_sort_key moves
+-- its vote as artist; an empty key is no vote.
 CREATE TRIGGER tracks_album_artist_sort_key AFTER UPDATE OF file_album_artist_sort_key ON tracks
 WHEN NEW.file_album_artist_sort_key <> OLD.file_album_artist_sort_key
 BEGIN
@@ -267,6 +269,8 @@ BEGIN
     WHERE artist_id = OLD.artist_id AND tag_id IN (SELECT tag_id FROM track_tags WHERE track_id = OLD.track_id);
 END;
 
+-- An album credit counts toward the artist's spelling, and, when it is the first credit, the
+-- track's album artist sort key unless that is empty.
 CREATE TRIGGER track_album_artists_added AFTER INSERT ON track_album_artists
 BEGIN
     INSERT INTO artist_spellings (library_id, artist_id, name, uses)
@@ -278,6 +282,7 @@ BEGIN
     ON CONFLICT (artist_id, sort_key) DO UPDATE SET uses = uses + 1;
 END;
 
+-- Undoes what track_album_artists_added counted.
 CREATE TRIGGER track_album_artists_removed AFTER DELETE ON track_album_artists
 BEGIN
     UPDATE artist_spellings SET uses = uses - 1

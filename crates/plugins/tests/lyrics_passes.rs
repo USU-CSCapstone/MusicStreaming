@@ -155,8 +155,8 @@ async fn a_miss_is_looked_up_again_once_the_saving_mode_changes() {
         let since_epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
         since_epoch.unwrap().as_secs()
     };
-    // Each change runs from a fresh library, where the first run keeps its mode as old as can be,
-    // so the misses made a moment later can be due only for a change of mode.
+    // Each change runs from a fresh library, whose first run keeps its mode as changed at time 0,
+    // so a miss made later is due again only if the mode changes after it.
     let changes = [
         ((false, true), (true, true), "it may add files now"),
         ((true, true), (true, false), "plain lyrics are wanted now"),

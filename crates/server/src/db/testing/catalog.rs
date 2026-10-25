@@ -181,7 +181,7 @@ impl Track {
     }
 
     /// Adds the track, on its library's root, its file giving the artist and album sort keys it
-    /// copies.
+    /// copies and no album artist sort key.
     pub fn insert(&self, conn: &Connection) -> Result<()> {
         conn.prepare_cached(
             "INSERT INTO tracks (id, library_id, album_id, root_id, path, file_size, file_mtime, \
