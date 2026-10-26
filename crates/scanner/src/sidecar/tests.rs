@@ -226,6 +226,10 @@ fn of_biographies_differing_in_case_the_first_usable_applies() {
         let audio = root.join("A/X/01.flac");
         touch(&audio, b"x");
         touch(&root.join("A/ARTIST.TXT"), upper);
+        if root.join("A/artist.txt").exists() {
+            eprintln!("skipping: this file system does not tell names apart by case");
+            return;
+        }
         touch(&root.join("A/artist.txt"), lower);
         let dir = audio.parent().unwrap();
         let mut scoped = resolver(&root);

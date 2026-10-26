@@ -1,5 +1,7 @@
 //! The background pool's threads run at low priority. The only test in its binary, so no other
-//! test's threads come and go while it reads them.
+//! test's threads come and go while it reads them. Linux only: elsewhere they keep their
+//! priority, and `/proc` is Linux's.
+#![cfg(target_os = "linux")]
 
 use std::sync::Arc;
 use std::time::Duration;

@@ -63,10 +63,10 @@ fn past_the_end_is_empty() {
 #[test]
 fn names_sort_by_their_bytes_and_after_need_not_name_one() {
     let (_temp, root) = library();
-    for name in ["é", "z", "Z", "b.flac", "a"] {
+    for name in ["é", "z", "Y", "b.flac", "a"] {
         fs::write(root.join("Album").join(name), b"").unwrap();
     }
-    let all = ["01.flac", "Z", "a", "b.flac", "z", "é"];
+    let all = ["01.flac", "Y", "a", "b.flac", "z", "é"];
     assert_eq!(names(&root, "Album", None), all);
     assert_eq!(names(&root, "Album", Some("b")), ["b.flac", "z", "é"]);
     assert_eq!(names(&root, "Album", Some("z")), ["é"]);
@@ -115,6 +115,8 @@ fn a_folder_that_cannot_be_searched_fails_the_listing_naming_it() {
     assert!(failed(listed, "Album: permission denied"));
 }
 
+// Linux only: macOS takes no name that is not UTF-8.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_name_that_is_not_utf8_is_left_out() {
     use std::os::unix::ffi::OsStrExt;

@@ -17,6 +17,12 @@ fn registered(registry: &Registry) -> Vec<Pid> {
     registry.children.lock().unwrap().keys().copied().collect()
 }
 
+/// Whether the child `pid` is not reaped yet: a signal of 0 finds a zombie too, on Linux and
+/// macOS alike.
+fn unreaped(pid: Pid) -> bool {
+    rustix::process::test_kill_process(pid) != Err(rustix::io::Errno::SRCH)
+}
+
 /// Waits up to 5 seconds for `done` to hold, and panics if it doesn't.
 fn wait_for(what: &str, done: impl Fn() -> bool) {
     for _ in 0..500 {
@@ -44,10 +50,7 @@ fn unregisters_before_reaping(run: impl FnOnce(Ffmpeg, PathBuf) + Send + 'static
     let pid = registered(&registry)[0];
     std::fs::write(&go, "").unwrap();
     wait_for("the child to unregister", || registered(&registry).is_empty());
-    assert!(
-        Path::new(&format!("/proc/{}", pid.as_raw_pid())).exists(),
-        "the child was reaped before it was unregistered"
-    );
+    assert!(unreaped(pid), "the child was reaped before it was unregistered");
     running.join().unwrap();
 }
 
@@ -74,7 +77,7 @@ fn dropping_a_decode_kills_and_reaps_its_child() {
     drop(stream);
     assert!(dropping.elapsed() < Duration::from_secs(2), "not killed");
     assert!(registered(&ffmpeg.registry).is_empty());
-    assert!(!Path::new(&format!("/proc/{}", pid.as_raw_pid())).exists(), "not reaped");
+    assert!(!unreaped(pid), "not reaped");
 }
 
 #[test]
