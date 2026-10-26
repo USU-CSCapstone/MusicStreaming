@@ -1,4 +1,4 @@
-//! Most of these run on paused time: whenever every task waits, the clock jumps to the next
+//! Some of these run on paused time: whenever every task waits, the clock jumps to the next
 //! timer.
 
 use std::convert::Infallible;
@@ -89,7 +89,9 @@ async fn a_connection_that_sends_nothing_is_closed_after_the_timeout() {
     assert!(opened.elapsed() >= HEADER_READ_TIMEOUT, "{:?}", opened.elapsed());
 }
 
-#[tokio::test(start_paused = true)]
+// On real time: paused time can pass the 1 s limit on each read before the kernel hands the
+// server the request.
+#[tokio::test]
 async fn a_connection_serves_a_second_request_after_its_response() {
     let (address, _stop, _server) = start(routes()).await;
     let request = b"GET / HTTP/1.1\r\nHost: jewelcase\r\n\r\n";
@@ -125,7 +127,9 @@ async fn an_idle_connection_stays_open_for_a_while_and_is_closed_by_the_timeout(
     assert!(idle_since.elapsed() <= HEADER_READ_TIMEOUT + Duration::from_secs(1));
 }
 
-#[tokio::test(start_paused = true)]
+// On real time: paused time can pass the 1 s limit on the read before the kernel hands the
+// server the request.
+#[tokio::test]
 async fn handlers_are_told_the_client_address() {
     let (address, _stop, _server) = start(routes()).await;
     let request = b"GET / HTTP/1.1\r\nHost: jewelcase\r\nConnection: close\r\n\r\n";
