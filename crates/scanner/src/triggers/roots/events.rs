@@ -11,11 +11,14 @@ use crate::worker::Stop;
 impl Roots {
     /// Watches what an event of `kind` at `path` may show that is not yet watched: a folder
     /// made or moved in, with the folders below it. Stops walking once `stop` is asked.
+    ///
+    /// On macOS, an event does not say which side of a rename its path is, so any rename may
+    /// have moved a folder in; a path moved away is gone, and watching it does nothing.
     pub(in crate::triggers) fn watch_shown(&mut self, kind: &EventKind, path: &Path, stop: &Stop) {
         if matches!(
             kind,
             EventKind::Create(CreateKind::Folder)
-                | EventKind::Modify(ModifyKind::Name(RenameMode::To))
+                | EventKind::Modify(ModifyKind::Name(RenameMode::To | RenameMode::Any))
         ) {
             self.watch_new(path, stop);
         }

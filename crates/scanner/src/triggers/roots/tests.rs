@@ -14,6 +14,14 @@ mod watcher;
 /// How long a test waits for what it expects before it fails.
 const PATIENCE: Duration = Duration::from_secs(10);
 
+/// A temporary folder, and its real path, which is the one events name: on macOS, temporary
+/// folders lie behind a link.
+fn real_tempdir() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().canonicalize().unwrap();
+    (tmp, real)
+}
+
 /// A scanner of the library with its one root at `root`, the owner of its thread, and its store.
 fn scanner(root: &Path) -> (Scanner, ScannerThread, Arc<BareStore>) {
     let store = Arc::new(BareStore::default());

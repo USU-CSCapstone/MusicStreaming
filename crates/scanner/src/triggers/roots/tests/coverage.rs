@@ -4,6 +4,9 @@ use std::fs::Permissions;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::sync::mpsc::Receiver;
 
+use notify::EventKind;
+use notify::event::{ModifyKind, RenameMode};
+
 use super::*;
 use crate::triggers::spawn_watch;
 
@@ -44,8 +47,8 @@ fn unlock(folder: &Path) {
 /// be, is passed over as the scan passes over it, and every other folder is watched.
 #[test]
 fn a_folder_that_cannot_be_read_leaves_the_rest_watched() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("root");
+    let (_temp, tmp) = real_tempdir();
+    let root = tmp.join("root");
     let siblings: Vec<PathBuf> = ["b", "c", "d/e"].iter().map(|name| root.join(name)).collect();
     siblings.iter().for_each(|folder| fs::create_dir_all(folder).unwrap());
     // Made last, which tmpfs lists first.
@@ -68,8 +71,8 @@ fn a_folder_that_cannot_be_read_leaves_the_rest_watched() {
 /// made later.
 #[test]
 fn no_folder_is_watched_through_a_link() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (root, outside) = (tmp.path().join("root"), tmp.path().join("outside"));
+    let (_temp, tmp) = real_tempdir();
+    let (root, outside) = (tmp.join("root"), tmp.join("outside"));
     fs::create_dir(&root).unwrap();
     fs::create_dir(&outside).unwrap();
     let (early, later) = (root.join("early"), root.join("later"));
@@ -90,19 +93,40 @@ fn no_folder_is_watched_through_a_link() {
 /// as their events arrive.
 #[test]
 fn folders_that_appear_later_are_watched() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("root");
+    let (_temp, tmp) = real_tempdir();
+    let root = tmp.join("root");
     fs::create_dir(&root).unwrap();
-    fs::create_dir_all(tmp.path().join("outside/a/b")).unwrap();
+    fs::create_dir_all(tmp.join("outside/a/b")).unwrap();
     let (scanner, thread, store) = scanner(&root);
     let watcher =
         spawn_watch(scanner.clone(), vec![root.clone()], Arc::default(), timing()).unwrap();
     let mut last = seen(&store, &root, &root, 0);
     fs::create_dir(root.join("new")).unwrap();
     last = seen(&store, &root, &root.join("new"), last);
-    fs::rename(tmp.path().join("outside/a"), root.join("a")).unwrap();
+    fs::rename(tmp.join("outside/a"), root.join("a")).unwrap();
     seen(&store, &root, &root.join("a/b"), last);
     drop(watcher);
+    drop(thread);
+}
+
+/// A folder moved in is watched even when its event does not say which side of the rename its
+/// path is, as on macOS.
+#[test]
+fn a_folder_moved_in_is_watched_from_a_rename_that_names_no_side() {
+    let (_temp, tmp) = real_tempdir();
+    let root = tmp.join("root");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir_all(tmp.join("outside/a/b")).unwrap();
+    let (scanner, thread, _) = scanner(&root);
+    let (tx, rx) = mpsc::channel();
+    let paths = slice::from_ref(&root);
+    let (_alive, stop) = Stop::new();
+    let mut roots = Roots::start(scanner.clone(), paths, tx, Arc::default(), &timing(), &stop);
+    fs::rename(tmp.join("outside/a"), root.join("a")).unwrap();
+    let renamed = EventKind::Modify(ModifyKind::Name(RenameMode::Any));
+    roots.watch_shown(&renamed, &root.join("a"), &stop);
+    events_until(&rx, &root.join("a/b"));
+    drop(roots);
     drop(thread);
 }
 
@@ -110,8 +134,7 @@ fn folders_that_appear_later_are_watched() {
 /// event was dropped, is watched.
 #[test]
 fn dropped_events_have_every_root_walked_again() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().to_path_buf();
+    let (_temp, root) = real_tempdir();
     let (scanner, thread, _) = scanner(&root);
     let (tx, rx) = mpsc::channel();
     let paths = slice::from_ref(&root);

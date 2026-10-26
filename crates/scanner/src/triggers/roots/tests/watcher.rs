@@ -22,8 +22,7 @@ fn looping(
 /// scanner and through it the database, is let go before the process ends.
 #[test]
 fn stopping_an_idle_watcher_waits_for_its_thread() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().to_path_buf();
+    let (_temp, root) = real_tempdir();
     let (scanner, thread, store) = scanner(&root);
     let watcher =
         spawn_watch(scanner.clone(), vec![root.clone()], Arc::default(), timing()).unwrap();
@@ -39,14 +38,14 @@ fn stopping_an_idle_watcher_waits_for_its_thread() {
 /// changes are seen.
 #[test]
 fn a_root_replaced_under_its_path_is_watched_afresh() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("root");
+    let (_temp, tmp) = real_tempdir();
+    let root = tmp.join("root");
     fs::create_dir(&root).unwrap();
     let (scanner, thread, store) = scanner(&root);
     let watcher =
         spawn_watch(scanner.clone(), vec![root.clone()], Arc::default(), timing()).unwrap();
     let before = seen(&store, &root, &root, 0);
-    replace(&root, &tmp.path().join("old"));
+    replace(&root, &tmp.join("old"));
     seen(&store, &root, &root, before);
     drop(watcher);
     drop(thread);
@@ -55,8 +54,7 @@ fn a_root_replaced_under_its_path_is_watched_afresh() {
 /// The watcher leaves out what the library's excludes match.
 #[test]
 fn what_the_library_excludes_is_not_watched() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().to_path_buf();
+    let (_temp, root) = real_tempdir();
     let skip = root.join("skip");
     fs::create_dir(&skip).unwrap();
     let store = Arc::new(BareStore::default());
