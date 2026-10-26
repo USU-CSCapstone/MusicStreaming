@@ -54,10 +54,17 @@ async fn login(
     (status, headers, serde_json::from_slice(&body).unwrap())
 }
 
-/// Moves every recorded attempt `ms` into the past, as if that much time had gone by.
-async fn wait(db: &Database, ms: i64) {
+/// Moves every recorded attempt so that the latest was made `ms` ago. A wait runs from when an
+/// attempt is recorded, before its password check, which queues behind other tests' under
+/// load, so without this a one-second wait may be over by the time the next attempt is made.
+async fn since_latest(db: &Database, ms: i64) {
+    let latest = crate::db::now_ms() - ms;
     db.write(move |tx| {
-        tx.execute("UPDATE login_attempts SET attempted_at = attempted_at - ?1", [ms])
+        tx.execute(
+            "UPDATE login_attempts \
+             SET attempted_at = attempted_at + ?1 - (SELECT max(attempted_at) FROM login_attempts)",
+            [latest],
+        )
     })
     .await
     .unwrap();
@@ -193,17 +200,19 @@ async fn repeated_failures_wait_longer_each_time_then_clear() {
     for _ in 0..5 {
         assert_eq!(login(&app, "203.0.113.5", "sam", "wrong").await.0, StatusCode::UNAUTHORIZED);
     }
+    since_latest(&db, 0).await;
     // Refused without checking, so even the right password waits, from anywhere.
     let (status, headers, problem) = login(&app, "198.51.100.7", "sam", PASSWORD).await;
     assert_eq!((status, &problem["code"]), (StatusCode::TOO_MANY_REQUESTS, &json!("rate_limited")));
     assert_eq!(headers[header::RETRY_AFTER], "1");
 
-    wait(&db, 1000).await;
+    since_latest(&db, 1000).await;
     assert_eq!(login(&app, "203.0.113.5", "sam", "wrong").await.0, StatusCode::UNAUTHORIZED);
+    since_latest(&db, 0).await;
     assert_eq!(login(&app, "203.0.113.5", "sam", PASSWORD).await.1[header::RETRY_AFTER], "2");
 
     // An hour on, the failures no longer count.
-    wait(&db, 60 * 60 * 1000).await;
+    since_latest(&db, 60 * 60 * 1000).await;
     assert_eq!(login(&app, "203.0.113.5", "sam", PASSWORD).await.0, StatusCode::OK);
 }
 
@@ -222,20 +231,22 @@ async fn a_success_clears_the_accounts_failures() {
 
 #[tokio::test]
 async fn unknown_usernames_are_limited_like_real_ones() {
-    let (_temp, _db, app) = server().await;
+    let (_temp, db, app) = server().await;
     for _ in 0..5 {
         login(&app, "203.0.113.5", "ghost", "wrong").await;
     }
+    since_latest(&db, 0).await;
     assert_eq!(login(&app, "203.0.113.5", "GHOST", "wrong").await.0, StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test]
 async fn a_sweep_from_one_origin_is_limited() {
-    let (_temp, _db, app) = server().await;
+    let (_temp, db, app) = server().await;
     for i in 0..20 {
         let (status, _, _) = login(&app, "203.0.113.5", &format!("user{i}"), "wrong").await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
+    since_latest(&db, 0).await;
     assert_eq!(login(&app, "203.0.113.5", "sam", PASSWORD).await.0, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(login(&app, "198.51.100.7", "sam", PASSWORD).await.0, StatusCode::OK);
 }
@@ -265,12 +276,13 @@ async fn an_origins_successes_do_not_count_against_it() {
 
 #[tokio::test]
 async fn an_ipv6_sweep_is_limited_across_its_64() {
-    let (_temp, _db, app) = server().await;
+    let (_temp, db, app) = server().await;
     for i in 0..20 {
         let peer = format!("2001:db8:1:2::{i:x}");
         let (status, _, _) = login(&app, &peer, &format!("user{i}"), "wrong").await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
+    since_latest(&db, 0).await;
     let next = login(&app, "2001:db8:1:2:ffff:ffff:ffff:ffff", "sam", PASSWORD).await;
     assert_eq!(next.0, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(login(&app, "2001:db8:1:3::1", "sam", PASSWORD).await.0, StatusCode::OK);
