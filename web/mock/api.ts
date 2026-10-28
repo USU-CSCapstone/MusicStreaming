@@ -93,6 +93,9 @@ export function createApi(dataDir: string) {
 			/^\/artists\/([^/]+)$/,
 			({ lib, params }) => withKey(params[0], (k) => catalog.artist(lib, k))
 		],
+		[/^\/tag-types$/, ({ lib }) => catalog.tagTypes(lib)],
+		[/^\/tags$/, ({ lib, query }) => catalog.listTags(lib, query)],
+		[/^\/tags\/([^/]+)$/, ({ lib, params }) => withKey(params[0], (k) => catalog.tag(lib, k))],
 		[/^\/search$/, ({ lib, query }) => search(lib, query)],
 		[
 			/^\/tracks\/([^/]+)\/waveform$/,

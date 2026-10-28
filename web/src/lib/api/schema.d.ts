@@ -410,6 +410,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/libraries/{libraryId}/tag-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List tag types
+         * @description **Planned:** The tag types the library's music carries, in key order: each type with at
+         *     least one tag in the library, and its count of tags. A type no file in the library
+         *     carries is left out, so a filter drawn from this list never shows an empty section
+         *     (`requirements/tags.md` §2, §8).
+         */
+        get: operations["listTagTypes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/libraries/{libraryId}/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Browse tags
+         * @description **Planned:** The library's tags, of one type or every type. A tag sorts by its name, its
+         *     leading article kept (`requirements/conventions.md` §4).
+         */
+        get: operations["listTags"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/libraries/{libraryId}/tags/{tagId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+                tagId: components["parameters"]["TagId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get a tag
+         * @description **Planned:** A tag's tracks, albums, and artists are browsed with the `tag` filter on the
+         *     browse endpoints (`requirements/tags.md` §7).
+         */
+        get: operations["getTag"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/libraries/{libraryId}/images/{imageId}": {
         parameters: {
             query?: never;
@@ -1243,6 +1315,32 @@ export interface components {
             id: components["schemas"]["Id"];
             name: string;
         };
+        /**
+         * @description An entity's tags by type key, each type's in name order. A type it carries none of is
+         *     left out (`requirements/tags.md` §2).
+         */
+        TagsByType: {
+            [key: string]: components["schemas"]["TagRef"][];
+        };
+        TagType: {
+            /** @description The type's name in `Tag.type` and in `TagsByType`, such as `genre` or `mood`. */
+            key: string;
+            /** @description Its tags in the library, never 0 (`listTagTypes`). */
+            tagCount: number;
+        };
+        Tag: {
+            id: components["schemas"]["Id"];
+            /** @description Its type's key (`TagType.key`). */
+            type: string;
+            /** @description The spelling the library uses most (`requirements/tags.md` §4). */
+            name: string;
+            trackCount: number;
+            albumCount: number;
+            artistCount: number;
+        };
+        TagPage: components["schemas"]["PageInfo"] & {
+            items: components["schemas"]["Tag"][];
+        };
         /** @description What any source can say about a track. `TrackSummary` adds what only the library knows. */
         TrackBase: {
             source?: components["schemas"]["Source"];
@@ -1263,7 +1361,10 @@ export interface components {
         TrackSummary: components["schemas"]["TrackBase"] & {
             album?: components["schemas"]["AlbumRef"];
             explicit: boolean;
+            /** @description Its tags of type `genre`, as `tags.genre`. Goes once `tags` is served. */
             genres?: components["schemas"]["TagRef"][];
+            /** @description Planned. */
+            tags?: components["schemas"]["TagsByType"];
             /** @description Enough to tell a FLAC from an MP3 at a glance (`requirements/tracks.md` §4). The full `Track` extends it. */
             audio: components["schemas"]["AudioSummary"];
             /** Format: date-time */
@@ -1400,7 +1501,10 @@ export interface components {
          */
         AlbumSummary: components["schemas"]["AlbumBase"] & {
             type: components["schemas"]["AlbumType"];
+            /** @description Its tags of type `genre`, as `tags.genre`. Goes once `tags` is served. */
             genres?: components["schemas"]["TagRef"][];
+            /** @description Planned. */
+            tags?: components["schemas"]["TagsByType"];
             /**
              * @description Tracks from this album in the library, including any marked missing — those stay in
              *     position with their own `availability`, so "incomplete" means never had, not lost.
@@ -1459,7 +1563,10 @@ export interface components {
         Artist: components["schemas"]["ArtistSummary"] & {
             /** @description From `artist.txt` (`requirements/scanning.md` §3.3). Usually absent. */
             biography: string | null;
+            /** @description Its tags of type `genre`, as `tags.genre`. Goes once `tags` is served. */
             genres: components["schemas"]["TagRef"][];
+            /** @description Planned. */
+            tags?: components["schemas"]["TagsByType"];
             appearanceCount: number;
         };
         ArtistPage: components["schemas"]["PageInfo"] & {
@@ -1645,9 +1752,9 @@ export interface components {
         };
         /** @description The browse filters, as a value (`requirements/tags.md` §7). */
         BrowseFilter: {
-            genres?: string[];
+            tags?: string[];
             /** @enum {string} */
-            genreMatch?: "all" | "any";
+            tagMatch?: "all" | "any";
             yearFrom?: number;
             yearTo?: number;
             albumTypes?: components["schemas"]["AlbumType"][];
@@ -1680,7 +1787,7 @@ export interface components {
              * @enum {string}
              */
             type: "radio";
-            /** @description Track, album, artist, playlist, or genre tag (`requirements/recommendations.md` §4). */
+            /** @description Track, album, artist, playlist, or tag (`requirements/recommendations.md` §4). */
             seed: components["schemas"]["EntityRef"];
         };
         ExternalContext: {
@@ -2192,10 +2299,16 @@ export interface components {
          */
         ArtistCredit: "any" | "owned" | "featured";
         Order: "asc" | "desc";
-        /** @description Tag IDs of type `genre`. Planned. */
-        Genre: string[];
-        /** @description Whether items must carry all or any of the given genres. Planned. */
-        GenreMatch: "all" | "any";
+        /**
+         * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
+         *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
+         *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
+         *     does not have matches nothing, as `artistId` does. Planned.
+         */
+        Tag: string[];
+        /** @description Whether an item must carry all or any of the given tags of each type. Planned. */
+        TagMatch: "all" | "any";
+        TagId: string;
         /** @description Planned. */
         YearFrom: number;
         /** @description Planned. */
@@ -2628,10 +2741,15 @@ export interface operations {
                  *     on a track but not an album artist; `any` — either (`requirements/artists.md` §2).
                  */
                 artistCredit?: components["parameters"]["ArtistCredit"];
-                /** @description Tag IDs of type `genre`. Planned. */
-                genre?: components["parameters"]["Genre"];
-                /** @description Whether items must carry all or any of the given genres. Planned. */
-                genreMatch?: components["parameters"]["GenreMatch"];
+                /**
+                 * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
+                 *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
+                 *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
+                 *     does not have matches nothing, as `artistId` does. Planned.
+                 */
+                tag?: components["parameters"]["Tag"];
+                /** @description Whether an item must carry all or any of the given tags of each type. Planned. */
+                tagMatch?: components["parameters"]["TagMatch"];
                 /** @description Planned. */
                 yearFrom?: components["parameters"]["YearFrom"];
                 /** @description Planned. */
@@ -2708,10 +2826,15 @@ export interface operations {
                 artistCredit?: components["parameters"]["ArtistCredit"];
                 /** @description Filter by album type (`requirements/albums.md` §6). Planned. */
                 type?: components["schemas"]["AlbumType"][];
-                /** @description Tag IDs of type `genre`. Planned. */
-                genre?: components["parameters"]["Genre"];
-                /** @description Whether items must carry all or any of the given genres. Planned. */
-                genreMatch?: components["parameters"]["GenreMatch"];
+                /**
+                 * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
+                 *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
+                 *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
+                 *     does not have matches nothing, as `artistId` does. Planned.
+                 */
+                tag?: components["parameters"]["Tag"];
+                /** @description Whether an item must carry all or any of the given tags of each type. Planned. */
+                tagMatch?: components["parameters"]["TagMatch"];
                 /** @description Planned. */
                 yearFrom?: components["parameters"]["YearFrom"];
                 /** @description Planned. */
@@ -2779,10 +2902,15 @@ export interface operations {
                 /** @description `playCount` and `lastPlayed` are planned. */
                 sort?: "name" | "dateAdded" | "playCount" | "lastPlayed";
                 order?: components["parameters"]["Order"];
-                /** @description Tag IDs of type `genre`. Planned. */
-                genre?: components["parameters"]["Genre"];
-                /** @description Whether items must carry all or any of the given genres. Planned. */
-                genreMatch?: components["parameters"]["GenreMatch"];
+                /**
+                 * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
+                 *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
+                 *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
+                 *     does not have matches nothing, as `artistId` does. Planned.
+                 */
+                tag?: components["parameters"]["Tag"];
+                /** @description Whether an item must carry all or any of the given tags of each type. Planned. */
+                tagMatch?: components["parameters"]["TagMatch"];
                 /** @description Server availability (`requirements/conventions.md` §6). Playability on a device is the client's to filter. Planned. */
                 availability?: components["parameters"]["Availability"];
                 /** @description Filter by whether the caller has ever played the item. Planned. */
@@ -2835,6 +2963,83 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Artist"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listTagTypes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagType"][];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listTags: {
+        parameters: {
+            query?: {
+                /** @description Only tags of this type (`listTagTypes`). */
+                type?: string;
+                sort?: "name" | "trackCount";
+                order?: components["parameters"]["Order"];
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagPage"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getTag: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+                tagId: components["parameters"]["TagId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Tag"];
                 };
             };
             default: components["responses"]["Problem"];
@@ -3041,8 +3246,15 @@ export interface operations {
                 types?: components["parameters"]["SearchTypes"];
                 /** @description Narrow to a container, as `artist:ID`, `album:ID`, or `playlist:ID` (`requirements/search.md` §5). Planned. */
                 within?: components["parameters"]["Within"];
-                /** @description Tag IDs of type `genre`. Planned. */
-                genre?: components["parameters"]["Genre"];
+                /**
+                 * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
+                 *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
+                 *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
+                 *     does not have matches nothing, as `artistId` does. Planned.
+                 */
+                tag?: components["parameters"]["Tag"];
+                /** @description Whether an item must carry all or any of the given tags of each type. Planned. */
+                tagMatch?: components["parameters"]["TagMatch"];
                 /** @description Planned. */
                 yearFrom?: components["parameters"]["YearFrom"];
                 /** @description Planned. */
