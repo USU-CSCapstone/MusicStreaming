@@ -55,17 +55,23 @@ Writing your own is covered in the [plugin guide](plugins/README.md).
 ## Checks
 
 Run these before opening a pull request. They run on your machine, so you need the tools
-from [Without Docker](#without-docker).
+from [Without Docker](#without-docker). CI runs them again on every pull request.
 
 | Where | Command |
 |---|---|
 | Repository root | `cargo fmt --check` |
-| | `cargo clippy` |
+| | `cargo clippy --workspace --all-targets -- -D warnings` |
 | | `cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used` |
+| | `cargo test` |
+| Each `plugins/<id>/` | `cargo fmt --check` |
+| | `cargo clippy --all-targets -- -D warnings` |
+| | `cargo clippy --target wasm32-wasip2 -- -D warnings` |
 | | `cargo test` |
 | `web/` | `pnpm lint` and `pnpm format:check` |
 | | `pnpm check` |
+| | `pnpm gen:api`, which must leave `src/lib/api/schema.d.ts` unchanged |
 | | `pnpm test` |
+| `api/` | `npx @redocly/cli@2.65.1 lint openapi.yaml` |
 
 Code outside tests may not use `unwrap()`. Use `expect("why it can't fail")` only where failure
 is impossible, and handle anything that depends on input, files, configuration, or the
