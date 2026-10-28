@@ -37,7 +37,7 @@ pub struct EditRequest {
     edit: Value,
 }
 
-/// The spec's `QueueEditApplied`.
+/// The answer to an applied edit.
 #[derive(Serialize)]
 pub struct Applied {
     /// The queue's version once the edit was applied.
@@ -53,7 +53,8 @@ struct Add {
 
 /// `editQueue`: applies the edit to the caller's queue and answers its new version. An `add`
 /// of `tracks` is checked as a start's are, and one of a `query` is run by the server, so
-/// every device gets the same tracks. `404` without a queue, `409` if `queueId` is not the
+/// every device gets the same tracks; an `add` that is not sent as an object with `type`
+/// `add` is refused, so none skips that check. `404` without a queue, `409` if `queueId` is not the
 /// queue the caller has or the edit's anchor is gone, `422` for an edit the core refuses.
 pub async fn edit(
     State(db): State<Arc<Database>>,
@@ -73,7 +74,11 @@ pub async fn edit(
         let source = Source { key: key.as_str().to_owned(), library_id, tracks };
         Edit::Add { source, before }
     } else {
-        serde_json::from_value(request.edit).map_err(invalid)?
+        // The core also reads an `add` from a JSON array, which has not been checked above.
+        match serde_json::from_value(request.edit).map_err(invalid)? {
+            Edit::Add { .. } => return Err(Problem::invalid("An add must be an object.")),
+            edit => edit,
+        }
     };
 
     // A queue of hundreds of thousands of tracks takes a while to edit and to send.

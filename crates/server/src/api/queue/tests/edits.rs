@@ -207,6 +207,22 @@ async fn an_add_of_tracks_out_of_reach_is_refused_as_a_start_is() {
     assert!(hears_no_queue(&mut socket).await);
 }
 
+#[tokio::test]
+async fn an_add_sent_as_an_array_is_refused_as_an_object_is() {
+    let (_temp, app) = setup().await;
+    let address = serve(app.clone()).await;
+    let mut socket = connect_with(address, "user2").await;
+    post(&app, "user2", start(QUEUE, "1", &["1"])).await;
+    next_of(&mut socket, "queueReplaced").await;
+
+    let source = json!({ "key": ADDED, "libraryId": "2", "tracks": ["3"] });
+    let edit = json!(["add", source, { "type": "manualEnd" }]);
+    let (status, _) = send(&app, "user2", QUEUE, 1, edit).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(get(&app, "user2").await.1["version"], 0);
+    assert!(hears_no_queue(&mut socket).await);
+}
+
 /// The detail of the refusal of the start `body` by user 2.
 async fn post_body(app: &Router, body: Value) -> Value {
     let (status, problem) = call(app, "user2", "POST", "/api/v1/me/queue", Some(body)).await;

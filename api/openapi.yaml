@@ -3038,23 +3038,7 @@ components:
           allOf:
             - $ref: '#/components/schemas/Context'
           description: What the queue started from, kept as sent.
-        source:
-          type: object
-          required: [key, libraryId]
-          description: |
-            The tracks to play, in the order the device shows them, resolved once and never
-            rewritten: exactly one of `tracks`, or a `query` the server runs to its end, which is
-            then frozen the same way. A track may appear more than once; each copy is its own item.
-          properties:
-            key:
-              type: string
-              format: uuid
-              description: Client-generated. Names the source's items, `<key>.<index>`.
-            libraryId: { type: string }
-            tracks:
-              type: array
-              items: { type: string }
-            query: { $ref: '#/components/schemas/QueueQuery' }
+        source: { $ref: '#/components/schemas/QueueSourceRequest' }
         start:
           type: integer
           minimum: 0
@@ -3068,6 +3052,28 @@ components:
           description: Start shuffled, with the order this seed gives.
           properties:
             seed: { type: integer, minimum: 0, maximum: 4294967295 }
+
+    QueueSourceRequest:
+      description: |
+        The tracks of a new source, as a start or an add sends them, resolved once and never
+        rewritten: exactly one of `tracks`, or a `query` the server runs to its end, which is
+        then frozen the same way. A track may appear more than once; each copy is its own item.
+        Both are checked: every track must be in the library, and the library one the caller reaches.
+      oneOf:
+        - type: object
+          required: [key, libraryId, tracks]
+          properties:
+            key: { type: string, format: uuid, description: "Client-generated. Names the source's items, `<key>.<index>`." }
+            libraryId: { type: string }
+            tracks:
+              type: array
+              items: { type: string }
+        - type: object
+          required: [key, libraryId, query]
+          properties:
+            key: { type: string, format: uuid, description: "Client-generated. Names the source's items, `<key>.<index>`." }
+            libraryId: { type: string }
+            query: { $ref: '#/components/schemas/QueueQuery' }
 
     QueueQuery:
       description: |
@@ -3119,13 +3125,7 @@ components:
               description: An `add` whose tracks the server is to find, which `queueEdit` then carries as `tracks`.
               properties:
                 type: { const: add }
-                source:
-                  type: object
-                  required: [key, libraryId, query]
-                  properties:
-                    key: { type: string, format: uuid }
-                    libraryId: { type: string }
-                    query: { $ref: '#/components/schemas/QueueQuery' }
+                source: { $ref: '#/components/schemas/QueueSourceRequest' }
                 before: { $ref: '#/components/schemas/QueueAnchor' }
 
     QueueEdit:

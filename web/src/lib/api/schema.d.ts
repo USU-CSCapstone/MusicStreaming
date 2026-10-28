@@ -1984,21 +1984,7 @@ export interface components {
             queueId: string;
             /** @description What the queue started from, kept as sent. */
             context: Omit<components["schemas"]["Context"], "type">;
-            /**
-             * @description The tracks to play, in the order the device shows them, resolved once and never
-             *     rewritten: exactly one of `tracks`, or a `query` the server runs to its end, which is
-             *     then frozen the same way. A track may appear more than once; each copy is its own item.
-             */
-            source: {
-                /**
-                 * Format: uuid
-                 * @description Client-generated. Names the source's items, `<key>.<index>`.
-                 */
-                key: string;
-                libraryId: string;
-                tracks?: string[];
-                query?: components["schemas"]["QueueQuery"];
-            };
+            source: components["schemas"]["QueueSourceRequest"];
             /** @description Required with `tracks`, and refused with a `query`. The index of the track that plays first. */
             start?: number;
             /** @description Required with a `query`, and refused with `tracks`. The track that plays first, at its first place in the list. */
@@ -2007,6 +1993,29 @@ export interface components {
             shuffle?: {
                 seed: number;
             };
+        };
+        /**
+         * @description The tracks of a new source, as a start or an add sends them, resolved once and never
+         *     rewritten: exactly one of `tracks`, or a `query` the server runs to its end, which is
+         *     then frozen the same way. A track may appear more than once; each copy is its own item.
+         *     Both are checked: every track must be in the library, and the library one the caller reaches.
+         */
+        QueueSourceRequest: {
+            /**
+             * Format: uuid
+             * @description Client-generated. Names the source's items, `<key>.<index>`.
+             */
+            key: string;
+            libraryId: string;
+            tracks: string[];
+        } | {
+            /**
+             * Format: uuid
+             * @description Client-generated. Names the source's items, `<key>.<index>`.
+             */
+            key: string;
+            libraryId: string;
+            query: components["schemas"]["QueueQuery"];
         };
         /** @description A list for the server to read to its end, as the view that started the queue pages it. */
         QueueQuery: {
@@ -2039,12 +2048,7 @@ export interface components {
             edit: components["schemas"]["QueueEdit"] | {
                 /** @constant */
                 type: "add";
-                source: {
-                    /** Format: uuid */
-                    key: string;
-                    libraryId: string;
-                    query: components["schemas"]["QueueQuery"];
-                };
+                source: components["schemas"]["QueueSourceRequest"];
                 before: components["schemas"]["QueueAnchor"];
             };
         };
