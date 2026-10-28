@@ -215,6 +215,17 @@ fn labels(tags: &[&Tag]) -> Vec<String> {
     if labels.is_empty() { strings(tags, &ItemKey::Publisher) } else { labels }
 }
 
+/// A tag type the mapper reads (`design/scanning.md` §4): its key, as `tag_types` lists it, and
+/// the lofty key its values come from.
+struct TagTypeField {
+    key: &'static str,
+    item: ItemKey,
+}
+
+/// Every tag type the scanner reads (`requirements/tags.md` §2). Each is read the same way, by
+/// [`strings`], so a new type is an entry here and nothing else.
+const TAG_TYPES: &[TagTypeField] = &[TagTypeField { key: "genre", item: ItemKey::Genre }];
+
 /// Parse a number that may be packed as `n/total`.
 fn number_pair(raw: &str) -> (Option<u32>, Option<u32>) {
     let mut it = raw.split('/');
@@ -279,7 +290,9 @@ fn map_tags(file: &TaggedFile) -> TagSet {
             .iter()
             .find_map(|k| first_string(&tags, k).and_then(|s| PartialDate::parse(&s)));
 
-    out.genres = strings(&tags, &ItemKey::Genre);
+    for tag_type in TAG_TYPES {
+        out.set_values(tag_type.key, strings(&tags, &tag_type.item));
+    }
     out.release_type =
         first_string(&tags, &ItemKey::MusicBrainzReleaseType).map(|s| s.to_ascii_lowercase());
     out.labels = labels(&tags);

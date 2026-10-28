@@ -1,6 +1,7 @@
 //! The generated library the benchmarks run on, at a large library's scale
 //! (`requirements/performance.md` §1, §8), and how they report what they measure.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -90,7 +91,7 @@ fn tagged(root: &Path, artist: u64, album: u64, number: u64, stamp: SidecarStamp
         album: Some(album_title),
         album_artists: vec![artist_name],
         track_number: u32::try_from(number).ok(),
-        genres: vec![format!("Genre {genre}")],
+        tag_values: BTreeMap::from([("genre".into(), vec![format!("Genre {genre}")])]),
         release_date: PartialDate::parse(&(1960 + mix(album ^ 4) % 65).to_string()),
         ..TagSet::default()
     };

@@ -60,7 +60,7 @@ fn random(rng: &mut Rng, root: &Path, path: PathBuf) -> TrackRecord {
     rec.tags.album_artists = if rng.chance(30) { names(rng, ARTISTS, 2) } else { Vec::new() };
     rec.tags.compilation = rng.chance(15);
     rec.tags.album = rng.chance(80).then(|| rng.pick(ALBUMS).to_string());
-    rec.tags.genres = names(rng, GENRES, 3);
+    rec.tags.set_values("genre", names(rng, GENRES, 3));
     rec.tags.labels = names(rng, LABELS, 2);
     rec.tags.disc_number = *rng.pick(&[None, Some(1), Some(2)]);
     rec.tags.track_number = *rng.pick(&[None, Some(1), Some(2)]);
@@ -236,7 +236,7 @@ fn a_genre_taken_off_a_credited_track_is_taken_off_its_artist() {
     let store = SqliteStore::new(db).unwrap();
     let tagged = |i, genres: &[&str]| {
         let mut rec = record(&root, i);
-        rec.tags.genres = genres.iter().map(|genre| genre.to_string()).collect();
+        rec.tags.set_values("genre", genres.iter().map(|genre| genre.to_string()).collect());
         rec
     };
     let upserts = vec![tagged(0, &["Rock", "Jazz"]), tagged(1, &["Rock"])];
