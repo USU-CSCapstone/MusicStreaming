@@ -10,7 +10,9 @@ use jewelcase_core::{Anchor, Edit, Source};
 use serde_json::{Value, json};
 
 use super::super::{Account, Queues};
-use super::{KEY, OTHER, QUEUE, conditional_get, start};
+use super::{KEY, OTHER, QUEUE, conditional_get, launch, start};
+use crate::api::queue::start::Launch;
+use crate::api::realtime::Hub;
 use crate::api::testing::{TOKEN, app_with_tracks, call, eventually, state};
 use crate::api::{AppState, Uuid, router};
 use crate::db::Database;
@@ -27,9 +29,9 @@ fn source(key: &str, tracks: &[&str]) -> Source {
 /// Starts the owner's queue in `queues` as `queue`, playing `tracks` from the first.
 fn begin(queues: &Queues, queue: &str, tracks: &[&str]) {
     let id = Uuid::try_from(queue.to_owned()).unwrap();
-    queues
-        .replace(1, id, json!({ "type": "album", "id": "101" }), source(KEY, tracks), 0, None)
-        .unwrap();
+    let context = json!({ "type": "album", "id": "101" });
+    let launch = Launch { context, ..launch(id, source(KEY, tracks)) };
+    queues.replace(&Hub::default(), 1, launch).unwrap();
 }
 
 /// Applies `edit` to the owner's queue in `queues`, and marks it unsaved, as an edit does.
@@ -237,4 +239,26 @@ async fn a_tag_from_before_a_restart_does_not_match() {
     let (status, _, length) = conditional_get(&again, Some(&tag)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(length > 0);
+}
+
+/// An edit made over HTTP is saved, and the queue a server that starts again serves has it.
+#[tokio::test]
+async fn an_edit_is_served_after_a_restart() {
+    let (temp, db, _app) = app_with_tracks().await;
+    let queues = Arc::new(Queues::default());
+    let app = app_over(&temp, &db, queues.clone());
+    call(&app, TOKEN, "POST", "/api/v1/me/queue", Some(start(QUEUE, "1", &["1", "2"]))).await;
+    // The start is saved, so only the edit's own marking can get it saved.
+    queues.save(&db).await;
+    let edit = json!({ "type": "shuffle", "on": true, "seed": 9 });
+    let body = json!({ "editId": QUEUE, "queueId": QUEUE, "edit": edit });
+    let (status, _) = call(&app, TOKEN, "POST", "/api/v1/me/queue/edits", Some(body)).await;
+    assert_eq!(status, StatusCode::OK);
+
+    queues.save(&db).await;
+    let loaded = Arc::new(Queues::load(&db).await.unwrap());
+    let (_, again) = snapshot(&app_over(&temp, &db, loaded)).await;
+    assert_eq!(again["version"], 1);
+    assert_eq!(again["state"]["shuffle"]["seed"], 9);
+    assert_eq!(again, snapshot(&app).await.1);
 }

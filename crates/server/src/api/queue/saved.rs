@@ -191,6 +191,7 @@ fn restore(
         version,
         context: serde_json::from_str::<Value>(context).ok()?,
         queue,
+        done: Default::default(),
         unsaved: false,
     })
 }
