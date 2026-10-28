@@ -75,6 +75,27 @@ impl Request {
     }
 }
 
+/// The ID in the first column of every row of `source`, in the order of `sort` and `order`: the
+/// list paged to its end, a thousand rows at a time, by the same queries `list` pages with.
+pub fn all_ids(
+    conn: &Connection,
+    source: &Source,
+    sort: &'static Sort,
+    order: Order,
+) -> rusqlite::Result<Vec<i64>> {
+    let mut ids = Vec::new();
+    let mut after = None;
+    loop {
+        let request = Request { sort, order, after, limit: MAX_LIMIT };
+        let (page, next) = keyset::fetch_keyed(conn, source, &request, |row| row.get::<_, i64>(0))?;
+        ids.extend(page);
+        match next {
+            Some(key) => after = Some(key),
+            None => return Ok(ids),
+        }
+    }
+}
+
 /// Checks `limit`, which the spec bounds from 1 to 1000.
 pub fn limit(limit: Option<u32>) -> Result<u32, Problem> {
     let limit = limit.unwrap_or(DEFAULT_LIMIT);

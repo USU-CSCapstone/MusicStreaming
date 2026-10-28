@@ -18,7 +18,7 @@ use super::artists::{self, ArtistSummary};
 use super::extract::Query;
 use super::scope::Scope;
 use super::tracks::{self, TrackSummary};
-use super::{Problem, page};
+use super::{Code, Problem, page};
 use crate::db::{Database, by_ids};
 
 /// The spec's `search` parameters.
@@ -90,6 +90,27 @@ pub async fn search(
         near_misses: Vec::new(),
         library_empty: track_count == 0,
     }))
+}
+
+/// The ID of every track of `library` that matches `q`, best first: the whole of the section a
+/// search of `types=tracks` shows the first `sectionLimit` of, which is the order and the
+/// matches it shows. `q` must not be empty.
+pub async fn track_ids(
+    db: &Arc<Database>,
+    indexes: &Indexes,
+    library: i64,
+    q: &str,
+) -> Result<Vec<i64>, Problem> {
+    if q.is_empty() {
+        return Err(Problem::invalid("q must not be empty"));
+    }
+    let index = indexes.index(db, library).await?;
+    // Ranking every match of a common word takes a while, so it runs off the async threads.
+    let q = q.to_owned();
+    let found = tokio::task::spawn_blocking(move || index.search(&q, &[Kind::Track], usize::MAX))
+        .await
+        .map_err(|_| Problem::new(Code::Internal))?;
+    Ok(found.into_iter().next().map(|section| section.ids).unwrap_or_default())
 }
 
 /// The kinds to search for the comma-separated section `types`. Playlists add none, since there

@@ -831,15 +831,27 @@ export interface paths {
         put?: never;
         /**
          * Start a queue
-         * @description Replaces the account's queue with one that plays `source` from `start`, and carries the
-         *     Manual Queue over (`requirements/queue.md` §6). The device chooses the `queueId` and the
-         *     source's `key` so it can apply the start at once; sending a start again for the queue
-         *     the account already has changes nothing. A track that is missing is allowed and is
-         *     skipped in place (`requirements/conventions.md` §6). Answers `422` unless every track
-         *     is in `libraryId` and the caller reaches the library, whether or not one that is
-         *     refused exists (`requirements/users.md` §10), or when `start` is past the end, or
-         *     `context` is not an object with a string `type` of at most 4 KiB. A request is limited
-         *     to what a 2 MiB body holds, about 90,000 tracks.
+         * @description Replaces the account's queue with one that plays `source` from where it starts, and
+         *     carries the Manual Queue over (`requirements/queue.md` §6). The device chooses the
+         *     `queueId` and the source's `key` so it can apply the start at once; sending a start
+         *     again for the queue the account already has changes nothing. A track that is missing is
+         *     allowed and is skipped in place (`requirements/conventions.md` §6).
+         *
+         *     A device that holds the whole list it shows, such as an album or a playlist, sends the
+         *     `tracks` and the index `start`. One that does not, such as the library's songs, an
+         *     artist's tracks or search results, sends the `query` its view pages through and the
+         *     `startTrackId` the user chose, and the server reads the list to its end. The queue
+         *     then plays what a client paging that list to the end would see, in the same order; the
+         *     first place of `startTrackId` in it is where the queue starts.
+         *
+         *     Answers `422` unless every track is in `libraryId` and the caller reaches the library,
+         *     whether or not one that is refused exists, or, for a `query`, whether or not the
+         *     library does (`requirements/users.md` §10); when `start` is past the end or
+         *     `startTrackId` is not in the list; when `tracks` and `query`, or `start` and
+         *     `startTrackId`, are mixed or one of each pair is missing; when the `query` is one its
+         *     list refuses; or when `context` is not an object with a string `type` of at most 4 KiB.
+         *     A request is limited to what a 2 MiB body holds, about 90,000 tracks, which a `query`
+         *     does not need.
          */
         post: operations["startQueue"];
         delete?: never;
@@ -1933,7 +1945,8 @@ export interface components {
             context: Omit<components["schemas"]["Context"], "type">;
             /**
              * @description The tracks to play, in the order the device shows them, resolved once and never
-             *     rewritten. A track may appear more than once; each copy is its own item.
+             *     rewritten: exactly one of `tracks`, or a `query` the server runs to its end, which is
+             *     then frozen the same way. A track may appear more than once; each copy is its own item.
              */
             source: {
                 /**
@@ -1942,14 +1955,34 @@ export interface components {
                  */
                 key: string;
                 libraryId: string;
-                tracks: string[];
+                tracks?: string[];
+                query?: components["schemas"]["QueueQuery"];
             };
-            /** @description The index in `tracks` of the track that plays first. */
-            start: number;
+            /** @description Required with `tracks`, and refused with a `query`. The index of the track that plays first. */
+            start?: number;
+            /** @description Required with a `query`, and refused with `tracks`. The track that plays first, at its first place in the list. */
+            startTrackId?: string;
             /** @description Start shuffled, with the order this seed gives. */
             shuffle?: {
                 seed: number;
             };
+        };
+        /** @description A list for the server to read to its end, as the view that started the queue pages it. */
+        QueueQuery: {
+            /** @enum {string} */
+            type: "tracks";
+            /** @enum {string} */
+            sort?: "name" | "artist" | "album" | "dateAdded" | "playCount" | "lastPlayed" | "releaseDate" | "duration" | "top";
+            /** @enum {string} */
+            order?: "asc" | "desc";
+            albumId?: string;
+            artistId?: string;
+            /** @enum {string} */
+            artistCredit?: "any" | "owned" | "featured";
+        } | {
+            /** @enum {string} */
+            type: "search";
+            q: string;
         };
         QueueSnapshot: {
             /** Format: uuid */

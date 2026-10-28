@@ -1152,15 +1152,27 @@ paths:
       tags: [Queue]
       summary: Start a queue
       description: |
-        Replaces the account's queue with one that plays `source` from `start`, and carries the
-        Manual Queue over (`requirements/queue.md` §6). The device chooses the `queueId` and the
-        source's `key` so it can apply the start at once; sending a start again for the queue
-        the account already has changes nothing. A track that is missing is allowed and is
-        skipped in place (`requirements/conventions.md` §6). Answers `422` unless every track
-        is in `libraryId` and the caller reaches the library, whether or not one that is
-        refused exists (`requirements/users.md` §10), or when `start` is past the end, or
-        `context` is not an object with a string `type` of at most 4 KiB. A request is limited
-        to what a 2 MiB body holds, about 90,000 tracks.
+        Replaces the account's queue with one that plays `source` from where it starts, and
+        carries the Manual Queue over (`requirements/queue.md` §6). The device chooses the
+        `queueId` and the source's `key` so it can apply the start at once; sending a start
+        again for the queue the account already has changes nothing. A track that is missing is
+        allowed and is skipped in place (`requirements/conventions.md` §6).
+
+        A device that holds the whole list it shows, such as an album or a playlist, sends the
+        `tracks` and the index `start`. One that does not, such as the library's songs, an
+        artist's tracks or search results, sends the `query` its view pages through and the
+        `startTrackId` the user chose, and the server reads the list to its end. The queue
+        then plays what a client paging that list to the end would see, in the same order; the
+        first place of `startTrackId` in it is where the queue starts.
+
+        Answers `422` unless every track is in `libraryId` and the caller reaches the library,
+        whether or not one that is refused exists, or, for a `query`, whether or not the
+        library does (`requirements/users.md` §10); when `start` is past the end or
+        `startTrackId` is not in the list; when `tracks` and `query`, or `start` and
+        `startTrackId`, are mixed or one of each pair is missing; when the `query` is one its
+        list refuses; or when `context` is not an object with a string `type` of at most 4 KiB.
+        A request is limited to what a 2 MiB body holds, about 90,000 tracks, which a `query`
+        does not need.
       operationId: startQueue
       x-status: draft
       requestBody:
@@ -2963,7 +2975,7 @@ components:
     # ───────────────────────────── Queue ─────────────────────────────
     StartQueue:
       type: object
-      required: [queueId, context, source, start]
+      required: [queueId, context, source]
       properties:
         queueId:
           type: string
@@ -2975,10 +2987,11 @@ components:
           description: What the queue started from, kept as sent.
         source:
           type: object
-          required: [key, libraryId, tracks]
+          required: [key, libraryId]
           description: |
             The tracks to play, in the order the device shows them, resolved once and never
-            rewritten. A track may appear more than once; each copy is its own item.
+            rewritten: exactly one of `tracks`, or a `query` the server runs to its end, which is
+            then frozen the same way. A track may appear more than once; each copy is its own item.
           properties:
             key:
               type: string
@@ -2988,16 +3001,50 @@ components:
             tracks:
               type: array
               items: { type: string }
+            query: { $ref: '#/components/schemas/QueueQuery' }
         start:
           type: integer
           minimum: 0
-          description: The index in `tracks` of the track that plays first.
+          description: 'Required with `tracks`, and refused with a `query`. The index of the track that plays first.'
+        startTrackId:
+          type: string
+          description: 'Required with a `query`, and refused with `tracks`. The track that plays first, at its first place in the list.'
         shuffle:
           type: object
           required: [seed]
           description: Start shuffled, with the order this seed gives.
           properties:
             seed: { type: integer, minimum: 0, maximum: 4294967295 }
+
+    QueueQuery:
+      description: |
+        A list for the server to read to its end, as the view that started the queue pages it.
+      oneOf:
+        - type: object
+          required: [type]
+          description: |
+            The tracks of the library as `listTracks` lists them, in the order it pages them.
+            It takes the same filters and sort, with their defaults and refusals, but not
+            `cursor`, `limit` or `ids`, which name part of a list: sending one is `422`.
+          properties:
+            type: { type: string, enum: [tracks] }
+            sort:
+              type: string
+              enum: [name, artist, album, dateAdded, playCount, lastPlayed, releaseDate, duration, top]
+            order: { type: string, enum: [asc, desc] }
+            albumId: { type: string }
+            artistId: { type: string }
+            artistCredit: { type: string, enum: [any, owned, featured] }
+        - type: object
+          required: [type, q]
+          description: |
+            A search's tracks, best match first, as `search` ranks them with `types=tracks`.
+            `search` shows at most `sectionLimit` of them; a start takes every match.
+          properties:
+            type: { type: string, enum: [search] }
+            q: { type: string, minLength: 1 }
+      discriminator:
+        propertyName: type
 
     QueueSnapshot:
       type: object
