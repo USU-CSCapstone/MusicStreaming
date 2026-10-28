@@ -3,9 +3,9 @@
 use serde_json::{Value, json};
 
 use super::{command, result_of, send, setup};
-use crate::api::testing::player::{command_id, report, start_playing};
+use crate::api::testing::player::{command_id, item, report, start_playing};
 use crate::api::testing::socket::{connect_with, next_of};
-use crate::api::testing::{TOKEN, add_device, conn};
+use crate::api::testing::{TOKEN, add_device, call, conn};
 
 #[tokio::test]
 async fn a_transfer_goes_to_the_device_it_names_and_its_answer_comes_back() {
@@ -29,6 +29,24 @@ async fn a_transfer_goes_to_the_device_it_names_and_its_answer_comes_back() {
 
     let here = json!({ "type": "transfer", "commandId": command_id(2), "deviceId": "2" });
     assert_eq!(command(&mut desk, here).await["status"], json!("applied"), "already there");
+}
+
+/// A transfer names no item: the device it goes to holds the account's queue, and finds the item
+/// and position in the state, which the transfer leaves as the playing device reported it.
+#[tokio::test]
+async fn a_transfer_lands_on_the_item_and_position_it_left() {
+    let (_temp, app, address) = setup().await;
+    let mut desk = connect_with(address, TOKEN).await;
+    let mut phone = connect_with(address, "phone").await;
+    let place = json!({ "start": true, "itemId": item(1), "positionMs": 2500 });
+    report(&mut desk, "paused", place).await;
+
+    let transfer = json!({ "type": "transfer", "commandId": command_id(1), "deviceId": "2" });
+    assert_eq!(command(&mut desk, transfer).await["status"], json!("pending"));
+    let sent = next_of(&mut phone, "execute").await["command"].clone();
+    assert_eq!(sent.get("itemId"), None);
+    let (_, state) = call(&app, TOKEN, "GET", "/api/v1/me/player", None).await;
+    assert_eq!((&state["itemId"], &state["positionMs"]), (&json!(item(1)), &json!(2500)));
 }
 
 #[tokio::test]

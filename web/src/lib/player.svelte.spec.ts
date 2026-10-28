@@ -32,7 +32,7 @@ const fake = vi.hoisted(() => ({
 	offline: false,
 	sent: [] as {
 		type: string;
-		report: { status: string; positionMs: number; start: boolean; trackId: string };
+		report: { status: string; positionMs: number; start: boolean; itemId: string };
 		result: unknown;
 	}[],
 	plays: [] as PlayReport[],
@@ -168,6 +168,7 @@ async function hold(ids: string[], start = 0) {
 	items = await itemsNow();
 }
 
+/** Sends the account's state, playing the first queue item on device 2, with `changes`. */
 function state(changes: Partial<PlayerState> = {}) {
 	send({
 		type: 'player',
@@ -175,8 +176,6 @@ function state(changes: Partial<PlayerState> = {}) {
 			status: 'playing',
 			activeDeviceId: '2',
 			itemId: items[0] ?? '0',
-			libraryId: '11',
-			trackId: '41',
 			positionMs: 10_000,
 			positionAt: new Date().toISOString(),
 			volume: 0.2,
@@ -235,7 +234,6 @@ describe('player', () => {
 		expect(report.report).toMatchObject({
 			start: true,
 			itemId: items[0],
-			trackId: '41',
 			status: 'buffering',
 			// Its own volume, not the other device's.
 			volume: 0.8
@@ -247,7 +245,7 @@ describe('player', () => {
 
 	it('plays the item of the queue the state names, moving the queue there if it is elsewhere', async () => {
 		await hold(['41', '42', '43']);
-		state({ trackId: '43', itemId: items[2] });
+		state({ itemId: items[2] });
 		transfer(true);
 		expect(await result()).toMatchObject({ status: 'applied' });
 		expect(player.current?.id).toBe('43');
@@ -257,7 +255,9 @@ describe('player', () => {
 
 	it('says when there is nothing it can pick up', async () => {
 		await hold(['41']);
-		state({ libraryId: '12' });
+		// Viewing another library, whose queue it would not know.
+		player.libraryId = '12';
+		state();
 		transfer(true);
 		expect(await result()).toMatchObject({
 			status: 'failed',
@@ -277,9 +277,9 @@ describe('player', () => {
 		let arrive: (track: Track) => void = () => {};
 		fake.tracks.set('43', new Promise((resolve) => (arrive = resolve)));
 		await hold(['43']);
-		state({ trackId: '43' });
+		state();
 		transfer(true);
-		state({ trackId: '43', activeDeviceId: '3' });
+		state({ activeDeviceId: '3' });
 		arrive(track('43', 60));
 		expect(await result()).toMatchObject({ status: 'failed' });
 		expect(fake.sent.map((m) => m.type)).toEqual(['commandResult']);
@@ -288,7 +288,7 @@ describe('player', () => {
 	it('starts no later than the end of the track', async () => {
 		fake.catalog.set('45', track('45', 5));
 		await hold(['44', '45'], 1);
-		state({ trackId: '45', positionMs: 30_000 });
+		state({ positionMs: 30_000 });
 		transfer(true);
 		await result();
 		expect(fake.sent[0].report.positionMs).toBe(5000);
@@ -297,7 +297,7 @@ describe('player', () => {
 	it('waits paused on a track that cannot play, rather than playing the next', async () => {
 		fake.info = () => Promise.reject(new Error('gone'));
 		await hold(['47', '48']);
-		state({ trackId: '47' });
+		state();
 		transfer(false);
 		await result();
 		// For the failure to be handled.
@@ -310,13 +310,13 @@ describe('player', () => {
 		fake.info = () => Promise.reject(new Error('gone'));
 		player.play([track('46', 60)], 0);
 		// The server confirms the takeover before the track turns out to be the last.
-		state({ status: 'paused', activeDeviceId: '1', trackId: '46' });
+		state({ status: 'paused', activeDeviceId: '1', itemId: queue.current! });
 		await vi.waitFor(() => expect(player.finished).toBe(true));
 		expect(fake.sent.at(-1)?.report, 'at the start of the last track').toMatchObject({
 			status: 'stopped',
 			positionMs: 0
 		});
-		state({ status: 'stopped', activeDeviceId: null, trackId: '46' });
+		state({ status: 'stopped', activeDeviceId: null, itemId: queue.current! });
 		expect(controls.remote).toBe(false);
 
 		void player.resume();
@@ -328,18 +328,18 @@ describe('player', () => {
 		// Its audio fails again.
 		await vi.waitFor(() => expect(player.finished).toBe(true));
 
-		state({ activeDeviceId: '2', trackId: '46' });
+		state({ activeDeviceId: '2', itemId: queue.current! });
 		expect(player.finished).toBe(false);
-		state({ status: 'stopped', activeDeviceId: null, trackId: '46' });
+		state({ status: 'stopped', activeDeviceId: null, itemId: queue.current! });
 		expect(controls.remote, 'stopped elsewhere').toBe(true);
 	});
 
 	it('shows a stop that is not its own, as one heard on reconnecting', async () => {
 		fake.info = () => Promise.reject(new Error('gone'));
 		player.play([track('49', 60)], 0);
-		state({ status: 'paused', activeDeviceId: '1', trackId: '49' });
+		state({ status: 'paused', activeDeviceId: '1', itemId: queue.current! });
 		await vi.waitFor(() => expect(player.finished).toBe(true));
-		state({ status: 'stopped', activeDeviceId: null, trackId: '50' });
+		state({ status: 'stopped', activeDeviceId: null, itemId: 'elsewhere.0' });
 		expect(player.finished).toBe(false);
 	});
 
@@ -402,7 +402,7 @@ describe('player', () => {
 		fake.info = () => Promise.resolve({ variant: 'original' });
 		const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
 		await hold(['56']);
-		state({ trackId: '56', positionMs: 30_000 });
+		state({ positionMs: 30_000 });
 		transfer(true);
 		await result();
 		await vi.waitFor(() => expect(play).toHaveBeenCalled());
@@ -451,8 +451,8 @@ describe('player', () => {
 	it('leaves the lock screen to the device that took over', async () => {
 		player.play([track('59', 60), track('60', 60)], 0);
 		await vi.waitFor(() => expect(player.current?.id).toBe('59'));
-		state({ activeDeviceId: '1', trackId: '59' });
-		state({ trackId: '41' });
+		state({ activeDeviceId: '1', itemId: queue.current! });
+		state();
 		expect(player.playing).toBe(false);
 		expect(navigator.mediaSession.metadata).toBeNull();
 
@@ -695,7 +695,7 @@ describe('player', () => {
 
 			// Another device took over: this one only shows the queue.
 			player.toggle();
-			state({ trackId: '204', activeDeviceId: '2' });
+			state({ activeDeviceId: '2' });
 			queue.edit({ type: 'jump', item: all[1] });
 			await settle();
 			expect(player.current?.id).toBe('204');
@@ -800,10 +800,9 @@ describe('player', () => {
 			);
 			await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
 			await vi.waitFor(() => expect(queue.settling).toBe(false));
+			// With no other report to carry it: the state must move off the placeholder itself.
 			await vi.waitFor(() => {
-				player.seek(1);
-				const report = fake.sent.findLast((m) => m.report?.trackId === '312')?.report;
-				expect(report).toMatchObject({ itemId: queue.current });
+				expect(fake.sent.findLast((m) => m.type === 'progress')?.report.itemId).toBe(queue.current);
 			});
 			expect(queue.current).toMatch(/\.1$/);
 		});
@@ -845,12 +844,12 @@ describe('player', () => {
 			await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
 			// The account's queue, started elsewhere from the whole library, and moved here.
 			await hold(['161', '162']);
-			state({ trackId: '161' });
+			state();
 			transfer(true);
 			expect(await result()).toMatchObject({ status: 'applied' });
 			await vi.waitFor(() => expect(player.current?.id).toBe('161'));
-			await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(2));
-			(play.mock.contexts[1] as HTMLAudioElement).dispatchEvent(new Event('playing'));
+			await vi.waitFor(() => expect(play.mock.calls.length).toBeGreaterThanOrEqual(2));
+			(play.mock.contexts.at(-1) as HTMLAudioElement).dispatchEvent(new Event('playing'));
 			expect(fake.plays.filter((p) => p.end === null).map((p) => [p.trackId, p.context])).toEqual([
 				['161', { type: 'library' }]
 			]);
@@ -969,12 +968,24 @@ describe('player', () => {
 			play.mockRestore();
 		});
 
-		it('reports the queue item that plays, with its track', async () => {
+		it('reports the queue item that plays, once the server has the queue', async () => {
+			let release: (value?: unknown) => void = () => {};
+			fake.holdStart = new Promise((resolve) => (release = resolve));
 			player.play([track('104', 60)], 0);
 			await vi.waitFor(() => expect(player.current?.id).toBe('104'));
-			await vi.waitFor(() => expect(fake.sent.some((m) => m.report?.trackId === '104')).toBe(true));
-			const report = fake.sent.findLast((m) => m.report?.trackId === '104')?.report;
-			expect(report).toMatchObject({ itemId: queue.current, trackId: '104' });
+			await settle();
+			expect(queue.starting).toBe(true);
+			expect(
+				fake.sent.filter((m) => m.type === 'progress'),
+				'it would be refused'
+			).toEqual([]);
+
+			release();
+			await vi.waitFor(() => expect(queue.starting).toBe(false));
+			await vi.waitFor(() =>
+				expect(fake.sent.some((m) => m.report?.itemId === queue.current)).toBe(true)
+			);
+			expect(fake.sent.at(-1)?.report).toMatchObject({ itemId: queue.current, start: true });
 		});
 
 		it('carries out remote next and previous as queue edits', async () => {
@@ -1017,12 +1028,12 @@ describe('player', () => {
 		fake.info = info;
 		const play = vi.spyOn(HTMLMediaElement.prototype, 'play');
 		await hold(['42']);
-		state({ activeDeviceId: null, status: 'stopped', trackId: '42' });
+		state({ activeDeviceId: null, status: 'stopped' });
 		transfer(false);
 		expect(await result()).toMatchObject({ status: 'applied' });
 		expect(fake.sent[0].report).toMatchObject({
 			start: true,
-			trackId: '42',
+			itemId: items[0],
 			status: 'paused',
 			positionMs: 10_000
 		});

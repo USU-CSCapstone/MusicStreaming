@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use super::{player, setup};
-use crate::api::testing::player::{report, start_playing};
+use crate::api::testing::player::{item, report, start_playing};
 use crate::api::testing::socket::{Socket, connect_with, next_of};
 use crate::api::testing::{TOKEN, conn, eventually};
 
@@ -36,7 +36,7 @@ async fn losing_the_playing_connection_stops_playback_where_it_got_to() {
     desk.close(None).await.unwrap();
 
     let state = state_with(&mut phone, "stopped").await;
-    assert_eq!((&state["activeDeviceId"], &state["trackId"]), (&json!(null), &json!("1")));
+    assert_eq!((&state["activeDeviceId"], &state["itemId"]), (&json!(null), &json!(item(0))));
     let position = state["positionMs"].as_u64().unwrap();
     assert!((1000..=furthest(reported)).contains(&position), "as far as it played: {position}");
     assert_eq!(player(&app, TOKEN).await, state);
@@ -99,7 +99,7 @@ async fn an_old_connection_closing_after_its_device_took_over_again_changes_noth
     start_playing(&mut old).await;
     // Reconnected while the old connection lingers, and took over on the new one.
     let mut new = connect_with(address, TOKEN).await;
-    report(&mut new, "playing", json!({ "start": true, "trackId": "2" })).await;
+    report(&mut new, "playing", json!({ "start": true, "itemId": item(1) })).await;
     // Once the server has let a connection go, it records when its device was last seen. Seen
     // in 2100 until then, so only that write lowers it: a request skips refreshing a device
     // seen so recently.
@@ -114,5 +114,5 @@ async fn an_old_connection_closing_after_its_device_took_over_again_changes_noth
     };
     eventually("the old connection to be let go", let_go).await;
     let state = player(&app, TOKEN).await;
-    assert_eq!((&state["status"], &state["trackId"]), (&json!("playing"), &json!("2")));
+    assert_eq!((&state["status"], &state["itemId"]), (&json!("playing"), &json!(item(1))));
 }

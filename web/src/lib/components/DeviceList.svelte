@@ -29,9 +29,10 @@
 	function movable(device: Device): boolean {
 		const state = playback.state;
 		if (stale || !device.connected || device.id === realtime.deviceId) return false;
-		return state?.trackId != null && device.id !== state.activeDeviceId;
+		return state?.itemId != null && device.id !== state.activeDeviceId;
 	}
 
+	/** What to say of `device`: whether it is connected and, if it plays, what and how. */
 	function status(device: Device): string {
 		const state = playback.state;
 		if (device.id === realtime.deviceId && stale) return 'Not connected';
@@ -46,8 +47,9 @@
 				: controls.playing
 					? 'Playing'
 					: 'Paused';
-			const track = controls.track;
-			const title = track && track.id === state.trackId ? track.title : null;
+			// Not the title of a track from before, while the one the state names is on its way.
+			const title =
+				!controls.remote || playback.trackItem === state.itemId ? controls.track?.title : null;
 			return title ? `${said} · ${title}` : said;
 		}
 		if (!device.connected) return 'Not connected';

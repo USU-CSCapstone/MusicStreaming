@@ -17,7 +17,7 @@ class Controls {
 	remote = $derived(
 		!(player.playing || player.finished) &&
 			(playback.elsewhere ||
-				(playback.state?.status === 'stopped' && playback.state.trackId != null))
+				(playback.state?.status === 'stopped' && playback.state.itemId != null))
 	);
 	/** Whether that playback stopped with no device holding it, so playing picks it up here. */
 	stopped = $derived(this.remote && !playback.elsewhere);
@@ -84,9 +84,7 @@ class Controls {
 
 	/** Whether what the other device was playing can play here: it is of this device's library and this device holds the queue. */
 	pickable = $derived(
-		playback.track !== null &&
-			playback.state?.libraryId === player.libraryId &&
-			queue.queueId !== null
+		playback.track !== null && playback.libraryId === player.libraryId && queue.queueId !== null
 	);
 
 	/** Plays here what the other device was playing, from where it got to, or says it could not. */

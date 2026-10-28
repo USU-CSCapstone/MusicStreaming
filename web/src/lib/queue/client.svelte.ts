@@ -38,6 +38,8 @@ export class QueueClient {
 	repeat = $state<Repeat>('off');
 	/** A start from a list is under way: the queue is its first track until the server's arrives. */
 	settling = $state(false);
+	/** The server has not yet taken the latest start: nothing it would name can be reported yet. */
+	starting = $state(false);
 	/** The latest edit or start that was reverted, for the UI to explain. */
 	refusal = $state<Refusal | null>(null);
 
@@ -77,6 +79,7 @@ export class QueueClient {
 		this.counts = { manual: 0, upcoming: 0, history: 0 };
 		this.repeat = 'off';
 		this.settling = false;
+		this.starting = false;
 	}
 
 	/** Starts a queue, here at once and on the server in the background. */
@@ -124,6 +127,7 @@ export class QueueClient {
 			this.current = summary.current;
 			this.repeat = summary.repeat;
 			this.settling = summary.settling;
+			this.starting = summary.starting;
 			this.counts = {
 				manual: summary.manual,
 				upcoming: summary.upcoming,

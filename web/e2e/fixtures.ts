@@ -651,8 +651,6 @@ export async function serveRealtime(page: Page) {
 		status: 'playing',
 		activeDeviceId: phone.id,
 		itemId: queue.queue!.current() ?? null,
-		libraryId: library.id,
-		trackId: tracks[1].id,
 		positionMs: 0,
 		positionAt: now(),
 		volume: 1
@@ -691,14 +689,15 @@ export async function serveRealtime(page: Page) {
 			}
 			const report = message.type === 'progress' ? message.report : null;
 			const starts = report?.start && report.status !== 'stopped';
-			if (report && (starts || deviceId === state.activeDeviceId)) {
+			// As the server does: an item the account's queue does not have is refused, and answered
+			// with the current state.
+			if (report && !queue.queue?.track(report.itemId)) send({ type: 'player', state });
+			else if (report && (starts || deviceId === state.activeDeviceId)) {
 				state = {
 					...state,
 					status: report.status === 'buffering' ? 'paused' : report.status,
 					activeDeviceId: report.status === 'stopped' ? null : deviceId,
 					itemId: report.itemId,
-					libraryId: report.libraryId,
-					trackId: report.trackId,
 					positionMs: report.positionMs,
 					positionAt: now(),
 					volume: report.volume ?? (deviceId === state.activeDeviceId ? state.volume : null)

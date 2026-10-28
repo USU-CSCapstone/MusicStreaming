@@ -1801,13 +1801,13 @@ export interface components {
              */
             activeDeviceId: string | null;
             /**
-             * @description The active device's own name for its place in its queue, as it last reported:
-             *     opaque to everyone else. The queue item playing once the server keeps the queue.
+             * @description The item of the account's queue (`getQueue`) playback is at, as the active device
+             *     last reported it; `null` before anything has played. Its track is the one the
+             *     queue's source names, so every device finds it in the queue it holds. A new queue
+             *     leaves the state as it was, so the item may be absent from the queue a device
+             *     holds: there is then nothing to resume or hand over, until the next report.
              */
             itemId: string | null;
-            /** @description The library of `trackId`, until the server keeps the queue, which names it. */
-            libraryId: string | null;
-            trackId: string | null;
             /** @description The external track playing. Planned. */
             external?: components["schemas"]["ExternalTrackRef"];
             positionMs: number;
@@ -1868,11 +1868,12 @@ export interface components {
         };
         /**
          * @description Shift: moves playback to the device named, which also wakes an idle one. Its newest
-         *     connection takes the track and position from the latest `player` state it received and
-         *     takes playback over with a `start` report, answering once it has, not once its audio
-         *     plays. To the device already holding playback it is `applied` at once, or plays there if
-         *     paused and `play` is true. The device's volume stays its own. `device_unavailable` when
-         *     the device is not connected or nothing has played.
+         *     connection takes the item and position from the latest `player` state it received, and
+         *     plays that item of the queue it already holds. It takes playback over with a `start`
+         *     report, answering once it has, not once its audio plays. To the device already holding
+         *     playback it is `applied` at once, or plays there if paused and `play` is true. The
+         *     device's volume stays its own. `device_unavailable` when the device is not connected or
+         *     nothing has played.
          */
         TransferCommand: {
             /**
@@ -1905,17 +1906,16 @@ export interface components {
         /**
          * @description Sent over the realtime connection by the playing device, or one taking playback over
          *     (`start`); a report is the device's whose connection sends it. A report that is refused
-         *     — invalid, from any connection but the active one, or of a track out of the caller's
-         *     reach — is answered with the current state; one that does not parse is ignored.
-         *     `buffering` is recorded as `paused` at its position.
+         *     — invalid, from any connection but the active one, or naming an item the account's
+         *     queue does not have — is answered with the current state; one that does not parse is
+         *     ignored. `buffering` is recorded as `paused` at its position.
          *
-         *     Until the server keeps the queue, a report names its track, and `itemId` is the
-         *     device's own name for its place in its queue, opaque to the server.
+         *     A report names the queue item playing, in any section of the queue: a device that starts
+         *     a queue must wait until the server has it before it reports.
          */
         ProgressReport: {
+            /** @description An item of the account's queue, named as the queue names it (`<key>.<index>`). */
             itemId: string;
-            libraryId: string;
-            trackId: string;
             /**
              * @description Set when the user starts playback on this connection, taking over from the device
              *     playing (`requirements/realtime.md` §2). Without it, a report from any connection but

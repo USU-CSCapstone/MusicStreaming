@@ -81,9 +81,8 @@ info:
     `name` is `null`; clients render it as unknown (`requirements/scanning.md` §2).
 
     **Draft shapes.** `x-status: draft` marks what is served but may still change shape:
-    audio delivery, which waits on its design (`design/general.md` §11); the waveform, whose
-    bin count is still open (`design/scanning.md`); the player's fields that name a track
-    until the player plays from the queue; and the queue, until the player plays from it.
+    audio delivery, which waits on its design (`design/general.md` §11), and the waveform, whose
+    bin count is still open (`design/scanning.md`).
 
     **Realtime.** `GET /realtime` upgrades to a WebSocket carrying
     `RealtimeClientMessage` and `RealtimeServerMessage`.
@@ -1125,7 +1124,6 @@ paths:
         answered `304` with no body, so a device that reconnects downloads only what it lacks.
         Any other value, or none, gets the whole snapshot.
       operationId: getQueue
-      x-status: draft
       parameters:
         - name: If-None-Match
           in: header
@@ -1174,7 +1172,6 @@ paths:
         A request is limited to what a 2 MiB body holds, about 90,000 tracks, which a `query`
         does not need.
       operationId: startQueue
-      x-status: draft
       requestBody:
         required: true
         content:
@@ -1212,7 +1209,6 @@ paths:
         queue or not a UUID, a source of both `tracks` and a `query` or neither, or a
         queue that would hold more than 4,294,967,295 items.
       operationId: editQueue
-      x-status: draft
       requestBody:
         required: true
         content:
@@ -2806,7 +2802,7 @@ components:
     # ───────────────────────────── Player ─────────────────────────────
     PlayerState:
       type: object
-      required: [status, activeDeviceId, itemId, libraryId, trackId, positionMs, positionAt, volume]
+      required: [status, activeDeviceId, itemId, positionMs, positionAt, volume]
       properties:
         status:
           type: string
@@ -2820,15 +2816,12 @@ components:
             device can carry on from there (§6).
         itemId:
           type: [string, 'null']
-          x-status: draft
           description: |
-            The active device's own name for its place in its queue, as it last reported:
-            opaque to everyone else. The queue item playing once the server keeps the queue.
-        libraryId:
-          type: [string, 'null']
-          x-status: draft
-          description: The library of `trackId`, until the server keeps the queue, which names it.
-        trackId: { type: [string, 'null'] }
+            The item of the account's queue (`getQueue`) playback is at, as the active device
+            last reported it; `null` before anything has played. Its track is the one the
+            queue's source names, so every device finds it in the queue it holds. A new queue
+            leaves the state as it was, so the item may be absent from the queue a device
+            holds: there is then nothing to resume or hand over, until the next report.
         external:
           $ref: '#/components/schemas/ExternalTrackRef'
           description: The external track playing. Planned.
@@ -2905,14 +2898,14 @@ components:
     TransferCommand:
       type: object
       required: [deviceId]
-      x-status: draft
       description: |
         Shift: moves playback to the device named, which also wakes an idle one. Its newest
-        connection takes the track and position from the latest `player` state it received and
-        takes playback over with a `start` report, answering once it has, not once its audio
-        plays. To the device already holding playback it is `applied` at once, or plays there if
-        paused and `play` is true. The device's volume stays its own. `device_unavailable` when
-        the device is not connected or nothing has played.
+        connection takes the item and position from the latest `player` state it received, and
+        plays that item of the queue it already holds. It takes playback over with a `start`
+        report, answering once it has, not once its audio plays. To the device already holding
+        playback it is `applied` at once, or plays there if paused and `play` is true. The
+        device's volume stays its own. `device_unavailable` when the device is not connected or
+        nothing has played.
       properties:
         type: { const: transfer }
         deviceId: { type: string }
@@ -2941,21 +2934,22 @@ components:
 
     ProgressReport:
       type: object
-      x-status: draft
-      required: [itemId, libraryId, trackId, status, positionMs]
+      required: [itemId, status, positionMs]
       description: |
         Sent over the realtime connection by the playing device, or one taking playback over
         (`start`); a report is the device's whose connection sends it. A report that is refused
-        — invalid, from any connection but the active one, or of a track out of the caller's
-        reach — is answered with the current state; one that does not parse is ignored.
-        `buffering` is recorded as `paused` at its position.
+        — invalid, from any connection but the active one, or naming an item the account's
+        queue does not have — is answered with the current state; one that does not parse is
+        ignored. `buffering` is recorded as `paused` at its position.
 
-        Until the server keeps the queue, a report names its track, and `itemId` is the
-        device's own name for its place in its queue, opaque to the server.
+        A report names the queue item playing, in any section of the queue: a device that starts
+        a queue must wait until the server has it before it reports.
       properties:
-        itemId: { type: string, minLength: 1, maxLength: 100, x-status: draft }
-        libraryId: { type: string }
-        trackId: { type: string }
+        itemId:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: An item of the account's queue, named as the queue names it (`<key>.<index>`).
         start:
           type: boolean
           default: false

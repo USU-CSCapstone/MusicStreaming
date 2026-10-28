@@ -58,7 +58,7 @@ export class Progress {
 
 	/**
 	 * Reports `now`, if the server would take it. A takeover the server refuses anyway, as for
-	 * a track no longer in reach, is not tried again: the device is stopped by the first state
+	 * an item the queue does not have, is not tried again: the device is stopped by the first state
 	 * naming another once it could have been confirmed, or plays on unreported.
 	 */
 	report(now: Snapshot) {

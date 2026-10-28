@@ -141,8 +141,6 @@ async fn a_stop_saves_players_and_queues_and_closes_connections_while_a_request_
             sleep(Duration::from_millis(100)).await;
         }
         let mut socket = connect_with(address, TOKEN).await;
-        start_playing(&mut socket).await;
-        report(&mut socket, "playing", json!({ "positionMs": 60_000 })).await;
         // A queue started just before the stop, which the periodic save may not have reached.
         let queue = json!({
             "queueId": "5f0c6a52-3b7e-4d43-9a8e-0d1c2b3a4f5e", "context": { "type": "album" },
@@ -161,6 +159,8 @@ async fn a_stop_saves_players_and_queues_and_closes_connections_while_a_request_
         let mut answer = String::new();
         starting.read_to_string(&mut answer).await.unwrap();
         assert!(answer.starts_with("HTTP/1.1 204"), "{answer}");
+        start_playing(&mut socket).await;
+        report(&mut socket, "playing", json!({ "positionMs": 60_000 })).await;
         // Part of a header holds the drain open, once the server has the connection.
         let mut hanging = TcpStream::connect(address).await.unwrap();
         hanging.write_all(b"GET /api/v1/health HTTP/1.1\r\n").await.unwrap();

@@ -105,6 +105,12 @@ impl Queues {
         Some((etag, Some(body)))
     }
 
+    /// Whether `user`'s queue has the item `item`: it names a track in one of the queue's
+    /// sources, whichever section it is in. An account with no queue has no items.
+    pub fn holds(&self, user: i64, item: &str) -> bool {
+        self.lock().get(&user).is_some_and(|account| account.queue.track(item).is_some())
+    }
+
     /// Each account's queue, locked.
     fn lock(&self) -> MutexGuard<'_, HashMap<i64, Account>> {
         self.accounts.lock().recover()

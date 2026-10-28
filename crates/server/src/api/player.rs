@@ -11,8 +11,11 @@
 //! device that was taken over from cannot take playback back with reports it sent before it
 //! heard. A refused report is answered with the current state.
 //!
-//! The server does not keep the queue, so a report names its track itself, and `itemId` is the
-//! device's own name for its place in its queue.
+//! A report names its place in the account's queue by `itemId`. The server accepts only items
+//! the queue has, in any of its sections; a track is found through the queue, and a device holds
+//! the same queue, so the state needs no track of its own. A new queue replaces the old without
+//! touching the state, which keeps naming its item until the next report: a client that finds
+//! the item absent from its queue has nothing to resume or hand over.
 //!
 //! Position is timed by when a report arrives: a device's clock may be off by more than a
 //! report takes to arrive.
@@ -58,9 +61,8 @@ pub struct PlayerState {
     /// browser tabs, and only one of them may report.
     #[serde(skip)]
     active_connection: Option<u64>,
+    /// The queue item playback is at, as the queue names it.
     item_id: Option<String>,
-    library_id: Option<Id>,
-    track_id: Option<Id>,
     position_ms: u32,
     /// When `position_ms` was true, in server time.
     #[serde(serialize_with = "serialize_rfc3339")]
@@ -69,9 +71,9 @@ pub struct PlayerState {
     /// Whether it changed since it was last saved.
     #[serde(skip)]
     unsaved: bool,
-    /// The item, track and position it was last saved at, and when.
+    /// The item and position it was last saved at, and when.
     #[serde(skip)]
-    saved: Option<(String, Id, u32, std::time::Instant)>,
+    saved: Option<(String, u32, std::time::Instant)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -90,8 +92,6 @@ impl PlayerState {
             active_device_id: None,
             active_connection: None,
             item_id: None,
-            library_id: None,
-            track_id: None,
             position_ms: 0,
             position_at: now_ms(),
             volume: None,

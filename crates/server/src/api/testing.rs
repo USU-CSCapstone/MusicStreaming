@@ -69,9 +69,14 @@ pub fn add_signed_out_device(
 pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
     let (temp, db) = crate::db::testing::open();
     let state = AppState { prefix: prefix(base_path), ..state(&temp, db.clone()) };
-    // A client that is not a trusted proxy, unless a request carries its own `ConnectInfo`.
+    (temp, db, router_over(state))
+}
+
+/// The API over `state`, for a client that is not a trusted proxy, unless a request carries its
+/// own `ConnectInfo`.
+pub fn router_over(state: AppState) -> Router {
     let peer = SocketAddr::from(([203, 0, 113, 1], 50_000));
-    (temp, db, router(state).layer(MockConnectInfo(peer)))
+    router(state).layer(MockConnectInfo(peer))
 }
 
 /// What the API's handlers share, over `db` in `temp`, mounted at the root, before setup is seen
