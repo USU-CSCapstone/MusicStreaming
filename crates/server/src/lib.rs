@@ -83,6 +83,8 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
     plugins.start_hooks();
     let players = Arc::new(api::Players::load(&db).await?);
     let saving = players.keep_saved(db.clone());
+    let queues = Arc::new(api::Queues::load(&db).await?);
+    let saving_queues = queues.keep_saved(db.clone());
     let retention = db::retention::start(db.clone(), db::retention::FIRST_SWEEP);
     let indexes = Arc::new(api::Indexes::default());
     indexes.build_all(&db);
@@ -95,6 +97,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         plugins: plugins.clone(),
         hub: hub.clone(),
         players: players.clone(),
+        queues: queues.clone(),
         prefix: api::prefix(&config.base_path),
         trusted_proxies: Arc::new(config.trusted_proxies.clone()),
     });
@@ -116,6 +119,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         hub.close_all();
         // The periodic save stops first, leaving a write already begun to finish.
         saving.abort();
+        saving_queues.abort();
         // The sweep stops before its next chunk, leaving one already begun to finish.
         retention.abort();
         let _ = retention.await;
@@ -124,9 +128,17 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         {
             error!(%error, "the periodic save of playback state panicked");
         }
+        if let Err(error) = saving_queues.await
+            && error.is_panic()
+        {
+            error!(%error, "the periodic save of queues panicked");
+        }
         players.save(&db).await;
+        queues.save(&db).await;
     };
     serve::serve(listener, app, shutdown, as_it_stops).await;
+    // A start or edit still in flight when the stop began may have landed after that save.
+    queues.save(&db).await;
     tokio::task::spawn_blocking(move || scanning.stop()).await?;
 
     info!("stopped");

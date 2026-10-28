@@ -103,7 +103,7 @@ async fn the_image_cache_is_swept_as_the_server_starts() {
 /// its account was playing at once, rather than once the requests in progress are answered. It
 /// stops the hooks before that, so a plugin enabled by a request still in progress runs nothing.
 #[tokio::test]
-async fn a_stop_saves_players_and_closes_connections_while_a_request_hangs() {
+async fn a_stop_saves_players_and_queues_and_closes_connections_while_a_request_hangs() {
     let temp = tempfile::tempdir().unwrap();
     let (data, music) = (temp.path().join("data"), temp.path().join("music"));
     fs::create_dir(&music).unwrap();
@@ -143,6 +143,24 @@ async fn a_stop_saves_players_and_closes_connections_while_a_request_hangs() {
         let mut socket = connect_with(address, TOKEN).await;
         start_playing(&mut socket).await;
         report(&mut socket, "playing", json!({ "positionMs": 60_000 })).await;
+        // A queue started just before the stop, which the periodic save may not have reached.
+        let queue = json!({
+            "queueId": "5f0c6a52-3b7e-4d43-9a8e-0d1c2b3a4f5e", "context": { "type": "album" },
+            "start": 0, "source": {
+                "key": "0b1b1b1b-3b7e-4d43-9a8e-0d1c2b3a4f5e", "libraryId": "1", "tracks": ["1"],
+            },
+        })
+        .to_string();
+        let mut starting = TcpStream::connect(address).await.unwrap();
+        let request = format!(
+            "POST /api/v1/me/queue HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\n\
+             Content-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{queue}",
+            queue.len()
+        );
+        starting.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        starting.read_to_string(&mut answer).await.unwrap();
+        assert!(answer.starts_with("HTTP/1.1 204"), "{answer}");
         // Part of a header holds the drain open, once the server has the connection.
         let mut hanging = TcpStream::connect(address).await.unwrap();
         hanging.write_all(b"GET /api/v1/health HTTP/1.1\r\n").await.unwrap();
@@ -167,9 +185,11 @@ async fn a_stop_saves_players_and_closes_connections_while_a_request_hangs() {
         }
         let conn = rusqlite::Connection::open(&state).unwrap();
         let saved = "SELECT position_ms FROM player_states WHERE user_id = 1";
+        let queued = "SELECT count(*) FROM queues WHERE user_id = 1";
         loop {
             let position = conn.query_row(saved, [], |r| r.get::<_, u32>(0)).optional();
-            if position.unwrap().is_some_and(|position| position >= 60_000) {
+            let queue = conn.query_row(queued, [], |r| r.get::<_, u32>(0)).unwrap();
+            if queue == 1 && position.unwrap().is_some_and(|position| position >= 60_000) {
                 break;
             }
             assert!(stopped.elapsed() < DRAIN_TIMEOUT / 2, "not saved before the drain");

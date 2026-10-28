@@ -24,6 +24,7 @@ mod playlists;
 mod plays;
 mod plugins;
 mod problem;
+mod queue;
 mod realtime;
 mod recent_searches;
 mod refs;
@@ -51,6 +52,7 @@ pub use id::{AnyId, Id, Uuid};
 pub use images::Images;
 pub use player::Players;
 pub use problem::{Code, Problem};
+pub use queue::Queues;
 pub use realtime::Hub;
 pub use scope::Caller;
 pub use search::Indexes;
@@ -81,6 +83,8 @@ pub struct AppState {
     pub hub: Arc<Hub>,
     /// Each account's playback state.
     pub players: Arc<Players>,
+    /// Each account's queue.
+    pub queues: Arc<Queues>,
     /// Where the API is mounted, as [`prefix`] gives it.
     pub prefix: Arc<str>,
     /// The proxies whose forwarded headers are believed ([`origin::Origin`]).

@@ -104,9 +104,12 @@ fn checked(report: PlayReport, now: i64) -> Result<Option<Play>, Problem> {
         (None, Some(_)) => return Ok(None),
         _ => return Err(Problem::invalid("A play names exactly one of trackId and external.")),
     };
-    let context = json_text(&report.context, "context", true)?;
-    let reason =
-        report.reason.as_ref().map(|reason| json_text(reason, "reason", false)).transpose()?;
+    let context = json_text(&report.context, "A play's context", true)?;
+    let reason = report
+        .reason
+        .as_ref()
+        .map(|reason| json_text(reason, "A play's reason", false))
+        .transpose()?;
     Ok(Some(Play {
         id: report.play_id,
         library: report.library_id,
@@ -121,16 +124,16 @@ fn checked(report: PlayReport, now: i64) -> Result<Option<Play>, Problem> {
 }
 
 /// `value` as JSON text, if it is an object (with a string `type` when `typed`) of at most
-/// [`MAX_JSON_BYTES`]. Otherwise the Problem naming `field`.
-fn json_text(value: &Value, field: &str, typed: bool) -> Result<String, Problem> {
+/// [`MAX_JSON_BYTES`]. Otherwise the Problem naming `field`, such as "A play's context".
+pub(super) fn json_text(value: &Value, field: &str, typed: bool) -> Result<String, Problem> {
     let object = value.as_object();
     if object.is_none_or(|object| typed && !object.get("type").is_some_and(Value::is_string)) {
         let needs = if typed { "an object with a string type" } else { "an object" };
-        return Err(Problem::invalid(format!("A play's {field} is {needs}.")));
+        return Err(Problem::invalid(format!("{field} is {needs}.")));
     }
     let text = value.to_string();
     if text.len() > MAX_JSON_BYTES {
-        return Err(Problem::invalid(format!("A play's {field} is at most 4 KiB.")));
+        return Err(Problem::invalid(format!("{field} is at most 4 KiB.")));
     }
     Ok(text)
 }

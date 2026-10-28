@@ -109,6 +109,40 @@ CREATE TABLE player_states (
     position_ms INTEGER NOT NULL CHECK (position_ms >= 0)
 ) STRICT;
 
+-- ───────────────────────────── Queues ─────────────────────────────
+
+-- Each account's queue (requirements/queue.md §6–§8, design/queue.md): one per account, since a
+-- new context replaces it. The server keeps it in memory and saves it in the background within
+-- about a second of a change, and once more as the server stops (`api/queue/saved.rs`).
+CREATE TABLE queues (
+    user_id  INTEGER PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
+    -- The `queueId` the device that started the queue chose. Any device can choose any ID, so
+    -- it names a queue only among its user's own (design/database.md §1).
+    queue_id TEXT    NOT NULL,
+    -- Zero when the queue starts; each edit adds one.
+    version  INTEGER NOT NULL CHECK (version >= 0),
+    -- What the queue started from, as the device sent it, recorded against plays.
+    context  TEXT    NOT NULL CHECK (json_valid(context) AND json_type(context) = 'object'),
+    -- The core's queue without its sources: the order, the cursor, History, the shuffle seed.
+    state    TEXT    NOT NULL CHECK (json_valid(state) AND json_type(state) = 'object')
+) STRICT;
+
+-- A queue's sources, each written once as it joins the queue, so a shuffle or a move saves no
+-- more than `queues.state`. They are numbered in the order they joined, which numbers the
+-- items. No foreign key to the library: once it is deleted its tracks are simply not found,
+-- and random IDs keep a later library from inheriting them.
+CREATE TABLE queue_sources (
+    user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    position   INTEGER NOT NULL CHECK (position >= 0),
+    -- The source key the device that added it chose, which names its items.
+    key        TEXT    NOT NULL,
+    -- As the API shows it, and never joined: it is read back only to be handed out again.
+    library_id TEXT    NOT NULL,
+    -- Track IDs as strings, as the API shows them, in the order they were resolved.
+    tracks     TEXT    NOT NULL CHECK (json_valid(tracks) AND json_type(tracks) = 'array'),
+    PRIMARY KEY (user_id, position)
+) STRICT;
+
 -- ───────────────────────────── Searches ─────────────────────────────
 
 -- Recent searches (requirements/search.md §6): what the search box offers when it is empty.

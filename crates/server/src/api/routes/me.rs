@@ -4,7 +4,7 @@
 use axum::Router;
 use axum::routing::{get, post, put};
 
-use crate::api::{AppState, connections, devices, me, player, plays};
+use crate::api::{AppState, connections, devices, me, player, plays, queue};
 
 /// Every route under `/me`.
 pub fn router() -> Router<AppState> {
@@ -13,6 +13,7 @@ pub fn router() -> Router<AppState> {
         .route("/me/devices", get(devices::list))
         .route("/me/player", get(player::get))
         .route("/me/player/commands", post(player::send_command))
+        .route("/me/queue", get(queue::get).post(queue::start))
         .route("/me/plays", post(plays::record))
         .route("/me/plugins", get(connections::list))
         .route(

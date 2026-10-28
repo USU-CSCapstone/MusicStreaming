@@ -20,6 +20,19 @@ impl Queue {
         Ok(Self(jewelcase_core::Queue::start(source, start)?))
     }
 
+    /// What a start does: like `start`, then carries the Manual Queue and repeat mode of
+    /// `previous`, the queue being replaced, if given, and shuffles with `seed` if given.
+    pub fn launch(
+        source: &str,
+        start: usize,
+        seed: Option<u32>,
+        previous: Option<Queue>,
+    ) -> Result<Queue, JsError> {
+        let source: Source = serde_json::from_str(source)?;
+        let previous = previous.as_ref().map(|queue| &queue.0);
+        Ok(Self(jewelcase_core::Queue::launch(source, start, seed, previous)?))
+    }
+
     /// Rebuild a queue from the JSON that [`Queue::snapshot`] or the server produced.
     #[wasm_bindgen(js_name = fromSnapshot)]
     pub fn from_snapshot(json: &str) -> Result<Queue, JsError> {
