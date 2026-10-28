@@ -315,7 +315,7 @@ CREATE TABLE tag_types (
     key TEXT PRIMARY KEY
 ) STRICT;
 
-INSERT INTO tag_types (key) VALUES ('genre');
+INSERT INTO tag_types (key) VALUES ('genre'), ('mood');
 
 CREATE TABLE tags (
     id           INTEGER PRIMARY KEY,
