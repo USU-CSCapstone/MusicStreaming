@@ -1,5 +1,6 @@
 //! What the suite reads back from a store.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use jewelcase_core::Format;
@@ -34,6 +35,8 @@ pub struct InspectTrack {
     pub analyzed: bool,
     /// Whether its analysis measured a loudness.
     pub measured: bool,
+    /// Its tags by type, each as the file spells it, in that order.
+    pub tags: BTreeMap<String, Vec<String>>,
 }
 
 /// What a store must expose for the suite to check it.
@@ -52,4 +55,7 @@ pub trait InspectStore: Store + AnalysisStore + PlaceholderStore {
     fn feed_tracks_after(&self, library: LibraryId, head: i64) -> Vec<TrackId>;
     /// The placeholder stored for the image with content `hash`.
     fn inspect_placeholder(&self, library: LibraryId, hash: &[u8]) -> Option<Vec<u8>>;
+    /// Marks every track of `library` read before any tag type, as a release adding a type finds
+    /// them ([`crate::tags_generation`]).
+    fn age_tag_reads(&self, library: LibraryId);
 }

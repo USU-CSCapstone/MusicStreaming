@@ -7,7 +7,7 @@ use crate::identity::{self, Identity};
 use crate::problems::{self, Problem};
 use crate::scope::Scope;
 use crate::sidecar::{SidecarResolver, Sidecars};
-use crate::store::IndexedFile;
+use crate::store::{IndexedFile, TagsReread};
 use crate::tag_set::TagSet;
 use crate::tags;
 use crate::track::{Artwork, ArtworkSource, SortKeys, TrackId, TrackRecord, filename_title};
@@ -24,6 +24,9 @@ pub enum FileOutcome {
     },
     Added(Box<TrackRecord>),
     Updated(Box<TrackRecord>),
+    /// An unchanged file whose track was read with an older generation of tag types, read again
+    /// for its tags alone.
+    Reread(TagsReread),
     /// A file that could not be read. A track the index holds for it stays as it is.
     Problem(Problem),
 }
@@ -39,7 +42,9 @@ pub(super) fn process_file(
     resolved: &mut Option<Sidecars>,
 ) -> FileOutcome {
     // Stage 2: skip. Path, size, mtime and sidecar stamp unchanged means done without opening
-    // the file or any sidecar. This check carries the incremental budget.
+    // the file or any sidecar. This check carries the incremental budget. A file read before the
+    // newest tag type was added is opened for its tags alone; one coming back from missing is
+    // left to the next scan, which finds it present.
     let stamped = sidecars.stamp(&dir.path, &candidate.path, &dir.files);
     if let Some(ix) = &indexed
         && ix.size == candidate.size
@@ -48,6 +53,14 @@ pub(super) fn process_file(
     {
         return if ix.missing {
             FileOutcome::Returned { track_id: ix.track_id }
+        } else if ix.tags_generation < tags::tags_generation() {
+            match tags::read(&candidate.path) {
+                Ok(read) => FileOutcome::Reread(TagsReread {
+                    track_id: ix.track_id,
+                    tag_values: read.tags.tag_values,
+                }),
+                Err(e) => FileOutcome::Problem(problems::from_read_error(&candidate.path, &e)),
+            }
         } else {
             FileOutcome::Unchanged
         };

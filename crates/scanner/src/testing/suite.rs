@@ -11,6 +11,7 @@ macro_rules! store_suite {
         $crate::store_suite!(@tests $make;
             cold_scan_then_incremental_is_all_unchanged,
             retag_updates_in_place_and_keeps_identity,
+            an_unchanged_file_is_read_again_for_a_newer_tag_type,
             lyrics_file_beside_an_unchanged_track,
             an_empty_lyrics_file_writes_nothing,
             sidecars_beside_unchanged_tracks_come_and_go,
