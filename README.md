@@ -1,107 +1,56 @@
-# MusicStreaming
+# Jewelcase
 
-A self-hosted music streaming platform for people who own large, curated
-collections but still reach for a commercial service because the experience is
-better. It runs as a single server container that scans and indexes a library
-of tagged music and streams to web and mobile clients with instant search,
-a synced queue, offline playback, and recommendations built from listening history.
+A self-hosted music server that streams the collection you own like a commercial streaming
+service.
 
-The server core is deliberately slim: it serves a well-tagged library and
-nothing more. Everything else, from metadata enrichment and scrobbling to
-loudness analysis and recommendation strategies, is a plugin built on a stable
-extension API so the community can extend both server and clients.
+Jewelcase scans your music folder and plays it in your browser, with search as you type and
+control from any of your devices. It's designed to stay fast with hundreds of thousands of
+tracks, even on a Raspberry Pi. Plugins add everything else, such as fetching lyrics and scrobbling.
 
-# Development
+> [!WARNING]
+> Jewelcase is in early development. There is no release yet, and the API and plugin contract
+> will change. See [`PLAN.md`](PLAN.md) for what's next.
 
-You need Docker with Compose. Point the server at some music by creating a `.env` file at the
-repository root:
+## Features
+
+- **Live library scanning:** picks up files as they're added, changed, or removed.
+- **Read-only to your music:** Jewelcase keeps its own data separately and never changes your
+  files. Only plugins you allow can write to them.
+- **Instant search:** finds albums, artists, and songs as you type, typos included.
+- **Web player:** seeking, waveforms, lyrics, and media keys and lock-screen controls.
+- **Remote control:** see your signed-in devices and control what plays from any of them.
+- **Plugins:** sandboxed WebAssembly plugins that an admin approves and turns on per library.
+  [LRCLIB lyrics](plugins/lrclib-lyrics/) and [ListenBrainz scrobbling](plugins/listenbrainz/)
+  are included as examples.
+
+Playlists, offline listening, recommendations, multiple users, transcoding, and an Android app
+are planned.
+
+## Getting started
+
+You need [Docker](https://docs.docker.com/get-docker/) with Compose.
 
 ```sh
-JEWELCASE_MUSIC=/path/to/music
+git clone https://github.com/USU-CSCapstone/MusicStreaming.git jewelcase
+cd jewelcase
+echo "JEWELCASE_MUSIC=/path/to/your/music" > .env
+docker compose up
 ```
 
-Then:
+The first start takes a few minutes to compile. Then open <http://localhost:5173> and **create
+the owner account right away**: until you do, anyone who can reach the server can claim it.
 
-```sh
-docker compose up --watch   # start everything, then open http://localhost:5173
-docker compose down         # stop it; add --volumes to also delete the database and caches
-```
+This runs the development setup, which only your computer can reach. There's no image for a
+home server yet; see [Self-hosting](docs/self-hosting.md).
 
-As you save, the web app updates in the browser, and the server rebuilds and restarts. The
-first start compiles the server, which takes a minute or so; later starts reuse the build.
-Your music is mounted writable so plugins can save into it, though Jewelcase itself only reads
-it, and the containers never write to your checkout. The server's API is also on
-http://localhost:8080.
+## Documentation
 
-Tests and checks run on your machine as usual: `cargo test` and `cargo clippy` at the root, and
-`pnpm test` and `pnpm check` in `web/`. Code outside tests must also pass
-`cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used`: use `expect("why it can't
-fail")` only where the failure is impossible, and handle anything that depends on input, files,
-configuration or the environment.
-Some Rust tests run the bundled plugins, so build them first with `plugins/lrclib-lyrics/build.sh && plugins/listenbrainz/build.sh`, then run `cargo test`. Running `pnpm dev` there on its own serves the web app
-against a mock of the API instead.
-
-# Prototype
-
-Build a thin slice of the core server and plugin system to learn where the
-complexity lives. Assume a well-tagged library; the database is built from
-artist, album, and track tags. No metadata enrichment, mobile, offline, or auth
-UI.
-
-## Core server
-
-- **Data model**: libraries, users with library membership, artists, albums,
-  tracks, play events, per-user playback state and queue.
-- **Track identity**: stable internal id separate from file path. Match files
-  on rescan by MusicBrainz ID tag, then path, then a tag hash, so moves and
-  retags keep history intact.
-- **Scanner**: reads tags, builds the model, incremental rescans. Runs as a job.
-- **Job queue**: persistent, resumable, shared by the scanner and plugins.
-- **Streaming**: direct play with range requests, on-demand transcode to Opus
-  with a disk cache.
-- **Search**: over artists, albums, playlists, and tracks with fuzzy matching.
-- **HTTP API**: JSON resources for the model above, a session per signed-in
-  device sent as a bearer token or the web client's cookie, every response
-  scoped to the user's libraries.
-- **Minimal web client**: browse, search, play, reorderable queue. Enough to
-  exercise the API and observe plugins.
-
-## Plugin system
-
-- **Extension points**: event sink, background job, provider, API extension.
-- **Execution model**: build the scrobbler in-process and in a sandbox, compare
-  deployment, isolation, per-call latency, and permission enforcement, then
-  commit to one.
-- **Manifest and permissions**: plugins declare API version, shapes, and
-  permissions (library read, file read, field-scoped track write, event
-  subscriptions, jobs, allowlisted network, routes, KV storage). Enforced at a
-  single chokepoint in the host API.
-- **Host API**: paged library queries, batch track fetch, file read, permitted
-  field writes, event subscribe with cursor, job enqueue, outbound HTTP, KV,
-  settings, route registration, logging.
-- **Lifecycle**: discovery from a plugins directory, enable/disable at
-  runtime, per-call timeouts, crash isolation.
-- **Reference plugins**, built only through the public API:
-  1. Scrobbler (event sink) — writes completed plays to a log or URL.
-  2. Loudness analysis (background job) — computes and writes track gain.
-  3. Next-track provider — trivial ranking, the seam for future recommendations.
-
-## Unknowns
-
-- Plugin system design
-- Plugin system security controls
-- How to derive track identity
-- How to handle gapless playback
-- How to implement a smart fuzzy search
-- How to normalize audio
-- What is the split between core server and plugins
-
-## Order
-
-1. Schema, scanner, identity
-2. Job queue
-3. Streaming, API, web client
-4. Execution model spike (done: `design/plugins.md`)
-5. Plugin host (done: `crates/plugins`)
-6. Loudness and next-track plugins
-7. Search at scale
+| I want to… | Read |
+|---|---|
+| Run Jewelcase and configure it | [Self-hosting](docs/self-hosting.md) |
+| Organize and tag my music | [Organizing your music](docs/organizing-music.md) |
+| Understand how Jewelcase fits together | [Architecture](docs/architecture.md) |
+| Write a plugin | [Writing a plugin](plugins/README.md) |
+| Build a client or script against the API | [API reference](api/openapi.yaml) |
+| Work on Jewelcase itself | [Contributing](CONTRIBUTING.md) |
+| Know why it works the way it does | [Requirements](requirements/), [design notes](design/), and [decisions](adr/) |
