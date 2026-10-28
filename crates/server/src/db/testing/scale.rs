@@ -19,6 +19,18 @@ pub fn size() -> usize {
         .map_or(500_000, |tracks| tracks.parse().expect("BENCH_TRACKS is a number of tracks"))
 }
 
+/// The moods a generated track may have, each with how many tracks in a million have it: from
+/// one, too few for any filter to walk the library for, to a tenth of them, too many to sort on
+/// every page.
+pub const MOODS: [(&str, u64); 6] = [
+    ("Mood 1ppm", 1),
+    ("Mood 10ppm", 10),
+    ("Mood 100ppm", 100),
+    ("Mood 1000ppm", 1_000),
+    ("Mood 10000ppm", 10_000),
+    ("Mood 100000ppm", 100_000),
+];
+
 /// SplitMix64's finalizer: a well-mixed number from `n`, so each choice the generator makes is a
 /// function of where it is made and the library is the same on every run.
 fn mix(n: u64) -> u64 {
@@ -32,8 +44,9 @@ fn mix(n: u64) -> u64 {
 /// by number, and each has up to `tracks / 400` albums, `tracks / 400 / (1 + r)` for a random `r`
 /// below `tracks / 14` but at least one, of 6 to 16 tracks: so a few artists, wherever they fall,
 /// hold thousands of tracks, and most hold one album. An eighth of the tracks also credit one of
-/// the first 200 artists. Each album has one of 40 genres, the first few far more common. The
-/// last fiftieth are untagged files, 25 to a folder, all on the unknown album. The store draws
+/// the first 200 artists. Each album has one of 40 genres, the first few far more common, and
+/// a track may have one of six moods ([`MOODS`]), scattered across the library. The last
+/// fiftieth are untagged files, 25 to a folder, all on the unknown album. The store draws
 /// each track's ID at random, so ID order is neither path nor sort order.
 pub fn records(root: &Path, tracks: usize) -> impl Iterator<Item = TrackRecord> {
     let untagged = tracks / 50;
@@ -79,6 +92,16 @@ fn tagged(root: &Path, artist: u64, album: u64, number: u64, stamp: SidecarStamp
         artists.push(name(featured));
     }
     let genre = (mix(album ^ 3) % 1000).pow(3) * 40 / 1_000_000_000;
+    // The tiers are disjoint ranges of one draw, so a track has one mood at most.
+    let draw = mix(seed ^ 9) % 1_000_000;
+    let mood = MOODS
+        .iter()
+        .scan(0, |below, &(name, per_million)| {
+            *below += per_million;
+            Some((name, *below))
+        })
+        .find(|&(_, below)| draw < below)
+        .map(|(name, _)| name.to_owned());
     let sort = SortKeys {
         title: sort_key(&title, None),
         artist: sort_key(&artist_name, None),
@@ -91,7 +114,11 @@ fn tagged(root: &Path, artist: u64, album: u64, number: u64, stamp: SidecarStamp
         album: Some(album_title),
         album_artists: vec![artist_name],
         track_number: u32::try_from(number).ok(),
-        tag_values: BTreeMap::from([("genre".into(), vec![format!("Genre {genre}")])]),
+        tag_values: BTreeMap::from_iter(
+            [("genre".to_owned(), vec![format!("Genre {genre}")])]
+                .into_iter()
+                .chain(mood.map(|mood| ("mood".to_owned(), vec![mood]))),
+        ),
         release_date: PartialDate::parse(&(1960 + mix(album ^ 4) % 65).to_string()),
         ..TagSet::default()
     };
