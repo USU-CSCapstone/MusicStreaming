@@ -62,10 +62,10 @@ pub use scope::{Depth, Scope};
 pub use sidecar::{Biography, SidecarImage, SidecarStamp};
 pub use store::{
     AnalysisStore, Batch, FileToDecode, IndexedFile, IndexedFolder, PickedTrack, PlaceholderStore,
-    ProblemLog, Store, StoreError,
+    ProblemLog, Store, StoreError, TagsReread,
 };
 pub use tag_set::{Lyrics, PartialDate, TagSet, release_kind};
-pub use tags::{ReadError, read as read_tags, tag_type_keys};
+pub use tags::{ReadError, read as read_tags, tag_type_keys, tags_generation};
 pub use track::{Artwork, ArtworkSource, SortKeys, TrackId, TrackRecord};
 pub use triggers::{scan_every, watch};
 pub use worker::{Stop, Worker};

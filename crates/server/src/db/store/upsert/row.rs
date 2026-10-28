@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::LazyLock;
 
-use jewelcase_scanner::{Lyrics, TagSet, TrackRecord};
+use jewelcase_scanner::{Lyrics, TagSet, TrackRecord, tags_generation};
 use rusqlite::types::Null;
 use rusqlite::{OptionalExtension, Result, ToSql, Transaction};
 
@@ -15,7 +15,7 @@ use crate::db::{Json, new_id};
 /// The track columns a scan sets, both when it inserts the row and when it updates it. Each binds
 /// by name, as `:column`. The insert also sets `id`, `library_id` and `added_at`, which an update
 /// keeps.
-const COLUMNS: [&str; 38] = [
+const COLUMNS: [&str; 39] = [
     "album_id",
     "album_artist_ids",
     "album_title",
@@ -54,6 +54,7 @@ const COLUMNS: [&str; 38] = [
     "artist_image_id",
     "biography_id",
     "sidecar_stamp",
+    "tags_generation",
 ];
 
 /// Inserts track `:id` with [`COLUMNS`], or updates it with them when it is a track of
@@ -152,6 +153,7 @@ pub(super) fn write_row(
         (":artist_image_id", &sidecars.artist_image_id),
         (":biography_id", &sidecars.biography_id),
         (":sidecar_stamp", &rec.sidecar_stamp),
+        (":tags_generation", &tags_generation()),
     ];
     // rusqlite rejects a name the statement lacks and leaves an unbound one NULL, so with one
     // entry per placeholder, distinct names mean every placeholder is bound.

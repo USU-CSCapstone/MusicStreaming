@@ -6,7 +6,7 @@
 //! [`ProblemLog`] it records problems in, and none of a scan's batches or questions. The server's
 //! SQLite store implements them all.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -30,6 +30,9 @@ pub struct IndexedFile {
     /// The stamp of the sidecars it resolved when last read, so a sidecar added, changed or
     /// removed beside an unchanged file is noticed (`requirements/scanning.md` §7).
     pub sidecar_stamp: SidecarStamp,
+    /// The generation of tag types it was last read with ([`crate::tags_generation`]), so an
+    /// unchanged file is read again for a type added since (`requirements/tags.md` §2).
+    pub tags_generation: u32,
 }
 
 /// What the index holds directly in one folder ([`Store::indexed_in`]), by name as the store
@@ -51,12 +54,24 @@ impl IndexedFolder {
     }
 }
 
+/// The tags read again from an unchanged file whose track was read with an older generation of
+/// tag types ([`IndexedFile::tags_generation`]). The file is as it was, so only its tags are
+/// written, of every type, with the current generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagsReread {
+    pub track_id: TrackId,
+    /// Its tag values by type, as [`crate::TagSet::tag_values`].
+    pub tag_values: BTreeMap<String, Vec<String>>,
+}
+
 /// One transaction's worth of outcomes (`design/scanning.md` §7). An unchanged file is in none
 /// of them, so a folder of unchanged files writes nothing.
 #[derive(Debug, Default, Clone)]
 pub struct Batch {
     /// New and updated tracks.
     pub upserts: Vec<TrackRecord>,
+    /// Unchanged files whose tags were read again for tag types added since their last read.
+    pub rereads: Vec<TagsReread>,
     /// Missing tracks whose files are back unchanged: clear the mark.
     pub returned: Vec<TrackId>,
     /// Tracks whose files their folder no longer lists, or under a folder its parent no longer
@@ -76,7 +91,11 @@ pub struct Batch {
 impl Batch {
     /// How many tracks and problems the batch writes, which is what sizes it.
     pub fn size(&self) -> usize {
-        self.upserts.len() + self.returned.len() + self.missing.len() + self.problems.len()
+        self.upserts.len()
+            + self.rereads.len()
+            + self.returned.len()
+            + self.missing.len()
+            + self.problems.len()
     }
 }
 
@@ -148,7 +167,9 @@ pub trait Store: Send + Sync {
     fn indexed_in(&self, library: LibraryId, dir: &Path) -> Result<IndexedFolder, StoreError>;
     /// Apply one batch atomically, with the scan row it carries, and append its net effect to the
     /// change feed, and return how many tracks it marked missing that were not already. An
-    /// upserted track keeps its analysis only while its file's size and mtime are unchanged. An
+    /// upserted track keeps its analysis only while its file's size and mtime are unchanged. A
+    /// track whose tags were read again keeps everything but its tags, and is in the feed only
+    /// when they changed. Both record the current [`crate::tags_generation`]. An
     /// error means nothing in the batch, its scan row included, was persisted.
     fn apply(&self, library: LibraryId, batch: Batch) -> Result<i64, StoreError>;
     /// The paths with a recorded problem that `scope` reaches: under it, or for a Directory

@@ -1,5 +1,6 @@
 //! The SQLite store as the scanner's pipeline suite inspects it.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use jewelcase_core::Format;
@@ -114,6 +115,21 @@ impl InspectStore for SqliteStore {
                     .collect::<std::result::Result<_, _>>()
                     .unwrap()
             };
+            let tags: BTreeMap<String, Vec<String>> = {
+                let mut s = conn
+                    .prepare(
+                        "SELECT tag.type, tagged.tag_name FROM track_tags tagged \
+                         JOIN tags tag ON tag.id = tagged.tag_id WHERE tagged.track_id = ?1 \
+                         ORDER BY tag.type, tagged.tag_name",
+                    )
+                    .unwrap();
+                let mut tags = BTreeMap::<String, Vec<String>>::new();
+                for row in s.query_map([id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap() {
+                    let (tag_type, name): (String, String) = row.unwrap();
+                    tags.entry(tag_type).or_default().push(name);
+                }
+                tags
+            };
             out.push(InspectTrack {
                 id,
                 path: roots[&root_id].join(&rel),
@@ -136,6 +152,7 @@ impl InspectStore for SqliteStore {
                 sample_rate: if rate == 0 { None } else { Some(u32::try_from(rate).unwrap()) },
                 analyzed,
                 measured,
+                tags,
             });
         }
         Ok(out)
@@ -183,6 +200,14 @@ impl InspectStore for SqliteStore {
             })
             .unwrap()
             .flatten()
+    }
+
+    fn age_tag_reads(&self, lib: LibraryId) {
+        self.db()
+            .write_blocking(move |tx| {
+                tx.execute("UPDATE tracks SET tags_generation = 0 WHERE library_id = ?1", [lib])
+            })
+            .unwrap();
     }
 
     fn inspect_scans(&self, lib: LibraryId) -> Vec<Scan> {
