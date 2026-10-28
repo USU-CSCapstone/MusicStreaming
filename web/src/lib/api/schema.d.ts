@@ -810,6 +810,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the queue
+         * @description The account's whole queue, for a device to load into the shared core
+         *     (`requirements/queue.md` §7). `404` until a queue has been started.
+         */
+        get: operations["getQueue"];
+        put?: never;
+        /**
+         * Start a queue
+         * @description Replaces the account's queue with one that plays `source` from `start`, and carries the
+         *     Manual Queue over (`requirements/queue.md` §6). The device chooses the `queueId` and the
+         *     source's `key` so it can apply the start at once; sending a start again for the queue
+         *     the account already has changes nothing. A track that is missing is allowed and is
+         *     skipped in place (`requirements/conventions.md` §6). Answers `422` unless every track
+         *     is in `libraryId` and the caller reaches the library, whether or not one that is
+         *     refused exists (`requirements/users.md` §10), or when `start` is past the end, or
+         *     `context` is not an object with a string `type` of at most 4 KiB. A request is limited
+         *     to what a 2 MiB body holds, about 90,000 tracks.
+         */
+        post: operations["startQueue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/plays": {
         parameters: {
             query?: never;
@@ -1884,6 +1917,72 @@ export interface components {
             origin: components["schemas"]["QueueOrigin"];
             /** @description With `automatic` — why radio or endless play chose it. */
             reason?: components["schemas"]["Reason"] | null;
+        };
+        StartQueue: {
+            /**
+             * Format: uuid
+             * @description Client-generated. Names the queue among the account's own.
+             */
+            queueId: string;
+            /** @description What the queue started from, kept as sent. */
+            context: Omit<components["schemas"]["Context"], "type">;
+            /**
+             * @description The tracks to play, in the order the device shows them, resolved once and never
+             *     rewritten. A track may appear more than once; each copy is its own item.
+             */
+            source: {
+                /**
+                 * Format: uuid
+                 * @description Client-generated. Names the source's items, `<key>.<index>`.
+                 */
+                key: string;
+                libraryId: string;
+                tracks: string[];
+            };
+            /** @description The index in `tracks` of the track that plays first. */
+            start: number;
+            /** @description Start shuffled, with the order this seed gives. */
+            shuffle?: {
+                seed: number;
+            };
+        };
+        QueueSnapshot: {
+            /** Format: uuid */
+            queueId: string;
+            /** @description Zero as the queue starts. */
+            version: number;
+            context: components["schemas"]["Context"];
+            state: components["schemas"]["QueueState"];
+        };
+        /**
+         * @description The shared core's queue, as it serializes. A client loads it into the core and asks the
+         *     core for what it shows, never reading the lists itself. Items are numbers: an item's
+         *     number counts the tracks of `sources` laid end to end, and its ID is `<key>.<index>`
+         *     in its source. A track that no longer resolves is skipped in place.
+         */
+        QueueState: {
+            sources: {
+                key: string;
+                libraryId: string;
+                tracks: string[];
+            }[];
+            /** @description The Manual Queue, in play order. */
+            manual: number[];
+            /** @description The context, with the items before `cursor` already started or passed. */
+            order: number[];
+            cursor: number;
+            current: number | null;
+            /** @description Oldest first. */
+            history: number[];
+            /** @description Set while the context is shuffled. */
+            shuffle: {
+                seed: number;
+                unshuffled: number[];
+            } | null;
+            /** @enum {string} */
+            repeat: "off" | "all" | "one";
+            /** @description How many sources a Repeat All restart or a carried-over Manual Queue has minted, keyed `~<n>`. */
+            copies: number;
         };
         PluginSettings: {
             /**
@@ -3500,6 +3599,50 @@ export interface operations {
                 content: {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueSnapshot"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    startQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartQueue"];
+            };
+        };
+        responses: {
+            /** @description Started. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Problem"];
         };

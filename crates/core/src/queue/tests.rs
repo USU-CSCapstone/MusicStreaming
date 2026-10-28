@@ -777,3 +777,44 @@ fn windows_return_the_ids_at_their_offset() {
     assert!(q.upcoming_window(9, 2).next().is_none());
     assert_eq!(q.history_window(1, 5).collect::<Vec<_>>(), ["a.1"]);
 }
+
+#[test]
+fn a_queue_saved_without_its_sources_is_whole_again_with_them() {
+    let mut q = album();
+    add(&mut q, source("m", 2), Anchor::ManualEnd);
+    shuffle_on(&mut q, 7);
+    q.apply(&Edit::Next).unwrap();
+    q.carry_manual(&q.clone()).unwrap();
+    assert!(q.copies > 0);
+    let stored = serde_json::to_value(q.stored()).unwrap();
+    assert!(stored.get("sources").is_none());
+    let mut restored: Queue = serde_json::from_value(stored).unwrap();
+    restored.attach_sources(q.sources().to_vec());
+    assert_eq!(restored, q);
+}
+
+#[test]
+fn carrying_the_manual_queue_over_keeps_its_order_and_tracks() {
+    let mut old = album();
+    add(&mut old, source("m", 3), Anchor::ManualEnd);
+    add(&mut old, Source { library_id: "other".into(), ..source("n", 1) }, Anchor::ManualEnd);
+    remove(&mut old, &["m.1"]);
+    let mut new = Queue::start(source("b", 4), 1).unwrap();
+    new.carry_manual(&old).unwrap();
+
+    let tracks: Vec<_> =
+        new.manual().map(|id| new.track(&id).unwrap().track_id.to_string()).collect();
+    assert_eq!(tracks, ["m-0", "m-2", "n-0"]);
+    assert_eq!(new.track(&manual(&new)[2]).unwrap().library_id, "other");
+    assert_eq!(new.current().as_deref(), Some("b.1"));
+    assert_eq!(upcoming(&new), ["b.2", "b.3"]);
+    assert_eq!(history(&new), Vec::<String>::new());
+    let keys: std::collections::HashSet<_> = new.sources().iter().map(|s| &s.key).collect();
+    assert_eq!(keys.len(), new.sources().len(), "keys are distinct");
+    // The copies join a restart's, without reusing a key.
+    new.apply(&Edit::Repeat { mode: Repeat::All }).unwrap();
+    for _ in 0..8 {
+        new.apply(&Edit::Next).unwrap();
+    }
+    assert_eq!(new.current().as_deref().map(|id| id.starts_with('~')), Some(true));
+}

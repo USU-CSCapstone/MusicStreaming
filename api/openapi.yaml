@@ -82,8 +82,8 @@ info:
 
     **Draft shapes.** `x-status: draft` marks what is served but may still change shape:
     audio delivery, which waits on its design (`design/general.md` §11); the waveform, whose
-    bin count is still open (`design/scanning.md`); and the player's fields that name a track
-    until the server keeps the queue.
+    bin count is still open (`design/scanning.md`); the player's fields that name a track
+    until the player plays from the queue; and the queue until its edits are served.
 
     **Realtime.** `GET /realtime` upgrades to a WebSocket carrying
     `RealtimeClientMessage` and `RealtimeServerMessage`.
@@ -117,6 +117,8 @@ tags:
     description: Saved playlists (`requirements/playlists.md`).
   - name: Player
     description: Playback state, remote control, and Shift (`requirements/realtime.md`).
+  - name: Queue
+    description: The account's queue (`requirements/queue.md`, `design/queue.md`).
   - name: Listening
     description: Plays, history, statistics, and summaries (`requirements/analytics.md`).
   - name: Realtime
@@ -1107,6 +1109,47 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  # ───────────────────────────── Queue ─────────────────────────────
+  /me/queue:
+    get:
+      tags: [Queue]
+      summary: Get the queue
+      description: |
+        The account's whole queue, for a device to load into the shared core
+        (`requirements/queue.md` §7). `404` until a queue has been started.
+      operationId: getQueue
+      x-status: draft
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueSnapshot' }
+        default: { $ref: '#/components/responses/Problem' }
+    post:
+      tags: [Queue]
+      summary: Start a queue
+      description: |
+        Replaces the account's queue with one that plays `source` from `start`, and carries the
+        Manual Queue over (`requirements/queue.md` §6). The device chooses the `queueId` and the
+        source's `key` so it can apply the start at once; sending a start again for the queue
+        the account already has changes nothing. A track that is missing is allowed and is
+        skipped in place (`requirements/conventions.md` §6). Answers `422` unless every track
+        is in `libraryId` and the caller reaches the library, whether or not one that is
+        refused exists (`requirements/users.md` §10), or when `start` is past the end, or
+        `context` is not an object with a string `type` of at most 4 KiB. A request is limited
+        to what a 2 MiB body holds, about 90,000 tracks.
+      operationId: startQueue
+      x-status: draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StartQueue' }
+      responses:
+        '204': { description: Started. }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Listening ─────────────────────────────
@@ -2896,6 +2939,109 @@ components:
           oneOf:
             - $ref: '#/components/schemas/Reason'
             - type: 'null'
+
+    # ───────────────────────────── Queue ─────────────────────────────
+    StartQueue:
+      type: object
+      required: [queueId, context, source, start]
+      properties:
+        queueId:
+          type: string
+          format: uuid
+          description: Client-generated. Names the queue among the account's own.
+        context:
+          allOf:
+            - $ref: '#/components/schemas/Context'
+          description: What the queue started from, kept as sent.
+        source:
+          type: object
+          required: [key, libraryId, tracks]
+          description: |
+            The tracks to play, in the order the device shows them, resolved once and never
+            rewritten. A track may appear more than once; each copy is its own item.
+          properties:
+            key:
+              type: string
+              format: uuid
+              description: Client-generated. Names the source's items, `<key>.<index>`.
+            libraryId: { type: string }
+            tracks:
+              type: array
+              items: { type: string }
+        start:
+          type: integer
+          minimum: 0
+          description: The index in `tracks` of the track that plays first.
+        shuffle:
+          type: object
+          required: [seed]
+          description: Start shuffled, with the order this seed gives.
+          properties:
+            seed: { type: integer, minimum: 0, maximum: 4294967295 }
+
+    QueueSnapshot:
+      type: object
+      required: [queueId, version, context, state]
+      properties:
+        queueId: { type: string, format: uuid }
+        version:
+          type: integer
+          minimum: 0
+          description: Zero as the queue starts.
+        context: { $ref: '#/components/schemas/Context' }
+        state: { $ref: '#/components/schemas/QueueState' }
+
+    QueueState:
+      type: object
+      required: [sources, manual, order, cursor, current, history, shuffle, repeat, copies]
+      description: |
+        The shared core's queue, as it serializes. A client loads it into the core and asks the
+        core for what it shows, never reading the lists itself. Items are numbers: an item's
+        number counts the tracks of `sources` laid end to end, and its ID is `<key>.<index>`
+        in its source. A track that no longer resolves is skipped in place.
+      properties:
+        sources:
+          type: array
+          items:
+            type: object
+            required: [key, libraryId, tracks]
+            properties:
+              key: { type: string }
+              libraryId: { type: string }
+              tracks:
+                type: array
+                items: { type: string }
+        manual:
+          type: array
+          items: { type: integer }
+          description: The Manual Queue, in play order.
+        order:
+          type: array
+          items: { type: integer }
+          description: The context, with the items before `cursor` already started or passed.
+        cursor: { type: integer, minimum: 0 }
+        current:
+          type: [integer, 'null']
+        history:
+          type: array
+          items: { type: integer }
+          description: Oldest first.
+        shuffle:
+          type: [object, 'null']
+          description: Set while the context is shuffled.
+          required: [seed, unshuffled]
+          properties:
+            seed: { type: integer }
+            unshuffled:
+              type: array
+              items: { type: integer }
+        repeat:
+          type: string
+          enum: [off, all, one]
+        copies:
+          type: integer
+          minimum: 0
+          description: How many sources a Repeat All restart or a carried-over Manual Queue has minted, keyed `~<n>`.
 
     # ───────────────────────────── Plugins ─────────────────────────────
     PluginSettings:

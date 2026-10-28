@@ -28,6 +28,7 @@
 
 mod edit;
 mod shuffle;
+mod stored;
 #[cfg(test)]
 mod tests;
 
@@ -83,6 +84,8 @@ struct Shuffled {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Queue {
+    /// Absent from a queue saved with [`Queue::stored`], which [`Queue::attach_sources`] completes.
+    #[serde(default)]
     sources: Vec<Source>,
     manual: Vec<u32>,
     order: Vec<u32>,
@@ -120,6 +123,29 @@ impl Queue {
             sources: vec![source],
             ..Self::default()
         })
+    }
+
+    /// Put the Manual Queue of `from` at the front of this one's, as new sources keyed `~<n>`, so
+    /// a new queue keeps what the user queued by hand (`requirements/queue.md` §6). Tracks the
+    /// sources of `from` do not hold are left out. Fails, changing nothing, if the items would
+    /// not fit in the item numbers.
+    pub fn carry_manual(&mut self, from: &Queue) -> Result<(), Error> {
+        let base = self.item_count();
+        let first = to_item(base)?;
+        to_item(base + from.manual.len())?;
+        let mut copies = self.copies;
+        let (sources, positions) = from.copy_runs(&from.manual, &mut copies);
+        let carried: Vec<u32> = positions.into_iter().flatten().map(|at| first + at).collect();
+        self.sources.extend(sources);
+        self.copies = copies;
+        self.manual.splice(0..0, carried);
+        Ok(())
+    }
+
+    /// The sources, in the order their items are numbered. Sources are only ever added, so a
+    /// caller that saved the first `n` need save only those after.
+    pub fn sources(&self) -> &[Source] {
+        &self.sources
     }
 
     /// Whether the context is shuffled.
@@ -292,29 +318,11 @@ impl Queue {
         let (Ok(base), Ok(_)) = (to_item(size), to_item(size + self.order.len())) else {
             return;
         };
-        let mut sources: Vec<Source> = Vec::new();
         let mut copies = self.copies;
-        let mut copied = 0;
+        let (sources, copied) = self.copy_runs(&self.order, &mut copies);
         let mut renumbered: Vec<Option<u32>> = vec![None; size];
-        for &item in &self.order {
-            let Some((source, index)) = self.span(item) else {
-                continue;
-            };
-            let track = source.tracks[index].clone();
-            match sources.last_mut() {
-                Some(run) if run.library_id == source.library_id => run.tracks.push(track),
-                _ => {
-                    let key = format!("~{copies}");
-                    copies += 1;
-                    sources.push(Source {
-                        key,
-                        library_id: source.library_id.clone(),
-                        tracks: vec![track],
-                    });
-                }
-            }
-            renumbered[item as usize] = Some(base + copied);
-            copied += 1;
+        for (&item, copy) in self.order.iter().zip(&copied) {
+            renumbered[item as usize] = copy.map(|at| base + at);
         }
         if let Some(shuffled) = &mut self.shuffle {
             shuffled.unshuffled = shuffled
@@ -325,8 +333,39 @@ impl Queue {
         }
         self.sources.extend(sources);
         self.copies = copies;
-        self.order = (base..base + copied).collect();
+        self.order = copied.iter().flatten().map(|&at| base + at).collect();
         self.cursor = 0;
+    }
+
+    /// Copy the tracks of `items`, in order, into new sources keyed `~<n>` from `copies` on (one
+    /// per run of tracks from the same library), and count `copies` up. Returns the sources and,
+    /// for each item, its position among the copied tracks, or `None` if the sources do not hold
+    /// it.
+    fn copy_runs(&self, items: &[u32], copies: &mut u32) -> (Vec<Source>, Vec<Option<u32>>) {
+        let mut sources: Vec<Source> = Vec::new();
+        let mut copied = 0;
+        let positions = items
+            .iter()
+            .map(|&item| {
+                let (source, index) = self.span(item)?;
+                let track = source.tracks[index].clone();
+                match sources.last_mut() {
+                    Some(run) if run.library_id == source.library_id => run.tracks.push(track),
+                    _ => {
+                        let key = format!("~{copies}");
+                        *copies += 1;
+                        sources.push(Source {
+                            key,
+                            library_id: source.library_id.clone(),
+                            tracks: vec![track],
+                        });
+                    }
+                }
+                copied += 1;
+                Some(copied - 1)
+            })
+            .collect();
+        (sources, positions)
     }
 
     /// Play the most recent History item. What was playing goes back to the front of Up Next:
