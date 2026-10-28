@@ -2303,10 +2303,10 @@ export interface components {
          * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
          *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
          *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
-         *     does not have matches nothing, as `artistId` does. Planned on search.
+         *     does not have matches nothing, as `artistId` does.
          */
         Tag: string[];
-        /** @description Whether an item must carry all or any of the given tags of each type. Planned on search. */
+        /** @description Whether an item must carry all or any of the given tags of each type. */
         TagMatch: "all" | "any";
         TagId: string;
         /** @description Planned. */
@@ -2745,10 +2745,10 @@ export interface operations {
                  * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
                  *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
                  *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
-                 *     does not have matches nothing, as `artistId` does. Planned on search.
+                 *     does not have matches nothing, as `artistId` does.
                  */
                 tag?: components["parameters"]["Tag"];
-                /** @description Whether an item must carry all or any of the given tags of each type. Planned on search. */
+                /** @description Whether an item must carry all or any of the given tags of each type. */
                 tagMatch?: components["parameters"]["TagMatch"];
                 /** @description Planned. */
                 yearFrom?: components["parameters"]["YearFrom"];
@@ -2830,10 +2830,10 @@ export interface operations {
                  * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
                  *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
                  *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
-                 *     does not have matches nothing, as `artistId` does. Planned on search.
+                 *     does not have matches nothing, as `artistId` does.
                  */
                 tag?: components["parameters"]["Tag"];
-                /** @description Whether an item must carry all or any of the given tags of each type. Planned on search. */
+                /** @description Whether an item must carry all or any of the given tags of each type. */
                 tagMatch?: components["parameters"]["TagMatch"];
                 /** @description Planned. */
                 yearFrom?: components["parameters"]["YearFrom"];
@@ -2906,10 +2906,10 @@ export interface operations {
                  * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
                  *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
                  *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
-                 *     does not have matches nothing, as `artistId` does. Planned on search.
+                 *     does not have matches nothing, as `artistId` does.
                  */
                 tag?: components["parameters"]["Tag"];
-                /** @description Whether an item must carry all or any of the given tags of each type. Planned on search. */
+                /** @description Whether an item must carry all or any of the given tags of each type. */
                 tagMatch?: components["parameters"]["TagMatch"];
                 /** @description Server availability (`requirements/conventions.md` §6). Playability on a device is the client's to filter. Planned. */
                 availability?: components["parameters"]["Availability"];
@@ -3250,10 +3250,10 @@ export interface operations {
                  * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
                  *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
                  *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
-                 *     does not have matches nothing, as `artistId` does. Planned on search.
+                 *     does not have matches nothing, as `artistId` does.
                  */
                 tag?: components["parameters"]["Tag"];
-                /** @description Whether an item must carry all or any of the given tags of each type. Planned on search. */
+                /** @description Whether an item must carry all or any of the given tags of each type. */
                 tagMatch?: components["parameters"]["TagMatch"];
                 /** @description Planned. */
                 yearFrom?: components["parameters"]["YearFrom"];
