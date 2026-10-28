@@ -239,7 +239,6 @@ export class Catalog {
 			artists: this.albumArtists(albumId),
 			releaseDate: str(row.release_date),
 			type: row.type as AlbumSummary['type'],
-			genres: tags.genre ?? [],
 			tags,
 			trackCount: num(row.track_count),
 			trackTotal: totals && num(totals.tagged) > 0 ? num(totals.total) : null,
@@ -384,7 +383,6 @@ export class Catalog {
 			trackNumber: numOrNull(row.track_number),
 			durationUs: num(row.duration_us),
 			releaseDate: str(row.release_date),
-			genres: tags.genre ?? [],
 			tags,
 			explicit: num(row.explicit) === 1,
 			audio: { codec: String(row.codec), lossless: num(row.lossless) === 1 },
@@ -576,7 +574,6 @@ export class Catalog {
 		return {
 			...this.#artistSummary(row),
 			biography: str(row.biography),
-			genres: tags.genre ?? [],
 			tags,
 			appearanceCount: num(row.appearance_count)
 		};

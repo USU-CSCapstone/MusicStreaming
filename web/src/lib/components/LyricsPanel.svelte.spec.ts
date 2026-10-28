@@ -27,6 +27,7 @@ const track = {
 	trackNumber: null,
 	durationUs: 193_000_000,
 	releaseDate: null,
+	tags: {},
 	explicit: false,
 	audio: { codec: 'mp3', lossless: false },
 	availability: 'available',

@@ -1361,10 +1361,7 @@ export interface components {
         TrackSummary: components["schemas"]["TrackBase"] & {
             album?: components["schemas"]["AlbumRef"];
             explicit: boolean;
-            /** @description Its tags of type `genre`, as `tags.genre`. Goes once `tags` is served. */
-            genres?: components["schemas"]["TagRef"][];
-            /** @description Planned. */
-            tags?: components["schemas"]["TagsByType"];
+            tags: components["schemas"]["TagsByType"];
             /** @description Enough to tell a FLAC from an MP3 at a glance (`requirements/tracks.md` §4). The full `Track` extends it. */
             audio: components["schemas"]["AudioSummary"];
             /** Format: date-time */
@@ -1501,10 +1498,7 @@ export interface components {
          */
         AlbumSummary: components["schemas"]["AlbumBase"] & {
             type: components["schemas"]["AlbumType"];
-            /** @description Its tags of type `genre`, as `tags.genre`. Goes once `tags` is served. */
-            genres?: components["schemas"]["TagRef"][];
-            /** @description Planned. */
-            tags?: components["schemas"]["TagsByType"];
+            tags: components["schemas"]["TagsByType"];
             /**
              * @description Tracks from this album in the library, including any marked missing — those stay in
              *     position with their own `availability`, so "incomplete" means never had, not lost.
@@ -1563,10 +1557,7 @@ export interface components {
         Artist: components["schemas"]["ArtistSummary"] & {
             /** @description From `artist.txt` (`requirements/scanning.md` §3.3). Usually absent. */
             biography: string | null;
-            /** @description Its tags of type `genre`, as `tags.genre`. Goes once `tags` is served. */
-            genres: components["schemas"]["TagRef"][];
-            /** @description Planned. */
-            tags?: components["schemas"]["TagsByType"];
+            tags: components["schemas"]["TagsByType"];
             appearanceCount: number;
         };
         ArtistPage: components["schemas"]["PageInfo"] & {

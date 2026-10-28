@@ -96,7 +96,7 @@ async fn gets_an_album_with_its_discs() {
             "id": "101", "title": "Abbey Road",
             "artists": [{ "id": "10", "name": "The Beatles" }],
             "releaseDate": "1969-09-26", "type": "album",
-            "genres": [{ "id": "30", "name": "Rock" }],
+            "tags": { "genre": [{ "id": "30", "name": "Rock" }], "mood": [{ "id": "32", "name": "Calm" }] },
             "trackCount": 17, "trackTotal": 17, "discCount": 1, "discTotal": 1,
             "durationUs": 2_830_000_000_i64, "image": null, "availability": "available",
             "addedAt": "1970-01-01T00:00:01.000Z", "labels": ["Apple"],

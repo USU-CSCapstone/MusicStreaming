@@ -13,6 +13,7 @@ const track = (n: number): TrackSummary => ({
 	trackNumber: n,
 	durationUs: n * 1_000_000,
 	releaseDate: null,
+	tags: {},
 	explicit: false,
 	audio: { codec: 'flac', lossless: true },
 	availability: 'available',

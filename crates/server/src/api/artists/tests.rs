@@ -66,7 +66,7 @@ async fn names_sort_without_their_accents_and_ties_by_id() {
 }
 
 #[tokio::test]
-async fn gets_an_artist_with_its_biography_and_genres() {
+async fn gets_an_artist_with_its_biography_and_tags() {
     let (_temp, _db, app) = catalog::app().await;
     let (status, artist) = json(&app, "/api/v1/libraries/1/artists/10").await;
     assert_eq!(status, StatusCode::OK);
@@ -76,14 +76,17 @@ async fn gets_an_artist_with_its_biography_and_genres() {
             "id": "10", "name": "The Beatles", "image": { "id": "40", "placeholder": null },
             "albumCount": 1, "trackCount": 5, "addedAt": "1970-01-01T00:00:03.000Z",
             "biography": "Four lads from Liverpool.",
-            "genres": [{ "id": "31", "name": "Pop" }, { "id": "30", "name": "Rock" }],
+            "tags": {
+                "genre": [{ "id": "31", "name": "Pop" }, { "id": "30", "name": "Rock" }],
+                "mood": [{ "id": "32", "name": "Calm" }],
+            },
             "appearanceCount": 1,
         })
     );
     let (_, unknown) = json(&app, "/api/v1/libraries/1/artists/13").await;
     assert_eq!(unknown["name"], Value::Null);
     assert_eq!(unknown["biography"], Value::Null);
-    assert_eq!(unknown["genres"], json!([]));
+    assert_eq!(unknown["tags"], json!({}), "a type with no tags is left out");
 }
 
 #[tokio::test]

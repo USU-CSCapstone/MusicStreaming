@@ -2107,17 +2107,11 @@ components:
       allOf:
         - $ref: '#/components/schemas/TrackBase'
         - type: object
-          required: [audio, explicit, sortKeys]
+          required: [audio, explicit, sortKeys, tags]
           properties:
             album: { $ref: '#/components/schemas/AlbumRef' }
             explicit: { type: boolean }
-            genres:
-              type: array
-              description: Its tags of type `genre`, as `tags.genre`. Goes once `tags` is served.
-              items: { $ref: '#/components/schemas/TagRef' }
-            tags:
-              $ref: '#/components/schemas/TagsByType'
-              description: Planned.
+            tags: { $ref: '#/components/schemas/TagsByType' }
             audio:
               $ref: '#/components/schemas/AudioSummary'
               description: Enough to tell a FLAC from an MP3 at a glance (`requirements/tracks.md` §4). The full `Track` extends it.
@@ -2309,16 +2303,10 @@ components:
       allOf:
         - $ref: '#/components/schemas/AlbumBase'
         - type: object
-          required: [type, trackCount, trackTotal, discCount, discTotal, durationUs, availability]
+          required: [type, tags, trackCount, trackTotal, discCount, discTotal, durationUs, availability]
           properties:
             type: { $ref: '#/components/schemas/AlbumType' }
-            genres:
-              type: array
-              description: Its tags of type `genre`, as `tags.genre`. Goes once `tags` is served.
-              items: { $ref: '#/components/schemas/TagRef' }
-            tags:
-              $ref: '#/components/schemas/TagsByType'
-              description: Planned.
+            tags: { $ref: '#/components/schemas/TagsByType' }
             trackCount:
               type: integer
               description: |
@@ -2414,18 +2402,12 @@ components:
       allOf:
         - $ref: '#/components/schemas/ArtistSummary'
         - type: object
-          required: [biography, genres, appearanceCount]
+          required: [biography, tags, appearanceCount]
           properties:
             biography:
               type: [string, 'null']
               description: From `artist.txt` (`requirements/scanning.md` §3.3). Usually absent.
-            genres:
-              type: array
-              description: Its tags of type `genre`, as `tags.genre`. Goes once `tags` is served.
-              items: { $ref: '#/components/schemas/TagRef' }
-            tags:
-              $ref: '#/components/schemas/TagsByType'
-              description: Planned.
+            tags: { $ref: '#/components/schemas/TagsByType' }
             appearanceCount: { type: integer }
 
     ArtistPage:
