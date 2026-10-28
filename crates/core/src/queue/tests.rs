@@ -109,6 +109,18 @@ fn add_before_an_item_and_at_the_end_of_the_context() {
 }
 
 #[test]
+fn a_queue_holds_at_most_max_items() {
+    assert_eq!(Queue::start(source("big", MAX_ITEMS + 1), 0), Err(Error::TooManyItems));
+    let mut q = Queue::start(source("big", MAX_ITEMS - 5), 0).unwrap();
+    let before = q.clone();
+    let edit = Edit::Add { source: source("m", 6), before: Anchor::ManualEnd };
+    assert_eq!(q.apply(&edit), Err(Error::TooManyItems));
+    assert_eq!(q, before);
+    add(&mut q, source("m", 5), Anchor::ManualEnd);
+    assert_eq!(manual(&q).len(), 5);
+}
+
+#[test]
 fn add_rejects_a_known_key_and_leaves_the_queue_alone() {
     let mut q = album();
     let edit = Edit::Add { source: source("a", 1), before: Anchor::ManualEnd };

@@ -352,8 +352,15 @@ impl Queue {
     }
 }
 
-/// Convert a count or index to an item number.
+/// The most items a queue holds, so one account's queue cannot exhaust the server's memory. A
+/// constant rather than a setting, so every device refuses exactly what the server does.
+pub const MAX_ITEMS: usize = 1_000_000;
+
+/// Convert a count or index to an item number, refusing one past [`MAX_ITEMS`].
 fn to_item(n: usize) -> Result<u32, Error> {
+    if n > MAX_ITEMS {
+        return Err(Error::TooManyItems);
+    }
     u32::try_from(n).map_err(|_| Error::TooManyItems)
 }
 
