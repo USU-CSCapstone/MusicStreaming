@@ -1,0 +1,126 @@
+# The checks from CONTRIBUTING.md, one GitHub check per area so a failure names what broke.
+name: CI
+
+on:
+  pull_request:
+  # Main's runs save the Rust build caches that pull requests restore.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels the run it replaces.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-format:
+    name: Rust Format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - run: cargo fmt --check
+      - name: cargo fmt --check, example plugins
+        run: for plugin in plugins/*/; do cargo fmt --check --manifest-path "$plugin/Cargo.toml"; done
+
+  rust-lint:
+    name: Rust Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy --workspace --lib --bins --locked -- -D clippy::unwrap_used
+      - name: cargo clippy, example plugins
+        run: |
+          for plugin in plugins/*/; do
+            cargo clippy --manifest-path "$plugin/Cargo.toml" --all-targets --locked -- -D warnings
+            cargo clippy --manifest-path "$plugin/Cargo.toml" --target wasm32-wasip2 --locked -- -D warnings
+          done
+
+  rust-test:
+    name: Rust Tests (${{ matrix.crate }})
+    # 24.04's ffmpeg 6.1 ignores `-max_pixels`, which the pixel cap tests rely on.
+    runs-on: ubuntu-26.04
+    # Long enough for a cold build; a hung test fails rather than holding a runner for 6 hours.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [core, ffmpeg, scanner, plugins, server]
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.crate }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ffmpeg
+      # Some plugin and server tests run them.
+      - name: Build the example plugins
+        if: matrix.crate == 'plugins' || matrix.crate == 'server'
+        run: plugins/lrclib-lyrics/build.sh && plugins/listenbrainz/build.sh
+      - run: cargo test --locked -p jewelcase-${{ matrix.crate }}
+
+  plugin-test:
+    name: Rust Tests (example plugins)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      - name: cargo test, example plugins
+        run: for plugin in plugins/*/; do cargo test --manifest-path "$plugin/Cargo.toml" --locked; done
+
+  web:
+    name: Web ${{ matrix.check }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { check: Lint, run: pnpm lint }
+          - { check: Format, run: pnpm format:check }
+          - { check: Types, run: pnpm check }
+          - { check: Generated API Types, run: pnpm gen:api && git diff --exit-code src/lib/api/schema.d.ts }
+          - { check: Unit Tests, run: pnpm test:unit --run, browser: true }
+          - { check: E2E Tests, run: pnpm exec playwright test, browser: true }
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - if: matrix.browser
+        run: pnpm exec playwright install --with-deps chromium
+      - run: ${{ matrix.run }}
+
+  api-lint:
+    name: API Spec Lint
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v7
+      - run: npx --yes @redocly/cli@2.65.1 lint openapi.yaml
+        env:
+          REDOCLY_TELEMETRY: off
