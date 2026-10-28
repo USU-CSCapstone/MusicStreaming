@@ -2,8 +2,8 @@
 //! which each library keeps in memory (`indexes`).
 
 mod indexes;
+mod tagged;
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::Json;
@@ -18,7 +18,7 @@ use super::albums::{self, AlbumSummary};
 use super::artists::{self, ArtistSummary};
 use super::extract::Query;
 use super::scope::Scope;
-use super::tag_filter::{TagFilter, TagMatch, Tagged, Tags};
+use super::tag_filter::{TagFilter, TagMatch};
 use super::tracks::{self, TrackSummary};
 use super::{Problem, page};
 use crate::db::{Database, by_ids};
@@ -86,8 +86,7 @@ pub async fn search(
     let track_count =
         db.read(move |conn| page::library_number(conn, library, "track_count")).await?;
     let filter = TagFilter::new(query.tag.as_deref(), query.tag_match);
-    let searched = kinds.clone();
-    let tagged = db.read(move |conn| tagged(conn, library, &filter, &searched)).await?;
+    let tagged = indexes.tagged.get(&db, library, &filter, &kinds).await?;
     let index = indexes.index(&db, library).await?;
     let found = index.search_within(&query.q, &kinds, limit, |kind, id| {
         tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
@@ -101,31 +100,6 @@ pub async fn search(
         near_misses: Vec::new(),
         library_empty: track_count == 0,
     }))
-}
-
-/// For each kind in `Kind::ALL` order, the IDs of `library`'s rows of it that carry the tags
-/// `filter` names, where it names any. A kind not in `kinds` is not read, since nothing of it is
-/// searched.
-fn tagged(
-    conn: &Connection,
-    library: i64,
-    filter: &TagFilter,
-    kinds: &[Kind],
-) -> rusqlite::Result<Option<[HashSet<i64>; 3]>> {
-    if filter.ids.is_empty() {
-        return Ok(None);
-    }
-    let mut sets: [HashSet<i64>; 3] = Default::default();
-    for kind in kinds {
-        let tagged: &Tagged = match kind {
-            Kind::Track => &tracks::TAGGED,
-            Kind::Album => &albums::TAGGED,
-            Kind::Artist => &artists::TAGGED,
-        };
-        let ids = Tags::read(conn, library, tagged, filter)?.ids(conn, tagged)?;
-        sets[*kind as usize] = ids.unwrap_or_default();
-    }
-    Ok(Some(sets))
 }
 
 /// The kinds to search for the comma-separated section `types`. Playlists add none, since there
