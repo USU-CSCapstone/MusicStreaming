@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use jewelcase_core::artists_key;
-use jewelcase_scanner::{Lyrics, TrackRecord};
+use jewelcase_scanner::{Lyrics, TagsReread, TrackRecord, tags_generation};
 use rusqlite::{Result, Transaction, params};
 
 use super::entities::{find_or_create_album, find_or_create_artist, find_or_create_tag};
@@ -119,7 +119,6 @@ fn replace_links(
 ) -> Result<()> {
     tx.prepare_cached("DELETE FROM track_artists WHERE track_id = ?1")?.execute([id])?;
     tx.prepare_cached("DELETE FROM track_album_artists WHERE track_id = ?1")?.execute([id])?;
-    tx.prepare_cached("DELETE FROM track_tags WHERE track_id = ?1")?.execute([id])?;
     let mut artists = tx.prepare_cached(
         "INSERT INTO track_artists (library_id, track_id, position, artist_id, artist_name) \
          VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
@@ -134,6 +133,61 @@ fn replace_links(
     for (pos, (artist_id, name)) in credits.album_artists.iter().enumerate() {
         album_artists.execute(params![lib, id, pos, artist_id, name.map(str::trim)])?;
     }
+    replace_tags(tx, lib, id, tag_values, touched)
+}
+
+/// Writes the tags read again from the unchanged file of track `reread.track_id`, of every type,
+/// with the current tag generation, and keeps everything else the track holds, its analysis
+/// included. Only when its tags changed does it record the track in the feed at `now` and add
+/// what it points at to `touched`, so tags read as they were change nothing derived and announce
+/// nothing. A track of another library is logged and skipped.
+pub fn reread_tags(
+    tx: &Transaction<'_>,
+    lib: i64,
+    reread: &TagsReread,
+    now: i64,
+    touched: &mut Touched,
+) -> Result<()> {
+    let id = reread.track_id;
+    let updated = tx
+        .prepare_cached("UPDATE tracks SET tags_generation = ?3 WHERE id = ?1 AND library_id = ?2")?
+        .execute(params![id, lib, tags_generation()])?;
+    if updated == 0 {
+        tracing::error!(track = id, "tags read again for a track of another library; skipped");
+        return Ok(());
+    }
+    let before = tag_links(tx, id)?;
+    let mut reached = Touched::default();
+    reached.track(tx, lib, id)?;
+    replace_tags(tx, lib, id, &reread.tag_values, &mut reached)?;
+    if tag_links(tx, id)? == before {
+        return Ok(());
+    }
+    touched.albums.extend(reached.albums);
+    touched.artists.extend(reached.artists);
+    touched.tags.extend(reached.tags);
+    feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)
+}
+
+/// Track `id`'s tags, each with its spelling in the file, by tag.
+fn tag_links(tx: &Transaction<'_>, id: i64) -> Result<Vec<(i64, String)>> {
+    tx.prepare_cached(
+        "SELECT tag_id, tag_name FROM track_tags WHERE track_id = ?1 ORDER BY tag_id, tag_name",
+    )?
+    .query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?
+    .collect()
+}
+
+/// Replaces track `id`'s tag links wholesale with `tag_values`, its tags' values by type, and
+/// adds each tag to `touched`.
+fn replace_tags(
+    tx: &Transaction<'_>,
+    lib: i64,
+    id: i64,
+    tag_values: &BTreeMap<String, Vec<String>>,
+    touched: &mut Touched,
+) -> Result<()> {
+    tx.prepare_cached("DELETE FROM track_tags WHERE track_id = ?1")?.execute([id])?;
     let mut tags = tx.prepare_cached(
         "INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES (?1, ?2, ?3, ?4) \
          ON CONFLICT DO NOTHING",

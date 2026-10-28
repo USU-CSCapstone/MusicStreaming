@@ -7,8 +7,8 @@ use std::time::Duration;
 use jewelcase_core::Format;
 
 use super::{
-    Factory, InspectStore, InspectTrack, PNG, library, live, make_album, scan_library, tag_wav,
-    write_small_wav,
+    Factory, InspectStore, InspectTrack, ItemKey, PNG, library, live, make_album, scan_library,
+    tag_wav, tag_wav_with, write_small_wav,
 };
 use crate::scan::ScanState;
 use crate::track::TrackId;
@@ -93,6 +93,49 @@ pub fn retag_updates_in_place_and_keeps_identity<S: InspectStore>(make: Factory<
     let after = live(&store, &lib)[0].clone();
     assert_eq!(after.id, before.id);
     assert_eq!(after.title, "Renamed");
+}
+
+/// A file read before a tag type was added is read again for its tags, though it is unchanged,
+/// and then not again; read again with nothing new, it announces nothing
+/// (`requirements/tags.md` §2).
+pub fn an_unchanged_file_is_read_again_for_a_newer_tag_type<S: InspectStore>(make: Factory<S>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    let path = root.join("A/track.wav");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    write_small_wav(&path);
+    tag_wav_with(&path, &[(ItemKey::TrackTitle, "Song"), (ItemKey::Genre, "Rock")]);
+    let lib = library(&root);
+    let store = make(&lib);
+    scan_library(&store, &lib);
+    let genres = |store: &S| live(store, &lib)[0].tags.get("genre").cloned().unwrap_or_default();
+    assert_eq!(genres(&store), ["Rock"]);
+
+    // The file's genre changes and its size and mtime stay, as a field read by no type would be.
+    let (size, mtime) = {
+        let meta = fs::metadata(&path).unwrap();
+        (meta.len(), meta.modified().unwrap())
+    };
+    tag_wav_with(&path, &[(ItemKey::TrackTitle, "Song"), (ItemKey::Genre, "Jazz")]);
+    fs::File::open(&path).unwrap().set_modified(mtime).unwrap();
+    assert_eq!(fs::metadata(&path).unwrap().len(), size, "the retag keeps the file's size");
+    let scan = scan_library(&store, &lib);
+    assert_eq!(scan.progress.files_processed, 0, "read with the current types, it is not opened");
+    assert_eq!(genres(&store), ["Rock"]);
+
+    store.age_tag_reads(lib.id);
+    let head = store.feed_head(lib.id);
+    let scan = scan_library(&store, &lib);
+    let progress = (scan.progress.files_processed, scan.progress.added, scan.progress.updated);
+    assert_eq!(progress, (1, 0, 0), "read for its tags alone");
+    assert_eq!(genres(&store), ["Jazz"]);
+    assert_eq!(store.feed_tracks_after(lib.id, head), [live(&store, &lib)[0].id]);
+    assert_eq!(scan_library(&store, &lib).progress.files_processed, 0, "and once only");
+
+    store.age_tag_reads(lib.id);
+    let head = store.feed_head(lib.id);
+    assert_eq!(scan_library(&store, &lib).progress.files_processed, 1);
+    assert_eq!(store.feed_head(lib.id), head, "tags read as they were change nothing");
 }
 
 /// A lyrics file written beside a track whose audio did not change, as a plugin does,

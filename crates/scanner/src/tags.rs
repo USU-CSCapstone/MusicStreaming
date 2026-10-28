@@ -215,20 +215,28 @@ fn labels(tags: &[&Tag]) -> Vec<String> {
     if labels.is_empty() { strings(tags, &ItemKey::Publisher) } else { labels }
 }
 
-/// A tag type the mapper reads (`design/scanning.md` §4): its key, as `tag_types` lists it, and
-/// the lofty key its values come from.
+/// A tag type the mapper reads (`design/scanning.md` §4): its key, as `tag_types` lists it, the
+/// lofty key its values come from, and the generation of types it was added in.
 struct TagTypeField {
     key: &'static str,
     item: ItemKey,
+    since: u32,
 }
 
 /// Every tag type the scanner reads (`requirements/tags.md` §2). Each is read the same way, by
-/// [`strings`], so a new type is an entry here and nothing else.
-const TAG_TYPES: &[TagTypeField] = &[TagTypeField { key: "genre", item: ItemKey::Genre }];
+/// [`strings`], so a new type is an entry here, in the generation after the newest.
+const TAG_TYPES: &[TagTypeField] = &[TagTypeField { key: "genre", item: ItemKey::Genre, since: 1 }];
 
 /// The keys of every tag type the scanner reads, each of which `tag_types` must list.
 pub fn tag_type_keys() -> impl Iterator<Item = &'static str> {
     TAG_TYPES.iter().map(|tag_type| tag_type.key)
+}
+
+/// The generation of the tag types the scanner reads: the one the newest was added in. A track
+/// read with an older one is read again, though its file is unchanged, for the types added
+/// since (`design/scanning.md` §2).
+pub fn tags_generation() -> u32 {
+    TAG_TYPES.iter().map(|tag_type| tag_type.since).max().unwrap_or(0)
 }
 
 /// Parse a number that may be packed as `n/total`.

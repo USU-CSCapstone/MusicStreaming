@@ -307,3 +307,56 @@ fn a_name_in_two_tag_types_is_two_tags() {
     assert_eq!(tags(&store), [tag("genre", "Ambient")]);
     check(&store, "retagged out of one type");
 }
+
+/// Tags read again from an unchanged file replace its tags of every type, at the current
+/// generation, and keep the rest of the track, its analysis included; the derived values follow
+/// (`design/scanning.md` §2).
+#[test]
+fn tags_read_again_keep_the_analysis() {
+    let (tmp, db) = open();
+    let root = tmp.path().join("a");
+    let created = root.clone();
+    db.write_blocking(move |tx| {
+        tx.execute("INSERT INTO tag_types (key) VALUES ('colour')", [])?;
+        libraries::create(tx, Some(1), "Music", &[&created], &[]).map(drop)
+    })
+    .unwrap();
+    let store = SqliteStore::new(db).unwrap();
+    let mut rec = record(&root, 0);
+    rec.tags.set_values("genre", vec!["Rock".into()]);
+    store.apply(1, Batch { upserts: vec![rec.clone()], ..Batch::default() }).unwrap();
+    let id = tracks(&store)[&rec.path].0;
+    store
+        .db()
+        .write_blocking(move |tx| {
+            tx.execute(
+                "UPDATE tracks SET analyzer_version = 3, loudness_lufs = -9.0, tags_generation = 0 \
+                 WHERE id = ?1",
+                [id],
+            )
+        })
+        .unwrap();
+
+    let tag_values = BTreeMap::from([
+        ("colour".to_owned(), vec!["Red".to_owned()]),
+        ("genre".to_owned(), vec!["Jazz".to_owned()]),
+    ]);
+    let rereads = vec![TagsReread { track_id: id, tag_values }];
+    store.apply(1, Batch { rereads, ..Batch::default() }).unwrap();
+    check(&store, "tags read again");
+    let (analyzed, generation, tags): (i64, u32, String) = store
+        .db()
+        .read_blocking(move |conn| {
+            conn.query_row(
+                "SELECT analyzer_version, tags_generation, \
+                 (SELECT group_concat(type || ':' || name, ' ') FROM \
+                  (SELECT type, name FROM tags ORDER BY type)) \
+                 FROM tracks WHERE id = ?1 AND loudness_lufs = -9.0",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+        })
+        .unwrap();
+    assert_eq!((analyzed, generation), (3, tags_generation()));
+    assert_eq!(tags, "colour:Red genre:Jazz", "Rock goes with its last track");
+}

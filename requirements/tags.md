@@ -29,7 +29,7 @@ Anticipated but not built: **personal labels**, if user tagging is added later; 
 
 - **Types are independent.** Filtering by one never implicitly filters by another, so a mood filter composes with the genre filter rather than replacing it.
 - **Adding a type must not change how existing tags behave**, or how users already interact with them.
-- **Adding a type reaches music already scanned.** Files already in the library show the new type's values without an admin rescanning anything. That costs a background read of every file's tags, the same order of work as a scan with nothing changed, and it is worth it: a type that appeared only on files changed since it was added would make most of the library look untagged — the absence of §8, invented by Jewelcase rather than found in the collection.
+- **Adding a type reaches music already scanned.** Files already in the library show the new type's values without an admin rescanning anything. That costs reading every file's tags once more in the background — a cold scan's reading, without its analysis — and it is worth it: a type that appeared only on files changed since it was added would make most of the library look untagged — the absence of §8, invented by Jewelcase rather than found in the collection.
 
 ---
 
