@@ -26,6 +26,9 @@ import type {
 	ServerInfo,
 	Session,
 	SetupRequest,
+	Tag,
+	TagPage,
+	TagType,
 	Track,
 	TrackPage,
 	User,
@@ -151,6 +154,16 @@ export const getTrack = (f: Fetch, libraryId: string, trackId: string) =>
 
 export const listArtists = (f: Fetch, libraryId: string, query: Query = {}) =>
 	get<ArtistPage>(f, `${lib(libraryId)}/artists`, query);
+
+/** The tag types the library's music carries, each with its count of tags (`requirements/tags.md` §2). */
+export const listTagTypes = (f: Fetch, libraryId: string) =>
+	get<TagType[]>(f, `${lib(libraryId)}/tag-types`);
+
+export const listTags = (f: Fetch, libraryId: string, query: Query = {}) =>
+	get<TagPage>(f, `${lib(libraryId)}/tags`, query);
+
+export const getTag = (f: Fetch, libraryId: string, tagId: string) =>
+	get<Tag>(f, `${lib(libraryId)}/tags/${encodeURIComponent(tagId)}`);
 
 export const getArtist = (f: Fetch, libraryId: string, artistId: string) =>
 	get<Artist>(f, `${lib(libraryId)}/artists/${encodeURIComponent(artistId)}`);
