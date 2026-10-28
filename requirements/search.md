@@ -78,7 +78,7 @@ Nothing else in the library. File paths and folder names are **not** searched: t
 - **Never beyond access.** Content a user cannot reach is indistinguishable from content that does not exist ([`users.md` §10](users.md#10-access-semantics)).
 - **Narrowable to a container** — within an artist, an album, or a playlist, without leaving it ([`playlists.md` §7](playlists.md#7-organization)).
 - **Filterable by type**, so someone looking only for albums is not shown tracks.
-- **Composable with filters** — genre, year, and listening data ([`tags.md` §7](tags.md#7-browsing-and-filtering)).
+- **Composable with filters** — tags, year, and listening data ([`tags.md` §7](tags.md#7-browsing-and-filtering)).
 
 ---
 

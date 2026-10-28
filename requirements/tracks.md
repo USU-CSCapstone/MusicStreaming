@@ -64,5 +64,5 @@ Resolution from disk follows [`scanning.md` §3.4](scanning.md#34-lyrics). Lyric
 ## 6. Classification & Identifiers
 
 - **Explicit content** flagged from tags, so clients can mark it visibly.
-- **Genres** preserved as multiple values ([`tags.md`](tags.md)).
+- **Tags of every type** — genres, moods — preserved as multiple values ([`tags.md`](tags.md)).
 - **ISRC** and other tagged identifiers, stored primarily so plugins can match a track against external services reliably rather than guessing from a title string. Not shown as primary information to listeners.

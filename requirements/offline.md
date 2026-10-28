@@ -9,7 +9,7 @@ Three things are held on a device, and the distinction runs through this documen
 
 | | What it is | How it gets there |
 |---|---|---|
-| **Catalog** | Everything *about* the music — titles, artists, albums, numbers, durations, genres, and the user's own playlists, queues, and history | Synced in full, automatically, never asked for |
+| **Catalog** | Everything *about* the music — titles, artists, albums, numbers, durations, tags, and the user's own playlists, queues, and history | Synced in full, automatically, never asked for |
 | **Imagery** | Artwork and artist images | A stand-in for every image, always. The real thing for what the user has seen or downloaded |
 | **Audio** | The files themselves | Downloaded deliberately by the user |
 
