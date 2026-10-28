@@ -91,10 +91,10 @@ jobs:
         include:
           - { check: Lint, run: pnpm lint }
           - { check: Format, run: pnpm format:check }
-          - { check: Types, run: pnpm check }
+          - { check: Types, run: pnpm check, wasm: true }
           - { check: Generated API Types, run: pnpm gen:api && git diff --exit-code src/lib/api/schema.d.ts }
-          - { check: Unit Tests, run: pnpm test:unit --run, browser: true }
-          - { check: E2E Tests, run: pnpm exec playwright test, browser: true }
+          - { check: Unit Tests, run: pnpm test:unit --run, browser: true, wasm: true }
+          - { check: E2E Tests, run: pnpm exec playwright test, browser: true, wasm: true }
     defaults:
       run:
         working-directory: web
@@ -109,6 +109,17 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      # These build the web app's WebAssembly core first (`web/scripts/wasm.sh`), which needs the
+      # toolchain's wasm target and the CLI at the version the `wasm-bindgen` crate pins.
+      - if: matrix.wasm
+        run: rustup toolchain install
+      - if: matrix.wasm
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: web-wasm
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - if: matrix.wasm
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
       - if: matrix.browser
         run: pnpm exec playwright install --with-deps chromium
       - run: ${{ matrix.run }}

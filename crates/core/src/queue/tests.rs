@@ -766,3 +766,14 @@ fn reserved_keys_are_refused_and_change_nothing() {
     assert_eq!(q.apply(&edit), Err(Error::ReservedKey));
     assert_eq!(q, album());
 }
+
+#[test]
+fn windows_return_the_ids_at_their_offset() {
+    let mut q = album();
+    q.apply(&Edit::Next).unwrap();
+    q.apply(&Edit::Next).unwrap();
+    assert_eq!(q.upcoming_window(1, 1).collect::<Vec<_>>(), ["a.4"]);
+    assert_eq!(q.upcoming_window(0, 99).collect::<Vec<_>>(), ["a.3", "a.4"]);
+    assert!(q.upcoming_window(9, 2).next().is_none());
+    assert_eq!(q.history_window(1, 5).collect::<Vec<_>>(), ["a.1"]);
+}

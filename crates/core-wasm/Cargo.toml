@@ -1,0 +1,16 @@
+[package]
+name = "jewelcase-core-wasm"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+jewelcase-core = { path = "../core" }
+serde_json = "1"
+# `web/scripts/wasm.sh` and the Dockerfile name this version for the matching CLI.
+wasm-bindgen = "=0.2.129"
+
+[lints]
+workspace = true
