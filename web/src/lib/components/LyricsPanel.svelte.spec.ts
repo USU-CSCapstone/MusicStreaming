@@ -83,8 +83,6 @@ describe('LyricsPanel.svelte', () => {
 			status: 'stopped',
 			activeDeviceId: null,
 			itemId: '0',
-			libraryId: '11',
-			trackId: track.id,
 			positionMs: 0,
 			positionAt: new Date().toISOString(),
 			volume: null

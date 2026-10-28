@@ -6,7 +6,7 @@ use futures_util::SinkExt;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
-use super::super::testing::player::{progress_report, report, start_playing};
+use super::super::testing::player::{item, progress_report, report, start_playing, start_queue};
 use super::super::testing::socket::{connect_with, next, next_of, serve};
 use super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, call, conn};
 use crate::db::testing::access;
@@ -14,8 +14,8 @@ use crate::db::testing::access;
 mod disconnected;
 mod saved;
 
-/// [`app_with_tracks`], served, with the owner also on device 2 as `phone`, and user 2, who
-/// reaches only library 1, on device 3 as `user2`.
+/// [`app_with_tracks`], served, with the owner, who has a queue, also on device 2 as `phone`,
+/// and user 2, who reaches only library 1 and has no queue, on device 3 as `user2`.
 async fn setup() -> (tempfile::TempDir, Router, SocketAddr) {
     let (temp, _db, app) = app_with_tracks().await;
     let conn = conn(&temp);
@@ -23,6 +23,7 @@ async fn setup() -> (tempfile::TempDir, Router, SocketAddr) {
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 3, "user2");
     access(&conn, 2, 1).unwrap();
+    start_queue(&app, TOKEN).await;
     let address = serve(app.clone()).await;
     (temp, app, address)
 }
@@ -43,8 +44,8 @@ async fn before_anything_plays_the_player_is_stopped() {
     assert_eq!(
         state,
         json!({
-            "status": "stopped", "activeDeviceId": null, "itemId": null, "libraryId": null,
-            "trackId": null, "positionMs": 0, "volume": null,
+            "status": "stopped", "activeDeviceId": null, "itemId": null, "positionMs": 0,
+            "volume": null,
         })
     );
 }
@@ -64,12 +65,12 @@ async fn playback_state_reaches_every_connection_of_the_account() {
         );
     }
 
-    let changes = json!({ "trackId": "2", "positionMs": 500, "start": true });
+    let changes = json!({ "itemId": item(1), "positionMs": 500, "start": true });
     let report = json!({ "type": "progress", "report": progress_report("playing", changes) });
     desk.send(Message::text(report.to_string())).await.unwrap();
     for socket in [&mut phone, &mut desk] {
         let state = &next_of(socket, "player").await["state"];
-        assert_eq!((&state["activeDeviceId"], &state["trackId"]), (&json!("1"), &json!("2")));
+        assert_eq!((&state["activeDeviceId"], &state["itemId"]), (&json!("1"), &json!(item(1))));
     }
     // Its own account's device list is the one other message it is sent.
     next_of(&mut stranger, "devices").await;
@@ -89,19 +90,18 @@ async fn starting_takes_over_and_only_the_active_device_reports() {
     let state = player(&app, TOKEN).await;
     assert_eq!(
         (&state["status"], &state["activeDeviceId"], &state["itemId"]),
-        (&json!("playing"), &json!("1"), &json!("item-1"))
+        (&json!("playing"), &json!("1"), &json!(item(0)))
     );
-    assert_eq!((&state["libraryId"], &state["trackId"]), (&json!("1"), &json!("1")));
     assert_eq!((&state["positionMs"], &state["volume"]), (&json!(1000), &json!(0.5)));
 
     // The phone starts, buffering first; the desk keeps reporting until it hears.
-    let start = json!({ "start": true, "trackId": "2", "positionMs": 0 });
+    let start = json!({ "start": true, "itemId": item(1), "positionMs": 0 });
     report(&mut phone, "buffering", start).await;
     report(&mut desk, "playing", json!({})).await;
     let state = player(&app, TOKEN).await;
     assert_eq!(
-        (&state["status"], &state["activeDeviceId"], &state["trackId"], &state["volume"]),
-        (&json!("paused"), &json!("2"), &json!("2"), &json!(null))
+        (&state["status"], &state["activeDeviceId"], &state["itemId"], &state["volume"]),
+        (&json!("paused"), &json!("2"), &json!(item(1)), &json!(null))
     );
 
     report(&mut phone, "stopped", json!({})).await;
@@ -135,20 +135,46 @@ async fn reports_are_checked() {
         json!({ "volume": 1.5 }),
         json!({ "positionMs": -1 }),
         json!({ "status": "rewinding" }),
-        // Out of reach or not there, which are the same (`requirements/users.md` §10).
-        json!({ "libraryId": "2", "trackId": "1" }),
-        json!({ "trackId": "01" }),
     ] {
         let mut changes = changes;
         changes["start"] = json!(true);
         report(&mut desk, "playing", changes.clone()).await;
         assert_eq!(player(&app, TOKEN).await["status"], json!("stopped"), "{changes}");
     }
-    let elsewhere = json!({ "start": true, "libraryId": "2", "trackId": "3" });
-    report(&mut user2, "playing", elsewhere).await;
-    assert_eq!(player(&app, "user2").await["status"], json!("stopped"), "library 2");
+    // Items the queue has, the same as another account's, are not another account's items.
     start_playing(&mut user2).await;
-    assert_eq!(player(&app, "user2").await["status"], json!("playing"), "library 1");
+    assert_eq!(player(&app, "user2").await["status"], json!("stopped"), "no queue");
+    start_queue(&app, "user2").await;
+    start_playing(&mut user2).await;
+    assert_eq!(player(&app, "user2").await["status"], json!("playing"), "its own queue");
+}
+
+/// A report names an item of the queue in any of its sections. One the queue has not is
+/// refused, and answered with the current state.
+#[tokio::test]
+async fn a_report_must_name_an_item_of_the_queue() {
+    let (_temp, app, address) = setup().await;
+    let mut desk = connect_with(address, TOKEN).await;
+    next_of(&mut desk, "player").await;
+    for gone in [item(2), "elsewhere.0".to_owned(), "x".to_owned()] {
+        let refused = progress_report("playing", json!({ "itemId": gone, "start": true }));
+        let refused = json!({ "type": "progress", "report": refused });
+        desk.send(Message::text(refused.to_string())).await.unwrap();
+        let answer = next_of(&mut desk, "player").await;
+        assert_eq!(answer["state"]["itemId"], json!(null), "{gone} is not in the queue");
+    }
+
+    // Item 1 is in Up Next, item 0 is current and, once passed, in History.
+    let mut at = async |n: usize, status: &str| {
+        report(&mut desk, status, json!({ "itemId": item(n), "start": true })).await;
+        player(&app, TOKEN).await["itemId"].clone()
+    };
+    assert_eq!(at(1, "playing").await, json!(item(1)), "up next");
+    assert_eq!(at(0, "paused").await, json!(item(0)), "current");
+    let queue = call(&app, TOKEN, "GET", "/api/v1/me/queue", None).await.1["queueId"].clone();
+    let next = json!({ "editId": queue, "queueId": queue, "edit": { "type": "next" } });
+    call(&app, TOKEN, "POST", "/api/v1/me/queue/edits", Some(next)).await;
+    assert_eq!(at(0, "paused").await, json!(item(0)), "history");
 }
 
 /// A `deviceId` in a report is ignored, whatever it names: a report is the device's whose
@@ -168,28 +194,24 @@ async fn of_a_devices_connections_only_the_one_playing_reports() {
     let mut tab = connect_with(address, TOKEN).await;
     let mut other_tab = connect_with(address, TOKEN).await;
     start_playing(&mut tab).await;
-    report(&mut other_tab, "playing", json!({ "start": true, "trackId": "2" })).await;
+    report(&mut other_tab, "playing", json!({ "start": true, "itemId": item(1) })).await;
     report(&mut tab, "playing", json!({})).await;
-    assert_eq!(player(&app, TOKEN).await["trackId"], json!("2"), "the tab that started");
+    assert_eq!(player(&app, TOKEN).await["itemId"], json!(item(1)), "the tab that started");
 }
 
 #[tokio::test]
 async fn a_report_is_checked_against_the_account_as_it_is_now() {
     let (temp, app, address) = setup().await;
-    let mut admin = connect_with(address, TOKEN).await;
-    let elsewhere = json!({ "start": true, "libraryId": "2", "trackId": "3" });
-    report(&mut admin, "playing", elsewhere.clone()).await;
-    assert_eq!(player(&app, TOKEN).await["trackId"], json!("3"), "an admin reaches every library");
-
     // Signed out by a path that does not close its connections.
     let mut phone = connect_with(address, "phone").await;
     let conn = conn(&temp);
     let revoke = "UPDATE devices SET revoked_reason = 'credentials_changed' WHERE id = 2";
     conn.execute(revoke, []).unwrap();
     start_playing(&mut phone).await;
-    assert_eq!(player(&app, TOKEN).await["activeDeviceId"], json!("1"));
+    assert_eq!(player(&app, TOKEN).await["activeDeviceId"], json!(null), "refused");
 
     // Suspended the same way. Its report is refused, and answered with its state.
+    start_queue(&app, "user2").await;
     let mut user2 = connect_with(address, "user2").await;
     next_of(&mut user2, "player").await;
     conn.execute("UPDATE users SET status = 'suspended' WHERE id = 2", []).unwrap();

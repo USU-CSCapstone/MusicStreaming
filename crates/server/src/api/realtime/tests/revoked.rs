@@ -15,9 +15,11 @@ use tokio_tungstenite::tungstenite::Error;
 use super::super::super::AppState;
 use super::super::super::player;
 use super::super::super::scope::Caller;
-use super::super::super::testing::player::{command_id, progress_report};
+use super::super::super::testing::player::{command_id, progress_report, start_queue};
 use super::super::super::testing::socket::{connect, serve};
-use super::super::super::testing::{add_signed_out_device, app, app_with_tracks, conn, state};
+use super::super::super::testing::{
+    TOKEN, add_signed_out_device, app, app_with_tracks, conn, router_over, state,
+};
 use super::super::{Presence, Revoked, handle, signed_in};
 use crate::db::{Database, Text};
 
@@ -42,6 +44,7 @@ async fn playback(state: &AppState) -> Value {
 async fn a_revoked_connection_acts_for_no_one() {
     let (temp, db, _app) = app_with_tracks().await;
     let state = state(&temp, db);
+    start_queue(&router_over(state.clone()), TOKEN).await;
     let phone = Caller { device: 2, ..OWNER };
     let mut other = state.players.connect(&state.hub, 1, phone.device);
     let revoked = state.players.connect(&state.hub, 1, OWNER.device);

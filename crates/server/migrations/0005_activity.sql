@@ -95,17 +95,15 @@ END;
 
 -- Where each account's playback was, so it resumes there after the server restarts
 -- (requirements/playback.md §6). The state lives in memory while the server runs. Changed
--- states are written together every few seconds, an account playing on through the same track
+-- states are written together every few seconds, an account playing on through the same item
 -- only every minute, and once more as the server stops (`api/player/saved.rs`). A server that
 -- starts again has no device connected to be playing, so every account starts stopped where it
 -- was (requirements/realtime.md §6), and nothing more than this is kept.
 CREATE TABLE player_states (
     user_id     INTEGER PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
-    -- The device's own name for its place in its queue, until the server keeps the queue.
+    -- The queue item playback was at (`api/queue.rs`). A new queue may since have replaced the
+    -- queue that has it; the state keeps naming it.
     item_id     TEXT    NOT NULL,
-    library_id  INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
-    -- No foreign key, as in plays: a track that goes is simply not found.
-    track_id    INTEGER NOT NULL,
     position_ms INTEGER NOT NULL CHECK (position_ms >= 0)
 ) STRICT;
 

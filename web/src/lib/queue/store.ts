@@ -275,7 +275,8 @@ export class QueueStore {
 			upcoming: view?.upcomingLen() ?? 0,
 			history: view?.historyLen() ?? 0,
 			repeat: (view?.repeat() ?? 'off') as Repeat,
-			settling: this.#placeholder
+			settling: this.#placeholder,
+			starting: this.#launch !== null
 		});
 	}
 
@@ -328,6 +329,7 @@ export class QueueStore {
 		const response = await this.#call('POST', '/me/queue', launch);
 		if (!response || this.#launch !== launch) return;
 		this.#launch = null;
+		this.#emit();
 		// What the device holds of a query's queue is its first track: the server's is the queue.
 		if (response.ok && 'query' in launch.source) this.#refetch = true;
 		if (!response.ok) {

@@ -58,7 +58,9 @@ test('playing here takes playback over from the other device', async ({ page }) 
 	const takeovers = () => sent.flatMap((m) => (m.type === 'progress' ? [m.report] : []));
 	await expect
 		.poll(takeovers)
-		.toContainEqual(expect.objectContaining({ start: true, trackId: '42' }));
+		.toContainEqual(
+			expect.objectContaining({ start: true, itemId: expect.stringMatching(/\.1$/) })
+		);
 	await expect(player.getByRole('button', { name: 'Devices', exact: true })).toBeVisible();
 	// The button gone, focus stays in the list, which says where playback went.
 	await expect(page.getByRole('list', { name: 'Devices' })).toBeFocused();

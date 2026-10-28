@@ -36,7 +36,8 @@ const summary: Summary = {
 	upcoming: 4,
 	history: 0,
 	repeat: 'off',
-	settling: false
+	settling: false,
+	starting: false
 };
 
 /** A client on a fake worker and a realtime connection the test can speak through. */

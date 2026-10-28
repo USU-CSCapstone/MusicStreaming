@@ -83,8 +83,7 @@ Built: a Wasmtime host (`crates/plugins`) with a versioned WIT contract and mani
 Built: device listing, an authenticated WebSocket with heartbeats, live device lists, and player state per account with one playing device. Player state is saved across restarts. Playback stops when the playing device disconnects. Remote commands work over the WebSocket and over HTTP.
 
 **Still open from this stage:**
-1. Player state temporarily carries `libraryId` + `trackId`. It moves onto the server queue in Stage 9.
-2. Replaying the results of commands that have already finished.
+1. Replaying the results of commands that have already finished.
 
 **End goal (reached):** The server knows every device, which one is playing, and where it is in the track, and can route commands to it. The server side of [`realtime.md` §1–2, §4–6, §8](requirements/realtime.md) and [`users.md` §4](requirements/users.md#4-sessions--devices) is met.
 
@@ -145,7 +144,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 1. **Audio delivery and gapless in the browser**, above all in an installed iOS PWA ([`design/general.md` §11](design/general.md#11-open-decisions) #1). Spike this first, because it decides the stream format.
 2. The transcode codec and bitrate for each quality tier, how client capabilities are negotiated, and how the transcode cache is sized and evicted.
 3. How seeking works inside a transcoded stream.
-4. How a queue over a context of hundreds of thousands of tracks is stored and synced: as a context reference plus a seed, or as a materialized list.
+4. ~~How a queue over a context of hundreds of thousands of tracks is stored and synced.~~ Answered: a materialized list, frozen as sources plus order lists, synced as edits that name items; player state names a queue item, not a track ([`design/queue.md`](design/queue.md) §1, §4–§7).
 5. How "the user adjusted this queue" is detected, so the queue is kept when a new context starts ([`queue.md` §6](requirements/queue.md#6-sessions)).
 6. Silence skipping needs silence detection. It has to come from the existing analysis pass, never a second one.
 7. Waveform bin count and shaping ([`design/scanning.md` §16](design/scanning.md#16-open-decisions) #2).

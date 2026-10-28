@@ -9,13 +9,14 @@ use tokio_tungstenite::tungstenite::Message;
 
 use super::super::super::realtime::Hub;
 use super::super::super::scope::Caller;
-use super::super::super::testing::player::{command_id, progress_report, start_playing};
+use super::super::super::testing::player::{
+    command_id, progress_report, start_playing, start_queue,
+};
 use super::super::super::testing::socket::{Socket, connect_with, next, next_of, serve};
 use super::super::super::testing::{TOKEN, add_device, add_user, app_with_tracks, conn};
 use super::super::Players;
 use super::relay::{MAX_WAITING, Reply};
 use super::{PlayerCommand, Status};
-use crate::api::Id;
 use crate::db::testing::access;
 
 mod failing;
@@ -25,14 +26,15 @@ mod volume;
 
 const OWNER: Caller = Caller { user: 1, device: 1, admin: true };
 
-/// Library 1's tracks, served, with the owner on device 1 as [`TOKEN`] and device 2 as
-/// `phone`, and user 2 on device 3 as `stranger`.
+/// Library 1's tracks, served, with the owner, who has a queue, on device 1 as [`TOKEN`] and
+/// device 2 as `phone`, and user 2 on device 3 as `stranger`.
 async fn setup() -> (tempfile::TempDir, Router, std::net::SocketAddr) {
     let (temp, _db, app) = app_with_tracks().await;
     let conn = conn(&temp);
     add_device(&conn, 1, 2, "phone");
     add_user(&conn, 2, "user");
     add_device(&conn, 2, 3, "stranger");
+    start_queue(&app, TOKEN).await;
     (temp, app.clone(), serve(app).await)
 }
 
@@ -130,7 +132,7 @@ async fn a_command_with_nowhere_to_go_fails_at_once() {
 fn playing() -> (Arc<Players>, Arc<Hub>) {
     let (players, hub) = (Arc::new(Players::default()), Arc::new(Hub::default()));
     let report = serde_json::from_value(progress_report("playing", json!({ "start": true })));
-    players.report(&hub, OWNER, 7, report.unwrap(), Id(1), Id(1)).unwrap();
+    players.report(&hub, OWNER, 7, report.unwrap()).unwrap();
     (players, hub)
 }
 
@@ -201,9 +203,10 @@ async fn a_command_sent_again_after_reconnecting_is_answered_on_the_new_connecti
 
 #[tokio::test]
 async fn two_accounts_may_use_the_same_command_id() {
-    let (temp, _app, address) = setup().await;
+    let (temp, app, address) = setup().await;
     let conn = conn(&temp);
     access(&conn, 2, 1).unwrap();
+    start_queue(&app, "stranger").await;
     let mut desk = connect_with(address, TOKEN).await;
     let mut stranger = connect_with(address, "stranger").await;
     start_playing(&mut desk).await;

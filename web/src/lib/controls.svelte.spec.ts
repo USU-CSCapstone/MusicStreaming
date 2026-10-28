@@ -4,6 +4,15 @@ import type { PlayerState, RealtimeServerMessage, Track } from '$lib/api/types';
 const fake = vi.hoisted(() => ({
 	listeners: [] as ((message: RealtimeServerMessage) => void)[],
 	sent: [] as { command: { type: string } }[],
+	queue: {
+		queueId: 'q',
+		revision: 0,
+		starting: false,
+		current: null,
+		counts: { manual: 0, upcoming: 0, history: 0 },
+		// Every item is track 41 of library 11, as the state in these tests names it.
+		track: async () => ({ libraryId: '11', trackId: '41' })
+	},
 	realtime: {
 		deviceId: '1',
 		connected: true,
@@ -18,26 +27,27 @@ const fake = vi.hoisted(() => ({
 
 vi.mock('$lib/realtime.svelte', () => ({ realtime: fake.realtime }));
 // The queue is held in a worker; here it is loaded unless a test says otherwise.
-vi.mock('$lib/queue/client.svelte', () => ({
-	queue: { queueId: 'q', current: null, counts: { manual: 0, upcoming: 0, history: 0 } }
-}));
+vi.mock('$lib/queue/client.svelte', () => ({ queue: fake.queue }));
 vi.mock('$lib/api/client', async (actual) => ({
 	...(await actual<typeof import('$lib/api/client')>()),
 	getTrack: async (_: unknown, _library: string, id: string) => ({ id, durationUs: 60e6 }) as Track,
 	getWaveform: async () => null
 }));
 
+// As reactive as the real one, so a change after rendering shows.
+const queue = $state(fake.queue);
+Object.assign(fake, { queue });
+
 const { player } = await import('./player.svelte');
 const { playback } = await import('./playback.svelte');
 const { controls } = await import('./controls.svelte');
 
+/** Sends the account's state with `device` at `status`, at item 0. */
 function state(device: string | null, status: PlayerState['status'] = 'playing') {
 	const state: PlayerState = {
 		status,
 		activeDeviceId: device,
 		itemId: '0',
-		libraryId: '11',
-		trackId: '41',
 		positionMs: 10_000,
 		positionAt: new Date().toISOString(),
 		volume: null

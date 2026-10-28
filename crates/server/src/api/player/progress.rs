@@ -1,25 +1,19 @@
 //! The `progress` reports from the device playing, checked and applied.
 
-use rusqlite::params;
 use serde::Deserialize;
 
 use super::{PlayerState, Players, Status};
 use crate::api::realtime::{Hub, Presence, ServerMessage};
 use crate::api::scope::Caller;
 use crate::api::session::device_signed_in;
-use crate::api::{AnyId, AppState, Id, Problem};
-use crate::db::{now_ms, reaches};
-
-/// Longer item IDs are refused, so no one keeps megabytes in memory as their place in a queue.
-const MAX_ITEM_ID: usize = 100;
+use crate::api::{AppState, Id, Problem};
+use crate::db::now_ms;
 
 /// The spec's `ProgressReport`. A report is the device's whose connection sends it.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressReport {
     item_id: String,
-    library_id: AnyId,
-    track_id: AnyId,
     status: Reported,
     position_ms: u32,
     volume: Option<f64>,
@@ -46,8 +40,6 @@ impl Players {
         caller: Caller,
         connection: u64,
         report: ProgressReport,
-        library: Id,
-        track: Id,
     ) -> Result<(), Problem> {
         let (user, device) = (caller.user, caller.device);
         let mut accounts = self.lock();
@@ -73,8 +65,6 @@ impl Players {
         state.active_device_id = playing.then_some(Id(device));
         state.active_connection = playing.then_some(connection);
         state.item_id = Some(report.item_id);
-        state.library_id = Some(library);
-        state.track_id = Some(track);
         state.position_ms = report.position_ms;
         state.position_at = now_ms();
         state.unsaved = true;
@@ -92,37 +82,32 @@ pub async fn apply(
     presence: &Presence,
     report: ProgressReport,
 ) -> Result<(), Problem> {
-    if report.item_id.is_empty() || report.item_id.chars().count() > MAX_ITEM_ID {
-        return Err(Problem::invalid(format!("itemId must be 1 to {MAX_ITEM_ID} characters.")));
-    }
     if report.volume.is_some_and(|volume| !(0.0..=1.0).contains(&volume)) {
         return Err(Problem::invalid("volume must be from 0 to 1."));
     }
-    // A malformed ID, like one out of reach, is not found, exactly as a track that does not
-    // exist (`requirements/users.md` §10).
-    let (AnyId(Some(library)), AnyId(Some(track))) = (report.library_id, report.track_id) else {
+    // An item the queue does not have, which an account that has no queue never does, is not
+    // found. The item's track was checked against the account's reach as it joined the queue,
+    // and the state names only the item, whose track a client looks up where it is checked
+    // again, so a report needs no check of reach of its own.
+    if !state.queues.holds(caller.user, &report.item_id) {
         return Err(Problem::not_found());
-    };
+    }
     // The connection was authenticated as it opened, perhaps hours ago, so whether the device
-    // is still signed in, its account still active, and the library still in its reach are
-    // read again.
-    let reachable = state.db.read(move |conn| {
+    // is still signed in and its account still active are read again.
+    let signed_in = state.db.read(move |conn| {
         conn.prepare_cached(concat!(
             "SELECT EXISTS (SELECT 1 FROM devices d JOIN users u ON u.id = d.user_id \
-             JOIN tracks t ON t.id = ?2 AND t.library_id = ?1 \
-             WHERE d.id = ?3 AND ",
+             WHERE d.id = ?1 AND ",
             device_signed_in!(),
-            " AND ",
-            reaches!(admin: "u.role <> 'user'", user: "u.id", library: "?1"),
             ")"
         ))?
-        .query_row(params![library, track, caller.device], |row| row.get(0))
+        .query_row([caller.device], |row| row.get(0))
     });
-    if !reachable.await? {
+    if !signed_in.await? {
         return Err(Problem::not_found());
     }
     if !presence.is_open() {
         return Ok(());
     }
-    state.players.report(&state.hub, caller, presence.id(), report, Id(library), Id(track))
+    state.players.report(&state.hub, caller, presence.id(), report)
 }

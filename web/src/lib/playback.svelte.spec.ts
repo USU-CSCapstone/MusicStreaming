@@ -5,6 +5,13 @@ import type { PlayerState, RealtimeServerMessage, Track } from '$lib/api/types';
 const fake = vi.hoisted(() => ({
 	listeners: [] as ((message: RealtimeServerMessage) => void)[],
 	tracks: new Map<string, Promise<unknown>>(),
+	/** Items the queue does not have yet, by ID. */
+	missing: new Set<string>(),
+	queue: {
+		revision: 0,
+		track: async (item: string) =>
+			fake.missing.has(item) ? null : { libraryId: '11', trackId: item }
+	},
 	sent: [] as {
 		type: string;
 		command: { type: string; commandId: string; volume?: number; play?: boolean };
@@ -23,6 +30,11 @@ const fake = vi.hoisted(() => ({
 }));
 
 vi.mock('$lib/realtime.svelte', () => ({ realtime: fake.realtime }));
+// An item of the queue is named for the track it plays.
+vi.mock('$lib/queue/client.svelte', () => ({ queue: fake.queue }));
+// As reactive as the real one, so a change of the queue is noticed.
+const queue = $state(fake.queue);
+Object.assign(fake, { queue });
 vi.mock('$lib/api/client', () => ({
 	getTrack: (_: unknown, _library: string, id: string) =>
 		fake.tracks.get(id) ?? new Promise(() => {}),
@@ -35,15 +47,14 @@ const send = (message: RealtimeServerMessage) =>
 	fake.listeners.forEach((listener) => listener(message));
 const track = (id: string, seconds: number) => ({ id, durationUs: seconds * 1e6 }) as Track;
 
+/** The state, at the item that plays track `trackId`. */
 function state(device: string | null, trackId: string, changes: Partial<PlayerState> = {}) {
 	send({
 		type: 'player',
 		state: {
 			status: 'playing',
 			activeDeviceId: device,
-			itemId: '0',
-			libraryId: '11',
-			trackId,
+			itemId: trackId,
 			positionMs: 10_000,
 			positionAt: new Date(Date.now() + 2000).toISOString(),
 			volume: null,
@@ -111,6 +122,19 @@ describe('playback', () => {
 		state('1', 'g');
 		await Promise.resolve();
 		expect(playback.track?.id).toBe('f');
+	});
+
+	it('looks an item up again once the queue has it', async () => {
+		fake.missing.add('n');
+		fake.tracks.set('n', Promise.resolve(track('n', 30)));
+		state('2', 'n');
+		await vi.advanceTimersByTimeAsync(10);
+		expect(playback.track?.id, 'not in the queue yet').not.toBe('n');
+
+		fake.missing.delete('n');
+		queue.revision++;
+		await vi.waitFor(() => expect(playback.track?.id).toBe('n'));
+		expect(playback.libraryId).toBe('11');
 	});
 
 	it('keeps the track the state names, whatever answers first', async () => {

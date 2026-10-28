@@ -97,7 +97,10 @@ can play; with none, Previous restarts the track and changes nothing), so nothin
 track on this device; Repeat All is the queue's, so a context whose last tracks are missing
 starts over, once, before the player gives up. Reports name the queue's item, a play records the
 queue's context, and a device that takes playback over plays that item from the queue it already
-holds. A library the account no longer reaches answers its lookups with 404, taken as all its
+holds. The state names only the item, so a device that only shows playback looks its track up
+through its own copy of the queue. A report waits until the server has the queue it names an
+item of, which a start sends in the background, since the server refuses an item it does not
+have. A library the account no longer reaches answers its lookups with 404, taken as all its
 tracks being absent, so its items are passed over like missing ones.
 
 The e2e fixtures keep a queue per test by running the shared core in Node, and answer the

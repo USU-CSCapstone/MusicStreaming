@@ -9,6 +9,7 @@ const fake = vi.hoisted(() => ({
 		devices: [] as unknown[],
 		state: null as unknown,
 		track: null as unknown,
+		trackItem: '0' as string | null,
 		moving: null as { deviceId: string; commandId: string } | null,
 		transfer: (() => {}) as (deviceId: string) => void
 	},
@@ -40,8 +41,6 @@ const playingOn = (activeDeviceId: string): PlayerState => ({
 	status: 'playing',
 	activeDeviceId,
 	itemId: '0',
-	libraryId: '11',
-	trackId: '41',
 	positionMs: 0,
 	positionAt: new Date().toISOString(),
 	volume: null
@@ -157,7 +156,7 @@ describe('DevicesPanel', () => {
 			...playingOn('1'),
 			status: 'stopped',
 			activeDeviceId: null,
-			trackId: null
+			itemId: null
 		};
 		render(DevicesPanel);
 		await expect.element(rows().nth(1)).toHaveTextContent(/Desk\s*Connected/);

@@ -54,6 +54,8 @@ export type Summary = {
 	repeat: Repeat;
 	/** A start from a list is under way: the queue is just its first track until the server's arrives. */
 	settling: boolean;
+	/** The server has not yet taken the latest start, so it would refuse a report naming its items. */
+	starting: boolean;
 };
 
 /** An edit or start the queue could not keep, so the page can say so (`requirements/queue.md` §7). */
