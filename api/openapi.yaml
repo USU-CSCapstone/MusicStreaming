@@ -3068,12 +3068,16 @@ components:
             tracks:
               type: array
               items: { type: string }
-        - type: object
-          required: [key, libraryId, query]
-          properties:
-            key: { type: string, format: uuid, description: "Client-generated. Names the source's items, `<key>.<index>`." }
-            libraryId: { type: string }
-            query: { $ref: '#/components/schemas/QueueQuery' }
+        - $ref: '#/components/schemas/QueueSourceQuery'
+
+    QueueSourceQuery:
+      type: object
+      required: [key, libraryId, query]
+      description: A new source whose tracks the server finds by running `query` to its end.
+      properties:
+        key: { type: string, format: uuid, description: "Client-generated. Names the source's items, `<key>.<index>`." }
+        libraryId: { type: string }
+        query: { $ref: '#/components/schemas/QueueQuery' }
 
     QueueQuery:
       description: |
@@ -3125,7 +3129,7 @@ components:
               description: An `add` whose tracks the server is to find, which `queueEdit` then carries as `tracks`.
               properties:
                 type: { const: add }
-                source: { $ref: '#/components/schemas/QueueSourceRequest' }
+                source: { $ref: '#/components/schemas/QueueSourceQuery' }
                 before: { $ref: '#/components/schemas/QueueAnchor' }
 
     QueueEdit:

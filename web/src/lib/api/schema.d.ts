@@ -2008,7 +2008,9 @@ export interface components {
             key: string;
             libraryId: string;
             tracks: string[];
-        } | {
+        } | components["schemas"]["QueueSourceQuery"];
+        /** @description A new source whose tracks the server finds by running `query` to its end. */
+        QueueSourceQuery: {
             /**
              * Format: uuid
              * @description Client-generated. Names the source's items, `<key>.<index>`.
@@ -2048,7 +2050,7 @@ export interface components {
             edit: components["schemas"]["QueueEdit"] | {
                 /** @constant */
                 type: "add";
-                source: components["schemas"]["QueueSourceRequest"];
+                source: components["schemas"]["QueueSourceQuery"];
                 before: components["schemas"]["QueueAnchor"];
             };
         };
