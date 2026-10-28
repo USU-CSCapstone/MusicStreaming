@@ -11,6 +11,7 @@ import type {
 	List,
 	Question,
 	Refusal,
+	Repeat,
 	StartArgs,
 	Summary,
 	ToWorker
@@ -33,6 +34,10 @@ export class QueueClient {
 	current = $state<string | null>(null);
 	/** How many items the Manual Queue, the context's Up Next and History hold. */
 	counts = $state({ manual: 0, upcoming: 0, history: 0 });
+	/** How the queue repeats. */
+	repeat = $state<Repeat>('off');
+	/** A start from a list is under way: the queue is its first track until the server's arrives. */
+	settling = $state(false);
 	/** The latest edit or start that was reverted, for the UI to explain. */
 	refusal = $state<Refusal | null>(null);
 
@@ -70,6 +75,8 @@ export class QueueClient {
 		this.context = null;
 		this.current = null;
 		this.counts = { manual: 0, upcoming: 0, history: 0 };
+		this.repeat = 'off';
+		this.settling = false;
 	}
 
 	/** Starts a queue, here at once and on the server in the background. */
@@ -115,6 +122,8 @@ export class QueueClient {
 			this.context = summary.context;
 			this.revision = summary.revision;
 			this.current = summary.current;
+			this.repeat = summary.repeat;
+			this.settling = summary.settling;
 			this.counts = {
 				manual: summary.manual,
 				upcoming: summary.upcoming,

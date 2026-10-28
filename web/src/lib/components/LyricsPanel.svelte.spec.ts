@@ -35,8 +35,7 @@ const track = {
 
 function open(l: Lyrics) {
 	lyrics.current = l;
-	player.tracks = [track];
-	player.index = 0;
+	player.current = track;
 	player.position = 0;
 	player.duration = 193; // Seeks clamp to the duration a loaded track reports.
 	panels.lyrics = true;

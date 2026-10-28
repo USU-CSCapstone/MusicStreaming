@@ -1,7 +1,7 @@
 # Queue Design
 
 ## Overview
-How the server keeps each account's queue, as built so far: the model, who names what, where it is kept, and what goes over the wire. It builds on [`requirements/queue.md`](../requirements/queue.md) and the shared core ([`general.md` §3](general.md#3-shared-core)). Applying edits and telling devices of them are built; the player's use of the queue is not.
+How the server keeps each account's queue, as built so far: the model, who names what, where it is kept, and what goes over the wire. It builds on [`requirements/queue.md`](../requirements/queue.md) and the shared core ([`general.md` §3](general.md#3-shared-core)). Applying edits and telling devices of them are built, and so are the web client's copy of the queue and its player ([`web.md`](web.md#playing)); what the server keeps of player state on the queue is not.
 
 **The one idea: store the inputs, send the edits, and compute the order in the core everywhere.** The queue's rules live in `crates/core` (`queue.rs`), which the server uses natively and the web client through WebAssembly ([`requirements/queue.md` §7](../requirements/queue.md#7-across-devices), [`requirements/general.md` §3.5](../requirements/general.md#35-offline-parity)). The server holds no rule of its own about order.
 

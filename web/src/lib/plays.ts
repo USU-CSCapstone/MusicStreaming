@@ -4,7 +4,7 @@
 // pauses, and when it ends, each time in full under its own ID, so the server can take them
 // in any order and count it once.
 
-import type { PlayContext, PlayReport } from './api/types';
+import type { PlayContext, PlayReport, QueueOrigin } from './api/types';
 
 export type End = NonNullable<PlayReport['end']>;
 
@@ -31,8 +31,17 @@ export class PlayRecorder {
 		return this.#play !== null;
 	}
 
-	/** A track has started playing at media time `time`. Ends any play before it as skipped. */
-	start(libraryId: string, trackId: string, context: PlayContext, time = 0) {
+	/**
+	 * A track has started playing at media time `time`, from the queue's `origin`. Ends any play
+	 * before it as skipped.
+	 */
+	start(
+		libraryId: string,
+		trackId: string,
+		context: PlayContext,
+		time = 0,
+		origin: QueueOrigin = 'context'
+	) {
 		this.end('skipped');
 		this.#play = {
 			playId: crypto.randomUUID(),
@@ -42,7 +51,7 @@ export class PlayRecorder {
 			listenTimeMs: 0,
 			end: null,
 			context,
-			origin: 'context'
+			origin
 		};
 		this.#heard = 0;
 		this.#last = time;

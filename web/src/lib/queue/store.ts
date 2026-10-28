@@ -5,10 +5,10 @@
 // its shell.
 
 import { Fetched, Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
-import type { QueueEdit, RealtimeServerMessage, StartQueue } from '$lib/api/types';
-import type { ItemTrack, List, Question, Refusal, StartArgs, Summary } from './protocol';
+import type { PlayContext, QueueEdit, RealtimeServerMessage, StartQueue } from '$lib/api/types';
+import type { ItemTrack, List, Question, Refusal, Repeat, StartArgs, Summary } from './protocol';
 
-type Context = StartQueue['context'];
+type Context = PlayContext;
 
 export type Options = {
 	/** The API's base path, such as `/api/v1`. */
@@ -64,6 +64,8 @@ export class QueueStore {
 	/** A start the server has not yet answered. It goes before anything else is sent. */
 	#launch: StartQueue | null = null;
 	#refetch = false;
+	/** The queue is the one track of a start from a list, until the server's replaces it. */
+	#placeholder = false;
 	/** Edits heard while the queue is being fetched; the fetch may predate them. */
 	#held: QueueEditMessage[] | null = null;
 	#draining = false;
@@ -86,15 +88,21 @@ export class QueueStore {
 	/**
 	 * Starts a queue at once and tells the server in the background. The Manual Queue comes
 	 * along, as the server carries it. Anything else queued up for the old queue is dropped.
+	 * A start from a list's `query` plays just its first track until the server has run the
+	 * query: the queue is then fetched, and replaces this one.
 	 */
-	start({ context, libraryId, tracks, start, shuffleSeed }: StartArgs) {
+	start(args: StartArgs) {
+		const { context, libraryId, shuffleSeed } = args;
 		const queueId = crypto.randomUUID();
 		const key = crypto.randomUUID();
+		const query = 'query' in args;
+		const shown = query ? [args.startTrackId] : args.tracks;
+		const start = query ? 0 : args.start;
 		let next: Queue;
 		try {
 			// `launch` uses up the queue it replaces, so it gets a copy of the one shown.
 			next = Queue.launch(
-				JSON.stringify({ key, libraryId, tracks }),
+				JSON.stringify({ key, libraryId, tracks: shown }),
 				start,
 				shuffleSeed,
 				this.#view?.copy()
@@ -117,11 +125,13 @@ export class QueueStore {
 		this.#version = 0;
 		this.#fromServer = false;
 		this.#pending = [];
+		this.#placeholder = query;
 		this.#launch = {
 			queueId,
 			context,
-			source: { key, libraryId, tracks },
-			start,
+			...(query
+				? { source: { key, libraryId, query: args.query }, startTrackId: args.startTrackId }
+				: { source: { key, libraryId, tracks: args.tracks }, start }),
 			...(shuffleSeed === undefined ? {} : { shuffle: { seed: shuffleSeed } })
 		};
 		this.#emit();
@@ -263,7 +273,9 @@ export class QueueStore {
 			current: view?.current() ?? null,
 			manual: view?.manualLen() ?? 0,
 			upcoming: view?.upcomingLen() ?? 0,
-			history: view?.historyLen() ?? 0
+			history: view?.historyLen() ?? 0,
+			repeat: (view?.repeat() ?? 'off') as Repeat,
+			settling: this.#placeholder
 		});
 	}
 
@@ -316,6 +328,8 @@ export class QueueStore {
 		const response = await this.#call('POST', '/me/queue', launch);
 		if (!response || this.#launch !== launch) return;
 		this.#launch = null;
+		// What the device holds of a query's queue is its first track: the server's is the queue.
+		if (response.ok && 'query' in launch.source) this.#refetch = true;
 		if (!response.ok) {
 			// What the device shows is not the server's queue: fetch that.
 			this.#refetch = true;
@@ -392,6 +406,7 @@ export class QueueStore {
 
 	/** The account has no queue. */
 	#clear() {
+		this.#placeholder = false;
 		this.#release();
 		this.#queueId = null;
 		this.#context = null;
@@ -417,6 +432,7 @@ export class QueueStore {
 		const { queueId, version } = fetched;
 		const context = JSON.parse(fetched.context) as Context;
 		const next = fetched.queue();
+		this.#placeholder = false;
 		this.#release();
 		this.#confirmed = this.#view = next;
 		this.#queueId = queueId;

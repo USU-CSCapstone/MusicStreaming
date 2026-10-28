@@ -77,6 +77,19 @@ test('opening an album and clicking a song plays it', async ({ page }) => {
 	expect(plays[0]).toMatchObject({ context: { type: 'album' }, origin: 'context' });
 });
 
+test('playing from the songs list plays on in the order the list is sorted', async ({ page }) => {
+	await serveLibrary(page);
+	await page.goto('/songs');
+	// Newest first: Part 2, Remix, Part 1. The page holds only part of a long list, so the
+	// queue is the list itself, read by the server.
+	await page.getByRole('button', { name: 'Signal Remix', exact: true }).click();
+	const player = page.getByRole('region', { name: 'Player' });
+	await expect(player.getByText('Signal Remix')).toBeVisible();
+
+	await player.getByRole('button', { name: 'Next' }).click();
+	await expect(player.getByText('Signal Part 1')).toBeVisible();
+});
+
 test('search updates as the user types', async ({ page }) => {
 	await serveLibrary(page);
 	await page.goto('/albums');

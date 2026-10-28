@@ -146,6 +146,19 @@ export const getAlbum = (f: Fetch, libraryId: string, albumId: string) =>
 export const listTracks = (f: Fetch, libraryId: string, query: Query = {}) =>
 	get<TrackPage>(f, `${lib(libraryId)}/tracks`, query);
 
+/**
+ * Summaries of up to 100 tracks by ID, in the order asked. One out of reach, or gone, is left
+ * out; so is every one of a library out of reach, which answers 404: an empty page.
+ */
+export const getTracks = (f: Fetch, libraryId: string, ids: string[]) =>
+	get<TrackPage>(f, `${lib(libraryId)}/tracks`, { ids: ids.join(',') }).catch(
+		(error): TrackPage => {
+			if (error instanceof ApiError && error.status === 404)
+				return { items: [], nextCursor: null, total: 0 };
+			throw error;
+		}
+	);
+
 export const getTrack = (f: Fetch, libraryId: string, trackId: string) =>
 	get<Track>(f, `${lib(libraryId)}/tracks/${encodeURIComponent(trackId)}`);
 

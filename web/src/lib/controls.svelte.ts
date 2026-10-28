@@ -5,6 +5,7 @@
 
 import { playback } from './playback.svelte';
 import { player } from './player.svelte';
+import { queue } from './queue/client.svelte';
 
 class Controls {
 	/**
@@ -81,8 +82,12 @@ class Controls {
 		else if (!this.stopped) playback.setVolume(volume);
 	}
 
-	/** Whether what the other device was playing can play here: it is of this device's library. */
-	pickable = $derived(playback.track !== null && playback.state?.libraryId === player.libraryId);
+	/** Whether what the other device was playing can play here: it is of this device's library and this device holds the queue. */
+	pickable = $derived(
+		playback.track !== null &&
+			playback.state?.libraryId === player.libraryId &&
+			queue.queueId !== null
+	);
 
 	/** Plays here what the other device was playing, from where it got to, or says it could not. */
 	playHere() {

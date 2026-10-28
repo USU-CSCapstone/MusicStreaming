@@ -7,7 +7,7 @@
 	import { tick } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
-	import type { PlayContext, TrackSummary } from '$lib/api/types';
+	import type { PlayContext, QueueQuery, TrackSummary } from '$lib/api/types';
 	import { albumTitle, formatDate, formatDuration, plural, releaseYear } from '$lib/format';
 	import { player } from '$lib/player.svelte';
 	import { songs } from '$lib/adding.svelte';
@@ -35,6 +35,7 @@
 		sentinel,
 		empty = 'No songs.',
 		context = { type: 'library' },
+		query,
 		onplay,
 		editable = false,
 		onremove,
@@ -62,6 +63,11 @@
 		empty?: string;
 		/** Where the tracks are from, which each play records. */
 		context?: PlayContext;
+		/**
+		 * The list `tracks` pages through, when it is only part of it: a play starts a queue from
+		 * the list itself, which the server reads to its end, rather than from the tracks held.
+		 */
+		query?: QueueQuery;
 		/** Called as the user starts one playing. */
 		onplay?: (track: TrackSummary) => void;
 		/**
@@ -422,7 +428,7 @@
 
 	function play(i: number) {
 		if (tracks[i].availability !== 'available') return;
-		player.play(tracks, i, context);
+		player.play(tracks, i, context, query);
 		onplay?.(tracks[i]);
 	}
 
@@ -469,7 +475,8 @@
 			return;
 		}
 		if (editable && !(e.target as Element).closest('.num')) select(e, i);
-		else play(i);
+		// The title button has played it already, and a second start would be a second queue.
+		else if (!(e.target as Element).closest('.title')) play(i);
 	}
 </script>
 

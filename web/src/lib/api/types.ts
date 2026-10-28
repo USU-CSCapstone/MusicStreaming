@@ -55,3 +55,5 @@ export type PlayerCommand = Schemas['PlayerCommand'];
 export type StartQueue = Schemas['StartQueue'];
 export type QueueSnapshot = Schemas['QueueSnapshot'];
 export type QueueEdit = Schemas['QueueEdit'];
+export type QueueQuery = Schemas['QueueQuery'];
+export type QueueOrigin = Schemas['QueueOrigin'];

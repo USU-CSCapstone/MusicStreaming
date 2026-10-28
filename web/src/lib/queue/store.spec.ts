@@ -88,8 +88,12 @@ class FakeServer {
 		}
 		if (path === '/me/queue' && method === 'POST') {
 			// As the server starts a queue: by the core's `launch`, which uses up the old queue.
+			const { query, tracks, ...rest } = body.source;
+			// A list's query reads as four tracks, `q-0` to `q-3`.
+			const list = query ? ['q-0', 'q-1', 'q-2', 'q-3'] : tracks;
+			const first = query ? list.indexOf(body.startTrackId) : body.start;
 			const seed = body.shuffle?.seed;
-			this.queue = Queue.launch(JSON.stringify(body.source), body.start, seed, this.queue);
+			this.queue = Queue.launch(JSON.stringify({ ...rest, tracks: list }), first, seed, this.queue);
 			this.queueId = body.queueId;
 			this.context = body.context;
 			this.version = 0;
@@ -344,6 +348,37 @@ describe('QueueStore', () => {
 			await settle();
 			expect(summary.current).not.toBeNull();
 			expect(summary.current).toBe(server.queue!.current());
+		});
+
+		it('plays the track chosen from a list at once, then takes the queue the server made of it', async () => {
+			const query = { type: 'search', q: 'sig' } as const;
+			store.start({ context: CONTEXT, libraryId: 'lib', query, startTrackId: 'q-2' });
+
+			expect(summary).toMatchObject({ upcoming: 0 });
+			const placeholder = summary.current!;
+			expect(store.ask({ what: 'track', item: placeholder })).toEqual({
+				libraryId: 'lib',
+				trackId: 'q-2'
+			});
+			await settle();
+			const [start, fetched] = server.requests;
+			// The placeholder's item is `<key>.0` under the server's source key, so a report naming
+			// it is one the server can hold.
+			expect(placeholder).toBe(`${start.body.source.key}.0`);
+			expect(start).toMatchObject({ method: 'POST', path: '/me/queue' });
+			expect(start.body).toMatchObject({
+				source: { libraryId: 'lib', query },
+				startTrackId: 'q-2'
+			});
+			expect(start.body.source.tracks).toBeUndefined();
+			expect(start.body.start).toBeUndefined();
+			expect(fetched).toMatchObject({ method: 'GET', path: '/me/queue' });
+			// The server's queue: its track follows.
+			expect(summary).toMatchObject({ upcoming: 1 });
+			expect(store.ask({ what: 'track', item: summary.current! })).toEqual({
+				libraryId: 'lib',
+				trackId: 'q-2'
+			});
 		});
 
 		it('carries the Manual Queue over as the core does', async () => {
