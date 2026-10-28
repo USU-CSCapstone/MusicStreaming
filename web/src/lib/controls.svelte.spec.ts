@@ -55,6 +55,7 @@ function state(device: string | null, status: PlayerState['status'] = 'playing')
 	fake.listeners.forEach((listener) => listener({ type: 'player', state }));
 }
 
+/** The types of the commands sent so far. */
 const sent = () => fake.sent.map((message) => message.command.type);
 
 beforeEach(() => {
@@ -134,15 +135,10 @@ describe('controls', () => {
 		await vi.waitFor(() => expect(playback.error).toBe('Could not play that here.'));
 	});
 
-	it('leave playback stopped in another library alone', async () => {
+	it('picks up a track of another library than the one viewed, from its own', async () => {
 		player.libraryId = '12';
 		state(null, 'stopped');
 		await vi.waitFor(() => expect(controls.track?.id).toBe('41'));
-		const pickUp = vi.spyOn(player, 'pickUp').mockImplementation(async () => {});
-		expect([controls.stopped, controls.pickable]).toEqual([true, false]);
-		controls.toggle();
-		controls.play();
-		expect(pickUp).not.toHaveBeenCalled();
-		expect(sent()).toEqual([]);
+		expect(controls.pickable).toBe(true);
 	});
 });

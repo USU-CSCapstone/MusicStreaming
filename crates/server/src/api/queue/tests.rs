@@ -140,7 +140,7 @@ fn a_start_carries_the_manual_queue_over() {
     assert_eq!(account.version, 0);
     let tracks: Vec<_> = account
         .queue
-        .manual()
+        .manual_window(0, usize::MAX)
         .map(|item| account.queue.track(&item).unwrap().track_id.to_owned())
         .collect();
     assert_eq!(tracks, ["9", "8"]);
@@ -331,6 +331,6 @@ async fn a_new_start_keeps_the_accounts_repeat_mode_and_manual_queue() {
     let accounts = queues.lock();
     let queue = &accounts[&1].queue;
     assert_eq!(queue.repeat(), jewelcase_core::Repeat::All);
-    assert_eq!(queue.manual().count(), 2);
+    assert_eq!(queue.manual_len(), 2);
     assert!(queue.shuffled());
 }

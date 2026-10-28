@@ -5,7 +5,7 @@
 // its shell.
 
 import { Fetched, Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
-import type { PlayContext, QueueEdit, RealtimeServerMessage, StartQueue } from '$lib/api/types';
+import type { PlayContext, RealtimeServerMessage, SentEdit, StartQueue } from '$lib/api/types';
 import type { ItemTrack, List, Question, Refusal, Repeat, StartArgs, Summary } from './protocol';
 
 type Context = PlayContext;
@@ -26,7 +26,7 @@ export type Options = {
 type Pending = {
 	editId: string;
 	queueId: string;
-	edit: QueueEdit;
+	edit: SentEdit;
 	/** The version the server answered it made, once it has. */
 	version?: number;
 };
@@ -140,22 +140,26 @@ export class QueueStore {
 
 	/**
 	 * Applies `edit` here at once and sends it in the background. An edit the queue refuses
-	 * changes nothing and is reported.
+	 * changes nothing and is reported. An `add` of a `query` has no tracks here to apply: it is
+	 * sent in its turn with the other edits, and shows once the server's resolved `queueEdit` for
+	 * it arrives (see `#rebuild`).
 	 */
-	edit(edit: QueueEdit) {
+	edit(edit: SentEdit) {
 		if (!this.#view || !this.#queueId) {
 			this.#refused({ code: 'no_queue', message: 'There is no queue to change.', edit });
 			return;
 		}
-		const next = this.#view === this.#confirmed ? this.#view.copy() : this.#view;
-		try {
-			next.apply(JSON.stringify(edit));
-		} catch (error) {
-			if (next !== this.#view) next.free();
-			this.#refused({ code: 'invalid', message: String(error), edit });
-			return;
+		if (!unresolved(edit)) {
+			const next = this.#view === this.#confirmed ? this.#view.copy() : this.#view;
+			try {
+				next.apply(JSON.stringify(edit));
+			} catch (error) {
+				if (next !== this.#view) next.free();
+				this.#refused({ code: 'invalid', message: String(error), edit });
+				return;
+			}
+			this.#view = next;
 		}
-		this.#view = next;
 		this.#pending.push({ editId: crypto.randomUUID(), queueId: this.#queueId, edit });
 		this.#emit();
 		this.#drain();
@@ -232,8 +236,10 @@ export class QueueStore {
 	/**
 	 * Makes the view from the confirmed queue and the pending edits. A pending edit the queue
 	 * no longer accepts, because of what arrived, is dropped and reported as `anchor_gone`: keys
-	 * are unique, so only the item it names can have gone, and the user is told. With none pending
-	 * the view is the confirmed queue itself, so nothing is copied.
+	 * are unique, so only the item it names can have gone, and the user is told. A pending `add`
+	 * of a `query` stays pending without showing: the server applies it in the order it heard it,
+	 * and so do the edits replayed on top of it once it arrives. With none pending the view is
+	 * the confirmed queue itself, so nothing is copied.
 	 */
 	#rebuild() {
 		const confirmed = this.#confirmed;
@@ -242,6 +248,7 @@ export class QueueStore {
 		if (this.#pending.length > 0) {
 			view = confirmed.copy();
 			this.#pending = this.#pending.filter((pending) => {
+				if (unresolved(pending.edit)) return true;
 				try {
 					view.apply(JSON.stringify(pending.edit));
 					return true;
@@ -449,6 +456,11 @@ export class QueueStore {
 		);
 		this.#rebuild();
 	}
+}
+
+/** Whether `edit` is an `add` whose tracks only the server can find, from a `query`. */
+function unresolved(edit: SentEdit): boolean {
+	return edit.type === 'add' && 'query' in edit.source;
 }
 
 /** The reason the server refused a request. */

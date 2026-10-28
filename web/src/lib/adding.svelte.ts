@@ -9,9 +9,11 @@ import {
 	checkPlaylistDuplicates,
 	editPlaylist,
 	getPlaylist,
+	listPlaylistItems,
 	listTracks
 } from './api/client';
-import type { Playable, Playlist, TrackSummary } from './api/types';
+import type { Playable, Playlist, QueueQuery, TrackSummary } from './api/types';
+import type { Card } from './cards';
 import { plural } from './format';
 import type { EditablePlaylist } from './playlist.svelte';
 import { toast } from './toast.svelte';
@@ -31,6 +33,11 @@ export type Adding = {
 	count: number;
 	refs: Playable[];
 	tracks: () => Promise<TrackSummary[]>;
+	/**
+	 * The list of tracks it is, when the device does not hold them: queueing it sends this for
+	 * the server to read, rather than fetching the tracks first.
+	 */
+	query?: QueueQuery;
 };
 
 /**
@@ -52,15 +59,49 @@ export function songs(tracks: TrackSummary[]): Adding {
 	};
 }
 
-/** An album, artist, or playlist, named `title`, with `tracks` as the server expands it. */
+/**
+ * An album, artist, or playlist, named `title`, with `tracks` as the server expands it. Give
+ * its `query` unless `tracks` are already held.
+ */
 export function collection(
 	type: 'album' | 'artist' | 'playlist',
 	id: string,
 	title: string,
 	count: number,
-	tracks: () => Promise<TrackSummary[]>
+	tracks: () => Promise<TrackSummary[]>,
+	query?: QueueQuery
 ): Adding {
-	return { label: `“${title}”`, count, refs: [{ type, id }], tracks };
+	return { label: `“${title}”`, count, refs: [{ type, id }], tracks, query };
+}
+
+/** An artist's songs as `artistTracks` lists them, for the server to read. */
+export const artistQuery = (artistId: string): QueueQuery => ({
+	type: 'tracks',
+	artistId,
+	sort: 'album'
+});
+
+/**
+ * The album, artist, or playlist a card stands for, which it does not hold: the tracks of an
+ * album or artist are fetched when asked for, or read by the server from the `query`; a
+ * playlist's are fetched and have no `query`.
+ */
+export function cardAdding(fetch: Fetch, libraryId: string, card: Card): Adding {
+	const { type, id, title, count } = card;
+	if (type === 'artist') {
+		return collection(type, id, title, count, artistTracks(fetch, libraryId, id), artistQuery(id));
+	}
+	if (type === 'album') {
+		const list = { albumId: id, sort: 'album' } as const;
+		const tracks = () =>
+			all((cursor) => listTracks(fetch, libraryId, { ...list, limit: 1000, cursor }));
+		return collection(type, id, title, count, tracks, { type: 'tracks', ...list });
+	}
+	const tracks = async () =>
+		(await all((cursor) => listPlaylistItems(fetch, libraryId, id, { cursor }))).flatMap((item) =>
+			item.track ? [item.track] : []
+		);
+	return collection(type, id, title, count, tracks);
 }
 
 /** Every song by an artist, in the order the server expands an artist: album, disc, track. */

@@ -21,6 +21,7 @@ import { playback } from './playback.svelte';
 import { PlayRecorder } from './plays';
 import { Progress } from './progress';
 import { queue } from './queue/client.svelte';
+import type { ItemTrack } from './queue/protocol';
 import { lookup, remember, type Found } from './queue/summaries';
 import { firstPlayable, restartsOnPrevious } from './queue';
 import { realtime } from './realtime.svelte';
@@ -75,7 +76,7 @@ class Player {
 	#backTo: string | null = null;
 	/** Under Repeat All, a restart was asked for because nothing after the current item plays. */
 	#wrapped = false;
-	/** The items such a run passes through, the last of them `#backTo`. */
+	/** The items a run of `previous` edits passes through, the last of them `#backTo`. */
 	#passing: string[] = [];
 	/** Bumped on every item opened, so a slow lookup for an earlier one is ignored. */
 	#opens = 0;
@@ -155,13 +156,18 @@ class Player {
 		void this.#open(item, direction);
 	}
 
+	/** Whether `ref`, a queue item's track, is the track loaded, in its own library. */
+	#isLoaded(ref: ItemTrack): boolean {
+		return ref.libraryId === this.#loaded?.libraryId && ref.trackId === this.current?.id;
+	}
+
 	/**
 	 * Moves on, as Next was wanted before the server's queue arrived: `item`, if it is the track
 	 * already loaded, is first taken up as the current one, so the move is followed like any other.
 	 */
 	async #advanceFrom(item: string | null) {
 		const ref = item ? await queue.track(item).catch(() => null) : null;
-		if (ref?.trackId === this.current?.id) this.#item = item;
+		if (ref && this.#isLoaded(ref)) this.#item = item;
 		this.#advance();
 	}
 
@@ -173,7 +179,7 @@ class Player {
 	async #adopt(item: string) {
 		const ref = await queue.track(item).catch(() => null);
 		if (!ref || queue.current !== item) return;
-		if (ref.trackId === this.current?.id) {
+		if (this.#isLoaded(ref)) {
 			this.#item = item;
 			// The server's state names the item before this one until this report.
 			this.#report();
@@ -335,18 +341,16 @@ class Player {
 		const itemId = state?.itemId;
 		// An item the queue this device holds does not have is not known here.
 		const ref = itemId ? await queue.track(itemId).catch(() => null) : null;
-		if (!itemId || !ref || ref.libraryId !== this.libraryId) {
-			throw new Error('Nothing here to pick up.');
-		}
-		if (playback.track?.id === ref.trackId) {
+		if (!itemId || !ref) throw new Error('Nothing here to pick up.');
+		if (playback.track?.id === ref.trackId && playback.libraryId === ref.libraryId) {
 			remember(ref.libraryId, playback.track);
 		}
 		const [found] = await this.#lookup([itemId]);
 		if (!found) throw new Error('Nothing here to pick up.');
-		// Another device took over, or this one changed library, while the track was on its way.
+		// Another device took over while the track was on its way.
 		const now = playback.state;
 		const moved = now?.itemId !== itemId || now.activeDeviceId !== state?.activeDeviceId;
-		if (moved || ref.libraryId !== this.libraryId) throw new Error('Playback moved on.');
+		if (moved) throw new Error('Playback moved on.');
 		const seconds = Math.min(playback.positionAt(Date.now()), found.track.durationUs / 1_000_000);
 		this.#started();
 		this.#awaiting = null;

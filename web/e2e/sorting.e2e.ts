@@ -76,7 +76,7 @@ test.describe('a playlist', () => {
 		await serveLibrary(page, { playlists: [signalMix] });
 		await page.goto(`/playlists/${signalMix.id}`);
 		// Signal Part 1 again, added now, after the rest.
-		await page.getByRole('button', { name: 'Add Signal Part 1 to a playlist' }).click();
+		await page.getByRole('button', { name: 'Actions for Signal Part 1' }).click();
 		await page.getByRole('menuitem', { name: /Signal Mix/ }).click();
 		await page.getByRole('button', { name: 'Add anyway' }).click();
 		const order = ['Signal Part 1', 'Signal Part 2', 'Signal Remix', 'Signal Part 1'];

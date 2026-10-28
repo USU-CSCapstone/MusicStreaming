@@ -8,9 +8,15 @@ const ROW = 56;
 
 /**
  * The queue panel, opened from the player bar, with a queue of the fixture's songs. Looking up
- * tracks takes `lookupMs` more, as over a slow link.
+ * tracks takes `lookupMs` more, as over a slow link. With `open` false the panel is
+ * left closed.
  */
-async function openQueue(page: Page, queue: Parameters<typeof serveRealtime>[1], lookupMs = 0) {
+async function openQueue(
+	page: Page,
+	queue: Parameters<typeof serveRealtime>[1],
+	lookupMs = 0,
+	open = true
+) {
 	await serveLibrary(page);
 	if (lookupMs) {
 		// After the fixture's routes, so it is asked first.
@@ -21,9 +27,13 @@ async function openQueue(page: Page, queue: Parameters<typeof serveRealtime>[1],
 	}
 	await serveRealtime(page, queue);
 	await page.goto('/albums');
-	await page.getByRole('region', { name: 'Player' }).getByRole('button', { name: 'Queue' }).click();
+	if (open) await showQueue(page);
 	return page.getByRole('complementary', { name: 'Queue' });
 }
+
+/** Opens the queue panel, which covers the page's right edge, rows' ⋯ buttons with it. */
+const showQueue = (page: Page) =>
+	page.getByRole('region', { name: 'Player' }).getByRole('button', { name: 'Queue' }).click();
 
 /** What each row of the list says, in order: a heading's words, or an item's title. */
 const rows = (list: Locator) =>
@@ -369,6 +379,7 @@ test('pressing the handle without moving selects the row, and again lets it go',
 	const list = panel.getByRole('list', { name: 'Up Next' });
 	const row = list.locator('li.row[data-item]').nth(2);
 	const grip = (await row.locator('.grip').boundingBox())!;
+	/** Presses and releases the grip without moving, as a tap does. */
 	const press = async () => {
 		await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
 		await page.mouse.down();
@@ -394,4 +405,194 @@ test('Escape in the middle of a drag drops nothing and leaves the panel open', a
 	await page.mouse.up();
 	await expect(panel).toBeVisible();
 	expect(await items(list)).toEqual(before);
+});
+
+// Adding to the queue from the browse views (`requirements/queue.md` §1, §3).
+
+/** Opens the ⋯ named `name` and picks `item` from its menu. */
+async function choose(page: Page, name: string, item: 'Queue next' | 'Queue last') {
+	await page.getByRole('button', { name: `Actions for ${name}` }).click();
+	await page.getByRole('menu').getByRole('menuitem', { name: item }).click();
+}
+
+/** The first card or link of the page's main area that is called `name`. */
+const open = (page: Page, name: string | RegExp) =>
+	page.getByRole('link', { name }).first().click();
+
+// The panel covers the page's right edge, rows' ⋯ buttons too, so these open it to look.
+test.describe('from a menu', () => {
+	test('Queue Next and Queue Last put a song at the start and end of the Manual Queue', async ({
+		page
+	}) => {
+		const panel = await openQueue(page, queued, 0, false);
+		await open(page, /^Signal/);
+		await choose(page, 'Signal Part 1', 'Queue next');
+		await expect(page.getByText('“Signal Part 1” queued next')).toBeVisible();
+		await choose(page, 'Signal Part 2', 'Queue last');
+		await expect(page.getByText('“Signal Part 2” queued last')).toBeVisible();
+		await showQueue(page);
+		await expect
+			.poll(() => rows(panel.getByRole('list', { name: 'Up Next' })))
+			.toEqual([
+				'Queued by you 3',
+				'Signal Part 1',
+				'Signal Remix',
+				'Signal Part 2',
+				'Up next 4',
+				'Signal Part 2',
+				'Signal Remix',
+				'Signal Part 1',
+				'Signal Part 2'
+			]);
+	});
+
+	test('Queue Next and Queue Last put an album in, as its tracks in album order', async ({
+		page
+	}) => {
+		const panel = await openQueue(page, queued, 0, false);
+		// The card on the albums list does not hold the album's songs, so the server reads the
+		// album; its page does, so they go as they are.
+		await choose(page, '“Signal”', 'Queue next');
+		await open(page, /^Signal/);
+		await choose(page, '“Signal”', 'Queue last');
+		await expect(page.getByText('“Signal” queued last')).toBeVisible();
+		await showQueue(page);
+		await expect
+			.poll(() => rows(panel.getByRole('list', { name: 'Up Next' })))
+			.toEqual([
+				'Queued by you 7',
+				'Signal Part 1',
+				'Signal Part 2',
+				'Signal Remix',
+				'Signal Remix',
+				'Signal Part 1',
+				'Signal Part 2',
+				'Signal Remix',
+				'Up next 4',
+				'Signal Part 2',
+				'Signal Remix',
+				'Signal Part 1',
+				'Signal Part 2'
+			]);
+	});
+
+	test('what the server is still reading does not hold back or reorder later edits', async ({
+		page
+	}) => {
+		const panel = await openQueue(page, queued, 0, false);
+		// Slow to answer, as a big artist would be.
+		let answer: () => void = () => {};
+		const held = new Promise<void>((resolve) => (answer = resolve));
+		await page.context().route('**/me/queue/edits', async (route) => {
+			if (route.request().postDataJSON().edit.source?.query) await held;
+			await route.fallback();
+		});
+		await page.getByRole('link', { name: 'Artists', exact: true }).click();
+		await choose(page, '“Aurora Lane”', 'Queue last');
+		await expect(page.getByText('“Aurora Lane” queued last')).toBeVisible();
+
+		// A song queued next meanwhile shows at once; the artist's songs show when the server
+		// answers, after it, as the server ordered them.
+		await page.getByRole('link', { name: 'Albums', exact: true }).click();
+		await open(page, /^Signal/);
+		await choose(page, 'Signal Part 2', 'Queue next');
+		await showQueue(page);
+		const list = panel.getByRole('list', { name: 'Up Next' });
+		await expect.poll(() => rows(list)).toContain('Queued by you 2');
+		answer();
+		await expect
+			.poll(() => rows(list))
+			.toEqual([
+				'Queued by you 5',
+				'Signal Part 2',
+				'Signal Remix',
+				'Signal Part 1',
+				'Signal Part 2',
+				'Signal Remix',
+				'Up next 4',
+				'Signal Part 2',
+				'Signal Remix',
+				'Signal Part 1',
+				'Signal Part 2'
+			]);
+	});
+});
+
+test('a query add from another device arrives as its tracks', async ({ page }) => {
+	const panel = await openQueue(page, queued);
+	const list = panel.getByRole('list', { name: 'Up Next' });
+	const queue = queueOf(page);
+	// What the server does for a device that sends an album: it runs the query, and every
+	// device, this one included, hears the album as tracks.
+	queue.edit({
+		editId: crypto.randomUUID(),
+		queueId: queue.queueId,
+		edit: {
+			type: 'add',
+			source: {
+				key: crypto.randomUUID(),
+				libraryId: '11',
+				query: { type: 'tracks', albumId: '31', sort: 'album' }
+			},
+			before: { type: 'manualEnd' }
+		}
+	});
+	await expect
+		.poll(() => rows(list))
+		.toEqual(expect.arrayContaining(['Queued by you 4', 'Signal Remix']));
+	expect((await items(list)).length).toBe(8);
+});
+
+/** Drags the card or row `source` onto the list, `y` pixels below its top. */
+const dragOnto = (source: Locator, list: Locator, y: number) =>
+	source.dragTo(list, { targetPosition: { x: 100, y } });
+
+test('dropping an album between two Up Next items inserts its tracks there, in album order', async ({
+	page
+}) => {
+	const panel = await openQueue(page, queued);
+	const list = panel.getByRole('list', { name: 'Up Next' });
+	await expect(list.locator('li.row[data-item]')).toHaveCount(5);
+	// Between the context's first and second.
+	await dragOnto(page.getByRole('link', { name: /^Signal/ }).first(), list, ROW * 4);
+	await expect
+		.poll(() => rows(list))
+		.toEqual([
+			'Queued by you 1',
+			'Signal Remix',
+			'Up next 7',
+			'Signal Part 2',
+			'Signal Part 1',
+			'Signal Part 2',
+			'Signal Remix',
+			'Signal Remix',
+			'Signal Part 1',
+			'Signal Part 2'
+		]);
+});
+
+test('dropping on either side of the boundary goes into the Manual Queue or the context', async ({
+	page
+}) => {
+	const panel = await openQueue(page, queued);
+	const list = panel.getByRole('list', { name: 'Up Next' });
+	await expect(list.locator('li.row[data-item]')).toHaveCount(5);
+	await page
+		.getByRole('link', { name: /Signal/ })
+		.first()
+		.click();
+	const row = page.locator('ol.tracks li.row', { hasText: 'Signal Part 1' });
+
+	// Just under the context's heading: the context's front.
+	await dragOnto(row, list, ROW * 3);
+	await expect
+		.poll(() => rows(list))
+		.toEqual(expect.arrayContaining(['Queued by you 1', 'Up next 5']));
+	await expect.poll(() => rows(list).then((r) => r.indexOf('Signal Part 1'))).toBe(3);
+
+	// Just above it: the end of the Manual Queue.
+	await dragOnto(row, list, ROW * 2);
+	await expect
+		.poll(() => rows(list))
+		.toEqual(expect.arrayContaining(['Queued by you 2', 'Up next 5']));
 });

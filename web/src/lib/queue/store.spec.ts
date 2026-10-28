@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { initSync, Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
-import type { QueueEdit, RealtimeServerMessage } from '$lib/api/types';
+import type { QueueEdit, RealtimeServerMessage, SentEdit } from '$lib/api/types';
 import type { Refusal, StartArgs, Summary } from './protocol';
 import { QueueStore } from './store';
 
@@ -51,7 +51,14 @@ class FakeServer {
 		return { type: 'queueEdit', queueId: this.queueId, version: this.version, editId, edit };
 	}
 
-	/** The `queueEdit` for the latest edit this device sent. */
+	/** An edit as the server applies it: an add of a query reads as two tracks, `q-0` and `q-1`. */
+	resolved(edit: SentEdit): QueueEdit {
+		if (edit.type !== 'add' || !('query' in edit.source)) return edit as QueueEdit;
+		const { key, libraryId } = edit.source;
+		return { ...edit, source: { key, libraryId, tracks: ['q-0', 'q-1'] } };
+	}
+
+	/** The `queueEdit` for the latest edit this device sent, or the `n`th. */
 	heardOf(n = -1): RealtimeServerMessage {
 		const sent = this.requests.filter((r) => r.path === '/me/queue/edits');
 		const { editId, edit } = sent.at(n)!.body;
@@ -60,7 +67,7 @@ class FakeServer {
 			queueId: this.queueId,
 			version: this.#answered.get(editId)!,
 			editId,
-			edit
+			edit: this.resolved(edit)
 		};
 	}
 
@@ -103,7 +110,7 @@ class FakeServer {
 		const done = this.#answered.get(body.editId);
 		if (done !== undefined) return json({ version: done });
 		try {
-			this.apply(body.edit, body.editId);
+			this.apply(this.resolved(body.edit), body.editId);
 		} catch {
 			return problem(409, 'anchor_gone');
 		}
@@ -211,8 +218,67 @@ describe('QueueStore', () => {
 		expect(summary).toMatchObject({ version: 2, manual: 2 });
 	});
 
+	it('sends an add of a query in its turn, shows it when the server answers, and keeps later edits on top', async () => {
+		await connect();
+		const add: SentEdit = {
+			type: 'add',
+			source: { key: 'q', libraryId: 'lib', query: { type: 'tracks', albumId: '9' } },
+			before: { type: 'manualEnd' }
+		};
+		store.edit(add);
+		// The device holds none of its tracks, so nothing shows; a later edit does, at once.
+		expect(window('manual')).toEqual([]);
+		store.edit(queueManual('m'));
+		expect(window('manual')).toEqual(['m.0']);
+		await settle();
+		expect(
+			server.requests.filter((r) => r.path === '/me/queue/edits').map((r) => r.body.edit)
+		).toEqual([add, queueManual('m')]);
+
+		// The server applied them in the order sent: the album's tracks, then ours.
+		store.message(server.heardOf(0));
+		expect(window('manual')).toEqual(['q.0', 'q.1', 'm.0']);
+		store.message(server.heardOf(1));
+		expect(window('manual')).toEqual(['q.0', 'q.1', 'm.0']);
+		expect(summary).toMatchObject({ version: 2, manual: 3 });
+		expect(refusals).toEqual([]);
+	});
+
+	it('keeps an unsent add of a query through a rebuild by another edit', async () => {
+		await connect();
+		store.edit(queueManual('m'));
+		store.edit({
+			type: 'add',
+			source: { key: 'q', libraryId: 'lib', query: { type: 'tracks', albumId: '9' } },
+			before: { type: 'manualEnd' }
+		});
+		store.message(server.apply(queueManual('t')));
+		await settle();
+		store.message(server.heardOf(0));
+		store.message(server.heardOf(1));
+
+		expect(window('manual')).toEqual(server.queue!.manualWindow(0, 10));
+		expect(refusals).toEqual([]);
+	});
+
+	it('drops an add of a query the server refuses, and says so', async () => {
+		await connect();
+		const add: SentEdit = {
+			type: 'add',
+			source: { key: 'q', libraryId: 'lib', query: { type: 'tracks', albumId: '9' } },
+			before: { type: 'manualEnd' }
+		};
+		server.failures = [422];
+		store.edit(add);
+		await settle();
+
+		expect(refusals).toEqual([{ code: 'failed', message: 'failed', edit: add }]);
+		expect(window('manual')).toEqual([]);
+	});
+
 	it('fetches the queue again after a gap in versions', async () => {
 		await connect();
+		/** How many times the queue has been fetched. */
 		const gets = () => server.requests.filter((r) => r.method === 'GET').length;
 		server.apply(next);
 		server.apply(next);
@@ -225,6 +291,7 @@ describe('QueueStore', () => {
 
 	it('fetches the queue when another one replaces it, but not for its own', async () => {
 		await connect();
+		/** How many times the queue has been fetched. */
 		const gets = () => server.requests.filter((r) => r.method === 'GET').length;
 		store.message({ type: 'queueReplaced', queueId: QUEUE });
 		await settle();
@@ -318,6 +385,7 @@ describe('QueueStore', () => {
 	});
 
 	describe('start', () => {
+		/** Arguments for a start from a list of tracks held here. */
 		const args = (): StartArgs => ({
 			context: CONTEXT,
 			libraryId: 'lib',
@@ -358,7 +426,7 @@ describe('QueueStore', () => {
 			store.start(args());
 			await settle();
 
-			expect(window('manual')).toEqual(server.queue!.manual());
+			expect(window('manual')).toEqual(server.queue!.manualWindow(0, server.queue!.manualLen()));
 			expect(window('upcoming')).toEqual(server.queue!.upcoming(0, 100));
 			expect(summary.current).toBe(server.queue!.current());
 			// Repeat All carried over: the end of the queue wraps, here and on the server.
@@ -423,6 +491,7 @@ describe('QueueStore', () => {
 			);
 			expected.carryManual(old);
 
+			/** The track each of `list`'s items plays, as `from` holds them. */
 			const tracks = (list: string[], from: Queue | QueueStore) =>
 				list.map((id) =>
 					from instanceof QueueStore
@@ -431,7 +500,7 @@ describe('QueueStore', () => {
 				);
 			expect(window('manual')).toHaveLength(3);
 			expect(tracks(window('manual') as string[], store)).toEqual(
-				tracks(expected.manual(), expected)
+				tracks(expected.manualWindow(0, expected.manualLen()), expected)
 			);
 			expect(summary).toMatchObject({ manual: 3, upcoming: 1 });
 			await settle();
@@ -447,7 +516,7 @@ describe('QueueStore', () => {
 		await settle();
 
 		expect(refusals.map((r) => r.code)).toEqual(['superseded', 'superseded']);
-		expect(window('manual')).toEqual(server.queue!.manual());
+		expect(window('manual')).toEqual(server.queue!.manualWindow(0, server.queue!.manualLen()));
 		expect(summary).toMatchObject({ queueId: server.queueId, manual: server.queue!.manualLen() });
 	});
 
@@ -499,7 +568,7 @@ describe('QueueStore', () => {
 
 			expect(refusals).toEqual([]);
 			expect(summary).toMatchObject({ manual: 1, version: 1 });
-			expect(window('manual')).toEqual(server.queue!.manual());
+			expect(window('manual')).toEqual(server.queue!.manualWindow(0, server.queue!.manualLen()));
 		});
 	});
 

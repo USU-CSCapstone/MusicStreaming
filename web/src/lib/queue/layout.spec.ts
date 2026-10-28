@@ -37,6 +37,7 @@ describe('Up Next rows', () => {
 });
 
 describe('where a drop lands', () => {
+	/** Where a drop at `gap` lands, with defaults for the queue's shape. */
 	const at = (gap: number, manual = 2, upcoming = 3, moving: string[] = []) =>
 		anchorAt(gap, manual, upcoming, itemAt(manual), new Set(moving));
 

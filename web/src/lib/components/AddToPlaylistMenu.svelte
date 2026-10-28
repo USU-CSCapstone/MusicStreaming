@@ -1,6 +1,7 @@
 <script lang="ts">
-	// Which playlist songs go to — a row's, the selection's, or a whole album's, artist's, or
-	// playlist's (`requirements/playlists.md` §4): one of the user's own, or a new one made on
+	// What can be done with songs — a row's, the selection's, or a whole album's, artist's, or
+	// playlist's: put them next or last in the queue (`requirements/queue.md` §1), or in a
+	// playlist (`requirements/playlists.md` §4): one of the user's own, or a new one made on
 	// the spot. Songs already there are warned about first, as adding them again is usually a
 	// mistake (§3).
 	import { onMount, tick } from 'svelte';
@@ -11,6 +12,7 @@
 	import { deleted } from '$lib/deletions.svelte';
 	import { plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
+	import { addToQueue } from '$lib/queueing';
 	import { toast } from '$lib/toast.svelte';
 	import Icon from './Icon.svelte';
 	import PlaylistDetailsDialog, { type PlaylistDetails } from './PlaylistDetailsDialog.svelte';
@@ -95,6 +97,12 @@
 		e.stopPropagation();
 	}
 
+	/** Queue Next or Queue Last. */
+	function queueIt(where: 'manualStart' | 'manualEnd') {
+		void addToQueue(what, libraryId, { type: where });
+		onclose();
+	}
+
 	function onpointerdown(e: PointerEvent) {
 		const target = e.target as Node;
 		if (step.kind === 'menu' && !menu?.contains(target) && !anchor.contains(target)) onclose();
@@ -172,12 +180,19 @@
 		class="menu"
 		role="menu"
 		tabindex="-1"
-		aria-label="Add {what.label} to a playlist"
+		aria-label="Actions for {what.label}"
 		bind:this={menu}
 		style:top="{place.top}px"
 		style:left="{place.left}px"
 		{onkeydown}
 	>
+		<button type="button" role="menuitem" onclick={() => queueIt('manualStart')}>
+			<Icon name="next" size={16} /> Queue next
+		</button>
+		<button type="button" role="menuitem" onclick={() => queueIt('manualEnd')}>
+			<Icon name="list" size={16} /> Queue last
+		</button>
+		<hr />
 		<p class="heading muted" aria-hidden="true">Add to playlist</p>
 		<button type="button" role="menuitem" onclick={() => (step = { kind: 'create' })}>
 			<Icon name="plus" size={16} /> New playlist…

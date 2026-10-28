@@ -68,6 +68,7 @@ vi.mock('$lib/api/client', async (actual) => ({
 	getPlaybackInfo: () => fake.info?.() ?? new Promise(() => {})
 }));
 
+/** A track summary of `seconds` length, by its ID. */
 const track = (id: string, seconds: number, availability = 'available') =>
 	({
 		id,
@@ -143,6 +144,7 @@ vi.mock('$lib/queue/client.svelte', async (actual) => {
 
 // Before the player sets its handlers, so a test can act as the lock screen does.
 const setAction = vi.spyOn(navigator.mediaSession, 'setActionHandler');
+/** Runs the handler the player last set for the lock-screen action `name`. */
 const action = (name: MediaSessionAction) =>
 	setAction.mock.calls.findLast(([a]) => a === name)![1]!({ action: name });
 
@@ -151,11 +153,13 @@ const { controls } = await import('./controls.svelte');
 const { queue } = await import('$lib/queue/client.svelte');
 const { playback } = await import('$lib/playback.svelte');
 
+/** Delivers a realtime message to the player's listeners. */
 const send = (message: RealtimeServerMessage) =>
 	fake.listeners.forEach((listener) => listener(message));
 
 /** The queue's items in play order: the current, the Manual Queue, then Up Next. */
 let items: string[] = [];
+/** The queue's items in play order, as it holds them now. */
 const itemsNow = async () => [
 	queue.current!,
 	...(await queue.window('manual', 0, 100)),
@@ -185,12 +189,14 @@ function state(changes: Partial<PlayerState> = {}) {
 	});
 }
 
+/** Sends a transfer command to this device, to play or to stay paused. */
 const transfer = (play: boolean) =>
 	send({
 		type: 'execute',
 		command: { type: 'transfer', commandId: crypto.randomUUID(), deviceId: '1', play }
 	});
 
+/** The result of the first command this device reported. */
 const result = () => vi.waitFor(() => fake.sent.find((m) => m.type === 'commandResult')!.result);
 
 /** Another tab of this browser, whose playing makes this player let go of any it held. */
@@ -254,17 +260,13 @@ describe('player', () => {
 		expect(queue.current).toBe(items[2]);
 	});
 
-	it('says when there is nothing it can pick up', async () => {
+	it('picks up an item of another library than the one viewed, from the item’s own', async () => {
 		await hold(['41']);
-		// Viewing another library, whose queue it would not know.
 		player.libraryId = '12';
 		state();
 		transfer(true);
-		expect(await result()).toMatchObject({
-			status: 'failed',
-			reason: 'This device could not pick up playback.'
-		});
-		expect(fake.sent.map((m) => m.type)).toEqual(['commandResult']);
+		expect(await result()).toMatchObject({ status: 'applied' });
+		expect(player.current?.id).toBe('41');
 	});
 
 	it('says when the item is not in the queue this device holds', async () => {

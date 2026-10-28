@@ -227,7 +227,7 @@ class Playback {
 			const ref = await queue.track(itemId);
 			if (!ref || !current()) return;
 			const { libraryId, trackId } = ref;
-			const changed = trackId !== this.track?.id;
+			const changed = trackId !== this.track?.id || libraryId !== this.libraryId;
 			if (changed) {
 				const track = await getTrack(fetch, libraryId, trackId);
 				if (!current()) return;

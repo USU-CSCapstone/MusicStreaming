@@ -76,9 +76,8 @@ It is a stand-in for the server, so it has these limits. None of them are client
 ## Not built yet
 
 These are client work still to do: virtualized lists beyond the queue panel's (the other long
-lists page in as you scroll), drop to insert and Queue Next/Last (the panel edits the queue, but
-nothing yet adds to it), loudness normalization, offline, and account preferences. Grid/list view
-and theme are per-browser for now.
+lists page in as you scroll), loudness normalization, offline, and account preferences. Grid/list
+view and theme are per-browser for now.
 
 ## Playing
 
@@ -126,7 +125,31 @@ client, applied here at once and sent on, and the device holding playback follow
   Clicking an Up Next row jumps to it, and everything ahead of it goes to History. In History a
   row plays again (`jump`) or returns to the front of Up Next (`move`).
 - **A change that did not stay is explained**: a refused `anchor_gone` or `superseded` shows a
-  toast (`requirements/realtime.md` §7).
+  toast (`requirements/realtime.md` §7), and so does a refused add.
+
+### Adding to the queue
+
+- **Queue Next and Queue Last** are the first two items of the ⋯ menu that opens on every song
+  row, on the selection bar, on every album, artist and playlist card, and on their own pages
+  (`AddToPlaylistMenu`, so there is one menu, with Add to playlist below). They `add` at
+  `manualStart` / `manualEnd` (`queueing.ts`) and say what they did in a toast. With no queue
+  there is nothing to add to, and the toast says to play something first.
+- **What an add carries.** Songs the device holds go as `tracks` and show at once. An album or
+  artist card does not hold its songs, so it goes as a `query` (`{type: tracks, albumId, sort:
+  album}`, or the artist's) for the server to read. The queue store cannot apply that locally: it
+  keeps it pending without showing it, sends it in turn with every other pending edit (one
+  request at a time, in the order made), and shows it when the server's resolved `queueEdit`
+  arrives, which retires it. Edits made meanwhile show at once and are replayed on top, so the
+  result is the server's order. A playlist is not stored on the server, so it goes as its songs,
+  fetched first when only its card is at hand.
+- **Drop to insert.** With a mouse, song rows (one, or the selection) and cards drag with the
+  browser's own drag and drop (`dragging.ts`) onto Up Next, which draws the same drop line
+  as a move and scrolls near its edges. The gap becomes an anchor with `anchorAt`, so a drop
+  above the context's heading is the Manual Queue's end and below it the context's front. Rows
+  of a list that reorders by dragging (an unsorted playlist) keep that drag for themselves; touch
+  and keyboard use the menu, as a moving finger scrolls.
+- **Libraries mix.** The caches of tracks (`queue/summaries.ts`, the player's) are keyed by
+  library and track ID, and an item's track is always looked up in its own library.
 
 The e2e fixtures keep a queue per test by running the shared core in Node, and answer the
 queue's requests from the page's worker, so they route on the browser context, not the page.
