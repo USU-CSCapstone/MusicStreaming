@@ -84,37 +84,45 @@ impl Queues {
         }
     }
 
-    /// Serializes every unsaved queue, and counts it as saved.
+    /// Serializes every unsaved queue, and counts it as saved. The lock is held only to copy
+    /// each queue (its sources are shared, not copied); serializing runs after it is released,
+    /// so a large queue does not stall every other account.
     fn unsaved(&self) -> Vec<Row> {
-        let mut rows = Vec::new();
+        let mut copies = Vec::new();
         for (&user, account) in self.lock().iter_mut().filter(|(_, account)| account.unsaved) {
-            let (replace, first) = match account.saved {
-                Some(count) => (false, count),
-                None => (true, 0),
-            };
-            let sources = account.queue.sources();
-            let (Ok(state), Ok(context)) = (
-                serde_json::to_string(&account.queue.stored()),
-                serde_json::to_string(&account.context),
-            ) else {
+            let first = account.saved.unwrap_or(0);
+            copies.push((
+                user,
+                account.queue_id.as_str().to_owned(),
+                account.version,
+                account.context.clone(),
+                account.queue.clone(),
+                first,
+            ));
+            account.unsaved = false;
+            account.saved = Some(account.queue.sources().len());
+        }
+        let mut rows = Vec::new();
+        for (user, queue_id, version, context, queue, first) in copies {
+            let (Ok(state), Ok(context)) =
+                (serde_json::to_string(&queue.stored()), serde_json::to_string(&context))
+            else {
                 continue;
             };
-            let new = sources[first..].iter().filter_map(|source| {
+            let new = queue.sources()[first..].iter().filter_map(|source| {
                 let tracks = serde_json::to_string(&source.tracks).ok()?;
                 Some((source.key.clone(), source.library_id.clone(), tracks))
             });
             rows.push(Row {
                 user,
-                queue_id: account.queue_id.as_str().to_owned(),
-                version: account.version,
+                queue_id,
+                version,
                 context,
                 state,
-                replace,
+                replace: first == 0,
                 first,
                 sources: new.collect(),
             });
-            account.unsaved = false;
-            account.saved = Some(sources.len());
         }
         rows
     }

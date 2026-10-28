@@ -52,3 +52,6 @@ export type RealtimeServerMessage = Schemas['RealtimeServerMessage'];
 export type PlayerState = Schemas['PlayerState'];
 export type ProgressReport = Schemas['ProgressReport'];
 export type PlayerCommand = Schemas['PlayerCommand'];
+export type StartQueue = Schemas['StartQueue'];
+export type QueueSnapshot = Schemas['QueueSnapshot'];
+export type QueueEdit = Schemas['QueueEdit'];

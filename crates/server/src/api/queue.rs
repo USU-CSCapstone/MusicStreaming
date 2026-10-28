@@ -81,18 +81,25 @@ impl Queues {
     /// `known` (an `If-None-Match` value) already names this queue and version, which is checked
     /// before anything is serialized.
     fn snapshot(&self, user: i64, known: Option<&str>) -> Option<(String, Option<Vec<u8>>)> {
-        let accounts = self.lock();
-        let account = accounts.get(&user)?;
-        let etag = format!("\"{}.{}.{}\"", self.boot, account.queue_id.as_str(), account.version);
-        if known.is_some_and(|known| known.split(',').any(|tag| tag.trim() == etag)) {
-            return Some((etag, None));
-        }
-        let snapshot = Snapshot {
-            queue_id: &account.queue_id,
-            version: account.version,
-            context: &account.context,
-            state: &account.queue,
+        // Only copies are made under the lock (the sources are shared, not copied), so
+        // serializing a large queue does not hold up every other account.
+        let (etag, queue_id, version, context, queue) = {
+            let accounts = self.lock();
+            let account = accounts.get(&user)?;
+            let etag =
+                format!("\"{}.{}.{}\"", self.boot, account.queue_id.as_str(), account.version);
+            if known.is_some_and(|known| known.split(',').any(|tag| tag.trim() == etag)) {
+                return Some((etag, None));
+            }
+            (
+                etag,
+                account.queue_id.clone(),
+                account.version,
+                account.context.clone(),
+                account.queue.clone(),
+            )
         };
+        let snapshot = Snapshot { queue_id: &queue_id, version, context: &context, state: &queue };
         // A queue takes only what its fields hold to serialize, so this cannot fail.
         let body = serde_json::to_vec(&snapshot).ok()?;
         Some((etag, Some(body)))
