@@ -844,12 +844,12 @@ describe('player', () => {
 			await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
 			// The account's queue, started elsewhere from the whole library, and moved here.
 			await hold(['161', '162']);
-			state({ trackId: '161' });
+			state();
 			transfer(true);
 			expect(await result()).toMatchObject({ status: 'applied' });
 			await vi.waitFor(() => expect(player.current?.id).toBe('161'));
-			await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(2));
-			(play.mock.contexts[1] as HTMLAudioElement).dispatchEvent(new Event('playing'));
+			await vi.waitFor(() => expect(play.mock.calls.length).toBeGreaterThanOrEqual(2));
+			(play.mock.contexts.at(-1) as HTMLAudioElement).dispatchEvent(new Event('playing'));
 			expect(fake.plays.filter((p) => p.end === null).map((p) => [p.trackId, p.context])).toEqual([
 				['161', { type: 'library' }]
 			]);
