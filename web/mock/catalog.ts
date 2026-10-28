@@ -11,6 +11,9 @@ import type {
 	ImageRef,
 	Library,
 	Page,
+	Tag,
+	TagType,
+	TagsByType,
 	TrackSummary
 } from '../src/lib/api/types.ts';
 import { type Db, type Row, id, iso, num, numOrNull, sortKey, str, toKey } from './db.ts';
@@ -114,14 +117,117 @@ export class Catalog {
 			.map((r) => ({ id: id(r.id), name: str(r.name) }));
 	}
 
-	#genres(sql: string, key: bigint) {
-		return this.db.all(sql, key).map((r) => ({ id: id(r.id), name: String(r.name) }));
+	// ───────────────────────────── Tags ─────────────────────────────
+
+	/** The tags of `owner` `key` by type, each type's in name order; a type it has none of is left out. */
+	#tags(owner: 'track' | 'album' | 'artist', key: bigint): TagsByType {
+		const tags: TagsByType = {};
+		const rows = this.db.all(
+			`SELECT t.id, t.type, t.name FROM ${owner}_tags x JOIN tags t ON t.id = x.tag_id
+			 WHERE x.${owner}_id = ? ORDER BY t.type, t.sort_key, t.id`,
+			key
+		);
+		for (const r of rows) (tags[String(r.type)] ??= []).push({ id: id(r.id), name: String(r.name) });
+		return tags;
+	}
+
+	/**
+	 * Adds the `tag` filter to `where` as conditions on `column`, the ID of an `owner`: the tags of
+	 * each type matched by `tagMatch`, and every type's together. An ID naming no tag in the library
+	 * matches nothing.
+	 */
+	#tagFilter(
+		lib: bigint,
+		q: URLSearchParams,
+		owner: 'track' | 'album' | 'artist',
+		column: string,
+		where: string[],
+		params: SQLInputValue[]
+	) {
+		const byType = new Map<string, bigint[]>();
+		for (const raw of q.get('tag')?.split(',').filter(Boolean) ?? []) {
+			const key = toKey(raw);
+			const row =
+				key === null
+					? undefined
+					: this.db.get('SELECT type FROM tags WHERE library_id = ? AND id = ?', lib, key);
+			if (key === null || !row) {
+				where.push('0');
+				return;
+			}
+			byType.set(String(row.type), [...(byType.get(String(row.type)) ?? []), key]);
+		}
+		const carrying = `${column} IN (SELECT ${owner}_id FROM ${owner}_tags WHERE tag_id`;
+		for (const keys of byType.values()) {
+			if (q.get('tagMatch') === 'all') {
+				where.push(...keys.map(() => `${carrying} = ?)`));
+			} else {
+				where.push(`${carrying} IN (${keys.map(() => '?').join(', ')}))`);
+			}
+			params.push(...keys);
+		}
+	}
+
+	#tag(row: Row): Tag {
+		return {
+			id: id(row.id),
+			type: String(row.type),
+			name: String(row.name),
+			trackCount: num(row.track_count),
+			albumCount: num(row.album_count),
+			artistCount: num(row.artist_count)
+		};
+	}
+
+	/** The types the library's tags are of, each with its count of tags, in key order. */
+	tagTypes(lib: bigint): TagType[] {
+		return this.db
+			.all(
+				'SELECT type, COUNT(*) AS n FROM tags WHERE library_id = ? GROUP BY type ORDER BY type',
+				lib
+			)
+			.map((r) => ({ key: String(r.type), tagCount: num(r.n) }));
+	}
+
+	listTags(lib: bigint, q: URLSearchParams): Page<Tag> {
+		const where = ['library_id = ?'];
+		const params: SQLInputValue[] = [lib];
+		const type = q.get('type');
+		if (type) {
+			where.push('type = ?');
+			params.push(type);
+		}
+		const sorts: Record<string, string[]> = {
+			name: ['sort_key', 'id'],
+			trackCount: ['track_count', 'id']
+		};
+		const sort = sorts[q.get('sort') ?? 'name'] ?? sorts.name;
+		const p = paging(q);
+		const clause = where.join(' AND ');
+		const total = num(this.db.get(`SELECT COUNT(*) AS n FROM tags WHERE ${clause}`, ...params)?.n);
+		const rows = this.db.all(
+			`SELECT * FROM tags WHERE ${clause} ORDER BY ${orderBy(sort, q)} LIMIT ? OFFSET ?`,
+			...params,
+			p.limit,
+			p.offset
+		);
+		return page(
+			rows.map((r) => this.#tag(r)),
+			total,
+			p
+		);
+	}
+
+	tag(lib: bigint, tagId: bigint): Tag | null {
+		const row = this.db.get('SELECT * FROM tags WHERE library_id = ? AND id = ?', lib, tagId);
+		return row ? this.#tag(row) : null;
 	}
 
 	// ───────────────────────────── Albums ─────────────────────────────
 
 	#albumSummary(row: Row): AlbumSummary {
 		const albumId = row.id as bigint;
+		const tags = this.#tags('album', albumId);
 		// The API's trackTotal sums the tagged per-disc totals of the discs present.
 		const totals = this.db.get(
 			'SELECT SUM(track_total) AS total, COUNT(track_total) AS tagged FROM album_discs WHERE album_id = ?',
@@ -133,10 +239,8 @@ export class Catalog {
 			artists: this.albumArtists(albumId),
 			releaseDate: str(row.release_date),
 			type: row.type as AlbumSummary['type'],
-			genres: this.#genres(
-				'SELECT t.id, t.name FROM album_tags x JOIN tags t ON t.id = x.tag_id WHERE x.album_id = ? ORDER BY t.sort_key',
-				albumId
-			),
+			genres: tags.genre ?? [],
+			tags,
 			trackCount: num(row.track_count),
 			trackTotal: totals && num(totals.tagged) > 0 ? num(totals.total) : null,
 			discCount: num(row.disc_count),
@@ -176,6 +280,7 @@ export class Catalog {
 			where.push(`al.type IN (${types.map(() => '?').join(', ')})`);
 			params.push(...types);
 		}
+		this.#tagFilter(lib, q, 'album', 'al.id', where, params);
 		const availability = q.get('availability');
 		if (availability === 'available') where.push('al.available_track_count > 0');
 		if (availability === 'missing') where.push('al.available_track_count = 0');
@@ -254,6 +359,7 @@ export class Catalog {
 		const trackId = row.id as bigint;
 		const albumId = row.album_id as bigint;
 		const disc = num(row.disc_number);
+		const tags = this.#tags('track', trackId);
 		return {
 			id: id(trackId),
 			title: String(row.title),
@@ -268,10 +374,8 @@ export class Catalog {
 			trackNumber: numOrNull(row.track_number),
 			durationUs: num(row.duration_us),
 			releaseDate: str(row.release_date),
-			genres: this.#genres(
-				'SELECT t.id, t.name FROM track_tags x JOIN tags t ON t.id = x.tag_id WHERE x.track_id = ? ORDER BY t.sort_key',
-				trackId
-			),
+			genres: tags.genre ?? [],
+			tags,
 			explicit: num(row.explicit) === 1,
 			audio: { codec: String(row.codec), lossless: num(row.lossless) === 1 },
 			availability: row.missing_since === null ? 'available' : 'missing',
@@ -311,6 +415,7 @@ export class Catalog {
 					params.push(key, key);
 			}
 		}
+		this.#tagFilter(lib, q, 'track', 't.id', where, params);
 		const availability = q.get('availability');
 		if (availability === 'available') where.push('t.missing_since IS NULL');
 		if (availability === 'missing') where.push('t.missing_since IS NOT NULL');
@@ -409,15 +514,19 @@ export class Catalog {
 		};
 		const sort = sorts[q.get('sort') ?? 'name'] ?? sorts.name;
 		const where = ['library_id = ?'];
+		const params: SQLInputValue[] = [lib];
+		this.#tagFilter(lib, q, 'artist', 'id', where, params);
 		const availability = q.get('availability');
 		if (availability === 'available') where.push('available_track_count > 0');
 		if (availability === 'missing') where.push('available_track_count = 0');
 		const clause = where.join(' AND ');
 		const p = paging(q);
-		const total = num(this.db.get(`SELECT COUNT(*) AS n FROM artists WHERE ${clause}`, lib)?.n);
+		const total = num(
+			this.db.get(`SELECT COUNT(*) AS n FROM artists WHERE ${clause}`, ...params)?.n
+		);
 		const rows = this.db.all(
 			`SELECT * FROM artists WHERE ${clause} ORDER BY ${orderBy(sort, q)} LIMIT ? OFFSET ?`,
-			lib,
+			...params,
 			p.limit,
 			p.offset
 		);
@@ -429,7 +538,7 @@ export class Catalog {
 	}
 
 	/**
-	 * The artist with its genres and biography, or null if the library has none by that ID.
+	 * The artist with its tags and biography, or null if the library has none by that ID.
 	 * `appearanceCount` counts the tracks on albums that credit the artist without making them an
 	 * album artist.
 	 */
@@ -443,13 +552,12 @@ export class Catalog {
 			artistId
 		);
 		if (!row) return null;
+		const tags = this.#tags('artist', artistId);
 		return {
 			...this.#artistSummary(row),
 			biography: str(row.biography),
-			genres: this.#genres(
-				'SELECT t.id, t.name FROM artist_tags x JOIN tags t ON t.id = x.tag_id WHERE x.artist_id = ? ORDER BY t.sort_key',
-				artistId
-			),
+			genres: tags.genre ?? [],
+			tags,
 			appearanceCount: num(row.appearance_count)
 		};
 	}
