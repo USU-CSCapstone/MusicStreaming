@@ -75,6 +75,13 @@ describe('the tag filter', () => {
 		expect(tracks({ tag: 'nope' })).toEqual([]);
 	});
 
+	it('narrows a search, counting only what carries the tags', () => {
+		const calm = new URLSearchParams({ tag: '32' });
+		const found = catalog.searchTracks(1n, 'track', 10, calm);
+		expect([found.items.map((t) => t.id), found.total]).toEqual([['11', '13'], 2]);
+		expect(catalog.searchAlbums(1n, 'signal', 10, new URLSearchParams({ tag: '50' })).total).toBe(0);
+	});
+
 	it('narrows albums and artists by their tracks', () => {
 		const q = new URLSearchParams({ tag: '31,30', tagMatch: 'all' });
 		expect(catalog.listAlbums(1n, q).items.map((a) => a.id)).toEqual(['101']);

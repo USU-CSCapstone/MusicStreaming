@@ -2,6 +2,8 @@
 //! (`requirements/tags.md` §2, §7). Types are independent, so a list's rows match the tags of
 //! every type named, each type's by `tagMatch`.
 
+use std::collections::HashSet;
+
 use rusqlite::types::Value;
 use rusqlite::{Connection, params_from_iter};
 use serde::Deserialize;
@@ -192,6 +194,31 @@ impl Tags {
     }
 }
 
+impl Tags {
+    /// The IDs of the rows `tagged` describes that match every group, where the filter names
+    /// tags: none for a tag the library does not have. Read from the smallest group's rows, each
+    /// checked against the others, so it costs what that group holds.
+    pub fn ids(self, conn: &Connection, tagged: &Tagged) -> rusqlite::Result<Option<HashSet<i64>>> {
+        let mut groups = match self {
+            Tags::Unfiltered => return Ok(None),
+            Tags::Nothing => return Ok(Some(HashSet::new())),
+            Tags::Groups(groups) => groups,
+        };
+        let Some(smallest) = (0..groups.len()).min_by_key(|&i| groups[i].size) else {
+            return Ok(None);
+        };
+        let Lead { ids, mut params, .. } = groups.swap_remove(smallest).lead(tagged);
+        let mut sql = format!("SELECT lead.id FROM ({ids}) lead");
+        if let Some(check) = Check::all(groups.iter().map(|group| group.check(tagged, "lead"))) {
+            sql += &format!(" WHERE {}", check.condition);
+            params.extend(check.params);
+        }
+        let mut statement = conn.prepare_cached(&sql)?;
+        let ids = statement.query_map(params_from_iter(params), |row| row.get(0))?;
+        Ok(Some(ids.collect::<rusqlite::Result<_>>()?))
+    }
+}
+
 impl Group {
     /// The group's rows, for a page to start from.
     fn lead(&self, tagged: &Tagged) -> Lead {
@@ -294,6 +321,31 @@ mod tests {
              SELECT track_id AS id FROM track_tags WHERE tag_id = ?"
         );
         assert_eq!(all.check(&TAGGED, "t").condition.matches("EXISTS").count(), 2);
+    }
+
+    #[test]
+    fn the_ids_matching_every_group_start_from_the_smallest() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE track_tags (track_id INTEGER, tag_id INTEGER);
+             INSERT INTO track_tags VALUES (1, 10), (2, 10), (3, 10), (2, 11), (3, 12), (3, 20);",
+        )
+        .unwrap();
+        let ids = |tags: Tags| {
+            let mut ids: Vec<i64> =
+                tags.ids(&conn, &TAGGED).unwrap().unwrap().into_iter().collect();
+            ids.sort_unstable();
+            ids
+        };
+        let genres = |tag_match| group(&[10, 11, 12], tag_match, 5);
+        assert_eq!(ids(Tags::Groups(vec![genres(TagMatch::Any)])), [1, 2, 3]);
+        assert_eq!(
+            ids(Tags::Groups(vec![genres(TagMatch::Any), group(&[20], TagMatch::Any, 1)])),
+            [3]
+        );
+        assert!(ids(Tags::Groups(vec![genres(TagMatch::All)])).is_empty());
+        assert!(Tags::Unfiltered.ids(&conn, &TAGGED).unwrap().is_none());
+        assert!(Tags::Nothing.ids(&conn, &TAGGED).unwrap().unwrap().is_empty());
     }
 
     #[test]

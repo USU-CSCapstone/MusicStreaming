@@ -174,7 +174,7 @@ pub const FEATURED_TRACKS: &str = "(SELECT ifnull(sum(ac.track_count), 0) FROM a
          WHERE aa.album_id = ac.album_id AND aa.artist_id = ac.artist_id))";
 
 /// How tracks carry tags.
-const TAGGED: Tagged = Tagged { links: "track_tags", owner: "track_id", count: "track_count" };
+pub const TAGGED: Tagged = Tagged { links: "track_tags", owner: "track_id", count: "track_count" };
 
 /// The tracks `list` pages through in `library`: every one, or those on `album`, credited to
 /// `artist` as `credit` says, and carrying the tags `tags` names. An artist's

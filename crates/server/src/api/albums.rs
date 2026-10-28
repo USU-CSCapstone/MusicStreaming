@@ -135,7 +135,7 @@ const CREDITS: Credits = Credits {
 };
 
 /// How albums carry tags: those of their tracks (`requirements/tags.md` §6).
-const TAGGED: Tagged = Tagged { links: "album_tags", owner: "album_id", count: "album_count" };
+pub const TAGGED: Tagged = Tagged { links: "album_tags", owner: "album_id", count: "album_count" };
 
 /// The albums `list` pages through in `library`: every one, or those credited to `artist` as
 /// `credit` says and carrying the tags `tags` names.

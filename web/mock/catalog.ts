@@ -330,8 +330,18 @@ export class Catalog {
 	}
 
 	/** Album searches: `LIKE` over titles, best matches first. */
-	searchAlbums(lib: bigint, text: string, limit: number): { items: AlbumSummary[]; total: number } {
-		const [where, params, rank] = matchClause('al.title', text);
+	/** Searches matching `text` that carry the tags `filters` names, as the `tag` filter reads them. */
+	searchAlbums(
+		lib: bigint,
+		text: string,
+		limit: number,
+		filters = new URLSearchParams()
+	): { items: AlbumSummary[]; total: number } {
+		const [match, matchParams, rank] = matchClause('al.title', text);
+		const conditions = [match];
+		const params: SQLInputValue[] = [...matchParams];
+		this.#tagFilter(lib, filters, 'album', 'al.id', conditions, params);
+		const where = conditions.join(' AND ');
 		const total = num(
 			this.db.get(
 				`SELECT COUNT(*) AS n FROM albums al WHERE al.library_id = ? AND ${where}`,
@@ -474,8 +484,18 @@ export class Catalog {
 		);
 	}
 
-	searchTracks(lib: bigint, text: string, limit: number): { items: TrackSummary[]; total: number } {
-		const [where, params, rank] = matchClause('t.title', text);
+	/** Searches matching `text` that carry the tags `filters` names, as the `tag` filter reads them. */
+	searchTracks(
+		lib: bigint,
+		text: string,
+		limit: number,
+		filters = new URLSearchParams()
+	): { items: TrackSummary[]; total: number } {
+		const [match, matchParams, rank] = matchClause('t.title', text);
+		const conditions = [match];
+		const params: SQLInputValue[] = [...matchParams];
+		this.#tagFilter(lib, filters, 'track', 't.id', conditions, params);
+		const where = conditions.join(' AND ');
 		const total = num(
 			this.db.get(
 				`SELECT COUNT(*) AS n FROM tracks t WHERE t.library_id = ? AND ${where}`,
@@ -562,12 +582,18 @@ export class Catalog {
 		};
 	}
 
+	/** Searches matching `text` that carry the tags `filters` names, as the `tag` filter reads them. */
 	searchArtists(
 		lib: bigint,
 		text: string,
-		limit: number
+		limit: number,
+		filters = new URLSearchParams()
 	): { items: ArtistSummary[]; total: number } {
-		const [where, params, rank] = matchClause('name', text);
+		const [match, matchParams, rank] = matchClause('name', text);
+		const conditions = [match];
+		const params: SQLInputValue[] = [...matchParams];
+		this.#tagFilter(lib, filters, 'artist', 'id', conditions, params);
+		const where = conditions.join(' AND ');
 		const total = num(
 			this.db.get(
 				`SELECT COUNT(*) AS n FROM artists WHERE library_id = ? AND ${where}`,

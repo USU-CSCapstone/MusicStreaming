@@ -177,21 +177,21 @@ export function createApi(dataDir: string) {
 			if (wanted.includes(type) && items.length)
 				sections.push({ type, items, total, rank: matchRank(best, text) });
 		};
-		const tracks = catalog.searchTracks(lib, text, limit);
+		const tracks = catalog.searchTracks(lib, text, limit, query);
 		add(
 			'tracks',
 			tracks.items.map((track) => ({ type: 'track', track })),
 			tracks.total,
 			tracks.items[0]?.title ?? null
 		);
-		const albums = catalog.searchAlbums(lib, text, limit);
+		const albums = catalog.searchAlbums(lib, text, limit, query);
 		add(
 			'albums',
 			albums.items.map((album) => ({ type: 'album', album })),
 			albums.total,
 			albums.items[0]?.title ?? null
 		);
-		const artists = catalog.searchArtists(lib, text, limit);
+		const artists = catalog.searchArtists(lib, text, limit, query);
 		add(
 			'artists',
 			artists.items.map((artist) => ({ type: 'artist', artist })),

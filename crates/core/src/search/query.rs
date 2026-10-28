@@ -42,6 +42,19 @@ impl Index {
     /// sections ordered by their best match, ties to the more specific kind. A leading article in
     /// a query of more than one word need not match.
     pub fn search(&self, query: &str, kinds: &[Kind], limit: usize) -> Vec<Section> {
+        self.search_within(query, kinds, limit, |_, _| true)
+    }
+
+    /// As [`Index::search`], over only the documents `keep` keeps by kind and ID, so a filter
+    /// narrows the matches before they are ranked and counted, wherever search runs
+    /// (`requirements/search.md` §5).
+    pub fn search_within(
+        &self,
+        query: &str,
+        kinds: &[Kind],
+        limit: usize,
+        keep: impl Fn(Kind, i64) -> bool,
+    ) -> Vec<Section> {
         let mut query_words = words(query);
         query_words.truncate(MAX_QUERY_WORDS);
         if query_words.is_empty() || limit == 0 {
@@ -83,8 +96,9 @@ impl Index {
         };
         let mut scored: [Vec<(Score, u32)>; 3] = Default::default();
         for &d in fewest {
-            let kind = self.documents[d as usize].kind;
-            if !kinds.contains(&kind) {
+            let document = &self.documents[d as usize];
+            let kind = document.kind;
+            if !kinds.contains(&kind) || !keep(kind, document.id) {
                 continue;
             }
             let Some(score) = self.score(d, &best, optional, exact.as_deref()) else {
