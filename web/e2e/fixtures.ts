@@ -1,6 +1,6 @@
 // A tiny library served by intercepting /api/v1, so the tests need no music folder.
 
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Page, Route } from '@playwright/test';
@@ -10,6 +10,8 @@ import type {
 	Library,
 	PlayReport,
 	PlayerState,
+	QueueEdit,
+	QueueQuery,
 	RealtimeClientMessage,
 	RealtimeServerMessage,
 	RecentSearch,
@@ -17,6 +19,7 @@ import type {
 	SetupRequest,
 	TrackSummary
 } from '../src/lib/api/types';
+import { initSync, Queue } from '../src/lib/core-wasm/jewelcase_core_wasm.js';
 import { type SortField, sortTracks } from '../src/lib/sorting';
 import { withManifest } from '../../tools/plugin-pack/manifest.mjs';
 import {
@@ -26,6 +29,10 @@ import {
 	playlistRoute
 } from '../mock/playlists';
 import { PluginStore, adminRoute } from '../mock/plugins';
+
+initSync({
+	module: readFileSync(new URL('../src/lib/core-wasm/jewelcase_core_wasm_bg.wasm', import.meta.url))
+});
 
 export const library: Library = {
 	id: '11',
@@ -100,6 +107,101 @@ function sortedAsAsked(query: URLSearchParams): TrackSummary[] {
 	};
 	return [...sortTracks(tracks, { field: fields[sort] ?? 'album', order: desc ? 'desc' : 'asc' })];
 }
+
+/** The tracks a queue's list `query` reads to its end, as the server runs it. */
+function resolveQuery(query: QueueQuery): TrackSummary[] {
+	if (query.type === 'search') {
+		return tracks.filter((t) => t.title.toLowerCase().includes(query.q.toLowerCase()));
+	}
+	const found =
+		(query.albumId ?? album.id) === album.id && (query.artistId ?? artist.id) === artist.id;
+	const asked = new URLSearchParams({ sort: query.sort ?? 'name', order: query.order ?? 'asc' });
+	return found ? sortedAsAsked(asked) : [];
+}
+
+/**
+ * The account's queue as the server keeps it: the shared core in Node applies every start and
+ * edit, and what it applied is sent to the page over the realtime connection `serveRealtime`
+ * answers, if one is, as the server does. One per page.
+ */
+class FixtureQueue {
+	queue: Queue | null = null;
+	queueId = '';
+	version = 0;
+	context: object = {};
+	/** The editIds answered, with the version each made. */
+	#answered = new Map<string, number>();
+	/** Sends a message to the page's realtime connection, when there is one. */
+	hear: (message: RealtimeServerMessage) => void = () => {};
+
+	/** The queue as `GET /me/queue` answers it. */
+	snapshot() {
+		return {
+			queueId: this.queueId,
+			version: this.version,
+			context: this.context,
+			state: JSON.parse(this.queue!.snapshot())
+		};
+	}
+
+	/** Starts a queue as `POST /me/queue` does, carrying the Manual Queue over. */
+	start(body: {
+		queueId: string;
+		context: object;
+		source: { key: string; libraryId: string; tracks?: string[]; query?: QueueQuery };
+		start?: number;
+		startTrackId?: string;
+		shuffle?: { seed: number };
+	}) {
+		if (body.queueId === this.queueId) return;
+		const { query, ...source } = body.source;
+		const list = query ? resolveQuery(query).map((t) => t.id) : (source.tracks ?? []);
+		const first = query ? list.indexOf(body.startTrackId!) : body.start!;
+		const next = Queue.start(JSON.stringify({ ...source, tracks: list }), first);
+		if (this.queue) next.carryManual(this.queue);
+		if (body.shuffle) {
+			next.apply(JSON.stringify({ type: 'shuffle', on: true, seed: body.shuffle.seed }));
+		}
+		this.queue = next;
+		this.queueId = body.queueId;
+		this.context = body.context;
+		this.version = 0;
+		this.#answered.clear();
+		this.hear({ type: 'queueReplaced', queueId: this.queueId });
+	}
+
+	/** Applies an edit as `POST /me/queue/edits` does: the version it made, or the problem code. */
+	edit(body: {
+		editId: string;
+		queueId: string;
+		edit: QueueEdit;
+	}): number | 'queue_changed' | 'anchor_gone' {
+		if (!this.queue || body.queueId !== this.queueId) return 'queue_changed';
+		const done = this.#answered.get(body.editId);
+		if (done !== undefined) return done;
+		try {
+			this.queue.apply(JSON.stringify(body.edit));
+		} catch {
+			return 'anchor_gone';
+		}
+		this.#answered.set(body.editId, ++this.version);
+		this.hear({
+			type: 'queueEdit',
+			queueId: this.queueId,
+			version: this.version,
+			editId: body.editId,
+			edit: body.edit
+		});
+		return this.version;
+	}
+}
+
+const queues = new WeakMap<Page, FixtureQueue>();
+/** The queue the page's fixtures share, made on first use. */
+const queueOf = (page: Page) => {
+	if (!queues.has(page)) queues.set(page, new FixtureQueue());
+	return queues.get(page)!;
+};
 
 /** A playlist of the whole album, for tests that need one to start with. */
 export const signalMix: Generated = {
@@ -270,6 +372,7 @@ export async function serveLibrary(
 	// Playlists, too, run through the mock's own store.
 	const playlistStore = new PlaylistStore(playlistLibrary(playlists));
 	const plays: PlayReport[] = [];
+	const queue = queueOf(page);
 	const searches: RecentSearch[] = [];
 	// A scrobbler this user can connect with their own token, which it never shows again, and
 	// share their searches with once connected.
@@ -284,7 +387,8 @@ export async function serveLibrary(
 		values: {},
 		secretsSet: token ? ['token'] : []
 	});
-	await page.route('**/api/v1/**', async (route: Route) => {
+	// On the context, so the queue's worker is answered too: a page's routes do not reach it.
+	await page.context().route('**/api/v1/**', async (route: Route) => {
 		const url = new URL(route.request().url());
 		const path = url.pathname.replace(/^.*\/api\/v1/, '');
 		const lib = `/libraries/${library.id}`;
@@ -323,6 +427,17 @@ export async function serveLibrary(
 		if (path === '/me/plays') {
 			plays.push(...route.request().postDataJSON().items);
 			return route.fulfill({ status: 204 });
+		}
+		if (path === '/me/queue') {
+			if (route.request().method() === 'GET') {
+				return queue.queue ? json(queue.snapshot()) : problem(404, 'not_found');
+			}
+			queue.start(route.request().postDataJSON());
+			return route.fulfill({ status: 204 });
+		}
+		if (path === '/me/queue/edits') {
+			const version = queue.edit(route.request().postDataJSON());
+			return typeof version === 'string' ? problem(409, version) : json({ version });
 		}
 		if (path === '/me/plugins') {
 			return json({
@@ -394,6 +509,13 @@ export async function serveLibrary(
 					{ number: 2, trackCount: 1, trackTotal: 1 }
 				]
 			});
+		}
+		if (path === `${lib}/tracks` && url.searchParams.has('ids')) {
+			const found = url.searchParams
+				.get('ids')!
+				.split(',')
+				.map((id) => tracks.find((t) => t.id === id));
+			return json(pageOf(found.filter((t) => t !== undefined)));
 		}
 		if (path === `${lib}/tracks`) return json(pageOf(sortedAsAsked(url.searchParams)));
 		if (path === `${lib}/artists`) {
@@ -515,10 +637,18 @@ export const phone = {
 export async function serveRealtime(page: Page) {
 	const sent: RealtimeClientMessage[] = [];
 	const now = () => new Date().toISOString();
+	// The phone plays the second track of a queue of the library, which this device then holds.
+	const queue = queueOf(page);
+	queue.start({
+		queueId: crypto.randomUUID(),
+		context: { type: 'library' },
+		source: { key: crypto.randomUUID(), libraryId: library.id, tracks: tracks.map((t) => t.id) },
+		start: 1
+	});
 	let state: PlayerState = {
 		status: 'playing',
 		activeDeviceId: phone.id,
-		itemId: null,
+		itemId: queue.queue!.current() ?? null,
 		libraryId: library.id,
 		trackId: tracks[1].id,
 		positionMs: 0,
@@ -527,6 +657,7 @@ export async function serveRealtime(page: Page) {
 	};
 	await page.routeWebSocket('**/api/v1/realtime', (ws) => {
 		const send = (message: RealtimeServerMessage) => ws.send(JSON.stringify(message));
+		queue.hear = send;
 		const devices = [
 			{ ...phone },
 			{

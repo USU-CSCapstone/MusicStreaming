@@ -4,7 +4,7 @@
 //! core's `serde` derives are the one description of them. Failures become JavaScript errors
 //! carrying the core's message.
 
-use jewelcase_core::{Edit, Source};
+use jewelcase_core::{Edit, Repeat, Source};
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 
@@ -73,6 +73,16 @@ impl Queue {
     /// The Manual Queue's item IDs, in play order.
     pub fn manual(&self) -> Vec<String> {
         self.0.manual().collect()
+    }
+
+    /// The repeat mode: `"off"`, `"all"` or `"one"`.
+    pub fn repeat(&self) -> String {
+        match self.0.repeat() {
+            Repeat::Off => "off",
+            Repeat::All => "all",
+            Repeat::One => "one",
+        }
+        .to_owned()
     }
 
     /// How many items the Manual Queue holds.

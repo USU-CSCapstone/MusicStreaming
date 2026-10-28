@@ -114,6 +114,7 @@
 					{sort}
 					onsort={showSorted}
 					context={{ type: 'search', query: data.q ?? '', section: 'tracks' }}
+					query={sort ? undefined : { type: 'search', q: data.q ?? '' }}
 					onplay={(track) => settler.settle({ type: 'track', id: track.id })}
 				/>
 			{:else}

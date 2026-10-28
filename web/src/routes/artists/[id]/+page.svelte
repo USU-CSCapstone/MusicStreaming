@@ -50,6 +50,7 @@
 			current = false;
 		};
 	});
+	const query = $derived({ type: 'tracks', artistId: artist.id, ...songs.order } as const);
 	const tracks = $derived(
 		new Paged(songs.first, (cursor) =>
 			listTracks(fetch, data.lib, { artistId: artist.id, ...songs.order, cursor })
@@ -85,7 +86,7 @@
 	seed={artist.id}
 	icon="artist"
 	round
-	onplay={tracks.items.length ? () => player.play(tracks.items, 0, context) : undefined}
+	onplay={tracks.items.length ? () => player.play(tracks.items, 0, context, query) : undefined}
 >
 	<span>{counts}</span>
 	{#snippet actions()}
@@ -122,6 +123,7 @@
 		{sort}
 		onsort={showSorted}
 		{context}
+		{query}
 	/>
 </section>
 

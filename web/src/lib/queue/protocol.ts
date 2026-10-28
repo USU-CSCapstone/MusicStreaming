@@ -1,7 +1,7 @@
 // What the queue worker and the page say to each other (`design/general.md` §7.1). The worker
 // holds the queue; the page sends it what happened and asks it for the windows it shows.
 
-import type { QueueEdit, RealtimeServerMessage, StartQueue } from '$lib/api/types';
+import type { QueueEdit, QueueQuery, RealtimeServerMessage, StartQueue } from '$lib/api/types';
 
 /** The parts of a queue a window can be read from. */
 export type List = 'manual' | 'upcoming' | 'history';
@@ -11,13 +11,25 @@ export type StartArgs = {
 	/** What the queue started from, kept as sent. */
 	context: StartQueue['context'];
 	libraryId: string;
-	/** The tracks to play, in the order shown. */
-	tracks: string[];
-	/** The index of the track that plays first. */
-	start: number;
 	/** Start shuffled, with the order this seed gives. */
 	shuffleSeed?: number;
-};
+} & (
+	| {
+			/** The tracks to play, in the order shown, when the device holds them all. */
+			tracks: string[];
+			/** The index of the track that plays first. */
+			start: number;
+	  }
+	| {
+			/** The list the view pages through, for the server to read to its end. */
+			query: QueueQuery;
+			/** The track that plays first; until the server answers, it is the whole queue. */
+			startTrackId: string;
+	  }
+);
+
+/** How the queue repeats: not at all, all of it, or the track playing. */
+export type Repeat = 'off' | 'all' | 'one';
 
 /** A question the page asks the queue; answered from the state it has now. */
 export type Question =
@@ -39,6 +51,9 @@ export type Summary = {
 	manual: number;
 	upcoming: number;
 	history: number;
+	repeat: Repeat;
+	/** A start from a list is under way: the queue is just its first track until the server's arrives. */
+	settling: boolean;
 };
 
 /** An edit or start the queue could not keep, so the page can say so (`requirements/queue.md` §7). */

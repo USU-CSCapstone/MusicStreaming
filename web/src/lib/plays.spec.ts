@@ -27,6 +27,13 @@ describe('PlayRecorder', () => {
 		expect(sent[0].context).toEqual(album);
 	});
 
+	it('says where in the queue the track came from', () => {
+		const { r, sent } = recorder();
+		r.start('1', '7', album);
+		r.start('1', '8', album, 0, 'manual');
+		expect(sent.filter((p) => p.end === null).map((p) => p.origin)).toEqual(['context', 'manual']);
+	});
+
 	it('counts audio heard, not jumps or time paused', () => {
 		const { r, sent } = recorder();
 		r.start('1', '7', album);

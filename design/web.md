@@ -46,8 +46,9 @@ and commit the result.
 | Path                       |                                                                                                                                                         |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/lib/api/`             | Generated schema types, the aliases in use, and the typed client. Catalog reads move to the worker later, and this is the one module that changes then. |
-| `src/lib/player.svelte.ts` | Playback: one audio element, the play context, and Media Session                                                                                        |
-| `src/lib/queue.ts`         | Moving through a context: next/previous and skipping missing tracks                                                                                     |
+| `src/lib/player.svelte.ts` | Playback: one audio element playing the server-kept queue's current item, moving on by queue edits, and Media Session                                   |
+| `src/lib/queue/`           | The queue on this device: a worker holding it through the shared core, and the page's client of it (`design/queue.md`)                                  |
+| `src/lib/queue.ts`         | Where playback starts in a view's tracks, and when Previous restarts a track                                                                            |
 | `src/lib/components/`      | Shell (sidebar, tab bar, player), collection and track views, waveform                                                                                  |
 | `src/routes/`              | One route per view: `/albums`, `/albums/[id]`, `/artists/…`, `/playlists/…`, `/songs`, `/search`, `/account`; `/setup` and `/login` without the shell   |
 | `mock/`                    | The dev-only mock API. Never bundled into the client.                                                                                                   |
@@ -64,6 +65,8 @@ It is a stand-in for the server, so it has these limits. None of them are client
   no custom artwork, mixes to save, or external tracks.
 - **Personal data** (play counts, listening history) doesn't exist, so sorts that need it fall back
   to album or name order.
+- **The queue** does not exist: the server keeps it (`design/queue.md`), so under `pnpm dev`
+  without the server a play starts a queue the mock cannot confirm, and nothing plays.
 - Only the read endpoints the client uses are implemented; any other write answers `405`.
 - **Accounts** don't exist: the mock reports setup as done, everyone is one user, and logging in
   accepts any password.
@@ -75,3 +78,24 @@ It is a stand-in for the server, so it has these limits. None of them are client
 These are client work still to do: virtualized lists (long lists currently page in as you scroll),
 the queue panel, loudness normalization, offline, and account preferences. Grid/list view and
 theme are per-browser for now.
+
+## Playing
+
+The player plays the account's queue, which the server keeps and every device holds
+(`design/queue.md`). Playing from a view starts a queue, here at once and on the server in the
+background: a view that holds its whole list (an album, a playlist) sends its track IDs in the
+order shown; a view that pages (songs, an artist's songs, unsorted search results) sends the
+query it pages through, and plays the clicked track alone until the server's queue arrives. The
+player then plays the queue's current item, looking up its track by ID, and the next item's
+ahead of time. The device holding playback follows every change of the current item, whoever
+made it; other devices only show it. Next, or a track ending, before the server's queue has
+arrived waits for it. Next, Previous and a track ending are `next` and `previous` edits, and the
+player plays whatever the queue says is current. A track that cannot play is passed over with
+one `jump` to the nearest that can (going back, with `previous` edits to the nearest item in History that
+can play; with none, Previous restarts the track and changes nothing), so nothing is reordered or removed
+([`requirements/conventions.md` §6](../requirements/conventions.md)). Repeat One replays the
+track on this device; Repeat All is the queue's. Reports name the queue's item, and a device
+that takes playback over plays that item from the queue it already holds.
+
+The e2e fixtures keep a queue per test by running the shared core in Node, and answer the
+queue's requests from the page's worker, so they route on the browser context, not the page.

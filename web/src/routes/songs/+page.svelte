@@ -21,6 +21,7 @@
 	tracks={tracks.items}
 	sentinel={tracks.sentinel}
 	sort={data.sort}
+	query={{ type: 'tracks', ...data.query }}
 	onsort={showSorted}
 	empty="No songs yet. They appear here as the library is scanned."
 />

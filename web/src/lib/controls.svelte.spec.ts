@@ -17,6 +17,10 @@ const fake = vi.hoisted(() => ({
 }));
 
 vi.mock('$lib/realtime.svelte', () => ({ realtime: fake.realtime }));
+// The queue is held in a worker; here it is loaded unless a test says otherwise.
+vi.mock('$lib/queue/client.svelte', () => ({
+	queue: { queueId: 'q', current: null, counts: { manual: 0, upcoming: 0, history: 0 } }
+}));
 vi.mock('$lib/api/client', async (actual) => ({
 	...(await actual<typeof import('$lib/api/client')>()),
 	getTrack: async (_: unknown, _library: string, id: string) => ({ id, durationUs: 60e6 }) as Track,
@@ -100,6 +104,16 @@ describe('controls', () => {
 		controls.toggle();
 		expect(sent()).toEqual([]);
 		expect(pickUp).toHaveBeenCalledOnce();
+	});
+
+	it('cannot pick up before this device has the queue', async () => {
+		const { queue } = await import('$lib/queue/client.svelte');
+		state(null, 'stopped');
+		await vi.waitFor(() => expect(controls.pickable).toBe(true));
+		const loaded = queue.queueId;
+		queue.queueId = null as never;
+		expect(controls.pickable).toBe(false);
+		queue.queueId = loaded;
 	});
 
 	it('say so when playback could not be picked up here', async () => {
