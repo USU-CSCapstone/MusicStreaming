@@ -69,11 +69,7 @@ pub fn get_url(q: &Query) -> String {
 
 /// The looser lookup, when the exact one finds nothing or only plain lyrics.
 pub fn search_url(q: &Query) -> String {
-    format!(
-        "{API}/search?track_name={}&artist_name={}",
-        encode(q.title),
-        encode(q.artist)
-    )
+    format!("{API}/search?track_name={}&artist_name={}", encode(q.title), encode(q.artist))
 }
 
 /// `/get`: a record, or none for LRCLIB's `404`, the only answer that means it has none.
@@ -107,10 +103,7 @@ fn nonempty(s: &Option<String>) -> Option<&str> {
 pub fn best(exact: Option<&Record>, search: &[Record], duration_s: f64) -> Found {
     let close: Vec<&Record> = search
         .iter()
-        .filter(|r| {
-            r.duration
-                .is_some_and(|d| (d - duration_s).abs() <= DURATION_TOLERANCE_S)
-        })
+        .filter(|r| r.duration.is_some_and(|d| (d - duration_s).abs() <= DURATION_TOLERANCE_S))
         .collect();
     let candidates = exact.into_iter().chain(close.iter().copied());
     let mut plain = None;
@@ -160,10 +153,7 @@ mod tests {
             get_url(&q()),
             "https://lrclib.net/api/get?track_name=Brandy%20%28You%27re%20a%20Fine%20Girl%29&artist_name=Looking%20Glass&duration=186"
         );
-        let with_album = Query {
-            album: Some("Looking Glass"),
-            ..q()
-        };
+        let with_album = Query { album: Some("Looking Glass"), ..q() };
         assert!(get_url(&with_album).ends_with("&album_name=Looking%20Glass"));
         assert!(search_url(&q()).starts_with("https://lrclib.net/api/search?track_name=Brandy"));
     }
@@ -193,10 +183,7 @@ mod tests {
 
     #[test]
     fn prefers_synced_from_a_close_search_result() {
-        let exact = Record {
-            plain_lyrics: Some("plain".into()),
-            ..Default::default()
-        };
+        let exact = Record { plain_lyrics: Some("plain".into()), ..Default::default() };
         let search = vec![
             Record {
                 duration: Some(300.0),
@@ -209,28 +196,16 @@ mod tests {
                 ..Default::default()
             },
         ];
-        assert_eq!(
-            best(Some(&exact), &search, 186.4),
-            Found::Synced("[00:01]near".into())
-        );
-        assert_eq!(
-            best(Some(&exact), &search[..1], 186.4),
-            Found::Plain("plain".into())
-        );
+        assert_eq!(best(Some(&exact), &search, 186.4), Found::Synced("[00:01]near".into()));
+        assert_eq!(best(Some(&exact), &search[..1], 186.4), Found::Plain("plain".into()));
     }
 
     #[test]
     fn reports_instrumentals_and_misses() {
-        let inst = Record {
-            instrumental: true,
-            ..Default::default()
-        };
+        let inst = Record { instrumental: true, ..Default::default() };
         assert_eq!(best(Some(&inst), &[], 100.0), Found::Instrumental);
         assert_eq!(best(None, &[], 100.0), Found::Nothing);
-        let blank = Record {
-            synced_lyrics: Some("  ".into()),
-            ..Default::default()
-        };
+        let blank = Record { synced_lyrics: Some("  ".into()), ..Default::default() };
         assert_eq!(best(Some(&blank), &[], 100.0), Found::Nothing);
     }
 }

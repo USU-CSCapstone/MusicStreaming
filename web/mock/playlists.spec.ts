@@ -241,9 +241,7 @@ describe('editing', () => {
 		expect(at({ baseVersion: 1, pinned: 'yes' })).toBe('/pinned');
 		expect(at({ baseVersion: 1, ops: [] })).toBe('/ops');
 		expect(at({ baseVersion: 1, ops: [{ op: 'shuffle' }] })).toBe('/ops/0/op');
-		expect(at({ baseVersion: 1, ops: [{ op: 'remove', positions: 0 }] })).toBe(
-			'/ops/0/positions'
-		);
+		expect(at({ baseVersion: 1, ops: [{ op: 'remove', positions: 0 }] })).toBe('/ops/0/positions');
 		expect(at({ baseVersion: 1, ops: [{ op: 'add', items: [{ type: 'mix', id: '1' }] }] })).toBe(
 			'/ops/0/items/0'
 		);
