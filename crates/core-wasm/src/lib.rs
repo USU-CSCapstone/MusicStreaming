@@ -70,11 +70,6 @@ impl Queue {
         self.0.current()
     }
 
-    /// The Manual Queue's item IDs, in play order.
-    pub fn manual(&self) -> Vec<String> {
-        self.0.manual().collect()
-    }
-
     /// The repeat mode: `"off"`, `"all"` or `"one"`.
     pub fn repeat(&self) -> String {
         match self.0.repeat() {

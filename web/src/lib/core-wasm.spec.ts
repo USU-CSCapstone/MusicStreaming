@@ -34,7 +34,7 @@ test('edits, lookups and snapshots work and round-trip', () => {
 
 	expect(queue.current()).toBe('m.0');
 	expect(queue.history(0, 10)).toEqual(ids(0));
-	expect(queue.manual()).toEqual([]);
+	expect(queue.manualWindow(0, queue.manualLen())).toEqual([]);
 	expect(queue.track('m.0')).toEqual(['other', 'm-0']);
 	expect(queue.track('zzz.1')).toBeUndefined();
 	expect(queue.repeat()).toBe('off');

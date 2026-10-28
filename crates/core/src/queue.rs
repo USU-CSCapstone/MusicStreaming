@@ -187,16 +187,6 @@ impl Queue {
         self.current.and_then(|item| self.id_of(item))
     }
 
-    /// The Manual Queue's item IDs, in play order.
-    pub fn manual(&self) -> impl Iterator<Item = String> + '_ {
-        self.ids(&self.manual)
-    }
-
-    /// The context's Up Next item IDs, in play order; they play after the Manual Queue.
-    pub fn upcoming(&self) -> impl Iterator<Item = String> + '_ {
-        self.ids(self.tail())
-    }
-
     /// Up to `limit` of the context's Up Next item IDs from `offset`, which play after the Manual
     /// Queue. Costs only the window, however deep.
     pub fn upcoming_window(
@@ -230,11 +220,6 @@ impl Queue {
     /// Up to `limit` History item IDs from `offset`, oldest first. Costs only the window.
     pub fn history_window(&self, offset: usize, limit: usize) -> impl Iterator<Item = String> + '_ {
         self.ids(window(&self.history, offset, limit))
-    }
-
-    /// The History item IDs, oldest first.
-    pub fn history(&self) -> impl Iterator<Item = String> + '_ {
-        self.ids(&self.history)
     }
 
     /// The track an item ID plays, or `None` if the queue has no such item.

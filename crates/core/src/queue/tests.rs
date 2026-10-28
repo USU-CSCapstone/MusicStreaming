@@ -47,17 +47,17 @@ fn jump(q: &mut Queue, id: &str) {
 
 /// The Manual Queue's item IDs.
 fn manual(q: &Queue) -> Vec<String> {
-    q.manual().collect()
+    q.manual_window(0, usize::MAX).collect()
 }
 
 /// The context's Up Next item IDs.
 fn upcoming(q: &Queue) -> Vec<String> {
-    q.upcoming().collect()
+    q.upcoming_window(0, usize::MAX).collect()
 }
 
 /// The History item IDs, oldest first.
 fn history(q: &Queue) -> Vec<String> {
-    q.history().collect()
+    q.history_window(0, usize::MAX).collect()
 }
 
 #[test]
@@ -332,7 +332,7 @@ fn large_queue_edits_are_fast() {
     let started = Instant::now();
     mv(&mut q, &["big.400000", "big.300000"], before("big.2")).unwrap();
     assert!(started.elapsed() < bound, "move took {:?}", started.elapsed());
-    assert_eq!(q.upcoming().take(3).collect::<Vec<_>>(), ["big.1", "big.300000", "big.400000"]);
+    assert_eq!(q.upcoming_window(0, 3).collect::<Vec<_>>(), ["big.1", "big.300000", "big.400000"]);
 
     let started = Instant::now();
     jump(&mut q, "big.450000");
@@ -561,7 +561,7 @@ fn repeat_mode_is_recorded() {
 
 /// Item IDs and tracks of the current item followed by Up Next (manual first).
 fn run(q: &Queue) -> Vec<(String, String)> {
-    let ids = [q.current()].into_iter().flatten().chain(q.manual()).chain(q.upcoming());
+    let ids = [q.current()].into_iter().flatten().chain(manual(q)).chain(upcoming(q));
     ids.map(|id| (id.clone(), q.track(&id).unwrap().track_id.to_string())).collect()
 }
 
@@ -677,7 +677,7 @@ fn unshuffle_keeps_additions_when_the_base_runs_short() {
     let two: Vec<String> = upcoming(&q).into_iter().take(2).collect();
     q.apply(&Edit::Remove { items: two }).unwrap();
     shuffle_off(&mut q);
-    assert_eq!(q.upcoming().last().as_deref(), Some("y.0"));
+    assert_eq!(upcoming(&q).last().map(String::as_str), Some("y.0"));
     assert_eq!(upcoming(&q).len(), 6);
 }
 
@@ -821,8 +821,10 @@ fn carrying_the_manual_queue_over_keeps_its_order_and_tracks() {
     let mut new = Queue::start(source("b", 4), 1).unwrap();
     new.carry_manual(&old).unwrap();
 
-    let tracks: Vec<_> =
-        new.manual().map(|id| new.track(&id).unwrap().track_id.to_string()).collect();
+    let tracks: Vec<_> = new
+        .manual_window(0, usize::MAX)
+        .map(|id| new.track(&id).unwrap().track_id.to_string())
+        .collect();
     assert_eq!(tracks, ["m-0", "m-2", "n-0"]);
     assert_eq!(new.track(&manual(&new)[2]).unwrap().library_id, "other");
     assert_eq!(new.current().as_deref(), Some("b.1"));

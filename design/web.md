@@ -143,7 +143,7 @@ client, applied here at once and sent on, and the device holding playback follow
   result is the server's order. A playlist is not stored on the server, so it goes as its songs,
   fetched first when only its card is at hand.
 - **Drop to insert.** With a mouse, song rows (one, or the selection) and cards drag with the
-  browser's own drag and drop (`dragging.svelte.ts`) onto Up Next, which draws the same drop line
+  browser's own drag and drop (`dragging.ts`) onto Up Next, which draws the same drop line
   as a move and scrolls near its edges. The gap becomes an anchor with `anchorAt`, so a drop
   above the context's heading is the Manual Queue's end and below it the context's front. Rows
   of a list that reorders by dragging (an unsorted playlist) keep that drag for themselves; touch

@@ -423,7 +423,7 @@ describe('QueueStore', () => {
 			store.start(args());
 			await settle();
 
-			expect(window('manual')).toEqual(server.queue!.manual());
+			expect(window('manual')).toEqual(server.queue!.manualWindow(0, server.queue!.manualLen()));
 			expect(window('upcoming')).toEqual(server.queue!.upcoming(0, 100));
 			expect(summary.current).toBe(server.queue!.current());
 			// Repeat All carried over: the end of the queue wraps, here and on the server.
@@ -496,7 +496,7 @@ describe('QueueStore', () => {
 				);
 			expect(window('manual')).toHaveLength(3);
 			expect(tracks(window('manual') as string[], store)).toEqual(
-				tracks(expected.manual(), expected)
+				tracks(expected.manualWindow(0, expected.manualLen()), expected)
 			);
 			expect(summary).toMatchObject({ manual: 3, upcoming: 1 });
 			await settle();
@@ -512,7 +512,7 @@ describe('QueueStore', () => {
 		await settle();
 
 		expect(refusals.map((r) => r.code)).toEqual(['superseded', 'superseded']);
-		expect(window('manual')).toEqual(server.queue!.manual());
+		expect(window('manual')).toEqual(server.queue!.manualWindow(0, server.queue!.manualLen()));
 		expect(summary).toMatchObject({ queueId: server.queueId, manual: server.queue!.manualLen() });
 	});
 
@@ -564,7 +564,7 @@ describe('QueueStore', () => {
 
 			expect(refusals).toEqual([]);
 			expect(summary).toMatchObject({ manual: 1, version: 1 });
-			expect(window('manual')).toEqual(server.queue!.manual());
+			expect(window('manual')).toEqual(server.queue!.manualWindow(0, server.queue!.manualLen()));
 		});
 	});
 
