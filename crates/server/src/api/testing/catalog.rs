@@ -131,15 +131,13 @@ fn insert(tx: &Transaction) -> Result<()> {
                (2, 2001, 0, 20);
            INSERT INTO album_discs (library_id, album_id, disc_number, track_count, track_total)
                VALUES (1, 101, 1, 17, 17), (1, 104, 0, 3, NULL);
-           -- A tag of another type, which track 1001 brings to its album and artist, is never a
-           -- genre.
-           INSERT INTO tag_types (key) VALUES ('colour');
+           -- A mood, which track 1001 brings to its album and artist, is never a genre.
            INSERT INTO tags (id, library_id, type, name, name_key, sort_key) VALUES
                (30, 1, 'genre', 'Rock', 'rock', CAST('rock' AS BLOB)),
                (31, 1, 'genre', 'Pop', 'pop', CAST('pop' AS BLOB)),
-               (32, 1, 'colour', 'Amber', 'amber', CAST('amber' AS BLOB));
+               (32, 1, 'mood', 'Calm', 'calm', CAST('calm' AS BLOB));
            INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES
-               (1, 1001, 30, 'rock'), (1, 1001, 32, 'Amber');
+               (1, 1001, 30, 'rock'), (1, 1001, 32, 'Calm');
            INSERT INTO artist_tags (library_id, artist_id, tag_id, track_count) VALUES (1, 10, 31, 1);
            UPDATE artists SET image_id = 40, biography = 'Four lads from Liverpool.' WHERE id = 10;
            UPDATE albums SET disc_total = 1, track_total = 17, labels = '["Apple"]' WHERE id = 101;
