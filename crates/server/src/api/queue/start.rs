@@ -1,5 +1,6 @@
 //! Starting a queue from track IDs: `startQueue`.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -10,6 +11,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{Account, Queues};
+use crate::api::realtime::{Hub, ServerMessage};
 use crate::api::scope::Caller;
 use crate::api::search::{self, Indexes};
 use crate::api::tracks::{self, ListQuery};
@@ -34,17 +36,17 @@ pub struct Start {
 /// the server is to run. Exactly one of the two.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct NewSource {
-    key: Uuid,
-    library_id: String,
-    tracks: Option<Vec<String>>,
-    query: Option<ViewQuery>,
+pub(super) struct NewSource {
+    pub key: Uuid,
+    pub library_id: String,
+    pub tracks: Option<Vec<String>>,
+    pub query: Option<ViewQuery>,
 }
 
 /// A list a view pages through, which the server reads to its end.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
-enum ViewQuery {
+pub(super) enum ViewQuery {
     /// The parameters of `listTracks`; `cursor`, `limit` and `ids` are refused.
     Tracks(ListQuery),
     /// A search's track section, all of it and not a `sectionLimit` of it.
@@ -68,6 +70,7 @@ pub async fn start(
     State(db): State<Arc<Database>>,
     State(queues): State<Arc<Queues>>,
     State(indexes): State<Arc<Indexes>>,
+    State(hub): State<Arc<Hub>>,
     caller: Caller,
     extract::Json(request): extract::Json<Start>,
 ) -> Result<StatusCode, Problem> {
@@ -76,34 +79,74 @@ pub async fn start(
     let library = Id::canonical(&request.source.library_id).ok_or_else(refused)?;
 
     let NewSource { key, library_id, tracks, query } = request.source;
-    let (tracks, start) = match (tracks, query, request.start, request.start_track_id) {
-        (Some(tracks), None, Some(start), None) => {
-            check_tracks(&db, &caller, library, &tracks).await?;
-            (tracks, start)
-        }
-        (None, Some(query), None, Some(start_track)) => {
-            let tracks = run(&db, &indexes, &caller, library, query).await?;
-            let start = tracks.iter().position(|track| *track == start_track);
-            let start =
-                start.ok_or_else(|| Problem::invalid("startTrackId is not in the list."))?;
-            (tracks, start)
-        }
+    // Checked before a query is run, which is the expensive part.
+    let at = match (&tracks, &query, request.start, request.start_track_id) {
+        (Some(_), None, Some(start), None) => At::Index(start),
+        (None, Some(_), None, Some(track)) => At::Track(track),
         _ => {
             return Err(Problem::invalid(
                 "A source is either tracks, started at start, or a query, started at startTrackId.",
             ));
         }
     };
+    let tracks = resolve(&db, &indexes, &caller, library, tracks, query).await?;
+    let start = match at {
+        At::Index(start) => start,
+        At::Track(track) => tracks
+            .iter()
+            .position(|id| *id == track)
+            .ok_or_else(|| Problem::invalid("startTrackId is not in the list."))?,
+    };
 
     let source = Source { key: key.as_str().to_owned(), library_id, tracks };
     let seed = request.shuffle.map(|shuffle| shuffle.seed);
-    queues.replace(caller.user, request.queue_id, request.context, source, start, seed)?;
+    let launch =
+        Launch { queue_id: request.queue_id, context: request.context, source, start, seed };
+    queues.replace(&hub, caller.user, launch)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Where a started queue begins, as the request says.
+enum At {
+    Index(usize),
+    Track(String),
+}
+
+/// What a start makes of an account's queue.
+pub(super) struct Launch {
+    pub queue_id: Uuid,
+    pub context: Value,
+    pub source: Source,
+    /// The index in `source` of the item that plays first.
+    pub start: usize,
+    /// Shuffle the context with this seed, if given.
+    pub seed: Option<u32>,
+}
+
+/// The IDs of a source's tracks, in order: the `tracks` as sent, once every one is checked to
+/// be in `library`, which the caller must reach; or what the `query` finds. Exactly one of the
+/// two must be given. Refused, `422`, as a start is.
+pub(super) async fn resolve(
+    db: &Arc<Database>,
+    indexes: &Indexes,
+    caller: &Caller,
+    library: Id,
+    tracks: Option<Vec<String>>,
+    query: Option<ViewQuery>,
+) -> Result<Vec<String>, Problem> {
+    match (tracks, query) {
+        (Some(tracks), None) => {
+            check_tracks(db, caller, library, &tracks).await?;
+            Ok(tracks)
+        }
+        (None, Some(query)) => run(db, indexes, caller, library, query).await,
+        _ => Err(Problem::invalid("A source is either tracks or a query.")),
+    }
 }
 
 /// The refusal for a track out of the library or a library out of reach, the same whether or
 /// not it exists.
-fn refused() -> Problem {
+pub(super) fn refused() -> Problem {
     Problem::invalid("Every track must be in the library, and the library one you reach.")
 }
 
@@ -182,17 +225,12 @@ async fn run(
 }
 
 impl Queues {
-    /// Makes `user`'s queue one that plays `source` from `start`, shuffled with `seed` if given,
-    /// and keeps the Manual Queue and repeat mode they had. Does nothing if their queue is `queue_id` already.
-    pub(super) fn replace(
-        &self,
-        user: i64,
-        queue_id: Uuid,
-        context: Value,
-        source: Source,
-        start: usize,
-        seed: Option<u32>,
-    ) -> Result<(), Problem> {
+    /// Makes `user`'s queue one that plays `launch`'s source from where it says, shuffled if it
+    /// gives a seed, and keeps the Manual Queue and repeat mode they had. Tells all of their
+    /// connections to fetch it. Does nothing, and tells no one, if their queue is
+    /// `launch.queue_id` already.
+    pub(super) fn replace(&self, hub: &Hub, user: i64, launch: Launch) -> Result<(), Problem> {
+        let Launch { queue_id, context, source, start, seed } = launch;
         let invalid = |error: jewelcase_core::QueueError| Problem::invalid(error.to_string());
         let mut accounts = self.lock();
         let before = accounts.get(&user);
@@ -204,8 +242,19 @@ impl Queues {
         // None of this queue is in the database, whatever an earlier queue left there, so the
         // next save replaces it.
         let saved = None;
-        accounts
-            .insert(user, Account { queue_id, version: 0, context, queue, unsaved: true, saved });
+        let done = VecDeque::new();
+        let account = Account {
+            queue_id: queue_id.clone(),
+            version: 0,
+            context,
+            queue,
+            done,
+            unsaved: true,
+            saved,
+        };
+        accounts.insert(user, account);
+        // Under the lock, so it is sent before any edit of the new queue.
+        hub.broadcast(user, &ServerMessage::QueueReplaced { queue_id });
         Ok(())
     }
 }

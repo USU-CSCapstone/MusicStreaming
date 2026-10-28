@@ -3,9 +3,10 @@
 use axum::extract::ws::Message;
 use serde::{Deserialize, Serialize};
 
-use crate::api::Id;
 use crate::api::devices::Device;
 use crate::api::player::{CommandResult, PlayerCommand, PlayerState, ProgressReport};
+use crate::api::{Id, Uuid};
+use jewelcase_core::Edit;
 
 /// The spec's `RealtimeClientMessage`, as far as it is built.
 #[derive(Deserialize)]
@@ -48,6 +49,19 @@ pub enum ServerMessage {
     },
     CommandResult {
         result: CommandResult,
+    },
+    /// An edit the server applied to the account's queue, as applied: an add's query is
+    /// resolved into its tracks.
+    QueueEdit {
+        queue_id: Uuid,
+        /// The queue's version once the edit is applied, one more than the last edit's.
+        version: u32,
+        edit_id: Uuid,
+        edit: Edit,
+    },
+    /// The account's queue was replaced by a start, so a device fetches it again.
+    QueueReplaced {
+        queue_id: Uuid,
     },
     SessionRevoked {
         reason: Revoked,

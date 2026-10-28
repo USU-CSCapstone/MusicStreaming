@@ -860,6 +860,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/queue/edits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Edit the queue
+         * @description Applies one edit to the account's queue, in the order edits arrive, and answers the
+         *     `version` it made: one more than before. Edits name items, never positions, so edits
+         *     from different devices mean the same whatever order they meet in; there is no version
+         *     to be refused for (`requirements/realtime.md` §7). Items an edit names that are gone are
+         *     ignored. Every applied edit is sent to all the account's realtime connections as
+         *     `queueEdit`, the sender's included, so a device that applied it at once can tell it
+         *     confirmed.
+         *
+         *     `editId` is chosen by the device. An edit sent again, by a device unsure the first
+         *     arrived, is applied once and answered the same; the latest 32 are remembered.
+         *
+         *     An `add` takes its source as `tracks`, checked as a start's are, or as a `query` the
+         *     server runs to its end (`QueueQuery`), so a device need not hold what it adds, such as
+         *     an album, which is a `tracks` query with `albumId`. `queueEdit` always carries the
+         *     resolved `tracks`.
+         *
+         *     Answers `404` before a queue has been started; `409` `queue_changed` unless `queueId` is
+         *     the account's queue, so the device fetches it again; `409` `anchor_gone` when an anchor
+         *     names an item no longer in Up Next, so the device reverts the edit; and `422` for tracks
+         *     out of reach or not in the library, as a start refuses them, a source key already in the
+         *     queue or not a UUID, a source of both `tracks` and a `query` or neither, or a
+         *     queue that would hold more than 4,294,967,295 items.
+         */
+        post: operations["editQueue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/plays": {
         parameters: {
             query?: never;
@@ -1112,7 +1153,7 @@ export interface components {
              * @description `version_conflict`, `cursor_expired`, and `unsupported_media` come only from planned operations.
              * @enum {string}
              */
-            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "version_conflict" | "cursor_expired" | "setup_required" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
+            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "version_conflict" | "cursor_expired" | "setup_required" | "unsupported_media" | "device_unavailable" | "queue_changed" | "anchor_gone" | "plugin_settings_invalid" | "internal";
             /**
              * @description With `session_revoked`. `credentials_changed` — the device keeps its downloads and
              *     logs in again with its `deviceId`; `logged_out` — the device removes them
@@ -1943,21 +1984,7 @@ export interface components {
             queueId: string;
             /** @description What the queue started from, kept as sent. */
             context: Omit<components["schemas"]["Context"], "type">;
-            /**
-             * @description The tracks to play, in the order the device shows them, resolved once and never
-             *     rewritten: exactly one of `tracks`, or a `query` the server runs to its end, which is
-             *     then frozen the same way. A track may appear more than once; each copy is its own item.
-             */
-            source: {
-                /**
-                 * Format: uuid
-                 * @description Client-generated. Names the source's items, `<key>.<index>`.
-                 */
-                key: string;
-                libraryId: string;
-                tracks?: string[];
-                query?: components["schemas"]["QueueQuery"];
-            };
+            source: components["schemas"]["QueueSourceRequest"];
             /** @description Required with `tracks`, and refused with a `query`. The index of the track that plays first. */
             start?: number;
             /** @description Required with a `query`, and refused with `tracks`. The track that plays first, at its first place in the list. */
@@ -1966,6 +1993,31 @@ export interface components {
             shuffle?: {
                 seed: number;
             };
+        };
+        /**
+         * @description The tracks of a new source, as a start or an add sends them, resolved once and never
+         *     rewritten: exactly one of `tracks`, or a `query` the server runs to its end, which is
+         *     then frozen the same way. A track may appear more than once; each copy is its own item.
+         *     Both are checked: every track must be in the library, and the library one the caller reaches.
+         */
+        QueueSourceRequest: {
+            /**
+             * Format: uuid
+             * @description Client-generated. Names the source's items, `<key>.<index>`.
+             */
+            key: string;
+            libraryId: string;
+            tracks: string[];
+        } | components["schemas"]["QueueSourceQuery"];
+        /** @description A new source whose tracks the server finds by running `query` to its end. */
+        QueueSourceQuery: {
+            /**
+             * Format: uuid
+             * @description Client-generated. Names the source's items, `<key>.<index>`.
+             */
+            key: string;
+            libraryId: string;
+            query: components["schemas"]["QueueQuery"];
         };
         /** @description A list for the server to read to its end, as the view that started the queue pages it. */
         QueueQuery: {
@@ -1983,6 +2035,91 @@ export interface components {
             /** @enum {string} */
             type: "search";
             q: string;
+        };
+        QueueEditRequest: {
+            /**
+             * Format: uuid
+             * @description Client-generated. Names the edit, so one sent again is applied once.
+             */
+            editId: string;
+            /**
+             * Format: uuid
+             * @description The queue the edit is for.
+             */
+            queueId: string;
+            edit: components["schemas"]["QueueEdit"] | {
+                /** @constant */
+                type: "add";
+                source: components["schemas"]["QueueSourceQuery"];
+                before: components["schemas"]["QueueAnchor"];
+            };
+        };
+        /**
+         * @description One change to the queue, as the shared core applies it. Items are `<sourceKey>.<index>`.
+         *     Items it names that are gone, or playing now, are ignored.
+         */
+        QueueEdit: {
+            /** @constant */
+            type: "add";
+            source: components["schemas"]["QueueSource"];
+            before: components["schemas"]["QueueAnchor"];
+        } | {
+            /** @constant */
+            type: "remove";
+            items: string[];
+        } | {
+            /** @constant */
+            type: "move";
+            items: string[];
+            before: components["schemas"]["QueueAnchor"];
+        } | {
+            /** @constant */
+            type: "jump";
+            item: string;
+        } | {
+            /** @constant */
+            type: "next";
+        } | {
+            /** @constant */
+            type: "previous";
+        } | {
+            /** @constant */
+            type: "shuffle";
+            on: boolean;
+            seed: number;
+        } | {
+            /** @constant */
+            type: "repeat";
+            /** @enum {string} */
+            mode: "off" | "all" | "one";
+        };
+        /** @description Where an add or move lands. */
+        QueueAnchor: {
+            /** @constant */
+            type: "manualStart";
+        } | {
+            /** @constant */
+            type: "manualEnd";
+        } | {
+            /** @constant */
+            type: "contextEnd";
+        } | {
+            /** @constant */
+            type: "before";
+            item: string;
+        };
+        /** @description A list of tracks resolved once, which never changes after it joins a queue. A key a device sends is a UUID. */
+        QueueSource: {
+            /**
+             * @description Unique within the queue; names the source's items. Chosen by whoever added it.
+             *     A key starting with `~` is reserved for the copies the server and Repeat All
+             *     restarts make.
+             */
+            key: string;
+            /** @description The library every track of the source is in. */
+            libraryId: string;
+            /** @description Track IDs, in the order they were resolved. A track may repeat. */
+            tracks: string[];
         };
         QueueSnapshot: {
             /** Format: uuid */
@@ -2012,18 +2149,7 @@ export interface components {
              * @description The lists of tracks the items come from, in the order that numbers them. Sources are
              *     only ever added, never changed.
              */
-            sources: {
-                /**
-                 * @description Unique within the queue; names the source's items. Chosen by whoever added it.
-                 *     A key starting with `~` is reserved for the copies the server and Repeat All
-                 *     restarts make.
-                 */
-                key: string;
-                /** @description The library every track of the source is in. */
-                libraryId: string;
-                /** @description Track IDs, in the order they were resolved. A track may repeat. */
-                tracks: string[];
-            }[];
+            sources: components["schemas"]["QueueSource"][];
             /** @description The Manual Queue, in play order. It plays before the context's Up Next. */
             manual: number[];
             /**
@@ -2273,6 +2399,20 @@ export interface components {
             /** @constant */
             type: "commandResult";
             result: components["schemas"]["CommandResult"];
+        } | {
+            /** @constant */
+            type: "queueEdit";
+            /** Format: uuid */
+            queueId: string;
+            version: number;
+            /** Format: uuid */
+            editId: string;
+            edit: components["schemas"]["QueueEdit"];
+        } | {
+            /** @constant */
+            type: "queueReplaced";
+            /** Format: uuid */
+            queueId: string;
         } | {
             /** @constant */
             type: "sessionRevoked";
@@ -3730,6 +3870,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    editQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QueueEditRequest"];
+            };
+        };
+        responses: {
+            /** @description Applied. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        version: number;
+                    };
+                };
+            };
+            /** @description `queue_changed` — `queueId` is not the account's queue; `anchor_gone` — an anchor is no longer in Up Next. Nothing was applied. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
             default: components["responses"]["Problem"];
         };

@@ -1,4 +1,4 @@
-//! The account's queue: `getQueue` and `startQueue` (`requirements/queue.md`, `design/queue.md`).
+//! The account's queue: `getQueue`, `startQueue` and `editQueue` (`requirements/queue.md`, `design/queue.md`).
 //!
 //! The server keeps each account's queue in memory and saves it in the background, as it does
 //! playback state. A device that starts a queue chooses its `queueId` and its source's key, so
@@ -6,10 +6,11 @@
 //! source names, then replaces the account's queue (`requirements/queue.md` §6) and carries the
 //! Manual Queue over. The queue itself, and every rule about it, is the shared core's.
 
+mod edits;
 mod saved;
 mod start;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::extract::State;
@@ -21,6 +22,7 @@ use serde_json::Value;
 
 use super::scope::Caller;
 use super::{Code, Problem, Uuid};
+pub use edits::edit;
 pub use start::start;
 
 /// Each account's queue, for those that have started one.
@@ -48,6 +50,9 @@ struct Account {
     /// What the queue started from, as the device sent it.
     context: Value,
     queue: Queue,
+    /// The latest edits applied, oldest first, by `editId` and the version each made, so one
+    /// sent again is applied once. Not saved: a device sends an edit again within moments.
+    done: VecDeque<(Uuid, u32)>,
     /// Whether it changed since it was last saved.
     unsaved: bool,
     /// How many of this queue's sources the database holds, if it holds the queue at all.

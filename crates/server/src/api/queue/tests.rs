@@ -4,10 +4,13 @@ use jewelcase_core::{Anchor, Edit, Source};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+use super::start::Launch;
 use super::{Queues, Uuid};
+use crate::api::realtime::Hub;
 use crate::api::testing::{TOKEN, add_device, add_user, app_with_tracks, call, conn};
 use crate::db::testing::access;
 
+mod edits;
 mod saved;
 mod view;
 
@@ -26,6 +29,11 @@ async fn setup() -> (tempfile::TempDir, Router) {
         access(&conn, user, 1).unwrap();
     }
     (temp, app)
+}
+
+/// A start of `queue` over `source`, from its first track.
+fn launch(queue_id: Uuid, source: Source) -> Launch {
+    Launch { queue_id, context: json!({ "type": "album" }), source, start: 0, seed: None }
 }
 
 /// A request to start a queue `queue` over `tracks` of `library`, from the first track.
@@ -111,23 +119,21 @@ async fn a_start_sent_again_changes_nothing() {
 /// a new start from `second` carries them over.
 #[test]
 fn a_start_carries_the_manual_queue_over() {
-    let queues = Queues::default();
+    let (queues, hub) = (Queues::default(), Hub::default());
     let source = |key: &str, tracks: &[&str]| Source {
         key: key.into(),
         library_id: "1".into(),
         tracks: tracks.iter().map(|track| (*track).into()).collect(),
     };
     let id = |text: &str| Uuid::try_from(text.to_owned()).unwrap();
-    queues
-        .replace(1, id(QUEUE), json!({ "type": "album" }), source("a", &["1", "2"]), 0, None)
-        .unwrap();
+    queues.replace(&hub, 1, launch(id(QUEUE), source("a", &["1", "2"]))).unwrap();
     {
         let mut accounts = queues.lock();
         let queue = &mut accounts.get_mut(&1).unwrap().queue;
         let queued = Edit::Add { source: source("m", &["9", "8"]), before: Anchor::ManualEnd };
         queue.apply(&queued).unwrap();
     }
-    queues.replace(1, id(OTHER), json!({ "type": "album" }), source("b", &["3"]), 0, None).unwrap();
+    queues.replace(&hub, 1, launch(id(OTHER), source("b", &["3"]))).unwrap();
 
     let accounts = queues.lock();
     let account = &accounts[&1];
@@ -148,8 +154,8 @@ fn a_start_sent_again_keeps_what_happened_since() {
     let source =
         Source { key: "a".into(), library_id: "1".into(), tracks: vec!["1".into(), "2".into()] };
     let id = Uuid::try_from(QUEUE.to_owned()).unwrap();
-    let context = json!({ "type": "album" });
-    queues.replace(1, id.clone(), context.clone(), source.clone(), 0, None).unwrap();
+    let hub = Hub::default();
+    queues.replace(&hub, 1, launch(id.clone(), source.clone())).unwrap();
     {
         let mut accounts = queues.lock();
         let account = accounts.get_mut(&1).unwrap();
@@ -157,7 +163,7 @@ fn a_start_sent_again_keeps_what_happened_since() {
         account.version = 4;
     }
     let moved = queues.lock()[&1].queue.clone();
-    queues.replace(1, id, context, source, 0, None).unwrap();
+    queues.replace(&hub, 1, launch(id, source)).unwrap();
     assert_eq!(queues.lock()[&1].queue, moved);
     assert_eq!(queues.lock()[&1].version, 4);
 }
@@ -305,7 +311,6 @@ async fn the_snapshot_is_conditional_on_its_queue_and_version() {
 
 #[tokio::test]
 async fn a_new_start_keeps_the_accounts_repeat_mode_and_manual_queue() {
-    // No endpoint edits a queue yet, so the edits are made as the server's own code would.
     let queues = Arc::new(Queues::default());
     let id = Uuid::try_from(QUEUE.to_owned()).unwrap();
     let source = |key: &str| Source {
@@ -313,7 +318,7 @@ async fn a_new_start_keeps_the_accounts_repeat_mode_and_manual_queue() {
         library_id: "1".into(),
         tracks: vec!["1".into(), "2".into()],
     };
-    queues.replace(1, id, json!({ "type": "album" }), source(KEY), 0, None).unwrap();
+    queues.replace(&Hub::default(), 1, launch(id, source(KEY))).unwrap();
     {
         let mut accounts = queues.lock();
         let queue = &mut accounts.get_mut(&1).unwrap().queue;
@@ -321,7 +326,8 @@ async fn a_new_start_keeps_the_accounts_repeat_mode_and_manual_queue() {
         queue.apply(&Edit::Add { source: source("m"), before: Anchor::ManualEnd }).unwrap();
     }
     let next = Uuid::try_from(OTHER.to_owned()).unwrap();
-    queues.replace(1, next, json!({ "type": "album" }), source(KEY), 0, Some(5)).unwrap();
+    let shuffled = Launch { seed: Some(5), ..launch(next, source(KEY)) };
+    queues.replace(&Hub::default(), 1, shuffled).unwrap();
     let accounts = queues.lock();
     let queue = &accounts[&1].queue;
     assert_eq!(queue.repeat(), jewelcase_core::Repeat::All);
