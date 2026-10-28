@@ -31,7 +31,10 @@ fn expected() -> TagSet {
         disc_number: Some(1),
         disc_total: Some(2),
         release_date: Some(PartialDate { year: 1991, month: Some(9), day: Some(24) }),
-        tag_values: BTreeMap::from([("genre".into(), vec!["Grunge".into(), "Rock".into()])]),
+        tag_values: BTreeMap::from([
+            ("genre".into(), vec!["Grunge".into(), "Rock".into()]),
+            ("mood".into(), vec!["Angry".into(), "Restless".into()]),
+        ]),
         release_type: Some("album".into()),
         labels: vec!["DGC".into()],
         explicit: None,
@@ -70,6 +73,9 @@ fn write_tags(path: &Path, tag_type: TagType) {
     tag.insert(text(ItemKey::RecordingDate, "1991-09-24"));
     for g in e.values_of("genre") {
         tag.push(text(ItemKey::Genre, g));
+    }
+    for m in e.values_of("mood") {
+        tag.push(text(ItemKey::Mood, m));
     }
     tag.insert(text(ItemKey::MusicBrainzReleaseType, "album"));
     // ID3v2 writes the label as `TPUB`, which reads back as the publisher.
@@ -159,9 +165,10 @@ fn mpeg_layer_ii_named_mp3_is_unsupported() {
 #[test]
 fn id3v23_packed_totals_and_semicolons() {
     // Raw ID3v2 frames as a v2.3 tagger writes them: TRCK "1/12", TPOS
-    // "1/2", artists semicolon-joined in one TPE1, genres in one TCON.
+    // "1/2", artists semicolon-joined in one TPE1, genres in one TCON, and mood in a TXXX frame,
+    // since v2.3 has no TMOO.
     use lofty::TextEncoding;
-    use lofty::id3::v2::{Frame, FrameId, Id3v2Tag, TextInformationFrame};
+    use lofty::id3::v2::{ExtendedTextFrame, Frame, FrameId, Id3v2Tag, TextInformationFrame};
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("packed.wav");
     write_small_wav(&path);
@@ -178,6 +185,7 @@ fn id3v23_packed_totals_and_semicolons() {
     tag.insert(frame("TPE1", "Kendrick Lamar; SZA"));
     tag.insert(frame("TCON", "Hip-Hop;R&B"));
     tag.insert(frame("TDRC", "2018"));
+    tag.insert(Frame::UserText(ExtendedTextFrame::new(TextEncoding::UTF8, "MOOD", "Dark;Dreamy")));
     tag.save_to_path(&path, WriteOptions::default()).unwrap();
     let got = read_tags(&path).unwrap().tags;
     assert_eq!(got.track_number, Some(1));
@@ -186,6 +194,7 @@ fn id3v23_packed_totals_and_semicolons() {
     assert_eq!(got.disc_total, Some(2));
     assert_eq!(got.artists, vec!["Kendrick Lamar", "SZA"]);
     assert_eq!(got.values_of("genre"), ["Hip-Hop", "R&B"]);
+    assert_eq!(got.values_of("mood"), ["Dark", "Dreamy"]);
     assert_eq!(got.release_date, Some(PartialDate { year: 2018, month: None, day: None }));
     assert!(!got.has_embedded_art);
 }
