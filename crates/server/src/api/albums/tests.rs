@@ -180,6 +180,14 @@ async fn every_sort_reads_from_an_index() {
             };
             album.insert(tx)?;
         }
+        // Tag 1 is on half the albums, too many to lead; the rest have one of 299 others.
+        tx.execute_batch(
+            "WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300) \
+             INSERT INTO tags (id, library_id, type, name, name_key, sort_key) \
+             SELECT i, 1, 'genre', 'Genre ' || i, 'genre ' || i, CAST('genre ' || i AS BLOB) FROM n; \
+             INSERT INTO album_tags (library_id, album_id, tag_id, track_count) \
+             SELECT 1, id, CASE WHEN id % 2 = 1 THEN 1 ELSE 2 + id % 299 END, 1 FROM albums;",
+        )?;
         tx.execute_batch("ANALYZE")
     })
     .await
@@ -192,10 +200,43 @@ async fn every_sort_reads_from_an_index() {
             AlbumSort::ReleaseDate,
             AlbumSort::Duration,
         ] {
-            page::assert_indexed(conn, &source(conn, 1, None, ArtistCredit::Any)?, sort.sort())?;
+            page::assert_indexed(
+                conn,
+                &source(conn, 1, None, ArtistCredit::Any, &TagFilter::default())?,
+                sort.sort(),
+            )?;
+            let tagged = TagFilter { ids: vec![AnyId(Some(1))], tag_match: TagMatch::Any };
+            let walked = source(conn, 1, None, ArtistCredit::Any, &tagged)?;
+            assert!(matches!(walked.total, page::Total::Stored(10_000)));
+            page::assert_indexed(conn, &walked, sort.sort())?;
         }
         Ok(())
     })
     .await
     .unwrap();
+}
+
+/// An album carries the tags of its tracks: Abbey Road has Rock and Calm from "Come Together",
+/// and Pop, which only The Beatles carry, is on no album.
+#[tokio::test]
+async fn filters_by_the_tags_of_their_tracks() {
+    let (_temp, _db, app) = catalog::app().await;
+    for (query, expected) in [
+        ("tag=30", json!(["Abbey Road"])),
+        ("tag=31", json!([])),
+        ("tag=30,31", json!(["Abbey Road"])),
+        ("tag=30,31&tagMatch=all", json!([])),
+        ("tag=30,32", json!(["Abbey Road"])),
+        ("tag=30&artistId=10", json!(["Abbey Road"])),
+        // Radiohead is featured on Abbey Road and owns Kid A, which carries no Rock.
+        ("tag=30&artistId=11", json!(["Abbey Road"])),
+        ("tag=30&artistId=11&artistCredit=owned", json!([])),
+        ("tag=nope", json!([])),
+    ] {
+        let uri = format!("/api/v1/libraries/1/albums?{query}");
+        assert_eq!(page_through(&app, &uri, 1, "title").await, expected, "{query}");
+        let (_, page) = json(&app, &uri).await;
+        assert_eq!(page["total"], expected.as_array().unwrap().len(), "{query}");
+    }
+    assert_eq!(json(&app, "/api/v1/libraries/2/albums?tag=30").await.1["total"], 0);
 }
