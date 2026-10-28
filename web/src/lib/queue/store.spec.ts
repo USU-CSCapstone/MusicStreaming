@@ -362,9 +362,9 @@ describe('QueueStore', () => {
 			});
 			await settle();
 			const [start, fetched] = server.requests;
-			// The placeholder's item ID is not one the server's queue has, so none names two tracks.
-			expect(placeholder.split('.')[0]).not.toBe(start.body.source.key);
-			expect(server.queue!.track(placeholder)).toBeUndefined();
+			// The placeholder's item is `<key>.0` under the server's source key, so a report naming
+			// it is one the server can hold.
+			expect(placeholder).toBe(`${start.body.source.key}.0`);
 			expect(start).toMatchObject({ method: 'POST', path: '/me/queue' });
 			expect(start.body).toMatchObject({
 				source: { libraryId: 'lib', query },

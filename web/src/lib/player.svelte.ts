@@ -87,11 +87,6 @@ class Player {
 	#wantsNext = false;
 	/** The item a run of `previous` edits leads to; the items passed on the way are not opened. */
 	#backTo: string | null = null;
-	/**
-	 * A start from a list is under way and its track not yet loaded: the server's queue, whose
-	 * items are not the one-track placeholder's, is opened like the placeholder was.
-	 */
-	#starting = false;
 	/** Under Repeat All, a restart was asked for because nothing after the current item plays. */
 	#wrapped = false;
 	/** The items such a run passes through, the last of them `#backTo`. */
@@ -145,7 +140,6 @@ class Player {
 		}
 		if (item === this.#item) return;
 		let direction = this.#awaiting;
-		if (direction === null && this.#starting && !settling) direction = 1;
 		if (direction !== null && this.#backTo !== null) {
 			// Stepping back: only the item the run lands on is opened, and one it does not pass
 			// through is a change made elsewhere, which is followed like any other.
@@ -193,7 +187,7 @@ class Player {
 	/** Stops and shows nothing, as when the queue is gone. */
 	#release() {
 		this.#item = null;
-		this.#holds = this.#wantsNext = this.#wrapped = this.#starting = false;
+		this.#holds = this.#wantsNext = this.#wrapped = false;
 		this.#awaiting = this.#backTo = null;
 		this.#opens++;
 		this.#load++;
@@ -392,7 +386,6 @@ class Player {
 		this.#started();
 		this.#awaiting = 1;
 		this.#wantsNext = false;
-		this.#starting = query !== undefined;
 		this.#origin = 'context';
 		queue.start(
 			query
@@ -549,7 +542,7 @@ class Player {
 
 	/** Stops at the end of the queue. */
 	#end() {
-		this.#wrapped = this.#starting = false;
+		this.#wrapped = false;
 		this.playing = this.#loading = false;
 		this.#audio?.pause();
 		this.#plays.end('skipped');
@@ -583,7 +576,7 @@ class Player {
 	/** Plays `track`, the queue's `item`, from `startAt` seconds in, or holds it there paused unless `play`. */
 	#go(found: Found, item: string, startAt = 0, play = true) {
 		const { track } = found;
-		this.#wrapped = this.#starting = false;
+		this.#wrapped = false;
 		this.#loaded = found;
 		this.#holds = true;
 		this.current = track;

@@ -85,8 +85,8 @@ The player plays the account's queue, which the server keeps and every device ho
 (`design/queue.md`). Playing from a view starts a queue, here at once and on the server in the
 background: a view that holds its whole list (an album, a playlist) sends its track IDs in the
 order shown; a view that pages (songs, an artist's songs, unsorted search results) sends the
-query it pages through, and plays the clicked track alone, in a one-track queue with a key of
-its own, until the server's queue arrives. The player then plays the queue's current item,
+query it pages through, and plays the clicked track alone, in a one-track queue under the source's
+key, until the server's queue arrives. The player then plays the queue's current item,
 looking up its track by ID, and the next item's track ahead of time. The device holding playback follows every change of the current item, whoever
 made it; other devices only show it. Next, or a track ending, before the server's queue has
 arrived waits for it. Next, Previous and a track ending are `next` and `previous` edits, and the

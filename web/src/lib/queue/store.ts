@@ -101,10 +101,8 @@ export class QueueStore {
 		let next: Queue;
 		try {
 			// `launch` uses up the queue it replaces, so it gets a copy of the one shown.
-			// A query start's one-track placeholder has a key of its own: the server's source under
-			// `key` lists other tracks, and an item ID must never name two.
 			next = Queue.launch(
-				JSON.stringify({ key: query ? crypto.randomUUID() : key, libraryId, tracks: shown }),
+				JSON.stringify({ key, libraryId, tracks: shown }),
 				start,
 				shuffleSeed,
 				this.#view?.copy()
