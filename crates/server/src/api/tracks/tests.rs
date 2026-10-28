@@ -2,10 +2,10 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 
 use super::super::testing::catalog::{self, page_through};
-use super::super::testing::{app, json};
+use super::super::testing::{add_device, add_user, app, call, conn, json};
 use super::*;
 use crate::api::page;
-use crate::db::testing::{Album, Image, Track, library, scattered_key};
+use crate::db::testing::{Album, Image, Track, access, library, scattered_key};
 
 #[tokio::test]
 async fn album_order_is_disc_then_number_with_unnumbered_tracks_last() {
@@ -268,6 +268,70 @@ async fn another_librarys_track_is_not_found() {
         let (status, problem) = json(&app, uri).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
         assert_eq!(problem["code"], "not_found", "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn ids_name_summaries_in_the_order_asked() {
+    let (_temp, _db, app) = catalog::app().await;
+    let base = "/api/v1/libraries/1/tracks";
+    let (_, listed) = json(&app, &format!("{base}?albumId=101&sort=album")).await;
+    let (status, page) = json(&app, &format!("{base}?ids=1004,1001")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["items"], json!([listed["items"][3], listed["items"][0]]));
+    assert_eq!((&page["nextCursor"], &page["total"]), (&Value::Null, &json!(2)));
+}
+
+#[tokio::test]
+async fn ids_outside_the_library_unknown_or_malformed_are_absent() {
+    let (_temp, _db, app) = catalog::app().await;
+    let (status, page) = json(&app, "/api/v1/libraries/1/tracks?ids=2001,999,x,-1,01,,1001").await;
+    assert_eq!(status, StatusCode::OK);
+    let ids: Vec<_> = page["items"].as_array().unwrap().iter().map(|t| &t["id"]).collect();
+    assert_eq!(ids, ["1001"]);
+    let (_, page) = json(&app, "/api/v1/libraries/1/tracks?ids=").await;
+    assert_eq!(page["items"], json!([]));
+}
+
+#[tokio::test]
+async fn ids_reach_only_the_callers_libraries() {
+    let (temp, _db, app) = catalog::app().await;
+    let conn = conn(&temp);
+    add_user(&conn, 2, "user");
+    add_device(&conn, 2, 2, "user2");
+    access(&conn, 2, 2).unwrap();
+    let get = |token, uri: &'static str| call(&app, token, "GET", uri, None);
+    // A library the caller does not reach answers as the other library routes do.
+    let (status, problem) = get("user2", "/api/v1/libraries/1/tracks?ids=1001").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(problem["code"], "not_found");
+    // In a library they reach, another library's track is just absent.
+    let (status, page) = get("user2", "/api/v1/libraries/2/tracks?ids=1001,2001").await;
+    assert_eq!(status, StatusCode::OK);
+    let ids: Vec<_> = page["items"].as_array().unwrap().iter().map(|t| &t["id"]).collect();
+    assert_eq!(ids, ["2001"]);
+}
+
+#[tokio::test]
+async fn ids_are_bounded_and_stand_alone() {
+    let (_temp, _db, app) = catalog::app().await;
+    let base = "/api/v1/libraries/1/tracks";
+    let many = |count: usize| vec!["1001"; count].join(",");
+    let (status, _) = json(&app, &format!("{base}?ids={}", many(100))).await;
+    assert_eq!(status, StatusCode::OK);
+    for query in [
+        format!("ids={}", many(101)),
+        "ids=1001&sort=name".to_owned(),
+        "ids=1001&limit=5".to_owned(),
+        "ids=1001&albumId=101".to_owned(),
+        "ids=1001&order=desc".to_owned(),
+        "ids=1001&artistId=21".to_owned(),
+        "ids=1001&artistCredit=owned".to_owned(),
+        "ids=1001&cursor=x".to_owned(),
+    ] {
+        let (status, problem) = json(&app, &format!("{base}?{query}")).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{query}");
+        assert_eq!(problem["code"], "validation_failed", "{query}");
     }
 }
 
