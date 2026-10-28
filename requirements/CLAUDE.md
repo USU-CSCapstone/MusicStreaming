@@ -16,7 +16,7 @@ Twenty documents defining what Jewelcase must do. Project overview and core prin
 | [`tracks.md`](tracks.md) | Track entity, metadata, audio properties, lyrics. |
 | [`albums.md`](albums.md) | Album entity, identity, type, artwork, grouping. |
 | [`artists.md`](artists.md) | Artist entity, images, biographies, ownership model. |
-| [`tags.md`](tags.md) | Tag and genre modeling, normalization. |
+| [`tags.md`](tags.md) | Tag types (genre, mood), modeling, normalization. |
 | [`playlists.md`](playlists.md) | Creation, mutation, concurrency control, artwork, export. |
 | [`queue.md`](queue.md) | Queue structure, shuffle, repeat, sessions, cross-device behavior. |
 | [`playback.md`](playback.md) | Streaming, transcoding, waveform, seeking, gapless, loudness, playback state. |
