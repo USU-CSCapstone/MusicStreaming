@@ -26,13 +26,18 @@ const source = (key: string, n: number) => ({
 /** The IDs of `a`'s items at these positions. */
 const ids = (key: string, ...positions: number[]) => positions.map((i) => `${key}.${i}`);
 
-type Request = { method: string; path: string; body?: any }; // eslint-disable-line @typescript-eslint/no-explicit-any
+type Request = { method: string; path: string; body?: any; headers?: Record<string, string> }; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 /** A server holding one queue in the core, answering as the API does. */
 class FakeServer {
 	queue: Queue | null = albumQueue();
 	queueId = QUEUE;
 	version = 0;
+	/** New each time the server starts, and part of every `ETag`. */
+	run = 'r1';
+	context: object = CONTEXT;
+	/** Runs when a fetch of the queue arrives, before it is answered. */
+	onGet: (() => void) | null = null;
 	requests: Request[] = [];
 	/** Statuses to answer the next requests with instead, in order; 0 is a lost connection. */
 	failures: number[] = [];
@@ -64,21 +69,29 @@ class FakeServer {
 		const path = String(url).slice(API.length);
 		const method = init?.method ?? 'GET';
 		const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
-		this.requests.push({ method, path, body });
+		const headers = init?.headers as Record<string, string> | undefined;
+		this.requests.push({ method, path, body, headers });
 		const failure = this.failures.shift();
 		if (failure === 0) throw new TypeError('offline');
 		if (failure) return problem(failure, 'failed');
 		if (path === '/me/queue' && method === 'GET') {
 			if (!this.queue) return problem(404, 'not_found');
+			const tag = `"${this.run}.${this.queueId}.${this.version}"`;
+			const known = headers?.['If-None-Match'] === tag;
+			this.onGet?.();
+			if (known) return new Response(null, { status: 304, headers: { ETag: tag } });
 			const state = JSON.parse(this.queue.snapshot());
-			return json({ queueId: this.queueId, version: this.version, context: CONTEXT, state });
+			const body = { queueId: this.queueId, version: this.version, context: this.context, state };
+			return new Response(JSON.stringify(body), {
+				headers: { 'Content-Type': 'application/json', ETag: tag }
+			});
 		}
 		if (path === '/me/queue' && method === 'POST') {
-			// As the server starts a queue: the source, then the Manual Queue carried over.
-			const next = Queue.start(JSON.stringify(body.source), body.start);
-			if (this.queue) next.carryManual(this.queue);
-			this.queue = next;
+			// As the server starts a queue: by the core's `launch`, which uses up the old queue.
+			const seed = body.shuffle?.seed;
+			this.queue = Queue.launch(JSON.stringify(body.source), body.start, seed, this.queue);
 			this.queueId = body.queueId;
+			this.context = body.context;
 			this.version = 0;
 			return new Response(null, { status: 204 });
 		}
@@ -316,6 +329,23 @@ describe('QueueStore', () => {
 			expect(server.requests).toHaveLength(1);
 		});
 
+		it('makes the queue the server makes: same items, with Repeat and the Manual Queue carried', async () => {
+			await connect();
+			store.edit({ type: 'repeat', mode: 'all' });
+			store.edit(queueManual('m'));
+			store.start(args());
+			await settle();
+
+			expect(window('manual')).toEqual(server.queue!.manual());
+			expect(window('upcoming')).toEqual(server.queue!.upcoming(0, 100));
+			expect(summary.current).toBe(server.queue!.current());
+			// Repeat All carried over: the end of the queue wraps, here and on the server.
+			for (let i = 0; i < 4; i++) store.edit(next);
+			await settle();
+			expect(summary.current).not.toBeNull();
+			expect(summary.current).toBe(server.queue!.current());
+		});
+
 		it('carries the Manual Queue over as the core does', async () => {
 			await connect();
 			store.edit(queueManual('m'));
@@ -358,32 +388,159 @@ describe('QueueStore', () => {
 		expect(summary).toMatchObject({ queueId: server.queueId, manual: server.queue!.manualLen() });
 	});
 
-	it('is done with an edit whose answer was lost when a reconnect fetches a queue that has it', async () => {
-		await connect();
-		const real = server.fetch;
-		let first = true;
-		const lossy = async (url: string | URL | Request, init?: RequestInit) => {
-			const response = await real(url, init);
-			if (init?.method === 'POST' && first) {
-				first = false;
-				store.message({ type: 'hello', deviceId: '1', serverTime: new Date().toISOString() });
-				throw new TypeError('lost');
-			}
-			return response;
-		};
-		store = new QueueStore({
-			api: API,
-			fetch: lossy as typeof fetch,
-			retryMs: 0,
-			changed: (s) => (summary = s),
-			refused: (r) => refusals.push(r)
-		});
-		await connect();
-		store.edit(next);
-		await settle();
+	describe('an edit whose answer was lost, then a reconnect', () => {
+		/** A store whose first POST reaches the server, but its answer is lost with a reconnect. */
+		async function lossy() {
+			const real = server.fetch;
+			let first = true;
+			const lost = async (url: string | URL | Request, init?: RequestInit) => {
+				const response = await real(url, init);
+				if (init?.method === 'POST' && first) {
+					first = false;
+					store.message({ type: 'hello', deviceId: '1', serverTime: new Date().toISOString() });
+					throw new TypeError('lost');
+				}
+				return response;
+			};
+			const currents: (string | null)[] = [];
+			store = new QueueStore({
+				api: API,
+				fetch: lost as typeof fetch,
+				retryMs: 0,
+				changed: (s) => {
+					summary = s;
+					currents.push(s.current);
+				},
+				refused: (r) => refusals.push(r)
+			});
+			await connect();
+			return currents;
+		}
 
-		expect(summary).toMatchObject({ current: 'a.1', history: 1, version: 1 });
-		expect(refusals).toEqual([]);
+		it('shows the edit once, and never as it was before', async () => {
+			const currents = await lossy();
+			store.edit(next);
+			await settle();
+
+			expect(summary).toMatchObject({ current: 'a.1', history: 1, version: 1 });
+			expect(refusals).toEqual([]);
+			expect([...new Set(currents)]).toEqual(['a.0', 'a.1']);
+			expect(currents.at(-1)).toBe('a.1');
+			expect(currents.lastIndexOf('a.0')).toBeLessThan(currents.indexOf('a.1'));
+		});
+
+		it('does not report an add that did happen as a duplicate', async () => {
+			await lossy();
+			store.edit(queueManual('m'));
+			await settle();
+
+			expect(refusals).toEqual([]);
+			expect(summary).toMatchObject({ manual: 1, version: 1 });
+			expect(window('manual')).toEqual(server.queue!.manual());
+		});
+	});
+
+	describe('when the server has lost an answered edit', () => {
+		/** An edit the server answered and then lost, as in a restart from an older save. */
+		async function lost() {
+			await connect();
+			store.edit(next);
+			await settle();
+			expect(summary.current).toBe('a.1');
+			server.queue = albumQueue();
+			server.version = 0;
+		}
+
+		it('goes back to the server queue when it is the version the device holds', async () => {
+			await lost();
+			await connect();
+
+			expect(summary).toMatchObject({ version: 0, current: 'a.0', history: 0 });
+			// The fetch said 304, and the lost edit did not come back with a later one.
+			expect(server.requests.at(-1)?.headers?.['If-None-Match']).toBe(`"r1.${QUEUE}.0"`);
+			store.edit({ type: 'remove', items: ['a.3'] });
+			await settle();
+			store.message(server.heardOf());
+			expect(summary).toMatchObject({ version: 1, current: 'a.0', history: 0, upcoming: 3 });
+		});
+
+		it('goes back to the server queue when it has moved on', async () => {
+			await lost();
+			server.apply({ type: 'remove', items: ['a.4'] });
+			await connect();
+
+			expect(summary).toMatchObject({ version: 1, current: 'a.0', history: 0, upcoming: 3 });
+		});
+	});
+
+	describe('fetching again', () => {
+		it('keeps the queue when the server says nothing changed, and hears what came meanwhile', async () => {
+			await connect();
+			store.edit(next);
+			store.edit(queueManual('m'));
+			await settle();
+			store.message(server.heardOf(0));
+			store.message(server.heardOf(1));
+			const before = server.requests.length;
+			// Another device's edit arrives while the fetch is out, to a server whose answer is 304.
+			server.onGet = () => {
+				server.onGet = null;
+				store.message(server.apply({ type: 'remove', items: ['a.4'] }));
+			};
+			store.message({ type: 'hello', deviceId: '1', serverTime: new Date().toISOString() });
+			await settle();
+
+			const get = server.requests.slice(before).find((r) => r.method === 'GET');
+			expect(get?.headers?.['If-None-Match']).toBe(`"r1.${QUEUE}.2"`);
+			expect(summary).toMatchObject({ version: 3, current: 'a.1', manual: 1, upcoming: 2 });
+			expect(window('upcoming')).toEqual(server.queue!.upcoming(0, 100));
+		});
+
+		it('downloads the queue after the server starts again, even at the version held', async () => {
+			await connect();
+			// A crash lost an edit this device heard, and another device's edit brought the
+			// restored queue back to the version it holds, with other contents.
+			store.edit(next);
+			await settle();
+			store.message(server.heardOf());
+			server.queue = albumQueue();
+			server.version = 0;
+			server.apply({ type: 'remove', items: ['a.4'] });
+			server.run = 'r2';
+			store.message({ type: 'hello', deviceId: '1', serverTime: new Date().toISOString() });
+			await settle();
+
+			expect(summary).toMatchObject({ version: 1, current: 'a.0', upcoming: 3 });
+			expect(window('upcoming')).toEqual(server.queue!.upcoming(0, 100));
+		});
+
+		it('downloads the queue when its version is not the one held', async () => {
+			await connect();
+			server.apply({ type: 'remove', items: ['a.4'] });
+			store.message({ type: 'hello', deviceId: '1', serverTime: new Date().toISOString() });
+			await settle();
+
+			const gets = server.requests.filter((r) => r.method === 'GET');
+			expect(gets[0].headers?.['If-None-Match']).toBeUndefined();
+			expect(gets[1].headers?.['If-None-Match']).toBe(`"r1.${QUEUE}.0"`);
+			expect(summary).toMatchObject({ version: 1, upcoming: 3 });
+		});
+	});
+
+	describe('context', () => {
+		it('is the one the server holds, and the one a start sent', async () => {
+			server.context = { type: 'playlist', id: '7' };
+			await connect();
+			expect(summary.context).toEqual({ type: 'playlist', id: '7' });
+
+			store.start({ context: CONTEXT, libraryId: 'lib', tracks: ['t-0'], start: 0 });
+			expect(summary.context).toEqual(CONTEXT);
+			await settle();
+
+			server.queue = null;
+			await connect();
+			expect(summary.context).toBeNull();
+		});
 	});
 
 	it('is an empty queue when the account has none', async () => {

@@ -28,6 +28,7 @@ class FakeWorker {
 /** A queue state the worker reports. */
 const summary: Summary = {
 	queueId: 'q',
+	context: { type: 'album', id: '1' },
 	version: 2,
 	revision: 5,
 	current: 'a.0',
@@ -66,6 +67,7 @@ describe('QueueClient', () => {
 		worker.say({ type: 'refused', refusal: { code: 'anchor_gone', message: 'gone' } });
 
 		expect(client).toMatchObject({ queueId: 'q', current: 'a.0', revision: 5 });
+		expect(client.context).toEqual({ type: 'album', id: '1' });
 		expect(client.counts).toEqual({ manual: 1, upcoming: 4, history: 0 });
 		expect(client.refusal?.code).toBe('anchor_gone');
 	});

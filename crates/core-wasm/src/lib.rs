@@ -5,6 +5,7 @@
 //! carrying the core's message.
 
 use jewelcase_core::{Edit, Source};
+use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 
 /// A queue held in WebAssembly memory. Call `free()` when done with one, or let it be collected.
@@ -113,5 +114,54 @@ impl Queue {
     pub fn track(&self, id: &str) -> Option<Vec<String>> {
         let track = self.0.track(id)?;
         Some(vec![track.library_id.to_owned(), track.track_id.to_owned()])
+    }
+}
+
+/// The server's `QueueSnapshot`, as `GET /me/queue` answers it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Snapshot {
+    queue_id: String,
+    version: u32,
+    context: serde_json::Value,
+    state: jewelcase_core::Queue,
+}
+
+/// A queue as the server's snapshot gave it, with the snapshot's other fields. The whole body is
+/// parsed once, here, rather than in JavaScript and again for the queue.
+#[wasm_bindgen]
+pub struct Fetched {
+    snapshot: Snapshot,
+}
+
+#[wasm_bindgen]
+impl Fetched {
+    /// Parse the body of `GET /me/queue`. Fails on JSON that is not a snapshot.
+    #[wasm_bindgen(js_name = parse)]
+    pub fn parse(body: &str) -> Result<Fetched, JsError> {
+        Ok(Self { snapshot: serde_json::from_str(body)? })
+    }
+
+    /// The queue's ID.
+    #[wasm_bindgen(getter, js_name = queueId)]
+    pub fn queue_id(&self) -> String {
+        self.snapshot.queue_id.clone()
+    }
+
+    /// How many edits the queue has had.
+    #[wasm_bindgen(getter)]
+    pub fn version(&self) -> u32 {
+        self.snapshot.version
+    }
+
+    /// What the queue started from, as JSON.
+    #[wasm_bindgen(getter)]
+    pub fn context(&self) -> String {
+        self.snapshot.context.to_string()
+    }
+
+    /// The queue itself. Read the other fields first: this uses the `Fetched` up.
+    pub fn queue(self) -> Queue {
+        Queue(self.snapshot.state)
     }
 }

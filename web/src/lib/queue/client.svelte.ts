@@ -12,6 +12,7 @@ import type {
 	Question,
 	Refusal,
 	StartArgs,
+	Summary,
 	ToWorker
 } from './protocol';
 
@@ -24,6 +25,8 @@ const spawn = () => new Worker(new URL('./worker.ts', import.meta.url), { type: 
 export class QueueClient {
 	/** The account's queue; null before it is loaded, and when the account has none. */
 	queueId = $state<string | null>(null);
+	/** What the queue started from, for a play to record; null with no queue. */
+	context = $state<Summary['context']>(null);
 	/** Counts up with every change; a window read at an earlier one may be stale. */
 	revision = $state(0);
 	/** The item playing now. */
@@ -64,6 +67,7 @@ export class QueueClient {
 		for (const { reject } of this.#asked.values()) reject(new Error('The queue is closed.'));
 		this.#asked.clear();
 		this.queueId = null;
+		this.context = null;
 		this.current = null;
 		this.counts = { manual: 0, upcoming: 0, history: 0 };
 	}
@@ -108,6 +112,7 @@ export class QueueClient {
 		if (message.type === 'state') {
 			const { summary } = message;
 			this.queueId = summary.queueId;
+			this.context = summary.context;
 			this.revision = summary.revision;
 			this.current = summary.current;
 			this.counts = {

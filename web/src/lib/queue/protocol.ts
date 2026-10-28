@@ -28,6 +28,8 @@ export type Question =
 export type Summary = {
 	/** Null until there is a queue. */
 	queueId: string | null;
+	/** What the queue started from, as the server keeps it, for a play to record; null with no queue. */
+	context: StartQueue['context'] | null;
 	/** The server's version of the queue, as far as this device has applied it. */
 	version: number;
 	/** Counts up with every change, so a window read earlier is known to be stale. */

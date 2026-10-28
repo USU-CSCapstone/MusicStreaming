@@ -4,9 +4,11 @@
 // holds no rule about it. Plain TypeScript so it runs in a worker and in tests; `worker.ts` is
 // its shell.
 
-import { Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
-import type { QueueEdit, QueueSnapshot, RealtimeServerMessage, StartQueue } from '$lib/api/types';
+import { Fetched, Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
+import type { QueueEdit, RealtimeServerMessage, StartQueue } from '$lib/api/types';
 import type { ItemTrack, List, Question, Refusal, StartArgs, Summary } from './protocol';
+
+type Context = StartQueue['context'];
 
 export type Options = {
 	/** The API's base path, such as `/api/v1`. */
@@ -46,7 +48,17 @@ export class QueueStore {
 	/** What this device shows: `#confirmed` with `#pending` on top. The same object with no pending. */
 	#view: Queue | null = null;
 	#queueId: string | null = null;
+	/** What the queue started from, as the server keeps it; null with no queue. */
+	#context: Context | null = null;
 	#version = 0;
+	/**
+	 * Whether `#confirmed` came from the server. A queue this device started did not, so it may
+	 * differ from the server's, which carries what the device did not know of; the first fetch
+	 * after a start is never conditional.
+	 */
+	#fromServer = false;
+	/** The part of the server's `ETag` that is new each time it starts, as last given. */
+	#run: string | null = null;
 	#revision = 0;
 	#pending: Pending[] = [];
 	/** A start the server has not yet answered. It goes before anything else is sent. */
@@ -78,15 +90,16 @@ export class QueueStore {
 	start({ context, libraryId, tracks, start, shuffleSeed }: StartArgs) {
 		const queueId = crypto.randomUUID();
 		const key = crypto.randomUUID();
-		let next: Queue | undefined;
+		let next: Queue;
 		try {
-			next = Queue.start(JSON.stringify({ key, libraryId, tracks }), start);
-			if (this.#view) next.carryManual(this.#view);
-			if (shuffleSeed !== undefined) {
-				next.apply(JSON.stringify({ type: 'shuffle', on: true, seed: shuffleSeed }));
-			}
+			// `launch` uses up the queue it replaces, so it gets a copy of the one shown.
+			next = Queue.launch(
+				JSON.stringify({ key, libraryId, tracks }),
+				start,
+				shuffleSeed,
+				this.#view?.copy()
+			);
 		} catch (error) {
-			next?.free();
 			this.#refused({ code: 'invalid', message: String(error) });
 			return;
 		}
@@ -100,7 +113,9 @@ export class QueueStore {
 		this.#release();
 		this.#confirmed = this.#view = next;
 		this.#queueId = queueId;
+		this.#context = context;
 		this.#version = 0;
+		this.#fromServer = false;
 		this.#pending = [];
 		this.#launch = {
 			queueId,
@@ -242,6 +257,7 @@ export class QueueStore {
 		const view = this.#view;
 		this.#changed({
 			queueId: this.#queueId,
+			context: this.#context,
 			version: this.#version,
 			revision: ++this.#revision,
 			current: view?.current() ?? null,
@@ -262,19 +278,28 @@ export class QueueStore {
 		}
 	}
 
-	/** Does the next thing waiting: a start, then a fetch, then edits. False when none is. */
+	/**
+	 * Does the next thing waiting: a start, then edits, then a fetch. False when none is. Edits
+	 * go before the fetch so each is answered, or known unsent, by the time the snapshot is
+	 * installed; one the server already has, whose answer was lost, is not applied twice.
+	 */
 	async #step(): Promise<boolean> {
 		const next = this.#pending.find((pending) => pending.version === undefined);
 		if (this.#launch) await this.#sendStart(this.#launch);
-		else if (this.#refetch) await this.#fetchQueue();
 		else if (next) await this.#sendEdit(next);
+		else if (this.#refetch) await this.#fetchQueue();
 		else return false;
 		return true;
 	}
 
 	/** One request to the API; null when it could not be made, or the server was too busy or broken. */
-	async #call(method: 'GET' | 'POST', path: string, body?: object): Promise<Response | null> {
-		const headers: Record<string, string> = { 'X-Jewelcase-Client': 'web' };
+	async #call(
+		method: 'GET' | 'POST',
+		path: string,
+		body?: object,
+		extra: Record<string, string> = {}
+	): Promise<Response | null> {
+		const headers: Record<string, string> = { 'X-Jewelcase-Client': 'web', ...extra };
 		if (body) headers['Content-Type'] = 'application/json';
 		const response = await this.#fetch(`${this.#api}${path}`, {
 			method,
@@ -326,11 +351,21 @@ export class QueueStore {
 		this.#rebuild();
 	}
 
-	/** Loads the server's queue, and puts the pending edits back on top. */
+	/**
+	 * Loads the server's queue, and puts the pending edits back on top. The request names the
+	 * queue and version held, so the server answers `304`, with nothing to download, if that is
+	 * still its queue.
+	 */
 	async #fetchQueue() {
 		this.#refetch = false;
 		this.#held = [];
-		const response = await this.#call('GET', '/me/queue');
+		const known = this.#fromServer && this.#run !== null && this.#queueId;
+		const response = await this.#call(
+			'GET',
+			'/me/queue',
+			undefined,
+			known ? { 'If-None-Match': `"${this.#run}.${known}.${this.#version}"` } : {}
+		);
 		const held = this.#held;
 		this.#held = null;
 		// A start since then is newer than what was fetched, and must reach the server first.
@@ -338,10 +373,16 @@ export class QueueStore {
 			this.#refetch = true;
 			return;
 		}
+		this.#run = runOf(response.headers.get('ETag'));
 		if (response.status === 404) {
 			this.#clear();
+		} else if (response.status === 304) {
+			// The server is where this device is, so an edit it answered but this device never
+			// heard confirmed is one the server has lost.
+			this.#keepUnanswered();
+			for (const message of held) this.#heard(message);
 		} else if (response.ok) {
-			this.#install((await response.json()) as QueueSnapshot);
+			this.#install(Fetched.parse(await response.text()));
 			for (const message of held) this.#heard(message);
 		} else {
 			this.#refetch = true;
@@ -353,25 +394,38 @@ export class QueueStore {
 	#clear() {
 		this.#release();
 		this.#queueId = null;
+		this.#context = null;
 		this.#version = 0;
 		this.#pending = [];
 		this.#emit();
 	}
 
 	/**
-	 * Makes the snapshot the confirmed queue. Pending edits for another queue go, and so do the
-	 * ones it already holds, which the server said it applied at or before its version.
+	 * Drops the pending edits the server answered. Edits are sent before a fetch, so one it
+	 * answered is either in what the fetch shows or was lost by the server, as in a restart;
+	 * either way it is not replayed, and sending it again could apply it twice.
 	 */
-	#install(snapshot: QueueSnapshot) {
-		const next = Queue.fromSnapshot(JSON.stringify(snapshot.state));
+	#keepUnanswered() {
+		const kept = this.#pending.filter((pending) => pending.version === undefined);
+		if (kept.length === this.#pending.length) return;
+		this.#pending = kept;
+		this.#rebuild();
+	}
+
+	/** Makes the snapshot the confirmed queue; pending edits for another queue go. */
+	#install(fetched: Fetched) {
+		const { queueId, version } = fetched;
+		const context = JSON.parse(fetched.context) as Context;
+		const next = fetched.queue();
 		this.#release();
 		this.#confirmed = this.#view = next;
-		this.#queueId = snapshot.queueId;
-		this.#version = snapshot.version;
+		this.#queueId = queueId;
+		this.#context = context;
+		this.#version = version;
+		this.#fromServer = true;
+		// Of the pending edits, only those for this queue that the server never answered stay.
 		this.#pending = this.#pending.filter(
-			(pending) =>
-				pending.queueId === snapshot.queueId &&
-				!(pending.version !== undefined && pending.version <= snapshot.version)
+			(pending) => pending.queueId === queueId && pending.version === undefined
 		);
 		this.#rebuild();
 	}
@@ -384,4 +438,9 @@ async function refusal(response: Response): Promise<Refusal> {
 		code: problem?.code ?? 'failed',
 		message: problem?.detail ?? problem?.title ?? response.statusText
 	};
+}
+
+/** The run part of an `ETag`, `"<run>.<queueId>.<version>"`, or `null` without one. */
+function runOf(etag: string | null): string | null {
+	return etag?.replace(/^"/, '').split('.')[0] || null;
 }
