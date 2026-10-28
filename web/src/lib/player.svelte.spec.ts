@@ -8,6 +8,7 @@ import type {
 	Track
 } from '$lib/api/types';
 import type { ToWorker } from '$lib/queue/protocol';
+import { remember } from '$lib/queue/summaries';
 
 const fake = vi.hoisted(() => ({
 	/** Tracks whose fetch is held back, by ID; any other arrives at once, a minute long. */
@@ -654,7 +655,8 @@ describe('player', () => {
 				before: { type: 'manualEnd' }
 			});
 			await vi.waitFor(() => expect(queue.counts.manual).toBe(1));
-			fake.catalog.set('111', track('111', 60, 'missing'));
+			// The track went missing since it was looked up, which the cache does not know until it is asked again.
+			remember('11', track('111', 60, 'missing'));
 			const before = await itemsNow();
 			const history = await queue.window('history', 0, 10);
 

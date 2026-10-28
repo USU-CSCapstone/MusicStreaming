@@ -3,6 +3,7 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import type { TrackSummary } from '$lib/api/types';
 	import { artistName, formatDuration, plural } from '$lib/format';
+	import { edgeStep } from '$lib/dragging';
 	import { queue } from '$lib/queue/client.svelte';
 	import { anchorAt, MAX_SPACE, ROW, upNextPieces, upNextRow, upNextRows } from '$lib/queue/layout';
 	import { lookup } from '$lib/queue/summaries';
@@ -139,8 +140,8 @@
 			const wanted = new Set(ids.values());
 			// eslint-disable-next-line svelte/prefer-svelte-reactivity -- replaces `shown`
 			const next = new Map<string, TrackSummary | null>();
-			for (const [item, track] of [...shown, ...summaries])
-				if (wanted.has(item)) next.set(item, track);
+			for (const [item, track] of shown) if (wanted.has(item)) next.set(item, track);
+			for (const [item, one] of summaries) if (wanted.has(item)) next.set(item, one && one.track);
 			shown = next;
 			await tick();
 			void flush();
@@ -339,16 +340,9 @@
 	/** Near the top or bottom of the list, scrolls toward it, faster the closer the pointer gets. */
 	function autoScroll() {
 		if (!drag?.started || !scroller) return;
-		const edge = 56;
-		const box = scroller.getBoundingClientRect();
-		const into =
-			drag.y < box.top + edge
-				? drag.y - (box.top + edge)
-				: drag.y > box.bottom - edge
-					? drag.y - (box.bottom - edge)
-					: 0;
-		if (into) {
-			scroller.scrollTop += Math.max(-20, Math.min(20, into / 3));
+		const step = edgeStep(drag.y, scroller.getBoundingClientRect());
+		if (step) {
+			scroller.scrollTop += step;
 			aim();
 		}
 		frame = requestAnimationFrame(autoScroll);

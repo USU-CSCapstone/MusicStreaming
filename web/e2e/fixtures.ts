@@ -513,10 +513,10 @@ export async function serveLibrary(
 			});
 		}
 		if (path === `${lib}/tracks` && url.searchParams.has('ids')) {
-			const found = url.searchParams
-				.get('ids')!
-				.split(',')
-				.map((id) => tracks.find((t) => t.id === id));
+			const asked = url.searchParams.get('ids')!.split(',');
+			// As the server: a lookup takes at most 100 IDs.
+			if (asked.length > 100) return problem(422, 'validation_failed', 'At most 100 ids.');
+			const found = asked.map((id) => tracks.find((t) => t.id === id));
 			return json(pageOf(found.filter((t) => t !== undefined)));
 		}
 		if (path === `${lib}/tracks`) return json(pageOf(sortedAsAsked(url.searchParams)));

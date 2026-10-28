@@ -231,7 +231,8 @@ export class QueueStore {
 
 	/**
 	 * Makes the view from the confirmed queue and the pending edits. A pending edit the queue
-	 * no longer accepts, because of what arrived, is dropped and reported. With none pending
+	 * no longer accepts, because of what arrived, is dropped and reported as `anchor_gone`: keys
+	 * are unique, so only the item it names can have gone, and the user is told. With none pending
 	 * the view is the confirmed queue itself, so nothing is copied.
 	 */
 	#rebuild() {
@@ -245,7 +246,7 @@ export class QueueStore {
 					view.apply(JSON.stringify(pending.edit));
 					return true;
 				} catch (error) {
-					this.#refused({ code: 'invalid', message: String(error), edit: pending.edit });
+					this.#refused({ code: 'anchor_gone', message: String(error), edit: pending.edit });
 					return false;
 				}
 			});

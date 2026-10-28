@@ -255,6 +255,21 @@ describe('QueueStore', () => {
 		expect(refusals).toEqual([{ code: 'anchor_gone', message: 'anchor_gone', edit: move }]);
 	});
 
+	it("says so when another device's edit, heard first, leaves a pending edit without its anchor", async () => {
+		await connect();
+		const move: QueueEdit = {
+			type: 'move',
+			items: ids('a', 1),
+			before: { type: 'before', item: 'a.3' }
+		};
+		server.failures = [0];
+		store.edit(move);
+		store.message(server.apply({ type: 'remove', items: ids('a', 3) }));
+
+		expect(refusals).toMatchObject([{ code: 'anchor_gone', edit: move }]);
+		expect(window('upcoming')).toEqual(ids('a', 1, 2, 4));
+	});
+
 	it('fetches the queue when the edit is for one that was replaced', async () => {
 		await connect();
 		server.queueId = '22222222-2222-4222-8222-222222222222';
