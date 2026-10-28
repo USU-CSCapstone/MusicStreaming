@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use jewelcase_core::{Document, Index};
 use rusqlite::Connection;
 
+use super::tagged::TaggedSets;
 use crate::api::page::library_number;
 use crate::db::{Database, DbError};
 use jewelcase_core::Recover;
@@ -25,10 +26,11 @@ use jewelcase_core::Recover;
 /// A rebuild waits this many times as long as the last one took.
 const REBUILD_SPACING: u32 = 10;
 
-/// Every library's search index.
+/// Every library's search index, and the rows recent searches' tags were read as.
 #[derive(Default)]
 pub struct Indexes {
     libraries: Mutex<HashMap<i64, Arc<Slot>>>,
+    pub tagged: TaggedSets,
 }
 
 /// One library's index, once built, and the lock that keeps its builds one at a time.
