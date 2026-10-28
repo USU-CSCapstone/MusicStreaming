@@ -245,3 +245,23 @@ fn ties_break_by_name_then_id() {
     ]);
     assert_eq!(find(&index, "love"), [(Kind::Track, vec![1, 2, 3])]);
 }
+
+#[test]
+fn a_filter_narrows_the_matches_before_they_are_ranked_and_counted() {
+    let index = library();
+    let blue = |keep: fn(Kind, i64) -> bool| -> Vec<(Kind, Vec<i64>, usize)> {
+        index
+            .search_within("blue", &Kind::ALL, 1, keep)
+            .into_iter()
+            .map(|section| (section.kind, section.ids, section.total))
+            .collect()
+    };
+    assert_eq!(
+        blue(|_, _| true),
+        [(Kind::Track, vec![21], 1), (Kind::Album, vec![11], 2)],
+        "the exact album first"
+    );
+    assert_eq!(blue(|_, id| id != 11), [(Kind::Track, vec![21], 1), (Kind::Album, vec![10], 1)]);
+    assert_eq!(blue(|kind, _| kind == Kind::Album), [(Kind::Album, vec![11], 2)]);
+    assert!(blue(|_, _| false).is_empty());
+}

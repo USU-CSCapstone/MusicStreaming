@@ -99,7 +99,8 @@ const ARTISTS: Table =
     Table { name: "artists", alias: "ar", select: SELECT, joins: "", count: "artist_count" };
 
 /// How artists carry tags: those of the tracks that credit them (`requirements/tags.md` §6).
-const TAGGED: Tagged = Tagged { links: "artist_tags", owner: "artist_id", count: "artist_count" };
+pub const TAGGED: Tagged =
+    Tagged { links: "artist_tags", owner: "artist_id", count: "artist_count" };
 
 /// The artists `list` pages through in `library`: every one, or those carrying the tags `tags`
 /// names.

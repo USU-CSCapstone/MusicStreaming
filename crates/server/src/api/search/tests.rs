@@ -179,3 +179,50 @@ async fn problems() {
         assert_eq!(content_type.as_deref(), Some("application/problem+json"), "{uri}");
     }
 }
+
+/// A search with tags finds only what carries them, of every kind, and counts only that. Library
+/// 1 gets three tracks called "Elsewhere": 1008, on the album "Elsewhere" (105) by the artist
+/// "Elsewhere" (14), is Rock and Calm, which its album and artist take; 1009 is Calm; 1007 is
+/// neither.
+#[tokio::test]
+async fn a_search_with_tags_finds_what_carries_them() {
+    let (_temp, db, app) = app_with_catalog().await;
+    db.write(|tx| {
+        let title = || "Elsewhere".to_owned();
+        Album { title: Some(title()), ..Album::new(105, 1) }.insert(tx)?;
+        Artist::new(14, 1, "Elsewhere").insert(tx)?;
+        for (id, album) in [(1007, 101), (1008, 105), (1009, 101)] {
+            Track { title: title(), ..Track::new(id, 1, album) }.insert(tx)?;
+        }
+        tx.execute_batch(
+            "INSERT INTO track_artists (library_id, track_id, position, artist_id, artist_name)
+             VALUES (1, 1008, 0, 14, 'Elsewhere');
+             INSERT INTO track_tags (library_id, track_id, tag_id, tag_name)
+             VALUES (1, 1008, 30, 'Rock'), (1, 1008, 32, 'Calm'), (1, 1009, 32, 'Calm');",
+        )
+    })
+    .await
+    .unwrap();
+    let ids = |ids: &[&str]| ids.iter().map(|&id| id.to_owned()).collect::<Vec<_>>();
+    let all = [
+        ("tracks".to_owned(), ids(&["1008"])),
+        ("albums".to_owned(), ids(&["105"])),
+        ("artists".to_owned(), ids(&["14"])),
+    ];
+    let base = "/api/v1/libraries/1/search?q=elsewhere";
+    for query in ["tag=30", "tag=30,32", "tag=32&sectionLimit=1"] {
+        let (status, body) = json(&app, &format!("{base}&{query}")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(sections(&body), all, "{query}");
+    }
+    let (_, body) = json(&app, &format!("{base}&tag=32")).await;
+    assert_eq!(body["sections"][0]["total"], 2, "1008 and 1009");
+    let (_, body) = json(&app, &format!("{base}&tag=30&types=tracks")).await;
+    assert_eq!(sections(&body), all[..1]);
+    for query in ["tag=31", "tag=30,31&tagMatch=all", "tag=nope"] {
+        let (_, body) = json(&app, &format!("{base}&{query}")).await;
+        assert_eq!(body["sections"], json!([]), "{query}");
+    }
+    let (_, body) = json(&app, "/api/v1/libraries/2/search?q=elsewhere&tag=30").await;
+    assert_eq!(body["sections"], json!([]), "another library's tag");
+}
