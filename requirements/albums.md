@@ -28,7 +28,7 @@ Shared behavior follows [`conventions.md`](conventions.md).
 - **Release year or date**, at tag precision
 - **Total tracks** and **total discs**, from tags rather than counted from what is present ([§3](#3-type), [§4](#4-track-listing--completeness))
 - **Type** ([§3](#3-type))
-- **Genres** ([`tags.md`](tags.md))
+- **Tags of every type**, from its tracks ([`tags.md` §6](tags.md#6-where-tags-attach))
 - **Labels** — from the label tag, else the publisher tag
 - **Total duration** and **track count** of the tracks present, shown wherever an album appears
 
