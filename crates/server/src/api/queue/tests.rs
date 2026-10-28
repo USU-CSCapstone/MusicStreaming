@@ -9,6 +9,7 @@ use crate::api::testing::{TOKEN, add_device, add_user, app_with_tracks, call, co
 use crate::db::testing::access;
 
 mod saved;
+mod view;
 
 const QUEUE: &str = "5f0c6a52-3b7e-4d43-9a8e-0d1c2b3a4f5e";
 const OTHER: &str = "6a1d0c52-3b7e-4d43-9a8e-0d1c2b3a4f5e";

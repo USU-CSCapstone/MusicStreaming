@@ -15,7 +15,7 @@ pub use representation::{
 
 use super::credit::{ArtistCredit, Credits};
 use super::extract::{Path, Query};
-use super::page::{Check, Order, Page, Request, Sort, Source, Table, Unknown};
+use super::page::{self, Check, Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
 use super::{AnyId, Id, Problem};
 use crate::db::{self, Database};
@@ -158,12 +158,7 @@ pub async fn list(
     if query.ids.is_some() {
         return by_ids(db, library, query).await;
     }
-    // An album's own track listing, the common case, reads straight from its index.
-    let sort = match (query.sort.unwrap_or_default(), &query.album_id) {
-        (TrackSort::Album, Some(_)) => &WITHIN_ALBUM,
-        (sort, _) => sort.sort(),
-    };
-    let order = query.order.unwrap_or_default();
+    let (sort, order) = ordering(&query);
     let request = Request::new(sort, order, query.cursor, query.limit)?;
     let credit = query.artist_credit.unwrap_or_default();
     let (album, artist) = (query.album_id, query.artist_id);
@@ -174,6 +169,39 @@ pub async fn list(
         })
         .await?;
     Ok(Json(page))
+}
+
+/// The keyset and direction `query` lists by.
+fn ordering(query: &ListQuery) -> (&'static Sort, Order) {
+    // An album's own track listing, the common case, reads straight from its index.
+    let sort = match (query.sort.unwrap_or_default(), &query.album_id) {
+        (TrackSort::Album, Some(_)) => &WITHIN_ALBUM,
+        (sort, _) => sort.sort(),
+    };
+    (sort, query.order.unwrap_or_default())
+}
+
+impl ListQuery {
+    /// Checks that this holds only the filters and the sort, as a queue's start takes it: a
+    /// `cursor`, `limit` or `ids` names a part of a list, and a start reads all of it.
+    pub fn check_whole(&self) -> Result<(), Problem> {
+        if self.cursor.is_some() || self.limit.is_some() || self.ids.is_some() {
+            return Err(Problem::invalid("cursor, limit and ids cannot start a queue"));
+        }
+        Ok(())
+    }
+}
+
+/// The ID of every track `query` lists in `library`, in the order `list` pages them, read by
+/// paging the same queries to the end. Ignores `cursor`, `limit` and `ids`; check them with
+/// [`ListQuery::check_whole`].
+pub fn all_ids(conn: &Connection, library: i64, query: ListQuery) -> rusqlite::Result<Vec<i64>> {
+    let (sort, order) = ordering(&query);
+    let credit = query.artist_credit.unwrap_or_default();
+    let source = source(conn, library, query.album_id, query.artist_id, credit)?;
+    // Only the IDs are wanted, so the columns and joins for summaries are left out.
+    let source = Source { select: &["t.id"], joins: "", ..source };
+    page::all_ids(conn, &source, sort, order)
 }
 
 /// `getTrack`: the track, or not found when the library has no such track.

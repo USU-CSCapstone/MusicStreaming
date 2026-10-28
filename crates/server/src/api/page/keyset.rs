@@ -105,8 +105,21 @@ pub fn fetch<T>(
     conn: &Connection,
     source: &Source,
     request: &Request,
-    mut map: impl FnMut(&Row) -> rusqlite::Result<T>,
+    map: impl FnMut(&Row) -> rusqlite::Result<T>,
 ) -> rusqlite::Result<(Vec<T>, Option<String>)> {
+    let (items, next) = fetch_keyed(conn, source, request, map)?;
+    let label = request.sort.label(request.order);
+    Ok((items, next.map(|key| cursor::encode(&label, &key))))
+}
+
+/// [`fetch`], with the sort values the next page continues after rather than a cursor made
+/// of them.
+pub fn fetch_keyed<T>(
+    conn: &Connection,
+    source: &Source,
+    request: &Request,
+    mut map: impl FnMut(&Row) -> rusqlite::Result<T>,
+) -> rusqlite::Result<(Vec<T>, Option<Vec<Value>>)> {
     // The row after the page, if there is one, says whether there is a next page.
     let mut left = request.limit + 1;
     let mut rows: Vec<(T, Vec<Value>)> = Vec::new();
@@ -130,7 +143,7 @@ pub fn fetch<T>(
 
     let next = if left == 0 {
         rows.pop();
-        rows.last().map(|(_, key)| cursor::encode(&request.sort.label(request.order), key))
+        rows.last().map(|(_, key)| key.clone())
     } else {
         None
     };
