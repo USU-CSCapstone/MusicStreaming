@@ -70,7 +70,10 @@ export function createApi(dataDir: string) {
 		if (req.method === 'DELETE') {
 			if (!id) recentSearches.delete(lib);
 			else if (list.some((r) => r.id === id)) {
-				recentSearches.set(lib, list.filter((r) => r.id !== id));
+				recentSearches.set(
+					lib,
+					list.filter((r) => r.id !== id)
+				);
 			} else return problem(res, 404, 'Not Found', 'not_found');
 			return reply(204);
 		}
@@ -287,7 +290,13 @@ export function createApi(dataDir: string) {
 			);
 		}
 		if (req.method !== 'GET' && req.method !== 'HEAD') {
-			return problem(res, 405, 'Method Not Allowed', 'method_not_allowed', 'The mock API is read-only.');
+			return problem(
+				res,
+				405,
+				'Method Not Allowed',
+				'method_not_allowed',
+				'The mock API is read-only.'
+			);
 		}
 		try {
 			const body = await route(req, res, path, url.searchParams);
