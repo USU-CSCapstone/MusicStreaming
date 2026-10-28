@@ -44,8 +44,9 @@ const SORTS: &[&str] = &["", "alpha", "beta", "zeta"];
 const LABELS: &[&str] = &["Sub Pop", "Domino", "Matador"];
 const TYPES: &[&str] = &["ep", "single", "album; compilation"];
 
-/// A record of the file at `path` under `root`, tagged from `rng`: up to two artists and three
-/// genres in several spellings, up to two labels, sometimes album artists, a compilation or a
+/// A record of the file at `path` under `root`, tagged from `rng`: up to two artists, three
+/// genres and two colours in several spellings, the colours from the genres' names, up to two
+/// labels, sometimes album artists, a compilation or a
 /// release type, sometimes no album or release date, one of a few sort keys for its artist and
 /// album, and sometimes art, embedded or a cover, an artist image or a biography, each one of a
 /// few.
@@ -61,6 +62,7 @@ fn random(rng: &mut Rng, root: &Path, path: PathBuf) -> TrackRecord {
     rec.tags.compilation = rng.chance(15);
     rec.tags.album = rng.chance(80).then(|| rng.pick(ALBUMS).to_string());
     rec.tags.set_values("genre", names(rng, GENRES, 3));
+    rec.tags.set_values("colour", names(rng, GENRES, 2));
     rec.tags.labels = names(rng, LABELS, 2);
     rec.tags.disc_number = *rng.pick(&[None, Some(1), Some(2)]);
     rec.tags.track_number = *rng.pick(&[None, Some(1), Some(2)]);
@@ -111,6 +113,7 @@ fn derived_values_equal_a_recompute_after_every_change() {
     let [a, b, c]: [PathBuf; 3] = ["a", "b", "c"].map(|r| tmp.path().join(r));
     let roots = (a.clone(), b.clone(), c.clone());
     db.write_blocking(move |tx| {
+        tx.execute("INSERT INTO tag_types (key) VALUES ('colour')", [])?;
         libraries::create(tx, Some(1), "Two roots", &[&roots.0, &roots.1], &[])?;
         libraries::create(tx, Some(2), "Other", &[&roots.2], &[]).map(drop)
     })
@@ -258,4 +261,49 @@ fn a_genre_taken_off_a_credited_track_is_taken_off_its_artist() {
         })
         .unwrap();
     check(&store, "taking a genre off one of them");
+}
+
+/// A name carried in two tag types is two tags, each brought to the album and artist on its own,
+/// and retagging a file out of one type leaves the other (`design/database.md` §3).
+#[test]
+fn a_name_in_two_tag_types_is_two_tags() {
+    let (tmp, db) = open();
+    let root = tmp.path().join("a");
+    let created = root.clone();
+    db.write_blocking(move |tx| {
+        tx.execute("INSERT INTO tag_types (key) VALUES ('colour')", [])?;
+        libraries::create(tx, Some(1), "Music", &[&created], &[]).map(drop)
+    })
+    .unwrap();
+    let store = SqliteStore::new(db).unwrap();
+    let tags = |store: &SqliteStore| -> Vec<(String, String, i64, i64, i64)> {
+        store
+            .db()
+            .read_blocking(|conn| {
+                conn.prepare(
+                    "SELECT type, name, track_count, \
+                     (SELECT COUNT(*) FROM album_tags WHERE tag_id = tags.id), \
+                     (SELECT COUNT(*) FROM artist_tags WHERE tag_id = tags.id) \
+                     FROM tags ORDER BY type",
+                )?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+                .collect()
+            })
+            .unwrap()
+    };
+    // Each tag is on one track, album and artist, and is named as its own type spells it.
+    let tag = |key: &str, name: &str| (key.to_owned(), name.to_owned(), 1, 1, 1);
+
+    let mut rec = record(&root, 0);
+    rec.tags.set_values("genre", vec!["Ambient".into()]);
+    rec.tags.set_values("colour", vec!["ambient".into()]);
+    store.apply(1, Batch { upserts: vec![rec.clone()], ..Batch::default() }).unwrap();
+    assert_eq!(tags(&store), [tag("colour", "ambient"), tag("genre", "Ambient")]);
+    check(&store, "one name in two types");
+
+    let id = tracks(&store).get(&rec.path).map(|t| t.0);
+    rec.tags.set_values("colour", Vec::new());
+    store.apply(1, Batch { upserts: vec![TrackRecord { id, ..rec }], ..Batch::default() }).unwrap();
+    assert_eq!(tags(&store), [tag("genre", "Ambient")]);
+    check(&store, "retagged out of one type");
 }

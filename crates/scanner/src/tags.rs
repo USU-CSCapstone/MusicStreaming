@@ -226,6 +226,11 @@ struct TagTypeField {
 /// [`strings`], so a new type is an entry here and nothing else.
 const TAG_TYPES: &[TagTypeField] = &[TagTypeField { key: "genre", item: ItemKey::Genre }];
 
+/// The keys of every tag type the scanner reads, each of which `tag_types` must list.
+pub fn tag_type_keys() -> impl Iterator<Item = &'static str> {
+    TAG_TYPES.iter().map(|tag_type| tag_type.key)
+}
+
 /// Parse a number that may be packed as `n/total`.
 fn number_pair(raw: &str) -> (Option<u32>, Option<u32>) {
     let mut it = raw.split('/');
