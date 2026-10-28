@@ -94,7 +94,7 @@ The displayed name — `artists.name`, `albums.title`, `tags.name` — is the sp
 - **Coalesced on write.** Recording a change deletes that entity's earlier row, so each entity has at most one row, carrying its latest position. "Everything after cursor N" is then already the net effect.
 - **Tombstones age out.** Deletions leave one row. Dropping those older than the retention window advances the feed's horizon, and older cursors answer `410`. Neither the aging out nor the horizon is built yet; each feed gains its horizon column with them.
 - **Written in the same transaction** as the change itself.
-- **An embedded summary follows its entity's own change.** A track's summary embeds its album's title and art, its artists' names and its genres' names, but a change to the album, artist or genre names only that album, artist or genre, never every track that embeds it. A client patches the copies it holds from that entity's change.
+- **An embedded summary follows its entity's own change.** A track's summary embeds its album's title and art, its artists' names and its tags' names, but a change to the album, artist or tag names only that album, artist or tag, never every track that embeds it. A client patches the copies it holds from that entity's change.
 
 ---
 

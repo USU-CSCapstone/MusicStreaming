@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use crate::api::Id;
 use crate::api::refs::{
-    AlbumRef, Credit, ImageRef, TagRef, artists_json, availability, genres_json, placeholder,
+    AlbumRef, Credit, ImageRef, TagsByType, artists_json, availability, placeholder, tags_json,
 };
 use crate::api::time::serialize_rfc3339;
 use crate::db::Json;
@@ -30,7 +30,7 @@ pub struct TrackSummary<A = AudioSummary> {
     track_number: Option<i64>,
     duration_us: i64,
     release_date: Option<String>,
-    genres: Vec<TagRef>,
+    tags: TagsByType,
     explicit: bool,
     audio: A,
     availability: &'static str,
@@ -122,7 +122,7 @@ pub const SELECT: &[&str] = &[
     "t.missing_since IS NULL",
     "t.added_at",
     artists_json!("track", "t.id"),
-    genres_json!("track", "t.id"),
+    tags_json!("track", "t.id"),
     "al.title",
     "al.image_id",
     artists_json!("album", "t.album_id"),
@@ -192,7 +192,7 @@ fn summary<A>(row: &Row, audio: A) -> rusqlite::Result<TrackSummary<A>> {
         track_number: row.get(4)?,
         duration_us: row.get(5)?,
         release_date: row.get(6)?,
-        genres: row.get::<_, Json<_>>(13)?.0,
+        tags: row.get::<_, Json<_>>(13)?.0,
         explicit: row.get(7)?,
         audio,
         availability: availability(row.get(10)?),
