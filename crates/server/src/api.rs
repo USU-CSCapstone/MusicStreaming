@@ -32,6 +32,7 @@ mod scope;
 mod search;
 mod session;
 mod setup;
+mod tags;
 #[cfg(test)]
 pub(crate) mod testing;
 mod time;

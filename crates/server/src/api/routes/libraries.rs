@@ -5,7 +5,7 @@ use axum::routing::{delete, get};
 
 use crate::api::{
     AppState, albums, artists, audio, images, libraries, lyrics, playlists, recent_searches,
-    search, tracks, waveform,
+    search, tags, tracks, waveform,
 };
 
 /// Every route under `/libraries`.
@@ -16,6 +16,9 @@ pub fn router() -> Router<AppState> {
         .route("/libraries/{library_id}/albums", get(albums::list))
         .route("/libraries/{library_id}/artists", get(artists::list))
         .route("/libraries/{library_id}/playlists", get(playlists::list))
+        .route("/libraries/{library_id}/tag-types", get(tags::types))
+        .route("/libraries/{library_id}/tags", get(tags::list))
+        .route("/libraries/{library_id}/tags/{tag_id}", get(tags::get))
         .route("/libraries/{library_id}/tracks", get(tracks::list))
         .route("/libraries/{library_id}/tracks/{track_id}", get(tracks::get))
         .route("/libraries/{library_id}/search", get(search::search))

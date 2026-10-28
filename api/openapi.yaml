@@ -607,7 +607,7 @@ paths:
       tags: [Browse]
       summary: List tag types
       description: |
-        **Planned:** The tag types the library's music carries, in key order: each type with at
+        The tag types the library's music carries, in key order: each type with at
         least one tag in the library, and its count of tags. A type no file in the library
         carries is left out, so a filter drawn from this list never shows an empty section
         (`requirements/tags.md` §2, §8).
@@ -629,7 +629,7 @@ paths:
       tags: [Browse]
       summary: Browse tags
       description: |
-        **Planned:** The library's tags, of one type or every type. A tag sorts by its name, its
+        The library's tags, of one type or every type. A tag sorts by its name, its
         leading article kept (`requirements/conventions.md` §4).
       operationId: listTags
       parameters:
@@ -662,8 +662,8 @@ paths:
       tags: [Browse]
       summary: Get a tag
       description: |
-        **Planned:** A tag's tracks, albums, and artists are browsed with the `tag` filter on the
-        browse endpoints (`requirements/tags.md` §7).
+        A tag's tracks, albums, and artists are browsed with the `tag` filter on the browse
+        endpoints (`requirements/tags.md` §7).
       operationId: getTag
       responses:
         '200':
