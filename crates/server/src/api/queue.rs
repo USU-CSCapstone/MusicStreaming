@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::extract::State;
-use axum::http::header;
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use jewelcase_core::{Queue, Recover};
 use serde::Serialize;
@@ -55,10 +55,16 @@ struct Snapshot<'a> {
 }
 
 impl Queues {
-    /// `user`'s snapshot as JSON, or `None` if they have no queue.
-    fn snapshot(&self, user: i64) -> Option<Vec<u8>> {
+    /// `user`'s snapshot, or `None` if they have no queue: its `ETag`, and its JSON unless
+    /// `known` (an `If-None-Match` value) already names this queue and version, which is checked
+    /// before anything is serialized.
+    fn snapshot(&self, user: i64, known: Option<&str>) -> Option<(String, Option<Vec<u8>>)> {
         let accounts = self.lock();
         let account = accounts.get(&user)?;
+        let etag = format!("\"{}.{}\"", account.queue_id.as_str(), account.version);
+        if known.is_some_and(|known| known.split(',').any(|tag| tag.trim() == etag)) {
+            return Some((etag, None));
+        }
         let snapshot = Snapshot {
             queue_id: &account.queue_id,
             version: account.version,
@@ -66,7 +72,8 @@ impl Queues {
             state: &account.queue,
         };
         // A queue takes only what its fields hold to serialize, so this cannot fail.
-        serde_json::to_vec(&snapshot).ok()
+        let body = serde_json::to_vec(&snapshot).ok()?;
+        Some((etag, Some(body)))
     }
 
     /// Each account's queue, locked.
@@ -75,14 +82,26 @@ impl Queues {
     }
 }
 
-/// `getQueue`: the caller's own queue, or `404` before they have started one. Serialized off
-/// the async threads, since a queue of hundreds of thousands of tracks takes a while.
-pub async fn get(State(queues): State<Arc<Queues>>, caller: Caller) -> Result<Response, Problem> {
-    let body = tokio::task::spawn_blocking(move || queues.snapshot(caller.user))
+/// `getQueue`: the caller's own queue, or `404` before they have started one. It carries an
+/// `ETag` naming the queue and its version, and `304` with no body answers an `If-None-Match`
+/// that names them, so a device that reconnects downloads nothing it has. Serialized off the
+/// async threads, since a queue of hundreds of thousands of tracks takes a while.
+pub async fn get(
+    State(queues): State<Arc<Queues>>,
+    caller: Caller,
+    headers: HeaderMap,
+) -> Result<Response, Problem> {
+    let known = headers.get(header::IF_NONE_MATCH).and_then(|value| value.to_str().ok());
+    let known = known.map(str::to_owned);
+    let found = tokio::task::spawn_blocking(move || queues.snapshot(caller.user, known.as_deref()))
         .await
         .map_err(|_| Problem::new(Code::Internal))?;
-    let body = body.ok_or_else(Problem::not_found)?;
-    Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
+    let (etag, body) = found.ok_or_else(Problem::not_found)?;
+    Ok(match body {
+        Some(body) => ([(header::CONTENT_TYPE, "application/json"), (header::ETAG, &etag)], body)
+            .into_response(),
+        None => (StatusCode::NOT_MODIFIED, [(header::ETAG, &etag)]).into_response(),
+    })
 }
 
 #[cfg(test)]

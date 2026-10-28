@@ -820,7 +820,10 @@ export interface paths {
         /**
          * Get the queue
          * @description The account's whole queue, for a device to load into the shared core
-         *     (`requirements/queue.md` §7). `404` until a queue has been started.
+         *     (`requirements/queue.md` §7). `404` until a queue has been started. The `ETag` names the
+         *     queue and its version, `"<queueId>.<version>"`; a request whose `If-None-Match` names
+         *     them is answered `304` with no body, so a device that reconnects downloads only what it
+         *     lacks. Any other value, or none, gets the whole snapshot.
          */
         get: operations["getQueue"];
         put?: never;
@@ -1955,33 +1958,69 @@ export interface components {
             state: components["schemas"]["QueueState"];
         };
         /**
-         * @description The shared core's queue, as it serializes. A client loads it into the core and asks the
-         *     core for what it shows, never reading the lists itself. Items are numbers: an item's
-         *     number counts the tracks of `sources` laid end to end, and its ID is `<key>.<index>`
-         *     in its source. A track that no longer resolves is skipped in place.
+         * @description The queue, in the shape the shared core serializes, which is a stable public shape: a
+         *     client may read it without the core, and a change to it is a breaking change.
+         *
+         *     An **item** is one track of one source. Its number is its position in the tracks of
+         *     `sources` laid end to end, and its ID is `<key>.<index>`, with `key` its source's and
+         *     `index` its position in that source. The same track twice is two items. Every number in
+         *     `manual`, `order`, `current`, `history` and `unshuffled` is an item number. An item is in
+         *     at most one of the Manual Queue, the context's Up Next, History and `current`. A track
+         *     that no longer resolves is skipped in place.
+         *
+         *     A queue holds at most 1,000,000 items, counting the copies a Repeat All restart makes: an
+         *     add that would pass it is refused with `422`, and a Repeat All restart that would pass it
+         *     ends the queue instead.
          */
         QueueState: {
+            /**
+             * @description The lists of tracks the items come from, in the order that numbers them. Sources are
+             *     only ever added, never changed.
+             */
             sources: {
+                /**
+                 * @description Unique within the queue; names the source's items. Chosen by whoever added it.
+                 *     A key starting with `~` is reserved for the copies the server and Repeat All
+                 *     restarts make.
+                 */
                 key: string;
+                /** @description The library every track of the source is in. */
                 libraryId: string;
+                /** @description Track IDs, in the order they were resolved. A track may repeat. */
                 tracks: string[];
             }[];
-            /** @description The Manual Queue, in play order. */
+            /** @description The Manual Queue, in play order. It plays before the context's Up Next. */
             manual: number[];
-            /** @description The context, with the items before `cursor` already started or passed. */
+            /**
+             * @description The context, in play order. The items before `cursor` have been started or passed and
+             *     stay here so the context can restart or unshuffle; those from `cursor` on are the
+             *     context's Up Next.
+             */
             order: number[];
+            /** @description How many items of `order` have been started or passed. */
             cursor: number;
+            /** @description The item playing now, or `null` when the queue has ended. */
             current: number | null;
-            /** @description Oldest first. */
+            /** @description The items that have played, oldest first. */
             history: number[];
-            /** @description Set while the context is shuffled. */
+            /** @description Set while the context is shuffled; `null` otherwise. */
             shuffle: {
+                /** @description The seed the current order came from, chosen by a device. */
                 seed: number;
+                /** @description The context's order before the shuffle, passed items included. */
                 unshuffled: number[];
             } | null;
-            /** @enum {string} */
+            /**
+             * @description What happens when the queue ends: `off` stops, `all` restarts the context in its
+             *     current order, `one` replays the current item (which the playing device carries out).
+             *     A new context keeps the mode.
+             * @enum {string}
+             */
             repeat: "off" | "all" | "one";
-            /** @description How many sources a Repeat All restart or a carried-over Manual Queue has minted, keyed `~<n>`. */
+            /**
+             * @description How many sources a Repeat All restart or a carried-over Manual Queue has minted, keyed
+             *     `~0`, `~1`, ...; it names the next.
+             */
             copies: number;
         };
         PluginSettings: {
@@ -3606,7 +3645,10 @@ export interface operations {
     getQueue: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The `ETag` of the snapshot the device already holds. */
+                "If-None-Match"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -3615,11 +3657,21 @@ export interface operations {
             /** @description OK */
             200: {
                 headers: {
+                    /** @description `"<queueId>.<version>"`. */
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["QueueSnapshot"];
                 };
+            };
+            /** @description The device's queue and version are current. */
+            304: {
+                headers: {
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Problem"];
         };

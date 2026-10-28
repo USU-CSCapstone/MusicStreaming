@@ -2,6 +2,7 @@ use axum::Router;
 use axum::http::StatusCode;
 use jewelcase_core::{Anchor, Edit, Source};
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 use super::{Queues, Uuid};
 use crate::api::testing::{TOKEN, add_device, add_user, app_with_tracks, call, conn};
@@ -254,4 +255,67 @@ async fn each_account_has_its_own_queue() {
     post(&app, "user2", start(OTHER, "1", &["2", "1"])).await;
     assert_eq!(tracks(get(&app, "user3").await.1), json!(["2"]));
     assert_eq!(get(&app, "user3").await.1["queueId"], QUEUE);
+}
+
+/// `getQueue` as the owner with `If-None-Match: tag`, if any: the status, `ETag` and body length.
+async fn conditional_get(app: &Router, tag: Option<&str>) -> (StatusCode, Option<String>, usize) {
+    let mut request = axum::http::Request::builder()
+        .uri("/api/v1/me/queue")
+        .header(axum::http::header::AUTHORIZATION, format!("Bearer {TOKEN}"));
+    if let Some(tag) = tag {
+        request = request.header(axum::http::header::IF_NONE_MATCH, tag);
+    }
+    let (status, headers, body) =
+        crate::api::testing::respond(app.clone(), request.body(axum::body::Body::empty()).unwrap())
+            .await;
+    let etag = headers.get(axum::http::header::ETAG).map(|tag| tag.to_str().unwrap().to_owned());
+    (status, etag, body.len())
+}
+
+#[tokio::test]
+async fn the_snapshot_is_conditional_on_its_queue_and_version() {
+    let (_temp, app) = setup().await;
+    post(&app, TOKEN, start(QUEUE, "1", &["1", "2"])).await;
+
+    let (status, etag, length) = conditional_get(&app, None).await;
+    let etag = etag.unwrap();
+    assert_eq!((status, etag.as_str()), (StatusCode::OK, format!("\"{QUEUE}.0\"").as_str()));
+    assert!(length > 0);
+
+    let (status, same, length) = conditional_get(&app, Some(&etag)).await;
+    assert_eq!((status, same.as_ref(), length), (StatusCode::NOT_MODIFIED, Some(&etag), 0));
+    let listed = format!("\"x\", {etag}");
+    assert_eq!(conditional_get(&app, Some(&listed)).await.0, StatusCode::NOT_MODIFIED);
+
+    for other in [format!("\"{QUEUE}.1\""), format!("\"{OTHER}.0\""), "*".to_owned()] {
+        let (status, _, length) = conditional_get(&app, Some(&other)).await;
+        assert_eq!(status, StatusCode::OK, "{other}");
+        assert!(length > 0);
+    }
+}
+
+#[tokio::test]
+async fn a_new_start_keeps_the_accounts_repeat_mode_and_manual_queue() {
+    // No endpoint edits a queue yet, so the edits are made as the server's own code would.
+    let queues = Arc::new(Queues::default());
+    let id = Uuid::try_from(QUEUE.to_owned()).unwrap();
+    let source = |key: &str| Source {
+        key: key.into(),
+        library_id: "1".into(),
+        tracks: vec!["1".into(), "2".into()],
+    };
+    queues.replace(1, id, json!({ "type": "album" }), source(KEY), 0, None).unwrap();
+    {
+        let mut accounts = queues.lock();
+        let queue = &mut accounts.get_mut(&1).unwrap().queue;
+        queue.apply(&Edit::Repeat { mode: jewelcase_core::Repeat::All }).unwrap();
+        queue.apply(&Edit::Add { source: source("m"), before: Anchor::ManualEnd }).unwrap();
+    }
+    let next = Uuid::try_from(OTHER.to_owned()).unwrap();
+    queues.replace(1, next, json!({ "type": "album" }), source(KEY), 0, Some(5)).unwrap();
+    let accounts = queues.lock();
+    let queue = &accounts[&1].queue;
+    assert_eq!(queue.repeat(), jewelcase_core::Repeat::All);
+    assert_eq!(queue.manual().count(), 2);
+    assert!(queue.shuffled());
 }

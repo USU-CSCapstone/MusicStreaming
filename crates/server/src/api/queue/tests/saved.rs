@@ -204,3 +204,19 @@ async fn restarting_an_earlier_queue_replaces_what_was_saved() {
     queues.save(&db).await;
     assert_eq!(restarted(&db).await.unwrap().queue, queues.lock()[&1].queue);
 }
+
+/// A save whose task is dropped while it waits still writes, so a stop that cuts off the
+/// periodic save loses nothing.
+#[tokio::test]
+async fn a_save_cut_off_is_not_lost() {
+    let (_temp, db, _app) = app_with_tracks().await;
+    let queues = Arc::new(Queues::default());
+    begin(&queues, QUEUE, &["1", "2"]);
+    tokio::select! {
+        biased;
+        () = queues.save(&db) => {}
+        () = std::future::ready(()) => {}
+    }
+    queues.save(&db).await;
+    assert!(restarted(&db).await.is_some());
+}

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::http::StatusCode;
-use jewelcase_core::{Edit, Queue, Source};
+use jewelcase_core::{Queue, Source};
 use rusqlite::params;
 use serde::Deserialize;
 use serde_json::Value;
@@ -41,7 +41,7 @@ struct Shuffle {
 }
 
 /// Replaces the caller's queue with one that plays the request's source from `start`, carrying
-/// the Manual Queue over. Refuses the request, `422`, unless every track is in the library and
+/// the Manual Queue and the repeat mode over. Refuses the request, `422`, unless every track is in the library and
 /// the caller reaches the library, whether or not what is refused exists, so no one learns what
 /// a library they cannot reach holds (`requirements/users.md` §10). A request for the queue the
 /// caller already has, by `queueId`, changes nothing, so a device may send it again.
@@ -92,7 +92,7 @@ pub async fn start(
 
 impl Queues {
     /// Makes `user`'s queue one that plays `source` from `start`, shuffled with `seed` if given,
-    /// and keeps the Manual Queue they had. Does nothing if their queue is `queue_id` already.
+    /// and keeps the Manual Queue and repeat mode they had. Does nothing if their queue is `queue_id` already.
     pub(super) fn replace(
         &self,
         user: i64,
@@ -108,13 +108,8 @@ impl Queues {
         if before.is_some_and(|account| account.queue_id == queue_id) {
             return Ok(());
         }
-        let mut queue = Queue::start(source, start).map_err(invalid)?;
-        if let Some(old) = before {
-            queue.carry_manual(&old.queue).map_err(invalid)?;
-        }
-        if let Some(seed) = seed {
-            queue.apply(&Edit::Shuffle { on: true, seed }).map_err(invalid)?;
-        }
+        let queue = Queue::launch(source, start, seed, before.map(|account| &account.queue))
+            .map_err(invalid)?;
         // None of this queue is in the database, whatever an earlier queue left there, so the
         // next save replaces it.
         let saved = None;

@@ -142,6 +142,26 @@ impl Queue {
         Ok(())
     }
 
+    /// What a start does, in one place: start `source` at `start`, carry the Manual Queue and the
+    /// repeat mode of the queue it replaces (`requirements/queue.md` §5, §6), and shuffle with
+    /// `seed` if given. Fails, as the steps do, with nothing built.
+    pub fn launch(
+        source: Source,
+        start: usize,
+        seed: Option<u32>,
+        previous: Option<&Queue>,
+    ) -> Result<Self, Error> {
+        let mut queue = Self::start(source, start)?;
+        if let Some(old) = previous {
+            queue.carry_manual(old)?;
+            queue.repeat = old.repeat;
+        }
+        if let Some(seed) = seed {
+            queue.apply(&Edit::Shuffle { on: true, seed })?;
+        }
+        Ok(queue)
+    }
+
     /// The sources, in the order their items are numbered. Sources are only ever added, so a
     /// caller that saved the first `n` need save only those after.
     pub fn sources(&self) -> &[Source] {
@@ -173,7 +193,8 @@ impl Queue {
         self.ids(self.tail())
     }
 
-    /// Up to `limit` of Up Next's item IDs from `offset`. Costs only the window, however deep.
+    /// Up to `limit` of the context's Up Next item IDs from `offset`, which play after the Manual
+    /// Queue. Costs only the window, however deep.
     pub fn upcoming_window(
         &self,
         offset: usize,

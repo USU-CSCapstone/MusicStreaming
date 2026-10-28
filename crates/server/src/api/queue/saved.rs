@@ -60,20 +60,13 @@ impl Queues {
     }
 
     /// Saves every queue changed since it was last saved, in one write. The queues are
-    /// serialized off the async threads, since a large one takes a while.
+    /// serialized in the write itself, on the database's writer thread rather than an async
+    /// one, since a large one takes a while; so a save whose task is aborted still finishes, and
+    /// never marks a queue saved without writing it.
     pub async fn save(self: &Arc<Self>, db: &Database) {
         let queues = self.clone();
-        let rows = tokio::task::spawn_blocking(move || queues.unsaved()).await;
-        let Ok(rows) = rows else {
-            tracing::warn!("cannot serialize queues to save");
-            return;
-        };
-        if rows.is_empty() {
-            return;
-        }
-        let users: Vec<i64> = rows.iter().map(|row| row.user).collect();
         let write = db.write(move |tx| {
-            for row in rows {
+            for row in queues.unsaved() {
                 // One account's failing, as when it was deleted under its queue, must not keep
                 // everyone else's from being saved.
                 if let Err(error) = write(tx, &row) {
@@ -85,12 +78,9 @@ impl Queues {
         if let Err(error) = write.await {
             tracing::warn!(%error, "cannot save queues");
             // Tried again at the next save, whole, not left until each queue's next change.
-            let mut accounts = self.lock();
-            for user in users {
-                if let Some(account) = accounts.get_mut(&user) {
-                    account.unsaved = true;
-                    account.saved = None;
-                }
+            for account in self.lock().values_mut() {
+                account.unsaved = true;
+                account.saved = None;
             }
         }
     }

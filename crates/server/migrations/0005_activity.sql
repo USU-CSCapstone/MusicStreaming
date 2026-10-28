@@ -130,7 +130,7 @@ CREATE TABLE queues (
 -- A queue's sources, each written once as it joins the queue, so a shuffle or a move saves no
 -- more than `queues.state`. They are numbered in the order they joined, which numbers the
 -- items. No foreign key to the library: once it is deleted its tracks are simply not found,
--- as in `player_states`, and random IDs keep a later library from inheriting them.
+-- and random IDs keep a later library from inheriting them.
 CREATE TABLE queue_sources (
     user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     position   INTEGER NOT NULL CHECK (position >= 0),

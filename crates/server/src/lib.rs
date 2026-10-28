@@ -137,6 +137,8 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         queues.save(&db).await;
     };
     serve::serve(listener, app, shutdown, as_it_stops).await;
+    // A start or edit still in flight when the stop began may have landed after that save.
+    queues.save(&db).await;
     tokio::task::spawn_blocking(move || scanning.stop()).await?;
 
     info!("stopped");

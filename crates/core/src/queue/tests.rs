@@ -818,3 +818,28 @@ fn carrying_the_manual_queue_over_keeps_its_order_and_tracks() {
     }
     assert_eq!(new.current().as_deref().map(|id| id.starts_with('~')), Some(true));
 }
+
+#[test]
+fn launch_carries_manual_and_repeat_and_shuffles_like_the_steps_it_replaces() {
+    let mut old = album();
+    add(&mut old, source("m", 2), Anchor::ManualEnd);
+    old.apply(&Edit::Repeat { mode: Repeat::All }).unwrap();
+
+    let launched = Queue::launch(source("b", 6), 2, Some(9), Some(&old)).unwrap();
+    assert_eq!(launched.repeat(), Repeat::All);
+    assert_eq!(manual(&launched), strings(&["~0.0", "~0.1"]));
+    assert!(launched.shuffled());
+
+    let mut steps = Queue::start(source("b", 6), 2).unwrap();
+    steps.carry_manual(&old).unwrap();
+    steps.apply(&Edit::Repeat { mode: Repeat::All }).unwrap();
+    shuffle_on(&mut steps, 9);
+    assert_eq!(launched, steps);
+}
+
+#[test]
+fn launch_without_a_previous_queue_or_seed_is_a_plain_start() {
+    let launched = Queue::launch(source("b", 6), 2, None, None).unwrap();
+    assert_eq!(launched, Queue::start(source("b", 6), 2).unwrap());
+    assert!(Queue::launch(source("b", 6), 6, None, None).is_err());
+}
