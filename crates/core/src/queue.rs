@@ -15,12 +15,19 @@
 //! - `history`: what has played, oldest first.
 //!
 //! Up Next is `manual` followed by the context's Up Next. An item is in at most one of Up Next,
-//! History and `current`. Played context items also stay in `order` before the cursor, so a later
-//! step can restart or unshuffle the context.
+//! History and `current`. Played context items also stay in `order` before the cursor, so the
+//! context can restart (Repeat All) or unshuffle.
+//!
+//! Shuffle permutes only the context's Up Next, by a seed the device chooses, and keeps the
+//! order it replaced in `unshuffled` (§4). Repeat All restarts the same order when the queue
+//! ends. A restart copies the context, in its order, into new sources with fresh item IDs (keys
+//! `~0`, `~1`, ...), so History keeps the whole session and no item is in Up Next and History at
+//! once. `~` keys are reserved: [`Queue::start`] and `Add` refuse a key that starts with one.
 //!
 //! Pure: no I/O, clock or randomness.
 
 mod edit;
+mod shuffle;
 #[cfg(test)]
 mod tests;
 
@@ -48,6 +55,30 @@ pub struct TrackRef<'a> {
     pub track_id: &'a str,
 }
 
+/// What happens when the queue ends (`requirements/queue.md` §5). Repeat One is the playing
+/// device's to carry out; the queue only records it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Repeat {
+    /// Stop at the end.
+    #[default]
+    Off,
+    /// Restart the context in the order it already has.
+    All,
+    /// Replay the current item.
+    One,
+}
+
+/// What a shuffled queue remembers about the shuffle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Shuffled {
+    /// The seed the order came from, chosen by a device.
+    seed: u32,
+    /// The context order before the shuffle, including passed items.
+    unshuffled: Vec<u32>,
+}
+
 /// A queue. Edits go through [`Queue::apply`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,6 +89,10 @@ pub struct Queue {
     cursor: usize,
     current: Option<u32>,
     history: Vec<u32>,
+    shuffle: Option<Shuffled>,
+    repeat: Repeat,
+    /// How many `~` sources Repeat All restarts have minted, which names the next one.
+    copies: u32,
 }
 
 /// Where an insert lands, as a position in `manual` or in `order`.
@@ -68,8 +103,12 @@ enum Spot {
 
 impl Queue {
     /// Start a queue that plays `source` from the item at `start`. Earlier items count as passed:
-    /// they are not in Up Next or History. Fails if `start` is past the end.
+    /// they are not in Up Next or History. Fails if `start` is past the end or the key is
+    /// reserved.
     pub fn start(source: Source, start: usize) -> Result<Self, Error> {
+        if source.key.starts_with('~') {
+            return Err(Error::ReservedKey);
+        }
         if start >= source.tracks.len() {
             return Err(Error::StartOutOfRange);
         }
@@ -81,6 +120,16 @@ impl Queue {
             sources: vec![source],
             ..Self::default()
         })
+    }
+
+    /// Whether the context is shuffled.
+    pub fn shuffled(&self) -> bool {
+        self.shuffle.is_some()
+    }
+
+    /// The repeat mode.
+    pub fn repeat(&self) -> Repeat {
+        self.repeat
     }
 
     /// The ID of the item playing now, if any.
@@ -122,6 +171,18 @@ impl Queue {
                 self.take_named(&named);
                 Ok(())
             }
+            Edit::Shuffle { on, seed } => {
+                if *on {
+                    self.shuffle(*seed);
+                } else {
+                    self.unshuffle();
+                }
+                Ok(())
+            }
+            Edit::Repeat { mode } => {
+                self.repeat = *mode;
+                Ok(())
+            }
             Edit::Jump { item } => {
                 self.jump(item);
                 Ok(())
@@ -140,10 +201,13 @@ impl Queue {
     /// Add a source's items at the anchor.
     fn add(&mut self, source: &Source, before: &Anchor) -> Result<(), Error> {
         let spot = self.spot(before, &[])?;
+        if source.key.starts_with('~') {
+            return Err(Error::ReservedKey);
+        }
         if self.sources.iter().any(|known| known.key == source.key) {
             return Err(Error::DuplicateSource);
         }
-        let count: usize = self.sources.iter().map(|s| s.tracks.len()).sum();
+        let count = self.item_count();
         let first = to_item(count)?;
         let end = to_item(count + source.tracks.len())?;
         self.sources.push(source.clone());
@@ -186,9 +250,14 @@ impl Queue {
         self.current = Some(item);
     }
 
-    /// Play the first item of Up Next, and move what was playing to History.
+    /// Play the first item of Up Next, and move what was playing to History. With Repeat All and
+    /// nothing left to play, the context restarts first, see [`Queue::restart`].
     fn next(&mut self) {
-        let upcoming = if self.manual.is_empty() {
+        self.retire_current();
+        if self.manual.is_empty() && self.tail().is_empty() && self.repeat == Repeat::All {
+            self.restart();
+        }
+        self.current = if self.manual.is_empty() {
             let first = self.tail().first().copied();
             if first.is_some() {
                 self.cursor += 1;
@@ -197,8 +266,53 @@ impl Queue {
         } else {
             Some(self.manual.remove(0))
         };
-        self.retire_current();
-        self.current = upcoming;
+    }
+
+    /// Start the context over for Repeat All: copy its tracks, in the order they have, into new
+    /// sources keyed `~<n>` (one per run of tracks from the same library), and make the copies
+    /// the context, unplayed. The old items stay where they are, so History keeps the whole
+    /// session. A shuffle carries over, with its remembered order mapped onto the copies. Does
+    /// nothing if the copies would not fit in the item numbers.
+    fn restart(&mut self) {
+        let size = self.item_count();
+        let (Ok(base), Ok(_)) = (to_item(size), to_item(size + self.order.len())) else {
+            return;
+        };
+        let mut sources: Vec<Source> = Vec::new();
+        let mut copies = self.copies;
+        let mut copied = 0;
+        let mut renumbered: Vec<Option<u32>> = vec![None; size];
+        for &item in &self.order {
+            let Some((source, index)) = self.span(item) else {
+                continue;
+            };
+            let track = source.tracks[index].clone();
+            match sources.last_mut() {
+                Some(run) if run.library_id == source.library_id => run.tracks.push(track),
+                _ => {
+                    let key = format!("~{copies}");
+                    copies += 1;
+                    sources.push(Source {
+                        key,
+                        library_id: source.library_id.clone(),
+                        tracks: vec![track],
+                    });
+                }
+            }
+            renumbered[item as usize] = Some(base + copied);
+            copied += 1;
+        }
+        if let Some(shuffled) = &mut self.shuffle {
+            shuffled.unshuffled = shuffled
+                .unshuffled
+                .iter()
+                .filter_map(|&item| renumbered.get(item as usize).copied().flatten())
+                .collect();
+        }
+        self.sources.extend(sources);
+        self.copies = copies;
+        self.order = (base..base + copied).collect();
+        self.cursor = 0;
     }
 
     /// Play the most recent History item. What was playing goes back to the front of Up Next:
@@ -304,6 +418,16 @@ impl Queue {
         items.sort_unstable();
         items.dedup();
         items
+    }
+
+    /// The context items already started or passed.
+    fn passed(&self) -> &[u32] {
+        self.order.get(..self.cursor).unwrap_or_default()
+    }
+
+    /// The number of items in all sources.
+    fn item_count(&self) -> usize {
+        self.sources.iter().map(|source| source.tracks.len()).sum()
     }
 
     /// The context's Up Next.
