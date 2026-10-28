@@ -30,6 +30,7 @@ state.
 | Command                       | What it does                                                   |
 | ----------------------------- | -------------------------------------------------------------- |
 | `pnpm dev`                    | Dev server with the mock API                                   |
+| `pnpm wasm`                   | Build `core-wasm` into `src/lib/core-wasm` (run by the others) |
 | `pnpm build` / `pnpm preview` | Static production build in `build/`, and a local preview of it |
 | `pnpm check`                  | Type-check, including the mock                                 |
 | `pnpm lint` / `pnpm format`   | ESLint and oxfmt                                               |

@@ -147,6 +147,20 @@ impl Queue {
         self.ids(self.tail())
     }
 
+    /// Up to `limit` of Up Next's item IDs from `offset`. Costs only the window, however deep.
+    pub fn upcoming_window(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> impl Iterator<Item = String> + '_ {
+        self.ids(window(self.tail(), offset, limit))
+    }
+
+    /// Up to `limit` History item IDs from `offset`, oldest first. Costs only the window.
+    pub fn history_window(&self, offset: usize, limit: usize) -> impl Iterator<Item = String> + '_ {
+        self.ids(window(&self.history, offset, limit))
+    }
+
     /// The History item IDs, oldest first.
     pub fn history(&self) -> impl Iterator<Item = String> + '_ {
         self.ids(&self.history)
@@ -474,6 +488,13 @@ impl Queue {
         }
         None
     }
+}
+
+/// The part of `items` that starts at `offset` and holds at most `limit` of them.
+fn window(items: &[u32], offset: usize, limit: usize) -> &[u32] {
+    let start = offset.min(items.len());
+    let end = start.saturating_add(limit).min(items.len());
+    &items[start..end]
 }
 
 /// The most items a queue holds, so one account's queue cannot exhaust the server's memory. A

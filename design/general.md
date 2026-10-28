@@ -118,7 +118,7 @@ Plugin UI surfaces must render natively on both web and Android ([`requirements/
 jewelcase/
 ├── crates/
 │   ├── core/        # shared core (§3)
-│   ├── core-wasm/   # WebAssembly bindings for the web client (later, with the worker in §7.1)
+│   ├── core-wasm/   # WebAssembly bindings for the web client, built by `pnpm -C web wasm` (ADR 0007)
 │   ├── ffmpeg/      # ffmpeg subprocess wrapper — probe, decode, transcode (scanning.md §11)
 │   ├── plugins/     # plugin host — Wasmtime, the WIT contract, manifests (plugins.md)
 │   ├── scanner/     # ingestion pipeline (scanning.md)
