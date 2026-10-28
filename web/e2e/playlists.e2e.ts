@@ -342,6 +342,7 @@ test('scrolling past the end of a long playlist leaves the app where it is', asy
 
 test.describe('adding to a playlist', () => {
 	const titles = (page: Page) => page.locator('.track .title');
+	/** The ⋯ button that opens the actions for the song `title`. */
 	const more = (page: Page, title: string) =>
 		page.getByRole('button', { name: `Actions for ${title}` });
 

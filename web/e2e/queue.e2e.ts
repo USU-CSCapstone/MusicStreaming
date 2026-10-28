@@ -379,6 +379,7 @@ test('pressing the handle without moving selects the row, and again lets it go',
 	const list = panel.getByRole('list', { name: 'Up Next' });
 	const row = list.locator('li.row[data-item]').nth(2);
 	const grip = (await row.locator('.grip').boundingBox())!;
+	/** Presses and releases the grip without moving, as a tap does. */
 	const press = async () => {
 		await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
 		await page.mouse.down();

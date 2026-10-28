@@ -76,7 +76,7 @@ class Player {
 	#backTo: string | null = null;
 	/** Under Repeat All, a restart was asked for because nothing after the current item plays. */
 	#wrapped = false;
-	/** The items such a run passes through, the last of them `#backTo`. */
+	/** The items a run of `previous` edits passes through, the last of them `#backTo`. */
 	#passing: string[] = [];
 	/** Bumped on every item opened, so a slow lookup for an earlier one is ignored. */
 	#opens = 0;

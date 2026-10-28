@@ -55,6 +55,7 @@ function state(device: string | null, status: PlayerState['status'] = 'playing')
 	fake.listeners.forEach((listener) => listener({ type: 'player', state }));
 }
 
+/** The types of the commands sent so far. */
 const sent = () => fake.sent.map((message) => message.command.type);
 
 beforeEach(() => {

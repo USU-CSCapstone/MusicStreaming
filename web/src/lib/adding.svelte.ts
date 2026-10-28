@@ -83,7 +83,8 @@ export const artistQuery = (artistId: string): QueueQuery => ({
 
 /**
  * The album, artist, or playlist a card stands for, which it does not hold: the tracks of an
- * album or artist are fetched when asked for or read by the server, a playlist's fetched.
+ * album or artist are fetched when asked for, or read by the server from the `query`; a
+ * playlist's are fetched and have no `query`.
  */
 export function cardAdding(fetch: Fetch, libraryId: string, card: Card): Adding {
 	const { type, id, title, count } = card;

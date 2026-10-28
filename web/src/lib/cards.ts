@@ -18,6 +18,7 @@ export type Card = {
 	round: boolean;
 };
 
+/** The card for an album, with its song count for queueing and dragging. */
 export function albumCard(a: AlbumSummary): Card {
 	const artists = a.artists.map((x) => artistName(x.name)).join(', ');
 	const year = releaseYear(a.releaseDate);
@@ -34,6 +35,7 @@ export function albumCard(a: AlbumSummary): Card {
 	};
 }
 
+/** The card for an artist, with its song count for queueing and dragging. */
 export function artistCard(a: ArtistSummary): Card {
 	return {
 		type: 'artist',
@@ -48,6 +50,7 @@ export function artistCard(a: ArtistSummary): Card {
 	};
 }
 
+/** The card for a playlist, with its song count for queueing and dragging. */
 export function playlistCard(p: Playlist): Card {
 	return {
 		type: 'playlist',

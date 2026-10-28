@@ -278,6 +278,7 @@ describe('QueueStore', () => {
 
 	it('fetches the queue again after a gap in versions', async () => {
 		await connect();
+		/** How many times the queue has been fetched. */
 		const gets = () => server.requests.filter((r) => r.method === 'GET').length;
 		server.apply(next);
 		server.apply(next);
@@ -290,6 +291,7 @@ describe('QueueStore', () => {
 
 	it('fetches the queue when another one replaces it, but not for its own', async () => {
 		await connect();
+		/** How many times the queue has been fetched. */
 		const gets = () => server.requests.filter((r) => r.method === 'GET').length;
 		store.message({ type: 'queueReplaced', queueId: QUEUE });
 		await settle();
@@ -383,6 +385,7 @@ describe('QueueStore', () => {
 	});
 
 	describe('start', () => {
+		/** Arguments for a start from a list of tracks held here. */
 		const args = (): StartArgs => ({
 			context: CONTEXT,
 			libraryId: 'lib',
@@ -488,6 +491,7 @@ describe('QueueStore', () => {
 			);
 			expected.carryManual(old);
 
+			/** The track each of `list`'s items plays, as `from` holds them. */
 			const tracks = (list: string[], from: Queue | QueueStore) =>
 				list.map((id) =>
 					from instanceof QueueStore

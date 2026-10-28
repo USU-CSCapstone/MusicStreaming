@@ -43,8 +43,10 @@ vi.mock('$lib/api/client', () => ({
 
 const { playback } = await import('./playback.svelte');
 
+/** Delivers a realtime message to the playback's listeners. */
 const send = (message: RealtimeServerMessage) =>
 	fake.listeners.forEach((listener) => listener(message));
+/** A track of `seconds` length, by its ID. */
 const track = (id: string, seconds: number) => ({ id, durationUs: seconds * 1e6 }) as Track;
 
 /** The state, at the item that plays track `trackId`. */
