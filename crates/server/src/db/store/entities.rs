@@ -74,15 +74,21 @@ pub fn find_or_create_album(
     Ok(id)
 }
 
-/// The genre of `lib` whose tag key `name` folds to, added if new. A new genre's sort key is
-/// empty until the recompute gives it its displayed name's.
-pub fn find_or_create_tag(tx: &Transaction<'_>, lib: i64, name: &str) -> Result<i64> {
+/// The tag of `lib` of type `tag_type` whose tag key `name` folds to, added if new. A name in two
+/// types is two tags (`design/database.md` §3). A new tag's sort key is empty until the recompute
+/// gives it its displayed name's.
+pub fn find_or_create_tag(
+    tx: &Transaction<'_>,
+    lib: i64,
+    tag_type: &str,
+    name: &str,
+) -> Result<i64> {
     let key = tag_key(name);
     if let Some(id) = tx
         .prepare_cached(
-            "SELECT id FROM tags WHERE library_id = ?1 AND type = 'genre' AND name_key = ?2",
+            "SELECT id FROM tags WHERE library_id = ?1 AND type = ?2 AND name_key = ?3",
         )?
-        .query_row(params![lib, key], |r| r.get(0))
+        .query_row(params![lib, tag_type, key], |r| r.get(0))
         .optional()?
     {
         return Ok(id);
@@ -90,9 +96,9 @@ pub fn find_or_create_tag(tx: &Transaction<'_>, lib: i64, name: &str) -> Result<
     let id = new_id()?;
     tx.prepare_cached(
         "INSERT INTO tags (id, library_id, type, name, name_key, sort_key) \
-         VALUES (?1, ?2, 'genre', ?3, ?4, x'')",
+         VALUES (?1, ?2, ?3, ?4, ?5, x'')",
     )?
-    .execute(params![id, lib, name.trim(), key])?;
+    .execute(params![id, lib, tag_type, name.trim(), key])?;
     Ok(id)
 }
 

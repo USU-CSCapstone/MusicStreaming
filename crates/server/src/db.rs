@@ -477,6 +477,21 @@ mod tests {
         db.write(insert_tag("colour")).await.unwrap();
     }
 
+    /// Every type the scanner reads is registered, or a batch tagging a file with it would fail.
+    #[tokio::test]
+    async fn every_tag_type_the_scanner_reads_is_registered() {
+        let (_temp, db) = open();
+        let registered: Vec<String> = db
+            .read(|conn| {
+                conn.prepare("SELECT key FROM tag_types")?.query_map([], |r| r.get(0))?.collect()
+            })
+            .await
+            .unwrap();
+        for key in jewelcase_scanner::tag_type_keys() {
+            assert!(registered.iter().any(|r| r == key), "{key} is not in tag_types");
+        }
+    }
+
     /// Readers map the database into memory, and the writer, which writes the log, limits it.
     #[tokio::test]
     async fn readers_map_the_file_and_the_writer_limits_the_log() {
