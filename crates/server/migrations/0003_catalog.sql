@@ -305,10 +305,19 @@ CREATE TABLE track_waveforms (
 
 -- ───────────────────────────── Tags ─────────────────────────────
 
+-- Every type the scanner reads (requirements/tags.md §2). Server-wide: a type is a field files
+-- carry, whichever library they are in (design/database.md §3).
+CREATE TABLE tag_types (
+    -- The type's name in the API and in tags.type
+    key TEXT PRIMARY KEY
+) STRICT;
+
+INSERT INTO tag_types (key) VALUES ('genre');
+
 CREATE TABLE tags (
     id           INTEGER PRIMARY KEY,
     library_id   INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
-    type         TEXT    NOT NULL CHECK (type IN ('genre')),
+    type         TEXT    NOT NULL REFERENCES tag_types (key),
     -- The most-used spelling in tag_spellings
     name         TEXT    NOT NULL,
     -- The name folded as artists.name_key is, with whitespace runs collapsed (requirements/tags.md §4)
