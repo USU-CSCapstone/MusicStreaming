@@ -7,7 +7,7 @@ use rusqlite::{Connection, params_from_iter};
 use serde::Deserialize;
 
 use super::AnyId;
-use super::page::{Check, Lead, Total};
+use super::page::{self, Check, Lead, Source, Table, Total};
 
 /// The spec's `TagMatch`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -35,13 +35,47 @@ pub struct Tagged {
 /// the browse benchmark measures the crossover (`design/database.md` §4).
 const LEAD_SHARE: i64 = 128;
 
-/// The tag IDs a `tag` parameter lists, comma-separated, each as [`AnyId`] reads it.
-pub fn ids(tag: Option<&str>) -> Vec<AnyId> {
-    tag.into_iter()
-        .flat_map(|tag| tag.split(','))
-        .filter(|id| !id.is_empty())
-        .map(AnyId::from)
-        .collect()
+/// The rows of `table` in `library` that start from `lead` and pass `check`, if given, and carry
+/// the tags `filter` names, the way `tagged` links them. An artist's or album's
+/// filter comes as `lead` or `check`; the tags plan around it ([`Tags::plan`]).
+pub fn source(
+    conn: &Connection,
+    library: i64,
+    table: &Table,
+    tagged: &Tagged,
+    lead: Option<Lead>,
+    check: Option<Check>,
+    filter: &TagFilter,
+) -> rusqlite::Result<Source> {
+    let tags = Tags::read(conn, library, tagged, filter)?;
+    let rows = match tags {
+        Tags::Groups(_) => page::library_number(conn, library, table.count)?,
+        _ => 0,
+    };
+    let alone = lead.is_none() && check.is_none();
+    let plan = tags.plan(tagged, table.alias, lead, rows, alone);
+    let mut source =
+        table.source(conn, library, plan.lead, Check::all(check.into_iter().chain(plan.check)))?;
+    if let Some(total) = plan.total {
+        source.total = total;
+    }
+    Ok(source)
+}
+
+/// A list's `tag` and `tagMatch` parameters.
+#[derive(Debug, Clone, Default)]
+pub struct TagFilter {
+    /// The tags named, each as [`AnyId`] reads it.
+    pub ids: Vec<AnyId>,
+    pub tag_match: TagMatch,
+}
+
+impl TagFilter {
+    /// The filter `tag`, comma-separated tag IDs, and `tag_match` make.
+    pub fn new(tag: Option<&str>, tag_match: TagMatch) -> TagFilter {
+        let ids = tag.into_iter().flat_map(|tag| tag.split(',')).filter(|id| !id.is_empty());
+        TagFilter { ids: ids.map(AnyId::from).collect(), tag_match }
+    }
 }
 
 /// The tags a filter names, as the library holds them.
@@ -74,15 +108,16 @@ pub struct Plan {
 }
 
 impl Tags {
-    /// The tags of `library` that `ids` name, grouped by type, with their stored counts of the
-    /// rows `tagged` describes.
+    /// The tags of `library` that `filter` names, grouped by type, with their stored counts of
+    /// the rows `tagged` describes.
     pub fn read(
         conn: &Connection,
         library: i64,
         tagged: &Tagged,
-        ids: &[AnyId],
-        tag_match: TagMatch,
+        filter: &TagFilter,
     ) -> rusqlite::Result<Tags> {
+        let TagFilter { ids, tag_match } = filter;
+        let tag_match = *tag_match;
         if ids.is_empty() {
             return Ok(Tags::Unfiltered);
         }
@@ -263,7 +298,8 @@ mod tests {
 
     #[test]
     fn lists_ids_separated_by_commas() {
-        assert!(ids(None).is_empty());
-        assert_eq!(ids(Some("1,,x")).iter().map(|id| id.0).collect::<Vec<_>>(), [Some(1), None]);
+        assert!(TagFilter::new(None, TagMatch::All).ids.is_empty());
+        let ids = TagFilter::new(Some("1,,x"), TagMatch::Any).ids;
+        assert_eq!(ids.iter().map(|id| id.0).collect::<Vec<_>>(), [Some(1), None]);
     }
 }
