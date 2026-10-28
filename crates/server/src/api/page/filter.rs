@@ -36,6 +36,16 @@ pub struct Check {
     pub params: Vec<Value>,
 }
 
+impl Check {
+    /// One check that a row passes when it passes every one of `checks`; `None` for none.
+    pub fn all(checks: impl IntoIterator<Item = Check>) -> Option<Check> {
+        checks.into_iter().reduce(|all, check| Check {
+            condition: format!("({}) AND ({})", all.condition, check.condition),
+            params: [all.params, check.params].concat(),
+        })
+    }
+}
+
 impl Table {
     /// The rows of the table in `library`, or those of `lead`, that meet `check` if there is
     /// one. The total is the library's stored count, or the lead's size, and is counted only

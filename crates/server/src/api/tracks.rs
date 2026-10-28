@@ -15,8 +15,9 @@ pub use representation::{
 
 use super::credit::{ArtistCredit, Credits};
 use super::extract::{Path, Query};
-use super::page::{Check, Order, Page, Request, Sort, Source, Table, Unknown};
+use super::page::{self, Check, Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
+use super::tag_filter::{self, TagMatch, Tagged, Tags};
 use super::{AnyId, Id, Problem};
 use crate::db::Database;
 
@@ -105,12 +106,15 @@ pub struct ListQuery {
     artist_id: Option<AnyId>,
     #[serde(default)]
     artist_credit: ArtistCredit,
+    tag: Option<String>,
+    #[serde(default)]
+    tag_match: TagMatch,
     cursor: Option<String>,
     limit: Option<u32>,
 }
 
-/// The library's tracks, or those on `albumId` and credited to `artistId` as `artistCredit`
-/// says, a page at a time.
+/// The library's tracks, or those on `albumId`, credited to `artistId` as `artistCredit` says,
+/// and carrying the tags `tag` names as `tagMatch` says, a page at a time.
 pub async fn list(
     State(db): State<Arc<Database>>,
     Scope { library, .. }: Scope,
@@ -123,9 +127,11 @@ pub async fn list(
     };
     let request = Request::new(sort, query.order, query.cursor, query.limit)?;
     let (album, artist, credit) = (query.album_id, query.artist_id, query.artist_credit);
+    let tags = tag_filter::ids(query.tag.as_deref());
+    let tag_match = query.tag_match;
     let page = db
         .read(move |conn| {
-            let source = source(conn, library, album, artist, credit)?;
+            let source = source(conn, library, album, artist, credit, &tags, tag_match)?;
             request.read(conn, &source, list_summary)
         })
         .await?;
@@ -168,21 +174,39 @@ pub const FEATURED_TRACKS: &str = "(SELECT ifnull(sum(ac.track_count), 0) FROM a
      WHERE ac.artist_id = ar.id AND NOT EXISTS (SELECT 1 FROM album_artists aa \
          WHERE aa.album_id = ac.album_id AND aa.artist_id = ac.artist_id))";
 
-/// The tracks `list` pages through in `library`: every one, or those on `album` and credited
-/// to `artist` as `credit` says.
+/// How tracks carry tags.
+const TAGGED: Tagged = Tagged { links: "track_tags", owner: "track_id", count: "track_count" };
+
+/// The tracks `list` pages through in `library`: every one, or those on `album`, credited to
+/// `artist` as `credit` says, and carrying the tags `tags` name as `tag_match` says. An artist's
+/// tracks lead a page; failing that, the tags' may ([`Tags::plan`]).
 fn source(
     conn: &Connection,
     library: i64,
     album: Option<AnyId>,
     artist: Option<AnyId>,
     credit: ArtistCredit,
+    tags: &[AnyId],
+    tag_match: TagMatch,
 ) -> rusqlite::Result<Source> {
     let lead = artist.map(|artist| credit.lead(conn, library, &CREDITS, artist)).transpose()?;
-    let check = album.map(|album| Check {
+    let tags = Tags::read(conn, library, &TAGGED, tags, tag_match)?;
+    let rows = match tags {
+        Tags::Groups(_) => page::library_number(conn, library, "track_count")?,
+        _ => 0,
+    };
+    let alone = album.is_none() && artist.is_none();
+    let plan = tags.plan(&TAGGED, "t", lead, rows, alone);
+    let album = album.map(|album| Check {
         condition: "t.album_id = ?".to_owned(),
         params: vec![album.0.into()],
     });
-    TRACKS.source(conn, library, lead, check)
+    let mut source =
+        TRACKS.source(conn, library, plan.lead, Check::all(album.into_iter().chain(plan.check)))?;
+    if let Some(total) = plan.total {
+        source.total = total;
+    }
+    Ok(source)
 }
 
 #[cfg(test)]

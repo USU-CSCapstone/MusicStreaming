@@ -101,14 +101,17 @@ macro_rules! artists_json {
 pub(crate) use artists_json;
 
 /// SQL for the genres of an `album`, an `artist`, or a `track` whose ID is the SQL `$id`, as
-/// JSON that reads as `Vec<TagRef>`, in name order. Tags of other types are not genres.
+/// JSON that reads as `Vec<TagRef>`, in name order. Tags of other types are not genres. `CROSS
+/// JOIN` keeps the entity's own links the outer loop: on the condition on `tag.type`, statistics
+/// showing few tags would otherwise have every row scan the library's tags.
 macro_rules! genres_json {
     ($owner:literal, $id:literal) => {
         concat!(
             "(SELECT json_group_array(json_array(CAST(tag.id AS TEXT), tag.name) \
              ORDER BY tag.sort_key, tag.id) FROM ",
             $owner,
-            "_tags tagged JOIN tags tag ON tag.id = tagged.tag_id WHERE tag.type = 'genre' AND tagged.",
+            "_tags tagged CROSS JOIN tags tag ON tag.id = tagged.tag_id \
+             WHERE tag.type = 'genre' AND tagged.",
             $owner,
             "_id = ",
             $id,
