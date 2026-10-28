@@ -33,9 +33,10 @@ pub struct Tagged {
 /// How small a share of a list one type's tags must be for a page to start from their rows
 /// rather than walk the sort's index and check each row: one row in this many at most. Starting
 /// from a tag sorts all of its rows on every page; walking reads rows until a page's worth carry
-/// it, which is quick for a common tag and reads the whole index for a rare one. Provisional until
-/// the browse benchmark measures the crossover (`design/database.md` §4).
-const LEAD_SHARE: i64 = 128;
+/// it, which is quick for a common tag and reads the whole index for a rare one. Measured, the two
+/// cross near one track in 80 at 100,000 tracks and one in 115 at 500,000, and a wrong choice near
+/// there costs under a millisecond (`design/database.md` §4).
+pub const LEAD_SHARE: i64 = 128;
 
 /// The rows of `table` in `library` that start from `lead` and pass `check`, if given, and carry
 /// the tags `filter` names, the way `tagged` links them. An artist's or album's
@@ -172,6 +173,21 @@ impl Tags {
         rows: i64,
         alone: bool,
     ) -> Plan {
+        self.plan_sharing(tagged, alias, lead, rows, alone, LEAD_SHARE)
+    }
+
+    /// [`Tags::plan`], with a group leading when it holds one row in `share` of the list at most:
+    /// 0 has the smallest always lead, and `i64::MAX` has every group checked. For the benchmark
+    /// that weighs one against the other.
+    pub fn plan_sharing(
+        self,
+        tagged: &Tagged,
+        alias: &str,
+        lead: Option<Lead>,
+        rows: i64,
+        alone: bool,
+        share: i64,
+    ) -> Plan {
         let mut groups = match self {
             Tags::Unfiltered => return Plan { lead, check: None, total: None },
             Tags::Nothing => {
@@ -186,7 +202,7 @@ impl Tags {
         };
         let lead = lead.or_else(|| {
             let smallest = (0..groups.len()).min_by_key(|&i| groups[i].size)?;
-            (groups[smallest].size.saturating_mul(LEAD_SHARE) <= rows)
+            (groups[smallest].size.saturating_mul(share) <= rows)
                 .then(|| groups.swap_remove(smallest).lead(tagged))
         });
         let checks: Vec<Check> = groups.iter().map(|group| group.check(tagged, alias)).collect();

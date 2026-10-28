@@ -150,7 +150,7 @@ pub async fn get(
 }
 
 /// The tracks a list reads.
-const TRACKS: Table =
+pub const TRACKS: Table =
     Table { name: "tracks", alias: "t", select: SELECT, joins: JOINS, count: "track_count" };
 
 /// How tracks are credited to an artist.
