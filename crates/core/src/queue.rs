@@ -33,6 +33,8 @@ mod stored;
 mod tests;
 
 pub use edit::{Anchor, Edit, Error};
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 /// A list of tracks resolved once. Never changes after it joins a queue.
@@ -85,8 +87,10 @@ struct Shuffled {
 #[serde(rename_all = "camelCase")]
 pub struct Queue {
     /// Absent from a queue saved with [`Queue::stored`], which [`Queue::attach_sources`] completes.
+    ///
+    /// Shared, so a copy of a queue (a device's view of it) costs the order lists, not the tracks.
     #[serde(default)]
-    sources: Vec<Source>,
+    sources: Vec<Arc<Source>>,
     manual: Vec<u32>,
     order: Vec<u32>,
     cursor: usize,
@@ -120,7 +124,7 @@ impl Queue {
             order: (0..count).collect(),
             cursor: start + 1,
             current: Some(to_item(start)?),
-            sources: vec![source],
+            sources: vec![Arc::new(source)],
             ..Self::default()
         })
     }
@@ -136,7 +140,7 @@ impl Queue {
         let mut copies = self.copies;
         let (sources, positions) = from.copy_runs(&from.manual, &mut copies);
         let carried: Vec<u32> = positions.into_iter().flatten().map(|at| first + at).collect();
-        self.sources.extend(sources);
+        self.sources.extend(sources.into_iter().map(Arc::new));
         self.copies = copies;
         self.manual.splice(0..0, carried);
         Ok(())
@@ -164,7 +168,7 @@ impl Queue {
 
     /// The sources, in the order their items are numbered. Sources are only ever added, so a
     /// caller that saved the first `n` need save only those after.
-    pub fn sources(&self) -> &[Source] {
+    pub fn sources(&self) -> &[Arc<Source>] {
         &self.sources
     }
 
@@ -201,6 +205,26 @@ impl Queue {
         limit: usize,
     ) -> impl Iterator<Item = String> + '_ {
         self.ids(window(self.tail(), offset, limit))
+    }
+
+    /// How many items the Manual Queue holds.
+    pub fn manual_len(&self) -> usize {
+        self.manual.len()
+    }
+
+    /// Up to `limit` of the Manual Queue's item IDs from `offset`. Costs only the window.
+    pub fn manual_window(&self, offset: usize, limit: usize) -> impl Iterator<Item = String> + '_ {
+        self.ids(window(&self.manual, offset, limit))
+    }
+
+    /// How many items the context's Up Next holds.
+    pub fn upcoming_len(&self) -> usize {
+        self.tail().len()
+    }
+
+    /// How many items History holds.
+    pub fn history_len(&self) -> usize {
+        self.history.len()
     }
 
     /// Up to `limit` History item IDs from `offset`, oldest first. Costs only the window.
@@ -271,7 +295,7 @@ impl Queue {
         let count = self.item_count();
         let first = to_item(count)?;
         let end = to_item(count + source.tracks.len())?;
-        self.sources.push(source.clone());
+        self.sources.push(Arc::new(source.clone()));
         self.insert(spot, (first..end).collect());
         Ok(())
     }
@@ -352,7 +376,7 @@ impl Queue {
                 .filter_map(|&item| renumbered.get(item as usize).copied().flatten())
                 .collect();
         }
-        self.sources.extend(sources);
+        self.sources.extend(sources.into_iter().map(Arc::new));
         self.copies = copies;
         self.order = copied.iter().flatten().map(|&at| base + at).collect();
         self.cursor = 0;
@@ -542,7 +566,7 @@ impl Queue {
         let mut rest = usize::try_from(item).ok()?;
         for source in &self.sources {
             if rest < source.tracks.len() {
-                return Some((source, rest));
+                return Some((source.as_ref(), rest));
             }
             rest -= source.tracks.len();
         }

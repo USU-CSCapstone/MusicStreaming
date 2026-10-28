@@ -1,0 +1,129 @@
+// The page's side of the queue worker (`worker.ts`): the queue's state to render, and the few
+// things the page can ask of it. The queue itself, which can be hundreds of thousands of items,
+// never leaves the worker; the page reads windows of it.
+
+import { API } from '$lib/api/client';
+import type { QueueEdit, RealtimeServerMessage } from '$lib/api/types';
+import type { Realtime } from '$lib/realtime.svelte';
+import type {
+	FromWorker,
+	ItemTrack,
+	List,
+	Question,
+	Refusal,
+	StartArgs,
+	ToWorker
+} from './protocol';
+
+/** The realtime messages that carry queue changes, and the one that says to catch up. */
+const QUEUE_MESSAGES = new Set(['hello', 'queueEdit', 'queueReplaced']);
+
+/** Starts the queue worker. */
+const spawn = () => new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+
+export class QueueClient {
+	/** The account's queue; null before it is loaded, and when the account has none. */
+	queueId = $state<string | null>(null);
+	/** Counts up with every change; a window read at an earlier one may be stale. */
+	revision = $state(0);
+	/** The item playing now. */
+	current = $state<string | null>(null);
+	/** How many items the Manual Queue, the context's Up Next and History hold. */
+	counts = $state({ manual: 0, upcoming: 0, history: 0 });
+	/** The latest edit or start that was reverted, for the UI to explain. */
+	refusal = $state<Refusal | null>(null);
+
+	#spawn: () => Worker;
+	#worker: Worker | null = null;
+	#unsubscribe: (() => void) | null = null;
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- who awaits what is not state to render
+	#asked = new Map<number, { resolve: (value: never) => void; reject: (error: Error) => void }>();
+	#asks = 0;
+
+	constructor(create: () => Worker = spawn) {
+		this.#spawn = create;
+	}
+
+	/** Starts the worker and feeds it the queue's realtime messages, until [`disconnect`](#disconnect). */
+	connect(realtime: Pick<Realtime, 'on'>) {
+		if (this.#worker) return;
+		const worker = (this.#worker = this.#spawn());
+		worker.onmessage = ({ data }: MessageEvent<FromWorker>) => this.#heard(data);
+		this.#send({ type: 'init', api: API });
+		this.#unsubscribe = realtime.on((message: RealtimeServerMessage) => {
+			if (QUEUE_MESSAGES.has(message.type)) this.#send({ type: 'message', message });
+		});
+	}
+
+	/** Stops the worker, and with it the queue held on this device. */
+	disconnect() {
+		this.#unsubscribe?.();
+		this.#unsubscribe = null;
+		this.#worker?.terminate();
+		this.#worker = null;
+		for (const { reject } of this.#asked.values()) reject(new Error('The queue is closed.'));
+		this.#asked.clear();
+		this.queueId = null;
+		this.current = null;
+		this.counts = { manual: 0, upcoming: 0, history: 0 };
+	}
+
+	/** Starts a queue, here at once and on the server in the background. */
+	start(args: StartArgs) {
+		this.#send({ type: 'start', args });
+	}
+
+	/** Applies `edit` here at once and sends it to the server in the background. */
+	edit(edit: QueueEdit) {
+		this.#send({ type: 'edit', edit });
+	}
+
+	/** Up to `limit` item IDs of `list` from `offset`, as the queue is now. */
+	window(list: List, offset: number, limit: number): Promise<string[]> {
+		return this.#ask({ what: 'window', list, offset, limit });
+	}
+
+	/** The track an item plays, or null if the queue has no such item. */
+	track(item: string): Promise<ItemTrack | null> {
+		return this.#ask({ what: 'track', item });
+	}
+
+	/** Posts a message to the worker, if it is running. */
+	#send(message: ToWorker) {
+		this.#worker?.postMessage(message);
+	}
+
+	/** Asks the worker a question; rejects if it is closed first. */
+	#ask<T>(question: Question): Promise<T> {
+		return new Promise<T>((resolve, reject) => {
+			if (!this.#worker) return reject(new Error('The queue is closed.'));
+			const id = ++this.#asks;
+			this.#asked.set(id, { resolve, reject });
+			this.#send({ type: 'ask', id, question });
+		});
+	}
+
+	/** Takes in what the worker said. */
+	#heard(message: FromWorker) {
+		if (message.type === 'state') {
+			const { summary } = message;
+			this.queueId = summary.queueId;
+			this.revision = summary.revision;
+			this.current = summary.current;
+			this.counts = {
+				manual: summary.manual,
+				upcoming: summary.upcoming,
+				history: summary.history
+			};
+		} else if (message.type === 'refused') {
+			this.refusal = message.refusal;
+		} else {
+			const asked = this.#asked.get(message.id);
+			this.#asked.delete(message.id);
+			if (message.type === 'answer') asked?.resolve(message.value as never);
+			else asked?.reject(new Error(message.error));
+		}
+	}
+}
+
+export const queue = new QueueClient();

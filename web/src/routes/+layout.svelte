@@ -10,6 +10,7 @@
 	import Toast from '$lib/components/Toast.svelte';
 	import { controls } from '$lib/controls.svelte';
 	import { player } from '$lib/player.svelte';
+	import { queue } from '$lib/queue/client.svelte';
 	import { realtime } from '$lib/realtime.svelte';
 
 	let { data, children } = $props();
@@ -25,7 +26,11 @@
 	$effect(() => {
 		if (bare || !data.me) return;
 		realtime.start();
-		return () => realtime.stop();
+		queue.connect(realtime);
+		return () => {
+			queue.disconnect();
+			realtime.stop();
+		};
 	});
 
 	/**

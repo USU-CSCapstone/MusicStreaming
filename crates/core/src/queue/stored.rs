@@ -1,6 +1,8 @@
 //! Saving a queue without its sources, which never change once added and so are saved once
 //! (`design/queue.md`).
 
+use std::sync::Arc;
+
 use serde::Serialize;
 
 use super::{Queue, Repeat, Shuffled, Source};
@@ -42,6 +44,6 @@ impl Queue {
     /// Give a queue restored from [`Queue::stored`] the sources its items number, which must be
     /// the ones it was saved with.
     pub fn attach_sources(&mut self, sources: Vec<Source>) {
-        self.sources = sources;
+        self.sources = sources.into_iter().map(Arc::new).collect();
     }
 }

@@ -1,0 +1,387 @@
+// The account's queue on this device: the server's queue as confirmed, plus this device's own
+// edits that the server has not yet confirmed, replayed on top (`design/queue.md`,
+// `requirements/general.md` §3.4). The order is the shared core's, run in WebAssembly, so this
+// holds no rule about it. Plain TypeScript so it runs in a worker and in tests; `worker.ts` is
+// its shell.
+
+import { Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
+import type { QueueEdit, QueueSnapshot, RealtimeServerMessage, StartQueue } from '$lib/api/types';
+import type { ItemTrack, List, Question, Refusal, StartArgs, Summary } from './protocol';
+
+export type Options = {
+	/** The API's base path, such as `/api/v1`. */
+	api: string;
+	fetch?: typeof fetch;
+	/** How long to wait before sending again what could not be sent. */
+	retryMs?: number;
+	/** Called after every change, with what the page shows. */
+	changed: (summary: Summary) => void;
+	/** Called when an edit or start could not be kept. */
+	refused: (refusal: Refusal) => void;
+};
+
+/** An edit this device made that the server has not confirmed. */
+type Pending = {
+	editId: string;
+	queueId: string;
+	edit: QueueEdit;
+	/** The version the server answered it made, once it has. */
+	version?: number;
+};
+
+type QueueEditMessage = Extract<RealtimeServerMessage, { type: 'queueEdit' }>;
+
+/** The server's problem body, if it sent one. */
+type Problem = { code?: string; detail?: string; title?: string } | null;
+
+export class QueueStore {
+	#api: string;
+	#fetch: typeof fetch;
+	#retryMs: number;
+	#changed: (summary: Summary) => void;
+	#refused: (refusal: Refusal) => void;
+
+	/** The server's queue: its snapshot with every edit since applied, in version order. */
+	#confirmed: Queue | null = null;
+	/** What this device shows: `#confirmed` with `#pending` on top. The same object with no pending. */
+	#view: Queue | null = null;
+	#queueId: string | null = null;
+	#version = 0;
+	#revision = 0;
+	#pending: Pending[] = [];
+	/** A start the server has not yet answered. It goes before anything else is sent. */
+	#launch: StartQueue | null = null;
+	#refetch = false;
+	/** Edits heard while the queue is being fetched; the fetch may predate them. */
+	#held: QueueEditMessage[] | null = null;
+	#draining = false;
+
+	/** Makes an empty store; it loads the server's queue when the connection says hello. */
+	constructor({
+		api,
+		fetch: fetcher = (...args) => fetch(...args),
+		retryMs = 2000,
+		changed,
+		refused
+	}: Options) {
+		this.#api = api;
+		this.#fetch = fetcher;
+		this.#retryMs = retryMs;
+		this.#changed = changed;
+		this.#refused = refused;
+	}
+
+	/**
+	 * Starts a queue at once and tells the server in the background. The Manual Queue comes
+	 * along, as the server carries it. Anything else queued up for the old queue is dropped.
+	 */
+	start({ context, libraryId, tracks, start, shuffleSeed }: StartArgs) {
+		const queueId = crypto.randomUUID();
+		const key = crypto.randomUUID();
+		let next: Queue | undefined;
+		try {
+			next = Queue.start(JSON.stringify({ key, libraryId, tracks }), start);
+			if (this.#view) next.carryManual(this.#view);
+			if (shuffleSeed !== undefined) {
+				next.apply(JSON.stringify({ type: 'shuffle', on: true, seed: shuffleSeed }));
+			}
+		} catch (error) {
+			next?.free();
+			this.#refused({ code: 'invalid', message: String(error) });
+			return;
+		}
+		// Edits the server may not have are lost with the old queue, though the carried Manual
+		// Queue holds their items: fetch what the server made of it, and say what went.
+		const unsent = this.#pending.filter((pending) => pending.version === undefined);
+		for (const { edit } of unsent) {
+			this.#refused({ code: 'superseded', message: 'A new queue replaced this change.', edit });
+		}
+		if (unsent.length > 0) this.#refetch = true;
+		this.#release();
+		this.#confirmed = this.#view = next;
+		this.#queueId = queueId;
+		this.#version = 0;
+		this.#pending = [];
+		this.#launch = {
+			queueId,
+			context,
+			source: { key, libraryId, tracks },
+			start,
+			...(shuffleSeed === undefined ? {} : { shuffle: { seed: shuffleSeed } })
+		};
+		this.#emit();
+		this.#drain();
+	}
+
+	/**
+	 * Applies `edit` here at once and sends it in the background. An edit the queue refuses
+	 * changes nothing and is reported.
+	 */
+	edit(edit: QueueEdit) {
+		if (!this.#view || !this.#queueId) {
+			this.#refused({ code: 'no_queue', message: 'There is no queue to change.', edit });
+			return;
+		}
+		const next = this.#view === this.#confirmed ? this.#view.copy() : this.#view;
+		try {
+			next.apply(JSON.stringify(edit));
+		} catch (error) {
+			if (next !== this.#view) next.free();
+			this.#refused({ code: 'invalid', message: String(error), edit });
+			return;
+		}
+		this.#view = next;
+		this.#pending.push({ editId: crypto.randomUUID(), queueId: this.#queueId, edit });
+		this.#emit();
+		this.#drain();
+	}
+
+	/** Takes in what the server said over the realtime connection. */
+	message(message: RealtimeServerMessage) {
+		if (message.type === 'hello') {
+			this.#refetch = true;
+			this.#drain();
+		} else if (message.type === 'queueReplaced') {
+			if (message.queueId !== this.#queueId) {
+				this.#refetch = true;
+				this.#drain();
+			}
+		} else if (message.type === 'queueEdit') {
+			this.#heard(message);
+		}
+	}
+
+	/** The answer to a question about the queue as shown now. */
+	ask(question: Question): string[] | ItemTrack | null {
+		if (question.what === 'track') return this.#track(question.item);
+		return this.#window(question.list, question.offset, question.limit);
+	}
+
+	/** Up to `limit` item IDs of `list` from `offset`; empty with no queue. */
+	#window(list: List, offset: number, limit: number): string[] {
+		const view = this.#view;
+		if (!view) return [];
+		if (list === 'manual') return view.manualWindow(offset, limit);
+		return list === 'upcoming' ? view.upcoming(offset, limit) : view.history(offset, limit);
+	}
+
+	/** The track an item plays, or null if the queue has no such item. */
+	#track(item: string): ItemTrack | null {
+		const found = this.#view?.track(item);
+		return found ? { libraryId: found[0], trackId: found[1] } : null;
+	}
+
+	/** An edit another device (or this one) made, as the server applied it. */
+	#heard(message: QueueEditMessage) {
+		if (this.#held) {
+			this.#held.push(message);
+			return;
+		}
+		if (message.queueId !== this.#queueId || !this.#confirmed) {
+			this.#refetch = true;
+			this.#drain();
+		} else if (message.version > this.#version) {
+			if (message.version === this.#version + 1) this.#confirm(this.#confirmed, message);
+			else {
+				this.#refetch = true;
+				this.#drain();
+			}
+		}
+	}
+
+	/** Applies the next edit to the confirmed queue; ours, if it is, stops being pending. */
+	#confirm(confirmed: Queue, { edit, editId, version }: QueueEditMessage) {
+		try {
+			confirmed.apply(JSON.stringify(edit));
+		} catch {
+			// The server applied what the core refuses: this device cannot trust its copy.
+			this.#refetch = true;
+			this.#drain();
+			return;
+		}
+		this.#version = version;
+		this.#pending = this.#pending.filter((pending) => pending.editId !== editId);
+		this.#rebuild();
+	}
+
+	/**
+	 * Makes the view from the confirmed queue and the pending edits. A pending edit the queue
+	 * no longer accepts, because of what arrived, is dropped and reported. With none pending
+	 * the view is the confirmed queue itself, so nothing is copied.
+	 */
+	#rebuild() {
+		const confirmed = this.#confirmed;
+		if (!confirmed) return;
+		let view = confirmed;
+		if (this.#pending.length > 0) {
+			view = confirmed.copy();
+			this.#pending = this.#pending.filter((pending) => {
+				try {
+					view.apply(JSON.stringify(pending.edit));
+					return true;
+				} catch (error) {
+					this.#refused({ code: 'invalid', message: String(error), edit: pending.edit });
+					return false;
+				}
+			});
+		}
+		if (this.#view !== confirmed) this.#view?.free();
+		this.#view = view;
+		this.#emit();
+	}
+
+	/** Lets go of both queues' memory. */
+	#release() {
+		if (this.#view !== this.#confirmed) this.#view?.free();
+		this.#confirmed?.free();
+		this.#confirmed = this.#view = null;
+	}
+
+	/** Tells the page what changed. */
+	#emit() {
+		const view = this.#view;
+		this.#changed({
+			queueId: this.#queueId,
+			version: this.#version,
+			revision: ++this.#revision,
+			current: view?.current() ?? null,
+			manual: view?.manualLen() ?? 0,
+			upcoming: view?.upcomingLen() ?? 0,
+			history: view?.historyLen() ?? 0
+		});
+	}
+
+	/** Sends and fetches what is waiting, one request at a time, so the server hears edits in order. */
+	async #drain() {
+		if (this.#draining) return;
+		this.#draining = true;
+		try {
+			while (await this.#step());
+		} finally {
+			this.#draining = false;
+		}
+	}
+
+	/** Does the next thing waiting: a start, then a fetch, then edits. False when none is. */
+	async #step(): Promise<boolean> {
+		const next = this.#pending.find((pending) => pending.version === undefined);
+		if (this.#launch) await this.#sendStart(this.#launch);
+		else if (this.#refetch) await this.#fetchQueue();
+		else if (next) await this.#sendEdit(next);
+		else return false;
+		return true;
+	}
+
+	/** One request to the API; null when it could not be made, or the server was too busy or broken. */
+	async #call(method: 'GET' | 'POST', path: string, body?: object): Promise<Response | null> {
+		const headers: Record<string, string> = { 'X-Jewelcase-Client': 'web' };
+		if (body) headers['Content-Type'] = 'application/json';
+		const response = await this.#fetch(`${this.#api}${path}`, {
+			method,
+			headers,
+			body: body && JSON.stringify(body)
+		}).catch(() => null);
+		if (response && response.status < 500 && response.status !== 429) return response;
+		await new Promise((resolve) => setTimeout(resolve, this.#retryMs));
+		return null;
+	}
+
+	/** Sends the start; sent again, by its `queueId`, if the answer was lost. */
+	async #sendStart(launch: StartQueue) {
+		const response = await this.#call('POST', '/me/queue', launch);
+		if (!response || this.#launch !== launch) return;
+		this.#launch = null;
+		if (!response.ok) {
+			// What the device shows is not the server's queue: fetch that.
+			this.#refetch = true;
+			this.#refused(await refusal(response));
+		}
+	}
+
+	/** Sends one edit, again with the same `editId` if the answer was lost. */
+	async #sendEdit(pending: Pending) {
+		const response = await this.#call('POST', '/me/queue/edits', {
+			editId: pending.editId,
+			queueId: pending.queueId,
+			edit: pending.edit
+		});
+		if (!response || !this.#pending.includes(pending)) return;
+		if (response.ok) {
+			pending.version = ((await response.json()) as { version: number }).version;
+			// Its `queueEdit` came before the answer, or was lost with the connection.
+			const confirmed = this.#queueId === pending.queueId && this.#version >= pending.version;
+			if (confirmed) this.#retire(pending);
+			return;
+		}
+		const problem = await refusal(response);
+		this.#retire(pending);
+		if (problem.code === 'queue_changed' || response.status === 404) this.#refetch = true;
+		// A queue that is no longer the account's takes its edits with it, without comment.
+		if (problem.code !== 'queue_changed') this.#refused({ ...problem, edit: pending.edit });
+	}
+
+	/** Stops the edit being pending, so the view is made without it. */
+	#retire(pending: Pending) {
+		this.#pending = this.#pending.filter((other) => other !== pending);
+		this.#rebuild();
+	}
+
+	/** Loads the server's queue, and puts the pending edits back on top. */
+	async #fetchQueue() {
+		this.#refetch = false;
+		this.#held = [];
+		const response = await this.#call('GET', '/me/queue');
+		const held = this.#held;
+		this.#held = null;
+		// A start since then is newer than what was fetched, and must reach the server first.
+		if (!response || this.#launch) {
+			this.#refetch = true;
+			return;
+		}
+		if (response.status === 404) {
+			this.#clear();
+		} else if (response.ok) {
+			this.#install((await response.json()) as QueueSnapshot);
+			for (const message of held) this.#heard(message);
+		} else {
+			this.#refetch = true;
+			await new Promise((resolve) => setTimeout(resolve, this.#retryMs));
+		}
+	}
+
+	/** The account has no queue. */
+	#clear() {
+		this.#release();
+		this.#queueId = null;
+		this.#version = 0;
+		this.#pending = [];
+		this.#emit();
+	}
+
+	/**
+	 * Makes the snapshot the confirmed queue. Pending edits for another queue go, and so do the
+	 * ones it already holds, which the server said it applied at or before its version.
+	 */
+	#install(snapshot: QueueSnapshot) {
+		const next = Queue.fromSnapshot(JSON.stringify(snapshot.state));
+		this.#release();
+		this.#confirmed = this.#view = next;
+		this.#queueId = snapshot.queueId;
+		this.#version = snapshot.version;
+		this.#pending = this.#pending.filter(
+			(pending) =>
+				pending.queueId === snapshot.queueId &&
+				!(pending.version !== undefined && pending.version <= snapshot.version)
+		);
+		this.#rebuild();
+	}
+}
+
+/** The reason the server refused a request. */
+async function refusal(response: Response): Promise<Refusal> {
+	const problem: Problem = await response.json().catch(() => null);
+	return {
+		code: problem?.code ?? 'failed',
+		message: problem?.detail ?? problem?.title ?? response.statusText
+	};
+}

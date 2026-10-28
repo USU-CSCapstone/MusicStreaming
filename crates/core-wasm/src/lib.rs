@@ -39,6 +39,19 @@ impl Queue {
         Ok(Self(serde_json::from_str(json)?))
     }
 
+    /// A copy that edits apart from this queue. Cheap however long the queue is: the copy shares
+    /// the sources, which never change, and copies only the order lists.
+    pub fn copy(&self) -> Queue {
+        Self(self.0.clone())
+    }
+
+    /// Put the Manual Queue of `from` at the front of this queue's, as a new queue starting
+    /// keeps what the user queued by hand. Fails, changing nothing, if the items do not fit.
+    #[wasm_bindgen(js_name = carryManual)]
+    pub fn carry_manual(&mut self, from: &Queue) -> Result<(), JsError> {
+        Ok(self.0.carry_manual(&from.0)?)
+    }
+
     /// The whole queue as JSON, for storage or to restore with `fromSnapshot`.
     pub fn snapshot(&self) -> Result<String, JsError> {
         Ok(serde_json::to_string(&self.0)?)
@@ -61,10 +74,34 @@ impl Queue {
         self.0.manual().collect()
     }
 
+    /// How many items the Manual Queue holds.
+    #[wasm_bindgen(js_name = manualLen)]
+    pub fn manual_len(&self) -> usize {
+        self.0.manual_len()
+    }
+
+    /// Up to `limit` of the Manual Queue's item IDs from `offset`, in play order.
+    #[wasm_bindgen(js_name = manualWindow)]
+    pub fn manual_window(&self, offset: usize, limit: usize) -> Vec<String> {
+        self.0.manual_window(offset, limit).collect()
+    }
+
     /// Up to `limit` of the context's Up Next item IDs from `offset`, in play order. They play
     /// after the Manual Queue.
     pub fn upcoming(&self, offset: usize, limit: usize) -> Vec<String> {
         self.0.upcoming_window(offset, limit).collect()
+    }
+
+    /// How many items the context's Up Next holds.
+    #[wasm_bindgen(js_name = upcomingLen)]
+    pub fn upcoming_len(&self) -> usize {
+        self.0.upcoming_len()
+    }
+
+    /// How many items History holds.
+    #[wasm_bindgen(js_name = historyLen)]
+    pub fn history_len(&self) -> usize {
+        self.0.history_len()
     }
 
     /// Up to `limit` History item IDs from `offset`, oldest first.

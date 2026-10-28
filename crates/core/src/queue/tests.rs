@@ -776,6 +776,25 @@ fn windows_return_the_ids_at_their_offset() {
     assert_eq!(q.upcoming_window(0, 99).collect::<Vec<_>>(), ["a.3", "a.4"]);
     assert!(q.upcoming_window(9, 2).next().is_none());
     assert_eq!(q.history_window(1, 5).collect::<Vec<_>>(), ["a.1"]);
+    assert_eq!((q.upcoming_len(), q.history_len()), (2, 2));
+    add(&mut q, source("m", 3), Anchor::ManualEnd);
+    assert_eq!(q.manual_len(), 3);
+    assert_eq!(q.manual_window(1, 5).collect::<Vec<_>>(), ["m.1", "m.2"]);
+}
+
+#[test]
+fn a_copy_shares_the_sources_and_edits_apart() {
+    let mut q = album();
+    let mut copy = q.clone();
+    assert!(Arc::ptr_eq(&q.sources()[0], &copy.sources()[0]));
+
+    copy.apply(&Edit::Next).unwrap();
+    assert_eq!(q.current().as_deref(), Some("a.0"));
+    add(&mut q, source("b", 2), Anchor::ManualEnd);
+    assert_eq!(copy.sources().len(), 1);
+    // The JSON shape does not show the sharing.
+    let json = serde_json::to_value(&q).unwrap();
+    assert_eq!(json["sources"][0]["tracks"].as_array().unwrap().len(), 5);
 }
 
 #[test]
@@ -789,7 +808,7 @@ fn a_queue_saved_without_its_sources_is_whole_again_with_them() {
     let stored = serde_json::to_value(q.stored()).unwrap();
     assert!(stored.get("sources").is_none());
     let mut restored: Queue = serde_json::from_value(stored).unwrap();
-    restored.attach_sources(q.sources().to_vec());
+    restored.attach_sources(q.sources().iter().map(|source| Source::clone(source)).collect());
     assert_eq!(restored, q);
 }
 
