@@ -92,14 +92,13 @@ describe('the tag filter', () => {
 });
 
 describe('tags', () => {
-	it('come by type on summaries, with only genres as genres', () => {
+	it('come by type on summaries', () => {
 		const [first] = catalog.listTracks(1n, new URLSearchParams({ tag: '32' })).items;
 		expect(first.tags).toEqual({
 			genre: [{ id: '30', name: 'Rock' }],
 			mood: [{ id: '32', name: 'Calm' }]
 		});
-		expect(first.genres).toEqual([{ id: '30', name: 'Rock' }]);
-		expect(catalog.artist(1n, 301n)?.tags?.genre?.map((t) => t.name)).toEqual(['Jazz', 'Rock']);
+		expect(catalog.artist(1n, 301n)?.tags.genre?.map((t) => t.name)).toEqual(['Jazz', 'Rock']);
 	});
 
 	it('list their types in use, and browse by type', () => {

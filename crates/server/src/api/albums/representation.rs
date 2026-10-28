@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::api::Id;
 use crate::api::refs::{
-    Credit, ImageRef, TagRef, artists_json, availability, genres_json, placeholder,
+    Credit, ImageRef, TagsByType, artists_json, availability, placeholder, tags_json,
 };
 use crate::api::time::serialize_rfc3339;
 use crate::db::Json;
@@ -25,7 +25,7 @@ pub struct AlbumSummary {
     release_date: Option<String>,
     #[serde(rename = "type")]
     kind: String,
-    genres: Vec<TagRef>,
+    tags: TagsByType,
     track_count: i64,
     track_total: Option<i64>,
     disc_count: i64,
@@ -71,7 +71,7 @@ pub const SELECT: &[&str] = &[
     "al.available_track_count > 0",
     "al.added_at",
     artists_json!("album", "al.id"),
-    genres_json!("album", "al.id"),
+    tags_json!("album", "al.id"),
     placeholder!("al.image_id"),
 ];
 
@@ -106,7 +106,7 @@ pub fn album(conn: &Connection, library: i64, album: i64) -> rusqlite::Result<Op
     Ok(Some(Album { summary, labels, discs }))
 }
 
-/// An album from a row of [`SELECT`], with its artists and genres.
+/// An album from a row of [`SELECT`], with its artists and tags.
 pub fn summary(row: &Row) -> rusqlite::Result<AlbumSummary> {
     let id: i64 = row.get(0)?;
     Ok(AlbumSummary {
@@ -115,7 +115,7 @@ pub fn summary(row: &Row) -> rusqlite::Result<AlbumSummary> {
         artists: row.get::<_, Json<_>>(12)?.0,
         release_date: row.get(2)?,
         kind: row.get(3)?,
-        genres: row.get::<_, Json<_>>(13)?.0,
+        tags: row.get::<_, Json<_>>(13)?.0,
         track_count: row.get(4)?,
         track_total: row.get(5)?,
         disc_count: row.get(6)?,
