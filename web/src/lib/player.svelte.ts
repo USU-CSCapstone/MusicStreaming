@@ -631,6 +631,8 @@ class Player {
 		audio.volume = this.volume;
 		audio.addEventListener('play', () => (this.playing = true));
 		audio.addEventListener('playing', () => {
+			// The audio is still the track before's, which began playing after it was left.
+			if (this.#stale) return;
 			this.#buffering = false;
 			this.#loading = false;
 			this.#report();

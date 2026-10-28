@@ -807,6 +807,26 @@ describe('player', () => {
 			play.mockRestore();
 		});
 
+		it('ignores what the audio of the track before reports once the next is chosen', async () => {
+			fake.info = () => Promise.resolve({ variant: 'original' });
+			const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+			player.play([track('111', 60), track('112', 60)], 0);
+			await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
+			const audio = play.mock.contexts[0] as HTMLAudioElement;
+			// Next is chosen before the first track's audio says it plays; the next track's audio is
+			// still on its way.
+			fake.info = () => new Promise(() => {});
+			player.next();
+			await vi.waitFor(() => expect(player.current?.id).toBe('112'));
+			// What the first track's audio had queued: that it plays, and that it was paused.
+			audio.dispatchEvent(new Event('playing'));
+			audio.dispatchEvent(new Event('pause'));
+			await settle();
+			expect(fake.plays).toEqual([]);
+			expect(player.playing, 'still on its way, not paused').toBe(true);
+			play.mockRestore();
+		});
+
 		it('records where in the queue each play came from', async () => {
 			const play = await playing();
 			player.play([track('101', 60), track('102', 60)], 0);
