@@ -58,7 +58,7 @@ pub fn upsert_track(
         tracing::error!(path = %rec.path.display(), "track of another library; skipped");
         return Ok(());
     };
-    replace_links(tx, lib, id, &credits, &rec.tags.genres, touched)?;
+    replace_links(tx, lib, id, &credits, rec.tags.values_of("genre"), touched)?;
     replace_lyrics(tx, lib, id, rec.lyrics())?;
     feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)
 }

@@ -1,6 +1,7 @@
 //! The SQLite store against the scanner's pipeline suite, plus the
 //! derived-data rules the schema assigns to the scanner and the scanning benchmarks.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -118,7 +119,7 @@ fn record(root: &Path, i: usize) -> TrackRecord {
             album_artists: vec![artist],
             track_number: Some((i % 10 + 1) as u32),
             track_total: Some(10),
-            genres: vec![format!("Genre {}", i % 3)],
+            tag_values: BTreeMap::from([("genre".into(), vec![format!("Genre {}", i % 3)])]),
             release_date: PartialDate::parse("1999"),
             ..Default::default()
         },
