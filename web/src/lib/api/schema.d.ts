@@ -820,10 +820,12 @@ export interface paths {
         /**
          * Get the queue
          * @description The account's whole queue, for a device to load into the shared core
-         *     (`requirements/queue.md` §7). `404` until a queue has been started. The `ETag` names the
-         *     queue and its version, `"<queueId>.<version>"`; a request whose `If-None-Match` names
-         *     them is answered `304` with no body, so a device that reconnects downloads only what it
-         *     lacks. Any other value, or none, gets the whole snapshot.
+         *     (`requirements/queue.md` §7). `404` until a queue has been started. The `ETag` is
+         *     `"<run>.<queueId>.<version>"`, where `<run>` is new each time the server starts, so no tag
+         *     from before a restart matches; a device names the version it holds with the `<run>` of
+         *     the last tag it was given. A request whose `If-None-Match` names the current tag is
+         *     answered `304` with no body, so a device that reconnects downloads only what it lacks.
+         *     Any other value, or none, gets the whole snapshot.
          */
         get: operations["getQueue"];
         put?: never;
@@ -3657,7 +3659,7 @@ export interface operations {
             /** @description OK */
             200: {
                 headers: {
-                    /** @description `"<queueId>.<version>"`. */
+                    /** @description `"<run>.<queueId>.<version>"`. */
                     ETag?: string;
                     [name: string]: unknown;
                 };

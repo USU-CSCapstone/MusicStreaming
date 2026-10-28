@@ -10,7 +10,7 @@ use jewelcase_core::{Anchor, Edit, Source};
 use serde_json::{Value, json};
 
 use super::super::{Account, Queues};
-use super::{KEY, OTHER, QUEUE, start};
+use super::{KEY, OTHER, QUEUE, conditional_get, start};
 use crate::api::testing::{TOKEN, app_with_tracks, call, eventually, state};
 use crate::api::{AppState, Uuid, router};
 use crate::db::Database;
@@ -219,4 +219,22 @@ async fn a_save_cut_off_is_not_lost() {
     }
     queues.save(&db).await;
     assert!(restarted(&db).await.is_some());
+}
+
+/// A server that starts again answers no `ETag` from before, so a device whose copy holds edits
+/// a crash lost fetches the queue again rather than keep it.
+#[tokio::test]
+async fn a_tag_from_before_a_restart_does_not_match() {
+    let (temp, db, _app) = app_with_tracks().await;
+    let queues = Arc::new(Queues::default());
+    let app = app_over(&temp, &db, queues.clone());
+    call(&app, TOKEN, "POST", "/api/v1/me/queue", Some(start(QUEUE, "1", &["1", "2"]))).await;
+    let tag = conditional_get(&app, None).await.1.unwrap();
+    assert_eq!(conditional_get(&app, Some(&tag)).await.0, StatusCode::NOT_MODIFIED);
+
+    queues.save(&db).await;
+    let again = app_over(&temp, &db, Arc::new(Queues::load(&db).await.unwrap()));
+    let (status, _, length) = conditional_get(&again, Some(&tag)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(length > 0);
 }

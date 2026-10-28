@@ -46,4 +46,5 @@ The queue lives in memory per account while the server runs and is saved in the 
 
 - **`POST /me/queue`** starts a queue: `{queueId, context, source: {key, libraryId, tracks}, start, shuffle?: {seed}}`, answered `204`.
 - **`GET /me/queue`** answers `{queueId, version, context, state}`, where `state` is the core's JSON, for a device to load into the core. `404` until the account has started a queue: there is no empty queue to show, unlike playback, which can be stopped.
+- **An unchanged queue is not sent again.** The `ETag` is `"<run>.<queueId>.<version>"`, and an `If-None-Match` naming it is answered `304`, checked before anything is serialized. `<run>` is drawn as the server starts: a crash can lose edits a device already heard, after which the restored queue can reach the same version with other contents, so a tag from before a restart never matches.
 - **The snapshot names IDs, not tracks.** What a device shows for them comes from the track lookup, which serves only tracks the caller reaches, so access taken away later shows rows as unavailable, never details ([`requirements/users.md` §10](../requirements/users.md#10-access-semantics)).

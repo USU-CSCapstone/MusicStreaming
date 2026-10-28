@@ -279,15 +279,23 @@ async fn the_snapshot_is_conditional_on_its_queue_and_version() {
 
     let (status, etag, length) = conditional_get(&app, None).await;
     let etag = etag.unwrap();
-    assert_eq!((status, etag.as_str()), (StatusCode::OK, format!("\"{QUEUE}.0\"").as_str()));
+    assert_eq!(status, StatusCode::OK);
+    assert!(etag.ends_with(&format!(".{QUEUE}.0\"")), "{etag}");
     assert!(length > 0);
+    let boot = etag.trim_matches('"').split('.').next().unwrap();
 
     let (status, same, length) = conditional_get(&app, Some(&etag)).await;
     assert_eq!((status, same.as_ref(), length), (StatusCode::NOT_MODIFIED, Some(&etag), 0));
     let listed = format!("\"x\", {etag}");
     assert_eq!(conditional_get(&app, Some(&listed)).await.0, StatusCode::NOT_MODIFIED);
 
-    for other in [format!("\"{QUEUE}.1\""), format!("\"{OTHER}.0\""), "*".to_owned()] {
+    let others = [
+        format!("\"{boot}.{QUEUE}.1\""),
+        format!("\"{boot}.{OTHER}.0\""),
+        format!("\"{QUEUE}.0\""),
+        "*".to_owned(),
+    ];
+    for other in others {
         let (status, _, length) = conditional_get(&app, Some(&other)).await;
         assert_eq!(status, StatusCode::OK, "{other}");
         assert!(length > 0);

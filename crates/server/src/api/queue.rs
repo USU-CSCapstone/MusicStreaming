@@ -24,9 +24,19 @@ use super::{Code, Problem, Uuid};
 pub use start::start;
 
 /// Each account's queue, for those that have started one.
-#[derive(Default)]
 pub struct Queues {
     accounts: Mutex<HashMap<i64, Account>>,
+    /// Drawn as the queues are made, and part of every `ETag`. A crash can lose edits a device
+    /// already heard, and the restored queue can then reach the same version with other
+    /// contents; a new value makes every tag from before the restart a mismatch.
+    boot: u64,
+}
+
+impl Default for Queues {
+    /// No queues, and a new value for `boot`.
+    fn default() -> Self {
+        Queues::holding(HashMap::new())
+    }
 }
 
 /// One account's queue and what the server needs to know about it.
@@ -55,13 +65,20 @@ struct Snapshot<'a> {
 }
 
 impl Queues {
+    /// Queues holding `accounts`, with a new value for `boot`; if the system's random source
+    /// cannot be read, the clock stands in.
+    fn holding(accounts: HashMap<i64, Account>) -> Self {
+        let boot = getrandom::u64().unwrap_or_else(|_| crate::db::now_ms().unsigned_abs());
+        Queues { accounts: Mutex::new(accounts), boot }
+    }
+
     /// `user`'s snapshot, or `None` if they have no queue: its `ETag`, and its JSON unless
     /// `known` (an `If-None-Match` value) already names this queue and version, which is checked
     /// before anything is serialized.
     fn snapshot(&self, user: i64, known: Option<&str>) -> Option<(String, Option<Vec<u8>>)> {
         let accounts = self.lock();
         let account = accounts.get(&user)?;
-        let etag = format!("\"{}.{}\"", account.queue_id.as_str(), account.version);
+        let etag = format!("\"{}.{}.{}\"", self.boot, account.queue_id.as_str(), account.version);
         if known.is_some_and(|known| known.split(',').any(|tag| tag.trim() == etag)) {
             return Some((etag, None));
         }

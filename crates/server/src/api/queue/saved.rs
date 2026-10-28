@@ -40,8 +40,7 @@ impl Queues {
     /// Every active account's saved queue, as the server starts. A queue that cannot be read
     /// back is left out and logged, so one damaged row does not keep the server from starting.
     pub async fn load(db: &Database) -> Result<Queues, crate::db::DbError> {
-        let accounts = std::sync::Mutex::new(db.read(load).await?);
-        Ok(Queues { accounts })
+        Ok(Queues::holding(db.read(load).await?))
     }
 
     /// Saves unsaved queues every [`SAVE_EVERY`] until the returned task is aborted, which leaves
