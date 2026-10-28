@@ -1,7 +1,7 @@
 // What the queue worker and the page say to each other (`design/general.md` §7.1). The worker
 // holds the queue; the page sends it what happened and asks it for the windows it shows.
 
-import type { PlayContext, QueueEdit, QueueQuery, RealtimeServerMessage } from '$lib/api/types';
+import type { PlayContext, QueueQuery, RealtimeServerMessage, SentEdit } from '$lib/api/types';
 
 /** The parts of a queue a window can be read from. */
 export type List = 'manual' | 'upcoming' | 'history';
@@ -66,11 +66,14 @@ export type Refusal = {
 	code: string;
 	message: string;
 	/** The edit that was reverted; absent for a start. */
-	edit?: QueueEdit;
+	edit?: SentEdit;
 };
 
 /** The track an item plays. */
 export type ItemTrack = { libraryId: string; trackId: string };
+
+/** What caches of a queue's tracks are keyed by: track IDs are only unique within a library. */
+export const trackKey = ({ libraryId, trackId }: ItemTrack) => `${libraryId}/${trackId}`;
 
 /** The page to the worker. */
 export type ToWorker =
@@ -78,7 +81,7 @@ export type ToWorker =
 	| { type: 'init'; api: string }
 	| { type: 'message'; message: RealtimeServerMessage }
 	| { type: 'start'; args: StartArgs }
-	| { type: 'edit'; edit: QueueEdit }
+	| { type: 'edit'; edit: SentEdit }
 	| { type: 'ask'; id: number; question: Question };
 
 /** The worker to the page. */

@@ -254,17 +254,13 @@ describe('player', () => {
 		expect(queue.current).toBe(items[2]);
 	});
 
-	it('says when there is nothing it can pick up', async () => {
+	it('picks up an item of another library than the one viewed, from the item’s own', async () => {
 		await hold(['41']);
-		// Viewing another library, whose queue it would not know.
 		player.libraryId = '12';
 		state();
 		transfer(true);
-		expect(await result()).toMatchObject({
-			status: 'failed',
-			reason: 'This device could not pick up playback.'
-		});
-		expect(fake.sent.map((m) => m.type)).toEqual(['commandResult']);
+		expect(await result()).toMatchObject({ status: 'applied' });
+		expect(player.current?.id).toBe('41');
 	});
 
 	it('says when the item is not in the queue this device holds', async () => {

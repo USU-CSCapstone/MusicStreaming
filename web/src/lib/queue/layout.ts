@@ -4,7 +4,7 @@
 // Manual Queue's heading and items (or a hint when it is empty), then the context's heading
 // and items.
 
-import type { QueueEdit } from '$lib/api/types';
+import type { QueueAnchor } from '$lib/api/types';
 import type { List } from './protocol';
 
 /** The height of every row, in pixels. */
@@ -12,9 +12,6 @@ export const ROW = 56;
 
 /** The tallest a list is drawn, in pixels: Firefox drops a height past about 17.9M, so a longer one scrolls through a scaled range. */
 export const MAX_SPACE = 10_000_000;
-
-/** The part of a queue's anchor a drop names. */
-type Anchor = Extract<QueueEdit, { type: 'move' }>['before'];
 
 /** What one row of Up Next is. */
 export type Row =
@@ -76,7 +73,7 @@ export function anchorAt(
 	upcoming: number,
 	itemAt: (v: number) => string | undefined,
 	moving: ReadonlySet<string>
-): Anchor {
+): QueueAnchor {
 	const rows = upNextRows(manual, upcoming);
 	const heading = contextHeading(manual);
 	let g = gap;

@@ -6,6 +6,9 @@ import type { IconName } from './components/Icon.svelte';
 import { albumTitle, artistName, plural, releaseYear } from './format';
 
 export type Card = {
+	/** What it is, and how many songs it holds, for queueing and dragging it. */
+	type: 'album' | 'artist' | 'playlist';
+	count: number;
 	id: string;
 	href: string;
 	title: string;
@@ -19,6 +22,8 @@ export function albumCard(a: AlbumSummary): Card {
 	const artists = a.artists.map((x) => artistName(x.name)).join(', ');
 	const year = releaseYear(a.releaseDate);
 	return {
+		type: 'album',
+		count: a.trackCount,
 		id: a.id,
 		href: resolve('/albums/[id]', { id: a.id }),
 		title: albumTitle(a.title),
@@ -31,6 +36,8 @@ export function albumCard(a: AlbumSummary): Card {
 
 export function artistCard(a: ArtistSummary): Card {
 	return {
+		type: 'artist',
+		count: a.trackCount,
 		id: a.id,
 		href: resolve('/artists/[id]', { id: a.id }),
 		title: artistName(a.name),
@@ -43,6 +50,8 @@ export function artistCard(a: ArtistSummary): Card {
 
 export function playlistCard(p: Playlist): Card {
 	return {
+		type: 'playlist',
+		count: p.trackCount,
 		id: p.id,
 		href: resolve('/playlists/[id]', { id: p.id }),
 		title: p.title,

@@ -16,6 +16,7 @@ import type {
 	RealtimeServerMessage,
 	RecentSearch,
 	Session,
+	SentEdit,
 	SetupRequest,
 	TrackSummary
 } from '../src/lib/api/types';
@@ -119,6 +120,9 @@ function resolveQuery(query: QueueQuery): TrackSummary[] {
 	return found ? sortedAsAsked(asked) : [];
 }
 
+/** An `add` as a device may send it, naming a `query` for the server to run. */
+type SentAdd = Extract<SentEdit, { type: 'add' }>;
+
 /**
  * The account's queue as the server keeps it: the shared core in Node applies every start and
  * edit, and what it applied is sent to the page over the realtime connection `serveRealtime`
@@ -172,17 +176,31 @@ class FixtureQueue {
 		this.hear({ type: 'queueReplaced', queueId: this.queueId });
 	}
 
-	/** Applies an edit as `POST /me/queue/edits` does: the version it made, or the problem code. */
+	/**
+	 * Applies an edit as `POST /me/queue/edits` does: the version it made, or the problem code.
+	 * An `add` of a `query` is run here, and what is sent to the page is the edit with its tracks.
+	 */
 	edit(body: {
 		editId: string;
 		queueId: string;
-		edit: QueueEdit;
+		edit: QueueEdit | SentAdd;
 	}): number | 'queue_changed' | 'anchor_gone' {
 		if (!this.queue || body.queueId !== this.queueId) return 'queue_changed';
 		const done = this.#answered.get(body.editId);
 		if (done !== undefined) return done;
+		const edit: QueueEdit =
+			body.edit.type === 'add' && 'query' in body.edit.source
+				? {
+						...body.edit,
+						source: {
+							key: body.edit.source.key,
+							libraryId: body.edit.source.libraryId,
+							tracks: resolveQuery(body.edit.source.query).map((t) => t.id)
+						}
+					}
+				: (body.edit as QueueEdit);
 		try {
-			this.queue.apply(JSON.stringify(body.edit));
+			this.queue.apply(JSON.stringify(edit));
 		} catch {
 			return 'anchor_gone';
 		}
@@ -192,7 +210,7 @@ class FixtureQueue {
 			queueId: this.queueId,
 			version: this.version,
 			editId: body.editId,
-			edit: body.edit
+			edit
 		});
 		return this.version;
 	}
@@ -519,7 +537,13 @@ export async function serveLibrary(
 			const found = asked.map((id) => tracks.find((t) => t.id === id));
 			return json(pageOf(found.filter((t) => t !== undefined)));
 		}
-		if (path === `${lib}/tracks`) return json(pageOf(sortedAsAsked(url.searchParams)));
+		if (path === `${lib}/tracks`) {
+			// As the server's `ListQuery`: a parameter it does not support is refused, not ignored.
+			const known = ['sort', 'order', 'albumId', 'artistId', 'artistCredit', 'cursor', 'limit'];
+			const unknown = [...url.searchParams.keys()].filter((key) => !known.includes(key));
+			if (unknown.length) return problem(422, 'validation_failed', `Unknown: ${unknown}`);
+			return json(pageOf(sortedAsAsked(url.searchParams)));
+		}
 		if (path === `${lib}/artists`) {
 			return json(pageOf([{ ...artist, image: null, albumCount: 1, trackCount: 3 }]));
 		}

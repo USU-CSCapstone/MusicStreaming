@@ -5,6 +5,7 @@
 import { getTracks } from '$lib/api/client';
 import type { TrackSummary } from '$lib/api/types';
 import { queue } from './client.svelte';
+import { trackKey } from './protocol';
 
 /** Most IDs one lookup takes. */
 const CHUNK = 100;
@@ -14,12 +15,12 @@ const KEEP = 2000;
 /** A track with the library it is in, which its audio comes from. */
 export type Found = { track: TrackSummary; libraryId: string };
 
-/** Tracks by ID; null for a track the lookup left out, which the account cannot reach or is gone. */
+/** Tracks by library and track ID (`trackKey`); null for a track the lookup left out, which the account cannot reach or is gone. */
 const known = new Map<string, Found | null>();
 
 /** Keeps a track the caller already holds, so asking about it needs no request. */
 export function remember(libraryId: string, track: TrackSummary) {
-	known.set(track.id, { track, libraryId });
+	known.set(trackKey({ libraryId, trackId: track.id }), { track, libraryId });
 }
 
 /**
@@ -33,7 +34,7 @@ export async function lookup(items: string[]): Promise<Map<string, Found | null>
 	const refs = await Promise.all(items.map((item) => queue.track(item).catch(() => undefined)));
 	const wanted: Record<string, Set<string>> = {};
 	for (const ref of refs) {
-		if (ref && !known.has(ref.trackId)) (wanted[ref.libraryId] ??= new Set()).add(ref.trackId);
+		if (ref && !known.has(trackKey(ref))) (wanted[ref.libraryId] ??= new Set()).add(ref.trackId);
 	}
 	await Promise.all(
 		Object.entries(wanted).flatMap(([library, ids]) => {
@@ -42,8 +43,15 @@ export async function lookup(items: string[]): Promise<Map<string, Found | null>
 				const asked = all.slice(i * CHUNK, (i + 1) * CHUNK);
 				try {
 					const found = (await getTracks(fetch, library, asked)).items;
-					for (const track of found) known.set(track.id, { track, libraryId: library });
-					for (const id of asked) if (!known.has(id)) known.set(id, null);
+					for (const track of found)
+						known.set(trackKey({ libraryId: library, trackId: track.id }), {
+							track,
+							libraryId: library
+						});
+					for (const id of asked) {
+						const key = trackKey({ libraryId: library, trackId: id });
+						if (!known.has(key)) known.set(key, null);
+					}
 				} catch {
 					// Left unknown, and asked for again with the next look.
 				}
@@ -55,7 +63,7 @@ export async function lookup(items: string[]): Promise<Map<string, Found | null>
 		const ref = refs[i];
 		if (ref === undefined) return;
 		if (ref === null) out.set(item, null);
-		else if (known.has(ref.trackId)) out.set(item, known.get(ref.trackId) ?? null);
+		else if (known.has(trackKey(ref))) out.set(item, known.get(trackKey(ref)) ?? null);
 	});
 	return out;
 }

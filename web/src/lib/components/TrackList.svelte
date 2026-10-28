@@ -6,10 +6,11 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
+	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import type { PlayContext, QueueQuery, TrackSummary } from '$lib/api/types';
-	import { edgeStep } from '$lib/dragging';
 	import { albumTitle, formatDate, formatDuration, plural, releaseYear } from '$lib/format';
+	import { canDrag, drop, edgeStep, lift } from '$lib/dragging';
 	import { player } from '$lib/player.svelte';
 	import { songs } from '$lib/adding.svelte';
 	import { applyOps } from '$lib/playlist-ops';
@@ -445,6 +446,16 @@
 		};
 	}
 
+	/**
+	 * A mouse drags the row, or the selection if the row is in it, toward the queue panel. Not
+	 * where rows are moved by dragging, which is the pointer's own.
+	 */
+	function dragRow(e: DragEvent, i: number) {
+		if (onmove) return;
+		const indexes = selected.has(i) ? [...selected].sort((a, b) => a - b) : [i];
+		lift(e, songs(indexes.map((k) => tracks[k])), page.data.library?.id ?? '');
+	}
+
 	function addSelected(e: MouseEvent) {
 		if (adding?.from === 'bar') return closeAdding();
 		const indexes = [...selected].sort((a, b) => a - b);
@@ -549,6 +560,9 @@
 					onpointermove={pointerMove}
 					onpointerup={pointerUp}
 					onpointercancel={pointerCancel}
+					draggable={canDrag && !onmove}
+					ondragstart={(e) => dragRow(e, i)}
+					ondragend={drop}
 					oncontextmenu={(e) => (press || longPressed) && e.preventDefault()}
 				>
 					<span class="num tabular">
@@ -601,8 +615,8 @@
 						class="more"
 						class:open={adding?.from === i}
 						aria-expanded={adding?.from === i}
-						aria-label="Add {track.title} to a playlist"
-						title="Add to playlist"
+						aria-label="Actions for {track.title}"
+						title="More actions"
 						aria-haspopup="menu"
 						onclick={(e) => more(e, i)}
 					>
@@ -649,11 +663,11 @@
 					class="bar-action"
 					aria-haspopup="menu"
 					aria-expanded={adding?.from === 'bar'}
-					aria-label="Add to playlist"
+					aria-label="Add to queue or playlist"
 					onclick={addSelected}
 				>
 					<Icon name="plus" size={16} />
-					<span>Add <span class="unit">to playlist</span></span>
+					<span>Add <span class="unit">to…</span></span>
 				</button>
 				{#if onremove}
 					<button type="button" class="bar-action" onclick={remove}>

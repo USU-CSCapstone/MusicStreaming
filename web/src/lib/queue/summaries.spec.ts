@@ -48,6 +48,20 @@ describe('lookup', () => {
 		expect(getTracks).not.toHaveBeenCalled();
 	});
 
+	it('keeps the same track ID in two libraries apart', async () => {
+		Object.assign(refs, {
+			'a.0': { libraryId: '1', trackId: '60' },
+			'b.0': { libraryId: '2', trackId: '60' }
+		});
+		getTracks.mockImplementation(async (_f, library: string, ids: string[]) => ({
+			items: ids.map((id) => ({ ...summary(id), title: `Track ${id} of ${library}` }))
+		}));
+
+		const found = await lookup(['a.0', 'b.0']);
+		expect(found.get('a.0')?.track.title).toBe('Track 60 of 1');
+		expect(found.get('b.0')?.track.title).toBe('Track 60 of 2');
+	});
+
 	it('maps an item the queue lacks, or a track out of reach, to null rather than failing', async () => {
 		refs['a.0'] = { libraryId: '1', trackId: '40' };
 		getTracks.mockResolvedValue({ items: [] });
@@ -70,7 +84,7 @@ describe('lookup', () => {
 		Object.assign(refs, {
 			'gone.0': { libraryId: '1', trackId: '50' },
 			'gone.1': { libraryId: '1', trackId: '51' },
-			'here.0': { libraryId: '2', trackId: '60' }
+			'here.0': { libraryId: '2', trackId: '65' }
 		});
 		// A library out of reach answers 404, which `getTracks` turns into an empty page.
 		getTracks.mockImplementation(async (_f, library: string, ids: string[]) => ({
@@ -80,7 +94,7 @@ describe('lookup', () => {
 		const found = await lookup(['gone.0', 'gone.1', 'here.0']);
 		expect(found.get('gone.0')).toBeNull();
 		expect(found.get('gone.1')).toBeNull();
-		expect(found.get('here.0')?.track.title).toBe('Track 60');
+		expect(found.get('here.0')?.track.title).toBe('Track 65');
 	});
 
 	it('asks for at most 100 tracks at once, as the server takes', async () => {

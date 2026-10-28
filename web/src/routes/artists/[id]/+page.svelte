@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { listAlbums, listTracks } from '$lib/api/client';
-	import { artistTracks, collection } from '$lib/adding.svelte';
+	import { artistQuery, artistTracks, collection } from '$lib/adding.svelte';
 	import { albumCard } from '$lib/cards';
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import CollectionView from '$lib/components/CollectionView.svelte';
@@ -64,7 +64,8 @@
 			artist.id,
 			artistName(artist.name),
 			tracks.total,
-			artistTracks(fetch, data.lib, artist.id)
+			artistTracks(fetch, data.lib, artist.id),
+			artistQuery(artist.id)
 		)
 	);
 	const counts = $derived(

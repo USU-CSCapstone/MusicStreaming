@@ -56,4 +56,7 @@ export type StartQueue = Schemas['StartQueue'];
 export type QueueSnapshot = Schemas['QueueSnapshot'];
 export type QueueEdit = Schemas['QueueEdit'];
 export type QueueQuery = Schemas['QueueQuery'];
+export type QueueAnchor = Schemas['QueueAnchor'];
+/** An edit as a device sends it: an `add` may name a `query` for the server to run. */
+export type SentEdit = Schemas['QueueEditRequest']['edit'];
 export type QueueOrigin = Schemas['QueueOrigin'];

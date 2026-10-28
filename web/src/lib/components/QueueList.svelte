@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { tick, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
-	import type { TrackSummary } from '$lib/api/types';
+	import type { QueueAnchor, TrackSummary } from '$lib/api/types';
+	import { carried, drop, edgeStep } from '$lib/dragging';
 	import { artistName, formatDuration, plural } from '$lib/format';
-	import { edgeStep } from '$lib/dragging';
 	import { queue } from '$lib/queue/client.svelte';
 	import { anchorAt, MAX_SPACE, ROW, upNextPieces, upNextRow, upNextRows } from '$lib/queue/layout';
 	import { lookup } from '$lib/queue/summaries';
+	import { addToQueue } from '$lib/queueing';
 	import Artwork from './Artwork.svelte';
 	import Icon from './Icon.svelte';
 
@@ -200,15 +201,22 @@
 		) {
 			return;
 		}
+		send({ type: 'move', items, before: await anchorFor(gap, items) });
+	}
+
+	/**
+	 * What a drop before row `gap` of Up Next anchors to, with the rows it looks at read first if
+	 * they are not drawn. `moving` are the items being moved, which it does not anchor to.
+	 */
+	async function anchorFor(gap: number, moving: string[]): Promise<QueueAnchor> {
 		// eslint-disable-next-line svelte/prefer-svelte-reactivity -- local
 		const known = new Map(ids);
-		for (const piece of upNextPieces(gap, gap + items.length + 1, manual, upcoming)) {
+		for (const piece of upNextPieces(gap, gap + moving.length + 1, manual, upcoming)) {
 			if (known.has(piece.row) && known.has(piece.row + piece.limit - 1)) continue;
 			const read = await queue.window(piece.list, piece.offset, piece.limit);
 			read.forEach((item, k) => known.set(piece.row + k, item));
 		}
-		const before = anchorAt(gap, manual, upcoming, (v) => known.get(v), new Set(items));
-		send({ type: 'move', items, before });
+		return anchorAt(gap, manual, upcoming, (v) => known.get(v), new Set(moving));
 	}
 
 	/** The items an action on `item` applies to: the selection if `item` is in it, else `item`. */
@@ -330,22 +338,62 @@
 		aim();
 	}
 
-	/** The gap nearest the pointer, from the scroll position, as every row is the same height. */
-	function aim() {
-		if (!drag || !scroller) return;
-		const y = drag.y - scroller.getBoundingClientRect().top + at(scroller.scrollTop);
-		drag.gap = Math.max(0, Math.min(total, Math.round(y / ROW)));
+	/** The gap nearest `clientY`, from the scroll position, as every row is the same height. */
+	function gapAt(clientY: number) {
+		const y = clientY - scroller!.getBoundingClientRect().top + at(scroller!.scrollTop);
+		return Math.max(0, Math.min(total, Math.round(y / ROW)));
 	}
 
-	/** Near the top or bottom of the list, scrolls toward it, faster the closer the pointer gets. */
+	/** The gap nearest the pointer. */
+	function aim() {
+		if (drag && scroller) drag.gap = gapAt(drag.y);
+	}
+
+	/**
+	 * Near the top or bottom of the list, scrolls toward it, faster the closer `y`, the pointer's,
+	 * gets. Whether it did.
+	 */
+	function nudge(y: number): boolean {
+		const step = edgeStep(y, scroller!.getBoundingClientRect());
+		if (step) scroller!.scrollTop += step;
+		return step !== 0;
+	}
+
+	/** Keeps scrolling while a drag is held near an edge. */
 	function autoScroll() {
 		if (!drag?.started || !scroller) return;
-		const step = edgeStep(drag.y, scroller.getBoundingClientRect());
-		if (step) {
-			scroller.scrollTop += step;
-			aim();
-		}
+		if (nudge(drag.y)) aim();
 		frame = requestAnimationFrame(autoScroll);
+	}
+
+	// Songs, or an album, artist or playlist, dragged in from a browse view over Up Next
+	// (`requirements/queue.md` §3): the gap they would drop into, as the browser reports the
+	// drag, which it does steadily even when the mouse is still.
+	let incoming = $state<number | null>(null);
+
+	/** Aims a drag from a browse view, and scrolls toward an edge it is held at. */
+	function dragOver(e: DragEvent) {
+		if (!up || !carried.what || !scroller) return;
+		e.preventDefault();
+		if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+		nudge(e.clientY);
+		incoming = gapAt(e.clientY);
+	}
+
+	/** Takes the line away when the drag leaves the list. */
+	function dragLeave(e: DragEvent) {
+		if (!scroller?.contains(e.relatedTarget as Node | null)) incoming = null;
+	}
+
+	/** Adds what was dragged in at the gap it was dropped on, in its turn after earlier edits. */
+	function dragIn(e: DragEvent) {
+		const { what, libraryId } = carried;
+		if (!up || !what || !scroller) return;
+		e.preventDefault();
+		const gap = gapAt(e.clientY);
+		incoming = null;
+		drop();
+		act(async () => addToQueue(what, libraryId, await anchorFor(gap, [])));
 	}
 
 	/** Ends a press: a drag drops where the line is; a press that did not move selects the row. */
@@ -393,6 +441,9 @@
 	onpointermove={dragMove}
 	onpointerup={dragUp}
 	onpointercancel={dragStop}
+	ondragover={dragOver}
+	ondragleave={dragLeave}
+	ondrop={dragIn}
 	class:dragging={drag?.started}
 >
 	{#if !queue.queueId}
@@ -506,8 +557,12 @@
 					</li>
 				{/if}
 			{/each}
-			{#if drag?.started}
-				<li class="drop" style:top="{topOf(drag.gap)}px" aria-hidden="true"></li>
+			{#if drag?.started || incoming !== null}
+				<li
+					class="drop"
+					style:top="{topOf(drag?.started ? drag.gap : incoming!)}px"
+					aria-hidden="true"
+				></li>
 			{/if}
 		</ol>
 	{/if}

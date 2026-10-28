@@ -3,7 +3,7 @@
 // never leaves the worker; the page reads windows of it.
 
 import { API } from '$lib/api/client';
-import type { QueueEdit, RealtimeServerMessage } from '$lib/api/types';
+import type { RealtimeServerMessage, SentEdit } from '$lib/api/types';
 import type { Realtime } from '$lib/realtime.svelte';
 import { toast } from '$lib/toast.svelte';
 import type {
@@ -97,8 +97,11 @@ export class QueueClient {
 		this.#send({ type: 'start', args });
 	}
 
-	/** Applies `edit` here at once and sends it to the server in the background. */
-	edit(edit: QueueEdit) {
+	/**
+	 * Applies `edit` here at once and sends it to the server in the background. An `add` of a
+	 * `query` is only sent: it shows when the server's answer arrives.
+	 */
+	edit(edit: SentEdit) {
 		this.#send({ type: 'edit', edit });
 	}
 
@@ -146,7 +149,9 @@ export class QueueClient {
 			};
 		} else if (message.type === 'refused') {
 			this.refusal = message.refusal;
-			const said = EXPLAINED[message.refusal.code];
+			const { code, edit, message: reason } = message.refusal;
+			const said =
+				EXPLAINED[code] ?? (edit?.type === 'add' && `Couldn’t add to the queue. ${reason}`);
 			if (said) toast(said);
 		} else {
 			const asked = this.#asked.get(message.id);
