@@ -5,10 +5,10 @@
 // its shell.
 
 import { Fetched, Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
-import type { QueueEdit, RealtimeServerMessage, StartQueue } from '$lib/api/types';
+import type { PlayContext, QueueEdit, RealtimeServerMessage, StartQueue } from '$lib/api/types';
 import type { ItemTrack, List, Question, Refusal, Repeat, StartArgs, Summary } from './protocol';
 
-type Context = StartQueue['context'];
+type Context = PlayContext;
 
 export type Options = {
 	/** The API's base path, such as `/api/v1`. */
@@ -101,8 +101,10 @@ export class QueueStore {
 		let next: Queue;
 		try {
 			// `launch` uses up the queue it replaces, so it gets a copy of the one shown.
+			// A query start's one-track placeholder has a key of its own: the server's source under
+			// `key` lists other tracks, and an item ID must never name two.
 			next = Queue.launch(
-				JSON.stringify({ key, libraryId, tracks: shown }),
+				JSON.stringify({ key: query ? crypto.randomUUID() : key, libraryId, tracks: shown }),
 				start,
 				shuffleSeed,
 				this.#view?.copy()

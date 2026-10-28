@@ -26,6 +26,8 @@ const fake = vi.hoisted(() => ({
 	/** The audio's playback info; by default it never arrives, so nothing plays. */
 	info: null as (() => Promise<unknown>) | null,
 	listeners: [] as ((message: RealtimeServerMessage) => void)[],
+	/** Libraries the account no longer reaches, whose lookups the server answers with 404. */
+	unreached: new Set<string>(),
 	/** Whether messages to the server fail to go. */
 	offline: false,
 	sent: [] as {
@@ -50,7 +52,11 @@ const fake = vi.hoisted(() => ({
 vi.mock('$lib/realtime.svelte', () => ({ realtime: fake.realtime }));
 vi.mock('$lib/api/client', async (actual) => ({
 	...(await actual<typeof import('$lib/api/client')>()),
-	getTracks: async (_: unknown, _library: string, ids: string[]) => {
+	getTracks: async (f: never, library: string, ids: string[]) => {
+		if (fake.unreached.has(library)) {
+			const refused = async () => new Response('{"status":404}', { status: 404 });
+			return (await actual<typeof import('$lib/api/client')>()).getTracks(refused, library, ids);
+		}
 		const items = await Promise.all(
 			ids.map((id) => fake.tracks.get(id) ?? fake.catalog.get(id) ?? track(id, 60))
 		);
@@ -79,6 +85,7 @@ vi.mock('$lib/queue/client.svelte', async (actual) => {
 	await wasm.default();
 	let version = 0;
 	let serverId = '';
+	let serverContext: object = {};
 	let server: import('$lib/core-wasm/jewelcase_core_wasm.js').Queue | null = null;
 	/** A response with this status and, if given, this JSON body. */
 	const answer = (status: number, body?: object) =>
@@ -105,12 +112,13 @@ vi.mock('$lib/queue/client.svelte', async (actual) => {
 				const first = query ? list.indexOf(body.startTrackId) : body.start;
 				server = wasm.Queue.start(JSON.stringify({ ...source, tracks: list }), first);
 				serverId = body.queueId;
+				serverContext = body.context;
 				version = 0;
 				return answer(204);
 			}
 			if (!server) return answer(404);
 			const state = JSON.parse(server.snapshot());
-			return answer(200, { queueId: serverId, version, context: {}, state });
+			return answer(200, { queueId: serverId, version, context: serverContext, state });
 		},
 		changed: (summary) => worker.onmessage?.({ data: { type: 'state', summary } } as MessageEvent),
 		refused: () => {}
@@ -202,6 +210,7 @@ beforeEach(async () => {
 	player.finished = false;
 	playback.state = null;
 	fake.offline = false;
+	fake.unreached.clear();
 	fake.tracks.clear();
 	fake.catalog.clear();
 	fake.info = null;
@@ -570,6 +579,9 @@ describe('player', () => {
 			audio.dispatchEvent(new Event('ended'));
 			await vi.waitFor(() => expect(fake.edits).toEqual([{ type: 'next' }]));
 			await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(3));
+			// A new queue keeps the repeat mode, which the next test must not get.
+			queue.edit({ type: 'repeat', mode: 'off' });
+			await vi.waitFor(() => expect(queue.repeat).toBe('off'));
 			play.mockRestore();
 		});
 
@@ -810,20 +822,123 @@ describe('player', () => {
 		it('ignores what the audio of the track before reports once the next is chosen', async () => {
 			fake.info = () => Promise.resolve({ variant: 'original' });
 			const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
-			player.play([track('111', 60), track('112', 60)], 0);
+			player.play([track('141', 60), track('142', 60)], 0);
 			await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
 			const audio = play.mock.contexts[0] as HTMLAudioElement;
 			// Next is chosen before the first track's audio says it plays; the next track's audio is
 			// still on its way.
 			fake.info = () => new Promise(() => {});
 			player.next();
-			await vi.waitFor(() => expect(player.current?.id).toBe('112'));
+			await vi.waitFor(() => expect(player.current?.id).toBe('142'));
 			// What the first track's audio had queued: that it plays, and that it was paused.
 			audio.dispatchEvent(new Event('playing'));
 			audio.dispatchEvent(new Event('pause'));
 			await settle();
 			expect(fake.plays).toEqual([]);
 			expect(player.playing, 'still on its way, not paused').toBe(true);
+			play.mockRestore();
+		});
+
+		it('records plays with the context of the queue, also after taking playback over', async () => {
+			const play = await playing();
+			player.play([track('151', 60)], 0, { type: 'album', id: '9' });
+			await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
+			// The account's queue, started elsewhere from the whole library, and moved here.
+			await hold(['161', '162']);
+			state({ trackId: '161' });
+			transfer(true);
+			expect(await result()).toMatchObject({ status: 'applied' });
+			await vi.waitFor(() => expect(player.current?.id).toBe('161'));
+			await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+			(play.mock.contexts[1] as HTMLAudioElement).dispatchEvent(new Event('playing'));
+			expect(fake.plays.filter((p) => p.end === null).map((p) => [p.trackId, p.context])).toEqual([
+				['161', { type: 'library' }]
+			]);
+			play.mockRestore();
+		});
+
+		it('passes over the items of a library out of reach, in place', async () => {
+			const play = await playing();
+			player.play([track('171', 60), track('173', 60)], 0);
+			await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
+			queue.edit({
+				type: 'add',
+				source: { key: 'u', libraryId: '99', tracks: ['172'] },
+				before: { type: 'manualEnd' }
+			});
+			await vi.waitFor(() => expect(queue.counts.manual).toBe(1));
+			fake.unreached.add('99');
+			const all = await itemsNow();
+
+			player.next();
+			await vi.waitFor(() => expect(player.current?.id).toBe('173'));
+			expect(fake.edits.filter((e) => e.type === 'jump')).toEqual([{ type: 'jump', item: all[2] }]);
+			play.mockRestore();
+		});
+
+		it('does not take a track ending for a move while the next is on its way', async () => {
+			fake.info = () => Promise.resolve({ variant: 'original' });
+			const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+			player.play(
+				['181', '182', '183'].map((id) => track(id, 60)),
+				0
+			);
+			await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
+			const audio = play.mock.contexts[0] as HTMLAudioElement;
+			audio.dispatchEvent(new Event('playing'));
+
+			// The next track's audio is still on its way when the move has landed.
+			fake.info = () => new Promise(() => {});
+			// Before the move has landed.
+			player.next();
+			audio.dispatchEvent(new Event('ended'));
+			await vi.waitFor(() => expect(player.current?.id).toBe('182'));
+			// After it: the audio is still the first track's.
+			audio.dispatchEvent(new Event('ended'));
+			await settle();
+			expect(player.current?.id).toBe('182');
+			expect(fake.edits).toEqual([{ type: 'next' }]);
+			play.mockRestore();
+		});
+
+		it('starts the context over on Repeat All when the last track is missing, once', async () => {
+			const play = await playing();
+			fake.catalog.set('192', track('192', 60, 'missing'));
+			player.play([track('191', 60), track('192', 60, 'missing')], 0);
+			await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
+			queue.edit({ type: 'repeat', mode: 'all' });
+			await vi.waitFor(() => expect(queue.repeat).toBe('all'));
+			fake.edits.length = 0;
+
+			player.next();
+			await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+			expect(player.current?.id).toBe('191');
+			expect(fake.edits).toEqual([{ type: 'next' }, { type: 'next' }]);
+			// A new queue keeps the repeat mode, which the next test must not get.
+			queue.edit({ type: 'repeat', mode: 'off' });
+			await vi.waitFor(() => expect(queue.repeat).toBe('off'));
+			play.mockRestore();
+		});
+
+		it('stops on Repeat All when no track of the context can play', async () => {
+			const play = await playing();
+			fake.catalog.set('196', track('196', 60, 'missing'));
+			fake.catalog.set('197', track('197', 60, 'missing'));
+			player.play([track('195', 60), track('196', 60, 'missing'), track('197', 60, 'missing')], 0);
+			await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
+			queue.edit({ type: 'repeat', mode: 'all' });
+			await vi.waitFor(() => expect(queue.repeat).toBe('all'));
+			fake.catalog.set('195', track('195', 60, 'missing'));
+			fake.edits.length = 0;
+
+			player.next();
+			await vi.waitFor(() => expect(player.finished).toBe(true));
+			await settle();
+			// One lap's restart and no more.
+			expect(fake.edits.filter((e) => e.type === 'next')).toHaveLength(2);
+			// A new queue keeps the repeat mode, which the next test must not get.
+			queue.edit({ type: 'repeat', mode: 'off' });
+			await vi.waitFor(() => expect(queue.repeat).toBe('off'));
 			play.mockRestore();
 		});
 

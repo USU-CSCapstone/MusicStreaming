@@ -50,9 +50,6 @@ class Player {
 
 	/** The track loaded, playing or waiting where it stopped. */
 	current = $state<TrackSummary | null>(null);
-	/** Where the queue came from, which each play records. */
-	context: PlayContext = { type: 'library' };
-
 	/** Whether it plays, or is to once the track's audio arrives. */
 	playing = $state(false);
 	/**
@@ -90,6 +87,13 @@ class Player {
 	#wantsNext = false;
 	/** The item a run of `previous` edits leads to; the items passed on the way are not opened. */
 	#backTo: string | null = null;
+	/**
+	 * A start from a list is under way and its track not yet loaded: the server's queue, whose
+	 * items are not the one-track placeholder's, is opened like the placeholder was.
+	 */
+	#starting = false;
+	/** Under Repeat All, a restart was asked for because nothing after the current item plays. */
+	#wrapped = false;
 	/** The items such a run passes through, the last of them `#backTo`. */
 	#passing: string[] = [];
 	/** Bumped on every item opened, so a slow lookup for an earlier one is ignored. */
@@ -141,6 +145,7 @@ class Player {
 		}
 		if (item === this.#item) return;
 		let direction = this.#awaiting;
+		if (direction === null && this.#starting && !settling) direction = 1;
 		if (direction !== null && this.#backTo !== null) {
 			// Stepping back: only the item the run lands on is opened, and one it does not pass
 			// through is a change made elsewhere, which is followed like any other.
@@ -188,7 +193,7 @@ class Player {
 	/** Stops and shows nothing, as when the queue is gone. */
 	#release() {
 		this.#item = null;
-		this.#holds = this.#wantsNext = false;
+		this.#holds = this.#wantsNext = this.#wrapped = this.#starting = false;
 		this.#awaiting = this.#backTo = null;
 		this.#opens++;
 		this.#load++;
@@ -217,8 +222,18 @@ class Player {
 			}
 			const target = await this.#playable();
 			if (open !== this.#opens) return;
-			if (target === null) return this.#end();
 			this.#awaiting = 1;
+			if (target === null) {
+				// Repeat All starts the context over, once: a lap with nothing playable ends it.
+				if (queue.repeat !== 'all' || this.#wrapped) {
+					this.#awaiting = null;
+					return this.#end();
+				}
+				this.#wrapped = true;
+				this.#origin = 'context';
+				queue.edit({ type: 'next' });
+				return;
+			}
 			this.#origin = target.origin;
 			queue.edit({ type: 'jump', item: target.item });
 		} catch {
@@ -371,13 +386,13 @@ class Player {
 	) {
 		const start = firstPlayable(tracks, index);
 		if (start === null) return;
-		this.context = context;
 		// The track the user chose is known, and plays before the queue says so.
 		const libraryId = this.libraryId;
 		this.#summaries.set(tracks[start].id, { track: tracks[start], libraryId });
 		this.#started();
 		this.#awaiting = 1;
 		this.#wantsNext = false;
+		this.#starting = query !== undefined;
 		this.#origin = 'context';
 		queue.start(
 			query
@@ -534,6 +549,7 @@ class Player {
 
 	/** Stops at the end of the queue. */
 	#end() {
+		this.#wrapped = this.#starting = false;
 		this.playing = this.#loading = false;
 		this.#audio?.pause();
 		this.#plays.end('skipped');
@@ -567,6 +583,7 @@ class Player {
 	/** Plays `track`, the queue's `item`, from `startAt` seconds in, or holds it there paused unless `play`. */
 	#go(found: Found, item: string, startAt = 0, play = true) {
 		const { track } = found;
+		this.#wrapped = this.#starting = false;
 		this.#loaded = found;
 		this.#holds = true;
 		this.current = track;
@@ -641,7 +658,7 @@ class Player {
 			this.#plays.start(
 				this.#loaded!.libraryId,
 				this.current.id,
-				this.context,
+				queue.context ?? { type: 'library' },
 				audio.currentTime,
 				this.#origin
 			);
@@ -675,6 +692,8 @@ class Player {
 		audio.addEventListener('ended', () => {
 			this.#plays.heard(audio.currentTime);
 			this.#plays.end('finished');
+			// The audio of a track already left, or a move under way, is not this track ending.
+			if (this.#stale || this.#awaiting !== null) return;
 			// Repeat One is this device's to carry out; Repeat All is the queue's.
 			if (queue.repeat === 'one' && this.#loaded && this.#item) this.#go(this.#loaded, this.#item);
 			else this.#advance();

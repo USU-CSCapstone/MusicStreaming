@@ -355,12 +355,16 @@ describe('QueueStore', () => {
 			store.start({ context: CONTEXT, libraryId: 'lib', query, startTrackId: 'q-2' });
 
 			expect(summary).toMatchObject({ upcoming: 0 });
-			expect(store.ask({ what: 'track', item: summary.current! })).toEqual({
+			const placeholder = summary.current!;
+			expect(store.ask({ what: 'track', item: placeholder })).toEqual({
 				libraryId: 'lib',
 				trackId: 'q-2'
 			});
 			await settle();
 			const [start, fetched] = server.requests;
+			// The placeholder's item ID is not one the server's queue has, so none names two tracks.
+			expect(placeholder.split('.')[0]).not.toBe(start.body.source.key);
+			expect(server.queue!.track(placeholder)).toBeUndefined();
 			expect(start).toMatchObject({ method: 'POST', path: '/me/queue' });
 			expect(start.body).toMatchObject({
 				source: { libraryId: 'lib', query },

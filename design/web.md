@@ -85,17 +85,20 @@ The player plays the account's queue, which the server keeps and every device ho
 (`design/queue.md`). Playing from a view starts a queue, here at once and on the server in the
 background: a view that holds its whole list (an album, a playlist) sends its track IDs in the
 order shown; a view that pages (songs, an artist's songs, unsorted search results) sends the
-query it pages through, and plays the clicked track alone until the server's queue arrives. The
-player then plays the queue's current item, looking up its track by ID, and the next item's
-ahead of time. The device holding playback follows every change of the current item, whoever
+query it pages through, and plays the clicked track alone, in a one-track queue with a key of
+its own, until the server's queue arrives. The player then plays the queue's current item,
+looking up its track by ID, and the next item's track ahead of time. The device holding playback follows every change of the current item, whoever
 made it; other devices only show it. Next, or a track ending, before the server's queue has
 arrived waits for it. Next, Previous and a track ending are `next` and `previous` edits, and the
 player plays whatever the queue says is current. A track that cannot play is passed over with
 one `jump` to the nearest that can (going back, with `previous` edits to the nearest item in History that
 can play; with none, Previous restarts the track and changes nothing), so nothing is reordered or removed
 ([`requirements/conventions.md` §6](../requirements/conventions.md)). Repeat One replays the
-track on this device; Repeat All is the queue's. Reports name the queue's item, and a device
-that takes playback over plays that item from the queue it already holds.
+track on this device; Repeat All is the queue's, so a context whose last tracks are missing
+starts over, once, before the player gives up. Reports name the queue's item, a play records the
+queue's context, and a device that takes playback over plays that item from the queue it already
+holds. A library the account no longer reaches answers its lookups with 404, taken as all its
+tracks being absent, so its items are passed over like missing ones.
 
 The e2e fixtures keep a queue per test by running the shared core in Node, and answer the
 queue's requests from the page's worker, so they route on the browser context, not the page.

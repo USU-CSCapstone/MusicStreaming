@@ -1,7 +1,7 @@
 // What the queue worker and the page say to each other (`design/general.md` §7.1). The worker
 // holds the queue; the page sends it what happened and asks it for the windows it shows.
 
-import type { QueueEdit, QueueQuery, RealtimeServerMessage, StartQueue } from '$lib/api/types';
+import type { PlayContext, QueueEdit, QueueQuery, RealtimeServerMessage } from '$lib/api/types';
 
 /** The parts of a queue a window can be read from. */
 export type List = 'manual' | 'upcoming' | 'history';
@@ -9,7 +9,7 @@ export type List = 'manual' | 'upcoming' | 'history';
 /** What a device needs to start a queue; the store chooses the IDs. */
 export type StartArgs = {
 	/** What the queue started from, kept as sent. */
-	context: StartQueue['context'];
+	context: PlayContext;
 	libraryId: string;
 	/** Start shuffled, with the order this seed gives. */
 	shuffleSeed?: number;
@@ -41,7 +41,7 @@ export type Summary = {
 	/** Null until there is a queue. */
 	queueId: string | null;
 	/** What the queue started from, as the server keeps it, for a play to record; null with no queue. */
-	context: StartQueue['context'] | null;
+	context: PlayContext | null;
 	/** The server's version of the queue, as far as this device has applied it. */
 	version: number;
 	/** Counts up with every change, so a window read earlier is known to be stale. */

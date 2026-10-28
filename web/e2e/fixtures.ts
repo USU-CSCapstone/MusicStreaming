@@ -144,7 +144,7 @@ class FixtureQueue {
 		};
 	}
 
-	/** Starts a queue as `POST /me/queue` does, carrying the Manual Queue over. */
+	/** Starts a queue as `POST /me/queue` does: the core's launch, which carries the Manual Queue and repeat over. */
 	start(body: {
 		queueId: string;
 		context: object;
@@ -157,11 +157,13 @@ class FixtureQueue {
 		const { query, ...source } = body.source;
 		const list = query ? resolveQuery(query).map((t) => t.id) : (source.tracks ?? []);
 		const first = query ? list.indexOf(body.startTrackId!) : body.start!;
-		const next = Queue.start(JSON.stringify({ ...source, tracks: list }), first);
-		if (this.queue) next.carryManual(this.queue);
-		if (body.shuffle) {
-			next.apply(JSON.stringify({ type: 'shuffle', on: true, seed: body.shuffle.seed }));
-		}
+		// `launch` uses up the queue it replaces, which a refused start must leave be: a copy.
+		const next = Queue.launch(
+			JSON.stringify({ ...source, tracks: list }),
+			first,
+			body.shuffle?.seed,
+			this.queue?.copy()
+		);
 		this.queue = next;
 		this.queueId = body.queueId;
 		this.context = body.context;
