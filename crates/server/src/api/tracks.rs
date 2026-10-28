@@ -18,7 +18,7 @@ use super::extract::{Path, Query};
 use super::page::{Check, Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
 use super::{AnyId, Id, Problem};
-use crate::db::Database;
+use crate::db::{self, Database};
 
 /// A track with no number sorts last on its disc. This matches the indexes' expression
 /// (`0003_catalog.sql`), which keeps NULL out of the keyset.
@@ -92,37 +92,81 @@ impl TrackSort {
     }
 }
 
+/// The most `ids` one request may name: a default page.
+const MAX_IDS: usize = super::page::DEFAULT_LIMIT as usize;
+
 /// The parameters `listTracks` supports so far. Any other, including the spec's other
-/// filters, answers `422` rather than being ignored.
+/// filters, answers `422` rather than being ignored. The ones with defaults are optional so
+/// that `ids`, which excludes every other parameter, can tell they were not sent.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListQuery {
-    #[serde(default)]
-    sort: TrackSort,
-    #[serde(default)]
-    order: Order,
+    sort: Option<TrackSort>,
+    order: Option<Order>,
     album_id: Option<AnyId>,
     artist_id: Option<AnyId>,
-    #[serde(default)]
-    artist_credit: ArtistCredit,
+    artist_credit: Option<ArtistCredit>,
     cursor: Option<String>,
     limit: Option<u32>,
+    /// Comma-separated track IDs, as the spec's `ids` says.
+    ids: Option<String>,
+}
+
+impl ListQuery {
+    /// Whether any parameter but `ids` was sent.
+    fn has_other_parameters(&self) -> bool {
+        self.sort.is_some()
+            || self.order.is_some()
+            || self.album_id.is_some()
+            || self.artist_id.is_some()
+            || self.artist_credit.is_some()
+            || self.cursor.is_some()
+            || self.limit.is_some()
+    }
+}
+
+/// The tracks `ids` names that are in `library`, in the order named, as one page. An ID that
+/// is malformed, unknown, or in another library is left out, so the answer never says which.
+/// More than [`MAX_IDS`] IDs, or any parameter besides `ids`, is `422`.
+async fn by_ids(
+    db: Arc<Database>,
+    library: i64,
+    query: ListQuery,
+) -> Result<Json<Page<TrackSummary>>, Problem> {
+    if query.has_other_parameters() {
+        return Err(Problem::invalid("ids cannot be combined with other parameters"));
+    }
+    let text = query.ids.unwrap_or_default();
+    let ids: Vec<i64> = text.split(',').filter_map(|id| AnyId::from(id).0).collect();
+    if text.split(',').count() > MAX_IDS {
+        return Err(Problem::invalid(format!("ids names at most {MAX_IDS} tracks")));
+    }
+    let items = db
+        .read(move |conn| db::by_ids(conn, SELECT, "tracks t", JOINS, library, &ids, list_summary))
+        .await?;
+    let total = i64::try_from(items.len()).unwrap_or(i64::MAX);
+    Ok(Json(Page { items, next_cursor: None, total }))
 }
 
 /// The library's tracks, or those on `albumId` and credited to `artistId` as `artistCredit`
-/// says, a page at a time.
+/// says, a page at a time; or, given `ids`, just those tracks (see [`by_ids`]).
 pub async fn list(
     State(db): State<Arc<Database>>,
     Scope { library, .. }: Scope,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<TrackSummary>>, Problem> {
+    if query.ids.is_some() {
+        return by_ids(db, library, query).await;
+    }
     // An album's own track listing, the common case, reads straight from its index.
-    let sort = match (query.sort, &query.album_id) {
+    let sort = match (query.sort.unwrap_or_default(), &query.album_id) {
         (TrackSort::Album, Some(_)) => &WITHIN_ALBUM,
         (sort, _) => sort.sort(),
     };
-    let request = Request::new(sort, query.order, query.cursor, query.limit)?;
-    let (album, artist, credit) = (query.album_id, query.artist_id, query.artist_credit);
+    let order = query.order.unwrap_or_default();
+    let request = Request::new(sort, order, query.cursor, query.limit)?;
+    let credit = query.artist_credit.unwrap_or_default();
+    let (album, artist) = (query.album_id, query.artist_id);
     let page = db
         .read(move |conn| {
             let source = source(conn, library, album, artist, credit)?;

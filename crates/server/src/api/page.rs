@@ -15,7 +15,7 @@ pub use keyset::{Sort, Source, Total, Unknown};
 
 use super::Problem;
 
-const DEFAULT_LIMIT: u32 = 100;
+pub const DEFAULT_LIMIT: u32 = 100;
 const MAX_LIMIT: u32 = 1000;
 
 /// A list's `order` parameter.

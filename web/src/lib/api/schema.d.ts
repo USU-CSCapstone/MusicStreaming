@@ -286,6 +286,13 @@ export interface paths {
          *     tracks in position (`requirements/albums.md` §4). Whether a track is owned or featured
          *     for an artist follows from its `album.artists`. A playlist is an ordered item list, not
          *     a track filter, and has its own item endpoint (`listPlaylistItems`).
+         *
+         *     `ids` looks up specific tracks, as a client does to fill the rows it shows. The answer is
+         *     one page in the order the IDs were given, with no `nextCursor`, and `total` is the number
+         *     returned. An ID that is unknown, in another library, or not an ID is left out, so the
+         *     answer never says which; a repeated ID comes back each time. `ids` takes the place of
+         *     every other parameter: sending any of them with it is `422`, as is naming more than 100
+         *     IDs.
          */
         get: operations["listTracks"];
         put?: never;
@@ -2609,6 +2616,8 @@ export interface operations {
     listTracks: {
         parameters: {
             query?: {
+                /** @description Track IDs, at most 100. */
+                ids?: string[];
                 /**
                  * @description `album` orders by album, then disc, then track number. `top` is the caller's own
                  *     ranking — listening weighted by completion, not play count alone — falling back to a
