@@ -275,6 +275,7 @@ export class QueueStore {
 			upcoming: view?.upcomingLen() ?? 0,
 			history: view?.historyLen() ?? 0,
 			repeat: (view?.repeat() ?? 'off') as Repeat,
+			shuffled: view?.shuffled() ?? false,
 			settling: this.#placeholder,
 			starting: this.#launch !== null
 		});

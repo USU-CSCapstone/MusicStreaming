@@ -5,6 +5,7 @@
 	import DevicesPanel from '$lib/components/DevicesPanel.svelte';
 	import LyricsPanel from '$lib/components/LyricsPanel.svelte';
 	import Player from '$lib/components/Player.svelte';
+	import QueuePanel from '$lib/components/QueuePanel.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import TabBar from '$lib/components/TabBar.svelte';
 	import Toast from '$lib/components/Toast.svelte';
@@ -65,6 +66,7 @@
 			</main>
 			<LyricsPanel />
 			<DevicesPanel />
+			<QueuePanel />
 			<Toast />
 		</div>
 		<div class="player"><Player /></div>

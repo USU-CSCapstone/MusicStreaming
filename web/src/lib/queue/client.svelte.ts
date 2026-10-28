@@ -5,6 +5,7 @@
 import { API } from '$lib/api/client';
 import type { QueueEdit, RealtimeServerMessage } from '$lib/api/types';
 import type { Realtime } from '$lib/realtime.svelte';
+import { toast } from '$lib/toast.svelte';
 import type {
 	FromWorker,
 	ItemTrack,
@@ -19,6 +20,12 @@ import type {
 
 /** The realtime messages that carry queue changes, and the one that says to catch up. */
 const QUEUE_MESSAGES = new Set(['hello', 'queueEdit', 'queueReplaced']);
+
+/** What to tell the user when an edit they made did not stay (`requirements/realtime.md` §7). */
+const EXPLAINED: Record<string, string> = {
+	anchor_gone: 'That change did not apply: the song it was placed next to is no longer in Up Next.',
+	superseded: 'That change did not apply: a new queue replaced this one.'
+};
 
 /** Starts the queue worker. */
 const spawn = () => new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
@@ -36,6 +43,8 @@ export class QueueClient {
 	counts = $state({ manual: 0, upcoming: 0, history: 0 });
 	/** How the queue repeats. */
 	repeat = $state<Repeat>('off');
+	/** The context's Up Next is shuffled. */
+	shuffled = $state(false);
 	/** A start from a list is under way: the queue is its first track until the server's arrives. */
 	settling = $state(false);
 	/** The server has not yet taken the latest start: nothing it would name can be reported yet. */
@@ -78,6 +87,7 @@ export class QueueClient {
 		this.current = null;
 		this.counts = { manual: 0, upcoming: 0, history: 0 };
 		this.repeat = 'off';
+		this.shuffled = false;
 		this.settling = false;
 		this.starting = false;
 	}
@@ -126,6 +136,7 @@ export class QueueClient {
 			this.revision = summary.revision;
 			this.current = summary.current;
 			this.repeat = summary.repeat;
+			this.shuffled = summary.shuffled;
 			this.settling = summary.settling;
 			this.starting = summary.starting;
 			this.counts = {
@@ -135,6 +146,8 @@ export class QueueClient {
 			};
 		} else if (message.type === 'refused') {
 			this.refusal = message.refusal;
+			const said = EXPLAINED[message.refusal.code];
+			if (said) toast(said);
 		} else {
 			const asked = this.#asked.get(message.id);
 			this.#asked.delete(message.id);

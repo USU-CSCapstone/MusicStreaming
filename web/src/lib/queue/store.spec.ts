@@ -314,7 +314,10 @@ describe('QueueStore', () => {
 		it('starts at once and tells the server, with IDs of its own', async () => {
 			store.start(args());
 
-			expect(summary).toMatchObject({ current: expect.stringMatching(/\.1$/) as string });
+			expect(summary).toMatchObject({
+				current: expect.stringMatching(/\.1$/) as string,
+				shuffled: true
+			});
 			await settle();
 			const sent = server.requests[0];
 			expect(sent).toMatchObject({ method: 'POST', path: '/me/queue' });
@@ -348,6 +351,16 @@ describe('QueueStore', () => {
 			await settle();
 			expect(summary.current).not.toBeNull();
 			expect(summary.current).toBe(server.queue!.current());
+		});
+
+		it('reports shuffle and repeat as they are turned on and off', () => {
+			store.start({ ...args(), shuffleSeed: undefined });
+			expect(summary).toMatchObject({ shuffled: false, repeat: 'off' });
+			store.edit({ type: 'shuffle', on: true, seed: 3 });
+			store.edit({ type: 'repeat', mode: 'all' });
+			expect(summary).toMatchObject({ shuffled: true, repeat: 'all' });
+			store.edit({ type: 'shuffle', on: false, seed: 0 });
+			expect(summary.shuffled).toBe(false);
 		});
 
 		it('plays the track chosen from a list at once, then takes the queue the server made of it', async () => {

@@ -134,9 +134,25 @@
 			onclick={() => {
 				panels.lyrics = !panels.lyrics;
 				panels.devices = false;
+				panels.queue = false;
 			}}
 		>
 			<Icon name="lyrics" size={18} />
+		</button>
+		<button
+			type="button"
+			class="icon-btn"
+			class:on={panels.queue}
+			aria-label="Queue"
+			aria-pressed={panels.queue}
+			title="Queue"
+			onclick={() => {
+				panels.queue = !panels.queue;
+				panels.lyrics = false;
+				panels.devices = false;
+			}}
+		>
+			<Icon name="list" size={18} />
 		</button>
 		<!-- Marked while another device plays, where the music can be taken back from. -->
 		<button
@@ -150,6 +166,7 @@
 			onclick={() => {
 				panels.devices = !panels.devices;
 				panels.lyrics = false;
+				panels.queue = false;
 			}}
 		>
 			<Icon name="devices" size={18} />

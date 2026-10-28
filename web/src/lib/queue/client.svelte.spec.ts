@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { toaster } from '$lib/toast.svelte';
 import type { RealtimeServerMessage } from '$lib/api/types';
 import { QueueClient } from './client.svelte';
 import type { FromWorker, Summary, ToWorker } from './protocol';
@@ -36,6 +37,7 @@ const summary: Summary = {
 	upcoming: 4,
 	history: 0,
 	repeat: 'off',
+	shuffled: false,
 	settling: false,
 	starting: false
 };
@@ -73,6 +75,19 @@ describe('QueueClient', () => {
 		expect(client.context).toEqual({ type: 'album', id: '1' });
 		expect(client.counts).toEqual({ manual: 1, upcoming: 4, history: 0 });
 		expect(client.refusal?.code).toBe('anchor_gone');
+	});
+
+	it('explains an edit that did not stay because its anchor or its queue went', () => {
+		const { worker } = setup();
+		worker.say({ type: 'refused', refusal: { code: 'anchor_gone', message: 'gone' } });
+		expect(toaster.current?.message).toContain('no longer in Up Next');
+
+		worker.say({ type: 'refused', refusal: { code: 'superseded', message: 'replaced' } });
+		expect(toaster.current?.message).toContain('new queue replaced this one');
+
+		toaster.dismiss();
+		worker.say({ type: 'refused', refusal: { code: 'invalid', message: 'refused by the core' } });
+		expect(toaster.current).toBeNull();
 	});
 
 	it('answers a window from the worker, and fails what is asked once closed', async () => {

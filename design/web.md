@@ -75,9 +75,10 @@ It is a stand-in for the server, so it has these limits. None of them are client
 
 ## Not built yet
 
-These are client work still to do: virtualized lists (long lists currently page in as you scroll),
-the queue panel, loudness normalization, offline, and account preferences. Grid/list view and
-theme are per-browser for now.
+These are client work still to do: virtualized lists beyond the queue panel's (the other long
+lists page in as you scroll), drop to insert and Queue Next/Last (the panel edits the queue, but
+nothing yet adds to it), loudness normalization, offline, and account preferences. Grid/list view
+and theme are per-browser for now.
 
 ## Playing
 
@@ -102,6 +103,30 @@ through its own copy of the queue. A report waits until the server has the queue
 item of, which a start sends in the background, since the server refuses an item it does not
 have. A library the account no longer reaches answers its lookups with 404, taken as all its
 tracks being absent, so its items are passed over like missing ones.
+
+## The queue panel
+
+Opened from the player bar, over the main area like Lyrics and Devices. It shows and edits the
+account's queue, so it works the same whichever device plays: every edit goes through the queue
+client, applied here at once and sent on, and the device holding playback follows the queue.
+
+- **Two tabs.** Up Next is the Manual Queue under its own heading (a hint stands in when it is
+  empty, so it is plain where Queue Last lands), then the context's items under theirs. History is
+  most recent first. Shuffle and repeat (Off, All, One) sit beside the tabs, since the player bar
+  has none; shuffle sends a random 32-bit seed.
+- **Rows are one fixed height, so the list is virtualized by arithmetic** (`queue/layout.ts`,
+  `QueueList.svelte`): the rows to draw come from the scroll position, the worker is asked for
+  those items' IDs only, and their tracks come from the batch lookup by item, cached
+  (`queue/summaries.ts`). A 500,000-item Up Next draws about twenty rows. The list is drawn at most 10 million pixels tall, since Firefox ignores a taller height, and past that the scroll position is scaled into the whole list. A track out of reach or
+  missing shows as "Unavailable", never as an error.
+- **Editing.** A grab handle drags one row, or the selected rows together, anywhere in Up Next,
+  across the Manual Queue's end too; the handle takes no scroll from a finger, and pressing it
+  without moving selects the row. From the keyboard, Space on a title selects, Alt+↑/↓ moves the
+  selection (or the row) a place, Delete removes. Alt+↑/↓ gathers a scattered selection into one block (a playlist's list steps each row on its own); presses made before the list has caught up with the last one wait for it, so holding the key moves one place per press. A row's ✕ removes it, or the selection it is in.
+  Clicking an Up Next row jumps to it, and everything ahead of it goes to History. In History a
+  row plays again (`jump`) or returns to the front of Up Next (`move`).
+- **A change that did not stay is explained**: a refused `anchor_gone` or `superseded` shows a
+  toast (`requirements/realtime.md` §7).
 
 The e2e fixtures keep a queue per test by running the shared core in Node, and answer the
 queue's requests from the page's worker, so they route on the browser context, not the page.
