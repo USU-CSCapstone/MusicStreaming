@@ -255,6 +255,21 @@ describe('QueueStore', () => {
 		expect(refusals).toEqual([{ code: 'anchor_gone', message: 'anchor_gone', edit: move }]);
 	});
 
+	it("says so when another device's edit, heard first, leaves a pending edit without its anchor", async () => {
+		await connect();
+		const move: QueueEdit = {
+			type: 'move',
+			items: ids('a', 1),
+			before: { type: 'before', item: 'a.3' }
+		};
+		server.failures = [0];
+		store.edit(move);
+		store.message(server.apply({ type: 'remove', items: ids('a', 3) }));
+
+		expect(refusals).toMatchObject([{ code: 'anchor_gone', edit: move }]);
+		expect(window('upcoming')).toEqual(ids('a', 1, 2, 4));
+	});
+
 	it('fetches the queue when the edit is for one that was replaced', async () => {
 		await connect();
 		server.queueId = '22222222-2222-4222-8222-222222222222';
@@ -314,7 +329,10 @@ describe('QueueStore', () => {
 		it('starts at once and tells the server, with IDs of its own', async () => {
 			store.start(args());
 
-			expect(summary).toMatchObject({ current: expect.stringMatching(/\.1$/) as string });
+			expect(summary).toMatchObject({
+				current: expect.stringMatching(/\.1$/) as string,
+				shuffled: true
+			});
 			await settle();
 			const sent = server.requests[0];
 			expect(sent).toMatchObject({ method: 'POST', path: '/me/queue' });
@@ -348,6 +366,16 @@ describe('QueueStore', () => {
 			await settle();
 			expect(summary.current).not.toBeNull();
 			expect(summary.current).toBe(server.queue!.current());
+		});
+
+		it('reports shuffle and repeat as they are turned on and off', () => {
+			store.start({ ...args(), shuffleSeed: undefined });
+			expect(summary).toMatchObject({ shuffled: false, repeat: 'off' });
+			store.edit({ type: 'shuffle', on: true, seed: 3 });
+			store.edit({ type: 'repeat', mode: 'all' });
+			expect(summary).toMatchObject({ shuffled: true, repeat: 'all' });
+			store.edit({ type: 'shuffle', on: false, seed: 0 });
+			expect(summary.shuffled).toBe(false);
 		});
 
 		it('plays the track chosen from a list at once, then takes the queue the server made of it', async () => {

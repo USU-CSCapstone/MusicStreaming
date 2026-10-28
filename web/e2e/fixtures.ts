@@ -200,7 +200,7 @@ class FixtureQueue {
 
 const queues = new WeakMap<Page, FixtureQueue>();
 /** The queue the page's fixtures share, made on first use. */
-const queueOf = (page: Page) => {
+export const queueOf = (page: Page) => {
 	if (!queues.has(page)) queues.set(page, new FixtureQueue());
 	return queues.get(page)!;
 };
@@ -513,10 +513,10 @@ export async function serveLibrary(
 			});
 		}
 		if (path === `${lib}/tracks` && url.searchParams.has('ids')) {
-			const found = url.searchParams
-				.get('ids')!
-				.split(',')
-				.map((id) => tracks.find((t) => t.id === id));
+			const asked = url.searchParams.get('ids')!.split(',');
+			// As the server: a lookup takes at most 100 IDs.
+			if (asked.length > 100) return problem(422, 'validation_failed', 'At most 100 ids.');
+			const found = asked.map((id) => tracks.find((t) => t.id === id));
 			return json(pageOf(found.filter((t) => t !== undefined)));
 		}
 		if (path === `${lib}/tracks`) return json(pageOf(sortedAsAsked(url.searchParams)));
@@ -633,20 +633,39 @@ export const phone = {
  * Answers the realtime connection as a server would with `phone` playing the second track: it
  * says hello, sends the state, and lists this device and the phone. It carries out `play` and
  * `pause` as if the phone had, and fails any other command as one the phone did not answer. It
- * takes reports as the server does: from the device playing, or one that starts playing.
- * Returns every message the page sent.
+ * takes reports as the server does: from the device playing, or one that starts playing. The
+ * queue it plays is the library's tracks from the second, unless `queued`, `start` and `manual`
+ * (track IDs queued by hand) say otherwise. Returns every message the page sent.
  */
-export async function serveRealtime(page: Page) {
+export async function serveRealtime(
+	page: Page,
+	{
+		queued = tracks.map((t) => t.id),
+		start = 1,
+		manual = [] as string[]
+	}: { queued?: string[]; start?: number; manual?: string[] } = {}
+) {
 	const sent: RealtimeClientMessage[] = [];
 	const now = () => new Date().toISOString();
-	// The phone plays the second track of a queue of the library, which this device then holds.
+	// The phone plays `queued` from `start`, with `manual` queued by hand, which this device then holds.
 	const queue = queueOf(page);
 	queue.start({
 		queueId: crypto.randomUUID(),
 		context: { type: 'library' },
-		source: { key: crypto.randomUUID(), libraryId: library.id, tracks: tracks.map((t) => t.id) },
-		start: 1
+		source: { key: crypto.randomUUID(), libraryId: library.id, tracks: queued },
+		start
 	});
+	if (manual.length) {
+		queue.edit({
+			editId: crypto.randomUUID(),
+			queueId: queue.queueId,
+			edit: {
+				type: 'add',
+				source: { key: crypto.randomUUID(), libraryId: library.id, tracks: manual },
+				before: { type: 'manualEnd' }
+			}
+		});
+	}
 	let state: PlayerState = {
 		status: 'playing',
 		activeDeviceId: phone.id,

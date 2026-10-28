@@ -85,6 +85,11 @@ impl Queue {
         .to_owned()
     }
 
+    /// Whether the context is shuffled.
+    pub fn shuffled(&self) -> bool {
+        self.0.shuffled()
+    }
+
     /// How many items the Manual Queue holds.
     #[wasm_bindgen(js_name = manualLen)]
     pub fn manual_len(&self) -> usize {

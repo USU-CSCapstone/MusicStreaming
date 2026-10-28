@@ -52,6 +52,8 @@ export type Summary = {
 	upcoming: number;
 	history: number;
 	repeat: Repeat;
+	/** The context's Up Next is in a shuffled order. */
+	shuffled: boolean;
 	/** A start from a list is under way: the queue is just its first track until the server's arrives. */
 	settling: boolean;
 	/** The server has not yet taken the latest start, so it would refuse a report naming its items. */

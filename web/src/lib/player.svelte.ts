@@ -7,14 +7,7 @@
 // is the same device to the server.
 
 import { untrack } from 'svelte';
-import {
-	audioUrl,
-	getPlaybackInfo,
-	getTracks,
-	getWaveform,
-	imageUrl,
-	recordPlays
-} from './api/client';
+import { audioUrl, getPlaybackInfo, getWaveform, imageUrl, recordPlays } from './api/client';
 import type {
 	PlayContext,
 	PlayerCommand,
@@ -28,6 +21,7 @@ import { playback } from './playback.svelte';
 import { PlayRecorder } from './plays';
 import { Progress } from './progress';
 import { queue } from './queue/client.svelte';
+import { lookup, remember, type Found } from './queue/summaries';
 import { firstPlayable, restartsOnPrevious } from './queue';
 import { realtime } from './realtime.svelte';
 import { carryOut, type Controls } from './remote';
@@ -41,9 +35,6 @@ const VOLUME_SETTLES_MS = 250;
 const LOOK_AHEAD = 100;
 
 type Status = 'playing' | 'paused' | 'stopped' | 'buffering';
-
-/** A track, with the library it is in. */
-type Found = { track: TrackSummary; libraryId: string };
 
 class Player {
 	libraryId = $state('');
@@ -71,11 +62,6 @@ class Player {
 	#loaded: Found | null = null;
 	/** Whether the item being moved to came off the Manual Queue, which plays record. */
 	#origin: QueueOrigin = 'context';
-	/**
-	 * Tracks by ID: what is playing and next, and what a start or a look-ahead just fetched, so
-	 * moving on needs no request.
-	 */
-	#summaries = new Map<string, Found>();
 	/** Set while this player waits for the queue to move where it asked, to the way it went. */
 	#awaiting: 1 | -1 | null = null;
 	/**
@@ -266,39 +252,29 @@ class Player {
 		return null;
 	}
 
-	/** Fetches the summary of the item after the current one, and forgets the rest. */
+	/** Fetches the summary of the item after the current one, so moving on needs no request. */
 	async #preload() {
 		try {
 			const next =
 				(await queue.window('manual', 0, 1))[0] ?? (await queue.window('upcoming', 0, 1))[0];
-			const [found] = next ? await this.#lookup([next]) : [];
-			for (const id of this.#summaries.keys()) {
-				if (id !== this.current?.id && id !== found?.track.id) this.#summaries.delete(id);
-			}
+			if (next) await this.#lookup([next]);
 		} catch {
 			// Fetched when it is reached.
 		}
 	}
 
 	/**
-	 * The tracks `items` play, with their libraries, in the same order. One out of reach, or that the queue does not
-	 * know, is null. Up to `LOOK_AHEAD` items go in one request.
+	 * The tracks `items` play, with their libraries, in the same order. One out of reach, or that
+	 * the queue does not know, is null. Unlike the shared `lookup`, a failed request throws, so
+	 * that the player waits instead of passing over tracks it could not ask about.
 	 */
 	async #lookup(items: string[]): Promise<(Found | null)[]> {
-		const refs = await Promise.all(items.map((item) => queue.track(item)));
-		const wanted: Record<string, string[]> = {};
-		for (const ref of refs) {
-			if (ref && !this.#summaries.has(ref.trackId))
-				(wanted[ref.libraryId] ??= []).push(ref.trackId);
-		}
-		await Promise.all(
-			Object.entries(wanted).map(async ([library, ids]) => {
-				for (const track of (await getTracks(fetch, library, [...new Set(ids)])).items) {
-					this.#summaries.set(track.id, { track, libraryId: library });
-				}
-			})
-		);
-		return refs.map((ref) => (ref && this.#summaries.get(ref.trackId)) || null);
+		const found = await lookup(items);
+		return items.map((item) => {
+			const one = found.get(item);
+			if (one === undefined) throw new Error('The tracks could not be looked up.');
+			return one;
+		});
 	}
 
 	/** The account's playback state, as the server just sent it. */
@@ -363,7 +339,7 @@ class Player {
 			throw new Error('Nothing here to pick up.');
 		}
 		if (playback.track?.id === ref.trackId) {
-			this.#summaries.set(ref.trackId, { track: playback.track, libraryId: ref.libraryId });
+			remember(ref.libraryId, playback.track);
 		}
 		const [found] = await this.#lookup([itemId]);
 		if (!found) throw new Error('Nothing here to pick up.');
@@ -396,7 +372,7 @@ class Player {
 		if (start === null) return;
 		// The track the user chose is known, and plays before the queue says so.
 		const libraryId = this.libraryId;
-		this.#summaries.set(tracks[start].id, { track: tracks[start], libraryId });
+		remember(libraryId, tracks[start]);
 		this.#started();
 		this.#awaiting = 1;
 		this.#wantsNext = false;

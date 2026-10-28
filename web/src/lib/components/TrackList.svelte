@@ -8,6 +8,7 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
 	import type { PlayContext, QueueQuery, TrackSummary } from '$lib/api/types';
+	import { edgeStep } from '$lib/dragging';
 	import { albumTitle, formatDate, formatDuration, plural, releaseYear } from '$lib/format';
 	import { player } from '$lib/player.svelte';
 	import { songs } from '$lib/adding.svelte';
@@ -337,16 +338,10 @@
 	/** Near the top or bottom of what scrolls, scrolls toward it, faster the closer it gets. */
 	function autoScroll() {
 		if (!drag?.started) return;
-		const edge = 56;
 		const box = scroller?.getBoundingClientRect() ?? { top: 0, bottom: innerHeight };
-		const into =
-			drag.y < box.top + edge
-				? drag.y - (box.top + edge)
-				: drag.y > box.bottom - edge
-					? drag.y - (box.bottom - edge)
-					: 0;
-		if (into) {
-			(scroller ?? document.scrollingElement!).scrollTop += Math.max(-20, Math.min(20, into / 3));
+		const step = edgeStep(drag.y, box);
+		if (step) {
+			(scroller ?? document.scrollingElement!).scrollTop += step;
 			aim();
 		}
 		frame = requestAnimationFrame(autoScroll);
