@@ -421,7 +421,7 @@ export interface paths {
         };
         /**
          * List tag types
-         * @description **Planned:** The tag types the library's music carries, in key order: each type with at
+         * @description The tag types the library's music carries, in key order: each type with at
          *     least one tag in the library, and its count of tags. A type no file in the library
          *     carries is left out, so a filter drawn from this list never shows an empty section
          *     (`requirements/tags.md` §2, §8).
@@ -446,7 +446,7 @@ export interface paths {
         };
         /**
          * Browse tags
-         * @description **Planned:** The library's tags, of one type or every type. A tag sorts by its name, its
+         * @description The library's tags, of one type or every type. A tag sorts by its name, its
          *     leading article kept (`requirements/conventions.md` §4).
          */
         get: operations["listTags"];
@@ -470,8 +470,8 @@ export interface paths {
         };
         /**
          * Get a tag
-         * @description **Planned:** A tag's tracks, albums, and artists are browsed with the `tag` filter on the
-         *     browse endpoints (`requirements/tags.md` §7).
+         * @description A tag's tracks, albums, and artists are browsed with the `tag` filter on the browse
+         *     endpoints (`requirements/tags.md` §7).
          */
         get: operations["getTag"];
         put?: never;
