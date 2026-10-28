@@ -92,7 +92,7 @@ impl Players {
                      (user_id, item_id, position_ms) VALUES (?1, ?2, ?3)",
             )?;
             for (user, item, position_ms) in rows {
-                // One account's failing, as when its library was deleted under it, must not keep
+                // One account's failing, as when the account was deleted meanwhile, must not keep
                 // everyone else's from being saved. SQLite undoes only the statement that failed.
                 if let Err(error) = upsert.execute(params![user, item, position_ms]) {
                     tracing::warn!(%error, user, "cannot save an account's playback state");
