@@ -394,3 +394,375 @@ fn move_forgets_a_history_item_just_before_the_cursor() {
     assert_eq!(q.order, [1, 2, 3, 4, 0]);
     assert_eq!(q.cursor, 0);
 }
+
+/// Turn shuffle on with `seed`, expecting success.
+fn shuffle_on(q: &mut Queue, seed: u32) {
+    q.apply(&Edit::Shuffle { on: true, seed }).unwrap();
+}
+
+/// Turn shuffle off, expecting success.
+fn shuffle_off(q: &mut Queue) {
+    q.apply(&Edit::Shuffle { on: false, seed: 0 }).unwrap();
+}
+
+/// Play the next item, expecting success.
+fn next(q: &mut Queue) {
+    q.apply(&Edit::Next).unwrap();
+}
+
+/// Item IDs `<key>.<n>` for each number.
+fn ids_of(key: &str, numbers: &[u32]) -> Vec<String> {
+    numbers.iter().map(|n| format!("{key}.{n}")).collect()
+}
+
+#[test]
+fn shuffle_leaves_manual_passed_and_current_alone() {
+    let mut q = Queue::start(source("a", 10), 3).unwrap();
+    add(&mut q, source("m", 3), Anchor::ManualEnd);
+    shuffle_on(&mut q, 7);
+    assert_eq!(q.current().as_deref(), Some("a.3"));
+    assert_eq!(manual(&q), ["m.0", "m.1", "m.2"]);
+    assert_eq!(q.order[..4], [0, 1, 2, 3]);
+    let mut tail = q.order[4..].to_vec();
+    assert_ne!(tail, [4, 5, 6, 7, 8, 9]);
+    tail.sort_unstable();
+    assert_eq!(tail, [4, 5, 6, 7, 8, 9]);
+}
+
+#[test]
+fn shuffle_when_already_shuffled_or_unshuffle_when_not_does_nothing() {
+    let mut q = album();
+    let plain = q.clone();
+    shuffle_off(&mut q);
+    assert_eq!(q, plain);
+    shuffle_on(&mut q, 1);
+    let shuffled = q.clone();
+    shuffle_on(&mut q, 2);
+    assert_eq!(q, shuffled);
+}
+
+#[test]
+fn unshuffle_restores_the_original_order() {
+    let mut q = Queue::start(source("a", 10), 0).unwrap();
+    let plain = q.clone();
+    shuffle_on(&mut q, 99);
+    assert_ne!(upcoming(&q), upcoming(&plain));
+    shuffle_off(&mut q);
+    assert_eq!(q, plain);
+}
+
+#[test]
+fn unshuffle_continues_from_the_current_items_natural_place() {
+    let mut q = Queue::start(source("a", 10), 0).unwrap();
+    shuffle_on(&mut q, 5);
+    for _ in 0..3 {
+        next(&mut q);
+    }
+    let played: Vec<u32> = q.history.clone();
+    let current = q.current.unwrap();
+    shuffle_off(&mut q);
+    assert!(!q.shuffled());
+    let expected: Vec<u32> = (current + 1..10).filter(|n| !played.contains(n)).collect();
+    assert_eq!(upcoming(&q), ids_of("a", &expected));
+    assert_eq!(q.current, Some(current));
+    assert_eq!(q.order[q.cursor - 1], current);
+    assert_eq!(q.history, played);
+}
+
+#[test]
+fn unshuffle_acts_on_the_right_copy_of_a_duplicated_track() {
+    let tracks = vec!["t".to_string(); 6];
+    let dup = Source { key: "d".into(), library_id: "lib".into(), tracks };
+    let mut q = Queue::start(dup, 0).unwrap();
+    shuffle_on(&mut q, 11);
+    next(&mut q);
+    next(&mut q);
+    let current = q.current.unwrap();
+    let played = q.history.clone();
+    shuffle_off(&mut q);
+    let expected: Vec<u32> = (current + 1..6).filter(|n| !played.contains(n)).collect();
+    assert_eq!(upcoming(&q), ids_of("d", &expected));
+}
+
+#[test]
+fn unshuffle_reverts_moves_made_while_shuffled() {
+    let mut q = Queue::start(source("a", 8), 0).unwrap();
+    let plain = q.clone();
+    shuffle_on(&mut q, 3);
+    let first = upcoming(&q).remove(0);
+    mv(&mut q, &[&first], Anchor::ContextEnd).unwrap();
+    shuffle_off(&mut q);
+    assert_eq!(q, plain);
+}
+
+#[test]
+fn unshuffle_keeps_removals() {
+    let mut q = Queue::start(source("a", 8), 0).unwrap();
+    shuffle_on(&mut q, 3);
+    remove(&mut q, &["a.4", "a.6"]);
+    shuffle_off(&mut q);
+    assert_eq!(upcoming(&q), ["a.1", "a.2", "a.3", "a.5", "a.7"]);
+}
+
+#[test]
+fn unshuffle_keeps_additions_at_their_distance_from_the_current_item() {
+    let mut q = Queue::start(source("a", 8), 0).unwrap();
+    shuffle_on(&mut q, 3);
+    let third = upcoming(&q)[2].clone();
+    add(&mut q, source("x", 2), before(&third));
+    add(&mut q, source("y", 1), Anchor::ContextEnd);
+    assert_eq!(upcoming(&q)[2..4], ["x.0", "x.1"]);
+    shuffle_off(&mut q);
+    assert_eq!(
+        upcoming(&q),
+        ["a.1", "a.2", "x.0", "x.1", "a.3", "a.4", "a.5", "a.6", "a.7", "y.0"]
+    );
+}
+
+#[test]
+fn unshuffle_from_a_manual_item_resumes_after_the_last_context_item_started() {
+    let mut q = Queue::start(source("a", 6), 0).unwrap();
+    shuffle_on(&mut q, 8);
+    next(&mut q);
+    let last_started = q.current().unwrap();
+    add(&mut q, source("m", 1), Anchor::ManualStart);
+    next(&mut q);
+    assert_eq!(q.current().as_deref(), Some("m.0"));
+    let number: u32 = last_started.split('.').next_back().unwrap().parse().unwrap();
+    shuffle_off(&mut q);
+    let expected: Vec<u32> = (number + 1..6).collect();
+    assert_eq!(upcoming(&q), ids_of("a", &expected));
+    assert_eq!(history(&q), ["a.0".to_string(), last_started]);
+}
+
+#[test]
+fn unshuffle_keeps_the_context_a_valid_queue() {
+    let mut q = Queue::start(source("a", 10), 0).unwrap();
+    shuffle_on(&mut q, 21);
+    next(&mut q);
+    next(&mut q);
+    shuffle_off(&mut q);
+    let mut seen = q.order.clone();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), q.order.len());
+    assert!(q.cursor <= q.order.len());
+}
+
+#[test]
+fn repeat_mode_is_recorded() {
+    let mut q = album();
+    assert_eq!(q.repeat(), Repeat::Off);
+    q.apply(&Edit::Repeat { mode: Repeat::One }).unwrap();
+    assert_eq!(q.repeat(), Repeat::One);
+    next(&mut q);
+    assert_eq!(q.current().as_deref(), Some("a.1"));
+}
+
+/// Item IDs and tracks of the current item followed by Up Next (manual first).
+fn run(q: &Queue) -> Vec<(String, String)> {
+    let ids = [q.current()].into_iter().flatten().chain(q.manual()).chain(q.upcoming());
+    ids.map(|id| (id.clone(), q.track(&id).unwrap().track_id.to_string())).collect()
+}
+
+/// Play on until the current item comes from a restart copy (key starting with `~`).
+fn play_into_next_lap(q: &mut Queue) {
+    while !q.current().is_some_and(|id| id.starts_with('~')) {
+        next(q);
+    }
+}
+
+#[test]
+fn repeat_all_restarts_into_copies_and_history_keeps_the_session() {
+    let mut q = Queue::start(source("a", 3), 0).unwrap();
+    add(&mut q, source("m", 1), Anchor::ManualEnd);
+    q.apply(&Edit::Repeat { mode: Repeat::All }).unwrap();
+    for _ in 0..3 {
+        next(&mut q);
+    }
+    assert_eq!(q.current().as_deref(), Some("a.2"));
+    next(&mut q);
+    assert_eq!(q.current().as_deref(), Some("~0.0"));
+    assert_eq!(upcoming(&q), ["~0.1", "~0.2"]);
+    assert_eq!(history(&q), ["a.0", "m.0", "a.1", "a.2"]);
+    assert_eq!(q.track("~0.2").map(|t| t.track_id), Some("a-2"));
+}
+
+#[test]
+fn repeat_all_previous_on_a_laps_first_track_returns_to_the_last_lap() {
+    let mut q = Queue::start(source("a", 2), 0).unwrap();
+    q.apply(&Edit::Repeat { mode: Repeat::All }).unwrap();
+    play_into_next_lap(&mut q);
+    q.apply(&Edit::Previous).unwrap();
+    assert_eq!(q.current().as_deref(), Some("a.1"));
+    assert_eq!(upcoming(&q), ["~0.0", "~0.1"]);
+    next(&mut q);
+    assert_eq!(q.current().as_deref(), Some("~0.0"));
+}
+
+#[test]
+fn repeat_all_laps_keep_restarting() {
+    let mut q = Queue::start(source("a", 2), 0).unwrap();
+    q.apply(&Edit::Repeat { mode: Repeat::All }).unwrap();
+    for _ in 0..4 {
+        next(&mut q);
+    }
+    assert_eq!(q.current().as_deref(), Some("~1.0"));
+    assert_eq!(upcoming(&q), ["~1.1"]);
+    assert_eq!(history(&q), ["a.0", "a.1", "~0.0", "~0.1"]);
+}
+
+#[test]
+fn repeat_all_copies_a_run_per_library() {
+    let mut q = Queue::start(source("a", 1), 0).unwrap();
+    let other = Source { library_id: "other".into(), ..source("b", 2) };
+    add(&mut q, other, Anchor::ContextEnd);
+    add(&mut q, source("c", 1), Anchor::ContextEnd);
+    q.apply(&Edit::Repeat { mode: Repeat::All }).unwrap();
+    play_into_next_lap(&mut q);
+    let libraries: Vec<&str> =
+        ["~0.0", "~1.0", "~1.1", "~2.0"].iter().map(|id| q.track(id).unwrap().library_id).collect();
+    assert_eq!(libraries, ["lib", "other", "other", "lib"]);
+}
+
+#[test]
+fn repeat_all_replays_a_shuffled_order_without_reshuffling() {
+    let mut q = Queue::start(source("a", 6), 0).unwrap();
+    shuffle_on(&mut q, 17);
+    q.apply(&Edit::Repeat { mode: Repeat::All }).unwrap();
+    let lap: Vec<String> = run(&q).into_iter().map(|(_, track)| track).collect();
+    play_into_next_lap(&mut q);
+    let second: Vec<String> = run(&q).into_iter().map(|(_, track)| track).collect();
+    assert_eq!(second, lap);
+    assert!(q.shuffled());
+}
+
+#[test]
+fn repeat_all_unshuffle_works_in_the_next_lap() {
+    let mut q = Queue::start(source("a", 6), 0).unwrap();
+    shuffle_on(&mut q, 17);
+    q.apply(&Edit::Repeat { mode: Repeat::All }).unwrap();
+    play_into_next_lap(&mut q);
+    next(&mut q);
+    shuffle_off(&mut q);
+    let (id, track) = run(&q).remove(0);
+    let number: usize = track.rsplit('-').next().unwrap().parse().unwrap();
+    assert!(id.starts_with('~'));
+    let expected: Vec<String> = (number + 1..6).map(|n| format!("a-{n}")).collect();
+    let tracks: Vec<String> = run(&q).into_iter().skip(1).map(|(_, t)| t).collect();
+    assert_eq!(tracks, expected);
+}
+
+#[test]
+fn unshuffle_then_repeat_all_still_plays_every_track() {
+    let mut q = Queue::start(source("a", 10), 0).unwrap();
+    shuffle_on(&mut q, 42);
+    next(&mut q);
+    next(&mut q);
+    shuffle_off(&mut q);
+    q.apply(&Edit::Repeat { mode: Repeat::All }).unwrap();
+    play_into_next_lap(&mut q);
+    let mut tracks: Vec<String> = run(&q).into_iter().map(|(_, t)| t).collect();
+    tracks.sort();
+    let mut all: Vec<String> = (0..10).map(|n| format!("a-{n}")).collect();
+    all.sort();
+    assert_eq!(tracks, all);
+}
+
+#[test]
+fn unshuffle_keeps_additions_when_the_base_runs_short() {
+    let mut q = Queue::start(source("a", 8), 0).unwrap();
+    shuffle_on(&mut q, 3);
+    add(&mut q, source("y", 1), Anchor::ContextEnd);
+    let two: Vec<String> = upcoming(&q).into_iter().take(2).collect();
+    q.apply(&Edit::Remove { items: two }).unwrap();
+    shuffle_off(&mut q);
+    assert_eq!(q.upcoming().last().as_deref(), Some("y.0"));
+    assert_eq!(upcoming(&q).len(), 6);
+}
+
+#[test]
+fn unshuffle_from_a_former_context_item_playing_from_the_manual_queue() {
+    let mut q = Queue::start(source("a", 6), 0).unwrap();
+    shuffle_on(&mut q, 8);
+    next(&mut q);
+    let last_started: u32 = q.current().unwrap().rsplit('.').next().unwrap().parse().unwrap();
+    let moved = upcoming(&q)[0].clone();
+    mv(&mut q, &[&moved], Anchor::ManualStart).unwrap();
+    next(&mut q);
+    assert_eq!(q.current(), Some(moved.clone()));
+    shuffle_off(&mut q);
+    let expected: Vec<u32> = (last_started + 1..6).filter(|n| format!("a.{n}") != moved).collect();
+    assert_eq!(upcoming(&q), ids_of("a", &expected));
+}
+
+#[test]
+fn repeat_off_ends_at_the_end() {
+    let mut q = Queue::start(source("a", 2), 0).unwrap();
+    next(&mut q);
+    next(&mut q);
+    assert_eq!(q.current(), None);
+}
+
+#[test]
+fn large_queue_shuffle_is_fast() {
+    let bound =
+        if cfg!(debug_assertions) { Duration::from_secs(5) } else { Duration::from_millis(50) };
+    let mut q = Queue::start(source("big", 500_000), 0).unwrap();
+    let started = Instant::now();
+    shuffle_on(&mut q, 1);
+    assert!(started.elapsed() < bound, "shuffle took {:?}", started.elapsed());
+    let started = Instant::now();
+    shuffle_off(&mut q);
+    assert!(started.elapsed() < bound, "unshuffle took {:?}", started.elapsed());
+    assert_eq!(q.order.len(), 500_000);
+    assert_eq!(q.order[1], 1);
+}
+
+#[test]
+fn serde_round_trips_shuffle_and_repeat() {
+    let mut q = album();
+    shuffle_on(&mut q, 9);
+    q.apply(&Edit::Repeat { mode: Repeat::All }).unwrap();
+    let json = serde_json::to_value(&q).unwrap();
+    assert_eq!(json["repeat"], "all");
+    assert_eq!(json["shuffle"]["seed"], 9);
+    assert!(json["shuffle"]["unshuffled"].is_array());
+    assert_eq!(serde_json::from_value::<Queue>(json).unwrap(), q);
+
+    assert_eq!(
+        serde_json::to_value(Edit::Shuffle { on: true, seed: 5 }).unwrap(),
+        serde_json::json!({"type": "shuffle", "on": true, "seed": 5})
+    );
+    assert_eq!(
+        serde_json::to_value(Edit::Repeat { mode: Repeat::One }).unwrap(),
+        serde_json::json!({"type": "repeat", "mode": "one"})
+    );
+}
+
+#[test]
+fn shuffle_golden_queue_order_follows_the_pinned_permutation() {
+    let mut q = Queue::start(source("a", 11), 0).unwrap();
+    shuffle_on(&mut q, 42);
+    assert_eq!(q.order, [0, 1, 10, 6, 9, 7, 5, 8, 3, 2, 4]);
+    assert_eq!(q.shuffle.as_ref().map(|s| s.seed), Some(42));
+}
+
+#[test]
+fn unshuffle_places_additions_after_a_base_that_ran_out() {
+    let mut q = Queue::start(source("a", 8), 0).unwrap();
+    shuffle_on(&mut q, 3);
+    jump(&mut q, "a.7");
+    add(&mut q, source("y", 1), Anchor::ContextEnd);
+    shuffle_off(&mut q);
+    assert_eq!(upcoming(&q), ["y.0"]);
+}
+
+#[test]
+fn reserved_keys_are_refused_and_change_nothing() {
+    assert_eq!(Queue::start(source("~0", 2), 0), Err(Error::ReservedKey));
+    let mut q = album();
+    let edit = Edit::Add { source: source("~7", 1), before: Anchor::ManualEnd };
+    assert_eq!(q.apply(&edit), Err(Error::ReservedKey));
+    assert_eq!(q, album());
+}

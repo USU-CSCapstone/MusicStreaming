@@ -15,7 +15,7 @@ mod waveform;
 pub use fold::{artists_key, name_key, tag_key};
 pub use format::Format;
 pub use lock::Recover;
-pub use queue::{Anchor, Edit, Error as QueueError, Queue, Source, TrackRef};
+pub use queue::{Anchor, Edit, Error as QueueError, Queue, Repeat, Source, TrackRef};
 pub use search::{Document, Index, Kind, Section, words};
 pub use sort::{sort_key, tag_sort_key};
 pub use waveform::{shape_waveform, waveform_level};

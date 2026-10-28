@@ -3,7 +3,7 @@
 //! Edits name items, never positions, so they mean the same thing whatever order they arrive in
 //! (`design/general.md` §3). They serialize as tagged JSON for the wire and for storage.
 
-use super::Source;
+use super::{Repeat, Source};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -39,6 +39,11 @@ pub enum Edit {
     Next,
     /// Play the most recent History item.
     Previous,
+    /// Shuffle the context's Up Next with `seed`, or put it back in its original order. A seed is
+    /// only used when turning shuffle on, and is ignored if already on.
+    Shuffle { on: bool, seed: u32 },
+    /// Set the repeat mode.
+    Repeat { mode: Repeat },
 }
 
 /// Why an edit or a queue could not be made. The queue is unchanged after an error.
@@ -48,6 +53,8 @@ pub enum Error {
     AnchorGone,
     /// A source with this key is already in the queue.
     DuplicateSource,
+    /// A source key starts with `~`, which Repeat All restarts reserve for their copies.
+    ReservedKey,
     /// The queue's first item is past the end of its source.
     StartOutOfRange,
     /// The queue would hold more items than a 32-bit index can name.
@@ -60,6 +67,7 @@ impl fmt::Display for Error {
         f.write_str(match self {
             Self::AnchorGone => "the item to insert before is no longer in Up Next",
             Self::DuplicateSource => "a source with this key is already in the queue",
+            Self::ReservedKey => "source keys starting with ~ are reserved",
             Self::StartOutOfRange => "the starting item is past the end of its source",
             Self::TooManyItems => "the queue would hold too many items",
         })
