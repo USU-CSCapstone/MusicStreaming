@@ -115,11 +115,13 @@
 {/if}
 
 <style>
+	/* It sits under the page's header, closer to it than the header's own margin. */
 	.filters {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-2);
+		margin: calc(-1 * var(--space-2)) 0 var(--space-4);
 	}
 
 	.chip {

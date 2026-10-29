@@ -116,6 +116,8 @@
 		],
 		up: [['path', { d: 'M12 19V5M5.5 11.5 12 5l6.5 6.5' }]],
 		down: [['path', { d: 'M12 5v14M5.5 12.5 12 19l6.5-6.5' }]],
+		// Opens a menu or panel below, where `down` is a descending sort.
+		chevron: [['path', { d: 'm6 9 6 6 6-6' }]],
 		clock: [
 			['circle', { cx: 12, cy: 12, r: 9 }],
 			['path', { d: 'M12 7v5l3 2' }]

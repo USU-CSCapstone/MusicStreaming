@@ -129,7 +129,7 @@
 >
 	{label}
 	{#if chosen.length}<span class="count">{chosen.length}</span>{/if}
-	<Icon name="down" size={14} />
+	<Icon name="chevron" size={14} />
 </button>
 
 {#if open}
