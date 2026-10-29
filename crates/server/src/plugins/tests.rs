@@ -24,6 +24,10 @@ mod turns;
 /// that it is done.
 pub(super) const TOUCHER: &str = include_str!("tests/toucher.wat");
 
+/// A plugin written by hand that replaces `Album/01.wav` in root 1 on any event with a WAV whose
+/// `ENERGY` field is `High`, and answers that it is done.
+const ENERGIZER: &str = include_str!("tests/energizer.wat");
+
 /// A library of its own, library 1, whose one root is `music` in the temporary folder, with a
 /// scanner, and the plugins over it. The root's ID is 1, so [`TOUCHER`] can name it. The scanner
 /// runs until its thread is dropped, which [`stop`] does.
@@ -145,6 +149,19 @@ async fn reconfigure_scans(db: &Database) -> i64 {
     db.read(move |conn| conn.query_row(sql, [], |r| r.get(0))).await.unwrap()
 }
 
+/// A manifest for `plugin` asking for `permissions`, among them `tagTypes`, which adds the type
+/// `energy`, named "Energy" and read from `ENERGY`.
+fn adding_energy(permissions: &[jewelcase_plugins::Permission]) -> serde_json::Value {
+    let mut manifest = manifest("plugin", permissions);
+    let types = serde_json::json!([{ "key": "energy", "name": "Energy", "field": "ENERGY" }]);
+    for request in manifest["permissions"].as_array_mut().unwrap() {
+        if request["permission"] == "tagTypes" {
+            request["types"] = types.clone();
+        }
+    }
+    manifest
+}
+
 /// Approving a plugin's tag types scans every library for them, so a file already indexed shows
 /// its values without a rescan asked for; approving them again scans nothing.
 #[tokio::test]
@@ -164,10 +181,7 @@ async fn approved_tag_types_are_read_from_files_already_indexed() {
     .await;
     assert_eq!(tagged(&db, "plugin.energy").await, Vec::<String>::new());
 
-    let mut manifest = manifest("plugin", &[TagTypes]);
-    manifest["permissions"][0]["types"] =
-        serde_json::json!([{ "key": "energy", "name": "Energy", "field": "ENERGY" }]);
-    install(&db, manifest).await;
+    install(&db, adding_energy(&[TagTypes])).await;
     grant(&plugins, "plugin", &[TagTypes], &[]).await;
     assert_eq!(reconfigure_scans(&db).await, 2, "the approval queued one");
     let names = eventually("the track is tagged", async || {
@@ -178,6 +192,30 @@ async fn approved_tag_types_are_read_from_files_already_indexed() {
 
     grant(&plugins, "plugin", &[TagTypes], &[]).await;
     assert_eq!(reconfigure_scans(&db).await, 2, "approved as it was, it reads nothing new");
+    stop(thread).await;
+}
+
+/// A field a plugin writes into a file, as a tagger does, is read as tags of the type it added,
+/// by the scan of what its run touched (`requirements/tags.md` §2).
+#[tokio::test]
+async fn a_field_a_plugin_writes_is_read_as_the_type_it_added() {
+    let (temp, db, plugins, thread) = scanned().await;
+    jewelcase_scanner::testing::write_small_wav(&temp.path().join("music/Album/01.wav"));
+    install(&db, adding_energy(&[LibraryChange, TagTypes])).await;
+    grant(&plugins, "plugin", &[TagTypes], &[LibraryChange]).await;
+    enable(&plugins, "plugin", true).await;
+    let file = plugins.path("plugin");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(file, ENERGIZER).unwrap();
+
+    let run = plugins.run("plugin".into()).await.unwrap();
+    assert_eq!((run.ok, run.summary.as_str(), run.saved), (true, "done", 1));
+    assert_eq!(watch_scans(&db).await, [["Album"]], "what it wrote is scanned");
+    let names = eventually("the track is tagged", async || {
+        Some(tagged(&db, "plugin.energy").await).filter(|names| !names.is_empty())
+    })
+    .await;
+    assert_eq!(names, ["High"]);
     stop(thread).await;
 }
 
