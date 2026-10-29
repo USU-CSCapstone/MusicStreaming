@@ -11,6 +11,7 @@
 	import type { PlayContext, TagType, TrackSummary } from '$lib/api/types';
 	import { type TagFilter, UNFILTERED, isFiltered, toggleTag } from '$lib/filters';
 	import { knownTags } from '$lib/known-tags.svelte';
+	import { fullText } from '$lib/full-text';
 	import { prefs } from '$lib/prefs.svelte';
 	import { tagTypeName } from '$lib/tags';
 	import { albumTitle, formatDate, formatDuration, plural, releaseYear } from '$lib/format';
@@ -562,11 +563,13 @@
 
 {#snippet tagCells(track: TrackSummary)}
 	{#each tagColumns as type, t (type.key)}
-		<span class="tag-col muted" style:grid-area="tag{t}">
-			{#each track.tags[type.key] ?? [] as tag, i (tag.id)}
-				{#if i > 0}<span class="sep">, </span>{/if}
-				<a href={resolve('/tags/[id]', { id: tag.id })}>{tag.name}</a>
-			{/each}
+		<span class="tag-col muted" style:grid-area="tag{t}" {@attach fullText}>
+			<span class="clip">
+				{#each track.tags[type.key] ?? [] as tag, i (tag.id)}
+					{#if i > 0}<span class="sep">, </span>{/if}
+					<a href={resolve('/tags/[id]', { id: tag.id })}>{tag.name}</a>
+				{/each}
+			</span>
 		</span>
 	{/each}
 {/snippet}
@@ -679,7 +682,7 @@
 							<Artwork image={track.album.image} seed={track.album.id} size={40} />
 						</span>
 					{/if}
-					<span class="title-col">
+					<span class="title-col" {@attach fullText}>
 						<!-- A pointer's click on the title selects when rows do; Enter (detail 0) plays.
 					     A missing track can still be selected, to remove it. -->
 						<button
@@ -698,12 +701,16 @@
 						{#if missing}<span class="badge">Unavailable</span>{/if}
 					</span>
 					<!-- Under the title where there is no room for its own column. -->
-					<span class="artist-col muted"><ArtistLinks artists={track.artists} /></span>
+					<span class="artist-col muted" {@attach fullText}
+						><ArtistLinks artists={track.artists} /></span
+					>
 					{#if isAlbum}{@render tagCells(track)}{/if}
 					{#if !isAlbum}
-						<span class="album-col muted">
-							<a href={resolve('/albums/[id]', { id: track.album.id })}
-								>{albumTitle(track.album.title)}</a
+						<span class="album-col muted" {@attach fullText}>
+							<span class="clip"
+								><a href={resolve('/albums/[id]', { id: track.album.id })}
+									>{albumTitle(track.album.title)}</a
+								></span
 							>
 						</span>
 						{@render tagCells(track)}
@@ -935,7 +942,10 @@
 		display: none;
 	}
 
-	.tag-col {
+	/* Cells that cut their text off do it in an inner span, so the cell can fill the row and a
+	   pointer anywhere in it shows the whole text (`fullText`). */
+	.clip {
+		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -953,9 +963,11 @@
 			grid-template-areas: var(--wide-areas);
 		}
 
+		/* Each fills its row's height, its text centred, so a pointer anywhere in the cell is over it. */
 		.title-col,
 		.artist-col {
-			align-self: center;
+			align-self: stretch;
+			align-items: center;
 		}
 
 		.artist-col {
@@ -963,9 +975,15 @@
 		}
 
 		.year,
-		.added,
-		.tag-col {
+		.added {
 			display: block;
+		}
+
+		.tag-col {
+			display: flex;
+			align-items: center;
+			align-self: stretch;
+			min-width: 0;
 		}
 
 		.head {
@@ -1187,7 +1205,13 @@
 		line-height: 18px;
 	}
 
-	.album-col,
+	.album-col {
+		display: flex;
+		align-items: center;
+		align-self: stretch;
+		min-width: 0;
+	}
+
 	.added {
 		overflow: hidden;
 		text-overflow: ellipsis;
