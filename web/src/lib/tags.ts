@@ -7,3 +7,8 @@ const NAMES: Record<string, string> = { genre: 'Genre', mood: 'Mood' };
 export function tagTypeName(key: string): string {
 	return NAMES[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
 }
+
+/** The name of the tag type `key` for more than one, such as `Genres`. */
+export function tagTypePlural(key: string): string {
+	return `${tagTypeName(key)}s`;
+}
