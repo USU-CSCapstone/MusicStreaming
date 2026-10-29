@@ -1,7 +1,10 @@
 <script lang="ts">
 	// One tag type's button in the filter bar, opening a checklist of the library's tags of that
 	// type, most used first, with a search that ignores case and accents, since a library can carry
-	// thousands of genres (`requirements/tags.md` §7). It sits and closes as SortMenu does.
+	// thousands of genres (`requirements/tags.md` §7). It sits and closes as SortMenu does; on a
+	// phone, where a panel beside the button would leave no room for the list, it is a sheet across
+	// the bottom of the screen, closed from its own button or by tapping above it
+	// (`requirements/general.md` §4).
 	import { tick } from 'svelte';
 	import { all, listTags } from '$lib/api/client';
 	import type { Tag, TagType } from '$lib/api/types';
@@ -35,6 +38,8 @@
 	let panel = $state<HTMLElement>();
 	let search = $state<HTMLInputElement>();
 	let place = $state({ top: 0, left: 0 });
+	/** Whether it opened as a sheet, on a screen as narrow as a phone's. */
+	let sheet = $state(false);
 
 	/** `text` as the search compares it: lowercase, with accents dropped. */
 	const fold = (text: string) =>
@@ -68,6 +73,7 @@
 	}
 
 	async function show() {
+		sheet = matchMedia('(max-width: 767px)').matches;
 		open = true;
 		await tick();
 		position();
@@ -85,7 +91,7 @@
 
 	/** Under the button, lined up on the left, or above it when there is no room below. */
 	function position() {
-		if (!panel || !button) return;
+		if (!panel || !button || sheet) return;
 		const a = button.getBoundingClientRect();
 		const { width, height } = panel.getBoundingClientRect();
 		const below = a.bottom + 4;
@@ -133,16 +139,31 @@
 </button>
 
 {#if open}
+	{#if sheet}<div class="backdrop" aria-hidden="true"></div>{/if}
 	<div
 		class="panel"
+		class:sheet
 		role="dialog"
 		tabindex="-1"
 		aria-label="{label} filter"
 		bind:this={panel}
-		style:top="{place.top}px"
-		style:left="{place.left}px"
+		style:top={sheet ? null : `${place.top}px`}
+		style:left={sheet ? null : `${place.left}px`}
 		{onkeydown}
 	>
+		{#if sheet}
+			<header>
+				<h2>{label}</h2>
+				<button
+					type="button"
+					class="done"
+					aria-label="Close {label.toLowerCase()} filter"
+					onclick={close}
+				>
+					<Icon name="close" size={18} />
+				</button>
+			</header>
+		{/if}
 		<label class="search">
 			<Icon name="search" size={16} />
 			<input
@@ -236,6 +257,52 @@
 		border-radius: var(--radius-m);
 		background: var(--surface);
 		box-shadow: var(--shadow);
+	}
+
+	/* On a phone: across the bottom, above everything but toasts, over a dimmed page. */
+	.panel.sheet {
+		right: 0;
+		bottom: 0;
+		left: 0;
+		z-index: 19;
+		width: 100%;
+		max-height: 70dvh;
+		padding: var(--space-2) var(--space-2) calc(var(--space-2) + env(safe-area-inset-bottom));
+		border-width: 1px 0 0;
+		border-radius: var(--radius-l) var(--radius-l) 0 0;
+	}
+
+	.backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 18;
+		background: rgb(0 0 0 / 0.35);
+	}
+
+	.sheet header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: var(--space-1) var(--space-2);
+	}
+
+	.sheet h2 {
+		margin: 0;
+		font-size: 16px;
+	}
+
+	.done {
+		display: inline-flex;
+		padding: var(--space-2);
+		border: 0;
+		border-radius: 50%;
+		background: none;
+		color: var(--text);
+		cursor: pointer;
+	}
+
+	.sheet .tag {
+		min-height: 44px;
 	}
 
 	.search {
