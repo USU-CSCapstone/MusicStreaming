@@ -377,7 +377,8 @@ impl<L: Library> WasiView for Run<L> {
     }
 }
 
-/// The permission as `host.granted` names it, or none for a hook, which a plugin is not told of.
+/// The permission as `host.granted` names it, or none for a hook or tag types, which a plugin is
+/// not told of: neither changes what a run may do.
 fn wit(permission: Permission) -> Option<host::Permission> {
     match permission {
         Permission::LibraryRead => Some(host::Permission::LibraryRead),
@@ -394,7 +395,8 @@ fn wit(permission: Permission) -> Option<host::Permission> {
         | Permission::Playing
         | Permission::Searched
         | Permission::AlbumsChanged
-        | Permission::ArtistsChanged => None,
+        | Permission::ArtistsChanged
+        | Permission::TagTypes => None,
     }
 }
 

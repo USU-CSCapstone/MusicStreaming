@@ -3,7 +3,10 @@
 use serde_json::{Map, Value};
 
 use super::rate_limit::validate_rate_limits;
-use super::{API_VERSION, Hook, MIN_EVERY_MINUTES, Permission, is_host_name, unknown_keys};
+use super::{
+    API_VERSION, BUILT_IN_TAG_FIELDS, Hook, MIN_EVERY_MINUTES, Permission, is_host_name,
+    unknown_keys,
+};
 use crate::settings;
 
 /// The keys a manifest may give at its top level.
@@ -21,8 +24,14 @@ pub(super) const KEYS: [&str; 10] = [
 ];
 
 /// The keys a permission request may give.
-pub(super) const REQUEST_KEYS: [&str; 6] =
-    ["permission", "required", "reason", "destinations", "rateLimits", "everyMinutes"];
+pub(super) const REQUEST_KEYS: [&str; 7] =
+    ["permission", "required", "reason", "destinations", "rateLimits", "everyMinutes", "types"];
+
+/// The keys a tag type in a tagTypes request may give, each of which it must.
+pub(super) const TAG_TYPE_KEYS: [&str; 3] = ["key", "name", "field"];
+
+/// The longest a tag type's name may be, so it fits a column's heading.
+const MAX_TAG_TYPE_NAME: usize = 40;
 
 /// Every problem with a manifest, in words an admin can act on; none when it is valid.
 pub fn validate(manifest: &Value) -> Vec<String> {
@@ -168,6 +177,69 @@ fn validate_request(at: &str, r: &Map<String, Value>, seen: &mut Vec<Permission>
         }
     } else if every.is_some() {
         problems.push(format!(r#"{at}: only schedule takes "everyMinutes""#));
+    }
+    match r.get("types") {
+        Some(types) if permission == Permission::TagTypes => {
+            problems.extend(validate_tag_types(at, types));
+        }
+        Some(_) => problems.push(format!(r#"{at}: only tagTypes takes "types""#)),
+        None if permission == Permission::TagTypes => problems.push(format!(
+            r#"{at}: tagTypes needs "types", each with a "key", a "name", and the "field" it is read from"#
+        )),
+        None => {}
+    }
+    problems
+}
+
+/// The problems with a tagTypes request's `types`, found at `at`: each type's key lowercase
+/// letters, digits, and hyphens, its name at most [`MAX_TAG_TYPE_NAME`] characters, and its field
+/// letters, digits, and underscores, none a built-in type's and none twice, ignoring case.
+fn validate_tag_types(at: &str, types: &Value) -> Vec<String> {
+    let Some(types) = types.as_array().filter(|types| !types.is_empty()) else {
+        return vec![format!(r#"{at}: "types" must be a list of at least one type"#)];
+    };
+    let mut problems = Vec::new();
+    let (mut keys, mut fields) = (Vec::new(), Vec::new());
+    for (i, t) in types.iter().enumerate() {
+        let at = format!("{at}: types[{i}]");
+        let Some(t) = t.as_object() else {
+            problems.push(format!("{at} must be an object"));
+            continue;
+        };
+        problems.extend(unknown_keys(&at, t, &TAG_TYPE_KEYS));
+        let text = |key| t.get(key).and_then(Value::as_str).unwrap_or("");
+        let key = text("key");
+        let key_ok = (1..=32).contains(&key.len())
+            && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !key_ok {
+            problems.push(format!(
+                r#"{at}: "key" must be lowercase letters, digits, and hyphens (1–32 characters)"#
+            ));
+        } else if keys.contains(&key) {
+            problems.push(format!(r#"{at}: "key" "{key}" is given twice"#));
+        } else {
+            keys.push(key);
+        }
+        let name = text("name").trim();
+        if name.is_empty() || name.chars().count() > MAX_TAG_TYPE_NAME {
+            problems.push(format!(
+                r#"{at}: "name" must be a non-empty string of at most {MAX_TAG_TYPE_NAME} characters"#
+            ));
+        }
+        let field = text("field").to_ascii_uppercase();
+        let field_ok = (1..=64).contains(&field.len())
+            && field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !field_ok {
+            problems.push(format!(
+                r#"{at}: "field" must be letters, digits, and underscores (1–64 characters)"#
+            ));
+        } else if BUILT_IN_TAG_FIELDS.contains(&field.as_str()) {
+            problems.push(format!(r#"{at}: "field" {field} is read as a built-in type already"#));
+        } else if fields.contains(&field) {
+            problems.push(format!(r#"{at}: "field" {field} is given twice"#));
+        } else {
+            fields.push(field);
+        }
     }
     problems
 }
