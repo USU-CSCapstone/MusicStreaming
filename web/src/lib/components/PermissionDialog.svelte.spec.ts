@@ -60,6 +60,25 @@ describe('PermissionDialog.svelte', () => {
 		}
 	});
 
+	it('shows each type of tag it adds, and what adding them costs', async () => {
+		const tagTypes = {
+			permission: 'tagTypes' as const,
+			required: false,
+			reason: 'To show how energetic each track is.',
+			types: [
+				{ key: 'energy', name: 'Energy', field: 'ENERGY' },
+				{ key: 'tempo', name: 'Tempo', field: 'tempo_range' }
+			]
+		};
+		setup(plugin({ permissions: [tagTypes] }));
+		await expect.element(page.getByText('Energy, read from each file’s ENERGY')).toBeVisible();
+		await expect.element(page.getByText('Tempo, read from each file’s TEMPO_RANGE')).toBeVisible();
+		await expect.element(page.getByText(/read once more to find them/)).toBeVisible();
+		await expect
+			.element(page.getByRole('checkbox', { name: /Add types of tag/ }))
+			.not.toBeChecked();
+	});
+
 	it('shows every rate limit it declares, flagging one every plugin keeps to', async () => {
 		const network = {
 			permission: 'network' as const,

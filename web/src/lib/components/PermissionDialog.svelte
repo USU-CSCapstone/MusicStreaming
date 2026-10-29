@@ -145,6 +145,12 @@
 				{/each}
 			{:else if req.permission === 'schedule' && req.everyMinutes}
 				<span class="detail">Every {every(req.everyMinutes)}</span>
+			{:else if req.permission === 'tagTypes'}
+				<!-- What each type is called and read from, and what adding them costs (`requirements/plugins.md` §4.1). -->
+				{#each req.types ?? [] as type (type.key)}
+					<span class="detail">{type.name}, read from each file’s {type.field.toUpperCase()}</span>
+				{/each}
+				<span class="warn"><Icon name="warning" size={14} /> {label.detail}</span>
 			{:else if req.permission === 'libraryAdd' || req.permission === 'libraryChange' || req.permission === 'hostRateLimits'}
 				<!-- The risk is stated where the decision is made (`requirements/plugins.md` §4.2). -->
 				<span class="warn"><Icon name="warning" size={14} /> {label.detail}</span>
