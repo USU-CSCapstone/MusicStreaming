@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import { plural } from '$lib/format';
 	import { inSection, sections } from '$lib/sections';
+	import { tagTypePlural } from '$lib/tags';
 	import AccountLink from './AccountLink.svelte';
 	import Icon from './Icon.svelte';
 	import SearchBox from './SearchBox.svelte';
@@ -11,6 +12,12 @@
 	const onPlugins = $derived(page.route.id?.startsWith('/admin/plugins') ?? false);
 	// Plugins are administered, so only admins and the owner see them (`requirements/users.md` §1).
 	const admin = $derived(page.data.me !== null && page.data.me.role !== 'user');
+	// A section for each type of tag the library's music carries, under Songs: its list, and the
+	// page of each of its tags (`requirements/tags.md` §7).
+	const tagTypes = $derived(page.data.tagTypes ?? []);
+	const onTagType = (key: string) =>
+		(page.route.id === '/tags' && page.url.searchParams.get('type') === key) ||
+		(page.route.id === '/tags/[id]' && page.data.tag?.type === key);
 </script>
 
 <nav class="sidebar" aria-label="Library">
@@ -23,6 +30,19 @@
 				<a href={s.href} class:active aria-current={active ? 'page' : undefined}>
 					<Icon name={s.icon} size={18} />
 					{s.label}
+				</a>
+			</li>
+		{/each}
+		{#each tagTypes as type (type.key)}
+			{@const active = onTagType(type.key)}
+			<li>
+				<a
+					href="{resolve('/tags')}?{new URLSearchParams({ type: type.key })}"
+					class:active
+					aria-current={active ? 'page' : undefined}
+				>
+					<Icon name="tag" size={18} />
+					{tagTypePlural(type.key)}
 				</a>
 			</li>
 		{/each}

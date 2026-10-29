@@ -70,3 +70,21 @@ test('on a phone, a tag type opens as a sheet', async ({ page }) => {
 	await expect(sheet).not.toBeVisible();
 	await expect(titles(page)).toHaveText(['Signal Remix']);
 });
+
+test('the sidebar has a section for each tag type, listing its tags', async ({ page }) => {
+	await serveLibrary(page);
+	await page.goto('/songs');
+	const nav = page.getByRole('navigation', { name: 'Library' }).first();
+	await nav.getByRole('link', { name: 'Genres' }).click();
+	await expect(page.getByRole('heading', { level: 1, name: 'Genres' })).toBeVisible();
+	await expect(page.getByText('2 genres')).toBeVisible();
+	const main = page.getByRole('main');
+	await expect(main.getByRole('link', { name: /Ambient/ })).toContainText('2 songs');
+
+	await main.getByRole('link', { name: /Electronic/ }).click();
+	await expect(page).toHaveURL(/\/tags\/62$/);
+	await expect(nav.getByRole('link', { name: 'Genres' })).toHaveAttribute('aria-current', 'page');
+
+	await nav.getByRole('link', { name: 'Moods' }).click();
+	await expect(main.getByRole('link', { name: /Calm/ })).toBeVisible();
+});
