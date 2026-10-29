@@ -16,6 +16,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
+	import { filterQuery, readFilter } from '$lib/filters';
 	import { clearRecentSearches, deleteRecentSearch, listRecentSearches } from '$lib/api/client';
 	import type { RecentSearch } from '$lib/api/types';
 	import Icon from './Icon.svelte';
@@ -42,8 +43,11 @@
 		if (!searching) returnTo = page.url.pathname + page.url.search;
 		// Results update as the user types, with no submit step (`requirements/search.md` §7).
 		// Each keystroke replaces the entry, so Back leaves search in one step.
+		// A search narrowed by tags stays narrowed as it is typed (`requirements/search.md` §5).
+		const filter = searching ? filterQuery(readFilter(page.url.searchParams)) : {};
+		const query = new URLSearchParams({ q: text, ...filter });
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- resolve() plus a query string
-		void goto(`${resolve('/search')}?${new URLSearchParams({ q: text })}`, {
+		void goto(`${resolve('/search')}?${query}`, {
 			replaceState: searching,
 			keepFocus: true,
 			noScroll: true

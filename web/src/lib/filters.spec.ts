@@ -4,6 +4,7 @@ import {
 	type TagFilter,
 	UNFILTERED,
 	currentFilter,
+	filterByTags,
 	filterQuery,
 	isFiltered,
 	readFilter,
@@ -112,5 +113,47 @@ describe("this page's filter", () => {
 			new URL('https://jewelcase.test/songs?sort=title&order=asc&tag=30'),
 			{ replaceState: true, keepFocus: true, noScroll: true }
 		);
+	});
+});
+
+describe('filterByTags', () => {
+	type Item = { name: string; tags: Record<string, { id: string; name: string }[]> };
+	const item = (name: string, genres: string[], moods: string[] = []): Item => ({
+		name,
+		tags: {
+			...(genres.length && { genre: genres.map((id) => ({ id, name: id })) }),
+			...(moods.length && { mood: moods.map((id) => ({ id, name: id })) })
+		}
+	});
+	// Rock is 30, Jazz 31, Calm 32 and Pop 34, which no item carries.
+	const items = [
+		item('daybreak', ['30'], ['32']),
+		item('static', ['30']),
+		item('drift', ['31'], ['32']),
+		item('pulse', ['30', '31'])
+	];
+	const kept = (tags: string[], match: 'any' | 'all' = 'any', typeOf?: (tag: string) => string) =>
+		filterByTags(items, { tags, match }, (i) => i.tags, typeOf).map((i) => i.name);
+
+	it('keeps everything with no filter', () => {
+		expect(kept([])).toEqual(['daybreak', 'static', 'drift', 'pulse']);
+	});
+
+	it('matches any of one type, or all of it', () => {
+		expect(kept(['30', '31'])).toEqual(['daybreak', 'static', 'drift', 'pulse']);
+		expect(kept(['30', '31'], 'all')).toEqual(['pulse']);
+	});
+
+	it('matches every type named', () => {
+		expect(kept(['30', '32'])).toEqual(['daybreak']);
+		expect(kept(['31', '30', '32'])).toEqual(['daybreak', 'drift']);
+	});
+
+	it('groups a tag no item carries by the type it is known to have', () => {
+		const genre = () => 'genre';
+		expect(kept(['30', '34'], 'any', genre)).toEqual(['daybreak', 'static', 'pulse']);
+		expect(kept(['30', '34'], 'all', genre)).toEqual([]);
+		// Not known, or not the library's, it matches nothing.
+		expect(kept(['30', '34'])).toEqual([]);
 	});
 });

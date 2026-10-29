@@ -3,10 +3,10 @@
 	// chips, and whether a type's chosen tags must all match (`requirements/tags.md` §2, §7). Types
 	// come from the library, so one a plugin adds gets a button with no change here, and a library
 	// with no tags shows nothing.
-	import { SvelteMap } from 'svelte/reactivity';
-	import { getTag, listTagTypes } from '$lib/api/client';
+	import { listTagTypes } from '$lib/api/client';
 	import type { Tag, TagType } from '$lib/api/types';
 	import { type TagFilter, UNFILTERED, isFiltered, toggleTag } from '$lib/filters';
+	import { knownTags } from '$lib/known-tags.svelte';
 	import Icon from './Icon.svelte';
 	import TagPicker from './TagPicker.svelte';
 
@@ -26,8 +26,6 @@
 	const typeName = (key: string) => NAMES[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
 
 	let types = $state<TagType[]>([]);
-	/** What is known of each chosen tag; `null` for one the library does not have. */
-	const known = new SvelteMap<string, Pick<Tag, 'name' | 'type'> | null>();
 
 	$effect(() => {
 		const library = libraryId;
@@ -41,24 +39,17 @@
 	});
 
 	// A filter can arrive in the URL before any of its tags has been listed, so each chosen tag
-	// not yet known is read once.
-	$effect(() => {
-		for (const id of filter.tags) {
-			if (known.has(id)) continue;
-			known.set(id, { name: '…', type: '' });
-			getTag(fetch, libraryId, id)
-				.then((tag) => known.set(id, { name: tag.name, type: tag.type }))
-				.catch(() => known.set(id, null));
-		}
-	});
+	// not yet known is read, once for the whole app.
+	$effect(() => knownTags.load(libraryId, filter.tags));
 
-	const chosenOf = (key: string) => filter.tags.filter((id) => known.get(id)?.type === key);
+	const known = (id: string) => knownTags.get(libraryId, id);
+	const chosenOf = (key: string) => filter.tags.filter((id) => known(id)?.type === key);
 
 	/** Whether a type has two tags chosen, so whether they must all match is a choice to show. */
 	const severalOfOneType = $derived(types.some((type) => chosenOf(type.key).length > 1));
 
 	function toggle(tag: Tag) {
-		known.set(tag.id, { name: tag.name, type: tag.type });
+		knownTags.note(libraryId, tag);
 		onchange(toggleTag(filter, tag.id));
 	}
 </script>
@@ -76,7 +67,7 @@
 		{/each}
 
 		{#each filter.tags as id (id)}
-			{@const tag = known.get(id)}
+			{@const tag = known(id)}
 			{@const name = tag === null ? 'Unknown tag' : (tag?.name ?? '…')}
 			{@const kind = tag?.type ? typeName(tag.type).toLowerCase() : 'tag'}
 			<span class="chip" class:unknown={tag === null}>

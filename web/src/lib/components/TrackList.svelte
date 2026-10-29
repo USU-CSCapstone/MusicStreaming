@@ -38,7 +38,8 @@
 		onplay,
 		editable = false,
 		onremove,
-		onmove
+		onmove,
+		filtered = false
 	}: {
 		tracks: TrackSummary[];
 		/**
@@ -77,9 +78,11 @@
 		 * two rows of a sort is no place in the list's own order (`requirements/playlists.md` §4).
 		 */
 		onmove?: (moves: RowMove[]) => void;
+		/** Whether the rows are a filtered few, between which rows are hidden, so none can move. */
+		filtered?: boolean;
 	} = $props();
 
-	const movable = $derived(onmove !== undefined && sort === null);
+	const movable = $derived(onmove !== undefined && sort === null && !filtered);
 
 	const selected = new SvelteSet<number>();
 	/** Where a Shift-click range starts: the row last clicked on its own. */
@@ -380,7 +383,7 @@
 		) {
 			e.preventDefault();
 			if (movable) step(e.key === 'ArrowUp' ? -1 : 1);
-			else moved = 'The list is sorted, so songs can’t be moved';
+			else moved = `The list is ${sort ? 'sorted' : 'filtered'}, so songs can’t be moved`;
 		}
 	}
 

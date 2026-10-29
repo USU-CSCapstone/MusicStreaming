@@ -4,13 +4,16 @@
 	import { collection, opened } from '$lib/adding.svelte';
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
+	import FilterBar from '$lib/components/FilterBar.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import PlaylistDetailsDialog, {
 		type PlaylistDetails
 	} from '$lib/components/PlaylistDetailsDialog.svelte';
 	import TrackList, { type RowMove } from '$lib/components/TrackList.svelte';
 	import { deleteWithUndo } from '$lib/deletions.svelte';
+	import { currentFilter, filterByTags, isFiltered, showFiltered } from '$lib/filters';
 	import { formatLength, plural } from '$lib/format';
+	import { knownTags } from '$lib/known-tags.svelte';
 	import { toast } from '$lib/toast.svelte';
 	import { player } from '$lib/player.svelte';
 	import { EditablePlaylist, rowMoveOps } from '$lib/playlist.svelte';
@@ -40,12 +43,20 @@
 	// Sorting shows the playlist in another order and leaves its own as arranged; it plays as
 	// shown (`requirements/conventions.md` §4.1, `requirements/playlists.md` §10).
 	const sort = $derived(currentSort(PLAYLIST_FIELDS));
+	// Filtering, like sorting, only changes what is shown (`requirements/tags.md` §7).
+	const filter = $derived(currentFilter());
+	const filtered = $derived(isFiltered(filter));
 	const shown = $derived(
-		sortRows(
-			rows,
-			sort,
-			(r) => r.track,
-			(r) => r.addedAt
+		filterByTags(
+			sortRows(
+				rows,
+				sort,
+				(r) => r.track,
+				(r) => r.addedAt
+			),
+			filter,
+			(r) => r.track.tags,
+			(tag) => knownTags.get(data.lib, tag)?.type
 		)
 	);
 	const shownTracks = $derived(shown.map((r) => r.track));
@@ -128,16 +139,18 @@
 	{/snippet}
 </DetailHeader>
 
+<FilterBar libraryId={data.lib} {filter} onchange={showFiltered} />
 <TrackList
 	tracks={shownTracks}
 	added={shown.map((r) => r.addedAt)}
 	{sort}
 	onsort={showSorted}
-	empty="This playlist is empty."
+	empty={filtered ? 'No songs in this playlist carry these tags.' : 'This playlist is empty.'}
 	{context}
 	editable
 	onremove={removeRows}
 	onmove={moveRows}
+	{filtered}
 />
 
 {#if editing}
