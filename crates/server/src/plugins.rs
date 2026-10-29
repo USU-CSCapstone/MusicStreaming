@@ -25,7 +25,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use jewelcase_plugins::{Host, InvalidPlugin, Permission};
-use jewelcase_scanner::Scanner;
+use jewelcase_scanner::{Scanner, Trigger};
 use tokio::runtime::Runtime;
 use tokio::sync::Semaphore;
 use tokio::task::JoinError;
@@ -164,19 +164,41 @@ impl Plugins {
         self.dir.join(format!("{id}.wasm"))
     }
 
-    /// Replaces what `id` is granted ([`grants::set`]).
+    /// Replaces what `id` is granted ([`grants::set`]). When that changes the tag types a scan
+    /// reads, every library is scanned for them ([`Plugins::scan_every_library`]).
     pub async fn set_grants(
         &self,
         id: String,
         plugin_wide: Vec<Permission>,
         per_library: Vec<(i64, Vec<Permission>)>,
     ) -> Result<(), PluginError> {
-        self.db
-            .try_write(move |tx| {
+        let read_anew = self
+            .db
+            .try_write(move |tx| -> Result<_, PluginError> {
                 let manifest = grants::manifest(tx, &id)?.ok_or(PluginError::NotFound)?;
                 Ok(grants::set(tx, &id, &manifest, &plugin_wide, &per_library)?)
             })
-            .await
+            .await?;
+        if read_anew {
+            self.scan_every_library().await;
+        }
+        Ok(())
+    }
+
+    /// Queues a scan of every library, as `reconfigure`, which reads its files' tags again for
+    /// the tag types a grant added (`design/scanning.md` §9). Queuing records each scan with a
+    /// blocking write, which must not run on an async thread. A scan that cannot be queued is
+    /// logged by the scanner, and the next start's scan reads them instead.
+    async fn scan_every_library(&self) {
+        let scanners: Vec<Scanner> = self.scanners.values().cloned().collect();
+        let queued = tokio::task::spawn_blocking(move || {
+            for scanner in scanners {
+                scanner.scan_library(Trigger::Reconfigure);
+            }
+        });
+        if let Err(error) = queued.await {
+            tracing::error!(%error, "queuing scans for added tag types failed");
+        }
     }
 
     /// Enables or disables `id` in `library`. Enabling needs every required permission.

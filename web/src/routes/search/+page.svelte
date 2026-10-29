@@ -114,7 +114,7 @@
 			{#each tagTypes as type (type.key)}
 				<a href="{resolve('/tags')}?{new URLSearchParams({ type: type.key })}">
 					<Icon name="tag" size={18} />
-					{tagTypePlural(type.key)}
+					{tagTypePlural(type.key, tagTypes)}
 				</a>
 			{/each}
 		</nav>

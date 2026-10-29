@@ -8,7 +8,7 @@ use jewelcase_core::Format;
 
 use super::{
     Factory, InspectStore, InspectTrack, ItemKey, PNG, library, live, make_album, scan_library,
-    tag_wav, tag_wav_with, write_small_wav,
+    tag_wav, tag_wav_with, tag_wav_with_field, write_small_wav,
 };
 use crate::scan::ScanState;
 use crate::track::TrackId;
@@ -141,18 +141,12 @@ pub fn an_unchanged_file_is_read_again_for_a_newer_tag_type<S: InspectStore>(mak
 /// A type a plugin adds is read from files already scanned, by the next scan, for their tags
 /// alone and once, from the field the plugin writes (`requirements/tags.md` §2).
 pub fn a_type_a_plugin_adds_is_read_from_files_already_scanned<S: InspectStore>(make: Factory<S>) {
-    use lofty::TextEncoding;
-    use lofty::config::WriteOptions;
-    use lofty::id3::v2::{ExtendedTextFrame, Frame, Id3v2Tag};
-    use lofty::tag::TagExt;
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     let path = root.join("A/track.wav");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     write_small_wav(&path);
-    let mut tag = Id3v2Tag::new();
-    tag.insert(Frame::UserText(ExtendedTextFrame::new(TextEncoding::UTF8, "ENERGY", "High")));
-    tag.save_to_path(&path, WriteOptions::default()).unwrap();
+    tag_wav_with_field(&path, "ENERGY", "High");
     let lib = library(&root);
     let store = make(&lib);
     scan_library(&store, &lib);

@@ -53,14 +53,16 @@ pub fn missing(manifest: &Manifest, granted: &[Permission]) -> Vec<Permission> {
 
 /// Replaces what `id` is granted: `plugin_wide` for itself, and `per_library` in each library
 /// it names, each with the request `manifest` makes for it. A library that loses a required
-/// permission is disabled.
+/// permission is disabled. Granting `tagTypes` registers the types it asks for
+/// ([`register_tag_types`]), and the answer is whether that changed what a scan reads, which
+/// every library is then scanned for.
 pub fn set(
     conn: &Connection,
     id: &str,
     manifest: &Manifest,
     plugin_wide: &[Permission],
     per_library: &[(i64, Vec<Permission>)],
-) -> rusqlite::Result<()> {
+) -> rusqlite::Result<bool> {
     // The permission and the request approved in granting it, if it is asked for in that scope.
     let approve = |p: &Permission, library: bool| {
         let request = manifest.permissions.iter().find(|r| r.permission == *p);
@@ -68,6 +70,7 @@ pub fn set(
         request.map(|r| approved(r).map(|approved| (Text(*p), approved))).transpose()
     };
     conn.execute("DELETE FROM plugin_grants WHERE plugin_id = ?1 AND library_id = 0", [id])?;
+    let mut read_anew = false;
     for p in plugin_wide {
         let Some((name, request)) = approve(p, false)? else { continue };
         conn.execute(
@@ -75,6 +78,9 @@ pub fn set(
              VALUES (?1, 0, ?2, ?3)",
             params![id, name, request],
         )?;
+        if *p == Permission::TagTypes {
+            read_anew = register_tag_types(conn, manifest)?;
+        }
     }
     // Library 0 holds the plugin's own grants, so it is never replaced as a library.
     for (library, permissions) in per_library.iter().filter(|(library, _)| *library != 0) {
@@ -105,7 +111,42 @@ pub fn set(
             )?;
         }
     }
-    Ok(())
+    Ok(read_anew)
+}
+
+/// Registers each tag type `manifest` asks to add, keyed under the plugin
+/// ([`Manifest::tag_type_key`]), and answers whether any is new or read from another field than
+/// before, which a scan must read files again for. Those take the next generation of plugins'
+/// types (`design/scanning.md` §4); one registered with the field it asks for keeps its
+/// generation and takes only its name. A type is never removed here, so it outlives its grant
+/// and its plugin (`requirements/plugins.md` §4.2).
+fn register_tag_types(conn: &Connection, manifest: &Manifest) -> rusqlite::Result<bool> {
+    let next: u32 =
+        conn.query_row("SELECT ifnull(max(since), 0) + 1 FROM tag_types", [], |row| row.get(0))?;
+    let mut read_anew = false;
+    for tag_type in manifest.tag_types() {
+        let since: u32 = conn
+            .prepare_cached(
+                "INSERT INTO tag_types (key, name, plugin_id, field, since) \
+                 VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT (key) DO UPDATE SET name = excluded.name, \
+                 since = iif(field = excluded.field, since, excluded.since), \
+                 field = excluded.field \
+                 RETURNING since",
+            )?
+            .query_row(
+                params![
+                    manifest.tag_type_key(&tag_type.key),
+                    tag_type.name.trim(),
+                    manifest.id,
+                    tag_type.field.to_ascii_uppercase(),
+                    next,
+                ],
+                |row| row.get(0),
+            )?;
+        read_anew |= since == next;
+    }
+    Ok(read_anew)
 }
 
 /// Enables or disables `id` in `library`. Enabling answers the required permissions still
