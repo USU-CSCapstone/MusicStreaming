@@ -91,6 +91,7 @@ That is the trade, made knowingly when write access is granted, library by libra
 | **Listening activity** | Play events and listening history ([§8](#8-events), [`analytics.md` §10](analytics.md#10-external-services)) | Per plugin |
 | **Search activity** | Each search a user settles on, from users who turned on sharing searches with the plugin ([`search.md` §6](search.md#6-recent-searches)) | Per plugin |
 | **Limiting a service for every plugin** | Setting a rate limit that every plugin's requests to one of the destinations it names under **Network** keep to, for a service that limits the whole server ([§7](#7-working-with-the-library)) — so it can slow every other plugin that uses that service | Per plugin |
+| **A tag type** | The scanner reading a field the plugin writes into files as a type of tag, shown, browsed, and filtered as genre and mood are ([`tags.md` §2](tags.md#2-tag-types)). Approving one has the scanner read every file's tags once more, in the background, which on a large library takes as long as a first scan's reading | Per plugin |
 | **Hooks** | Running on its own when something happens, such as tracks changing ([§8](#8-events)), rather than only when an admin asks | Per library, or per plugin for hooks not about a library |
 
 - **Some things need no permission**: a plugin's own settings and stored state ([§6](#6-configuration--credentials)), and the interface surfaces it adds ([§9](#9-extending-the-interface)). They touch nothing but the plugin itself.
@@ -104,7 +105,7 @@ That is the trade, made knowingly when write access is granted, library by libra
 - **Every request carries a reason**, written by the plugin's author in plain language and shown beside it: *"Network: to fetch lyrics from lrclib.net."*
 - **Requests are required or optional.** A plugin marks what it cannot work without. Optional permissions may be declined and the plugin works without the features that depend on them; a plugin cannot be enabled until its required permissions are granted, so the admin learns that at install rather than when it fails.
 - **Approve all, some, or none**, at install and at any time after. Nothing is granted implicitly, and nothing is pre-approved.
-- **Changes take effect immediately**, in both directions, as disabling does ([§5](#5-installation--lifecycle)). A revoked permission is gone mid-task, not at the next restart.
+- **Changes take effect immediately**, in both directions, as disabling does ([§5](#5-installation--lifecycle)). A revoked permission is gone mid-task, not at the next restart. **A tag type is the one exception:** once approved it belongs to the library's catalog, not to the plugin, and revoking the grant leaves it, since its values are in the files ([`tags.md` §2](tags.md#2-tag-types)).
 - **Updates never widen access on their own.** An update asking for more shows the new requests at the point of updating. Until they are approved it runs with what was already granted; if a new request is required, the update waits.
 - **The risk is stated per permission**, where the decision is made — write access above all ([§3](#3-writing-to-the-library)).
 
@@ -127,7 +128,7 @@ That is the trade, made knowingly when write access is granted, library by libra
 - **Installation is trivial** — a file or a URL, from the admin interface, with no restart and no shell.
 - **Enabled per library, independently** ([`libraries.md`](libraries.md)). A plugin may serve one library and never see another.
 - **Disabling is immediate and complete.** A disabled plugin runs nothing, sees nothing, and reaches nothing. The one exception is the check of its settings an admin's save makes, so that a wrong value is still reported as it is entered ([§6](#6-configuration--credentials)).
-- **Uninstalling leaves the library alone.** Files a plugin wrote are ordinary files and stay; content it merely *sourced* disappears with it ([§10](#10-external-content-sources)).
+- **Uninstalling leaves the library alone.** Files a plugin wrote are ordinary files and stay, and so does any tag type it added, which those files carry ([`tags.md` §2](tags.md#2-tag-types)); content it merely *sourced* disappears with it ([§10](#10-external-content-sources)).
 - **Updates are the admin's choice**, never automatic — code that may hold write access must not change underneath a running server. An update never widens its own access ([§4.2](#42-asking-and-approving)).
 - **Configuration and granted permissions survive a reinstall**, so removing a plugin to fix something does not mean setting it up again. A grant survives only for a request made again unchanged, and a changed one is asked again ([§4.2](#42-asking-and-approving)); users connect again.
 

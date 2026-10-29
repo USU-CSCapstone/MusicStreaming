@@ -21,7 +21,7 @@ Shared behavior follows [`conventions.md`](conventions.md).
 
 ## 2. Tag Types
 
-**Every tag has a type.** In v1 there are two — **genre** and **mood**, each read from its standard field.
+**Every tag has a type.** In v1 two are built in — **genre** and **mood**, each read from its standard field — and a plugin can add more.
 
 **A type is a field, and nothing more.** Every type is read, matched, and browsed by the same rules — §3 to §8 apply unchanged — and none is special-cased by name. A new type is therefore a new field to read, not new behaviour to build, and genre is the first entry in the list rather than the shape of the list.
 
@@ -29,6 +29,8 @@ Anticipated but not built: **personal labels**, if user tagging is added later; 
 
 - **Types are independent.** Filtering by one never implicitly filters by another, so a mood filter composes with the genre filter rather than replacing it.
 - **Adding a type must not change how existing tags behave**, or how users already interact with them.
+- **A plugin can add a type** ([`plugins.md` §4.1](plugins.md#41-what-can-be-asked-for)): a field of its own that it writes into the files, such as an energy rating, with a name to show it by. The scanner reads it as it reads genre and mood, and the plugin never hands tags over any other way (§1), so a plugin's tags are ordinary tags. Each type a plugin adds is its own, named after the plugin, so two plugins never claim one type.
+- **A type outlives the plugin that added it.** Its values are in the files, which a plugin leaves behind ([`plugins.md` §5](plugins.md#5-installation--lifecycle)), so they stay browsable after it is uninstalled. Removing a type is an admin's own decision, not a side effect of removing software.
 - **Adding a type reaches music already scanned.** Files already in the library show the new type's values without an admin rescanning anything. That costs reading every file's tags once more in the background — a cold scan's reading, without its analysis — and it is worth it: a type that appeared only on files changed since it was added would make most of the library look untagged — the absence of §8, invented by Jewelcase rather than found in the collection.
 
 ---
