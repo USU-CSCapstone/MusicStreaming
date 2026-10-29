@@ -29,9 +29,7 @@
 
 <!-- Songs are always a list: a grid of one album cover per song says nothing. -->
 <PageHeader title="Songs" subtitle={plural(tracks.total, 'song')} />
-<div class="filters">
-	<FilterBar libraryId={data.lib} filter={data.filter} onchange={showFiltered} />
-</div>
+<FilterBar libraryId={data.lib} filter={data.filter} onchange={showFiltered} />
 <TrackList
 	tracks={tracks.items}
 	sentinel={tracks.sentinel}
@@ -42,9 +40,3 @@
 		? 'No songs carry these tags.'
 		: 'No songs yet. They appear here as the library is scanned.'}
 />
-
-<style>
-	.filters:not(:empty) {
-		margin: calc(-1 * var(--space-2)) 0 var(--space-4);
-	}
-</style>
