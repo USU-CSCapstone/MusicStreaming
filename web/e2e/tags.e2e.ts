@@ -5,33 +5,56 @@ import { serveLibrary } from './fixtures';
 
 const titles = (page: Page) => page.locator('.track .title');
 
-test('songs filter by tags of every type, held in the URL', async ({ page }) => {
+test('songs filter by tags from their columns, held in the URL', async ({ page }) => {
 	await serveLibrary(page);
 	await page.goto('/songs');
 	const songs = titles(page);
 	await expect(songs).toHaveCount(3);
+	// Each song's tags show in their columns, as links to their pages.
+	const partTwo = page.locator('.track').filter({ hasText: 'Signal Part 2' });
+	await expect(partTwo.getByRole('link', { name: 'Ambient' })).toHaveAttribute(
+		'href',
+		/\/tags\/61$/
+	);
 
-	await page.getByRole('button', { name: 'Genre' }).click();
+	await page.getByRole('button', { name: 'Filter by genre' }).click();
 	await page.getByRole('checkbox', { name: /Ambient/ }).check();
 	await expect(page).toHaveURL(/tag=61/);
 	await page.keyboard.press('Escape');
 	await expect(songs).toHaveText(['Signal Part 2', 'Signal Part 1']);
 
-	await page.getByRole('button', { name: 'Mood' }).click();
+	await page.getByRole('button', { name: 'Filter by mood' }).click();
 	await page.getByRole('searchbox', { name: 'Find a mood' }).fill('cal');
 	await page.getByRole('checkbox', { name: /Calm/ }).check();
 	await page.keyboard.press('Escape');
 	await expect(songs).toHaveText(['Signal Part 1']);
-	await expect(page.getByRole('heading', { name: 'Songs' })).toBeVisible();
 
-	// A reload is the same filtered list, its tags named.
+	// A reload is the same filtered list, each heading saying what it holds.
 	await page.reload();
 	await expect(songs).toHaveText(['Signal Part 1']);
-	await expect(page.getByRole('button', { name: 'Remove genre Ambient' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Filter by genre, 1 chosen' })).toBeVisible();
 
-	await page.getByRole('button', { name: 'Clear filters' }).click();
+	for (const type of ['genre', 'mood']) {
+		await page.getByRole('button', { name: `Filter by ${type}, 1 chosen` }).click();
+		await page.getByRole('button', { name: 'Clear', exact: true }).click();
+		await page.keyboard.press('Escape');
+	}
 	await expect(songs).toHaveCount(3);
 	await expect(page).not.toHaveURL(/tag=/);
+});
+
+test('the account chooses which tags are columns', async ({ page }) => {
+	await serveLibrary(page);
+	await page.goto('/account');
+	await page.getByRole('checkbox', { name: 'Mood' }).uncheck();
+	await page.goto('/songs');
+	await expect(page.getByRole('button', { name: 'Filter by genre' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Filter by mood' })).toHaveCount(0);
+
+	// A filter by a hidden type still shows its column, so it never narrows the list unseen.
+	await page.goto('/songs?tag=63');
+	await expect(page.getByRole('button', { name: 'Filter by mood, 1 chosen' })).toBeVisible();
+	await expect(titles(page)).toHaveText(['Signal Remix', 'Signal Part 1']);
 });
 
 test("an album's tags lead to their pages, which play what carries them", async ({ page }) => {
@@ -43,7 +66,8 @@ test("an album's tags lead to their pages, which play what carries them", async 
 		.click();
 	await expect(page.getByRole('heading', { level: 1, name: 'Signal' })).toBeVisible();
 
-	await page.getByRole('link', { name: 'Calm' }).click();
+	// The album's own tags, in its header; its songs' are in their columns.
+	await page.getByRole('group', { name: 'Mood' }).getByRole('link', { name: 'Calm' }).click();
 	await expect(page).toHaveURL(/\/tags\/63$/);
 	await expect(page.getByRole('heading', { level: 1, name: 'Calm' })).toBeVisible();
 	await expect(page.getByText('2 songs · 1 album · 1 artist')).toBeVisible();
