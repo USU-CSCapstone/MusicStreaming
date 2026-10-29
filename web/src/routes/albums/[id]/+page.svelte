@@ -3,8 +3,11 @@
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import ArtistLinks from '$lib/components/ArtistLinks.svelte';
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
+	import FilterBar from '$lib/components/FilterBar.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
+	import { currentFilter, filterByTags, isFiltered, showFiltered } from '$lib/filters';
 	import { albumTitle, formatLength, plural, releaseYear } from '$lib/format';
+	import { knownTags } from '$lib/known-tags.svelte';
 	import { player } from '$lib/player.svelte';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { ALBUM_FIELDS, sortTracks } from '$lib/sorting';
@@ -16,7 +19,17 @@
 	// Unsorted is disc then track order (`requirements/albums.md` §4); sorted, it plays as shown
 	// (`requirements/conventions.md` §4.1).
 	const sort = $derived(currentSort(ALBUM_FIELDS));
-	const shown = $derived([...sortTracks(data.tracks, sort)]);
+	// The album holds its tracks, so it filters them itself, as the server would
+	// (`requirements/tags.md` §7).
+	const filter = $derived(currentFilter());
+	const shown = $derived(
+		filterByTags(
+			sortTracks(data.tracks, sort),
+			filter,
+			(track) => track.tags,
+			(tag) => knownTags.get(data.lib, tag)?.type
+		)
+	);
 	// The whole album, as the server expands it: every track, in disc then track order.
 	const adding = $derived(
 		collection(
@@ -65,7 +78,15 @@
 	{/snippet}
 </DetailHeader>
 
-<TrackList tracks={shown} variant="album" {sort} onsort={showSorted} {context} />
+<FilterBar libraryId={data.lib} {filter} onchange={showFiltered} />
+<TrackList
+	tracks={shown}
+	variant="album"
+	{sort}
+	onsort={showSorted}
+	{context}
+	empty={isFiltered(filter) ? 'No songs on this album carry these tags.' : undefined}
+/>
 
 <style>
 	.artists {

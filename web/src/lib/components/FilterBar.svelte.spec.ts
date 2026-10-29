@@ -1,6 +1,7 @@
 import { page, userEvent } from 'vitest/browser';
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
+import { ApiError } from '$lib/api/client';
 import type { Tag } from '$lib/api/types';
 import { type TagFilter, UNFILTERED } from '$lib/filters';
 
@@ -34,7 +35,7 @@ vi.mock('$lib/api/client', async (actual) => ({
 	},
 	getTag: async (_f: unknown, _library: string, id: string) => {
 		const found = TAGS.find((t) => t.id === id);
-		if (!found) throw new Error('not found');
+		if (!found) throw new ApiError(404, 'not_found', 'Not Found');
 		return found;
 	}
 }));
