@@ -212,13 +212,12 @@ impl InspectStore for SqliteStore {
 
     fn add_tag_type(&self, key: &str, field: &str) {
         let (key, field) = (key.to_owned(), field.to_owned());
-        let built_in = TagTypes::built_in().generation();
         self.db()
             .write_blocking(move |tx| {
                 tx.execute(
                     "INSERT INTO tag_types (key, name, plugin_id, field, since) \
-                     SELECT ?1, ?1, 'test', ?2, max(?3, ifnull(max(since), 0)) + 1 FROM tag_types",
-                    rusqlite::params![key, field, built_in],
+                     SELECT ?1, ?1, 'test', ?2, ifnull(max(since), 0) + 1 FROM tag_types",
+                    rusqlite::params![key, field],
                 )
             })
             .unwrap();

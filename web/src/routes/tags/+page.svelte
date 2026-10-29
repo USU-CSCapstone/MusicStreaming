@@ -15,12 +15,12 @@
 	const tags = $derived(
 		new Paged(data.tags, (cursor) => listTags(fetch, data.lib, { ...data.query, cursor }))
 	);
-	const name = $derived(tagTypeName(data.type).toLowerCase());
+	const name = $derived(tagTypeName(data.type, data.tagTypes).toLowerCase());
 </script>
 
-<svelte:head><title>{tagTypePlural(data.type)} · Jewelcase</title></svelte:head>
+<svelte:head><title>{tagTypePlural(data.type, data.tagTypes)} · Jewelcase</title></svelte:head>
 
-<PageHeader title={tagTypePlural(data.type)} subtitle={plural(tags.total, name)} />
+<PageHeader title={tagTypePlural(data.type, data.tagTypes)} subtitle={plural(tags.total, name)} />
 
 {#if tags.items.length}
 	<ul class="tags">

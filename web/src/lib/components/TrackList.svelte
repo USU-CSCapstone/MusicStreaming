@@ -537,7 +537,7 @@
 			{libraryId}
 			{type}
 			{variant}
-			label={tagTypeName(type.key)}
+			label={tagTypeName(type.key, page.data.tagTypes)}
 			chosen={chosenOf(type.key)}
 			match={f.match}
 			ontoggle={(tag) => {
@@ -551,7 +551,7 @@
 			}}
 		/>
 	{:else}
-		{tagTypeName(type.key)}
+		{tagTypeName(type.key, page.data.tagTypes)}
 	{/if}
 {/snippet}
 

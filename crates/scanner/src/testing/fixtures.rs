@@ -80,6 +80,20 @@ pub fn tag_wav_with(path: &Path, items: &[(ItemKey, &str)]) {
     text_tag(items).save_to_path(path, WriteOptions::default()).unwrap();
 }
 
+/// Give the WAV at `path` an ID3v2 tag holding `value` in the custom field `field`, a `TXXX`
+/// frame, as a plugin writes a field of its own, replacing the ID3v2 tag it had.
+pub fn tag_wav_with_field(path: &Path, field: &str, value: &str) {
+    use lofty::TextEncoding;
+    use lofty::id3::v2::{ExtendedTextFrame, Frame, Id3v2Tag};
+    let mut tag = Id3v2Tag::new();
+    tag.insert(Frame::UserText(ExtendedTextFrame::new(
+        TextEncoding::UTF8,
+        field.to_owned(),
+        value.to_owned(),
+    )));
+    tag.save_to_path(path, WriteOptions::default()).unwrap();
+}
+
 /// Give the WAV at `path` an ID3v2 tag holding the text `items` and the PNG `art` as its front
 /// cover, replacing the ID3v2 tag it had.
 pub fn tag_wav_with_art(path: &Path, items: &[(ItemKey, &str)], art: &[u8]) {

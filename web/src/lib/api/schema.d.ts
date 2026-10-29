@@ -1323,8 +1323,10 @@ export interface components {
             [key: string]: components["schemas"]["TagRef"][];
         };
         TagType: {
-            /** @description The type's name in `Tag.type` and in `TagsByType`, such as `genre` or `mood`. */
+            /** @description The type's name in `Tag.type` and in `TagsByType`, such as `genre` or `mood`. A type a plugin added is keyed under the plugin, such as `acousticbrainz.energy`. */
             key: string;
+            /** @description The name a plugin gave the type it added, which serves for one tag or more. A built-in type has none, and clients name it in their own words. */
+            name?: string;
             /** @description Its tags in the library, never 0 (`listTagTypes`). */
             tagCount: number;
         };

@@ -117,4 +117,19 @@ describe('tags', () => {
 		]);
 		expect(catalog.tag(1n, 50n)).toBeNull();
 	});
+
+	it('name a type a plugin added as it did', () => {
+		const db = new DatabaseSync(join(dir, 'jewelcase.db'));
+		db.exec(`
+			INSERT INTO tag_types (key, name, plugin_id, field, since)
+			VALUES ('acousticbrainz.energy', 'Energy', 'acousticbrainz', 'ENERGY', 1);
+			INSERT INTO tags (id, library_id, type, name, name_key, sort_key)
+			VALUES (60, 2, 'acousticbrainz.energy', 'High', 'high', x'68696768');
+		`);
+		db.close();
+		expect(catalog.tagTypes(2n)).toEqual([
+			{ key: 'acousticbrainz.energy', name: 'Energy', tagCount: 1 },
+			{ key: 'genre', tagCount: 1 }
+		]);
+	});
 });

@@ -285,8 +285,8 @@ struct TagTypeField {
 }
 
 /// The tag types built in (`requirements/tags.md` §2). A new one is an entry here, in the
-/// generation after the newest, which [`TagTypes::with`] keeps plugins' types above. ID3v2.3
-/// has no mood frame, so taggers write mood there as `TXXX:MOOD`.
+/// generation after the newest, which raises [`TagTypes::generation`]. ID3v2.3 has no mood
+/// frame, so taggers write mood there as `TXXX:MOOD`.
 static BUILT_IN: [TagTypeField; 2] = [
     TagTypeField { key: Cow::Borrowed("genre"), item: Some(ItemKey::Genre), field: None, since: 1 },
     TagTypeField {
@@ -298,8 +298,9 @@ static BUILT_IN: [TagTypeField; 2] = [
 ];
 
 /// A tag type a plugin added, as the store holds it (`requirements/tags.md` §2): its key, the
-/// custom field it is read from, and the generation of types it was added in, after every type
-/// before it.
+/// custom field it is read from, and the generation of plugins' types it was added in, after
+/// every one before it. Plugins' types count their generations apart from the built-in ones,
+/// which a release raises ([`TagTypes::generation`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddedTagType {
     pub key: String,
@@ -329,11 +330,16 @@ impl TagTypes {
         TagTypes(BUILT_IN.iter().cloned().chain(added).collect())
     }
 
-    /// The generation the types are read with: the one the newest was added in. A track read
-    /// with an older one is read again, though its file is unchanged, for the types added since
-    /// (`design/scanning.md` §2).
+    /// The generation the types are read with: the one the newest built-in type was added in,
+    /// plus the one the newest of plugins' types was. A track read with an older one is read
+    /// again, though its file is unchanged, for the types added since (`design/scanning.md` §2).
+    /// Each part only grows, so the sum grows whenever either does: a release adding a type
+    /// reaches files read with plugins' types, and a plugin's type files read by an older
+    /// release.
     pub fn generation(&self) -> u32 {
-        self.0.iter().map(|tag_type| tag_type.since).max().unwrap_or(0)
+        let (built_in, added) = self.0.split_at(BUILT_IN.len());
+        let newest = |types: &[TagTypeField]| types.iter().map(|t| t.since).max().unwrap_or(0);
+        newest(built_in) + newest(added)
     }
 }
 
@@ -599,10 +605,10 @@ mod tests {
     }
 
     #[test]
-    fn the_generation_is_the_newest_types() {
+    fn the_generation_adds_the_newest_plugin_types_to_the_newest_built_in_types() {
         assert_eq!(TagTypes::built_in().generation(), 2);
         let added = |since| AddedTagType { key: "p.k".into(), field: "K".into(), since };
-        assert_eq!(TagTypes::with(vec![added(5)]).generation(), 5);
+        assert_eq!(TagTypes::with(vec![added(1), added(3)]).generation(), 5);
         assert_eq!(TagTypes::with(Vec::new()), TagTypes::built_in());
     }
 

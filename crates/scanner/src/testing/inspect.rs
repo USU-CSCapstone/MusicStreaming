@@ -58,7 +58,8 @@ pub trait InspectStore: Store + AnalysisStore + PlaceholderStore {
     /// Marks every track of `library` read before any tag type, as a release adding a type finds
     /// them ([`crate::TagTypes::generation`]).
     fn age_tag_reads(&self, library: LibraryId);
-    /// Adds a type with key `key`, read from the custom field `field`, in the generation after the
-    /// newest, as a plugin granted it does ([`Store::added_tag_types`]).
+    /// Adds a type with key `key`, read from the custom field `field`, in the generation of
+    /// plugins' types after the newest, as a plugin granted it does
+    /// ([`Store::added_tag_types`]).
     fn add_tag_type(&self, key: &str, field: &str);
 }
