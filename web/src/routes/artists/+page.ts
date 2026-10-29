@@ -1,12 +1,8 @@
 import { listArtists } from '$lib/api/client';
-import { filterQuery, readFilter } from '$lib/filters';
 import { requireLibrary } from '$lib/library';
 import type { PageLoad } from './$types';
 
-export const load: PageLoad = async ({ fetch, parent, url }) => {
+export const load: PageLoad = async ({ fetch, parent }) => {
 	const lib = await requireLibrary(parent);
-	// The server filters, so a new filter loads again (`requirements/tags.md` §7).
-	const filter = readFilter(url.searchParams);
-	const query = { sort: 'name', ...filterQuery(filter) };
-	return { lib, filter, query, artists: await listArtists(fetch, lib, query) };
+	return { lib, artists: await listArtists(fetch, lib, { sort: 'name' }) };
 };

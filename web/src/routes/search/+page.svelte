@@ -6,10 +6,9 @@
 	import type { SearchResult } from '$lib/api/types';
 	import { albumCard, artistCard, playlistCard, type Card } from '$lib/cards';
 	import CollectionView from '$lib/components/CollectionView.svelte';
-	import FilterBar from '$lib/components/FilterBar.svelte';
 	import SearchBox, { settler } from '$lib/components/SearchBox.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
-	import { isFiltered, showFiltered } from '$lib/filters';
+	import { UNFILTERED, isFiltered, showFiltered } from '$lib/filters';
 	import type { Selected } from '$lib/recent';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { FIELDS, sortTracks } from '$lib/sorting';
@@ -80,9 +79,6 @@
 
 <!-- The sidebar holds the box on wide screens; at phone width this page does. -->
 <div class="box"><SearchBox /></div>
-{#if data.results}
-	<FilterBar libraryId={data.lib} filter={data.filter} onchange={showFiltered} />
-{/if}
 
 {#if !data.results}
 	<p class="state muted">Search songs, albums, artists, and playlists.</p>
@@ -95,7 +91,12 @@
 		{:else}
 			<h2>No music matches “{data.q}”{filtered ? ' with these tags' : ''}</h2>
 			{#if filtered}
-				<p class="muted">Try taking a tag out, or searching without them.</p>
+				<p class="muted">
+					Try taking a tag out, or
+					<button type="button" class="link" onclick={() => showFiltered({ ...UNFILTERED })}>
+						search without them</button
+					>.
+				</p>
 			{:else if data.results.nearMisses.length}
 				<p class="muted">
 					Did you mean
@@ -121,6 +122,8 @@
 					tracks={songs}
 					{sort}
 					onsort={showSorted}
+					filter={data.filter}
+					onfilter={showFiltered}
 					context={{
 						type: 'search',
 						query: data.q ?? '',
@@ -179,5 +182,14 @@
 		.box {
 			display: block;
 		}
+	}
+
+	.link {
+		padding: 0;
+		border: 0;
+		background: none;
+		color: var(--accent);
+		font: inherit;
+		cursor: pointer;
 	}
 </style>
