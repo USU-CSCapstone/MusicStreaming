@@ -138,6 +138,37 @@ pub fn an_unchanged_file_is_read_again_for_a_newer_tag_type<S: InspectStore>(mak
     assert_eq!(store.feed_head(lib.id), head, "tags read as they were change nothing");
 }
 
+/// A type a plugin adds is read from files already scanned, by the next scan, for their tags
+/// alone and once, from the field the plugin writes (`requirements/tags.md` §2).
+pub fn a_type_a_plugin_adds_is_read_from_files_already_scanned<S: InspectStore>(make: Factory<S>) {
+    use lofty::TextEncoding;
+    use lofty::config::WriteOptions;
+    use lofty::id3::v2::{ExtendedTextFrame, Frame, Id3v2Tag};
+    use lofty::tag::TagExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    let path = root.join("A/track.wav");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    write_small_wav(&path);
+    let mut tag = Id3v2Tag::new();
+    tag.insert(Frame::UserText(ExtendedTextFrame::new(TextEncoding::UTF8, "ENERGY", "High")));
+    tag.save_to_path(&path, WriteOptions::default()).unwrap();
+    let lib = library(&root);
+    let store = make(&lib);
+    scan_library(&store, &lib);
+    let energy = |store: &S| live(store, &lib)[0].tags.get("acousticbrainz.energy").cloned();
+    assert_eq!(energy(&store), None, "no type reads the field yet");
+
+    store.add_tag_type("acousticbrainz.energy", "ENERGY");
+    let head = store.feed_head(lib.id);
+    let scan = scan_library(&store, &lib);
+    let progress = (scan.progress.files_processed, scan.progress.added, scan.progress.updated);
+    assert_eq!(progress, (1, 0, 0), "read for its tags alone");
+    assert_eq!(energy(&store), Some(vec!["High".to_owned()]));
+    assert_eq!(store.feed_tracks_after(lib.id, head), [live(&store, &lib)[0].id]);
+    assert_eq!(scan_library(&store, &lib).progress.files_processed, 0, "and once only");
+}
+
 /// A lyrics file written beside a track whose audio did not change, as a plugin does,
 /// is picked up by the next scan, and dropped when it goes (`requirements/scanning.md` §7).
 pub fn lyrics_file_beside_an_unchanged_track<S: InspectStore>(make: Factory<S>) {

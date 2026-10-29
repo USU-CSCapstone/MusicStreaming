@@ -9,7 +9,7 @@ use crate::scope::Scope;
 use crate::sidecar::{SidecarResolver, Sidecars};
 use crate::store::{IndexedFile, TagsReread};
 use crate::tag_set::TagSet;
-use crate::tags;
+use crate::tags::{self, TagTypes};
 use crate::track::{Artwork, ArtworkSource, SortKeys, TrackId, TrackRecord, filename_title};
 
 /// Per-file result of the pipeline (`design/scanning.md` §2). `Added` and `Updated` carry the
@@ -31,13 +31,14 @@ pub enum FileOutcome {
     Problem(Problem),
 }
 
-/// Runs `candidate`, one of `dir`'s files, through stages 2 to 5, given what the index holds
-/// at its path, `indexed`: what the scan does with it.
+/// Runs `candidate`, one of `dir`'s files, through stages 2 to 5 with tag types `types`, given
+/// what the index holds at its path, `indexed`: what the scan does with it.
 pub(super) fn process_file(
     scope: &Scope,
     dir: &Directory,
     candidate: &Candidate,
     indexed: Option<IndexedFile>,
+    types: &TagTypes,
     sidecars: &mut SidecarResolver,
     resolved: &mut Option<Sidecars>,
 ) -> FileOutcome {
@@ -53,11 +54,12 @@ pub(super) fn process_file(
     {
         return if ix.missing {
             FileOutcome::Returned { track_id: ix.track_id }
-        } else if ix.tags_generation < tags::tags_generation() {
-            match tags::read(&candidate.path) {
+        } else if ix.tags_generation < types.generation() {
+            match tags::read(&candidate.path, types) {
                 Ok(read) => FileOutcome::Reread(TagsReread {
                     track_id: ix.track_id,
                     tag_values: read.tags.tag_values,
+                    tags_generation: types.generation(),
                 }),
                 Err(e) => FileOutcome::Problem(problems::from_read_error(&candidate.path, &e)),
             }
@@ -67,7 +69,7 @@ pub(super) fn process_file(
     }
 
     // Stage 3: read headers. A known file that cannot be read keeps its track, as a problem.
-    let read = match tags::read(&candidate.path) {
+    let read = match tags::read(&candidate.path, types) {
         Ok(r) => r,
         Err(e) => {
             let problem = problems::from_read_error(&candidate.path, &e);
@@ -112,6 +114,7 @@ pub(super) fn process_file(
         lyrics_sidecar,
         sidecar_stamp: stamped.stamp,
         sort,
+        tags_generation: types.generation(),
     };
 
     match identity {

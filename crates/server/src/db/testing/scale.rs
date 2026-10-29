@@ -155,6 +155,7 @@ fn record(
         lyrics_sidecar: None,
         sidecar_stamp: stamp,
         sort,
+        tags_generation: TagTypes::built_in().generation(),
     }
 }
 

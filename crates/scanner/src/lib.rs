@@ -65,7 +65,7 @@ pub use store::{
     ProblemLog, Store, StoreError, TagsReread,
 };
 pub use tag_set::{Lyrics, PartialDate, TagSet, release_kind};
-pub use tags::{ReadError, read as read_tags, tag_type_keys, tags_generation};
+pub use tags::{AddedTagType, ReadError, TagTypes, read as read_tags, tag_type_keys};
 pub use track::{Artwork, ArtworkSource, SortKeys, TrackId, TrackRecord};
 pub use triggers::{scan_every, watch};
 pub use worker::{Stop, Worker};

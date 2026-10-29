@@ -8,6 +8,7 @@ use crate::library::LibraryId;
 use crate::scan::{Scan, ScanState, Trigger};
 use crate::scope::Scope;
 use crate::store::{Batch, IndexedFolder, Store, StoreError};
+use crate::tags::AddedTagType;
 
 /// A hook run before a call.
 type Hook<'a> = Box<dyn Fn() -> Result<(), StoreError> + Send + Sync + 'a>;
@@ -137,5 +138,9 @@ impl Store for Hooked<'_> {
     ) -> Result<Vec<PathBuf>, StoreError> {
         (self.on_under)()?;
         self.inner.problems_under(library, scope)
+    }
+    /// The inner store's, with no hook.
+    fn added_tag_types(&self) -> Result<Vec<AddedTagType>, StoreError> {
+        self.inner.added_tag_types()
     }
 }
