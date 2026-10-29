@@ -11,5 +11,5 @@ export const load: PageLoad = async ({ fetch, parent, params }) => {
 			listTracks(fetch, lib, { albumId: params.id, sort: 'album', limit: 1000, cursor })
 		)
 	]);
-	return { album, tracks };
+	return { lib, album, tracks };
 };

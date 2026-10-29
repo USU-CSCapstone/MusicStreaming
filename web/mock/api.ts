@@ -201,8 +201,8 @@ export function createApi(dataDir: string) {
 			artists.total,
 			artists.items[0]?.name ?? null
 		);
-		const lists = playlists
-			.all(lib)
+		// Playlists carry no tags, so a search narrowed by them finds none.
+		const lists = (query.get('tag') ? [] : playlists.all(lib))
 			.filter((p) => matchRank(p.title, text) >= 0)
 			.sort((a, b) => matchRank(b.title, text) - matchRank(a.title, text));
 		add(
