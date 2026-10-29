@@ -6,12 +6,12 @@ use rusqlite::{Result, Transaction, params};
 use super::SqliteStore;
 use super::problems::{clear_problem, record_problem};
 use super::scans;
-use super::upsert::upsert_track;
+use super::upsert::{reread_tags, upsert_track};
 use crate::db::catalog::{self, Touched};
 use crate::db::feed::{self, Entity, Op};
 use crate::db::{DbError, now_ms};
 
-/// Writes `batch` in one transaction: its tracks, returned files, tracks gone, problems, the
+/// Writes `batch` in one transaction: its tracks, tags read again, returned files, tracks gone, problems, the
 /// derived data they touch, and the scan row it carries, with the row's missing count raised by
 /// the tracks the batch marked missing that were not already. Returns that number.
 pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<i64, DbError> {
@@ -21,6 +21,9 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<i64, DbError
         let mut touched = Touched::default();
         for record in &batch.upserts {
             upsert_track(&roots, tx, lib, record, now, &mut touched)?;
+        }
+        for reread in &batch.rereads {
+            reread_tags(tx, lib, reread, now, &mut touched)?;
         }
         let mut marked = 0;
         for &id in &batch.missing {

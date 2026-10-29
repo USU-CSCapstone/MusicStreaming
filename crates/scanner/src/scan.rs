@@ -304,6 +304,11 @@ fn process_directory(
                 batch.cleared.push(candidate.path.clone());
                 batch.upserts.push(*record);
             }
+            FileOutcome::Reread(reread) => {
+                scan.progress.files_processed += 1;
+                batch.cleared.push(candidate.path.clone());
+                batch.rereads.push(reread);
+            }
             FileOutcome::Problem(problem) => {
                 scan.progress.files_processed += 1;
                 scan.progress.problems += 1;

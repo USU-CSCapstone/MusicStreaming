@@ -15,7 +15,8 @@ use crate::db::DbError;
 fn select(bounded: bool) -> String {
     let below = if bounded { " AND path < ?3" } else { "" };
     format!(
-        "SELECT path, id, file_size, file_mtime, missing_since, sidecar_stamp FROM tracks \
+        "SELECT path, id, file_size, file_mtime, missing_since, sidecar_stamp, tags_generation \
+         FROM tracks \
          WHERE root_id = ?1 AND path >= ?2{below} ORDER BY path"
     )
 }
@@ -67,6 +68,7 @@ fn indexed_file(row: &Row<'_>) -> Result<IndexedFile> {
         mtime_ms: row.get(3)?,
         missing: row.get::<_, Option<i64>>(4)?.is_some(),
         sidecar_stamp: row.get(5)?,
+        tags_generation: row.get(6)?,
     })
 }
 

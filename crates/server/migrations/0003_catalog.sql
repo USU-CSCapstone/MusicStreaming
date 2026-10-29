@@ -207,6 +207,9 @@ CREATE TABLE tracks (
     -- A hash of the path, size and mtime of each sidecar the file resolved, its lyrics file
     -- included, which a scan compares to notice a sidecar change (design/scanning.md §2)
     sidecar_stamp   INTEGER NOT NULL DEFAULT 0,
+    -- The generation of tag types the file was last read with; a scan reads an unchanged file
+    -- again for its tags when the scanner reads a newer one (design/scanning.md §2)
+    tags_generation INTEGER NOT NULL DEFAULT 0,
     added_at        INTEGER NOT NULL,
     UNIQUE (library_id, id),
     FOREIGN KEY (library_id, album_id) REFERENCES albums (library_id, id),
@@ -312,7 +315,7 @@ CREATE TABLE tag_types (
     key TEXT PRIMARY KEY
 ) STRICT;
 
-INSERT INTO tag_types (key) VALUES ('genre');
+INSERT INTO tag_types (key) VALUES ('genre'), ('mood');
 
 CREATE TABLE tags (
     id           INTEGER PRIMARY KEY,

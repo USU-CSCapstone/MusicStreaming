@@ -5,6 +5,7 @@
 //! scheme-independent key; the mapper below handles what survives that
 //! abstraction. Nothing outside this module knows what an ID3 frame is.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io;
 use std::panic;
@@ -14,6 +15,9 @@ use jewelcase_core::Format;
 use lofty::config::ParseOptions;
 use lofty::error::{FileParseError, UnknownFormatError, UnsupportedTagError};
 use lofty::file::{AudioFile, FileType, TaggedFile, TaggedFileExt};
+use lofty::id3::v2::{Frame, Id3v2Tag};
+use lofty::iff::aiff::AiffFile;
+use lofty::iff::wav::WavFile;
 use lofty::mp4::{Mp4Codec, Mp4File};
 use lofty::mpeg::{Layer, MpegFile};
 use lofty::picture::PictureType;
@@ -65,23 +69,34 @@ fn parse(path: &Path) -> Result<ReadResult, ReadError> {
     let mut file = File::open(path)?;
     let options = ParseOptions::new();
 
-    let (tagged, format): (TaggedFile, Format) = if sniff_mp4(&mut file)? {
+    // The formats that carry ID3v2 are read by their own readers, whose ID3v2 tag still holds the
+    // `TXXX` frames lofty's generic tag drops ([`user_texts`]).
+    let (tagged, format, user_texts): (TaggedFile, Format, UserTexts) = if sniff_mp4(&mut file)? {
         let mp4 = Mp4File::read_from(&mut file, options).map_err(map_parse_error)?;
         let format = match mp4.properties().codec() {
             Some(Mp4Codec::AAC) => Format::Aac,
             Some(Mp4Codec::ALAC) => Format::Alac,
             other => return Err(ReadError::Unsupported(format!("MP4 codec {other:?}"))),
         };
-        (mp4.into(), format)
+        (mp4.into(), format, UserTexts::new())
     } else {
         let probe = Probe::new(&mut file).options(options).guess_file_type()?;
         if probe.file_type() == Some(FileType::Mpeg) {
             // Layers I and II share MP3's frame sync, so only the frame header tells them apart.
             let mpeg = MpegFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
+            let user_texts = user_texts(mpeg.id3v2());
             match mpeg.properties().layer() {
-                Layer::Layer3 => (mpeg.into(), Format::Mp3),
+                Layer::Layer3 => (mpeg.into(), Format::Mp3, user_texts),
                 other => return Err(ReadError::Unsupported(format!("MPEG {other:?}"))),
             }
+        } else if probe.file_type() == Some(FileType::Wav) {
+            let wav = WavFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
+            let user_texts = user_texts(wav.id3v2());
+            (wav.into(), Format::Wav, user_texts)
+        } else if probe.file_type() == Some(FileType::Aiff) {
+            let aiff = AiffFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
+            let user_texts = user_texts(aiff.id3v2());
+            (aiff.into(), Format::Aiff, user_texts)
         } else {
             let tagged = probe.read().map_err(map_parse_error)?;
             let format = match tagged.file_type() {
@@ -95,7 +110,7 @@ fn parse(path: &Path) -> Result<ReadResult, ReadError> {
                 FileType::Mp4 => Format::Aac,
                 other => return Err(ReadError::Unsupported(format!("{other:?}"))),
             };
-            (tagged, format)
+            (tagged, format, UserTexts::new())
         }
     };
 
@@ -109,7 +124,7 @@ fn parse(path: &Path) -> Result<ReadResult, ReadError> {
         bitrate_kbps: props.audio_bitrate().or(props.overall_bitrate()),
     };
 
-    let tags = map_tags(&tagged);
+    let tags = map_tags(&tagged, &user_texts);
     let embedded_art = front_cover(&tagged).and_then(crate::image::describe);
     Ok(ReadResult { tags, properties, embedded_art })
 }
@@ -215,20 +230,60 @@ fn labels(tags: &[&Tag]) -> Vec<String> {
     if labels.is_empty() { strings(tags, &ItemKey::Publisher) } else { labels }
 }
 
-/// A tag type the mapper reads (`design/scanning.md` §4): its key, as `tag_types` lists it, and
-/// the lofty key its values come from.
+/// A tag type the mapper reads (`design/scanning.md` §4): its key, as `tag_types` lists it, the
+/// lofty key its values come from, the description of an ID3v2 `TXXX` frame that carries them
+/// where lofty maps none, and the generation of types it was added in.
 struct TagTypeField {
     key: &'static str,
     item: ItemKey,
+    txxx: Option<&'static str>,
+    since: u32,
 }
 
 /// Every tag type the scanner reads (`requirements/tags.md` §2). Each is read the same way, by
-/// [`strings`], so a new type is an entry here and nothing else.
-const TAG_TYPES: &[TagTypeField] = &[TagTypeField { key: "genre", item: ItemKey::Genre }];
+/// [`strings`] and then [`user_texts`], so a new type is an entry here, in the generation after
+/// the newest. ID3v2.3 has no mood frame, so taggers write mood there as `TXXX:MOOD`.
+const TAG_TYPES: &[TagTypeField] = &[
+    TagTypeField { key: "genre", item: ItemKey::Genre, txxx: None, since: 1 },
+    TagTypeField { key: "mood", item: ItemKey::Mood, txxx: Some("MOOD"), since: 2 },
+];
+
+/// The values of the ID3v2 `TXXX` frames that tag types read ([`TagTypeField::txxx`]), by type
+/// key. lofty's generic tag drops a `TXXX` frame whose description it does not map.
+type UserTexts = BTreeMap<&'static str, Vec<String>>;
+
+/// The values in `tag`'s `TXXX` frames for each tag type that reads one, its description matched
+/// ignoring case, as taggers differ on it. Native null-separated values and semicolons come out
+/// the same, as in [`strings`].
+fn user_texts(tag: Option<&Id3v2Tag>) -> UserTexts {
+    let mut out = UserTexts::new();
+    let Some(tag) = tag else { return out };
+    for tag_type in TAG_TYPES {
+        let Some(description) = tag_type.txxx else { continue };
+        let frames = tag.into_iter().filter_map(|frame| match frame {
+            Frame::UserText(text) if text.description.eq_ignore_ascii_case(description) => {
+                Some(text.content.as_ref())
+            }
+            _ => None,
+        });
+        let values = multi_value::split_all(frames.flat_map(|content| content.split('\0')));
+        if !values.is_empty() {
+            out.insert(tag_type.key, values);
+        }
+    }
+    out
+}
 
 /// The keys of every tag type the scanner reads, each of which `tag_types` must list.
 pub fn tag_type_keys() -> impl Iterator<Item = &'static str> {
     TAG_TYPES.iter().map(|tag_type| tag_type.key)
+}
+
+/// The generation of the tag types the scanner reads: the one the newest was added in. A track
+/// read with an older one is read again, though its file is unchanged, for the types added
+/// since (`design/scanning.md` §2).
+pub fn tags_generation() -> u32 {
+    TAG_TYPES.iter().map(|tag_type| tag_type.since).max().unwrap_or(0)
 }
 
 /// Parse a number that may be packed as `n/total`.
@@ -244,10 +299,20 @@ fn flag(raw: &str) -> bool {
     matches!(raw.trim(), "1" | "true" | "True" | "TRUE" | "yes")
 }
 
-/// The canonical [`TagSet`] of `file`'s tags.
-fn map_tags(file: &TaggedFile) -> TagSet {
+/// The canonical [`TagSet`] of `file`'s tags, with `user_texts` for the tag types lofty's
+/// generic tag carries nothing of.
+fn map_tags(file: &TaggedFile, user_texts: &UserTexts) -> TagSet {
     let tags = ordered_tags(file);
     let mut out = TagSet::default();
+    for tag_type in TAG_TYPES {
+        let values = strings(&tags, &tag_type.item);
+        let values = if values.is_empty() {
+            user_texts.get(tag_type.key).cloned().unwrap_or_default()
+        } else {
+            values
+        };
+        out.set_values(tag_type.key, values);
+    }
     if tags.is_empty() {
         return out;
     }
@@ -295,9 +360,6 @@ fn map_tags(file: &TaggedFile) -> TagSet {
             .iter()
             .find_map(|k| first_string(&tags, k).and_then(|s| PartialDate::parse(&s)));
 
-    for tag_type in TAG_TYPES {
-        out.set_values(tag_type.key, strings(&tags, &tag_type.item));
-    }
     out.release_type =
         first_string(&tags, &ItemKey::MusicBrainzReleaseType).map(|s| s.to_ascii_lowercase());
     out.labels = labels(&tags);
@@ -349,6 +411,23 @@ mod tests {
         let publisher = tagged(&[(ItemKey::Publisher, "Warner;WARNER")]);
         assert_eq!(labels(&[&publisher]), ["Warner"]);
         assert!(labels(&[&tagged(&[])]).is_empty());
+    }
+
+    #[test]
+    fn a_user_text_frame_carries_a_type_lofty_does_not_map() {
+        use lofty::TextEncoding;
+        use lofty::id3::v2::ExtendedTextFrame;
+        let mut tag = Id3v2Tag::new();
+        for (description, content) in [("mood", "Calm\0Dark;calm"), ("OTHER", "Loud")] {
+            tag.insert(Frame::UserText(ExtendedTextFrame::new(
+                TextEncoding::UTF8,
+                description,
+                content,
+            )));
+        }
+        let mood = vec!["Calm".to_owned(), "Dark".to_owned()];
+        assert_eq!(user_texts(Some(&tag)), UserTexts::from([("mood", mood)]));
+        assert!(user_texts(None).is_empty());
     }
 
     #[test]
