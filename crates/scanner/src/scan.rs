@@ -16,6 +16,7 @@ use crate::problems;
 use crate::scope::Scope;
 use crate::sidecar::SidecarResolver;
 use crate::store::{Store, StoreError};
+use crate::tags::TagTypes;
 use file::{FileOutcome, process_file};
 use writer::{Halt, Writer};
 
@@ -138,6 +139,9 @@ fn scan_scopes(
         scan.started_at = Some(now_ms());
     }
     writer.save(ctx, scan)?;
+    // A type added while the scan runs is read by the next one, which the store has requested.
+    let added = ctx.store.added_tag_types().map_err(|e| writer.fail(ctx, scan, &e))?;
+    let types = TagTypes::with(added);
 
     for (scope_index, scope) in from_cursor(scan) {
         if ctx.stopping() {
@@ -179,7 +183,7 @@ fn scan_scopes(
                     scan.progress.problems += 1;
                 }
                 WalkItem::Directory(dir) => {
-                    process_directory(ctx, scan, &scope, &dir, &mut sidecars, writer)?;
+                    process_directory(ctx, scan, &scope, &dir, &types, &mut sidecars, writer)?;
                     scan.cursor = Some(Cursor { scope_index, after_directory: Some(dir.path) });
                 }
             }
@@ -242,7 +246,8 @@ fn root_answers(root: &Path) -> bool {
     false
 }
 
-/// Runs every audio candidate in `dir` through stages 2 to 5 into the writer's batch, with a
+/// Runs every audio candidate in `dir` through stages 2 to 5 with tag types `types` into the
+/// writer's batch, with a
 /// checkpoint before each, against what the index holds in `dir`, read once for all of them.
 /// Then reconciles `dir` (stage 7): the tracks in it whose files it no longer lists, and every
 /// track under a folder it no longer lists, go missing through the batch ([`reconcile::mark`]),
@@ -260,6 +265,7 @@ fn process_directory(
     scan: &mut Scan,
     scope: &Scope,
     dir: &Directory,
+    types: &TagTypes,
     sidecars: &mut SidecarResolver,
     writer: &mut Writer,
 ) -> Result<(), Halt> {
@@ -284,7 +290,7 @@ fn process_directory(
         }
         scan.progress.files_seen += 1;
         let known = indexed.take(&candidate.path);
-        let outcome = process_file(scope, dir, candidate, known, sidecars, &mut resolved);
+        let outcome = process_file(scope, dir, candidate, known, types, sidecars, &mut resolved);
         let batch = &mut writer.batch;
         match outcome {
             FileOutcome::Unchanged => {}

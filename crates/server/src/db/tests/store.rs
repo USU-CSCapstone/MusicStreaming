@@ -142,5 +142,6 @@ fn record(root: &Path, i: usize) -> TrackRecord {
             album_artist: format!("artist {}", i / 100),
             album: format!("album {}", i / 10),
         },
+        tags_generation: TagTypes::built_in().generation(),
     }
 }

@@ -9,7 +9,7 @@ use std::path::Path;
 
 use jewelcase_core::Format;
 use jewelcase_scanner::testing::{PNG, encode, write_sine_wav, write_small_wav};
-use jewelcase_scanner::{Lyrics, PartialDate, ReadError, SyncedLine, TagSet, read_tags};
+use jewelcase_scanner::{Lyrics, PartialDate, ReadError, SyncedLine, TagSet, TagTypes, read_tags};
 use lofty::config::WriteOptions;
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::*;
@@ -129,7 +129,8 @@ fn every_format_reads_the_same_tagset() {
         let path = tmp.path().join(name);
         encode(&wav, &path, &args);
         write_tags(&path, tag_type);
-        let got = read_tags(&path).unwrap_or_else(|e| panic!("read {name}: {e}"));
+        let got =
+            read_tags(&path, &TagTypes::built_in()).unwrap_or_else(|e| panic!("read {name}: {e}"));
         if got.properties.format != format {
             failures.push(format!("{name}: format {:?}, wanted {format:?}", got.properties.format));
         }
@@ -156,7 +157,7 @@ fn mpeg_layer_ii_named_mp3_is_unsupported() {
     let path = tmp.path().join("disguised.mp3");
     encode(&wav, &path, &["-c:a", "mp2", "-f", "mp2"]);
 
-    match read_tags(&path) {
+    match read_tags(&path, &TagTypes::built_in()) {
         Err(ReadError::Unsupported(detail)) => assert!(detail.contains("Layer2"), "{detail}"),
         other => panic!("Layer II read as {other:?}"),
     }
@@ -187,7 +188,7 @@ fn id3v23_packed_totals_and_semicolons() {
     tag.insert(frame("TDRC", "2018"));
     tag.insert(Frame::UserText(ExtendedTextFrame::new(TextEncoding::UTF8, "MOOD", "Dark;Dreamy")));
     tag.save_to_path(&path, WriteOptions::default()).unwrap();
-    let got = read_tags(&path).unwrap().tags;
+    let got = read_tags(&path, &TagTypes::built_in()).unwrap().tags;
     assert_eq!(got.track_number, Some(1));
     assert_eq!(got.track_total, Some(12));
     assert_eq!(got.disc_number, Some(1));
@@ -197,4 +198,71 @@ fn id3v23_packed_totals_and_semicolons() {
     assert_eq!(got.values_of("mood"), ["Dark", "Dreamy"]);
     assert_eq!(got.release_date, Some(PartialDate { year: 2018, month: None, day: None }));
     assert!(!got.has_embedded_art);
+}
+
+#[test]
+fn a_plugins_field_reads_back_from_every_format() {
+    // Each file carries the field only in its format's own tag, under the scheme's convention for
+    // a field of one's own, as a plugin writes it, in a case other than the manifest's.
+    use lofty::TextEncoding;
+    use lofty::ape::{ApeItem, ApeTag};
+    use lofty::id3::v2::{ExtendedTextFrame, Frame, Id3v2Tag};
+    use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst};
+    use lofty::ogg::tag::VorbisComments;
+    let tmp = tempfile::tempdir().unwrap();
+    let wav = tmp.path().join("src.wav");
+    write_small_wav(&wav);
+    let types = TagTypes::with(vec![jewelcase_scanner::AddedTagType {
+        key: "acousticbrainz.energy".into(),
+        field: "ENERGY".into(),
+        since: 3,
+    }]);
+
+    let cases: [(&str, &[&str]); 9] = [
+        ("t.flac", &["-c:a", "flac"]),
+        ("t.ogg", &["-c:a", "libvorbis"]),
+        ("t.opus", &["-c:a", "libopus"]),
+        ("t.mp3", &["-c:a", "libmp3lame", "-b:a", "128k"]),
+        ("ape.mp3", &["-c:a", "libmp3lame", "-b:a", "128k"]),
+        ("t.wav", &["-c:a", "pcm_s16le"]),
+        ("t.aiff", &["-c:a", "pcm_s16be"]),
+        ("aac.m4a", &["-c:a", "aac", "-b:a", "128k"]),
+        ("alac.m4a", &["-c:a", "alac"]),
+    ];
+    for (name, args) in cases {
+        let path = tmp.path().join(name);
+        encode(&wav, &path, args);
+        let saved = match name {
+            "t.flac" | "t.ogg" | "t.opus" => {
+                let mut tag = VorbisComments::default();
+                tag.push("Energy".into(), "High".into());
+                tag.push("energy".into(), "Calm".into());
+                tag.save_to_path(&path, WriteOptions::default())
+            }
+            "ape.mp3" => {
+                let mut tag = ApeTag::new();
+                let item = ApeItem::new("Energy".into(), ItemValue::Text("High;Calm".into()));
+                tag.insert(item.unwrap());
+                tag.save_to_path(&path, WriteOptions::default())
+            }
+            "aac.m4a" | "alac.m4a" => {
+                let mut tag = Ilst::new();
+                let name =
+                    AtomIdent::Freeform { mean: "com.apple.iTunes".into(), name: "Energy".into() };
+                tag.insert(Atom::new(name, AtomData::UTF8("High;Calm".into())));
+                tag.save_to_path(&path, WriteOptions::default())
+            }
+            _ => {
+                let mut tag = Id3v2Tag::new();
+                let frame = ExtendedTextFrame::new(TextEncoding::UTF8, "Energy", "High\0Calm");
+                tag.insert(Frame::UserText(frame));
+                tag.save_to_path(&path, WriteOptions::default())
+            }
+        };
+        saved.unwrap_or_else(|err| panic!("write {name}: {err}"));
+        let got = read_tags(&path, &types).unwrap_or_else(|e| panic!("read {name}: {e}")).tags;
+        assert_eq!(got.values_of("acousticbrainz.energy"), ["High", "Calm"], "{name}");
+        let without = read_tags(&path, &TagTypes::built_in()).unwrap().tags;
+        assert!(without.tag_values.is_empty(), "{name}: {:?}", without.tag_values);
+    }
 }
