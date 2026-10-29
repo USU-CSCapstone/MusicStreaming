@@ -6,6 +6,7 @@
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import CollectionView from '$lib/components/CollectionView.svelte';
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
+	import TagLinks from '$lib/components/TagLinks.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
 	import ViewToggle from '$lib/components/ViewToggle.svelte';
 	import { artistName, plural } from '$lib/format';
@@ -88,6 +89,7 @@
 	onplay={tracks.items.length ? () => player.play(tracks.items, 0, context) : undefined}
 >
 	<span>{counts}</span>
+	{#if Object.keys(artist.tags).length}<TagLinks tags={artist.tags} />{/if}
 	{#snippet actions()}
 		{#if tracks.total}<AddToPlaylistButton what={adding} />{/if}
 	{/snippet}
