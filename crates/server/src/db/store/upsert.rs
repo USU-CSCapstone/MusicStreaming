@@ -1,7 +1,7 @@
-//! Writing one scanned file: its track row, credits, genres, lyrics, and the art and sidecars it
+//! Writing one scanned file: its track row, credits, tags, lyrics, and the art and sidecars it
 //! resolved, in the batch's transaction.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use jewelcase_core::artists_key;
 use jewelcase_scanner::{Lyrics, TrackRecord};
@@ -25,7 +25,7 @@ struct Credits<'a> {
     album_id: i64,
 }
 
-/// Writes `rec` as a track of `lib`, with its credits, genres, lyrics, and the art, artist image
+/// Writes `rec` as a track of `lib`, with its credits, tags of every type, lyrics, and the art, artist image
 /// and biography it resolved, records it in the feed at `now`, and adds the albums, artists and
 /// tags it pointed at before and after to `touched`, which take their art and biographies from
 /// their tracks as they are recomputed. A track whose file's size or mtime changed loses its
@@ -58,7 +58,7 @@ pub fn upsert_track(
         tracing::error!(path = %rec.path.display(), "track of another library; skipped");
         return Ok(());
     };
-    replace_links(tx, lib, id, &credits, &rec.tags.genres, touched)?;
+    replace_links(tx, lib, id, &credits, &rec.tags.tag_values, touched)?;
     replace_lyrics(tx, lib, id, rec.lyrics())?;
     feed::record(tx, lib, Entity::Track, id, Op::Upsert, now)
 }
@@ -107,14 +107,14 @@ fn artist_ids<'a>(
         .collect()
 }
 
-/// Replaces track `id`'s artist, album-artist and genre links wholesale with `credits` and
-/// `genres`, and adds each genre's tag to `touched`.
+/// Replaces track `id`'s artist, album-artist and tag links wholesale with `credits` and
+/// `tag_values`, its tags' values by type, and adds each tag to `touched`.
 fn replace_links(
     tx: &Transaction<'_>,
     lib: i64,
     id: i64,
     credits: &Credits<'_>,
-    genres: &[String],
+    tag_values: &BTreeMap<String, Vec<String>>,
     touched: &mut Touched,
 ) -> Result<()> {
     tx.prepare_cached("DELETE FROM track_artists WHERE track_id = ?1")?.execute([id])?;
@@ -138,10 +138,12 @@ fn replace_links(
         "INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) VALUES (?1, ?2, ?3, ?4) \
          ON CONFLICT DO NOTHING",
     )?;
-    for genre in genres {
-        let tag_id = find_or_create_tag(tx, lib, genre)?;
-        tags.execute(params![lib, id, tag_id, genre.trim()])?;
-        touched.tags.insert(tag_id);
+    for (tag_type, values) in tag_values {
+        for value in values {
+            let tag_id = find_or_create_tag(tx, lib, tag_type, value)?;
+            tags.execute(params![lib, id, tag_id, value.trim()])?;
+            touched.tags.insert(tag_id);
+        }
     }
     Ok(())
 }

@@ -4,6 +4,7 @@
 //!
 //! Needs ffmpeg on PATH to produce the encoded files, and fails without it.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use jewelcase_core::Format;
@@ -30,7 +31,7 @@ fn expected() -> TagSet {
         disc_number: Some(1),
         disc_total: Some(2),
         release_date: Some(PartialDate { year: 1991, month: Some(9), day: Some(24) }),
-        genres: vec!["Grunge".into(), "Rock".into()],
+        tag_values: BTreeMap::from([("genre".into(), vec!["Grunge".into(), "Rock".into()])]),
         release_type: Some("album".into()),
         labels: vec!["DGC".into()],
         explicit: None,
@@ -67,7 +68,7 @@ fn write_tags(path: &Path, tag_type: TagType) {
     tag.insert(text(ItemKey::DiscNumber, "1"));
     tag.insert(text(ItemKey::DiscTotal, "2"));
     tag.insert(text(ItemKey::RecordingDate, "1991-09-24"));
-    for g in &e.genres {
+    for g in e.values_of("genre") {
         tag.push(text(ItemKey::Genre, g));
     }
     tag.insert(text(ItemKey::MusicBrainzReleaseType, "album"));
@@ -184,7 +185,7 @@ fn id3v23_packed_totals_and_semicolons() {
     assert_eq!(got.disc_number, Some(1));
     assert_eq!(got.disc_total, Some(2));
     assert_eq!(got.artists, vec!["Kendrick Lamar", "SZA"]);
-    assert_eq!(got.genres, vec!["Hip-Hop", "R&B"]);
+    assert_eq!(got.values_of("genre"), ["Hip-Hop", "R&B"]);
     assert_eq!(got.release_date, Some(PartialDate { year: 2018, month: None, day: None }));
     assert!(!got.has_embedded_art);
 }

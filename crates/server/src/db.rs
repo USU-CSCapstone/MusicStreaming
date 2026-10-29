@@ -452,6 +452,46 @@ mod tests {
         assert!(matches!(result, Err(DbError::Sqlite(_))));
     }
 
+    /// A tag's type is a registered one, and registering a type is all a new one needs
+    /// (design/database.md §3).
+    #[tokio::test]
+    async fn a_tag_has_a_registered_type() {
+        let (_temp, db) = open();
+        let insert_tag = |key: &'static str| {
+            move |tx: &Transaction| {
+                tx.execute(
+                    "INSERT INTO tags (library_id, type, name, name_key, sort_key) \
+                     VALUES (1, ?1, 'Red', 'red', x'')",
+                    [key],
+                )
+            }
+        };
+        db.write(|tx| tx.execute(INSERT_LIBRARY, [1])).await.unwrap();
+        db.write(insert_tag("genre")).await.unwrap();
+        let unregistered = db.write(insert_tag("colour")).await;
+        assert!(matches!(unregistered, Err(DbError::Sqlite(_))));
+
+        db.write(|tx| tx.execute("INSERT INTO tag_types (key) VALUES ('colour')", []))
+            .await
+            .unwrap();
+        db.write(insert_tag("colour")).await.unwrap();
+    }
+
+    /// Every type the scanner reads is registered, or a batch tagging a file with it would fail.
+    #[tokio::test]
+    async fn every_tag_type_the_scanner_reads_is_registered() {
+        let (_temp, db) = open();
+        let registered: Vec<String> = db
+            .read(|conn| {
+                conn.prepare("SELECT key FROM tag_types")?.query_map([], |r| r.get(0))?.collect()
+            })
+            .await
+            .unwrap();
+        for key in jewelcase_scanner::tag_type_keys() {
+            assert!(registered.iter().any(|r| r == key), "{key} is not in tag_types");
+        }
+    }
+
     /// Readers map the database into memory, and the writer, which writes the log, limits it.
     #[tokio::test]
     async fn readers_map_the_file_and_the_writer_limits_the_log() {

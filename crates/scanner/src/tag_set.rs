@@ -4,6 +4,8 @@
 //! carrying the same logical metadata in ID3v2 and Vorbis comments yield
 //! equal `TagSet`s; that equality is what the golden-corpus test asserts.
 
+use std::collections::BTreeMap;
+
 use crate::lrc::{self, SyncedLine};
 
 /// A date at whatever precision the tag carried (`requirements/tracks.md` §2).
@@ -110,8 +112,10 @@ pub struct TagSet {
     pub disc_number: Option<u32>,
     pub disc_total: Option<u32>,
     pub release_date: Option<PartialDate>,
-    /// Genres, multi-valued and unranked (`requirements/tags.md` §3).
-    pub genres: Vec<String>,
+    /// Tag values by type key, as `tag_types` lists it (`requirements/tags.md` §2): each type's
+    /// multi-valued and unranked (§3). A type the file carries none of is absent, so set them with
+    /// [`TagSet::set_values`].
+    pub tag_values: BTreeMap<String, Vec<String>>,
     /// The release-type tag, authoritative for album type
     /// (`requirements/albums.md` §3).
     pub release_type: Option<String>,
@@ -135,6 +139,21 @@ pub struct TagSet {
 }
 
 impl TagSet {
+    /// The values of tag type `key`, empty where the file carries none.
+    pub fn values_of(&self, key: &str) -> &[String] {
+        self.tag_values.get(key).map(Vec::as_slice).unwrap_or_default()
+    }
+
+    /// Sets the values of tag type `key`, leaving the type out where there are none, so files
+    /// carrying the same tags have equal `TagSet`s.
+    pub fn set_values(&mut self, key: &str, values: Vec<String>) {
+        if values.is_empty() {
+            self.tag_values.remove(key);
+        } else {
+            self.tag_values.insert(key.to_owned(), values);
+        }
+    }
+
     /// The album artists this file gives its album (`requirements/albums.md` §1): the tagged
     /// ones; else none for a compilation; else the first track artist, so a guest on one track
     /// neither splits the album nor owns it. Empty means the unknown artist. The file is a
@@ -238,6 +257,16 @@ mod tests {
         assert_eq!(tags(&["A", "B"], &[], false).album_artists_or_primary(), ["A"]);
         assert!(tags(&["A", "B"], &[], true).album_artists_or_primary().is_empty());
         assert!(tags(&[], &[], false).album_artists_or_primary().is_empty());
+    }
+
+    #[test]
+    fn a_tag_type_without_values_is_absent() {
+        let mut tags = TagSet::default();
+        tags.set_values("genre", vec!["Rock".into()]);
+        assert_eq!(tags.values_of("genre"), ["Rock"]);
+        assert!(tags.values_of("mood").is_empty());
+        tags.set_values("genre", Vec::new());
+        assert_eq!(tags, TagSet::default());
     }
 
     #[test]
