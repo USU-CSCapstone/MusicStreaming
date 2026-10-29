@@ -15,6 +15,7 @@ use super::credit::{ArtistCredit, Credits};
 use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
+use super::tag_filter::{self, TagFilter, TagMatch, Tagged};
 use super::{AnyId, Id, Problem};
 use crate::db::Database;
 
@@ -77,12 +78,15 @@ pub struct ListQuery {
     artist_id: Option<AnyId>,
     #[serde(default)]
     artist_credit: ArtistCredit,
+    tag: Option<String>,
+    #[serde(default)]
+    tag_match: TagMatch,
     cursor: Option<String>,
     limit: Option<u32>,
 }
 
-/// The library's albums, or those credited to `artistId` as `artistCredit` says, a page at a
-/// time.
+/// The library's albums, or those credited to `artistId` as `artistCredit` says and whose
+/// tracks carry the tags `tag` names as `tagMatch` says, a page at a time.
 pub async fn list(
     State(db): State<Arc<Database>>,
     Scope { library, .. }: Scope,
@@ -90,9 +94,10 @@ pub async fn list(
 ) -> Result<Json<Page<AlbumSummary>>, Problem> {
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
     let (artist, credit) = (query.artist_id, query.artist_credit);
+    let tags = TagFilter::new(query.tag.as_deref(), query.tag_match);
     let page = db
         .read(move |conn| {
-            let source = source(conn, library, artist, credit)?;
+            let source = source(conn, library, artist, credit, &tags)?;
             request.read(conn, &source, summary)
         })
         .await?;
@@ -129,16 +134,20 @@ const CREDITS: Credits = Credits {
     featured_count: FEATURED_ALBUMS,
 };
 
+/// How albums carry tags: those of their tracks (`requirements/tags.md` §6).
+pub const TAGGED: Tagged = Tagged { links: "album_tags", owner: "album_id", count: "album_count" };
+
 /// The albums `list` pages through in `library`: every one, or those credited to `artist` as
-/// `credit` says.
+/// `credit` says and carrying the tags `tags` names.
 fn source(
     conn: &Connection,
     library: i64,
     artist: Option<AnyId>,
     credit: ArtistCredit,
+    tags: &TagFilter,
 ) -> rusqlite::Result<Source> {
     let lead = artist.map(|artist| credit.lead(conn, library, &CREDITS, artist)).transpose()?;
-    ALBUMS.source(conn, library, lead, None)
+    tag_filter::source(conn, library, &ALBUMS, &TAGGED, lead, None, tags)
 }
 
 #[cfg(test)]

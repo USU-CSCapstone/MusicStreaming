@@ -14,6 +14,7 @@ const track = (id: string, title: string): TrackSummary => ({
 	trackNumber: Number(id),
 	durationUs: 2_000_000,
 	releaseDate: '2023',
+	tags: {},
 	explicit: false,
 	audio: { codec: 'flac', lossless: true },
 	availability: 'available',

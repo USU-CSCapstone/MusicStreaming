@@ -96,6 +96,9 @@ export function createApi(dataDir: string) {
 			/^\/artists\/([^/]+)$/,
 			({ lib, params }) => withKey(params[0], (k) => catalog.artist(lib, k))
 		],
+		[/^\/tag-types$/, ({ lib }) => catalog.tagTypes(lib)],
+		[/^\/tags$/, ({ lib, query }) => catalog.listTags(lib, query)],
+		[/^\/tags\/([^/]+)$/, ({ lib, params }) => withKey(params[0], (k) => catalog.tag(lib, k))],
 		[/^\/search$/, ({ lib, query }) => search(lib, query)],
 		[
 			/^\/tracks\/([^/]+)\/waveform$/,
@@ -177,21 +180,21 @@ export function createApi(dataDir: string) {
 			if (wanted.includes(type) && items.length)
 				sections.push({ type, items, total, rank: matchRank(best, text) });
 		};
-		const tracks = catalog.searchTracks(lib, text, limit);
+		const tracks = catalog.searchTracks(lib, text, limit, query);
 		add(
 			'tracks',
 			tracks.items.map((track) => ({ type: 'track', track })),
 			tracks.total,
 			tracks.items[0]?.title ?? null
 		);
-		const albums = catalog.searchAlbums(lib, text, limit);
+		const albums = catalog.searchAlbums(lib, text, limit, query);
 		add(
 			'albums',
 			albums.items.map((album) => ({ type: 'album', album })),
 			albums.total,
 			albums.items[0]?.title ?? null
 		);
-		const artists = catalog.searchArtists(lib, text, limit);
+		const artists = catalog.searchArtists(lib, text, limit, query);
 		add(
 			'artists',
 			artists.items.map((artist) => ({ type: 'artist', artist })),

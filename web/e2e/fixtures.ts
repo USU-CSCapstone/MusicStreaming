@@ -407,7 +407,7 @@ export async function serveLibrary(
 				trackCount: 3,
 				addedAt: '2026-01-01T00:00:00.000Z',
 				biography: null,
-				genres: [],
+				tags: {},
 				appearanceCount: 0
 			});
 		}

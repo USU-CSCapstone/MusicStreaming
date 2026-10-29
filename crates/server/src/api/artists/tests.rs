@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use super::super::testing::catalog::{self, page_through};
 use super::super::testing::{app, json};
 use super::*;
-use crate::api::page;
+use crate::api::{AnyId, page};
 use crate::db::testing::{Artist, library, scattered_key};
 
 #[tokio::test]
@@ -66,7 +66,7 @@ async fn names_sort_without_their_accents_and_ties_by_id() {
 }
 
 #[tokio::test]
-async fn gets_an_artist_with_its_biography_and_genres() {
+async fn gets_an_artist_with_its_biography_and_tags() {
     let (_temp, _db, app) = catalog::app().await;
     let (status, artist) = json(&app, "/api/v1/libraries/1/artists/10").await;
     assert_eq!(status, StatusCode::OK);
@@ -76,14 +76,17 @@ async fn gets_an_artist_with_its_biography_and_genres() {
             "id": "10", "name": "The Beatles", "image": { "id": "40", "placeholder": null },
             "albumCount": 1, "trackCount": 5, "addedAt": "1970-01-01T00:00:03.000Z",
             "biography": "Four lads from Liverpool.",
-            "genres": [{ "id": "31", "name": "Pop" }, { "id": "30", "name": "Rock" }],
+            "tags": {
+                "genre": [{ "id": "31", "name": "Pop" }, { "id": "30", "name": "Rock" }],
+                "mood": [{ "id": "32", "name": "Calm" }],
+            },
             "appearanceCount": 1,
         })
     );
     let (_, unknown) = json(&app, "/api/v1/libraries/1/artists/13").await;
     assert_eq!(unknown["name"], Value::Null);
     assert_eq!(unknown["biography"], Value::Null);
-    assert_eq!(unknown["genres"], json!([]));
+    assert_eq!(unknown["tags"], json!({}), "a type with no tags is left out");
 }
 
 #[tokio::test]
@@ -137,16 +140,48 @@ async fn every_sort_reads_from_an_index() {
             let sort_key = if i % 1000 == 0 { Vec::new() } else { scattered_key("artist", i) };
             Artist { sort_key, added_at: i, ..artist }.insert(tx)?;
         }
+        // Tag 1 is on half the artists, too many to lead; the rest have one of 299 others.
+        tx.execute_batch(
+            "WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300) \
+             INSERT INTO tags (id, library_id, type, name, name_key, sort_key) \
+             SELECT i, 1, 'genre', 'Genre ' || i, 'genre ' || i, CAST('genre ' || i AS BLOB) FROM n; \
+             INSERT INTO artist_tags (library_id, artist_id, tag_id, track_count) \
+             SELECT 1, id, CASE WHEN id % 2 = 1 THEN 1 ELSE 2 + id % 299 END, 1 FROM artists;",
+        )?;
         tx.execute_batch("ANALYZE")
     })
     .await
     .unwrap();
     db.read(|conn| {
+        let tagged = TagFilter { ids: vec![AnyId(Some(1))], tag_match: TagMatch::Any };
         for sort in [ArtistSort::Name, ArtistSort::DateAdded] {
-            page::assert_indexed(conn, &ARTISTS.source(conn, 1, None, None)?, sort.sort())?;
+            page::assert_indexed(conn, &source(conn, 1, &TagFilter::default())?, sort.sort())?;
+            let walked = source(conn, 1, &tagged)?;
+            assert!(matches!(walked.total, page::Total::Stored(10_000)));
+            page::assert_indexed(conn, &walked, sort.sort())?;
         }
         Ok(())
     })
     .await
     .unwrap();
+}
+
+/// An artist carries the tags of the tracks that credit it, and any linked to it alone: The
+/// Beatles have Rock and Calm from "Come Together", and Pop.
+#[tokio::test]
+async fn filters_by_the_tags_of_their_work() {
+    let (_temp, _db, app) = catalog::app().await;
+    for (query, expected) in [
+        ("tag=31", json!(["The Beatles"])),
+        ("tag=30,31&tagMatch=all", json!(["The Beatles"])),
+        ("tag=31,32", json!(["The Beatles"])),
+        ("tag=30,50", json!([])),
+        ("tag=nope", json!([])),
+    ] {
+        let uri = format!("/api/v1/libraries/1/artists?{query}");
+        assert_eq!(page_through(&app, &uri, 1, "name").await, expected, "{query}");
+        let (_, page) = json(&app, &uri).await;
+        assert_eq!(page["total"], expected.as_array().unwrap().len(), "{query}");
+    }
+    assert_eq!(json(&app, "/api/v1/libraries/2/artists?tag=31").await.1["total"], 0);
 }

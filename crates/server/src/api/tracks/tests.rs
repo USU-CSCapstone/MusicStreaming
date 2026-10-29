@@ -184,7 +184,8 @@ async fn summaries_and_full_tracks() {
         "album": { "id": "101", "title": "Abbey Road",
                    "artists": [{ "id": "10", "name": "The Beatles" }], "image": null },
         "discNumber": 1, "trackNumber": 1, "durationUs": 1_000_000, "releaseDate": "1969",
-        "genres": [{ "id": "30", "name": "Rock" }], "explicit": true,
+        "tags": { "genre": [{ "id": "30", "name": "Rock" }], "mood": [{ "id": "32", "name": "Calm" }] },
+        "explicit": true,
         "audio": { "codec": "flac", "lossless": true }, "availability": "available",
         "addedAt": "1970-01-01T00:00:01.001Z",
         "sortKeys": { "title": "come together", "artist": "beatles", "album": "abbey road" },
@@ -318,6 +319,17 @@ async fn every_sort_reads_from_an_index() {
             };
             track.insert(tx)?;
         }
+        tx.execute_batch(
+            "INSERT INTO tags (id, library_id, type, name, name_key, sort_key) \
+             VALUES (1, 1, 'genre', 'Half', 'half', x'68'); \
+             INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) \
+             SELECT 1, id, 1, 'Half' FROM tracks WHERE id % 2 = 1; \
+             WITH RECURSIVE n (i) AS (SELECT 2 UNION ALL SELECT i + 1 FROM n WHERE i < 300) \
+             INSERT INTO tags (id, library_id, type, name, name_key, sort_key) \
+             SELECT i, 1, 'genre', 'Genre ' || i, 'genre ' || i, CAST('genre ' || i AS BLOB) FROM n; \
+             INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) \
+             SELECT 1, id, 2 + id % 299, 'Genre' FROM tracks WHERE id % 2 = 0;",
+        )?;
         tx.execute_batch("ANALYZE")
     })
     .await
@@ -331,11 +343,20 @@ async fn every_sort_reads_from_an_index() {
             TrackSort::ReleaseDate,
             TrackSort::Duration,
         ] {
-            let source = source(conn, 1, None, None, ArtistCredit::Any)?;
+            let source = source(conn, 1, None, None, ArtistCredit::Any, &TagFilter::default())?;
             page::assert_indexed(conn, &source, sort.sort())?;
         }
-        let one_album = source(conn, 1, Some(AnyId(Some(7))), None, ArtistCredit::Any)?;
+        let one_album =
+            source(conn, 1, Some(AnyId(Some(7))), None, ArtistCredit::Any, &TagFilter::default())?;
         page::assert_indexed(conn, &one_album, &WITHIN_ALBUM)?;
+        // Half the tracks carry tag 1, too many to lead, so a page walks each sort's index. The
+        // other half carry one of 299 other genres, so the planner knows tags as a library has them.
+        let tagged = TagFilter { ids: vec![AnyId(Some(1))], tag_match: TagMatch::Any };
+        for sort in [TrackSort::Name, TrackSort::DateAdded, TrackSort::ReleaseDate] {
+            let source = source(conn, 1, None, None, ArtistCredit::Any, &tagged)?;
+            assert!(matches!(source.total, page::Total::Stored(10_000)));
+            page::assert_indexed(conn, &source, sort.sort())?;
+        }
         Ok(())
     })
     .await
@@ -347,7 +368,7 @@ async fn every_sort_reads_from_an_index() {
 async fn a_track_row_reads_its_album_once() {
     let (_temp, db, _app) = catalog::app().await;
     db.read(|conn| {
-        let source = source(conn, 1, None, None, ArtistCredit::Any)?;
+        let source = source(conn, 1, None, None, ArtistCredit::Any, &TagFilter::default())?;
         let sql = format!(
             "EXPLAIN QUERY PLAN SELECT {} FROM {} {} WHERE {}",
             SELECT.join(", "),
@@ -367,4 +388,99 @@ async fn a_track_row_reads_its_album_once() {
     })
     .await
     .unwrap();
+}
+
+/// 300 tracks of library 1, `0001` to `0300` by name, each on album `1 + i % 10`, every fourth
+/// credited to artist 9. Genre Rock (30) is on every third, Jazz (31) every fifth, Blues (34)
+/// every seventh, mood Calm (32) every second, and mood Rare (33) on track 15 alone. Library 2 has a track of its own, which
+/// its Rock (50) is on.
+async fn tagged_library() -> (tempfile::TempDir, std::sync::Arc<crate::db::Database>, axum::Router)
+{
+    let (temp, db, app) = app("");
+    db.write(|tx| {
+        library(tx, 1, "Music", "/music")?;
+        library(tx, 2, "Other", "/other")?;
+        for album in 1..=10 {
+            Album::new(album, 1).insert(tx)?;
+        }
+        Album::new(20, 2).insert(tx)?;
+        for i in 1..=300 {
+            let sort_key = format!("{i:04}").into_bytes();
+            Track { sort_key, added_at: i, ..Track::new(i, 1, 1 + i % 10) }.insert(tx)?;
+        }
+        Track::new(400, 2, 20).insert(tx)?;
+        tx.execute_batch(
+            "INSERT INTO artists (id, library_id, name, name_key, sort_key, added_at)
+             VALUES (9, 1, 'Nine', 'nine', x'6e', 0);
+             INSERT INTO track_artists (library_id, track_id, position, artist_id, artist_name)
+             SELECT 1, id, 0, 9, 'Nine' FROM tracks WHERE library_id = 1 AND id % 4 = 0;
+             INSERT INTO tags (id, library_id, type, name, name_key, sort_key) VALUES
+                 (30, 1, 'genre', 'Rock', 'rock', x'72'), (31, 1, 'genre', 'Jazz', 'jazz', x'6a'),
+                 (32, 1, 'mood', 'Calm', 'calm', x'63'), (33, 1, 'mood', 'Rare', 'rare', x'72'),
+                 (34, 1, 'genre', 'Blues', 'blues', x'62'),
+                 (50, 2, 'genre', 'Rock', 'rock', x'72');
+             INSERT INTO track_tags (library_id, track_id, tag_id, tag_name)
+             SELECT 1, id, 30, 'Rock' FROM tracks WHERE library_id = 1 AND id % 3 = 0
+             UNION ALL SELECT 1, id, 31, 'Jazz' FROM tracks WHERE library_id = 1 AND id % 5 = 0
+             UNION ALL SELECT 1, id, 32, 'Calm' FROM tracks WHERE library_id = 1 AND id % 2 = 0
+             UNION ALL SELECT 1, id, 34, 'Blues' FROM tracks WHERE library_id = 1 AND id % 7 = 0
+             UNION ALL SELECT 1, 15, 33, 'Rare'
+             UNION ALL SELECT 2, 400, 50, 'Rock';",
+        )
+    })
+    .await
+    .unwrap();
+    (temp, db, app)
+}
+
+/// Which of library 1's tracks, by ID, a query lists.
+type Keep = fn(i64) -> bool;
+
+/// Each query's tracks are those of library 1 that its [`Keep`] keeps, in name order, whether a
+/// page starts from a tag (Rare, one track of 300) or walks the sort's index and checks each
+/// track (the rest), and however it is paged.
+#[tokio::test]
+async fn filters_by_tags_of_every_type() {
+    let (_temp, _db, app) = tagged_library().await;
+    let cases: [(&str, Keep); 15] = [
+        ("tag=30", |i| i % 3 == 0),
+        ("tag=30,31", |i| i % 3 == 0 || i % 5 == 0),
+        ("tag=30,31&tagMatch=all", |i| i % 15 == 0),
+        ("tag=30,32", |i| i % 6 == 0),
+        ("tag=31,30,32", |i| (i % 3 == 0 || i % 5 == 0) && i % 2 == 0),
+        ("tag=33", |i| i == 15),
+        ("tag=33,30,31&tagMatch=all", |i| i == 15),
+        ("tag=33,32", |i| i == 15 || i % 2 == 0),
+        ("tag=33,32&tagMatch=all", |_| false),
+        ("tag=33,31", |i| i == 15),
+        ("tag=33,34", |_| false),
+        ("tag=30&albumId=4", |i| i % 3 == 0 && i % 10 == 3),
+        ("tag=30&artistId=9", |i| i % 12 == 0),
+        ("tag=30,50", |_| false),
+        ("tag=30,nope", |_| false),
+    ];
+    for (query, keep) in cases {
+        let expected: Vec<Value> =
+            (1..=300).filter(|&i| keep(i)).map(|i| json!(i.to_string())).collect();
+        let base = format!("/api/v1/libraries/1/tracks?{query}");
+        for limit in [1, 7, 1000] {
+            assert_eq!(
+                page_through(&app, &base, limit, "id").await,
+                json!(expected),
+                "{query}, limit {limit}"
+            );
+        }
+        let mut reversed = expected.clone();
+        reversed.reverse();
+        let newest =
+            page_through(&app, &format!("{base}&sort=dateAdded&order=desc"), 7, "id").await;
+        assert_eq!(newest, json!(reversed), "{query}, newest first");
+        let (_, page) = json(&app, &base).await;
+        assert_eq!(page["total"], expected.len(), "{query}");
+    }
+    let (_, other) = json(&app, "/api/v1/libraries/2/tracks?tag=50").await;
+    assert_eq!(other["items"][0]["id"], "400");
+    assert_eq!(json(&app, "/api/v1/libraries/2/tracks?tag=30").await.1["total"], 0);
+    let (status, _) = json(&app, "/api/v1/libraries/1/tracks?tag=30&tagMatch=most").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }

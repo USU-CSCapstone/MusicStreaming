@@ -2,6 +2,7 @@
 //! which each library keeps in memory (`indexes`).
 
 mod indexes;
+mod tagged;
 
 use std::sync::Arc;
 
@@ -17,6 +18,7 @@ use super::albums::{self, AlbumSummary};
 use super::artists::{self, ArtistSummary};
 use super::extract::Query;
 use super::scope::Scope;
+use super::tag_filter::{TagFilter, TagMatch};
 use super::tracks::{self, TrackSummary};
 use super::{Problem, page};
 use crate::db::{Database, by_ids};
@@ -28,6 +30,9 @@ pub struct SearchQuery {
     q: String,
     /// Comma-separated section types.
     types: Option<String>,
+    tag: Option<String>,
+    #[serde(default)]
+    tag_match: TagMatch,
     section_limit: Option<usize>,
 }
 
@@ -60,7 +65,8 @@ enum SearchResult {
     Artist { artist: ArtistSummary },
 }
 
-/// The spec's `search`: each section's best matches for `q` in `library`.
+/// The spec's `search`: each section's best matches for `q` in `library`, of those carrying the
+/// tags `tag` names as `tagMatch` says.
 pub async fn search(
     State(db): State<Arc<Database>>,
     State(indexes): State<Arc<Indexes>>,
@@ -79,8 +85,12 @@ pub async fn search(
 
     let track_count =
         db.read(move |conn| page::library_number(conn, library, "track_count")).await?;
+    let filter = TagFilter::new(query.tag.as_deref(), query.tag_match);
+    let tagged = indexes.tagged.get(&db, library, &filter, &kinds).await?;
     let index = indexes.index(&db, library).await?;
-    let found = index.search(&query.q, &kinds, limit);
+    let found = index.search_within(&query.q, &kinds, limit, |kind, id| {
+        tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
+    });
     let sections = db.read(move |conn| results(conn, library, found)).await?;
 
     Ok(Json(SearchResponse {

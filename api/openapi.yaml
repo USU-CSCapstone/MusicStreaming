@@ -443,8 +443,8 @@ paths:
           schema: { type: string }
         - $ref: '#/components/parameters/ArtistFilter'
         - $ref: '#/components/parameters/ArtistCredit'
-        - $ref: '#/components/parameters/Genre'
-        - $ref: '#/components/parameters/GenreMatch'
+        - $ref: '#/components/parameters/Tag'
+        - $ref: '#/components/parameters/TagMatch'
         - $ref: '#/components/parameters/YearFrom'
         - $ref: '#/components/parameters/YearTo'
         - $ref: '#/components/parameters/Availability'
@@ -511,8 +511,8 @@ paths:
           schema:
             type: array
             items: { $ref: '#/components/schemas/AlbumType' }
-        - $ref: '#/components/parameters/Genre'
-        - $ref: '#/components/parameters/GenreMatch'
+        - $ref: '#/components/parameters/Tag'
+        - $ref: '#/components/parameters/TagMatch'
         - $ref: '#/components/parameters/YearFrom'
         - $ref: '#/components/parameters/YearTo'
         - $ref: '#/components/parameters/Availability'
@@ -567,8 +567,8 @@ paths:
             enum: [name, dateAdded, playCount, lastPlayed]
             default: name
         - $ref: '#/components/parameters/Order'
-        - $ref: '#/components/parameters/Genre'
-        - $ref: '#/components/parameters/GenreMatch'
+        - $ref: '#/components/parameters/Tag'
+        - $ref: '#/components/parameters/TagMatch'
         - $ref: '#/components/parameters/Availability'
         - $ref: '#/components/parameters/Played'
         - $ref: '#/components/parameters/LastPlayedBefore'
@@ -598,6 +598,79 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Artist' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /libraries/{libraryId}/tag-types:
+    parameters:
+      - $ref: '#/components/parameters/LibraryId'
+    get:
+      tags: [Browse]
+      summary: List tag types
+      description: |
+        The tag types the library's music carries, in key order: each type with at
+        least one tag in the library, and its count of tags. A type no file in the library
+        carries is left out, so a filter drawn from this list never shows an empty section
+        (`requirements/tags.md` §2, §8).
+      operationId: listTagTypes
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TagType' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /libraries/{libraryId}/tags:
+    parameters:
+      - $ref: '#/components/parameters/LibraryId'
+    get:
+      tags: [Browse]
+      summary: Browse tags
+      description: |
+        The library's tags, of one type or every type. A tag sorts by its name, its
+        leading article kept (`requirements/conventions.md` §4).
+      operationId: listTags
+      parameters:
+        - name: type
+          in: query
+          description: Only tags of this type (`listTagTypes`).
+          schema: { type: string }
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [name, trackCount]
+            default: name
+        - $ref: '#/components/parameters/Order'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TagPage' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /libraries/{libraryId}/tags/{tagId}:
+    parameters:
+      - $ref: '#/components/parameters/LibraryId'
+      - $ref: '#/components/parameters/TagId'
+    get:
+      tags: [Browse]
+      summary: Get a tag
+      description: |
+        A tag's tracks, albums, and artists are browsed with the `tag` filter on the browse
+        endpoints (`requirements/tags.md` §7).
+      operationId: getTag
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tag' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Media ─────────────────────────────
@@ -748,7 +821,8 @@ paths:
         - $ref: '#/components/parameters/Query'
         - $ref: '#/components/parameters/SearchTypes'
         - $ref: '#/components/parameters/Within'
-        - $ref: '#/components/parameters/Genre'
+        - $ref: '#/components/parameters/Tag'
+        - $ref: '#/components/parameters/TagMatch'
         - $ref: '#/components/parameters/YearFrom'
         - $ref: '#/components/parameters/YearTo'
         - $ref: '#/components/parameters/Played'
@@ -1461,23 +1535,33 @@ components:
         type: string
         enum: [asc, desc]
         default: asc
-    Genre:
-      name: genre
+    Tag:
+      name: tag
       in: query
-      description: Tag IDs of type `genre`. Planned.
+      description: |
+        Tag IDs, of any types. An item must match the tags of every type named, since types are
+        independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
+        or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
+        does not have matches nothing, as `artistId` does.
       style: form
       explode: false
       schema:
         type: array
         items: { type: string }
-    GenreMatch:
-      name: genreMatch
+    TagMatch:
+      name: tagMatch
       in: query
-      description: Whether items must carry all or any of the given genres. Planned.
+      description: |
+        Whether an item must carry all or any of the given tags of each type.
       schema:
         type: string
         enum: [all, any]
         default: any
+    TagId:
+      name: tagId
+      in: path
+      required: true
+      schema: { type: string }
     YearFrom:
       name: yearFrom
       in: query
@@ -1945,6 +2029,51 @@ components:
         id: { $ref: '#/components/schemas/Id' }
         name: { type: string }
 
+    TagsByType:
+      type: object
+      description: |
+        An entity's tags by type key, each type's in name order. A type it carries none of is
+        left out (`requirements/tags.md` §2).
+      additionalProperties:
+        type: array
+        items: { $ref: '#/components/schemas/TagRef' }
+
+    TagType:
+      type: object
+      required: [key, tagCount]
+      properties:
+        key:
+          type: string
+          description: The type's name in `Tag.type` and in `TagsByType`, such as `genre` or `mood`.
+        tagCount:
+          type: integer
+          description: Its tags in the library, never 0 (`listTagTypes`).
+
+    Tag:
+      type: object
+      required: [id, type, name, trackCount, albumCount, artistCount]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        type:
+          type: string
+          description: Its type's key (`TagType.key`).
+        name:
+          type: string
+          description: The spelling the library uses most (`requirements/tags.md` §4).
+        trackCount: { type: integer }
+        albumCount: { type: integer }
+        artistCount: { type: integer }
+
+    TagPage:
+      allOf:
+        - $ref: '#/components/schemas/PageInfo'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/Tag' }
+
     TrackBase:
       type: object
       required: [id, title, artists, album, discNumber, trackNumber, durationUs, releaseDate, availability]
@@ -1978,13 +2107,11 @@ components:
       allOf:
         - $ref: '#/components/schemas/TrackBase'
         - type: object
-          required: [audio, explicit, sortKeys]
+          required: [audio, explicit, sortKeys, tags]
           properties:
             album: { $ref: '#/components/schemas/AlbumRef' }
             explicit: { type: boolean }
-            genres:
-              type: array
-              items: { $ref: '#/components/schemas/TagRef' }
+            tags: { $ref: '#/components/schemas/TagsByType' }
             audio:
               $ref: '#/components/schemas/AudioSummary'
               description: Enough to tell a FLAC from an MP3 at a glance (`requirements/tracks.md` §4). The full `Track` extends it.
@@ -2176,12 +2303,10 @@ components:
       allOf:
         - $ref: '#/components/schemas/AlbumBase'
         - type: object
-          required: [type, trackCount, trackTotal, discCount, discTotal, durationUs, availability]
+          required: [type, tags, trackCount, trackTotal, discCount, discTotal, durationUs, availability]
           properties:
             type: { $ref: '#/components/schemas/AlbumType' }
-            genres:
-              type: array
-              items: { $ref: '#/components/schemas/TagRef' }
+            tags: { $ref: '#/components/schemas/TagsByType' }
             trackCount:
               type: integer
               description: |
@@ -2277,14 +2402,12 @@ components:
       allOf:
         - $ref: '#/components/schemas/ArtistSummary'
         - type: object
-          required: [biography, genres, appearanceCount]
+          required: [biography, tags, appearanceCount]
           properties:
             biography:
               type: [string, 'null']
               description: From `artist.txt` (`requirements/scanning.md` §3.3). Usually absent.
-            genres:
-              type: array
-              items: { $ref: '#/components/schemas/TagRef' }
+            tags: { $ref: '#/components/schemas/TagsByType' }
             appearanceCount: { type: integer }
 
     ArtistPage:
@@ -2606,10 +2729,10 @@ components:
       type: object
       description: The browse filters, as a value (`requirements/tags.md` §7).
       properties:
-        genres:
+        tags:
           type: array
           items: { type: string }
-        genreMatch:
+        tagMatch:
           type: string
           enum: [all, any]
         yearFrom: { type: integer }
@@ -2649,7 +2772,7 @@ components:
         type: { const: radio }
         seed:
           $ref: '#/components/schemas/EntityRef'
-          description: Track, album, artist, playlist, or genre tag (`requirements/recommendations.md` §4).
+          description: Track, album, artist, playlist, or tag (`requirements/recommendations.md` §4).
 
     ExternalContext:
       type: object

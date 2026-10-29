@@ -21,6 +21,7 @@ const track = (id: string, title: string, f: Fields = {}): TrackSummary => ({
 	trackNumber: f.n ?? null,
 	durationUs: f.duration ?? 1_000_000,
 	releaseDate: f.date ?? null,
+	tags: {},
 	explicit: false,
 	audio: { codec: 'flac', lossless: true },
 	availability: 'available',

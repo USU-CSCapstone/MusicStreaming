@@ -1,9 +1,11 @@
 //! What the browse responses share: small references to other entities, and the fields every
 //! entity reads alike.
 
+use std::collections::BTreeMap;
+
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::Id;
 
@@ -15,11 +17,28 @@ pub struct Credit {
     pub name: Option<String>,
 }
 
-/// The spec's `TagRef`. Read from [`genres_json!`]'s `[id, name]`.
-#[derive(Clone, Serialize, Deserialize)]
+/// The spec's `TagRef`.
+#[derive(Clone, Serialize)]
 pub struct TagRef {
     pub id: Id,
     pub name: String,
+}
+
+/// The spec's `TagsByType`: an entity's tags by type key, each type's in name order, and a type
+/// it has none of left out. Read from [`tags_json!`]'s `[type, id, name]`s.
+#[derive(Clone, Default, Serialize)]
+#[serde(transparent)]
+pub struct TagsByType(BTreeMap<String, Vec<TagRef>>);
+
+impl<'de> Deserialize<'de> for TagsByType {
+    /// The tags of an array of `[type, id, name]`, in name order within each type.
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<TagsByType, D::Error> {
+        let mut tags = BTreeMap::<String, Vec<TagRef>>::new();
+        for (tag_type, id, name) in Vec::<(String, Id, String)>::deserialize(deserializer)? {
+            tags.entry(tag_type).or_default().push(TagRef { id, name });
+        }
+        Ok(TagsByType(tags))
+    }
 }
 
 /// The spec's `ImageRef`.
@@ -100,15 +119,17 @@ macro_rules! artists_json {
 }
 pub(crate) use artists_json;
 
-/// SQL for the genres of an `album`, an `artist`, or a `track` whose ID is the SQL `$id`, as
-/// JSON that reads as `Vec<TagRef>`, in name order. Tags of other types are not genres.
-macro_rules! genres_json {
+/// SQL for the tags of an `album`, an `artist`, or a `track` whose ID is the SQL `$id`, as JSON
+/// that reads as [`TagsByType`]: `[type, id, name]`s in type, then name order. `CROSS JOIN`
+/// keeps the entity's own links the outer loop, so statistics showing few tags never have every
+/// row scan the library's tags.
+macro_rules! tags_json {
     ($owner:literal, $id:literal) => {
         concat!(
-            "(SELECT json_group_array(json_array(CAST(tag.id AS TEXT), tag.name) \
-             ORDER BY tag.sort_key, tag.id) FROM ",
+            "(SELECT json_group_array(json_array(tag.type, CAST(tag.id AS TEXT), tag.name) \
+             ORDER BY tag.type, tag.sort_key, tag.id) FROM ",
             $owner,
-            "_tags tagged JOIN tags tag ON tag.id = tagged.tag_id WHERE tag.type = 'genre' AND tagged.",
+            "_tags tagged CROSS JOIN tags tag ON tag.id = tagged.tag_id WHERE tagged.",
             $owner,
             "_id = ",
             $id,
@@ -116,4 +137,4 @@ macro_rules! genres_json {
         )
     };
 }
-pub(crate) use genres_json;
+pub(crate) use tags_json;

@@ -7,7 +7,7 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
 use crate::api::Id;
-use crate::api::refs::{ImageRef, TagRef, genres_json, placeholder};
+use crate::api::refs::{ImageRef, TagsByType, placeholder, tags_json};
 use crate::api::time::serialize_rfc3339;
 use crate::api::tracks::FEATURED_TRACKS;
 use crate::db::Json;
@@ -35,7 +35,7 @@ pub struct Artist {
     #[serde(flatten)]
     summary: ArtistSummary,
     biography: Option<String>,
-    genres: Vec<TagRef>,
+    tags: TagsByType,
     appearance_count: i64,
 }
 
@@ -54,17 +54,17 @@ pub const SELECT: &[&str] = &[
 pub fn artist(conn: &Connection, library: i64, artist: i64) -> rusqlite::Result<Option<Artist>> {
     let sql = format!(
         "SELECT {}, ar.biography AS biography, {} AS appearance_count, \
-         {} AS genres FROM artists ar WHERE ar.library_id = ?1 AND ar.id = ?2",
+         {} AS tags FROM artists ar WHERE ar.library_id = ?1 AND ar.id = ?2",
         SELECT.join(", "),
         FEATURED_TRACKS,
-        genres_json!("artist", "ar.id"),
+        tags_json!("artist", "ar.id"),
     );
     conn.prepare_cached(&sql)?
         .query_row([library, artist], |row| {
             Ok(Artist {
                 summary: summary(row)?,
                 biography: row.get("biography")?,
-                genres: row.get::<_, Json<_>>("genres")?.0,
+                tags: row.get::<_, Json<_>>("tags")?.0,
                 appearance_count: row.get("appearance_count")?,
             })
         })
