@@ -113,7 +113,7 @@
 		<h2 id="columns">Song columns</h2>
 		<p class="muted">
 			Which tags show as columns in lists of songs, where each column's heading filters by them.
-			Tags come from your music files' own genre and mood fields.
+			Tags come from your music files' own fields, such as genre and mood.
 		</p>
 		{#if tagTypes.length}
 			<ul>
@@ -125,7 +125,7 @@
 								checked={prefs.showsTagColumn(type.key)}
 								onchange={(e) => prefs.showTagColumn(type.key, e.currentTarget.checked)}
 							/>
-							{tagTypeName(type.key)}
+							{tagTypeName(type.key, tagTypes)}
 						</label>
 					</li>
 				{/each}

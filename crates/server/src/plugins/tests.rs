@@ -8,12 +8,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use jewelcase_plugins::Permission::{LibraryChange, LibraryRead};
+use jewelcase_plugins::Permission::{LibraryChange, LibraryRead, TagTypes};
 use jewelcase_scanner::{Scanner, ScannerThread};
 use tempfile::TempDir;
 
 use super::testing::{database, enable, grant, install, manifest, plugins};
 use super::{PluginError, Plugins};
+use crate::api::testing::eventually;
 use crate::db::{Database, SqliteStore, libraries};
 
 mod scans;
@@ -126,6 +127,57 @@ async fn saved_files_are_scanned_without_blocking_the_runtime() {
         !plugins.scan(1, &[Path::new("/elsewhere/x.lrc").to_path_buf()]).await,
         "outside its roots"
     );
+    stop(thread).await;
+}
+
+/// Each tag a track of library 1 has of `type`, by name.
+async fn tagged(db: &Database, r#type: &'static str) -> Vec<String> {
+    let sql = "SELECT tag_name FROM track_tags tagged JOIN tags tag ON tag.id = tagged.tag_id \
+               WHERE tag.library_id = 1 AND tag.type = ?1 ORDER BY tag_name";
+    let names =
+        db.read(move |conn| conn.prepare(sql)?.query_map([r#type], |r| r.get(0))?.collect());
+    names.await.unwrap()
+}
+
+/// How many scans of library 1 have been queued as `reconfigure`.
+async fn reconfigure_scans(db: &Database) -> i64 {
+    let sql = "SELECT count(*) FROM scans WHERE library_id = 1 AND trigger = 'reconfigure'";
+    db.read(move |conn| conn.query_row(sql, [], |r| r.get(0))).await.unwrap()
+}
+
+/// Approving a plugin's tag types scans every library for them, so a file already indexed shows
+/// its values without a rescan asked for; approving them again scans nothing.
+#[tokio::test]
+async fn approved_tag_types_are_read_from_files_already_indexed() {
+    let (temp, db, plugins, thread) = scanned().await;
+    let wav = temp.path().join("music/Album/01.wav");
+    jewelcase_scanner::testing::write_small_wav(&wav);
+    jewelcase_scanner::testing::tag_wav_with_field(&wav, "ENERGY", "High");
+    plugins.scan_every_library().await;
+    let indexed = "SELECT count(*) FROM tracks t JOIN scans s ON s.library_id = t.library_id \
+                   WHERE t.library_id = 1 AND s.state = 'completed'";
+    eventually("the library is indexed", async || {
+        let count: i64 =
+            db.read(move |conn| conn.query_row(indexed, [], |r| r.get(0))).await.unwrap();
+        (count == 1).then_some(())
+    })
+    .await;
+    assert_eq!(tagged(&db, "plugin.energy").await, Vec::<String>::new());
+
+    let mut manifest = manifest("plugin", &[TagTypes]);
+    manifest["permissions"][0]["types"] =
+        serde_json::json!([{ "key": "energy", "name": "Energy", "field": "ENERGY" }]);
+    install(&db, manifest).await;
+    grant(&plugins, "plugin", &[TagTypes], &[]).await;
+    assert_eq!(reconfigure_scans(&db).await, 2, "the approval queued one");
+    let names = eventually("the track is tagged", async || {
+        Some(tagged(&db, "plugin.energy").await).filter(|names| !names.is_empty())
+    })
+    .await;
+    assert_eq!(names, ["High"]);
+
+    grant(&plugins, "plugin", &[TagTypes], &[]).await;
+    assert_eq!(reconfigure_scans(&db).await, 2, "approved as it was, it reads nothing new");
     stop(thread).await;
 }
 

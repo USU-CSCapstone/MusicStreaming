@@ -535,7 +535,7 @@
 	{#if current && onfilter}
 		<FilterPicker {libraryId} {type} {variant} filter={current} {onfilter} />
 	{:else}
-		{tagTypeName(type.key)}
+		{tagTypeName(type.key, page.data.tagTypes)}
 	{/if}
 {/snippet}
 

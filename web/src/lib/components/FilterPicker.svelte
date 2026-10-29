@@ -1,6 +1,7 @@
 <script lang="ts">
 	// One tag type's part of a list's filter: its tags, and whether an item must carry all of them
 	// or any, which puts them in the filter's `all` or `any` (`requirements/tags.md` §7).
+	import { page } from '$app/state';
 	import type { TagType } from '$lib/api/types';
 	import {
 		type TagFilter,
@@ -42,7 +43,7 @@
 	{libraryId}
 	{type}
 	{variant}
-	label={tagTypeName(type.key)}
+	label={tagTypeName(type.key, page.data.tagTypes)}
 	{chosen}
 	match={typeMatch(filter, chosen)}
 	ontoggle={(tag) => {

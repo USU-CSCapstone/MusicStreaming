@@ -316,8 +316,9 @@ CREATE TABLE tag_types (
     key       TEXT    PRIMARY KEY,
     -- For a type a plugin added, all four, and for a built-in one none: the name it is shown by,
     -- the plugin that added it, which it outlives, so nothing references plugins, the custom
-    -- field it is read from, uppercase, and the generation of types it was added in, above every
-    -- type's before it, so a scan reads files already scanned again for it.
+    -- field it is read from, uppercase, and the generation of plugins' types it was added in,
+    -- above every one's before it and counted apart from the built-in ones, so a scan reads files
+    -- already scanned again for it.
     name      TEXT,
     plugin_id TEXT,
     field     TEXT,

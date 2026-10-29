@@ -42,7 +42,7 @@
 					aria-current={active ? 'page' : undefined}
 				>
 					<Icon name="tag" size={18} />
-					{tagTypePlural(type.key)}
+					{tagTypePlural(type.key, tagTypes)}
 				</a>
 			</li>
 		{/each}

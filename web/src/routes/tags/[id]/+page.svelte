@@ -44,7 +44,7 @@
 <svelte:head><title>{tag.name} · Jewelcase</title></svelte:head>
 
 <DetailHeader
-	kind={tagTypeName(tag.type)}
+	kind={tagTypeName(tag.type, data.tagTypes)}
 	title={tag.name}
 	image={null}
 	seed={tag.id}
