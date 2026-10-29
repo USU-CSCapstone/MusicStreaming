@@ -5,6 +5,7 @@
 //! scheme-independent key; the mapper below handles what survives that
 //! abstraction. Nothing outside this module knows what an ID3 frame is.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io;
@@ -12,17 +13,22 @@ use std::panic;
 use std::path::Path;
 
 use jewelcase_core::Format;
+use lofty::aac::AacFile;
+use lofty::ape::ApeTag;
 use lofty::config::ParseOptions;
 use lofty::error::{FileParseError, UnknownFormatError, UnsupportedTagError};
 use lofty::file::{AudioFile, FileType, TaggedFile, TaggedFileExt};
+use lofty::flac::FlacFile;
 use lofty::id3::v2::{Frame, Id3v2Tag};
 use lofty::iff::aiff::AiffFile;
 use lofty::iff::wav::WavFile;
-use lofty::mp4::{Mp4Codec, Mp4File};
+use lofty::mp4::{AtomData, AtomIdent, Ilst, Mp4Codec, Mp4File};
 use lofty::mpeg::{Layer, MpegFile};
+use lofty::ogg::tag::VorbisComments;
+use lofty::ogg::{OpusFile, VorbisFile};
 use lofty::picture::PictureType;
 use lofty::probe::Probe;
-use lofty::tag::{ItemKey, Tag, TagType};
+use lofty::tag::{ItemKey, ItemValue, Tag, TagType};
 
 use crate::audio::{AudioProperties, duration_ms};
 use crate::{Lyrics, PartialDate, TagSet, multi_value};
@@ -54,63 +60,84 @@ pub struct ReadResult {
     pub embedded_art: Option<crate::image::ImageInfo>,
 }
 
-/// Read one file. A panic while parsing it, in lofty or the mapping, is
-/// [`ReadError::Malformed`] with a fixed reason, never the panic's message,
-/// which may name a host path.
-pub fn read(path: &Path) -> Result<ReadResult, ReadError> {
-    // The closure borrows only `path`, and everything the parse builds is dropped as it unwinds,
-    // so nothing a panic interrupted is used again.
-    panic::catch_unwind(|| parse(path))
+/// Read one file, with the tag types `types` lists. A panic while parsing it, in lofty or the
+/// mapping, is [`ReadError::Malformed`] with a fixed reason, never the panic's message, which
+/// may name a host path.
+pub fn read(path: &Path, types: &TagTypes) -> Result<ReadResult, ReadError> {
+    // The closure borrows only `path` and `types`, and everything the parse builds is dropped as
+    // it unwinds, so nothing a panic interrupted is used again.
+    panic::catch_unwind(|| parse(path, types))
         .unwrap_or_else(|_| Err(ReadError::Malformed("the tag reader failed unexpectedly".into())))
 }
 
 /// [`read`] without the panic guard.
-fn parse(path: &Path) -> Result<ReadResult, ReadError> {
+fn parse(path: &Path, types: &TagTypes) -> Result<ReadResult, ReadError> {
     let mut file = File::open(path)?;
     let options = ParseOptions::new();
 
-    // The formats that carry ID3v2 are read by their own readers, whose ID3v2 tag still holds the
-    // `TXXX` frames lofty's generic tag drops ([`user_texts`]).
-    let (tagged, format, user_texts): (TaggedFile, Format, UserTexts) = if sniff_mp4(&mut file)? {
-        let mp4 = Mp4File::read_from(&mut file, options).map_err(map_parse_error)?;
-        let format = match mp4.properties().codec() {
-            Some(Mp4Codec::AAC) => Format::Aac,
-            Some(Mp4Codec::ALAC) => Format::Alac,
-            other => return Err(ReadError::Unsupported(format!("MP4 codec {other:?}"))),
-        };
-        (mp4.into(), format, UserTexts::new())
+    // Every format is read by its own reader, whose tags still hold the custom fields lofty's
+    // generic tag drops ([`custom_values`]), in the order they are taken from.
+    let (tagged, format, custom): (TaggedFile, Format, CustomValues) = if sniff_mp4(&mut file)? {
+        read_mp4(&mut file, options, types)?
     } else {
         let probe = Probe::new(&mut file).options(options).guess_file_type()?;
-        if probe.file_type() == Some(FileType::Mpeg) {
-            // Layers I and II share MP3's frame sync, so only the frame header tells them apart.
-            let mpeg = MpegFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
-            let user_texts = user_texts(mpeg.id3v2());
-            match mpeg.properties().layer() {
-                Layer::Layer3 => (mpeg.into(), Format::Mp3, user_texts),
-                other => return Err(ReadError::Unsupported(format!("MPEG {other:?}"))),
+        match probe.file_type() {
+            Some(FileType::Mpeg) => {
+                // Layers I and II share MP3's frame sync, so only the frame header tells them
+                // apart.
+                let mpeg =
+                    MpegFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
+                let raw = [mpeg.id3v2().map(Raw::Id3v2), mpeg.ape().map(Raw::Ape)];
+                let custom = custom_values(types, &raw);
+                match mpeg.properties().layer() {
+                    Layer::Layer3 => (mpeg.into(), Format::Mp3, custom),
+                    other => return Err(ReadError::Unsupported(format!("MPEG {other:?}"))),
+                }
             }
-        } else if probe.file_type() == Some(FileType::Wav) {
-            let wav = WavFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
-            let user_texts = user_texts(wav.id3v2());
-            (wav.into(), Format::Wav, user_texts)
-        } else if probe.file_type() == Some(FileType::Aiff) {
-            let aiff = AiffFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
-            let user_texts = user_texts(aiff.id3v2());
-            (aiff.into(), Format::Aiff, user_texts)
-        } else {
-            let tagged = probe.read().map_err(map_parse_error)?;
-            let format = match tagged.file_type() {
-                FileType::Flac => Format::Flac,
-                FileType::Aac => Format::Aac,
-                FileType::Vorbis => Format::Vorbis,
-                FileType::Opus => Format::Opus,
-                FileType::Wav => Format::Wav,
-                FileType::Aiff => Format::Aiff,
-                // MP4 without an `ftyp` sniff hit; lofty found it anyway.
-                FileType::Mp4 => Format::Aac,
-                other => return Err(ReadError::Unsupported(format!("{other:?}"))),
-            };
-            (tagged, format, UserTexts::new())
+            Some(FileType::Flac) => {
+                let flac =
+                    FlacFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
+                let raw = [flac.vorbis_comments().map(Raw::Vorbis), flac.id3v2().map(Raw::Id3v2)];
+                let custom = custom_values(types, &raw);
+                (flac.into(), Format::Flac, custom)
+            }
+            Some(FileType::Vorbis) => {
+                let ogg =
+                    VorbisFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
+                let custom = custom_values(types, &[Some(Raw::Vorbis(ogg.vorbis_comments()))]);
+                (ogg.into(), Format::Vorbis, custom)
+            }
+            Some(FileType::Opus) => {
+                let opus =
+                    OpusFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
+                let custom = custom_values(types, &[Some(Raw::Vorbis(opus.vorbis_comments()))]);
+                (opus.into(), Format::Opus, custom)
+            }
+            Some(FileType::Aac) => {
+                let aac =
+                    AacFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
+                let custom = custom_values(types, &[aac.id3v2().map(Raw::Id3v2)]);
+                (aac.into(), Format::Aac, custom)
+            }
+            Some(FileType::Wav) => {
+                let wav =
+                    WavFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
+                let custom = custom_values(types, &[wav.id3v2().map(Raw::Id3v2)]);
+                (wav.into(), Format::Wav, custom)
+            }
+            Some(FileType::Aiff) => {
+                let aiff =
+                    AiffFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
+                let custom = custom_values(types, &[aiff.id3v2().map(Raw::Id3v2)]);
+                (aiff.into(), Format::Aiff, custom)
+            }
+            // MP4 without an `ftyp` sniff hit; lofty found it anyway.
+            Some(FileType::Mp4) => read_mp4(probe.into_inner(), options, types)?,
+            // lofty reads what has no reader here, and says why it cannot or what it is.
+            _ => {
+                let tagged = probe.read().map_err(map_parse_error)?;
+                return Err(ReadError::Unsupported(format!("{:?}", tagged.file_type())));
+            }
         }
     };
 
@@ -124,9 +151,25 @@ fn parse(path: &Path) -> Result<ReadResult, ReadError> {
         bitrate_kbps: props.audio_bitrate().or(props.overall_bitrate()),
     };
 
-    let tags = map_tags(&tagged, &user_texts);
+    let tags = map_tags(&tagged, types, custom);
     let embedded_art = front_cover(&tagged).and_then(crate::image::describe);
     Ok(ReadResult { tags, properties, embedded_art })
+}
+
+/// An MP4 file, read by the typed reader to learn its codec.
+fn read_mp4(
+    file: &mut File,
+    options: ParseOptions,
+    types: &TagTypes,
+) -> Result<(TaggedFile, Format, CustomValues), ReadError> {
+    let mp4 = Mp4File::read_from(file, options).map_err(map_parse_error)?;
+    let format = match mp4.properties().codec() {
+        Some(Mp4Codec::AAC) => Format::Aac,
+        Some(Mp4Codec::ALAC) => Format::Alac,
+        other => return Err(ReadError::Unsupported(format!("MP4 codec {other:?}"))),
+    };
+    let custom = custom_values(types, &[mp4.ilst().map(Raw::Ilst)]);
+    Ok((mp4.into(), format, custom))
 }
 
 /// `ftyp` at offset 4 marks an ISO base media file. lofty's guess handles it
@@ -231,59 +274,148 @@ fn labels(tags: &[&Tag]) -> Vec<String> {
 }
 
 /// A tag type the mapper reads (`design/scanning.md` §4): its key, as `tag_types` lists it, the
-/// lofty key its values come from, the description of an ID3v2 `TXXX` frame that carries them
-/// where lofty maps none, and the generation of types it was added in.
+/// lofty key its values come from, if lofty maps one, the custom field that carries them where
+/// that finds none, and the generation of types it was added in.
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct TagTypeField {
-    key: &'static str,
-    item: ItemKey,
-    txxx: Option<&'static str>,
+    key: Cow<'static, str>,
+    item: Option<ItemKey>,
+    field: Option<Cow<'static, str>>,
     since: u32,
 }
 
-/// Every tag type the scanner reads (`requirements/tags.md` §2). Each is read the same way, by
-/// [`strings`] and then [`user_texts`], so a new type is an entry here, in the generation after
-/// the newest. ID3v2.3 has no mood frame, so taggers write mood there as `TXXX:MOOD`.
-const TAG_TYPES: &[TagTypeField] = &[
-    TagTypeField { key: "genre", item: ItemKey::Genre, txxx: None, since: 1 },
-    TagTypeField { key: "mood", item: ItemKey::Mood, txxx: Some("MOOD"), since: 2 },
+/// The tag types built in (`requirements/tags.md` §2). A new one is an entry here, in the
+/// generation after the newest, which raises [`TagTypes::generation`]. ID3v2.3 has no mood
+/// frame, so taggers write mood there as `TXXX:MOOD`.
+static BUILT_IN: [TagTypeField; 2] = [
+    TagTypeField { key: Cow::Borrowed("genre"), item: Some(ItemKey::Genre), field: None, since: 1 },
+    TagTypeField {
+        key: Cow::Borrowed("mood"),
+        item: Some(ItemKey::Mood),
+        field: Some(Cow::Borrowed("MOOD")),
+        since: 2,
+    },
 ];
 
-/// The values of the ID3v2 `TXXX` frames that tag types read ([`TagTypeField::txxx`]), by type
-/// key. lofty's generic tag drops a `TXXX` frame whose description it does not map.
-type UserTexts = BTreeMap<&'static str, Vec<String>>;
+/// A tag type a plugin added, as the store holds it (`requirements/tags.md` §2): its key, the
+/// custom field it is read from, and the generation of plugins' types it was added in, after
+/// every one before it. Plugins' types count their generations apart from the built-in ones,
+/// which a release raises ([`TagTypes::generation`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddedTagType {
+    pub key: String,
+    pub field: String,
+    pub since: u32,
+}
 
-/// The values in `tag`'s `TXXX` frames for each tag type that reads one, its description matched
-/// ignoring case, as taggers differ on it. Native null-separated values and semicolons come out
-/// the same, as in [`strings`].
-fn user_texts(tag: Option<&Id3v2Tag>) -> UserTexts {
-    let mut out = UserTexts::new();
-    let Some(tag) = tag else { return out };
-    for tag_type in TAG_TYPES {
-        let Some(description) = tag_type.txxx else { continue };
-        let frames = tag.into_iter().filter_map(|frame| match frame {
-            Frame::UserText(text) if text.description.eq_ignore_ascii_case(description) => {
-                Some(text.content.as_ref())
-            }
-            _ => None,
+/// The tag types a scan reads, each the same way, by [`strings`] and then [`custom_values`]: the
+/// built-in ones, and those plugins added, which the scan takes from the store as it starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagTypes(Vec<TagTypeField>);
+
+impl TagTypes {
+    /// The built-in types alone.
+    pub fn built_in() -> TagTypes {
+        TagTypes(BUILT_IN.to_vec())
+    }
+
+    /// The built-in types and `added`.
+    pub fn with(added: Vec<AddedTagType>) -> TagTypes {
+        let added = added.into_iter().map(|t| TagTypeField {
+            key: Cow::Owned(t.key),
+            item: None,
+            field: Some(Cow::Owned(t.field)),
+            since: t.since,
         });
-        let values = multi_value::split_all(frames.flat_map(|content| content.split('\0')));
-        if !values.is_empty() {
-            out.insert(tag_type.key, values);
+        TagTypes(BUILT_IN.iter().cloned().chain(added).collect())
+    }
+
+    /// The generation the types are read with: the one the newest built-in type was added in,
+    /// plus the one the newest of plugins' types was. A track read with an older one is read
+    /// again, though its file is unchanged, for the types added since (`design/scanning.md` §2).
+    /// Each part only grows, so the sum grows whenever either does: a release adding a type
+    /// reaches files read with plugins' types, and a plugin's type files read by an older
+    /// release.
+    pub fn generation(&self) -> u32 {
+        let (built_in, added) = self.0.split_at(BUILT_IN.len());
+        let newest = |types: &[TagTypeField]| types.iter().map(|t| t.since).max().unwrap_or(0);
+        newest(built_in) + newest(added)
+    }
+}
+
+/// The keys of the built-in tag types, each of which `tag_types` must list.
+pub fn tag_type_keys() -> impl Iterator<Item = &'static str> {
+    BUILT_IN.iter().map(|tag_type| tag_type.key.as_ref())
+}
+
+/// The values of each tag type's custom field, by type key, from the first of a file's own tags
+/// that has any. lofty's generic tag drops every field it has no key for.
+type CustomValues = BTreeMap<String, Vec<String>>;
+
+/// A format's own tag, which keeps the fields lofty's generic tag drops.
+enum Raw<'a> {
+    Id3v2(&'a Id3v2Tag),
+    Vorbis(&'a VorbisComments),
+    Ape(&'a ApeTag),
+    Ilst(&'a Ilst),
+}
+
+impl Raw<'_> {
+    /// The values of the custom field `field` under the scheme's convention for a field of one's
+    /// own: `TXXX:<field>`, a Vorbis comment or APE item of that name, or
+    /// `----:com.apple.iTunes:<field>`, its name matched ignoring case, as taggers differ on it.
+    /// Native repeats, null-separated values and semicolons come out the same, as in [`strings`].
+    fn values(&self, field: &str) -> Vec<String> {
+        let texts: Vec<&str> = match self {
+            Raw::Id3v2(tag) => tag
+                .into_iter()
+                .filter_map(|frame| match frame {
+                    Frame::UserText(text) if text.description.eq_ignore_ascii_case(field) => {
+                        Some(text.content.as_ref())
+                    }
+                    _ => None,
+                })
+                .collect(),
+            Raw::Vorbis(tag) => tag.get_all(field).collect(),
+            Raw::Ape(tag) => tag
+                .into_iter()
+                .filter(|item| item.key().eq_ignore_ascii_case(field))
+                .filter_map(|item| match item.value() {
+                    ItemValue::Text(text) => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect(),
+            Raw::Ilst(tag) => tag
+                .into_iter()
+                .filter(|atom| match atom.ident() {
+                    AtomIdent::Freeform { mean, name } => {
+                        mean == "com.apple.iTunes" && name.eq_ignore_ascii_case(field)
+                    }
+                    AtomIdent::Fourcc(_) => false,
+                })
+                .flat_map(|atom| atom.data())
+                .filter_map(|data| match data {
+                    AtomData::UTF8(text) | AtomData::UTF16(text) => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect(),
+        };
+        multi_value::split_all(texts.into_iter().flat_map(|text| text.split('\0')))
+    }
+}
+
+/// The values of each of `types`' custom fields in `raw`, a file's own tags in the order fields
+/// are taken from them, each from the first that has any.
+fn custom_values(types: &TagTypes, raw: &[Option<Raw<'_>>]) -> CustomValues {
+    let mut out = CustomValues::new();
+    for tag_type in &types.0 {
+        let Some(field) = &tag_type.field else { continue };
+        let values = raw.iter().flatten().map(|raw| raw.values(field)).find(|v| !v.is_empty());
+        if let Some(values) = values {
+            out.insert(tag_type.key.to_string(), values);
         }
     }
     out
-}
-
-/// The keys of every tag type the scanner reads, each of which `tag_types` must list.
-pub fn tag_type_keys() -> impl Iterator<Item = &'static str> {
-    TAG_TYPES.iter().map(|tag_type| tag_type.key)
-}
-
-/// The generation of the tag types the scanner reads: the one the newest was added in. A track
-/// read with an older one is read again, though its file is unchanged, for the types added
-/// since (`design/scanning.md` §2).
-pub fn tags_generation() -> u32 {
-    TAG_TYPES.iter().map(|tag_type| tag_type.since).max().unwrap_or(0)
 }
 
 /// Parse a number that may be packed as `n/total`.
@@ -299,19 +431,19 @@ fn flag(raw: &str) -> bool {
     matches!(raw.trim(), "1" | "true" | "True" | "TRUE" | "yes")
 }
 
-/// The canonical [`TagSet`] of `file`'s tags, with `user_texts` for the tag types lofty's
-/// generic tag carries nothing of.
-fn map_tags(file: &TaggedFile, user_texts: &UserTexts) -> TagSet {
+/// The canonical [`TagSet`] of `file`'s tags, with values of each of `types`, taken from
+/// `custom` where lofty's generic tag carries none.
+fn map_tags(file: &TaggedFile, types: &TagTypes, mut custom: CustomValues) -> TagSet {
     let tags = ordered_tags(file);
     let mut out = TagSet::default();
-    for tag_type in TAG_TYPES {
-        let values = strings(&tags, &tag_type.item);
+    for tag_type in &types.0 {
+        let values = tag_type.item.map(|item| strings(&tags, &item)).unwrap_or_default();
         let values = if values.is_empty() {
-            user_texts.get(tag_type.key).cloned().unwrap_or_default()
+            custom.remove(tag_type.key.as_ref()).unwrap_or_default()
         } else {
             values
         };
-        out.set_values(tag_type.key, values);
+        out.set_values(&tag_type.key, values);
     }
     if tags.is_empty() {
         return out;
@@ -414,20 +546,70 @@ mod tests {
     }
 
     #[test]
-    fn a_user_text_frame_carries_a_type_lofty_does_not_map() {
+    fn a_custom_field_is_read_under_each_schemes_convention_ignoring_case() {
         use lofty::TextEncoding;
+        use lofty::ape::ApeItem;
         use lofty::id3::v2::ExtendedTextFrame;
-        let mut tag = Id3v2Tag::new();
-        for (description, content) in [("mood", "Calm\0Dark;calm"), ("OTHER", "Loud")] {
-            tag.insert(Frame::UserText(ExtendedTextFrame::new(
+        use lofty::mp4::Atom;
+        let mut id3v2 = Id3v2Tag::new();
+        for (description, content) in [("energy", "High\0Calm;high"), ("OTHER", "Loud")] {
+            id3v2.insert(Frame::UserText(ExtendedTextFrame::new(
                 TextEncoding::UTF8,
                 description,
                 content,
             )));
         }
-        let mood = vec!["Calm".to_owned(), "Dark".to_owned()];
-        assert_eq!(user_texts(Some(&tag)), UserTexts::from([("mood", mood)]));
-        assert!(user_texts(None).is_empty());
+        let mut vorbis = VorbisComments::default();
+        vorbis.push("Energy".into(), "High".into());
+        vorbis.push("ENERGY".into(), "Calm".into());
+        let mut ape = ApeTag::new();
+        ape.insert(ApeItem::new("energy".into(), ItemValue::Text("High;Calm".into())).unwrap());
+        let mut ilst = Ilst::new();
+        let freeform = |mean: &'static str, name: &'static str| AtomIdent::Freeform {
+            mean: mean.into(),
+            name: name.into(),
+        };
+        ilst.insert(Atom::new(
+            freeform("com.apple.iTunes", "Energy"),
+            AtomData::UTF8("High".into()),
+        ));
+        ilst.insert(Atom::new(
+            freeform("com.apple.iTunes", "ENERGY"),
+            AtomData::UTF8("Calm".into()),
+        ));
+        ilst.insert(Atom::new(freeform("org.example", "ENERGY"), AtomData::UTF8("Loud".into())));
+        for raw in [Raw::Id3v2(&id3v2), Raw::Vorbis(&vorbis), Raw::Ape(&ape), Raw::Ilst(&ilst)] {
+            assert_eq!(raw.values("ENERGY"), ["High", "Calm"]);
+            assert!(raw.values("TEMPO").is_empty());
+        }
+    }
+
+    #[test]
+    fn a_type_reads_the_first_of_a_files_tags_that_carries_its_field() {
+        let types = TagTypes::with(vec![AddedTagType {
+            key: "acousticbrainz.energy".into(),
+            field: "ENERGY".into(),
+            since: 3,
+        }]);
+        let mut first = VorbisComments::default();
+        first.push("MOOD".into(), "Calm".into());
+        let mut second = VorbisComments::default();
+        second.push("ENERGY".into(), "High".into());
+        second.push("MOOD".into(), "Dark".into());
+        let raw = [None, Some(Raw::Vorbis(&first)), Some(Raw::Vorbis(&second))];
+        let got = custom_values(&types, &raw);
+        let want = [("acousticbrainz.energy", "High"), ("mood", "Calm")];
+        let want = want.map(|(key, value)| (key.to_owned(), vec![value.to_owned()]));
+        assert_eq!(got, CustomValues::from(want));
+        assert!(custom_values(&TagTypes::built_in(), &raw[..2]).contains_key("mood"));
+    }
+
+    #[test]
+    fn the_generation_adds_the_newest_plugin_types_to_the_newest_built_in_types() {
+        assert_eq!(TagTypes::built_in().generation(), 2);
+        let added = |since| AddedTagType { key: "p.k".into(), field: "K".into(), since };
+        assert_eq!(TagTypes::with(vec![added(1), added(3)]).generation(), 5);
+        assert_eq!(TagTypes::with(Vec::new()), TagTypes::built_in());
     }
 
     #[test]

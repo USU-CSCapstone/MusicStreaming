@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::LazyLock;
 
-use jewelcase_scanner::{Lyrics, TagSet, TrackRecord, tags_generation};
+use jewelcase_scanner::{Lyrics, TagSet, TrackRecord};
 use rusqlite::types::Null;
 use rusqlite::{OptionalExtension, Result, ToSql, Transaction};
 
@@ -153,7 +153,7 @@ pub(super) fn write_row(
         (":artist_image_id", &sidecars.artist_image_id),
         (":biography_id", &sidecars.biography_id),
         (":sidecar_stamp", &rec.sidecar_stamp),
-        (":tags_generation", &tags_generation()),
+        (":tags_generation", &rec.tags_generation),
     ];
     // rusqlite rejects a name the statement lacks and leaves an unbound one NULL, so with one
     // entry per placeholder, distinct names mean every placeholder is bound.

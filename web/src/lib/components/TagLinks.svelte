@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import type { TagsByType } from '$lib/api/types';
 	import { fullText } from '$lib/full-text';
 	import { tagTypeName } from '$lib/tags';
@@ -15,7 +16,7 @@
 	{#each types as type, t (type)}
 		<!-- Svelte trims a separator's leading space, so it is a no-break one; the line break after it is the space after. -->
 		{#if t > 0}<span class="between" aria-hidden="true">&nbsp;·</span>{/if}
-		<span class="type" aria-label={tagTypeName(type)} role="group">
+		<span class="type" aria-label={tagTypeName(type, page.data.tagTypes)} role="group">
 			{#each tags[type] as tag, i (tag.id)}
 				{#if i > 0}<span class="sep">, </span>{/if}
 				<a href={resolve('/tags/[id]', { id: tag.id })}>{tag.name}</a>

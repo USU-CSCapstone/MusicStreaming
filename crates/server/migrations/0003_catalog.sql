@@ -309,10 +309,23 @@ CREATE TABLE track_waveforms (
 -- ───────────────────────────── Tags ─────────────────────────────
 
 -- Every type the scanner reads (requirements/tags.md §2). Server-wide: a type is a field files
--- carry, whichever library they are in (design/database.md §3).
+-- carry, whichever library they are in (design/database.md §3). Genre and mood are built in, and
+-- the scanner holds their fields and generations.
 CREATE TABLE tag_types (
     -- The type's name in the API and in tags.type
-    key TEXT PRIMARY KEY
+    key       TEXT    PRIMARY KEY,
+    -- For a type a plugin added, all four, and for a built-in one none: the name it is shown by,
+    -- the plugin that added it, which it outlives, so nothing references plugins, the custom
+    -- field it is read from, uppercase, and the generation of plugins' types it was added in,
+    -- above every one's before it and counted apart from the built-in ones, so a scan reads files
+    -- already scanned again for it.
+    name      TEXT,
+    plugin_id TEXT,
+    field     TEXT,
+    since     INTEGER,
+    CHECK ((name IS NULL) = (plugin_id IS NULL)
+       AND (plugin_id IS NULL) = (field IS NULL)
+       AND (field IS NULL) = (since IS NULL))
 ) STRICT;
 
 INSERT INTO tag_types (key) VALUES ('genre'), ('mood');

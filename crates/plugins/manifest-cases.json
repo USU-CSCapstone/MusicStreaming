@@ -2773,5 +2773,144 @@
 			"settings.mode: unknown key \"defualt\"",
 			"personalSettings.token: unknown key \"secret\""
 		]
+	},
+	{
+		"name": "tag types a plugin adds",
+		"manifest": {
+			"id": "acousticbrainz",
+			"name": "AcousticBrainz",
+			"version": "0.1.0",
+			"apiVersion": "0.1",
+			"permissions": [
+				{
+					"permission": "tagTypes",
+					"required": false,
+					"reason": "To show how energetic each track is.",
+					"types": [
+						{
+							"key": "energy",
+							"name": "Energy",
+							"field": "ENERGY"
+						},
+						{
+							"key": "tempo-range",
+							"name": "Tempo",
+							"field": "tempo_range"
+						}
+					]
+				}
+			]
+		},
+		"problems": []
+	},
+	{
+		"name": "tag types with none listed",
+		"manifest": {
+			"id": "acousticbrainz",
+			"name": "AcousticBrainz",
+			"version": "0.1.0",
+			"apiVersion": "0.1",
+			"permissions": [
+				{
+					"permission": "tagTypes",
+					"required": false,
+					"reason": "x"
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: tagTypes needs \"types\", each with a \"key\", a \"name\", and the \"field\" it is read from"
+		]
+	},
+	{
+		"name": "tag types as an empty list",
+		"manifest": {
+			"id": "acousticbrainz",
+			"name": "AcousticBrainz",
+			"version": "0.1.0",
+			"apiVersion": "0.1",
+			"permissions": [
+				{
+					"permission": "tagTypes",
+					"required": false,
+					"reason": "To show how energetic each track is.",
+					"types": []
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: \"types\" must be a list of at least one type"
+		]
+	},
+	{
+		"name": "types on another permission",
+		"manifest": {
+			"id": "acousticbrainz",
+			"name": "AcousticBrainz",
+			"version": "0.1.0",
+			"apiVersion": "0.1",
+			"permissions": [
+				{
+					"permission": "libraryRead",
+					"required": true,
+					"reason": "x",
+					"types": []
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: only tagTypes takes \"types\""
+		]
+	},
+	{
+		"name": "tag types badly named",
+		"manifest": {
+			"id": "acousticbrainz",
+			"name": "AcousticBrainz",
+			"version": "0.1.0",
+			"apiVersion": "0.1",
+			"permissions": [
+				{
+					"permission": "tagTypes",
+					"required": false,
+					"reason": "To show how energetic each track is.",
+					"types": [
+						{
+							"key": "Energy",
+							"name": "",
+							"field": "ENERGY-LEVEL"
+						},
+						{
+							"key": "danceable",
+							"name": "How danceable a track is, on a scale from one to ten",
+							"field": "genre"
+						},
+						{
+							"key": "danceable",
+							"name": "Danceable",
+							"field": "DANCE",
+							"label": "Dance"
+						},
+						{
+							"key": "dance",
+							"name": "Dance",
+							"field": "dance"
+						},
+						"mood"
+					]
+				}
+			]
+		},
+		"problems": [
+			"permissions[0]: types[0]: \"key\" must be lowercase letters, digits, and hyphens (1–32 characters)",
+			"permissions[0]: types[0]: \"name\" must be a non-empty string of at most 40 characters",
+			"permissions[0]: types[0]: \"field\" must be letters, digits, and underscores (1–64 characters)",
+			"permissions[0]: types[1]: \"name\" must be a non-empty string of at most 40 characters",
+			"permissions[0]: types[1]: \"field\" GENRE is read as a built-in type already",
+			"permissions[0]: types[2]: unknown key \"label\"",
+			"permissions[0]: types[2]: \"key\" \"danceable\" is given twice",
+			"permissions[0]: types[3]: \"field\" DANCE is given twice",
+			"permissions[0]: types[4] must be an object"
+		]
 	}
 ]

@@ -1323,8 +1323,10 @@ export interface components {
             [key: string]: components["schemas"]["TagRef"][];
         };
         TagType: {
-            /** @description The type's name in `Tag.type` and in `TagsByType`, such as `genre` or `mood`. */
+            /** @description The type's name in `Tag.type` and in `TagsByType`, such as `genre` or `mood`. A type a plugin added is keyed under the plugin, such as `acousticbrainz.energy`. */
             key: string;
+            /** @description The name a plugin gave the type it added, which serves for one tag or more. A built-in type has none, and clients name it in their own words. */
+            name?: string;
             /** @description Its tags in the library, never 0 (`listTagTypes`). */
             tagCount: number;
         };
@@ -2093,7 +2095,9 @@ export interface components {
          *       `scanFinished`, as a scan finishes, which each need `libraryRead`.
          *     - Per plugin: `network`; `listeningActivity`; `searchActivity`, the searches of users
          *       who share them with it (`setMySearchSharing`); and `hostRateLimits`, under which its
-         *       `"per": "host"` rate limits bind every plugin's requests to that host, not only its own.
+         *       `"per": "host"` rate limits bind every plugin's requests to that host, not only its own;
+         *       and `tagTypes`, the scanner reading the fields its `types` name as types of tag, which
+         *       once granted stay in the catalog however the grant changes (`requirements/tags.md` §2).
          *     - Per plugin, hooks: `schedule`, at its `everyMinutes`, in every library it is enabled
          *       in; `played` and `playing`, as each user who connected it finishes or starts playing
          *       something, needing `listeningActivity`, and `libraryRead` in the library played from;
@@ -2101,7 +2105,7 @@ export interface components {
          *       needing `searchActivity` and `libraryRead`.
          * @enum {string}
          */
-        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played" | "playing" | "searchActivity" | "searched" | "albumsChanged" | "artistsChanged" | "hostRateLimits";
+        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played" | "playing" | "searchActivity" | "searched" | "albumsChanged" | "artistsChanged" | "hostRateLimits" | "tagTypes";
         PermissionRequest: {
             permission: components["schemas"]["PermissionName"];
             /** @description Whether it cannot work without it (`requirements/plugins.md` §4.2). */
@@ -2128,6 +2132,16 @@ export interface components {
             };
             /** @description With `schedule` only. How often it runs. */
             everyMinutes?: number;
+            /**
+             * @description With `tagTypes` only. Each type of tag it adds: its `key`, which the catalog keys
+             *     under the plugin's id (`acousticbrainz.energy`), the `name` people see, and the `field`
+             *     it is read from in each file (`design/plugins.md` §6).
+             */
+            types?: {
+                key: string;
+                name: string;
+                field: string;
+            }[];
         };
         PermissionGrants: {
             /** @description Plugin-wide permissions. */

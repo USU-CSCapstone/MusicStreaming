@@ -8,7 +8,7 @@ use jewelcase_core::Format;
 
 use super::{
     Factory, InspectStore, InspectTrack, ItemKey, PNG, library, live, make_album, scan_library,
-    tag_wav, tag_wav_with, write_small_wav,
+    tag_wav, tag_wav_with, tag_wav_with_field, write_small_wav,
 };
 use crate::scan::ScanState;
 use crate::track::TrackId;
@@ -136,6 +136,31 @@ pub fn an_unchanged_file_is_read_again_for_a_newer_tag_type<S: InspectStore>(mak
     let head = store.feed_head(lib.id);
     assert_eq!(scan_library(&store, &lib).progress.files_processed, 1);
     assert_eq!(store.feed_head(lib.id), head, "tags read as they were change nothing");
+}
+
+/// A type a plugin adds is read from files already scanned, by the next scan, for their tags
+/// alone and once, from the field the plugin writes (`requirements/tags.md` §2).
+pub fn a_type_a_plugin_adds_is_read_from_files_already_scanned<S: InspectStore>(make: Factory<S>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    let path = root.join("A/track.wav");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    write_small_wav(&path);
+    tag_wav_with_field(&path, "ENERGY", "High");
+    let lib = library(&root);
+    let store = make(&lib);
+    scan_library(&store, &lib);
+    let energy = |store: &S| live(store, &lib)[0].tags.get("acousticbrainz.energy").cloned();
+    assert_eq!(energy(&store), None, "no type reads the field yet");
+
+    store.add_tag_type("acousticbrainz.energy", "ENERGY");
+    let head = store.feed_head(lib.id);
+    let scan = scan_library(&store, &lib);
+    let progress = (scan.progress.files_processed, scan.progress.added, scan.progress.updated);
+    assert_eq!(progress, (1, 0, 0), "read for its tags alone");
+    assert_eq!(energy(&store), Some(vec!["High".to_owned()]));
+    assert_eq!(store.feed_tracks_after(lib.id, head), [live(&store, &lib)[0].id]);
+    assert_eq!(scan_library(&store, &lib).progress.files_processed, 0, "and once only");
 }
 
 /// A lyrics file written beside a track whose audio did not change, as a plugin does,

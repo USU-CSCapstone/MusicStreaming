@@ -38,6 +38,25 @@ async fn lists_the_types_each_library_has_tags_of() {
 }
 
 #[tokio::test]
+async fn a_type_a_plugin_added_is_listed_with_its_name() {
+    let (_temp, db, app) = catalog::app().await;
+    db.write(|tx| {
+        tx.execute_batch(
+            "INSERT INTO tag_types (key, name, plugin_id, field, since)
+             VALUES ('acousticbrainz.energy', 'Energy', 'acousticbrainz', 'ENERGY', 1);
+             INSERT INTO tags (id, library_id, type, name, name_key, sort_key)
+             VALUES (60, 1, 'acousticbrainz.energy', 'High', 'high', CAST('high' AS BLOB));",
+        )
+    })
+    .await
+    .unwrap();
+    let types = json(&app, "/api/v1/libraries/1/tag-types").await.1;
+    let energy = json!({ "key": "acousticbrainz.energy", "name": "Energy", "tagCount": 1 });
+    assert_eq!(types[0], energy, "keyed after its plugin, so before genre");
+    assert_eq!(types[1], json!({ "key": "genre", "tagCount": 2 }), "a built-in type has no name");
+}
+
+#[tokio::test]
 async fn pages_through_tags_of_one_type_or_every_type() {
     let (_temp, db, app) = catalog::app().await;
     other_library_genre(&db).await;

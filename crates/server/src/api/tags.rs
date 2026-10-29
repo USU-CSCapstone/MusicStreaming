@@ -18,6 +18,9 @@ use crate::db::Database;
 #[serde(rename_all = "camelCase")]
 pub struct TagType {
     key: String,
+    /// The name the plugin that added it gave it; none for a built-in type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     tag_count: i64,
 }
 
@@ -92,8 +95,9 @@ pub struct ListQuery {
     limit: Option<u32>,
 }
 
-/// `listTagTypes`: each type the library has a tag of, with its count of tags, in key order. A
-/// tag goes with the last track that carries it, so every type listed has music behind it.
+/// `listTagTypes`: each type the library has a tag of, with its count of tags and the name a
+/// plugin's type is shown by, in key order. A tag goes with the last track that carries it, so
+/// every type listed has music behind it.
 pub async fn types(
     State(db): State<Arc<Database>>,
     Scope { library, .. }: Scope,
@@ -101,9 +105,13 @@ pub async fn types(
     let types = db
         .read(move |conn| {
             conn.prepare_cached(
-                "SELECT type, count(*) FROM tags WHERE library_id = ?1 GROUP BY type ORDER BY type",
+                "SELECT used.type, kind.name, used.tags \
+                 FROM (SELECT type, count(*) AS tags FROM tags WHERE library_id = ?1 GROUP BY type) \
+                 used JOIN tag_types kind ON kind.key = used.type ORDER BY used.type",
             )?
-            .query_map([library], |row| Ok(TagType { key: row.get(0)?, tag_count: row.get(1)? }))?
+            .query_map([library], |row| {
+                Ok(TagType { key: row.get(0)?, name: row.get(1)?, tag_count: row.get(2)? })
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()
         })
         .await?;

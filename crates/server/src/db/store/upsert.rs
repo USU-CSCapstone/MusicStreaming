@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use jewelcase_core::artists_key;
-use jewelcase_scanner::{Lyrics, TagsReread, TrackRecord, tags_generation};
+use jewelcase_scanner::{Lyrics, TagsReread, TrackRecord};
 use rusqlite::{Result, Transaction, params};
 
 use super::entities::{find_or_create_album, find_or_create_artist, find_or_create_tag};
@@ -137,7 +137,7 @@ fn replace_links(
 }
 
 /// Writes the tags read again from the unchanged file of track `reread.track_id`, of every type,
-/// with the current tag generation, and keeps everything else the track holds, its analysis
+/// with the generation they were read with, and keeps everything else the track holds, its analysis
 /// included. Only when its tags changed does it record the track in the feed at `now` and add
 /// what it points at to `touched`, so tags read as they were change nothing derived and announce
 /// nothing. A track of another library is logged and skipped.
@@ -151,7 +151,7 @@ pub fn reread_tags(
     let id = reread.track_id;
     let updated = tx
         .prepare_cached("UPDATE tracks SET tags_generation = ?3 WHERE id = ?1 AND library_id = ?2")?
-        .execute(params![id, lib, tags_generation()])?;
+        .execute(params![id, lib, reread.tags_generation])?;
     if updated == 0 {
         tracing::error!(track = id, "tags read again for a track of another library; skipped");
         return Ok(());

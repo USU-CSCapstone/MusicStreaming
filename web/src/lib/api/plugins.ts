@@ -121,6 +121,11 @@ export const PERMISSION_LABELS: Record<PermissionName, { title: string; detail: 
 		title: 'Limit a service for every plugin',
 		detail:
 			'Can set a rate limit that every plugin keeps to, for a service that limits this whole server. It can slow other plugins.'
+	},
+	tagTypes: {
+		title: 'Add types of tag',
+		detail:
+			'Every file’s tags are read once more to find them, which on a large library takes as long as a first scan. Once added, they stay, even if this plugin goes.'
 	}
 };
 

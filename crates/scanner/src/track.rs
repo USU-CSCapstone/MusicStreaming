@@ -59,6 +59,8 @@ pub struct TrackRecord {
     /// compares.
     pub sidecar_stamp: SidecarStamp,
     pub sort: SortKeys,
+    /// The generation of tag types its tags were read with ([`crate::TagTypes::generation`]).
+    pub tags_generation: u32,
 }
 
 impl TrackRecord {

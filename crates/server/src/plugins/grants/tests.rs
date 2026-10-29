@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use jewelcase_plugins::Permission::{self, LibraryAdd, LibraryRead, Network, Schedule};
+use jewelcase_plugins::Permission::{self, LibraryAdd, LibraryRead, Network, Schedule, TagTypes};
 use serde_json::{Value, json};
 
 use super::super::Plugins;
@@ -150,6 +150,65 @@ async fn a_reinstall_keeps_a_grant_only_for_the_same_request() {
     changed["permissions"][2]["reason"] = json!("To read your tags.");
     reinstall(&db, &plugins, changed).await;
     assert_eq!(held(&db, 1).await, ["libraryAdd"], "any host, more often, or for another reason");
+}
+
+/// A manifest for `plugin` asking to add a tag type for each (key, name, field) of `types`.
+fn adding(types: &[(&str, &str, &str)]) -> Value {
+    let mut manifest = manifest("plugin", &[TagTypes]);
+    let types =
+        types.iter().map(|(key, name, field)| json!({ "key": key, "name": name, "field": field }));
+    manifest["permissions"][0]["types"] = types.collect();
+    manifest
+}
+
+/// Each tag type a plugin added, as (key, name, plugin, field, generation), in key order.
+async fn added_types(db: &Database) -> Vec<(String, String, String, String, u32)> {
+    db.read(|conn| {
+        conn.prepare(
+            "SELECT key, name, plugin_id, field, since FROM tag_types \
+             WHERE plugin_id IS NOT NULL ORDER BY key",
+        )?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+        .collect()
+    })
+    .await
+    .unwrap()
+}
+
+/// (key, name, plugin, field, generation) as [`added_types`] lists it, for `plugin`.
+fn row(key: &str, name: &str, field: &str, since: u32) -> (String, String, String, String, u32) {
+    (key.into(), name.into(), "plugin".into(), field.into(), since)
+}
+
+#[tokio::test]
+async fn approving_tag_types_registers_them_under_the_plugin_and_they_outlive_it() {
+    let (temp, db) = database().await;
+    install(&db, adding(&[("energy", "Energy", "energy"), ("tempo", " Tempo ", "TEMPO")])).await;
+    let plugins = plugins(&temp, &db);
+    assert_eq!(added_types(&db).await, [], "asking adds nothing");
+    set(&plugins, &[TagTypes], &[]).await;
+    let first =
+        [row("plugin.energy", "Energy", "ENERGY", 1), row("plugin.tempo", "Tempo", "TEMPO", 1)];
+    assert_eq!(added_types(&db).await, first, "in one generation, with the field uppercase");
+
+    set(&plugins, &[], &[]).await;
+    set(&plugins, &[TagTypes], &[]).await;
+    assert_eq!(added_types(&db).await, first, "revoked and approved again, as they were");
+
+    // Approved again for another name changes the name; for another field, it is read anew.
+    reinstall(
+        &db,
+        &plugins,
+        adding(&[("energy", "Liveliness", "ENERGY"), ("tempo", "Tempo", "BPM")]),
+    )
+    .await;
+    set(&plugins, &[TagTypes], &[]).await;
+    let second =
+        [row("plugin.energy", "Liveliness", "ENERGY", 1), row("plugin.tempo", "Tempo", "BPM", 2)];
+    assert_eq!(added_types(&db).await, second);
+
+    plugins.uninstall("plugin".into()).await.unwrap();
+    assert_eq!(added_types(&db).await, second, "an uninstall leaves them");
 }
 
 /// Each permission is stored by its name in manifests and the API, which the shared manifest

@@ -73,7 +73,26 @@ pub struct PermissionRequest {
     /// For schedule: how often it runs.
     #[serde(default, rename = "everyMinutes", skip_serializing_if = "Option::is_none")]
     pub every_minutes: Option<u32>,
+    /// For tagTypes: the types of tag it adds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub types: Option<Vec<TagTypeRequest>>,
 }
+
+/// A type of tag a plugin adds (`requirements/tags.md` §2): a field it writes into files, read
+/// by the scanner under each scheme's convention for a field of one's own (`design/scanning.md`
+/// §4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TagTypeRequest {
+    /// Its key among the plugin's types; the catalog's is [`Manifest::tag_type_key`].
+    pub key: String,
+    /// What people see it called, such as `Energy`.
+    pub name: String,
+    /// The field it is read from, such as `ENERGY`, matched without regard to case.
+    pub field: String,
+}
+
+/// The fields the built-in tag types are read from, which no plugin's type may read again.
+pub const BUILT_IN_TAG_FIELDS: [&str; 2] = ["GENRE", "MOOD"];
 
 impl Manifest {
     /// The hosts its network request names; none if it asks for no network.
@@ -96,6 +115,18 @@ impl Manifest {
             Some(RateLimit { host: host.to_ascii_lowercase(), limit: pace.clone(), gap, per })
         };
         limits.filter_map(limit).collect()
+    }
+
+    /// The types of tag its tagTypes request adds; none if it asks for none.
+    pub fn tag_types(&self) -> &[TagTypeRequest] {
+        let request = self.permissions.iter().find(|r| r.permission == Permission::TagTypes);
+        request.and_then(|r| r.types.as_deref()).unwrap_or_default()
+    }
+
+    /// The catalog's key for its type `key`: the plugin's id and the key, so no two plugins
+    /// share a type (`design/plugins.md` §6).
+    pub fn tag_type_key(&self, key: &str) -> String {
+        format!("{}.{key}", self.id)
     }
 
     /// The permissions it marks required, which must be granted before it can be enabled.

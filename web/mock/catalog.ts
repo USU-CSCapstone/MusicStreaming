@@ -180,14 +180,23 @@ export class Catalog {
 		};
 	}
 
-	/** The types the library's tags are of, each with its count of tags, in key order. */
+	/**
+	 * The types the library's tags are of, each with its count of tags and the name a plugin gave
+	 * its own, in key order.
+	 */
 	tagTypes(lib: bigint): TagType[] {
 		return this.db
 			.all(
-				'SELECT type, COUNT(*) AS n FROM tags WHERE library_id = ? GROUP BY type ORDER BY type',
+				`SELECT used.type, kind.name, used.n FROM
+				   (SELECT type, COUNT(*) AS n FROM tags WHERE library_id = ? GROUP BY type) used
+				   JOIN tag_types kind ON kind.key = used.type ORDER BY used.type`,
 				lib
 			)
-			.map((r) => ({ key: String(r.type), tagCount: num(r.n) }));
+			.map((r) => ({
+				key: String(r.type),
+				...(r.name == null ? {} : { name: String(r.name) }),
+				tagCount: num(r.n)
+			}));
 	}
 
 	listTags(lib: bigint, q: URLSearchParams): Page<Tag> {

@@ -18,6 +18,7 @@ use crate::problems::Problem;
 use crate::scan::{Scan, Trigger};
 use crate::scope::Scope;
 use crate::sidecar::SidecarStamp;
+use crate::tags::AddedTagType;
 use crate::track::{TrackId, TrackRecord};
 
 /// What the store already knows about a file. Enough for the skip check.
@@ -30,8 +31,8 @@ pub struct IndexedFile {
     /// The stamp of the sidecars it resolved when last read, so a sidecar added, changed or
     /// removed beside an unchanged file is noticed (`requirements/scanning.md` §7).
     pub sidecar_stamp: SidecarStamp,
-    /// The generation of tag types it was last read with ([`crate::tags_generation`]), so an
-    /// unchanged file is read again for a type added since (`requirements/tags.md` §2).
+    /// The generation of tag types it was last read with ([`crate::TagTypes::generation`]), so
+    /// an unchanged file is read again for a type added since (`requirements/tags.md` §2).
     pub tags_generation: u32,
 }
 
@@ -56,12 +57,14 @@ impl IndexedFolder {
 
 /// The tags read again from an unchanged file whose track was read with an older generation of
 /// tag types ([`IndexedFile::tags_generation`]). The file is as it was, so only its tags are
-/// written, of every type, with the current generation.
+/// written, of every type, with the generation they were read with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagsReread {
     pub track_id: TrackId,
     /// Its tag values by type, as [`crate::TagSet::tag_values`].
     pub tag_values: BTreeMap<String, Vec<String>>,
+    /// The generation of tag types they were read with ([`crate::TagTypes::generation`]).
+    pub tags_generation: u32,
 }
 
 /// One transaction's worth of outcomes (`design/scanning.md` §7). An unchanged file is in none
@@ -169,13 +172,18 @@ pub trait Store: Send + Sync {
     /// change feed, and return how many tracks it marked missing that were not already. An
     /// upserted track keeps its analysis only while its file's size and mtime are unchanged. A
     /// track whose tags were read again keeps everything but its tags, and is in the feed only
-    /// when they changed. Both record the current [`crate::tags_generation`]. An
+    /// when they changed. Both record the generation of tag types they were read with. An
     /// error means nothing in the batch, its scan row included, was persisted.
     fn apply(&self, library: LibraryId, batch: Batch) -> Result<i64, StoreError>;
     /// The paths with a recorded problem that `scope` reaches: under it, or for a Directory
     /// scope directly in it ([`Scope::contains_file`]).
     fn problems_under(&self, library: LibraryId, scope: &Scope)
     -> Result<Vec<PathBuf>, StoreError>;
+
+    // --- tag types ---
+    /// The tag types plugins added, which a scan reads with the built-in ones
+    /// ([`crate::TagTypes::with`]).
+    fn added_tag_types(&self) -> Result<Vec<AddedTagType>, StoreError>;
 }
 
 /// Where a background job records what it made of a file it could not decode, and clears the

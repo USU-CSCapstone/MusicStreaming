@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use super::rate_limit::LIMIT_KEYS;
-use super::validate::{KEYS, REQUEST_KEYS};
+use super::validate::{KEYS, REQUEST_KEYS, TAG_TYPE_KEYS};
 use super::*;
 use crate::settings;
 
@@ -117,9 +117,12 @@ fn the_typed_form_keeps_every_key_validation_allows() {
         "rateLimits": {"a.example": "2/s", "b.example": limit}});
     let schedule = serde_json::json!({"permission": "schedule", "required": false,
         "reason": "r", "everyMinutes": 60});
+    let tag_type = serde_json::json!({"key": "energy", "name": "Energy", "field": "ENERGY"});
+    let tag_types = serde_json::json!({"permission": "tagTypes", "required": false,
+        "reason": "r", "types": [tag_type]});
     let manifest = serde_json::json!({"id": "ab", "name": "A", "version": "1",
         "apiVersion": API_VERSION, "description": "D", "author": "Me",
-        "homepage": "https://a.example", "permissions": [network, schedule],
+        "homepage": "https://a.example", "permissions": [network, schedule, tag_types],
         "settings": schema, "personalSettings": personal});
     assert_eq!(validate(&manifest), Vec::<String>::new());
 
@@ -129,12 +132,13 @@ fn the_typed_form_keeps_every_key_validation_allows() {
         known.sort();
         known
     };
-    let mut request = [keys(&network), keys(&schedule)].concat();
+    let mut request = [keys(&network), keys(&schedule), keys(&tag_types)].concat();
     request.sort();
     request.dedup();
     assert_eq!(keys(&manifest), sorted(&KEYS));
     assert_eq!(request, sorted(&REQUEST_KEYS));
     assert_eq!(keys(&limit), sorted(&LIMIT_KEYS));
+    assert_eq!(keys(&tag_type), sorted(&TAG_TYPE_KEYS));
     assert_eq!(keys(&schema), sorted(&settings::SCHEMA_KEYS));
     assert_eq!(keys(&setting), sorted(&settings::SETTING_KEYS));
 
@@ -151,6 +155,23 @@ fn reads_the_manifest_a_component_carries() {
     assert_eq!(read.id, "lrclib-lyrics");
     assert_eq!(read.destinations(), ["lrclib.net"]);
     assert_eq!(read.required().collect::<Vec<_>>(), [Permission::Network]);
+}
+
+/// The types of tag a manifest adds, each keyed in the catalog under the plugin's id.
+#[test]
+fn tag_types_are_keyed_under_the_plugin() {
+    let manifest: Manifest = serde_json::from_value(serde_json::json!({"id": "acousticbrainz",
+        "name": "A", "version": "1", "apiVersion": API_VERSION, "permissions": [
+        {"permission": "tagTypes", "required": false, "reason": "r",
+         "types": [{"key": "energy", "name": "Energy", "field": "ENERGY"}]}]}))
+    .unwrap();
+    let names: Vec<&str> = manifest.tag_types().iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["Energy"]);
+    assert_eq!(manifest.tag_type_key("energy"), "acousticbrainz.energy");
+    let none: Manifest = serde_json::from_value(serde_json::json!({"id": "ab", "name": "A",
+        "version": "1", "apiVersion": API_VERSION, "permissions": []}))
+    .unwrap();
+    assert!(none.tag_types().is_empty());
 }
 
 #[test]

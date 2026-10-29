@@ -37,6 +37,9 @@ pub enum Permission {
     /// Its rate limits that say `"per": "host"` are kept to by every plugin's requests to that
     /// host, so it can slow other plugins. Without it, they count its own.
     HostRateLimits,
+    /// The scanner reading fields it writes into files as types of tag, which its request's
+    /// `types` names (`requirements/tags.md` §2). Once granted, a type stays in the catalog.
+    TagTypes,
 }
 
 /// Whom a hook runs a plugin for (`design/hooks.md` §2).
@@ -51,7 +54,7 @@ pub enum Hook {
 impl Permission {
     /// Every permission, each once. Public so the server's tests can check its hook table
     /// against [`Permission::hook`].
-    pub const ALL: [Permission; 15] = [
+    pub const ALL: [Permission; 16] = [
         Self::LibraryRead,
         Self::LibraryAdd,
         Self::LibraryChange,
@@ -67,6 +70,7 @@ impl Permission {
         Self::AlbumsChanged,
         Self::ArtistsChanged,
         Self::HostRateLimits,
+        Self::TagTypes,
     ];
 
     /// Its name in manifests, the API and the database, such as `libraryRead`. It is the name its
@@ -114,7 +118,8 @@ impl Permission {
             | Self::Network
             | Self::ListeningActivity
             | Self::SearchActivity
-            | Self::HostRateLimits => None,
+            | Self::HostRateLimits
+            | Self::TagTypes => None,
         }
     }
 
@@ -136,7 +141,8 @@ impl Permission {
             | Self::ListeningActivity
             | Self::Schedule
             | Self::SearchActivity
-            | Self::HostRateLimits => &[],
+            | Self::HostRateLimits
+            | Self::TagTypes => &[],
         }
     }
 
@@ -158,6 +164,7 @@ impl Permission {
             Self::AlbumsChanged => "Run when albums change",
             Self::ArtistsChanged => "Run when artists change",
             Self::HostRateLimits => "Limit a service for every plugin",
+            Self::TagTypes => "Add types of tag",
         }
     }
 }
