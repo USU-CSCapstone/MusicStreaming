@@ -338,7 +338,7 @@ fn tags_read_again_keep_the_analysis() {
         ("genre".to_owned(), vec!["Jazz".to_owned()]),
         ("mood".to_owned(), vec!["Red".to_owned()]),
     ]);
-    let rereads = vec![TagsReread { track_id: id, tag_values }];
+    let rereads = vec![TagsReread { track_id: id, tag_values, tags_generation: 7 }];
     store.apply(1, Batch { rereads, ..Batch::default() }).unwrap();
     check(&store, "tags read again");
     let (analyzed, generation, tags): (i64, u32, String) = store
@@ -354,6 +354,6 @@ fn tags_read_again_keep_the_analysis() {
             )
         })
         .unwrap();
-    assert_eq!((analyzed, generation), (3, tags_generation()));
+    assert_eq!((analyzed, generation), (3, 7), "it records the generation they were read with");
     assert_eq!(tags, "genre:Jazz mood:Red", "Rock goes with its last track");
 }

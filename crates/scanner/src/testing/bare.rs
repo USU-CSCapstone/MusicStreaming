@@ -12,6 +12,7 @@ use crate::store::{
     AnalysisStore, Batch, FileToDecode, IndexedFolder, PickedTrack, PlaceholderStore, ProblemLog,
     Store, StoreError,
 };
+use crate::tags::AddedTagType;
 
 /// A store for tests that need one but not an index: those of the queue, the watcher and the
 /// background jobs, and a scan that must find every file new. It keeps scan rows, numbered from 1
@@ -80,6 +81,11 @@ impl Store for BareStore {
 
     /// None, though it keeps the problems recorded through [`ProblemLog`].
     fn problems_under(&self, _: LibraryId, _: &Scope) -> Result<Vec<PathBuf>, StoreError> {
+        Ok(Vec::new())
+    }
+
+    /// None: a scan reads the built-in types alone.
+    fn added_tag_types(&self) -> Result<Vec<AddedTagType>, StoreError> {
         Ok(Vec::new())
     }
 }

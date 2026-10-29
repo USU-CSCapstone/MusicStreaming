@@ -12,6 +12,7 @@ mod problems;
 mod roots;
 mod scans;
 mod sidecars;
+mod tag_types;
 mod tracks;
 mod upsert;
 
@@ -101,6 +102,10 @@ impl Store for SqliteStore {
         scope: &Scope,
     ) -> Result<Vec<PathBuf>, StoreError> {
         Ok(problems::under(self, library, scope)?)
+    }
+
+    fn added_tag_types(&self) -> Result<Vec<AddedTagType>, StoreError> {
+        Ok(tag_types::added(self)?)
     }
 }
 
