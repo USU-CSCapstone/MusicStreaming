@@ -4,6 +4,7 @@
 	import Icon from '$lib/components/Icon.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { plural } from '$lib/format';
+	import { fullText } from '$lib/full-text';
 	import { Paged } from '$lib/paged.svelte';
 	import { tagTypeName, tagTypePlural } from '$lib/tags';
 
@@ -27,7 +28,7 @@
 			<li>
 				<a href={resolve('/tags/[id]', { id: tag.id })}>
 					<span class="icon"><Icon name="tag" size={18} /></span>
-					<span class="name">{tag.name}</span>
+					<span class="name" {@attach fullText}>{tag.name}</span>
 					<span class="count muted">{plural(tag.trackCount, 'song')}</span>
 				</a>
 			</li>

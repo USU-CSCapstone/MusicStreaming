@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import type { TagsByType } from '$lib/api/types';
+	import { fullText } from '$lib/full-text';
 	import { tagTypeName } from '$lib/tags';
 
 	// An album's or artist's tags, each a link to its page (`requirements/conventions.md` §3,
@@ -10,7 +11,7 @@
 	const types = $derived(Object.keys(tags).sort());
 </script>
 
-<span class="tags">
+<span class="tags" {@attach fullText}>
 	{#each types as type, t (type)}
 		<!-- Svelte trims a separator's leading space, so it is a no-break one; the line break after it is the space after. -->
 		{#if t > 0}<span class="between" aria-hidden="true">&nbsp;·</span>{/if}

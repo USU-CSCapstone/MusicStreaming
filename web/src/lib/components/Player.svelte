@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fullText } from '$lib/full-text';
 	import { resolve } from '$app/paths';
 	import { formatDuration } from '$lib/format';
 	import { controls } from '$lib/controls.svelte';
@@ -60,12 +61,12 @@
 				<Artwork image={track.album.image} seed={track.album.id} size={56} />
 			</a>
 			<div class="meta">
-				<span class="title">{track.title}</span>
+				<span class="title" {@attach fullText}>{track.title}</span>
 				<span class="muted artists"><ArtistLinks artists={track.artists} /></span>
 				{#if playback.error}
 					<span class="where error" role="alert" title={playback.error}>{playback.error}</span>
 				{:else if remote && where}
-					<span class="where">{where}</span>
+					<span class="where" {@attach fullText}>{where}</span>
 				{/if}
 			</div>
 		{:else if playback.error}
