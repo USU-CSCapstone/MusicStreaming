@@ -7,6 +7,7 @@
 	import type { Tag, TagType } from '$lib/api/types';
 	import { type TagFilter, UNFILTERED, isFiltered, toggleTag } from '$lib/filters';
 	import { knownTags } from '$lib/known-tags.svelte';
+	import { tagTypeName } from '$lib/tags';
 	import Icon from './Icon.svelte';
 	import TagPicker from './TagPicker.svelte';
 
@@ -20,10 +21,6 @@
 		/** The filter as the user changed it. */
 		onchange: (filter: TagFilter) => void;
 	} = $props();
-
-	/** The built-in types' names; any other type is named after its key. */
-	const NAMES: Record<string, string> = { genre: 'Genre', mood: 'Mood' };
-	const typeName = (key: string) => NAMES[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
 
 	let types = $state<TagType[]>([]);
 
@@ -60,7 +57,7 @@
 			<TagPicker
 				{libraryId}
 				{type}
-				label={typeName(type.key)}
+				label={tagTypeName(type.key)}
 				chosen={chosenOf(type.key)}
 				ontoggle={toggle}
 			/>
@@ -69,7 +66,7 @@
 		{#each filter.tags as id (id)}
 			{@const tag = known(id)}
 			{@const name = tag === null ? 'Unknown tag' : (tag?.name ?? '…')}
-			{@const kind = tag?.type ? typeName(tag.type).toLowerCase() : 'tag'}
+			{@const kind = tag?.type ? tagTypeName(tag.type).toLowerCase() : 'tag'}
 			<span class="chip" class:unknown={tag === null}>
 				{name}
 				<button

@@ -4,6 +4,7 @@
 	import ArtistLinks from '$lib/components/ArtistLinks.svelte';
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
 	import FilterBar from '$lib/components/FilterBar.svelte';
+	import TagLinks from '$lib/components/TagLinks.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
 	import { currentFilter, filterByTags, isFiltered, showFiltered } from '$lib/filters';
 	import { albumTitle, formatLength, plural, releaseYear } from '$lib/format';
@@ -69,6 +70,7 @@
 	onplay={data.tracks.length ? () => player.play(shown, 0, context) : undefined}
 >
 	<span class="artists"><ArtistLinks artists={album.artists} /></span>
+	{#if Object.keys(album.tags).length}<TagLinks tags={album.tags} />{/if}
 	<span>
 		{plural(album.trackCount, 'song')} · {formatLength(album.durationUs)}
 		{#if completeness}· <span class="incomplete">{completeness}</span>{/if}
