@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { listTracks } from '$lib/api/client';
 	import type { PlayContext } from '$lib/api/types';
-	import FilterBar from '$lib/components/FilterBar.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
 	import { isFiltered, showFiltered } from '$lib/filters';
@@ -29,12 +28,13 @@
 
 <!-- Songs are always a list: a grid of one album cover per song says nothing. -->
 <PageHeader title="Songs" subtitle={plural(tracks.total, 'song')} />
-<FilterBar libraryId={data.lib} filter={data.filter} onchange={showFiltered} />
 <TrackList
 	tracks={tracks.items}
 	sentinel={tracks.sentinel}
 	sort={data.sort}
 	onsort={showSorted}
+	filter={data.filter}
+	onfilter={showFiltered}
 	{context}
 	empty={filtered
 		? 'No songs carry these tags.'

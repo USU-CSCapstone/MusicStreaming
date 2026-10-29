@@ -4,7 +4,6 @@
 	import { collection, opened } from '$lib/adding.svelte';
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
-	import FilterBar from '$lib/components/FilterBar.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import PlaylistDetailsDialog, {
 		type PlaylistDetails
@@ -139,7 +138,6 @@
 	{/snippet}
 </DetailHeader>
 
-<FilterBar libraryId={data.lib} {filter} onchange={showFiltered} />
 <TrackList
 	tracks={shownTracks}
 	added={shown.map((r) => r.addedAt)}
@@ -150,7 +148,8 @@
 	editable
 	onremove={removeRows}
 	onmove={moveRows}
-	{filtered}
+	{filter}
+	onfilter={showFiltered}
 />
 
 {#if editing}

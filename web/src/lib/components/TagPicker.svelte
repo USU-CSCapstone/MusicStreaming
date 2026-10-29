@@ -8,6 +8,7 @@
 	import { tick } from 'svelte';
 	import { all, listTags } from '$lib/api/client';
 	import type { Tag, TagType } from '$lib/api/types';
+	import type { TagMatch } from '$lib/filters';
 	import Icon from './Icon.svelte';
 
 	let {
@@ -15,7 +16,11 @@
 		type,
 		label,
 		chosen,
-		ontoggle
+		ontoggle,
+		variant = 'button',
+		match = 'any',
+		onmatch,
+		onclear
 	}: {
 		libraryId: string;
 		type: TagType;
@@ -25,6 +30,14 @@
 		chosen: readonly string[];
 		/** A tag checked or unchecked. */
 		ontoggle: (tag: Tag) => void;
+		/** `heading`: a column's heading in a list of songs; `button`: a button of its own. */
+		variant?: 'button' | 'heading';
+		/** Whether the filter's chosen tags of a type must all match, or any. */
+		match?: TagMatch;
+		/** All or any chosen, offered once two of this type are. */
+		onmatch?: (match: TagMatch) => void;
+		/** This type's tags taken out of the filter. */
+		onclear?: () => void;
 	} = $props();
 
 	/** At most this many tags are listed at once; the search finds the rest. */
@@ -126,11 +139,14 @@
 <button
 	bind:this={button}
 	type="button"
-	class="trigger"
+	class={variant === 'heading' ? 'heading-trigger' : 'trigger'}
 	class:active={chosen.length > 0}
 	aria-haspopup="dialog"
 	aria-expanded={open}
-	aria-label={chosen.length ? `${label}, ${chosen.length} chosen` : label}
+	aria-label="{variant === 'heading' ? `Filter by ${label.toLowerCase()}` : label}{chosen.length
+		? `, ${chosen.length} chosen`
+		: ''}"
+	title={variant === 'heading' ? `Filter by ${label.toLowerCase()}` : undefined}
 	onclick={() => (open ? close() : show())}
 >
 	{label}
@@ -174,6 +190,25 @@
 				aria-label="Find a {label.toLowerCase()}"
 			/>
 		</label>
+		{#if chosen.length && (onclear || (onmatch && chosen.length > 1))}
+			<div class="chosen">
+				{#if onmatch && chosen.length > 1}
+					<div class="match" role="radiogroup" aria-label="Match">
+						{#each [['any', 'Any'], ['all', 'All']] as const as [value, text] (value)}
+							<button
+								type="button"
+								role="radio"
+								aria-checked={match === value}
+								onclick={() => onmatch(value)}>{text}</button
+							>
+						{/each}
+					</div>
+				{/if}
+				{#if onclear}
+					<button type="button" class="clear" onclick={onclear}>Clear</button>
+				{/if}
+			</div>
+		{/if}
 		{#if failed}
 			<p class="note muted">
 				Couldn't load the {label.toLowerCase()}s.
@@ -227,6 +262,74 @@
 	.trigger:hover,
 	.trigger[aria-expanded='true'] {
 		background: var(--surface-hover);
+	}
+
+	/* As a column's heading: its text, with the heading's own colour until a tag is chosen. */
+	.heading-trigger {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-1);
+		min-width: 0;
+		padding: 0;
+		border: 0;
+		border-radius: 4px;
+		background: none;
+		color: inherit;
+		font: inherit;
+		cursor: pointer;
+	}
+
+	.heading-trigger:hover,
+	.heading-trigger[aria-expanded='true'] {
+		color: var(--text);
+	}
+
+	.heading-trigger.active {
+		color: var(--accent);
+	}
+
+	.heading-trigger:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+	}
+
+	.chosen {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-2);
+		padding: var(--space-1) var(--space-2);
+	}
+
+	.match {
+		display: inline-flex;
+		border: 1px solid var(--border);
+		border-radius: 14px;
+		overflow: hidden;
+	}
+
+	.match button {
+		height: 26px;
+		padding: 0 var(--space-3);
+		border: 0;
+		background: var(--surface);
+		color: var(--text);
+		font-size: 12px;
+		cursor: pointer;
+	}
+
+	.match button[aria-checked='true'] {
+		background: var(--accent);
+		color: var(--accent-text);
+	}
+
+	.clear {
+		margin-left: auto;
+		border: 0;
+		background: none;
+		color: var(--accent);
+		font-size: 13px;
+		cursor: pointer;
 	}
 
 	.trigger.active {

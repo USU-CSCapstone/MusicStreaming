@@ -3,7 +3,6 @@
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import ArtistLinks from '$lib/components/ArtistLinks.svelte';
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
-	import FilterBar from '$lib/components/FilterBar.svelte';
 	import TagLinks from '$lib/components/TagLinks.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
 	import { currentFilter, filterByTags, isFiltered, showFiltered } from '$lib/filters';
@@ -80,12 +79,13 @@
 	{/snippet}
 </DetailHeader>
 
-<FilterBar libraryId={data.lib} {filter} onchange={showFiltered} />
 <TrackList
 	tracks={shown}
 	variant="album"
 	{sort}
 	onsort={showSorted}
+	{filter}
+	onfilter={showFiltered}
 	{context}
 	empty={isFiltered(filter) ? 'No songs on this album carry these tags.' : undefined}
 />

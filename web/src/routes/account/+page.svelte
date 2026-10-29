@@ -14,6 +14,8 @@
 	import DeviceList from '$lib/components/DeviceList.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import SettingsDialog from '$lib/components/SettingsDialog.svelte';
+	import { prefs } from '$lib/prefs.svelte';
+	import { tagTypeName } from '$lib/tags';
 
 	let { data } = $props();
 
@@ -23,6 +25,7 @@
 	let connecting = $state<PersonalPlugin | null>(null);
 	let connectionError = $state('');
 	const roles: Record<User['role'], string> = { owner: 'Owner', admin: 'Admin', user: 'User' };
+	const tagTypes = $derived(page.data.tagTypes ?? []);
 
 	let error = $state('');
 	let busy = $state(false);
@@ -102,6 +105,34 @@
 			it or take it over.
 		</p>
 		<DeviceList />
+	</section>
+{/if}
+
+{#if me}
+	<section aria-labelledby="columns">
+		<h2 id="columns">Song columns</h2>
+		<p class="muted">
+			Which tags show as columns in lists of songs, where each column's heading filters by them.
+			Tags come from your music files' own genre and mood fields.
+		</p>
+		{#if tagTypes.length}
+			<ul>
+				{#each tagTypes as type (type.key)}
+					<li>
+						<label class="column">
+							<input
+								type="checkbox"
+								checked={prefs.showsTagColumn(type.key)}
+								onchange={(e) => prefs.showTagColumn(type.key, e.currentTarget.checked)}
+							/>
+							{tagTypeName(type.key)}
+						</label>
+					</li>
+				{/each}
+			</ul>
+		{:else}
+			<p class="muted">Your music carries no genres or moods yet.</p>
+		{/if}
 	</section>
 {/if}
 
@@ -196,6 +227,13 @@
 		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-2);
+	}
+
+	.column {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		cursor: pointer;
 	}
 
 	.share {

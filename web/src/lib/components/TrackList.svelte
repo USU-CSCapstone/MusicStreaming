@@ -7,7 +7,12 @@
 	import { tick } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { resolve } from '$app/paths';
-	import type { PlayContext, TrackSummary } from '$lib/api/types';
+	import { page } from '$app/state';
+	import type { PlayContext, TagType, TrackSummary } from '$lib/api/types';
+	import { type TagFilter, UNFILTERED, isFiltered, toggleTag } from '$lib/filters';
+	import { knownTags } from '$lib/known-tags.svelte';
+	import { prefs } from '$lib/prefs.svelte';
+	import { tagTypeName } from '$lib/tags';
 	import { albumTitle, formatDate, formatDuration, plural, releaseYear } from '$lib/format';
 	import { player } from '$lib/player.svelte';
 	import { songs } from '$lib/adding.svelte';
@@ -25,6 +30,7 @@
 	import AddToPlaylistMenu from './AddToPlaylistMenu.svelte';
 	import Icon from './Icon.svelte';
 	import SortMenu from './SortMenu.svelte';
+	import TagPicker from './TagPicker.svelte';
 
 	let {
 		tracks,
@@ -39,7 +45,8 @@
 		editable = false,
 		onremove,
 		onmove,
-		filtered = false
+		filter,
+		onfilter
 	}: {
 		tracks: TrackSummary[];
 		/**
@@ -78,11 +85,55 @@
 		 * two rows of a sort is no place in the list's own order (`requirements/playlists.md` §4).
 		 */
 		onmove?: (moves: RowMove[]) => void;
-		/** Whether the rows are a filtered few, between which rows are hidden, so none can move. */
-		filtered?: boolean;
+		/**
+		 * The tag filter the rows are narrowed by. With `onfilter`, each tag column's heading
+		 * chooses its tags; without it, the headings only name the columns.
+		 */
+		filter?: TagFilter;
+		/** The filter as the user changed it. */
+		onfilter?: (filter: TagFilter) => void;
 	} = $props();
 
-	const movable = $derived(onmove !== undefined && sort === null && !filtered);
+	// Filtered, rows are hidden between those shown, so a place among them is no place in the
+	// list's own order and none can move.
+	const tagFiltered = $derived(filter !== undefined && isFiltered(filter));
+	const movable = $derived(onmove !== undefined && sort === null && !tagFiltered);
+
+	// A column for each tag type the account shows, and any the filter names, so a filter never
+	// narrows the list unseen (`requirements/tags.md` §7).
+	const libraryId = $derived(page.data.library?.id ?? '');
+	$effect(() => {
+		if (filter && libraryId) knownTags.load(libraryId, filter.tags);
+	});
+	const tagColumns: TagType[] = $derived.by(() => {
+		const filtering = new Set(filter?.tags.map((id) => knownTags.get(libraryId, id)?.type));
+		const types: TagType[] = page.data.tagTypes ?? [];
+		return types.filter((type) => prefs.showsTagColumn(type.key) || filtering.has(type.key));
+	});
+	const chosenOf = (key: string) =>
+		filter?.tags.filter((id) => knownTags.get(libraryId, id)?.type === key) ?? [];
+	// Where every column has room, the tag columns go after the album, or the artist on an
+	// album's own page; a column's width and place are the grid's, set here for any number.
+	const wide = $derived.by(() => {
+		const sizes = tagColumns.map(() => ' minmax(0, 1.5fr)').join('');
+		const areas = tagColumns.map((_, i) => ` tag${i}`).join('');
+		if (isAlbum) {
+			return {
+				columns: `32px minmax(0, 3fr) minmax(0, 2fr)${sizes} 56px 36px`,
+				areas: `'num title artist${areas} duration more'`
+			};
+		}
+		const lead = `32px 40px minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr)${sizes} 48px`;
+		return added
+			? {
+					columns: `${lead} 104px 56px 36px`,
+					areas: `'num thumb title artist album${areas} year added duration more'`
+				}
+			: {
+					columns: `${lead} 56px 36px`,
+					areas: `'num thumb title artist album${areas} year duration more'`
+				};
+	});
 
 	const selected = new SvelteSet<number>();
 	/** Where a Shift-click range starts: the row last clicked on its own. */
@@ -478,22 +529,84 @@
 
 <svelte:window {onkeydown} />
 
+{#snippet picker(type: TagType, variant: 'button' | 'heading')}
+	{#if filter && onfilter}
+		{@const f = filter}
+		<TagPicker
+			{libraryId}
+			{type}
+			{variant}
+			label={tagTypeName(type.key)}
+			chosen={chosenOf(type.key)}
+			match={f.match}
+			ontoggle={(tag) => {
+				knownTags.note(libraryId, tag);
+				onfilter(toggleTag(f, tag.id));
+			}}
+			onmatch={(match) => onfilter({ ...f, match })}
+			onclear={() => {
+				const gone = new Set(chosenOf(type.key));
+				onfilter({ ...f, tags: f.tags.filter((id) => !gone.has(id)) });
+			}}
+		/>
+	{:else}
+		{tagTypeName(type.key)}
+	{/if}
+{/snippet}
+
+{#snippet tagHeadings()}
+	{#each tagColumns as type, t (type.key)}
+		<span class="heading" style:grid-area="tag{t}">{@render picker(type, 'heading')}</span>
+	{/each}
+{/snippet}
+
+{#snippet tagCells(track: TrackSummary)}
+	{#each tagColumns as type, t (type.key)}
+		<span class="tag-col muted" style:grid-area="tag{t}">
+			{#each track.tags[type.key] ?? [] as tag, i (tag.id)}
+				{#if i > 0}<span class="sep">, </span>{/if}
+				<a href={resolve('/tags/[id]', { id: tag.id })}>{tag.name}</a>
+			{/each}
+		</span>
+	{/each}
+{/snippet}
+
 {#if tracks.length === 0}
-	<p class="empty muted">{empty}</p>
+	<p class="empty muted">
+		{empty}
+		{#if tagFiltered && onfilter}
+			<button type="button" class="clear-filters" onclick={() => onfilter({ ...UNFILTERED })}>
+				Clear filters
+			</button>
+		{/if}
+	</p>
 {:else}
 	<!-- The list's own width, not the window's, decides its columns: the sidebar and the
 	     page's padding take some of the window. -->
-	<div class="list" class:album={isAlbum} class:dated={added}>
-		{#if onsort}
-			<!-- Where the headings don't fit, the same sorts are one button away, which stays in
-			     view as the header does. -->
+	<div
+		class="list"
+		class:album={isAlbum}
+		class:dated={added}
+		style:--wide-columns={wide.columns}
+		style:--wide-areas={wide.areas}
+	>
+		{#if onsort || (onfilter && tagColumns.length)}
+			<!-- Where the headings don't fit, the same sorts and tag filters are a button away,
+			     which stays in view as the header does. -->
 			<div class="sorter">
-				<SortMenu fields={columns} {labels} {sort} onchoose={sortBy} />
+				{#if onfilter}
+					{#each tagColumns as type (type.key)}{@render picker(type, 'button')}{/each}
+				{/if}
+				{#if onsort}<SortMenu fields={columns} {labels} {sort} onchoose={sortBy} />{/if}
 			</div>
 		{/if}
 		<!-- Stays in view as the list scrolls, so changing the sort never means going back to
 		     the top (`requirements/conventions.md` §4.1). -->
-		<div class="row head" role="group" aria-label="Sort songs">
+		<div
+			class="row head"
+			role="group"
+			aria-label={onfilter ? 'Sort and filter songs' : 'Sort songs'}
+		>
 			<span class="heading" style:grid-area="num" aria-hidden="true">#</span>
 			{#each columns as field (field)}
 				{@const order = sort?.field === field ? sort.order : null}
@@ -516,6 +629,7 @@
 						{labels[field]}
 					{/if}
 				</span>
+				{#if field === (isAlbum ? 'artist' : 'album')}{@render tagHeadings()}{/if}
 			{/each}
 		</div>
 		<span class="visually-hidden" aria-live="polite">{sorted}</span>
@@ -585,12 +699,14 @@
 					</span>
 					<!-- Under the title where there is no room for its own column. -->
 					<span class="artist-col muted"><ArtistLinks artists={track.artists} /></span>
+					{#if isAlbum}{@render tagCells(track)}{/if}
 					{#if !isAlbum}
 						<span class="album-col muted">
 							<a href={resolve('/albums/[id]', { id: track.album.id })}
 								>{albumTitle(track.album.title)}</a
 							>
 						</span>
+						{@render tagCells(track)}
 						<span class="year muted tabular">{releaseYear(track.releaseDate) ?? ''}</span>
 					{/if}
 					{#if added}
@@ -735,7 +851,9 @@
 	/* Stays in view as the header does. */
 	.sorter {
 		display: flex;
+		flex-wrap: wrap;
 		justify-content: flex-end;
+		gap: var(--space-2);
 		position: sticky;
 		top: calc(-1 * var(--page-top, 0px));
 		z-index: 3;
@@ -812,29 +930,27 @@
 	}
 
 	.year,
-	.added {
+	.added,
+	.tag-col {
 		display: none;
+	}
+
+	.tag-col {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.tag-col a {
+		color: inherit;
 	}
 
 	/* Wide enough for every column: the artists get their own, and year and date added show. */
 	@container tracks (min-width: 880px) {
+		/* Set on the list for its tag columns, however many (`wide` in the script). */
 		.row {
-			grid-template-columns:
-				32px 40px minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr)
-				48px 56px 36px;
-			grid-template-areas: 'num thumb title artist album year duration more';
-		}
-
-		.dated .row {
-			grid-template-columns:
-				32px 40px minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr)
-				48px 104px 56px 36px;
-			grid-template-areas: 'num thumb title artist album year added duration more';
-		}
-
-		.album .row {
-			grid-template-columns: 32px minmax(0, 3fr) minmax(0, 2fr) 56px 36px;
-			grid-template-areas: 'num title artist duration more';
+			grid-template-columns: var(--wide-columns);
+			grid-template-areas: var(--wide-areas);
 		}
 
 		.title-col,
@@ -847,7 +963,8 @@
 		}
 
 		.year,
-		.added {
+		.added,
+		.tag-col {
 			display: block;
 		}
 
@@ -1174,5 +1291,14 @@
 		.bar-action :global(svg) {
 			display: none;
 		}
+	}
+
+	.clear-filters {
+		margin-left: var(--space-2);
+		border: 0;
+		background: none;
+		color: var(--accent);
+		font: inherit;
+		cursor: pointer;
 	}
 </style>
