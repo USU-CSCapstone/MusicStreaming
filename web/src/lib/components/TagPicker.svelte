@@ -9,6 +9,7 @@
 	import { all, listTags } from '$lib/api/client';
 	import type { Tag, TagType } from '$lib/api/types';
 	import type { TagMatch } from '$lib/filters';
+	import { fullText } from '$lib/full-text';
 	import Icon from './Icon.svelte';
 
 	let {
@@ -228,7 +229,7 @@
 								checked={chosen.includes(tag.id)}
 								onchange={() => ontoggle(tag)}
 							/>
-							<span class="name">{tag.name}</span>
+							<span class="name" {@attach fullText}>{tag.name}</span>
 							<span class="tracks muted">{tag.trackCount.toLocaleString()}</span>
 						</label>
 					</li>
