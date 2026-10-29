@@ -45,7 +45,9 @@ beforeAll(() => {
 	const path = join(dir, 'jewelcase.db');
 	const db = new DatabaseSync(path);
 	db.exec('PRAGMA foreign_keys = ON');
-	for (const file of readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql')).sort()) {
+	for (const file of readdirSync(MIGRATIONS)
+		.filter((f) => f.endsWith('.sql'))
+		.sort()) {
 		db.exec(readFileSync(join(MIGRATIONS, file), 'utf8'));
 	}
 	db.exec(FIXTURE);
@@ -79,7 +81,9 @@ describe('the tag filter', () => {
 		const calm = new URLSearchParams({ tag: '32' });
 		const found = catalog.searchTracks(1n, 'track', 10, calm);
 		expect([found.items.map((t) => t.id), found.total]).toEqual([['11', '13'], 2]);
-		expect(catalog.searchAlbums(1n, 'signal', 10, new URLSearchParams({ tag: '50' })).total).toBe(0);
+		expect(catalog.searchAlbums(1n, 'signal', 10, new URLSearchParams({ tag: '50' })).total).toBe(
+			0
+		);
 	});
 
 	it('narrows albums and artists by their tracks', () => {

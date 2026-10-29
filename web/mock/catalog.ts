@@ -127,7 +127,8 @@ export class Catalog {
 			 WHERE x.${owner}_id = ? ORDER BY t.type, t.sort_key, t.id`,
 			key
 		);
-		for (const r of rows) (tags[String(r.type)] ??= []).push({ id: id(r.id), name: String(r.name) });
+		for (const r of rows)
+			(tags[String(r.type)] ??= []).push({ id: id(r.id), name: String(r.name) });
 		return tags;
 	}
 

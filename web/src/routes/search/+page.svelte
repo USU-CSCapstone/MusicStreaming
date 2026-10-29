@@ -8,6 +8,7 @@
 	import CollectionView from '$lib/components/CollectionView.svelte';
 	import SearchBox, { settler } from '$lib/components/SearchBox.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
+	import { UNFILTERED, isFiltered, showFiltered } from '$lib/filters';
 	import type { Selected } from '$lib/recent';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { FIELDS, sortTracks } from '$lib/sorting';
@@ -31,6 +32,7 @@
 	}
 
 	const sections = $derived(data.results?.sections ?? []);
+	const filtered = $derived(isFiltered(data.filter));
 	// Songs come in match order; sorted, they play as shown (`requirements/conventions.md` §4.1).
 	const sort = $derived(currentSort(FIELDS));
 	const songs = $derived.by(() => {
@@ -87,8 +89,15 @@
 			<h2>You have no music yet</h2>
 			<p class="muted">Songs appear here once the library has been scanned.</p>
 		{:else}
-			<h2>No music matches “{data.q}”</h2>
-			{#if data.results.nearMisses.length}
+			<h2>No music matches “{data.q}”{filtered ? ' with these tags' : ''}</h2>
+			{#if filtered}
+				<p class="muted">
+					Try taking a tag out, or
+					<button type="button" class="link" onclick={() => showFiltered({ ...UNFILTERED })}>
+						search without them</button
+					>.
+				</p>
+			{:else if data.results.nearMisses.length}
 				<p class="muted">
 					Did you mean
 					{#each data.results.nearMisses as miss, i (miss)}
@@ -113,7 +122,16 @@
 					tracks={songs}
 					{sort}
 					onsort={showSorted}
-					context={{ type: 'search', query: data.q ?? '', section: 'tracks' }}
+					filter={data.filter}
+					onfilter={showFiltered}
+					context={{
+						type: 'search',
+						query: data.q ?? '',
+						section: 'tracks',
+						...(filtered && {
+							filter: { tags: data.filter.tags, tagMatch: data.filter.match }
+						})
+					}}
 					onplay={(track) => settler.settle({ type: 'track', id: track.id })}
 				/>
 			{:else}
@@ -164,5 +182,14 @@
 		.box {
 			display: block;
 		}
+	}
+
+	.link {
+		padding: 0;
+		border: 0;
+		background: none;
+		color: var(--accent);
+		font: inherit;
+		cursor: pointer;
 	}
 </style>

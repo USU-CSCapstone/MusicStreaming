@@ -116,6 +116,17 @@
 		],
 		up: [['path', { d: 'M12 19V5M5.5 11.5 12 5l6.5 6.5' }]],
 		down: [['path', { d: 'M12 5v14M5.5 12.5 12 19l6.5-6.5' }]],
+		// Opens a menu or panel below, where `down` is a descending sort.
+		chevron: [['path', { d: 'm6 9 6 6 6-6' }]],
+		tag: [
+			[
+				'path',
+				{
+					d: 'M3 12.2V4a1 1 0 0 1 1-1h8.2a2 2 0 0 1 1.4.6l7.2 7.2a2 2 0 0 1 0 2.8l-7.4 7.4a2 2 0 0 1-2.8 0l-7.2-7.2a2 2 0 0 1-.4-.6Z'
+				}
+			],
+			['circle', { cx: 8, cy: 8, r: 1.5 }]
+		],
 		clock: [
 			['circle', { cx: 12, cy: 12, r: 9 }],
 			['path', { d: 'M12 7v5l3 2' }]

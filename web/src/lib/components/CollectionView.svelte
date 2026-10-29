@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fullText } from '$lib/full-text';
 	import type { Card } from '$lib/cards';
 	import { prefs } from '$lib/prefs.svelte';
 	import Artwork from './Artwork.svelte';
@@ -30,8 +31,8 @@
 						icon={card.icon}
 						round={card.round}
 					/>
-					<span class="title">{card.title}</span>
-					<span class="subtitle muted">{card.subtitle}</span>
+					<span class="title" {@attach fullText}>{card.title}</span>
+					<span class="subtitle muted" {@attach fullText}>{card.subtitle}</span>
 				</a>
 			</li>
 		{/each}
@@ -52,8 +53,8 @@
 						/>
 					</span>
 					<span class="text">
-						<span class="title">{card.title}</span>
-						<span class="subtitle muted">{card.subtitle}</span>
+						<span class="title" {@attach fullText}>{card.title}</span>
+						<span class="subtitle muted" {@attach fullText}>{card.subtitle}</span>
 					</span>
 				</a>
 			</li>

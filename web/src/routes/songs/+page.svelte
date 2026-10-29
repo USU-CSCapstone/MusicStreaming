@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { listTracks } from '$lib/api/client';
+	import type { PlayContext } from '$lib/api/types';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
+	import { isFiltered, showFiltered } from '$lib/filters';
 	import { plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
 	import { showSorted } from '$lib/sort-url';
@@ -10,6 +12,15 @@
 
 	const tracks = $derived(
 		new Paged(data.tracks, (cursor) => listTracks(fetch, data.lib, { ...data.query, cursor }))
+	);
+	const filtered = $derived(isFiltered(data.filter));
+
+	// A filtered list is a filtered view, which a play records as what it was played from
+	// (`requirements/playlists.md` Overview, `requirements/analytics.md` §1).
+	const context: PlayContext = $derived(
+		filtered
+			? { type: 'filter', filter: { tags: data.filter.tags, tagMatch: data.filter.match } }
+			: { type: 'library' }
 	);
 </script>
 
@@ -22,5 +33,10 @@
 	sentinel={tracks.sentinel}
 	sort={data.sort}
 	onsort={showSorted}
-	empty="No songs yet. They appear here as the library is scanned."
+	filter={data.filter}
+	onfilter={showFiltered}
+	{context}
+	empty={filtered
+		? 'No songs carry these tags.'
+		: 'No songs yet. They appear here as the library is scanned.'}
 />

@@ -15,9 +15,12 @@ import type {
 	RecentSearch,
 	Session,
 	SetupRequest,
+	Tag,
+	TagsByType,
 	TrackSummary
 } from '../src/lib/api/types';
 import { type SortField, sortTracks } from '../src/lib/sorting';
+import { type TagFilter, filterByTags } from '../src/lib/tag-match';
 import { withManifest } from '../../tools/plugin-pack/manifest.mjs';
 import {
 	type Generated,
@@ -39,12 +42,56 @@ export const library: Library = {
 
 export const artist = { id: '21', name: 'Aurora Lane' };
 
+/** The library's tags: two genres and a mood. */
+export const ambient: Tag = {
+	id: '61',
+	type: 'genre',
+	name: 'Ambient',
+	trackCount: 2,
+	albumCount: 1,
+	artistCount: 1
+};
+export const electronic: Tag = {
+	id: '62',
+	type: 'genre',
+	name: 'Electronic',
+	trackCount: 1,
+	albumCount: 1,
+	artistCount: 1
+};
+export const calm: Tag = {
+	id: '63',
+	type: 'mood',
+	name: 'Calm',
+	trackCount: 2,
+	albumCount: 1,
+	artistCount: 1
+};
+const TAGS = [ambient, electronic, calm];
+
+/** `tags` as an entity carries them: by type, each type's in name order. */
+function byType(tags: Tag[]): TagsByType {
+	const out: TagsByType = {};
+	for (const tag of tags.toSorted((a, b) => a.name.localeCompare(b.name))) {
+		(out[tag.type] ??= []).push({ id: tag.id, name: tag.name });
+	}
+	return out;
+}
+
+/** The filter a list's `tag` and `tagMatch` ask for, and the items of `items` it keeps. */
+function tagged<T>(items: T[], query: URLSearchParams, tagsOf: (item: T) => TagsByType): T[] {
+	const tags = (query.get('tag') ?? '').split(',').filter(Boolean);
+	const filter: TagFilter = { tags, match: query.get('tagMatch') === 'all' ? 'all' : 'any' };
+	return filterByTags(items, filter, tagsOf, (id) => TAGS.find((t) => t.id === id)?.type);
+}
+
 export const album: AlbumSummary = {
 	id: '31',
 	title: 'Signal',
 	artists: [artist],
 	releaseDate: '2023',
 	type: 'album',
+	tags: byType(TAGS),
 	trackCount: 3,
 	trackTotal: 3,
 	discCount: 2,
@@ -59,7 +106,8 @@ const track = (
 	title: string,
 	disc: number,
 	n: number,
-	addedAt: string
+	addedAt: string,
+	tags: Tag[]
 ): TrackSummary => ({
 	id,
 	title,
@@ -69,6 +117,7 @@ const track = (
 	discNumber: disc,
 	trackNumber: n,
 	durationUs: 2_000_000,
+	tags: byType(tags),
 	explicit: false,
 	audio: { codec: 'pcm', lossless: true },
 	availability: 'available',
@@ -77,9 +126,9 @@ const track = (
 
 // Added out of title order, so newest first is an order of its own.
 export const tracks = [
-	track('41', 'Signal Part 1', 1, 1, '2026-01-01T00:00:00.000Z'),
-	track('42', 'Signal Part 2', 1, 2, '2026-01-03T00:00:00.000Z'),
-	track('43', 'Signal Remix', 2, 1, '2026-01-02T00:00:00.000Z')
+	track('41', 'Signal Part 1', 1, 1, '2026-01-01T00:00:00.000Z', [ambient, calm]),
+	track('42', 'Signal Part 2', 1, 2, '2026-01-03T00:00:00.000Z', [ambient]),
+	track('43', 'Signal Remix', 2, 1, '2026-01-02T00:00:00.000Z', [electronic, calm])
 ];
 
 /** The library's tracks as `listTracks` would sort them: `sort` and `order` from `query`. */
@@ -384,7 +433,8 @@ export async function serveLibrary(
 		}
 
 		if (path === '/libraries') return json({ items: empty ? [] : [library] });
-		if (path === `${lib}/albums`) return json(pageOf([album]));
+		if (path === `${lib}/albums`)
+			return json(pageOf(tagged([album], url.searchParams, (a) => a.tags)));
 		if (path === `${lib}/albums/${album.id}`) {
 			return json({
 				...album,
@@ -395,9 +445,25 @@ export async function serveLibrary(
 				]
 			});
 		}
-		if (path === `${lib}/tracks`) return json(pageOf(sortedAsAsked(url.searchParams)));
+		if (path === `${lib}/tracks`) {
+			return json(pageOf(tagged(sortedAsAsked(url.searchParams), url.searchParams, (t) => t.tags)));
+		}
+		if (path === `${lib}/tag-types`) {
+			return json([
+				{ key: 'genre', tagCount: 2 },
+				{ key: 'mood', tagCount: 1 }
+			]);
+		}
+		if (path === `${lib}/tags`) {
+			const type = url.searchParams.get('type');
+			const of = TAGS.filter((t) => !type || t.type === type);
+			return json(pageOf(of.toSorted((a, b) => b.trackCount - a.trackCount)));
+		}
+		const tag = TAGS.find((t) => path === `${lib}/tags/${t.id}`);
+		if (tag) return json(tag);
 		if (path === `${lib}/artists`) {
-			return json(pageOf([{ ...artist, image: null, albumCount: 1, trackCount: 3 }]));
+			const all = [{ ...artist, image: null, albumCount: 1, trackCount: 3 }];
+			return json(pageOf(tagged(all, url.searchParams, () => byType(TAGS))));
 		}
 		if (path === `${lib}/artists/${artist.id}`) {
 			return json({
@@ -407,7 +473,7 @@ export async function serveLibrary(
 				trackCount: 3,
 				addedAt: '2026-01-01T00:00:00.000Z',
 				biography: null,
-				tags: {},
+				tags: byType(TAGS),
 				appearanceCount: 0
 			});
 		}
