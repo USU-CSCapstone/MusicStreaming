@@ -6,12 +6,14 @@ saving files into it, calling web services, or hearing what users play and searc
 lyrics, scrobbling, and fixing tags can all be plugins.
 
 This guide gets a plugin built and running, then explains how plugins work, every manifest
-option, and the limits a plugin runs within. Two complete plugins are in this folder to copy
+option, and the limits a plugin runs within. Three complete plugins are in this folder to copy
 from:
 
 - [`lrclib-lyrics`](lrclib-lyrics/) works through the whole library a part at a time, saves
   lyrics files, and retries when its service is down.
 - [`listenbrainz`](listenbrainz/) acts for each user who connects it, with their own token.
+- [`musicbrainz-tagger`](musicbrainz-tagger/) reads and rewrites files, filling in the tags
+  untagged tracks are missing.
 
 > [!NOTE]
 > The plugin contract is at version 0.1 and will change before the first release.
