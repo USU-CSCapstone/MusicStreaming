@@ -49,6 +49,13 @@ a day for network shares (NFS, SMB) where watching doesn't work. A very large li
 may hit the system's limit on watched folders; the log says so, and raising
 `fs.inotify.max_user_watches` on the host fixes it.
 
+**On Windows, new music isn't picked up as it's added.** Docker Desktop shares a folder on a
+Windows drive in a way that doesn't tell Jewelcase when it changes, so music you add appears
+with the next rescan. To see it sooner, an admin can press **Scan now** on the Libraries page.
+The server's log warns about this at startup, as it does for network shares. Docker's advice is
+to keep files that need change notifications in the WSL filesystem instead; see its
+[WSL best practices](https://docs.docker.com/desktop/features/wsl/best-practices/).
+
 ## Configuration
 
 Jewelcase is configured with environment variables. Every one has a working default, and a
