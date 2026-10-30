@@ -9,7 +9,7 @@ use std::sync::Arc;
 use globset::GlobSet;
 use notify::{ErrorKind, RecommendedWatcher, RecursiveMode, Watcher};
 
-use super::{Events, identity, limit};
+use super::{Events, filesystem, identity, limit};
 use crate::confine::without_links;
 use crate::discover::{excluded, excluded_scope, gone};
 use crate::scope::{Depth, Scope};
@@ -24,6 +24,8 @@ pub(in crate::triggers) struct RootWatch {
     pub(super) identity: Option<(u64, u64)>,
     /// Whether the watch covers the whole root, or why it may not.
     pub(super) coverage: notify::Result<()>,
+    /// The type of the root's filesystem, when inotify does not report every change on it.
+    pub(super) unreported: Option<String>,
     /// What the scan leaves out, which is not watched either.
     pub(super) excludes: Arc<GlobSet>,
 }
@@ -39,15 +41,18 @@ impl RootWatch {
         stop: &Stop,
     ) -> RootWatch {
         let identity = identity(root);
+        let unreported = identity.and_then(|(dev, _)| filesystem::unreported(dev));
         let excludes = excludes.clone();
         match watcher(events.clone()) {
             Ok(mut watcher) => {
                 let coverage = watch_folders(&Scope::root(root), &excludes, stop, |folder| {
                     watcher.watch(folder, RecursiveMode::NonRecursive)
                 });
-                RootWatch { watcher: Some(watcher), identity, coverage, excludes }
+                RootWatch { watcher: Some(watcher), identity, coverage, unreported, excludes }
             }
-            Err(error) => RootWatch { watcher: None, identity, coverage: Err(error), excludes },
+            Err(error) => {
+                RootWatch { watcher: None, identity, coverage: Err(error), unreported, excludes }
+            }
         }
     }
 

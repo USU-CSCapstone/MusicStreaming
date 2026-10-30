@@ -97,9 +97,12 @@ fn a_watch_covers_the_whole_root_or_says_why_not() {
     let watch = watched(&root, &events, &stop);
     assert!(watch.coverage.is_ok());
     assert_eq!(watch.identity, identity(&root));
+    // A local folder reports every change, so nothing warns that it may not.
+    assert_eq!(watch.unreported, None);
     let missing = watched(&tmp.path().join("missing"), &events, &stop);
     assert!(matches!(missing.coverage.unwrap_err().kind, ErrorKind::PathNotFound));
     assert_eq!(missing.identity, None);
+    assert_eq!(missing.unreported, None);
 }
 
 /// A root whose directory is replaced is watched afresh and scanned, since what changed while

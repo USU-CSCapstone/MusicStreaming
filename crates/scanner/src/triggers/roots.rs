@@ -2,6 +2,7 @@
 //! directory at its path changes.
 
 mod events;
+mod filesystem;
 mod watch;
 
 use std::fs;
@@ -96,10 +97,21 @@ fn limit(error: &notify::Error) -> bool {
     matches!(error.kind, ErrorKind::MaxFilesWatch)
 }
 
-/// Logs how much of `root` `watch` covers.
+/// Logs how much of `root` `watch` covers, and warns when its filesystem does not report every
+/// change, since then changes wait for the schedule or a restart however much is watched.
 fn report(root: &Path, watch: &RootWatch) {
     let root = root.display();
+    if let Some(filesystem) = &watch.unreported {
+        warn!(
+            %root,
+            %filesystem,
+            "changes on this filesystem are not all reported, so new music may appear only at \
+             the next scheduled scan or when the server restarts"
+        );
+    }
     match &watch.coverage {
+        // Every folder is watched, but changes still go unseen, so the warning above stands alone.
+        Ok(()) if watch.unreported.is_some() => {}
         Ok(()) => info!(%root, "watching every folder"),
         Err(error) if limit(error) => warn!(
             %root,
