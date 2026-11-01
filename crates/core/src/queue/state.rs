@@ -148,6 +148,8 @@ pub enum QueueError {
     UnknownSource,
     /// The track list's length isn't the source's.
     LengthMismatch,
+    /// The anchor names an item that isn't in Up Next, or one the same edit moves.
+    AnchorGone,
 }
 
 impl fmt::Display for QueueError {
@@ -158,6 +160,7 @@ impl fmt::Display for QueueError {
             Self::OutOfRange => "the position is not in the source",
             Self::UnknownSource => "no source has that key",
             Self::LengthMismatch => "the track list's length is not the source's",
+            Self::AnchorGone => "the item to insert before is no longer in Up Next",
         })
     }
 }
@@ -166,8 +169,8 @@ impl std::error::Error for QueueError {}
 
 /// An account's queue: a few spans over views of frozen lists. This is the snapshot's `state`.
 ///
-/// History, shuffle and repeat are declared so the JSON shape is whole; nothing sets them yet,
-/// and reads don't go through a shuffle.
+/// History and shuffle are declared so the JSON shape is whole; nothing sets them yet, and
+/// reads don't go through a shuffle.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueState {
@@ -279,6 +282,7 @@ mod tests {
         assert_eq!(state.sources.len(), 1);
         assert!(state.copies.is_empty() && state.manual.is_empty());
         assert_eq!((state.cursor, state.up_next_len()), (3, 0));
+        crate::queue::tests::assert_invariants(&state);
     }
 
     #[test]
