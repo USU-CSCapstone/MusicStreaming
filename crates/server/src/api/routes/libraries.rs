@@ -15,7 +15,11 @@ pub fn router() -> Router<AppState> {
         .route("/libraries/{library_id}", get(libraries::get))
         .route("/libraries/{library_id}/albums", get(albums::list))
         .route("/libraries/{library_id}/artists", get(artists::list))
-        .route("/libraries/{library_id}/playlists", get(playlists::list))
+        .route("/libraries/{library_id}/playlists", get(playlists::list).post(playlists::create))
+        .route(
+            "/libraries/{library_id}/playlists/{playlist_id}",
+            get(playlists::get).delete(playlists::delete),
+        )
         .route("/libraries/{library_id}/tag-types", get(tags::types))
         .route("/libraries/{library_id}/tags", get(tags::list))
         .route("/libraries/{library_id}/tags/{tag_id}", get(tags::get))

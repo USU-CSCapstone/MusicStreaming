@@ -270,6 +270,44 @@ fn missing_tracks_go_after_the_window_in_each_library() {
     assert_eq!(deleted, [(1, 1), (2, 5)]);
 }
 
+/// A track missing past the window stays for as long as any playlist holds it, whoever's and
+/// however often, and goes once none does; one in no playlist goes with the rest.
+#[test]
+fn a_missing_track_a_playlist_holds_is_kept() {
+    let (_temp, db) = open(|conn| {
+        walked(conn, NOW)?;
+        Album::new(10, 1).insert(conn)?;
+        User::new(2, "user").insert(conn)?;
+        for id in 1..=3 {
+            Track { missing_since: Some(OLD), ..Track::new(id, 1, 10) }.insert(conn)?;
+        }
+        for (playlist, user) in [(1, 1), (2, 2)] {
+            conn.execute(
+                "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, \
+                 created_at, modified_at) VALUES (?1, 1, ?2, 'P', 'p', x'70', 0, 0)",
+                [playlist, user],
+            )?;
+        }
+        for (playlist, key, track) in [(1, 1, 1), (1, 2, 1), (2, 1, 1), (2, 2, 2)] {
+            conn.execute(
+                "INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at) \
+                 VALUES (?1, ?2, 1, ?3, 0)",
+                [playlist, key, track],
+            )?;
+        }
+        Ok(())
+    });
+    let tracks = "SELECT id FROM tracks ORDER BY id";
+    sweep(&db, NOW);
+    assert_eq!(column(&db, tracks), [1, 2], "track 3 is in no playlist");
+    db.write_blocking(|tx| tx.execute("DELETE FROM playlists WHERE id = 2", [])).unwrap();
+    sweep(&db, NOW);
+    assert_eq!(column(&db, tracks), [1], "track 1 is still in the first playlist twice");
+    db.write_blocking(|tx| tx.execute("DELETE FROM playlists WHERE id = 1", [])).unwrap();
+    sweep(&db, NOW);
+    assert!(column(&db, tracks).is_empty(), "nothing holds it now");
+}
+
 /// A track missing past the window stays until a scan of its whole root that started once the
 /// window was up has completed: not while no scan has, nor after one that started a moment
 /// before (`requirements/scanning.md` §8). A track missing for less stays, though a scan's start

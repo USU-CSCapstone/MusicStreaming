@@ -40,6 +40,9 @@ pub(super) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/libraries/2/artists"),
     ("GET", "/libraries/2/artists/20"),
     ("GET", "/libraries/2/playlists"),
+    ("POST", "/libraries/2/playlists"),
+    ("GET", "/libraries/2/playlists/1"),
+    ("DELETE", "/libraries/2/playlists/1"),
     ("GET", "/libraries/2/tracks"),
     ("GET", "/libraries/2/tracks/3"),
     ("GET", "/libraries/2/tracks/3/lyrics"),
@@ -73,7 +76,8 @@ const ADMIN: &str = "Bearer admin-token";
 
 /// [`app_with_tracks_at`] `base`, with user 2 ([`USER`]) granted library 1 only, and admin 3
 /// ([`ADMIN`]). Library 2 also holds artist 20, image 20, and recent search 20, which is user
-/// 2's and just made, as if recorded before their access was taken away.
+/// 2's and just made, as if recorded before their access was taken away, and the owner's
+/// playlist 1.
 async fn server(base: &str) -> (tempfile::TempDir, Router) {
     let (temp, _db, app) = app_with_tracks_at(base).await;
     let conn = conn(&temp);
@@ -85,6 +89,12 @@ async fn server(base: &str) -> (tempfile::TempDir, Router) {
     conn.execute(
         "INSERT INTO recent_searches (id, user_id, library_id, query, folded, searched_at) \
          VALUES (20, 2, 2, 'a', 'a', unixepoch() * 1000)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, created_at, \
+         modified_at) VALUES (1, 2, 1, 'P', 'p', x'70', 0, 0)",
         [],
     )
     .unwrap();

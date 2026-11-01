@@ -23,7 +23,7 @@ use crate::db::Database;
 
 /// A track with no number sorts last on its disc. This matches the indexes' expression
 /// (`0003_catalog.sql`), which keeps NULL out of the keyset.
-const TRACK_NUMBER: &str = "ifnull(t.track_number, 9223372036854775807)";
+pub const TRACK_NUMBER: &str = "ifnull(t.track_number, 9223372036854775807)";
 
 /// Album order within one album: disc, then number. `tracks_by_album_order` holds exactly this
 /// after `album_id`, where the library-wide album order would sort the album on every page.
@@ -153,7 +153,7 @@ pub const TRACKS: Table =
     Table { name: "tracks", alias: "t", select: SELECT, joins: JOINS, count: "track_count" };
 
 /// How tracks are credited to an artist.
-const CREDITS: Credits = Credits {
+pub const CREDITS: Credits = Credits {
     owned: "SELECT tracks.id FROM album_artists \
          JOIN tracks ON tracks.album_id = album_artists.album_id WHERE album_artists.artist_id = ?",
     on_tracks: "SELECT track_id AS id FROM track_artists WHERE artist_id = ?",
