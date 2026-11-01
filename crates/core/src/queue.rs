@@ -5,6 +5,7 @@
 mod cleanup;
 mod edit;
 mod history;
+mod previous;
 mod read;
 mod spans;
 mod state;
