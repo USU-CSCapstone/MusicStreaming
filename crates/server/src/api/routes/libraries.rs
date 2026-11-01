@@ -18,7 +18,7 @@ pub fn router() -> Router<AppState> {
         .route("/libraries/{library_id}/playlists", get(playlists::list).post(playlists::create))
         .route(
             "/libraries/{library_id}/playlists/{playlist_id}",
-            get(playlists::get).delete(playlists::delete),
+            get(playlists::get).patch(playlists::edit).delete(playlists::delete),
         )
         .route("/libraries/{library_id}/playlists/{playlist_id}/items", get(playlists::list_items))
         .route(

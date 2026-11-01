@@ -48,3 +48,17 @@ CREATE TABLE playlist_items (
 ) STRICT, WITHOUT ROWID;
 
 CREATE INDEX playlist_items_by_track ON playlist_items (library_id, track_id);
+
+-- The answer to a create or an edit that came with an `Idempotency-Key`, kept for a day, so a
+-- retry of a request that applied (its answer was lost) gets that answer and not a second
+-- apply. Written in the same transaction as the change.
+CREATE TABLE idempotency_keys (
+    user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    key        TEXT    NOT NULL,
+    status     INTEGER NOT NULL,
+    body       TEXT    NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, key)
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX idempotency_keys_by_age ON idempotency_keys (created_at);
