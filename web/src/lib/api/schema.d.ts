@@ -704,12 +704,12 @@ export interface paths {
          * @description At version 1, optionally with initial items, or by saving a generated mix
          *     (`requirements/playlists.md` §8). A playlist created offline exists only on its device,
          *     which folds any edits into it and creates it here, final contents and all, once online.
-         *     Send an `Idempotency-Key`, so a retry does not create a second playlist.
+         *     Send an `Idempotency-Key`, so a retry does not create a second playlist: a key the
+         *     caller already used for a request that created one returns that `201` and body again.
          *
-         *     Planned: the server does not act on `Idempotency-Key` yet, so a retry creates a second
-         *     playlist, and answers `422` to `fromMix` and to `external` items. Every other item must
-         *     be in this library, or the caller's own playlist in it, or the answer is `422` and
-         *     nothing is created.
+         *     Planned: `fromMix` and `external` items answer `422`. Every other item must be in this
+         *     library, or the caller's own playlist in it, or the answer is `422` and nothing is
+         *     created.
          */
         post: operations["createPlaylist"];
         delete?: never;
@@ -744,13 +744,21 @@ export interface paths {
         head?: never;
         /**
          * Edit a playlist
-         * @description **Planned:** the server does not serve this yet; the web client's mock does.
+         * @description Changes details and contents — adds, removes, and moves, including non-contiguous
+         *     selections — as one atomic edit against `baseVersion`: every part applies, or none does
+         *     (`requirements/playlists.md` §4–§5). Each applied edit adds 1 to `version` and sets
+         *     `modifiedAt`, even if what it names is already so. `trackCount` and `durationUs` are
+         *     recounted from the tracks' durations as they are at the edit; a rescan alone does not
+         *     update them.
          *
-         *     Changes details and contents — adds, removes, and moves, including non-contiguous
-         *     selections — as one atomic edit against `baseVersion`; otherwise `409 version_conflict`
-         *     (`requirements/playlists.md` §4–§5). A device chains its queued edits, each against the
-         *     version the previous one produced. Undo is a further edit that reverses the last. Send
-         *     an `Idempotency-Key`, so a retried edit is not refused because its first attempt applied.
+         *     An edit made on another version is `409 version_conflict`, whose `currentVersion` is the
+         *     version the playlist is at. A position out of range, an add of something not the
+         *     caller's to add (as for `createPlaylist`), or an edit that names nothing to change (only
+         *     `baseVersion`, or an empty `ops` or op list) is `422`. A
+         *     device chains its queued edits, each against the version the previous one produced. Undo
+         *     is a further edit that reverses the last. Send an `Idempotency-Key`, so a retried edit is
+         *     not refused because its first attempt applied: a key the caller already used for an edit
+         *     that applied returns that `200` and body again, whatever `baseVersion` the retry names.
          */
         patch: operations["editPlaylist"];
         trace?: never;
@@ -1129,7 +1137,7 @@ export interface components {
             /** @description Human-readable, safe to show. Never contains credentials or plugin internals. */
             detail?: string;
             /**
-             * @description `version_conflict` and `unsupported_media` come only from planned operations.
+             * @description `unsupported_media` comes only from planned operations.
              * @enum {string}
              */
             code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "version_conflict" | "cursor_expired" | "setup_required" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
@@ -2240,7 +2248,7 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description `version_conflict` — changed elsewhere since `baseVersion`. Nothing was applied. */
+        /** @description `version_conflict` — changed elsewhere since `baseVersion`; `currentVersion` says to what. Nothing was applied. */
         VersionConflict: {
             headers: {
                 [name: string]: unknown;
@@ -2356,7 +2364,13 @@ export interface components {
          *     others. Omitted, the client can play anything.
          */
         Codecs: string[];
-        /** @description Client-generated. A repeated key returns the original result without applying twice. */
+        /**
+         * @description Client-generated, at most 128 characters; longer, empty or not plain text is `422`. A
+         *     repeated key returns the original result without applying twice: the same status and
+         *     body, whatever else the request says. Keys are the caller's own, so another user's
+         *     identical key is another key. Only a request that applied is remembered, so one that was
+         *     refused (`409`, `422`) can be sent again with the same key. Kept for 24 hours.
+         */
         IdempotencyKey: string;
     };
     requestBodies: never;
@@ -3460,7 +3474,13 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Client-generated. A repeated key returns the original result without applying twice. */
+                /**
+                 * @description Client-generated, at most 128 characters; longer, empty or not plain text is `422`. A
+                 *     repeated key returns the original result without applying twice: the same status and
+                 *     body, whatever else the request says. Keys are the caller's own, so another user's
+                 *     identical key is another key. Only a request that applied is remembered, so one that was
+                 *     refused (`409`, `422`) can be sent again with the same key. Kept for 24 hours.
+                 */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {
@@ -3536,7 +3556,13 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description Client-generated. A repeated key returns the original result without applying twice. */
+                /**
+                 * @description Client-generated, at most 128 characters; longer, empty or not plain text is `422`. A
+                 *     repeated key returns the original result without applying twice: the same status and
+                 *     body, whatever else the request says. Keys are the caller's own, so another user's
+                 *     identical key is another key. Only a request that applied is remembered, so one that was
+                 *     refused (`409`, `422`) can be sent again with the same key. Kept for 24 hours.
+                 */
                 "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
             };
             path: {

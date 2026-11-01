@@ -7,7 +7,7 @@ use std::time::Duration;
 use rusqlite::{Connection, Result, params};
 
 use super::catalog::{self, MISSING, TRACK_CHUNK};
-use super::{CHUNK, WINDOW_MS, scans, start};
+use super::{CHUNK, IDEMPOTENCY_MS, WINDOW_MS, idempotency_keys, scans, start};
 use crate::db::Database;
 use crate::db::testing::{self, Album, Artist, Image, Track, User, library, sweep};
 
@@ -139,6 +139,33 @@ fn delivered(conn: &Connection, library: i64, hook: &str, position: i64) -> Resu
         params![library, hook, position],
     )
     .map(drop)
+}
+
+/// Idempotency keys go after a day, not the window, whoever's they are; a younger one stays, and
+/// a sweep with more than a chunk of them deletes a chunk at a time.
+#[test]
+fn idempotency_keys_age_out_after_a_day() {
+    let n = i64::try_from(CHUNK).unwrap() + 20;
+    let (_temp, db) = open(move |conn| {
+        User { role: "user", ..User::new(2, "other") }.insert(conn)?;
+        let mut insert = conn.prepare(
+            "INSERT INTO idempotency_keys (user_id, key, status, body, created_at) \
+             VALUES (?1, ?2, 200, '{}', ?3)",
+        )?;
+        insert.execute(params![1, "fresh", NOW - IDEMPOTENCY_MS + 1])?;
+        insert.execute(params![2, "fresh", NOW - 1000])?;
+        insert.execute(params![2, "stale", NOW - IDEMPOTENCY_MS - 1])?;
+        for k in 0..n {
+            insert.execute(params![1, format!("old{k}"), NOW - IDEMPOTENCY_MS - 1 - k])?;
+        }
+        Ok(())
+    });
+    let count = "SELECT count(*) FROM idempotency_keys";
+    let done = db.write_blocking(|tx| idempotency_keys(tx, NOW, &mut 0)).unwrap();
+    assert!(!done);
+    assert_eq!(column(&db, count)[0], n + 3 - i64::try_from(CHUNK).unwrap());
+    sweep(&db, NOW);
+    assert_eq!(column(&db, "SELECT user_id FROM idempotency_keys ORDER BY user_id"), [1, 2]);
 }
 
 /// Recent searches and what the `searched` hook noted of them age out together. A request to

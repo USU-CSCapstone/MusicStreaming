@@ -1,13 +1,17 @@
 //! Playlists: `listPlaylists`, `createPlaylist`, `getPlaylist`, and `deletePlaylist`
-//! (`api/openapi.yaml`); the items and duplicates endpoints are in `items`.
+//! (`api/openapi.yaml`); the items and duplicates endpoints are in `items`, `editPlaylist` in
+//! `edit`.
 //!
 //! A playlist is its user's own, in one library (`design/database.md` §6). Everything here is
 //! scoped to the caller's account as well as the library, so another account, an admin
 //! included, finds a playlist as absent as one that never was (`requirements/users.md` §10).
-//! A playlist's items are kept in order under sparse keys [`KEY_GAP`] apart. Editing them and
-//! serving artwork are not done here: `image` is always `null`.
+//! A playlist's items are kept in order under sparse keys [`KEY_GAP`] apart. Serving artwork is
+//! not done here: `image` is always `null`.
 
+mod edit;
+mod idempotency;
 mod items;
+mod keys;
 mod representation;
 
 use std::sync::Arc;
@@ -15,11 +19,14 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::Response;
 use jewelcase_core::{sort_key, words};
 use rusqlite::params;
 use rusqlite::types::Value;
 use serde::Deserialize;
 
+pub use edit::edit;
+use idempotency::{Answer, Key};
 pub use items::{duplicates, list_items};
 use representation::{Playlist, SELECT, playlist};
 
@@ -131,12 +138,14 @@ pub struct Create {
 
 /// Creates a playlist for the caller in `library` at version 1, holding the tracks `items`
 /// expand to in order, and returns it as `201`. A blank title, an item that is not the caller's
-/// to add, and `fromMix` are `422`.
+/// to add, and `fromMix` are `422`. With an `Idempotency-Key` the caller already used for a
+/// request that applied, returns that answer and creates nothing.
 pub async fn create(
     State(db): State<Arc<Database>>,
     Scope { user, library }: Scope,
+    Key(key): Key,
     extract::Json(body): extract::Json<Create>,
-) -> Result<(StatusCode, Json<Playlist>), Problem> {
+) -> Result<Response, Problem> {
     let title = body.title.trim().to_owned();
     if title.is_empty() {
         return Err(Problem::invalid("title must have something in it."));
@@ -146,11 +155,25 @@ pub async fn create(
     }
     let items = body.items.unwrap_or_default();
     // The expansion is the slow part, so it is read before the writer is taken. A track purged
-    // between the two is left out by the insert.
-    let tracks = db.try_read(move |conn| playables::expand(conn, user, library, &items)).await?;
+    // between the two is left out by the insert. A retry that was answered before is found here,
+    // and again in the write, where a concurrent first attempt would be.
+    let asked = key.clone();
+    let tracks = db
+        .try_read(move |conn| match Answer::find(conn, user, asked.as_deref())? {
+            Some(answer) => Ok::<_, Problem>(Err(answer)),
+            None => Ok(Ok(playables::expand(conn, user, library, &items)?)),
+        })
+        .await?;
+    let tracks = match tracks {
+        Ok(tracks) => tracks,
+        Err(answer) => return Ok(answer.into_response()),
+    };
     let description = body.description;
-    let created = db
-        .write(move |tx| {
+    let answer = db
+        .try_write(move |tx| {
+            if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
+                return Ok::<_, Problem>(answer);
+            }
             let (id, now) = (new_id()?, now_ms());
             tx.execute(
                 "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, \
@@ -183,12 +206,17 @@ pub async fn create(
                  WHERE playlists.id = ?1",
                 [id],
             )?;
-            representation::get(tx, user, library, id)
+            // The row was just inserted in this transaction.
+            let created =
+                representation::get(tx, user, library, id)?.ok_or_else(Problem::not_found)?;
+            let answer = Answer::new(StatusCode::CREATED, &created)?;
+            if let Some(key) = &key {
+                answer.store(tx, user, key, now)?;
+            }
+            Ok(answer)
         })
         .await?;
-    // The row was just inserted in this transaction.
-    let created = created.ok_or_else(Problem::not_found)?;
-    Ok((StatusCode::CREATED, Json(created)))
+    Ok(answer.into_response())
 }
 
 /// `getPlaylist`: the caller's playlist, or not found when it is not theirs in this library.

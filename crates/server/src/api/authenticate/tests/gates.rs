@@ -42,6 +42,7 @@ pub(super) const ROUTES: &[(&str, &str)] = &[
     ("GET", "/libraries/2/playlists"),
     ("POST", "/libraries/2/playlists"),
     ("GET", "/libraries/2/playlists/1"),
+    ("PATCH", "/libraries/2/playlists/1"),
     ("DELETE", "/libraries/2/playlists/1"),
     ("GET", "/libraries/2/playlists/1/items"),
     ("POST", "/libraries/2/playlists/1/duplicates"),

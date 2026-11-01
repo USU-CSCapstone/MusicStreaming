@@ -29,6 +29,7 @@ pub enum Code {
     PluginSettingsInvalid,
     PluginExists,
     PermissionsRequired,
+    VersionConflict,
     CursorExpired,
     DeviceUnavailable,
     SetupRequired,
@@ -50,9 +51,10 @@ impl Code {
             | Self::WeakPassword
             | Self::PluginInvalid
             | Self::PluginSettingsInvalid => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::PluginExists | Self::PermissionsRequired | Self::DeviceUnavailable => {
-                StatusCode::CONFLICT
-            }
+            Self::PluginExists
+            | Self::PermissionsRequired
+            | Self::VersionConflict
+            | Self::DeviceUnavailable => StatusCode::CONFLICT,
             Self::SetupRequired => StatusCode::SERVICE_UNAVAILABLE,
             Self::CursorExpired => StatusCode::GONE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
@@ -73,6 +75,9 @@ pub struct Problem {
     /// Why the device was signed out, with `session_revoked`.
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<Revoked>,
+    /// The version the resource is at now, with `version_conflict`.
+    #[serde(rename = "currentVersion", skip_serializing_if = "Option::is_none")]
+    current_version: Option<i64>,
     /// When to try again, in whole seconds, with `rate_limited`: sent as `Retry-After`.
     #[serde(skip)]
     retry_after: Option<i64>,
@@ -91,6 +96,7 @@ impl Problem {
             code,
             detail: None,
             reason: None,
+            current_version: None,
             retry_after: None,
         }
     }
@@ -114,6 +120,13 @@ impl Problem {
     /// A `401 session_revoked`: the device was signed out, for `reason`.
     pub fn revoked(reason: Revoked) -> Problem {
         Problem { reason: Some(reason), ..Problem::new(Code::SessionRevoked) }
+    }
+
+    /// A `409 version_conflict`: the edit was made on a version, and the resource is at
+    /// `current` now.
+    pub fn version_conflict(current: i64) -> Problem {
+        Problem { current_version: Some(current), ..Problem::new(Code::VersionConflict) }
+            .detail("The playlist changed since this edit was made; nothing was applied.")
     }
 
     /// A `429 rate_limited` that says, in whole seconds rounded up, when to try again.

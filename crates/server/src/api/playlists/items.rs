@@ -63,7 +63,7 @@ pub struct ItemPage {
 }
 
 /// The version and item count of `user`'s playlist `id` in `library`, if it is theirs.
-fn header(
+pub(super) fn header(
     conn: &Connection,
     user: i64,
     library: i64,

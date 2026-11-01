@@ -6,7 +6,7 @@
 //! recent searches and what the `searched` hook noted of them; and tracks missing that long,
 //! with whatever of the catalog goes with them. A request to forget searches (`stopped`) is
 //! kept until it is delivered instead, however old it is. Art and biographies that nothing
-//! points at go whatever their age.
+//! points at go whatever their age, and idempotency keys go after a day, not the window.
 //!
 //! The sweep is one write per chunk of rows ([`sweep`]), so a write queued behind it waits for
 //! one chunk, never the whole sweep. A kind of row that fails is passed over until the next
@@ -37,6 +37,9 @@ pub const FIRST_SWEEP: Duration = Duration::from_secs(300);
 /// How often the sweep runs.
 const EVERY: Duration = Duration::from_secs(3600);
 
+/// How long an idempotency key is kept: a day.
+const IDEMPOTENCY_MS: i64 = 24 * 60 * 60 * 1000;
+
 /// The most rows one statement of the sweep deletes or looks at, so a write stays short.
 /// Tracks go in smaller chunks ([`catalog::tracks`]).
 const CHUNK: usize = 100;
@@ -47,13 +50,14 @@ type Stage = fn(&Transaction<'_>, i64, &mut i64) -> Result<bool>;
 
 /// Every kind of row, in order: missing tracks before the art and biographies they leave
 /// unreferenced.
-const STAGES: [Stage; 9] = [
+const STAGES: [Stage; 10] = [
     scans,
     login_attempts,
     play_ends,
     recent_searches,
     searches_noted,
     forgets_delivered,
+    idempotency_keys,
     catalog::tracks,
     catalog::images,
     catalog::biographies,
@@ -183,5 +187,16 @@ fn forgets_delivered(tx: &Transaction<'_>, _: i64, _: &mut i64) -> Result<bool> 
          LIMIT ?2)",
         )?
         .execute(params![Text(Permission::Searched), CHUNK])?;
+    Ok(deleted < CHUNK)
+}
+
+/// Idempotency keys older than a day, whatever the window, through `idempotency_keys_by_age`.
+fn idempotency_keys(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
+    let deleted = tx
+        .prepare_cached(
+            "DELETE FROM idempotency_keys WHERE (user_id, key) IN \
+             (SELECT user_id, key FROM idempotency_keys WHERE created_at < ?1 LIMIT ?2)",
+        )?
+        .execute(params![now - IDEMPOTENCY_MS, CHUNK])?;
     Ok(deleted < CHUNK)
 }
