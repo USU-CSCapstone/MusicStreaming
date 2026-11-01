@@ -62,6 +62,15 @@ impl Config {
         command
     }
 
+    /// The command that composes the four images at `paths`, or the pictures attached to audio
+    /// files, into a 2×2 grid of `tile`-pixel squares, each cropped to fill its square, and
+    /// writes it to standard output as JPEG. Interactive, like [`Config::resize_command`].
+    pub fn mosaic_command(&self, paths: &[PathBuf], tile: u32) -> Command {
+        let mut command = image::mosaic_command(self, paths, tile);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        command
+    }
+
     // `transcode` is the playback design's to specify; it is interactive too, so it will build a
     // command here. Deliberately absent until that design exists.
 }

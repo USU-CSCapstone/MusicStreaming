@@ -19,6 +19,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Deserializer};
 
 use super::KEY_GAP;
+use super::artwork;
 use super::idempotency::{Answer, Key};
 use super::keys::assign;
 use super::representation::{self, header};
@@ -142,6 +143,10 @@ pub async fn edit(
                     return Ok(None);
                 }
                 write(tx, user, library, id, base, &plan)?;
+                // An edit of details alone leaves the items, and so the artwork.
+                if plan.totals.is_some() {
+                    artwork::refresh(tx, id)?;
+                }
                 let (count, duration) = plan.totals.unzip();
                 let new_title = title.as_deref();
                 tx.prepare_cached(

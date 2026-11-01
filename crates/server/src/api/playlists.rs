@@ -5,9 +5,10 @@
 //! A playlist is its user's own, in one library (`design/database.md` §6). Everything here is
 //! scoped to the caller's account as well as the library, so another account, an admin
 //! included, finds a playlist as absent as one that never was (`requirements/users.md` §10).
-//! A playlist's items are kept in order under sparse keys [`KEY_GAP`] apart. Serving artwork is
-//! not done here: `image` is always `null`.
+//! A playlist's items are kept in order under sparse keys [`KEY_GAP`] apart. Its artwork is
+//! an ID kept on the row (`artwork`) and served by `getImage`.
 
+mod artwork;
 mod edit;
 mod idempotency;
 mod items;
@@ -200,6 +201,7 @@ pub async fn create(
                 "UPDATE playlists SET track_count = ?2, duration_us = ?3 WHERE id = ?1",
                 params![id, count, duration],
             )?;
+            artwork::refresh(tx, id)?;
             // The row was just inserted in this transaction.
             let created =
                 representation::get(tx, user, library, id)?.ok_or_else(Problem::not_found)?;

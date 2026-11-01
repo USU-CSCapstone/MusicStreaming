@@ -1,7 +1,7 @@
 //! Decoding an image scaled to fit a size: to a few pixels for placeholders, or to JPEG for the
 //! server's artwork.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
@@ -38,6 +38,30 @@ pub(crate) fn command(config: &Config, path: &Path, max_side: u32, codec: [&str;
         .args(input(path))
         .args(["-map", "0:v:0", "-frames:v", "1", "-vf", &scale, "-f", "image2pipe"])
         .args(codec)
+        .arg("pipe:1")
+        .stdin(Stdio::null());
+    command
+}
+
+/// The command that composes the four images at `paths` into a 2×2 grid of `tile`-pixel squares,
+/// each scaled to cover its square and cropped, encoded as JPEG. Like [`command`], it reads no
+/// input and its output is for the caller to pipe.
+pub(crate) fn mosaic_command(config: &Config, paths: &[PathBuf], tile: u32) -> Command {
+    let fill =
+        format!("scale={tile}:{tile}:force_original_aspect_ratio=increase,crop={tile}:{tile}");
+    let mut graph = String::new();
+    for index in 0..paths.len() {
+        graph += &format!("[{index}:v:0]{fill}[c{index}];");
+    }
+    graph += "[c0][c1][c2][c3]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0";
+    let mut command = Command::new(&config.ffmpeg);
+    command.args(["-nostdin", "-hide_banner", "-v", "error"]);
+    for path in paths {
+        command.args(input(path));
+    }
+    command
+        .args(["-filter_complex", &graph, "-frames:v", "1", "-f", "image2pipe"])
+        .args(JPEG)
         .arg("pipe:1")
         .stdin(Stdio::null());
     command
