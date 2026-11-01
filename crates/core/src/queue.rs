@@ -5,6 +5,7 @@
 mod cleanup;
 mod edit;
 mod history;
+mod permutation;
 mod previous;
 mod read;
 mod rewind;
