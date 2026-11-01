@@ -7,6 +7,7 @@
 mod fold;
 mod format;
 mod lock;
+pub mod playlist;
 mod search;
 mod sort;
 mod waveform;
