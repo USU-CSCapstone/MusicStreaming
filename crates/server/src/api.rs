@@ -19,6 +19,7 @@ mod me;
 mod origin;
 mod page;
 mod password;
+mod playables;
 mod player;
 mod playlists;
 mod plays;

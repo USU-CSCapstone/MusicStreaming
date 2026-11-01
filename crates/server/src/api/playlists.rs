@@ -1,16 +1,38 @@
-//! Playlists: `listPlaylists` (`api/openapi.yaml`).
+//! Playlists: `listPlaylists`, `createPlaylist`, `getPlaylist`, and `deletePlaylist`
+//! (`api/openapi.yaml`).
 //!
-//! Playlists are not stored, so every library lists none. No other playlist operation is routed,
-//! so any playlist's ID answers `404` like an unknown path.
+//! A playlist is its user's own, in one library (`design/database.md` §6). Everything here is
+//! scoped to the caller's account as well as the library, so another account, an admin
+//! included, finds a playlist as absent as one that never was (`requirements/users.md` §10).
+//! A playlist's items are kept in order under sparse keys [`KEY_GAP`] apart. Editing them and
+//! serving artwork are not done here: `image` is always `null`.
+
+mod representation;
+
+use std::sync::Arc;
 
 use axum::Json;
+use axum::extract::State;
+use axum::http::StatusCode;
+use jewelcase_core::{sort_key, words};
+use rusqlite::params;
+use rusqlite::types::Value;
 use serde::Deserialize;
 
-use super::Problem;
-use super::extract::Query;
-use super::page::{self, Order, Page};
+use representation::{Playlist, SELECT, playlist};
 
-/// The spec's `sort` values for `listPlaylists`.
+use super::extract::{self, Path, Query};
+use super::page::{Order, Page, Request, Sort, Source, Total, Unknown};
+use super::playables::{self, Playable};
+use super::scope::Scope;
+use super::{Id, Problem};
+use crate::db::{Database, new_id, now_ms};
+
+/// How far apart the keys of a playlist's items start, so an item put between two takes the
+/// midpoint, 20 times over, before the playlist is renumbered.
+pub const KEY_GAP: i64 = 1 << 20;
+
+/// The `sort` values `listPlaylists` supports.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum PlaylistSort {
@@ -18,14 +40,38 @@ enum PlaylistSort {
     Created,
     #[default]
     Modified,
-    PlayCount,
+    // The spec's `playCount` needs listening data, which is not kept per playlist yet, so it
+    // answers `422`.
 }
 
-/// The spec's parameters, checked like every other list's so a client's mistakes show even
-/// while there is nothing to list.
+impl PlaylistSort {
+    /// The keyset this sort pages by. A pinned playlist's `pin_rank` is 1 and the rest's NULL,
+    /// the unknown part of the list, so the pinned come first in either order. Each sort's
+    /// columns are one of `playlists`' indexes after `user_id` and `library_id`.
+    fn sort(self) -> &'static Sort {
+        match self {
+            PlaylistSort::Name => &Sort {
+                label: "playlists.name",
+                columns: &["p.pin_rank", "p.sort_key", "p.id"],
+                unknown: Unknown::Null,
+            },
+            PlaylistSort::Created => &Sort {
+                label: "playlists.created",
+                columns: &["p.pin_rank", "p.created_at", "p.id"],
+                unknown: Unknown::Null,
+            },
+            PlaylistSort::Modified => &Sort {
+                label: "playlists.modified",
+                columns: &["p.pin_rank", "p.modified_at", "p.id"],
+                unknown: Unknown::Null,
+            },
+        }
+    }
+}
+
+/// The parameters `listPlaylists` supports. Any other answers `422` rather than being ignored.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-#[expect(dead_code, reason = "with no playlists, the order and filter apply to nothing")]
 pub struct ListQuery {
     #[serde(default)]
     sort: PlaylistSort,
@@ -36,52 +82,145 @@ pub struct ListQuery {
     limit: Option<u32>,
 }
 
-/// An empty page, in any library the caller reaches: `authenticate` answers `404` for any
-/// other. Its items have no type yet, so `()` stands in for one.
-pub async fn list(Query(query): Query<ListQuery>) -> Result<Json<Page<()>>, Problem> {
-    page::limit(query.limit)?;
-    // An empty list gives out no cursors, so no cursor is one of ours.
-    if query.cursor.is_some() {
-        return Err(Problem::invalid("cursor is not valid"));
+/// The playlists `user` has in `library`, those whose title holds all of `q`'s words, in order
+/// if `q` has any.
+fn source(user: i64, library: i64, q: Option<&str>) -> Source {
+    let mut filter = "p.user_id = ? AND p.library_id = ?".to_owned();
+    let mut params = vec![Value::from(user), Value::from(library)];
+    let folded = words(q.unwrap_or("")).join(" ");
+    if !folded.is_empty() {
+        filter += " AND instr(p.folded, ?) > 0";
+        params.push(Value::from(folded));
     }
-    Ok(Json(Page { items: Vec::new(), next_cursor: None, total: 0 }))
+    // Counted for every page: a user has hundreds of playlists at most, all in one index range.
+    Source {
+        select: SELECT,
+        from: "playlists p".to_owned(),
+        joins: "",
+        filter,
+        params,
+        total: Total::Counted,
+    }
+}
+
+/// The caller's playlists in `library`, pinned first, a page at a time.
+pub async fn list(
+    State(db): State<Arc<Database>>,
+    Scope { user, library }: Scope,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Page<Playlist>>, Problem> {
+    let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
+    let q = query.q;
+    let page = db
+        .read(move |conn| request.read(conn, &source(user, library, q.as_deref()), playlist))
+        .await?;
+    Ok(Json(page))
+}
+
+/// The spec's `PlaylistCreate`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Create {
+    title: String,
+    description: Option<String>,
+    items: Option<Vec<Playable>>,
+    from_mix: Option<String>,
+}
+
+/// Creates a playlist for the caller in `library` at version 1, holding the tracks `items`
+/// expand to in order, and returns it as `201`. A blank title, an item that is not the caller's
+/// to add, and `fromMix` are `422`.
+pub async fn create(
+    State(db): State<Arc<Database>>,
+    Scope { user, library }: Scope,
+    extract::Json(body): extract::Json<Create>,
+) -> Result<(StatusCode, Json<Playlist>), Problem> {
+    let title = body.title.trim().to_owned();
+    if title.is_empty() {
+        return Err(Problem::invalid("title must have something in it."));
+    }
+    if body.from_mix.is_some() {
+        return Err(Problem::invalid("Saving a mix as a playlist is not supported yet."));
+    }
+    let items = body.items.unwrap_or_default();
+    // The expansion is the slow part, so it is read before the writer is taken. A track purged
+    // between the two is left out by the insert.
+    let tracks = db.try_read(move |conn| playables::expand(conn, user, library, &items)).await?;
+    let description = body.description;
+    let created = db
+        .write(move |tx| {
+            let (id, now) = (new_id()?, now_ms());
+            tx.execute(
+                "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, \
+                 description, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                params![
+                    id,
+                    library,
+                    user,
+                    title,
+                    words(&title).join(" "),
+                    sort_key(&title, None).as_bytes(),
+                    description,
+                    now
+                ],
+            )?;
+            // A track no longer in the library inserts nothing.
+            let mut insert = tx.prepare_cached(
+                "INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at) \
+                 SELECT ?1, ?2, library_id, id, ?5 FROM tracks WHERE id = ?4 AND library_id = ?3",
+            )?;
+            for (index, track) in (1..).zip(&tracks) {
+                insert.execute(params![id, index * KEY_GAP, library, track, now])?;
+            }
+            tx.execute(
+                "UPDATE playlists SET track_count = c.items, duration_us = c.duration \
+                 FROM (SELECT count(*) AS items, ifnull(sum(t.duration_us), 0) AS duration \
+                       FROM playlist_items i JOIN tracks t \
+                         ON t.library_id = i.library_id AND t.id = i.track_id \
+                       WHERE i.playlist_id = ?1) c \
+                 WHERE playlists.id = ?1",
+                [id],
+            )?;
+            representation::get(tx, user, library, id)
+        })
+        .await?;
+    // The row was just inserted in this transaction.
+    let created = created.ok_or_else(Problem::not_found)?;
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+/// `getPlaylist`: the caller's playlist, or not found when it is not theirs in this library.
+pub async fn get(
+    State(db): State<Arc<Database>>,
+    Scope { user, library }: Scope,
+    Path((_, Id(id))): Path<(Id, Id)>,
+) -> Result<Json<Playlist>, Problem> {
+    db.read(move |conn| representation::get(conn, user, library, id))
+        .await?
+        .map(Json)
+        .ok_or_else(Problem::not_found)
+}
+
+/// `deletePlaylist`: deletes the caller's playlist and its items, or not found when it is not
+/// theirs in this library.
+pub async fn delete(
+    State(db): State<Arc<Database>>,
+    Scope { user, library }: Scope,
+    Path((_, Id(id))): Path<(Id, Id)>,
+) -> Result<StatusCode, Problem> {
+    let deleted = db
+        .write(move |tx| {
+            tx.execute(
+                "DELETE FROM playlists WHERE id = ?1 AND user_id = ?2 AND library_id = ?3",
+                params![id, user, library],
+            )
+        })
+        .await?;
+    if deleted == 0 {
+        return Err(Problem::not_found());
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
-mod tests {
-    use axum::http::StatusCode;
-    use serde_json::{Value, json};
-
-    use super::super::testing::{app_with_tracks, send};
-
-    #[tokio::test]
-    async fn every_library_has_none() {
-        let (_temp, _db, app) = app_with_tracks().await;
-        for uri in [
-            "/api/v1/libraries/1/playlists",
-            "/api/v1/libraries/2/playlists?sort=name&order=desc&q=road&limit=10",
-        ] {
-            let (status, _, body) = send(app.clone(), "GET", uri).await;
-            assert_eq!(status, StatusCode::OK, "{uri}");
-            let body: Value = serde_json::from_slice(&body).unwrap();
-            assert_eq!(body, json!({ "items": [], "nextCursor": null, "total": 0 }), "{uri}");
-        }
-    }
-
-    #[tokio::test]
-    async fn problems() {
-        let (_temp, _db, app) = app_with_tracks().await;
-        for (uri, status) in [
-            ("/api/v1/libraries/9/playlists", StatusCode::NOT_FOUND),
-            ("/api/v1/libraries/1/playlists/1", StatusCode::NOT_FOUND),
-            ("/api/v1/libraries/1/playlists?cursor=00", StatusCode::UNPROCESSABLE_ENTITY),
-            ("/api/v1/libraries/1/playlists?sort=size", StatusCode::UNPROCESSABLE_ENTITY),
-            ("/api/v1/libraries/1/playlists?limit=0", StatusCode::UNPROCESSABLE_ENTITY),
-            ("/api/v1/libraries/1/playlists?pinned=true", StatusCode::UNPROCESSABLE_ENTITY),
-        ] {
-            let (actual, content_type, _) = send(app.clone(), "GET", uri).await;
-            assert_eq!(actual, status, "{uri}");
-            assert_eq!(content_type.as_deref(), Some("application/problem+json"), "{uri}");
-        }
-    }
-}
+mod tests;

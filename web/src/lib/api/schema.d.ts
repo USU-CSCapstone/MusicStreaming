@@ -695,18 +695,21 @@ export interface paths {
         };
         /**
          * List the caller's playlists
-         * @description Pinned playlists first (`requirements/playlists.md` §7).
+         * @description Pinned playlists first, in either `order` (`requirements/playlists.md` §7).
          */
         get: operations["listPlaylists"];
         put?: never;
         /**
          * Create a playlist
-         * @description **Planned:** the server does not serve this yet; the web client's mock does.
-         *
-         *     At version 1, optionally with initial items, or by saving a generated mix
+         * @description At version 1, optionally with initial items, or by saving a generated mix
          *     (`requirements/playlists.md` §8). A playlist created offline exists only on its device,
          *     which folds any edits into it and creates it here, final contents and all, once online.
          *     Send an `Idempotency-Key`, so a retry does not create a second playlist.
+         *
+         *     Planned: the server does not act on `Idempotency-Key` yet, so a retry creates a second
+         *     playlist, and answers `422` to `fromMix` and to `external` items. Every other item must
+         *     be in this library, or the caller's own playlist in it, or the answer is `422` and
+         *     nothing is created.
          */
         post: operations["createPlaylist"];
         delete?: never;
@@ -727,14 +730,14 @@ export interface paths {
         };
         /**
          * Get a playlist
-         * @description **Planned:** the server does not serve this yet; the web client's mock does.
+         * @description The caller's own playlist. Anyone else's, an admin's included, is `404`.
          */
         get: operations["getPlaylist"];
         put?: never;
         post?: never;
         /**
          * Delete a playlist
-         * @description **Planned:** the server does not serve this yet; the web client's mock does.
+         * @description Deletes the playlist and its items, never the tracks. Anyone else's is `404`.
          */
         delete: operations["deletePlaylist"];
         options?: never;
@@ -1622,7 +1625,7 @@ export interface components {
             id: components["schemas"]["Id"];
             title: string;
             description: string | null;
-            /** @description For the user's own playlist, custom or a mosaic of the tracks inside; `null` when empty. */
+            /** @description For the user's own playlist, custom or a mosaic of the tracks inside; `null` when empty. Both are planned, so it is `null` for now. */
             image: components["schemas"]["ImageRef"] | null;
         };
         Playlist: components["schemas"]["PlaylistBase"] & {
@@ -1665,7 +1668,7 @@ export interface components {
             description?: string;
             /** @description Albums, artists, and playlists expand to their tracks in order. */
             items?: components["schemas"]["Playable"][];
-            /** @description Save a generated mix as it is now (`requirements/playlists.md` §8). `title` defaults sensibly. */
+            /** @description Save a generated mix as it is now (`requirements/playlists.md` §8). `title` defaults sensibly. Planned. */
             fromMix?: string;
         };
         /**
@@ -3423,9 +3426,10 @@ export interface operations {
     listPlaylists: {
         parameters: {
             query?: {
+                /** @description `playCount` is planned. */
                 sort?: "name" | "created" | "modified" | "playCount";
                 order?: components["parameters"]["Order"];
-                /** @description Filter by name. */
+                /** @description Keeps the playlists whose name contains this text, as a substring in order, ignoring case and accents. Text with no letters or digits keeps all. */
                 q?: string;
                 cursor?: components["parameters"]["Cursor"];
                 limit?: components["parameters"]["Limit"];

@@ -1,0 +1,492 @@
+use axum::Router;
+use axum::http::StatusCode;
+use serde_json::{Value, json};
+
+use super::super::page;
+use super::super::testing::{TOKEN, add_device, add_user, app, app_with_tracks, call, conn};
+use super::*;
+use crate::db::testing::{
+    Artist, Track, access, album_artist, library, scattered_key, track_artist,
+};
+
+const URI: &str = "/api/v1/libraries/1/playlists";
+const LIBRARY_2: &str = "/api/v1/libraries/2/playlists";
+
+/// Library 1 with tracks 1 and 2 on album 101, and album 102 holding tracks 13 (disc 1 number
+/// 1), 12 (1, 2), 14 (disc 1, no number) and 11 (disc 2, 1), listed in that album order. Artist
+/// 31 is album artist of 102 and features on track 2; artist 41 and library 2's artist 32 are
+/// in no playlist. Library 2 holds track 3 on album 201.
+async fn catalog() -> (tempfile::TempDir, Arc<Database>, Router) {
+    let (temp, db, app) = app_with_tracks().await;
+    db.write(|tx| {
+        crate::db::testing::Album::new(102, 1).insert(tx)?;
+        for (id, disc, number) in
+            [(11, 2, Some(1)), (12, 1, Some(2)), (13, 1, Some(1)), (14, 1, None)]
+        {
+            Track { disc_number: disc, track_number: number, ..Track::new(id, 1, 102) }
+                .insert(tx)?;
+        }
+        Artist::new(31, 1, "Thirty One").insert(tx)?;
+        Artist::new(32, 2, "Other").insert(tx)?;
+        album_artist(tx, 1, 102, 31)?;
+        track_artist(tx, 1, 2, 0, 31, "Thirty One")
+    })
+    .await
+    .unwrap();
+    (temp, db, app)
+}
+
+/// Creates a playlist as the owner in library 1 and returns its body.
+async fn create(app: &Router, body: Value) -> Value {
+    let (status, playlist) = call(app, TOKEN, "POST", URI, Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{playlist}");
+    playlist
+}
+
+/// The tracks of playlist `id` in its order, as stored.
+async fn tracks(db: &Database, id: &Value) -> Vec<i64> {
+    let id: i64 = id.as_str().unwrap().parse().unwrap();
+    db.read(move |conn| {
+        conn.prepare("SELECT track_id FROM playlist_items WHERE playlist_id = ?1 ORDER BY key")?
+            .query_map([id], |row| row.get(0))?
+            .collect()
+    })
+    .await
+    .unwrap()
+}
+
+/// How many playlists are stored, whoever's.
+async fn stored(db: &Database) -> i64 {
+    db.read(|conn| conn.query_row("SELECT count(*) FROM playlists", [], |row| row.get(0)))
+        .await
+        .unwrap()
+}
+
+/// Adds user 2, who reaches library 1, with the token `user-token`, and an admin, user 3, with
+/// `admin-token`, who reaches every library.
+fn add_others(temp: &tempfile::TempDir) {
+    let conn = conn(temp);
+    add_user(&conn, 2, "user");
+    add_device(&conn, 2, 2, "user-token");
+    access(&conn, 2, 1).unwrap();
+    add_user(&conn, 3, "admin");
+    add_device(&conn, 3, 3, "admin-token");
+}
+
+#[tokio::test]
+async fn a_playlist_is_created_with_the_tracks_its_items_expand_to_in_order() {
+    let (_temp, db, app) = catalog().await;
+    let body = json!({
+        "title": "  Road  ",
+        "description": "Long drives",
+        "items": [
+            { "type": "track", "id": "2" },
+            { "type": "album", "id": "102" },
+            { "type": "artist", "id": "31" },
+            { "type": "track", "id": "2" },
+        ],
+    });
+    let (status, made) = call(&app, TOKEN, "POST", URI, Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    let id = made["id"].as_str().unwrap();
+    assert!(made["createdAt"].as_str().unwrap().ends_with('Z'));
+    assert_eq!(made["createdAt"], made["modifiedAt"]);
+    let mut shown = made.clone();
+    for field in ["id", "createdAt", "modifiedAt"] {
+        shown.as_object_mut().unwrap().remove(field);
+    }
+    assert_eq!(
+        shown,
+        json!({
+            "libraryId": "1", "title": "Road", "description": "Long drives", "image": null,
+            "customImage": false, "trackCount": 11, "durationUs": 11_000_000, "pinned": false,
+            "version": 1,
+        })
+    );
+    // An album in its disc and number order; an artist's own album then what it features on, in
+    // album order; a track as often as it is named.
+    assert_eq!(
+        tracks(&db, &made["id"]).await,
+        [2, 13, 12, 14, 11, 2, 13, 12, 14, 11, 2].map(i64::from)
+    );
+    let keys: Vec<i64> = db
+        .read(|conn| {
+            conn.prepare("SELECT key FROM playlist_items ORDER BY key")?
+                .query_map([], |row| row.get(0))?
+                .collect()
+        })
+        .await
+        .unwrap();
+    assert_eq!(keys[..2], [KEY_GAP, 2 * KEY_GAP]);
+    assert!(keys.windows(2).all(|pair| pair[1] - pair[0] == KEY_GAP));
+
+    let (status, got) = call(&app, TOKEN, "GET", &format!("{URI}/{id}"), None).await;
+    assert_eq!((status, &got), (StatusCode::OK, &made));
+}
+
+#[tokio::test]
+async fn a_playlist_can_start_empty_and_from_another_playlist() {
+    let (_temp, db, app) = catalog().await;
+    let empty = create(&app, json!({ "title": "Empty" })).await;
+    assert_eq!(
+        (&empty["trackCount"], &empty["durationUs"], &empty["description"], &empty["image"]),
+        (&json!(0), &json!(0), &Value::Null, &Value::Null)
+    );
+    let first =
+        create(&app, json!({ "title": "A", "items": [{ "type": "album", "id": "102" }] })).await;
+    let copy = create(
+        &app,
+        json!({ "title": "B", "items": [
+            { "type": "playlist", "id": first["id"] }, { "type": "playlist", "id": empty["id"] },
+        ] }),
+    )
+    .await;
+    assert_eq!(tracks(&db, &copy["id"]).await, [13, 12, 14, 11]);
+}
+
+#[tokio::test]
+async fn a_missing_track_is_counted_and_kept_in_place() {
+    let (_temp, db, app) = catalog().await;
+    db.write(|tx| {
+        tx.execute("UPDATE tracks SET missing_since = 5, duration_us = 7 WHERE id = 12", [])
+    })
+    .await
+    .unwrap();
+    let made =
+        create(&app, json!({ "items": [{ "type": "album", "id": "102" }], "title": "M" })).await;
+    assert_eq!((&made["trackCount"], &made["durationUs"]), (&json!(4), &json!(3_000_007)));
+    assert_eq!(tracks(&db, &made["id"]).await, [13, 12, 14, 11]);
+}
+
+#[tokio::test]
+async fn a_bad_request_creates_nothing() {
+    let (temp, db, app) = catalog().await;
+    add_others(&temp);
+    let theirs = create_as(&app, "user-token", json!({ "title": "Theirs" })).await;
+    let elsewhere = create_in(&app, LIBRARY_2, json!({ "title": "Elsewhere" })).await;
+    let bodies = [
+        json!({}),
+        json!({ "title": "" }),
+        json!({ "title": "   " }),
+        json!({ "title": 5 }),
+        json!({ "title": "T", "items": "track" }),
+        json!({ "title": "T", "fromMix": "mix-1" }),
+        json!({ "title": "T", "items": [{ "type": "external", "sourceId": "s", "externalId": "e" }] }),
+        json!({ "title": "T", "items": [{ "type": "tag", "id": "1" }] }),
+        json!({ "title": "T", "items": [{ "id": "1" }] }),
+        json!({ "title": "T", "items": [{ "type": "track" }] }),
+        json!({ "title": "T", "items": [{ "type": "track", "id": "nope" }] }),
+        json!({ "title": "T", "items": [{ "type": "track", "id": "999" }] }),
+        // Another library's content and another user's playlist are as absent as nothing.
+        json!({ "title": "T", "items": [{ "type": "track", "id": "3" }] }),
+        json!({ "title": "T", "items": [{ "type": "album", "id": "201" }] }),
+        json!({ "title": "T", "items": [{ "type": "artist", "id": "32" }] }),
+        json!({ "title": "T", "items": [{ "type": "playlist", "id": theirs["id"] }] }),
+        // The caller's own playlist in another library is as absent as another user's.
+        json!({ "title": "T", "items": [{ "type": "playlist", "id": elsewhere["id"] }] }),
+        // The good items before a bad one do not survive.
+        json!({ "title": "T", "items": [{ "type": "track", "id": "1" }, { "type": "album", "id": "9" }] }),
+    ];
+    for body in bodies {
+        let (status, problem) = call(&app, TOKEN, "POST", URI, Some(body.clone())).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}: {problem}");
+        assert_eq!(problem["code"], "validation_failed", "{body}");
+    }
+    assert_eq!(stored(&db).await, 2);
+    let (status, _) = call(
+        &app,
+        TOKEN,
+        "POST",
+        LIBRARY_2,
+        Some(json!({ "title": "T", "items": [{ "type": "track", "id": "1" }] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "library 1's track in library 2");
+    let (status, _) =
+        call(&app, TOKEN, "POST", "/api/v1/libraries/9/playlists", Some(json!({ "title": "T" })))
+            .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(stored(&db).await, 2);
+}
+
+/// Creates a playlist as the owner at `uri`.
+async fn create_in(app: &Router, uri: &str, body: Value) -> Value {
+    let (status, playlist) = call(app, TOKEN, "POST", uri, Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{playlist}");
+    playlist
+}
+
+/// Creates a playlist as the device with `token` in library 1.
+async fn create_as(app: &Router, token: &str, body: Value) -> Value {
+    let (status, playlist) = call(app, token, "POST", URI, Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{playlist}");
+    playlist
+}
+
+/// The titles `uri` lists, as the owner, page by page of `limit`, and every page's total.
+async fn titles(app: &Router, uri: &str, limit: usize) -> (Vec<String>, Vec<i64>) {
+    let (mut titles, mut totals, mut cursor) = (Vec::new(), Vec::new(), None::<String>);
+    loop {
+        let joiner = if uri.contains('?') { '&' } else { '?' };
+        let mut page_uri = format!("{uri}{joiner}limit={limit}");
+        if let Some(cursor) = &cursor {
+            page_uri += &format!("&cursor={cursor}");
+        }
+        let (status, page) = call(app, TOKEN, "GET", &page_uri, None).await;
+        assert_eq!(status, StatusCode::OK, "{page_uri}: {page}");
+        titles.extend(
+            page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p["title"].as_str().unwrap().to_owned()),
+        );
+        totals.push(page["total"].as_i64().unwrap());
+        match page["nextCursor"].as_str() {
+            Some(next) => cursor = Some(next.to_owned()),
+            None => return (titles, totals),
+        }
+    }
+}
+
+/// Four playlists, Delta and Beta pinned, with created and modified times that order them
+/// differently from their names.
+async fn four(app: &Router, db: &Database) {
+    for title in ["Beta", "alpha", "The Cure", "Delta"] {
+        create(app, json!({ "title": title })).await;
+    }
+    db.write(|tx| {
+        // created: Delta, The Cure, alpha, Beta; modified: alpha, Beta, Delta, The Cure.
+        tx.execute_batch(
+            "UPDATE playlists SET
+               created_at = CASE title WHEN 'Delta' THEN 1 WHEN 'The Cure' THEN 2 WHEN 'alpha' THEN 3 ELSE 4 END,
+               modified_at = CASE title WHEN 'alpha' THEN 1 WHEN 'Beta' THEN 2 WHEN 'Delta' THEN 3 ELSE 4 END,
+               pinned = title IN ('Delta', 'Beta')",
+        )
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn the_list_puts_pinned_first_then_sorts_in_either_order() {
+    let (_temp, db, app) = catalog().await;
+    four(&app, &db).await;
+    for (query, expected) in [
+        ("", ["Beta", "Delta", "alpha", "The Cure"]),
+        ("sort=modified&order=asc", ["Beta", "Delta", "alpha", "The Cure"]),
+        ("sort=name", ["Beta", "Delta", "alpha", "The Cure"]),
+        ("sort=name&order=desc", ["Delta", "Beta", "The Cure", "alpha"]),
+        ("sort=created", ["Delta", "Beta", "The Cure", "alpha"]),
+        ("sort=created&order=desc", ["Beta", "Delta", "alpha", "The Cure"]),
+        ("sort=modified&order=desc", ["Delta", "Beta", "The Cure", "alpha"]),
+    ] {
+        for limit in [1, 3, 100] {
+            let (found, totals) = titles(&app, &format!("{URI}?{query}"), limit).await;
+            assert_eq!(found, expected, "{query} by {limit}");
+            assert!(totals.iter().all(|total| *total == 4), "{query} by {limit}: {totals:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_list_filters_by_the_words_of_a_title() {
+    let (_temp, db, app) = catalog().await;
+    four(&app, &db).await;
+    create(&app, json!({ "title": "Café Noir" })).await;
+    for (q, expected) in [
+        ("cure", vec!["The Cure"]),
+        ("the cu", vec!["The Cure"]),
+        ("ALPHA", vec!["alpha"]),
+        ("cafe", vec!["Café Noir"]),
+        ("a", vec!["Beta", "Delta", "alpha", "Café Noir"]),
+        ("zzz", vec![]),
+        ("  ", vec!["Beta", "Delta", "alpha", "Café Noir", "The Cure"]),
+    ] {
+        let (found, totals) =
+            titles(&app, &format!("{URI}?sort=name&q={}", q.replace(' ', "%20")), 2).await;
+        assert_eq!(found, expected, "{q}");
+        assert!(
+            totals.iter().all(|total| *total == i64::try_from(expected.len()).unwrap()),
+            "{q}: {totals:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_list_refuses_what_it_does_not_serve() {
+    let (_temp, _db, app) = app_with_tracks().await;
+    for uri in [
+        "/api/v1/libraries/1/playlists?sort=playCount",
+        "/api/v1/libraries/1/playlists?sort=size",
+        "/api/v1/libraries/1/playlists?limit=0",
+        "/api/v1/libraries/1/playlists?pinned=true",
+        "/api/v1/libraries/1/playlists?cursor=00",
+        // A cursor belongs to the sort and order it came from.
+        "/api/v1/libraries/1/playlists?sort=name&cursor=AAA",
+    ] {
+        let (status, problem) = call(&app, TOKEN, "GET", uri, None).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{uri}");
+        assert_eq!(problem["code"], "validation_failed", "{uri}");
+    }
+    let (status, _) = call(&app, TOKEN, "GET", "/api/v1/libraries/9/playlists", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_cursor_from_one_sort_is_refused_by_another() {
+    let (_temp, db, app) = catalog().await;
+    four(&app, &db).await;
+    let (_, page) = call(&app, TOKEN, "GET", &format!("{URI}?sort=name&limit=1"), None).await;
+    let cursor = page["nextCursor"].as_str().unwrap();
+    for query in ["sort=created", "sort=name&order=desc"] {
+        let (status, _) =
+            call(&app, TOKEN, "GET", &format!("{URI}?{query}&cursor={cursor}"), None).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{query}");
+    }
+}
+
+#[tokio::test]
+async fn every_sort_reads_from_an_index() {
+    let (_temp, db, _app) = app("");
+    db.write(|tx| {
+        library(tx, 1, "Music", "/music")?;
+        // 20,000 playlists, a seventh of them pinned.
+        for i in 1..=20_000_i64 {
+            let title = format!("Playlist {i}");
+            tx.execute(
+                "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, pinned, \
+                 created_at, modified_at) VALUES (?1, 1, 1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    i,
+                    title,
+                    title.to_lowercase(),
+                    scattered_key("playlist", i),
+                    i % 7 == 0,
+                    i * 3 % 20_011,
+                    i * 5 % 20_011
+                ],
+            )?;
+        }
+        tx.execute_batch("ANALYZE")
+    })
+    .await
+    .unwrap();
+    db.read(|conn| {
+        for sort in [PlaylistSort::Name, PlaylistSort::Created, PlaylistSort::Modified] {
+            for q in [None, Some("playlist 1")] {
+                page::assert_indexed(conn, &source(1, 1, q), sort.sort())?;
+            }
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_playlist_is_its_users_alone() {
+    let (temp, db, app) = catalog().await;
+    add_others(&temp);
+    let made =
+        create(&app, json!({ "title": "Mine", "items": [{ "type": "track", "id": "1" }] })).await;
+    let id = made["id"].as_str().unwrap();
+    let here = format!("{URI}/{id}");
+    // Another account, an admin who reaches the library, another library's path, and an ID
+    // that is not one.
+    for (token, uri) in [
+        ("user-token", here.clone()),
+        ("admin-token", here.clone()),
+        (TOKEN, format!("{LIBRARY_2}/{id}")),
+        ("admin-token", format!("{LIBRARY_2}/{id}")),
+        (TOKEN, format!("{URI}/{id}0")),
+        (TOKEN, format!("{URI}/0{id}")),
+        (TOKEN, format!("{URI}/nope")),
+    ] {
+        for method in ["GET", "DELETE"] {
+            let (status, problem) = call(&app, token, method, &uri, None).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{token} {method} {uri}");
+            assert_eq!(problem["code"], "not_found", "{token} {method} {uri}");
+        }
+    }
+    // None of it deleted anything, and no one else's list shows it.
+    assert_eq!(stored(&db).await, 1);
+    for (token, uris) in [("user-token", vec![URI]), ("admin-token", vec![URI, LIBRARY_2])] {
+        for uri in uris {
+            let (status, page) = call(&app, token, "GET", uri, None).await;
+            assert_eq!(status, StatusCode::OK, "{token} {uri}");
+            assert_eq!((&page["items"], &page["total"]), (&json!([]), &json!(0)), "{token} {uri}");
+        }
+    }
+    let (_, own) = call(&app, TOKEN, "GET", LIBRARY_2, None).await;
+    assert_eq!(own["total"], 0, "a playlist is in its own library");
+    let (_, own) = call(&app, TOKEN, "GET", URI, None).await;
+    assert_eq!(own["total"], 1);
+
+    // A user with no access to library 2 is told no more than for a library that is not there.
+    let (status, _) =
+        call(&app, "user-token", "POST", LIBRARY_2, Some(json!({ "title": "X" }))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    // Their own, with the same ID space, is theirs only.
+    let theirs = create_as(&app, "user-token", json!({ "title": "Theirs" })).await;
+    let (status, _) =
+        call(&app, TOKEN, "GET", &format!("{URI}/{}", theirs["id"].as_str().unwrap()), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) =
+        call(&app, "user-token", "GET", &format!("{URI}/{}", theirs["id"].as_str().unwrap()), None)
+            .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn deleting_a_playlist_removes_it_and_its_items_and_nothing_else() {
+    let (_temp, db, app) = catalog().await;
+    let doomed =
+        create(&app, json!({ "title": "Doomed", "items": [{ "type": "album", "id": "102" }] }))
+            .await;
+    let kept =
+        create(&app, json!({ "title": "Kept", "items": [{ "type": "track", "id": "1" }] })).await;
+    let uri = format!("{URI}/{}", doomed["id"].as_str().unwrap());
+    let (status, body) = call(&app, TOKEN, "DELETE", &uri, None).await;
+    assert_eq!((status, body), (StatusCode::NO_CONTENT, Value::Null));
+    let (status, _) = call(&app, TOKEN, "GET", &uri, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(&app, TOKEN, "DELETE", &uri, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "already gone");
+    assert!(tracks(&db, &doomed["id"]).await.is_empty());
+    assert_eq!(tracks(&db, &kept["id"]).await, [1]);
+    let tracks_left: i64 = db
+        .read(|conn| conn.query_row("SELECT count(*) FROM tracks", [], |row| row.get(0)))
+        .await
+        .unwrap();
+    assert_eq!(tracks_left, 7, "the tracks are the library's");
+}
+
+/// A link across libraries fails at insert, whatever the code above it does
+/// (`design/database.md` §2).
+#[tokio::test]
+async fn an_item_cannot_name_another_librarys_track() {
+    let (_temp, db, app) = catalog().await;
+    let made = create(&app, json!({ "title": "Mine" })).await;
+    let id: i64 = made["id"].as_str().unwrap().parse().unwrap();
+    let across = db
+        .write(move |tx| {
+            tx.execute(
+                "INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at) \
+                 VALUES (?1, 1, 1, 3, 0)",
+                [id],
+            )
+        })
+        .await;
+    assert!(across.is_err());
+    let elsewhere = db
+        .write(move |tx| {
+            tx.execute(
+                "INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at) \
+                 VALUES (?1, 1, 2, 3, 0)",
+                [id],
+            )
+        })
+        .await;
+    assert!(elsewhere.is_err(), "nor a playlist of another library");
+}

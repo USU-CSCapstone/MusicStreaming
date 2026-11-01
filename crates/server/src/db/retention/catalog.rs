@@ -26,9 +26,13 @@ const BIOGRAPHY_USED: &str = "EXISTS (SELECT 1 FROM tracks t \
 
 /// Up to `?3` tracks of library `?1` missing since before `?2`, and since more than `?4` before
 /// the start of the last completed scan of their whole root, so none under a root no such scan
-/// has walked; read root by root through `tracks_missing`.
+/// has walked, and none that a playlist holds; read root by root through `tracks_missing`, and
+/// each track's playlists through `playlist_items_by_track`.
 pub(super) const MISSING: &str = "SELECT t.id FROM library_roots r JOIN tracks t ON t.root_id = r.id \
-     WHERE r.library_id = ?1 AND t.missing_since < min(?2, r.walked_at - ?4) LIMIT ?3";
+     WHERE r.library_id = ?1 AND t.missing_since < min(?2, r.walked_at - ?4) \
+       AND NOT EXISTS (SELECT 1 FROM playlist_items i \
+                       WHERE i.library_id = r.library_id AND i.track_id = t.id) \
+     LIMIT ?3";
 
 /// The most tracks one chunk purges: half a scan batch (`design/scanning.md` §7).
 /// A track costs about 1 ms with its recompute in a release build, more on a Pi and on a large
@@ -39,10 +43,10 @@ pub(super) const TRACK_CHUNK: usize = 16;
 /// a completed scan of their whole root that started once the window was up, recording each in
 /// the feed, and brings the albums, artists and tags they counted toward up to date in the same
 /// transaction, which deletes those they were the last of and records that too.
-/// A play of a purged track keeps its snapshot, since `plays.track_id` has no foreign key.
+/// A play of a purged track keeps its snapshot, since `plays.track_id` has no foreign key. A
+/// track that any playlist holds is kept for as long as one does, and stays missing meanwhile.
 ///
-/// Returns whether none is left. Playlists are not modelled yet (`design/database.md` §10); a
-/// track in one is to be kept.
+/// Returns whether none is left.
 pub(super) fn tracks(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
     let mut missing = tx.prepare_cached(MISSING)?;
     let mut delete = tx.prepare_cached("DELETE FROM tracks WHERE id = ?1")?;
