@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::history::play_span;
 use super::spans::{Span, View};
 use super::state::{ItemId, QueueError, QueueState, Repeat, Source};
 
@@ -23,6 +24,16 @@ pub enum Anchor {
         /// The item the rows go ahead of.
         item: ItemId,
     },
+}
+
+/// A play of History as an edit names it: acted on only if the number and the item both match,
+/// since a device's play numbers are guesses until confirmed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayRef {
+    /// The play's number.
+    pub play: u64,
+    /// The item it played.
+    pub item: ItemId,
 }
 
 /// One change to a queue.
@@ -56,6 +67,19 @@ pub enum Edit {
     },
     /// Play the next item.
     Next,
+    /// Take plays out of History. Plays that are gone or played another item are ignored.
+    RemovePlays {
+        /// The plays.
+        plays: Vec<PlayRef>,
+    },
+    /// Put a copy of a played item at the front of Up Next and take the play out of History.
+    /// Ignored if the play is gone or played another item.
+    Requeue {
+        /// The play.
+        play: PlayRef,
+        /// The copy's key, minted by the device and new.
+        key: String,
+    },
     /// Set the repeat mode.
     Repeat {
         /// The mode.
@@ -84,7 +108,8 @@ impl QueueState {
     /// Items an edit names that aren't in Up Next are ignored, and an edit that then does
     /// nothing leaves the state as it was, `adjusted` included. An anchor that isn't in Up Next
     /// fails the whole edit with [`QueueError::AnchorGone`], so a device can revert and say so.
-    /// `adjusted` is set by an add, remove or move that acts, and by no other edit.
+    /// `adjusted` is set by an add, remove, move, play removal or re-queue that acts, and by no
+    /// other edit.
     pub fn apply(&mut self, edit: &Edit) -> Result<(), QueueError> {
         match edit {
             Edit::Add { source, before } => self.add(source, before),
@@ -101,6 +126,11 @@ impl QueueState {
                 self.next();
                 Ok(())
             }
+            Edit::RemovePlays { plays } => {
+                self.remove_plays(plays);
+                Ok(())
+            }
+            Edit::Requeue { play, key } => self.requeue(play, key),
             Edit::Repeat { mode } => {
                 self.repeat = *mode;
                 Ok(())
@@ -151,26 +181,38 @@ impl QueueState {
         Ok(())
     }
 
-    /// Plays `item` now. Everything ahead of it in Up Next leaves it. Does nothing if `item`
-    /// isn't in Up Next.
+    /// Plays `item` now. Everything ahead of it in Up Next leaves it and, like the item that
+    /// was playing, becomes plays: one run per span passed. Does nothing if `item` isn't in
+    /// Up Next.
     fn jump(&mut self, item: &ItemId) {
         let Some(index) = self.find_item(item) else { return };
+        let mut plays: Vec<Span> = self.current.iter().map(play_span).collect();
         match index.checked_sub(self.manual.len()) {
             None => {
-                self.manual.remove(0..index + 1);
+                plays.extend(self.manual.remove(0..index));
+                self.manual.remove(0..1);
             }
             Some(rest) => {
-                self.manual = Default::default();
+                plays.extend(self.manual.remove(0..self.manual.len()));
+                plays.extend(self.order.slice(self.cursor..self.cursor + rest));
                 self.cursor += rest + 1;
             }
         }
         self.current = Some(item.clone());
-        self.clean_up();
+        if self.record_plays(plays) {
+            self.clean_up();
+        }
     }
 
-    /// Plays the front of the Manual Queue, or else the next context row. With nothing left,
-    /// nothing plays.
+    /// Plays the front of the Manual Queue, or else the next context row, and records the item
+    /// that was playing as a play. With the context spent and Repeat All on, the context starts
+    /// over from its first row, with no copy. With nothing left, nothing plays. Repeat One is
+    /// the player's to apply.
     fn next(&mut self) {
+        let plays: Vec<Span> = self.current.iter().map(play_span).collect();
+        if self.manual.is_empty() && self.cursor >= self.order.len() && self.repeat == Repeat::All {
+            self.cursor = 0;
+        }
         self.current = if !self.manual.is_empty() {
             let item = item_of(self.manual.get(0));
             self.manual.remove(0..1);
@@ -182,7 +224,9 @@ impl QueueState {
         } else {
             None
         };
-        self.clean_up();
+        if self.record_plays(plays) {
+            self.clean_up();
+        }
     }
 
     /// The Up Next indices of the named items that are in Up Next, ascending and distinct.

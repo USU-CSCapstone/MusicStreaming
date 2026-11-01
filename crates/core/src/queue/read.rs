@@ -64,7 +64,7 @@ impl QueueState {
 
     /// The row for position `pos` of the source or copy `key`: a copy's position reads the
     /// source position its spans name.
-    fn row_of(&self, key: &str, pos: u64) -> Option<Row<'_>> {
+    pub(super) fn row_of(&self, key: &str, pos: u64) -> Option<Row<'_>> {
         let (source, position) = match self.source(key) {
             Some(source) => (source, pos),
             None => {
