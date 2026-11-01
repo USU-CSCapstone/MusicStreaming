@@ -1,5 +1,5 @@
 //! Playlists: `listPlaylists`, `createPlaylist`, `getPlaylist`, and `deletePlaylist`
-//! (`api/openapi.yaml`).
+//! (`api/openapi.yaml`); the items and duplicates endpoints are in `items`.
 //!
 //! A playlist is its user's own, in one library (`design/database.md` §6). Everything here is
 //! scoped to the caller's account as well as the library, so another account, an admin
@@ -7,6 +7,7 @@
 //! A playlist's items are kept in order under sparse keys [`KEY_GAP`] apart. Editing them and
 //! serving artwork are not done here: `image` is always `null`.
 
+mod items;
 mod representation;
 
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use rusqlite::params;
 use rusqlite::types::Value;
 use serde::Deserialize;
 
+pub use items::{duplicates, list_items};
 use representation::{Playlist, SELECT, playlist};
 
 use super::extract::{self, Path, Query};

@@ -490,3 +490,248 @@ async fn an_item_cannot_name_another_librarys_track() {
         .await;
     assert!(elsewhere.is_err(), "nor a playlist of another library");
 }
+
+/// Marks track 12 missing, then creates a playlist of tracks `[2, 1, 2, 12, 1]`: duplicates of
+/// tracks 1 and 2 and a missing track, at known positions. Returns the created playlist.
+async fn mixed(app: &Router, db: &Database) -> Value {
+    db.write(|tx| tx.execute("UPDATE tracks SET missing_since = 5 WHERE id = 12", []))
+        .await
+        .unwrap();
+    let items: Vec<Value> =
+        [2, 1, 2, 12, 1].map(|t| json!({ "type": "track", "id": t.to_string() })).into();
+    create(app, json!({ "title": "Mixed", "items": items })).await
+}
+
+/// The items of a page as `(track id, availability)`.
+fn listed(page: &Value) -> Vec<(String, String)> {
+    page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| {
+            let track = &item["track"];
+            (track["id"].as_str().unwrap().into(), track["availability"].as_str().unwrap().into())
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn items_page_in_order_with_duplicates_and_missing_tracks_in_place() {
+    let (_temp, db, app) = catalog().await;
+    let made = mixed(&app, &db).await;
+    let uri = format!("{URI}/{}/items", made["id"].as_str().unwrap());
+    let (status, all) = call(&app, TOKEN, "GET", &uri, None).await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    let expected: Vec<(String, String)> = [
+        ("2", "available"),
+        ("1", "available"),
+        ("2", "available"),
+        ("12", "missing"),
+        ("1", "available"),
+    ]
+    .map(|(id, a)| (id.into(), a.into()))
+    .into();
+    assert_eq!(listed(&all), expected);
+    assert_eq!(
+        (&all["total"], &all["version"], &all["nextCursor"]),
+        (&json!(5), &json!(1), &Value::Null)
+    );
+    assert!(all["items"][0]["addedAt"].as_str().unwrap().ends_with('Z'));
+    assert!(all["items"][0]["track"]["title"].is_string());
+
+    // Every page size gives the same items in the same order, and the same version.
+    for limit in [1, 2, 3, 5] {
+        let (mut got, mut cursor) = (Vec::new(), None::<String>);
+        loop {
+            let after = cursor.map(|c| format!("&cursor={c}")).unwrap_or_default();
+            let (status, page) =
+                call(&app, TOKEN, "GET", &format!("{uri}?limit={limit}{after}"), None).await;
+            assert_eq!(status, StatusCode::OK, "{page}");
+            assert_eq!((&page["total"], &page["version"]), (&json!(5), &json!(1)));
+            assert!(page["items"].as_array().unwrap().len() <= limit);
+            got.extend(listed(&page));
+            assert_eq!(page["nextCursor"].is_null(), got.len() == 5, "limit {limit}: {page}");
+            cursor = page["nextCursor"].as_str().map(str::to_owned);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(got, expected, "limit {limit}");
+    }
+}
+
+#[tokio::test]
+async fn a_cursor_from_an_older_version_is_gone() {
+    let (_temp, db, app) = catalog().await;
+    let made = mixed(&app, &db).await;
+    let id = made["id"].as_str().unwrap();
+    let uri = format!("{URI}/{id}/items");
+    let (_, first) = call(&app, TOKEN, "GET", &format!("{uri}?limit=2"), None).await;
+    let cursor = first["nextCursor"].as_str().unwrap();
+    let id: i64 = id.parse().unwrap();
+    db.write(move |tx| tx.execute("UPDATE playlists SET version = 2 WHERE id = ?1", [id]))
+        .await
+        .unwrap();
+    let (status, problem) =
+        call(&app, TOKEN, "GET", &format!("{uri}?limit=2&cursor={cursor}"), None).await;
+    assert_eq!(status, StatusCode::GONE, "{problem}");
+    assert_eq!(problem["code"], "cursor_expired");
+    let (status, again) = call(&app, TOKEN, "GET", &format!("{uri}?limit=2"), None).await;
+    assert_eq!((status, &again["version"]), (StatusCode::OK, &json!(2)));
+    // A made-up cursor and parameters the list does not take are 422.
+    for query in ["cursor=nope", "limit=0", "limit=1001", "sort=name", "cursor="] {
+        let (status, _) = call(&app, TOKEN, "GET", &format!("{uri}?{query}"), None).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{query}");
+    }
+}
+
+#[tokio::test]
+async fn duplicates_are_the_present_tracks_once_each_in_request_order() {
+    let (_temp, db, app) = catalog().await;
+    let made = mixed(&app, &db).await;
+    let uri = format!("{URI}/{}/duplicates", made["id"].as_str().unwrap());
+    let other =
+        create(&app, json!({ "title": "O", "items": [{ "type": "album", "id": "102" }] })).await;
+    let body = json!({ "items": [
+        { "type": "track", "id": "1" },
+        { "type": "track", "id": "13" },
+        { "type": "track", "id": "2" },
+        { "type": "track", "id": "1" },
+        { "type": "album", "id": "101" },
+        { "type": "playlist", "id": other["id"] },
+        { "type": "track", "id": "12" },
+    ] });
+    let (status, got) = call(&app, TOKEN, "POST", &uri, Some(body)).await;
+    assert_eq!(status, StatusCode::OK, "{got}");
+    // Album 101 holds 1 and 2; playlist `other` holds 13, 12, 14, 11; 12 is missing but present.
+    assert_eq!(got, json!({ "trackIds": ["1", "2", "12"] }));
+    let (status, none) = call(
+        &app,
+        TOKEN,
+        "POST",
+        &uri,
+        Some(json!({ "items": [{ "type": "track", "id": "13" }] })),
+    )
+    .await;
+    assert_eq!((status, none), (StatusCode::OK, json!({ "trackIds": [] })));
+    let (status, empty) = call(&app, TOKEN, "POST", &uri, Some(json!({ "items": [] }))).await;
+    assert_eq!((status, empty), (StatusCode::OK, json!({ "trackIds": [] })));
+    // Not a playable the caller may add, or not a list at all.
+    for body in [
+        json!({ "items": [{ "type": "track", "id": "3" }] }),
+        json!({ "items": [{ "type": "track", "id": "nope" }] }),
+        json!({ "items": [{ "type": "external" }] }),
+        json!({ "items": "x" }),
+        json!({}),
+    ] {
+        let (status, _) = call(&app, TOKEN, "POST", &uri, Some(body.clone())).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn another_users_items_and_duplicates_are_not_found() {
+    let (temp, db, app) = catalog().await;
+    add_others(&temp);
+    let made = mixed(&app, &db).await;
+    let id = made["id"].as_str().unwrap();
+    let body = json!({ "items": [{ "type": "track", "id": "1" }] });
+    for (token, base) in
+        [("user-token", URI), ("admin-token", URI), (TOKEN, LIBRARY_2), ("admin-token", LIBRARY_2)]
+    {
+        let (status, problem) = call(&app, token, "GET", &format!("{base}/{id}/items"), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{token} {base} items");
+        assert_eq!(problem["code"], "not_found");
+        let (status, problem) =
+            call(&app, token, "POST", &format!("{base}/{id}/duplicates"), Some(body.clone())).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{token} {base} duplicates");
+        assert_eq!(problem["code"], "not_found");
+    }
+    for bad in [format!("{id}0"), format!("0{id}"), "nope".into()] {
+        let (status, _) = call(&app, TOKEN, "GET", &format!("{URI}/{bad}/items"), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{bad}");
+        let (status, _) =
+            call(&app, TOKEN, "POST", &format!("{URI}/{bad}/duplicates"), Some(body.clone())).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{bad}");
+    }
+    // The owner's cursor, used on another user's playlist, reads only that playlist's rows.
+    let (_, first) = call(&app, TOKEN, "GET", &format!("{URI}/{id}/items?limit=2"), None).await;
+    let cursor = first["nextCursor"].as_str().unwrap();
+    let theirs = create_as(&app, "user-token", json!({ "title": "T" })).await;
+    let (status, page) = call(
+        &app,
+        "user-token",
+        "GET",
+        &format!("{URI}/{}/items?cursor={cursor}", theirs["id"].as_str().unwrap()),
+        None,
+    )
+    .await;
+    assert_eq!((status, &page["items"], &page["total"]), (StatusCode::OK, &json!([]), &json!(0)));
+    // Their own playlist is not a playable for a duplicates check on another user's playlist.
+    let (status, _) = call(
+        &app,
+        "user-token",
+        "POST",
+        &format!("{URI}/{}/duplicates", theirs["id"].as_str().unwrap()),
+        Some(json!({ "items": [{ "type": "playlist", "id": made["id"] }] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// Both queries search the primary key or `playlist_items_by_track`, never scan, in a playlist
+/// of 50,000 items among others.
+#[tokio::test]
+async fn items_and_duplicates_read_from_an_index() {
+    let (_temp, db, _app) = app("");
+    db.write(|tx| {
+        library(tx, 1, "Music", "/music")?;
+        for p in 1..=3 {
+            tx.execute(
+                "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, \
+                 created_at, modified_at) VALUES (?1, 1, 1, 'A', 'a', x'00', 0, 0)",
+                [p],
+            )?;
+        }
+        crate::db::testing::Album::new(101, 1).insert(tx)?;
+        for t in 1..=50_000_i64 {
+            crate::db::testing::Track::new(t, 1, 101).insert(tx)?;
+        }
+        tx.execute(
+            "INSERT INTO playlist_items SELECT 1 + id % 3, id * 4, 1, id, 0 FROM tracks",
+            [],
+        )?;
+        tx.execute_batch("ANALYZE")
+    })
+    .await
+    .unwrap();
+    db.read(|conn| {
+        let items = (super::items::ITEMS, ["1", "1000", "101"]);
+        let held = (super::items::HELD, ["1", "1", "[3,6,9]"]);
+        for (sql, args) in [items, held] {
+            let plan: Vec<String> = conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?
+                .query_map(
+                    rusqlite::params_from_iter(args.map(|a| {
+                        a.parse::<i64>().map_or(
+                            rusqlite::types::Value::from(a.to_owned()),
+                            rusqlite::types::Value::from,
+                        )
+                    })),
+                    |row| row.get(3),
+                )?
+                .collect::<Result<_, _>>()?;
+            let plan = plan.join(" | ");
+            assert!(!plan.contains("SCAN playlist_items"), "{plan}");
+            // The duplicates' sort is of the request's own few IDs.
+            let index =
+                if sql == super::items::HELD { "playlist_items_by_track" } else { "PRIMARY KEY" };
+            assert!(plan.contains(index), "{plan}");
+            assert!(sql == super::items::HELD || !plan.contains("TEMP B-TREE"), "{plan}");
+            assert!(plan.contains("SEARCH"), "{plan}");
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+}

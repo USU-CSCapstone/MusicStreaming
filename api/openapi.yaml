@@ -1037,10 +1037,11 @@ paths:
       tags: [Playlists]
       summary: List playlist items
       description: |
-        **Planned:** the server does not serve this yet; the web client's mock does.
-
         In the user's order, where an item's index is its position for `editPlaylist`. Missing
-        tracks stay in position (`requirements/playlists.md` §3). Every page comes from one version.
+        tracks stay in position (`requirements/playlists.md` §3). A duplicate track is a separate
+        item. Every page comes from one version: a `cursor` made at another version is `410`, and
+        the client starts again from the first page. `total` counts every item, missing included.
+        Anyone else's playlist is `404`.
       operationId: listPlaylistItems
       parameters:
         - $ref: '#/components/parameters/Cursor'
@@ -1066,9 +1067,10 @@ paths:
       tags: [Playlists]
       summary: Check for duplicates before adding
       description: |
-        **Planned:** the server does not serve this yet; the web client's mock does.
-
-        Reports which of the given items are already present, so the user can back out (`requirements/playlists.md` §3).
+        Reports which of the given items are already present, so the user can back out
+        (`requirements/playlists.md` §3). The items are expanded as when adding them, so an item
+        the caller may not add is `422`. `trackIds` holds each track already in the playlist once,
+        in the order the request first names it. Anyone else's playlist is `404`.
       operationId: checkPlaylistDuplicates
       requestBody:
         required: true
@@ -1736,7 +1738,7 @@ components:
           description: Human-readable, safe to show. Never contains credentials or plugin internals.
         code:
           type: string
-          description: '`version_conflict`, `cursor_expired`, and `unsupported_media` come only from planned operations.'
+          description: '`version_conflict` and `unsupported_media` come only from planned operations.'
           enum:
             - unauthenticated
             - session_revoked
