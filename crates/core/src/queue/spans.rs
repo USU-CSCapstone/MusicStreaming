@@ -1,10 +1,13 @@
-//! Frozen lists and span lists (`design/queue.md` §2, §4).
+//! Recipes, views and span lists (`design/queue.md` §2, §4).
 
 use std::ops::Range;
 
+use serde::{Deserialize, Serialize};
+
 /// How a list was made. It isn't what plays (the hash is); it lets a device rebuild the list
 /// and lets the interface say what is playing. Every field that changes the order is part of it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Recipe {
     /// An album's tracks in a sort.
     Album { album_id: String, sort: String },
@@ -18,25 +21,11 @@ pub enum Recipe {
     Tracks,
 }
 
-/// The track IDs a collection resolved to, named by the hash of its content.
-///
-/// The hash is opaque here: only the server computes it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct List {
-    /// The library every track belongs to.
-    pub library_id: String,
-    /// Lowercase hex SHA-256 of the track IDs in order.
-    pub hash: String,
-    /// The number of tracks, and so of positions.
-    pub length: u64,
-    /// How the list was made, when known.
-    pub recipe: Option<Recipe>,
-}
-
 /// What a span reads: a source's or a copy's key, or the queue's one shuffle.
 ///
 /// Naming views by key means dropping a view renumbers nothing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum View {
     /// A source or a copy, by its device-minted key.
     Key(String),
@@ -45,7 +34,7 @@ pub enum View {
 }
 
 /// Positions `start..start + len` of a view. Never empty inside a [`SpanList`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
     /// The view read.
     pub view: View,
@@ -115,6 +104,15 @@ impl SpanList {
         Some((&span.view, span.start + offset))
     }
 
+    /// The index of the first row that reads position `pos` of `view`, or `None`. O(spans).
+    pub fn find(&self, view: &View, pos: u64) -> Option<u64> {
+        let i = self
+            .spans
+            .iter()
+            .position(|s| s.view == *view && (s.start..s.start + s.len).contains(&pos))?;
+        Some(self.start_of(i) + pos - self.spans[i].start)
+    }
+
     /// Makes row `index` the start of a span, splitting the span that holds it, and returns
     /// that span's index (the span count when `index` is the end). An `index` past the end is
     /// the end.
@@ -182,6 +180,20 @@ impl SpanList {
             })
             .collect();
         self.spans = merged;
+    }
+}
+
+/// Serializes as the spans alone.
+impl Serialize for SpanList {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.spans.serialize(serializer)
+    }
+}
+
+/// Reads the spans and rebuilds the running lengths, dropping empty spans and merging neighbours.
+impl<'de> Deserialize<'de> for SpanList {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self::from_spans(Vec::<Span>::deserialize(deserializer)?))
     }
 }
 

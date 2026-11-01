@@ -16,7 +16,10 @@ mod waveform;
 pub use fold::{artists_key, name_key, tag_key};
 pub use format::Format;
 pub use lock::Recover;
-pub use queue::{List, Recipe, Span, SpanList, View};
+pub use queue::{
+    ItemId, QueueCopy, QueueError, QueueState, Recipe, Repeat, Row, Run, Shuffle, Source, Span,
+    SpanList, View,
+};
 pub use search::{Document, Index, Kind, Section, words};
 pub use sort::{sort_key, tag_sort_key};
 pub use waveform::{shape_waveform, waveform_level};
