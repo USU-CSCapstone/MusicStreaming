@@ -24,6 +24,14 @@ pub(super) fn play_span(item: &ItemId) -> Span {
 }
 
 impl QueueState {
+    /// The spans naming the source position `item` reads, for a flattened copy of it.
+    pub(super) fn source_spans(&self, item: &ItemId) -> Vec<Span> {
+        match self.copies.iter().find(|c| c.key == item.key) {
+            Some(copy) => copy.of.slice(item.pos..item.pos + 1),
+            None => vec![play_span(item)],
+        }
+    }
+
     /// Records `spans`, in order, as consecutive plays: each extends the last run when it
     /// continues it and starts a run otherwise. Then trims History. Returns whether the trim
     /// dropped runs, the only way recording lets go of a view: the caller then cleans up.
@@ -128,11 +136,7 @@ impl QueueState {
         if self.has_key(key) {
             return Err(QueueError::DuplicateKey);
         }
-        let item = &play.item;
-        let of = match self.copies.iter().find(|c| c.key == item.key) {
-            Some(copy) => copy.of.slice(item.pos..item.pos + 1),
-            None => vec![play_span(item)],
-        };
+        let of = self.source_spans(&play.item);
         self.take_play(i, offset);
         self.copies.push(QueueCopy { key: key.to_string(), of: SpanList::from_spans(of) });
         self.manual.splice(0, [Span::new(View::Key(key.to_string()), 0, 1)]);

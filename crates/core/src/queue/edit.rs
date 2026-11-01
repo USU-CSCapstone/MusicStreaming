@@ -80,6 +80,13 @@ pub enum Edit {
         /// The copy's key, minted by the device and new.
         key: String,
     },
+    /// Step back: the last play becomes current and the item playing returns to the front of
+    /// Up Next. Does nothing with an empty History.
+    Previous {
+        /// The key of the copy made when the last play's item is still in Up Next; unused
+        /// otherwise, and then it may name anything.
+        key: String,
+    },
     /// Set the repeat mode.
     Repeat {
         /// The mode.
@@ -95,7 +102,7 @@ enum Spot {
 }
 
 /// The item a row of a span list reads, or `None` past the end or for a shuffle row.
-fn item_of(row: Option<(&View, u64)>) -> Option<ItemId> {
+pub(super) fn item_of(row: Option<(&View, u64)>) -> Option<ItemId> {
     match row? {
         (View::Key(key), pos) => Some(ItemId { key: key.clone(), pos }),
         (View::Shuffle, _) => None,
@@ -109,7 +116,9 @@ impl QueueState {
     /// nothing leaves the state as it was, `adjusted` included. An anchor that isn't in Up Next
     /// fails the whole edit with [`QueueError::AnchorGone`], so a device can revert and say so.
     /// `adjusted` is set by an add, remove, move, play removal or re-queue that acts, and by no
-    /// other edit.
+    /// other edit. A context track that Previous put in the Manual Queue holds a second, passed
+    /// place in the context: the same item ID in `order` before the cursor. A move within the
+    /// Manual Queue keeps it; a move into the context, or a removal, drops it.
     pub fn apply(&mut self, edit: &Edit) -> Result<(), QueueError> {
         match edit {
             Edit::Add { source, before } => self.add(source, before),
@@ -131,6 +140,7 @@ impl QueueState {
                 Ok(())
             }
             Edit::Requeue { play, key } => self.requeue(play, key),
+            Edit::Previous { key } => self.previous(key),
             Edit::Repeat { mode } => {
                 self.repeat = *mode;
                 Ok(())
@@ -161,7 +171,7 @@ impl QueueState {
         if at.is_empty() {
             return;
         }
-        self.take(&at);
+        self.take(&at, false);
         self.adjusted = true;
         self.clean_up();
     }
@@ -169,11 +179,11 @@ impl QueueState {
     /// Moves the named items of Up Next to the anchor.
     fn move_items(&mut self, items: &[ItemId], before: &Anchor) -> Result<(), QueueError> {
         let at = self.resolve(items);
-        self.spot(before, &at)?;
+        let target = self.spot(before, &at)?;
         if at.is_empty() {
             return Ok(());
         }
-        let moved = self.take(&at);
+        let moved = self.take(&at, matches!(target, Spot::Manual(_)));
         // Taking the rows shifted every position, so the anchor is found again.
         let spot = self.spot(before, &[])?;
         self.put(spot, moved);
@@ -255,15 +265,35 @@ impl QueueState {
     }
 
     /// Takes the rows at Up Next indices `at` (ascending, distinct) out of the queue and
-    /// returns them in queue order, one span per row until they are put back. One pass over
-    /// each span list, so a remove or move of k rows is O(s + k).
-    fn take(&mut self, at: &[u64]) -> Vec<Span> {
+    /// returns them in queue order, one span per row until they are put back. A Manual Queue
+    /// row that also has a passed place in the context loses it unless `keep_passed`. One pass
+    /// over each span list, so a remove or move of k rows is O(s + k) besides finding those
+    /// passed places.
+    fn take(&mut self, at: &[u64], keep_passed: bool) -> Vec<Span> {
         let manual_len = self.manual.len();
         let (manual, rest) = at.split_at(at.partition_point(|&index| index < manual_len));
-        let rows: Vec<u64> = rest.iter().map(|&index| self.cursor + index - manual_len).collect();
+        let mut rows: Vec<u64> = if keep_passed {
+            Vec::new()
+        } else {
+            manual
+                .iter()
+                .filter_map(|&index| self.passed_row(&item_of(self.manual.get(index))?))
+                .collect()
+        };
+        // Passed places are behind the cursor, so they sort ahead of the Up Next rows.
+        rows.sort_unstable();
+        let passed = rows.len();
+        rows.extend(rest.iter().map(|&index| self.cursor + index - manual_len));
         let mut taken = self.manual.remove_rows(manual);
-        taken.extend(self.order.remove_rows(&rows));
+        taken.extend(self.order.remove_rows(&rows).into_iter().skip(passed));
+        self.cursor -= passed as u64;
         taken
+    }
+
+    /// The context row of `item`'s passed place, if it has one. O(spans).
+    fn passed_row(&self, item: &ItemId) -> Option<u64> {
+        let view = View::Key(item.key.clone());
+        self.order.find(&view, item.pos).filter(|&i| i < self.cursor)
     }
 
     /// Splices `spans` in at `spot`.

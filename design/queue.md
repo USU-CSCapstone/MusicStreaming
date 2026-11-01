@@ -125,7 +125,7 @@ QueueState {
   - Queueing anything sets it, so a queue the user queued into is always kept.
 - **Items** are what is queued: the Manual Queue, the context and current. An item's ID never changes while it is queued: through moves, shuffle, unshuffle and Repeat All.
 - **Invariant: every item is in Up Next (`manual`, and `order` past the cursor) at most once, and in `order` at most once.** Edits, anchors and jumps name Up Next items, so a second place there would make them ambiguous.
-  - **One item can hold two places.** A context track that Previous put back in the Manual Queue keeps its passed place in `order`, so Repeat All still plays it.
+  - **One item can hold two places.** A context track that Previous put back in the Manual Queue keeps its passed place in `order`, so Repeat All still plays it. No field records this: the item's ID is in `manual` and in `order` before the cursor.
   - Moving it within the Manual Queue keeps the passed place. Moving it into the context, or removing it, drops that place too, so a removed track is gone from later laps. Dropping a passed place moves the cursor back one.
   - The core's tests check the invariant after every edit.
 - **Clean-up is eager, and in the core.** A source or copy nothing refers to is dropped in the same edit that let it go, with no stubs and no renumbering. "Refers to" means `current`, or a span in `manual`, `order`, the shuffle's base, a copy, or a History run. Every device and the server drop identically, and an edit naming an item of a dropped source is ignored, like any item that is gone.
