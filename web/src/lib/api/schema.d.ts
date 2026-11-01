@@ -488,7 +488,7 @@ export interface paths {
             header?: never;
             path: {
                 libraryId: components["parameters"]["LibraryId"];
-                /** @description Content-addressed; replacing an image on disk yields a new ID. */
+                /** @description An `ImageRef` ID, opaque to clients. Content-addressed; replacing an image on disk yields a new ID. */
                 imageId: string;
             };
             cookie?: never;
@@ -497,7 +497,9 @@ export interface paths {
          * Get an image
          * @description Album and artist images as JPEG, resized to the requested size
          *     (`requirements/conventions.md` §5). Immutable and cacheable indefinitely, because its ID
-         *     changes whenever the image does.
+         *     changes whenever the image does. A playlist's `image` ID may name the mosaic of its
+         *     first four album images, a 2×2 square of them, composed on first request and then kept;
+         *     a mosaic is served only to the owner of a playlist that holds it, and is `404` to anyone else.
          */
         get: operations["getImage"];
         put?: never;
@@ -1636,7 +1638,7 @@ export interface components {
             id: components["schemas"]["Id"];
             title: string;
             description: string | null;
-            /** @description For the user's own playlist, custom or a mosaic of the tracks inside; `null` when empty. Both are planned, so it is `null` for now. */
+            /** @description For the user's own playlist, a mosaic of the album images of its first tracks; `null` when none of its tracks has one. With fewer than four distinct album images it is the first of them alone. Its ID is opaque and changes whenever the mosaic would. A custom image is planned. */
             image: components["schemas"]["ImageRef"] | null;
         };
         Playlist: components["schemas"]["PlaylistBase"] & {
@@ -3104,7 +3106,7 @@ export interface operations {
             header?: never;
             path: {
                 libraryId: components["parameters"]["LibraryId"];
-                /** @description Content-addressed; replacing an image on disk yields a new ID. */
+                /** @description An `ImageRef` ID, opaque to clients. Content-addressed; replacing an image on disk yields a new ID. */
                 imageId: string;
             };
             cookie?: never;

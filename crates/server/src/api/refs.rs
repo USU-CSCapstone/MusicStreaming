@@ -44,7 +44,7 @@ impl<'de> Deserialize<'de> for TagsByType {
 /// The spec's `ImageRef`.
 #[derive(Clone, Serialize)]
 pub struct ImageRef {
-    id: Id,
+    id: String,
     /// The image's ThumbHash in base64, from which a client draws a blurred stand-in before the
     /// image arrives (`requirements/offline.md` §1.1). `None`, sent as `null`, until the
     /// placeholder job has made one, and for an image it could not decode.
@@ -55,8 +55,14 @@ impl ImageRef {
     /// The image with this ID, if there is one, and its [`placeholder!`] column, which is NULL
     /// before the placeholder job has run and empty when it could not decode the image.
     pub fn new(image_id: Option<i64>, placeholder: Option<Vec<u8>>) -> Option<ImageRef> {
-        image_id.map(|id| ImageRef {
-            id: Id(id),
+        ImageRef::named(image_id.map(|id| id.to_string()), placeholder)
+    }
+
+    /// The image with this `id`, which `getImage` reads as an image or a mosaic ID, if there is
+    /// one, with its placeholder as [`ImageRef::new`] reads it.
+    pub fn named(id: Option<String>, placeholder: Option<Vec<u8>>) -> Option<ImageRef> {
+        id.map(|id| ImageRef {
+            id,
             placeholder: placeholder
                 .filter(|hash| !hash.is_empty())
                 .map(|hash| BASE64.encode(hash)),
