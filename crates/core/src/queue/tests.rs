@@ -64,6 +64,25 @@ fn jump(state: &mut QueueState, id: &str) {
     apply(state, Edit::Jump { item: item(id) }).unwrap();
 }
 
+/// A play reference.
+fn play(no: u64, id: &str) -> PlayRef {
+    PlayRef { play: no, item: item(id) }
+}
+
+/// The plays in History, oldest first, as (number, item).
+fn plays(state: &QueueState) -> Vec<(u64, ItemId)> {
+    state
+        .history
+        .iter()
+        .flat_map(|run| {
+            (0..run.span.len).map(move |i| {
+                let View::Key(key) = &run.span.view else { panic!("a run reads the shuffle") };
+                (run.first + i, ItemId { key: key.clone(), pos: run.span.start + i })
+            })
+        })
+        .collect()
+}
+
 /// The Manual Queue's items.
 fn manual(state: &QueueState) -> Vec<String> {
     (0..state.manual.len()).map(|i| state.up_next_row(i).unwrap().item.to_string()).collect()
@@ -163,6 +182,16 @@ pub(super) fn assert_invariants(state: &QueueState) {
     for key in &keys {
         assert!(referenced.contains(*key), "{key} is unreferenced");
     }
+
+    assert!(state.history.len() <= HISTORY_RUNS, "History keeps too many runs");
+    let mut next_free = 0;
+    for run in &state.history {
+        assert!(run.span.len > 0, "an empty run");
+        assert!(run.first >= next_free, "runs overlap or are out of order");
+        assert!(matches!(run.span.view, View::Key(_)), "a run reads the shuffle");
+        next_free = run.first + run.span.len;
+    }
+    assert!(next_free <= state.next_play, "a play number is past nextPlay");
 
     assert!(state.cursor <= state.order.len(), "cursor past the context");
     let passed = list_items(&state.order);
@@ -272,8 +301,8 @@ fn jump_in_up_next_moves_everything_ahead_out() {
     assert!(manual(&q).is_empty());
     assert_eq!(upcoming(&q), ["a.4"]);
     assert_eq!(q.cursor, 4);
-    // The Manual Queue's source went with its rows.
-    assert_eq!(q.sources.len(), 1);
+    // The Manual Queue's source stays while History names it.
+    assert_eq!(q.sources.len(), 2);
 }
 
 #[test]
@@ -313,6 +342,245 @@ fn next_plays_manual_first_then_the_context_and_ends() {
     next(&mut q);
     assert_eq!(current(&q), None);
     assert_eq!(q.up_next_len(), 0);
+}
+
+/// A run as (first play, view key, start, length).
+fn runs(state: &QueueState) -> Vec<(u64, String, u64, u64)> {
+    state
+        .history
+        .iter()
+        .map(|r| {
+            let View::Key(key) = &r.span.view else { panic!("a run reads the shuffle") };
+            (r.first, key.clone(), r.span.start, r.span.len)
+        })
+        .collect()
+}
+
+#[test]
+fn album_played_through_is_one_run() {
+    let mut q = album();
+    for _ in 0..4 {
+        next(&mut q);
+    }
+    // The current item is not a play yet.
+    assert_eq!(runs(&q), [(0, "a".into(), 0, 4)]);
+    assert_eq!((q.next_play, q.history_len()), (4, 4));
+    next(&mut q);
+    assert_eq!(runs(&q), [(0, "a".into(), 0, 5)]);
+    assert_eq!(current(&q), None);
+    let newest = q.history_row(0).unwrap();
+    assert_eq!((newest.play, newest.row.item), (4, item("a.4")));
+    assert_eq!(q.history_row(4).unwrap().play, 0);
+    assert!(q.history_row(5).is_none());
+    assert!(!q.adjusted);
+}
+
+#[test]
+fn long_jump_is_one_run() {
+    let mut q = QueueState::default();
+    q.start(source("a", 500), 0).unwrap();
+    remove(&mut q, &["a.10", "a.20"]);
+    jump(&mut q, "a.400");
+    // The item playing and everything skipped: one run per span passed.
+    assert_eq!(
+        runs(&q),
+        [(0, "a".into(), 0, 10), (10, "a".into(), 11, 9), (19, "a".into(), 21, 379)]
+    );
+    assert_eq!(q.next_play, 398);
+
+    // Manual Queue rows ahead of the target are plays too, ahead of the context's.
+    let mut q = album();
+    add(&mut q, source("m", 2), Anchor::ManualEnd);
+    jump(&mut q, "a.2");
+    assert_eq!(
+        plays(&q).into_iter().map(|(_, i)| i.to_string()).collect::<Vec<_>>(),
+        ["a.0", "m.0", "m.1", "a.1"]
+    );
+    // A jump within the Manual Queue plays what it passes.
+    let mut q = album();
+    add(&mut q, source("m", 3), Anchor::ManualEnd);
+    jump(&mut q, "m.1");
+    assert_eq!(
+        plays(&q).into_iter().map(|(_, i)| i.to_string()).collect::<Vec<_>>(),
+        ["a.0", "m.0"]
+    );
+}
+
+#[test]
+fn history_keeps_newest_runs() {
+    let mut q = album();
+    // Applied directly: the invariant check after each of 2,200 edits would dominate.
+    for i in 0..1_100 {
+        let source = source(&format!("m{i}"), 1);
+        q.apply(&Edit::Add { source, before: Anchor::ManualEnd }).unwrap();
+    }
+    for _ in 0..1_100 {
+        q.apply(&Edit::Next).unwrap();
+    }
+    assert_invariants(&q);
+    // Each source is its own run.
+    assert_eq!(q.history.len(), HISTORY_RUNS);
+    assert_eq!(q.next_play, 1_100);
+    assert_eq!(q.history[0].first, 100);
+    assert_eq!(q.history_row(0).unwrap().row.item, item("m1098.0"));
+    assert_eq!(q.history_len(), HISTORY_RUNS as u64);
+    // What the trimmed runs named is cleaned up with them.
+    assert!(q.sources.iter().all(|s| s.key != "m0"));
+    assert!(q.sources.iter().any(|s| s.key == "m1098"));
+}
+
+#[test]
+fn history_stays_trimmed_when_a_removal_splits_a_run() {
+    // 999 one-play runs, then one run of four plays: exactly 1,000 runs.
+    let mut q = album();
+    for i in 0..999 {
+        let source = source(&format!("m{i}"), 1);
+        q.apply(&Edit::Add { source, before: Anchor::ManualEnd }).unwrap();
+    }
+    for _ in 0..1_000 {
+        q.apply(&Edit::Next).unwrap();
+    }
+    q.apply(&Edit::Add { source: source("z", 5), before: Anchor::ManualEnd }).unwrap();
+    for _ in 0..5 {
+        q.apply(&Edit::Next).unwrap();
+    }
+    assert_eq!(q.history.len(), HISTORY_RUNS);
+    let last = q.history.last().unwrap().clone();
+    assert_eq!(last.span.len, 4);
+
+    // Removing a play from the middle of that run splits it, and the oldest run goes.
+    let mid = play(last.first + 1, &format!("z.{}", last.span.start + 1));
+    let plays_before = q.history_len();
+    apply(&mut q, Edit::RemovePlays { plays: vec![mid] }).unwrap();
+    assert_eq!(q.history.len(), HISTORY_RUNS);
+    assert_eq!(q.history_len(), plays_before - 2);
+
+    // So does a re-queue.
+    let mid = play(last.first + 2, &format!("z.{}", last.span.start + 2));
+    apply(&mut q, Edit::Requeue { play: mid, key: "c".into() }).unwrap();
+    assert_eq!(q.history.len(), HISTORY_RUNS);
+}
+
+#[test]
+fn jump_with_full_history_drops_the_trimmed_runs_source() {
+    let mut q = album();
+    q.apply(&Edit::Add { source: source("x", 1), before: Anchor::ManualStart }).unwrap();
+    for i in 0..999 {
+        let source = source(&format!("m{i}"), 1);
+        q.apply(&Edit::Add { source, before: Anchor::ManualEnd }).unwrap();
+    }
+    // Plays a.0, x.0, m0 ... m997: 1,000 runs, and m998 is playing.
+    for _ in 0..1_000 {
+        q.apply(&Edit::Next).unwrap();
+    }
+    assert_eq!((q.history.len(), current(&q)), (HISTORY_RUNS, Some("m998.0".into())));
+    for key in ["y", "z"] {
+        q.apply(&Edit::Add { source: source(key, 1), before: Anchor::ManualEnd }).unwrap();
+    }
+    assert!(q.sources.iter().any(|s| s.key == "x"));
+
+    // Jumping over y and z plays three runs, which trims a.0's and x.0's: x is named no more.
+    jump(&mut q, "a.1");
+    assert_eq!(q.history.len(), HISTORY_RUNS);
+    assert!(q.sources.iter().all(|s| s.key != "x"));
+}
+
+#[test]
+fn repeat_all_restarts_by_cursor() {
+    let mut q = QueueState::default();
+    q.start(source("a", 3), 0).unwrap();
+    apply(&mut q, Edit::Repeat { mode: Repeat::All }).unwrap();
+    for _ in 0..2 {
+        next(&mut q);
+    }
+    let order = q.order.clone();
+    next(&mut q);
+    assert_eq!(current(&q), Some("a.0".into()));
+    assert_eq!((q.cursor, &q.order), (1, &order));
+    assert!(q.copies.is_empty() && q.sources.len() == 1);
+    assert_eq!(upcoming(&q), ["a.1", "a.2"]);
+    assert_eq!(runs(&q), [(0, "a".into(), 0, 3)]);
+
+    // Repeat off ends instead, and Repeat One leaves Next to advance.
+    let mut q = QueueState::default();
+    q.start(source("a", 2), 0).unwrap();
+    apply(&mut q, Edit::Repeat { mode: Repeat::One }).unwrap();
+    next(&mut q);
+    assert_eq!(current(&q), Some("a.1".into()));
+    next(&mut q);
+    assert_eq!(current(&q), None);
+}
+
+#[test]
+fn stale_play_number_removes_nothing() {
+    let mut q = album();
+    for _ in 0..3 {
+        next(&mut q);
+    }
+    let fresh = q.clone();
+    let remove_plays = |q: &mut QueueState, ps| apply(q, Edit::RemovePlays { plays: ps });
+    // The number is right and the item wrong, the item right and the number wrong, and a play
+    // that never was.
+    remove_plays(&mut q, vec![play(1, "a.2"), play(2, "a.1"), play(9, "a.9"), play(1, "x.1")])
+        .unwrap();
+    assert_eq!(q, fresh);
+    assert!(!q.adjusted);
+
+    remove_plays(&mut q, vec![play(1, "a.1"), play(1, "a.1")]).unwrap();
+    assert_eq!(runs(&q), [(0, "a".into(), 0, 1), (2, "a".into(), 2, 1)]);
+    assert!(q.adjusted);
+    assert_eq!(q.next_play, 3);
+    // The number is not reused, and the gap closes for reads.
+    assert_eq!(q.history_row(0).unwrap().play, 2);
+    assert_eq!(q.history_row(1).unwrap().play, 0);
+    remove_plays(&mut q, vec![play(0, "a.0"), play(2, "a.2")]).unwrap();
+    assert!(q.history.is_empty());
+    next(&mut q);
+    assert_eq!(q.history[0].first, 3);
+    // The sources they named are dropped with the last play, unless still referenced.
+    assert_eq!(q.sources.len(), 1);
+}
+
+#[test]
+fn requeue_puts_copy_first() {
+    let mut q = album();
+    add(&mut q, source("m", 1), Anchor::ManualEnd);
+    q.adjusted = false;
+    for _ in 0..3 {
+        next(&mut q);
+    }
+    // Plays 0, 1, 2 are a.0, m.0, a.1, and a.2 is playing.
+    let fresh = q.clone();
+
+    // A stale play changes nothing.
+    apply(&mut q, Edit::Requeue { play: play(0, "a.1"), key: "c".into() }).unwrap();
+    assert_eq!(q, fresh);
+    assert!(!q.adjusted);
+
+    apply(&mut q, Edit::Requeue { play: play(2, "a.1"), key: "c".into() }).unwrap();
+    assert!(q.adjusted);
+    assert_eq!(manual(&q), ["c.0"]);
+    assert_eq!(q.copies.len(), 1);
+    assert_eq!(q.copies[0].of.spans(), [Span::new(View::Key("a".into()), 1, 1)]);
+    assert_eq!(runs(&q), [(0, "a".into(), 0, 1), (1, "m".into(), 0, 1)]);
+    // The copy reads the source row, and the context's own item stays where it was.
+    assert_eq!(q.up_next_row(0).unwrap().position, 1);
+    assert_eq!(upcoming(&q), ["a.3", "a.4"]);
+
+    // A key in use fails the edit.
+    let edit = Edit::Requeue { play: play(1, "m.0"), key: "c".into() };
+    let before = q.clone();
+    assert_eq!(apply(&mut q, edit), Err(QueueError::DuplicateKey));
+    assert_eq!(q, before);
+
+    // The copy of a copy is flattened onto its source.
+    next(&mut q);
+    next(&mut q);
+    assert_eq!(current(&q), Some("a.3".into()));
+    apply(&mut q, Edit::Requeue { play: play(4, "c.0"), key: "d".into() }).unwrap();
+    assert_eq!(q.copies.len(), 1);
+    assert_eq!(q.copies[0].key, "d");
+    assert_eq!(q.copies[0].of.spans(), [Span::new(View::Key("a".into()), 1, 1)]);
 }
 
 #[test]
@@ -404,6 +672,10 @@ fn cleanup_drops_unreferenced_sources() {
     next(&mut q);
     next(&mut q);
     assert_eq!(current(&q), Some("a.1".into()));
+    // History's plays keep what they name.
+    assert_eq!(q.sources.iter().map(|s| &*s.key).collect::<Vec<_>>(), ["a", "n"]);
+    let plays = [play(1, "n.0"), play(2, "n.1")];
+    apply(&mut q, Edit::RemovePlays { plays: plays.to_vec() }).unwrap();
     assert_eq!(q.sources.iter().map(|s| &*s.key).collect::<Vec<_>>(), ["a"]);
 }
 
@@ -464,6 +736,8 @@ fn edits_serialize_as_tagged_json() {
         (Edit::Jump { item: item("a.2") }, "jump"),
         (Edit::Next, "next"),
         (Edit::Repeat { mode: Repeat::All }, "repeat"),
+        (Edit::RemovePlays { plays: vec![play(3, "a.1")] }, "removePlays"),
+        (Edit::Requeue { play: play(3, "a.1"), key: "c".into() }, "requeue"),
     ];
     for (edit, tag) in edits {
         let value = serde_json::to_value(&edit).unwrap();
@@ -481,6 +755,14 @@ fn edits_serialize_as_tagged_json() {
                "source": {"key": "b", "libraryId": "lib", "length": 1}})
     );
     assert_eq!(serde_json::to_value(Edit::Next).unwrap(), json!({"type": "next"}));
+    assert_eq!(
+        serde_json::to_value(Edit::RemovePlays { plays: vec![play(3, "a.1")] }).unwrap(),
+        json!({"type": "removePlays", "plays": [{"play": 3, "item": "a.1"}]})
+    );
+    assert_eq!(
+        serde_json::to_value(Edit::Requeue { play: play(3, "a.1"), key: "c".into() }).unwrap(),
+        json!({"type": "requeue", "play": {"play": 3, "item": "a.1"}, "key": "c"})
+    );
 }
 
 /// A small deterministic generator (SplitMix64).
@@ -497,12 +779,19 @@ impl Rng {
     }
 }
 
-/// What Up Next and the playing item should be, kept as plain lists.
+/// What Up Next, the passed context, the playing item and History should be, kept as plain
+/// lists.
 #[derive(Debug, PartialEq)]
 struct Model {
     manual: Vec<ItemId>,
     context: Vec<ItemId>,
+    /// The context rows before Up Next, the current context item last.
+    passed: Vec<ItemId>,
     current: Option<ItemId>,
+    /// Every play, oldest first, with its number.
+    plays: Vec<(u64, ItemId)>,
+    next_play: u64,
+    repeat: Repeat,
 }
 
 impl Model {
@@ -525,6 +814,14 @@ impl Model {
     fn put(&mut self, spot: (bool, usize), rows: Vec<ItemId>) {
         let list = if spot.0 { &mut self.manual } else { &mut self.context };
         list.splice(spot.1..spot.1, rows);
+    }
+
+    /// Records the item playing as a play.
+    fn play_current(&mut self) {
+        if let Some(item) = self.current.clone() {
+            self.plays.push((self.next_play, item));
+            self.next_play += 1;
+        }
     }
 
     /// Applies `edit` the obvious way, and says whether it should fail.
@@ -560,26 +857,53 @@ impl Model {
                 self.put(spot, moved);
             }
             Edit::Jump { item } => {
-                if let Some(at) = self.manual.iter().position(|i| i == item) {
-                    self.manual.drain(..=at);
-                } else if let Some(at) = self.context.iter().position(|i| i == item) {
-                    self.manual.clear();
-                    self.context.drain(..=at);
-                } else {
-                    return Ok(());
+                let skipped: Vec<ItemId> =
+                    if let Some(at) = self.manual.iter().position(|i| i == item) {
+                        self.manual.drain(..=at).collect()
+                    } else if let Some(at) = self.context.iter().position(|i| i == item) {
+                        let mut skipped: Vec<_> = std::mem::take(&mut self.manual);
+                        let passed: Vec<_> = self.context.drain(..=at).collect();
+                        skipped.extend(passed.iter().cloned());
+                        self.passed.extend(passed);
+                        skipped
+                    } else {
+                        return Ok(());
+                    };
+                self.play_current();
+                for skipped in &skipped[..skipped.len() - 1] {
+                    self.plays.push((self.next_play, skipped.clone()));
+                    self.next_play += 1;
                 }
                 self.current = Some(item.clone());
             }
             Edit::Next => {
+                self.play_current();
+                if self.manual.is_empty() && self.context.is_empty() && self.repeat == Repeat::All {
+                    self.context = std::mem::take(&mut self.passed);
+                }
                 self.current = if !self.manual.is_empty() {
                     Some(self.manual.remove(0))
                 } else if !self.context.is_empty() {
-                    Some(self.context.remove(0))
+                    let item = self.context.remove(0);
+                    self.passed.push(item.clone());
+                    Some(item)
                 } else {
                     None
                 };
             }
-            Edit::Repeat { .. } => {}
+            Edit::RemovePlays { plays } => {
+                for p in plays {
+                    self.plays.retain(|(no, item)| !(*no == p.play && *item == p.item));
+                }
+            }
+            Edit::Requeue { play, key } => {
+                let held = (play.play, play.item.clone());
+                if let Some(at) = self.plays.iter().position(|p| *p == held) {
+                    self.plays.remove(at);
+                    self.manual.insert(0, ItemId { key: key.clone(), pos: 0 });
+                }
+            }
+            Edit::Repeat { mode } => self.repeat = *mode,
         }
         Ok(())
     }
@@ -591,7 +915,11 @@ fn model_of(state: &QueueState) -> Model {
     Model {
         manual: (0..state.manual.len()).map(row).collect(),
         context: (state.manual.len()..state.up_next_len()).map(row).collect(),
+        passed: list_items(&state.order)[..state.cursor as usize].to_vec(),
         current: state.current.clone(),
+        plays: plays(state),
+        next_play: state.next_play,
+        repeat: state.repeat,
     }
 }
 
@@ -622,7 +950,19 @@ fn random_edits_keep_invariants() {
                 2 => Anchor::ContextEnd,
                 _ => Anchor::Before { item: pick(&mut rng) },
             };
-            let edit = match rng.below(10) {
+            // A play to name: a real one, a real number with the wrong item, or a made-up one.
+            let play_ref = |rng: &mut Rng| match model.plays.len() as u64 {
+                0 => play(rng.below(3), "s0.0"),
+                n => {
+                    let (no, item) = model.plays[rng.below(n) as usize].clone();
+                    match rng.below(4) {
+                        0 => PlayRef { play: no, item: pick(rng) },
+                        1 => PlayRef { play: no + 1, item },
+                        _ => PlayRef { play: no, item },
+                    }
+                }
+            };
+            let edit = match rng.below(14) {
                 0..=2 => {
                     let key = format!("s{keys}");
                     keys += 1;
@@ -631,8 +971,17 @@ fn random_edits_keep_invariants() {
                 3 | 4 => Edit::Remove { items: named },
                 5 | 6 => Edit::Move { items: named, before: anchor },
                 7 => Edit::Jump { item: pick(&mut rng) },
-                8 => Edit::Next,
-                _ => Edit::Repeat { mode: Repeat::All },
+                8 | 9 => Edit::Next,
+                10 => Edit::RemovePlays { plays: (0..count).map(|_| play_ref(&mut rng)).collect() },
+                11 => {
+                    let play = play_ref(&mut rng);
+                    let key = format!("s{keys}");
+                    keys += 1;
+                    Edit::Requeue { play, key }
+                }
+                _ => Edit::Repeat {
+                    mode: [Repeat::Off, Repeat::All, Repeat::One][rng.below(3) as usize],
+                },
             };
             let was = q.clone();
             let expected = model.apply(&edit);

@@ -161,6 +161,27 @@ impl SpanList {
         self.normalize();
     }
 
+    /// The spans the rows in `range` (clamped to the list) read, without changing the list.
+    pub fn slice(&self, range: Range<u64>) -> Vec<Span> {
+        let end = range.end.min(self.len());
+        let Some((first, _)) = (range.start < end).then(|| self.locate(range.start)).flatten()
+        else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for i in first..self.spans.len() {
+            let from = self.start_of(i);
+            if from >= end {
+                break;
+            }
+            let span = &self.spans[i];
+            let skip = range.start.saturating_sub(from);
+            let take = (self.ends[i].min(end) - from) - skip;
+            out.push(Span::new(span.view.clone(), span.start + skip, take));
+        }
+        out
+    }
+
     /// Removes the rows in `range` (clamped to the list) and returns the spans they were.
     pub fn remove(&mut self, range: Range<u64>) -> Vec<Span> {
         let end = range.end.min(self.len());
@@ -326,6 +347,13 @@ mod tests {
         assert_eq!(list.len(), 8);
         assert_eq!(list.get(1), Some((&key("a"), 1)));
         assert_eq!(list.get(2), Some((&key("d"), 0)));
+
+        // A slice reads what a removal would return, and changes nothing.
+        let copy = list.clone();
+        assert_eq!(list.slice(1..4), copy.clone().remove(1..4));
+        assert_eq!(list.slice(0..99), copy.clone().remove(0..99));
+        assert!(list.slice(3..3).is_empty() && list.slice(99..100).is_empty());
+        assert_eq!(list, copy);
 
         // Out-of-range removals clamp, and an empty range does nothing.
         assert!(list.remove(5..5).is_empty());
