@@ -7,6 +7,7 @@ mod edit;
 mod history;
 mod previous;
 mod read;
+mod rewind;
 mod spans;
 mod state;
 #[cfg(test)]

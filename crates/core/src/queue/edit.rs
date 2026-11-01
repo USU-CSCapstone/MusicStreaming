@@ -87,6 +87,16 @@ pub enum Edit {
         /// otherwise, and then it may name anything.
         key: String,
     },
+    /// Step back until a play is current, as Previous repeated would: it plays, then everything
+    /// heard after it in the order heard, then Up Next as it was. Fails with
+    /// [`QueueError::PlayGone`] if the play is gone or played another item.
+    Rewind {
+        /// The play to go back to.
+        play: PlayRef,
+        /// The key of the one copy made when some of the plays are still in Up Next; unused
+        /// otherwise, and then it may name anything.
+        key: String,
+    },
     /// Set the repeat mode.
     Repeat {
         /// The mode.
@@ -116,9 +126,10 @@ impl QueueState {
     /// nothing leaves the state as it was, `adjusted` included. An anchor that isn't in Up Next
     /// fails the whole edit with [`QueueError::AnchorGone`], so a device can revert and say so.
     /// `adjusted` is set by an add, remove, move, play removal or re-queue that acts, and by no
-    /// other edit. A context track that Previous put in the Manual Queue holds a second, passed
-    /// place in the context: the same item ID in `order` before the cursor. A move within the
-    /// Manual Queue keeps it; a move into the context, or a removal, drops it.
+    /// other edit (Previous and rewind are playback). A context track that Previous or rewind
+    /// put in the Manual Queue holds a second, passed place in the context: the same item ID in
+    /// `order` before the cursor. A move within the Manual Queue keeps it; a move into the
+    /// context, or a removal, drops it.
     pub fn apply(&mut self, edit: &Edit) -> Result<(), QueueError> {
         match edit {
             Edit::Add { source, before } => self.add(source, before),
@@ -141,6 +152,7 @@ impl QueueState {
             }
             Edit::Requeue { play, key } => self.requeue(play, key),
             Edit::Previous { key } => self.previous(key),
+            Edit::Rewind { play, key } => self.rewind(play, key),
             Edit::Repeat { mode } => {
                 self.repeat = *mode;
                 Ok(())
