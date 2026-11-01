@@ -767,10 +767,11 @@ export interface paths {
         };
         /**
          * List playlist items
-         * @description **Planned:** the server does not serve this yet; the web client's mock does.
-         *
-         *     In the user's order, where an item's index is its position for `editPlaylist`. Missing
-         *     tracks stay in position (`requirements/playlists.md` §3). Every page comes from one version.
+         * @description In the user's order, where an item's index is its position for `editPlaylist`. Missing
+         *     tracks stay in position (`requirements/playlists.md` §3). A duplicate track is a separate
+         *     item. Every page comes from one version: a `cursor` made at another version is `410`, and
+         *     the client starts again from the first page. `total` counts every item, missing included.
+         *     Anyone else's playlist is `404`.
          */
         get: operations["listPlaylistItems"];
         put?: never;
@@ -795,9 +796,10 @@ export interface paths {
         put?: never;
         /**
          * Check for duplicates before adding
-         * @description **Planned:** the server does not serve this yet; the web client's mock does.
-         *
-         *     Reports which of the given items are already present, so the user can back out (`requirements/playlists.md` §3).
+         * @description Reports which of the given items are already present, so the user can back out
+         *     (`requirements/playlists.md` §3). The items are expanded as when adding them, so an item
+         *     the caller may not add is `422`. `trackIds` holds each track already in the playlist once,
+         *     in the order the request first names it. Anyone else's playlist is `404`.
          */
         post: operations["checkPlaylistDuplicates"];
         delete?: never;
@@ -1127,7 +1129,7 @@ export interface components {
             /** @description Human-readable, safe to show. Never contains credentials or plugin internals. */
             detail?: string;
             /**
-             * @description `version_conflict`, `cursor_expired`, and `unsupported_media` come only from planned operations.
+             * @description `version_conflict` and `unsupported_media` come only from planned operations.
              * @enum {string}
              */
             code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "version_conflict" | "cursor_expired" | "setup_required" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";

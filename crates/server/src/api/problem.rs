@@ -29,6 +29,7 @@ pub enum Code {
     PluginSettingsInvalid,
     PluginExists,
     PermissionsRequired,
+    CursorExpired,
     DeviceUnavailable,
     SetupRequired,
     Internal,
@@ -53,6 +54,7 @@ impl Code {
                 StatusCode::CONFLICT
             }
             Self::SetupRequired => StatusCode::SERVICE_UNAVAILABLE,
+            Self::CursorExpired => StatusCode::GONE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

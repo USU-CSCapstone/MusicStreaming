@@ -1,7 +1,7 @@
 //! The routes under `/libraries`: the libraries the caller reaches and the catalog in each.
 
 use axum::Router;
-use axum::routing::{delete, get};
+use axum::routing::{delete, get, post};
 
 use crate::api::{
     AppState, albums, artists, audio, images, libraries, lyrics, playlists, recent_searches,
@@ -19,6 +19,11 @@ pub fn router() -> Router<AppState> {
         .route(
             "/libraries/{library_id}/playlists/{playlist_id}",
             get(playlists::get).delete(playlists::delete),
+        )
+        .route("/libraries/{library_id}/playlists/{playlist_id}/items", get(playlists::list_items))
+        .route(
+            "/libraries/{library_id}/playlists/{playlist_id}/duplicates",
+            post(playlists::duplicates),
         )
         .route("/libraries/{library_id}/tag-types", get(tags::types))
         .route("/libraries/{library_id}/tags", get(tags::list))
