@@ -929,6 +929,10 @@ fn edits_serialize_as_tagged_json() {
         json!({"type": "previous", "key": "c"})
     );
     assert_eq!(
+        serde_json::to_value(Edit::Rewind { play: play(3, "a.1"), key: "c".into() }).unwrap(),
+        json!({"type": "rewind", "play": {"play": 3, "item": "a.1"}, "key": "c"})
+    );
+    assert_eq!(
         serde_json::to_value(Edit::RemovePlays { plays: vec![play(3, "a.1")] }).unwrap(),
         json!({"type": "removePlays", "plays": [{"play": 3, "item": "a.1"}]})
     );
@@ -1100,6 +1104,7 @@ impl Model {
                 self.current =
                     Some(if queued { ItemId { key: key.clone(), pos: 0 } } else { last });
             }
+            Edit::Rewind { .. } => unreachable!("random edits don't rewind"),
             Edit::Repeat { mode } => self.repeat = *mode,
         }
         Ok(())
@@ -1242,6 +1247,280 @@ fn previous_restores_up_next() {
     assert!(stepped_back > 500, "only {stepped_back} Previous edits ran with plays");
 }
 
+/// What a queue plays, by what each row reads: the playing row, Up Next with each Manual Queue
+/// row's second, passed place, the passed context, the cursor, and what History keeps.
+fn reads(state: &QueueState) -> impl PartialEq + std::fmt::Debug {
+    let read = |row: Option<Row<'_>>| row.map(|r| (r.source.to_string(), r.position));
+    let passed = list_items(&state.order);
+    let up_next: Vec<_> = (0..state.up_next_len())
+        .map(|i| {
+            let row = state.up_next_row(i).unwrap();
+            let two_place =
+                i < state.manual.len() && passed[..state.cursor as usize].contains(&row.item);
+            (read(Some(row)), two_place)
+        })
+        .collect();
+    let context: Vec<_> = (0..state.cursor).map(|i| read(state.context_row(i))).collect();
+    (
+        read(state.current_row()),
+        up_next,
+        state.manual.len(),
+        context,
+        state.cursor,
+        plays(state),
+        (state.next_play, state.adjusted, state.repeat),
+    )
+}
+
+/// Rewinds a copy of `state` to the play numbered `no`, and checks it reads as Previous
+/// repeated until that play is current, with at most one new copy. Returns the rewound queue.
+fn rewound(state: &QueueState, no: u64, key: &str) -> QueueState {
+    let (_, item) = plays(state).into_iter().find(|(n, _)| *n == no).unwrap();
+    let mut by_previous = state.clone();
+    for n in 0..plays(state).iter().filter(|(n, _)| *n >= no).count() {
+        by_previous.apply(&Edit::Previous { key: format!("{key}-{n}") }).unwrap();
+    }
+    let mut q = state.clone();
+    apply(&mut q, Edit::Rewind { play: PlayRef { play: no, item }, key: key.into() }).unwrap();
+    assert_eq!(reads(&q), reads(&by_previous));
+    assert!(q.copies.len() <= state.copies.len() + 1);
+    q
+}
+
+/// A queue over `a` of `n` tracks on Repeat All, played until it restarted at `a.0`.
+fn restarted(n: u64) -> QueueState {
+    let mut q = QueueState::default();
+    q.start(source("a", n), 0).unwrap();
+    apply(&mut q, Edit::Repeat { mode: Repeat::All }).unwrap();
+    for _ in 0..n {
+        next(&mut q);
+    }
+    q
+}
+
+#[test]
+fn rewind_replays_in_order_heard() {
+    // Hear a.0, a.1, m.0 (queued), a.2, with a.3 playing: five tracks, the third queued.
+    let mut q = album();
+    next(&mut q);
+    add(&mut q, source("m", 1), Anchor::ManualStart);
+    next(&mut q);
+    next(&mut q);
+    next(&mut q);
+    assert_eq!(current(&q), Some("a.3".into()));
+
+    let mut q = rewound(&q, 0, "r");
+    assert_eq!(current(&q), Some("a.0".into()));
+    assert_eq!(manual(&q), ["a.1", "m.0"]);
+    assert_eq!(upcoming(&q), ["a.2", "a.3", "a.4"]);
+    // The cursor went back over a.3 and a.2, and nothing was copied.
+    assert_eq!(q.cursor, 2);
+    assert!(q.copies.is_empty() && q.history.is_empty());
+    let mut heard = Vec::new();
+    for _ in 0..5 {
+        next(&mut q);
+        heard.extend(current(&q));
+    }
+    assert_eq!(heard, ["a.1", "m.0", "a.2", "a.3", "a.4"]);
+    // The numbers of the plays taken back aren't reused.
+    assert_eq!(plays(&q)[0].0, 4);
+}
+
+#[test]
+fn rewind_within_an_album_moves_only_the_cursor() {
+    let mut q = album();
+    for _ in 0..4 {
+        next(&mut q);
+    }
+    let order = q.order.clone();
+    // No copy is needed, so a key in use is fine.
+    let q = rewound(&q, 1, "a");
+    assert_eq!((current(&q), q.cursor, &q.order), (Some("a.1".into()), 2, &order));
+    assert!(q.manual.is_empty() && q.copies.is_empty());
+    assert_eq!(upcoming(&q), ["a.2", "a.3", "a.4"]);
+    assert_eq!(runs(&q), [(0, "a".into(), 0, 1)]);
+}
+
+#[test]
+fn rewind_keeps_waiting_manual_tracks_after() {
+    let mut q = album();
+    next(&mut q);
+    add(&mut q, source("m", 1), Anchor::ManualStart);
+    next(&mut q);
+    next(&mut q);
+    next(&mut q);
+    add(&mut q, source("w", 2), Anchor::ManualEnd);
+    assert_eq!((current(&q), manual(&q)), (Some("a.3".into()), vec!["w.0".into(), "w.1".into()]));
+
+    let q = rewound(&q, 0, "r");
+    assert_eq!(current(&q), Some("a.0".into()));
+    // No phase 1 with the Manual Queue waiting: everything heard goes ahead of it.
+    assert_eq!(q.cursor, 4);
+    assert_eq!(manual(&q), ["a.1", "m.0", "a.2", "a.3", "w.0", "w.1"]);
+    assert_eq!(upcoming(&q), ["a.4"]);
+    assert!(q.copies.is_empty());
+}
+
+#[test]
+fn rewind_over_mixed_run() {
+    // a.1 is queued, so the run a.0, a.1, a.2 mixes a Manual play with context plays, and
+    // `order` has no a.1 between a.0 and a.2.
+    let mut q = album();
+    mv(&mut q, &["a.1"], Anchor::ManualStart).unwrap();
+    for _ in 0..3 {
+        next(&mut q);
+    }
+    assert_eq!(current(&q), Some("a.3".into()));
+    assert_eq!(runs(&q), [(0, "a".into(), 0, 3)]);
+
+    let before = q;
+    let q = rewound(&before, 0, "r");
+    assert_eq!(current(&q), Some("a.0".into()));
+    // Phase 1 takes a.3 and a.2; a.1 doesn't match the order, so it is a Manual piece.
+    assert_eq!(q.cursor, 1);
+    assert_eq!(
+        (manual(&q), upcoming(&q)),
+        (vec!["a.1".into()], ["a.2", "a.3", "a.4"].map(String::from).to_vec())
+    );
+    assert!(q.copies.is_empty() && q.history.is_empty());
+
+    // Rewinding to the middle of the run splits it.
+    let q = rewound(&before, 1, "r");
+    assert_eq!(current(&q), Some("a.1".into()));
+    assert_eq!(runs(&q), [(0, "a".into(), 0, 1)]);
+}
+
+#[test]
+fn rewind_after_restart_copies() {
+    let q = restarted(3);
+    assert_eq!((current(&q), q.cursor), (Some("a.0".into()), 1));
+    // Every play is in Up Next once the cursor goes back: one copy of all three.
+    let mut by_rewind = rewound(&q, 0, "r");
+    assert_eq!(by_rewind.copies.len(), 1);
+    assert_eq!(by_rewind.copies[0].of.spans(), [Span::new(View::Key("a".into()), 0, 3)]);
+    assert_eq!(current(&by_rewind), Some("r.0".into()));
+    assert_eq!(manual(&by_rewind), ["r.1", "r.2"]);
+    assert_eq!(upcoming(&by_rewind), ["a.0", "a.1", "a.2"]);
+    assert_eq!(by_rewind.cursor, 0);
+    // The copy plays the lap again, then the lap's tracks.
+    let mut heard = Vec::new();
+    for _ in 0..5 {
+        next(&mut by_rewind);
+        heard.extend(by_rewind.current_row().map(|r| r.position));
+    }
+    assert_eq!(heard, [1, 2, 0, 1, 2]);
+
+    // A key in use fails the edit, changing nothing.
+    let mut q = q;
+    let fresh = q.clone();
+    let rewind = |no, id, key: &str| Edit::Rewind { play: play(no, id), key: key.into() };
+    assert_eq!(q.apply(&rewind(0, "a.0", "a")), Err(QueueError::DuplicateKey));
+    assert_eq!(q, fresh);
+    // Rewinding to the newest play with its item queued is Previous.
+    let newest = rewound(&q, 2, "r");
+    assert_eq!(current(&newest), Some("r.0".into()));
+}
+
+#[test]
+fn rewind_after_split_run_one_copy() {
+    let mut q = restarted(4);
+    // Another device removes a.2, splitting the run.
+    apply(&mut q, Edit::RemovePlays { plays: vec![play(2, "a.2")] }).unwrap();
+    assert_eq!(runs(&q), [(0, "a".into(), 0, 2), (3, "a".into(), 3, 1)]);
+    let before = q;
+    let q = rewound(&before, 0, "r");
+    assert_eq!(q.copies.len(), 1);
+    assert_eq!(
+        q.copies[0].of.spans(),
+        [Span::new(View::Key("a".into()), 0, 2), Span::new(View::Key("a".into()), 3, 1)]
+    );
+    assert_eq!(current(&q), Some("r.0".into()));
+    assert_eq!(manual(&q), ["r.1", "r.2"]);
+    assert!(q.history.is_empty());
+
+    // Rewinding to the piece after the split goes back over a single run.
+    let q = rewound(&before, 3, "r");
+    assert_eq!(runs(&q), [(0, "a".into(), 0, 2)]);
+}
+
+#[test]
+fn rewind_flattens_copies() {
+    // a.1 is re-queued as copy c, moved into the context and played on a later lap.
+    let mut q = QueueState::default();
+    q.start(source("a", 3), 0).unwrap();
+    next(&mut q);
+    next(&mut q);
+    apply(&mut q, Edit::Requeue { play: play(1, "a.1"), key: "c".into() }).unwrap();
+    mv(&mut q, &["c.0"], Anchor::ContextEnd).unwrap();
+    apply(&mut q, Edit::Repeat { mode: Repeat::All }).unwrap();
+    for _ in 0..3 {
+        next(&mut q);
+    }
+    assert_eq!(current(&q), Some("a.1".into()));
+    assert_eq!(plays(&q).last(), Some(&(4, item("a.0"))));
+
+    // Play 3 is c.0, back in Up Next after the restart: the copy of it names a, not c.
+    let q = rewound(&q, 3, "r");
+    assert_eq!(
+        q.copies.iter().find(|c| c.key == "r").unwrap().of.spans(),
+        [Span::new(View::Key("a".into()), 1, 1)]
+    );
+    assert_eq!(current(&q), Some("r.0".into()));
+    assert_eq!(q.current_row().unwrap().position, 1);
+}
+
+#[test]
+fn rewind_stale_play_is_play_gone() {
+    let mut q = album();
+    for _ in 0..3 {
+        next(&mut q);
+    }
+    let fresh = q.clone();
+    let rewind = |no, id: &str| Edit::Rewind { play: play(no, id), key: "r".into() };
+    // Wrong item, wrong number, a play past History, and a play another device removed.
+    let used_key = Edit::Rewind { play: play(5, "a.1"), key: "a".into() };
+    for edit in [rewind(1, "a.2"), rewind(5, "a.1"), rewind(3, "a.3"), rewind(1, "b.1"), used_key] {
+        assert_eq!(apply(&mut q, edit), Err(QueueError::PlayGone));
+        assert_eq!(q, fresh);
+    }
+    apply(&mut q, Edit::RemovePlays { plays: vec![play(1, "a.1")] }).unwrap();
+    let removed = q.clone();
+    assert_eq!(apply(&mut q, rewind(1, "a.1")), Err(QueueError::PlayGone));
+    assert_eq!(q, removed);
+    assert_eq!(QueueError::PlayGone.to_string(), "the play is no longer in History");
+}
+
+#[test]
+fn rewind_equals_repeated_previous() {
+    let (mut rewinds, mut with_copy, mut moved_cursor) = (0, 0, 0);
+    for seed in 0..80 {
+        let mut rng = Rng(5_000 + seed);
+        let (mut q, mut model) = random_queue(&mut rng);
+        let mut keys = 1;
+        for step in 0..150 {
+            let edit = random_edit(&mut rng, &model, &mut keys);
+            let expected = model.apply(&edit);
+            assert_eq!(apply(&mut q, edit.clone()), expected, "seed {seed}: {edit:?}");
+            assert_eq!(model_of(&q), model, "seed {seed}: {edit:?}");
+            let all = plays(&q);
+            if all.is_empty() || rng.below(2) == 0 {
+                continue;
+            }
+            let (no, _) = all[rng.below(all.len() as u64) as usize].clone();
+            let by_rewind = rewound(&q, no, &format!("r{step}"));
+            rewinds += 1;
+            with_copy += usize::from(by_rewind.copies.len() > q.copies.len());
+            moved_cursor += usize::from(by_rewind.cursor < q.cursor);
+            if rng.below(3) == 0 {
+                q = by_rewind;
+                model = model_of(&q);
+            }
+        }
+    }
+    assert!(rewinds > 800, "only {rewinds} rewinds ran");
+    assert!(with_copy > 15 && moved_cursor > 50, "{with_copy} copies, {moved_cursor} cursor moves");
+}
+
 #[test]
 #[ignore = "timing run: cargo test -p jewelcase-core --release -- --ignored --nocapture"]
 fn edits_at_500k_are_fast() {
@@ -1333,4 +1612,29 @@ fn scattered_manual_edits_at_370k_are_fast() {
     let (moved, removed) = scattered_manual_edits(370_000);
     println!("move 370k scattered to the Manual Queue: {moved:?}; remove them: {removed:?}");
     assert!(moved < Duration::from_secs(1) && removed < Duration::from_secs(1));
+}
+
+#[test]
+#[ignore = "timing run: cargo test -p jewelcase-core --release -- --ignored --nocapture"]
+fn rewind_across_1000_runs_is_fast() {
+    let bound =
+        if cfg!(debug_assertions) { Duration::from_secs(1) } else { Duration::from_millis(5) };
+    // 1,000 runs alternating between two long lists; every `a` play is still in Up Next.
+    let mut q = QueueState::default();
+    q.start(source("a", 5_000), 0).unwrap();
+    q.sources.push(source("b", 5_000));
+    for i in 0..1_000 {
+        let view = View::Key(if i % 2 == 0 { "a" } else { "b" }.into());
+        q.history.push(Run { first: i, span: Span::new(view, i + 1, 1) });
+    }
+    q.next_play = 1_000;
+    assert_invariants(&q);
+    let target = PlayRef { play: 0, item: item("a.1") };
+    let started = Instant::now();
+    q.apply(&Edit::Rewind { play: target, key: "r".into() }).unwrap();
+    let took = started.elapsed();
+    println!("rewind across 1,000 runs: {took:?}");
+    assert_invariants(&q);
+    assert!(took < bound, "rewind took {took:?}");
+    assert_eq!(q.manual.len(), 999);
 }

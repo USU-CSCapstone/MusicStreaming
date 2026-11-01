@@ -26,9 +26,15 @@ pub(super) fn play_span(item: &ItemId) -> Span {
 impl QueueState {
     /// The spans naming the source position `item` reads, for a flattened copy of it.
     pub(super) fn source_spans(&self, item: &ItemId) -> Vec<Span> {
-        match self.copies.iter().find(|c| c.key == item.key) {
-            Some(copy) => copy.of.slice(item.pos..item.pos + 1),
-            None => vec![play_span(item)],
+        self.source_range(&item.key, item.pos, 1)
+    }
+
+    /// The spans naming the source positions read by the `len` positions of view `key` from
+    /// `start`, for a flattened copy of them.
+    pub(super) fn source_range(&self, key: &str, start: u64, len: u64) -> Vec<Span> {
+        match self.copies.iter().find(|c| c.key == key) {
+            Some(copy) => copy.of.slice(start..start + len),
+            None => vec![Span::new(View::Key(key.to_string()), start, len)],
         }
     }
 
@@ -90,7 +96,7 @@ impl QueueState {
     }
 
     /// The run and offset of `play` if it is in History and played the item it names.
-    fn match_play(&self, play: &PlayRef) -> Option<(usize, u64)> {
+    pub(super) fn match_play(&self, play: &PlayRef) -> Option<(usize, u64)> {
         let (i, offset) = self.find_play(play.play)?;
         let span = &self.history[i].span;
         let View::Key(key) = &span.view else { return None };

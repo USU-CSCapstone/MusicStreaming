@@ -150,6 +150,8 @@ pub enum QueueError {
     LengthMismatch,
     /// The anchor names an item that isn't in Up Next, or one the same edit moves.
     AnchorGone,
+    /// The play isn't in History, or played another item.
+    PlayGone,
 }
 
 impl fmt::Display for QueueError {
@@ -161,6 +163,7 @@ impl fmt::Display for QueueError {
             Self::UnknownSource => "no source has that key",
             Self::LengthMismatch => "the track list's length is not the source's",
             Self::AnchorGone => "the item to insert before is no longer in Up Next",
+            Self::PlayGone => "the play is no longer in History",
         })
     }
 }
