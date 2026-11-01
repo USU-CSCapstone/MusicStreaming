@@ -72,7 +72,7 @@ This is what makes recommendations work on a real collection:
 - **It becomes the context** and appears in Up Next like any other queue ([`queue.md` §1](queue.md#1-structure)), fully reorderable and removable.
 - **Endless play is radio seeded by what just finished** ([`queue.md` §5](queue.md#5-repeat--endless-play)), so a user who starts an album and walks away keeps listening in the same vein.
 - **Automatic tracks are always marked as such** ([`queue.md` §5](queue.md#5-repeat--endless-play)). A user must never wonder why something is playing.
-- **Nothing repeats within a session** ([`queue.md` §4](queue.md#4-shuffle)).
+- **It never re-selects a track that has already played** ([`queue.md` §4](queue.md#4-shuffle)).
 
 ---
 

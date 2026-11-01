@@ -86,7 +86,7 @@ A device carries a **name** (defaulted to something recognizable, user-editable)
 
 User-controlled, never imposed by an admin.
 
-- **Playback** — crossfade and its duration, volume normalization mode, silence skipping, default shuffle and repeat behavior, endless play, and whether a manual queue carries over into a new context ([`queue.md` §6](queue.md#6-sessions)). Gapless is not listed here: it is always on and not configurable ([`playback.md` §4](playback.md#4-transitions)).
+- **Playback** — crossfade and its duration, volume normalization mode, silence skipping, default shuffle and repeat behavior, and endless play ([`queue.md` §5](queue.md#5-repeat--endless-play)). Gapless is not listed here: it is always on and not configurable ([`playback.md` §4](playback.md#4-transitions)).
 - **Streaming quality** — independent choices for unmetered connections, metered connections, and offline downloads, so nobody must choose between quality at home and cost on the move. A further choice decides whether a downloaded track may be streamed when the connection allows better quality, or always plays from the device ([`offline.md` §4](offline.md#4-choosing-between-local-and-stream)).
 - **Appearance** — theme, accent color, list-versus-grid density, language.
 - **Identity** — display name and avatar, both editable; username, which identifies the account for sign-in.

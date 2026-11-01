@@ -98,6 +98,7 @@ Everything, other than audio the device does not hold.
 
 - **Browse, search, sort, and filter** across the full library, with search matching and ranking exactly as the server does ([`search.md` §2.1](search.md#21-one-search-two-places-to-run-it)).
 - **Build and manipulate queues**, including shuffle, over any context ([`queue.md` §4](queue.md#4-shuffle)) — the same context, sorting, and filters produce the same sequence they would online.
+- **Kept queues restore offline**, exactly as left ([`queue.md` §6](queue.md#6-sessions)). Where a track's audio is not on the device it is skipped in place, as in any queue.
 - **Create and edit playlists**, reconciling on reconnect ([§8](#8-reconnection)).
 - **Play what is downloaded**, with plays and listen time recorded locally ([§8](#8-reconnection)).
 - **"Not on this device" and "gone from the server" are different states**, presented differently, and both skipped in place during playback ([`conventions.md` §6](conventions.md#6-availability)).
