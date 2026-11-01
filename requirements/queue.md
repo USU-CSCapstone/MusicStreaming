@@ -33,7 +33,8 @@ Two tabs, because "what's coming" and "what just played" are different questions
 
 - **Up Next** — everything still to play, top to bottom in play order. The Manual Queue is **visually separated** from the context, so it is always obvious where Queue Last will land.
 - **History** — what has already played this session, most recent first.
-- **A track in History can be played again or returned to Up Next**, without disturbing the order of what is upcoming.
+- **Choosing a History entry goes back to it, as pressing Previous that many times would.** It plays, then every track heard after it, plus the one that was playing, in the order heard, then Up Next as it was. Hear 1, 2, 3 (queued by hand), 4, 5, then choose 1, and 1, 2, 3, 4, 5 play again, so going back never loses or reorders what was upcoming.
+- **Each History entry can be removed or re-queued**, which puts it at the front of Up Next.
 - **History belongs to the queue, not the account.** It reflects this queue only, and is distinct from listening history ([`analytics.md`](analytics.md)), which records every play on every device.
 
 ---
@@ -51,7 +52,8 @@ Two tabs, because "what's coming" and "what just played" are different questions
 
 - **Shuffle randomizes only the unplayed context.** The Manual Queue keeps its order and still plays first.
 - **Unshuffle restores the original order** and resumes from the current track's natural position in it, so turning shuffle off mid-album continues rather than jumping. Keep in mind that the same track can appear multiple times in the same context!
-- **Nothing repeats within a session.** Shuffle and endless play never re-select a track that has already played.
+- **Unshuffling may revisit tracks played while shuffled.** It resumes from the current track's natural position, so tracks after it are upcoming again whether or not they played while shuffled. Resuming in the album's order matters more than a clean tally.
+- **Endless play never re-selects a track that has already played.** The same holds for radio ([`recommendations.md` §4](recommendations.md#4-radio--endless-play)), so a user who walks away never hears a repeat they did not ask for.
 - **A shuffled order is fixed once generated.** It does not reshuffle as the user scrolls Up Next, and it is the same order on every device ([§7](#7-across-devices)) and offline ([`offline.md` §6](offline.md#6-what-works-offline)).
 - **Repeat All is the one exception, and it does not reshuffle.** Restarting a shuffled queue replays the same order it already generated, exactly as repeating an album replays the same running order ([§5](#5-repeat--endless-play)). A user who wants a different order asks for one by toggling shuffle.
 
@@ -72,7 +74,7 @@ Two independent controls, both surviving context changes and device handoff.
 - **Starting a new context replaces the current queue** — unless the user has invested something in it.
 - **A queue is kept when it has been adjusted**: anything moved, removed, or added, in Up Next or History. An untouched queue is simply replaced, so playing three albums in a row leaves nothing behind to prune.
 - **Kept queues are reachable from a dedicated list** and restore exactly as they were left — position, shuffle, repeat, Manual Queue, and History.
-- **The Manual Queue's fate is the user's choice.** A preference decides whether manually queued tracks **carry over** into a new context or are **parked** with the session they belong to ([`users.md` §6](users.md#6-profile--preferences)). They carry over by default: the user asked for them explicitly.
+- **The Manual Queue stays with its queue.** A new context starts with an empty Manual Queue, and the old one is kept with the queue it belongs to, since queueing anything counts as adjusting a queue. Carrying tracks over would mix two sessions, and restoring a kept queue could then not return it exactly as it was left.
 - **Kept queues expire after 30 days of inactivity**, or when the user deletes them.
 
 ---
