@@ -186,8 +186,25 @@ impl QueueState {
     }
 
     /// The Up Next indices of the named items that are in Up Next, ascending and distinct.
+    /// Each item is found as [`QueueState::find_item`] would, but all in one sweep over each
+    /// span list: O((s + k) log k) for k items.
     fn resolve(&self, items: &[ItemId]) -> Vec<u64> {
-        let mut at: Vec<u64> = items.iter().filter_map(|item| self.find_item(item)).collect();
+        let mut sorted: Vec<(&str, u64)> =
+            items.iter().map(|item| (item.key.as_str(), item.pos)).collect();
+        sorted.sort_unstable();
+        sorted.dedup();
+        let manual = self.manual.find_sorted(&sorted);
+        let order = self.order.find_sorted(&sorted);
+        let mut at: Vec<u64> = manual
+            .into_iter()
+            .zip(order)
+            .filter_map(|(manual, order)| {
+                manual.or_else(|| {
+                    let rest = order?.checked_sub(self.cursor)?;
+                    Some(self.manual.len() + rest)
+                })
+            })
+            .collect();
         at.sort_unstable();
         at.dedup();
         at
