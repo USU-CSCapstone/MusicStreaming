@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::Id;
 use crate::api::devices::Device;
 use crate::api::player::{CommandResult, PlayerCommand, PlayerState, ProgressReport};
+use crate::api::playlists::Change;
 
 /// The spec's `RealtimeClientMessage`, as far as it is built.
 #[derive(Deserialize)]
@@ -49,6 +50,8 @@ pub enum ServerMessage {
     CommandResult {
         result: CommandResult,
     },
+    /// A playlist of the user's was created, edited or deleted.
+    Playlist(Change),
     SessionRevoked {
         reason: Revoked,
     },

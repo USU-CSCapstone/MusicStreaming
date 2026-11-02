@@ -17,7 +17,7 @@ async fn order(app: &Router, id: &str) -> Vec<i64> {
 }
 
 /// `body` sent as `method` on `uri` as `token`, with `key` as its `Idempotency-Key`.
-async fn send(
+pub(super) async fn send(
     app: &Router,
     token: &str,
     method: &str,
@@ -40,12 +40,12 @@ async fn send(
 }
 
 /// Edits playlist `id` as the owner.
-async fn edit(app: &Router, id: &str, body: Value) -> (StatusCode, Value) {
+pub(super) async fn edit(app: &Router, id: &str, body: Value) -> (StatusCode, Value) {
     send(app, TOKEN, "PATCH", &format!("{URI}/{id}"), None, body).await
 }
 
 /// `{ "type": "track", "id": ... }`.
-fn track(id: i64) -> Value {
+pub(super) fn track(id: i64) -> Value {
     json!({ "type": "track", "id": id.to_string() })
 }
 
@@ -715,4 +715,21 @@ async fn a_plan_is_written_only_while_the_playlist_is_as_it_was_planned_from() {
     assert_eq!(add.totals, Some((3, 3_000_000)));
     assert!(write(add, 2).await.unwrap());
     assert_eq!(tracks(&db, &made["id"]).await, [1, 1, 2]);
+}
+
+#[tokio::test]
+async fn an_announced_add_leaves_out_tracks_purged_since_the_expansion() {
+    let (_temp, db, app) = catalog().await;
+    let playlist = create(&app, json!({ "title": "Mix", "items": [track(2)] })).await;
+    let id: i64 = playlist["id"].as_str().unwrap().parse().unwrap();
+    let ops = vec![Op::Add { at: None, items: vec![1, 999_999] }];
+    let plan =
+        db.try_read(move |conn| super::super::edit::plan(conn, 1, id, ops, 5)).await.unwrap();
+    assert_eq!(plan.totals.map(|(count, _)| count), Some(2), "only track 1 was added");
+    let [super::super::announce::AppliedOp::Add { track_ids, .. }] = &plan.applied[..] else {
+        panic!("one add expected");
+    };
+    assert_eq!(serde_json::to_value(track_ids).unwrap(), json!(["1"]));
+    db.try_write(move |tx| super::super::edit::write(tx, 1, 1, id, 1, &plan)).await.unwrap();
+    assert_eq!(tracks(&db, &playlist["id"]).await, [2, 1]);
 }

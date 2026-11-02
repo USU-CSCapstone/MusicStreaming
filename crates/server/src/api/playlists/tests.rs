@@ -771,3 +771,4 @@ async fn items_and_duplicates_read_from_an_index() {
 
 mod artwork;
 mod edit;
+mod realtime;

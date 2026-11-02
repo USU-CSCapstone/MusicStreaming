@@ -1706,6 +1706,32 @@ export interface components {
             /** @description Position the first moved track takes once the move is done. */
             at: number;
         };
+        /**
+         * @description A `PlaylistOp` as the server applied it, sent in the `playlist` realtime message. Remove
+         *     and move are as they were asked; an add names tracks rather than playables.
+         */
+        PlaylistAppliedOp: {
+            /** @constant */
+            op: "add";
+            /** @description The tracks to insert, in order, less any no longer in the library. */
+            trackIds: components["schemas"]["Id"][];
+            /** @description Position the first track takes. Omitted appends. */
+            at?: number;
+            /**
+             * Format: date-time
+             * @description The `addedAt` of each of the tracks.
+             */
+            addedAt: string;
+        } | {
+            /** @constant */
+            op: "remove";
+            positions: number[];
+        } | {
+            /** @constant */
+            op: "move";
+            positions: number[];
+            at: number;
+        };
         /** @description Every part applies, or none does. */
         PlaylistEdit: {
             /** @description The version the edit was made against. */
@@ -2220,6 +2246,26 @@ export interface components {
             /** @constant */
             type: "commandResult";
             result: components["schemas"]["CommandResult"];
+        } | {
+            /** @constant */
+            type: "playlist";
+            libraryId: components["schemas"]["Id"];
+            playlistId: components["schemas"]["Id"];
+            /** @description The playlist's version after the change; for a deletion, the last it had. */
+            version: number;
+            /** @description The playlist as the change left it, or `null` when it was deleted. */
+            playlist: components["schemas"]["Playlist"] | null;
+            /**
+             * @description What an edit applied to the items, in order, as `PlaylistOp` positions mean. An add
+             *     names the tracks its playables expanded to, in order, so the device does not expand
+             *     them again. Left out for a creation, a deletion, and an edit of details alone.
+             */
+            ops?: components["schemas"]["PlaylistAppliedOp"][];
+            /**
+             * @description `true` when the edit changed the items but its `ops` were too many for one message
+             *     (they are left out): the device reads the items again. Left out otherwise.
+             */
+            refetch?: boolean;
         } | {
             /** @constant */
             type: "sessionRevoked";
