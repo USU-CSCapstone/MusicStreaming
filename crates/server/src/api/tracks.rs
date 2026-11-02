@@ -33,10 +33,10 @@ const WITHIN_ALBUM: Sort = Sort {
     unknown: Unknown::Never,
 };
 
-/// The `sort` values `listTracks` supports.
+/// The `sort` values `listTracks` supports, and so a recipe.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-enum TrackSort {
+pub enum TrackSort {
     #[default]
     Name,
     Artist,
@@ -103,40 +103,19 @@ impl TrackSort {
     }
 }
 
-/// A track list's sort and direction as a recipe spells them, such as `name.asc`: one of the
-/// sorts `listTracks` supports, then `asc` or `desc`. Anything else, including the personal
-/// sorts that are not implemented, is refused as the request is read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "String")]
+/// A track list's sort and direction, as `listTracks` takes them and a recipe keeps them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrackOrder {
-    sort: TrackSort,
-    order: Order,
-}
-
-impl TryFrom<String> for TrackOrder {
-    type Error = String;
-
-    /// Reads `text` as `{sort}.{order}`.
-    fn try_from(text: String) -> Result<TrackOrder, String> {
-        let parsed = text.split_once('.').and_then(|(sort, order)| {
-            let (sort, _) = TrackSort::ALL.into_iter().find(|(_, name)| *name == sort)?;
-            let order = match order {
-                "asc" => Order::Asc,
-                "desc" => Order::Desc,
-                _ => return None,
-            };
-            Some(TrackOrder { sort, order })
-        });
-        parsed.ok_or_else(|| format!("{text:?} is not a sort, such as name.asc"))
-    }
+    pub sort: TrackSort,
+    pub order: Order,
 }
 
 impl TrackOrder {
-    /// The order as a recipe spells it.
-    pub fn label(self) -> String {
+    /// The sort's and the direction's names, as `listTracks` and a recipe spell them.
+    pub fn names(self) -> (&'static str, &'static str) {
         let name = TrackSort::ALL.into_iter().find(|(sort, _)| *sort == self.sort);
         let order = if self.order == Order::Asc { "asc" } else { "desc" };
-        format!("{}.{order}", name.map_or("", |(_, name)| name))
+        (name.map_or("", |(_, name)| name), order)
     }
 }
 

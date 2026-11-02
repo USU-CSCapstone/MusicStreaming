@@ -3,18 +3,21 @@
 use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 /// How a list was made. It isn't what plays (the hash is); it lets a device rebuild the list
 /// and lets the interface say what is playing. Every field that changes the order is part of it.
+/// The core keeps the fields as the API spells them (`sort` and `order` as `listTracks` takes
+/// them, `filters` as a browse filter) without reading them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Recipe {
     /// An album's tracks in a sort.
-    Album { album_id: String, sort: String },
+    Album { album_id: String, sort: String, order: String },
     /// An artist's tracks, by scope and credit, in a sort.
-    Artist { artist_id: String, scope: String, artist_credit: String, sort: String },
-    /// A library's tracks under filters (name, value pairs), in a sort.
-    Library { filters: Vec<(String, String)>, sort: String },
+    Artist { artist_id: String, scope: String, artist_credit: String, sort: String, order: String },
+    /// A library's tracks under filters, in a sort.
+    Library { filters: Map<String, Value>, sort: String, order: String },
     /// A search query.
     Search { q: String },
     /// Explicit track IDs the device sent.

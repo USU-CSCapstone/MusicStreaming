@@ -10,12 +10,14 @@ use std::sync::Arc;
 use jewelcase_core::{Kind, Recipe as Stored};
 use rusqlite::params;
 use serde::Deserialize;
+use serde_json::{Map, Value};
 
 use super::refused;
 use crate::api::credit::ArtistCredit;
+use crate::api::page::Order;
 use crate::api::scope::Caller;
 use crate::api::search::Indexes;
-use crate::api::tracks::{self, TrackOrder};
+use crate::api::tracks::{self, TrackOrder, TrackSort};
 use crate::api::{AnyId, Code, Id, Problem};
 use crate::db::{Database, by_ids, reaches};
 
@@ -30,11 +32,18 @@ use crate::db::{Database, by_ids, reaches};
 )]
 pub enum Recipe {
     /// An album's tracks in a sort.
-    Album { album_id: String, sort: TrackOrder },
+    Album { album_id: String, sort: TrackSort, order: Order },
     /// An artist's tracks, credited as `artist_credit` says, in a sort.
-    Artist { artist_id: String, scope: Scope, artist_credit: ArtistCredit, sort: TrackOrder },
-    /// A library's tracks in a sort. No filter is supported yet, so `filters` must be empty.
-    Library { filters: Vec<(String, String)>, sort: TrackOrder },
+    Artist {
+        artist_id: String,
+        scope: Scope,
+        artist_credit: ArtistCredit,
+        sort: TrackSort,
+        order: Order,
+    },
+    /// A library's tracks under a browse filter, in a sort. No filter is supported yet, so
+    /// `filters` must be empty.
+    Library { filters: Map<String, Value>, sort: TrackSort, order: Order },
     /// The tracks a search finds, in its ranking.
     Search { q: String },
 }
@@ -51,17 +60,23 @@ impl Recipe {
     /// The recipe as the core keeps it, which is how a snapshot shows it.
     pub fn stored(&self) -> Stored {
         match self {
-            Recipe::Album { album_id, sort } => {
-                Stored::Album { album_id: album_id.clone(), sort: sort.label() }
+            Recipe::Album { album_id, sort, order } => {
+                let (sort, order) = names(*sort, *order);
+                Stored::Album { album_id: album_id.clone(), sort, order }
             }
-            Recipe::Artist { artist_id, artist_credit, sort, .. } => Stored::Artist {
-                artist_id: artist_id.clone(),
-                scope: "all".to_owned(),
-                artist_credit: artist_credit.name().to_owned(),
-                sort: sort.label(),
-            },
-            Recipe::Library { filters, sort } => {
-                Stored::Library { filters: filters.clone(), sort: sort.label() }
+            Recipe::Artist { artist_id, artist_credit, sort, order, .. } => {
+                let (sort, order) = names(*sort, *order);
+                Stored::Artist {
+                    artist_id: artist_id.clone(),
+                    scope: "all".to_owned(),
+                    artist_credit: artist_credit.name().to_owned(),
+                    sort,
+                    order,
+                }
+            }
+            Recipe::Library { filters, sort, order } => {
+                let (sort, order) = names(*sort, *order);
+                Stored::Library { filters: filters.clone(), sort, order }
             }
             Recipe::Search { q } => Stored::Search { q: q.clone() },
         }
@@ -77,6 +92,12 @@ impl Recipe {
             _ => Ok(()),
         }
     }
+}
+
+/// `sort` and `order` as a stored recipe spells them.
+fn names(sort: TrackSort, order: Order) -> (String, String) {
+    let (sort, order) = TrackOrder { sort, order }.names();
+    (sort.to_owned(), order.to_owned())
 }
 
 /// The track IDs `recipe` resolves to in `library`, in order, one statement for each part of the
@@ -111,19 +132,22 @@ pub async fn resolve(
 
     let library = library.0;
     let ids = match recipe.clone() {
-        Recipe::Album { album_id, sort } => {
+        Recipe::Album { album_id, sort, order } => {
             let album = Some(AnyId::from(album_id.as_str()));
+            let sort = TrackOrder { sort, order };
             db.read(move |conn| {
                 tracks::resolve(conn, library, album, None, ArtistCredit::Any, sort)
             })
             .await?
         }
-        Recipe::Artist { artist_id, artist_credit, sort, scope: Scope::All } => {
+        Recipe::Artist { artist_id, artist_credit, sort, order, scope: Scope::All } => {
             let artist = Some(AnyId::from(artist_id.as_str()));
+            let sort = TrackOrder { sort, order };
             db.read(move |conn| tracks::resolve(conn, library, None, artist, artist_credit, sort))
                 .await?
         }
-        Recipe::Library { sort, .. } => {
+        Recipe::Library { sort, order, .. } => {
+            let sort = TrackOrder { sort, order };
             db.read(move |conn| tracks::resolve(conn, library, None, None, ArtistCredit::Any, sort))
                 .await?
         }

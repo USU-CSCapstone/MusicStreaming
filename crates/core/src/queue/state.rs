@@ -347,7 +347,7 @@ mod tests {
             "k",
             "lib",
             4,
-            Some(Recipe::Album { album_id: "7".into(), sort: "disc".into() }),
+            Some(Recipe::Album { album_id: "7".into(), sort: "album".into(), order: "asc".into() }),
         );
         source.hash = Some("ab".into());
         state.start(source, 1).unwrap();
@@ -376,7 +376,7 @@ mod tests {
             json!({
                 "sources": [
                     {"key": "k", "libraryId": "lib", "list": "ab", "length": 4,
-                     "recipe": {"type": "album", "albumId": "7", "sort": "disc"}},
+                     "recipe": {"type": "album", "albumId": "7", "sort": "album", "order": "asc"}},
                     {"key": "s", "libraryId": "lib", "list": "cd", "length": 2,
                      "recipe": {"type": "tracks"}},
                 ],
