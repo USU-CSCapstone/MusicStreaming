@@ -575,6 +575,23 @@ describe('QueueStore', () => {
 		expect(refusals).toEqual([]);
 	});
 
+	it('shows the rows of its own recipe add as unknown while the server cannot be reached', async () => {
+		await hello();
+		server.failures = Array(1000).fill(0);
+		store.edit(
+			{
+				type: 'add',
+				source: { key: 'q', libraryId: 'lib', recipe: { type: 'album', albumId: '9' } as never },
+				before: { type: 'manualStart' }
+			},
+			3
+		);
+		await settle();
+
+		// The add names its list once it is sent, so the player waits for it.
+		expect(upNext(3)).toEqual(['unknown', 'unknown', 'unknown']);
+	});
+
 	it('sends an add of a recipe with no length in its turn and shows it when the server answers', async () => {
 		await hello();
 		const add: SentEdit = {
