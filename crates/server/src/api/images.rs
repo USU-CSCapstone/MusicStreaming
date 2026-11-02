@@ -15,11 +15,12 @@ use tower_http::services::ServeFile;
 
 pub use cache::Images;
 
+use jewelcase_scanner::FileToDecode;
+
 use super::extract::{Path, Query};
 use super::scope::Scope;
 use super::{Code, Id, Problem, playlists};
 use crate::db::{Database, libraries};
-use jewelcase_scanner::FileToDecode;
 
 /// The sizes images are resized to, as the longest edge in pixels. A request rounds up to the
 /// next one, and no further than the first that holds the whole image, which is never enlarged,

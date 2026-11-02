@@ -308,6 +308,26 @@ async fn an_edit_or_delete_removes_the_mosaics_the_artwork_moved_on_from() {
 }
 
 #[tokio::test]
+async fn pruning_leaves_the_temporary_file_of_a_render_under_way() {
+    let (temp, db, app) = covers().await;
+    created(&app, &[1, 2, 3, 4]).await;
+    let folder = temp.path().join("cache/1/m/1");
+    std::fs::create_dir_all(&folder).unwrap();
+    // What `NamedTempFile` leaves while a render is being written, beside finished files.
+    let temp_file = folder.join(".tmpAbC123");
+    let unheld = folder.join("2-3-4-5-64.jpg");
+    let marker = folder.join("2-3-4-5-64.failed");
+    for file in [&temp_file, &unheld, &marker] {
+        std::fs::write(file, "").unwrap();
+    }
+    Images::new(temp.path().join("cache"), jewelcase_ffmpeg::Config::default())
+        .prune_mosaics(&db, 1, 1)
+        .await;
+    assert!(temp_file.exists(), "a render's temporary file was deleted");
+    assert!(!unheld.exists() && !marker.exists());
+}
+
+#[tokio::test]
 async fn a_mosaic_is_served_only_to_the_owner_of_a_playlist_that_holds_it() {
     let (temp, _db, app) = covers().await;
     add_others(&temp);

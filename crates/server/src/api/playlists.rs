@@ -27,7 +27,7 @@ use rusqlite::params;
 use rusqlite::types::Value;
 use serde::Deserialize;
 
-pub use artwork::held as holds_artwork;
+pub use artwork::{all_mosaics, held as holds_artwork, mosaics_of};
 pub use edit::edit;
 use idempotency::{Answer, Key};
 pub use items::{duplicates, list_items};
