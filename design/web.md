@@ -47,6 +47,8 @@ and commit the result.
 | `src/lib/api/`             | Generated schema types, the aliases in use, and the typed client. Catalog reads move to the worker later, and this is the one module that changes then. |
 | `src/lib/player.svelte.ts` | Playback: one audio element playing the queue's current item, starts from views, and Media Session (*Player* below)                                    |
 | `src/lib/queue/`           | The queue on this device: a worker holding it through the shared core, and the page's client of it (`design/queue.md`)                                  |
+| `src/lib/queueing.svelte.ts` | Adding to the queue from every menu and drag, and the toast that says what was done (*The queue panel* below) |
+| `src/lib/core-wasm/`       | The shared core built to WebAssembly by `pnpm wasm` (gitignored); needs the `wasm-bindgen` CLI at the version in `scripts/wasm.sh` |
 | `src/lib/queue.ts`         | What a start from a view sends (`PlayFrom`), and when Previous restarts rather than steps back                                                          |
 | `src/lib/components/`      | Shell (sidebar, tab bar, player), collection and track views, waveform                                                                                  |
 | `src/routes/`              | One route per view: `/albums`, `/albums/[id]`, `/artists/…`, `/playlists/…`, `/songs`, `/search`, `/account`; `/setup` and `/login` without the shell   |
@@ -65,6 +67,7 @@ It is a stand-in for the server, so it has these limits. None of them are client
 - **Personal data** (play counts, listening history) doesn't exist, so sorts that need it fall back
   to album or name order.
 - Only the read endpoints the client uses are implemented; any other write answers `405`.
+- **The queue** has no endpoints (`/me/queue*`, `/me/queues*`, the tracks-by-IDs lookup), so the queue panel and the player work only against the real server, or in the end-to-end tests, which stub them.
 - **Accounts** don't exist: the mock reports setup as done, everyone is one user, and logging in
   accepts any password.
 - **Plugins** can be installed, granted, and enabled, but never run: **Run now** needs the server,
@@ -196,7 +199,7 @@ the queue only by editing it (`requirements/queue.md`, `design/queue.md` §3).
   holds it. So a report waits until the server has the item: a start's takeover for the start's
   answer, a Previous's copy for its edit's confirmation (the queue worker says which item the
   server's queue has playing). A report the server refused is sent again when the queue next
-  changes, once per change. A play records the queue's context.
+  changes, once per change. A play records the queue's context. Its `context` and `origin` are the device's, as sent (the server cannot tell the Manual Queue from the context for a play reported after the queue changed), and the web records every play's origin as `context`, the Manual Queue's included.
 - **Restores.** `restore()` (the `restore` message, `QueueClient.restore`) sends `POST
   /me/queues/{id}/restore`, which is not retried, since a second restore of the same queue is
   refused as active. Nothing shows until the server answers, since only it holds the queue; its

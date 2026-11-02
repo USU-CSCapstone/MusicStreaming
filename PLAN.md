@@ -83,8 +83,7 @@ Built: a Wasmtime host (`crates/plugins`) with a versioned WIT contract and mani
 Built: device listing, an authenticated WebSocket with heartbeats, live device lists, and player state per account with one playing device. Player state is saved across restarts. Playback stops when the playing device disconnects. Remote commands work over the WebSocket and over HTTP.
 
 **Still open from this stage:**
-1. Player state temporarily carries `libraryId` + `trackId`. It moves onto the server queue in Stage 9.
-2. Replaying the results of commands that have already finished.
+1. Replaying the results of commands that have already finished.
 
 **End goal (reached):** The server knows every device, which one is playing, and where it is in the track, and can route commands to it. The server side of [`realtime.md` §1–2, §4–6, §8](requirements/realtime.md) and [`users.md` §4](requirements/users.md#4-sessions--devices) is met.
 
@@ -138,6 +137,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 ### Stage 9 — Queue, playback & Shift
 
 - A server-owned queue with the Manual Queue, Context Queue, and History. Seeded shuffle in `crates/core`, repeat, and kept sessions. Move player state onto the queue.
+  - **Built:** all of this, online: the core's queue rules, the server's queue, kept queues and player state on items, and the web's queue panel, player and queueing ([`design/queue.md`](design/queue.md), [`design/web.md`](design/web.md#queue-worker)). Endless play, and the queue offline, are not (Stage 10).
 - The web client side of realtime: connection, progress, a device picker, and remote control. Then Shift, waking, and per-device volume.
 - Transcoding with a cache and seekable streams. Gapless playback, normalization, crossfade, silence skipping, and failure handling.
 
@@ -145,8 +145,8 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 1. **Audio delivery and gapless in the browser**, above all in an installed iOS PWA ([`design/general.md` §11](design/general.md#11-open-decisions) #1). Spike this first, because it decides the stream format.
 2. The transcode codec and bitrate for each quality tier, how client capabilities are negotiated, and how the transcode cache is sized and evicted.
 3. How seeking works inside a transcoded stream.
-4. How a queue over a context of hundreds of thousands of tracks is stored and synced: as a context reference plus a seed, or as a materialized list.
-5. How "the user adjusted this queue" is detected, so the queue is kept when a new context starts ([`queue.md` §6](requirements/queue.md#6-sessions)).
+4. ~~How a queue over a context of hundreds of thousands of tracks is stored and synced.~~ **Decided:** a few spans over frozen lists, each list stored once per account under a server-computed hash and fetched by it, so state and traffic grow with edits, not tracks ([`design/queue.md`](design/queue.md), [`design/database.md` §6](design/database.md#6-personal-data)).
+5. ~~How "the user adjusted this queue" is detected.~~ **Decided:** `adjusted` is set by any add, remove or move, and by removing or re-queueing a play, and is never cleared, so a start keeps the queue if it is set and deletes it otherwise ([`design/queue.md` §5](design/queue.md#5-queue-state), [`queue.md` §6](requirements/queue.md#6-sessions)).
 6. Silence skipping needs silence detection. It has to come from the existing analysis pass, never a second one.
 7. Waveform bin count and shaping ([`design/scanning.md` §16](design/scanning.md#16-open-decisions) #2).
 8. Normalization headroom: how quiet tracks are raised without clipping.
@@ -156,9 +156,15 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 
 ### Stage 10 — Offline & PWA
 
-- Build search, sort, and queue rules into `core-wasm`, with a parity test suite against the native build.
+- Build search and sort rules into `core-wasm`, with a parity test suite against the native build. The queue's rules already run there, with golden vectors pinning shuffle parity (Stage 9).
 - A web worker holds the catalog, synced from the change feeds, with a durable command queue for optimistic actions.
 - A service worker, an installable PWA, downloads with a storage budget, choosing between local and stream, and reconciliation.
+- **The queue goes offline** ([`design/queue.md` §7](design/queue.md#7-where-it-is-built-and-what-is-not-yet)). Until now devices download every list and kept queues need the server:
+  - stored sort orders in the catalog, kept by the core comparator, so a device builds the lists it can rebuild;
+  - starts that read them and check the result against the server's hash, downloading only on a mismatch (hashing moves into the core: `sha2` already builds for wasm);
+  - after an offline start, the recipe and the played tracks sent on reconnect;
+  - IndexedDB for lists and state, kept queues' too, so a restore works offline ([`offline.md` §6](requirements/offline.md#6-what-works-offline)) and lists stop depending on Cache Storage;
+  - a parity suite comparing stored orders with the server's resolves, since sorts a device cannot reproduce (personal-data sorts, search ranking) always travel as lists.
 
 **Open questions:**
 1. **The on-device catalog and index format**, within the [`performance.md` §6](requirements/performance.md#6-client-footprint) goals ([`design/general.md` §11](design/general.md#11-open-decisions) #2).

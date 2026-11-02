@@ -1,7 +1,7 @@
 # Queue Design
 
 ## Overview
-How an account's queue is represented and edited: the model, the shuffle, the state and every operation on it. It builds on [`requirements/queue.md`](../requirements/queue.md) and the shared core ([`general.md` §3](general.md#3-shared-core)); where it conflicts with [`requirements/`](../requirements/), the requirements win. Storage, the API and the web client are described where they are built; [§7](#7-what-is-not-here-yet) says which.
+How an account's queue is represented and edited: the model, the shuffle, the state and every operation on it. It builds on [`requirements/queue.md`](../requirements/queue.md) and the shared core ([`general.md` §3](general.md#3-shared-core)); where it conflicts with [`requirements/`](../requirements/), the requirements win. Storage, the API and the web client are described where they are built; [§7](#7-where-it-is-built-and-what-is-not-yet) says which.
 
 **The one idea: a queue is a few spans over frozen lists, so its state, storage and network cost grow with edits, not tracks.** An untouched 500,000-track queue is one span. Every rule lives in `crates/core`, which the server uses natively and the web client through WebAssembly, so every device and the server compute the same queue ([`requirements/queue.md` §7](../requirements/queue.md#7-across-devices), [`requirements/general.md` §3.5](../requirements/general.md#35-offline-parity)). No queue is bounded in length ([`requirements/general.md` §3.3](../requirements/general.md#33-the-host-is-the-limiter)), so counts and offsets are `u64`.
 
@@ -27,12 +27,12 @@ The Manual Queue, the context and History are each a short list of spans or runs
 
 ## 2. Lists and sorting
 
-A **list** is `{libraryId, hash, length, recipe?}`.
+A **list** is `{libraryId, hash, length, recipe?}`. A source names its list by that hash in a field called `list`, everywhere.
 
 - **The hash** is SHA-256 over the track IDs in order, as 8-byte little-endian integers, in lowercase hex.
   - Only the server computes it. It never takes one from a device.
   - It names the list everywhere: in queues, on the wire, in storage and in device caches. It must resist collisions, since devices trust it as the list's name.
-- **The recipe** is how the list was made. It is not what plays; the hash is. It is kept so a device can rebuild the list from its own catalog once it keeps one ([§7](#7-what-is-not-here-yet)), and so the interface can say what is playing.
+- **The recipe** is how the list was made. It is not what plays; the hash is. It is kept so a device can rebuild the list from its own catalog once it keeps one ([§7](#7-where-it-is-built-and-what-is-not-yet)), and so the interface can say what is playing.
 
   | Recipe | Fields |
   |---|---|
@@ -110,7 +110,7 @@ QueueState {
   sources:  [ { key, libraryId, list: hash, length, recipe? } ]
   copies:   [ { key, of: [Span] } ]            // flattened
   manual:   [Span]                             // the Manual Queue, in play order
-  order:    [Span], cursor                     // the context, passed part included
+  order:    [Span], cursor                     // the context, passed part included; cursor counts the passed rows
   current:  ItemId?
   history:  [ { first: playNo, span: Span } ]  // play runs, oldest first, newest 1,000 kept
   nextPlay: u64
@@ -123,6 +123,7 @@ QueueState {
 - **`adjusted`** is set by any add, remove or move, in Up Next or History, and is never cleared. Every device and the server set it alike.
   - Playback controls (Next, Previous, rewind, jumps), shuffle, repeat and endless play's additions leave it alone, so playing three albums in a row leaves nothing behind ([`requirements/queue.md` §6](../requirements/queue.md#6-sessions)).
   - Queueing anything sets it, so a queue the user queued into is always kept.
+- **`cursor` counts the rows of `order` that are passed**, and nothing more. Up Next's context part is `order` from `cursor` on. Current is the last passed row only while a context item plays that was reached in order: while a Manual item plays, or after an unshuffle that leaves passed additions between the passed base rows and the cursor, it is not. A reader never infers current from the cursor.
 - **Items** are what is queued: the Manual Queue, the context and current. An item's ID never changes while it is queued: through moves, shuffle, unshuffle and Repeat All.
 - **Invariant: every item is in Up Next (`manual`, and `order` past the cursor) at most once, and in `order` at most once.** Edits, anchors and jumps name Up Next items, so a second place there would make them ambiguous.
   - **One item can hold two places.** A context track that Previous put back in the Manual Queue keeps its passed place in `order`, so Repeat All still plays it. No field records this: the item's ID is in `manual` and in `order` before the cursor.
@@ -146,18 +147,19 @@ n items in the queue; s spans in the list edited; B spans in the shuffle's base;
 | **Start** | `order: [list[0..len)]` with an empty Manual Queue. The queue it replaces is parked ([§1](#1-model)) | O(1) |
 | **Add a collection** | Splice one span in at the anchor | O(s) |
 | **Remove k items** | Split the spans holding them | O(k·s) |
-| **Move k items** | Remove, then splice in at the anchor. Shuffled rows moved into the Manual Queue go in as list positions, one span per consecutive stretch | O(k·s) |
+| **Move k items** | Remove, then splice in at the anchor. Shuffled rows moved into the Manual Queue go in as list positions, one span per consecutive stretch. Adds up to 2k + 1 spans: k splits where the rows left, up to k spans for the rows moved, and one split at the anchor | O(k·s) |
 | **Next / track ends** | The Manual Queue's front becomes current if it has one, and otherwise the cursor moves +1. Append a play (extend the last run or start one) and trim History | O(1) amortised |
 | **Previous** | See below | O(1); O(s) to find X |
 | **Jump forward over k** | Everything ahead of the target becomes plays: Manual Queue items leave it (a two-place track keeps its passed place), and the cursor moves past context items. One run per span passed, or per item in a shuffle. Only the last 1,000 runs are computed | O(spans passed), or O(min(k, 1,000)) shuffled |
-| **Shuffle** | Freeze the unplayed spans as the base. Up Next becomes `shuffle[0..m)` | O(B) |
-| **Unshuffle** | See below | O(B + edits while shuffled) |
+| **Shuffle** | Freeze the unplayed spans as the base. Up Next becomes `shuffle[0..m)`. With nothing left to play, it marks the next lap instead (below) | O(s) |
+| **Unshuffle** | See below | O(s + B), plus π for each edit made while shuffled |
 | **Repeat All restart** | `cursor = 0` over the same spans. No copy | O(1) |
-| **Read Up Next row i** | Prefix-sum search to the span, then the view: a list reads directly, a shuffle runs π then the base walk, a copy reads its spans | O(log s), plus O(log B) and π shuffled |
-| **Find an item by ID** | Key to source or copy by hash map, then the Up Next span holding that position. In a shuffle: the base position, then π⁻¹ | O(s); O(s + B) shuffled |
-| **Remove a play** | Split its run | O(r) |
-| **Re-queue a play** | A copy of that position goes to the front of Up Next, and the play leaves History | O(log r + s) |
-| **Rewind (click play #k)** | See below | O(r + s) |
+| **Read Up Next row i** | Prefix-sum search to the span, then the view: a list reads directly, a shuffle runs π then the base walk, a copy reads its spans. The row's source or copy is found by key, a scan of the few sources and copies | O(log s), plus O(log B) and π shuffled |
+| **Read History row i** | Walk the runs from the newest, subtracting each run's length, then read the row. Measured at 1.5 µs with 1,000 runs | O(r) |
+| **Find an item by ID** | Compare keys down the Manual Queue's spans, then the context's: a scan, since the few sources make an index not worth its upkeep. In a shuffle: the base position, then π⁻¹ | O(s); O(s + B) shuffled |
+| **Remove a play** | Find its run by play number, split it | O(r) |
+| **Re-queue a play** | A copy of that position goes to the front of Up Next, and the play leaves History | O(r + s) |
+| **Rewind (click play #k)** | See below | O((r + s) log s), plus π shuffled |
 
 **Previous leaves Up Next exactly as it was, with the old current at its front.** Pop the last play, of item X.
 
@@ -170,8 +172,9 @@ Never pull X out of Up Next instead: that drops it from the context and from eve
 
 - The core applies it in two phases with the same result as Previous play by play, so rewinding past a long jump is one step. A History run is consecutive positions of one view, not of `order`, so it can mix Manual and context plays or cross a restart; the phases split runs into pieces where needed.
 - **Phase 1,** only if the Manual Queue starts empty: move the cursor back over the longest stretch, the old current and then the newest plays, that matches `order` read backwards from the cursor.
-- **Phase 2:** the rest go to the front of the Manual Queue in the order heard, in pieces. A piece still in Up Next after phase 1 goes into the one copy under the edit's `key`, flattened. Any other piece is a span of its view, a context piece keeping its passed places.
-- Within an album that is just the cursor moving back: no copy, no new spans. At most one copy of at most r + 1 spans is made.
+- **Phase 2:** the rest go to the front of the Manual Queue in the order heard, in pieces. Each heard run is cut along the positions Up Next still holds after phase 1: the Manual Queue, the context past the cursor (a shuffle's rows by π⁻¹), and the item that was playing. Those parts, which would otherwise put an item in Up Next twice, go into the one copy under the edit's `key`, flattened. Any other part is a span of its view, a context part keeping its passed places.
+- Within an album that is just the cursor moving back: no copy, no new spans. At most one copy is made, and no copy at all when no heard position is still held. The copy has one span for each held stretch of a heard run, so it can have more than r + 1 spans when edits have fragmented Up Next.
+- **Cost:** the walk back and the cut work on runs and spans through ordered maps, so O((r + s) log s) (340–383 µs with 1,000 runs), plus π for the shuffle rows named.
 
 **Unshuffle never just replaces Up Next.** That would leave items played while shuffled in both the passed part and Up Next, and lose base items the shuffle skipped.
 
@@ -181,18 +184,28 @@ Never pull X out of Up Next instead: that drops it from the context and from eve
 4. **Context additions:** one still in Up Next goes back just before the natural place of the base row that followed it, so an album dropped at the end of a shuffled context stays at the end. If that row was removed, the next surviving one counts; with none, it goes at the end of the context. Consecutive additions stay together. Rows still ahead of the first shuffle row, and an addition whose follower is already passed, stay at the front of Up Next. One already passed stays passed, just ahead of the cursor in the order passed, so Repeat All still plays it.
 5. **Moves:** moves within the context revert. Moves into the Manual Queue stay, and so do context tracks Previous put there: they are left out of the rebuilt Up Next. Such a two-place track whose base position falls after the pivot keeps a passed place just before the cursor, so Repeat All still plays it.
 
-**Shuffling the next lap.** With nothing left to play in the context, shuffle has nothing to randomise, so it marks the next lap instead: at the Repeat All restart the whole context becomes the shuffle's base. Unshuffling before the restart leaves the lap as it was.
+**Shuffling the next lap.** With nothing left to play in the context, shuffle has nothing to randomise, so it marks the next lap instead, as an empty base: at a Repeat All restart the whole context becomes the shuffle's base. The mark is the empty shuffle itself, so it works even if Repeat All was turned on after shuffle. Unshuffling before the restart leaves the lap as it was, and rows added meanwhile join the lap.
 
 With no edits while shuffled, the state returns exactly to its pre-shuffle spans.
 
-**Bounded costs.** Scattered edits fragment spans, each edited row adding one or two, so the state grows with what devices send. Nothing amplifies small edits: shuffle keeps one base, Repeat All adds nothing, and Previous and rewind add at most one copy.
+**Bounded costs.** Scattered edits fragment spans, each edited row adding one or two, so the state grows with what devices send. A move of k items adds up to 2k + 1 spans. Nothing else amplifies small edits: shuffle keeps one base, Repeat All adds nothing, and Previous and rewind add at most one copy.
 
-## 7. What is not here yet
+## 7. Where it is built, and what is not yet
 
-- **Storage, the API and realtime messages** are in the docs of the steps that build them. The snapshot's shape is a stable public contract: it carries the state and each list's hash and length, never tracks.
+The rules above are `crates/core/src/queue`. The rest is built in these places:
+
+- **The server** holds each account's active queue in memory, applies every edit in the order edits arrive, and saves changed accounts every second ([`database.md` §6](database.md#6-personal-data), `crates/server/src/queue`). Edits name items, never positions, and carry no base version, so none is refused for being stale. A device-minted `editId` makes a retry safe: the server remembers an account's latest 32 and answers a repeat without applying it, so a retry after 32 more edits or a restart can apply twice. A start or an edit above 64 MiB (about 2.9 million track IDs) is refused as `validation_failed`. The server replaces an add's `list` and `length` with its own and never takes a hash from a device.
+- **The API** is [`api/openapi.yaml`](../api/openapi.yaml): the snapshot (`GET /me/queue`, with an `ETag` of `"<run>.<queueId>.<version>"`), starts and edits, lists by hash, pages of rows, and kept queues (`/me/queues`). The snapshot's shape is a stable public contract: it carries the state and each list's `list` hash and `length`, never tracks. The hash is `list` everywhere on the wire. Restoring or deleting the active queue is `409 queue_active`, the opposite of `queue_changed`, which means the edit named a queue that is not active.
+- **Player state and plays follow the queue.** The player state and a progress report name the item, `<key>.<position>`, which the server accepts only if the account's active queue holds it. The item ID is stable. A play's `context` and `origin` are the device's, as sent: the server cannot tell the Manual Queue from the context for a play reported after the queue changed.
+- **The web client** is a worker around the core ([`web.md`](web.md#queue-worker)).
+
+Not built yet:
+
 - **Kept queues are online-only until the device keeps its own catalog** (Stage 10, [`PLAN.md`](../PLAN.md)). Their lists and restores need the server until devices store kept states, which falls short of [`requirements/offline.md` §6](../requirements/offline.md#6-what-works-offline) until then ([`requirements/general.md` §3.5](../requirements/general.md#35-offline-parity)).
 - **Stage 10 also lets a device build a list from stored orders** and check its hash, downloading only on a mismatch. Until then, devices download every list.
 - **Playlists** are the recipe `tracks` until a playlist can name `{playlistId, version, sort}`.
+- **Endless play.** Nothing adds tracks yet. When the server does, it mints UUID keys as a device does, and avoids re-selecting a played track by reading History's tracks from the lists it holds.
+- **An index for finding an item** and a **resolve cache** wait until a measurement says they are needed. Finding is a scan of the spans, which stay few.
 
 ---
 
