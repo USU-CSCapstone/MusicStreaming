@@ -39,3 +39,13 @@ pub fn refresh(conn: &Connection, id: i64) -> rusqlite::Result<()> {
     .execute(params![id, key])?;
     Ok(())
 }
+
+/// Whether `user` has a playlist in `library` whose artwork is `key`, the only way a mosaic may
+/// be composed for them: it bounds the mosaics that can be made and tells no one what another
+/// user holds.
+pub fn held(conn: &Connection, user: i64, library: i64, key: &str) -> rusqlite::Result<bool> {
+    conn.prepare_cached(
+        "SELECT 1 FROM playlists WHERE user_id = ?1 AND library_id = ?2 AND image_key = ?3",
+    )?
+    .exists(params![user, library, key])
+}

@@ -17,7 +17,7 @@ pub use cache::Images;
 
 use super::extract::{Path, Query};
 use super::scope::Scope;
-use super::{Code, Id, Problem};
+use super::{Code, Id, Problem, playlists};
 use crate::db::{Database, libraries};
 use jewelcase_scanner::FileToDecode;
 
@@ -46,17 +46,15 @@ pub fn mosaic_id(ids: [i64; 4]) -> String {
 }
 
 impl Target {
-    /// The target `text` names, if it is an [`Id`] or a [`mosaic_id`] of four distinct ones in
-    /// its one canonical spelling.
+    /// The target `text` names, if it is an [`Id`] or a [`mosaic_id`] of four in its one canonical
+    /// spelling. Whether a playlist holds the mosaic is for [`get`] to ask.
     fn parse(text: &str) -> Option<Target> {
         let Some(ids) = text.strip_prefix('m') else {
             return Id::canonical(text).map(|Id(id)| Target::Image(id));
         };
         let ids: Vec<i64> =
             ids.split('-').map(|id| Id::canonical(id).map(|Id(id)| id)).collect::<Option<_>>()?;
-        let ids: [i64; 4] = ids.try_into().ok()?;
-        let distinct = ids.iter().all(|id| ids.iter().filter(|other| *other == id).count() == 1);
-        distinct.then_some(Target::Mosaic(ids))
+        Some(Target::Mosaic(ids.try_into().ok()?))
     }
 }
 
@@ -116,15 +114,7 @@ pub async fn get(
         Target::Mosaic(ids) => {
             let found = db
                 .try_read(move |conn| -> Result<_, Problem> {
-                    // Only the artwork of one of the caller's own playlists, which bounds the
-                    // mosaics that can be made and tells no one what another user holds.
-                    let held = conn
-                        .prepare_cached(
-                            "SELECT 1 FROM playlists \
-                             WHERE user_id = ?1 AND library_id = ?2 AND image_key = ?3",
-                        )?
-                        .exists(rusqlite::params![user, library, mosaic_id(ids)])?;
-                    if !held {
+                    if !playlists::holds_artwork(conn, user, library, &mosaic_id(ids))? {
                         return Err(Problem::not_found());
                     }
                     let [a, b, c, d] = ids;
@@ -138,7 +128,7 @@ pub async fn get(
                 .await?;
             let longest = found.iter().map(|(_, longest, _)| *longest).max().unwrap_or(0);
             let size = whole(longest.saturating_mul(2)).map_or(size, |whole| size.min(whole));
-            images.mosaic(library, ids, size, found.map(|(_, _, source)| source)).await
+            images.mosaic(library, user, ids, size, found.map(|(_, _, source)| source)).await
         }
     }
     .map_err(|error| {
