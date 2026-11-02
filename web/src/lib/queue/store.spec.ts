@@ -1085,6 +1085,16 @@ describe('QueueStore lists and rows', () => {
 			expect(summary).toMatchObject({ queueId: STARTED, repeat: 'all' });
 		});
 
+		it('waits for the rows a start made offline has not loaded instead of skipping them', async () => {
+			await hello();
+			server.failures = Array(1000).fill(0);
+			store.start(recipeStart(['200', '201']));
+			await settle();
+
+			// The start names their list once it is sent, so the player waits for it.
+			expect(now()).toEqual(['201', 'unknown', 'unknown', 'unknown']);
+		});
+
 		it('sends a repeat change the start replaced before it was sent, so here and the server agree', async () => {
 			await hello();
 			const answer = gate();
@@ -1166,14 +1176,15 @@ describe('QueueStore lists and rows', () => {
 			expect(now()).toEqual(['201', 'unknown', 'unknown', 'unknown']);
 		});
 
-		it('shows rows only the server could tell as unavailable while it cannot be reached, and waits again when it can', async () => {
+		it('sends a start again when the server cannot be reached, and fills the rows once it answers', async () => {
 			await hello();
 			server.failures = [0];
 			store.start(recipeStart());
 			await Promise.resolve();
 			await new Promise((resolve) => setTimeout(resolve, 0));
 
-			expect(now()).toEqual(['201', '202', 'unavailable', 'unavailable']);
+			// The start names their list once it arrives, so these wait.
+			expect(now()).toEqual(['201', '202', 'unknown', 'unknown']);
 			await settle();
 			// Sent again, and answered: the same start, not a second.
 			const posts = server.requests.filter((r) => r.method === 'POST');
