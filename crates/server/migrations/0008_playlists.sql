@@ -1,6 +1,6 @@
 -- Playlists: each user's own, in one library (requirements/playlists.md), and the tracks in them.
--- They are the user's data, not the library's, so the scanner never writes them
--- (design/database.md §6).
+-- They are the user's data, not the library's, so a scan or purge writes nothing of them but
+-- the artwork, which follows the albums' art (design/database.md §6).
 
 CREATE TABLE playlists (
     id           INTEGER PRIMARY KEY,
@@ -22,7 +22,8 @@ CREATE TABLE playlists (
     duration_us  INTEGER NOT NULL DEFAULT 0,
     -- The ID of the playlist's artwork, as the API gives it: the album image of its first track
     -- that has one when it has fewer than four distinct album images, else the mosaic of the
-    -- first four ("m" and their IDs). NULL with none. Kept in the same write as the items.
+    -- first four ("m" and their IDs). NULL with none. Kept in the same write as the items, and
+    -- as a scan or purge changes their albums' art.
     image_key    TEXT,
     -- 1 for a pinned playlist and NULL for the rest, so that every list puts the pinned first in
     -- both orders as the unknown part of a keyset does (design/database.md §4)

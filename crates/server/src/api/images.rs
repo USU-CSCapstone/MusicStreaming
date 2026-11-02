@@ -20,6 +20,7 @@ use jewelcase_scanner::FileToDecode;
 use super::extract::{Path, Query};
 use super::scope::Scope;
 use super::{Code, Id, Problem, playlists};
+use crate::db::catalog::mosaic_id;
 use crate::db::{Database, libraries};
 
 /// The sizes images are resized to, as the longest edge in pixels. A request rounds up to the
@@ -37,13 +38,6 @@ pub struct ImageQuery {
 enum Target {
     Image(i64),
     Mosaic([i64; 4]),
-}
-
-/// The ID of the mosaic of `ids`, the first of which is the top left, as the spec's `ImageRef`
-/// carries it for a playlist: `m` and the four image IDs, each as [`Id`] spells it, joined by `-`.
-pub fn mosaic_id(ids: [i64; 4]) -> String {
-    let [a, b, c, d] = ids;
-    format!("m{a}-{b}-{c}-{d}")
 }
 
 impl Target {
