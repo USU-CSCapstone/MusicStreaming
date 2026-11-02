@@ -172,8 +172,8 @@ impl std::error::Error for QueueError {}
 
 /// An account's queue: a few spans over views of frozen lists. This is the snapshot's `state`.
 ///
-/// History and shuffle are declared so the JSON shape is whole; nothing sets them yet, and
-/// reads don't go through a shuffle.
+/// While `shuffle` is set, the context's Up Next is `Shuffle` rows of `order`, read through
+/// the base.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueState {

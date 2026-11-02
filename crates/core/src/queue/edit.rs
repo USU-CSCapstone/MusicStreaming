@@ -97,6 +97,14 @@ pub enum Edit {
         /// otherwise, and then it may name anything.
         key: String,
     },
+    /// Shuffle the unplayed context with `seed`, or put it back in its natural order. Turning
+    /// shuffle on while shuffled, or off while not, does nothing.
+    Shuffle {
+        /// Whether to shuffle.
+        on: bool,
+        /// Fixes the order; chosen by the device so a shuffle works offline.
+        seed: u32,
+    },
     /// Set the repeat mode.
     Repeat {
         /// The mode.
@@ -111,14 +119,6 @@ enum Spot {
     Order(u64),
 }
 
-/// The item a row of a span list reads, or `None` past the end or for a shuffle row.
-pub(super) fn item_of(row: Option<(&View, u64)>) -> Option<ItemId> {
-    match row? {
-        (View::Key(key), pos) => Some(ItemId { key: key.clone(), pos }),
-        (View::Shuffle, _) => None,
-    }
-}
-
 impl QueueState {
     /// Applies one edit. An edit that fails changes nothing.
     ///
@@ -126,10 +126,10 @@ impl QueueState {
     /// nothing leaves the state as it was, `adjusted` included. An anchor that isn't in Up Next
     /// fails the whole edit with [`QueueError::AnchorGone`], so a device can revert and say so.
     /// `adjusted` is set by an add, remove, move, play removal or re-queue that acts, and by no
-    /// other edit (Previous and rewind are playback). A context track that Previous or rewind
-    /// put in the Manual Queue holds a second, passed place in the context: the same item ID in
-    /// `order` before the cursor. A move within the Manual Queue keeps it; a move into the
-    /// context, or a removal, drops it.
+    /// other edit (Previous, rewind, shuffle and repeat are not). A context track that Previous
+    /// or rewind put in the Manual Queue holds a second, passed place in the context: the same
+    /// item ID in `order` before the cursor. A move within the Manual Queue keeps it; a move
+    /// into the context, or a removal, drops it.
     pub fn apply(&mut self, edit: &Edit) -> Result<(), QueueError> {
         match edit {
             Edit::Add { source, before } => self.add(source, before),
@@ -153,6 +153,10 @@ impl QueueState {
             Edit::Requeue { play, key } => self.requeue(play, key),
             Edit::Previous { key } => self.previous(key),
             Edit::Rewind { play, key } => self.rewind(play, key),
+            Edit::Shuffle { on, seed } => {
+                self.set_shuffle(*on, *seed);
+                Ok(())
+            }
             Edit::Repeat { mode } => {
                 self.repeat = *mode;
                 Ok(())
@@ -195,7 +199,12 @@ impl QueueState {
         if at.is_empty() {
             return Ok(());
         }
-        let moved = self.take(&at, matches!(target, Spot::Manual(_)));
+        let to_manual = matches!(target, Spot::Manual(_));
+        let mut moved = self.take(&at, to_manual);
+        if to_manual {
+            // The Manual Queue records list positions, never shuffle rows.
+            moved = self.list_spans(moved);
+        }
         // Taking the rows shifted every position, so the anchor is found again.
         let spot = self.spot(before, &[])?;
         self.put(spot, moved);
@@ -228,19 +237,21 @@ impl QueueState {
 
     /// Plays the front of the Manual Queue, or else the next context row, and records the item
     /// that was playing as a play. With the context spent and Repeat All on, the context starts
-    /// over from its first row, with no copy. With nothing left, nothing plays. Repeat One is
+    /// over from its first row, with no copy; a shuffle that had nothing to play shuffles that
+    /// lap (the whole context becomes its base). With nothing left, nothing plays. Repeat One is
     /// the player's to apply.
     fn next(&mut self) {
         let plays: Vec<Span> = self.current.iter().map(play_span).collect();
         if self.manual.is_empty() && self.cursor >= self.order.len() && self.repeat == Repeat::All {
             self.cursor = 0;
+            self.shuffle_next_lap();
         }
         self.current = if !self.manual.is_empty() {
-            let item = item_of(self.manual.get(0));
+            let item = self.item_at(&self.manual, 0);
             self.manual.remove(0..1);
             item
         } else if self.cursor < self.order.len() {
-            let item = item_of(self.order.get(self.cursor));
+            let item = self.item_at(&self.order, self.cursor);
             self.cursor += 1;
             item
         } else {
@@ -260,7 +271,7 @@ impl QueueState {
         sorted.sort_unstable();
         sorted.dedup();
         let manual = self.manual.find_sorted(&sorted);
-        let order = self.order.find_sorted(&sorted);
+        let order = self.order_rows_of(&sorted);
         let mut at: Vec<u64> = manual
             .into_iter()
             .zip(order)
@@ -296,17 +307,14 @@ impl QueueState {
     }
 
     /// The context rows of the passed places that the Manual Queue rows at `manual` have, in
-    /// no particular order. One sweep over `order`.
+    /// no particular order. One sweep, as [`QueueState::order_rows_of`].
     fn passed_rows(&self, manual: &[u64]) -> Vec<u64> {
-        let mut items: Vec<(&str, u64)> = manual
-            .iter()
-            .filter_map(|&index| match self.manual.get(index)? {
-                (View::Key(key), pos) => Some((key.as_str(), pos)),
-                (View::Shuffle, _) => None,
-            })
-            .collect();
-        items.sort_unstable();
-        let found = self.order.find_sorted(&items).into_iter().flatten();
+        let items: Vec<ItemId> =
+            manual.iter().filter_map(|&index| self.item_at(&self.manual, index)).collect();
+        let mut sorted: Vec<(&str, u64)> =
+            items.iter().map(|item| (item.key.as_str(), item.pos)).collect();
+        sorted.sort_unstable();
+        let found = self.order_rows_of(&sorted).into_iter().flatten();
         found.filter(|&row| row < self.cursor).collect()
     }
 

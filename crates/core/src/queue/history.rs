@@ -39,9 +39,12 @@ impl QueueState {
     }
 
     /// Records `spans`, in order, as consecutive plays: each extends the last run when it
-    /// continues it and starts a run otherwise. Then trims History. Returns whether the trim
+    /// continues it and starts a run otherwise. A span may read the shuffle: each of its rows
+    /// is recorded as the list position it plays. Then trims History. Returns whether the trim
     /// dropped runs, the only way recording lets go of a view: the caller then cleans up.
-    pub(super) fn record_plays(&mut self, spans: impl IntoIterator<Item = Span>) -> bool {
+    pub(super) fn record_plays(&mut self, spans: Vec<Span>) -> bool {
+        let (skipped, spans) = self.played(spans);
+        self.next_play += skipped;
         for span in spans {
             let first = self.next_play;
             self.next_play += span.len;

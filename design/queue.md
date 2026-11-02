@@ -178,8 +178,10 @@ Never pull X out of Up Next instead: that drops it from the context and from eve
 1. **Find the pivot:** the current item if it is in the base, and otherwise the latest passed base item. π of its shuffled position gives its base position j, or −1 if there is none.
 2. **Rebuild `order` as** the spans passed before the shuffle, then the base in natural order minus items removed or moved out while shuffled, then context additions.
 3. **Place the cursor just after base position j.** Base items before it count as passed, as when starting mid-album. Items after it are Up Next again, whether or not they played while shuffled.
-4. **Context additions:** one still in Up Next keeps its distance from current. One already passed stays passed, just ahead of the cursor in the order passed, so Repeat All still plays it.
+4. **Context additions:** one still in Up Next goes back just before the natural place of the base row that followed it, so an album dropped at the end of a shuffled context stays at the end. If that row was removed, the next surviving one counts; with none, it goes at the end of the context. Consecutive additions stay together. Rows still ahead of the first shuffle row, and an addition whose follower is already passed, stay at the front of Up Next. One already passed stays passed, just ahead of the cursor in the order passed, so Repeat All still plays it.
 5. **Moves:** moves within the context revert. Moves into the Manual Queue stay, and so do context tracks Previous put there: they are left out of the rebuilt Up Next. Such a two-place track whose base position falls after the pivot keeps a passed place just before the cursor, so Repeat All still plays it.
+
+**Shuffling the next lap.** With nothing left to play in the context, shuffle has nothing to randomise, so it marks the next lap instead: at the Repeat All restart the whole context becomes the shuffle's base. Unshuffling before the restart leaves the lap as it was.
 
 With no edits while shuffled, the state returns exactly to its pre-shuffle spans.
 

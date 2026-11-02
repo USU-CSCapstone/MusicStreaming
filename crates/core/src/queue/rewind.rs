@@ -68,11 +68,14 @@ impl QueueState {
     /// the cursor matches. Phase 2: the rest go to the front of the Manual Queue in the order
     /// heard, each as a span of its own view, keeping any passed place in `order`, except the
     /// plays whose items are in Up Next by then. Those are flattened into one copy under `key`,
-    /// which also plays if the target itself is one. Costs O((r + s) log s) for r runs and s
-    /// spans. Fails with [`QueueError::PlayGone`] if `play` isn't in History or played another
-    /// item, and with [`QueueError::DuplicateKey`] if a copy is needed and `key` is in use,
-    /// changing nothing either way. Never sets `adjusted`, and needs no clean-up: every view a
-    /// removed play named is still named by Up Next or the playing item.
+    /// which also plays if the target itself is one. Under a shuffle, a play is a copy while its
+    /// item still has a shuffle row ahead of the cursor, found by π⁻¹ for each play of a run that
+    /// the base holds, or by π of each row not ahead if that is fewer. Costs O((r + s) log s)
+    /// for r runs and s spans, plus π for the rows just named. Fails with
+    /// [`QueueError::PlayGone`] if `play` isn't in History or played another item, and with
+    /// [`QueueError::DuplicateKey`] if a copy is needed and `key` is in use, changing nothing
+    /// either way. Never sets `adjusted`, and needs no clean-up: every view a removed play
+    /// named is still named by Up Next or the playing item.
     pub(super) fn rewind(&mut self, play: &PlayRef, key: &str) -> Result<(), QueueError> {
         let (first_run, offset) = self.match_play(play).ok_or(QueueError::PlayGone)?;
 
@@ -125,6 +128,10 @@ impl QueueState {
         }
         for span in self.order.slice(row..self.order.len()) {
             hold(&span.view, span.start, span.len);
+        }
+        // Context rows read through a shuffle are held where their shuffle row is still ahead.
+        for (key, start, end) in self.shuffle_held(row, &Self::positions_of(&target, &heard)) {
+            hold(&View::Key(key), start, end - start);
         }
         if let Some(old) = &old_left {
             hold(&View::Key(old.key.clone()), old.pos, 1);
@@ -182,6 +189,26 @@ impl QueueState {
         Ok(())
     }
 
+    /// The positions the target and the plays heard after it cover, per view, as disjoint
+    /// ranges (view key, first, end).
+    fn positions_of(target: &Piece, heard: &[Piece]) -> Vec<(String, u64, u64)> {
+        let mut ranges: Vec<(String, u64, u64)> = std::iter::once(target)
+            .chain(heard)
+            .map(|p| (p.key.clone(), p.start, p.start + p.len))
+            .collect();
+        ranges.sort_unstable();
+        let mut merged: Vec<(String, u64, u64)> = Vec::new();
+        for range in ranges {
+            match merged.last_mut() {
+                Some(last) if last.0 == range.0 && range.1 <= last.2 => {
+                    last.2 = last.2.max(range.2)
+                }
+                _ => merged.push(range),
+            }
+        }
+        merged
+    }
+
     /// Matches the last `*left` positions of `key` from `start` against the context rows before
     /// row `*row`, read backwards, taking the rows as far as they match. Lowers `*left` and
     /// `*row` by what matched.
@@ -189,6 +216,16 @@ impl QueueState {
         while *left > 0 && *row > 0 {
             let Some((i, offset)) = self.order.locate(*row - 1) else { return };
             let span = &self.order.spans()[i];
+            if span.view == View::Shuffle {
+                // A shuffle row plays the base row π gives it, so rows match one at a time.
+                let played = self.item_at(&self.order, *row - 1);
+                if played != Some(ItemId { key: key.to_string(), pos: start + *left - 1 }) {
+                    return;
+                }
+                *left -= 1;
+                *row -= 1;
+                continue;
+            }
             let same = matches!(&span.view, View::Key(k) if k == key);
             if !same || span.start + offset != start + *left - 1 {
                 return;
