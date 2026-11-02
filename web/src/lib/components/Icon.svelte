@@ -141,6 +141,9 @@
 			],
 			['circle', { cx: 8, cy: 8, r: 1.5 }]
 		],
+		grip: [
+			['path', { d: 'M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01', 'stroke-width': 3 }]
+		],
 		clock: [
 			['circle', { cx: 12, cy: 12, r: 9 }],
 			['path', { d: 'M12 7v5l3 2' }]

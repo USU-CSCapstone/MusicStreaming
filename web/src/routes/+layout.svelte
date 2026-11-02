@@ -4,6 +4,7 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import DevicesPanel from '$lib/components/DevicesPanel.svelte';
 	import LyricsPanel from '$lib/components/LyricsPanel.svelte';
+	import QueuePanel from '$lib/components/QueuePanel.svelte';
 	import Player from '$lib/components/Player.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import TabBar from '$lib/components/TabBar.svelte';
@@ -65,6 +66,7 @@
 				{@render children()}
 			</main>
 			<LyricsPanel />
+			<QueuePanel />
 			<DevicesPanel />
 			<Toast />
 		</div>

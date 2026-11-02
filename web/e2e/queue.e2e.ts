@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { queueOf, serveLibrary } from './fixtures';
 
 test('plays an album from the queue', async ({ page }) => {
@@ -57,4 +57,81 @@ test('a tag-filtered view starts from the songs it shows, not a recipe', async (
 		expect(start).toMatchObject({ source: { tracks: ['42', '41'] }, start: 1 });
 		expect(start.source).not.toHaveProperty('recipe');
 	}
+});
+
+/** Starts the album on its first track, with the queue panel open, and answers the start. */
+async function openUpNext(page: Page) {
+	const { plays } = await serveLibrary(page);
+	await page.goto('/albums/31');
+	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
+	const player = page.getByRole('region', { name: 'Player' });
+	await expect(player.getByText('Signal Part 1')).toBeVisible();
+	await player.getByRole('button', { name: 'Queue' }).click();
+	const panel = page.getByRole('complementary', { name: 'Queue' });
+	return { panel, plays, list: panel.getByRole('list', { name: 'Up Next' }) };
+}
+
+test('reorders and removes in Up Next', async ({ page }) => {
+	const queue = queueOf(page);
+	const { panel, list } = await openUpNext(page);
+	const titles = () => list.locator('[data-item] .title').allInnerTexts();
+	await expect.poll(titles).toEqual(['Signal Part 2', 'Signal Remix']);
+	await expect(panel.getByText('Nothing queued.')).toBeVisible();
+
+	// Dragging the grip of the first row below the last moves it to the end of the context.
+	const grip = list.locator('[data-item]').first().locator('.grip');
+	const [from, last] = [
+		await grip.boundingBox(),
+		await list.locator('[data-item]').last().boundingBox()
+	];
+	await page.mouse.move(from!.x + 5, from!.y + 5);
+	await page.mouse.down();
+	await page.mouse.move(from!.x + 5, from!.y + 40, { steps: 4 });
+	await page.mouse.move(from!.x + 5, last!.y + last!.height - 4, { steps: 4 });
+	await page.mouse.up();
+	await expect.poll(titles).toEqual(['Signal Remix', 'Signal Part 2']);
+	expect(queue.edits.at(-1)).toMatchObject({ type: 'move', before: { type: 'contextEnd' } });
+
+	// Alt+↑ from the keyboard moves the last row up, and up again across the Manual Queue's end.
+	await list.getByRole('button', { name: 'Signal Part 2', exact: true }).focus();
+	await page.keyboard.press('Alt+ArrowUp');
+	await expect.poll(titles).toEqual(['Signal Part 2', 'Signal Remix']);
+	await page.keyboard.press('Alt+ArrowUp');
+	await expect(panel.getByRole('heading', { name: /Queued by you\s*1/ })).toBeVisible();
+	expect(queue.edits.at(-1)).toMatchObject({ type: 'move', before: { type: 'manualEnd' } });
+	await expect(panel.getByText('Nothing queued.')).toBeHidden();
+
+	// One press removes a row from anywhere, the Manual Queue's included.
+	await panel.getByRole('button', { name: 'Remove Signal Part 2' }).click();
+	await expect.poll(titles).toEqual(['Signal Remix']);
+	expect(queue.edits.at(-1)).toMatchObject({ type: 'remove' });
+	await expect(panel.getByText('Nothing queued.')).toBeVisible();
+
+	// Clicking a row plays it, the rows before it going to History.
+	await list.getByRole('button', { name: 'Signal Remix', exact: true }).click();
+	await expect(
+		page.getByRole('region', { name: 'Player' }).getByText('Signal Remix')
+	).toBeVisible();
+	expect(queue.edits.at(-1)).toMatchObject({ type: 'jump' });
+});
+
+test('reaches Shuffle and Repeat from the panel at phone width', async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	const queue = queueOf(page);
+	const { panel } = await openUpNext(page);
+	// The player bar has no room for them.
+	await expect(
+		page.getByRole('region', { name: 'Player' }).getByRole('button', { name: 'Shuffle' })
+	).toBeHidden();
+	await panel.getByRole('button', { name: 'Shuffle' }).click();
+	await expect(panel.getByRole('button', { name: 'Shuffle' })).toHaveAttribute(
+		'aria-pressed',
+		'true'
+	);
+	await panel.getByRole('button', { name: 'Repeat off' }).click();
+	await expect(panel.getByRole('button', { name: 'Repeat all' })).toBeVisible();
+	await expect
+		.poll(() => queue.edits.map((e) => e.type))
+		.toEqual(expect.arrayContaining(['shuffle', 'repeat']));
+	expect(queue.edits.at(-1)).toMatchObject({ type: 'repeat', mode: 'all' });
 });
