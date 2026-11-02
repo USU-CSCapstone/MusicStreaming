@@ -41,7 +41,7 @@ use super::page::{Order, Page, Request, Sort, Source, Total, Unknown};
 use super::playables::{self, Playable};
 use super::realtime::{Hub, ServerMessage};
 use super::scope::Scope;
-use super::{Id, Images, Problem};
+use super::{Code, Id, Images, Problem};
 use crate::db::{Database, catalog, new_id, now_ms};
 
 /// How far apart the keys of a playlist's items start, so an item put between two takes the
@@ -178,49 +178,63 @@ pub async fn create(
         Err(answer) => return Ok(answer.into_response()),
     };
     let description = body.description;
-    let (answer, change) = db
-        .try_write(move |tx| {
-            if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
-                return Ok::<_, Problem>((answer, None));
-            }
-            let (id, now) = (new_id()?, now_ms());
-            tx.execute(
-                "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, \
+    let answer = settle(async move {
+        let (answer, change) = db
+            .try_write(move |tx| {
+                if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
+                    return Ok::<_, Problem>((answer, None));
+                }
+                let (id, now) = (new_id()?, now_ms());
+                tx.execute(
+                    "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, \
                  description, created_at, modified_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-                params![
-                    id,
-                    library,
-                    user,
-                    title,
-                    words(&title).join(" "),
-                    sort_key(&title, None).as_bytes(),
-                    description,
-                    now
-                ],
-            )?;
-            // In the writer, unlike an edit's plan: the playlist is new, so the work is one
-            // add, and no track can be purged between the plan and the write.
-            let add = vec![Op::Add { at: None, items: tracks }];
-            let plan = edit::plan(tx, library, id, add, now)?;
-            edit::write(tx, user, library, id, 1, &plan)?;
-            let (count, duration) = plan.totals.unwrap_or_default();
-            tx.execute(
-                "UPDATE playlists SET track_count = ?2, duration_us = ?3 WHERE id = ?1",
-                params![id, count, duration],
-            )?;
-            catalog::playlist_artwork(tx, id)?;
-            // The row was just inserted in this transaction.
-            let created =
-                representation::get(tx, user, library, id)?.ok_or_else(Problem::not_found)?;
-            let answer = Answer::new(StatusCode::CREATED, &created)?;
-            if let Some(key) = &key {
-                answer.store(tx, user, key, now)?;
-            }
-            Ok((answer, Some(Change::of(created, Vec::new()))))
-        })
-        .await?;
-    announce(&hub, user, change);
+                    params![
+                        id,
+                        library,
+                        user,
+                        title,
+                        words(&title).join(" "),
+                        sort_key(&title, None).as_bytes(),
+                        description,
+                        now
+                    ],
+                )?;
+                // In the writer, unlike an edit's plan: the playlist is new, so the work is one
+                // add, and no track can be purged between the plan and the write.
+                let add = vec![Op::Add { at: None, items: tracks }];
+                let plan = edit::plan(tx, library, id, add, now)?;
+                edit::write(tx, user, library, id, 1, &plan)?;
+                let (count, duration) = plan.totals.unwrap_or_default();
+                tx.execute(
+                    "UPDATE playlists SET track_count = ?2, duration_us = ?3 WHERE id = ?1",
+                    params![id, count, duration],
+                )?;
+                catalog::playlist_artwork(tx, id)?;
+                // The row was just inserted in this transaction.
+                let created =
+                    representation::get(tx, user, library, id)?.ok_or_else(Problem::not_found)?;
+                let answer = Answer::new(StatusCode::CREATED, &created)?;
+                if let Some(key) = &key {
+                    answer.store(tx, user, key, now)?;
+                }
+                Ok((answer, Some(Change::of(created, Vec::new()))))
+            })
+            .await?;
+        announce(&hub, user, change);
+        Ok(answer)
+    })
+    .await?;
     Ok(answer.into_response())
+}
+
+/// Runs `work`, a write with what follows its commit (the announcement, the pruning), in a task
+/// of its own and waits for it. A client that gives up drops the handler, which would drop the
+/// work after the write was queued: the change would commit and never be announced, and a retry
+/// is answered from its stored answer, which announces nothing. The task runs on.
+async fn settle<T: Send + 'static>(
+    work: impl Future<Output = Result<T, Problem>> + Send + 'static,
+) -> Result<T, Problem> {
+    tokio::spawn(work).await.map_err(|_| Problem::new(Code::Internal))?
 }
 
 /// Tells `user`'s devices of `change`, if there is one, which is only for a request that
@@ -253,20 +267,24 @@ pub async fn delete(
     Scope { user, library }: Scope,
     Path((_, Id(id))): Path<(Id, Id)>,
 ) -> Result<StatusCode, Problem> {
-    let version = db
-        .write(move |tx| {
-            tx.prepare_cached(
-                "DELETE FROM playlists WHERE id = ?1 AND user_id = ?2 AND library_id = ?3 \
+    settle(async move {
+        let version = db
+            .write(move |tx| {
+                tx.prepare_cached(
+                    "DELETE FROM playlists WHERE id = ?1 AND user_id = ?2 AND library_id = ?3 \
                  RETURNING version",
-            )?
-            .query_row(params![id, user, library], |row| row.get::<_, i64>(0))
-            .optional()
-        })
-        .await?
-        .ok_or_else(Problem::not_found)?;
-    // Its mosaics go too, off the request, unless another of the user's playlists shows them.
-    tokio::spawn(async move { images.prune_mosaics(&db, library, user).await });
-    announce(&hub, user, Some(Change::deleted(library, id, version)));
+                )?
+                .query_row(params![id, user, library], |row| row.get::<_, i64>(0))
+                .optional()
+            })
+            .await?
+            .ok_or_else(Problem::not_found)?;
+        // Its mosaics go too, off the request, unless another of the user's playlists shows them.
+        tokio::spawn(async move { images.prune_mosaics(&db, library, user).await });
+        announce(&hub, user, Some(Change::deleted(library, id, version)));
+        Ok(())
+    })
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
