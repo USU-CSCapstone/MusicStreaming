@@ -158,3 +158,39 @@ async fn refused_requests_and_replays_send_nothing() {
     assert_eq!(second["playlist"]["title"], json!("Keyed"));
     quiet(&mut phone).await;
 }
+
+#[tokio::test]
+async fn an_edit_the_client_gave_up_on_is_still_announced_once_it_commits() {
+    let (temp, db, app) = catalog().await;
+    let conn = conn(&temp);
+    add_device(&conn, 1, 2, PHONE);
+    let address = serve(app.clone()).await;
+    let id = create(&app, json!({ "title": "Mix", "items": [track(1)] })).await["id"].clone();
+    let mut phone = connect_with(address, PHONE).await;
+
+    // The writer is busy, as behind a scan, so the edit waits for it.
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let busy = tokio::spawn({
+        let db = db.clone();
+        async move {
+            db.write(move |_| {
+                held.recv().unwrap();
+                Ok(())
+            })
+            .await
+            .unwrap();
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let body = json!({ "baseVersion": 1, "title": "Renamed" });
+    let gave_up =
+        tokio::time::timeout(Duration::from_millis(300), edit(&app, id.as_str().unwrap(), body))
+            .await;
+    assert!(gave_up.is_err(), "the writer was not busy");
+    release.send(()).unwrap();
+    busy.await.unwrap();
+
+    let message = change(&mut phone).await;
+    assert_eq!(message["version"], json!(2));
+    assert_eq!(message["playlist"]["title"], json!("Renamed"));
+}

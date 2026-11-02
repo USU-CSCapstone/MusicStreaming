@@ -112,91 +112,94 @@ pub async fn edit(
     let title = body.check()?;
     let (base, pinned, description) = (body.base_version, body.pinned, body.description);
     let ops = body.ops.unwrap_or_default();
-    // Made again only when a track the edit adds is purged between the read and the write.
-    // The next plan leaves that track out, so each attempt adds fewer, and this ends.
-    loop {
-        let now = now_ms();
-        // Read first, off the writer: a retry already answered, a stale version, the items an
-        // add expands to, and the plan. The write checks the version again, so an edit made in
-        // between is a conflict and not a lost update.
-        let (asked, ops) = (key.clone(), ops.clone());
-        let prepared = db
-            .try_read(move |conn| {
-                if let Some(answer) = Answer::find(conn, user, asked.as_deref())? {
-                    return Ok::<_, Problem>(Err(answer));
-                }
-                at(conn, user, library, id, base)?;
-                let ops = ops
-                    .into_iter()
-                    .map(|op| expand(conn, user, library, op))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Ok(plan(conn, library, id, ops, now)?))
-            })
-            .await?;
-        let plan = match prepared {
-            Ok(plan) => plan,
-            Err(answer) => return Ok(answer.into_response()),
-        };
-        let (key, title, description) = (key.clone(), title.clone(), description.clone());
-        let moves_items = plan.totals.is_some();
-        let answer = db
-            .try_write(move |tx| {
-                if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
-                    return Ok::<_, Problem>(Some((answer, None)));
-                }
-                // Retention keeps the tracks the playlist holds; only an added one can be gone.
-                if !fresh(tx, library, &plan)? {
-                    return Ok(None);
-                }
-                write(tx, user, library, id, base, &plan)?;
-                // An edit of details alone leaves the items, and so the artwork.
-                if plan.totals.is_some() {
-                    catalog::playlist_artwork(tx, id)?;
-                }
-                let (count, duration) = plan.totals.unzip();
-                let new_title = title.as_deref();
-                tx.prepare_cached(
-                    "UPDATE playlists SET title = coalesce(?4, title), \
+    super::settle(async move {
+        // Made again only when a track the edit adds is purged between the read and the write.
+        // The next plan leaves that track out, so each attempt adds fewer, and this ends.
+        loop {
+            let now = now_ms();
+            // Read first, off the writer: a retry already answered, a stale version, the items an
+            // add expands to, and the plan. The write checks the version again, so an edit made in
+            // between is a conflict and not a lost update.
+            let (asked, ops) = (key.clone(), ops.clone());
+            let prepared = db
+                .try_read(move |conn| {
+                    if let Some(answer) = Answer::find(conn, user, asked.as_deref())? {
+                        return Ok::<_, Problem>(Err(answer));
+                    }
+                    at(conn, user, library, id, base)?;
+                    let ops = ops
+                        .into_iter()
+                        .map(|op| expand(conn, user, library, op))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(Ok(plan(conn, library, id, ops, now)?))
+                })
+                .await?;
+            let plan = match prepared {
+                Ok(plan) => plan,
+                Err(answer) => return Ok(answer.into_response()),
+            };
+            let (key, title, description) = (key.clone(), title.clone(), description.clone());
+            let moves_items = plan.totals.is_some();
+            let answer = db
+                .try_write(move |tx| {
+                    if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
+                        return Ok::<_, Problem>(Some((answer, None)));
+                    }
+                    // Retention keeps the tracks the playlist holds; only an added one can be gone.
+                    if !fresh(tx, library, &plan)? {
+                        return Ok(None);
+                    }
+                    write(tx, user, library, id, base, &plan)?;
+                    // An edit of details alone leaves the items, and so the artwork.
+                    if plan.totals.is_some() {
+                        catalog::playlist_artwork(tx, id)?;
+                    }
+                    let (count, duration) = plan.totals.unzip();
+                    let new_title = title.as_deref();
+                    tx.prepare_cached(
+                        "UPDATE playlists SET title = coalesce(?4, title), \
                      folded = coalesce(?5, folded), sort_key = coalesce(?6, sort_key), \
                      description = CASE WHEN ?7 THEN ?8 ELSE description END, \
                      pinned = coalesce(?9, pinned), version = version + 1, modified_at = ?10, \
                      track_count = coalesce(?11, track_count), \
                      duration_us = coalesce(?12, duration_us) \
                      WHERE id = ?1 AND user_id = ?2 AND library_id = ?3",
-                )?
-                .execute(params![
-                    id,
-                    user,
-                    library,
-                    new_title,
-                    new_title.map(|t| words(t).join(" ")),
-                    new_title.map(|t| sort_key(t, None).as_bytes().to_vec()),
-                    description.is_some(),
-                    description.flatten(),
-                    pinned,
-                    now,
-                    count,
-                    duration,
-                ])?;
-                let edited =
-                    representation::get(tx, user, library, id)?.ok_or_else(Problem::not_found)?;
-                let answer = Answer::new(StatusCode::OK, &edited)?;
-                if let Some(key) = &key {
-                    answer.store(tx, user, key, now)?;
+                    )?
+                    .execute(params![
+                        id,
+                        user,
+                        library,
+                        new_title,
+                        new_title.map(|t| words(t).join(" ")),
+                        new_title.map(|t| sort_key(t, None).as_bytes().to_vec()),
+                        description.is_some(),
+                        description.flatten(),
+                        pinned,
+                        now,
+                        count,
+                        duration,
+                    ])?;
+                    let edited = representation::get(tx, user, library, id)?
+                        .ok_or_else(Problem::not_found)?;
+                    let answer = Answer::new(StatusCode::OK, &edited)?;
+                    if let Some(key) = &key {
+                        answer.store(tx, user, key, now)?;
+                    }
+                    Ok(Some((answer, Some(Change::of(edited, plan.applied)))))
+                })
+                .await?;
+            if let Some((answer, change)) = answer {
+                if moves_items && change.is_some() {
+                    // The edit may have moved the artwork on; its old mosaics go, off the request.
+                    let db = db.clone();
+                    tokio::spawn(async move { images.prune_mosaics(&db, library, user).await });
                 }
-                Ok(Some((answer, Some(Change::of(edited, plan.applied)))))
-            })
-            .await?;
-        if let Some((answer, change)) = answer {
-            if moves_items && change.is_some() {
-                // The edit may have moved the artwork on; its old mosaics go, off the request.
-                let db = db.clone();
-                tokio::spawn(async move { images.prune_mosaics(&db, library, user).await });
+                super::announce(&hub, user, change);
+                return Ok(answer.into_response());
             }
-            super::announce(&hub, user, change);
-            return Ok(answer.into_response());
         }
-    }
+    })
+    .await
 }
 
 /// `404` unless playlist `id` is `user`'s in `library`, and `409 version_conflict` unless it is
