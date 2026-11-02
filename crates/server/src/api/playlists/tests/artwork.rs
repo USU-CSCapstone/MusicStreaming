@@ -6,6 +6,7 @@ use jewelcase_scanner::describe_image;
 use super::super::super::testing::{ffmpeg, send};
 use super::*;
 use crate::api::Images;
+use crate::db::catalog::{self, Touched};
 use crate::db::testing::{Image, Track};
 
 const PNGS: [&str; 6] = ["c1.png", "c2.png", "c3.png", "c4.png", "c5.png", "c6.png"];
@@ -135,6 +136,56 @@ async fn fewer_than_four_covers_show_the_first_alone_and_none_shows_null() {
     let (playlist, id) =
         edited(&app, &playlist, json!([{ "op": "remove", "positions": [0, 1] }])).await;
     assert!(id.is_null(), "{playlist}");
+}
+
+/// Runs `change` on track `track` of library 1 as a scan does: in the same write, what the track
+/// pointed at before and after is brought up to date, and a move to another album is noted.
+async fn scanned(db: &Database, track: i64, change: &'static str) {
+    db.write(move |tx| {
+        let mut touched = Touched::default();
+        let before = touched.track(tx, 1, track)?;
+        tx.execute(change, [track])?;
+        if touched.track(tx, 1, track)? != before {
+            touched.moved.insert(track);
+        }
+        catalog::recompute(tx, 1, &touched, 0)
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_scan_that_changes_the_album_art_moves_the_artwork_on() {
+    let (_temp, db, app) = covers().await;
+    // Each track offers its album's cover, as a scan would have found it.
+    db.write(|tx| {
+        tx.execute(
+            "UPDATE tracks SET image_id = (SELECT image_id FROM albums WHERE id = album_id)",
+            [],
+        )
+    })
+    .await
+    .unwrap();
+    let playlist = created(&app, &[1, 2, 3, 4, 5]).await;
+    assert_eq!(playlist["image"]["id"], "m1-2-3-4");
+    let uri = format!("{URI}/{}", playlist["id"].as_str().unwrap());
+    let image = || async { call(&app, TOKEN, "GET", &uri, None).await.1["image"]["id"].clone() };
+
+    // Track 2, retagged onto album 105 with no art of its own, shows that album's cover.
+    scanned(&db, 2, "UPDATE tracks SET album_id = 105, image_id = NULL WHERE id = ?1").await;
+    assert_eq!(image().await, "m1-5-3-4");
+    // Track 7, which no playlist holds, now comes first on album 101 with cover 6, which
+    // replaces album 101's.
+    scanned(&db, 7, "UPDATE tracks SET image_id = 6, track_number = 1 WHERE id = ?1").await;
+    assert_eq!(image().await, "m6-5-3-4");
+    // Album 104 loses its cover, which leaves three, so the first alone.
+    scanned(&db, 4, "UPDATE tracks SET image_id = NULL WHERE id = ?1").await;
+    assert_eq!(image().await, "6");
+
+    // None of it was the user's change.
+    let (_, got) = call(&app, TOKEN, "GET", &uri, None).await;
+    assert_eq!(got["version"], playlist["version"]);
+    assert_eq!(got["modifiedAt"], playlist["modifiedAt"]);
 }
 
 /// Fetches an image, which must be one JPEG, and returns its dimensions.

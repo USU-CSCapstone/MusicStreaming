@@ -44,11 +44,18 @@ pub fn upsert_track(
         tracing::warn!(path = %rec.path.display(), "track under an unknown root; skipped");
         return Ok(());
     };
-    if let Some(id) = rec.id {
-        // Whatever it pointed at before may now be orphaned.
-        touched.track(tx, lib, id)?;
-    }
+    // Whatever it pointed at before may now be orphaned.
+    let before = match rec.id {
+        Some(id) => touched.track(tx, lib, id)?,
+        None => None,
+    };
     let credits = credits(tx, lib, rec, now)?;
+    // A track moved onto another album takes its playlists' artwork with it.
+    if let Some(id) = rec.id
+        && before != Some(credits.album_id)
+    {
+        touched.moved.insert(id);
+    }
     // Touched even if the track is skipped below, so an album or artist made only for it is
     // removed again.
     touched.albums.insert(credits.album_id);

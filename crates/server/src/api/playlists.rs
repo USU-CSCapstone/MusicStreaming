@@ -38,7 +38,7 @@ use super::page::{Order, Page, Request, Sort, Source, Total, Unknown};
 use super::playables::{self, Playable};
 use super::scope::Scope;
 use super::{Id, Images, Problem};
-use crate::db::{Database, new_id, now_ms};
+use crate::db::{Database, catalog, new_id, now_ms};
 
 /// How far apart the keys of a playlist's items start, so an item put between two takes the
 /// midpoint, 20 times over, before the playlist is renumbered.
@@ -202,7 +202,7 @@ pub async fn create(
                 "UPDATE playlists SET track_count = ?2, duration_us = ?3 WHERE id = ?1",
                 params![id, count, duration],
             )?;
-            artwork::refresh(tx, id)?;
+            catalog::playlist_artwork(tx, id)?;
             // The row was just inserted in this transaction.
             let created =
                 representation::get(tx, user, library, id)?.ok_or_else(Problem::not_found)?;

@@ -19,7 +19,6 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Deserializer};
 
 use super::KEY_GAP;
-use super::artwork;
 use super::idempotency::{Answer, Key};
 use super::keys::assign;
 use super::representation::{self, header};
@@ -28,7 +27,7 @@ use crate::api::extract::{self, Path};
 use crate::api::playables::{self, Playable};
 use crate::api::scope::Scope;
 use crate::api::{Id, Problem};
-use crate::db::{Database, now_ms};
+use crate::db::{Database, catalog, now_ms};
 
 /// The spec's `PlaylistEdit`.
 #[derive(Deserialize)]
@@ -148,7 +147,7 @@ pub async fn edit(
                 write(tx, user, library, id, base, &plan)?;
                 // An edit of details alone leaves the items, and so the artwork.
                 if plan.totals.is_some() {
-                    artwork::refresh(tx, id)?;
+                    catalog::playlist_artwork(tx, id)?;
                 }
                 let (count, duration) = plan.totals.unzip();
                 let new_title = title.as_deref();
