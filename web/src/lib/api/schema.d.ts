@@ -747,8 +747,9 @@ export interface paths {
          * @description Changes details and contents — adds, removes, and moves, including non-contiguous
          *     selections — as one atomic edit against `baseVersion`: every part applies, or none does
          *     (`requirements/playlists.md` §4–§5). Each applied edit adds 1 to `version` and sets
-         *     `modifiedAt`, even if what it names is already so. `trackCount` and `durationUs` are
-         *     recounted from the tracks' durations as they are at the edit; a rescan alone does not
+         *     `modifiedAt`, even if what it names is already so. An edit that changes the items (one
+         *     with `ops`) recounts `trackCount` and `durationUs` from the tracks' durations as they
+         *     are at the edit; one of details alone leaves them as they were. A rescan alone does not
          *     update them.
          *
          *     An edit made on another version is `409 version_conflict`, whose `currentVersion` is the

@@ -676,3 +676,37 @@ async fn an_edit_sums_the_durations_the_tracks_have_now() {
     assert_eq!(status, StatusCode::OK, "{edited}");
     assert_eq!((&edited["trackCount"], &edited["durationUs"]), (&json!(1), &json!(5_000_000)));
 }
+
+/// The ops are applied off the writer, so the write checks again that the playlist is as the
+/// plan found it. An edit that came between is a conflict, and a track the plan adds that was
+/// purged since sends it back to be made again; either way nothing is written.
+#[tokio::test]
+async fn a_plan_is_written_only_while_the_playlist_is_as_it_was_planned_from() {
+    let (_temp, db, app) = catalog().await;
+    let made = create(&app, json!({ "title": "P", "items": [track(1), track(2)] })).await;
+    let id: i64 = made["id"].as_str().unwrap().parse().unwrap();
+    let plan =
+        |ops: Vec<Op<i64>>| db.try_read(move |conn| super::super::edit::plan(conn, 1, id, ops, 5));
+    let write = |plan: super::super::edit::Plan, base: i64| {
+        db.try_write(move |tx| super::super::edit::write(tx, 1, 1, id, base, &plan))
+    };
+
+    let remove = plan(vec![Op::Remove { positions: vec![0] }]).await.unwrap();
+    let (status, _) = edit(&app, &id.to_string(), json!({ "baseVersion": 1, "title": "Q" })).await;
+    assert_eq!(status, StatusCode::OK);
+    let problem = serde_json::to_value(write(remove, 1).await.unwrap_err()).unwrap();
+    assert_eq!(
+        (&problem["code"], &problem["currentVersion"]),
+        (&json!("version_conflict"), &json!(2))
+    );
+    assert_eq!(tracks(&db, &made["id"]).await, [1, 2]);
+
+    let add = plan(vec![Op::Add { at: Some(0), items: vec![14, 1] }]).await.unwrap();
+    db.write(|tx| tx.execute("DELETE FROM tracks WHERE id = 14", [])).await.unwrap();
+    assert!(!write(add, 2).await.unwrap(), "a plan whose added track is gone is made again");
+    assert_eq!(tracks(&db, &made["id"]).await, [1, 2]);
+    let add = plan(vec![Op::Add { at: Some(0), items: vec![14, 1] }]).await.unwrap();
+    assert_eq!(add.totals, Some((3, 3_000_000)));
+    assert!(write(add, 2).await.unwrap());
+    assert_eq!(tracks(&db, &made["id"]).await, [1, 1, 2]);
+}

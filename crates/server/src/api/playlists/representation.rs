@@ -74,3 +74,18 @@ pub fn get(
     .query_row(rusqlite::params![id, user, library], playlist)
     .optional()
 }
+
+/// The version and item count of `user`'s playlist `id` in `library`, if it is theirs.
+pub fn header(
+    conn: &Connection,
+    user: i64,
+    library: i64,
+    id: i64,
+) -> rusqlite::Result<Option<(i64, i64)>> {
+    conn.prepare_cached(
+        "SELECT version, track_count FROM playlists \
+         WHERE id = ?1 AND user_id = ?2 AND library_id = ?3",
+    )?
+    .query_row(rusqlite::params![id, user, library], |row| Ok((row.get(0)?, row.get(1)?)))
+    .optional()
+}
