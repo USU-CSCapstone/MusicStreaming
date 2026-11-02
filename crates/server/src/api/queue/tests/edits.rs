@@ -7,7 +7,7 @@ use jewelcase_core::QueueState;
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
-use super::{KEY, KEY2, OTHER, QUEUE, setup, snapshot, start, start_body};
+use super::{KEY, KEY2, OTHER, QUEUE, etag, get, setup, snapshot, start, start_body};
 use crate::api::testing::socket::{Socket, connect_with, next, next_of, serve};
 use crate::api::testing::{TOKEN, call, conn};
 use crate::queue::list_hash;
@@ -120,7 +120,7 @@ async fn edit_broadcasts_with_hash() {
 async fn an_add_by_recipe_is_resolved_by_the_server() {
     let (_temp, _state, app) = setup().await;
     start(&app, TOKEN, start_body(QUEUE, KEY, &["1"], 0)).await;
-    let recipe = json!({ "type": "album", "albumId": "101", "sort": "name.asc" });
+    let recipe = json!({ "type": "album", "albumId": "101", "sort": "name", "order": "asc" });
     let edit = json!({
         "type": "add", "before": manual_end(),
         "source": { "key": ADDED, "libraryId": "1", "recipe": recipe },
@@ -150,7 +150,7 @@ async fn an_add_by_recipe_is_resolved_by_the_server() {
     }
     let unreached = json!({
         "type": "add", "before": manual_end(),
-        "source": { "key": KEY2, "libraryId": "2", "recipe": { "type": "library", "filters": [], "sort": "name.asc" } },
+        "source": { "key": KEY2, "libraryId": "2", "recipe": { "type": "library", "filters": {}, "sort": "name", "order": "asc" } },
     });
     let (status, _) = send(&app, "user2", QUEUE, 9, unreached).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "refused before the queue is looked at");
@@ -248,7 +248,7 @@ async fn add_refuses_unreachable_tracks() {
     let (_, missing) = send(&app, "user2", QUEUE, 2, in_library("2", &["99"])).await;
     let (_, missing_library) = send(&app, "user2", QUEUE, 3, in_library("9", &["99"])).await;
     assert_eq!((&unreachable, &unreachable), (&missing, &missing_library));
-    let recipe = json!({ "type": "library", "filters": [], "sort": "name.asc" });
+    let recipe = json!({ "type": "library", "filters": {}, "sort": "name", "order": "asc" });
     let by_recipe = json!({
         "type": "add", "before": manual_end(),
         "source": { "key": ADDED, "libraryId": "2", "recipe": recipe },
@@ -446,4 +446,27 @@ async fn keys_are_stored_lowercase() {
         (status, &problem["code"]),
         (StatusCode::UNPROCESSABLE_ENTITY, &json!("duplicate_key"))
     );
+}
+
+#[tokio::test]
+async fn an_edit_moves_the_etag_to_the_next_version() {
+    let (_temp, _state, app) = setup().await;
+    start(&app, TOKEN, start_body(QUEUE, KEY, &["1", "2"], 0)).await;
+    let (_, headers, _) = get(&app, &[]).await;
+    let tag = etag(&headers);
+    let run = tag.trim_start_matches('"').split('.').next().unwrap();
+    send(&app, TOKEN, QUEUE, 1, json!({ "type": "next" })).await;
+    // The tag a device builds for the version it reached by hearing the edit.
+    let (status, ..) = get(&app, &[("if-none-match", &format!("\"{run}.{QUEUE}.1\""))]).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+}
+
+#[tokio::test]
+async fn repeat_survives_a_start() {
+    let (_temp, _state, app) = setup().await;
+    start(&app, TOKEN, start_body(QUEUE, KEY, &["1", "2"], 0)).await;
+    let (status, _) = send(&app, TOKEN, QUEUE, 1, json!({ "type": "repeat", "mode": "all" })).await;
+    assert_eq!(status, StatusCode::OK);
+    start(&app, TOKEN, start_body(OTHER, KEY2, &["2", "1"], 0)).await;
+    assert_eq!(snapshot(&app).await["state"]["repeat"], "all");
 }
