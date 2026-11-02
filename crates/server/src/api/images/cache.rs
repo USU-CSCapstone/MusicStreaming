@@ -23,6 +23,8 @@ use tempfile::NamedTempFile;
 use tokio::process::Command;
 use tokio::sync::Semaphore;
 
+use super::mosaic_id;
+use crate::api::playlists;
 use crate::db::Database;
 
 /// A resize that takes longer than this is killed: the image is broken or the host is stuck.
@@ -144,19 +146,10 @@ impl Images {
     /// has committed.
     pub async fn prune_mosaics(&self, db: &Database, library: i64, user: i64) {
         let dir = self.cache.join(library.to_string()).join(MOSAICS).join(user.to_string());
-        let artwork = db
-            .read(move |conn| {
-                conn.prepare_cached(
-                    "SELECT image_key FROM playlists \
-                     WHERE user_id = ?1 AND library_id = ?2 AND image_key GLOB 'm*'",
-                )?
-                .query_map([user, library], |row| row.get(0))?
-                .collect::<Result<HashSet<String>, _>>()
-            })
-            .await;
+        let artwork = db.read(move |conn| playlists::mosaics_of(conn, user, library)).await;
         let pruned = match artwork {
             Ok(artwork) => {
-                tokio::task::spawn_blocking(move || match sweep_user(&dir, &artwork, None) {
+                tokio::task::spawn_blocking(move || match sweep_user(&dir, &artwork, None, true) {
                     Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
                     other => other,
                 })
@@ -253,14 +246,10 @@ fn held(conn: &Connection) -> rusqlite::Result<HashMap<i64, Held>> {
         library.ids.insert(row.get(1)?);
         library.hashes.insert(hex(&row.get::<_, Vec<u8>>(2)?));
     }
-    let mut select = conn.prepare(
-        "SELECT library_id, user_id, image_key FROM playlists WHERE image_key GLOB 'm*'",
-    )?;
-    let mut rows = select.query([])?;
-    while let Some(row) = rows.next()? {
+    for (library, user, key) in playlists::all_mosaics(conn)? {
         // A playlist of a library with no images has no cached files to keep either way.
-        if let Some(library) = held.get_mut(&row.get::<_, i64>(0)?) {
-            library.artwork.entry(row.get(1)?).or_default().insert(row.get(2)?);
+        if let Some(library) = held.get_mut(&library) {
+            library.artwork.entry(user).or_default().insert(key);
         }
     }
     Ok(held)
@@ -325,26 +314,38 @@ fn sweep_mosaics(dir: &Path, held: &Held) -> io::Result<()> {
             remove(&user)?;
             continue;
         };
-        sweep_user(&user, artwork, Some(&held.ids))?;
+        sweep_user(&user, artwork, Some(&held.ids), false)?;
     }
     Ok(())
 }
 
 /// Deletes everything in one user's mosaic folder, `dir`, but the mosaics whose four images
-/// are among `ids`, if given, and that `artwork` names as a playlist's.
-fn sweep_user(dir: &Path, artwork: &HashSet<String>, ids: Option<&HashSet<i64>>) -> io::Result<()> {
+/// are among `ids`, if given, and that `artwork` names as a playlist's. With `running`, the
+/// server is taking requests, so a file that is not a finished copy or a failure marker may be a
+/// render's temporary file and is left alone.
+fn sweep_user(
+    dir: &Path,
+    artwork: &HashSet<String>,
+    ids: Option<&HashSet<i64>>,
+    running: bool,
+) -> io::Result<()> {
     for file in fs::read_dir(dir)? {
         let file = file?.path();
-        let stem = file.file_name().and_then(|name| name.to_str()?.strip_suffix(".jpg"));
-        // A mosaic is `{id}-{id}-{id}-{id}-{size}.jpg`; a playlist holds `m{a}-{b}-{c}-{d}`.
+        let name = file.file_name().and_then(|name| name.to_str());
+        let finished = name.and_then(|name| name.strip_suffix(".jpg"));
+        let stem = match (running, finished) {
+            (true, None) => name.and_then(|name| name.strip_suffix(".failed")),
+            _ => finished,
+        };
+        if running && stem.is_none() {
+            continue;
+        }
+        // A mosaic is `{id}-{id}-{id}-{id}-{size}.jpg`.
         let keep = stem.is_some_and(|stem| {
-            let mut parts = stem.split('-');
-            let four: Vec<_> = parts.by_ref().take(4).collect();
-            four.len() == 4
-                && four
-                    .iter()
-                    .all(|id| id.parse().is_ok_and(|id| ids.is_none_or(|ids| ids.contains(&id))))
-                && artwork.contains(&format!("m{}", four.join("-")))
+            let four: Vec<i64> = stem.split('-').take(4).map_while(|id| id.parse().ok()).collect();
+            let Ok(four) = <[i64; 4]>::try_from(four) else { return false };
+            ids.is_none_or(|ids| four.iter().all(|id| ids.contains(id)))
+                && artwork.contains(&mosaic_id(four))
         });
         if !keep {
             remove(&file)?;
