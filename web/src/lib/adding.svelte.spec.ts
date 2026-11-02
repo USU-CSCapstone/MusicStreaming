@@ -20,14 +20,15 @@ describe('cardAdding', () => {
 			label: '“Signal”',
 			count: 7,
 			refs: [{ type: 'album', id: '5' }],
-			recipe: { type: 'album', albumId: '5', sort: 'album.asc' }
+			recipe: { type: 'album', albumId: '5', sort: 'album', order: 'asc' }
 		});
 		expect(cardAdding(fetch, '11', card('artist')).recipe).toEqual({
 			type: 'artist',
 			artistId: '5',
 			scope: 'all',
 			artistCredit: 'any',
-			sort: 'album.asc'
+			sort: 'album',
+			order: 'asc'
 		});
 	});
 

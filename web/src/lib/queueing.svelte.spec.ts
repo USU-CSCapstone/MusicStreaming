@@ -3,7 +3,10 @@ import type { Adding } from './adding.svelte';
 import type { SentEdit, TrackSummary } from './api/types';
 
 const fake = vi.hoisted(() => ({
-	queue: { queueId: 'q1' as string | null, edit: (() => {}) as (edit: SentEdit) => void }
+	queue: {
+		queueId: 'q1' as string | null,
+		edit: (() => {}) as (edit: SentEdit, length?: number) => void
+	}
 }));
 vi.mock('$lib/queue/client.svelte', () => ({ queue: fake.queue }));
 
@@ -25,15 +28,21 @@ const album: Adding = {
 	...songs([]),
 	label: '“Signal”',
 	count: 3,
-	recipe: { type: 'album', albumId: '31', sort: 'album.asc' }
+	recipe: { type: 'album', albumId: '31', sort: 'album', order: 'asc' }
 };
 
 let edits: SentEdit[];
+/** The length each edit was sent with, for a recipe's rows to show at once. */
+let lengths: (number | undefined)[];
 
 beforeEach(() => {
 	edits = [];
+	lengths = [];
 	fake.queue.queueId = 'q1';
-	fake.queue.edit = (e) => void edits.push(e);
+	fake.queue.edit = (e, length) => {
+		edits.push(e);
+		lengths.push(length);
+	};
 	placing.what = null;
 	panels.queue = false;
 });
@@ -53,7 +62,7 @@ describe('addToQueue', () => {
 		expect(toaster.current?.message).toBe('2 songs queued next');
 	});
 
-	it('sends a collection by its recipe, never its tracks, at the end for Queue Last', async () => {
+	it('sends a collection by its recipe with its count, never its tracks, at the end for Queue Last', async () => {
 		const tracks = vi.fn(async () => [track('1')]);
 		await addToQueue({ ...album, tracks }, '11', { type: 'manualEnd' });
 		expect(edits[0]).toEqual({
@@ -61,10 +70,11 @@ describe('addToQueue', () => {
 			source: {
 				key: expect.any(String),
 				libraryId: '11',
-				recipe: { type: 'album', albumId: '31', sort: 'album.asc' }
+				recipe: { type: 'album', albumId: '31', sort: 'album', order: 'asc' }
 			},
 			before: { type: 'manualEnd' }
 		});
+		expect(lengths).toEqual([3]);
 		expect(tracks).not.toHaveBeenCalled();
 		expect(toaster.current?.message).toBe('“Signal” queued last');
 	});

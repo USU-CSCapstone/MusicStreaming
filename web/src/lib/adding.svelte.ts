@@ -16,6 +16,7 @@ import {
 import type { Playable, Playlist, QueueRecipe, TrackSummary } from './api/types';
 import type { Card } from './cards';
 import { plural } from './format';
+import { albumRecipe, artistRecipe } from './queue';
 import type { EditablePlaylist } from './playlist.svelte';
 import { toast } from './toast.svelte';
 
@@ -80,22 +81,6 @@ export function collection(
 export function view(label: string, count: number, recipe: QueueRecipe): Adding {
 	return { label, count, refs: [], tracks: async () => [], recipe };
 }
-
-/** An album's songs in `sort`, as the server resolves them. */
-export const albumRecipe = (albumId: string, sort = 'album.asc'): QueueRecipe => ({
-	type: 'album',
-	albumId,
-	sort
-});
-
-/** Every song an artist is credited on in `sort`, as the server resolves them. */
-export const artistRecipe = (artistId: string, sort = 'album.asc'): QueueRecipe => ({
-	type: 'artist',
-	artistId,
-	scope: 'all',
-	artistCredit: 'any',
-	sort
-});
 
 /**
  * The album, artist, or playlist a card stands for. It holds no songs: an album's or artist's
