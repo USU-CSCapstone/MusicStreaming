@@ -72,8 +72,8 @@ It is a stand-in for the server, so it has these limits. None of them are client
 
 ## Not built yet
 
-These are client work still to do: virtualized lists (long lists currently page in as you scroll),
-the queue panel, loudness normalization, offline, and account preferences. Grid/list view and
+These are client work still to do: virtualized lists beyond the queue panel's (the other long
+lists page in as you scroll), the panel's History tab and kept queues, loudness normalization, offline, and account preferences. Grid/list view and
 theme are per-browser for now.
 
 ## Queue worker
@@ -200,3 +200,33 @@ the queue only by editing it (`requirements/queue.md`, `design/queue.md` §3).
 - **Taking over** a track another device plays needs the state's `itemId` to be the queue's
   current item, with its row known: playback moves without rebuilding the queue. It fails, and
   starts nothing, while the queue here is not that far or the item is of another library.
+
+## The queue panel
+
+Opened from the player bar, over the main area like Lyrics and Devices. It shows and edits the
+account's queue, so it works the same whichever device plays: every edit goes through the queue
+client, applied here at once and sent on, and the device holding playback follows the queue. Only
+the Up Next tab is built.
+
+- **Up Next** is the Manual Queue under its own heading (a hint stands in when it is empty), then
+  the context's items under theirs. **Shuffle and Repeat** (Off, All, One) sit beside the heading,
+  since the player bar hides them at phone width; they go through the player (`setShuffle`,
+  `setRepeat`), so a shuffle sends a random 32-bit seed.
+- **Rows are one fixed height, so the list is virtualized by arithmetic** (`queue/layout.ts`,
+  `QueueList.svelte`): the rows to draw come from the scroll position, and the worker is asked for
+  those rows only (`rows('upNext', offset, limit)`, the Manual Queue's first). Each is drawn as
+  soon as the worker names its item, and shows its track once the batch lookup by IDs has it
+  (`queue/summaries.ts`, at most 100 IDs per library per request, never none). A `loading` row is
+  one the worker is still learning (it is asked again when the queue changes); an `unavailable`
+  one, or a track out of reach or missing, shows "Unavailable". A 500,000-item Up Next draws about
+  twenty rows. The list is drawn at most 10 million pixels tall, since Firefox ignores a taller
+  height, and past that the scroll position is scaled into the whole list.
+- **Editing.** A grab handle drags one row, or the selected rows together, anywhere in Up Next,
+  across the Manual Queue's end too (`move`, with an anchor from `anchorAt`); the handle takes no
+  scroll from a finger, and pressing it without moving selects the row. From the keyboard, Space on
+  a title selects, Alt+↑/↓ moves the selection (or the row) a place, Delete removes. A row's ✕
+  removes it, or the selection it is in. Presses made before the list has caught up with the last
+  edit wait for it, so holding a key moves one place per press. Clicking a row jumps to it
+  (`player.jump`), and everything ahead of it goes to History.
+- **A change that did not stay is explained** in the panel from the client's `refusal` (`anchor_gone`,
+  `superseded`, `lost`, ...), until dismissed.

@@ -70,3 +70,5 @@ export type QueueRows = Schemas['QueueRows'];
 export type QueueEdit = Schemas['QueueEdit'];
 /** An edit as a device sends it: an `add`'s source names `tracks` or a `recipe`. */
 export type SentEdit = Schemas['EditQueue']['edit'];
+/** Where an add or move lands. */
+export type QueueAnchor = Schemas['QueueAnchor'];

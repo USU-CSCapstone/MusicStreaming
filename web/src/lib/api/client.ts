@@ -149,6 +149,13 @@ export const getAlbum = (f: Fetch, libraryId: string, albumId: string) =>
 export const listTracks = (f: Fetch, libraryId: string, query: Query = {}) =>
 	get<TrackPage>(f, `${lib(libraryId)}/tracks`, query);
 
+/**
+ * The tracks `ids` names that `libraryId` holds, in the order named; an ID the library does not
+ * hold is left out. At most 100, and never none: with no `ids` the endpoint lists the library.
+ */
+export const getTracksByIds = (f: Fetch, libraryId: string, ids: string[]) =>
+	get<TrackPage>(f, `${lib(libraryId)}/tracks`, { ids: ids.join(',') });
+
 export const getTrack = (f: Fetch, libraryId: string, trackId: string) =>
 	get<Track>(f, `${lib(libraryId)}/tracks/${encodeURIComponent(trackId)}`);
 

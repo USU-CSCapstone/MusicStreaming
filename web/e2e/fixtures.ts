@@ -591,6 +591,11 @@ export async function serveLibrary(
 				]
 			});
 		}
+		if (path === `${lib}/tracks` && url.searchParams.has('ids')) {
+			// A lookup by IDs: the tracks held, in the order named.
+			const named = url.searchParams.get('ids')!.split(',');
+			return json(pageOf(named.flatMap((id) => tracks.filter((t) => t.id === id))));
+		}
 		if (path === `${lib}/tracks`) {
 			return json(pageOf(tagged(sortedAsAsked(url.searchParams), url.searchParams, (t) => t.tags)));
 		}
