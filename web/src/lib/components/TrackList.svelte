@@ -9,7 +9,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import type { PlayContext, TagType, TrackSummary } from '$lib/api/types';
-	import { type TagFilter, UNFILTERED, isFiltered, toggleTag } from '$lib/filters';
+	import { type TagFilter, UNFILTERED, chosenTags, isFiltered, shownFilter } from '$lib/filters';
 	import { knownTags } from '$lib/known-tags.svelte';
 	import { fullText } from '$lib/full-text';
 	import { prefs } from '$lib/prefs.svelte';
@@ -31,7 +31,7 @@
 	import AddToPlaylistMenu from './AddToPlaylistMenu.svelte';
 	import Icon from './Icon.svelte';
 	import SortMenu from './SortMenu.svelte';
-	import TagPicker from './TagPicker.svelte';
+	import FilterPicker from './FilterPicker.svelte';
 
 	let {
 		tracks,
@@ -95,24 +95,25 @@
 		onfilter?: (filter: TagFilter) => void;
 	} = $props();
 
+	// The filter as its controls show it: one just chosen shows before its load finishes.
+	const current = $derived(filter && shownFilter(filter));
 	// Filtered, rows are hidden between those shown, so a place among them is no place in the
 	// list's own order and none can move.
-	const tagFiltered = $derived(filter !== undefined && isFiltered(filter));
+	const tagFiltered = $derived(current !== undefined && isFiltered(current));
 	const movable = $derived(onmove !== undefined && sort === null && !tagFiltered);
 
 	// A column for each tag type the account shows, and any the filter names, so a filter never
 	// narrows the list unseen (`requirements/tags.md` §7).
 	const libraryId = $derived(page.data.library?.id ?? '');
 	$effect(() => {
-		if (filter && libraryId) knownTags.load(libraryId, filter.tags);
+		if (current && libraryId) knownTags.load(libraryId, chosenTags(current));
 	});
 	const tagColumns: TagType[] = $derived.by(() => {
-		const filtering = new Set(filter?.tags.map((id) => knownTags.get(libraryId, id)?.type));
+		const chosen = current ? chosenTags(current) : [];
+		const filtering = new Set(chosen.map((id) => knownTags.get(libraryId, id)?.type));
 		const types: TagType[] = page.data.tagTypes ?? [];
 		return types.filter((type) => prefs.showsTagColumn(type.key) || filtering.has(type.key));
 	});
-	const chosenOf = (key: string) =>
-		filter?.tags.filter((id) => knownTags.get(libraryId, id)?.type === key) ?? [];
 	// Where every column has room, the tag columns go after the album, or the artist on an
 	// album's own page; a column's width and place are the grid's, set here for any number.
 	const wide = $derived.by(() => {
@@ -531,25 +532,8 @@
 <svelte:window {onkeydown} />
 
 {#snippet picker(type: TagType, variant: 'button' | 'heading')}
-	{#if filter && onfilter}
-		{@const f = filter}
-		<TagPicker
-			{libraryId}
-			{type}
-			{variant}
-			label={tagTypeName(type.key)}
-			chosen={chosenOf(type.key)}
-			match={f.match}
-			ontoggle={(tag) => {
-				knownTags.note(libraryId, tag);
-				onfilter(toggleTag(f, tag.id));
-			}}
-			onmatch={(match) => onfilter({ ...f, match })}
-			onclear={() => {
-				const gone = new Set(chosenOf(type.key));
-				onfilter({ ...f, tags: f.tags.filter((id) => !gone.has(id)) });
-			}}
-		/>
+	{#if current && onfilter}
+		<FilterPicker {libraryId} {type} {variant} filter={current} {onfilter} />
 	{:else}
 		{tagTypeName(type.key)}
 	{/if}
@@ -574,7 +558,7 @@
 	{/each}
 {/snippet}
 
-{#if tracks.length === 0}
+{#snippet emptyNote()}
 	<p class="empty muted">
 		{empty}
 		{#if tagFiltered && onfilter}
@@ -583,6 +567,11 @@
 			</button>
 		{/if}
 	</p>
+{/snippet}
+
+<!-- A filter that leaves no songs keeps the headings, so its tags can be changed one at a time. -->
+{#if tracks.length === 0 && !tagFiltered}
+	{@render emptyNote()}
 {:else}
 	<!-- The list's own width, not the window's, decides its columns: the sidebar and the
 	     page's padding take some of the window. -->
@@ -738,6 +727,7 @@
 				<li class="drop" style:top="{drag.line}px" aria-hidden="true"></li>
 			{/if}
 		</ol>
+		{#if tracks.length === 0}{@render emptyNote()}{/if}
 	</div>
 	{#if drag?.started}
 		<div class="ghost" style:left="{drag.x + 14}px" style:top="{drag.y + 14}px" aria-hidden="true">

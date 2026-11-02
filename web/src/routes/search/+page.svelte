@@ -6,9 +6,12 @@
 	import type { SearchResult } from '$lib/api/types';
 	import { albumCard, artistCard, playlistCard, type Card } from '$lib/cards';
 	import CollectionView from '$lib/components/CollectionView.svelte';
+	import FilterPicker from '$lib/components/FilterPicker.svelte';
+	import Icon from '$lib/components/Icon.svelte';
 	import SearchBox, { settler } from '$lib/components/SearchBox.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
-	import { UNFILTERED, isFiltered, showFiltered } from '$lib/filters';
+	import { UNFILTERED, isFiltered, showFiltered, shownFilter } from '$lib/filters';
+	import { tagTypePlural } from '$lib/tags';
 	import type { Selected } from '$lib/recent';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { FIELDS, sortTracks } from '$lib/sorting';
@@ -33,6 +36,10 @@
 
 	const sections = $derived(data.results?.sections ?? []);
 	const filtered = $derived(isFiltered(data.filter));
+	// The filter narrows every section, so its controls sit above them all, and stay when it
+	// leaves nothing (`requirements/tags.md` §7).
+	const filter = $derived(shownFilter(data.filter));
+	const tagTypes = $derived(data.tagTypes ?? []);
 	// Songs come in match order; sorted, they play as shown (`requirements/conventions.md` §4.1).
 	const sort = $derived(currentSort(FIELDS));
 	const songs = $derived.by(() => {
@@ -80,8 +87,38 @@
 <!-- The sidebar holds the box on wide screens; at phone width this page does. -->
 <div class="box"><SearchBox /></div>
 
+{#if data.results && tagTypes.length}
+	<div class="filters" role="group" aria-label="Filter by tags">
+		{#each tagTypes as type (type.key)}
+			<FilterPicker
+				libraryId={data.library?.id ?? ''}
+				{type}
+				variant="button"
+				{filter}
+				onfilter={showFiltered}
+			/>
+		{/each}
+		{#if isFiltered(filter)}
+			<button type="button" class="link" onclick={() => showFiltered({ ...UNFILTERED })}>
+				Clear filters
+			</button>
+		{/if}
+	</div>
+{/if}
+
 {#if !data.results}
 	<p class="state muted">Search songs, albums, artists, and playlists.</p>
+	<!-- Each type's tags to browse, which on a phone, without the sidebar, are only here. -->
+	{#if tagTypes.length}
+		<nav class="browse" aria-label="Browse tags">
+			{#each tagTypes as type (type.key)}
+				<a href="{resolve('/tags')}?{new URLSearchParams({ type: type.key })}">
+					<Icon name="tag" size={18} />
+					{tagTypePlural(type.key)}
+				</a>
+			{/each}
+		</nav>
+	{/if}
 {:else if sections.length === 0}
 	<!-- "No music yet" and "nothing matches" call for different responses (`requirements/search.md` §8). -->
 	<div class="state">
@@ -123,13 +160,12 @@
 					{sort}
 					onsort={showSorted}
 					filter={data.filter}
-					onfilter={showFiltered}
 					context={{
 						type: 'search',
 						query: data.q ?? '',
 						section: 'tracks',
 						...(filtered && {
-							filter: { tags: data.filter.tags, tagMatch: data.filter.match }
+							filter: { tagAll: data.filter.all, tagAny: data.filter.any }
 						})
 					}}
 					onplay={(track) => settler.settle({ type: 'track', id: track.id })}
@@ -149,6 +185,39 @@
 
 	section {
 		margin-bottom: var(--space-6);
+	}
+
+	.filters {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-2);
+		margin-bottom: var(--space-5);
+	}
+
+	.browse {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		gap: var(--space-2);
+		margin-top: var(--space-5);
+	}
+
+	.browse a {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		min-height: 44px;
+		padding: 0 var(--space-4);
+		border: 1px solid var(--border);
+		border-radius: 22px;
+		background: var(--surface);
+		color: var(--text);
+		text-decoration: none;
+	}
+
+	.browse a:hover {
+		background: var(--surface-hover);
 	}
 
 	section header {

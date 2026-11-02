@@ -9,11 +9,11 @@ export const load: PageLoad = async ({ fetch, parent, params, url }) => {
 	const tag = params.id;
 	// The songs sort on the server; unsorted, they run album by album.
 	const sort = readSort(url.searchParams, FIELDS);
-	const songs = { tag, ...(serverSort(sort) ?? { sort: 'album', order: 'asc' }) };
+	const songs = { tagAll: tag, ...(serverSort(sort) ?? { sort: 'album', order: 'asc' }) };
 	const [found, albums, artists, tracks] = await Promise.all([
 		getTag(fetch, lib, tag),
-		listAlbums(fetch, lib, { tag, sort: 'name' }),
-		listArtists(fetch, lib, { tag, sort: 'name' }),
+		listAlbums(fetch, lib, { tagAll: tag, sort: 'name' }),
+		listArtists(fetch, lib, { tagAll: tag, sort: 'name' }),
 		listTracks(fetch, lib, songs)
 	]);
 	return { lib, tag: found, albums, artists, songs, tracks };

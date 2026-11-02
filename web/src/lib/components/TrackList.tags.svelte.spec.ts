@@ -1,4 +1,4 @@
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import type { Tag, TagType, TrackSummary } from '$lib/api/types';
@@ -78,7 +78,7 @@ describe('TrackList.svelte tag columns', () => {
 		render(TrackList, { tracks, filter: UNFILTERED, onfilter: (f: TagFilter) => changes.push(f) });
 		await page.getByRole('button', { name: 'Filter by genre' }).click();
 		await page.getByRole('checkbox', { name: /Jazz/ }).click();
-		expect(changes).toEqual([{ tags: ['31'], match: 'any' }]);
+		expect(changes).toEqual([{ all: [], any: ['31'] }]);
 	});
 
 	it('leaves out a hidden type, unless the filter names it', async () => {
@@ -87,21 +87,26 @@ describe('TrackList.svelte tag columns', () => {
 		await expect.element(page.getByText('Genre', { exact: true })).toBeVisible();
 		await expect.element(page.getByText('Mood', { exact: true })).not.toBeInTheDocument();
 
-		render(TrackList, { tracks, filter: { tags: ['32'], match: 'any' }, onfilter: () => {} });
+		render(TrackList, { tracks, filter: { all: [], any: ['32'] }, onfilter: () => {} });
 		await expect
 			.element(page.getByRole('button', { name: 'Filter by mood, 1 chosen' }))
 			.toBeVisible();
 	});
 
-	it('offers to clear a filter that leaves nothing', async () => {
+	it('keeps its headings for a filter that leaves nothing, and offers to clear it', async () => {
 		const changes: TagFilter[] = [];
 		render(TrackList, {
 			tracks: [],
 			empty: 'No songs carry these tags.',
-			filter: { tags: ['31', '32'], match: 'all' },
+			filter: { all: ['31', '32'], any: [] },
 			onfilter: (f: TagFilter) => changes.push(f)
 		});
+		await expect.element(page.getByText('No songs carry these tags.')).toBeVisible();
+		// One tag can come out, not only all of them.
+		await page.getByRole('button', { name: 'Filter by genre, 1 chosen' }).click();
+		await page.getByRole('checkbox', { name: /Jazz/ }).click();
+		await userEvent.keyboard('{Escape}');
 		await page.getByRole('button', { name: 'Clear filters' }).click();
-		expect(changes).toEqual([UNFILTERED]);
+		expect(changes).toEqual([{ all: ['32'], any: [] }, UNFILTERED]);
 	});
 });

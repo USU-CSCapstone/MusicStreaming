@@ -10,7 +10,7 @@
 	} from '$lib/components/PlaylistDetailsDialog.svelte';
 	import TrackList, { type RowMove } from '$lib/components/TrackList.svelte';
 	import { deleteWithUndo } from '$lib/deletions.svelte';
-	import { currentFilter, filterByTags, isFiltered, showFiltered } from '$lib/filters';
+	import { currentFilter, filterByTags, isFiltered, showFiltered, shownFilter } from '$lib/filters';
 	import { formatLength, plural } from '$lib/format';
 	import { knownTags } from '$lib/known-tags.svelte';
 	import { toast } from '$lib/toast.svelte';
@@ -42,8 +42,9 @@
 	// Sorting shows the playlist in another order and leaves its own as arranged; it plays as
 	// shown (`requirements/conventions.md` §4.1, `requirements/playlists.md` §10).
 	const sort = $derived(currentSort(PLAYLIST_FIELDS));
-	// Filtering, like sorting, only changes what is shown (`requirements/tags.md` §7).
-	const filter = $derived(currentFilter());
+	// Filtering, like sorting, only changes what is shown, and at once for a filter just chosen
+	// (`requirements/tags.md` §7).
+	const filter = $derived(shownFilter(currentFilter()));
 	const filtered = $derived(isFiltered(filter));
 	const shown = $derived(
 		filterByTags(
@@ -104,7 +105,7 @@
 	image={playlist.image}
 	seed={playlist.id}
 	icon="playlist"
-	onplay={tracks.length ? () => player.play(shownTracks, 0, context) : undefined}
+	onplay={shownTracks.length ? () => player.play(shownTracks, 0, context) : undefined}
 >
 	{#if playlist.description}<span>{playlist.description}</span>{/if}
 	<span>{plural(playlist.trackCount, 'song')} · {formatLength(playlist.durationUs)}</span>

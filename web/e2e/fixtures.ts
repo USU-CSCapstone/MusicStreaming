@@ -78,10 +78,10 @@ function byType(tags: Tag[]): TagsByType {
 	return out;
 }
 
-/** The filter a list's `tag` and `tagMatch` ask for, and the items of `items` it keeps. */
+/** The filter a list's `tagAll` and `tagAny` ask for, and the items of `items` it keeps. */
 function tagged<T>(items: T[], query: URLSearchParams, tagsOf: (item: T) => TagsByType): T[] {
-	const tags = (query.get('tag') ?? '').split(',').filter(Boolean);
-	const filter: TagFilter = { tags, match: query.get('tagMatch') === 'all' ? 'all' : 'any' };
+	const ids = (key: string) => (query.get(key) ?? '').split(',').filter(Boolean);
+	const filter: TagFilter = { all: ids('tagAll'), any: ids('tagAny') };
 	return filterByTags(items, filter, tagsOf, (id) => TAGS.find((t) => t.id === id)?.type);
 }
 
@@ -456,7 +456,10 @@ export async function serveLibrary(
 		}
 		if (path === `${lib}/tags`) {
 			const type = url.searchParams.get('type');
-			const of = TAGS.filter((t) => !type || t.type === type);
+			const q = url.searchParams.get('q')?.trim().toLowerCase();
+			const of = TAGS.filter(
+				(t) => (!type || t.type === type) && (!q || t.name.toLowerCase().includes(q))
+			);
 			return json(pageOf(of.toSorted((a, b) => b.trackCount - a.trackCount)));
 		}
 		const tag = TAGS.find((t) => path === `${lib}/tags/${t.id}`);
@@ -515,7 +518,11 @@ export async function serveLibrary(
 		}
 		if (path === `${lib}/search`) {
 			const q = url.searchParams.get('q') ?? '';
-			const hits = tracks.filter((t) => t.title.toLowerCase().includes(q.toLowerCase()));
+			const hits = tagged(
+				tracks.filter((t) => t.title.toLowerCase().includes(q.toLowerCase())),
+				url.searchParams,
+				(t) => t.tags
+			);
 			return json({
 				query: q,
 				top: hits[0] ? { type: 'track', track: hits[0] } : null,
