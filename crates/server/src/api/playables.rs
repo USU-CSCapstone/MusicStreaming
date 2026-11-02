@@ -72,12 +72,10 @@ pub fn expand(
                 collect(conn, PLAYLIST_TRACKS, params![id], &mut tracks)?;
             }
             "external" => {
-                return Err(Problem::invalid("External tracks cannot be added to a playlist yet."));
+                return Err(Problem::invalid("External tracks are not supported yet."));
             }
             _ => {
-                return Err(Problem::invalid(
-                    "type must be track, album, artist, or playlist to be added to a playlist.",
-                ));
+                return Err(Problem::invalid("type must be track, album, artist, or playlist."));
             }
         }
     }
