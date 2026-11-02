@@ -19,12 +19,14 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Deserializer};
 
 use super::KEY_GAP;
+use super::announce::{AppliedOp, Change};
 use super::idempotency::{Answer, Key};
 use super::keys::assign;
 use super::representation::{self, header};
 use crate::api::Images;
 use crate::api::extract::{self, Path};
 use crate::api::playables::{self, Playable};
+use crate::api::realtime::Hub;
 use crate::api::scope::Scope;
 use crate::api::{Id, Problem};
 use crate::db::{Database, catalog, now_ms};
@@ -95,11 +97,13 @@ struct Item {
 /// `editPlaylist`: applies the details and ops to the caller's playlist if it is at
 /// `baseVersion`, and returns it at the next version. Another version is `409 version_conflict`,
 /// a position out of range, or an item the caller cannot add, `422`, and nothing is applied
-/// either way. An edit that moves the artwork on deletes the old mosaics afterwards. With an `Idempotency-Key` the caller already used for an edit that applied,
-/// returns that answer and applies nothing.
+/// either way. With an `Idempotency-Key` the caller already used for an edit that applied,
+/// returns that answer and applies nothing. An edit that applied is announced to the caller's
+/// devices once it is committed, and one that moves the artwork on deletes the old mosaics.
 pub async fn edit(
     State(db): State<Arc<Database>>,
     State(images): State<Arc<Images>>,
+    State(hub): State<Arc<Hub>>,
     Scope { user, library }: Scope,
     Path((_, Id(id))): Path<(Id, Id)>,
     Key(key): Key,
@@ -138,7 +142,7 @@ pub async fn edit(
         let answer = db
             .try_write(move |tx| {
                 if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
-                    return Ok::<_, Problem>(Some(answer));
+                    return Ok::<_, Problem>(Some((answer, None)));
                 }
                 // Retention keeps the tracks the playlist holds; only an added one can be gone.
                 if !fresh(tx, library, &plan)? {
@@ -180,15 +184,16 @@ pub async fn edit(
                 if let Some(key) = &key {
                     answer.store(tx, user, key, now)?;
                 }
-                Ok(Some(answer))
+                Ok(Some((answer, Some(Change::of(edited, plan.applied)))))
             })
             .await?;
-        if let Some(answer) = answer {
-            if moves_items {
+        if let Some((answer, change)) = answer {
+            if moves_items && change.is_some() {
                 // The edit may have moved the artwork on; its old mosaics go, off the request.
                 let db = db.clone();
                 tokio::spawn(async move { images.prune_mosaics(&db, library, user).await });
             }
+            super::announce(&hub, user, change);
             return Ok(answer.into_response());
         }
     }
@@ -246,10 +251,13 @@ pub(super) struct Plan {
     delete: Option<Vec<i64>>,
     /// The rows to insert, as `(key, track, added_at)`.
     insert: Vec<(i64, i64, i64)>,
+    /// The ops as they apply, to announce: an add's tracks are those still in the library.
+    pub(super) applied: Vec<AppliedOp>,
 }
 
 /// Applies `ops` to the items of playlist `id` as `conn` finds them, and works out the rows that
-/// change and the totals after, summed from the tracks' durations as they are now. A track
+/// change, the ops as applied, and the totals after, summed from the tracks' durations as they
+/// are now. A track
 /// `library` no longer has is left out of an add, as create leaves it out. A position out of
 /// range is `422`. It only reads, so it runs off the writer; the caller has checked the
 /// playlist is the caller's and at the version the ops were made on.
@@ -266,6 +274,7 @@ pub(super) fn plan(
             added: Vec::new(),
             delete: Some(Vec::new()),
             insert: Vec::new(),
+            applied: Vec::new(),
         });
     }
     let added = durations(
@@ -291,6 +300,18 @@ pub(super) fn plan(
             },
             Op::Remove { positions } => Op::Remove { positions },
             Op::Move { positions, at } => Op::Move { positions, at },
+        })
+        .collect::<Vec<Op<Item>>>();
+    let applied = ops
+        .iter()
+        .map(|op| match op {
+            Op::Add { at, items } => AppliedOp::Add {
+                at: *at,
+                track_ids: items.iter().map(|item| Id(item.track)).collect(),
+                added_at: now,
+            },
+            Op::Remove { positions } => AppliedOp::Remove { positions: positions.clone() },
+            Op::Move { positions, at } => AppliedOp::Move { positions: positions.clone(), at: *at },
         })
         .collect();
     let before: Vec<Item> = conn
@@ -336,7 +357,13 @@ pub(super) fn plan(
                 .collect(),
         ),
     };
-    Ok(Plan { totals: Some((count, duration)), added: added.into_keys().collect(), delete, insert })
+    Ok(Plan {
+        totals: Some((count, duration)),
+        added: added.into_keys().collect(),
+        delete,
+        insert,
+        applied,
+    })
 }
 
 /// Whether every track `plan` adds is still in `library`, which a plan made off the writer must

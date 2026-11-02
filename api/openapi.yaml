@@ -2679,6 +2679,43 @@ components:
               minimum: 0
               description: Position the first moved track takes once the move is done.
 
+    PlaylistAppliedOp:
+      description: |
+        A `PlaylistOp` as the server applied it, sent in the `playlist` realtime message. Remove
+        and move are as they were asked; an add names tracks rather than playables.
+      oneOf:
+        - type: object
+          required: [op, trackIds, addedAt]
+          properties:
+            op: { const: add }
+            trackIds:
+              type: array
+              description: The tracks to insert, in order, less any no longer in the library.
+              items: { $ref: '#/components/schemas/Id' }
+            at:
+              type: integer
+              minimum: 0
+              description: Position the first track takes. Omitted appends.
+            addedAt:
+              type: string
+              format: date-time
+              description: The `addedAt` of each of the tracks.
+        - type: object
+          required: [op, positions]
+          properties:
+            op: { const: remove }
+            positions:
+              type: array
+              items: { type: integer, minimum: 0 }
+        - type: object
+          required: [op, positions, at]
+          properties:
+            op: { const: move }
+            positions:
+              type: array
+              items: { type: integer, minimum: 0 }
+            at: { type: integer, minimum: 0 }
+
     PlaylistEdit:
       type: object
       required: [baseVersion]
@@ -3361,6 +3398,44 @@ components:
           properties:
             type: { const: commandResult }
             result: { $ref: '#/components/schemas/CommandResult' }
+        - type: object
+          required: [type, libraryId, playlistId, version, playlist]
+          description: |
+            One of the user's playlists was created, edited, or deleted. Sent to every connection
+            of the user, the one that made the change included, once the change is committed;
+            never for a request that was refused, and not again for a retry answered from its
+            `Idempotency-Key`. Nothing about another user's playlists is ever sent.
+
+            A `playlist` of `null` removes the playlist from the device, whatever version it
+            holds. Otherwise a message whose `version` is not newer than the one the device holds
+            is ignored, as messages can arrive out of order. A device holding `version - 1`
+            applies `ops` to its items to reach `version`, with no refetch; one holding an older
+            version reloads the playlist. A device that holds the playlist's details replaces
+            them with `playlist`. The item list is never sent.
+          properties:
+            type: { const: playlist }
+            libraryId: { $ref: '#/components/schemas/Id' }
+            playlistId: { $ref: '#/components/schemas/Id' }
+            version:
+              type: integer
+              description: The playlist's version after the change; for a deletion, the last it had.
+            playlist:
+              description: The playlist as the change left it, or `null` when it was deleted.
+              oneOf:
+                - $ref: '#/components/schemas/Playlist'
+                - type: 'null'
+            ops:
+              type: array
+              description: |
+                What an edit applied to the items, in order, as `PlaylistOp` positions mean. An add
+                names the tracks its playables expanded to, in order, so the device does not expand
+                them again. Left out for a creation, a deletion, and an edit of details alone.
+              items: { $ref: '#/components/schemas/PlaylistAppliedOp' }
+            refetch:
+              type: boolean
+              description: |
+                `true` when the edit changed the items but its `ops` were too many for one message
+                (they are left out): the device reads the items again. Left out otherwise.
         - type: object
           required: [type, reason]
           properties:

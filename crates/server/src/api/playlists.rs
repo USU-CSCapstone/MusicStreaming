@@ -8,6 +8,7 @@
 //! A playlist's items are kept in order under sparse keys [`KEY_GAP`] apart. Its artwork is
 //! an ID kept on the row (`artwork`) and served by `getImage`.
 
+mod announce;
 mod artwork;
 mod edit;
 mod idempotency;
@@ -23,19 +24,22 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use jewelcase_core::playlist::Op;
 use jewelcase_core::{sort_key, words};
-use rusqlite::params;
 use rusqlite::types::Value;
+use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
 
+pub use announce::Change;
 pub use artwork::{all_mosaics, held as holds_artwork, mosaics_of};
 pub use edit::edit;
 use idempotency::{Answer, Key};
 pub use items::{duplicates, list_items};
-use representation::{Playlist, SELECT, playlist};
+pub use representation::Playlist;
+use representation::{SELECT, playlist};
 
 use super::extract::{self, Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Total, Unknown};
 use super::playables::{self, Playable};
+use super::realtime::{Hub, ServerMessage};
 use super::scope::Scope;
 use super::{Id, Images, Problem};
 use crate::db::{Database, catalog, new_id, now_ms};
@@ -142,9 +146,11 @@ pub struct Create {
 /// Creates a playlist for the caller in `library` at version 1, holding the tracks `items`
 /// expand to in order, and returns it as `201`. A blank title, an item that is not the caller's
 /// to add, and `fromMix` are `422`. With an `Idempotency-Key` the caller already used for a
-/// request that applied, returns that answer and creates nothing.
+/// request that applied, returns that answer and creates nothing. A playlist that was created is
+/// announced to the caller's devices once it is committed.
 pub async fn create(
     State(db): State<Arc<Database>>,
+    State(hub): State<Arc<Hub>>,
     Scope { user, library }: Scope,
     Key(key): Key,
     extract::Json(body): extract::Json<Create>,
@@ -172,10 +178,10 @@ pub async fn create(
         Err(answer) => return Ok(answer.into_response()),
     };
     let description = body.description;
-    let answer = db
+    let (answer, change) = db
         .try_write(move |tx| {
             if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
-                return Ok::<_, Problem>(answer);
+                return Ok::<_, Problem>((answer, None));
             }
             let (id, now) = (new_id()?, now_ms());
             tx.execute(
@@ -210,10 +216,20 @@ pub async fn create(
             if let Some(key) = &key {
                 answer.store(tx, user, key, now)?;
             }
-            Ok(answer)
+            Ok((answer, Some(Change::of(created, Vec::new()))))
         })
         .await?;
+    announce(&hub, user, change);
     Ok(answer.into_response())
+}
+
+/// Tells `user`'s devices of `change`, if there is one, which is only for a request that
+/// applied: a retry answered from its stored answer has nothing new to say. Call it once the
+/// change is committed.
+fn announce(hub: &Hub, user: i64, change: Option<Change>) {
+    if let Some(change) = change {
+        hub.broadcast(user, &ServerMessage::Playlist(change));
+    }
 }
 
 /// `getPlaylist`: the caller's playlist, or not found when it is not theirs in this library.
@@ -229,26 +245,28 @@ pub async fn get(
 }
 
 /// `deletePlaylist`: deletes the caller's playlist and its items, or not found when it is not
-/// theirs in this library.
+/// theirs in this library. A deletion is announced to the caller's devices once it is committed.
 pub async fn delete(
     State(db): State<Arc<Database>>,
     State(images): State<Arc<Images>>,
+    State(hub): State<Arc<Hub>>,
     Scope { user, library }: Scope,
     Path((_, Id(id))): Path<(Id, Id)>,
 ) -> Result<StatusCode, Problem> {
-    let deleted = db
+    let version = db
         .write(move |tx| {
-            tx.execute(
-                "DELETE FROM playlists WHERE id = ?1 AND user_id = ?2 AND library_id = ?3",
-                params![id, user, library],
-            )
+            tx.prepare_cached(
+                "DELETE FROM playlists WHERE id = ?1 AND user_id = ?2 AND library_id = ?3 \
+                 RETURNING version",
+            )?
+            .query_row(params![id, user, library], |row| row.get::<_, i64>(0))
+            .optional()
         })
-        .await?;
-    if deleted == 0 {
-        return Err(Problem::not_found());
-    }
+        .await?
+        .ok_or_else(Problem::not_found)?;
     // Its mosaics go too, off the request, unless another of the user's playlists shows them.
     tokio::spawn(async move { images.prune_mosaics(&db, library, user).await });
+    announce(&hub, user, Some(Change::deleted(library, id, version)));
     Ok(StatusCode::NO_CONTENT)
 }
 

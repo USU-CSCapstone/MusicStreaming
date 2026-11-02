@@ -12,8 +12,8 @@ use crate::api::time::serialize_rfc3339;
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Playlist {
-    id: Id,
-    library_id: Id,
+    pub(super) id: Id,
+    pub(super) library_id: Id,
     title: String,
     description: Option<String>,
     image: Option<ImageRef>,
@@ -25,7 +25,7 @@ pub struct Playlist {
     created_at: i64,
     #[serde(serialize_with = "serialize_rfc3339")]
     modified_at: i64,
-    version: i64,
+    pub(super) version: i64,
 }
 
 /// The columns [`playlist`] reads, in order, from `playlists p`.
