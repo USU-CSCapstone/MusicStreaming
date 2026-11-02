@@ -16,6 +16,8 @@ export class RowPages {
 	#items = new Map<string, string | null>();
 	/** The version each page was last asked at; a page is asked again only when that changes. */
 	#asked = new Map<string, number>();
+	/** How many fetches of each page, as `section:page`, are under way. */
+	#fetching = new Map<string, number>();
 	#queueId: string | null = null;
 	/** Counts queues, so a page that comes back after another queue replaced this one is dropped. */
 	#generation = 0;
@@ -31,6 +33,11 @@ export class RowPages {
 	/** The track of `item` from a page: a string, null if the server could not read it, or undefined if not held. */
 	track(item: string): string | null | undefined {
 		return this.#items.get(item);
+	}
+
+	/** Whether the page holding row `index` of `section` is being fetched. */
+	fetching(section: Section, index: number): boolean {
+		return this.#fetching.has(`${section}:${Math.floor(index / PAGE)}`);
 	}
 
 	/** Drops what pages gave for the items of the sources `keys`, once their lists are attached. */
@@ -52,6 +59,7 @@ export class RowPages {
 		this.#generation++;
 		this.#items.clear();
 		this.#asked.clear();
+		this.#fetching.clear();
 	}
 
 	/** Lets every page be asked for again, as when the connection is back. */
@@ -71,28 +79,33 @@ export class RowPages {
 			const key = `${section}:${page}`;
 			if (this.#asked.get(key) === version) continue;
 			this.#asked.set(key, version);
-			void this.#fetch(section, page * PAGE);
+			void this.#fetch(section, page);
 		}
 	}
 
-	/** Fetches one page and keeps its rows by item. */
-	async #fetch(section: Section, offset: number) {
+	/** Fetches page number `page` and keeps its rows by item. */
+	async #fetch(section: Section, page: number) {
 		const generation = this.#generation;
 		const queueId = this.#queueId;
+		const key = `${section}:${page}`;
+		this.#fetching.set(key, (this.#fetching.get(key) ?? 0) + 1);
 		try {
 			const response = await this.#get(
-				`/me/queue/rows?section=${section}&offset=${offset}&limit=${PAGE}`
+				`/me/queue/rows?section=${section}&offset=${page * PAGE}&limit=${PAGE}`
 			);
 			if (!response?.ok) return;
-			const page = (await response.json()) as QueueRows;
-			if (generation !== this.#generation || page.queueId !== queueId) return;
-			for (const row of [...(page.current ? [page.current] : []), ...page.rows]) {
+			const rows = (await response.json()) as QueueRows;
+			if (generation !== this.#generation || rows.queueId !== queueId) return;
+			for (const row of [...(rows.current ? [rows.current] : []), ...rows.rows]) {
 				this.#items.set(row.item, row.trackId);
 			}
 		} catch {
 			// A page that cannot be read is treated as one that failed.
 		} finally {
 			if (generation === this.#generation) {
+				const left = (this.#fetching.get(key) ?? 1) - 1;
+				if (left > 0) this.#fetching.set(key, left);
+				else this.#fetching.delete(key);
 				this.#settled();
 			}
 		}

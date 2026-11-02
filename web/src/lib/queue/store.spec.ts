@@ -227,6 +227,8 @@ class FakeCaches {
 	broken = false;
 	/** Holds back every read until it is opened. */
 	matchGate: Promise<void> | null = null;
+	/** The hashes read, in order. */
+	reads: string[] = [];
 
 	/** The one cache. */
 	async open(): Promise<Cache> {
@@ -234,6 +236,7 @@ class FakeCaches {
 		const files = this.files;
 		return {
 			match: async (url: string) => {
+				this.reads.push(url.split('/').pop()!);
 				await this.matchGate;
 				return files.has(url) ? new Response(files.get(url)) : undefined;
 			},
@@ -749,6 +752,40 @@ describe('QueueStore lists and rows', () => {
 		expect(upNext()).toEqual(['102', '103', '104']);
 		expect(server.listGets()).toEqual(['h']);
 		expect(server.rowGets()).toHaveLength(pages);
+	});
+
+	it('shares the lists it holds with a refetched queue instead of reading them again', async () => {
+		caches.keep('h', ['100', '101', '102', '103', '104']);
+		await hello();
+		expect(caches.reads).toEqual(['h']);
+
+		server.apply(next);
+		await hello();
+		expect(summary.version).toBe(1);
+		expect(upNext()).toEqual(['102', '103', '104']);
+		expect(caches.reads).toEqual(['h']);
+		expect(server.listGets()).toEqual([]);
+	});
+
+	it('shows a list that failed once as unknown while a page for the row is on its way', async () => {
+		server.listGate = Promise.reject(new TypeError('blip'));
+		server.listGate.catch(() => {});
+		const rows = gate();
+		server.rowsGate = rows.wait;
+		server.rowsStatus = 500;
+		await hello();
+		expect(server.listGets()).toEqual(['h']);
+		expect(server.rowGets()).toContain('upNext:0');
+		expect(store.rows({ section: 'current', offset: 0, limit: 1 }).rows[0].status).toBe('unknown');
+		expect(upNext()).toEqual(['unknown', 'unknown', 'unknown', 'unknown']);
+
+		// The page fails too, so nothing can still give the rows.
+		rows.open();
+		await settle();
+		expect(store.rows({ section: 'current', offset: 0, limit: 1 }).rows[0].status).toBe(
+			'unavailable'
+		);
+		expect(upNext()).toEqual(['unavailable', 'unavailable', 'unavailable', 'unavailable']);
 	});
 
 	it('marks the rows of a list the server does not have unavailable, and does not ask again', async () => {

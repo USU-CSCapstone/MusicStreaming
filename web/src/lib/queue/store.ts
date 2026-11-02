@@ -123,7 +123,8 @@ export class QueueStore {
 	/**
 	 * Up to `limit` rows of `section` from `offset`, as the page shows them (`design/queue.md`
 	 * §3). Each row's track is the list's once attached, else a page's, else it is `unknown` while
-	 * a list or page that holds it is on its way, and `unavailable` if none is. Rows for which
+	 * a list or page that holds it is on its way, and `unavailable` if none is: a list that could
+	 * not be reached counts as on its way only while a page for the row is. Rows for which
 	 * no list is attached yet start pages for the window, asked for again only when the version
 	 * changes, so asking again when `revision` changes never loops.
 	 */
@@ -146,16 +147,21 @@ export class QueueStore {
 					? view.historyLen()
 					: raw.length;
 		if (raw.some((row) => this.#needsPage(row))) this.#ensurePages(section, offset, limit);
-		const rows = raw.map((row): QueueRow => {
+		// The page that holds the window's rows: the item playing comes with Up Next's first.
+		const [part, first] = section === 'current' ? (['upNext', 0] as const) : [section, offset];
+		const rows = raw.map((row, i): QueueRow => {
 			const { libraryId, list } = this.#sources.get(row.source) ?? { libraryId: '' };
 			// The list, else a page, else the tracks of an add of this device's own that waits.
 			const held = row.track !== null ? row.track : this.#fromPageOrOwn(row);
 			if (row.track !== null) this.#pages.forget(row.item);
 			// A list not yet confirmed, or not given up on, is on its way, and so is a page for it.
+			const problem = list === undefined ? undefined : this.#problems.get(list);
 			const status =
 				typeof held === 'string'
 					? 'known'
-					: held === null || (list !== undefined && this.#problems.has(list))
+					: held === null ||
+						  problem === 'gone' ||
+						  (problem === 'failed' && !this.#pages.fetching(part, first + i))
 						? 'unavailable'
 						: 'unknown';
 			const out: QueueRow = {
@@ -299,7 +305,6 @@ export class QueueStore {
 		const own = this.#pending.find((pending) => pending.editId === editId);
 		const mine = own && edit.type === 'add' && edit.source.list ? edit.source.list : null;
 		const body = own && mine ? ownBody(own.edit) : null;
-		if (mine && body) void this.#lists.put(mine, body);
 		if (applyTo(confirmed, edit) !== undefined) {
 			// The server applied what the core refuses: this device cannot trust its copy.
 			this.#refetch = true;
@@ -591,15 +596,19 @@ export class QueueStore {
 	}
 
 	/**
-	 * Makes the snapshot the confirmed queue, with the lists already stored attached again, since
-	 * a new core queue holds none; pending edits for another queue go. Stored lists the snapshot
-	 * does not use are deleted: after a reload nothing else knows they were kept.
+	 * Makes the snapshot the confirmed queue, with its lists attached again, since a new core
+	 * queue holds none: those the confirmed queue holds are shared from it, and only the others
+	 * are read from storage. Pending edits for another queue go. Stored lists the snapshot does
+	 * not use are deleted: after a reload nothing else knows they were kept.
 	 */
 	async #install({ queueId, version, context, state }: QueueSnapshot) {
 		const next = Queue.fromJson(JSON.stringify(state));
 		const hashes = hashesOf(next);
-		const attached = new Set<string>();
+		const attached = new Set<string>(
+			this.#confirmed ? JSON.parse(next.adoptLists(this.#confirmed)) : []
+		);
 		for (const hash of hashes) {
+			if (attached.has(hash)) continue;
 			const body = await this.#lists.get(hash);
 			if (body === null) continue;
 			try {
