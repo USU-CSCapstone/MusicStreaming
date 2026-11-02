@@ -155,6 +155,24 @@ async fn a_stop_saves_players_and_closes_connections_while_a_request_hangs() {
         );
         enabling.write_all(head.as_bytes()).await.unwrap();
         sleep(Duration::from_millis(200)).await;
+        // A queue started just before the stop, so the periodic save has not taken it: only the
+        // save the stop ends with can.
+        let start = String::from(
+            r#"{"queueId":"11111111-1111-4111-8111-111111111111","context":{"type":"album"},"source":{"key":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","libraryId":"1","tracks":["1"]},"start":0}"#,
+        );
+        let mut starting = TcpStream::connect(address).await.unwrap();
+        let request = format!(
+            "POST /api/v1/me/queue HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\n\
+             Content-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{start}",
+            start.len()
+        );
+        starting.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = String::new();
+        timeout(Duration::from_secs(5), starting.read_to_string(&mut answer))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
         stop.send(()).unwrap();
         let stopped = Instant::now();
 
@@ -191,4 +209,7 @@ async fn a_stop_saves_players_and_closes_connections_while_a_request_hangs() {
                      + (SELECT count(*) FROM plugin_libraries WHERE last_run_at IS NOT NULL)";
     let delivered: i64 = conn.query_row(delivered, [], |row| row.get(0)).unwrap();
     assert_eq!(delivered, 0, "a hook delivery ran after the stop began");
+    let queues: i64 =
+        conn.query_row("SELECT count(*) FROM queues WHERE active = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(queues, 1, "the queue started just before the stop is saved by it");
 }

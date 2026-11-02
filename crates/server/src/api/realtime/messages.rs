@@ -3,10 +3,10 @@
 use axum::extract::ws::Message;
 use serde::{Deserialize, Serialize};
 
-use crate::api::Id;
 use crate::api::devices::Device;
 use crate::api::player::{CommandResult, PlayerCommand, PlayerState, ProgressReport};
 use crate::api::playlists::Change;
+use crate::api::{Id, Uuid};
 
 /// The spec's `RealtimeClientMessage`, as far as it is built.
 #[derive(Deserialize)]
@@ -52,6 +52,10 @@ pub enum ServerMessage {
     },
     /// A playlist of the user's was created, edited or deleted.
     Playlist(Change),
+    /// A start replaced the account's queue, so a device fetches it again.
+    QueueReplaced {
+        queue_id: Uuid,
+    },
     SessionRevoked {
         reason: Revoked,
     },

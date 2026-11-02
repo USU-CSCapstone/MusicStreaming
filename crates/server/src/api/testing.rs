@@ -74,6 +74,12 @@ pub fn app_before_setup(base_path: &str) -> (tempfile::TempDir, Arc<Database>, R
     (temp, db, router(state).layer(MockConnectInfo(peer)))
 }
 
+/// The API over `state`, reached from a client that is not a trusted proxy: for a test that
+/// keeps the state to look inside it.
+pub fn router_over(state: AppState) -> Router {
+    router(state).layer(MockConnectInfo(SocketAddr::from(([203, 0, 113, 1], 50_000))))
+}
+
 /// What the API's handlers share, over `db` in `temp`, mounted at the root, before setup is seen
 /// done.
 pub(crate) fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
@@ -84,6 +90,7 @@ pub(crate) fn state(temp: &tempfile::TempDir, db: Arc<Database>) -> AppState {
         plugins: plugins(temp, &db),
         hub: Arc::default(),
         players: Arc::default(),
+        queues: Arc::default(),
         prefix: prefix(""),
         trusted_proxies: Arc::default(),
         db,

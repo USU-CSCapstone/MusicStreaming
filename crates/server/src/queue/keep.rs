@@ -11,7 +11,6 @@ use jewelcase_core::{QueueError, QueueState, Recipe, Recover, Source};
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde_json::Value;
 
-use super::hash::list_hash;
 use super::save::{delete_unused_lists, write_account};
 use super::store::{Account, Position, Queue, Queues};
 use crate::api::Uuid;
@@ -69,17 +68,15 @@ pub struct NewQueue {
 /// if the commit fails.
 type Undo = Arc<Mutex<Option<(Option<Queue>, Option<Queue>)>>>;
 
-/// The account `new` starts, with its list held. Hashes the list.
-pub(super) fn fresh(new: NewQueue) -> Result<Account, KeepError> {
-    let tracks = new.tracks;
-    let mut source =
-        Source::new(new.key, new.library_id.to_string(), tracks.len() as u64, new.recipe);
-    source.hash = Some(list_hash(&tracks));
-    let mut state = QueueState::default();
-    state.start(source, new.at).map_err(KeepError::NotInList)?;
-    let mut fresh = Account::new(new.queue_id, new.context, state);
-    fresh.hold(new.library_id, tracks);
-    Ok(fresh)
+/// The account `new` starts, with its list held, and the list's hash. Hashes the list once.
+pub(super) fn fresh(new: NewQueue) -> Result<(Account, String), KeepError> {
+    let length = new.tracks.len() as u64;
+    let mut fresh = Account::new(new.queue_id, new.context, QueueState::default());
+    let hash = fresh.hold(new.library_id, new.tracks);
+    let mut source = Source::new(new.key, new.library_id.to_string(), length, new.recipe);
+    source.hash = Some(hash.clone());
+    fresh.state.start(source, new.at).map_err(KeepError::NotInList)?;
+    Ok((fresh, hash))
 }
 
 impl Queues {
@@ -87,20 +84,21 @@ impl Queues {
     /// save if it was adjusted, deleted otherwise. `place` is called under the lock for where
     /// playback is, and it is kept with the parked queue if it names one of its items.
     ///
-    /// Changes nothing and answers [`KeepError::Exists`] if `new.queue_id` names any queue of the
-    /// account, so a retried start never revives or replaces one. Nothing is written until the
-    /// next background save.
+    /// Answers the list's hash. Changes nothing and answers [`KeepError::Exists`] if
+    /// `new.queue_id` names any queue of the account, so a retried start never revives or
+    /// replaces one. Nothing is written until the next background save.
     pub async fn start(
         self: &Arc<Self>,
         db: &Database,
         user: i64,
         new: NewQueue,
         place: impl FnOnce() -> Option<Position> + Send + 'static,
-    ) -> Result<(), KeepError> {
-        let fresh = fresh(new)?;
+    ) -> Result<String, KeepError> {
+        let (fresh, hash) = fresh(new)?;
         let queues = self.clone();
         // On the writer so that a queue a save is writing as kept is not missed.
-        db.try_write(move |tx| queues.start_in(tx, user, fresh, place)).await
+        db.try_write(move |tx| queues.start_in(tx, user, fresh, place)).await?;
+        Ok(hash)
     }
 
     /// Makes `fresh`'s queue active, in the writer's job `tx`, with the active queue's repeat

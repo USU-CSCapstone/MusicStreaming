@@ -23,12 +23,13 @@ tempfile = "3.27.0"
 thiserror = "2.0.21"
 time = { version = "0.3.55", default-features = false, features = ["parsing"] }
 tokio = { version = "1.53.1", features = ["full"] }
-tower-http = { version = "0.7.1", features = ["add-extension", "fs", "set-header", "timeout"] }
+tower-http = { version = "0.7.1", features = ["add-extension", "compression-gzip", "fs", "set-header", "timeout"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 zxcvbn = { version = "3.1", default-features = false }
 
 [dev-dependencies]
+flate2 = "1.1"
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 tokio = { version = "1.53.1", features = ["test-util"] }
 tower = { version = "0.5.3", features = ["util"] }

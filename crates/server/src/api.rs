@@ -25,6 +25,7 @@ mod playlists;
 mod plays;
 mod plugins;
 mod problem;
+mod queue;
 mod realtime;
 mod recent_searches;
 mod refs;
@@ -84,6 +85,8 @@ pub struct AppState {
     pub hub: Arc<Hub>,
     /// Each account's playback state.
     pub players: Arc<Players>,
+    /// Each account's queues.
+    pub queues: Arc<crate::queue::Queues>,
     /// Where the API is mounted, as [`prefix`] gives it.
     pub prefix: Arc<str>,
     /// The proxies whose forwarded headers are believed ([`origin::Origin`]).

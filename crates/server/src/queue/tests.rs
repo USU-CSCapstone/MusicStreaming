@@ -379,7 +379,7 @@ async fn start(
     queue: &str,
     tracks: &[u64],
 ) -> Result<(), KeepError> {
-    queues.start(db, 1, new_queue(queue, tracks), || None).await
+    queues.start(db, 1, new_queue(queue, tracks), || None).await.map(drop)
 }
 
 /// Marks account 1's active queue adjusted, as a queued track would.
@@ -676,7 +676,7 @@ async fn add_during_save_then_start_keeps_held_list() {
         .write(move |tx| {
             let saved = saving.write_changed(tx);
             add_list(&saving, "b", &[7]);
-            saving.start_in(tx, 1, fresh(new_queue(OTHER, &[5])).unwrap(), || None).unwrap();
+            saving.start_in(tx, 1, fresh(new_queue(OTHER, &[5])).unwrap().0, || None).unwrap();
             Ok(saved)
         })
         .await

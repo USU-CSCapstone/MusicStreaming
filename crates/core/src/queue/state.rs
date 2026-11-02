@@ -200,7 +200,8 @@ pub struct QueueState {
     pub manual: SpanList,
     /// The context, the passed part included.
     pub order: SpanList,
-    /// How many rows of `order` are passed. The current context item is the last of them.
+    /// How many rows of `order` are passed. Current is not necessarily the last of them: a Manual
+    /// item can be playing, and an unshuffle can leave passed additions after the passed rows.
     pub cursor: u64,
     /// The item playing.
     pub current: Option<ItemId>,
