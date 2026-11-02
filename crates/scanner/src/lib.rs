@@ -55,7 +55,7 @@ pub use library::{LibraryConfig, LibraryId};
 pub use lrc::SyncedLine;
 pub use placeholders::Placeholders;
 pub use pool::{Job, Pool};
-pub use problems::{Problem, ProblemKind, UNOPENED, group_key as problem_group_key};
+pub use problems::{Problem, ProblemKind, UNOPENED, UNREAD, group_key as problem_group_key};
 pub use queue::{Scanner, ScannerThread};
 pub use scan::{Cursor, Scan, ScanId, ScanOptions, ScanProgress, ScanState, Trigger};
 pub use scope::{Depth, Scope};

@@ -82,6 +82,10 @@ pub struct Batch {
     /// recorded for them. Applied before `problems`, so a path in both keeps the problem this
     /// batch records.
     pub cleared: Vec<PathBuf>,
+    /// Paths of files whose tags were read again: clear a problem saying the file could not be
+    /// opened or its tags read ([`crate::problems::UNREAD`]), and leave any other, such as a
+    /// background decode's verdict, which the analysis a reread keeps would never record again.
+    pub cleared_unread: Vec<PathBuf>,
     /// The scan row to save in the same transaction, so its cursor and progress always agree
     /// with what the store holds. Its missing count is saved raised by the tracks the batch marks
     /// missing that were not already.

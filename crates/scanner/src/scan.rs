@@ -306,7 +306,7 @@ fn process_directory(
             }
             FileOutcome::Reread(reread) => {
                 scan.progress.files_processed += 1;
-                batch.cleared.push(candidate.path.clone());
+                batch.cleared_unread.push(candidate.path.clone());
                 batch.rereads.push(reread);
             }
             FileOutcome::Problem(problem) => {

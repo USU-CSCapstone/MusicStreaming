@@ -1,10 +1,10 @@
 //! Tracks as the scanner sees them: applying a batch.
 
-use jewelcase_scanner::Batch;
+use jewelcase_scanner::{Batch, UNREAD};
 use rusqlite::{Result, Transaction, params};
 
 use super::SqliteStore;
-use super::problems::{clear_problem, record_problem};
+use super::problems::{clear_problem, clear_problem_of, record_problem};
 use super::scans;
 use super::upsert::{reread_tags, upsert_track};
 use crate::db::catalog::{self, Touched};
@@ -51,6 +51,9 @@ pub fn apply(store: &SqliteStore, lib: i64, batch: Batch) -> Result<i64, DbError
         }
         for path in &batch.cleared {
             clear_problem(&roots, tx, lib, path)?;
+        }
+        for path in &batch.cleared_unread {
+            clear_problem_of(&roots, tx, lib, path, &UNREAD)?;
         }
         for problem in &batch.problems {
             record_problem(&roots, tx, lib, problem)?;
