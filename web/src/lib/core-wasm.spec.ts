@@ -14,6 +14,11 @@ const parity = JSON.parse(
 	readFileSync(new URL('../../../crates/core/src/queue/parity.json', import.meta.url), 'utf8')
 ) as {
 	permutation: [number, number, number, number][];
+	started: {
+		source: { key: string; libraryId: string; length: number };
+		at: number;
+		state: unknown;
+	};
 	initial: unknown;
 	edits: unknown[];
 	final: unknown;
@@ -53,6 +58,13 @@ test('permutation matches native vectors', () => {
 		expect(row.position - 1, `seed ${seed} m ${m} x ${x}`).toBe(y);
 		expect(queue.upNextLen()).toBe(m);
 	}
+});
+
+test('a started queue matches native', () => {
+	const { source, at, state } = parity.started;
+	const queue = Queue.started(source.key, source.libraryId, source.length, at);
+	expect(JSON.parse(queue.toJson())).toEqual(state);
+	expect(() => Queue.started('a', 'lib', 3, 3)).toThrow();
 });
 
 test('edits match native', () => {

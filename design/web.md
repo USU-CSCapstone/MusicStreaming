@@ -45,9 +45,9 @@ and commit the result.
 | Path                       |                                                                                                                                                         |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/lib/api/`             | Generated schema types, the aliases in use, and the typed client. Catalog reads move to the worker later, and this is the one module that changes then. |
-| `src/lib/player.svelte.ts` | Playback: one audio element, the play context, and Media Session                                                                                        |
+| `src/lib/player.svelte.ts` | Playback: one audio element playing the queue's current item, starts from views, and Media Session (*Player* below)                                    |
 | `src/lib/queue/`           | The queue on this device: a worker holding it through the shared core, and the page's client of it (`design/queue.md`)                                  |
-| `src/lib/queue.ts`         | Moving through a context: next/previous and skipping missing tracks                                                                                     |
+| `src/lib/queue.ts`         | What a start from a view sends (`PlayFrom`), and when Previous restarts rather than steps back                                                          |
 | `src/lib/components/`      | Shell (sidebar, tab bar, player), collection and track views, waveform                                                                                  |
 | `src/routes/`              | One route per view: `/albums`, `/albums/[id]`, `/artists/…`, `/playlists/…`, `/songs`, `/search`, `/account`; `/setup` and `/login` without the shell   |
 | `mock/`                    | The dev-only mock API. Never bundled into the client.                                                                                                   |
@@ -140,7 +140,61 @@ the server (*Lists and rows* below, `design/queue.md` §3).
   playing as soon as any lacks a track, and for a requested window; they fill by item, so any
   version's is right. A page is asked for again only when the confirmed version changes (or on
   `hello`), so a window asked for again whenever `revision` changes never loops. What a page gave
-  for a source is dropped once its list is attached. No edit waits for a list or a page. The view's
-  loaded rows, the last fill of §3 for an unshuffled start, are left to the start flow.
+  for a source is dropped once its list is attached. No edit waits for a list or a page. The last
+  fill of §3, the rows of the view a start came from, is *Starts* below.
+- **Starts.** `start()` (the `start` message, `QueueClient.start`) makes the queue the new one at
+  once, as a start from a view does: the state is the core's own start (`Queue.started`), the
+  source as long as the view's `total` (or its `tracks`), no list, the clicked row current and
+  the cursor after it. It goes before every edit and fetch, so `POST /me/queue` is sent
+  first, again with the same body if the answer is lost, and edits made meanwhile name the new
+  `queueId`. A start of `tracks` is answered with `{list, length}`: the tracks are attached under
+  that hash and kept, so nothing is downloaded back. A start of a `recipe` then fetches the
+  snapshot, with no `If-None-Match`, since the server's list and start may differ from the view's.
+  A fetch that began before a start, or whose install was waiting on stored lists, is never
+  installed over it. If the server's list is not as long as the view's, or its snapshot makes
+  another item current, the view's rows are dropped, so the row waits for a page. A start the server refuses (4xx)
+  is taken back: the edits made since are dropped as `superseded`, the failure is reported with
+  no edit, and the server's queue is fetched.
+- **The view's rows.** A recipe start holds the rows its view loaded, by position. While the
+  queue is unshuffled, or for the item playing, they fill the rows read straight from the source,
+  after the list and a page, so a page the server gives replaces them if the library changed.
+  They are dropped once the list is attached or clean-up drops the source. A row nothing can fill
+  is `unknown` while a request that could tell it may still answer, and `unavailable` while the
+  last request to the server failed (`failing`), until one succeeds.
 - **Connection.** `connect()` spawns the worker and passes it `hello`, `queueEdit` and
   `queueReplaced`. A request that fails, or answers 429 or 5xx, is tried again after a wait.
+
+## Player
+
+`player.svelte.ts` plays the queue's current item through one audio element, and moves through
+the queue only by editing it (`requirements/queue.md`, `design/queue.md` §3).
+
+- **A start from a view** (`play(tracks, index, context, from?)`) plays the clicked track, whose
+  summary the view holds, before anything is answered, and starts the queue in the background. The
+  item is `<key>.<index>`, which the report names. With `from`, a recipe and the view's `total`
+  (`PlayFrom`), the request carries the recipe, `start`, `startTrackId`, `total` and the loaded
+  rows; without it, the tracks. Album, artist, songs and search views send a recipe; a sorted
+  search and playlists send tracks, since no recipe gives their order. A Next pressed before the
+  worker has the queue is carried out once it has.
+- **Following.** A device holding playback plays whatever the queue's current item becomes,
+  whoever moved it. The item's row is read from the worker. `unknown`, a row still being learned,
+  waits, and the player looks again with each change to the queue. `unavailable`, or a track
+  that is missing, out of reach (403, 404) or fails as media, is skipped in place: one more
+  `next`, or `previous` when going back, applied at once. Going back past History's start goes on
+  forward. A failure to reach the server (a network error, 5xx, 429) is never a reason to skip:
+  the player waits paused and asks again every 3 seconds. A run of skips stops when it
+  comes round to an item it already passed over (reset when audio plays): playback stops and says
+  that nothing in the queue can play, under Repeat All too. A pause cancels a track waiting to be
+  asked for again. If the server's queue makes the track just started
+  another item, the same track goes on under the new item. A start the server refuses leaves the
+  player paused on the chosen track with the refusal shown, while the old queue comes back.
+- **Controls.** Next and a track's end send `next`; Previous restarts a track played more than 3
+  seconds, or with an empty History, and otherwise sends `previous` with a fresh key; Repeat One
+  plays the item again here, and Repeat All is the queue's own. `jump(item)`, shuffle (with a
+  device-chosen `u32` seed) and repeat are edits too. The next row's track is fetched ahead.
+- **Reports** name the `itemId` alongside `libraryId` and `trackId`, which the server still goes
+  by until it follows the queue. A play records the queue's context.
+- **Taking over** a track another device plays needs the state's `itemId` to be the queue's
+  current item, with its row known: playback moves without rebuilding the queue. It fails, and
+  starts nothing, while the queue here is not that far. Only a place that is not a queue item, as
+  another client names it, becomes a queue of one track.

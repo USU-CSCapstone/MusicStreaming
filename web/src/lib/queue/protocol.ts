@@ -1,7 +1,7 @@
 // What the queue worker and the page say to each other (`design/web.md`, Queue worker). The
 // worker holds the queue; the page sends it what happened and shows what it reports.
 
-import type { PlayContext, RealtimeServerMessage, SentEdit } from '$lib/api/types';
+import type { PlayContext, RealtimeServerMessage, SentEdit, StartQueue } from '$lib/api/types';
 
 /** How the queue repeats: not at all, all of it, or the item playing. */
 export type Repeat = 'off' | 'all' | 'one';
@@ -36,7 +36,19 @@ export type Refusal = {
 	 */
 	code: string;
 	message: string;
-	edit: SentEdit;
+	/** Null when a start, not an edit, did not stay. */
+	edit: SentEdit | null;
+};
+
+/**
+ * A start from a view (`design/queue.md` §3): the request as the server takes it, and what the
+ * device holds that the server's does not need. A `tracks` source is the whole list; with a
+ * `recipe` the source is `total` long and the view loaded its first rows, `loaded`, which
+ * fill the rows that read straight from the list until the list or a page does.
+ */
+export type StartRequest = StartQueue & {
+	total?: number;
+	loaded?: string[];
 };
 
 /** Which rows a window is of: the item playing, Up Next, or History (newest first). */
@@ -76,6 +88,8 @@ export type ToWorker =
 	| { type: 'init'; api: string }
 	| { type: 'message'; message: RealtimeServerMessage }
 	| { type: 'edit'; edit: SentEdit }
+	/** Starts a queue; answered with `started` carrying the same `id`. */
+	| { type: 'start'; id: number; request: StartRequest }
 	/** Asks for up to `limit` rows from `offset`; answered with `rows` carrying the same `id`. */
 	| { type: 'rows'; id: number; section: RowSection; offset: number; limit: number };
 
@@ -83,4 +97,6 @@ export type ToWorker =
 export type FromWorker =
 	| { type: 'state'; summary: Summary }
 	| { type: 'refused'; refusal: Refusal }
+	/** Whether the start took: the queue is the new one, and its state follows. */
+	| { type: 'started'; id: number; ok: boolean }
 	| { type: 'rows'; id: number; window: RowsWindow };

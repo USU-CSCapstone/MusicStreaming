@@ -19,6 +19,11 @@
     [3, 4294967301, 4294967300, 2336714214],
     [9, 1099511627779, 12345, 343340338295]
   ],
+  "started": {
+    "source": {"key":"a","libraryId":"lib","length":8},
+    "at": 3,
+    "state": {"sources":[{"key":"a","libraryId":"lib","length":8}],"copies":[],"manual":[],"order":[{"view":{"key":"a"},"start":0,"len":8}],"cursor":4,"current":"a.3","history":[],"nextPlay":0,"shuffle":null,"repeat":"off","adjusted":false}
+  },
   "initial": {"sources":[{"key":"a","libraryId":"lib","length":8}],"copies":[],"manual":[],"order":[{"view":{"key":"a"},"start":0,"len":8}],"cursor":2,"current":"a.1","history":[],"nextPlay":0,"shuffle":null,"repeat":"off","adjusted":false},
   "edits": [
     {"type":"add","source":{"key":"b","libraryId":"lib","list":"hb","length":4},"before":{"type":"manualEnd"}},

@@ -1,7 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PlayReport, PlayerState, RealtimeServerMessage, Track } from '$lib/api/types';
+import type {
+	PlayReport,
+	PlayerState,
+	RealtimeServerMessage,
+	SentEdit,
+	Track
+} from '$lib/api/types';
+import type { FromWorker, RowSection, StartRequest, ToWorker } from '$lib/queue/protocol';
 
 const fake = vi.hoisted(() => ({
+	/** Makes the worker the queue client talks to; set below, before the player loads. */
+	worker: null as unknown as () => Worker,
 	/** Tracks whose fetch is held back, by ID; any other arrives at once, a minute long. */
 	tracks: new Map<string, Promise<unknown>>(),
 	/** The audio's playback info; by default it never arrives, so nothing plays. */
@@ -11,7 +20,14 @@ const fake = vi.hoisted(() => ({
 	offline: false,
 	sent: [] as {
 		type: string;
-		report: { status: string; positionMs: number; start: boolean };
+		report: {
+			status: string;
+			positionMs: number;
+			start: boolean;
+			itemId: string;
+			libraryId: string;
+			trackId: string;
+		};
 		result: unknown;
 	}[],
 	plays: [] as PlayReport[],
@@ -29,6 +45,12 @@ const fake = vi.hoisted(() => ({
 }));
 
 vi.mock('$lib/realtime.svelte', () => ({ realtime: fake.realtime }));
+vi.mock('$lib/queue/client.svelte', async (actual) => {
+	const { QueueClient } = await actual<typeof import('$lib/queue/client.svelte')>();
+	const queue = new QueueClient(() => fake.worker());
+	queue.connect({ on: () => () => {} });
+	return { queue };
+});
 vi.mock('$lib/api/client', async (actual) => ({
 	...(await actual<typeof import('$lib/api/client')>()),
 	getTrack: (_: unknown, _library: string, id: string) =>
@@ -38,14 +60,169 @@ vi.mock('$lib/api/client', async (actual) => ({
 	getPlaybackInfo: () => fake.info?.() ?? new Promise(() => {})
 }));
 
-const track = (id: string, seconds: number) =>
+const track = (id: string, seconds: number, availability = 'available') =>
 	({
 		id,
 		durationUs: seconds * 1e6,
-		availability: 'available',
+		availability,
 		album: {},
 		artists: []
 	}) as unknown as Track;
+
+/** What a fake queue's row is: a track, one still being learned, or one that cannot be. */
+type Slot = string | 'unknown' | 'unavailable';
+
+/**
+ * The queue worker, as far as the player meets it: one list of items, the first `at` of them
+ * History, and a row for each that is known, being learned, or unavailable. It answers a
+ * start, the edits that move through the list, and windows of rows, a moment after being asked
+ * as a worker does.
+ */
+class FakeQueue {
+	slots: Slot[] = [];
+	at = 0;
+	/** How many plays History holds: the moves made, which a wrap back to the first item does not undo. */
+	moves = 0;
+	key = '';
+	repeat = 'off';
+	shuffled = false;
+	revision = 0;
+	/** What the page sent, in order. */
+	sent: ToWorker[] = [];
+	edits: SentEdit[] = [];
+	starts: StartRequest[] = [];
+	/** While set, a start is not answered. */
+	holdStart = false;
+	/** Whether the server refuses the next start. */
+	refuseStart = false;
+	onmessage: ((event: MessageEvent<FromWorker>) => void) | null = null;
+	#held: (() => void) | null = null;
+	#context: unknown = null;
+
+	postMessage(message: ToWorker) {
+		this.sent.push(message);
+		if (message.type === 'start') this.#start(message.id, message.request);
+		else if (message.type === 'edit') this.#edit(message.edit);
+		else if (message.type === 'rows') this.#rows(message.id, message.section, message.offset);
+	}
+
+	terminate() {}
+
+	/** Tells the page, as the worker does after a change. */
+	#say(message: FromWorker) {
+		setTimeout(() => this.onmessage?.({ data: message } as MessageEvent<FromWorker>));
+	}
+
+	/** Tells the page what the queue is now. */
+	#state() {
+		this.revision++;
+		this.#say({
+			type: 'state',
+			summary: {
+				queueId: 'q',
+				context: this.#context as never,
+				version: 0,
+				revision: this.revision,
+				current: this.slots.length ? `${this.key}.${this.at}` : null,
+				manual: 0,
+				upNext: Math.max(0, this.slots.length - this.at - 1),
+				history: this.moves,
+				repeat: this.repeat as never,
+				shuffled: this.shuffled
+			}
+		});
+	}
+
+	#start(id: number, request: StartRequest) {
+		this.starts.push(request);
+		const reply = () => {
+			const { source, total, loaded } = request;
+			this.key = source.key;
+			this.#context = request.context;
+			this.slots = source.tracks ?? [
+				...(loaded ?? []),
+				...Array<Slot>(Math.max(0, (total ?? 0) - (loaded?.length ?? 0))).fill('unknown')
+			];
+			this.at = request.start;
+			this.moves = 0;
+			this.#state();
+			this.#say({ type: 'started', id, ok: true });
+			if (this.refuseStart) {
+				this.#say({
+					type: 'refused',
+					refusal: {
+						code: 'validation_failed',
+						message: 'The server refused this start.',
+						edit: null
+					}
+				});
+			}
+		};
+		if (this.holdStart) this.#held = reply;
+		else reply();
+	}
+
+	/** Answers the held start. */
+	release() {
+		this.#held?.();
+		this.#held = null;
+	}
+
+	#edit(edit: SentEdit) {
+		this.edits.push(edit);
+		if (edit.type === 'next') {
+			if (this.at + 1 < this.slots.length) this.at++;
+			else if (this.repeat === 'all') this.at = 0;
+			this.moves++;
+		} else if (edit.type === 'jump') {
+			this.at = Number(edit.item.split('.')[1]);
+		} else if (edit.type === 'previous') {
+			this.at = Math.max(0, this.at - 1);
+			this.moves = Math.max(0, this.moves - 1);
+		} else if (edit.type === 'repeat') this.repeat = edit.mode;
+		else if (edit.type === 'shuffle') this.shuffled = edit.on;
+		this.#state();
+	}
+
+	#rows(id: number, section: RowSection, offset: number) {
+		const at = section === 'current' ? this.at : section === 'upNext' ? this.at + 1 + offset : -1;
+		const slot = this.slots[at];
+		const rows =
+			slot === undefined
+				? []
+				: [
+						{
+							item: `${this.key}.${at}`,
+							libraryId: '11',
+							status: (slot === 'unknown' || slot === 'unavailable' ? slot : 'known') as
+								| 'known'
+								| 'unknown'
+								| 'unavailable',
+							track: slot === 'unknown' || slot === 'unavailable' ? null : slot
+						}
+					];
+		this.#say({
+			type: 'rows',
+			id,
+			window: { section, offset, total: rows.length, revision: this.revision, rows }
+		});
+	}
+
+	/** A row learned or given up on, as when its list or page arrives or fails. */
+	learn(position: number, slot: Slot) {
+		this.slots[position] = slot;
+		this.#state();
+	}
+
+	/** Another device's move, as the queue then says it. */
+	moveTo(position: number) {
+		this.at = position;
+		this.#state();
+	}
+}
+
+const queueWorker = new FakeQueue();
+fake.worker = () => queueWorker as unknown as Worker;
 
 // Before the player sets its handlers, so a test can act as the lock screen does.
 const setAction = vi.spyOn(navigator.mediaSession, 'setActionHandler');
@@ -54,6 +231,7 @@ const action = (name: MediaSessionAction) =>
 
 const { player } = await import('./player.svelte');
 const { controls } = await import('./controls.svelte');
+const { playback } = await import('./playback.svelte');
 
 const send = (message: RealtimeServerMessage) =>
 	fake.listeners.forEach((listener) => listener(message));
@@ -84,6 +262,12 @@ const transfer = (play: boolean) =>
 const result = () => vi.waitFor(() => fake.sent.find((m) => m.type === 'commandResult')!.result);
 
 beforeEach(() => {
+	queueWorker.sent.length = queueWorker.edits.length = queueWorker.starts.length = 0;
+	queueWorker.holdStart = false;
+	queueWorker.refuseStart = false;
+	queueWorker.repeat = 'off';
+	queueWorker.shuffled = false;
+	queueWorker.release();
 	fake.sent.length = 0;
 	fake.plays.length = 0;
 	fake.offline = false;
@@ -91,6 +275,7 @@ beforeEach(() => {
 	fake.info = null;
 	player.libraryId = '11';
 	player.volume = 0.8;
+	player.finished = false;
 });
 
 describe('player', () => {
@@ -143,7 +328,6 @@ describe('player', () => {
 
 	it('waits paused on a track that cannot play, rather than playing the next', async () => {
 		fake.info = () => Promise.reject(new Error('gone'));
-		player.tracks = [track('47', 60), track('48', 60)];
 		state({ trackId: '47' });
 		transfer(false);
 		await result();
@@ -325,5 +509,390 @@ describe('player', () => {
 		await vi.waitFor(() => expect(info).toHaveBeenCalled());
 		await new Promise((resolve) => setTimeout(resolve));
 		expect(play).not.toHaveBeenCalled();
+	});
+});
+
+/** Lets the queue worker's answers, and what the player does with them, happen. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
+
+describe('player and the queue', () => {
+	const album = { type: 'album', id: '9' } as const;
+	const recipe = { type: 'album', albumId: '9', sort: 'album.asc' } as const;
+	/** Plays a started queue's audio, and answers with the element so a test can end its track. */
+	async function playing(...ids: string[]) {
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+		player.play(
+			ids.map((id) => track(id, 60) as never),
+			0,
+			album
+		);
+		await settle();
+		return { play, audio: play.mock.contexts[0] as HTMLAudioElement };
+	}
+
+	it('start plays immediately: the clicked track plays before the server answers, and reports its item', () => {
+		queueWorker.holdStart = true;
+		player.play([track('61', 60), track('62', 60), track('63', 60)] as never, 1, album);
+
+		expect(player.current?.id).toBe('62');
+		expect(player.playing).toBe(true);
+		const [request] = queueWorker.starts;
+		expect(request).toMatchObject({
+			start: 1,
+			context: album,
+			source: { libraryId: '11', tracks: ['61', '62', '63'] }
+		});
+		// Alongside the track and library, which the server still goes by.
+		expect(fake.sent.at(-1)!.report).toMatchObject({
+			start: true,
+			itemId: `${request.source.key}.1`,
+			libraryId: '11',
+			trackId: '62',
+			status: 'buffering'
+		});
+	});
+
+	it("sends a view's recipe with the clicked row and the rows it loaded, and no tracks", () => {
+		queueWorker.holdStart = true;
+		player.play([track('61', 60), track('62', 60)] as never, 1, album, { recipe, total: 5 });
+
+		const [request] = queueWorker.starts;
+		expect(request).toMatchObject({ start: 1, startTrackId: '62', total: 5, loaded: ['61', '62'] });
+		expect(request.source).toMatchObject({ libraryId: '11', recipe });
+		expect(request.source).not.toHaveProperty('tracks');
+	});
+
+	it('moves on with a next edit, applied at once, and plays what the queue moves to', async () => {
+		await playing('64', '65', '66');
+		player.next();
+
+		expect(queueWorker.edits).toEqual([{ type: 'next' }]);
+		await vi.waitFor(() => expect(player.current?.id).toBe('65'));
+		expect(fake.sent.at(-1)!.report.itemId).toBe(`${queueWorker.key}.1`);
+	});
+
+	it('moves on with a next edit when the track ends, or plays it again under Repeat One', async () => {
+		const { play, audio } = await playing('64', '65');
+		audio.dispatchEvent(new Event('ended'));
+		expect(queueWorker.edits).toEqual([{ type: 'next' }]);
+		await vi.waitFor(() => expect(player.current?.id).toBe('65'));
+
+		player.setRepeat('one');
+		await settle();
+		const plays = play.mock.calls.length;
+		audio.dispatchEvent(new Event('ended'));
+		expect(queueWorker.edits.filter((e) => e.type === 'next')).toHaveLength(1);
+		await vi.waitFor(() => expect(play.mock.calls.length).toBeGreaterThan(plays));
+		expect(player.current?.id).toBe('65');
+	});
+
+	it('unknown rows wait or skip: waits for a row that is being learned, and plays it once it is', async () => {
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		player.play([track('71', 60), track('72', 60)] as never, 1, album, { recipe, total: 4 });
+		await settle();
+		player.next();
+		await settle();
+		expect(queueWorker.edits).toEqual([{ type: 'next' }]);
+		expect(player.current?.id, 'still on the track before').toBe('72');
+
+		queueWorker.learn(2, '73');
+		await vi.waitFor(() => expect(player.current?.id).toBe('73'));
+		expect(queueWorker.edits, 'nothing skipped').toHaveLength(1);
+	});
+
+	it('unknown rows wait or skip: skips in place a row that cannot be learned, and stops at the end of the queue', async () => {
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		player.play([track('71', 60), track('72', 60)] as never, 1, album, { recipe, total: 5 });
+		await settle();
+		queueWorker.learn(2, 'unavailable');
+		queueWorker.learn(3, '74');
+		queueWorker.learn(4, 'unavailable');
+		player.next();
+		await vi.waitFor(() => expect(player.current?.id).toBe('74'));
+		expect(queueWorker.edits).toEqual([{ type: 'next' }, { type: 'next' }]);
+
+		player.next();
+		await vi.waitFor(() => expect(player.finished).toBe(true));
+	});
+
+	it('skips in place a track that is missing, in the way it was going', async () => {
+		fake.tracks.set('82', Promise.resolve(track('82', 60, 'missing')));
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		player.play([track('81', 60), track('82', 60), track('83', 60)] as never, 0, album);
+		await settle();
+		player.next();
+		await vi.waitFor(() => expect(player.current?.id).toBe('83'));
+		expect(queueWorker.edits).toEqual([{ type: 'next' }, { type: 'next' }]);
+
+		queueWorker.learn(1, '82');
+		player.position = 0;
+		player.previous();
+		await vi.waitFor(() => expect(player.current?.id).toBe('81'));
+		expect(queueWorker.edits.map((e) => e.type)).toEqual(['next', 'next', 'previous', 'previous']);
+		expect(queueWorker.edits[2]).toMatchObject({ key: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+	});
+
+	describe('Previous', () => {
+		it('restarts a track that is under way, and one with nothing played before it', async () => {
+			await playing('84', '85');
+			player.position = 10;
+			player.previous();
+			expect(player.position).toBe(0);
+			player.previous();
+			expect(queueWorker.edits, 'nothing is before the first').toEqual([]);
+		});
+
+		it('steps back, with a key for the copy it may make, near the start of a track', async () => {
+			await playing('84', '85');
+			player.next();
+			await vi.waitFor(() => expect(player.current?.id).toBe('85'));
+			player.position = 1;
+			player.previous();
+
+			expect(queueWorker.edits.at(-1)).toMatchObject({ type: 'previous', key: expect.any(String) });
+			await vi.waitFor(() => expect(player.current?.id).toBe('84'));
+		});
+	});
+
+	it('follows the queue when another device moves it, while this one plays', async () => {
+		await playing('86', '87', '88');
+		queueWorker.moveTo(2);
+		await vi.waitFor(() => expect(player.current?.id).toBe('88'));
+		expect(queueWorker.edits).toEqual([]);
+	});
+
+	it('jumps to an item of Up Next with a jump edit, and plays it', async () => {
+		await playing('86', '87', '88');
+		const [item] = [`${queueWorker.key}.2`];
+		queueWorker.edits.length = 0;
+		player.jump(item);
+
+		expect(queueWorker.edits).toEqual([{ type: 'jump', item }]);
+		await vi.waitFor(() => expect(player.current?.id).toBe('88'));
+	});
+
+	it('moves on once the start is answered, if Next was pressed before', async () => {
+		queueWorker.holdStart = true;
+		player.play([track('61', 60), track('62', 60)] as never, 0, album);
+		player.next();
+		expect(queueWorker.edits).toEqual([]);
+		queueWorker.release();
+		await vi.waitFor(() => expect(player.current?.id).toBe('62'));
+		expect(queueWorker.edits).toEqual([{ type: 'next' }]);
+	});
+
+	it('sends shuffle with a seed of its own, and repeat, as edits', () => {
+		player.setShuffle(true);
+		player.setRepeat('all');
+
+		const [shuffle, repeat] = queueWorker.edits;
+		expect(shuffle).toMatchObject({ type: 'shuffle', on: true });
+		const { seed } = shuffle as { seed: number };
+		expect(Number.isInteger(seed) && seed >= 0 && seed < 2 ** 32).toBe(true);
+		expect(repeat).toEqual({ type: 'repeat', mode: 'all' });
+	});
+
+	it("records each play with the queue's context", async () => {
+		const { audio } = await playing('89', '90');
+		audio.dispatchEvent(new Event('playing'));
+
+		expect(fake.plays.at(-1)).toMatchObject({ trackId: '89', context: album, origin: 'context' });
+	});
+
+	describe('when tracks cannot play', () => {
+		it('stops after one lap of a queue none of which can play, even under Repeat All', async () => {
+			fake.info = () => Promise.reject(new Error('gone'));
+			queueWorker.repeat = 'all';
+			player.play([track('92', 60), track('93', 60)] as never, 0, album);
+			await vi.waitFor(() => expect(player.finished).toBe(true));
+			await settle();
+
+			// Each track tried once, and the first again as the lap comes round.
+			expect(queueWorker.edits).toEqual([{ type: 'next' }, { type: 'next' }]);
+			expect(playback.error).toBe('None of the songs in the queue can play.');
+		});
+
+		it('tries every track before stopping, though it started in the middle, under Repeat All', async () => {
+			fake.info = () => Promise.reject(new Error('gone'));
+			queueWorker.repeat = 'all';
+			player.play([track('92', 60), track('93', 60), track('94', 60)] as never, 1, album);
+			await vi.waitFor(() => expect(player.finished).toBe(true));
+			await settle();
+
+			expect(queueWorker.edits).toHaveLength(3);
+		});
+
+		it('stops after one lap when the audio itself fails, under Repeat All', async () => {
+			fake.info = () => Promise.resolve({ variant: 'original' });
+			const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+			queueWorker.repeat = 'all';
+			player.play([track('92', 60), track('93', 60)] as never, 0, album);
+			await settle();
+			const audio = play.mock.contexts[0] as HTMLAudioElement;
+			// As if it were playing, which the mocked `play` leaves it not.
+			Object.defineProperty(audio, 'paused', { value: false, configurable: true });
+			for (let i = 0; i < 6 && !player.finished; i++) {
+				audio.dispatchEvent(new Event('error'));
+				await settle();
+			}
+
+			// The element is the player's for good: it is left as it was.
+			delete (audio as { paused?: boolean }).paused;
+			expect(player.finished).toBe(true);
+			expect(queueWorker.edits.length).toBeLessThanOrEqual(2);
+		});
+
+		it('moves on in the new queue when the track fails before the start is answered', async () => {
+			queueWorker.holdStart = true;
+			fake.info = () => Promise.reject(new Error('gone'));
+			player.play([track('92', 60), track('93', 60)] as never, 0, album);
+			await settle();
+			expect(queueWorker.edits).toEqual([]);
+			queueWorker.release();
+
+			await vi.waitFor(() => expect(queueWorker.edits).toEqual([{ type: 'next' }]));
+		});
+
+		it('does not ask again for a track once it is paused', async () => {
+			vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+			try {
+				let asked = 0;
+				fake.info = () => {
+					asked++;
+					return Promise.reject(new TypeError('Failed to fetch'));
+				};
+				player.play([track('94', 60)] as never, 0, album);
+				await vi.advanceTimersByTimeAsync(100);
+				player.pause();
+				const before = asked;
+				await vi.advanceTimersByTimeAsync(10_000);
+
+				expect(asked).toBe(before);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('waits and asks again when the server cannot be reached, and never skips', async () => {
+			vi.useFakeTimers({ toFake: ['setTimeout'] });
+			try {
+				let asked = 0;
+				fake.info = () => {
+					asked++;
+					return Promise.reject(new TypeError('Failed to fetch'));
+				};
+				player.play([track('94', 60), track('95', 60)] as never, 0, album);
+				await vi.advanceTimersByTimeAsync(10_000);
+
+				expect(asked).toBeGreaterThan(1);
+				expect(queueWorker.edits).toEqual([]);
+				expect(player.current?.id).toBe('94');
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+	});
+
+	describe('taking over', () => {
+		/** A queue of three here, `at` playing, which the other device reports it plays. */
+		async function queued(slot: string) {
+			queueWorker.key = 'K';
+			queueWorker.slots = ['91', slot, '93'];
+			queueWorker.moveTo(1);
+			await settle();
+		}
+
+		it('plays the queue’s own current item, without starting a queue', async () => {
+			await queued('92');
+			state({ itemId: 'K.1', trackId: '92' });
+			transfer(true);
+
+			expect(await result()).toMatchObject({ status: 'applied' });
+			expect(queueWorker.starts).toEqual([]);
+			expect(fake.sent[0].report).toMatchObject({ itemId: 'K.1', trackId: '92' });
+		});
+
+		it('fails, and starts no queue, while the item’s row is still being learned', async () => {
+			await queued('unknown');
+			state({ itemId: 'K.1', trackId: '92' });
+			transfer(true);
+
+			expect(await result()).toMatchObject({ status: 'failed' });
+			expect(queueWorker.starts).toEqual([]);
+		});
+
+		it('fails, and starts no queue, before the queue is here at all', async () => {
+			queueWorker.key = 'L';
+			queueWorker.slots = ['91'];
+			queueWorker.moveTo(0);
+			await settle();
+			state({ itemId: 'K.1', trackId: '92' });
+			transfer(true);
+
+			expect(await result()).toMatchObject({ status: 'failed' });
+			expect(queueWorker.starts).toEqual([]);
+		});
+	});
+
+	it('plays the first track again when the last ends under Repeat All', async () => {
+		const { audio } = await playing('96', '97');
+		player.setRepeat('all');
+		player.next();
+		await vi.waitFor(() => expect(player.current?.id).toBe('97'));
+		audio.dispatchEvent(new Event('ended'));
+
+		await vi.waitFor(() => expect(player.current?.id).toBe('96'));
+		expect(queueWorker.edits.map((e) => e.type)).toEqual(['repeat', 'next', 'next']);
+	});
+
+	it('moves on once, not twice, when the track ends while the next row is being learned', async () => {
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+		player.play([track('71', 60), track('72', 60)] as never, 1, album, { recipe, total: 4 });
+		await settle();
+		player.next();
+		await settle();
+		(play.mock.contexts[0] as HTMLAudioElement).dispatchEvent(new Event('ended'));
+		await settle();
+
+		expect(queueWorker.edits).toEqual([{ type: 'next' }]);
+	});
+
+	it('keeps the track clicked while the queue it replaces is heard, until the start is answered', async () => {
+		queueWorker.key = 'old';
+		queueWorker.slots = ['881', '882'];
+		queueWorker.holdStart = true;
+		player.play([track('61', 60), track('62', 60)] as never, 0, album);
+		queueWorker.moveTo(0);
+		await settle();
+
+		expect(player.current?.id).toBe('61');
+	});
+
+	it('goes on with the same track when the server’s queue made it another item', async () => {
+		let asked = 0;
+		fake.info = () => {
+			asked++;
+			return Promise.resolve({ variant: 'original' });
+		};
+		player.play([track('61', 60), track('62', 60)] as never, 0, album, { recipe, total: 3 });
+		await settle();
+		queueWorker.slots = ['60', '61', '62'];
+		queueWorker.moveTo(1);
+		await settle();
+
+		expect(asked).toBe(1);
+		expect(fake.sent.at(-1)!.report.itemId).toBe(`${queueWorker.key}.1`);
+	});
+
+	it('pauses on the track chosen, and says so, when the server refuses the start', async () => {
+		queueWorker.refuseStart = true;
+		player.play([track('61', 60), track('62', 60)] as never, 0, album);
+		await settle();
+
+		expect(player.playing).toBe(false);
+		expect(player.current?.id).toBe('61');
+		expect(playback.error).toBe('The server refused this start.');
 	});
 });

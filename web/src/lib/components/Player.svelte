@@ -5,6 +5,8 @@
 	import { controls } from '$lib/controls.svelte';
 	import { panels } from '$lib/panels.svelte';
 	import { playback } from '$lib/playback.svelte';
+	import { player } from '$lib/player.svelte';
+	import { queue } from '$lib/queue/client.svelte';
 	import { realtime } from '$lib/realtime.svelte';
 	import ArtistLinks from './ArtistLinks.svelte';
 	import Artwork from './Artwork.svelte';
@@ -34,6 +36,9 @@
 	const unmuted: Record<string, number> = {};
 	let innerWidth = $state(1024);
 	const compact = $derived(innerWidth < 768);
+
+	/** Repeat goes Off, All, One, and back (`requirements/queue.md` §5). */
+	const nextRepeat = { off: 'all', all: 'one', one: 'off' } as const;
 
 	function toggleMute() {
 		const device = (controls.remote ? playback.state?.activeDeviceId : realtime.deviceId) ?? '';
@@ -80,6 +85,18 @@
 		<div class="controls">
 			<button
 				type="button"
+				class="icon-btn mode"
+				class:on={queue.shuffled}
+				aria-label="Shuffle"
+				aria-pressed={queue.shuffled}
+				title="Shuffle"
+				disabled={!queue.queueId}
+				onclick={() => player.setShuffle(!queue.shuffled)}
+			>
+				<Icon name="shuffle" size={18} />
+			</button>
+			<button
+				type="button"
 				class="icon-btn skip"
 				aria-label="Previous"
 				disabled={!track || controls.stopped}
@@ -104,6 +121,17 @@
 				onclick={() => controls.next()}
 			>
 				<Icon name="next" size={18} />
+			</button>
+			<button
+				type="button"
+				class="icon-btn mode"
+				class:on={queue.repeat !== 'off'}
+				aria-label="Repeat {queue.repeat}"
+				title="Repeat {queue.repeat}"
+				disabled={!queue.queueId}
+				onclick={() => player.setRepeat(nextRepeat[queue.repeat])}
+			>
+				<Icon name={queue.repeat === 'one' ? 'repeatOne' : 'repeat'} size={18} />
 			</button>
 		</div>
 		<div class="progress">
@@ -404,7 +432,8 @@
 		}
 
 		.time,
-		.volume {
+		.volume,
+		.mode {
 			display: none;
 		}
 	}

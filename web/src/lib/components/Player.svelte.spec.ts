@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 
 const fake = vi.hoisted(() => ({
+	queue: { queueId: 'q' as string | null, shuffled: false, repeat: 'off' as 'off' | 'all' | 'one' },
+	player: { setShuffle: vi.fn(), setRepeat: vi.fn() },
 	realtime: { connected: true, offline: false },
 	playback: { elsewhere: false, deviceName: 'Desk', error: null as string | null },
 	controls: {
@@ -28,10 +30,15 @@ vi.mock('$app/state', () => ({ page: { data: { library: { id: '11' } } } }));
 vi.mock('$lib/realtime.svelte', () => ({ realtime: fake.realtime }));
 vi.mock('$lib/playback.svelte', () => ({ playback: fake.playback }));
 vi.mock('$lib/controls.svelte', () => ({ controls: fake.controls }));
+vi.mock('$lib/player.svelte', () => ({ player: fake.player }));
+vi.mock('$lib/queue/client.svelte', () => ({ queue: fake.queue }));
 
 const { default: Player } = await import('./Player.svelte');
 
 beforeEach(() => {
+	Object.assign(fake.queue, { queueId: 'q', shuffled: false, repeat: 'off' });
+	fake.player.setShuffle.mockClear();
+	fake.player.setRepeat.mockClear();
 	fake.controls.pickable = true;
 	fake.playback.error = null;
 });
@@ -72,5 +79,33 @@ describe('Player.svelte', () => {
 			.toHaveTextContent('That device is not connected.');
 		await expect.element(page.getByText('Nothing playing')).not.toBeInTheDocument();
 		Object.assign(fake.controls, { remote, track });
+	});
+
+	it('turns shuffle on or off, and steps Repeat from off to all to one and back', async () => {
+		await page.viewport(1024, 768);
+		render(Player);
+		await page.getByRole('button', { name: 'Shuffle' }).click();
+		expect(fake.player.setShuffle).toHaveBeenLastCalledWith(true);
+		for (const [mode, next] of [
+			['off', 'all'],
+			['all', 'one'],
+			['one', 'off']
+		] as const) {
+			fake.queue.repeat = mode;
+			render(Player);
+			await page
+				.getByRole('button', { name: `Repeat ${mode}` })
+				.first()
+				.click();
+			expect(fake.player.setRepeat).toHaveBeenLastCalledWith(next);
+		}
+	});
+
+	it('offers neither with no queue to change', async () => {
+		await page.viewport(1024, 768);
+		fake.queue.queueId = null;
+		render(Player);
+		await expect.element(page.getByRole('button', { name: 'Shuffle' })).toBeDisabled();
+		await expect.element(page.getByRole('button', { name: 'Repeat off' })).toBeDisabled();
 	});
 });
