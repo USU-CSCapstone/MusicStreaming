@@ -20,7 +20,7 @@ The Manual Queue, the context and History are each a short list of spans or runs
 **An account has one active queue and any number of kept ones** ([`requirements/queue.md` §6](../requirements/queue.md#6-sessions)).
 
 - **Every device plays the active queue, and only it is edited.**
-- **Starting a new context parks the active queue.** It is kept if it was adjusted ([§5](#5-queue-state)), Manual Queue and all, and deleted otherwise. The new queue starts with an empty Manual Queue: nothing carries over.
+- **Starting a new context parks the active queue.** It is kept if it was adjusted ([§5](#5-queue-state)), Manual Queue and all, and deleted otherwise. The new queue starts with an empty Manual Queue: nothing carries over but the repeat mode, which survives a change of context ([`requirements/queue.md` §5](../requirements/queue.md#5-repeat--endless-play)).
 - **A kept queue is a stored state.** A restore makes it active again, exactly as left: position, shuffle, repeat, Manual Queue and History.
 - **Kept queues expire after 30 days of inactivity**, or when the user deletes them.
 - **Its lists belong to the account**, so a kept queue and the active one share any list they both use.
@@ -36,12 +36,13 @@ A **list** is `{libraryId, hash, length, recipe?}`. A source names its list by t
 
   | Recipe | Fields |
   |---|---|
-  | `album` | `albumId`, sort |
-  | `artist` | `artistId`, `scope`/`artistCredit`, sort |
-  | `library` | filters, sort |
+  | `album` | `albumId`, `sort`/`order` |
+  | `artist` | `artistId`, `scope`/`artistCredit`, `sort`/`order` |
+  | `library` | `filters`, `sort`/`order` |
   | `search` | `q` |
   | `tracks` | none: the IDs the device sent |
 
+  `sort` and `order` are `listTracks`' own, and `filters` is the API's `BrowseFilter`, so a client names a recipe as it names the view it shows. The core keeps them as given, so recipes compare exactly.
 - **A queue's sources** are `{key, libraryId, list: hash, length, recipe?}`. Item `<key>.<p>` is position `p` of that list. A track listed twice is two positions, so two items ([`requirements/queue.md` §8](../requirements/queue.md#8-resilience)).
 
 **The sort is part of the recipe.** Each combination of collection, filters, sort and direction is its own list.
@@ -144,9 +145,9 @@ n items in the queue; s spans in the list edited; B spans in the shuffle's base;
 
 | Operation | What happens | Time |
 |---|---|---|
-| **Start** | `order: [list[0..len)]` with an empty Manual Queue. The queue it replaces is parked ([§1](#1-model)) | O(1) |
+| **Start** | `order: [list[0..len)]` with an empty Manual Queue, keeping the repeat mode. The queue it replaces is parked ([§1](#1-model)) | O(1) |
 | **Add a collection** | Splice one span in at the anchor | O(s) |
-| **Remove k items** | Split the spans holding them | O(k·s) |
+| **Remove k items** | One pass over the spans, splitting those holding them, in ascending row order | O(s + k log k) |
 | **Move k items** | Remove, then splice in at the anchor. Shuffled rows moved into the Manual Queue go in as list positions, one span per consecutive stretch. Adds up to 2k + 1 spans: k splits where the rows left, up to k spans for the rows moved, and one split at the anchor | O(k·s) |
 | **Next / track ends** | The Manual Queue's front becomes current if it has one, and otherwise the cursor moves +1. Append a play (extend the last run or start one) and trim History | O(1) amortised |
 | **Previous** | See below | O(1); O(s) to find X |
@@ -194,9 +195,9 @@ With no edits while shuffled, the state returns exactly to its pre-shuffle spans
 
 The rules above are `crates/core/src/queue`. The rest is built in these places:
 
-- **The server** holds each account's active queue in memory, applies every edit in the order edits arrive, and saves changed accounts every second ([`database.md` §6](database.md#6-personal-data), `crates/server/src/queue`). Edits name items, never positions, and carry no base version, so none is refused for being stale. A device-minted `editId` makes a retry safe: the server remembers an account's latest 32 and answers a repeat without applying it, so a retry after 32 more edits or a restart can apply twice. A start or an edit above 64 MiB (about 2.9 million track IDs) is refused as `validation_failed`. The server replaces an add's `list` and `length` with its own and never takes a hash from a device.
+- **The server** holds each account's active queue in memory, applies every edit in the order edits arrive, and saves changed accounts every second ([`database.md` §6](database.md#6-personal-data), `crates/server/src/queue`). Edits name items, never positions, and carry no base version, so none is refused for being stale. A device-minted `editId` makes a retry safe: the server remembers an account's latest 32 and answers a repeat without applying it, so a retry after 32 more edits or a restart can apply twice. A start or an edit above 16 MiB (about 760,000 track IDs) is refused as `validation_failed`. Bodies are read so that none costs much more than a few times its size: a start's `context` and an edit are kept as raw JSON until their shape is known, track IDs are read straight into integers, and the items a `remove`, `move` or `removePlays` names are read one by one and must have a UUID key. A start takes the active queue's repeat mode; a restore keeps the kept queue's own. The server replaces an add's `list` and `length` with its own and never takes a hash from a device.
 - **The API** is [`api/openapi.yaml`](../api/openapi.yaml): the snapshot (`GET /me/queue`, with an `ETag` of `"<run>.<queueId>.<version>"`), starts and edits, lists by hash, pages of rows, and kept queues (`/me/queues`). The snapshot's shape is a stable public contract: it carries the state and each list's `list` hash and `length`, never tracks. The hash is `list` everywhere on the wire. Restoring or deleting the active queue is `409 queue_active`, the opposite of `queue_changed`, which means the edit named a queue that is not active.
-- **Player state and plays follow the queue.** The player state and a progress report name the item, `<key>.<position>`, which the server accepts only if the account's active queue holds it. The item ID is stable. A play's `context` and `origin` are the device's, as sent: the server cannot tell the Manual Queue from the context for a play reported after the queue changed.
+- **Player state and plays follow the queue.** The player state and a progress report name the item, `<key>.<position>`, which the server accepts only if the account's active queue holds it. The item ID is stable. A play's `context` and `origin` are the device's, as sent: the server cannot tell the Manual Queue from the context for a play reported after the queue changed. A device reports `manual` for an item playing from the Manual Queue, which is one not in the context.
 - **The web client** is a worker around the core ([`web.md`](web.md#queue-worker)).
 
 Not built yet:
