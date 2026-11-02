@@ -57,6 +57,9 @@ pub enum ServerMessage {
     QueueReplaced {
         queue_id: Uuid,
     },
+    /// The account's kept queues changed by a start, restore or delete, so a device showing
+    /// them fetches the list again.
+    QueuesChanged,
     /// An edit applied to the account's queue, as applied: an add's source carries the server's
     /// list and length. `version` is the queue's version once it was; a device that finds a gap
     /// fetches the queue again.

@@ -17,6 +17,7 @@ use crate::db::testing::{Track, access};
 use crate::queue::{Queues, list_hash};
 
 mod edits;
+mod kept;
 mod recipes;
 mod rows;
 
@@ -296,19 +297,25 @@ async fn retried_start_is_noop() {
     start(&app, TOKEN, start_body(OTHER, KEY2, &["2"], 0)).await;
     start(&app, TOKEN, start_body(QUEUE, KEY, &["1", "2"], 0)).await;
     assert_eq!(snapshot(&app).await["queueId"], json!(OTHER));
-    assert_eq!(message(&mut socket).await, json!({ "type": "queueReplaced", "queueId": QUEUE }));
-    assert_eq!(message(&mut socket).await, json!({ "type": "queueReplaced", "queueId": OTHER }));
+    for queue in [QUEUE, OTHER] {
+        assert_eq!(
+            message(&mut socket).await,
+            json!({ "type": "queueReplaced", "queueId": queue })
+        );
+        assert_eq!(message(&mut socket).await, json!({ "type": "queuesChanged" }));
+    }
     socket_is_quiet(&mut socket).await;
 }
 
-/// Asserts that no `queueReplaced` is waiting on `socket`: a ping sent now is answered with
-/// none before it.
+/// Asserts that no `queueReplaced` or `queuesChanged` is waiting on `socket`: a ping sent now is
+/// answered with none before it.
 async fn socket_is_quiet(socket: &mut Socket) {
     use futures_util::SinkExt;
     socket.send(tokio_tungstenite::tungstenite::Message::text(r#"{"type":"ping"}"#)).await.unwrap();
     loop {
         let message = next(socket).await;
         assert_ne!(message["type"], "queueReplaced", "{message}");
+        assert_ne!(message["type"], "queuesChanged", "{message}");
         if message["type"] == "pong" {
             return;
         }

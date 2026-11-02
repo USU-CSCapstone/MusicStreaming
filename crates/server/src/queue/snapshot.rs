@@ -4,7 +4,7 @@ use jewelcase_core::QueueState;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::store::Queues;
+use super::store::{Position, Queues};
 use crate::api::Uuid;
 
 /// The spec's `QueueSnapshot`.
@@ -15,6 +15,9 @@ struct Snapshot<'a> {
     version: u32,
     context: &'a Value,
     state: &'a QueueState,
+    /// Only a restore's answer carries it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    position: Option<&'a Position>,
 }
 
 /// Whether the `If-None-Match` value `known` matches `etag`, compared weakly as RFC 9110 §13.1.2
@@ -30,9 +33,18 @@ impl Queues {
     ///
     /// The tag is `"<boot>.<queueId>.<version>"`, so it differs for every queue and every
     /// change, and for every start of the server.
-    pub fn snapshot(&self, user: i64, known: Option<&str>) -> Option<(String, Option<Vec<u8>>)> {
+    ///
+    /// `position`, for a restore's answer, is a queue's ID and where its playback was left. It is
+    /// sent in the body only, and only if that queue is still the active one, so an answer never
+    /// pairs a position with another queue.
+    pub fn snapshot(
+        &self,
+        user: i64,
+        known: Option<&str>,
+        position: Option<(&Uuid, &Position)>,
+    ) -> Option<(String, Option<Vec<u8>>)> {
         // Only copies are made under the lock, so serializing does not hold up other accounts.
-        let (etag, queue_id, version, context, state) = {
+        let (etag, queue_id, version, context, state, position) = {
             let accounts = self.lock();
             let account = accounts.get(&user)?;
             let etag =
@@ -46,9 +58,16 @@ impl Queues {
                 account.version,
                 account.context.clone(),
                 account.state.clone(),
+                position.filter(|(id, _)| **id == account.queue_id).map(|(_, at)| at.clone()),
             )
         };
-        let snapshot = Snapshot { queue_id: &queue_id, version, context: &context, state: &state };
+        let snapshot = Snapshot {
+            queue_id: &queue_id,
+            version,
+            context: &context,
+            state: &state,
+            position: position.as_ref(),
+        };
         // A state and a context are plain data, so this cannot fail.
         let body = serde_json::to_vec(&snapshot).ok()?;
         Some((etag, Some(body)))

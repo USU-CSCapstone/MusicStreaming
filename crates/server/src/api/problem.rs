@@ -29,6 +29,7 @@ pub enum Code {
     PluginSettingsInvalid,
     PluginExists,
     QueueChanged,
+    QueueActive,
     AnchorGone,
     PlayGone,
     DuplicateKey,
@@ -61,6 +62,7 @@ impl Code {
             | Self::VersionConflict
             | Self::DeviceUnavailable
             | Self::QueueChanged
+            | Self::QueueActive
             | Self::AnchorGone
             | Self::PlayGone => StatusCode::CONFLICT,
             Self::SetupRequired => StatusCode::SERVICE_UNAVAILABLE,
