@@ -260,10 +260,10 @@ pub(super) struct Plan {
 
 /// Applies `ops` to the items of playlist `id` as `conn` finds them, and works out the rows that
 /// change, the ops as applied, and the totals after, summed from the tracks' durations as they
-/// are now. A track
-/// `library` no longer has is left out of an add, as create leaves it out. A position out of
-/// range is `422`. It only reads, so it runs off the writer; the caller has checked the
-/// playlist is the caller's and at the version the ops were made on.
+/// are now. A track `library`
+/// no longer has is left out of an add, as create leaves it out. A position out of range is
+/// `422`. It only reads, so it runs off the writer; the caller has checked the playlist is the
+/// caller's and at the version the ops were made on.
 pub(super) fn plan(
     conn: &Connection,
     library: i64,
