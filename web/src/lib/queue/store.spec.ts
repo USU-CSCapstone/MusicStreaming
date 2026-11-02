@@ -52,6 +52,15 @@ class FakeServer {
 	failures: number[] = [];
 	/** Runs when a fetch of the queue has been answered but before the store hears the answer. */
 	onGet: (() => void) | null = null;
+	/** The lists the server holds, by hash. */
+	lists = new Map<string, string[]>([['h', ['100', '101', '102', '103', '104']]]);
+	/** Holds back the answers to requests for lists or for rows until it is opened. */
+	listGate: Promise<void> | null = null;
+	rowsGate: Promise<void> | null = null;
+	/** Holds back the answer to an edit, once it is applied, until it is opened. */
+	editGate: Promise<void> | null = null;
+	/** The status pages of rows are answered with instead of the page. */
+	rowsStatus = 0;
 	/** Edits applied whose answer is lost on its way, in count. */
 	loseAnswers = 0;
 	#answered = new Map<string, number>();
@@ -70,7 +79,8 @@ class FakeServer {
 		if (edit.type !== 'add') return edit;
 		const { key, libraryId, tracks } = edit.source;
 		const length = tracks ? tracks.length : 2;
-		return { ...edit, source: { key, libraryId, list: `h-${key}`, length } };
+		const list = tracks ? `h-${tracks.join('-')}` : `h-${key}`;
+		return { ...edit, source: { key, libraryId, list, length } };
 	}
 
 	/** The `queueEdit` the server sent for the `n`th edit this device sent (the last by default). */
@@ -94,9 +104,65 @@ class FakeServer {
 		this.#answered.clear();
 	}
 
-	/** How many times the queue was asked for, and how many of those answered with the whole of it. */
+	/** The requests for the queue itself. */
+	queueGets() {
+		return this.requests.filter((r) => r.path === '/me/queue');
+	}
+
+	/** How many times the queue was asked for. */
 	gets() {
-		return this.requests.filter((r) => r.method === 'GET').length;
+		return this.queueGets().length;
+	}
+
+	/** The requests for lists, as the hashes asked for, in order. */
+	listGets() {
+		return this.requests
+			.filter((r) => r.path.startsWith('/me/queue/lists/'))
+			.map((r) => r.path.split('/').pop());
+	}
+
+	/** The requests for pages of rows, as `section:offset`. */
+	rowGets() {
+		return this.requests
+			.filter((r) => r.path.startsWith('/me/queue/rows'))
+			.map((r) => {
+				const query = new URL(r.path, 'http://x').searchParams;
+				return `${query.get('section')}:${query.get('offset')}`;
+			});
+	}
+
+	/** The page of rows the server's queue, with every list it holds, gives. */
+	rowsPage(path: string): Response {
+		const query = new URL(path, 'http://x').searchParams;
+		const [offset, limit] = [Number(query.get('offset')), Number(query.get('limit'))];
+		const queue = this.queue.copy();
+		for (const [hash, tracks] of this.lists) {
+			queue.attachList(hash, JSON.stringify({ libraryId: 'lib', tracks }));
+		}
+		const history = query.get('section') === 'history';
+		/** A core row as the API's page gives it. */
+		const row = ({ item, track, play }: { item: string; track: string | null; play?: number }) => ({
+			item,
+			libraryId: 'lib',
+			trackId: track,
+			...(play === undefined ? {} : { play })
+		});
+		const rows = JSON.parse(
+			history ? queue.historyRows(offset, limit) : queue.upNextRows(offset, limit)
+		);
+		const current = queue.currentRow();
+		const page = {
+			queueId: this.queueId,
+			version: this.version,
+			current: current && row(JSON.parse(current)),
+			total: history ? queue.historyLen() : queue.upNextLen(),
+			manual: history ? 0 : queue.manualLen(),
+			shuffled: false,
+			repeat: 'off',
+			rows: rows.map(row)
+		};
+		queue.free();
+		return new Response(JSON.stringify(page));
 	}
 
 	/** Answers a request as the API does, unless a failure is queued for it. */
@@ -106,6 +172,16 @@ class FakeServer {
 		const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
 		const headers = init?.headers as Record<string, string> | undefined;
 		this.requests.push({ method, path, body, headers });
+		if (path.startsWith('/me/queue/lists/')) {
+			await this.listGate;
+			const tracks = this.lists.get(path.split('/').pop()!);
+			if (!tracks) return problem(404, 'not_found');
+			return new Response(JSON.stringify({ libraryId: 'lib', tracks }));
+		}
+		if (path.startsWith('/me/queue/rows')) {
+			await this.rowsGate;
+			return this.rowsStatus ? problem(this.rowsStatus, 'failed') : this.rowsPage(path);
+		}
 		const failure = this.failures.shift();
 		if (failure === 0) throw new TypeError('offline');
 		if (failure) return problem(failure, 'failed');
@@ -137,8 +213,53 @@ class FakeServer {
 				throw new TypeError('connection lost');
 			}
 		}
-		return new Response(JSON.stringify({ version }));
+		await this.editGate;
+		const edit = this.resolved(body.edit);
+		return new Response(
+			JSON.stringify({ version, ...(edit.type === 'add' ? { source: edit.source } : {}) })
+		);
 	};
+}
+
+/** Cache Storage, in memory, as far as lists use it; `broken` makes every call fail. */
+class FakeCaches {
+	files = new Map<string, string>();
+	broken = false;
+	/** Holds back every read until it is opened. */
+	matchGate: Promise<void> | null = null;
+
+	/** The one cache. */
+	async open(): Promise<Cache> {
+		if (this.broken) throw new Error('private mode');
+		const files = this.files;
+		return {
+			match: async (url: string) => {
+				await this.matchGate;
+				return files.has(url) ? new Response(files.get(url)) : undefined;
+			},
+			put: async (url: string, response: Response) => void files.set(url, await response.text()),
+			delete: async (url: string | { url: string }) =>
+				files.delete(typeof url === 'string' ? url : new URL(url.url).pathname),
+			keys: async () => [...files.keys()].map((url) => ({ url: `http://localhost${url}` }))
+		} as unknown as Cache;
+	}
+
+	/** The hashes kept. */
+	hashes() {
+		return [...this.files.keys()].map((url) => url.split('/').pop());
+	}
+
+	/** Keeps a list as an earlier run of the worker would have. */
+	keep(hash: string, tracks: string[]) {
+		this.files.set(`${API}/me/queue/lists/${hash}`, JSON.stringify({ libraryId: 'lib', tracks }));
+	}
+}
+
+/** A gate to hold answers behind, and the way to open it. */
+function gate(): { wait: Promise<void>; open: () => void } {
+	let open!: () => void;
+	const wait = new Promise<void>((resolve) => (open = resolve));
+	return { wait, open };
 }
 
 /** An error response with the server's problem body. */
@@ -152,6 +273,11 @@ let server: FakeServer;
 let store: QueueStore;
 let summary: Summary;
 let refusals: Refusal[];
+let caches: FakeCaches;
+
+/** The first `limit` rows of Up Next as the store gives them: each track, or its status if it has none. */
+const upNext = (limit = 10) =>
+	store.rows({ section: 'upNext', offset: 0, limit }).rows.map((row) => row.track ?? row.status);
 
 /** Says hello, as a connection does, and lets the store catch up. */
 async function hello() {
@@ -172,10 +298,12 @@ const queueManual = (key: string): SentEdit => ({
 beforeEach(() => {
 	server = new FakeServer();
 	refusals = [];
+	caches = new FakeCaches();
 	store = new QueueStore({
 		api: API,
 		fetch: server.fetch as typeof fetch,
 		retryMs: 0,
+		storage: caches as unknown as CacheStorage,
 		changed: (s) => (summary = s),
 		refused: (r) => refusals.push(r)
 	});
@@ -252,14 +380,14 @@ describe('QueueStore', () => {
 		await hello();
 
 		expect(server.gets()).toBe(2);
-		expect(server.requests[1].headers?.['If-None-Match']).toBe(`"r1.${QUEUE}.0"`);
+		expect(server.queueGets()[1].headers?.['If-None-Match']).toBe(`"r1.${QUEUE}.0"`);
 		expect(summary.revision).toBe(revision);
 
 		// An edit this device missed, as after a dropped connection.
 		server.apply(next);
 		await hello();
 		expect(server.gets()).toBe(3);
-		expect(server.requests[2].headers?.['If-None-Match']).toBe(`"r1.${QUEUE}.0"`);
+		expect(server.queueGets()[2].headers?.['If-None-Match']).toBe(`"r1.${QUEUE}.0"`);
 		expect(summary).toMatchObject({ version: 1, current: 'a.1', history: 1 });
 
 		// Heard live, an edit needs no fetch; a gap does.
@@ -501,5 +629,361 @@ describe('QueueStore', () => {
 		await hello();
 
 		expect(server.gets()).toBe(2);
+	});
+});
+
+/** The state of a queue with sources `keys`, each of two tracks and list `h<key>`, the first playing. */
+function twoSourceState(...keys: string[]) {
+	return Queue.fromJson(
+		JSON.stringify({
+			sources: keys.map((key) => ({ key, libraryId: 'lib', list: `h${key}`, length: 2 })),
+			copies: [],
+			manual: [],
+			order: [{ view: { key: keys.at(-1) }, start: 0, len: 2 }],
+			cursor: 1,
+			current: `${keys.at(-1)}.0`,
+			history: [],
+			nextPlay: 0,
+			shuffle: null,
+			repeat: 'off',
+			adjusted: false
+		})
+	);
+}
+
+describe('QueueStore lists and rows', () => {
+	it('fills from pages then lists', async () => {
+		const lists = gate();
+		const rows = gate();
+		server.listGate = lists.wait;
+		server.rowsGate = rows.wait;
+		await hello();
+		expect(upNext()).toEqual(['unknown', 'unknown', 'unknown', 'unknown']);
+
+		rows.open();
+		await settle();
+		expect(upNext()).toEqual(['101', '102', '103', '104']);
+		expect(store.rows({ section: 'current', offset: 0, limit: 1 }).rows[0]).toMatchObject({
+			item: 'a.0',
+			track: '100',
+			status: 'known'
+		});
+		// Up Next's first page, once, as History has nothing to show.
+		expect(server.rowGets()).toEqual(['upNext:0']);
+
+		lists.open();
+		await settle();
+		expect(upNext()).toEqual(['101', '102', '103', '104']);
+		expect(server.listGets()).toEqual(['h']);
+		expect(server.rowGets()).toEqual(['upNext:0']);
+		expect(server.requests.some((r) => r.path.startsWith('/tracks'))).toBe(false);
+	});
+
+	it('asks again for a window only when the version changes, so never in a loop', async () => {
+		server.rowsStatus = 500;
+		server.listGate = new Promise(() => {});
+		await hello();
+		for (let i = 0; i < 5; i++) {
+			upNext();
+			await settle();
+		}
+		expect(server.rowGets()).toEqual(['upNext:0']);
+		expect(upNext()).toEqual(['unknown', 'unknown', 'unknown', 'unknown']);
+
+		// A new version asks again, for Up Next and now for History's first play too.
+		store.message(server.apply(next));
+		await settle();
+		upNext();
+		await settle();
+		expect(server.rowGets().sort()).toEqual(['history:0', 'upNext:0', 'upNext:0']);
+	});
+
+	it('fetches a window past the first page a page at a time', async () => {
+		server.listGate = new Promise(() => {});
+		server.queue = Queue.fromJson(
+			JSON.stringify({
+				...JSON.parse(albumQueue().toJson()),
+				sources: [{ key: 'a', libraryId: 'lib', list: 'h', length: 300 }],
+				order: [{ view: { key: 'a' }, start: 0, len: 300 }]
+			})
+		);
+		server.lists.set(
+			'h',
+			Array.from({ length: 300 }, (_, i) => String(1000 + i))
+		);
+		await hello();
+		await settle();
+		const window = store.rows({ section: 'upNext', offset: 150, limit: 20 });
+		expect(window.total).toBe(299);
+		expect(window.rows[0].status).toBe('unknown');
+		await settle();
+
+		expect(server.rowGets()).toContain('upNext:100');
+		expect(store.rows({ section: 'upNext', offset: 150, limit: 20 }).rows[0]).toMatchObject({
+			item: 'a.151',
+			track: '1151'
+		});
+	});
+
+	it('cleans Cache Storage on load, and attaches what it keeps without asking the server', async () => {
+		caches.keep('h', ['100', '101', '102', '103', '104']);
+		caches.keep('stale', ['1']);
+		await hello();
+
+		expect(caches.hashes()).toEqual(['h']);
+		expect(upNext()).toEqual(['101', '102', '103', '104']);
+		expect(server.listGets()).toEqual([]);
+		expect(server.rowGets()).toEqual([]);
+	});
+
+	it('attaches its lists again after every install', async () => {
+		await hello();
+		expect(server.listGets()).toEqual(['h']);
+		expect(caches.hashes()).toEqual(['h']);
+		const pages = server.rowGets().length;
+
+		// An edit missed, so the queue is fetched whole and a new core queue holds no list.
+		server.apply(next);
+		await hello();
+		expect(summary.version).toBe(1);
+		expect(upNext()).toEqual(['102', '103', '104']);
+		expect(server.listGets()).toEqual(['h']);
+		expect(server.rowGets()).toHaveLength(pages);
+	});
+
+	it('marks the rows of a list the server does not have unavailable, and does not ask again', async () => {
+		server.lists.delete('h');
+		await hello();
+
+		expect(upNext()).toEqual(['unavailable', 'unavailable', 'unavailable', 'unavailable']);
+		await hello();
+		server.apply(next);
+		await hello();
+		expect(server.listGets()).toEqual(['h']);
+	});
+
+	it('shows an unfetchable list unavailable even when its pages are down too', async () => {
+		server.lists.delete('h');
+		server.rowsStatus = 500;
+		await hello();
+
+		expect(upNext()).toEqual(['unavailable', 'unavailable', 'unavailable', 'unavailable']);
+		expect(store.rows({ section: 'current', offset: 0, limit: 1 }).rows[0].status).toBe(
+			'unavailable'
+		);
+	});
+
+	it('asks again for a list that could not be reached when the connection is back', async () => {
+		server.listGate = Promise.reject(new TypeError('offline'));
+		server.listGate.catch(() => {});
+		await hello();
+		expect(upNext()).toEqual(['101', '102', '103', '104']);
+		expect(server.listGets()).toEqual(['h']);
+
+		server.listGate = null;
+		await hello();
+		expect(server.listGets()).toEqual(['h', 'h']);
+	});
+
+	it('loads first the lists that the item playing and Up Next read', async () => {
+		server.queue = twoSourceState('z', 'a', 'b');
+		for (const key of ['z', 'a', 'b']) server.lists.set(`h${key}`, ['1', '2']);
+		await hello();
+		await settle();
+
+		expect(server.listGets()).toEqual(['hb', 'hz', 'ha']);
+	});
+
+	it('lets go of a list when clean-up drops it', async () => {
+		await hello();
+		store.edit({
+			type: 'add',
+			source: { key: 'm', libraryId: 'lib', tracks: ['7', '8'] },
+			before: { type: 'manualEnd' }
+		});
+		await settle();
+		store.message(server.heardOf());
+		await settle();
+		expect(caches.hashes().sort()).toEqual(['h', 'h-7-8']);
+		// Its own tracks were never downloaded back.
+		expect(server.listGets()).toEqual(['h']);
+		expect(upNext()).toEqual(['7', '8', '101', '102', '103', '104']);
+
+		store.edit({ type: 'remove', items: ids('m', 0, 1) });
+		await settle();
+		store.message(server.heardOf());
+		await settle();
+		expect(caches.hashes()).toEqual(['h']);
+
+		// The same tracks added again are a list with the same hash, which must load afresh.
+		store.edit({
+			type: 'add',
+			source: { key: 'n', libraryId: 'lib', tracks: ['7', '8'] },
+			before: { type: 'manualEnd' }
+		});
+		await settle();
+		store.message(server.heardOf());
+		await settle();
+		expect(upNext()).toEqual(['7', '8', '101', '102', '103', '104']);
+		expect(caches.hashes().sort()).toEqual(['h', 'h-7-8']);
+	});
+
+	it('shows the tracks of its own add once the server has named their list, before it confirms', async () => {
+		await hello();
+		store.edit({
+			type: 'add',
+			source: { key: 'm', libraryId: 'lib', tracks: ['7', '8'] },
+			before: { type: 'manualStart' }
+		});
+		await settle();
+
+		expect(summary.manual).toBe(2);
+		expect(upNext(2)).toEqual(['7', '8']);
+		expect(server.listGets()).toEqual(['h']);
+	});
+
+	it('keeps lists in memory and uses pages when Cache Storage throws', async () => {
+		caches.broken = true;
+		server.listGate = new Promise(() => {});
+		await hello();
+		expect(upNext()).toEqual(['101', '102', '103', '104']);
+		expect(server.rowGets()).toEqual(['upNext:0']);
+	});
+
+	it('keeps a list in memory when Cache Storage throws, so a reload of the queue does not download it again', async () => {
+		caches.broken = true;
+		await hello();
+		expect(upNext()).toEqual(['101', '102', '103', '104']);
+
+		server.apply(next);
+		await hello();
+		expect(upNext()).toEqual(['102', '103', '104']);
+		expect(server.listGets()).toEqual(['h']);
+	});
+
+	it('works with no Cache Storage at all', async () => {
+		store = new QueueStore({
+			api: API,
+			fetch: server.fetch as typeof fetch,
+			retryMs: 0,
+			storage: undefined,
+			changed: (s) => (summary = s),
+			refused: (r) => refusals.push(r)
+		});
+		await hello();
+		expect(upNext()).toEqual(['101', '102', '103', '104']);
+	});
+
+	it("fills the rows of its own add at once, before the server's answer", async () => {
+		await hello();
+		const answer = gate();
+		server.editGate = answer.wait;
+		store.edit({
+			type: 'add',
+			source: { key: 'm', libraryId: 'lib', tracks: ['7', '8'] },
+			before: { type: 'manualStart' }
+		});
+		expect(upNext(3)).toEqual(['7', '8', '101']);
+		await settle();
+		expect(upNext(3)).toEqual(['7', '8', '101']);
+		answer.open();
+		await settle();
+		expect(server.listGets()).toEqual(['h']);
+	});
+
+	it('does not download its own add back when the edit is heard before it is answered', async () => {
+		await hello();
+		const answer = gate();
+		server.editGate = answer.wait;
+		store.edit({
+			type: 'add',
+			source: { key: 'm', libraryId: 'lib', tracks: ['7', '8'] },
+			before: { type: 'manualStart' }
+		});
+		await settle();
+		store.message(server.heardOf());
+		answer.open();
+		await settle();
+
+		expect(server.listGets()).toEqual(['h']);
+		expect(upNext(2)).toEqual(['7', '8']);
+	});
+
+	it('needs no page to confirm its own add', async () => {
+		await hello();
+		const pages = server.rowGets().length;
+		store.edit({
+			type: 'add',
+			source: { key: 'm', libraryId: 'lib', tracks: ['7', '8'] },
+			before: { type: 'manualStart' }
+		});
+		await settle();
+		store.message(server.heardOf());
+		await settle();
+
+		expect(server.rowGets()).toHaveLength(pages);
+		expect(upNext(2)).toEqual(['7', '8']);
+	});
+
+	it('shows the rows of a list that could not be reached as unavailable', async () => {
+		server.listGate = Promise.reject(new TypeError('offline'));
+		server.listGate.catch(() => {});
+		server.rowsStatus = 500;
+		await hello();
+
+		expect(upNext()).toEqual(['unavailable', 'unavailable', 'unavailable', 'unavailable']);
+	});
+
+	it('shows a row the server could not read as unavailable', async () => {
+		server.listGate = new Promise(() => {});
+		server.lists.delete('h');
+		await hello();
+
+		expect(upNext()).toEqual(['unavailable', 'unavailable', 'unavailable', 'unavailable']);
+	});
+
+	it('does not ask again for a list that does not fit the queue', async () => {
+		server.lists.set('h', ['1']);
+		await hello();
+		await settle();
+
+		expect(server.listGets()).toEqual(['h']);
+	});
+
+	it('counts History and Up Next separately', async () => {
+		await hello();
+		store.edit(next);
+
+		expect(store.rows({ section: 'history', offset: 0, limit: 10 }).total).toBe(1);
+		expect(store.rows({ section: 'upNext', offset: 0, limit: 10 }).total).toBe(3);
+	});
+
+	it('keeps edits heard while it installs a snapshot', async () => {
+		caches.keep('h', ['100', '101', '102', '103', '104']);
+		const reading = gate();
+		caches.matchGate = reading.wait;
+		store.message({ type: 'hello', deviceId: '1', serverTime: '' });
+		await settle();
+		store.message(server.apply(next));
+		reading.open();
+		await settle();
+
+		expect(summary).toMatchObject({ version: 1, current: 'a.1' });
+		expect(server.gets()).toBe(1);
+	});
+
+	it('does not download its own add back when the echo is missed and the queue is fetched', async () => {
+		await hello();
+		store.edit({
+			type: 'add',
+			source: { key: 'm', libraryId: 'lib', tracks: ['7', '8'] },
+			before: { type: 'manualStart' }
+		});
+		await settle();
+		await hello();
+
+		expect(summary.manual).toBe(2);
+		expect(upNext(2)).toEqual(['7', '8']);
+		expect(server.listGets()).toEqual(['h']);
 	});
 });

@@ -39,14 +39,48 @@ export type Refusal = {
 	edit: SentEdit;
 };
 
+/** Which rows a window is of: the item playing, Up Next, or History (newest first). */
+export type RowSection = 'current' | 'upNext' | 'history';
+
+/**
+ * One row, as the page shows it. `known` has its `track`. `unknown` is one the worker is
+ * still learning, from a list or a page on its way, so the page may wait for it. `unavailable`
+ * is one it cannot learn, since its list is not there to be had, so the player skips it in
+ * place (`design/queue.md` §3).
+ */
+export type QueueRow = {
+	/** `<key>.<position>`: what edits name. */
+	item: string;
+	libraryId: string;
+	status: 'known' | 'unknown' | 'unavailable';
+	/** The track ID when `known`, else null. */
+	track: string | null;
+	/** A History row's play number. */
+	play?: number;
+};
+
+/** The worker's answer to a window of rows. */
+export type RowsWindow = {
+	section: RowSection;
+	offset: number;
+	/** The rows in the whole section; at most one in `current`. */
+	total: number;
+	/** The `revision` this was read at, so it is known to be stale once the queue changes. */
+	revision: number;
+	rows: QueueRow[];
+};
+
 /** The page to the worker. */
 export type ToWorker =
 	/** First: where the API is. */
 	| { type: 'init'; api: string }
 	| { type: 'message'; message: RealtimeServerMessage }
-	| { type: 'edit'; edit: SentEdit };
+	| { type: 'edit'; edit: SentEdit }
+	/** Asks for up to `limit` rows from `offset`; answered with `rows` carrying the same `id`. */
+	| { type: 'rows'; id: number; section: RowSection; offset: number; limit: number };
 
 /** The worker to the page. */
 export type FromWorker =
 	| { type: 'state'; summary: Summary }
-	| { type: 'refused'; refusal: Refusal };
+	| { type: 'refused'; refusal: Refusal }
+	| { type: 'rows'; id: number; window: RowsWindow };
