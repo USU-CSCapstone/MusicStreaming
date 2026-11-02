@@ -36,10 +36,12 @@ pub struct Current {
     pub track_id: Option<u64>,
 }
 
-/// A page of the listing, and the key to continue after if there is more.
+/// A page of the listing, the key to continue after if there is more, and how many kept queues
+/// the whole listing holds.
 pub struct Listed {
     pub entries: Vec<Entry>,
     pub next: Option<Key>,
+    pub total: u64,
 }
 
 /// What an account has parked in memory.
@@ -95,6 +97,7 @@ impl Queues {
         limit: u32,
     ) -> Result<Listed, DbError> {
         let Parked { drafts, hidden, held } = self.parked(user);
+        let unsaved = drafts.len() as u64;
         let limit = limit as usize;
         let mut candidates: Vec<(Key, Option<Draft>)> = drafts
             .into_iter()
@@ -102,8 +105,15 @@ impl Queues {
             .filter(|(key, _)| after.as_ref().is_none_or(|after| key < after))
             .collect();
         candidates.sort_by(|a, b| b.0.cmp(&a.0));
-        let stored = db.read(move |conn| stored(conn, user, after, limit + 1)).await?;
-        candidates.extend(stored.into_iter().filter(|(key, _)| !hidden.contains(&key.1)));
+        let (stored, counted) = db
+            .read(move |conn| {
+                let rows = stored(conn, user, after, limit + 1)?;
+                let rows: Vec<_> =
+                    rows.into_iter().filter(|(key, _)| !hidden.contains(&key.1)).collect();
+                Ok((rows, count(conn, user, &hidden)?))
+            })
+            .await?;
+        candidates.extend(stored);
 
         let more = candidates.len() > limit;
         candidates.truncate(limit);
@@ -126,7 +136,7 @@ impl Queues {
                 history: draft.history,
             })
             .collect();
-        Ok(Listed { entries, next })
+        Ok(Listed { entries, next, total: unsaved + counted })
     }
 
     /// Under the lock: what the account has parked and not yet saved, and its held lists.
@@ -151,6 +161,26 @@ impl Queues {
     }
 }
 
+/// How many of `user`'s stored kept queues are not in `hidden`, readable or not. Reads only the
+/// kept queues' index.
+fn count(conn: &Connection, user: i64, hidden: &HashSet<String>) -> rusqlite::Result<u64> {
+    let mut select =
+        conn.prepare_cached("SELECT queue_id FROM queues WHERE user_id = ?1 AND active = 0")?;
+    let mut count = 0;
+    for id in select.query_map([user], |row| row.get::<_, String>(0))? {
+        if !hidden.contains(&id?) {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+/// A page of `?1`'s stored kept queues after `(?2, ?3)` (from the start for null), newest first,
+/// at most `?4`.
+pub(super) const KEPT: &str = "SELECT queue_id, context, state, last_active FROM queues \
+     WHERE user_id = ?1 AND active = 0 AND (?2 IS NULL OR (last_active, queue_id) < (?2, ?3)) \
+     ORDER BY last_active DESC, queue_id DESC LIMIT ?4";
+
 /// Up to `limit` of `user`'s stored kept queues after `after`, newest first, keyed for
 /// paging. A row that can't be read has no draft.
 fn stored(
@@ -160,11 +190,7 @@ fn stored(
     limit: usize,
 ) -> rusqlite::Result<Vec<(Key, Option<Draft>)>> {
     let (at, id) = after.unzip();
-    let mut select = conn.prepare_cached(
-        "SELECT queue_id, context, state, last_active FROM queues \
-         WHERE user_id = ?1 AND active = 0 AND (?2 IS NULL OR (last_active, queue_id) < (?2, ?3)) \
-         ORDER BY last_active DESC, queue_id DESC LIMIT ?4",
-    )?;
+    let mut select = conn.prepare_cached(KEPT)?;
     let rows = select.query_map(
         params![user, at, id, i64::try_from(limit).unwrap_or(i64::MAX)],
         |row| {

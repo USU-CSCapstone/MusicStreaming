@@ -867,3 +867,17 @@ async fn a_start_naming_any_of_the_accounts_queues_changes_nothing() {
     assert_eq!(queue_ids(&conn, 0), [QUEUE, OTHER]);
     assert!(!stored(&conn, 1).contains(&list_hash(&[9])));
 }
+
+#[test]
+fn the_kept_listing_reads_its_index() {
+    let (_temp, db) = open();
+    let plan: Vec<String> = db
+        .read_blocking(|conn| {
+            conn.prepare(&format!("EXPLAIN QUERY PLAN {}", super::listing::KEPT))?
+                .query_map(rusqlite::params![1, 5, "q", 10], |r| r.get(3))?
+                .collect()
+        })
+        .unwrap();
+    assert!(plan.iter().any(|step| step.contains("INDEX queues_kept")), "{plan:?}");
+    assert!(!plan.iter().any(|step| step.contains("TEMP B-TREE")), "{plan:?}");
+}

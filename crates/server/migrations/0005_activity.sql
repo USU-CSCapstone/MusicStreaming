@@ -138,6 +138,10 @@ CREATE TABLE queues (
 -- An account has at most one active queue.
 CREATE UNIQUE INDEX queues_active ON queues (user_id) WHERE active = 1;
 
+-- An account's kept queues, newest first, as they are listed and expire, without reading their
+-- states.
+CREATE INDEX queues_kept ON queues (user_id, last_active, queue_id) WHERE active = 0;
+
 -- Which lists each queue uses, so one statement finds the account's lists that no queue uses.
 CREATE TABLE queue_list_uses (
     user_id  INTEGER NOT NULL,

@@ -1,4 +1,4 @@
-//! The account's kept queues: `listKeptQueues`, `restoreQueue` and `deleteQueue`
+//! The account's kept queues: `listKeptQueues`, `restoreQueue` and `deleteKeptQueue`
 //! (`design/queue.md` §8, §9).
 
 use std::sync::Arc;
@@ -59,6 +59,7 @@ struct Playing {
 pub struct KeptPage {
     items: Vec<Kept>,
     next_cursor: Option<String>,
+    total: u64,
 }
 
 /// The caller's kept queues, most recently active first, a page at a time (`limit` as other
@@ -76,7 +77,7 @@ pub async fn list(
     let items = listed.entries.into_iter().map(kept).collect();
     let next_cursor =
         listed.next.map(|(at, id)| cursor::encode(CURSOR, &[Sql::Integer(at), Sql::Text(id)]));
-    Ok(Json(KeptPage { items, next_cursor }))
+    Ok(Json(KeptPage { items, next_cursor, total: listed.total }))
 }
 
 /// The key a cursor continues after.
