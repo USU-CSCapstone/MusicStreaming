@@ -265,7 +265,7 @@ class FixtureQueue {
 			return entry;
 		});
 		const end = from + 2;
-		return { items, nextCursor: end < all.length ? String(end) : null };
+		return { items, total: all.length, nextCursor: end < all.length ? String(end) : null };
 	}
 
 	/**
