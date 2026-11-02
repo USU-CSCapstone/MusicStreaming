@@ -6,12 +6,14 @@
 //! account. The server keeps the `editId`s of the latest edits, so one sent again is applied
 //! once and answered the same.
 
+use std::fmt;
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use jewelcase_core::{Anchor, Edit, QueueError, Source};
+use jewelcase_core::{Anchor, Edit, ItemId, PlayRef, QueueError, Source};
 use serde::Deserialize;
+use serde::de::{self, Deserializer, Visitor};
 use serde_json::value::RawValue;
 
 use super::start::{NewSource, Resolved};
@@ -40,6 +42,67 @@ struct Kind {
     kind: String,
 }
 
+/// A `remove` as sent.
+#[derive(Deserialize)]
+struct Remove {
+    items: Vec<SentItem>,
+}
+
+/// A `move` as sent.
+#[derive(Deserialize)]
+struct Move {
+    items: Vec<SentItem>,
+    before: Anchor,
+}
+
+/// A `removePlays` as sent.
+#[derive(Deserialize)]
+struct RemovePlays {
+    plays: Vec<SentPlay>,
+}
+
+/// A play of History as an edit names it, with a [`SentItem`].
+#[derive(Deserialize)]
+struct SentPlay {
+    play: u64,
+    item: SentItem,
+}
+
+/// An item an edit names, `<key>.<position>`, whose key must be a UUID; it is kept lowercase,
+/// as keys are. Read from the text as it is parsed, so an item held costs about what its JSON
+/// does.
+struct SentItem(ItemId);
+
+impl<'de> Deserialize<'de> for SentItem {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<SentItem, D::Error> {
+        deserializer.deserialize_str(ItemVisitor)
+    }
+}
+
+/// Reads a [`SentItem`] from a string.
+struct ItemVisitor;
+
+impl Visitor<'_> for ItemVisitor {
+    type Value = SentItem;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("an item, <key>.<position>, whose key is a UUID")
+    }
+
+    fn visit_str<E: de::Error>(self, text: &str) -> Result<SentItem, E> {
+        let invalid = || E::custom("an item is <key>.<position>, and its key a UUID");
+        let (key, pos) = text.rsplit_once('.').ok_or_else(invalid)?;
+        let key = Uuid::try_from(key.to_owned()).map_err(|_| invalid())?;
+        let pos = pos.parse().map_err(|_| invalid())?;
+        Ok(SentItem(ItemId { key: key.as_str().to_owned(), pos }))
+    }
+}
+
+/// The core's items of `sent`.
+fn items(sent: Vec<SentItem>) -> Vec<ItemId> {
+    sent.into_iter().map(|SentItem(item)| item).collect()
+}
+
 /// An `add` as sent, whose source the server resolves into a list of its own.
 #[derive(Deserialize)]
 struct Add {
@@ -51,7 +114,8 @@ struct Add {
 /// and for an add the source as registered. An add of `tracks` is checked as a start's are, and
 /// one of a `recipe` is resolved by the server, so every device gets the same tracks; whatever
 /// `list` or `length` a client sends for it is ignored, and the server holds the list it made.
-/// Keys must be UUIDs. `404` without a queue, `409` if `queueId` is not the active queue or an
+/// Keys must be UUIDs, and so must the keys of the items a `remove`, `move` or `removePlays`
+/// names. `404` without a queue, `409` if `queueId` is not the active queue or an
 /// anchor is gone, `422` for tracks out of reach or not in the library, a key that is not a UUID
 /// or already in use, or an edit the core refuses.
 pub async fn edit(
@@ -75,6 +139,21 @@ pub async fn edit(
             Source::new(key.as_str(), library.0.to_string(), tracks.len() as u64, recipe);
         source.hash = Some(hash.clone());
         (Edit::Add { source, before }, Some(Added { hash, library_id: library.0, tracks }))
+    } else if kind == "remove" {
+        // The edits that name many items are read as the server's own types: the core's
+        // tagged `Edit` would be buffered whole before it is read.
+        let Remove { items: sent } = serde_json::from_str(text).map_err(invalid)?;
+        (Edit::Remove { items: items(sent) }, None)
+    } else if kind == "move" {
+        let Move { items: sent, before } = serde_json::from_str(text).map_err(invalid)?;
+        (Edit::Move { items: items(sent), before }, None)
+    } else if kind == "removePlays" {
+        let RemovePlays { plays } = serde_json::from_str(text).map_err(invalid)?;
+        let plays = plays
+            .into_iter()
+            .map(|SentPlay { play, item: SentItem(item) }| PlayRef { play, item })
+            .collect();
+        (Edit::RemovePlays { plays }, None)
     } else {
         let mut edit: Edit = serde_json::from_str(text).map_err(invalid)?;
         // Keys are kept in lowercase, as an add's are.

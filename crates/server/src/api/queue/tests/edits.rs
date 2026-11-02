@@ -470,3 +470,32 @@ async fn repeat_survives_a_start() {
     start(&app, TOKEN, start_body(OTHER, KEY2, &["2", "1"], 0)).await;
     assert_eq!(snapshot(&app).await["state"]["repeat"], "all");
 }
+
+#[tokio::test]
+async fn an_item_whose_key_is_not_a_uuid_is_refused() {
+    let (_temp, _state, app) = setup().await;
+    start(&app, TOKEN, start_body(QUEUE, KEY, &["1", "2", "1"], 0)).await;
+    let good = format!("{KEY}.2");
+    for (n, edit) in [
+        json!({ "type": "remove", "items": [good, "k.1"] }),
+        json!({ "type": "remove", "items": [KEY] }),
+        json!({ "type": "remove", "items": [0] }),
+        json!({ "type": "move", "items": ["k.1"], "before": manual_end() }),
+        json!({ "type": "removePlays", "plays": [{ "play": 0, "item": "k.0" }] }),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (status, problem) = send(&app, TOKEN, QUEUE, n, edit.clone()).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{edit}: {problem}");
+        assert_eq!(problem["code"], "validation_failed");
+    }
+    assert_eq!(snapshot(&app).await["version"], 0, "nothing applied");
+
+    // A key in capitals names the same item, as keys are kept in lowercase.
+    let upper = format!("{}.2", KEY.to_uppercase());
+    let (status, _) =
+        send(&app, TOKEN, QUEUE, 9, json!({ "type": "remove", "items": [upper] })).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(snapshot(&app).await["state"]["order"][0]["len"], 2);
+}
