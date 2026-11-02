@@ -207,7 +207,7 @@ impl QueueState {
     }
 
     /// Starts a new queue over `source`, replacing this one, with position `at` current and
-    /// the Manual Queue empty. Nothing carries over.
+    /// the Manual Queue empty. Only the repeat mode carries over (requirements/queue.md §5).
     ///
     /// Refused, changing nothing, if `source.key` already names a source or copy of the queue
     /// being replaced (so a retried start never replaces anything), or if `at` isn't a position.
@@ -228,6 +228,7 @@ impl QueueState {
             cursor: at + 1,
             current: Some(ItemId { key: source.key.clone(), pos: at }),
             sources: vec![source],
+            repeat: self.repeat,
             ..Self::default()
         };
         Ok(())
@@ -278,6 +279,15 @@ mod tests {
         assert_eq!(state.sources.len(), 1);
         assert!(state.copies.is_empty() && state.manual.is_empty());
         assert_eq!((state.cursor, state.up_next_len()), (3, 0));
+    }
+
+    #[test]
+    fn start_keeps_repeat() {
+        let mut state = QueueState::default();
+        state.start(Source::new("a", "lib", 3, None), 0).unwrap();
+        state.repeat = Repeat::One;
+        state.start(Source::new("b", "lib", 2, None), 1).unwrap();
+        assert_eq!(state.repeat, Repeat::One);
     }
 
     #[test]
