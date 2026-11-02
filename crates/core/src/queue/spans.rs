@@ -155,6 +155,30 @@ impl SpanList {
         removed
     }
 
+    /// Removes the rows at `rows` (ascending and distinct; any past the end are ignored) in one
+    /// pass, and returns them in order, one span per row. O(s + k) for k rows.
+    pub fn remove_rows(&mut self, rows: &[u64]) -> Vec<Span> {
+        let mut removed = Vec::with_capacity(rows.len());
+        let mut kept = Vec::with_capacity(self.spans.len() + rows.len());
+        let mut rows = rows.iter().copied().peekable();
+        let mut first = 0;
+        for span in self.spans.drain(..) {
+            let end = first + span.len;
+            // The first row of the span not yet kept or removed.
+            let mut from = first;
+            while let Some(row) = rows.next_if(|&row| row < end) {
+                kept.push(Span::new(span.view.clone(), span.start + from - first, row - from));
+                removed.push(Span::new(span.view.clone(), span.start + row - first, 1));
+                from = row + 1;
+            }
+            kept.push(Span { start: span.start + from - first, len: end - from, ..span });
+            first = end;
+        }
+        self.spans = kept;
+        self.normalize();
+        removed
+    }
+
     /// The row index where span `i` starts.
     fn start_of(&self, i: usize) -> u64 {
         if i == 0 { 0 } else { self.ends[i - 1] }
@@ -293,6 +317,23 @@ mod tests {
         list.remove(0..3);
         assert!(list.is_empty());
         assert_eq!(list.len(), 0);
+    }
+
+    #[test]
+    fn remove_rows_matches_removing_one_row_at_a_time() {
+        let list = SpanList::from_spans([span("a", 4, 3), span("b", 0, 1), span("a", 0, 3)]);
+        // Every set of rows, plus one past the end.
+        for mask in 0u32..1 << 8 {
+            let rows: Vec<u64> = (0..8).filter(|row| mask & 1 << row != 0).collect();
+            let mut one_pass = list.clone();
+            let mut one_by_one = list.clone();
+            let mut expected: Vec<Span> =
+                rows.iter().rev().flat_map(|&row| one_by_one.remove(row..row + 1)).collect();
+            expected.reverse();
+            assert_eq!(one_pass.remove_rows(&rows), expected, "rows {rows:?}");
+            assert_eq!(one_pass, one_by_one, "rows {rows:?}");
+            assert_invariants(&one_pass);
+        }
     }
 
     #[test]

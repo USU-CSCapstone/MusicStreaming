@@ -194,20 +194,14 @@ impl QueueState {
     }
 
     /// Takes the rows at Up Next indices `at` (ascending, distinct) out of the queue and
-    /// returns them in queue order, one span per row until they are put back.
+    /// returns them in queue order, one span per row until they are put back. One pass over
+    /// each span list, so a remove or move of k rows is O(s + k).
     fn take(&mut self, at: &[u64]) -> Vec<Span> {
-        let mut taken = Vec::with_capacity(at.len());
-        // Highest first, so the indices still to take stay right.
-        for &index in at.iter().rev() {
-            taken.extend(match index.checked_sub(self.manual.len()) {
-                None => self.manual.remove(index..index + 1),
-                Some(rest) => {
-                    let row = self.cursor + rest;
-                    self.order.remove(row..row + 1)
-                }
-            });
-        }
-        taken.reverse();
+        let manual_len = self.manual.len();
+        let (manual, rest) = at.split_at(at.partition_point(|&index| index < manual_len));
+        let rows: Vec<u64> = rest.iter().map(|&index| self.cursor + index - manual_len).collect();
+        let mut taken = self.manual.remove_rows(manual);
+        taken.extend(self.order.remove_rows(&rows));
         taken
     }
 

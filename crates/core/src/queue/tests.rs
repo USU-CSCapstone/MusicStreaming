@@ -676,3 +676,21 @@ fn edits_at_500k_are_fast() {
     assert_eq!(current(&q), Some("big.450000".into()));
     assert_invariants(&q);
 }
+
+#[test]
+#[ignore = "timing run: cargo test -p jewelcase-core --release -- --ignored --nocapture"]
+fn removing_half_of_500k_scattered_items_is_fast() {
+    let bound =
+        if cfg!(debug_assertions) { Duration::from_secs(5) } else { Duration::from_millis(250) };
+    let mut q = QueueState::default();
+    q.start(source("big", 500_000), 0).unwrap();
+    let every_other: Vec<ItemId> =
+        (1..500_000).step_by(2).map(|pos| ItemId { key: "big".into(), pos }).collect();
+    let started = Instant::now();
+    q.apply(&Edit::Remove { items: every_other }).unwrap();
+    let took = started.elapsed();
+    println!("remove 250k scattered: {took:?}");
+    assert!(took < bound, "took {took:?}");
+    assert_eq!(q.up_next_len(), 249_999);
+    assert_invariants(&q);
+}
