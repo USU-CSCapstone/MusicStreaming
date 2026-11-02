@@ -1085,6 +1085,31 @@ describe('QueueStore lists and rows', () => {
 			expect(summary).toMatchObject({ queueId: STARTED, repeat: 'all' });
 		});
 
+		it('sends a repeat change the start replaced before it was sent, so here and the server agree', async () => {
+			await hello();
+			const answer = gate();
+			server.editGate = answer.wait;
+			store.edit({ type: 'next' });
+			await settle();
+			// Waits behind the edit in flight.
+			store.edit({ type: 'repeat', mode: 'all' });
+			const { total, loaded, ...body } = recipeStart();
+			void total;
+			void loaded;
+			store.start({
+				...body,
+				source: { key: SOURCE, libraryId: 'lib', tracks: ['200', '201', '202'] },
+				startTrackId: undefined
+			});
+			expect(summary).toMatchObject({ queueId: STARTED, repeat: 'all' });
+			answer.open();
+			await settle();
+
+			expect(summary).toMatchObject({ queueId: STARTED, repeat: 'all' });
+			expect(JSON.parse(server.queue.toJson()).repeat).toBe('all');
+			expect(refusals.map((r) => r.edit?.type)).not.toContain('repeat');
+		});
+
 		it("fetches the server's queue once it answers a recipe, and fills the rest from its list", async () => {
 			await hello();
 			store.start(recipeStart());
