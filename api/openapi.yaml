@@ -1298,6 +1298,58 @@ paths:
               schema: { $ref: '#/components/schemas/StartedQueue' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /me/queue/edits:
+    post:
+      tags: [Queue]
+      summary: Edit the queue
+      description: |
+        Applies one edit to the account's active queue, in the order edits arrive, and answers
+        the `version` it made: one more than before. Edits name items, never positions, so edits
+        from different devices mean the same whatever order they meet in, and there is no version
+        to be refused for (`requirements/realtime.md` §7). Items an edit names that are gone are
+        ignored. Every applied edit is sent to all the account's realtime connections as
+        `queueEdit`, the sender's included, so a device that applied it at once can tell it
+        confirmed. Edits and player reports name only the active queue.
+
+        `editId` is chosen by the device. An edit sent again, by a device unsure the first
+        arrived, is applied once and answered the same; the latest 32 are remembered.
+
+        An `add` takes its source as `tracks`, checked as a start's are, or as a `recipe` the
+        server resolves in `libraryId` as a start's is (`startQueue`), so a device need not hold
+        what it adds, such as an album. The server hashes the list itself and holds it for the
+        account from the moment the edit applies. The answer and `queueEdit` carry the source as
+        registered, with the server's `list` and `length`, so the device attaches the tracks it
+        sent to that hash instead of downloading them back. Any `list` or `length` a client sends
+        is ignored. An add whose list is empty registers no source. `previous`, `requeue` and
+        `rewind` carry a device-minted key, used only when they make a copy.
+
+        There is no size limit on a queue. Answers `404` before a queue has been started; `409`
+        `queue_changed` unless `queueId` is the account's active queue, replaced or kept, so the
+        device fetches the queue again; `409` `anchor_gone` when an anchor names an item no longer
+        in Up Next, so the device reverts the edit; and `422` for tracks out of reach or not in
+        the library, as a start refuses them (whether or not they exist), a source of both
+        `tracks` and a `recipe` or of neither, a recipe the server cannot resolve, a key that is
+        not a UUID, `duplicate_key` for a key that already names a source or copy of the queue,
+        or a body larger than the server accepts, which is far past any library it is meant for.
+      operationId: editQueue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EditQueue' }
+      responses:
+        '200':
+          description: Applied, or already applied.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppliedEdit' }
+        '409':
+          description: '`queue_changed` — `queueId` is not the account''s active queue; `anchor_gone` — an anchor is no longer in Up Next. Nothing was applied.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ───────────────────────────── Listening ─────────────────────────────
   /me/plays:
     post:
@@ -1875,6 +1927,9 @@ components:
             - plugin_invalid
             - plugin_exists
             - permissions_required
+            - queue_changed
+            - anchor_gone
+            - duplicate_key
             - version_conflict
             - cursor_expired
             - setup_required
@@ -3205,6 +3260,155 @@ components:
           description: The hash the server holds the source's list under, which is the source's `list` in the snapshot.
         length: { type: integer, minimum: 1 }
 
+    EditQueue:
+      type: object
+      required: [editId, queueId, edit]
+      properties:
+        editId:
+          type: string
+          format: uuid
+          description: Client-generated. Names the edit, so one sent again is applied once.
+        queueId:
+          type: string
+          format: uuid
+          description: The active queue, which the edit is for.
+        edit:
+          description: |
+            The same edits as `QueueEdit`, except that an `add`'s source names its tracks as
+            `tracks` or a `recipe`, and carries no `list` or `length`.
+          oneOf:
+            - $ref: '#/components/schemas/QueueEditNoAdd'
+            - type: object
+              required: [type, source, before]
+              properties:
+                type: { const: add }
+                source:
+                  type: object
+                  required: [key, libraryId]
+                  description: Exactly one of `tracks` and `recipe`.
+                  properties:
+                    key:
+                      type: string
+                      format: uuid
+                    libraryId: { type: string }
+                    tracks:
+                      type: array
+                      items: { type: string }
+                    recipe:
+                      oneOf:
+                        - $ref: '#/components/schemas/QueueAlbumRecipe'
+                        - $ref: '#/components/schemas/QueueArtistRecipe'
+                        - $ref: '#/components/schemas/QueueLibraryRecipe'
+                        - $ref: '#/components/schemas/QueueSearchRecipe'
+                      discriminator:
+                        propertyName: type
+                        mapping:
+                          album: '#/components/schemas/QueueAlbumRecipe'
+                          artist: '#/components/schemas/QueueArtistRecipe'
+                          library: '#/components/schemas/QueueLibraryRecipe'
+                          search: '#/components/schemas/QueueSearchRecipe'
+                before: { $ref: '#/components/schemas/QueueAnchor' }
+
+    AppliedEdit:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: The queue's version once the edit was applied.
+        source:
+          allOf:
+            - $ref: '#/components/schemas/QueueSource'
+          description: For an `add`, the source as registered, with the server's `list` and `length`. Not there for other edits.
+
+    QueueEdit:
+      description: |
+        One change to the queue, as the shared core applies it and `queueEdit` carries it. Items
+        are `<key>.<position>`. Items an edit names that are gone, or not in Up Next, are ignored.
+      oneOf:
+        - $ref: '#/components/schemas/QueueEditNoAdd'
+        - type: object
+          required: [type, source, before]
+          description: Registers a new source and puts all its rows at the anchor, in order. Its `list` and `length` are the server's.
+          properties:
+            type: { const: add }
+            source: { $ref: '#/components/schemas/QueueSource' }
+            before: { $ref: '#/components/schemas/QueueAnchor' }
+
+    QueueEditNoAdd:
+      description: The edits that name items and carry no source.
+      oneOf:
+        - type: object
+          required: [type, items]
+          description: Drops items from Up Next.
+          properties:
+            type: { const: remove }
+            items: { type: array, items: { type: string } }
+        - type: object
+          required: [type, items, before]
+          description: Moves items of Up Next to the anchor, keeping their relative order.
+          properties:
+            type: { const: move }
+            items: { type: array, items: { type: string } }
+            before: { $ref: '#/components/schemas/QueueAnchor' }
+        - type: object
+          required: [type, item]
+          description: Plays an item of Up Next now. Everything ahead of it leaves Up Next as plays.
+          properties:
+            type: { const: jump }
+            item: { type: string }
+        - type: object
+          required: [type]
+          description: Plays the next item.
+          properties:
+            type: { const: next }
+        - type: object
+          required: [type, key]
+          description: |
+            Steps back to the latest play. `key` is a new UUID, used only when the play's item is
+            still queued, and then names the copy made.
+          properties:
+            type: { const: previous }
+            key: { type: string, format: uuid }
+        - type: object
+          required: [type, on, seed]
+          description: Shuffles the unplayed context with `seed`, or puts it back in order. Turning shuffle on while on, or off while off, does nothing.
+          properties:
+            type: { const: shuffle }
+            on: { type: boolean }
+            seed: { type: integer, minimum: 0, maximum: 4294967295 }
+        - type: object
+          required: [type, mode]
+          properties:
+            type: { const: repeat }
+            mode: { type: string, enum: [off, all, one] }
+
+    QueueAnchor:
+      description: Where an add or move lands.
+      oneOf:
+        - type: object
+          required: [type]
+          description: The front of the Manual Queue (Queue Next).
+          properties:
+            type: { const: manualStart }
+        - type: object
+          required: [type]
+          description: The end of the Manual Queue (Queue Last).
+          properties:
+            type: { const: manualEnd }
+        - type: object
+          required: [type]
+          description: The end of the context's Up Next.
+          properties:
+            type: { const: contextEnd }
+        - type: object
+          required: [type, item]
+          description: Just ahead of an item in Up Next. `409 anchor_gone` if it is not there.
+          properties:
+            type: { const: before }
+            item: { type: string }
+
     QueueSnapshot:
       type: object
       required: [queueId, version, context, state]
@@ -3883,6 +4087,21 @@ components:
           properties:
             type: { const: queueReplaced }
             queueId: { type: string, format: uuid }
+        - type: object
+          required: [type, queueId, version, editId, edit]
+          description: |
+            An edit the server applied to the account's active queue, as applied: an `add`'s
+            source carries the server's `list` and `length`, and never tracks, so the sender
+            attaches its own tracks under that hash and others download the list by it. `version`
+            is the queue's version once it was applied, one more than the last edit's. A device
+            that finds a gap, or a `queueId` it does not hold, fetches the queue again. Sent to the
+            sender too, with its own `editId`.
+          properties:
+            type: { const: queueEdit }
+            queueId: { type: string, format: uuid }
+            version: { type: integer, minimum: 1 }
+            editId: { type: string, format: uuid }
+            edit: { $ref: '#/components/schemas/QueueEdit' }
         - type: object
           required: [type, reason]
           properties:

@@ -28,6 +28,9 @@ pub enum Code {
     PluginInvalid,
     PluginSettingsInvalid,
     PluginExists,
+    QueueChanged,
+    AnchorGone,
+    DuplicateKey,
     PermissionsRequired,
     VersionConflict,
     CursorExpired,
@@ -48,13 +51,16 @@ impl Code {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::ValidationFailed
+            | Self::DuplicateKey
             | Self::WeakPassword
             | Self::PluginInvalid
             | Self::PluginSettingsInvalid => StatusCode::UNPROCESSABLE_ENTITY,
             Self::PluginExists
             | Self::PermissionsRequired
             | Self::VersionConflict
-            | Self::DeviceUnavailable => StatusCode::CONFLICT,
+            | Self::DeviceUnavailable
+            | Self::QueueChanged
+            | Self::AnchorGone => StatusCode::CONFLICT,
             Self::SetupRequired => StatusCode::SERVICE_UNAVAILABLE,
             Self::CursorExpired => StatusCode::GONE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,

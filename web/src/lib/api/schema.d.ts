@@ -962,6 +962,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/queue/edits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Edit the queue
+         * @description Applies one edit to the account's active queue, in the order edits arrive, and answers
+         *     the `version` it made: one more than before. Edits name items, never positions, so edits
+         *     from different devices mean the same whatever order they meet in, and there is no version
+         *     to be refused for (`requirements/realtime.md` §7). Items an edit names that are gone are
+         *     ignored. Every applied edit is sent to all the account's realtime connections as
+         *     `queueEdit`, the sender's included, so a device that applied it at once can tell it
+         *     confirmed. Edits and player reports name only the active queue.
+         *
+         *     `editId` is chosen by the device. An edit sent again, by a device unsure the first
+         *     arrived, is applied once and answered the same; the latest 32 are remembered.
+         *
+         *     An `add` takes its source as `tracks`, checked as a start's are, or as a `recipe` the
+         *     server resolves in `libraryId` as a start's is (`startQueue`), so a device need not hold
+         *     what it adds, such as an album. The server hashes the list itself and holds it for the
+         *     account from the moment the edit applies. The answer and `queueEdit` carry the source as
+         *     registered, with the server's `list` and `length`, so the device attaches the tracks it
+         *     sent to that hash instead of downloading them back. Any `list` or `length` a client sends
+         *     is ignored. An add whose list is empty registers no source. `previous`, `requeue` and
+         *     `rewind` carry a device-minted key, used only when they make a copy.
+         *
+         *     There is no size limit on a queue. Answers `404` before a queue has been started; `409`
+         *     `queue_changed` unless `queueId` is the account's active queue, replaced or kept, so the
+         *     device fetches the queue again; `409` `anchor_gone` when an anchor names an item no longer
+         *     in Up Next, so the device reverts the edit; and `422` for tracks out of reach or not in
+         *     the library, as a start refuses them (whether or not they exist), a source of both
+         *     `tracks` and a `recipe` or of neither, a recipe the server cannot resolve, a key that is
+         *     not a UUID, `duplicate_key` for a key that already names a source or copy of the queue,
+         *     or a body larger than the server accepts, which is far past any library it is meant for.
+         */
+        post: operations["editQueue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/plays": {
         parameters: {
             query?: never;
@@ -1214,7 +1261,7 @@ export interface components {
              * @description `unsupported_media` comes only from planned operations.
              * @enum {string}
              */
-            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "version_conflict" | "cursor_expired" | "setup_required" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
+            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "queue_changed" | "anchor_gone" | "duplicate_key" | "version_conflict" | "cursor_expired" | "setup_required" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
             /**
              * @description With `session_revoked`. `credentials_changed` — the device keeps its downloads and
              *     logs in again with its `deviceId`; `logged_out` — the device removes them
@@ -2087,6 +2134,99 @@ export interface components {
             list: string;
             length: number;
         };
+        EditQueue: {
+            /**
+             * Format: uuid
+             * @description Client-generated. Names the edit, so one sent again is applied once.
+             */
+            editId: string;
+            /**
+             * Format: uuid
+             * @description The active queue, which the edit is for.
+             */
+            queueId: string;
+            /**
+             * @description The same edits as `QueueEdit`, except that an `add`'s source names its tracks as
+             *     `tracks` or a `recipe`, and carries no `list` or `length`.
+             */
+            edit: components["schemas"]["QueueEditNoAdd"] | {
+                /** @constant */
+                type: "add";
+                /** @description Exactly one of `tracks` and `recipe`. */
+                source: {
+                    /** Format: uuid */
+                    key: string;
+                    libraryId: string;
+                    tracks?: string[];
+                    recipe?: components["schemas"]["QueueAlbumRecipe"] | components["schemas"]["QueueArtistRecipe"] | components["schemas"]["QueueLibraryRecipe"] | components["schemas"]["QueueSearchRecipe"];
+                };
+                before: components["schemas"]["QueueAnchor"];
+            };
+        };
+        AppliedEdit: {
+            /** @description The queue's version once the edit was applied. */
+            version: number;
+            /** @description For an `add`, the source as registered, with the server's `list` and `length`. Not there for other edits. */
+            source?: components["schemas"]["QueueSource"];
+        };
+        /**
+         * @description One change to the queue, as the shared core applies it and `queueEdit` carries it. Items
+         *     are `<key>.<position>`. Items an edit names that are gone, or not in Up Next, are ignored.
+         */
+        QueueEdit: components["schemas"]["QueueEditNoAdd"] | {
+            /** @constant */
+            type: "add";
+            source: components["schemas"]["QueueSource"];
+            before: components["schemas"]["QueueAnchor"];
+        };
+        /** @description The edits that name items and carry no source. */
+        QueueEditNoAdd: {
+            /** @constant */
+            type: "remove";
+            items: string[];
+        } | {
+            /** @constant */
+            type: "move";
+            items: string[];
+            before: components["schemas"]["QueueAnchor"];
+        } | {
+            /** @constant */
+            type: "jump";
+            item: string;
+        } | {
+            /** @constant */
+            type: "next";
+        } | {
+            /** @constant */
+            type: "previous";
+            /** Format: uuid */
+            key: string;
+        } | {
+            /** @constant */
+            type: "shuffle";
+            on: boolean;
+            seed: number;
+        } | {
+            /** @constant */
+            type: "repeat";
+            /** @enum {string} */
+            mode: "off" | "all" | "one";
+        };
+        /** @description Where an add or move lands. */
+        QueueAnchor: {
+            /** @constant */
+            type: "manualStart";
+        } | {
+            /** @constant */
+            type: "manualEnd";
+        } | {
+            /** @constant */
+            type: "contextEnd";
+        } | {
+            /** @constant */
+            type: "before";
+            item: string;
+        };
         QueueSnapshot: {
             /** Format: uuid */
             queueId: string;
@@ -2572,6 +2712,15 @@ export interface components {
             type: "queueReplaced";
             /** Format: uuid */
             queueId: string;
+        } | {
+            /** @constant */
+            type: "queueEdit";
+            /** Format: uuid */
+            queueId: string;
+            version: number;
+            /** Format: uuid */
+            editId: string;
+            edit: components["schemas"]["QueueEdit"];
         } | {
             /** @constant */
             type: "sessionRevoked";
@@ -4185,6 +4334,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StartedQueue"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    editQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditQueue"];
+            };
+        };
+        responses: {
+            /** @description Applied, or already applied. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppliedEdit"];
+                };
+            };
+            /** @description `queue_changed` — `queueId` is not the account's active queue; `anchor_gone` — an anchor is no longer in Up Next. Nothing was applied. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             default: components["responses"]["Problem"];

@@ -1,6 +1,7 @@
 //! The messages a realtime connection carries, each way.
 
 use axum::extract::ws::Message;
+use jewelcase_core::Edit;
 use serde::{Deserialize, Serialize};
 
 use crate::api::devices::Device;
@@ -55,6 +56,15 @@ pub enum ServerMessage {
     /// A start replaced the account's queue, so a device fetches it again.
     QueueReplaced {
         queue_id: Uuid,
+    },
+    /// An edit applied to the account's queue, as applied: an add's source carries the server's
+    /// list and length. `version` is the queue's version once it was; a device that finds a gap
+    /// fetches the queue again.
+    QueueEdit {
+        queue_id: Uuid,
+        version: u32,
+        edit_id: Uuid,
+        edit: Edit,
     },
     SessionRevoked {
         reason: Revoked,
