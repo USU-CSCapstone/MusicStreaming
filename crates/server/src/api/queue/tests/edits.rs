@@ -111,8 +111,9 @@ async fn edit_broadcasts_with_hash() {
             r.get(0)
         })
         .unwrap();
-    let version: i64 =
-        conn.query_row("SELECT version FROM queues WHERE user_id = 1", [], |r| r.get(0)).unwrap();
+    let version: i64 = conn
+        .query_row("SELECT version FROM queues WHERE user_id = 1 AND active = 1", [], |r| r.get(0))
+        .unwrap();
     assert_eq!((length, version), (3, 1));
 }
 
@@ -541,4 +542,114 @@ async fn oversized_small_parts_of_an_edit_are_refused_for_their_size() {
         assert_eq!(answer["detail"], format!("{detail} is at most 4 KiB."), "{what}");
     }
     assert_eq!(snapshot(&app).await["version"], 0, "nothing applied");
+}
+
+/// Starts `queue` over four tracks and plays two of them, so History holds plays 0 and 1 of
+/// items `KEY.0` and `KEY.1`, nothing is adjusted and the version is 2. The two `next` edits
+/// use sequence numbers `first` and `first + 1`.
+async fn played_two(app: &Router, queue: &str, first: usize) {
+    start(app, TOKEN, start_body(queue, KEY, &["1", "2", "1", "2"], 0)).await;
+    for n in first..first + 2 {
+        let (status, _) = send(app, TOKEN, queue, n, json!({ "type": "next" })).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+}
+
+/// A play of the queue started by `played_two`.
+fn play(play: u64, item: u64) -> Value {
+    json!({ "play": play, "item": format!("{KEY}.{item}") })
+}
+
+#[tokio::test]
+async fn rewind_stale_play_is_409() {
+    let (_temp, _state, app) = setup().await;
+    let address = serve(app.clone()).await;
+    let mut socket = connect_with(address, TOKEN).await;
+    played_two(&app, QUEUE, 0).await;
+    let before = snapshot(&app).await;
+    next_of(&mut socket, "queueEdit").await;
+    next_of(&mut socket, "queueEdit").await;
+
+    // A play that is gone, and one whose number names another item, both leave nothing changed.
+    for (n, stale) in [play(7, 0), play(0, 1), play(1, 0)].into_iter().enumerate() {
+        let edit = json!({ "type": "rewind", "play": stale, "key": key(n) });
+        let (status, problem) = send(&app, TOKEN, QUEUE, n + 10, edit).await;
+        assert_eq!((status, &problem["code"]), (StatusCode::CONFLICT, &json!("play_gone")));
+    }
+    assert_eq!(snapshot(&app).await, before);
+    hears_no_queue(&mut socket).await;
+
+    // A play that matches rewinds, and does not adjust the queue.
+    let edit = json!({ "type": "rewind", "play": play(0, 0), "key": key(9) });
+    let (status, answer) = send(&app, TOKEN, QUEUE, 20, edit).await;
+    assert_eq!((status, &answer), (StatusCode::OK, &json!({ "version": 3 })));
+    assert_eq!(next_of(&mut socket, "queueEdit").await["version"], 3);
+    assert_eq!(snapshot(&app).await["state"]["adjusted"], false);
+}
+
+#[tokio::test]
+async fn history_edits_adjust_queue() {
+    let (temp, state, app) = setup().await;
+    let address = serve(app.clone()).await;
+    let mut socket = connect_with(address, TOKEN).await;
+
+    let remove = json!({ "type": "removePlays", "plays": [play(0, 0)] });
+    let requeue = json!({ "type": "requeue", "play": play(1, 1), "key": key(1) });
+    for (queue, first, edit) in [(QUEUE, 0, remove), (OTHER, 10, requeue)] {
+        played_two(&app, queue, first).await;
+        assert_eq!(snapshot(&app).await["state"]["adjusted"], false);
+        state.queues.save(&state.db).await;
+        while next_of(&mut socket, "queueEdit").await["version"] != 2 {}
+
+        let (status, answer) = send(&app, TOKEN, queue, first + 5, edit.clone()).await;
+        assert_eq!((status, &answer), (StatusCode::OK, &json!({ "version": 3 })));
+        let heard = next_of(&mut socket, "queueEdit").await;
+        assert_eq!((&heard["version"], &heard["edit"]), (&json!(3), &edit));
+        let queue = snapshot(&app).await;
+        assert_eq!(queue["state"]["adjusted"], true, "{edit}");
+        assert_eq!(queue["state"]["history"].as_array().unwrap().len(), 1, "{edit}");
+
+        // The edit marks the account changed, so the save stores it.
+        state.queues.save(&state.db).await;
+        let version: i64 = conn(&temp)
+            .query_row("SELECT version FROM queues WHERE user_id = 1 AND active = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 3);
+    }
+}
+
+#[tokio::test]
+async fn remove_plays_with_a_mismatched_play_changes_nothing() {
+    let (_temp, _state, app) = setup().await;
+    played_two(&app, QUEUE, 0).await;
+    let before = snapshot(&app).await;
+
+    // Ignored, not refused: the edit still applies as any edit, but touches no state.
+    let edits = [
+        json!({ "type": "removePlays", "plays": [play(0, 1), play(9, 0)] }),
+        json!({ "type": "requeue", "play": play(1, 0), "key": key(1) }),
+    ];
+    for (n, edit) in edits.into_iter().enumerate() {
+        let (status, answer) = send(&app, TOKEN, QUEUE, n + 10, edit.clone()).await;
+        assert_eq!((status, &answer["version"]), (StatusCode::OK, &json!(3 + n)), "{edit}");
+        let mut after = snapshot(&app).await;
+        assert_eq!(after["version"], 3 + n);
+        after["version"] = before["version"].clone();
+        assert_eq!(after, before, "{edit}");
+    }
+}
+
+#[tokio::test]
+async fn a_requeue_key_that_is_not_a_uuid_is_refused() {
+    let (_temp, _state, app) = setup().await;
+    played_two(&app, QUEUE, 0).await;
+    let edit = json!({ "type": "requeue", "play": play(1, 1), "key": "not-a-uuid" });
+    let (status, problem) = send(&app, TOKEN, QUEUE, 10, edit).await;
+    assert_eq!(
+        (status, &problem["code"]),
+        (StatusCode::UNPROCESSABLE_ENTITY, &json!("validation_failed"))
+    );
+    assert_eq!(snapshot(&app).await["version"], 2);
 }

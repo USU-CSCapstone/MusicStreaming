@@ -30,6 +30,7 @@ pub enum Code {
     PluginExists,
     QueueChanged,
     AnchorGone,
+    PlayGone,
     DuplicateKey,
     PermissionsRequired,
     VersionConflict,
@@ -60,7 +61,8 @@ impl Code {
             | Self::VersionConflict
             | Self::DeviceUnavailable
             | Self::QueueChanged
-            | Self::AnchorGone => StatusCode::CONFLICT,
+            | Self::AnchorGone
+            | Self::PlayGone => StatusCode::CONFLICT,
             Self::SetupRequired => StatusCode::SERVICE_UNAVAILABLE,
             Self::CursorExpired => StatusCode::GONE,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
