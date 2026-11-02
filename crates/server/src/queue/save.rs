@@ -1,10 +1,10 @@
 //! The background save of each account's queues and lists (`design/queue.md` §8).
 //!
-//! Every second, each changed account is written in a savepoint of its own: the lists its
-//! state references and the database lacks, then the state, then the removal of the account's
-//! lists no queue uses. All of it runs on the database's writer, which takes what it needs from
-//! memory under the lock, so nothing else that writes an account's queues can meet a half-done
-//! save.
+//! Every second, each changed account is written in a savepoint of its own: the queues parked
+//! since the last save, kept or deleted, then the lists the states reference and the database
+//! lacks, then the active state, then the removal of the account's lists no queue uses. All of
+//! it runs on the database's writer, which takes what it needs from memory under the lock, so
+//! nothing else that writes an account's queues can meet a half-done save.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -15,17 +15,28 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 use super::hash::list_bytes;
-use super::store::{Held, Queues};
+use super::store::{Account, Held, Queue, Queues};
 use crate::db::Database;
+use serde_json::Value;
 
 /// How long a change may go unsaved: as much of a queue as a crash can lose anyone.
 const SAVE_EVERY: Duration = Duration::from_secs(1);
 
 /// What one account's save took from memory.
-struct Pending {
+pub(super) struct Pending {
     queue: QueueRow,
-    /// The held lists the queue's state references.
+    /// The queues parked since the last save, oldest first.
+    parked: Vec<Park>,
+    /// The held lists the active and parked states reference.
     lists: Vec<(String, Held)>,
+}
+
+/// What a save does with a parked queue.
+enum Park {
+    /// It was adjusted: it is kept.
+    Keep(QueueRow),
+    /// It was not: it goes, with the lists only it used.
+    Delete(String),
 }
 
 /// A queue ready to write: its state is serialized and the hashes it references are known.
@@ -34,6 +45,8 @@ struct QueueRow {
     version: u32,
     context: String,
     state: String,
+    /// The position as JSON; only a parked queue's is written.
+    position: Option<String>,
     hashes: Vec<String>,
 }
 
@@ -42,6 +55,15 @@ pub(super) struct Saved {
     user: i64,
     /// The hashes of the held lists the commit stored.
     stored: HashSet<String>,
+    /// The IDs of the parked queues the commit wrote.
+    parked: Vec<String>,
+}
+
+/// What an account's save takes from memory, before it is serialized.
+pub(super) struct Taken {
+    active: Queue,
+    parked: Vec<Queue>,
+    lists: Vec<(String, Held)>,
 }
 
 impl Queues {
@@ -90,10 +112,7 @@ impl Queues {
         for user in users {
             let Some(pending) = self.take(user) else { continue };
             match write_account(tx, user, &pending) {
-                Ok(()) => saved.push(Saved {
-                    user,
-                    stored: pending.lists.into_iter().map(|(hash, _)| hash).collect(),
-                }),
+                Ok(()) => saved.push(pending.saved(user)),
                 Err(error) => {
                     tracing::warn!(%error, user, "cannot save an account's queue");
                     if let Some(account) = self.lock().get_mut(&user) {
@@ -105,46 +124,32 @@ impl Queues {
         saved
     }
 
-    /// Takes `user`'s changed state and the held lists it references, and counts it as taken.
-    /// The lock is held only to copy, so serializing does not stall other accounts. `None` if
-    /// the account is gone or its state cannot be serialized, which a state never fails.
-    fn take(&self, user: i64) -> Option<Pending> {
-        let (queue_id, version, context, state, held) = {
-            let mut accounts = self.lock();
-            let account = accounts.get_mut(&user)?;
-            account.changed = false;
-            let held: Vec<(String, Held)> = account
-                .state
-                .list_hashes()
-                .into_iter()
-                .filter_map(|hash| Some((hash.to_owned(), account.lists.get(hash)?.clone())))
-                .collect();
-            (
-                account.queue_id.as_str().to_owned(),
-                account.version,
-                account.context.clone(),
-                account.state.clone(),
-                held,
-            )
-        };
-        let hashes = state.list_hashes().into_iter().map(str::to_owned).collect();
-        let (Ok(context), Ok(state)) =
-            (serde_json::to_string(&context), serde_json::to_string(&state))
-        else {
-            return None;
-        };
-        Some(Pending { queue: QueueRow { queue_id, version, context, state, hashes }, lists: held })
+    /// Takes `user`'s changed state, parked queues and the held lists they reference, and counts
+    /// the account as taken. The lock is held only to copy, so serializing does not stall other
+    /// accounts. `None` if the account is gone or a state cannot be serialized, which a state
+    /// never fails.
+    pub(super) fn take(&self, user: i64) -> Option<Pending> {
+        let taken = self.lock().get_mut(&user)?.take();
+        taken.serialize()
     }
 
-    /// Settles memory after a commit that wrote `saved`, under the lock. A held list stays only
-    /// if the account's changed state, still to be written, references it and the commit did
-    /// not store it: one added during the save. The rest are stored or no longer used.
+    /// Settles memory after a commit that wrote `saved`, under the lock. Written parked queues
+    /// leave memory. A held list stays only if the account's changed states, still to be
+    /// written, reference it and the commit did not store it: one added during the save. The
+    /// rest are stored or no longer used.
     pub(super) fn committed(&self, saved: Vec<Saved>) {
         let mut accounts = self.lock();
-        for Saved { user, stored } in saved {
+        for Saved { user, stored, parked } in saved {
             let Some(account) = accounts.get_mut(&user) else { continue };
-            let referenced: HashSet<String> =
-                account.state.list_hashes().into_iter().map(str::to_owned).collect();
+            account.parked.retain(|queue| !parked.iter().any(|id| id == queue.queue_id.as_str()));
+            let referenced: HashSet<String> = account
+                .parked
+                .iter()
+                .map(|queue| &queue.state)
+                .chain([&account.state])
+                .flat_map(|state| state.list_hashes())
+                .map(str::to_owned)
+                .collect();
             let changed = account.changed;
             account
                 .lists
@@ -153,8 +158,92 @@ impl Queues {
     }
 }
 
+impl Account {
+    /// Copies what a save needs, and counts the account as taken.
+    pub(super) fn take(&mut self) -> Taken {
+        self.changed = false;
+        let active = self.active();
+        let parked = self.parked.clone();
+        let mut seen = HashSet::new();
+        // An untouched parked queue is only deleted, so its lists are not written first.
+        let lists = parked
+            .iter()
+            .filter(|queue| queue.state.adjusted)
+            .map(|queue| &queue.state)
+            .chain([&active.state])
+            .flat_map(|state| state.list_hashes())
+            .filter(|hash| seen.insert(*hash))
+            .filter_map(|hash| Some((hash.to_owned(), self.lists.get(hash)?.clone())))
+            .collect();
+        Taken { active, parked, lists }
+    }
+}
+
+impl Taken {
+    /// Serializes the queues. `None` if one cannot be, which a state never fails.
+    pub(super) fn serialize(self) -> Option<Pending> {
+        let parked = self
+            .parked
+            .iter()
+            .map(|queue| {
+                let row = row(queue)?;
+                Some(if queue.state.adjusted {
+                    Park::Keep(row)
+                } else {
+                    Park::Delete(row.queue_id)
+                })
+            })
+            .collect::<Option<_>>()?;
+        Some(Pending { queue: row(&self.active)?, parked, lists: self.lists })
+    }
+}
+
+impl Pending {
+    /// What the commit of this save stored and wrote.
+    pub(super) fn saved(self, user: i64) -> Saved {
+        Saved {
+            user,
+            stored: self.lists.into_iter().map(|(hash, _)| hash).collect(),
+            parked: self.parked.iter().map(Park::queue_id).map(str::to_owned).collect(),
+        }
+    }
+}
+
+impl Park {
+    /// The ID of the queue this step is for.
+    fn queue_id(&self) -> &str {
+        match self {
+            Park::Keep(row) => &row.queue_id,
+            Park::Delete(id) => id,
+        }
+    }
+}
+
+/// `queue` serialized for writing.
+fn row(queue: &Queue) -> Option<QueueRow> {
+    let context = serde_json::to_string::<Value>(&queue.context).ok()?;
+    let state = serde_json::to_string(&queue.state).ok()?;
+    let position = match &queue.position {
+        Some(position) => Some(serde_json::to_string(position).ok()?),
+        None => None,
+    };
+    let hashes = queue.state.list_hashes().into_iter().map(str::to_owned).collect();
+    Some(QueueRow {
+        queue_id: queue.queue_id.as_str().to_owned(),
+        version: queue.version,
+        context,
+        state,
+        position,
+        hashes,
+    })
+}
+
 /// Writes one account in a savepoint, undoing all of it if any statement fails.
-fn write_account(tx: &Transaction, user: i64, pending: &Pending) -> rusqlite::Result<()> {
+pub(super) fn write_account(
+    tx: &Transaction,
+    user: i64,
+    pending: &Pending,
+) -> rusqlite::Result<()> {
     tx.execute_batch("SAVEPOINT queue_save")?;
     let written = write_statements(tx, user, pending);
     match written {
@@ -169,6 +258,17 @@ fn write_account(tx: &Transaction, user: i64, pending: &Pending) -> rusqlite::Re
 
 /// The statements of one account's save, in the order that keeps every reference whole.
 fn write_statements(tx: &Transaction, user: i64, pending: &Pending) -> rusqlite::Result<()> {
+    // Parked queues go first, so the active row, which may be one of them until now, is
+    // demoted before the new active row is written, and the one-active index holds throughout.
+    for park in &pending.parked {
+        match park {
+            Park::Keep(queue) => write_parked(tx, user, queue)?,
+            Park::Delete(id) => {
+                tx.prepare_cached("DELETE FROM queues WHERE user_id = ?1 AND queue_id = ?2")?
+                    .execute(params![user, id])?;
+            }
+        }
+    }
     // A list dropped and re-added within the second still has its row, so these ignore a clash.
     let mut insert = tx.prepare_cached(
         "INSERT OR IGNORE INTO queue_lists (user_id, hash, library_id, tracks, length) \
@@ -179,12 +279,40 @@ fn write_statements(tx: &Transaction, user: i64, pending: &Pending) -> rusqlite:
         insert.execute(params![user, hash, held.library_id, bytes, length])?;
     }
     write_queue(tx, user, &pending.queue)?;
+    delete_unused_lists(tx, user)
+}
+
+/// Deletes the account's lists that no queue uses.
+pub(super) fn delete_unused_lists(tx: &Transaction, user: i64) -> rusqlite::Result<()> {
     tx.prepare_cached(
         "DELETE FROM queue_lists WHERE user_id = ?1 AND NOT EXISTS \
          (SELECT 1 FROM queue_list_uses u WHERE u.user_id = ?1 AND u.hash = queue_lists.hash)",
     )?
     .execute([user])?;
     Ok(())
+}
+
+/// Writes `queue` as a kept queue, parked now with its position, and rewrites which lists it
+/// uses. An upsert, so the row of a queue that was active until now is updated in place.
+fn write_parked(tx: &Transaction, user: i64, queue: &QueueRow) -> rusqlite::Result<()> {
+    tx.prepare_cached(
+        "INSERT INTO queues (user_id, queue_id, version, context, state, active, last_active, \
+                             position) \
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7) \
+         ON CONFLICT (user_id, queue_id) DO UPDATE SET \
+             version = excluded.version, context = excluded.context, state = excluded.state, \
+             active = 0, last_active = excluded.last_active, position = excluded.position",
+    )?
+    .execute(params![
+        user,
+        queue.queue_id,
+        queue.version,
+        queue.context,
+        queue.state,
+        crate::db::now_ms(),
+        queue.position
+    ])?;
+    write_uses(tx, user, queue)
 }
 
 /// Writes `queue` as the account's active queue, an upsert so a clashing row is never quietly
@@ -205,6 +333,11 @@ fn write_queue(tx: &Transaction, user: i64, queue: &QueueRow) -> rusqlite::Resul
              state = excluded.state, active = 1, last_active = NULL",
     )?
     .execute(params![user, queue.queue_id, queue.version, queue.context, queue.state])?;
+    write_uses(tx, user, queue)
+}
+
+/// Rewrites which lists `queue` uses.
+fn write_uses(tx: &Transaction, user: i64, queue: &QueueRow) -> rusqlite::Result<()> {
     tx.prepare_cached("DELETE FROM queue_list_uses WHERE user_id = ?1 AND queue_id = ?2")?
         .execute(params![user, queue.queue_id])?;
     let mut uses = tx.prepare_cached(

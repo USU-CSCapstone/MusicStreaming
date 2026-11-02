@@ -6,7 +6,16 @@
 //! and once more as the server stops, so the database sees one write however many people are
 //! listening.
 
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "starts, restores and deletes have no caller until steps 14 and 19"
+    )
+)]
+
 mod hash;
+mod keep;
 mod save;
 mod store;
 #[cfg(test)]

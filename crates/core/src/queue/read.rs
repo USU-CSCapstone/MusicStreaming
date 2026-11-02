@@ -54,6 +54,14 @@ impl QueueState {
         i.checked_sub(self.cursor).map(|rest| self.manual.len() + rest)
     }
 
+    /// Whether `item` is one of the queue's items: playing, in the Manual Queue, or in the
+    /// context, passed rows included. O(spans).
+    pub fn holds_item(&self, item: &ItemId) -> bool {
+        self.current.as_ref() == Some(item)
+            || self.manual.find(&View::Key(item.key.clone()), item.pos).is_some()
+            || self.order_row_of(item).is_some()
+    }
+
     /// The row of the context that reads `item`, passed rows included. While shuffled, an item
     /// of the base is found by its base position and then π⁻¹. O(spans + base spans).
     pub(super) fn order_row_of(&self, item: &ItemId) -> Option<u64> {

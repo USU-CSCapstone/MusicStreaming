@@ -3,7 +3,8 @@
 //! A task runs it every hour, first a few minutes after the server starts.
 //! Rows go once they are older than [`WINDOW_MS`]: finished scans, but each library's last
 //! finished and last completed; login attempts; ended plays' events for the `played` hook;
-//! recent searches and what the `searched` hook noted of them; and tracks missing that long,
+//! recent searches and what the `searched` hook noted of them; kept queues parked that long
+//! ago, with the lists no queue uses after them; and tracks missing that long,
 //! with whatever of the catalog goes with them. A request to forget searches (`stopped`) is
 //! kept until it is delivered instead, however old it is. Art and biographies that nothing
 //! points at go whatever their age, and idempotency keys go after a day, not the window.
@@ -50,7 +51,7 @@ type Stage = fn(&Transaction<'_>, i64, &mut i64) -> Result<bool>;
 
 /// Every kind of row, in order: missing tracks before the art and biographies they leave
 /// unreferenced.
-const STAGES: [Stage; 10] = [
+const STAGES: [Stage; 12] = [
     scans,
     login_attempts,
     play_ends,
@@ -58,6 +59,8 @@ const STAGES: [Stage; 10] = [
     searches_noted,
     forgets_delivered,
     idempotency_keys,
+    kept_queues,
+    unused_queue_lists,
     catalog::tracks,
     catalog::images,
     catalog::biographies,
@@ -173,6 +176,34 @@ fn searches_noted(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
         "DELETE FROM search_events WHERE seq IN (SELECT seq FROM search_events \
          WHERE kind <> 'stopped' AND created_at < ?1 LIMIT ?2)",
     )
+}
+
+/// Kept queues parked more than the window ago. A queue parked and not yet saved is still
+/// active in the database, so it is never touched here, and a restore ran before or after on the
+/// writer, so it finds the row or has made it active.
+fn kept_queues(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
+    aged(
+        tx,
+        now,
+        "DELETE FROM queues WHERE (user_id, queue_id) IN (SELECT user_id, queue_id FROM queues \
+         WHERE active = 0 AND last_active < ?1 LIMIT ?2)",
+    )
+}
+
+/// How many queue lists one write deletes: each is up to 4 MB at 500,000 tracks.
+const LIST_CHUNK: usize = 8;
+
+/// Queue lists that no queue uses, which the deleted queues leave. A list is written in the
+/// same write as the queue that uses it, so none is unused for being new.
+fn unused_queue_lists(tx: &Transaction<'_>, _: i64, _: &mut i64) -> Result<bool> {
+    let deleted = tx
+        .prepare_cached(
+            "DELETE FROM queue_lists WHERE (user_id, hash) IN (SELECT l.user_id, l.hash \
+             FROM queue_lists l WHERE NOT EXISTS (SELECT 1 FROM queue_list_uses u \
+                 WHERE u.user_id = l.user_id AND u.hash = l.hash) LIMIT ?1)",
+        )?
+        .execute([LIST_CHUNK])?;
+    Ok(deleted < LIST_CHUNK)
 }
 
 /// Requests to forget searches that their plugin's `searched` hook has delivered in their
