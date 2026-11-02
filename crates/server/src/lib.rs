@@ -3,6 +3,7 @@ pub mod config;
 mod data_dir;
 mod db;
 mod plugins;
+mod queue;
 mod scanning;
 mod serve;
 mod web;
@@ -83,6 +84,8 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
     plugins.start_hooks();
     let players = Arc::new(api::Players::load(&db).await?);
     let saving = players.keep_saved(db.clone());
+    let queues = Arc::new(queue::Queues::load(&db).await?);
+    let saving_queues = queues.keep_saved(db.clone());
     let retention = db::retention::start(db.clone(), db::retention::FIRST_SWEEP);
     let indexes = Arc::new(api::Indexes::default());
     indexes.build_all(&db);
@@ -124,7 +127,14 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         {
             error!(%error, "the periodic save of playback state panicked");
         }
+        saving_queues.abort();
+        if let Err(error) = saving_queues.await
+            && error.is_panic()
+        {
+            error!(%error, "the periodic save of queues panicked");
+        }
         players.save(&db).await;
+        queues.save(&db).await;
     };
     serve::serve(listener, app, shutdown, as_it_stops).await;
     tokio::task::spawn_blocking(move || scanning.stop()).await?;

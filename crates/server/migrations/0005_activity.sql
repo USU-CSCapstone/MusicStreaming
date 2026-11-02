@@ -109,6 +109,62 @@ CREATE TABLE player_states (
     position_ms INTEGER NOT NULL CHECK (position_ms >= 0)
 ) STRICT;
 
+-- ───────────────────────────── Queues ─────────────────────────────
+
+-- Every queue an account has (design/queue.md, design/database.md §6): one active, the rest
+-- kept. The server holds the active one in memory and saves it in the background within about
+-- a second of a change, and once more as the server stops (`queue/save.rs`).
+CREATE TABLE queues (
+    user_id     INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    -- The `queueId` the device that started the queue chose. Any device can choose any ID, so
+    -- it names a queue only among its user's own (design/database.md §1).
+    queue_id    TEXT    NOT NULL,
+    -- Zero when the queue starts; each edit adds one.
+    version     INTEGER NOT NULL CHECK (version >= 0),
+    -- What the queue started from, as the device sent it, recorded against plays.
+    context     TEXT    NOT NULL CHECK (json_valid(context) AND json_type(context) = 'object'),
+    -- The core's queue state without its lists: the sources, spans, cursor, History, shuffle.
+    state       TEXT    NOT NULL CHECK (json_valid(state) AND json_type(state) = 'object'),
+    active      INTEGER NOT NULL CHECK (active IN (0, 1)),
+    -- When the queue was parked, which its expiry counts from; null while it is active.
+    last_active INTEGER,
+    -- The item and point in its track that playback was at when the queue was parked, so a
+    -- restore resumes there; null if none was known.
+    position    TEXT    CHECK (position IS NULL OR (json_valid(position) AND json_type(position) = 'object')),
+    PRIMARY KEY (user_id, queue_id),
+    CHECK (active = 1 OR last_active IS NOT NULL)
+) STRICT, WITHOUT ROWID;
+
+-- An account has at most one active queue.
+CREATE UNIQUE INDEX queues_active ON queues (user_id) WHERE active = 1;
+
+-- Which lists each queue uses, so one statement finds the account's lists that no queue uses.
+CREATE TABLE queue_list_uses (
+    user_id  INTEGER NOT NULL,
+    queue_id TEXT    NOT NULL,
+    hash     TEXT    NOT NULL,
+    PRIMARY KEY (user_id, queue_id, hash),
+    FOREIGN KEY (user_id, queue_id) REFERENCES queues (user_id, queue_id) ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX queue_list_uses_by_hash ON queue_list_uses (user_id, hash);
+
+-- Each list any of the account's queues uses, once: the track IDs a queue's sources name by
+-- `hash`. Lists are per account, so no account's list is another's. No foreign key to the
+-- library: once it is deleted its tracks are simply not found, and random IDs keep a later
+-- library from inheriting them.
+CREATE TABLE queue_lists (
+    user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    -- Lowercase hex SHA-256 of `tracks`, which only the server computes.
+    hash       TEXT    NOT NULL,
+    library_id INTEGER NOT NULL,
+    -- The track IDs in order, each as 8 bytes, little-endian.
+    tracks     BLOB    NOT NULL,
+    length     INTEGER NOT NULL,
+    PRIMARY KEY (user_id, hash),
+    CHECK (length >= 0 AND length(tracks) = length * 8)
+) STRICT, WITHOUT ROWID;
+
 -- ───────────────────────────── Searches ─────────────────────────────
 
 -- Recent searches (requirements/search.md §6): what the search box offers when it is empty.
