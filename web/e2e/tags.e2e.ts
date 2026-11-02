@@ -66,7 +66,15 @@ test("an album's tags lead to their pages, which play what carries them", async 
 		.click();
 	await expect(page.getByRole('heading', { level: 1, name: 'Signal' })).toBeVisible();
 
-	// The album's own tags, in its header; its songs' are in their columns.
+	// The album's own tags, in its header; its songs' are in their columns, each under its
+	// heading and clear of the next.
+	const row = page.locator('.track').filter({ hasText: 'Signal Part 1' });
+	const genre = (await row.getByRole('link', { name: 'Ambient' }).boundingBox())!;
+	const mood = (await row.getByRole('link', { name: 'Calm' }).boundingBox())!;
+	const moodHeading = (await page.getByRole('button', { name: 'Filter by mood' }).boundingBox())!;
+	expect(genre.x + genre.width).toBeLessThanOrEqual(moodHeading.x);
+	expect(mood.x).toBeGreaterThanOrEqual(moodHeading.x);
+
 	await page.getByRole('group', { name: 'Mood' }).getByRole('link', { name: 'Calm' }).click();
 	await expect(page).toHaveURL(/\/tags\/63$/);
 	await expect(page.getByRole('heading', { level: 1, name: 'Calm' })).toBeVisible();

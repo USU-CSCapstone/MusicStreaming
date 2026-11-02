@@ -947,8 +947,10 @@
 
 	/* Wide enough for every column: the artists get their own, and year and date added show. */
 	@container tracks (min-width: 880px) {
-		/* Set on the list for its tag columns, however many (`wide` in the script). */
-		.row {
+		/* Set on the list for its tag columns, however many (`wide` in the script). An album's
+		   own rows are named too, or their narrow columns would win over these. */
+		.row,
+		.album .row {
 			grid-template-columns: var(--wide-columns);
 			grid-template-areas: var(--wide-areas);
 		}
