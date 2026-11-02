@@ -152,7 +152,8 @@ CREATE INDEX queue_list_uses_by_hash ON queue_list_uses (user_id, hash);
 -- Each list any of the account's queues uses, once: the track IDs a queue's sources name by
 -- `hash`. Lists are per account, so no account's list is another's. No foreign key to the
 -- library: once it is deleted its tracks are simply not found, and random IDs keep a later
--- library from inheriting them.
+-- library from inheriting them. It keeps its rowid, which a page of rows reads single IDs
+-- through (incremental BLOB I/O needs one).
 CREATE TABLE queue_lists (
     user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
     -- Lowercase hex SHA-256 of `tracks`, which only the server computes.
@@ -163,7 +164,7 @@ CREATE TABLE queue_lists (
     length     INTEGER NOT NULL,
     PRIMARY KEY (user_id, hash),
     CHECK (length >= 0 AND length(tracks) = length * 8)
-) STRICT, WITHOUT ROWID;
+) STRICT;
 
 -- ───────────────────────────── Searches ─────────────────────────────
 

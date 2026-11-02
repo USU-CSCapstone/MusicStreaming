@@ -19,7 +19,7 @@ struct Snapshot<'a> {
 
 /// Whether the `If-None-Match` value `known` matches `etag`, compared weakly as RFC 9110 §13.1.2
 /// has it: `*` matches, and so does any tag of a list, weak or strong, with the same text.
-fn names(known: &str, etag: &str) -> bool {
+pub fn names(known: &str, etag: &str) -> bool {
     known.split(',').map(str::trim).any(|tag| tag == "*" || tag.trim_start_matches("W/") == etag)
 }
 

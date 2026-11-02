@@ -18,6 +18,7 @@ use crate::queue::{Queues, list_hash};
 
 mod edits;
 mod recipes;
+mod rows;
 
 const QUEUE: &str = "11111111-1111-4111-8111-111111111111";
 const OTHER: &str = "22222222-2222-4222-8222-222222222222";

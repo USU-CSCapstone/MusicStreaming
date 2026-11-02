@@ -1014,6 +1014,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/queue/lists/{hash}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a list of the queue
+         * @description One of the caller's own lists by the `hash` a source names: the track IDs a queue's source
+         *     plays, in order, which a device downloads for a source it lacks. It serves any list one
+         *     of the account's queues uses, a kept queue's included, so a device restoring one can
+         *     download its lists. A hash that none of the caller's queues uses is `404`, the same
+         *     whether it is unknown or another account's, so no one learns what another account holds.
+         *     Reach is not checked again: every track was checked as it joined a queue, and IDs are
+         *     random.
+         *
+         *     A list never changes under its hash. The `ETag` is `"<hash>"`, the answer is cached for a
+         *     year and marked immutable, and an `If-None-Match` naming it is answered `304` with no
+         *     body. The body is gzipped when the client sends `Accept-Encoding: gzip`.
+         */
+        get: operations["getQueueList"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/queue/rows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a page of the queue's rows
+         * @description A page of up to 100 rows of the account's active queue, with the track each names, for a
+         *     client that does not hold the lists, or does not yet hold one. `404` before a queue has
+         *     been started. `upNext` is the Manual Queue and then the context past the cursor; `history`
+         *     runs newest first and each row carries its play number, for `removePlays`, `requeue` and
+         *     `rewind`. `total` counts the section's rows; in `upNext`, `manual` counts the Manual Queue's
+         *     rows at its top, so a client can draw the divider, and it is `0` in `history`. `current` is
+         *     the row playing, if any, whichever the section.
+         *
+         *     A row names its `libraryId`, since the track lookup is per library. A row whose track
+         *     cannot be read has a `null` `trackId`, and is unavailable. A page is for one `version`:
+         *     a client drops a page older than the newest version it has heard, and fetches again when
+         *     its pages differ in version. `shuffled` and `repeat` are the queue's.
+         */
+        get: operations["getQueueRows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/plays": {
         parameters: {
             query?: never;
@@ -2257,6 +2318,35 @@ export interface components {
             /** @constant */
             type: "before";
             item: string;
+        };
+        QueueList: {
+            /** @description The library every track of the list is in. */
+            libraryId: string;
+            /** @description Track IDs, in the list's order. */
+            tracks: string[];
+        };
+        QueueRow: {
+            /** @description `<key>.<position>`: what edits name. */
+            item: string;
+            libraryId: string;
+            /** @description The row's track, or `null` where it cannot be read, which makes the row unavailable. */
+            trackId: string | null;
+            /** @description A History row's play number. */
+            play?: number;
+        };
+        QueueRows: {
+            /** Format: uuid */
+            queueId: string;
+            version: number;
+            current?: components["schemas"]["QueueRow"];
+            /** @description The rows in the section. */
+            total: number;
+            /** @description In `upNext`, the Manual Queue's rows at its top; `0` in `history`. */
+            manual: number;
+            shuffled: boolean;
+            /** @enum {string} */
+            repeat: "off" | "all" | "one";
+            rows: components["schemas"]["QueueRow"][];
         };
         QueueSnapshot: {
             /** Format: uuid */
@@ -4399,6 +4489,70 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getQueueList: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The `ETag` of the list the device already holds, or a list of them. */
+                "If-None-Match"?: string;
+            };
+            path: {
+                hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    /** @description `"<hash>"`. */
+                    ETag?: string;
+                    /** @description `private, max-age=31536000, immutable`. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueList"];
+                };
+            };
+            /** @description The device already holds the list. */
+            304: {
+                headers: {
+                    ETag?: string;
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getQueueRows: {
+        parameters: {
+            query: {
+                section: "upNext" | "history";
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueRows"];
                 };
             };
             default: components["responses"]["Problem"];
