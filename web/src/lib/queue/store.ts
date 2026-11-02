@@ -278,8 +278,9 @@ export class QueueStore {
 	 * queue is the new one, its source as long as the view says and with no list, the clicked row
 	 * playing, and the request goes to the server in the background, before anything else. The view's
 	 * own rows fill the unshuffled rows they cover. Answers false, changing nothing, if the
-	 * start is not a position of the source. The new queue keeps the repeat mode shown, as the
-	 * server's does (`requirements/queue.md` §5).
+	 * start is not a position of the source. The new queue keeps the confirmed queue's repeat
+	 * mode, as the server's does (`requirements/queue.md` §5); the latest repeat change not yet
+	 * confirmed is then made again on it, and sent after the start, so both end on that mode.
 	 */
 	start({ total, loaded, ...body }: StartRequest): boolean {
 		const { key, libraryId, tracks } = body.source;
@@ -288,7 +289,7 @@ export class QueueStore {
 		if (!Number.isInteger(body.start) || body.start < 0) return false;
 		let next: Queue;
 		try {
-			const repeat = this.#view ? JSON.parse(this.#view.toJson()).repeat : 'off';
+			const repeat = this.#confirmed ? JSON.parse(this.#confirmed.toJson()).repeat : 'off';
 			next = Queue.started(key, libraryId, length, body.start, repeat);
 		} catch {
 			return false;
@@ -306,10 +307,16 @@ export class QueueStore {
 		this.#problems.clear();
 		this.#pages.reset(body.queueId);
 		this.#viewRows.set(key, tracks ?? loaded ?? []);
-		this.#supersede(() => true);
+		const tapped = this.#pending.findLast((pending) => pending.edit.type === 'repeat');
+		this.#supersede((pending) => pending.edit.type !== 'repeat');
+		this.#pending = [];
 		this.#starting = { body, total };
-		this.#emit();
-		this.#drain();
+		if (tapped) {
+			this.edit(tapped.edit);
+		} else {
+			this.#emit();
+			this.#drain();
+		}
 		return true;
 	}
 
