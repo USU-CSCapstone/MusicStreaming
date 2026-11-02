@@ -1,9 +1,18 @@
+import { flushSync } from 'svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlayerState, RealtimeServerMessage, Track } from '$lib/api/types';
 
 const fake = vi.hoisted(() => ({
 	listeners: [] as ((message: RealtimeServerMessage) => void)[],
 	sent: [] as { command: { type: string } }[],
+	/** The queue, with the track 41 as its current item. */
+	queue: {
+		current: 'k.0',
+		revision: 0,
+		rows: async () => ({
+			rows: [{ item: 'k.0', libraryId: '11', status: 'known', track: '41' }]
+		})
+	},
 	realtime: {
 		deviceId: '1',
 		connected: true,
@@ -17,6 +26,7 @@ const fake = vi.hoisted(() => ({
 }));
 
 vi.mock('$lib/realtime.svelte', () => ({ realtime: fake.realtime }));
+vi.mock('$lib/queue/client.svelte', () => ({ queue: fake.queue }));
 vi.mock('$lib/api/client', async (actual) => ({
 	...(await actual<typeof import('$lib/api/client')>()),
 	getTrack: async (_: unknown, _library: string, id: string) => ({ id, durationUs: 60e6 }) as Track,
@@ -27,18 +37,18 @@ const { player } = await import('./player.svelte');
 const { playback } = await import('./playback.svelte');
 const { controls } = await import('./controls.svelte');
 
+/** Sends the state with `device` playing the queue's current item, `k.0`, and applies its effects. */
 function state(device: string | null, status: PlayerState['status'] = 'playing') {
 	const state: PlayerState = {
 		status,
 		activeDeviceId: device,
-		itemId: '0',
-		libraryId: '11',
-		trackId: '41',
+		itemId: 'k.0',
 		positionMs: 10_000,
 		positionAt: new Date().toISOString(),
 		volume: null
 	};
 	fake.listeners.forEach((listener) => listener({ type: 'player', state }));
+	flushSync();
 }
 
 const sent = () => fake.sent.map((message) => message.command.type);

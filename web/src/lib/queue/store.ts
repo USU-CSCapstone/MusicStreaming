@@ -338,6 +338,7 @@ export class QueueStore {
 		}
 		const { list, length } = (await response.json()) as { list: string; length: number };
 		this.#starting = null;
+		this.#emit();
 		const { key, libraryId, tracks } = body.source;
 		if (tracks) {
 			const text = JSON.stringify({ libraryId, tracks });
@@ -496,6 +497,7 @@ export class QueueStore {
 		// What clean-up dropped, the view's rows for it go too.
 		for (const key of this.#viewRows.keys())
 			if (!this.#sources.has(key)) this.#viewRows.delete(key);
+		const heldRow = this.#starting ? null : this.#confirmed?.currentRow();
 		this.#changed({
 			queueId: this.#queueId,
 			context: this.#context,
@@ -503,6 +505,7 @@ export class QueueStore {
 			revision: ++this.#revision,
 			current: state?.current ?? null,
 			playingManual: view?.playingManual() ?? false,
+			held: heldRow ? (JSON.parse(heldRow) as CoreRow).item : null,
 			manual: view?.manualLen() ?? 0,
 			upNext: view?.upNextLen() ?? 0,
 			history: view?.historyLen() ?? 0,

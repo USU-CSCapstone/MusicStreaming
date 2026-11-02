@@ -9,6 +9,7 @@
 import { flushSync } from 'svelte';
 import { getTrack, getWaveform } from './api/client';
 import type { Device, PlayerCommand, PlayerState, TrackSummary } from './api/types';
+import { queue } from './queue/client.svelte';
 import { realtime } from './realtime.svelte';
 import { decodeWaveform } from './waveform';
 
@@ -28,8 +29,11 @@ class Playback {
 	/** The latest state, or null before the server has sent one. */
 	state = $state<PlayerState | null>(null);
 	devices = $state<Device[]>([]);
-	/** The track the state names, once fetched; the one before until then. */
+	/** The track of the item the state names, once found in the queue and fetched; the one before until then. */
 	track = $state<TrackSummary | null>(null);
+	/** The queue item `track` is of, and the library its audio is in. */
+	trackItem = $state<string | null>(null);
+	libraryId = $state<string | null>(null);
 	waveform = $state<Uint8Array | null>(null);
 	/** Why the latest command, or picking up here, failed, for a few seconds. */
 	error = $state<string | null>(null);
@@ -55,7 +59,7 @@ class Playback {
 			'another device'
 	);
 
-	/** The track being fetched, so it is fetched once, and again after failing. */
+	/** The item whose track is being fetched, so it is fetched once, and again after failing. */
 	#fetching: string | null = null;
 
 	constructor() {
@@ -71,8 +75,15 @@ class Playback {
 			// A state from before a command was carried out may still be on its way until then.
 			const asking = this.#waiting.size > 0 || this.#volumeTimer !== undefined;
 			if (!asking) this.#asked = {};
-			// The device playing has its own track; any other fetches the one it plays.
-			if (message.state.activeDeviceId !== realtime.deviceId) this.#fetch(message.state);
+		});
+		// The device playing has its own track; any other looks up the one the state's item is,
+		// in the queue it holds, and again as that queue changes.
+		$effect.root(() => {
+			$effect(() => {
+				void queue.revision;
+				const state = this.state;
+				if (state?.itemId && state.activeDeviceId !== realtime.deviceId) this.#fetch(state.itemId);
+			});
 		});
 	}
 
@@ -91,7 +102,7 @@ class Playback {
 			ms += Math.max(0, now + realtime.clockOffset - at);
 		}
 		// Not the end of a track from before, while the one it names is on its way.
-		const track = this.track?.id === state.trackId ? this.track : null;
+		const track = this.trackItem === state.itemId ? this.track : null;
 		const end = track ? track.durationUs / 1000 : Infinity;
 		return Math.max(0, Math.min(ms, end)) / 1000;
 	}
@@ -198,24 +209,33 @@ class Playback {
 		this.#errorTimer = setTimeout(() => (this.error = null), ERROR_FOR_MS);
 	}
 
-	#fetch({ libraryId, trackId }: PlayerState) {
-		if (!libraryId || !trackId || trackId === this.track?.id || trackId === this.#fetching) {
-			return;
-		}
-		this.#fetching = trackId;
-		const current = () => this.#fetching === trackId;
-		getTrack(fetch, libraryId, trackId)
-			.then((track) => {
+	/**
+	 * Fetches the track of `item`, the queue's current one, once the queue says what it is. A
+	 * queue not yet at that item, or a row not yet learned, is tried again when the queue changes.
+	 */
+	#fetch(item: string) {
+		if (item === this.trackItem || item === this.#fetching || item !== queue.current) return;
+		this.#fetching = item;
+		const current = () => this.#fetching === item;
+		queue
+			.rows('current', 0, 1)
+			.then(({ rows: [row] }) => {
 				if (!current()) return;
-				this.track = track;
-				this.waveform = null;
-				this.#fetching = null;
-				return getWaveform(fetch, libraryId, trackId);
+				if (row?.item !== item || row.status !== 'known') return void (this.#fetching = null);
+				const { libraryId, track: trackId } = row;
+				return getTrack(fetch, libraryId, trackId!).then((track) => {
+					if (!current()) return;
+					this.track = track;
+					this.trackItem = item;
+					this.libraryId = libraryId;
+					this.waveform = null;
+					this.#fetching = null;
+					return getWaveform(fetch, libraryId, track.id).then((w) => {
+						if (w && this.trackItem === item) this.waveform = decodeWaveform(w);
+					});
+				});
 			})
-			.then((w) => {
-				if (w && this.track?.id === trackId) this.waveform = decodeWaveform(w);
-			})
-			// Tried again with the next state that names it.
+			// Tried again with the next change to the queue or state.
 			.catch(() => {
 				if (current()) this.#fetching = null;
 			});

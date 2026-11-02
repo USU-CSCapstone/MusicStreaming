@@ -8,6 +8,7 @@ use crate::db::testing::access;
 
 mod bounds;
 mod checks;
+mod context;
 mod keys;
 mod outlives;
 mod snapshot;

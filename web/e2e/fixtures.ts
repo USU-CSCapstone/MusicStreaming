@@ -736,12 +736,17 @@ export const phone = {
 export async function serveRealtime(page: Page) {
 	const sent: RealtimeClientMessage[] = [];
 	const now = () => new Date().toISOString();
+	// The phone plays the second item of the account's queue, which this device loads on hello.
+	queueOf(page).start({
+		queueId: 'phone-queue',
+		context: { type: 'library' },
+		source: { key: 'phone', libraryId: library.id, tracks: tracks.map((t) => t.id) },
+		start: 1
+	} as StartQueue);
 	let state: PlayerState = {
 		status: 'playing',
 		activeDeviceId: phone.id,
-		itemId: null,
-		libraryId: library.id,
-		trackId: tracks[1].id,
+		itemId: 'phone.1',
 		positionMs: 0,
 		positionAt: now(),
 		volume: 1
@@ -779,14 +784,20 @@ export async function serveRealtime(page: Page) {
 			}
 			const report = message.type === 'progress' ? message.report : null;
 			const starts = report?.start && report.status !== 'stopped';
-			if (report && (starts || deviceId === state.activeDeviceId)) {
+			// As the server does: an item the account's queue lacks is refused, with the state as it is.
+			const queue = queueOf(page).queue;
+			const holds =
+				!!report &&
+				!!queue &&
+				(JSON.parse(queue.currentRow() ?? '{}').item === report.itemId ||
+					queue.findItem(report.itemId) !== undefined);
+			if (report && !holds) send({ type: 'player', state });
+			else if (report && (starts || deviceId === state.activeDeviceId)) {
 				state = {
 					...state,
 					status: report.status === 'buffering' ? 'paused' : report.status,
 					activeDeviceId: report.status === 'stopped' ? null : deviceId,
 					itemId: report.itemId,
-					libraryId: report.libraryId,
-					trackId: report.trackId,
 					positionMs: report.positionMs,
 					positionAt: now(),
 					volume: report.volume ?? (deviceId === state.activeDeviceId ? state.volume : null)
@@ -795,5 +806,5 @@ export async function serveRealtime(page: Page) {
 			}
 		});
 	});
-	return { sent };
+	return { sent, state: () => state };
 }

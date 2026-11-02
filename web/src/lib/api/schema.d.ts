@@ -2110,13 +2110,14 @@ export interface components {
              */
             activeDeviceId: string | null;
             /**
-             * @description The active device's own name for its place in its queue, as it last reported:
-             *     opaque to everyone else. The queue item playing once the server keeps the queue.
+             * @description The queue item playback is at, as the active device last reported it, `<key>.<position>`:
+             *     an item of the account's active queue when it was reported. A device finds its track in
+             *     the queue it holds. A new queue replaces the active one without touching the state,
+             *     which keeps naming its item until the next report, so a client that finds the item
+             *     absent from its queue has nothing to resume or hand over. `null` before anything has
+             *     played.
              */
             itemId: string | null;
-            /** @description The library of `trackId`, until the server keeps the queue, which names it. */
-            libraryId: string | null;
-            trackId: string | null;
             /** @description The external track playing. Planned. */
             external?: components["schemas"]["ExternalTrackRef"];
             positionMs: number;
@@ -2214,17 +2215,20 @@ export interface components {
         /**
          * @description Sent over the realtime connection by the playing device, or one taking playback over
          *     (`start`); a report is the device's whose connection sends it. A report that is refused
-         *     — invalid, from any connection but the active one, or of a track out of the caller's
-         *     reach — is answered with the current state; one that does not parse is ignored.
-         *     `buffering` is recorded as `paused` at its position.
+         *     — invalid, from any connection but the active one, or naming an item the account's
+         *     active queue does not have — is answered with the current state; one that does not parse
+         *     is ignored. `buffering` is recorded as `paused` at its position.
          *
-         *     Until the server keeps the queue, a report names its track, and `itemId` is the
-         *     device's own name for its place in its queue, opaque to the server.
+         *     A report names only the active queue's item, and no queue: item IDs never repeat across
+         *     an account's queues. A device restoring a kept queue reports as a start (`start`), since
+         *     another device may be playing.
          */
         ProgressReport: {
+            /**
+             * @description An item of the account's active queue, in any of its sections, `<key>.<position>`.
+             *     The track is the one the queue has under it.
+             */
             itemId: string;
-            libraryId: string;
-            trackId: string;
             /**
              * @description Set when the user starts playback on this connection, taking over from the device
              *     playing (`requirements/realtime.md` §2). Without it, a report from any connection but

@@ -61,6 +61,7 @@ describe('QueueClient', () => {
 				revision: 5,
 				current: 'a.0',
 				playingManual: true,
+				held: 'a.0',
 				manual: 1,
 				upNext: 4,
 				history: 0,

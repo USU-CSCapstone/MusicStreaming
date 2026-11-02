@@ -25,8 +25,6 @@ const fake = vi.hoisted(() => ({
 			positionMs: number;
 			start: boolean;
 			itemId: string;
-			libraryId: string;
-			trackId: string;
 		};
 		result: unknown;
 	}[],
@@ -97,6 +95,15 @@ class FakeQueue {
 	holdStart = false;
 	/** Whether the server refuses the next start. */
 	refuseStart = false;
+	/** Whether a Previous makes a new item, a copy, as one from History does. */
+	copyOnPrevious = false;
+	/** The copy that is the current item, if any. */
+	copy: string | null = null;
+	/** While set, the server has not confirmed the edits: the queue held is as before them. */
+	holdEdits = false;
+	/** The server's version, which a learned row advances. */
+	version = 0;
+	#heldItem: string | null = null;
 	onmessage: ((event: MessageEvent<FromWorker>) => void) | null = null;
 	#held: (() => void) | null = null;
 	#context: unknown = null;
@@ -118,15 +125,18 @@ class FakeQueue {
 	/** Tells the page what the queue is now. */
 	#state() {
 		this.revision++;
+		const current = this.slots.length ? (this.copy ?? `${this.key}.${this.at}`) : null;
+		if (!this.holdEdits) this.#heldItem = current;
 		this.#say({
 			type: 'state',
 			summary: {
 				queueId: 'q',
 				context: this.#context as never,
-				version: 0,
+				version: this.version,
 				revision: this.revision,
-				current: this.slots.length ? `${this.key}.${this.at}` : null,
+				current,
 				playingManual: this.playingManual,
+				held: this.#heldItem,
 				manual: 0,
 				upNext: Math.max(0, this.slots.length - this.at - 1),
 				history: this.moves,
@@ -165,6 +175,12 @@ class FakeQueue {
 		else reply();
 	}
 
+	/** Confirms the edits held. */
+	releaseEdits() {
+		this.holdEdits = false;
+		this.#state();
+	}
+
 	/** Answers the held start. */
 	release() {
 		this.#held?.();
@@ -181,6 +197,7 @@ class FakeQueue {
 			this.at = Number(edit.item.split('.')[1]);
 		} else if (edit.type === 'previous') {
 			this.at = Math.max(0, this.at - 1);
+			this.copy = this.copyOnPrevious ? `${this.key}.p` : null;
 			this.moves = Math.max(0, this.moves - 1);
 		} else if (edit.type === 'repeat') this.repeat = edit.mode;
 		else if (edit.type === 'shuffle') this.shuffled = edit.on;
@@ -195,7 +212,7 @@ class FakeQueue {
 				? []
 				: [
 						{
-							item: `${this.key}.${at}`,
+							item: section === 'current' && this.copy ? this.copy : `${this.key}.${at}`,
 							libraryId: '11',
 							status: (slot === 'unknown' || slot === 'unavailable' ? slot : 'known') as
 								| 'known'
@@ -214,6 +231,7 @@ class FakeQueue {
 	/** A row learned or given up on, as when its list or page arrives or fails. */
 	learn(position: number, slot: Slot) {
 		this.slots[position] = slot;
+		this.version++;
 		this.#state();
 	}
 
@@ -240,6 +258,7 @@ const { queue } = await import('$lib/queue/client.svelte');
 const send = (message: RealtimeServerMessage) =>
 	fake.listeners.forEach((listener) => listener(message));
 
+/** Sends the account's state, another device playing item `0`, with `changes` over it. */
 function state(changes: Partial<PlayerState> = {}) {
 	send({
 		type: 'player',
@@ -247,14 +266,31 @@ function state(changes: Partial<PlayerState> = {}) {
 			status: 'playing',
 			activeDeviceId: '2',
 			itemId: '0',
-			libraryId: '11',
-			trackId: '41',
 			positionMs: 10_000,
 			positionAt: new Date().toISOString(),
 			volume: 0.2,
 			...changes
 		}
 	});
+}
+
+/** The item the player's own queue is at, as the device playing it reports it. */
+const own = () => `${queueWorker.key}.${queueWorker.at}`;
+
+/**
+ * The queue holds `trackId` as its current item, and another device reports it plays it: the
+ * state names the item, and the track is the queue's to say.
+ */
+async function heldAs(trackId: string, changes: Partial<PlayerState> = {}) {
+	// Another tab plays, so this player, if it held a queue before, does not follow it to the track.
+	const tab = new BroadcastChannel('jewelcase.player');
+	tab.postMessage('started');
+	tab.close();
+	queueWorker.key = `K${trackId}`;
+	queueWorker.slots = [trackId];
+	queueWorker.moveTo(0);
+	await settle();
+	state({ itemId: `K${trackId}.0`, ...changes });
 }
 
 const transfer = (play: boolean) =>
@@ -268,6 +304,8 @@ const result = () => vi.waitFor(() => fake.sent.find((m) => m.type === 'commandR
 beforeEach(() => {
 	queueWorker.sent.length = queueWorker.edits.length = queueWorker.starts.length = 0;
 	queueWorker.holdStart = false;
+	queueWorker.copyOnPrevious = queueWorker.holdEdits = false;
+	queueWorker.copy = null;
 	queueWorker.refuseStart = false;
 	queueWorker.repeat = 'off';
 	queueWorker.shuffled = false;
@@ -285,14 +323,14 @@ beforeEach(() => {
 
 describe('player', () => {
 	it('takes playback over when another device moves it here', async () => {
-		state();
+		await heldAs('41');
 		transfer(true);
 		expect(await result()).toMatchObject({ status: 'applied' });
 		const [report] = fake.sent;
 		expect(report.type, 'taken over before answering').toBe('progress');
 		expect(report.report).toMatchObject({
 			start: true,
-			trackId: '41',
+			itemId: 'K41.0',
 			status: 'buffering',
 			// Its own volume, not the other device's.
 			volume: 0.8
@@ -302,7 +340,8 @@ describe('player', () => {
 	});
 
 	it('says when there is nothing it can pick up', async () => {
-		state({ libraryId: '12' });
+		await heldAs('41');
+		player.libraryId = '12';
 		transfer(true);
 		expect(await result()).toMatchObject({
 			status: 'failed',
@@ -314,18 +353,18 @@ describe('player', () => {
 	it('does not take back what another device took over meanwhile', async () => {
 		let arrive: (track: Track) => void = () => {};
 		fake.tracks.set('43', new Promise((resolve) => (arrive = resolve)));
-		state({ trackId: '43' });
+		await heldAs('43');
 		transfer(true);
-		state({ trackId: '43', activeDeviceId: '3' });
+		state({ itemId: 'K43.0', activeDeviceId: '3' });
 		arrive(track('43', 60));
 		expect(await result()).toMatchObject({ status: 'failed' });
 		expect(fake.sent.map((m) => m.type)).toEqual(['commandResult']);
 	});
 
 	it('starts no later than the end of the track', async () => {
-		state({ trackId: '44', positionMs: 0 });
+		await heldAs('44', { positionMs: 0 });
 		fake.tracks.set('45', Promise.resolve(track('45', 5)));
-		state({ trackId: '45', positionMs: 30_000 });
+		await heldAs('45', { positionMs: 30_000 });
 		transfer(true);
 		await result();
 		expect(fake.sent[0].report.positionMs).toBe(5000);
@@ -333,7 +372,7 @@ describe('player', () => {
 
 	it('waits paused on a track that cannot play, rather than playing the next', async () => {
 		fake.info = () => Promise.reject(new Error('gone'));
-		state({ trackId: '47' });
+		await heldAs('47');
 		transfer(false);
 		await result();
 		// For the failure to be handled.
@@ -345,7 +384,7 @@ describe('player', () => {
 		fake.info = () => Promise.reject(new Error('gone'));
 		player.play([track('46', 60)], 0);
 		// The server confirms the takeover before the track turns out to be the last.
-		state({ status: 'paused', activeDeviceId: '1', trackId: '46' });
+		state({ status: 'paused', activeDeviceId: '1', itemId: own() });
 		// As if it had played most of the way.
 		player.position = 55;
 		await vi.waitFor(() => expect(player.finished).toBe(true));
@@ -353,7 +392,7 @@ describe('player', () => {
 			status: 'stopped',
 			positionMs: 0
 		});
-		state({ status: 'stopped', activeDeviceId: null, trackId: '46' });
+		state({ status: 'stopped', activeDeviceId: null, itemId: own() });
 		expect(controls.remote).toBe(false);
 
 		void player.resume();
@@ -365,18 +404,18 @@ describe('player', () => {
 		// Its audio fails again.
 		await vi.waitFor(() => expect(player.finished).toBe(true));
 
-		state({ activeDeviceId: '2', trackId: '46' });
+		state({ activeDeviceId: '2', itemId: own() });
 		expect(player.finished).toBe(false);
-		state({ status: 'stopped', activeDeviceId: null, trackId: '46' });
+		state({ status: 'stopped', activeDeviceId: null, itemId: own() });
 		expect(controls.remote, 'stopped elsewhere').toBe(true);
 	});
 
 	it('shows a stop that is not its own, as one heard on reconnecting', async () => {
 		fake.info = () => Promise.reject(new Error('gone'));
 		player.play([track('49', 60)], 0);
-		state({ status: 'paused', activeDeviceId: '1', trackId: '49' });
+		state({ status: 'paused', activeDeviceId: '1', itemId: own() });
 		await vi.waitFor(() => expect(player.finished).toBe(true));
-		state({ status: 'stopped', activeDeviceId: null, trackId: '50' });
+		state({ status: 'stopped', activeDeviceId: null, itemId: 'other.0' });
 		expect(player.finished).toBe(false);
 	});
 
@@ -436,7 +475,7 @@ describe('player', () => {
 	it('starts where it was moved to before its audio arrived', async () => {
 		fake.info = () => Promise.resolve({ variant: 'original' });
 		const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
-		state({ trackId: '56', positionMs: 30_000 });
+		await heldAs('56', { positionMs: 30_000 });
 		transfer(true);
 		await result();
 		await vi.waitFor(() => expect(play).toHaveBeenCalled());
@@ -494,11 +533,13 @@ describe('player', () => {
 		play.mockRestore();
 	});
 
-	it('leaves the lock screen to the device that took over', () => {
+	it('leaves the lock screen to the device that took over', async () => {
 		player.play([track('59', 60), track('60', 60)], 0);
+		// Once the server has the queue, it hears of this device.
+		await settle();
 		expect(navigator.mediaSession.metadata).not.toBeNull();
-		state({ activeDeviceId: '1', trackId: '59' });
-		state({ trackId: '41' });
+		state({ activeDeviceId: '1', itemId: own() });
+		state({ itemId: 'other.0' });
 		expect(player.playing).toBe(false);
 		expect(navigator.mediaSession.metadata).toBeNull();
 
@@ -515,12 +556,12 @@ describe('player', () => {
 		const info = vi.fn(() => Promise.resolve({ variant: 'original' }));
 		fake.info = info;
 		const play = vi.spyOn(HTMLMediaElement.prototype, 'play');
-		state({ activeDeviceId: null, status: 'stopped', trackId: '42' });
+		await heldAs('42', { activeDeviceId: null, status: 'stopped' });
 		transfer(false);
 		expect(await result()).toMatchObject({ status: 'applied' });
 		expect(fake.sent[0].report).toMatchObject({
 			start: true,
-			trackId: '42',
+			itemId: 'K42.0',
 			status: 'paused',
 			positionMs: 10_000
 		});
@@ -549,7 +590,7 @@ describe('player and the queue', () => {
 		return { play, audio: play.mock.contexts[0] as HTMLAudioElement };
 	}
 
-	it('start plays immediately: the clicked track plays before the server answers, and reports its item', () => {
+	it('start plays immediately, and reports its item once the server has the queue', async () => {
 		queueWorker.holdStart = true;
 		player.play([track('61', 60), track('62', 60), track('63', 60)] as never, 1, album);
 
@@ -561,14 +602,48 @@ describe('player and the queue', () => {
 			context: album,
 			source: { libraryId: '11', tracks: ['61', '62', '63'] }
 		});
-		// Alongside the track and library, which the server still goes by.
+		// The server refuses an item its queue lacks, and would not take the report again.
+		expect(fake.sent, 'nothing reported while the start is on its way').toEqual([]);
+
+		queueWorker.release();
+		await settle();
 		expect(fake.sent.at(-1)!.report).toMatchObject({
 			start: true,
 			itemId: `${request.source.key}.1`,
-			libraryId: '11',
-			trackId: '62',
 			status: 'buffering'
 		});
+	});
+
+	it('reports a Previous that makes a new item once the server has the edit', async () => {
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		player.play([track('64', 60), track('65', 60), track('67', 60)] as never, 0, album);
+		await settle();
+		player.next();
+		await settle();
+		fake.sent.length = 0;
+		queueWorker.copyOnPrevious = true;
+		queueWorker.holdEdits = true;
+		player.position = 0;
+		player.previous();
+		await settle();
+		const named = () => fake.sent.filter((m) => m.report.itemId === `${queueWorker.key}.p`);
+		expect(named(), "the copy is not the server's yet").toEqual([]);
+		queueWorker.releaseEdits();
+		await settle();
+		expect(fake.sent.at(-1)!.report).toMatchObject({ itemId: `${queueWorker.key}.p` });
+	});
+
+	it('reports again when the queue reaches the item its report was refused for', async () => {
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		player.play([track('66', 60)] as never, 0, album);
+		await settle();
+		const item = own();
+		// The server answered with a state that does not have this device at the item.
+		state({ activeDeviceId: null, status: 'stopped', itemId: 'older.0' });
+		fake.sent.length = 0;
+		queueWorker.learn(0, '66');
+		await settle();
+		expect(fake.sent.at(-1)?.report).toMatchObject({ itemId: item });
 	});
 
 	it("sends a view's recipe with the clicked row and the rows it loaded, and no tracks", () => {
@@ -823,17 +898,26 @@ describe('player and the queue', () => {
 
 		it('plays the queue’s own current item, without starting a queue', async () => {
 			await queued('92');
-			state({ itemId: 'K.1', trackId: '92' });
+			state({ itemId: 'K.1' });
 			transfer(true);
 
 			expect(await result()).toMatchObject({ status: 'applied' });
 			expect(queueWorker.starts).toEqual([]);
-			expect(fake.sent[0].report).toMatchObject({ itemId: 'K.1', trackId: '92' });
+			expect(fake.sent[0].report).toMatchObject({ itemId: 'K.1' });
 		});
 
 		it('fails, and starts no queue, while the item’s row is still being learned', async () => {
 			await queued('unknown');
-			state({ itemId: 'K.1', trackId: '92' });
+			state({ itemId: 'K.1' });
+			transfer(true);
+
+			expect(await result()).toMatchObject({ status: 'failed' });
+			expect(queueWorker.starts).toEqual([]);
+		});
+
+		it('fails, and starts no queue, for a place that is not an item of a queue', async () => {
+			await queued('92');
+			state({ itemId: '0' });
 			transfer(true);
 
 			expect(await result()).toMatchObject({ status: 'failed' });
@@ -845,7 +929,7 @@ describe('player and the queue', () => {
 			queueWorker.slots = ['91'];
 			queueWorker.moveTo(0);
 			await settle();
-			state({ itemId: 'K.1', trackId: '92' });
+			state({ itemId: 'K.1' });
 			transfer(true);
 
 			expect(await result()).toMatchObject({ status: 'failed' });

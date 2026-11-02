@@ -1063,6 +1063,7 @@ describe('QueueStore lists and rows', () => {
 			expect(summary).toMatchObject({ upNext: 3, history: 0, version: 0 });
 			// The view loaded three rows: what it did not load is waited for.
 			expect(now()).toEqual(['201', '202', 'unknown', 'unknown']);
+			expect(summary.held, 'the server has not got the queue yet').toBeNull();
 			expect(server.requests.at(-1)).toMatchObject({ method: 'POST', path: '/me/queue' });
 			expect(server.requests.at(-1)!.body).toEqual({
 				queueId: STARTED,
@@ -1138,6 +1139,7 @@ describe('QueueStore lists and rows', () => {
 			expect(server.gets()).toBe(2);
 			expect(server.queueGets().at(-1)!.headers).not.toHaveProperty('If-None-Match');
 			expect(summary).toMatchObject({ queueId: STARTED, current: `${SOURCE}.1`, upNext: 3 });
+			expect(summary.held, 'the server has it now').toBe(`${SOURCE}.1`);
 			expect(now()).toEqual(['201', '202', '203', '204']);
 			expect(server.listGets().at(-1)).toBe(`hs-${STARTED.slice(0, 4)}`);
 		});
