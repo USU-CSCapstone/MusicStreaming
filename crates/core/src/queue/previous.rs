@@ -1,6 +1,5 @@
 //! Previous: step back one play (`design/queue.md` §5, §6).
 
-use super::edit::item_of;
 use super::history::play_span;
 use super::spans::{SpanList, View};
 use super::state::{ItemId, QueueCopy, QueueError, QueueState};
@@ -32,7 +31,7 @@ impl QueueState {
             let just_passed = self
                 .cursor
                 .checked_sub(1)
-                .is_some_and(|row| item_of(self.order.get(row)).as_ref() == Some(old));
+                .is_some_and(|row| self.item_at(&self.order, row).as_ref() == Some(old));
             if self.manual.is_empty() && just_passed {
                 self.cursor -= 1;
             } else {

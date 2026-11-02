@@ -9,11 +9,6 @@
 //! `mix(C ^ max(x, x'))` is 1, where `mix` is the SplitMix64 finalizer. Both members of a
 //! pair see the same coin, so a round is its own inverse. R = 6⌈log₂ m⌉ + 6.
 
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "nothing reads the permutation until the shuffle step")
-)]
-
 /// The SplitMix64 increment.
 const GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
 

@@ -1,5 +1,6 @@
 //! Reading rows and finding items (`design/queue.md` §3, §6).
 
+use super::permutation::{permute, unpermute};
 use super::spans::{SpanList, View};
 use super::state::{ItemId, QueueState};
 
@@ -49,17 +50,51 @@ impl QueueState {
         if let Some(i) = self.manual.find(&view, item.pos) {
             return Some(i);
         }
-        let i = self.order.find(&view, item.pos)?;
+        let i = self.order_row_of(item)?;
         i.checked_sub(self.cursor).map(|rest| self.manual.len() + rest)
+    }
+
+    /// The row of the context that reads `item`, passed rows included. While shuffled, an item
+    /// of the base is found by its base position and then π⁻¹. O(spans + base spans).
+    pub(super) fn order_row_of(&self, item: &ItemId) -> Option<u64> {
+        let view = View::Key(item.key.clone());
+        if let Some(row) = self.order.find(&view, item.pos) {
+            return Some(row);
+        }
+        let shuffle = self.shuffle.as_ref()?;
+        let base = shuffle.base.find(&view, item.pos)?;
+        self.order.find(&View::Shuffle, unpermute(shuffle.seed, shuffle.base.len(), base))
+    }
+
+    /// The item that position `pos` of `view` plays: a list or copy row plays itself, and a
+    /// shuffle row plays the base row π maps it to. `None` for a shuffle row outside the shuffle.
+    pub(super) fn item_of(&self, view: &View, pos: u64) -> Option<ItemId> {
+        match view {
+            View::Key(key) => Some(ItemId { key: key.clone(), pos }),
+            View::Shuffle => {
+                let shuffle = self.shuffle.as_ref()?;
+                let m = shuffle.base.len();
+                if pos >= m {
+                    return None;
+                }
+                match shuffle.base.get(permute(shuffle.seed, m, pos))? {
+                    (View::Key(key), p) => Some(ItemId { key: key.clone(), pos: p }),
+                    (View::Shuffle, _) => None,
+                }
+            }
+        }
+    }
+
+    /// The item at row `index` of `spans`, read through the shuffle if the row is one.
+    pub(super) fn item_at(&self, spans: &SpanList, index: u64) -> Option<ItemId> {
+        let (view, pos) = spans.get(index)?;
+        self.item_of(view, pos)
     }
 
     /// Row `index` of `spans`.
     fn row_in(&self, spans: &SpanList, index: u64) -> Option<Row<'_>> {
-        match spans.get(index)? {
-            (View::Key(key), pos) => self.row_of(key, pos),
-            // Shuffle views can't be read yet.
-            (View::Shuffle, _) => None,
-        }
+        let item = self.item_at(spans, index)?;
+        self.row_of(&item.key, item.pos)
     }
 
     /// The row for position `pos` of the source or copy `key`: a copy's position reads the

@@ -9,6 +9,7 @@ mod permutation;
 mod previous;
 mod read;
 mod rewind;
+mod shuffle;
 mod spans;
 mod state;
 #[cfg(test)]
