@@ -193,24 +193,24 @@ async fn benchmark_queue_resolves() {
         .await
         .unwrap();
     let (indexes, caller) = (Indexes::default(), Caller { user: 1, device: 1, admin: true });
-    let library = |sort: &str| json!({ "type": "library", "filters": [], "sort": sort });
+    let library = |sort: &str, order: &str| json!({ "type": "library", "filters": {}, "sort": sort, "order": order });
     let mut recipes = Vec::new();
     for sort in ["name", "artist", "album", "dateAdded", "releaseDate", "duration"] {
         for order in ["asc", "desc"] {
-            recipes
-                .push((format!("library by {sort} {order}"), library(&format!("{sort}.{order}"))));
+            recipes.push((format!("library by {sort} {order}"), library(sort, order)));
         }
     }
     for (n, artist) in artists.iter().enumerate() {
         let what =
             ["the artist with the most tracks", "the unknown artist", "an artist of one album"];
-        for (credit, sort) in [("any", "name.asc"), ("any", "album.asc"), ("owned", "artist.desc")]
+        for (credit, sort, order) in
+            [("any", "name", "asc"), ("any", "album", "asc"), ("owned", "artist", "desc")]
         {
             recipes.push((
-                format!("{}, {credit}, {sort}", what[n]),
+                format!("{}, {credit}, {sort}.{order}", what[n]),
                 json!({
                     "type": "artist", "artistId": artist.to_string(), "scope": "all",
-                    "artistCredit": credit, "sort": sort,
+                    "artistCredit": credit, "sort": sort, "order": order,
                 }),
             ));
         }
@@ -234,10 +234,14 @@ async fn benchmark_queue_resolves() {
     // first track.
     let big = artists[0].to_string();
     let starts = [
-        ("library by name", library("name.asc"), "/api/v1/libraries/1/tracks?limit=1".to_owned()),
+        (
+            "library by name",
+            library("name", "asc"),
+            "/api/v1/libraries/1/tracks?limit=1".to_owned(),
+        ),
         (
             "the artist with the most tracks",
-            json!({ "type": "artist", "artistId": big, "scope": "all", "artistCredit": "any", "sort": "name.asc" }),
+            json!({ "type": "artist", "artistId": big, "scope": "all", "artistCredit": "any", "sort": "name", "order": "asc" }),
             format!("/api/v1/libraries/1/tracks?limit=1&artistId={big}"),
         ),
     ];

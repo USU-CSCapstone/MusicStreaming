@@ -117,18 +117,17 @@ async fn paged_view_equals_resolve() {
     let mut checked = 0;
     for sort in SORTS {
         for order in ["asc", "desc"] {
-            let label = json!(format!("{sort}.{order}"));
             let views = [
                 (
-                    json!({ "type": "album", "albumId": "101", "sort": label }),
+                    json!({ "type": "album", "albumId": "101", "sort": sort, "order": order }),
                     format!("albumId=101&sort={sort}&order={order}"),
                 ),
                 (
-                    json!({ "type": "album", "albumId": "103", "sort": label }),
+                    json!({ "type": "album", "albumId": "103", "sort": sort, "order": order }),
                     format!("albumId=103&sort={sort}&order={order}"),
                 ),
                 (
-                    json!({ "type": "library", "filters": [], "sort": label }),
+                    json!({ "type": "library", "filters": {}, "sort": sort, "order": order }),
                     format!("sort={sort}&order={order}"),
                 ),
             ];
@@ -137,7 +136,7 @@ async fn paged_view_equals_resolve() {
                     (
                         json!({
                             "type": "artist", "artistId": artist, "scope": "all",
-                            "artistCredit": credit, "sort": label,
+                            "artistCredit": credit, "sort": sort, "order": order,
                         }),
                         format!(
                             "artistId={artist}&artistCredit={credit}&sort={sort}&order={order}"
@@ -159,7 +158,7 @@ async fn paged_view_equals_resolve() {
     assert_eq!(checked, 12 * 12);
 
     // Ties end on the ID, and a track with no name sorts last in both directions.
-    let name = |order| json!({ "type": "library", "filters": [], "sort": format!("name.{order}") });
+    let name = |order| json!({ "type": "library", "filters": {}, "sort": "name", "order": order });
     let up = ["5", "6", "13", "7", "8", "14", "9", "1", "2", "12", "3", "4", "10", "11"];
     let down = ["4", "3", "12", "2", "1", "9", "14", "8", "7", "13", "6", "5", "11", "10"];
     assert_eq!(resolved(&state, &name("asc")).await, up);
@@ -195,7 +194,7 @@ async fn search_resolve_equals_the_search_section() {
 #[tokio::test]
 async fn start_follows_start_track_id() {
     let (_temp, _state, app) = fixture().await;
-    let library = json!({ "type": "library", "filters": [], "sort": "name.asc" });
+    let library = json!({ "type": "library", "filters": {}, "sort": "name", "order": "asc" });
     // Name order is 5 6 13 7 8 14 9 1 2 12 3 4 10 11.
     let from = |queue: &str, key: &str, track: &str, start: u64| {
         recipe_start(queue, key, library.clone(), track, start)
@@ -211,7 +210,7 @@ async fn start_follows_start_track_id() {
     assert_eq!(queue["state"]["cursor"], json!(7));
     assert_eq!(
         queue["state"]["sources"][0]["recipe"],
-        json!({ "type": "library", "filters": [], "sort": "name.asc" })
+        json!({ "type": "library", "filters": {}, "sort": "name", "order": "asc" })
     );
 
     // The library changed since the view loaded: the track is not at `start`, so the first
@@ -236,7 +235,7 @@ async fn start_follows_start_track_id() {
 #[tokio::test]
 async fn recipe_refuses_unreachable_library() {
     let (_temp, _state, app) = fixture().await;
-    let recipe = json!({ "type": "library", "filters": [], "sort": "name.asc" });
+    let recipe = json!({ "type": "library", "filters": {}, "sort": "name", "order": "asc" });
     let in_library = |library: &str| {
         let mut body = recipe_start(QUEUE, KEY, recipe.clone(), "900", 0);
         body["source"]["libraryId"] = json!(library);
@@ -266,18 +265,19 @@ async fn recipe_refuses_unreachable_library() {
 #[tokio::test]
 async fn recipes_the_server_cannot_resolve_are_refused() {
     let (_temp, _state, app) = fixture().await;
-    let library =
-        |sort: &str, filters: Value| json!({ "type": "library", "filters": filters, "sort": sort });
+    let library = |sort: &str, order: &str, filters: Value| json!({ "type": "library", "filters": filters, "sort": sort, "order": order });
     let artist = |scope: &str, credit: &str| {
         json!({
-            "type": "artist", "artistId": "10", "scope": scope, "artistCredit": credit, "sort": "name.asc",
+            "type": "artist", "artistId": "10", "scope": scope, "artistCredit": credit, "sort": "name", "order": "asc",
         })
     };
     for (what, recipe) in [
-        ("a personal sort", library("top.asc", json!([]))),
-        ("a sort with no direction", library("name", json!([]))),
-        ("an unknown sort", library("name.up", json!([]))),
-        ("a filter", library("name.asc", json!([["genre", "30"]]))),
+        ("a personal sort", library("top", "asc", json!({}))),
+        ("a sort with no direction", json!({ "type": "library", "filters": {}, "sort": "name" })),
+        ("an unknown direction", library("name", "up", json!({}))),
+        ("a sort and direction in one", library("name.asc", "asc", json!({}))),
+        ("a filter", library("name", "asc", json!({ "genres": ["30"] }))),
+        ("filters that are not a browse filter", library("name", "asc", json!([]))),
         ("a scope not built", artist("topTracks", "any")),
         ("an unknown credit", artist("all", "some")),
         ("an empty search", json!({ "type": "search", "q": "" })),
@@ -288,7 +288,7 @@ async fn recipes_the_server_cannot_resolve_are_refused() {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{what}: {body}");
     }
     // Tracks and a recipe together, a recipe with no start track, and tracks with one.
-    let good = recipe_start(QUEUE, KEY, library("name.asc", json!([])), "1", 0);
+    let good = recipe_start(QUEUE, KEY, library("name", "asc", json!({})), "1", 0);
     let mut both = good.clone();
     both["source"]["tracks"] = json!(["1"]);
     let mut no_track = good.clone();
@@ -310,7 +310,7 @@ async fn a_desc_recipe_is_shown_as_sent() {
     let (_temp, _state, app) = fixture().await;
     let recipe = json!({
         "type": "artist", "artistId": "10", "scope": "all", "artistCredit": "owned",
-        "sort": "releaseDate.desc",
+        "sort": "releaseDate", "order": "desc",
     });
     let (status, answer) =
         start(&app, TOKEN, recipe_start(QUEUE, KEY, recipe.clone(), "1", 0)).await;

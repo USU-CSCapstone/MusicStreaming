@@ -3344,16 +3344,17 @@ components:
 
     QueueAlbumRecipe:
       type: object
-      required: [type, albumId, sort]
+      required: [type, albumId, sort, order]
       description: An album's tracks in a sort.
       properties:
         type: { const: album }
         albumId: { type: string }
         sort: { $ref: '#/components/schemas/QueueTrackSort' }
+        order: { $ref: '#/components/schemas/QueueTrackOrder' }
 
     QueueArtistRecipe:
       type: object
-      required: [type, artistId, scope, artistCredit, sort]
+      required: [type, artistId, scope, artistCredit, sort, order]
       description: An artist's tracks, by scope and credit, in a sort.
       properties:
         type: { const: artist }
@@ -3368,31 +3369,34 @@ components:
           enum: [any, owned, featured]
           description: As `artistCredit` of `listTracks`.
         sort: { $ref: '#/components/schemas/QueueTrackSort' }
+        order: { $ref: '#/components/schemas/QueueTrackOrder' }
 
     QueueLibraryRecipe:
       type: object
-      required: [type, filters, sort]
+      required: [type, filters, sort, order]
       description: A library's tracks under filters, in a sort.
       properties:
         type: { const: library }
         filters:
-          type: array
-          description: Pairs of a filter's name and its value. No filter is supported yet, so a start with any is `422`.
-          items:
-            type: array
-            minItems: 2
-            maxItems: 2
-            items: { type: string }
+          allOf:
+            - $ref: '#/components/schemas/BrowseFilter'
+          description: The view's filters. No filter is supported yet, so a start with any is `422`.
         sort: { $ref: '#/components/schemas/QueueTrackSort' }
+        order: { $ref: '#/components/schemas/QueueTrackOrder' }
 
     QueueTrackSort:
       type: string
-      pattern: '^(name|artist|album|dateAdded|playCount|lastPlayed|releaseDate|duration|top)\.(asc|desc)$'
+      enum: [name, artist, album, dateAdded, playCount, lastPlayed, releaseDate, duration, top]
       description: |
-        A sort of `listTracks` and its direction, such as `name.asc`. The list is that of a view
-        paged to its end: ties end on the track ID, and a track with no value in the sort's
-        field comes last in both directions. `playCount`, `lastPlayed` and `top` are planned:
-        a start with one is `422` until they are built, as they are for `listTracks`.
+        A sort of `listTracks`, in the direction `order` gives. The list is that of a view paged
+        to its end: ties end on the track ID, and a track with no value in the sort's field
+        comes last in both directions. `playCount`, `lastPlayed` and `top` are planned: a start
+        with one is `422` until they are built, as they are for `listTracks`.
+
+    QueueTrackOrder:
+      type: string
+      enum: [asc, desc]
+      description: The direction of the recipe's `sort`, as `order` of `listTracks`.
 
     QueueSearchRecipe:
       type: object

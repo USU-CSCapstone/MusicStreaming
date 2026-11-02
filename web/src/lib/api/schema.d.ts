@@ -2187,6 +2187,7 @@ export interface components {
             type: "album";
             albumId: string;
             sort: components["schemas"]["QueueTrackSort"];
+            order: components["schemas"]["QueueTrackOrder"];
         };
         /** @description An artist's tracks, by scope and credit, in a sort. */
         QueueArtistRecipe: {
@@ -2207,6 +2208,7 @@ export interface components {
              */
             artistCredit: "any" | "owned" | "featured";
             sort: components["schemas"]["QueueTrackSort"];
+            order: components["schemas"]["QueueTrackOrder"];
         };
         /** @description A library's tracks under filters, in a sort. */
         QueueLibraryRecipe: {
@@ -2215,17 +2217,24 @@ export interface components {
              * @enum {string}
              */
             type: "library";
-            /** @description Pairs of a filter's name and its value. No filter is supported yet, so a start with any is `422`. */
-            filters: string[][];
+            /** @description The view's filters. No filter is supported yet, so a start with any is `422`. */
+            filters: components["schemas"]["BrowseFilter"];
             sort: components["schemas"]["QueueTrackSort"];
+            order: components["schemas"]["QueueTrackOrder"];
         };
         /**
-         * @description A sort of `listTracks` and its direction, such as `name.asc`. The list is that of a view
-         *     paged to its end: ties end on the track ID, and a track with no value in the sort's
-         *     field comes last in both directions. `playCount`, `lastPlayed` and `top` are planned:
-         *     a start with one is `422` until they are built, as they are for `listTracks`.
+         * @description A sort of `listTracks`, in the direction `order` gives. The list is that of a view paged
+         *     to its end: ties end on the track ID, and a track with no value in the sort's field
+         *     comes last in both directions. `playCount`, `lastPlayed` and `top` are planned: a start
+         *     with one is `422` until they are built, as they are for `listTracks`.
+         * @enum {string}
          */
-        QueueTrackSort: string;
+        QueueTrackSort: "name" | "artist" | "album" | "dateAdded" | "playCount" | "lastPlayed" | "releaseDate" | "duration" | "top";
+        /**
+         * @description The direction of the recipe's `sort`, as `order` of `listTracks`.
+         * @enum {string}
+         */
+        QueueTrackOrder: "asc" | "desc";
         /** @description A search's tracks, all of them, in the search's ranking. */
         QueueSearchRecipe: {
             /**
