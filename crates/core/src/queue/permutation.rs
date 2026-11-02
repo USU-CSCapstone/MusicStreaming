@@ -125,30 +125,14 @@ mod tests {
         assert!((10..54).contains(&swapped), "m = 2 swapped for {swapped} of 64 seeds");
     }
 
+    /// The vectors in `parity.json`, which the web build's `core-wasm.spec.ts` checks in
+    /// WebAssembly: the one table native and wasm are held to.
     #[test]
     fn permutation_golden_vectors() {
-        let table: [(u32, u64, u64, u64); 18] = [
-            (0, 1, 0, 0),
-            (0, 8, 3, 6),
-            (1, 16, 5, 10),
-            (1, 2, 0, 0),
-            (1, 2, 1, 1),
-            (0, 3, 0, 1),
-            (0, 3, 2, 0),
-            (7, 3, 1, 1),
-            (0, 10, 0, 3),
-            (0, 10, 9, 2),
-            (42, 10, 4, 8),
-            (1, 12, 5, 6),
-            (4294967295, 12, 11, 10),
-            (0, 500000, 0, 168416),
-            (42, 500000, 123456, 491515),
-            (4294967295, 500000, 499999, 446286),
-            (3, 4294967301, 4294967300, 2336714214),
-            (9, 1099511627779, 12345, 343340338295),
-        ];
-        for (seed, m, x, y) in table {
-            assert_eq!(permute(seed, m, x), y, "seed {seed} m {m} x {x}");
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("parity.json")).unwrap();
+        for v in fixture["permutation"].as_array().unwrap() {
+            let [seed, m, x, y] = [0, 1, 2, 3].map(|i| v[i].as_u64().unwrap());
+            assert_eq!(permute(u32::try_from(seed).unwrap(), m, x), y, "seed {seed} m {m} x {x}");
         }
     }
 

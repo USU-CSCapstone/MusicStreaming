@@ -1,0 +1,43 @@
+{
+  "permutation": [
+    [0, 1, 0, 0],
+    [0, 8, 3, 6],
+    [1, 16, 5, 10],
+    [1, 2, 0, 0],
+    [1, 2, 1, 1],
+    [0, 3, 0, 1],
+    [0, 3, 2, 0],
+    [7, 3, 1, 1],
+    [0, 10, 0, 3],
+    [0, 10, 9, 2],
+    [42, 10, 4, 8],
+    [1, 12, 5, 6],
+    [4294967295, 12, 11, 10],
+    [0, 500000, 0, 168416],
+    [42, 500000, 123456, 491515],
+    [4294967295, 500000, 499999, 446286],
+    [3, 4294967301, 4294967300, 2336714214],
+    [9, 1099511627779, 12345, 343340338295]
+  ],
+  "initial": {"sources":[{"key":"a","libraryId":"lib","length":8}],"copies":[],"manual":[],"order":[{"view":{"key":"a"},"start":0,"len":8}],"cursor":2,"current":"a.1","history":[],"nextPlay":0,"shuffle":null,"repeat":"off","adjusted":false},
+  "edits": [
+    {"type":"add","source":{"key":"b","libraryId":"lib","list":"hb","length":4},"before":{"type":"manualEnd"}},
+    {"type":"shuffle","on":true,"seed":42},
+    {"type":"next"},
+    {"type":"next"},
+    {"type":"add","source":{"key":"c","libraryId":"lib","length":3},"before":{"type":"manualStart"}},
+    {"type":"next"},
+    {"type":"previous","key":"p1"},
+    {"type":"move","items":["a.2"],"before":{"type":"contextEnd"}},
+    {"type":"repeat","mode":"all"},
+    {"type":"next"},
+    {"type":"next"},
+    {"type":"requeue","play":{"play":0,"item":"a.1"},"key":"r1"},
+    {"type":"remove","items":["a.7"]},
+    {"type":"jump","item":"c.2"},
+    {"type":"shuffle","on":false,"seed":0},
+    {"type":"rewind","play":{"play":3,"item":"b.1"},"key":"w1"},
+    {"type":"removePlays","plays":[{"play":1,"item":"b.0"}]}
+  ],
+  "final": {"sources":[{"key":"a","libraryId":"lib","length":8},{"key":"b","libraryId":"lib","list":"hb","length":4},{"key":"c","libraryId":"lib","length":3}],"copies":[{"key":"r1","of":[{"view":{"key":"a"},"start":1,"len":1}]}],"manual":[{"view":{"key":"c"},"start":0,"len":2},{"view":{"key":"r1"},"start":0,"len":1},{"view":{"key":"c"},"start":2,"len":1},{"view":{"key":"b"},"start":2,"len":2}],"order":[{"view":{"key":"a"},"start":0,"len":7}],"cursor":2,"current":"b.1","history":[],"nextPlay":7,"shuffle":null,"repeat":"all","adjusted":true}
+}

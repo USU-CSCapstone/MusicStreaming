@@ -154,6 +154,20 @@ pub enum QueueError {
     PlayGone,
 }
 
+impl QueueError {
+    /// The refusal's stable code, as the wire and the web client name it.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::DuplicateKey => "duplicate_key",
+            Self::OutOfRange => "out_of_range",
+            Self::UnknownSource => "unknown_source",
+            Self::LengthMismatch => "length_mismatch",
+            Self::AnchorGone => "anchor_gone",
+            Self::PlayGone => "play_gone",
+        }
+    }
+}
+
 impl fmt::Display for QueueError {
     /// Writes a plain-language reason for the refusal.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -257,6 +271,34 @@ impl QueueState {
         source.hash = Some(hash);
         source.tracks = Some(tracks);
         Ok(())
+    }
+
+    /// Attaches `tracks` to every source whose confirmed hash is `hash`, and returns how many
+    /// there were: none if no source references the list.
+    ///
+    /// Refused, attaching nothing, if `tracks` isn't as long as one of them.
+    pub fn attach_hash(&mut self, hash: &str, tracks: &Arc<[u64]>) -> Result<usize, QueueError> {
+        let mut matching = self.sources.iter().filter(|s| s.hash.as_deref() == Some(hash));
+        if matching.any(|s| tracks.len() as u64 != s.length) {
+            return Err(QueueError::LengthMismatch);
+        }
+        let mut count = 0;
+        for source in self.sources.iter_mut().filter(|s| s.hash.as_deref() == Some(hash)) {
+            source.tracks = Some(Arc::clone(tracks));
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// The hashes of the lists the sources reference, each once, in source order.
+    pub fn list_hashes(&self) -> Vec<&str> {
+        let mut hashes: Vec<&str> = Vec::new();
+        for hash in self.sources.iter().filter_map(|s| s.hash.as_deref()) {
+            if !hashes.contains(&hash) {
+                hashes.push(hash);
+            }
+        }
+        hashes
     }
 }
 

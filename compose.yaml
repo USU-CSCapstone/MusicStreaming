@@ -75,12 +75,18 @@ services:
             - node_modules/
             - .svelte-kit/
             - build/
+            - src/lib/core-wasm/
             - test-results/
             - package.json
             - pnpm-lock.yaml
         - path: ./tools
           target: /src/tools
           action: sync
+        # The wasm module is built into the image from the core's source.
+        - path: ./crates/core
+          action: rebuild
+        - path: ./crates/core-wasm
+          action: rebuild
         - path: ./web/package.json
           action: rebuild
         - path: ./web/pnpm-lock.yaml

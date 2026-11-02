@@ -25,8 +25,14 @@ also on <http://localhost:8080>. The containers never write to your checkout.
 
 ### Without Docker
 
-You need [rustup](https://rustup.rs), which installs the toolchain and the WebAssembly target on
-first use, ffmpeg, and Node with pnpm.
+You need [rustup](https://rustup.rs), which installs the toolchain and the WebAssembly targets on
+first use, ffmpeg, Node with pnpm, and the `wasm-bindgen` CLI at exactly the version the web app's
+WebAssembly core is built with, which `pnpm dev`, `pnpm check`, `pnpm test` and `pnpm build`
+build first:
+
+```sh
+cargo install wasm-bindgen-cli --version 0.2.129 --locked
+```
 
 ```sh
 # The server, with its data in ./data

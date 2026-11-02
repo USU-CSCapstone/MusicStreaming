@@ -2486,3 +2486,19 @@ fn shuffle_at_the_end_shuffles_the_next_lap() {
     assert_eq!(lap.iter().collect::<HashSet<_>>().len(), 7);
     assert!(lap.contains(&item("b.0")) && lap.contains(&item("a.0")));
 }
+
+/// The cases the web build's `core-wasm.spec.ts` replays in WebAssembly, so native and wasm are
+/// held to the same π vectors and the same edit sequence.
+fn parity() -> serde_json::Value {
+    serde_json::from_str(include_str!("parity.json")).unwrap()
+}
+
+#[test]
+fn parity_edit_sequence() {
+    let fixture = parity();
+    let mut state: QueueState = serde_json::from_value(fixture["initial"].clone()).unwrap();
+    for edit in fixture["edits"].as_array().unwrap() {
+        apply(&mut state, serde_json::from_value(edit.clone()).unwrap()).unwrap();
+    }
+    assert_eq!(serde_json::to_value(&state).unwrap(), fixture["final"]);
+}

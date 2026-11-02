@@ -179,6 +179,24 @@ mod tests {
     }
 
     #[test]
+    fn attach_by_hash() {
+        let mut state = started(3, 0);
+        state.sources.push(Source::new("s", "lib", 3, None));
+        state.sources.push(Source::new("t", "lib", 2, None));
+        state.sources[0].hash = Some("h".into());
+        state.sources[1].hash = Some("h".into());
+        state.sources[2].hash = Some("g".into());
+        assert_eq!(state.list_hashes(), ["h", "g"]);
+
+        let list: Arc<[u64]> = Arc::from([7, 8, 9]);
+        assert_eq!(state.attach_hash("h", &list), Ok(2));
+        assert_eq!(state.attach_hash("none", &list), Ok(0));
+        assert_eq!(state.sources[1].tracks(), Some(&[7, 8, 9][..]));
+        assert_eq!(state.attach_hash("g", &list), Err(crate::QueueError::LengthMismatch));
+        assert!(state.sources[2].tracks().is_none());
+    }
+
+    #[test]
     fn find_item_in_up_next() {
         let mut state = started(5, 1);
         assert_eq!(state.find_item(&item("k", 3)), Some(1));
