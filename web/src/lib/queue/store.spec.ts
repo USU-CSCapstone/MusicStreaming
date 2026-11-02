@@ -302,14 +302,20 @@ beforeEach(() => {
 	server = new FakeServer();
 	refusals = [];
 	caches = new FakeCaches();
-	store = new QueueStore({
+	// A store from an earlier test can still be retrying; only this test's store reports here.
+	const created: QueueStore = new QueueStore({
 		api: API,
 		fetch: server.fetch as typeof fetch,
 		retryMs: 0,
 		storage: caches as unknown as CacheStorage,
-		changed: (s) => (summary = s),
-		refused: (r) => refusals.push(r)
+		changed: (s) => {
+			if (store === created) summary = s;
+		},
+		refused: (r) => {
+			if (store === created) refusals.push(r);
+		}
 	});
+	store = created;
 });
 
 describe('QueueStore', () => {
