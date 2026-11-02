@@ -949,10 +949,11 @@ export interface paths {
          *     whether or not one that is refused exists (`requirements/users.md` §10), and the same
          *     for a recipe's library; when `tracks` is empty or `start` is not one of its positions;
          *     when `startTrackId` is missing from a recipe start, sent with `tracks`, or not in the
-         *     recipe's list; when a recipe is one the server cannot resolve, as its schema says; when a
-         *     key or `queueId` is not a UUID; when `context` is not an object with a string `type` of
-         *     at most 4 KiB; or when the body is larger than the server accepts, which holds hundreds
-         *     of thousands of tracks (a longer list starts from a recipe).
+         *     recipe's list; when a recipe is one the server cannot resolve, as its schema says, or is
+         *     larger than 4 KiB; when a key or `queueId` is not a UUID; when `context` is not an object
+         *     with a string `type` of at most 4 KiB; or when the body is larger than the server
+         *     accepts, which holds hundreds of thousands of tracks (a longer list starts from a
+         *     recipe).
          */
         post: operations["startQueue"];
         delete?: never;

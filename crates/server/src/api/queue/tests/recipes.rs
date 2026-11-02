@@ -306,6 +306,16 @@ async fn recipes_the_server_cannot_resolve_are_refused() {
 }
 
 #[tokio::test]
+async fn an_oversized_recipe_is_refused_for_its_size() {
+    let (_temp, _state, app) = fixture().await;
+    // Read whole, a tagged recipe this size would be buffered whole before it is refused.
+    let recipe = json!({ "type": "search", "q": "Song", "junk": vec![0; 100_000] });
+    let (status, answer) = start(&app, TOKEN, recipe_start(QUEUE, KEY, recipe, "1", 0)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(answer["detail"], "A recipe is at most 4 KiB.");
+}
+
+#[tokio::test]
 async fn a_desc_recipe_is_shown_as_sent() {
     let (_temp, _state, app) = fixture().await;
     let recipe = json!({

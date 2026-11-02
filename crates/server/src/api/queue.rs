@@ -13,9 +13,11 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use serde::de::DeserializeOwned;
+use serde_json::value::RawValue;
 
-use super::Problem;
 use super::scope::Caller;
+use super::{Problem, plays};
 use crate::queue::Queues;
 pub use resolve::{Recipe, resolve};
 pub use start::start;
@@ -47,6 +49,16 @@ pub async fn get(
 /// not it exists.
 fn refused() -> Problem {
     Problem::invalid("Every track must be in the library, and the library one you reach.")
+}
+
+/// Reads `raw`, a small part of a request such as a recipe, refusing it, `422`, unless it is at
+/// most 4 KiB. The size is checked first because serde reads a tagged enum, or any tree, whole
+/// into memory before it can refuse it. `field` names the part in the refusal, as "A recipe".
+fn small<T: DeserializeOwned>(raw: &RawValue, field: &str) -> Result<T, Problem> {
+    if raw.get().len() > plays::MAX_JSON_BYTES {
+        return Err(Problem::invalid(format!("{field} is at most 4 KiB.")));
+    }
+    serde_json::from_str(raw.get()).map_err(|error| Problem::invalid(error.to_string()))
 }
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
-use super::{Recipe, refused, resolve};
+use super::{Recipe, refused, resolve, small};
 use crate::api::player::Players;
 use crate::api::realtime::{Hub, ServerMessage};
 use crate::api::scope::Caller;
@@ -42,7 +42,8 @@ struct NewSource {
     library_id: String,
     /// Read straight into IDs, eight bytes each, so the body is the largest thing a start holds.
     tracks: Option<Vec<Id>>,
-    recipe: Option<Recipe>,
+    /// Kept raw until its size is checked, as `context` is.
+    recipe: Option<Box<RawValue>>,
 }
 
 /// The spec's `StartedQueue`: the list the server holds for the start, which the device attaches
@@ -81,6 +82,7 @@ pub async fn start(
             (ids, None, request.start)
         }
         (None, Some(recipe), Some(track)) => {
+            let recipe: Recipe = small(&recipe, "A recipe")?;
             let track = Id::canonical(&track).map_or(u64::MAX, |Id(id)| id.cast_unsigned());
             let ids = resolve(&db, &indexes, &caller, library, &recipe).await?;
             let at = start_at(&ids, request.start, track)
@@ -137,11 +139,7 @@ fn start_at(list: &[u64], start: u64, track: u64) -> Option<u64> {
 /// parsed.
 fn context(raw: &RawValue) -> Result<Value, Problem> {
     const FIELD: &str = "A queue's context";
-    if raw.get().len() > plays::MAX_JSON_BYTES {
-        return Err(Problem::invalid(format!("{FIELD} is at most 4 KiB.")));
-    }
-    let value =
-        serde_json::from_str(raw.get()).map_err(|error| Problem::invalid(error.to_string()))?;
+    let value = small(raw, FIELD)?;
     plays::json_text(&value, FIELD, true)?;
     Ok(value)
 }
