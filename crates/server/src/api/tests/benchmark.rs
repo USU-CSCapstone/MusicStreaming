@@ -6,12 +6,15 @@ use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::http::StatusCode;
+use serde_json::json;
 
-use super::super::AnyId;
 use super::super::page::{Order, Request, Sort, Unknown};
+use super::super::queue::{Recipe, resolve};
+use super::super::scope::Caller;
 use super::super::tag_filter::{LEAD_SHARE, TagFilter, Tags};
-use super::super::testing::{app, json, send};
+use super::super::testing::{TOKEN, app, call, json, send};
 use super::super::tracks;
+use super::super::{AnyId, Id, Indexes};
 use crate::db::Database;
 use crate::db::store::SqliteStore;
 use crate::db::testing::library;
@@ -169,5 +172,90 @@ async fn benchmark_tag_filters() {
         }
         time_pages(&app, &format!("{lists}/albums?tagAny={tag}&limit=100")).await;
         time_pages(&app, &format!("{lists}/search?q=track&tagAny={tag}")).await;
+    }
+}
+
+/// What resolving a queue's recipe costs on the generated library, the whole library in each
+/// sort, and the artists of [`ARTISTS`] in each credit, as [`resolve`] reads them, with the
+/// library's length checked against what the sort's list holds; and what a recipe start costs
+/// through the router, hashing, parking and the store included. A search resolve is not timed:
+/// it runs the index's ranking, which `core`'s full-scale search benchmark covers. Run it as
+/// [`benchmark_list_pages`] is:
+/// `TMPDIR=<folder> cargo test --release -p jewelcase-server benchmark_queue_resolves -- --ignored --nocapture`.
+/// It prints each resolve's timings and fails only on a wrong answer, never on a time.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "benchmark"]
+async fn benchmark_queue_resolves() {
+    let (_temp, db, app) = filled().await;
+    let tracks = scale::size();
+    let artists: Vec<i64> = db
+        .read(|conn| conn.prepare(ARTISTS)?.query_map([], |r| r.get(0))?.collect())
+        .await
+        .unwrap();
+    let (indexes, caller) = (Indexes::default(), Caller { user: 1, device: 1, admin: true });
+    let library = |sort: &str| json!({ "type": "library", "filters": [], "sort": sort });
+    let mut recipes = Vec::new();
+    for sort in ["name", "artist", "album", "dateAdded", "releaseDate", "duration"] {
+        for order in ["asc", "desc"] {
+            recipes
+                .push((format!("library by {sort} {order}"), library(&format!("{sort}.{order}"))));
+        }
+    }
+    for (n, artist) in artists.iter().enumerate() {
+        let what =
+            ["the artist with the most tracks", "the unknown artist", "an artist of one album"];
+        for (credit, sort) in [("any", "name.asc"), ("any", "album.asc"), ("owned", "artist.desc")]
+        {
+            recipes.push((
+                format!("{}, {credit}, {sort}", what[n]),
+                json!({
+                    "type": "artist", "artistId": artist.to_string(), "scope": "all",
+                    "artistCredit": credit, "sort": sort,
+                }),
+            ));
+        }
+    }
+    for (what, recipe) in recipes {
+        let recipe: Recipe = serde_json::from_value(recipe).unwrap();
+        let mut times = Vec::new();
+        let mut length = 0;
+        for _ in 0..20 {
+            let started = Instant::now();
+            length = resolve(&db, &indexes, &caller, Id(1), &recipe).await.unwrap().len();
+            times.push(started.elapsed());
+        }
+        if what.starts_with("library") {
+            assert_eq!(length, tracks, "{what}");
+        }
+        println!("{what}: {length} tracks\n  {}", summary(&mut times));
+    }
+
+    // A start through the router, the library by name and the biggest artist, each from its
+    // first track.
+    let big = artists[0].to_string();
+    let starts = [
+        ("library by name", library("name.asc"), "/api/v1/libraries/1/tracks?limit=1".to_owned()),
+        (
+            "the artist with the most tracks",
+            json!({ "type": "artist", "artistId": big, "scope": "all", "artistCredit": "any", "sort": "name.asc" }),
+            format!("/api/v1/libraries/1/tracks?limit=1&artistId={big}"),
+        ),
+    ];
+    for (n, (what, recipe, first)) in starts.into_iter().enumerate() {
+        let (_, page) = json(&app, &first).await;
+        let track = page["items"][0]["id"].as_str().unwrap().to_owned();
+        let mut times = Vec::new();
+        for i in 0..5 {
+            let body = json!({
+                "queueId": format!("5f0c6a52-3b7e-4d43-9a8e-0d1c2b3a{n:02x}{i:02x}"),
+                "context": { "type": "library" }, "start": 0, "startTrackId": track,
+                "source": { "key": format!("0b1b1b1b-3b7e-4d43-9a8e-0d1c2b3a{n:02x}{i:02x}"), "libraryId": "1", "recipe": recipe },
+            });
+            let started = Instant::now();
+            let (status, answer) = call(&app, TOKEN, "POST", "/api/v1/me/queue", Some(body)).await;
+            times.push(started.elapsed());
+            assert_eq!(status, StatusCode::OK, "{answer}");
+        }
+        println!("start from {what}\n  {}", summary(&mut times));
     }
 }

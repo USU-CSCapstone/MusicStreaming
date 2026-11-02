@@ -37,6 +37,15 @@ pub struct Credits {
 }
 
 impl ArtistCredit {
+    /// The credit as the API spells it.
+    pub fn name(self) -> &'static str {
+        match self {
+            ArtistCredit::Any => "any",
+            ArtistCredit::Owned => "owned",
+            ArtistCredit::Featured => "featured",
+        }
+    }
+
     /// The rows `credits` credits to `artist` this way, for a page to start from. Their number
     /// is the artist's count of them, 0 for an artist `library` does not hold.
     pub fn lead(

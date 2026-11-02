@@ -5,6 +5,7 @@
 //! chooses its `queueId` and its source's key, so it can apply the start at once, and the server
 //! checks that the caller reaches every track the source names.
 
+mod resolve;
 mod start;
 
 use std::sync::Arc;
@@ -16,6 +17,7 @@ use axum::response::{IntoResponse, Response};
 use super::Problem;
 use super::scope::Caller;
 use crate::queue::Queues;
+pub use resolve::{Recipe, resolve};
 pub use start::start;
 
 /// The largest body a start accepts: about 760,000 real (19-digit) track IDs. A request at the
@@ -39,6 +41,12 @@ pub async fn get(
             .into_response(),
         None => (StatusCode::NOT_MODIFIED, [(header::ETAG, &etag)]).into_response(),
     })
+}
+
+/// The refusal for a track out of the library or a library out of reach, the same whether or
+/// not it exists.
+fn refused() -> Problem {
+    Problem::invalid("Every track must be in the library, and the library one you reach.")
 }
 
 #[cfg(test)]

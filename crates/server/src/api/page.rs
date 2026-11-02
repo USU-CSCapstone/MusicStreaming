@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 pub use filter::{Check, Lead, Table};
 #[cfg(test)]
 pub use keyset::assert_indexed;
-pub use keyset::{Sort, Source, Total, Unknown};
+pub use keyset::{Sort, Source, Total, Unknown, ids};
 
 use super::Problem;
 

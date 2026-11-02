@@ -1254,23 +1254,35 @@ paths:
       tags: [Queue]
       summary: Start a queue
       description: |
-        Makes a new queue the account's active one, playing `source`'s tracks from the one at
-        `start`, with an empty Manual Queue (`requirements/queue.md` §6). The queue it replaces
-        is kept if it was adjusted, and deleted otherwise. The device chooses the `queueId` and
-        the source's `key` so it can apply the start at once. The server holds the list under the
-        hash it answers with, and the device attaches the tracks it sent to that hash instead of
-        downloading them back. Every connection of the account, the sender's included, is sent
-        `queueReplaced`.
+        Makes a new queue the account's active one, playing the source's list from one track,
+        with an empty Manual Queue (`requirements/queue.md` §6). The queue it replaces is kept if
+        it was adjusted, and deleted otherwise. The device chooses the `queueId` and the source's
+        `key` so it can apply the start at once. Every connection of the account, the sender's
+        included, is sent `queueReplaced`.
+
+        The source is either `tracks`, which the device resolved and the server holds under the
+        hash it answers with, so the device attaches the tracks it sent to that hash instead of
+        downloading them back, or a `recipe`, which the server resolves in `libraryId` to the
+        same list, in the same order, that a view of it pages through to its end. A recipe start
+        also sends `startTrackId`, the track that plays first: the server starts at `start` if
+        its list holds that track there, and otherwise at the first place the list holds it. The
+        device then fetches the snapshot (`getQueue`), since the server's list and start may
+        differ from what the device showed if the library changed. A device never names a list by
+        hash.
 
         A start naming any queue of the account, active or kept, changes nothing and sends
         nothing, so a retried start never revives or replaces one. It is answered `200` with the
-        `list` and `length` of the tracks it sent, as the first start was.
+        `list` and `length` of the source it sent, as the first start was (for a recipe, as it
+        resolves again).
 
         Answers `422` unless every track is in `libraryId` and the caller reaches the library,
-        whether or not one that is refused exists (`requirements/users.md` §10); when `tracks` is
-        empty or `start` is not one of its positions; when a key or `queueId` is not a UUID; when
-        `context` is not an object with a string `type` of at most 4 KiB; or when the body is
-        larger than the server accepts, which holds hundreds of thousands of tracks.
+        whether or not one that is refused exists (`requirements/users.md` §10), and the same
+        for a recipe's library; when `tracks` is empty or `start` is not one of its positions;
+        when `startTrackId` is missing from a recipe start, sent with `tracks`, or not in the
+        recipe's list; when a recipe is one the server cannot resolve, as its schema says; when a
+        key or `queueId` is not a UUID; when `context` is not an object with a string `type` of
+        at most 4 KiB; or when the body is larger than the server accepts, which holds hundreds
+        of thousands of tracks (a longer list starts from a recipe).
       operationId: startQueue
       requestBody:
         required: true
@@ -3144,10 +3156,9 @@ components:
           description: What the queue started from, kept as sent.
         source:
           type: object
-          required: [key, libraryId, tracks]
+          required: [key, libraryId]
           description: |
-            The tracks as the device resolved them, in play order. A track may appear more than
-            once; each place is its own item.
+            Exactly one of `tracks` and `recipe`.
           properties:
             key:
               type: string
@@ -3156,11 +3167,33 @@ components:
             libraryId: { type: string }
             tracks:
               type: array
+              description: |
+                The tracks as the device resolved them, in play order. A track may appear more than
+                once; each place is its own item.
               items: { type: string }
+            recipe:
+              description: What the server resolves into the list. Needs `startTrackId`.
+              oneOf:
+                - $ref: '#/components/schemas/QueueAlbumRecipe'
+                - $ref: '#/components/schemas/QueueArtistRecipe'
+                - $ref: '#/components/schemas/QueueLibraryRecipe'
+                - $ref: '#/components/schemas/QueueSearchRecipe'
+              discriminator:
+                propertyName: type
+                mapping:
+                  album: '#/components/schemas/QueueAlbumRecipe'
+                  artist: '#/components/schemas/QueueArtistRecipe'
+                  library: '#/components/schemas/QueueLibraryRecipe'
+                  search: '#/components/schemas/QueueSearchRecipe'
         start:
           type: integer
           minimum: 0
-          description: The position in `tracks` of the track that plays first.
+          description: |
+            With `tracks`, the position of the track that plays first. With a recipe, the index of
+            the clicked track in the view the device showed.
+        startTrackId:
+          type: string
+          description: With a recipe, the track that plays first. The server uses `start` if its list holds this track there, and otherwise the first place it appears.
 
     StartedQueue:
       type: object
@@ -3316,7 +3349,7 @@ components:
       properties:
         type: { const: album }
         albumId: { type: string }
-        sort: { type: string }
+        sort: { $ref: '#/components/schemas/QueueTrackSort' }
 
     QueueArtistRecipe:
       type: object
@@ -3325,9 +3358,16 @@ components:
       properties:
         type: { const: artist }
         artistId: { type: string }
-        scope: { type: string }
-        artistCredit: { type: string }
-        sort: { type: string }
+        scope:
+          type: string
+          description: |
+            Which of the artist's tracks. Only `all` is supported so far; any other value, such
+            as `topTracks`, is `422` on a start until it is built.
+        artistCredit:
+          type: string
+          enum: [any, owned, featured]
+          description: As `artistCredit` of `listTracks`.
+        sort: { $ref: '#/components/schemas/QueueTrackSort' }
 
     QueueLibraryRecipe:
       type: object
@@ -3337,21 +3377,30 @@ components:
         type: { const: library }
         filters:
           type: array
-          description: Pairs of a filter's name and its value.
+          description: Pairs of a filter's name and its value. No filter is supported yet, so a start with any is `422`.
           items:
             type: array
             minItems: 2
             maxItems: 2
             items: { type: string }
-        sort: { type: string }
+        sort: { $ref: '#/components/schemas/QueueTrackSort' }
+
+    QueueTrackSort:
+      type: string
+      pattern: '^(name|artist|album|dateAdded|playCount|lastPlayed|releaseDate|duration|top)\.(asc|desc)$'
+      description: |
+        A sort of `listTracks` and its direction, such as `name.asc`. The list is that of a view
+        paged to its end: ties end on the track ID, and a track with no value in the sort's
+        field comes last in both directions. `playCount`, `lastPlayed` and `top` are planned:
+        a start with one is `422` until they are built, as they are for `listTracks`.
 
     QueueSearchRecipe:
       type: object
       required: [type, q]
-      description: A search's tracks.
+      description: A search's tracks, all of them, in the search's ranking.
       properties:
         type: { const: search }
-        q: { type: string }
+        q: { type: string, minLength: 1 }
 
     QueueTracksRecipe:
       type: object

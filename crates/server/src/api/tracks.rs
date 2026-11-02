@@ -15,7 +15,7 @@ pub use representation::{
 
 use super::credit::{ArtistCredit, Credits};
 use super::extract::{Path, Query};
-use super::page::{Check, Order, Page, Request, Sort, Source, Table, Unknown};
+use super::page::{self, Check, Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
 use super::tag_filter::{self, TagFilter, Tagged};
 use super::{AnyId, Id, Problem};
@@ -34,7 +34,7 @@ const WITHIN_ALBUM: Sort = Sort {
 };
 
 /// The `sort` values `listTracks` supports.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum TrackSort {
     #[default]
@@ -48,6 +48,16 @@ enum TrackSort {
 }
 
 impl TrackSort {
+    /// Every sort a track list supports, with the name `listTracks` and a recipe spell it by.
+    const ALL: [(TrackSort, &'static str); 6] = [
+        (TrackSort::Name, "name"),
+        (TrackSort::Artist, "artist"),
+        (TrackSort::Album, "album"),
+        (TrackSort::DateAdded, "dateAdded"),
+        (TrackSort::ReleaseDate, "releaseDate"),
+        (TrackSort::Duration, "duration"),
+    ];
+
     /// The keyset this sort pages by. Each one's columns are one of `tracks`' indexes after
     /// `library_id`.
     fn sort(self) -> &'static Sort {
@@ -90,6 +100,43 @@ impl TrackSort {
                 unknown: Unknown::Never,
             },
         }
+    }
+}
+
+/// A track list's sort and direction as a recipe spells them, such as `name.asc`: one of the
+/// sorts `listTracks` supports, then `asc` or `desc`. Anything else, including the personal
+/// sorts that are not implemented, is refused as the request is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct TrackOrder {
+    sort: TrackSort,
+    order: Order,
+}
+
+impl TryFrom<String> for TrackOrder {
+    type Error = String;
+
+    /// Reads `text` as `{sort}.{order}`.
+    fn try_from(text: String) -> Result<TrackOrder, String> {
+        let parsed = text.split_once('.').and_then(|(sort, order)| {
+            let (sort, _) = TrackSort::ALL.into_iter().find(|(_, name)| *name == sort)?;
+            let order = match order {
+                "asc" => Order::Asc,
+                "desc" => Order::Desc,
+                _ => return None,
+            };
+            Some(TrackOrder { sort, order })
+        });
+        parsed.ok_or_else(|| format!("{text:?} is not a sort, such as name.asc"))
+    }
+}
+
+impl TrackOrder {
+    /// The order as a recipe spells it.
+    pub fn label(self) -> String {
+        let name = TrackSort::ALL.into_iter().find(|(sort, _)| *sort == self.sort);
+        let order = if self.order == Order::Asc { "asc" } else { "desc" };
+        format!("{}.{order}", name.map_or("", |(_, name)| name))
     }
 }
 
@@ -164,12 +211,9 @@ pub async fn list(
     if query.ids.is_some() {
         return by_ids(db, library, query).await;
     }
-    // An album's own track listing, the common case, reads straight from its index.
-    let sort = match (query.sort.unwrap_or_default(), &query.album_id) {
-        (TrackSort::Album, Some(_)) => &WITHIN_ALBUM,
-        (sort, _) => sort.sort(),
-    };
-    let order = query.order.unwrap_or_default();
+    let order =
+        TrackOrder { sort: query.sort.unwrap_or_default(), order: query.order.unwrap_or_default() };
+    let (sort, order) = order.keyset(query.album_id.is_some());
     let request = Request::new(sort, order, query.cursor, query.limit)?;
     let credit = query.artist_credit.unwrap_or_default();
     let (album, artist) = (query.album_id, query.artist_id);
@@ -181,6 +225,35 @@ pub async fn list(
         })
         .await?;
     Ok(Json(page))
+}
+
+impl TrackOrder {
+    /// The keyset and direction to page by. An album's own track listing, the common case,
+    /// reads straight from its index.
+    fn keyset(self, one_album: bool) -> (&'static Sort, Order) {
+        match (self.sort, one_album) {
+            (TrackSort::Album, true) => (&WITHIN_ALBUM, self.order),
+            (sort, _) => (sort.sort(), self.order),
+        }
+    }
+}
+
+/// The ID of every track in `library` that `list` pages through for the same `album`, `artist`,
+/// `credit` and `order` with no tag filter, in the same order, read at once: one statement for
+/// each part of the sort's index, not a page at a time.
+pub fn resolve(
+    conn: &Connection,
+    library: i64,
+    album: Option<AnyId>,
+    artist: Option<AnyId>,
+    credit: ArtistCredit,
+    order: TrackOrder,
+) -> rusqlite::Result<Vec<u64>> {
+    let (sort, order) = order.keyset(album.is_some());
+    let source = source(conn, library, album, artist, credit, &TagFilter::default())?;
+    // Only the IDs are wanted, so the columns and joins for summaries are left out.
+    let source = Source { select: &["t.id"], joins: "", ..source };
+    page::ids(conn, &source, sort, order)
 }
 
 /// `getTrack`: the track, or not found when the library has no such track.
