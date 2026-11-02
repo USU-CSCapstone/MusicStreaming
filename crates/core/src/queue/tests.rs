@@ -2502,3 +2502,17 @@ fn parity_edit_sequence() {
     }
     assert_eq!(serde_json::to_value(&state).unwrap(), fixture["final"]);
 }
+
+#[test]
+fn holds_item_covers_playing_queued_and_passed_items() {
+    let mut q = album();
+    next(&mut q);
+    add(&mut q, source("b", 2), Anchor::ManualEnd);
+    for held in ["a.0", "a.1", "a.4", "b.1"] {
+        assert!(q.holds_item(&item(held)), "{held}");
+    }
+    remove(&mut q, &["b.1"]);
+    for gone in ["b.1", "b.2", "a.5", "c.0"] {
+        assert!(!q.holds_item(&item(gone)), "{gone}");
+    }
+}

@@ -517,3 +517,42 @@ async fn the_task_sweeps_on_its_own() {
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
 }
+
+/// Kept queues parked more than the window ago go with the lists no queue uses after them. A
+/// recent one, an active one, and the lists they use stay, even where another account's list
+/// has the same hash.
+#[test]
+fn kept_queues_age_out_with_their_unused_lists() {
+    let (_temp, db) = open(|conn| {
+        User::new(2, "user").insert(conn)?;
+        for (user, queue, active, at) in [
+            (1, "old", 0, Some(OLD)),
+            (1, "recent", 0, Some(RECENT)),
+            (1, "live", 1, None),
+            (2, "old", 0, Some(RECENT)),
+        ] {
+            conn.execute(
+                "INSERT INTO queues (user_id, queue_id, version, context, state, active, \
+                 last_active) VALUES (?1, ?2, 0, '{}', '{}', ?3, ?4)",
+                params![user, queue, active, at],
+            )?;
+            conn.execute(
+                "INSERT INTO queue_list_uses (user_id, queue_id, hash) VALUES (?1, ?2, ?2)",
+                params![user, queue],
+            )?;
+            conn.execute(
+                "INSERT INTO queue_lists (user_id, hash, library_id, tracks, length) \
+                 VALUES (?1, ?2, 1, x'0100000000000000', 1)",
+                params![user, queue],
+            )?;
+        }
+        Ok(())
+    });
+    sweep(&db, NOW);
+    let rows = |sql| column(&db, sql);
+    assert_eq!(rows("SELECT user_id FROM queues ORDER BY user_id, queue_id"), [1, 1, 2]);
+    assert_eq!(rows("SELECT count(*) FROM queue_list_uses"), [3]);
+    // Account 1's `old` list goes, though account 2's, with the same hash, is still used.
+    assert_eq!(rows("SELECT user_id FROM queue_lists ORDER BY user_id, hash"), [1, 1, 2]);
+    assert_eq!(rows("SELECT count(*) FROM queue_lists WHERE hash = 'old' AND user_id = 1"), [0]);
+}
