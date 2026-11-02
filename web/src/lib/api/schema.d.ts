@@ -940,7 +940,7 @@ export interface paths {
          *     whether or not one that is refused exists (`requirements/users.md` §10); when `tracks` is
          *     empty or `start` is not one of its positions; when a key or `queueId` is not a UUID; when
          *     `context` is not an object with a string `type` of at most 4 KiB; or when the body is
-         *     larger than the server accepts, which is far past any library it is meant for.
+         *     larger than the server accepts, which holds hundreds of thousands of tracks.
          */
         post: operations["startQueue"];
         delete?: never;

@@ -130,7 +130,10 @@ async fn snapshot_is_conditional() {
     let (status, headers, body) = get(&app, &[]).await;
     assert_eq!(status, StatusCode::OK);
     let tag = etag(&headers);
-    assert!(tag.starts_with('"') && tag.contains(QUEUE) && !body.is_empty(), "{tag}");
+    // Devices rebuild the tag for a version they reached by edits, so its form is fixed.
+    let run = tag.trim_start_matches('"').split('.').next().unwrap();
+    assert_eq!(tag, format!("\"{run}.{QUEUE}.0\""));
+    assert!(!body.is_empty());
 
     for known in [tag.clone(), format!("\"other\", {tag}"), format!("W/{tag}"), "*".to_owned()] {
         let (status, headers, body) = get(&app, &[("if-none-match", &known)]).await;
@@ -404,4 +407,15 @@ async fn a_start_past_the_body_limit_is_refused() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{}", String::from_utf8_lossy(&answer));
     let (status, _) = call(&app, TOKEN, "GET", "/api/v1/me/queue", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "nothing started");
+}
+
+#[tokio::test]
+async fn an_oversized_context_is_refused_for_its_size() {
+    let (_temp, _state, app) = setup().await;
+    // Not an object either, but its size is checked before it is read.
+    let mut body = start_body(QUEUE, KEY, &["1"], 0);
+    body["context"] = json!(vec![0; 100_000]);
+    let (status, answer) = start(&app, TOKEN, body).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(answer["detail"], "A queue's context is at most 4 KiB.");
 }

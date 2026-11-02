@@ -7,6 +7,7 @@ use axum::extract::State;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_json::value::RawValue;
 
 use crate::api::player::Players;
 use crate::api::realtime::{Hub, ServerMessage};
@@ -20,7 +21,8 @@ use crate::queue::{KeepError, NewQueue, Queues, list_hash};
 #[serde(rename_all = "camelCase")]
 pub struct Start {
     queue_id: Uuid,
-    context: Value,
+    /// Kept raw until its size is checked, so an oversized one is never built as a tree.
+    context: Box<RawValue>,
     source: NewSource,
     /// The index of the track that plays first.
     start: u64,
@@ -32,7 +34,8 @@ pub struct Start {
 struct NewSource {
     key: Uuid,
     library_id: String,
-    tracks: Vec<String>,
+    /// Read straight into IDs, eight bytes each, so the body is the largest thing a start holds.
+    tracks: Vec<Id>,
 }
 
 /// The spec's `StartedQueue`: the list the server holds for the start, which the device attaches
@@ -58,11 +61,11 @@ pub async fn start(
     caller: Caller,
     extract::Json(request): extract::Json<Start>,
 ) -> Result<Json<Started>, Problem> {
-    // The context is checked as a play's is, and kept as sent.
-    plays::json_text(&request.context, "A queue's context", true)?;
+    let context = context(&request.context)?;
     let NewSource { key, library_id, tracks } = request.source;
     let library = Id::canonical(&library_id).ok_or_else(refused)?;
-    let ids = check_tracks(&db, &caller, library, &tracks).await?;
+    let ids: Vec<u64> = tracks.into_iter().map(|Id(id)| id.cast_unsigned()).collect();
+    check_tracks(&db, &caller, library, &ids).await?;
     let length = ids.len();
     let tracks: Arc<[u64]> = ids.into();
 
@@ -70,7 +73,7 @@ pub async fn start(
     let queue_id = request.queue_id;
     let new = NewQueue {
         queue_id: queue_id.clone(),
-        context: request.context,
+        context,
         key: key.as_str().to_owned(),
         library_id: library.0,
         tracks: tracks.clone(),
@@ -99,20 +102,28 @@ fn refused() -> Problem {
     Problem::invalid("Every track must be in the library, and the library one you reach.")
 }
 
-/// `tracks` as IDs, once every one is checked to be in `library`, which the caller must reach.
-/// Refused, `422`, as a start is.
+/// A start's context, checked as a play's is and kept as sent. Its size is checked before it is
+/// parsed.
+fn context(raw: &RawValue) -> Result<Value, Problem> {
+    const FIELD: &str = "A queue's context";
+    if raw.get().len() > plays::MAX_JSON_BYTES {
+        return Err(Problem::invalid(format!("{FIELD} is at most 4 KiB.")));
+    }
+    let value =
+        serde_json::from_str(raw.get()).map_err(|error| Problem::invalid(error.to_string()))?;
+    plays::json_text(&value, FIELD, true)?;
+    Ok(value)
+}
+
+/// Checks that every one of `ids` is in `library`, which the caller must reach. Refused, `422`,
+/// as a start is.
 async fn check_tracks(
     db: &Database,
     caller: &Caller,
     library: Id,
-    tracks: &[String],
-) -> Result<Vec<u64>, Problem> {
-    let ids = tracks
-        .iter()
-        .map(|track| Id::canonical(track).map(|Id(id)| id.cast_unsigned()))
-        .collect::<Option<Vec<u64>>>()
-        .ok_or_else(refused)?;
-    let mut distinct = ids.clone();
+    ids: &[u64],
+) -> Result<(), Problem> {
+    let mut distinct = ids.to_vec();
     distinct.sort_unstable();
     distinct.dedup();
 
@@ -130,5 +141,5 @@ async fn check_tracks(
             .query_row(params![library.0, json, admin, user], |row| row.get(0))
         })
         .await?;
-    if found == distinct.len() { Ok(ids) } else { Err(refused()) }
+    if found == distinct.len() { Ok(()) } else { Err(refused()) }
 }
