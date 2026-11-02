@@ -499,3 +499,31 @@ async fn an_item_whose_key_is_not_a_uuid_is_refused() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(snapshot(&app).await["state"]["order"][0]["len"], 2);
 }
+
+#[tokio::test]
+async fn oversized_small_parts_of_an_edit_are_refused_for_their_size() {
+    let (_temp, _state, app) = setup().await;
+    start(&app, TOKEN, start_body(QUEUE, KEY, &["1", "2"], 0)).await;
+    // Each would be buffered whole as a tagged enum if it were read before its size is checked.
+    let junk = vec![0; 100_000];
+    let anchor = json!({ "type": "manualStart", "junk": junk });
+    let recipe = json!({ "type": "search", "q": "x", "junk": junk });
+    for (what, edit, detail) in [
+        ("next", json!({ "type": "next", "junk": junk }), "An edit of this type"),
+        ("move", json!({ "type": "move", "items": [], "before": anchor }), "An anchor"),
+        ("add", add(ADDED, &["1"], anchor), "An anchor"),
+        (
+            "add of a recipe",
+            json!({
+                "type": "add", "before": manual_end(),
+                "source": { "key": ADDED, "libraryId": "1", "recipe": recipe },
+            }),
+            "A recipe",
+        ),
+    ] {
+        let (status, answer) = send(&app, TOKEN, QUEUE, 1, edit).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{what}: {answer}");
+        assert_eq!(answer["detail"], format!("{detail} is at most 4 KiB."), "{what}");
+    }
+    assert_eq!(snapshot(&app).await["version"], 0, "nothing applied");
+}
