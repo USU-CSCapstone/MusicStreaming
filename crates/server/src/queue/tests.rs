@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use jewelcase_core::{Anchor, Edit, QueueState, Source};
+use jewelcase_core::{Anchor, Edit, QueueState, Repeat, Source};
 use rusqlite::Connection;
 use serde_json::json;
 
@@ -533,6 +533,21 @@ async fn restore_unsaved_parked_queue() {
     }
     assert_eq!((queue_ids(&conn, 0), queue_ids(&conn, 1)), (vec![], vec![QUEUE.to_owned()]));
     assert_eq!((stored(&conn, 1), uses(&conn, 1)), (vec![first.clone()], vec![first]));
+}
+
+#[tokio::test]
+async fn a_start_keeps_repeat_and_a_restore_keeps_its_own() {
+    let (_temp, db, _conn) = setup();
+    let (queues, _) = adjusted_and_saved(&db).await;
+    let set =
+        |mode| queues.lock().get_mut(&1).unwrap().state.apply(&Edit::Repeat { mode }).unwrap();
+    set(Repeat::All);
+    start(&queues, &db, OTHER, &[3]).await.unwrap();
+    assert_eq!(queues.lock()[&1].state.repeat, Repeat::All);
+
+    set(Repeat::Off);
+    queues.restore(&db, 1, id(QUEUE), || None).await.unwrap();
+    assert_eq!(queues.lock()[&1].state.repeat, Repeat::All);
 }
 
 #[tokio::test]

@@ -103,7 +103,8 @@ impl Queues {
         db.try_write(move |tx| queues.start_in(tx, user, fresh, place)).await
     }
 
-    /// Makes `fresh`'s queue active, in the writer's job `tx`.
+    /// Makes `fresh`'s queue active, in the writer's job `tx`, with the active queue's repeat
+    /// mode.
     pub(super) fn start_in(
         &self,
         tx: &Transaction,
@@ -125,11 +126,14 @@ impl Queues {
         if stored || account.names(&fresh.queue_id) {
             return Err(KeepError::Exists);
         }
+        let mut state = fresh.state;
+        // Repeat survives a context change (requirements/queue.md §5).
+        state.repeat = account.state.repeat;
         let queue = Queue {
             queue_id: fresh.queue_id,
             version: 0,
             context: fresh.context,
-            state: fresh.state,
+            state,
             position: None,
         };
         account.lists.extend(fresh.lists);
