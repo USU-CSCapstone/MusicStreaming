@@ -9,8 +9,9 @@
 	import { albumTitle, formatLength, plural, releaseYear } from '$lib/format';
 	import { knownTags } from '$lib/known-tags.svelte';
 	import { player } from '$lib/player.svelte';
+	import { type PlayFrom, recipeSort } from '$lib/queue';
 	import { currentSort, showSorted } from '$lib/sort-url';
-	import { ALBUM_FIELDS, sortTracks } from '$lib/sorting';
+	import { ALBUM_FIELDS, serverSort, sortTracks } from '$lib/sorting';
 
 	let { data } = $props();
 
@@ -29,6 +30,20 @@
 			(track) => track.tags,
 			(tag) => knownTags.get(data.lib, tag)?.type
 		)
+	);
+	// The server resolves the album in the order shown: within the album, or as sorted. Filtered,
+	// it plays as shown, since a recipe cannot name tags yet.
+	const from = $derived<PlayFrom | undefined>(
+		isFiltered(filter)
+			? undefined
+			: {
+					recipe: {
+						type: 'album',
+						albumId: album.id,
+						sort: recipeSort(serverSort(sort) ?? { sort: 'album', order: 'asc' })
+					},
+					total: shown.length
+				}
 	);
 	// The whole album, as the server expands it: every track, in disc then track order.
 	const adding = $derived(
@@ -66,7 +81,7 @@
 	image={album.image}
 	seed={album.id}
 	icon="album"
-	onplay={shown.length ? () => player.play(shown, 0, context) : undefined}
+	onplay={shown.length ? () => player.play(shown, 0, context, from) : undefined}
 >
 	<span class="artists"><ArtistLinks artists={album.artists} /></span>
 	{#if Object.keys(album.tags).length}<TagLinks tags={album.tags} />{/if}
@@ -87,6 +102,7 @@
 	{filter}
 	onfilter={showFiltered}
 	{context}
+	{from}
 	empty={isFiltered(filter) ? 'No songs on this album carry these tags.' : undefined}
 />
 

@@ -12,11 +12,20 @@ import type {
 	QueueEdit,
 	QueueSnapshot,
 	RealtimeServerMessage,
-	SentEdit
+	SentEdit,
+	StartQueue
 } from '$lib/api/types';
 import { download, ListCache } from './lists';
 import { PAGE, RowPages } from './rows';
-import type { QueueRow, Refusal, Repeat, RowSection, RowsWindow, Summary } from './protocol';
+import type {
+	QueueRow,
+	Refusal,
+	Repeat,
+	RowSection,
+	RowsWindow,
+	StartRequest,
+	Summary
+} from './protocol';
 
 export type Options = {
 	/** The API's base path, such as `/api/v1`. */
@@ -41,6 +50,14 @@ type Pending = {
 	local: QueueEdit | null;
 	/** The version the server answered it made, once it has. */
 	version?: number;
+};
+
+/** A start this device made that the server has not answered. */
+type Starting = {
+	/** What is sent: the request without what only this device holds. */
+	body: StartQueue;
+	/** How long the view said the source was, to tell whether the server's list is the view's. */
+	total?: number;
 };
 
 /** What the state says of a source that rows need. */
@@ -86,6 +103,20 @@ export class QueueStore {
 	/** Edits heard while the queue is being fetched; the fetch may predate them. */
 	#held: QueueEditMessage[] | null = null;
 	#draining = false;
+	/** The start waiting to be sent or answered; it goes before every edit and fetch. */
+	#starting: Starting | null = null;
+	/** The rows of the view a start came from, by position, for the source it started (`rows`). */
+	#viewRows = new Map<string, string[]>();
+	/** The item a recipe start played, until the server's snapshot says whether it is the one it made current. */
+	#startItem: string | null = null;
+	/** Counts starts, so a fetch that began before one is not installed over it. */
+	#epoch = 0;
+	/** Whether the last request that could be made failed, so what it would have fetched is not coming. */
+	#failing = false;
+	/** The context's rows are in a shuffled order, which a view's rows cannot fill. */
+	#shuffled = false;
+	/** The item playing, which the shuffle does not move. */
+	#current: string | null = null;
 
 	#lists: ListCache;
 	#pages: RowPages;
@@ -160,8 +191,10 @@ export class QueueStore {
 				typeof held === 'string'
 					? 'known'
 					: held === null ||
-						  problem === 'gone' ||
-						  (problem === 'failed' && !this.#pages.fetching(part, first + i))
+						  (list === undefined
+								? this.#failing
+								: problem === 'gone' ||
+									(problem === 'failed' && !this.#pages.fetching(part, first + i)))
 						? 'unavailable'
 						: 'unknown';
 			const out: QueueRow = {
@@ -176,10 +209,18 @@ export class QueueStore {
 		return { section, offset, total, revision: this.#revision, rows };
 	}
 
-	/** A page's track for the row, null if the server could not read it, else a pending add's, else undefined. */
+	/**
+	 * A page's track for the row, null if the server could not read it, else a pending add's,
+	 * else the view's the queue started from, else undefined. The view's fill only rows of an
+	 * unshuffled queue, which read straight from the list.
+	 */
 	#fromPageOrOwn(row: CoreRow): string | null | undefined {
 		const page = this.#pages.track(row.item);
-		return page === undefined ? this.#ownTrack(row) : page;
+		if (page !== undefined) return page;
+		const straight = !this.#shuffled || row.item === this.#current;
+		return (
+			this.#ownTrack(row) ?? (straight ? this.#viewRows.get(row.source)?.[row.position] : undefined)
+		);
 	}
 
 	/**
@@ -230,6 +271,86 @@ export class QueueStore {
 		return this.#fetch(`${this.#api}${path}`, { headers: { 'X-Jewelcase-Client': 'web' } }).catch(
 			() => null
 		);
+	}
+
+	/**
+	 * Starts a queue here at once, as a start from a view does (`design/queue.md` §3): the
+	 * queue is the new one, its source as long as the view says and with no list, the clicked row
+	 * playing, and the request goes to the server in the background, before anything else. The view's
+	 * own rows fill the unshuffled rows they cover. Answers false, changing nothing, if the
+	 * start is not a position of the source.
+	 */
+	start({ total, loaded, ...body }: StartRequest): boolean {
+		const { key, libraryId, tracks } = body.source;
+		const length = tracks?.length ?? total ?? 0;
+		// The core makes the state; it rounds what it is given, so a position it would not is refused here.
+		if (!Number.isInteger(body.start) || body.start < 0) return false;
+		let next: Queue;
+		try {
+			next = Queue.started(key, libraryId, length, body.start);
+		} catch {
+			return false;
+		}
+		this.#epoch++;
+		this.#startItem = null;
+		this.#release();
+		this.#confirmed = this.#view = next;
+		this.#queueId = body.queueId;
+		this.#context = body.context as PlayContext;
+		this.#version = 0;
+		this.#run = null;
+		this.#refetch = false;
+		this.#attached.clear();
+		this.#problems.clear();
+		this.#pages.reset(body.queueId);
+		this.#viewRows.set(key, tracks ?? loaded ?? []);
+		this.#supersede(() => true);
+		this.#starting = { body, total };
+		this.#emit();
+		this.#drain();
+		return true;
+	}
+
+	/**
+	 * Sends the start, again if the answer was lost. Its answer gives the list's hash: a start of
+	 * `tracks` attaches them under it, so they are never downloaded back, and a recipe's start
+	 * fetches the queue, since the server's list and start may differ from the view's. A start
+	 * the server refuses is gone, and the queue the server has is fetched.
+	 */
+	async #sendStart(starting: Starting) {
+		const { body } = starting;
+		const response = await this.#call('POST', '/me/queue', body);
+		if (this.#starting !== starting || !response) return;
+		if (!response.ok) {
+			const problem = await problemOf(response);
+			this.#starting = null;
+			this.#viewRows.clear();
+			this.#supersede((pending) => pending.queueId === body.queueId);
+			this.#refetch = true;
+			this.#refused({ code: problem.code, message: problem.message, edit: null });
+			return;
+		}
+		const { list, length } = (await response.json()) as { list: string; length: number };
+		this.#starting = null;
+		const { key, libraryId, tracks } = body.source;
+		if (tracks) {
+			const text = JSON.stringify({ libraryId, tracks });
+			void this.#lists.put(list, text);
+			try {
+				this.#confirmed?.attachSource(key, list, text);
+				this.#attached.add(list);
+				this.#viewRows.delete(key);
+				this.#rebuild();
+			} catch {
+				// The queue no longer has the source: its own list is fetched like any other.
+			}
+		} else {
+			// The server's list, or its start, may differ from the view's: if it does, the view's rows
+			// are no guide to the rows the snapshot names.
+			if (length !== starting.total) this.#viewRows.delete(key);
+			this.#startItem = `${key}.${body.start}`;
+			this.#refetch = true;
+		}
 	}
 
 	/**
@@ -364,6 +485,11 @@ export class QueueStore {
 			sources: { key: string; libraryId: string; list?: string }[];
 		} | null = view ? JSON.parse(view.toJson()) : null;
 		this.#sources = new Map(state?.sources.map((source) => [source.key, source]));
+		this.#shuffled = !!state?.shuffle;
+		this.#current = state?.current ?? null;
+		// What clean-up dropped, the view's rows for it go too.
+		for (const key of this.#viewRows.keys())
+			if (!this.#sources.has(key)) this.#viewRows.delete(key);
 		this.#changed({
 			queueId: this.#queueId,
 			context: this.#context,
@@ -474,6 +600,7 @@ export class QueueStore {
 		const keys = new Set<string>();
 		for (const [key, source] of this.#sources) if (source.list === hash) keys.add(key);
 		this.#pages.forgetSources(keys);
+		for (const key of keys) this.#viewRows.delete(key);
 		return true;
 	}
 
@@ -490,10 +617,12 @@ export class QueueStore {
 	}
 
 	/**
-	 * The next thing waiting, or null: an edit, then a fetch. Edits go before the fetch so each is
+	 * The next thing waiting, or null: the start, an edit, then a fetch. Edits go before the fetch so each is
 	 * answered, or known unsent, by the time the snapshot is installed.
 	 */
 	#next(): (() => Promise<void>) | null {
+		const starting = this.#starting;
+		if (starting) return () => this.#sendStart(starting);
 		const edit = this.#pending.find((pending) => pending.version === undefined);
 		if (edit) return () => this.#sendEdit(edit);
 		return this.#refetch ? () => this.#fetchQueue() : null;
@@ -513,9 +642,20 @@ export class QueueStore {
 			headers,
 			body: body && JSON.stringify(body)
 		}).catch(() => null);
-		if (response && response.status < 500 && response.status !== 429) return response;
+		if (response && response.status < 500 && response.status !== 429) {
+			this.#reached(true);
+			return response;
+		}
+		this.#reached(false);
 		await new Promise((resolve) => setTimeout(resolve, this.#retryMs));
 		return null;
+	}
+
+	/** Notes whether the server could be reached, so rows that only it could tell are `unavailable` while it cannot. */
+	#reached(reached: boolean) {
+		if (this.#failing === !reached) return;
+		this.#failing = !reached;
+		this.#emit();
 	}
 
 	/** Sends one edit, again with the same `editId` if the answer was lost. */
@@ -549,6 +689,7 @@ export class QueueStore {
 	 */
 	async #fetchQueue() {
 		this.#refetch = false;
+		const epoch = this.#epoch;
 		// Held until the snapshot is installed, which can wait for stored lists.
 		const held: QueueEditMessage[] = (this.#held = []);
 		let settle = false;
@@ -561,6 +702,8 @@ export class QueueStore {
 					? { 'If-None-Match': `"${this.#run}.${this.#queueId}.${this.#version}"` }
 					: {}
 			);
+			// A start meanwhile made this the queue of another, which is not to replace it.
+			if (epoch !== this.#epoch) return;
 			if (!response) {
 				this.#refetch = true;
 				return;
@@ -571,8 +714,7 @@ export class QueueStore {
 			} else if (response.status === 304) {
 				settle = this.#pending.length > 0 || held.length > 0;
 			} else if (response.ok) {
-				await this.#install((await response.json()) as QueueSnapshot);
-				settle = true;
+				settle = await this.#install((await response.json()) as QueueSnapshot, epoch);
 			}
 		} finally {
 			this.#held = null;
@@ -599,9 +741,13 @@ export class QueueStore {
 	 * Makes the snapshot the confirmed queue, with its lists attached again, since a new core
 	 * queue holds none: those the confirmed queue holds are shared from it, and only the others
 	 * are read from storage. Pending edits for another queue go. Stored lists the snapshot does
-	 * not use are deleted: after a reload nothing else knows they were kept.
+	 * not use are deleted: after a reload nothing else knows they were kept. False if a start
+	 * since `epoch` made the snapshot out of date, which then changes nothing.
 	 */
-	async #install({ queueId, version, context, state }: QueueSnapshot) {
+	async #install(
+		{ queueId, version, context, state }: QueueSnapshot,
+		epoch: number
+	): Promise<boolean> {
 		const next = Queue.fromJson(JSON.stringify(state));
 		const hashes = hashesOf(next);
 		const attached = new Set<string>(
@@ -618,14 +764,21 @@ export class QueueStore {
 				void this.#lists.delete(hash);
 			}
 		}
+		if (epoch !== this.#epoch) return false;
 		void this.#lists.keep(new Set(hashes));
 		this.#release();
+		// A start the server moved: its current is not the row the view clicked.
+		if (this.#startItem !== null) {
+			if (state.current !== this.#startItem) this.#viewRows.clear();
+			this.#startItem = null;
+		}
 		this.#confirmed = this.#view = next;
 		this.#attached = attached;
 		this.#queueId = queueId;
 		this.#context = context;
 		this.#version = version;
 		this.#supersede((pending) => pending.queueId !== queueId);
+		return true;
 	}
 
 	/** Drops the pending edits `gone` picks, saying a new queue replaced them. */

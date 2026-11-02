@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { initSync, Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
-import type { QueueEdit, RealtimeServerMessage, SentEdit } from '$lib/api/types';
+import type { QueueEdit, RealtimeServerMessage, SentEdit, StartQueue } from '$lib/api/types';
 import type { Refusal, Summary } from './protocol';
 import { QueueStore } from './store';
 
@@ -59,6 +59,10 @@ class FakeServer {
 	rowsGate: Promise<void> | null = null;
 	/** Holds back the answer to an edit, once it is applied, until it is opened. */
 	editGate: Promise<void> | null = null;
+	/** Holds back the answer to a start until it is opened. */
+	startGate: Promise<void> | null = null;
+	/** What a recipe resolves to, as the tracks of the list the server holds for a recipe's start. */
+	resolved5 = ['200', '201', '202', '203', '204'];
 	/** The status pages of rows are answered with instead of the page. */
 	rowsStatus = 0;
 	/** Edits applied whose answer is lost on its way, in count. */
@@ -96,6 +100,20 @@ class FakeServer {
 		};
 	}
 
+	/** Starts a queue as `POST /me/queue` does, over the tracks sent or the recipe's resolve. */
+	start({ queueId, source, start, startTrackId }: StartQueue): Response {
+		const tracks: string[] = source.tracks ?? this.resolved5;
+		const at = source.tracks ? start : tracks.indexOf(startTrackId!);
+		const list = `hs-${queueId.slice(0, 4)}`;
+		const state = JSON.parse(Queue.started(source.key, 'lib', tracks.length, at).toJson());
+		state.sources[0].list = list;
+		this.queue = Queue.fromJson(JSON.stringify(state));
+		this.queueId = queueId;
+		this.version = 0;
+		this.lists.set(list, tracks);
+		return new Response(JSON.stringify({ list, length: tracks.length }));
+	}
+
 	/** Starts the server again: a new run, and the queue as a crash left it. */
 	restart(queue: Queue, version: number) {
 		this.run = 'r2';
@@ -106,7 +124,7 @@ class FakeServer {
 
 	/** The requests for the queue itself. */
 	queueGets() {
-		return this.requests.filter((r) => r.path === '/me/queue');
+		return this.requests.filter((r) => r.path === '/me/queue' && r.method === 'GET');
 	}
 
 	/** How many times the queue was asked for. */
@@ -197,6 +215,10 @@ class FakeServer {
 			}
 			this.onGet?.();
 			return answer;
+		}
+		if (path === '/me/queue' && method === 'POST') {
+			await this.startGate;
+			return this.start(body);
 		}
 		if (body.queueId !== this.queueId) return problem(409, 'queue_changed');
 		let version = this.#answered.get(body.editId);
@@ -991,6 +1013,222 @@ describe('QueueStore lists and rows', () => {
 		await settle();
 
 		expect(server.listGets()).toEqual(['h']);
+	});
+
+	describe('a start', () => {
+		const SOURCE = '22222222-2222-4222-8222-222222222222';
+		const STARTED = '33333333-3333-4333-8333-333333333333';
+		/** A start of a recipe over five tracks, its view having loaded `loaded` of them, clicking the second. */
+		const recipeStart = (loaded = ['200', '201', '202']) => ({
+			queueId: STARTED,
+			context: CONTEXT,
+			source: {
+				key: SOURCE,
+				libraryId: 'lib',
+				recipe: { type: 'album' as const, albumId: '1', sort: 'album.asc' }
+			},
+			start: 1,
+			startTrackId: '201',
+			total: 5,
+			loaded
+		});
+		/** The current row, and the first rows of Up Next, as tracks or statuses. */
+		const now = () => {
+			const row = store.rows({ section: 'current', offset: 0, limit: 1 }).rows[0];
+			return [row.track ?? row.status, ...upNext()];
+		};
+
+		it('plays the clicked row and fills its unshuffled rows from the view before the server answers', async () => {
+			await hello();
+			server.startGate = new Promise(() => {});
+			expect(store.start(recipeStart())).toBe(true);
+
+			expect(summary).toMatchObject({ queueId: STARTED, context: CONTEXT, current: `${SOURCE}.1` });
+			expect(summary).toMatchObject({ upNext: 3, history: 0, version: 0 });
+			// The view loaded three rows: what it did not load is waited for.
+			expect(now()).toEqual(['201', '202', 'unknown', 'unknown']);
+			expect(server.requests.at(-1)).toMatchObject({ method: 'POST', path: '/me/queue' });
+			expect(server.requests.at(-1)!.body).toEqual({
+				queueId: STARTED,
+				context: CONTEXT,
+				source: recipeStart().source,
+				start: 1,
+				startTrackId: '201'
+			});
+		});
+
+		it("fetches the server's queue once it answers a recipe, and fills the rest from its list", async () => {
+			await hello();
+			store.start(recipeStart());
+			await settle();
+
+			expect(server.gets()).toBe(2);
+			expect(server.queueGets().at(-1)!.headers).not.toHaveProperty('If-None-Match');
+			expect(summary).toMatchObject({ queueId: STARTED, current: `${SOURCE}.1`, upNext: 3 });
+			expect(now()).toEqual(['201', '202', '203', '204']);
+			expect(server.listGets().at(-1)).toBe(`hs-${STARTED.slice(0, 4)}`);
+		});
+
+		it("replaces the view's rows with the server's when the library changed", async () => {
+			await hello();
+			server.resolved5 = ['200', '201', '302', '303', '304'];
+			const held = gate();
+			server.listGate = held.wait;
+			store.start(recipeStart());
+			await settle();
+
+			// The list is on its way: the page the server gave says what its rows are.
+			expect(now()).toEqual(['201', '302', '303', '304']);
+			held.open();
+		});
+
+		it('attaches the tracks it sent under the hash the server gives, downloading and fetching nothing', async () => {
+			await hello();
+			const pages = server.rowGets();
+			const { total, loaded, ...body } = recipeStart(['200', '201', '202', '203', '204']);
+			void total;
+			void loaded;
+			store.start({
+				...body,
+				source: { key: SOURCE, libraryId: 'lib', tracks: ['200', '201', '202', '203', '204'] },
+				startTrackId: undefined
+			});
+			expect(now()).toEqual(['201', '202', '203', '204']);
+			await settle();
+
+			expect(now()).toEqual(['201', '202', '203', '204']);
+			expect(server.gets()).toBe(1);
+			expect(server.listGets()).toEqual(['h']);
+			expect(server.rowGets()).toEqual(pages);
+			expect(caches.hashes()).toEqual([`hs-${STARTED.slice(0, 4)}`]);
+		});
+
+		it('does not fill a shuffled queue from the view, but still the row playing', async () => {
+			await hello();
+			server.startGate = new Promise(() => {});
+			store.start(recipeStart(['200', '201', '202', '203', '204']));
+			store.edit({ type: 'shuffle', on: true, seed: 7 });
+
+			expect(summary.shuffled).toBe(true);
+			expect(now()).toEqual(['201', 'unknown', 'unknown', 'unknown']);
+		});
+
+		it('shows rows only the server could tell as unavailable while it cannot be reached, and waits again when it can', async () => {
+			await hello();
+			server.failures = [0];
+			store.start(recipeStart());
+			await Promise.resolve();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+
+			expect(now()).toEqual(['201', '202', 'unavailable', 'unavailable']);
+			await settle();
+			// Sent again, and answered: the same start, not a second.
+			const posts = server.requests.filter((r) => r.method === 'POST');
+			expect(posts.length).toBe(2);
+			expect(posts[1].body).toEqual(posts[0].body);
+			expect(now()).toEqual(['201', '202', '203', '204']);
+		});
+
+		it('sends edits made before the answer after the start, to the new queue', async () => {
+			await hello();
+			const held = gate();
+			server.startGate = held.wait;
+			store.start(recipeStart());
+			store.edit({ type: 'next' });
+			expect(summary).toMatchObject({ current: `${SOURCE}.2`, history: 1 });
+			held.open();
+			await settle();
+
+			const posts = server.requests.filter((r) => r.method === 'POST').map((r) => r.path);
+			expect(posts.slice(0, 2)).toEqual(['/me/queue', '/me/queue/edits']);
+			expect(server.requests.find((r) => r.path === '/me/queue/edits')!.body.queueId).toBe(STARTED);
+			expect(summary).toMatchObject({ current: `${SOURCE}.2`, version: 1 });
+			expect(refusals).toEqual([]);
+		});
+
+		it('takes back a start the server refuses, with the queue it has', async () => {
+			await hello();
+			server.failures = [422];
+			store.start(recipeStart());
+			store.edit({ type: 'next' });
+			await settle();
+
+			expect(refusals).toMatchObject([
+				{ code: 'superseded', edit: { type: 'next' } },
+				{ code: 'failed', edit: null }
+			]);
+			expect(summary).toMatchObject({ queueId: QUEUE, current: 'a.0' });
+		});
+
+		it('is not undone by a fetch of the queue it replaced that was under way', async () => {
+			server.startGate = new Promise(() => {});
+			server.onGet = () => {
+				server.onGet = null;
+				store.start(recipeStart());
+			};
+			store.message({ type: 'hello', deviceId: '1', serverTime: '' });
+			await settle();
+
+			expect(summary.queueId).toBe(STARTED);
+			expect(summary.current).toBe(`${SOURCE}.1`);
+		});
+
+		it('is not cleared by an answer that the account had no queue, after the start', async () => {
+			server.startGate = new Promise(() => {});
+			server.failures = [404];
+			store.message({ type: 'hello', deviceId: '1', serverTime: '' });
+			// The fetch is on its way.
+			store.start(recipeStart());
+			await settle();
+
+			expect(summary).toMatchObject({ queueId: STARTED, current: `${SOURCE}.1` });
+		});
+
+		it('does not play a stale view row when the server moved the clicked track', async () => {
+			await hello();
+			// A track was added ahead of the clicked one since the view loaded.
+			server.resolved5 = ['199', '200', '201', '202', '203'];
+			server.listGate = new Promise(() => {});
+			server.rowsGate = new Promise(() => {});
+			store.start(recipeStart(['200', '201', '202']));
+			await settle();
+
+			expect(summary.current).toBe(`${SOURCE}.2`);
+			// Not the view's third row, which is another track: it waits for the page.
+			expect(now()[0]).toBe('unknown');
+		});
+
+		it('does not fill Up Next from the view when a track was added after the clicked one', async () => {
+			await hello();
+			server.resolved5 = ['200', '201', '299', '202', '203'];
+			server.listGate = new Promise(() => {});
+			server.rowsGate = new Promise(() => {});
+			store.start({ ...recipeStart(['200', '201', '202', '203']), total: 4 });
+			await settle();
+
+			// The view's next row is another track than the server's, which the page will say.
+			expect(now().slice(1, 2)).toEqual(['unknown']);
+		});
+
+		it('is not replaced by a snapshot that was being installed when the start was made', async () => {
+			caches.keep('h', ['100', '101', '102', '103', '104']);
+			const reading = gate();
+			caches.matchGate = reading.wait;
+			server.startGate = new Promise(() => {});
+			store.message({ type: 'hello', deviceId: '1', serverTime: '' });
+			await settle();
+			store.start(recipeStart());
+			reading.open();
+			await settle();
+
+			expect(summary).toMatchObject({ queueId: STARTED, current: `${SOURCE}.1` });
+		});
+
+		it('refuses a start at a row the source does not have', () => {
+			expect(store.start({ ...recipeStart(), start: 5 })).toBe(false);
+			expect(store.start({ ...recipeStart(), start: -1 })).toBe(false);
+			expect(store.rows({ section: 'current', offset: 0, limit: 1 }).rows).toEqual([]);
+		});
 	});
 
 	it('counts History and Up Next separately', async () => {

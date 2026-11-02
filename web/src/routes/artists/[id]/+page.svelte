@@ -12,6 +12,7 @@
 	import { artistName, plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
 	import { player } from '$lib/player.svelte';
+	import { type PlayFrom, recipeSort } from '$lib/queue';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { FIELDS } from '$lib/sorting';
 	import { toast } from '$lib/toast.svelte';
@@ -56,6 +57,17 @@
 			listTracks(fetch, data.lib, { artistId: artist.id, ...songs.order, cursor })
 		)
 	);
+	// The songs shown, as the server resolves them in the same order.
+	const from = $derived<PlayFrom>({
+		recipe: {
+			type: 'artist',
+			artistId: artist.id,
+			scope: 'all',
+			artistCredit: 'any',
+			sort: recipeSort(songs.order)
+		},
+		total: tracks.total
+	});
 	// Every song the artist is credited on, as the server expands an artist, which the page
 	// shows a page at a time; `tracks.total` counts the same songs.
 	const adding = $derived(
@@ -86,7 +98,7 @@
 	seed={artist.id}
 	icon="artist"
 	round
-	onplay={tracks.items.length ? () => player.play(tracks.items, 0, context) : undefined}
+	onplay={tracks.items.length ? () => player.play(tracks.items, 0, context, from) : undefined}
 >
 	<span>{counts}</span>
 	{#if Object.keys(artist.tags).length}<TagLinks tags={artist.tags} />{/if}
@@ -124,6 +136,7 @@
 		{sort}
 		onsort={showSorted}
 		{context}
+		{from}
 	/>
 </section>
 

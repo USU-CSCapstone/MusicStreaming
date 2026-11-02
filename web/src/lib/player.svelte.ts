@@ -1,11 +1,15 @@
-// Local playback: one audio element playing through a context of tracks. It reports its
+// Local playback: one audio element playing the account's queue, which the server keeps and
+// `queue/` holds on this device. The player plays the queue's current item and moves on by
+// editing the queue (`next`, `previous`), applied here at once, so every device sees where it
+// is. A start from a view plays its clicked track before anything is answered. It reports its
 // progress to the server and stops when another device takes over (`progress.ts`), carries out
 // commands from the user's other devices while it plays, and takes playback over when one moves
 // it here (`remote.ts`). It plays in one tab of this browser at a time, since every tab is the
 // same device to the server.
-// Queue editing comes later (`requirements/queue.md`).
 
+import { untrack } from 'svelte';
 import {
+	ApiError,
 	audioUrl,
 	getPlaybackInfo,
 	getTrack,
@@ -18,26 +22,42 @@ import { albumTitle, artistName } from './format';
 import { playback } from './playback.svelte';
 import { PlayRecorder } from './plays';
 import { Progress } from './progress';
-import { firstPlayable, nextPlayable, previousTarget } from './queue';
+import { firstPlayable, type PlayFrom, restartsOnPrevious } from './queue';
+import { queue } from './queue/client.svelte';
 import { realtime } from './realtime.svelte';
 import { carryOut, type Controls } from './remote';
 import { decodeWaveform } from './waveform';
 
 /** How often a playing player says where it is, so a device picking up is never far behind. */
 const REPORT_EVERY_MS = 10_000;
+/** How long a track the server could not be reached for waits before it is asked for again. */
+const RETRY_MS = 3_000;
 /** How long the volume rests before it is reported, so dragging the slider is one report. */
 const VOLUME_SETTLES_MS = 250;
 
 type Status = 'playing' | 'paused' | 'stopped' | 'buffering';
 
+/** A track and the library its audio is in. */
+type Loaded = { track: TrackSummary; libraryId: string };
+
+/** Whether a failure to load a track is the connection's or the server's, so that trying again may work. */
+const isTransient = (error: unknown) =>
+	error instanceof TypeError ||
+	(error instanceof ApiError &&
+		(error.status >= 500 || error.status === 429 || error.status === 408));
+
+/** Whether an item is `<key>.<position>`, as the queue names them, and not another client's name for its place. */
+const isQueueItem = (id: string) => /^[^.]+\.\d+$/.test(id);
+
+/** A random seed for a shuffle, which fixes its order. */
+const newSeed = () => crypto.getRandomValues(new Uint32Array(1))[0];
+
 class Player {
+	/** The library the user browses, which a track picked up from another device must be of. */
 	libraryId = '';
 
-	tracks = $state<TrackSummary[]>([]);
-	/** Where `tracks` came from, which each play records. */
-	context: PlayContext = { type: 'library' };
-	index = $state(-1);
-	current = $derived<TrackSummary | null>(this.tracks[this.index] ?? null);
+	/** The track loaded, playing or waiting where it stopped. */
+	current = $state<TrackSummary | null>(null);
 
 	/** Whether it plays, or is to once the track's audio arrives. */
 	playing = $state(false);
@@ -54,6 +74,38 @@ class Player {
 	/** Null while loading or until the track is analyzed; the progress bar is then plain. */
 	waveform = $state<Uint8Array | null>(null);
 
+	/** The queue item `current` is, which reports name. */
+	#item: string | null = null;
+	/** What `current` is, with the library its audio is in. */
+	#loaded: Loaded | null = null;
+	/**
+	 * Tracks by ID: what is playing and next, so moving on needs no request. The queue's rows
+	 * name tracks; this holds what the player shows and plays of them.
+	 */
+	#summaries = new Map<string, TrackSummary>();
+	/**
+	 * Whether this device holds playback, playing or paused: it plays whatever the queue's
+	 * current item becomes, whoever moved it. Other devices and tabs only show it.
+	 */
+	#holds = false;
+	/** A start from a view is on its way to the queue, which still holds the one before. */
+	#starting = false;
+	/** What waits for the start is the passing over of this item, a track that cannot play. */
+	#wantsSkip: string | null = null;
+	/** Next was pressed while a start was on its way. */
+	#wantsNext = false;
+	/** The queue moved to an item that is not loaded yet, which is being looked up. */
+	#moving = false;
+	/** Which way the last move went, so a track that cannot play is passed over the same way. */
+	#direction: 1 | -1 = 1;
+	/** The items passed over in a row, so a run that comes round to one again, as under Repeat All, has tried the whole queue. */
+	#tried = new Set<string>();
+	/** Tries again a track the server could not be reached for. */
+	#retryTimer: ReturnType<typeof setTimeout> | undefined;
+	/** The track started from a view is the only one loaded, until the server's queue says which item it is. */
+	#adoptable = false;
+	/** Bumped on every item opened, so a slow lookup for an earlier one is ignored. */
+	#opens = 0;
 	#audio: HTMLAudioElement | null = null;
 	/** Bumped on every load, so a slow response for an earlier track is ignored. */
 	#load = 0;
@@ -69,6 +121,7 @@ class Player {
 	/** This browser's other tabs, told when playback starts in this one. */
 	#tabs = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel('jewelcase.player');
 
+	/** Listens to the realtime connection, and follows the queue while this device holds playback. */
 	constructor() {
 		realtime.on((message) => {
 			if (message.type === 'hello') this.#progress.connected();
@@ -76,6 +129,143 @@ class Player {
 			else if (message.type === 'execute') void this.#execute(message.command);
 		});
 		this.#tabs?.addEventListener('message', () => this.#yield());
+		$effect.root(() => {
+			$effect(() => {
+				// Every change to the queue: an item still unknown may be known by now.
+				const { current } = queue;
+				void queue.revision;
+				untrack(() => this.#follow(current));
+			});
+			$effect(() => {
+				const { refusal } = queue;
+				// A start the server refused: the queue is the old one again, and the track chosen
+				// stays where it is, paused, rather than the audio switching to another queue's.
+				if (refusal && refusal.edit === null) untrack(() => this.#refused(refusal.message));
+			});
+		});
+	}
+
+	/** Pauses on the track a refused start was for, and says why. */
+	#refused(message: string) {
+		this.#holds = this.#wantsNext = this.#moving = false;
+		this.pause();
+		playback.fail(message);
+	}
+
+	/**
+	 * Takes in the queue's current item. The device holding playback plays it, whoever moved
+	 * it, unless a start of its own is still on its way.
+	 */
+	#follow(item: string | null) {
+		if (item === null) this.#moving = false;
+		if (!this.#holds || this.#starting || item === null || item === this.#item) return;
+		void this.#open(item);
+	}
+
+	/**
+	 * Plays `item`, the queue's current item, once its row is known (`design/queue.md` §3). A row
+	 * still being learned is waited for: this runs again with each change to the queue. One that
+	 * cannot be learned, or whose track cannot play, is passed over in place
+	 * (`requirements/conventions.md` §6).
+	 */
+	async #open(item: string) {
+		const open = ++this.#opens;
+		this.#moving = true;
+		let found: Loaded | 'skip' | 'wait' = 'wait';
+		try {
+			const { rows } = await queue.rows('current', 0, 1);
+			const row = rows[0];
+			// Not the queue's now: it moved again while the row was on its way.
+			if (open !== this.#opens || row?.item !== item) return;
+			if (row.status === 'unavailable') found = 'skip';
+			else if (row.status === 'known') {
+				const track = await this.#summary(row.libraryId, row.track!).catch((error) => {
+					// A track that is gone or out of reach is passed over; one the network failed to
+					// give waits, as one that cannot be loaded does.
+					if (error instanceof ApiError && [403, 404].includes(error.status)) return null;
+					throw error;
+				});
+				if (open !== this.#opens) return;
+				found = track?.availability === 'available' ? { track, libraryId: row.libraryId } : 'skip';
+			}
+		} catch {
+			// The server could not be reached: it waits, and asks again.
+			if (open === this.#opens) {
+				this.#moving = this.playing = this.#loading = false;
+				this.#retry(() => this.#follow(queue.current));
+			}
+			return;
+		}
+		if (found === 'wait') return;
+		if (found === 'skip') return this.#skip(item);
+		this.#direction = 1;
+		// The server's queue made the track the view clicked another item: the same track goes on.
+		if (this.#adoptable && found.track.id === this.current?.id) {
+			this.#adoptable = false;
+			this.#moving = false;
+			this.#item = item;
+			this.#report();
+			return;
+		}
+		this.#go(found.track, found.libraryId, item);
+		void this.#preload();
+	}
+
+	/** Runs `again` after a wait, in place of any other waiting. */
+	#retry(again: () => void) {
+		clearTimeout(this.#retryTimer);
+		this.#retryTimer = setTimeout(again, RETRY_MS);
+	}
+
+	/**
+	 * Passes over `item`, which cannot play, on the way the player was going: one more `next` or
+	 * `previous`, which the queue applies at once. Back past the first of History it goes on
+	 * forward. A run that comes round to an item it has passed over has tried the whole queue,
+	 * under Repeat All too: playback stops and says that nothing in it can play.
+	 */
+	#skip(item: string) {
+		// The queue still has the one before: moving on waits for the new one.
+		if (this.#starting) {
+			this.#wantsNext = true;
+			this.#wantsSkip = item;
+			return;
+		}
+		if (this.#tried.has(item)) {
+			playback.fail('None of the songs in the queue can play.');
+			return this.#end();
+		}
+		this.#tried.add(item);
+		if (this.#direction === -1 && queue.counts.history > 0) {
+			queue.edit({ type: 'previous', key: crypto.randomUUID() });
+			return;
+		}
+		this.#direction = 1;
+		if (this.#hasNext()) queue.edit({ type: 'next' });
+		else this.#end();
+	}
+
+	/** The summary of the track `trackId` in `libraryId`, fetched unless held. */
+	async #summary(libraryId: string, trackId: string): Promise<TrackSummary> {
+		const held = this.#summaries.get(trackId);
+		if (held) return held;
+		const track = await getTrack(fetch, libraryId, trackId);
+		this.#summaries.set(trackId, track);
+		return track;
+	}
+
+	/** Fetches the summary of the item after the current one, and forgets the rest. */
+	async #preload() {
+		try {
+			const {
+				rows: [row]
+			} = await queue.rows('upNext', 0, 1);
+			if (row?.status === 'known') await this.#summary(row.libraryId, row.track!);
+			for (const id of this.#summaries.keys()) {
+				if (id !== this.current?.id && id !== row?.track) this.#summaries.delete(id);
+			}
+		} catch {
+			// Fetched when it is reached.
+		}
 	}
 
 	/** The account's playback state, as the server just sent it. */
@@ -107,6 +297,10 @@ class Player {
 
 	/** Another device or tab took over: this one stops where it is, and can take it back. */
 	#yield() {
+		this.#holds = this.#wantsNext = this.#moving = false;
+		clearTimeout(this.#retryTimer);
+		// Nor is a track still being looked up to be loaded.
+		this.#opens++;
 		// Nor does a takeover from here it could not yet send.
 		this.#progress.paused();
 		// Nor does the lock screen show what no longer plays here (`requirements/playback.md` §7).
@@ -123,43 +317,101 @@ class Player {
 	}
 
 	/**
-	 * Takes the account's playback over here, playing, or paused if not `play`: the track it
-	 * names, from where it got to, within the context this player has, if the track is in it, or
-	 * on its own. Until the server keeps the queue, what came after it on the device it was on
-	 * does not come along. The volume stays this device's own. Fails if there is nothing to pick
-	 * up, or playback moves on meanwhile.
+	 * Takes the account's playback over here, playing, or paused if not `play`: the item the state
+	 * names, from where it got to, which must be the queue's current item (playback moves
+	 * without rebuilding the queue, `requirements/queue.md` §7). It fails, and starts nothing,
+	 * if the queue here is not that far yet. Only a track whose place is not an item of a queue,
+	 * as another client names it, becomes a queue of its own. The volume stays this device's own.
+	 * Fails too if there is nothing to pick up, or playback moves on meanwhile.
 	 */
 	async pickUp(play = true) {
 		const state = playback.state;
-		const { libraryId, trackId } = state ?? {};
+		const { libraryId, trackId, itemId } = state ?? {};
 		if (!libraryId || libraryId !== this.libraryId || !trackId) {
 			throw new Error('Nothing here to pick up.');
 		}
 		const track =
 			playback.track?.id === trackId ? playback.track : await getTrack(fetch, libraryId, trackId);
+		const queued = !!itemId && isQueueItem(itemId);
+		let row;
+		if (queued) {
+			if (itemId !== queue.current) throw new Error('The queue is not here yet.');
+			({
+				rows: [row]
+			} = await queue.rows('current', 0, 1));
+			if (row?.item !== itemId || row.status !== 'known' || row.track !== trackId) {
+				throw new Error('The queue is not here yet.');
+			}
+		}
 		// Another device took over, or this one changed library, while the track was on its way.
 		const now = playback.state;
 		const moved = now?.trackId !== trackId || now.activeDeviceId !== state?.activeDeviceId;
 		if (moved || libraryId !== this.libraryId) throw new Error('Playback moved on.');
 		const seconds = Math.min(playback.positionAt(Date.now()), track.durationUs / 1_000_000);
-		let index = this.tracks.findIndex((t) => t.id === track.id);
-		if (index < 0) {
-			this.tracks = [track];
-			this.context = { type: 'library' };
-			index = 0;
+		if (row) {
+			this.#summaries.set(trackId, track);
+			this.#started();
+			this.#go(track, libraryId, row.item, seconds, play);
+			void this.#preload();
+		} else {
+			this.#begin([track], 0, { type: 'library' }, undefined, seconds, play);
 		}
-		this.#started();
-		this.#go(index, seconds, play);
 	}
 
-	/** Play `tracks` from `context`, starting at `index`. */
-	play(tracks: TrackSummary[], index: number, context: PlayContext = { type: 'library' }) {
+	/**
+	 * Starts a queue and plays `tracks[index]`, or the first track from there that can. The
+	 * track plays at once; the queue is started here and sent to the server in the background.
+	 * A view that pages through a list of `total` tracks passes its `from`, a recipe for the
+	 * server to resolve, and its `tracks` are the rows it loaded; one with no recipe sends its
+	 * tracks.
+	 */
+	play(
+		tracks: TrackSummary[],
+		index: number,
+		context: PlayContext = { type: 'library' },
+		from?: PlayFrom
+	) {
 		const start = firstPlayable(tracks, index);
 		if (start === null) return;
-		this.tracks = tracks;
-		this.context = context;
+		this.#begin(tracks, start, context, from);
+	}
+
+	/** Starts the queue at `tracks[at]` and plays it from `startAt` seconds in, or holds it there paused unless `play`. */
+	#begin(
+		tracks: TrackSummary[],
+		at: number,
+		context: PlayContext,
+		from?: PlayFrom,
+		startAt = 0,
+		play = true
+	) {
+		const libraryId = this.libraryId;
+		const track = tracks[at];
+		const key = crypto.randomUUID();
+		const ids = tracks.map((t) => t.id);
+		this.#summaries.set(track.id, track);
+		this.#starting = true;
+		this.#wantsNext = false;
+		this.#wantsSkip = null;
 		this.#started();
-		this.#go(start);
+		this.#go(track, libraryId, `${key}.${at}`, startAt, play);
+		this.#adoptable = true;
+		this.#tried.clear();
+		const source = from ? { key, libraryId, recipe: from.recipe } : { key, libraryId, tracks: ids };
+		const request = from
+			? { start: at, startTrackId: track.id, total: from.total, loaded: ids }
+			: { start: at };
+		void queue.start({ queueId: crypto.randomUUID(), context, source, ...request }).then(() => {
+			this.#starting = false;
+			void this.#preload();
+			if (this.#wantsNext) {
+				const skip = this.#wantsSkip;
+				this.#wantsNext = false;
+				this.#wantsSkip = null;
+				if (skip) this.#skip(skip);
+				else this.#advance();
+			}
+		});
 	}
 
 	toggle() {
@@ -180,39 +432,48 @@ class Player {
 		// The track is on its way, and its audio is not yet the audio element's.
 		if (this.#loading) return;
 		if (byUser) this.#started();
-		if (this.#stale) this.#go(this.index, this.position);
-		else {
+		if (this.#stale && this.#item && this.#loaded) {
+			this.#go(this.#loaded.track, this.#loaded.libraryId, this.#item, this.position);
+		} else {
 			// Shown again, as yielding to another tab or device clears it.
 			this.#mediaSession(this.current);
 			await audio.play();
 		}
 	}
 
+	/** Pauses here, and stops waiting to ask again for a track the server could not be reached for. */
 	pause() {
+		// A pause is the user's word: a track waiting to be asked for again is not.
+		clearTimeout(this.#retryTimer);
 		this.#progress.paused();
 		// A track still on its way stays paused once its audio arrives.
 		this.playing = this.#loading = false;
 		this.#audio?.pause();
 	}
 
+	/** The user's Next: moves the queue on, taking playback over here, or stops at its end. */
 	next() {
-		if (nextPlayable(this.tracks, this.index, 1) !== null) this.#started();
-		this.#next();
+		if (this.#hasNext()) this.#started();
+		this.#advance();
 	}
 
+	/** The user's Previous: restarts the track if it is under way or first, else steps back. */
 	previous() {
 		this.#previous(true);
 	}
 
 	/** Back a track, or to the start of this one, as the user here (`byUser`) or another device would. */
 	#previous(byUser: boolean) {
-		const target = previousTarget(this.tracks, this.index, this.position);
 		// Back to the start of this track takes nothing over; it leaves it playing or not.
-		if (target.restart) this.seek(0);
-		else {
-			if (byUser) this.#started();
-			this.#go(target.index);
+		if (restartsOnPrevious(this.position, queue.counts.history)) {
+			this.seek(0);
+			return;
 		}
+		if (byUser) this.#started();
+		this.#direction = -1;
+		this.#tried.clear();
+		this.#adoptable = false;
+		queue.edit({ type: 'previous', key: crypto.randomUUID() });
 	}
 
 	/**
@@ -226,7 +487,7 @@ class Player {
 		playing: () => this.playing,
 		resume: () => this.#resume(false),
 		pause: () => this.pause(),
-		next: () => this.#next(),
+		next: () => this.#advance(),
 		previous: () => this.#previous(false),
 		seek: (seconds) => this.seek(seconds),
 		setVolume: (volume) => this.setVolume(volume),
@@ -247,43 +508,78 @@ class Player {
 		this.#volumeReport = setTimeout(() => this.#report(), VOLUME_SETTLES_MS);
 	}
 
+	/** The user picks `item` of Up Next: the queue jumps to it, and playback is taken over here to play it. */
+	jump(item: string) {
+		this.#started();
+		this.#holds = true;
+		this.#direction = 1;
+		this.#tried.clear();
+		this.#adoptable = false;
+		queue.edit({ type: 'jump', item });
+	}
+
+	/** Turns shuffle on or off for the whole account's queue, with a new seed. */
+	setShuffle(on: boolean) {
+		queue.edit({ type: 'shuffle', on, seed: newSeed() });
+	}
+
+	/** Sets how the queue repeats. */
+	setRepeat(mode: 'off' | 'all' | 'one') {
+		queue.edit({ type: 'repeat', mode });
+	}
+
 	/** The user started or moved playback here, which takes it over from anywhere else. */
 	#started() {
 		this.#progress.started();
 		this.#tabs?.postMessage('started');
 	}
 
-	/** On to the next track, or stopped at the end of the context rather than wrapping. */
-	#next() {
-		const i = nextPlayable(this.tracks, this.index, 1);
-		if (i === null) {
-			this.playing = this.#loading = false;
-			this.#audio?.pause();
-			this.#plays.end('skipped');
-			// Stopped at the start of the last track, so playing again, here or anywhere, plays it:
-			// here, loaded again as a new play, since the audio may be of the track before.
-			this.position = 0;
-			this.#stale = true;
-			this.finished = true;
-			this.#report('stopped');
+	/** Whether the queue has anything to play after the current item, or starts over. */
+	#hasNext(): boolean {
+		return queue.counts.upNext > 0 || queue.repeat === 'all';
+	}
+
+	/** On to the next item, which the queue moves to at once, or stopped at the end of the queue rather than wrapping. */
+	#advance() {
+		// The queue still has the one before.
+		if (this.#starting) {
+			this.#wantsNext = true;
 			return;
 		}
-		this.#go(i);
+		if (!this.#hasNext()) return this.#end();
+		this.#direction = 1;
+		this.#tried.clear();
+		this.#adoptable = false;
+		queue.edit({ type: 'next' });
+	}
+
+	/** Stops at the end of the queue. */
+	#end() {
+		clearTimeout(this.#retryTimer);
+		this.#holds = this.#moving = false;
+		this.playing = this.#loading = false;
+		this.#audio?.pause();
+		this.#plays.end('skipped');
+		// Stopped at the start of the last track, so playing again, here or anywhere, plays it:
+		// here, loaded again as a new play, since the audio may be of the track before.
+		this.position = 0;
+		this.#stale = true;
+		this.finished = true;
+		this.#report('stopped');
 	}
 
 	/** Tells the server where the player is: `status`, or as the audio element says. */
 	#report(status?: Status) {
 		const track = this.current;
-		if (!track || !realtime.deviceId) return;
+		if (!track || !this.#item || !this.#loaded || !realtime.deviceId) return;
 		status ??= !this.playing
 			? 'paused'
 			: this.#loading || this.#buffering
 				? 'buffering'
 				: 'playing';
 		this.#progress.report({
-			// Its place in the context, until the server keeps the queue.
-			itemId: String(this.index),
-			libraryId: this.libraryId,
+			itemId: this.#item,
+			libraryId: this.#loaded.libraryId,
 			trackId: track.id,
 			status,
 			positionMs: Math.round(this.position * 1000),
@@ -291,10 +587,14 @@ class Player {
 		});
 	}
 
-	/** Plays `index` from `startAt` seconds in, or holds it there paused unless `play`. */
-	#go(index: number, startAt = 0, play = true) {
-		this.index = index;
-		const track = this.tracks[index];
+	/** Plays `track`, the queue's `item`, from `startAt` seconds in, or holds it there paused unless `play`. */
+	#go(track: TrackSummary, libraryId: string, item: string, startAt = 0, play = true) {
+		clearTimeout(this.#retryTimer);
+		this.#loaded = { track, libraryId };
+		this.#holds = true;
+		this.#moving = false;
+		this.current = track;
+		this.#item = item;
 		const load = ++this.#load;
 		const audio = this.#ensureAudio();
 		// One that played to its end has ended its play already.
@@ -309,7 +609,7 @@ class Player {
 		this.#stale = true;
 		this.#report();
 
-		const lib = this.libraryId;
+		const lib = libraryId;
 		getPlaybackInfo(fetch, lib, track.id)
 			.then((info) => {
 				if (load !== this.#load) return;
@@ -336,10 +636,18 @@ class Player {
 				// here, rather than playing the next track.
 				const waits =
 					!this.#loading || error?.name === 'NotAllowedError' || error?.name === 'AbortError';
+				const retries = !waits && isTransient(error);
 				this.playing = this.#loading = false;
 				if (waits) this.#report();
+				// The connection failed, not the track: it waits and is asked for again, never skipped.
+				else if (retries) {
+					this.#report();
+					this.#retry(() => {
+						if (this.#holds && this.#item === item) this.#go(track, libraryId, item, this.position);
+					});
+				}
 				// A track that cannot play is skipped in place, without a message (`requirements/conventions.md` §6).
-				else this.#next();
+				else this.#skip(item);
 			});
 		getWaveform(fetch, lib, track.id)
 			.then((w) => {
@@ -355,12 +663,19 @@ class Player {
 		audio.volume = this.volume;
 		audio.addEventListener('play', () => (this.playing = true));
 		audio.addEventListener('playing', () => {
+			// Something plays: a run of tracks that would not has ended.
+			this.#tried.clear();
 			this.#buffering = false;
 			this.#loading = false;
 			this.#report();
 			// Resuming a play under way is the same play.
-			if (this.#plays.active || !this.current) return;
-			this.#plays.start(this.libraryId, this.current.id, this.context, audio.currentTime);
+			if (this.#plays.active || !this.current || !this.#loaded) return;
+			this.#plays.start(
+				this.#loaded.libraryId,
+				this.current.id,
+				queue.context ?? { type: 'library' },
+				audio.currentTime
+			);
 		});
 		audio.addEventListener('waiting', () => {
 			this.#buffering = true;
@@ -391,13 +706,18 @@ class Player {
 		audio.addEventListener('ended', () => {
 			this.#plays.heard(audio.currentTime);
 			this.#plays.end('finished');
-			this.#next();
+			// A move under way is waiting for the item it goes to.
+			if (this.#moving) return;
+			// Repeat One is this device's to carry out; Repeat All is the queue's.
+			if (queue.repeat === 'one' && this.#loaded && this.#item) {
+				this.#go(this.#loaded.track, this.#loaded.libraryId, this.#item);
+			} else this.#advance();
 		});
 		// Closing the page stops what is playing. The report must outlive the page.
 		addEventListener('pagehide', () => this.#plays.end('stopped', true));
 		audio.addEventListener('error', () => {
 			// One waiting paused waits here, rather than playing the next track.
-			if (audio.src && !audio.paused) this.#next();
+			if (audio.src && !audio.paused && this.#item) this.#skip(this.#item);
 		});
 		this.#audio = audio;
 
@@ -427,7 +747,13 @@ class Player {
 			artist: track.artists.map((a) => artistName(a.name)).join(', '),
 			album: albumTitle(track.album.title),
 			artwork: image
-				? [{ src: imageUrl(this.libraryId, image, 512), sizes: '512x512', type: 'image/jpeg' }]
+				? [
+						{
+							src: imageUrl(this.#loaded?.libraryId ?? this.libraryId, image, 512),
+							sizes: '512x512',
+							type: 'image/jpeg'
+						}
+					]
 				: []
 		});
 	}

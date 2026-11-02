@@ -11,6 +11,7 @@ import type {
 	Repeat,
 	RowSection,
 	RowsWindow,
+	StartRequest,
 	Summary,
 	ToWorker
 } from './protocol';
@@ -43,6 +44,8 @@ export class QueueClient {
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- waiting askers are not state to render
 	#asks = new Map<number, (window: RowsWindow) => void>();
 	#askId = 0;
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- waiting askers are not state to render
+	#starts = new Map<number, (ok: boolean) => void>();
 
 	/** Makes a client that starts its worker with `create` on `connect`; tests pass a fake. */
 	constructor(create: () => Worker = spawn) {
@@ -67,6 +70,7 @@ export class QueueClient {
 		this.#worker?.terminate();
 		this.#worker = null;
 		this.#asks.clear();
+		this.#starts.clear();
 		this.queueId = null;
 		this.context = null;
 		this.current = null;
@@ -78,6 +82,19 @@ export class QueueClient {
 	/** Applies `edit` here at once and sends it to the server in the background. */
 	edit(edit: SentEdit) {
 		this.#send({ type: 'edit', edit });
+	}
+
+	/**
+	 * Starts a queue here (`QueueStore.start`): settles once the worker has it, and then
+	 * `queueId`, `current` and the rest are the new queue's. False if the start is not a position
+	 * of its source. Never settles if the worker is stopped first.
+	 */
+	start(request: StartRequest): Promise<boolean> {
+		const id = ++this.#askId;
+		return new Promise((resolve) => {
+			this.#starts.set(id, resolve);
+			this.#send({ type: 'start', id, request });
+		});
 	}
 
 	/**
@@ -103,6 +120,11 @@ export class QueueClient {
 		if (message.type === 'rows') {
 			this.#asks.get(message.id)?.(message.window);
 			this.#asks.delete(message.id);
+			return;
+		}
+		if (message.type === 'started') {
+			this.#starts.get(message.id)?.(message.ok);
+			this.#starts.delete(message.id);
 			return;
 		}
 		if (message.type === 'refused') {

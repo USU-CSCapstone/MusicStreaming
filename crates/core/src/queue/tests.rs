@@ -2494,6 +2494,22 @@ fn parity() -> serde_json::Value {
 }
 
 #[test]
+fn parity_started_queue() {
+    let fixture = parity();
+    let case = &fixture["started"];
+    let source = &case["source"];
+    let mut state = QueueState::default();
+    let source = Source::new(
+        source["key"].as_str().unwrap(),
+        source["libraryId"].as_str().unwrap(),
+        source["length"].as_u64().unwrap(),
+        None,
+    );
+    state.start(source, case["at"].as_u64().unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(&state).unwrap(), case["state"]);
+}
+
+#[test]
 fn parity_edit_sequence() {
     let fixture = parity();
     let mut state: QueueState = serde_json::from_value(fixture["initial"].clone()).unwrap();

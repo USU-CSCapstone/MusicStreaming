@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use jewelcase_core::{ItemId, QueueState, Row};
+use jewelcase_core::{ItemId, QueueState, Row, Source};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -75,6 +75,16 @@ impl Queue {
     #[wasm_bindgen(js_name = fromJson)]
     pub fn from_json(state: &str) -> Result<Queue, JsError> {
         Ok(Self(serde_json::from_str(state)?))
+    }
+
+    /// A queue just started over one source of `length` positions whose list hasn't arrived,
+    /// with position `at` playing: what the core's start makes of an empty queue. Throws if `at`
+    /// is not a position of the source.
+    pub fn started(key: &str, library_id: &str, length: f64, at: f64) -> Result<Queue, JsError> {
+        let mut state = QueueState::default();
+        let source = Source::new(key, library_id, whole(length), None);
+        state.start(source, whole(at)).map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(Self(state))
     }
 
     /// A copy that edits apart from this queue and shares its attached lists, so it costs

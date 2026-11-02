@@ -16,6 +16,7 @@
 	import { tagTypeName } from '$lib/tags';
 	import { albumTitle, formatDate, formatDuration, plural, releaseYear } from '$lib/format';
 	import { player } from '$lib/player.svelte';
+	import type { PlayFrom } from '$lib/queue';
 	import { songs } from '$lib/adding.svelte';
 	import { applyOps } from '$lib/playlist-ops';
 	import {
@@ -42,6 +43,7 @@
 		sentinel,
 		empty = 'No songs.',
 		context = { type: 'library' },
+		from,
 		onplay,
 		editable = false,
 		onremove,
@@ -71,6 +73,11 @@
 		empty?: string;
 		/** Where the tracks are from, which each play records. */
 		context?: PlayContext;
+		/**
+		 * How the server makes the list `tracks` are the first of, if it does: a play then starts a
+		 * queue it resolves, and these are the rows already loaded, which play at once.
+		 */
+		from?: PlayFrom;
 		/** Called as the user starts one playing. */
 		onplay?: (track: TrackSummary) => void;
 		/**
@@ -478,7 +485,7 @@
 
 	function play(i: number) {
 		if (tracks[i].availability !== 'available') return;
-		player.play(tracks, i, context);
+		player.play(tracks, i, context, from);
 		onplay?.(tracks[i]);
 	}
 

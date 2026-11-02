@@ -27,6 +27,8 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 		store?.then((ready) => {
 			if (data.type === 'message') ready.message(data.message);
 			else if (data.type === 'edit') ready.edit(data.edit);
+			else if (data.type === 'start')
+				post({ type: 'started', id: data.id, ok: ready.start(data.request) });
 			else post({ type: 'rows', id: data.id, window: ready.rows(data) });
 		});
 	}

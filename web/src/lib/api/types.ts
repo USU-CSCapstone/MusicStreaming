@@ -58,6 +58,12 @@ export type PlayerState = Schemas['PlayerState'];
 export type ProgressReport = Schemas['ProgressReport'];
 export type PlayerCommand = Schemas['PlayerCommand'];
 export type QueueSnapshot = Schemas['QueueSnapshot'];
+/** A queue's state, as a snapshot carries it. */
+export type QueueState = Schemas['QueueState'];
+/** A start as `POST /me/queue` takes it. */
+export type StartQueue = Schemas['StartQueue'];
+/** How the server makes a source's list, for a start to name. */
+export type StartRecipe = NonNullable<StartQueue['source']['recipe']>;
 /** A page of the queue's rows, with each row's track. */
 export type QueueRows = Schemas['QueueRows'];
 /** An edit as the server applies it and `queueEdit` carries it. */

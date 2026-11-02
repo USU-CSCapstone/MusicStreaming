@@ -6,6 +6,7 @@
 	import { isFiltered, showFiltered } from '$lib/filters';
 	import { plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
+	import { type PlayFrom, recipeSort } from '$lib/queue';
 	import { showSorted } from '$lib/sort-url';
 
 	let { data } = $props();
@@ -22,6 +23,16 @@
 			? { type: 'filter', filter: { tagAll: data.filter.all, tagAny: data.filter.any } }
 			: { type: 'library' }
 	);
+	// Unfiltered, the library in the order shown, as the server resolves it. Filtered, the songs
+	// play as loaded, since a recipe cannot name tags yet.
+	const from = $derived<PlayFrom | undefined>(
+		filtered
+			? undefined
+			: {
+					recipe: { type: 'library', filters: [], sort: recipeSort(data.query) },
+					total: tracks.total
+				}
+	);
 </script>
 
 <svelte:head><title>Songs · Jewelcase</title></svelte:head>
@@ -36,6 +47,7 @@
 	filter={data.filter}
 	onfilter={showFiltered}
 	{context}
+	{from}
 	empty={filtered
 		? 'No songs carry these tags.'
 		: 'No songs yet. They appear here as the library is scanned.'}

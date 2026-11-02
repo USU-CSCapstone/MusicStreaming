@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { RealtimeServerMessage } from '$lib/api/types';
 import { QueueClient } from './client.svelte';
-import type { FromWorker, ToWorker } from './protocol';
+import type { FromWorker, StartRequest, ToWorker } from './protocol';
 
 /** A worker the test plays the queue for. */
 class FakeWorker {
@@ -97,5 +97,24 @@ describe('QueueClient', () => {
 		expect(one).toMatchObject({ section: 'upNext', offset: 0, limit: 10 });
 		expect((await first).section).toBe('upNext');
 		expect((await second).section).toBe('history');
+	});
+
+	it('settles a start with what the worker says of it', async () => {
+		const { worker, client } = setup();
+		const request: StartRequest = {
+			queueId: 'q',
+			context: { type: 'library' } as StartRequest['context'],
+			source: { key: 'k', libraryId: '1', tracks: ['5'] },
+			start: 0
+		};
+		const taken = client.start(request);
+		const refused = client.start({ ...request, start: 3 });
+		const [one, two] = worker.sent.slice(1) as Extract<ToWorker, { type: 'start' }>[];
+		worker.say({ type: 'started', id: two.id, ok: false });
+		worker.say({ type: 'started', id: one.id, ok: true });
+
+		expect(one).toMatchObject({ type: 'start', request });
+		expect(await taken).toBe(true);
+		expect(await refused).toBe(false);
 	});
 });

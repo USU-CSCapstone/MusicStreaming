@@ -1,6 +1,6 @@
 // A tiny library served by intercepting /api/v1, so the tests need no music folder.
 
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Page, Route } from '@playwright/test';
@@ -12,13 +12,17 @@ import type {
 	PlayerState,
 	RealtimeClientMessage,
 	RealtimeServerMessage,
+	QueueEdit,
 	RecentSearch,
+	SentEdit,
 	Session,
 	SetupRequest,
+	StartQueue,
 	Tag,
 	TagsByType,
 	TrackSummary
 } from '../src/lib/api/types';
+import { initSync, Queue } from '../src/lib/core-wasm/jewelcase_core_wasm.js';
 import { type SortField, sortTracks } from '../src/lib/sorting';
 import { type TagFilter, filterByTags } from '../src/lib/tag-match';
 import { withManifest } from '../../tools/plugin-pack/manifest.mjs';
@@ -29,6 +33,10 @@ import {
 	playlistRoute
 } from '../mock/playlists';
 import { PluginStore, adminRoute } from '../mock/plugins';
+
+initSync({
+	module: readFileSync(new URL('../src/lib/core-wasm/jewelcase_core_wasm_bg.wasm', import.meta.url))
+});
 
 export const library: Library = {
 	id: '11',
@@ -148,6 +156,144 @@ function sortedAsAsked(query: URLSearchParams): TrackSummary[] {
 		duration: 'duration'
 	};
 	return [...sortTracks(tracks, { field: fields[sort] ?? 'album', order: desc ? 'desc' : 'asc' })];
+}
+
+/** The tracks a start's recipe resolves to, as the server runs it; what the fixture does not know is empty. */
+function resolveRecipe(recipe: NonNullable<StartQueue['source']['recipe']>): TrackSummary[] {
+	if (recipe.type === 'search') {
+		return tracks.filter((t) => t.title.toLowerCase().includes(recipe.q.toLowerCase()));
+	}
+	const [sort, order] = (recipe.sort as string).split('.');
+	return sortedAsAsked(new URLSearchParams({ sort, order }));
+}
+
+/**
+ * The account's queue as the server keeps it: the shared core in Node holds the state, and the
+ * fixture answers the queue's endpoints for it. It sends nothing over the realtime connection.
+ * One per page.
+ */
+class FixtureQueue {
+	queue: Queue | null = null;
+	queueId = '';
+	version = 0;
+	context: object = {};
+	/** The lists held, by hash. */
+	lists = new Map<string, string[]>();
+	/** The starts received, as sent. */
+	starts: StartQueue[] = [];
+	/** The edits received, as sent. */
+	edits: SentEdit[] = [];
+	/** While set, a start is not answered until it settles. */
+	holdStarts: Promise<void> | null = null;
+	/** The editIds answered, with the version each made. */
+	#answered = new Map<string, number>();
+
+	/** The queue as `GET /me/queue` answers it. */
+	snapshot() {
+		return {
+			queueId: this.queueId,
+			version: this.version,
+			context: this.context,
+			state: JSON.parse(this.queue!.toJson())
+		};
+	}
+
+	/** Starts a queue as `POST /me/queue` does: the list is the tracks sent, or what the recipe resolves to. */
+	start(body: StartQueue) {
+		this.starts.push(body);
+		const { key, libraryId, tracks: sent, recipe } = body.source;
+		const ids = sent ?? resolveRecipe(recipe!).map((t) => t.id);
+		const at = sent ? body.start : ids.indexOf(body.startTrackId!);
+		const list = `list-${this.starts.length}`;
+		const state = JSON.parse(Queue.started(key, libraryId, ids.length, at).toJson());
+		state.sources[0].list = list;
+		this.queue?.free();
+		this.queue = Queue.fromJson(JSON.stringify(state));
+		this.queueId = body.queueId;
+		this.context = body.context;
+		this.version = 0;
+		this.lists.set(list, ids);
+		this.#answered.clear();
+		return { list, length: ids.length };
+	}
+
+	/** Applies an edit as `POST /me/queue/edits` does: the version it made, or the problem code. */
+	edit(body: { editId: string; queueId: string; edit: SentEdit }): number | 'queue_changed' {
+		if (!this.queue || body.queueId !== this.queueId) return 'queue_changed';
+		const done = this.#answered.get(body.editId);
+		if (done !== undefined) return done;
+		this.edits.push(body.edit);
+		this.queue.apply(JSON.stringify(body.edit as QueueEdit));
+		this.#answered.set(body.editId, ++this.version);
+		return this.version;
+	}
+
+	/** A page of rows as `GET /me/queue/rows` answers it, from the list of every source. */
+	rows(query: URLSearchParams) {
+		const copy = this.queue!.copy();
+		for (const [hash, ids] of this.lists) {
+			copy.attachList(hash, JSON.stringify({ libraryId: library.id, tracks: ids }));
+		}
+		const [offset, limit] = [Number(query.get('offset')), Number(query.get('limit'))];
+		const history = query.get('section') === 'history';
+		type Row = { item: string; track: string | null; play?: number };
+		const row = ({ item, track, play }: Row) => ({
+			item,
+			libraryId: library.id,
+			trackId: track,
+			...(play === undefined ? {} : { play })
+		});
+		const read: Row[] = JSON.parse(
+			history ? copy.historyRows(offset, limit) : copy.upNextRows(offset, limit)
+		);
+		const current = copy.currentRow();
+		const page = {
+			queueId: this.queueId,
+			version: this.version,
+			current: current && row(JSON.parse(current)),
+			total: history ? copy.historyLen() : copy.upNextLen(),
+			manual: history ? 0 : copy.manualLen(),
+			shuffled: !!JSON.parse(copy.toJson()).shuffle,
+			repeat: JSON.parse(copy.toJson()).repeat,
+			rows: read.map(row)
+		};
+		copy.free();
+		return page;
+	}
+}
+
+const queues = new WeakMap<Page, FixtureQueue>();
+/** The queue the page's fixtures share, made on first use. */
+export const queueOf = (page: Page) => {
+	if (!queues.has(page)) queues.set(page, new FixtureQueue());
+	return queues.get(page)!;
+};
+
+/** Answers the queue's endpoints for `queue`, which its worker asks. */
+async function serveQueue(page: Page, queue: FixtureQueue) {
+	await page.route('**/api/v1/me/queue**', async (route: Route) => {
+		const request = route.request();
+		const url = new URL(request.url());
+		const path = url.pathname.replace(/^.*\/api\/v1\/me\/queue/, '');
+		const problem = (status: number, code: string) =>
+			route.fulfill({ status, json: { type: 'about:blank', title: '', status, code } });
+		if (path === '' && request.method() === 'POST') {
+			await queue.holdStarts;
+			return route.fulfill({ json: queue.start(request.postDataJSON()) });
+		}
+		if (!queue.queue) return problem(404, 'not_found');
+		if (path === '') return route.fulfill({ json: queue.snapshot() });
+		if (path === '/edits') {
+			const version = queue.edit(request.postDataJSON());
+			return typeof version === 'string'
+				? problem(409, version)
+				: route.fulfill({ json: { version } });
+		}
+		if (path === '/rows') return route.fulfill({ json: queue.rows(url.searchParams) });
+		const tracks = queue.lists.get(path.replace('/lists/', ''));
+		if (!tracks) return problem(404, 'not_found');
+		return route.fulfill({ json: { libraryId: library.id, tracks } });
+	});
 }
 
 /** A playlist of the whole album, for tests that need one to start with. */
@@ -565,6 +711,8 @@ export async function serveLibrary(
 		if (media?.[2] === 'audio') return route.fulfill({ body: wav(), contentType: 'audio/wav' });
 		return problem(404, 'not_found');
 	});
+	// After the rest, so it is asked first for the queue's paths.
+	await serveQueue(page, queueOf(page));
 	return { plays, searches };
 }
 
