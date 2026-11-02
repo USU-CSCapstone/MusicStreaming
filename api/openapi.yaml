@@ -1329,8 +1329,10 @@ paths:
         in Up Next, so the device reverts the edit; and `422` for tracks out of reach or not in
         the library, as a start refuses them (whether or not they exist), a source of both
         `tracks` and a `recipe` or of neither, a recipe the server cannot resolve, a key that is
-        not a UUID, `duplicate_key` for a key that already names a source or copy of the queue,
-        or a body larger than the server accepts, which holds hundreds of thousands of tracks.
+        not a UUID, an item of a `remove`, `move` or `removePlays` that is not `<key>.<position>`
+        with a UUID key (an item whose key is in capitals names the same item in lowercase),
+        `duplicate_key` for a key that already names a source or copy of the queue, or a body
+        larger than the server accepts, which holds hundreds of thousands of tracks.
       operationId: editQueue
       requestBody:
         required: true
