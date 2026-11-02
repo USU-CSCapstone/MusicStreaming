@@ -121,10 +121,10 @@ struct Add {
 /// one of a `recipe` is resolved by the server, so every device gets the same tracks; whatever
 /// `list` or `length` a client sends for it is ignored, and the server holds the list it made.
 /// Keys must be UUIDs, and so must the keys of the items a `remove`, `move` or `removePlays`
-/// names. `404` without a queue, `409` if `queueId` is not the active queue or an
-/// anchor is gone, `422` for tracks out of reach or not in the library, a key that is not a UUID
-/// or already in use, an anchor or recipe over 4 KiB, any edit but those four over 4 KiB, or an
-/// edit the core refuses.
+/// names. `404` without a queue, `409` if `queueId` is not the active queue or an anchor or the
+/// play a `rewind` names is gone, `422` for tracks out of reach or not in the library, a key
+/// that is not a UUID or already in use, an anchor or recipe over 4 KiB, any edit but those
+/// four over 4 KiB, or an edit the core refuses.
 pub async fn edit(
     State(db): State<Arc<Database>>,
     State(queues): State<Arc<Queues>>,
@@ -204,6 +204,7 @@ pub async fn edit(
 fn refusal(error: QueueError) -> Problem {
     match error {
         QueueError::AnchorGone => Problem::new(Code::AnchorGone),
+        QueueError::PlayGone => Problem::new(Code::PlayGone),
         QueueError::DuplicateKey => Problem::new(Code::DuplicateKey),
         _ => Problem::invalid(error.to_string()),
     }

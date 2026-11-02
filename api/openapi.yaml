@@ -1326,8 +1326,9 @@ paths:
         There is no size limit on a queue. Answers `404` before a queue has been started; `409`
         `queue_changed` unless `queueId` is the account's active queue, replaced or kept, so the
         device fetches the queue again; `409` `anchor_gone` when an anchor names an item no longer
-        in Up Next, so the device reverts the edit; and `422` for tracks out of reach or not in
-        the library, as a start refuses them (whether or not they exist), a source of both
+        in Up Next, so the device reverts the edit; `409` `play_gone` when a `rewind` names a play
+        that is no longer in History or played another item, so the device reverts it; and `422`
+        for tracks out of reach or not in the library, as a start refuses them (whether or not they exist), a source of both
         `tracks` and a `recipe` or of neither, a recipe the server cannot resolve, a key that is
         not a UUID, an item of a `remove`, `move` or `removePlays` that is not `<key>.<position>`
         with a UUID key (an item whose key is in capitals names the same item in lowercase), an
@@ -1348,7 +1349,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AppliedEdit' }
         '409':
-          description: '`queue_changed` — `queueId` is not the account''s active queue; `anchor_gone` — an anchor is no longer in Up Next. Nothing was applied.'
+          description: '`queue_changed` — `queueId` is not the account''s active queue; `anchor_gone` — an anchor is no longer in Up Next; `play_gone` — a rewind''s play is no longer in History, or played another item. Nothing was applied.'
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -1933,6 +1934,7 @@ components:
             - permissions_required
             - queue_changed
             - anchor_gone
+            - play_gone
             - duplicate_key
             - version_conflict
             - cursor_expired
@@ -3376,6 +3378,36 @@ components:
             type: { const: previous }
             key: { type: string, format: uuid }
         - type: object
+          required: [type, plays]
+          description: |
+            Takes plays out of History. A play whose number or item does not match is ignored,
+            and if none acts the edit changes nothing, `adjusted` included, though it is still
+            applied and answered as any edit.
+          properties:
+            type: { const: removePlays }
+            plays: { type: array, items: { $ref: '#/components/schemas/QueuePlayRef' } }
+        - type: object
+          required: [type, play, key]
+          description: |
+            Puts a copy of a played item at the front of Up Next and takes the play out of
+            History. `key` is a new UUID, which names the copy. A play that does not match is
+            ignored, as for `removePlays`.
+          properties:
+            type: { const: requeue }
+            play: { $ref: '#/components/schemas/QueuePlayRef' }
+            key: { type: string, format: uuid }
+        - type: object
+          required: [type, play, key]
+          description: |
+            Steps back until the play is current, as `previous` repeated would. `key` is a new
+            UUID, used only when some of the plays are still queued, and then names the one copy
+            made. `409 play_gone` if the play does not match, unlike `requeue`, so the device can
+            revert.
+          properties:
+            type: { const: rewind }
+            play: { $ref: '#/components/schemas/QueuePlayRef' }
+            key: { type: string, format: uuid }
+        - type: object
           required: [type, on, seed]
           description: Shuffles the unplayed context with `seed`, or puts it back in order. Turning shuffle on while on, or off while off, does nothing.
           properties:
@@ -3387,6 +3419,16 @@ components:
           properties:
             type: { const: repeat }
             mode: { type: string, enum: [off, all, one] }
+
+    QueuePlayRef:
+      type: object
+      required: [play, item]
+      description: |
+        A play of History as an edit names it. It is acted on only if the number and the item
+        both match, since a device's play numbers are guesses until confirmed.
+      properties:
+        play: { type: integer, minimum: 0, description: "The play's number." }
+        item: { type: string, description: The item it played. }
 
     QueueAnchor:
       description: Where an add or move lands.

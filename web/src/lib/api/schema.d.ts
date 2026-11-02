@@ -996,8 +996,9 @@ export interface paths {
          *     There is no size limit on a queue. Answers `404` before a queue has been started; `409`
          *     `queue_changed` unless `queueId` is the account's active queue, replaced or kept, so the
          *     device fetches the queue again; `409` `anchor_gone` when an anchor names an item no longer
-         *     in Up Next, so the device reverts the edit; and `422` for tracks out of reach or not in
-         *     the library, as a start refuses them (whether or not they exist), a source of both
+         *     in Up Next, so the device reverts the edit; `409` `play_gone` when a `rewind` names a play
+         *     that is no longer in History or played another item, so the device reverts it; and `422`
+         *     for tracks out of reach or not in the library, as a start refuses them (whether or not they exist), a source of both
          *     `tracks` and a `recipe` or of neither, a recipe the server cannot resolve, a key that is
          *     not a UUID, an item of a `remove`, `move` or `removePlays` that is not `<key>.<position>`
          *     with a UUID key (an item whose key is in capitals names the same item in lowercase), an
@@ -1265,7 +1266,7 @@ export interface components {
              * @description `unsupported_media` comes only from planned operations.
              * @enum {string}
              */
-            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "queue_changed" | "anchor_gone" | "duplicate_key" | "version_conflict" | "cursor_expired" | "setup_required" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
+            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "queue_changed" | "anchor_gone" | "play_gone" | "duplicate_key" | "version_conflict" | "cursor_expired" | "setup_required" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
             /**
              * @description With `session_revoked`. `credentials_changed` — the device keeps its downloads and
              *     logs in again with its `deviceId`; `logged_out` — the device removes them
@@ -2207,6 +2208,22 @@ export interface components {
             key: string;
         } | {
             /** @constant */
+            type: "removePlays";
+            plays: components["schemas"]["QueuePlayRef"][];
+        } | {
+            /** @constant */
+            type: "requeue";
+            play: components["schemas"]["QueuePlayRef"];
+            /** Format: uuid */
+            key: string;
+        } | {
+            /** @constant */
+            type: "rewind";
+            play: components["schemas"]["QueuePlayRef"];
+            /** Format: uuid */
+            key: string;
+        } | {
+            /** @constant */
             type: "shuffle";
             on: boolean;
             seed: number;
@@ -2215,6 +2232,16 @@ export interface components {
             type: "repeat";
             /** @enum {string} */
             mode: "off" | "all" | "one";
+        };
+        /**
+         * @description A play of History as an edit names it. It is acted on only if the number and the item
+         *     both match, since a device's play numbers are guesses until confirmed.
+         */
+        QueuePlayRef: {
+            /** @description The play's number. */
+            play: number;
+            /** @description The item it played. */
+            item: string;
         };
         /** @description Where an add or move lands. */
         QueueAnchor: {
@@ -4365,7 +4392,7 @@ export interface operations {
                     "application/json": components["schemas"]["AppliedEdit"];
                 };
             };
-            /** @description `queue_changed` — `queueId` is not the account's active queue; `anchor_gone` — an anchor is no longer in Up Next. Nothing was applied. */
+            /** @description `queue_changed` — `queueId` is not the account's active queue; `anchor_gone` — an anchor is no longer in Up Next; `play_gone` — a rewind's play is no longer in History, or played another item. Nothing was applied. */
             409: {
                 headers: {
                     [name: string]: unknown;
