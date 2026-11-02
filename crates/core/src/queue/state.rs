@@ -96,6 +96,11 @@ impl Source {
     pub fn tracks(&self) -> Option<&[u64]> {
         self.tracks.as_deref()
     }
+
+    /// The attached track IDs as the shared list, to attach to another queue without copying.
+    pub fn attached(&self) -> Option<&Arc<[u64]>> {
+        self.tracks.as_ref()
+    }
 }
 
 /// A copy of some spans under a new identity: its position `p` is item `<key>.<p>`.

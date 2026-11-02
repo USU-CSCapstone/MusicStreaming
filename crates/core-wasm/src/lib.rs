@@ -6,6 +6,7 @@
 //! `u64` a `BigInt`) and track IDs as decimal strings, since IDs pass 2⁵³. Malformed input
 //! throws; an edit the queue refuses returns its code.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use jewelcase_core::{ItemId, QueueState, Row};
@@ -111,6 +112,24 @@ impl Queue {
     pub fn attach_source(&mut self, key: &str, hash: &str, body: &str) -> Result<(), JsError> {
         let tracks = parse_list(body)?;
         self.0.attach_list(key, hash.to_owned(), tracks).map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Attach every list `from` has attached to the sources here that reference it, sharing it,
+    /// so nothing is parsed again. Returns the hashes it attached, as a JSON array of strings; a
+    /// list whose length doesn't fit is left out.
+    #[wasm_bindgen(js_name = adoptLists)]
+    pub fn adopt_lists(&mut self, from: &Queue) -> Result<String, JsError> {
+        let mut seen = HashSet::new();
+        let mut adopted = Vec::new();
+        for source in &from.0.sources {
+            let (Some(hash), Some(tracks)) = (source.hash.as_deref(), source.attached()) else {
+                continue;
+            };
+            if seen.insert(hash) && self.0.attach_hash(hash, tracks).is_ok_and(|n| n > 0) {
+                adopted.push(hash);
+            }
+        }
+        Ok(serde_json::to_string(&adopted)?)
     }
 
     /// The hashes of the lists the state references, as a JSON array of strings.

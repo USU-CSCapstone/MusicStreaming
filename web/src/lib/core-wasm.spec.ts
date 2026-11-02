@@ -92,6 +92,17 @@ test('rows fill when a list attaches', () => {
 	expect(queue.attachList('other', list('1', '2', '3'))).toBe(0);
 });
 
+test('a queue adopts the lists another has attached, and only those', () => {
+	const held = started(3);
+	held.attachList('h', list('1', '2', '3'));
+	const fresh = Queue.fromJson(held.toJson());
+	expect(JSON.parse(fresh.upNextRows(0, 1))[0].track).toBeNull();
+
+	expect(JSON.parse(fresh.adoptLists(held))).toEqual(['h']);
+	expect(JSON.parse(fresh.upNextRows(0, 1))[0].track).toBe('2');
+	expect(JSON.parse(fresh.adoptLists(started(3)))).toEqual([]);
+});
+
 test('a list for a source with no hash attaches by key', () => {
 	const queue = Queue.fromJson(
 		JSON.stringify({
