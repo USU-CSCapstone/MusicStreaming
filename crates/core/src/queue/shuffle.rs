@@ -83,21 +83,19 @@ impl QueueState {
 
     /// `spans` with every shuffle row replaced by the list position it plays, so what is
     /// recorded outside the shuffled context never reads the shuffle. One span per row, merged
-    /// with a neighbour it continues.
+    /// with a neighbour it continues. O(spans + shuffle rows·π).
     pub(super) fn list_spans(&self, spans: Vec<Span>) -> Vec<Span> {
-        let mut out = SpanList::new();
+        let mut out = Vec::with_capacity(spans.len());
         for span in spans {
             match span.view {
-                View::Key(_) => out.splice(out.len(), [span]),
-                View::Shuffle => {
-                    for p in span.start..span.start + span.len {
-                        let played = self.item_of(&span.view, p).as_ref().map(play_span);
-                        out.splice(out.len(), played);
-                    }
-                }
+                View::Key(_) => out.push(span),
+                View::Shuffle => out.extend(
+                    (span.start..span.start + span.len)
+                        .filter_map(|p| self.item_of(&span.view, p).as_ref().map(play_span)),
+                ),
             }
         }
-        out.spans().to_vec()
+        SpanList::from_spans(out).spans().to_vec()
     }
 
     /// `spans` as the plays they make, in order, with each shuffle row as the list position it
