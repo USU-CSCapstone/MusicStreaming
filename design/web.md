@@ -151,7 +151,10 @@ the server (*Lists and rows* below, `design/queue.md` §3).
 - **Starts.** `start()` (the `start` message, `QueueClient.start`) makes the queue the new one at
   once, as a start from a view does: the state is the core's own start (`Queue.started`), the
   source as long as the view's `total` (or its `tracks`), no list, the clicked row current and
-  the cursor after it, and the repeat mode shown, which the server's start keeps too. It goes before every edit and fetch, so `POST /me/queue` is sent
+  the cursor after it, and the confirmed queue's repeat mode, which the server's start copies
+  too. The latest repeat change not yet confirmed is not dropped with the other pending edits:
+  it is made again on the new queue and sent after the start, so the device and the server both
+  end on the mode last chosen. It goes before every edit and fetch, so `POST /me/queue` is sent
   first, again with the same body if the answer is lost, and edits made meanwhile name the new
   `queueId`. A start of `tracks` is answered with `{list, length}`: the tracks are attached under
   that hash and kept, so nothing is downloaded back. A start of a `recipe` then fetches the
@@ -165,8 +168,9 @@ the server (*Lists and rows* below, `design/queue.md` §3).
   queue is unshuffled, or for the item playing, they fill the rows read straight from the source,
   after the list and a page, so a page the server gives replaces them if the library changed.
   They are dropped once the list is attached or clean-up drops the source. A row nothing can fill
-  is `unknown`, however the server answers: it waits for the snapshot that follows a confirmed start,
-  and the player waits with it rather than skip it.
+  is `unknown`, however the server answers: its list is on its way, after a confirmed start in
+  the snapshot that follows and after an add of this device's own in the add's answer, so the
+  player waits for it rather than skip it.
 - **Connection.** `connect()` spawns the worker and passes it `hello`, `queueEdit` and
   `queueReplaced`. A request that fails, or answers 429 or 5xx, is tried again after a wait.
 
