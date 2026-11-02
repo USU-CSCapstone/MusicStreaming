@@ -126,7 +126,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 - Playlists: CRUD, bulk and non-contiguous edits, version-checked edits, undo, generated artwork, custom artwork, pinning, and export.
 
 **Open questions:**
-1. How playlist undo works: a time window, a trash, or both, and how long they last.
+1. ~~How playlist undo works.~~ Decided: undo is the client's. An edit is undone by a further edit that reverses it, and a deletion by holding the `DELETE` back until its Undo toast is gone (`web/src/lib/deletions.svelte.ts`). The server keeps no trash.
 2. The format of the complete playlist export ([`playlists.md` §9](requirements/playlists.md#9-export)).
 3. How lyric matching and ranking fit into the core search index, without breaking parity with client search.
 4. How long recent searches are kept ([`search.md` §6](requirements/search.md#6-recent-searches)).
