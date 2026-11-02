@@ -3412,6 +3412,19 @@ components:
             applies `ops` to its items to reach `version`, with no refetch; one holding an older
             version reloads the playlist. A device that holds the playlist's details replaces
             them with `playlist`. The item list is never sent.
+
+            This message and the answer to the request that made the change travel separately,
+            so either can arrive first. A device therefore holds every `playlist` message that
+            arrives while one of its own playlist requests (a create, edit, or delete) is
+            unanswered, or while it reloads a playlist, and applies them in order once none is.
+            A request stays unanswered across attempts with the same `Idempotency-Key` until one
+            is answered with its result or a refusal; a device that gives up on one reloads
+            instead. Applied before the answer, the message for the device's own change would
+            apply its edit a second time over the one shown, or list a playlist it created
+            twice; after it, the message is not newer than the version answered, so it is
+            ignored, or it removes a playlist already deleted. After a refusal, such as `409`,
+            the held messages apply to the version the device last had confirmed, or to the one
+            it reloaded.
           properties:
             type: { const: playlist }
             libraryId: { $ref: '#/components/schemas/Id' }
