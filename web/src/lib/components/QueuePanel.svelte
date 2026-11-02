@@ -5,18 +5,22 @@
 	import { placing } from '$lib/queueing.svelte';
 	import type { Refusal, Repeat } from '$lib/queue/protocol';
 	import Icon from './Icon.svelte';
+	import KeptQueues from './KeptQueues.svelte';
 	import Panel from './Panel.svelte';
 	import QueueList from './QueueList.svelte';
 
 	// The account's queue: what is coming and what has played, with shuffle and repeat. It shows
 	// and edits the account's queue, whichever device plays it (`requirements/queue.md` §2, §7).
 	// Shuffle and Repeat are here at every width, since the player bar hides them on a phone.
+	// Kept queues are a third tab, so they are reached the same way at every width, by touch, mouse
+	// and keyboard, and sit beside the queue they were once the active one of.
 
 	const tabs = [
 		{ id: 'upNext', label: 'Up Next' },
-		{ id: 'history', label: 'History' }
+		{ id: 'history', label: 'History' },
+		{ id: 'kept', label: 'Kept' }
 	] as const;
-	let tab = $state<'upNext' | 'history'>('upNext');
+	let tab = $state<'upNext' | 'history' | 'kept'>('upNext');
 	// Choosing where something goes happens in Up Next, so show it; closing the panel gives the choice up.
 	$effect(() => {
 		if (placing.what) tab = 'upNext';
@@ -71,7 +75,9 @@
 							onclick={() => (tab = id)}
 						>
 							{label}
-							<span class="muted tabular">{count[id].toLocaleString()}</span>
+							{#if id !== 'kept'}
+								<span class="muted tabular">{count[id].toLocaleString()}</span>
+							{/if}
 						</button>
 					{/each}
 				</div>
@@ -109,7 +115,11 @@
 			{/if}
 			<div class="tabpanel" id="queue-tabpanel" role="tabpanel" aria-labelledby="queue-tab-{tab}">
 				{#key tab}
-					<QueueList {tab} />
+					{#if tab === 'kept'}
+						<KeptQueues onrestored={() => (tab = 'upNext')} />
+					{:else}
+						<QueueList {tab} />
+					{/if}
 				{/key}
 			</div>
 		</div>

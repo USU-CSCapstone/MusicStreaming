@@ -8,6 +8,7 @@ import type { Realtime } from '$lib/realtime.svelte';
 import type {
 	FromWorker,
 	Refusal,
+	RestoreResult,
 	Repeat,
 	RowSection,
 	RowsWindow,
@@ -52,6 +53,8 @@ export class QueueClient {
 	#askId = 0;
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- waiting askers are not state to render
 	#starts = new Map<number, (ok: boolean) => void>();
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- waiting askers are not state to render
+	#restores = new Map<number, (result: RestoreResult) => void>();
 
 	/** Makes a client that starts its worker with `create` on `connect`; tests pass a fake. */
 	constructor(create: () => Worker = spawn) {
@@ -77,6 +80,7 @@ export class QueueClient {
 		this.#worker = null;
 		this.#asks.clear();
 		this.#starts.clear();
+		this.#restores.clear();
 		this.queueId = null;
 		this.context = null;
 		this.current = null;
@@ -110,6 +114,19 @@ export class QueueClient {
 	}
 
 	/**
+	 * Makes a kept queue the account's active one (`QueueStore.restore`): settles once the worker
+	 * has it, and then the queue's state is the restored queue's, or with why it was not. Never
+	 * settles if the worker is stopped first.
+	 */
+	restore(queueId: string): Promise<RestoreResult> {
+		const id = ++this.#askId;
+		return new Promise((resolve) => {
+			this.#restores.set(id, resolve);
+			this.#send({ type: 'restore', id, queueId });
+		});
+	}
+
+	/**
 	 * Asks the worker for up to `limit` rows of `section` from `offset`. Rows it is still
 	 * learning come back `unknown`; ask again when `revision` changes. Never answered if the
 	 * worker is stopped first.
@@ -137,6 +154,11 @@ export class QueueClient {
 		if (message.type === 'started') {
 			this.#starts.get(message.id)?.(message.ok);
 			this.#starts.delete(message.id);
+			return;
+		}
+		if (message.type === 'restored') {
+			this.#restores.get(message.id)?.(message.result);
+			this.#restores.delete(message.id);
 			return;
 		}
 		if (message.type === 'refused') {

@@ -73,7 +73,7 @@ It is a stand-in for the server, so it has these limits. None of them are client
 ## Not built yet
 
 These are client work still to do: virtualized lists beyond the queue panel's (the other long
-lists page in as you scroll), the panel's kept queues, loudness normalization, offline, and account preferences. Grid/list view and
+lists page in as you scroll), loudness normalization, offline, and account preferences. Grid/list view and
 theme are per-browser for now.
 
 ## Queue worker
@@ -112,7 +112,7 @@ the server (*Lists and rows* below, `design/queue.md` §3).
   when its `queueEdit`, carrying the source as the server registered it, arrives, and edits made
   after it replay on top.
 - **`queueReplaced`** for a queue other than the one held fetches the new queue; pending edits
-  for the old one are dropped as `superseded`. `queuesChanged` is not the worker's.
+  for the old one are dropped as `superseded`. `queuesChanged` is not the worker's: the kept list listens for it (*The queue panel*).
 - **Lists.** The store downloads each list the confirmed queue references, `GET
   /me/queue/lists/{hash}`, one at a time in the background, those the item playing and Up Next's
   first 100 rows read first. A list is kept by hash in Cache Storage (`lists.ts`, cache
@@ -197,6 +197,13 @@ the queue only by editing it (`requirements/queue.md`, `design/queue.md` §3).
   answer, a Previous's copy for its edit's confirmation (the queue worker says which item the
   server's queue has playing). A report the server refused is sent again when the queue next
   changes, once per change. A play records the queue's context.
+- **Restores.** `restore()` (the `restore` message, `QueueClient.restore`) sends `POST
+  /me/queues/{id}/restore`, which is not retried, since a second restore of the same queue is
+  refused as active. Nothing shows until the server answers, since only it holds the queue; its
+  snapshot is installed as a fetch's is (stored lists attached, edits for the replaced queue
+  dropped as `superseded`, edits heard meanwhile replayed) and the answer carries `position`, or
+  why it was refused (`queue_active`, `not_found`, or `unreachable` with the server out of reach,
+  after which the queue is fetched again).
 - **Taking over** a track another device plays needs the state's `itemId` to be the queue's
   current item, with its row known: playback moves without rebuilding the queue. It fails, and
   starts nothing, while the queue here is not that far or the item is of another library.
@@ -206,7 +213,7 @@ the queue only by editing it (`requirements/queue.md`, `design/queue.md` §3).
 Opened from the player bar, over the main area like Lyrics and Devices. It shows and edits the
 account's queue, so it works the same whichever device plays: every edit goes through the queue
 client, applied here at once and sent on, and the device holding playback follows the queue. It
-has two tabs, Up Next and History, an accessible tab list (arrows, Home and End move between the
+has three tabs, Up Next, History and Kept, an accessible tab list (arrows, Home and End move between the
 tabs, and the selected tab's panel is labelled by it); each tab draws its own list, so nothing but
 the tab's name carries from one to the other.
 
@@ -240,6 +247,21 @@ the tab's name carries from one to the other.
   History has a check button that selects, and Space on a title selects too; the ✕ removes the
   whole selection. A row that is still being learned or cannot be read cannot be rewound to or
   re-queued, and can be removed. An empty History says nothing has played.
+- **Kept** is the third tab, so kept queues (`requirements/queue.md` §6) are reached the same way
+  at every width, by touch, mouse and keyboard, beside the queue they were once the active one of
+  (`KeptQueues.svelte`). The list is the server's: `GET /me/queues`, paged with its cursor by a
+  Show more button, fetched when the tab opens, on `queuesChanged` and on `hello`, and again as
+  far as was shown, so a change does not send the person back to the top. Each entry names the
+  song it was playing (the by-IDs lookup), its context (an album, artist or playlist by name,
+  looked up in the library of the song; otherwise by kind), its Up Next and History counts and
+  when it was last active. Pressing the entry restores it (`player.restore`): the player waits
+  for the server's answer (`#starting`, so the queue playing is not followed meanwhile), then
+  takes playback over here as a start does, plays the current item from `position` (`#resumeAt`,
+  used when the item loads) and reports it as a start, which it can since the queue it names is
+  now the server's. The panel then shows Up Next. The trash button deletes with one press, and
+  `queue_active` is explained: the active queue is replaced by a start. A failed restore is
+  shown and nothing changes. **Offline** the list and a restore need the server (`design/queue.md`
+  §7): the tab says so and offers Try again, which `hello` also does when the connection returns.
 - **Adding to the queue** (`queueing.svelte.ts`). Every ⋯ menu (song rows and the selection bar,
   album, artist and playlist cards and detail headers, the Songs page and the search Songs
   header) opens Queue next, Queue last and Add to Up Next…, above Add to playlist (which a view

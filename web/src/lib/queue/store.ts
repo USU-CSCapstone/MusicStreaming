@@ -12,6 +12,7 @@ import type {
 	QueueEdit,
 	QueueSnapshot,
 	RealtimeServerMessage,
+	RestoredQueue,
 	SentEdit,
 	StartQueue
 } from '$lib/api/types';
@@ -21,6 +22,7 @@ import type {
 	QueueRow,
 	Refusal,
 	Repeat,
+	RestoreResult,
 	RowSection,
 	RowsWindow,
 	StartRequest,
@@ -51,6 +53,9 @@ type Pending = {
 	/** The version the server answered it made, once it has. */
 	version?: number;
 };
+
+/** A restore waiting to be sent, and how its answer reaches the caller. */
+type Restoring = { queueId: string; settle: (result: RestoreResult) => void };
 
 /** A start this device made that the server has not answered. */
 type Starting = {
@@ -105,6 +110,8 @@ export class QueueStore {
 	#draining = false;
 	/** The start waiting to be sent or answered; it goes before every edit and fetch. */
 	#starting: Starting | null = null;
+	/** The restore waiting its turn or being sent. */
+	#restoring: Restoring | null = null;
 	/** The rows of the view a start came from, by position, for the source it started (`rows`). */
 	#viewRows = new Map<string, string[]>();
 	/** The item a recipe start played, until the server's snapshot says whether it is the one it made current. */
@@ -358,6 +365,58 @@ export class QueueStore {
 			this.#startItem = `${key}.${body.start}`;
 			this.#refetch = true;
 		}
+	}
+
+	/**
+	 * Makes the kept queue `queueId` the account's active one (`POST /me/queues/{id}/restore`).
+	 * It waits its turn after a start and the edits pending, and goes before a fetch, so an
+	 * unanswered start cannot replace it and no fetch runs beside it. Nothing shows until the
+	 * server answers, since only it holds the queue; the answer is then installed as a fetch's is,
+	 * and edits for the queue it replaced are dropped. The request is not retried, since a second
+	 * restore of the same queue is refused as active. Settles with where playback was left, or why
+	 * the queue was not restored; one restore at a time.
+	 */
+	restore(queueId: string): Promise<RestoreResult> {
+		if (this.#restoring) {
+			return Promise.resolve({ ok: false, code: 'busy', message: 'Another restore is under way.' });
+		}
+		return new Promise((settle) => {
+			this.#restoring = { queueId, settle };
+			void this.#drain();
+		});
+	}
+
+	/** Sends the restore and installs its answer; see [`restore`](#restore). */
+	async #sendRestore({ queueId, settle }: Restoring) {
+		this.#restoring = null;
+		const epoch = ++this.#epoch;
+		const path = `/me/queues/${encodeURIComponent(queueId)}/restore`;
+		const response = await this.#call('POST', path);
+		if (!response?.ok) {
+			if (!response) {
+				return settle({
+					ok: false,
+					code: 'unreachable',
+					message: 'The server could not be reached.'
+				});
+			}
+			const { code, message } = await problemOf(response);
+			return settle({ ok: false, code, message });
+		}
+		const restored = (await response.json()) as RestoredQueue;
+		this.#run = runOf(response.headers.get('ETag')) ?? this.#run;
+		this.#startItem = null;
+		this.#viewRows.clear();
+		if (!(await this.#install(restored, epoch))) {
+			return settle({
+				ok: false,
+				code: 'superseded',
+				message: 'Another queue replaced this one.'
+			});
+		}
+		// An edit heard before this was installed named another queue, so a fetch follows for it.
+		this.#caughtUp([]);
+		settle({ ok: true, position: restored.position ?? null });
 	}
 
 	/**
@@ -629,7 +688,7 @@ export class QueueStore {
 	}
 
 	/**
-	 * The next thing waiting, or null: the start, an edit, then a fetch. Edits go before the fetch so each is
+	 * The next thing waiting, or null: the start, an edit, a restore, then a fetch. Edits go before the fetch so each is
 	 * answered, or known unsent, by the time the snapshot is installed.
 	 */
 	#next(): (() => Promise<void>) | null {
@@ -637,6 +696,8 @@ export class QueueStore {
 		if (starting) return () => this.#sendStart(starting);
 		const edit = this.#pending.find((pending) => pending.version === undefined);
 		if (edit) return () => this.#sendEdit(edit);
+		const restoring = this.#restoring;
+		if (restoring) return () => this.#sendRestore(restoring);
 		return this.#refetch ? () => this.#fetchQueue() : null;
 	}
 

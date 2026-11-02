@@ -106,6 +106,8 @@ class Player {
 	#retryTimer: ReturnType<typeof setTimeout> | undefined;
 	/** The track started from a view is the only one loaded, until the server's queue says which item it is. */
 	#adoptable = false;
+	/** Where a restored queue's current item resumes, until it is loaded. */
+	#resumeAt: { item: string; seconds: number } | null = null;
 	/** Bumped on every item opened, so a slow lookup for an earlier one is ignored. */
 	#opens = 0;
 	#audio: HTMLAudioElement | null = null;
@@ -224,7 +226,9 @@ class Player {
 			this.#report();
 			return;
 		}
-		this.#go(found.track, found.libraryId, item);
+		const startAt = this.#resumeAt?.item === item ? this.#resumeAt.seconds : 0;
+		this.#resumeAt = null;
+		this.#go(found.track, found.libraryId, item, startAt);
 		void this.#preload();
 	}
 
@@ -408,6 +412,36 @@ class Player {
 				else this.#advance();
 			}
 		});
+	}
+
+	/**
+	 * Restores the kept queue `queueId` and plays it here from where it was left, taking playback
+	 * over as a start does (`requirements/queue.md` §6). Nothing changes until the server has
+	 * answered, and the first report, naming an item it holds, goes after. Settles with why it
+	 * was not restored, or null.
+	 */
+	async restore(queueId: string): Promise<string | null> {
+		// As a start's wait: the queue is not followed while the server's answer is on its way.
+		this.#starting = true;
+		const result = await queue.restore(queueId);
+		this.#starting = false;
+		if (!result.ok) return result.message;
+		const item = queue.current;
+		if (item === null) return null;
+		const { position } = result;
+		this.#resumeAt = {
+			item,
+			seconds: position?.item === item ? position.positionMs / 1000 : 0
+		};
+		this.#adoptable = false;
+		this.#wantsNext = false;
+		this.#wantsSkip = null;
+		this.#tried.clear();
+		this.#started();
+		// As a jump: the restored item is followed, however long its row takes to be known.
+		this.#holds = true;
+		void this.#open(item);
+		return null;
 	}
 
 	toggle() {

@@ -58,6 +58,14 @@ export type StartRequest = StartQueue & {
 	loaded?: string[];
 };
 
+/**
+ * The answer to restoring a kept queue (`design/queue.md` §7): the queue is now the active one
+ * and `position` is where its playback was left, or why it was not restored.
+ */
+export type RestoreResult =
+	| { ok: true; position: { item: string; positionMs: number } | null }
+	| { ok: false; code: string; message: string };
+
 /** Which rows a window is of: the item playing, Up Next, or History (newest first). */
 export type RowSection = 'current' | 'upNext' | 'history';
 
@@ -97,6 +105,8 @@ export type ToWorker =
 	| { type: 'edit'; edit: SentEdit; length?: number }
 	/** Starts a queue; answered with `started` carrying the same `id`. */
 	| { type: 'start'; id: number; request: StartRequest }
+	/** Restores a kept queue; answered with `restored` carrying the same `id`. */
+	| { type: 'restore'; id: number; queueId: string }
 	/** Asks for up to `limit` rows from `offset`; answered with `rows` carrying the same `id`. */
 	| { type: 'rows'; id: number; section: RowSection; offset: number; limit: number };
 
@@ -106,4 +116,5 @@ export type FromWorker =
 	| { type: 'refused'; refusal: Refusal }
 	/** Whether the start took: the queue is the new one, and its state follows. */
 	| { type: 'started'; id: number; ok: boolean }
+	| { type: 'restored'; id: number; result: RestoreResult }
 	| { type: 'rows'; id: number; window: RowsWindow };

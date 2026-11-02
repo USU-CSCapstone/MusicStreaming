@@ -186,6 +186,16 @@ class FixtureQueue {
 	holdStarts: Promise<void> | null = null;
 	/** Where `queueEdit` goes, as the realtime connection would send it; unset with none. */
 	broadcast: ((message: RealtimeServerMessage) => void) | null = null;
+	/** The kept queues, parked when a start or a restore replaced them: each with where its playback was left. */
+	kept = new Map<string, { queue: Queue; context: object; version: number; lastActive: string }>();
+	/** The progress reports the page sent over the realtime connection, as sent. */
+	reports: { itemId: string; positionMs: number; start: boolean; status: string }[] = [];
+	/** How long the lists and pages of rows take to arrive, as on a slow link. */
+	delayMs = 0;
+	/** The restores received, by queue. */
+	restores: string[] = [];
+	/** Where playback of the active queue is, as the server would have it from the device's reports. */
+	positionMs = 0;
 	/** The editIds answered, with the version each made. */
 	#answered = new Map<string, number>();
 
@@ -209,7 +219,7 @@ class FixtureQueue {
 		const repeat = this.queue ? JSON.parse(this.queue.toJson()).repeat : 'off';
 		const state = JSON.parse(Queue.started(key, libraryId, ids.length, at, repeat).toJson());
 		state.sources[0].list = list;
-		this.queue?.free();
+		this.#park();
 		this.queue = Queue.fromJson(JSON.stringify(state));
 		this.queueId = body.queueId;
 		this.context = body.context;
@@ -217,6 +227,65 @@ class FixtureQueue {
 		this.lists.set(list, ids);
 		this.#answered.clear();
 		return { list, length: ids.length };
+	}
+
+	/** Keeps the active queue if it was adjusted, as a start or a restore does, and lets go of it if not. */
+	#park() {
+		if (this.queue && JSON.parse(this.queue.toJson()).adjusted) {
+			const { queueId, context, version } = this;
+			this.kept.set(queueId, {
+				queue: this.queue,
+				context,
+				version,
+				lastActive: new Date().toISOString()
+			});
+			this.broadcast?.({ type: 'queuesChanged' });
+		} else this.queue?.free();
+	}
+
+	/** `GET /me/queues`: the kept queues, newest first, two to a page, with what each was playing. */
+	keptPage(cursor: string | null) {
+		const all = [...this.kept].reverse();
+		const from = cursor ? Number(cursor) : 0;
+		const items = all.slice(from, from + 2).map(([queueId, { queue, context, lastActive }]) => {
+			const copy = queue.copy();
+			for (const [hash, ids] of this.lists) {
+				copy.attachList(hash, JSON.stringify({ libraryId: library.id, tracks: ids }));
+			}
+			const current = copy.currentRow();
+			const entry = {
+				queueId,
+				context,
+				lastActive,
+				current: current && { libraryId: library.id, trackId: JSON.parse(current).track as string },
+				upNext: copy.upNextLen(),
+				history: copy.historyLen()
+			};
+			copy.free();
+			return entry;
+		});
+		const end = from + 2;
+		return { items, nextCursor: end < all.length ? String(end) : null };
+	}
+
+	/**
+	 * `POST /me/queues/{id}/restore`: the kept queue is the active one, the one it replaces is kept
+	 * if adjusted, and every device hears of it. Null for a queue that is not kept.
+	 */
+	restore(id: string) {
+		const kept = this.kept.get(id);
+		if (!kept) return null;
+		this.restores.push(id);
+		this.kept.delete(id);
+		this.#park();
+		this.queue = kept.queue;
+		this.queueId = id;
+		this.context = kept.context;
+		this.version = kept.version;
+		const current = JSON.parse(this.queue.currentRow() ?? '{}').item as string;
+		this.broadcast?.({ type: 'queueReplaced', queueId: id });
+		this.broadcast?.({ type: 'queuesChanged' });
+		return { ...this.snapshot(), position: { item: current, positionMs: this.positionMs } };
 	}
 
 	/** Applies an edit as `POST /me/queue/edits` does: the version it made, or the problem code. */
@@ -285,12 +354,37 @@ export const queueOf = (page: Page) => {
 	return queues.get(page)!;
 };
 
+/** Answers the kept queues' endpoints (`/me/queues`) for `queue`; `path` is what follows `/me/queues`. */
+async function serveKept(route: Route, queue: FixtureQueue, path: string) {
+	const request = route.request();
+	const problem = (status: number, code: string) =>
+		route.fulfill({ status, json: { type: 'about:blank', title: '', status, code } });
+	if (path === '') {
+		return route.fulfill({
+			json: queue.keptPage(new URL(request.url()).searchParams.get('cursor'))
+		});
+	}
+	const [, id, action] = path.split('/');
+	if (request.method() === 'POST' && action === 'restore') {
+		const restored = queue.restore(id);
+		return restored ? route.fulfill({ json: restored }) : problem(404, 'not_found');
+	}
+	if (request.method() === 'DELETE') {
+		if (id === queue.queueId) return problem(409, 'queue_active');
+		if (!queue.kept.delete(id)) return problem(404, 'not_found');
+		queue.broadcast?.({ type: 'queuesChanged' });
+		return route.fulfill({ status: 204 });
+	}
+	return problem(404, 'not_found');
+}
+
 /** Answers the queue's endpoints for `queue`, which its worker asks. */
 async function serveQueue(page: Page, queue: FixtureQueue) {
 	await page.route('**/api/v1/me/queue**', async (route: Route) => {
 		const request = route.request();
 		const url = new URL(request.url());
 		const path = url.pathname.replace(/^.*\/api\/v1\/me\/queue/, '');
+		if (path.startsWith('s')) return serveKept(route, queue, path.slice(1));
 		const problem = (status: number, code: string) =>
 			route.fulfill({ status, json: { type: 'about:blank', title: '', status, code } });
 		if (path === '' && request.method() === 'POST') {
@@ -304,6 +398,9 @@ async function serveQueue(page: Page, queue: FixtureQueue) {
 			return typeof version === 'string'
 				? problem(409, version)
 				: route.fulfill({ json: { version } });
+		}
+		if (queue.delayMs && (path === '/rows' || path.startsWith('/lists/'))) {
+			await new Promise((resolve) => setTimeout(resolve, queue.delayMs));
 		}
 		if (path === '/rows') return route.fulfill({ json: queue.rows(url.searchParams) });
 		const tracks = queue.lists.get(path.replace('/lists/', ''));
@@ -746,6 +843,10 @@ export async function serveQueueEdits(page: Page) {
 		const send = (message: RealtimeServerMessage) => ws.send(JSON.stringify(message));
 		send({ type: 'hello', deviceId, serverTime: new Date().toISOString() });
 		queueOf(page).broadcast = send;
+		ws.onMessage((data) => {
+			const message = JSON.parse(String(data));
+			if (message.type === 'progress') queueOf(page).reports.push(message.report);
+		});
 	});
 }
 

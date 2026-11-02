@@ -393,3 +393,94 @@ test('says to start something first when there is no queue to add to', async ({ 
 	).toBeVisible();
 	expect(queueOf(page).edits).toEqual([]);
 });
+
+test('a queued-into queue is kept and restores where it was', async ({ page }) => {
+	const queue = queueOf(page);
+	const { player, panel } = await playAlbum(page);
+	// Paused, so the short fixture audio does not end and move the queue on.
+	await player.getByRole('button', { name: 'Pause' }).click();
+	// Queue a song, so the queue was adjusted, and say where playback was left.
+	await page.locator('main').getByRole('button', { name: 'Actions for Signal Remix' }).click();
+	await page.getByRole('menuitem', { name: 'Queue last' }).click();
+	await expect.poll(() => queue.edits.at(-1)).toMatchObject({ type: 'add' });
+	queue.positionMs = 1_000;
+	const first = queue.queueId;
+
+	// Starting another queue replaces it, and keeps it.
+	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
+	await expect.poll(() => queue.starts.length).toBe(2);
+	expect([...queue.kept.keys()]).toEqual([first]);
+
+	await player.getByRole('button', { name: 'Queue' }).click();
+	await panel.getByRole('tab', { name: 'Kept' }).click();
+	const entry = panel.getByRole('list', { name: 'Kept queues' }).getByRole('listitem');
+	await expect(entry).toHaveCount(1);
+	await expect(entry).toContainText('Signal Part 1');
+	await expect(entry).toContainText('Signal');
+	await expect(entry).toContainText('3 songs up next');
+	await expect(entry).toContainText('0 plays played');
+
+	queue.reports.length = 0;
+	await entry.getByRole('button', { name: /^Restore/ }).click();
+	await expect.poll(() => queue.restores).toEqual([first]);
+	// It is the queue shown, and the first thing reported is a start of its item, where it was left.
+	await expect(panel.getByRole('tab', { name: /Up Next/ })).toHaveAttribute(
+		'aria-selected',
+		'true'
+	);
+	await expect
+		.poll(() => queue.reports[0])
+		.toMatchObject({ itemId: expect.stringMatching(/\.0$/), start: true, positionMs: 1_000 });
+	await expect(player.getByText('Signal Part 1')).toBeVisible();
+	await expect(
+		panel.getByRole('list', { name: 'Up Next' }).getByRole('button', { name: 'Signal Remix' })
+	).toHaveCount(2);
+
+	// The queue it replaced was never adjusted, so nothing is kept now.
+	await panel.getByRole('tab', { name: 'Kept' }).click();
+	await expect(panel.getByText(/kept here for 30 days/)).toBeVisible();
+});
+
+test('deletes a kept queue with one press', async ({ page }) => {
+	const queue = queueOf(page);
+	const { player, panel } = await playAlbum(page);
+	await page.locator('main').getByRole('button', { name: 'Actions for Signal Remix' }).click();
+	await page.getByRole('menuitem', { name: 'Queue last' }).click();
+	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
+	await expect.poll(() => queue.kept.size).toBe(1);
+
+	await player.getByRole('button', { name: 'Queue' }).click();
+	await panel.getByRole('tab', { name: 'Kept' }).click();
+	await panel.getByRole('button', { name: /^Delete/ }).click();
+	await expect(panel.getByText(/kept here for 30 days/)).toBeVisible();
+	expect(queue.kept.size).toBe(0);
+});
+
+test('restores a kept queue on a device that holds no playback, while its lists are slow', async ({
+	page
+}) => {
+	const queue = queueOf(page);
+	const { player, panel } = await playAlbum(page);
+	await player.getByRole('button', { name: 'Pause' }).click();
+	await page.locator('main').getByRole('button', { name: 'Actions for Signal Remix' }).click();
+	await page.getByRole('menuitem', { name: 'Queue last' }).click();
+	await expect.poll(() => queue.edits.at(-1)).toMatchObject({ type: 'add' });
+	queue.positionMs = 1_000;
+	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
+	await expect.poll(() => queue.kept.size).toBe(1);
+
+	// A fresh page holds no playback and no lists, and the server is slow to give them.
+	queue.delayMs = 1_500;
+	await page.reload();
+	await page.getByRole('region', { name: 'Player' }).getByRole('button', { name: 'Queue' }).click();
+	await panel.getByRole('tab', { name: 'Kept' }).click();
+	queue.reports.length = 0;
+	await panel.getByRole('button', { name: /^Restore/ }).click();
+	await expect.poll(() => queue.restores.length).toBe(1);
+	await expect
+		.poll(() => queue.reports[0], { timeout: 10_000 })
+		.toMatchObject({ itemId: expect.stringMatching(/\.0$/), start: true, positionMs: 1_000 });
+	await expect(
+		page.getByRole('region', { name: 'Player' }).getByText('Signal Part 1')
+	).toBeVisible();
+});
