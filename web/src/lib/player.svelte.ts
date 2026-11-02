@@ -379,20 +379,8 @@ class Player {
 		context: PlayContext = { type: 'library' },
 		from?: PlayFrom
 	) {
-		const start = firstPlayable(tracks, index);
-		if (start === null) return;
-		this.#begin(tracks, start, context, from);
-	}
-
-	/** Starts the queue at `tracks[at]` and plays it from `startAt` seconds in, or holds it there paused unless `play`. */
-	#begin(
-		tracks: TrackSummary[],
-		at: number,
-		context: PlayContext,
-		from?: PlayFrom,
-		startAt = 0,
-		play = true
-	) {
+		const at = firstPlayable(tracks, index);
+		if (at === null) return;
 		const libraryId = this.libraryId;
 		const track = tracks[at];
 		const key = crypto.randomUUID();
@@ -402,7 +390,7 @@ class Player {
 		this.#wantsNext = false;
 		this.#wantsSkip = null;
 		this.#started();
-		this.#go(track, libraryId, `${key}.${at}`, startAt, play);
+		this.#go(track, libraryId, `${key}.${at}`);
 		this.#adoptable = true;
 		this.#tried.clear();
 		const source = from ? { key, libraryId, recipe: from.recipe } : { key, libraryId, tracks: ids };
