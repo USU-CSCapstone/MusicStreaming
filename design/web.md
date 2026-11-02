@@ -111,17 +111,19 @@ the server (*Lists and rows* below, `design/queue.md` §3).
   needed (the core's code on the replay); a new queue replaced it (`superseded`); or the server
   answered it but, after a restart, no longer has it (`lost`), which is told by its version
   being past the snapshot's. A lost edit is not sent again, since that could apply it twice.
-- **An `add` of a `recipe`,** such as an album, has no length here, so it is only sent. It shows
-  when its `queueEdit`, carrying the source as the server registered it, arrives, and edits made
-  after it replay on top.
+- **An `add` of a `recipe`,** such as an album, applies at once as the number of rows its view
+  counts (`edit(edit, length)`), which are `unknown` until the server's list or pages say what
+  they are. Its `queueEdit` carries the source as the server registered it, with the length it
+  resolved, and replaces the pending add. One sent with no length shows only when that arrives.
 - **`queueReplaced`** for a queue other than the one held fetches the new queue; pending edits
   for the old one are dropped as `superseded`. `queuesChanged` is not the worker's: the kept list listens for it (*The queue panel*).
 - **Lists.** The store downloads each list the confirmed queue references, `GET
   /me/queue/lists/{hash}`, one at a time in the background, those the item playing and Up Next's
   first 100 rows read first. A list is kept by hash in Cache Storage (`lists.ts`, cache
   `jewelcase-queue-lists`, not the HTTP cache, which iOS evicts quickly) and attached to the core
-  when it arrives. A fetch installs a fresh core queue that holds no list, so `#install` attaches
-  the stored ones again before the queue is swapped in, and downloads only those it lacks. When a
+  when it arrives. A fetch installs a fresh core queue that holds no list, so `#install` shares
+  the lists the confirmed queue holds with it (`adoptLists`, which parses nothing), reads only the
+  others from storage before the queue is swapped in, and downloads only those it still lacks. When a
   change leaves the queue no longer referencing a hash, as clean-up drops a source, the list is
   released: deleted from storage. Loading a snapshot also deletes every stored list it does not
   reference. A `404` marks the list `gone` for as long as the queue references it; a failed
@@ -137,8 +139,9 @@ the server (*Lists and rows* below, `design/queue.md` §3).
 - **Rows.** `rows()` (the `rows` message, `QueueClient.rows`) answers a window of `current`, `upNext`
   or `history` with each row's `item`, `libraryId` and `track`, filled from the attached list,
   else from a page (`rows.ts`), else from a pending add's own tracks, else not at all. A row without a track is `unknown` while its
-  list is on its way or not yet confirmed, and `unavailable` when its list is `gone` or `failed`, or
-  a page says the server cannot read it, so the player can skip it in place. Pages,
+  list is on its way or not yet confirmed, and `unavailable` when its list is `gone`, when it is
+  `failed` and no page that holds the row is being fetched, or when a page says the server cannot
+  read it, so the player can skip it in place. Pages,
   `GET /me/queue/rows`, are fetched for the first 100 rows of Up Next and of History and the item
   playing as soon as any lacks a track, and for a requested window; they fill by item, so any
   version's is right. A page is asked for again only when the confirmed version changes (or on
@@ -148,7 +151,7 @@ the server (*Lists and rows* below, `design/queue.md` §3).
 - **Starts.** `start()` (the `start` message, `QueueClient.start`) makes the queue the new one at
   once, as a start from a view does: the state is the core's own start (`Queue.started`), the
   source as long as the view's `total` (or its `tracks`), no list, the clicked row current and
-  the cursor after it. It goes before every edit and fetch, so `POST /me/queue` is sent
+  the cursor after it, and the repeat mode shown, which the server's start keeps too. It goes before every edit and fetch, so `POST /me/queue` is sent
   first, again with the same body if the answer is lost, and edits made meanwhile name the new
   `queueId`. A start of `tracks` is answered with `{list, length}`: the tracks are attached under
   that hash and kept, so nothing is downloaded back. A start of a `recipe` then fetches the
@@ -199,7 +202,8 @@ the queue only by editing it (`requirements/queue.md`, `design/queue.md` §3).
   holds it. So a report waits until the server has the item: a start's takeover for the start's
   answer, a Previous's copy for its edit's confirmation (the queue worker says which item the
   server's queue has playing). A report the server refused is sent again when the queue next
-  changes, once per change. A play records the queue's context. Its `context` and `origin` are the device's, as sent (the server cannot tell the Manual Queue from the context for a play reported after the queue changed), and the web records every play's origin as `context`, the Manual Queue's included.
+  changes, once per change. A play records the queue's context. Its `context` and `origin` are the device's, as sent (the server cannot tell the Manual Queue from the context for a play reported after the queue changed), and the web records `manual` for a play of an item from the Manual Queue (the worker's
+  `playingManual`, from the core), `context` otherwise.
 - **Restores.** `restore()` (the `restore` message, `QueueClient.restore`) sends `POST
   /me/queues/{id}/restore`, which is not retried, since a second restore of the same queue is
   refused as active. Nothing shows until the server answers, since only it holds the queue; its
@@ -271,8 +275,8 @@ the tab's name carries from one to the other.
   with no entity, such as all songs, lacks). They are an `add` at `manualStart` / `manualEnd`, or
   at a point chosen in Up Next, and a toast says what was done at once. **What goes as a recipe:**
   album and artist pages and cards (in the order shown), the Songs page, and an unsorted search's
-  songs; the device holds no tracks for these, so the store keeps the add pending and its rows
-  wait for the server's `queueEdit`. **What goes as `tracks`:** songs, selections, playlists (in
+  songs; the device holds no tracks for these, so the add shows at once as the view's count of
+  rows, which wait for the server's list or pages. **What goes as `tracks`:** songs, selections, playlists (in
   the order shown) and sorted search rows; these show at once from the tracks sent. **Dropping at
   a point:** with a mouse (`pointer: fine`) song rows, the selection and cards drag from a view
   onto Up Next, which draws the drop line and scrolls near its edges; the gap becomes an anchor
