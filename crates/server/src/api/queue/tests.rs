@@ -16,6 +16,8 @@ use super::super::testing::{
 use crate::db::testing::{Track, access};
 use crate::queue::{Queues, list_hash};
 
+mod recipes;
+
 const QUEUE: &str = "11111111-1111-4111-8111-111111111111";
 const OTHER: &str = "22222222-2222-4222-8222-222222222222";
 const KEY: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -254,7 +256,7 @@ async fn start_refuses_malformed_requests() {
         ("no tracks", with(&["source", "tracks"], json!([]))),
         ("a context that is not an object", with(&["context"], json!("album"))),
         ("a context with no type", with(&["context"], json!({ "id": "1" }))),
-        ("a recipe, which is not built yet", recipe),
+        ("a recipe with no start track", recipe),
     ] {
         let (status, body) = start(&app, TOKEN, body).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{what}: {body}");

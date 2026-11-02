@@ -1,4 +1,4 @@
-//! Starting a queue from track IDs: `startQueue`.
+//! Starting a queue from track IDs or a recipe: `startQueue`.
 
 use std::sync::Arc;
 
@@ -9,9 +9,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
+use super::{Recipe, refused, resolve};
 use crate::api::player::Players;
 use crate::api::realtime::{Hub, ServerMessage};
 use crate::api::scope::Caller;
+use crate::api::search::Indexes;
 use crate::api::{Id, Problem, Uuid, extract, plays};
 use crate::db::{Database, reaches};
 use crate::queue::{KeepError, NewQueue, Queues, list_hash};
@@ -24,18 +26,23 @@ pub struct Start {
     /// Kept raw until its size is checked, so an oversized one is never built as a tree.
     context: Box<RawValue>,
     source: NewSource,
-    /// The index of the track that plays first.
+    /// The index of the track that plays first. For a recipe, the index in the view the device
+    /// showed, which the server uses if its list holds `start_track_id` there.
     start: u64,
+    /// With a recipe, the track that plays first.
+    start_track_id: Option<String>,
 }
 
-/// The tracks of a new source, as the device resolved them.
+/// A new source: the tracks as the device resolved them, or the recipe for the server to
+/// resolve. Exactly one of the two.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct NewSource {
     key: Uuid,
     library_id: String,
     /// Read straight into IDs, eight bytes each, so the body is the largest thing a start holds.
-    tracks: Vec<Id>,
+    tracks: Option<Vec<Id>>,
+    recipe: Option<Recipe>,
 }
 
 /// The spec's `StartedQueue`: the list the server holds for the start, which the device attaches
@@ -46,11 +53,13 @@ pub struct Started {
     length: usize,
 }
 
-/// Starts a queue that plays the request's tracks from `start`, parking the one it replaces
-/// (kept if it was adjusted, `requirements/queue.md` §6), and tells the account's connections.
-/// Refused, `422`, unless every track is in the library and the caller reaches the library,
-/// whether or not what is refused exists, so no one learns what a library they cannot reach
-/// holds (`requirements/users.md` §10). A request for a queue the account already has, active or
+/// Starts a queue that plays the request's tracks, or the list its recipe resolves to, from
+/// `start`, parking the one it replaces (kept if it was adjusted, `requirements/queue.md` §6),
+/// and tells the account's connections. Refused, `422`, unless every track is in the library
+/// and the caller reaches the library, whether or not what is refused exists, so no one learns
+/// what a library they cannot reach holds (`requirements/users.md` §10). A recipe's list starts
+/// at `start` if it holds `startTrackId` there, and otherwise at that track's first place, and a
+/// list without it is refused. A request for a queue the account already has, active or
 /// kept, by `queueId`, changes nothing and is answered as the first was, so a device may send it
 /// again.
 pub async fn start(
@@ -58,14 +67,32 @@ pub async fn start(
     State(queues): State<Arc<Queues>>,
     State(players): State<Arc<Players>>,
     State(hub): State<Arc<Hub>>,
+    State(indexes): State<Arc<Indexes>>,
     caller: Caller,
     extract::Json(request): extract::Json<Start>,
 ) -> Result<Json<Started>, Problem> {
     let context = context(&request.context)?;
-    let NewSource { key, library_id, tracks } = request.source;
+    let NewSource { key, library_id, tracks, recipe } = request.source;
     let library = Id::canonical(&library_id).ok_or_else(refused)?;
-    let ids: Vec<u64> = tracks.into_iter().map(|Id(id)| id.cast_unsigned()).collect();
-    check_tracks(&db, &caller, library, &ids).await?;
+    let (ids, recipe, at) = match (tracks, recipe, request.start_track_id) {
+        (Some(tracks), None, None) => {
+            let ids: Vec<u64> = tracks.into_iter().map(|Id(id)| id.cast_unsigned()).collect();
+            check_tracks(&db, &caller, library, &ids).await?;
+            (ids, None, request.start)
+        }
+        (None, Some(recipe), Some(track)) => {
+            let track = Id::canonical(&track).map_or(u64::MAX, |Id(id)| id.cast_unsigned());
+            let ids = resolve(&db, &indexes, &caller, library, &recipe).await?;
+            let at = start_at(&ids, request.start, track)
+                .ok_or_else(|| Problem::invalid("startTrackId is not in the recipe's tracks."))?;
+            (ids, Some(recipe.stored()), at)
+        }
+        _ => {
+            return Err(Problem::invalid(
+                "A source is either tracks, or a recipe with startTrackId.",
+            ));
+        }
+    };
     let length = ids.len();
     let tracks: Arc<[u64]> = ids.into();
 
@@ -77,8 +104,8 @@ pub async fn start(
         key: key.as_str().to_owned(),
         library_id: library.0,
         tracks: tracks.clone(),
-        recipe: None,
-        at: request.start,
+        recipe,
+        at,
     };
     // Under the queues' lock, so lock order is queues before player state.
     let place = move || players.position(user);
@@ -96,10 +123,14 @@ pub async fn start(
     Ok(Json(Started { list, length }))
 }
 
-/// The refusal for a track out of the library or a library out of reach, the same whether or
-/// not it exists.
-fn refused() -> Problem {
-    Problem::invalid("Every track must be in the library, and the library one you reach.")
+/// Where `track` plays first in `list`: `start` if it holds `track` there, and otherwise the
+/// first place that does, if any.
+fn start_at(list: &[u64], start: u64, track: u64) -> Option<u64> {
+    let there = usize::try_from(start).ok().and_then(|start| list.get(start));
+    if there == Some(&track) {
+        return Some(start);
+    }
+    list.iter().position(|&id| id == track).map(|at| at as u64)
 }
 
 /// A start's context, checked as a play's is and kept as sent. Its size is checked before it is

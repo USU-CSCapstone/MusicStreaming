@@ -924,23 +924,35 @@ export interface paths {
         put?: never;
         /**
          * Start a queue
-         * @description Makes a new queue the account's active one, playing `source`'s tracks from the one at
-         *     `start`, with an empty Manual Queue (`requirements/queue.md` §6). The queue it replaces
-         *     is kept if it was adjusted, and deleted otherwise. The device chooses the `queueId` and
-         *     the source's `key` so it can apply the start at once. The server holds the list under the
-         *     hash it answers with, and the device attaches the tracks it sent to that hash instead of
-         *     downloading them back. Every connection of the account, the sender's included, is sent
-         *     `queueReplaced`.
+         * @description Makes a new queue the account's active one, playing the source's list from one track,
+         *     with an empty Manual Queue (`requirements/queue.md` §6). The queue it replaces is kept if
+         *     it was adjusted, and deleted otherwise. The device chooses the `queueId` and the source's
+         *     `key` so it can apply the start at once. Every connection of the account, the sender's
+         *     included, is sent `queueReplaced`.
+         *
+         *     The source is either `tracks`, which the device resolved and the server holds under the
+         *     hash it answers with, so the device attaches the tracks it sent to that hash instead of
+         *     downloading them back, or a `recipe`, which the server resolves in `libraryId` to the
+         *     same list, in the same order, that a view of it pages through to its end. A recipe start
+         *     also sends `startTrackId`, the track that plays first: the server starts at `start` if
+         *     its list holds that track there, and otherwise at the first place the list holds it. The
+         *     device then fetches the snapshot (`getQueue`), since the server's list and start may
+         *     differ from what the device showed if the library changed. A device never names a list by
+         *     hash.
          *
          *     A start naming any queue of the account, active or kept, changes nothing and sends
          *     nothing, so a retried start never revives or replaces one. It is answered `200` with the
-         *     `list` and `length` of the tracks it sent, as the first start was.
+         *     `list` and `length` of the source it sent, as the first start was (for a recipe, as it
+         *     resolves again).
          *
          *     Answers `422` unless every track is in `libraryId` and the caller reaches the library,
-         *     whether or not one that is refused exists (`requirements/users.md` §10); when `tracks` is
-         *     empty or `start` is not one of its positions; when a key or `queueId` is not a UUID; when
-         *     `context` is not an object with a string `type` of at most 4 KiB; or when the body is
-         *     larger than the server accepts, which holds hundreds of thousands of tracks.
+         *     whether or not one that is refused exists (`requirements/users.md` §10), and the same
+         *     for a recipe's library; when `tracks` is empty or `start` is not one of its positions;
+         *     when `startTrackId` is missing from a recipe start, sent with `tracks`, or not in the
+         *     recipe's list; when a recipe is one the server cannot resolve, as its schema says; when a
+         *     key or `queueId` is not a UUID; when `context` is not an object with a string `type` of
+         *     at most 4 KiB; or when the body is larger than the server accepts, which holds hundreds
+         *     of thousands of tracks (a longer list starts from a recipe).
          */
         post: operations["startQueue"];
         delete?: never;
@@ -2045,10 +2057,7 @@ export interface components {
             queueId: string;
             /** @description What the queue started from, kept as sent. */
             context: components["schemas"]["Context"];
-            /**
-             * @description The tracks as the device resolved them, in play order. A track may appear more than
-             *     once; each place is its own item.
-             */
+            /** @description Exactly one of `tracks` and `recipe`. */
             source: {
                 /**
                  * Format: uuid
@@ -2056,10 +2065,21 @@ export interface components {
                  */
                 key: string;
                 libraryId: string;
-                tracks: string[];
+                /**
+                 * @description The tracks as the device resolved them, in play order. A track may appear more than
+                 *     once; each place is its own item.
+                 */
+                tracks?: string[];
+                /** @description What the server resolves into the list. Needs `startTrackId`. */
+                recipe?: components["schemas"]["QueueAlbumRecipe"] | components["schemas"]["QueueArtistRecipe"] | components["schemas"]["QueueLibraryRecipe"] | components["schemas"]["QueueSearchRecipe"];
             };
-            /** @description The position in `tracks` of the track that plays first. */
+            /**
+             * @description With `tracks`, the position of the track that plays first. With a recipe, the index of
+             *     the clicked track in the view the device showed.
+             */
             start: number;
+            /** @description With a recipe, the track that plays first. The server uses `start` if its list holds this track there, and otherwise the first place it appears. */
+            startTrackId?: string;
         };
         StartedQueue: {
             /** @description The hash the server holds the source's list under, which is the source's `list` in the snapshot. */
@@ -2166,7 +2186,7 @@ export interface components {
              */
             type: "album";
             albumId: string;
-            sort: string;
+            sort: components["schemas"]["QueueTrackSort"];
         };
         /** @description An artist's tracks, by scope and credit, in a sort. */
         QueueArtistRecipe: {
@@ -2176,9 +2196,17 @@ export interface components {
              */
             type: "artist";
             artistId: string;
+            /**
+             * @description Which of the artist's tracks. Only `all` is supported so far; any other value, such
+             *     as `topTracks`, is `422` on a start until it is built.
+             */
             scope: string;
-            artistCredit: string;
-            sort: string;
+            /**
+             * @description As `artistCredit` of `listTracks`.
+             * @enum {string}
+             */
+            artistCredit: "any" | "owned" | "featured";
+            sort: components["schemas"]["QueueTrackSort"];
         };
         /** @description A library's tracks under filters, in a sort. */
         QueueLibraryRecipe: {
@@ -2187,11 +2215,18 @@ export interface components {
              * @enum {string}
              */
             type: "library";
-            /** @description Pairs of a filter's name and its value. */
+            /** @description Pairs of a filter's name and its value. No filter is supported yet, so a start with any is `422`. */
             filters: string[][];
-            sort: string;
+            sort: components["schemas"]["QueueTrackSort"];
         };
-        /** @description A search's tracks. */
+        /**
+         * @description A sort of `listTracks` and its direction, such as `name.asc`. The list is that of a view
+         *     paged to its end: ties end on the track ID, and a track with no value in the sort's
+         *     field comes last in both directions. `playCount`, `lastPlayed` and `top` are planned:
+         *     a start with one is `422` until they are built, as they are for `listTracks`.
+         */
+        QueueTrackSort: string;
+        /** @description A search's tracks, all of them, in the search's ranking. */
         QueueSearchRecipe: {
             /**
              * @description discriminator enum property added by openapi-typescript

@@ -148,7 +148,8 @@ fn parts(sort: &Sort, after: Option<&[Value]>) -> &'static [Part] {
     }
 }
 
-/// The query for up to `limit` rows of one part of the list, and its parameters.
+/// The query for up to `limit` rows of one part of the list, and its parameters. The sort's
+/// columns follow the source's in each row, as a page's cursor needs.
 fn part_query(
     source: &Source,
     sort: &Sort,
@@ -196,6 +197,28 @@ fn part_query(
         conditions.join(" AND "),
     );
     (sql, params)
+}
+
+/// The first column of every row of `source` as an ID, in the order of `sort` and `order`: the
+/// whole list at once, which is what `fetch` pages through to its end. Each part of the list is
+/// one statement over the same range of the sort's index, with no limit. The source's first
+/// column must be the ID.
+pub fn ids(
+    conn: &Connection,
+    source: &Source,
+    sort: &Sort,
+    order: Order,
+) -> rusqlite::Result<Vec<u64>> {
+    let mut ids = Vec::new();
+    for &part in parts(sort, None) {
+        let (sql, params) = part_query(source, sort, order, None, part, u32::MAX);
+        let mut statement = conn.prepare_cached(&sql)?;
+        let mut rows = statement.query(params_from_iter(params))?;
+        while let Some(row) = rows.next()? {
+            ids.push(row.get::<_, i64>(0)?.cast_unsigned());
+        }
+    }
+    Ok(ids)
 }
 
 /// Checks that every query `fetch` makes for `sort` over `source` reads one range of an index
