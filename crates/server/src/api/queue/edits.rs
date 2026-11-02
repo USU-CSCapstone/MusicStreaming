@@ -12,14 +12,13 @@ use axum::Json;
 use axum::extract::State;
 use jewelcase_core::{Anchor, Edit, QueueError, Source};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::value::RawValue;
 
-use super::start::{NewSource, check_tracks};
-use super::{Recipe, refused, resolve, small};
+use super::start::{NewSource, Resolved};
 use crate::api::realtime::{Hub, ServerMessage};
 use crate::api::scope::Caller;
 use crate::api::search::Indexes;
-use crate::api::{Code, Id, Problem, Uuid, extract};
+use crate::api::{Code, Problem, Uuid, extract};
 use crate::db::Database;
 use crate::queue::{Added, Applied, EditError, Queues, list_hash};
 
@@ -30,8 +29,15 @@ pub struct EditRequest {
     edit_id: Uuid,
     queue_id: Uuid,
     /// The core's `Edit`, except that an `add`'s source is a [`NewSource`]; so it is read in
-    /// two steps.
-    edit: Value,
+    /// two steps, from the raw text, never as a tree.
+    edit: Box<RawValue>,
+}
+
+/// An edit's `type`, read without building the rest of it.
+#[derive(Deserialize)]
+struct Kind {
+    #[serde(rename = "type")]
+    kind: String,
 }
 
 /// An `add` as sent, whose source the server resolves into a list of its own.
@@ -57,24 +63,12 @@ pub async fn edit(
     extract::Json(request): extract::Json<EditRequest>,
 ) -> Result<Json<Applied>, Problem> {
     let invalid = |error: serde_json::Error| Problem::invalid(error.to_string());
-    // Only a value whose `type` is `add` can read as an add, so no other path skips the checks.
-    let adds = request.edit.get("type").and_then(Value::as_str) == Some("add");
-    let (edit, added) = if adds {
-        let Add { source, before } = serde_json::from_value(request.edit).map_err(invalid)?;
-        let NewSource { key, library_id, tracks, recipe } = source;
-        let library = Id::canonical(&library_id).ok_or_else(refused)?;
-        let (ids, recipe) = match (tracks, recipe) {
-            (Some(tracks), None) => {
-                let ids: Vec<u64> = tracks.into_iter().map(|Id(id)| id.cast_unsigned()).collect();
-                check_tracks(&db, &caller, library, &ids).await?;
-                (ids, None)
-            }
-            (None, Some(recipe)) => {
-                let recipe: Recipe = small(&recipe, "A recipe")?;
-                (resolve(&db, &indexes, &caller, library, &recipe).await?, Some(recipe.stored()))
-            }
-            _ => return Err(Problem::invalid("A source is either tracks or a recipe.")),
-        };
+    let text = request.edit.get();
+    // Only an edit whose `type` is `add` can read as an add, so no other path skips the checks.
+    let Kind { kind } = serde_json::from_str(text).map_err(invalid)?;
+    let (edit, added) = if kind == "add" {
+        let Add { source, before } = serde_json::from_str(text).map_err(invalid)?;
+        let Resolved { key, library, ids, recipe } = source.resolve(&db, &indexes, &caller).await?;
         let tracks: Arc<[u64]> = ids.into();
         let hash = list_hash(&tracks);
         let mut source =
@@ -82,7 +76,7 @@ pub async fn edit(
         source.hash = Some(hash.clone());
         (Edit::Add { source, before }, Some(Added { hash, library_id: library.0, tracks }))
     } else {
-        let mut edit: Edit = serde_json::from_value(request.edit).map_err(invalid)?;
+        let mut edit: Edit = serde_json::from_str(text).map_err(invalid)?;
         // Keys are kept in lowercase, as an add's are.
         if let Edit::Previous { key } | Edit::Requeue { key, .. } | Edit::Rewind { key, .. } =
             &mut edit

@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
+use jewelcase_core::Recipe as Stored;
+
 use super::{Recipe, refused, resolve, small};
 use crate::api::player::Players;
 use crate::api::realtime::{Hub, ServerMessage};
@@ -38,12 +40,48 @@ pub struct Start {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct NewSource {
-    pub(super) key: Uuid,
-    pub(super) library_id: String,
+    key: Uuid,
+    library_id: String,
     /// Read straight into IDs, eight bytes each, so the body is the largest thing a start holds.
-    pub(super) tracks: Option<Vec<Id>>,
+    tracks: Option<Vec<Id>>,
     /// Kept raw until its size is checked, as `context` is.
-    pub(super) recipe: Option<Box<RawValue>>,
+    recipe: Option<Box<RawValue>>,
+}
+
+/// A [`NewSource`] once its tracks are known.
+pub(super) struct Resolved {
+    pub(super) key: Uuid,
+    pub(super) library: Id,
+    pub(super) ids: Vec<u64>,
+    /// How the tracks were made, for a recipe.
+    pub(super) recipe: Option<Stored>,
+}
+
+impl NewSource {
+    /// The source's tracks: the ones sent, once each is checked to be in the library and the
+    /// library in the caller's reach, or the recipe's, resolved by the server. Refused, `422`,
+    /// as a start is, and unless exactly one of the two is sent.
+    pub(super) async fn resolve(
+        self,
+        db: &Arc<Database>,
+        indexes: &Indexes,
+        caller: &Caller,
+    ) -> Result<Resolved, Problem> {
+        let library = Id::canonical(&self.library_id).ok_or_else(refused)?;
+        let (ids, recipe) = match (self.tracks, self.recipe) {
+            (Some(tracks), None) => {
+                let ids: Vec<u64> = tracks.into_iter().map(|Id(id)| id.cast_unsigned()).collect();
+                check_tracks(db, caller, library, &ids).await?;
+                (ids, None)
+            }
+            (None, Some(recipe)) => {
+                let recipe: Recipe = small(&recipe, "A recipe")?;
+                (resolve(db, indexes, caller, library, &recipe).await?, Some(recipe.stored()))
+            }
+            _ => return Err(Problem::invalid("A source is either tracks or a recipe.")),
+        };
+        Ok(Resolved { key: self.key, library, ids, recipe })
+    }
 }
 
 /// The spec's `StartedQueue`: the list the server holds for the start, which the device attaches
@@ -73,26 +111,17 @@ pub async fn start(
     extract::Json(request): extract::Json<Start>,
 ) -> Result<Json<Started>, Problem> {
     let context = context(&request.context)?;
-    let NewSource { key, library_id, tracks, recipe } = request.source;
-    let library = Id::canonical(&library_id).ok_or_else(refused)?;
-    let (ids, recipe, at) = match (tracks, recipe, request.start_track_id) {
-        (Some(tracks), None, None) => {
-            let ids: Vec<u64> = tracks.into_iter().map(|Id(id)| id.cast_unsigned()).collect();
-            check_tracks(&db, &caller, library, &ids).await?;
-            (ids, None, request.start)
-        }
-        (None, Some(recipe), Some(track)) => {
-            let recipe: Recipe = small(&recipe, "A recipe")?;
+    if request.source.recipe.is_some() != request.start_track_id.is_some() {
+        return Err(Problem::invalid("A source is either tracks, or a recipe with startTrackId."));
+    }
+    let Resolved { key, library, ids, recipe } =
+        request.source.resolve(&db, &indexes, &caller).await?;
+    let at = match request.start_track_id {
+        None => request.start,
+        Some(track) => {
             let track = Id::canonical(&track).map_or(u64::MAX, |Id(id)| id.cast_unsigned());
-            let ids = resolve(&db, &indexes, &caller, library, &recipe).await?;
-            let at = start_at(&ids, request.start, track)
-                .ok_or_else(|| Problem::invalid("startTrackId is not in the recipe's tracks."))?;
-            (ids, Some(recipe.stored()), at)
-        }
-        _ => {
-            return Err(Problem::invalid(
-                "A source is either tracks, or a recipe with startTrackId.",
-            ));
+            start_at(&ids, request.start, track)
+                .ok_or_else(|| Problem::invalid("startTrackId is not in the recipe's tracks."))?
         }
     };
     let length = ids.len();
@@ -146,7 +175,7 @@ fn context(raw: &RawValue) -> Result<Value, Problem> {
 
 /// Checks that every one of `ids` is in `library`, which the caller must reach. Refused, `422`,
 /// as a start is.
-pub(super) async fn check_tracks(
+async fn check_tracks(
     db: &Database,
     caller: &Caller,
     library: Id,

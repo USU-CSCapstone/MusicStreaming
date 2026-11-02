@@ -24,10 +24,10 @@ pub use edits::edit;
 pub use resolve::{Recipe, resolve};
 pub use start::start;
 
-/// The largest body a start or an edit accepts: about 760,000 real (19-digit) track IDs. A request at the
-/// limit peaks at about 4× its size, with the shortest IDs, so a few at once still fit a small
-/// host's memory. A larger list starts from a recipe. Past it the body is refused as
-/// `422 validation_failed`.
+/// The largest body a start or an edit accepts: about 760,000 real (19-digit) track IDs. A start
+/// or an add at the limit peaks at about 4× its size, with the shortest IDs, so a few at once
+/// still fit a small host's memory. A larger list starts from a recipe. Past it the body is
+/// refused as `422 validation_failed`.
 pub const BODY_LIMIT: usize = 16 << 20;
 
 /// `getQueue`: the caller's own queue, or `404` before they have started one. It carries an

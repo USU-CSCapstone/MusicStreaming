@@ -1000,7 +1000,7 @@ export interface paths {
          *     the library, as a start refuses them (whether or not they exist), a source of both
          *     `tracks` and a `recipe` or of neither, a recipe the server cannot resolve, a key that is
          *     not a UUID, `duplicate_key` for a key that already names a source or copy of the queue,
-         *     or a body larger than the server accepts, which is far past any library it is meant for.
+         *     or a body larger than the server accepts, which holds hundreds of thousands of tracks.
          */
         post: operations["editQueue"];
         delete?: never;
