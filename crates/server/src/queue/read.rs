@@ -29,7 +29,19 @@ pub struct Slot {
     /// The play's number, for a History row.
     pub play: Option<u64>,
     /// The row's list by hash and the position in it, or `None` where the source has no list.
-    list: Option<(String, u64)>,
+    pub(super) list: Option<(String, u64)>,
+}
+
+/// `row` of `state` as a slot, with `play` for a History row, or `None` if its source is not in
+/// the state.
+pub(super) fn slot(
+    state: &jewelcase_core::QueueState,
+    row: jewelcase_core::Row<'_>,
+    play: Option<u64>,
+) -> Option<Slot> {
+    let source = state.sources.iter().find(|source| source.key == row.source)?;
+    let list = source.hash.clone().map(|hash| (hash, row.position));
+    Some(Slot { item: row.item.to_string(), library_id: source.library_id.clone(), play, list })
 }
 
 /// A page of rows as the server's memory describes it, with the lists it reads from held.
@@ -54,16 +66,6 @@ impl Queues {
         let accounts = self.lock();
         let account = accounts.get(&user)?;
         let state = &account.state;
-        let slot = |row: jewelcase_core::Row<'_>, play: Option<u64>| {
-            let source = state.sources.iter().find(|source| source.key == row.source)?;
-            let list = source.hash.clone().map(|hash| (hash, row.position));
-            Some(Slot {
-                item: row.item.to_string(),
-                library_id: source.library_id.clone(),
-                play,
-                list,
-            })
-        };
         let (total, manual) = match section {
             Section::UpNext => (state.up_next_len(), state.manual.len()),
             Section::History => (state.history_len(), 0),
@@ -71,14 +73,14 @@ impl Queues {
         let end = total.min(offset.saturating_add(limit));
         let rows: Vec<Slot> = (offset..end)
             .filter_map(|index| match section {
-                Section::UpNext => slot(state.up_next_row(index)?, None),
+                Section::UpNext => slot(state, state.up_next_row(index)?, None),
                 Section::History => {
                     let played = state.history_row(index)?;
-                    slot(played.row, Some(played.play))
+                    slot(state, played.row, Some(played.play))
                 }
             })
             .collect();
-        let current = state.current_row().and_then(|row| slot(row, None));
+        let current = state.current_row().and_then(|row| slot(state, row, None));
         let held = rows
             .iter()
             .chain(&current)
@@ -106,26 +108,7 @@ impl Queues {
         user: i64,
         page: &Page,
     ) -> Result<Vec<Option<u64>>, DbError> {
-        let slots = page.current.iter().chain(&page.rows);
-        let mut found: Vec<Option<u64>> = Vec::new();
-        let mut wanted: Vec<Option<(String, u64)>> = Vec::new();
-        for slot in slots {
-            let held = slot.list.as_ref().and_then(|(hash, position)| {
-                let tracks = page.held.get(hash)?;
-                Some(usize::try_from(*position).ok().and_then(|at| tracks.get(at)).copied())
-            });
-            match held {
-                Some(track) => (found.push(track), wanted.push(None)),
-                None => (found.push(None), wanted.push(slot.list.clone())),
-            };
-        }
-        if wanted.iter().any(Option::is_some) {
-            let stored = db.read(move |conn| read_stored(conn, user, &wanted)).await?;
-            for (found, stored) in found.iter_mut().zip(stored) {
-                *found = found.or(stored);
-            }
-        }
-        Ok(found)
+        read_tracks(db, user, page.current.iter().chain(&page.rows), &page.held).await
     }
 
     /// The JSON of `user`'s list `hash`, `{"libraryId", "tracks"}` with IDs as decimal strings,
@@ -163,6 +146,35 @@ impl Queues {
         })
         .await
     }
+}
+
+/// The track of each of `slots`, or `None` where its list can't be read: from `held`, else from
+/// the stored list. A database failure is an error.
+pub(super) async fn read_tracks<'a>(
+    db: &Database,
+    user: i64,
+    slots: impl Iterator<Item = &'a Slot>,
+    held: &HashMap<String, Arc<[u64]>>,
+) -> Result<Vec<Option<u64>>, DbError> {
+    let mut found: Vec<Option<u64>> = Vec::new();
+    let mut wanted: Vec<Option<(String, u64)>> = Vec::new();
+    for slot in slots {
+        let known = slot.list.as_ref().and_then(|(hash, position)| {
+            let tracks = held.get(hash)?;
+            Some(usize::try_from(*position).ok().and_then(|at| tracks.get(at)).copied())
+        });
+        match known {
+            Some(track) => (found.push(track), wanted.push(None)),
+            None => (found.push(None), wanted.push(slot.list.clone())),
+        };
+    }
+    if wanted.iter().any(Option::is_some) {
+        let stored = db.read(move |conn| read_stored(conn, user, &wanted)).await?;
+        for (found, stored) in found.iter_mut().zip(stored) {
+            *found = found.or(stored);
+        }
+    }
+    Ok(found)
 }
 
 /// `{"libraryId": "...", "tracks": ["...", ...]}`.

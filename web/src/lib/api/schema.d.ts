@@ -928,7 +928,7 @@ export interface paths {
          *     with an empty Manual Queue (`requirements/queue.md` §6). The queue it replaces is kept if
          *     it was adjusted, and deleted otherwise. The device chooses the `queueId` and the source's
          *     `key` so it can apply the start at once. Every connection of the account, the sender's
-         *     included, is sent `queueReplaced`.
+         *     included, is sent `queueReplaced` and `queuesChanged`.
          *
          *     The source is either `tracks`, which the device resolved and the server holds under the
          *     hash it answers with, so the device attaches the tracks it sent to that hash instead of
@@ -1070,6 +1070,87 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/queues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the kept queues
+         * @description The account's kept queues, most recently active first, keyset-paged on when each was
+         *     parked and then its `queueId`, since queues parked together share a time. A queue is kept
+         *     when a start or restore replaces it and it had been adjusted (`requirements/queue.md`
+         *     §6), and is deleted after 30 days. The active queue is not listed.
+         *
+         *     Each entry is computed from the stored queue when listed: what was `current`, and how
+         *     many rows `upNext` and `history` hold. A queue kept a moment ago, before the server has
+         *     saved it, is listed too, with the time of the request as its `lastActive`. A queue that
+         *     cannot be read is left out. `current.trackId` is `null` where its track cannot be read.
+         *
+         *     Devices showing the list fetch it again on `queuesChanged`. An expiry sends nothing.
+         */
+        get: operations["listKeptQueues"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/queues/{queueId}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore a kept queue
+         * @description Makes a kept queue the account's active one, and parks the queue it replaces as a start
+         *     does (kept if it was adjusted). Answers as `getQueue` does, with `position`: the item
+         *     and point in its track that playback was at when the queue was parked, which only this
+         *     answer carries. The restoring device resumes there and reports it as a start
+         *     (`start: true`), since another device may be playing; the server leaves the player state
+         *     alone. A device downloads the queue's lists by hash (`getQueueList`).
+         *
+         *     Every connection of the account, the sender's included, is sent `queueReplaced` and
+         *     `queuesChanged`. `404` for a queue that is not kept: unknown, expired, deleted, another
+         *     account's, or one that was never adjusted. `409` `queue_active` for the active queue.
+         */
+        post: operations["restoreQueue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/queues/{queueId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a kept queue
+         * @description Deletes a kept queue. Every connection of the account is sent `queuesChanged`. `404` for a
+         *     queue that is not kept (as `restoreQueue`); `409` `queue_active` for the active queue,
+         *     which is replaced by a start instead.
+         */
+        delete: operations["deleteQueue"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1327,7 +1408,7 @@ export interface components {
              * @description `unsupported_media` comes only from planned operations.
              * @enum {string}
              */
-            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "queue_changed" | "anchor_gone" | "play_gone" | "duplicate_key" | "version_conflict" | "cursor_expired" | "setup_required" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
+            code: "unauthenticated" | "session_revoked" | "invalid_credentials" | "rate_limited" | "forbidden" | "not_found" | "method_not_allowed" | "validation_failed" | "weak_password" | "plugin_invalid" | "plugin_exists" | "permissions_required" | "queue_changed" | "queue_active" | "anchor_gone" | "play_gone" | "duplicate_key" | "version_conflict" | "cursor_expired" | "setup_required" | "unsupported_media" | "device_unavailable" | "plugin_settings_invalid" | "internal";
             /**
              * @description With `session_revoked`. `credentials_changed` — the device keeps its downloads and
              *     logs in again with its `deviceId`; `logged_out` — the device removes them
@@ -2348,6 +2429,39 @@ export interface components {
             repeat: "off" | "all" | "one";
             rows: components["schemas"]["QueueRow"][];
         };
+        KeptQueue: {
+            /** Format: uuid */
+            queueId: string;
+            context: components["schemas"]["Context"];
+            /**
+             * Format: date-time
+             * @description When the queue was parked.
+             */
+            lastActive: string;
+            /** @description What was playing, if anything. */
+            current?: {
+                libraryId: string;
+                /** @description The track, or `null` where it cannot be read. */
+                trackId: string | null;
+            };
+            /** @description The rows in Up Next. */
+            upNext: number;
+            /** @description The rows in History. */
+            history: number;
+        };
+        KeptQueuePage: {
+            items: components["schemas"]["KeptQueue"][];
+            nextCursor: string | null;
+        };
+        /** @description The queue as `getQueue` answers, with where its playback was left. */
+        RestoredQueue: components["schemas"]["QueueSnapshot"] & {
+            /** @description Absent if no position was known. */
+            position?: {
+                /** @description The item, `<key>.<position>`. */
+                item: string;
+                positionMs: number;
+            };
+        };
         QueueSnapshot: {
             /** Format: uuid */
             queueId: string;
@@ -2833,6 +2947,9 @@ export interface components {
             type: "queueReplaced";
             /** Format: uuid */
             queueId: string;
+        } | {
+            /** @constant */
+            type: "queuesChanged";
         } | {
             /** @constant */
             type: "queueEdit";
@@ -4553,6 +4670,94 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueueRows"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listKeptQueues: {
+        parameters: {
+            query?: {
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeptQueuePage"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    restoreQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                queueId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Restored. */
+            200: {
+                headers: {
+                    /** @description As `getQueue`'s. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoredQueue"];
+                };
+            };
+            /** @description `queue_active` — the queue is the active one. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    deleteQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                queueId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `queue_active` — the queue is the active one. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             default: components["responses"]["Problem"];

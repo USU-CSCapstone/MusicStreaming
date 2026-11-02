@@ -6,6 +6,7 @@
 //! checks that the caller reaches every track the source names.
 
 mod edits;
+mod kept;
 mod lists;
 mod resolve;
 mod rows;
@@ -23,6 +24,7 @@ use super::scope::Caller;
 use super::{Problem, plays};
 use crate::queue::Queues;
 pub use edits::edit;
+pub use kept::{delete, list, restore};
 pub use lists::get_list;
 pub use resolve::{Recipe, resolve};
 pub use rows::get_rows;
@@ -43,7 +45,7 @@ pub async fn get(
     headers: HeaderMap,
 ) -> Result<Response, Problem> {
     let known = headers.get(header::IF_NONE_MATCH).and_then(|value| value.to_str().ok());
-    let (etag, body) = queues.snapshot(caller.user, known).ok_or_else(Problem::not_found)?;
+    let (etag, body) = queues.snapshot(caller.user, known, None).ok_or_else(Problem::not_found)?;
     Ok(match body {
         Some(body) => ([(header::CONTENT_TYPE, "application/json"), (header::ETAG, &etag)], body)
             .into_response(),

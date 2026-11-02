@@ -9,6 +9,7 @@
 mod edit;
 mod hash;
 mod keep;
+mod listing;
 mod read;
 mod save;
 mod snapshot;
@@ -19,6 +20,7 @@ mod tests;
 pub use edit::{Added, Applied, EditError};
 pub use hash::list_hash;
 pub use keep::{KeepError, NewQueue};
+pub use listing::{Current, Entry, Key};
 pub use read::{Section, Slot};
 pub use snapshot::names;
 pub use store::{Position, Queues};

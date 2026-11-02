@@ -1258,7 +1258,7 @@ paths:
         with an empty Manual Queue (`requirements/queue.md` §6). The queue it replaces is kept if
         it was adjusted, and deleted otherwise. The device chooses the `queueId` and the source's
         `key` so it can apply the start at once. Every connection of the account, the sender's
-        included, is sent `queueReplaced`.
+        included, is sent `queueReplaced` and `queuesChanged`.
 
         The source is either `tracks`, which the device resolved and the server holds under the
         hash it answers with, so the device attaches the tracks it sent to that hash instead of
@@ -1441,6 +1441,95 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/QueueRows' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /me/queues:
+    get:
+      tags: [Queue]
+      summary: List the kept queues
+      description: |
+        The account's kept queues, most recently active first, keyset-paged on when each was
+        parked and then its `queueId`, since queues parked together share a time. A queue is kept
+        when a start or restore replaces it and it had been adjusted (`requirements/queue.md`
+        §6), and is deleted after 30 days. The active queue is not listed.
+
+        Each entry is computed from the stored queue when listed: what was `current`, and how
+        many rows `upNext` and `history` hold. A queue kept a moment ago, before the server has
+        saved it, is listed too, with the time of the request as its `lastActive`. A queue that
+        cannot be read is left out. `current.trackId` is `null` where its track cannot be read.
+
+        Devices showing the list fetch it again on `queuesChanged`. An expiry sends nothing.
+      operationId: listKeptQueues
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KeptQueuePage' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /me/queues/{queueId}/restore:
+    post:
+      tags: [Queue]
+      summary: Restore a kept queue
+      description: |
+        Makes a kept queue the account's active one, and parks the queue it replaces as a start
+        does (kept if it was adjusted). Answers as `getQueue` does, with `position`: the item
+        and point in its track that playback was at when the queue was parked, which only this
+        answer carries. The restoring device resumes there and reports it as a start
+        (`start: true`), since another device may be playing; the server leaves the player state
+        alone. A device downloads the queue's lists by hash (`getQueueList`).
+
+        Every connection of the account, the sender's included, is sent `queueReplaced` and
+        `queuesChanged`. `404` for a queue that is not kept: unknown, expired, deleted, another
+        account's, or one that was never adjusted. `409` `queue_active` for the active queue.
+      operationId: restoreQueue
+      parameters:
+        - name: queueId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Restored.
+          headers:
+            ETag:
+              description: As `getQueue`'s.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RestoredQueue' }
+        '409':
+          description: '`queue_active` — the queue is the active one.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /me/queues/{queueId}:
+    delete:
+      tags: [Queue]
+      summary: Delete a kept queue
+      description: |
+        Deletes a kept queue. Every connection of the account is sent `queuesChanged`. `404` for a
+        queue that is not kept (as `restoreQueue`); `409` `queue_active` for the active queue,
+        which is replaced by a start instead.
+      operationId: deleteQueue
+      parameters:
+        - name: queueId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Deleted. }
+        '409':
+          description: '`queue_active` — the queue is the active one.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         default: { $ref: '#/components/responses/Problem' }
 
   # ───────────────────────────── Listening ─────────────────────────────
@@ -2021,6 +2110,7 @@ components:
             - plugin_exists
             - permissions_required
             - queue_changed
+            - queue_active
             - anchor_gone
             - play_gone
             - duplicate_key
@@ -3589,6 +3679,51 @@ components:
           maxItems: 100
           items: { $ref: '#/components/schemas/QueueRow' }
 
+    KeptQueue:
+      type: object
+      required: [queueId, context, lastActive, upNext, history]
+      properties:
+        queueId: { type: string, format: uuid }
+        context: { $ref: '#/components/schemas/Context' }
+        lastActive:
+          type: string
+          format: date-time
+          description: When the queue was parked.
+        current:
+          type: object
+          description: What was playing, if anything.
+          required: [libraryId, trackId]
+          properties:
+            libraryId: { type: string }
+            trackId:
+              type: [string, 'null']
+              description: The track, or `null` where it cannot be read.
+        upNext: { type: integer, minimum: 0, description: The rows in Up Next. }
+        history: { type: integer, minimum: 0, description: The rows in History. }
+
+    KeptQueuePage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/KeptQueue' }
+        nextCursor: { type: [string, 'null'] }
+
+    RestoredQueue:
+      description: The queue as `getQueue` answers, with where its playback was left.
+      allOf:
+        - $ref: '#/components/schemas/QueueSnapshot'
+        - type: object
+          properties:
+            position:
+              type: object
+              description: Absent if no position was known.
+              required: [item, positionMs]
+              properties:
+                item: { type: string, description: 'The item, `<key>.<position>`.' }
+                positionMs: { type: integer, minimum: 0 }
+
     QueueSnapshot:
       type: object
       required: [queueId, version, context, state]
@@ -4267,6 +4402,14 @@ components:
           properties:
             type: { const: queueReplaced }
             queueId: { type: string, format: uuid }
+        - type: object
+          required: [type]
+          description: |
+            The account's kept queues changed by a start, a restore or a delete, so a device
+            showing them fetches the list again (`listKeptQueues`). Not sent for an expiry, nor
+            for a start of a queue the account already has.
+          properties:
+            type: { const: queuesChanged }
         - type: object
           required: [type, queueId, version, editId, edit]
           description: |

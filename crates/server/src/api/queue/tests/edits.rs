@@ -50,14 +50,15 @@ fn manual_end() -> Value {
     json!({ "type": "manualEnd" })
 }
 
-/// Asserts that `socket` hears no queue message before it answers a ping, which it does after
-/// anything the server sent first.
+/// Asserts that `socket` hears no queue message, `queuesChanged` aside, before it answers a ping,
+/// which it does after anything the server sent first.
 async fn hears_no_queue(socket: &mut Socket) {
     socket.send(Message::text(r#"{"type":"ping"}"#)).await.unwrap();
     loop {
         let message = next(socket).await;
-        assert!(!message["type"].as_str().unwrap().starts_with("queue"), "{message}");
-        if message["type"] == "pong" {
+        let kind = message["type"].as_str().unwrap();
+        assert!(!kind.starts_with("queue") || kind == "queuesChanged", "{message}");
+        if kind == "pong" {
             return;
         }
     }

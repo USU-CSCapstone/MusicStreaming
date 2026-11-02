@@ -143,6 +143,7 @@ pub async fn start(
     let list = match queues.start(&db, user, new, place).await {
         Ok(list) => {
             hub.broadcast(user, &ServerMessage::QueueReplaced { queue_id });
+            hub.broadcast(user, &ServerMessage::QueuesChanged);
             list
         }
         // A retry: the answer is the one the first start gave, which the same tracks hash to.

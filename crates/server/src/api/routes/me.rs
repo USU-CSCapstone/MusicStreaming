@@ -3,7 +3,7 @@
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use tower_http::compression::CompressionLayer;
 
 use crate::api::{AppState, connections, devices, me, player, plays, queue};
@@ -29,6 +29,13 @@ pub fn router() -> Router<AppState> {
         // A list is gzipped like the snapshot, and no other answer is.
         .route("/me/queue/lists/{hash}", get(queue::get_list).layer(CompressionLayer::new()))
         .route("/me/queue/rows", get(queue::get_rows))
+        .route("/me/queues", get(queue::list))
+        .route(
+            "/me/queues/{queue_id}/restore",
+            // The answer is a snapshot, gzipped as `GET /me/queue` is.
+            post(queue::restore).layer(CompressionLayer::new()),
+        )
+        .route("/me/queues/{queue_id}", delete(queue::delete))
         .route("/me/plays", post(plays::record))
         .route("/me/plugins", get(connections::list))
         .route(
