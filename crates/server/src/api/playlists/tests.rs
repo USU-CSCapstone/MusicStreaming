@@ -158,6 +158,39 @@ async fn a_missing_track_is_counted_and_kept_in_place() {
     assert_eq!(tracks(&db, &made["id"]).await, [13, 12, 14, 11]);
 }
 
+/// An edit's positions count a missing track in its place, so one around it leaves it there,
+/// and an add of a playlist that holds one copies it, as create does.
+#[tokio::test]
+async fn an_edit_counts_a_missing_track_in_its_place() {
+    let (_temp, db, app) = catalog().await;
+    let made = mixed(&app, &db).await; // [2, 1, 2, 12 (missing), 1]
+    let uri = format!("{URI}/{}", made["id"].as_str().unwrap());
+    let body = json!({ "baseVersion": 1, "ops": [
+        { "op": "remove", "positions": [3] },
+        { "op": "move", "positions": [3], "at": 0 },
+    ] });
+    let (status, edited) = call(&app, TOKEN, "PATCH", &uri, Some(body)).await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(tracks(&db, &made["id"]).await, [1, 2, 1, 2]);
+    assert_eq!(edited["trackCount"], 4);
+
+    let made = mixed(&app, &db).await;
+    let uri = format!("{URI}/{}", made["id"].as_str().unwrap());
+    let body = json!({ "baseVersion": 1, "ops": [{ "op": "remove", "positions": [4] }] });
+    let (status, edited) = call(&app, TOKEN, "PATCH", &uri, Some(body)).await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(tracks(&db, &made["id"]).await, [2, 1, 2, 12]);
+    assert_eq!(edited["trackCount"], 4);
+
+    let copy = create(&app, json!({ "title": "C" })).await;
+    let uri = format!("{URI}/{}", copy["id"].as_str().unwrap());
+    let body = json!({ "baseVersion": 1, "ops": [{ "op": "add",
+        "items": [{ "type": "playlist", "id": made["id"] }] }] });
+    let (status, edited) = call(&app, TOKEN, "PATCH", &uri, Some(body)).await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(tracks(&db, &copy["id"]).await, [2, 1, 2, 12]);
+}
+
 #[tokio::test]
 async fn a_bad_request_creates_nothing() {
     let (temp, db, app) = catalog().await;

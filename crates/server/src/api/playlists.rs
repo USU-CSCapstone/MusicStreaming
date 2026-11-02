@@ -20,6 +20,7 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Response;
+use jewelcase_core::playlist::Op;
 use jewelcase_core::{sort_key, words};
 use rusqlite::params;
 use rusqlite::types::Value;
@@ -155,7 +156,7 @@ pub async fn create(
     }
     let items = body.items.unwrap_or_default();
     // The expansion is the slow part, so it is read before the writer is taken. A track purged
-    // between the two is left out by the insert. A retry that was answered before is found here,
+    // between the two is left out by the write. A retry that was answered before is found here,
     // and again in the write, where a concurrent first attempt would be.
     let asked = key.clone();
     let tracks = db
@@ -189,22 +190,15 @@ pub async fn create(
                     now
                 ],
             )?;
-            // A track no longer in the library inserts nothing.
-            let mut insert = tx.prepare_cached(
-                "INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at) \
-                 SELECT ?1, ?2, library_id, id, ?5 FROM tracks WHERE id = ?4 AND library_id = ?3",
-            )?;
-            for (index, track) in (1..).zip(&tracks) {
-                insert.execute(params![id, index * KEY_GAP, library, track, now])?;
-            }
+            // In the writer, unlike an edit's plan: the playlist is new, so the work is one
+            // add, and no track can be purged between the plan and the write.
+            let add = vec![Op::Add { at: None, items: tracks }];
+            let plan = edit::plan(tx, library, id, add, now)?;
+            edit::write(tx, user, library, id, 1, &plan)?;
+            let (count, duration) = plan.totals.unwrap_or_default();
             tx.execute(
-                "UPDATE playlists SET track_count = c.items, duration_us = c.duration \
-                 FROM (SELECT count(*) AS items, ifnull(sum(t.duration_us), 0) AS duration \
-                       FROM playlist_items i JOIN tracks t \
-                         ON t.library_id = i.library_id AND t.id = i.track_id \
-                       WHERE i.playlist_id = ?1) c \
-                 WHERE playlists.id = ?1",
-                [id],
+                "UPDATE playlists SET track_count = ?2, duration_us = ?3 WHERE id = ?1",
+                params![id, count, duration],
             )?;
             // The row was just inserted in this transaction.
             let created =

@@ -1,9 +1,11 @@
 //! `editPlaylist` (`api/openapi.yaml`): details and ops against the version they were made on.
 //!
-//! An edit applies whole or not at all, in one write: the version is checked, the ops are
-//! applied in memory by the shared core (`jewelcase_core::playlist`), and then only the rows the
-//! ops changed are written, under keys from [`keys`](super::keys). So the writer is held for one
-//! read of the playlist's items and for writes that scale with the edit, not with the playlist.
+//! An edit applies whole or not at all, in one write. Off the writer, the ops are applied in
+//! memory by the shared core (`jewelcase_core::playlist`) to the playlist's items at the version
+//! the edit was made on, and the rows they change are worked out, under keys from
+//! [`keys`](super::keys): a [`Plan`]. The write checks the version again and writes only those
+//! rows. So the writer is held for writes that scale with the edit, not with the playlist or
+//! the number of ops.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -13,13 +15,13 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use jewelcase_core::playlist::{Op, apply_ops};
 use jewelcase_core::{sort_key, words};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Deserializer};
 
+use super::KEY_GAP;
 use super::idempotency::{Answer, Key};
-use super::items::header;
 use super::keys::assign;
-use super::{KEY_GAP, representation};
+use super::representation::{self, header};
 use crate::api::extract::{self, Path};
 use crate::api::playables::{self, Playable};
 use crate::api::scope::Scope;
@@ -45,7 +47,7 @@ fn nullable<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D
 }
 
 /// The spec's `PlaylistOp`.
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
 enum EditOp {
     Add { items: Vec<Playable>, at: Option<usize> },
@@ -104,69 +106,88 @@ pub async fn edit(
     let title = body.check()?;
     let (base, pinned, description) = (body.base_version, body.pinned, body.description);
     let ops = body.ops.unwrap_or_default();
-    // Read first, off the writer: a retry already answered, a stale version, and the items an
-    // add expands to. The write checks the version again, so an edit made in between is a
-    // conflict and not a lost update.
-    let asked = key.clone();
-    let prepared = db
-        .try_read(move |conn| {
-            if let Some(answer) = Answer::find(conn, user, asked.as_deref())? {
-                return Ok::<_, Problem>(Err(answer));
-            }
-            let (version, _) = header(conn, user, library, id)?.ok_or_else(Problem::not_found)?;
-            if version != base {
-                return Err(Problem::version_conflict(version));
-            }
-            ops.into_iter()
-                .map(|op| expand(conn, user, library, op))
-                .collect::<Result<Vec<_>, _>>()
-                .map(Ok)
-        })
-        .await?;
-    let ops = match prepared {
-        Ok(ops) => ops,
-        Err(answer) => return Ok(answer.into_response()),
-    };
-    let answer = db
-        .try_write(move |tx| {
-            if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
-                return Ok::<_, Problem>(answer);
-            }
-            let now = now_ms();
-            let (count, duration) = update(tx, user, library, id, base, ops, now)?;
-            let new_title = title.as_deref();
-            tx.prepare_cached(
-                "UPDATE playlists SET title = coalesce(?4, title), folded = coalesce(?5, folded), \
-                 sort_key = coalesce(?6, sort_key), \
-                 description = CASE WHEN ?7 THEN ?8 ELSE description END, \
-                 pinned = coalesce(?9, pinned), version = version + 1, modified_at = ?10, \
-                 track_count = ?11, duration_us = ?12 \
-                 WHERE id = ?1 AND user_id = ?2 AND library_id = ?3",
-            )?
-            .execute(params![
-                id,
-                user,
-                library,
-                new_title,
-                new_title.map(|t| words(t).join(" ")),
-                new_title.map(|t| sort_key(t, None).as_bytes().to_vec()),
-                description.is_some(),
-                description.flatten(),
-                pinned,
-                now,
-                count,
-                duration,
-            ])?;
-            let edited =
-                representation::get(tx, user, library, id)?.ok_or_else(Problem::not_found)?;
-            let answer = Answer::new(StatusCode::OK, &edited)?;
-            if let Some(key) = &key {
-                answer.store(tx, user, key, now)?;
-            }
-            Ok(answer)
-        })
-        .await?;
-    Ok(answer.into_response())
+    // Made again only when a track the edit adds is purged between the read and the write.
+    // The next plan leaves that track out, so each attempt adds fewer, and this ends.
+    loop {
+        let now = now_ms();
+        // Read first, off the writer: a retry already answered, a stale version, the items an
+        // add expands to, and the plan. The write checks the version again, so an edit made in
+        // between is a conflict and not a lost update.
+        let (asked, ops) = (key.clone(), ops.clone());
+        let prepared = db
+            .try_read(move |conn| {
+                if let Some(answer) = Answer::find(conn, user, asked.as_deref())? {
+                    return Ok::<_, Problem>(Err(answer));
+                }
+                at(conn, user, library, id, base)?;
+                let ops = ops
+                    .into_iter()
+                    .map(|op| expand(conn, user, library, op))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Ok(plan(conn, library, id, ops, now)?))
+            })
+            .await?;
+        let plan = match prepared {
+            Ok(plan) => plan,
+            Err(answer) => return Ok(answer.into_response()),
+        };
+        let (key, title, description) = (key.clone(), title.clone(), description.clone());
+        let answer = db
+            .try_write(move |tx| {
+                if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
+                    return Ok::<_, Problem>(Some(answer));
+                }
+                if !write(tx, user, library, id, base, &plan)? {
+                    return Ok(None);
+                }
+                let (count, duration) = plan.totals.unzip();
+                let new_title = title.as_deref();
+                tx.prepare_cached(
+                    "UPDATE playlists SET title = coalesce(?4, title), \
+                     folded = coalesce(?5, folded), sort_key = coalesce(?6, sort_key), \
+                     description = CASE WHEN ?7 THEN ?8 ELSE description END, \
+                     pinned = coalesce(?9, pinned), version = version + 1, modified_at = ?10, \
+                     track_count = coalesce(?11, track_count), \
+                     duration_us = coalesce(?12, duration_us) \
+                     WHERE id = ?1 AND user_id = ?2 AND library_id = ?3",
+                )?
+                .execute(params![
+                    id,
+                    user,
+                    library,
+                    new_title,
+                    new_title.map(|t| words(t).join(" ")),
+                    new_title.map(|t| sort_key(t, None).as_bytes().to_vec()),
+                    description.is_some(),
+                    description.flatten(),
+                    pinned,
+                    now,
+                    count,
+                    duration,
+                ])?;
+                let edited =
+                    representation::get(tx, user, library, id)?.ok_or_else(Problem::not_found)?;
+                let answer = Answer::new(StatusCode::OK, &edited)?;
+                if let Some(key) = &key {
+                    answer.store(tx, user, key, now)?;
+                }
+                Ok(Some(answer))
+            })
+            .await?;
+        if let Some(answer) = answer {
+            return Ok(answer.into_response());
+        }
+    }
+}
+
+/// `404` unless playlist `id` is `user`'s in `library`, and `409 version_conflict` unless it is
+/// at `base`.
+fn at(conn: &Connection, user: i64, library: i64, id: i64, base: i64) -> Result<(), Problem> {
+    let (version, _) = header(conn, user, library, id)?.ok_or_else(Problem::not_found)?;
+    if version != base {
+        return Err(Problem::version_conflict(version));
+    }
+    Ok(())
 }
 
 /// `op` with an add's playables expanded to track IDs.
@@ -199,39 +220,42 @@ fn durations(
     Ok(found)
 }
 
-/// Checks the playlist is the caller's and at `base`, applies `ops` to its items, writes the
-/// rows that changed, and returns the playlist's new item count and duration, summed from the
-/// tracks as they are now. A position out of range is `422`. The details and version are the
-/// caller's to write.
-fn update(
-    tx: &Transaction,
-    user: i64,
+/// What an edit's ops write, worked out from the playlist's items at one version by [`plan`],
+/// for [`write`] to write.
+pub(super) struct Plan {
+    /// The item count and duration once written, or `None` for an edit of details alone, which
+    /// leaves them as they are.
+    pub(super) totals: Option<(i64, i64)>,
+    /// The distinct tracks the ops add.
+    added: Vec<i64>,
+    /// The keys of the rows to delete, or `None` to delete them all, for a renumber.
+    delete: Option<Vec<i64>>,
+    /// The rows to insert, as `(key, track, added_at)`.
+    insert: Vec<(i64, i64, i64)>,
+}
+
+/// Applies `ops` to the items of playlist `id` as `conn` finds them, and works out the rows that
+/// change and the totals after, summed from the tracks' durations as they are now. A track
+/// `library` no longer has is left out of an add, as create leaves it out. A position out of
+/// range is `422`. It only reads, so it runs off the writer; the caller has checked the
+/// playlist is the caller's and at the version the ops were made on.
+pub(super) fn plan(
+    conn: &Connection,
     library: i64,
     id: i64,
-    base: i64,
     ops: Vec<Op<i64>>,
     now: i64,
-) -> Result<(i64, i64), Problem> {
-    let (version, count, duration): (i64, i64, i64) = tx
-        .prepare_cached(
-            "SELECT version, track_count, duration_us FROM playlists \
-             WHERE id = ?1 AND user_id = ?2 AND library_id = ?3",
-        )?
-        .query_row(params![id, user, library], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-        .map_err(|error| match error {
-            rusqlite::Error::QueryReturnedNoRows => Problem::not_found(),
-            error => error.into(),
-        })?;
-    if version != base {
-        return Err(Problem::version_conflict(version));
-    }
+) -> Result<Plan, Problem> {
     if ops.is_empty() {
-        return Ok((count, duration));
+        return Ok(Plan {
+            totals: None,
+            added: Vec::new(),
+            delete: Some(Vec::new()),
+            insert: Vec::new(),
+        });
     }
-
-    // A track purged since the expansion is left out of the add, as create leaves it out.
     let added = durations(
-        tx,
+        conn,
         library,
         ops.iter()
             .flat_map(|op| match op {
@@ -255,7 +279,7 @@ fn update(
             Op::Move { positions, at } => Op::Move { positions, at },
         })
         .collect();
-    let before: Vec<Item> = tx
+    let before: Vec<Item> = conn
         .prepare_cached(
             "SELECT i.key, i.track_id, i.added_at, t.duration_us FROM playlist_items i \
              JOIN tracks t ON t.library_id = i.library_id AND t.id = i.track_id \
@@ -274,46 +298,72 @@ fn update(
 
     let stored: Vec<Option<i64>> = after.iter().map(|item| item.key).collect();
     let kept: HashSet<i64> = stored.iter().flatten().copied().collect();
-    let removed: Vec<&Item> =
-        before.iter().filter(|item| item.key.is_some_and(|key| !kept.contains(&key))).collect();
-    let (count, duration) = (after.len(), after.iter().map(|item| item.duration).sum::<i64>());
-    let count = i64::try_from(count).unwrap_or(i64::MAX);
+    let removed = before.iter().filter_map(|item| item.key).filter(|key| !kept.contains(key));
+    let duration = after.iter().map(|item| item.duration).sum::<i64>();
+    let count = i64::try_from(after.len()).unwrap_or(i64::MAX);
+    let (delete, insert) = match assign(&stored) {
+        Some(keys) => {
+            let written: Vec<(&Item, i64)> =
+                after.iter().zip(keys).filter(|(item, key)| item.key != Some(*key)).collect();
+            let moved = written.iter().filter_map(|(item, _)| item.key);
+            let delete = removed.chain(moved).collect();
+            (
+                Some(delete),
+                written.iter().map(|(item, key)| (*key, item.track, item.added_at)).collect(),
+            )
+        }
+        // No room between two neighbours: the whole playlist takes fresh keys, spaced out again.
+        None => (
+            None,
+            after
+                .iter()
+                .zip(1..)
+                .map(|(item, n)| (n * KEY_GAP, item.track, item.added_at))
+                .collect(),
+        ),
+    };
+    Ok(Plan { totals: Some((count, duration)), added: added.into_keys().collect(), delete, insert })
+}
 
-    // Deleted before anything is inserted, so no new key meets an old one that is on its way out.
-    let mut delete =
-        tx.prepare_cached("DELETE FROM playlist_items WHERE playlist_id = ?1 AND key = ?2")?;
+/// Writes `plan`, made from playlist `id` at version `base`, if the playlist is still `user`'s
+/// in `library` and at `base`: otherwise `404` or `409 version_conflict`, and nothing is
+/// written. Returns `false`, having written nothing, when a track the plan adds was purged
+/// since it was made, so it is out of date and to be made again. The details, totals and
+/// version are the caller's to write.
+pub(super) fn write(
+    tx: &Connection,
+    user: i64,
+    library: i64,
+    id: i64,
+    base: i64,
+    plan: &Plan,
+) -> Result<bool, Problem> {
+    // The version moves with every change to the items, so at `base` they are what the plan
+    // was made from. Retention keeps the tracks they hold; only an added one can be gone.
+    at(tx, user, library, id, base)?;
+    if durations(tx, library, plan.added.iter().copied())?.len() < plan.added.len() {
+        return Ok(false);
+    }
+    // Deleted before anything is inserted, so no new key meets an old one on its way out.
+    match &plan.delete {
+        Some(keys) => {
+            let mut delete = tx
+                .prepare_cached("DELETE FROM playlist_items WHERE playlist_id = ?1 AND key = ?2")?;
+            for key in keys {
+                delete.execute(params![id, key])?;
+            }
+        }
+        None => {
+            tx.prepare_cached("DELETE FROM playlist_items WHERE playlist_id = ?1")?
+                .execute([id])?;
+        }
+    }
     let mut insert = tx.prepare_cached(
         "INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at) \
          VALUES (?1, ?2, ?3, ?4, ?5)",
     )?;
-    match assign(&stored) {
-        Some(keys) => {
-            let written: Vec<(&Item, i64)> =
-                after.iter().zip(keys).filter(|(item, key)| item.key != Some(*key)).collect();
-            for key in
-                removed.iter().chain(written.iter().map(|(item, _)| item)).filter_map(|i| i.key)
-            {
-                delete.execute(params![id, key])?;
-            }
-            for (item, key) in written {
-                insert.execute(params![id, key, library, item.track, item.added_at])?;
-            }
-        }
-        None => {
-            // No room between two neighbours: the whole playlist takes fresh keys, spaced out
-            // again.
-            tx.prepare_cached("DELETE FROM playlist_items WHERE playlist_id = ?1")?
-                .execute([id])?;
-            for (item, number) in after.iter().zip(1..) {
-                insert.execute(params![
-                    id,
-                    number * KEY_GAP,
-                    library,
-                    item.track,
-                    item.added_at
-                ])?;
-            }
-        }
+    for (key, track, added_at) in &plan.insert {
+        insert.execute(params![id, key, library, track, added_at])?;
     }
-    Ok((count, duration))
+    Ok(true)
 }

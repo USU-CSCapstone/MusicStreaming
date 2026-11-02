@@ -8,10 +8,11 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use rusqlite::params;
 use rusqlite::types::Value;
-use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
+use super::representation::header;
 use crate::api::cursor;
 use crate::api::extract::{self, Path, Query};
 use crate::api::playables::{self, Playable};
@@ -60,21 +61,6 @@ pub struct ItemPage {
     next_cursor: Option<String>,
     total: i64,
     version: i64,
-}
-
-/// The version and item count of `user`'s playlist `id` in `library`, if it is theirs.
-pub(super) fn header(
-    conn: &Connection,
-    user: i64,
-    library: i64,
-    id: i64,
-) -> rusqlite::Result<Option<(i64, i64)>> {
-    conn.prepare_cached(
-        "SELECT version, track_count FROM playlists \
-         WHERE id = ?1 AND user_id = ?2 AND library_id = ?3",
-    )?
-    .query_row(params![id, user, library], |row| Ok((row.get(0)?, row.get(1)?)))
-    .optional()
 }
 
 /// One page of the playlist's items in the user's order, a duplicate as often as it occurs and
