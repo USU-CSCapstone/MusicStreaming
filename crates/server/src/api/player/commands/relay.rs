@@ -101,7 +101,7 @@ impl Players {
             let Some(AnyId(device)) = command.device_id else {
                 return Err(Problem::invalid("transfer must name its deviceId."));
             };
-            if state.and_then(|state| state.track_id).is_none() {
+            if state.and_then(|state| state.item_id.as_ref()).is_none() {
                 return Err(unavailable("Nothing has played to move."));
             }
             let device = device.map(Id);

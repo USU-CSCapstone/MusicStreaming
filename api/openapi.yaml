@@ -82,8 +82,8 @@ info:
 
     **Draft shapes.** `x-status: draft` marks what is served but may still change shape:
     audio delivery, which waits on its design (`design/general.md` §11); the waveform, whose
-    bin count is still open (`design/scanning.md`); and the player's fields that name a track
-    until the server keeps the queue.
+    bin count is still open (`design/scanning.md`). The player's `itemId` is stable, like the
+    queue contract it names.
 
     **Realtime.** `GET /realtime` upgrades to a WebSocket carrying
     `RealtimeClientMessage` and `RealtimeServerMessage`.
@@ -3209,7 +3209,7 @@ components:
     # ───────────────────────────── Player ─────────────────────────────
     PlayerState:
       type: object
-      required: [status, activeDeviceId, itemId, libraryId, trackId, positionMs, positionAt, volume]
+      required: [status, activeDeviceId, itemId, positionMs, positionAt, volume]
       properties:
         status:
           type: string
@@ -3223,15 +3223,13 @@ components:
             device can carry on from there (§6).
         itemId:
           type: [string, 'null']
-          x-status: draft
           description: |
-            The active device's own name for its place in its queue, as it last reported:
-            opaque to everyone else. The queue item playing once the server keeps the queue.
-        libraryId:
-          type: [string, 'null']
-          x-status: draft
-          description: The library of `trackId`, until the server keeps the queue, which names it.
-        trackId: { type: [string, 'null'] }
+            The queue item playback is at, as the active device last reported it, `<key>.<position>`:
+            an item of the account's active queue when it was reported. A device finds its track in
+            the queue it holds. A new queue replaces the active one without touching the state,
+            which keeps naming its item until the next report, so a client that finds the item
+            absent from its queue has nothing to resume or hand over. `null` before anything has
+            played.
         external:
           $ref: '#/components/schemas/ExternalTrackRef'
           description: The external track playing. Planned.
@@ -3345,20 +3343,23 @@ components:
     ProgressReport:
       type: object
       x-status: draft
-      required: [itemId, libraryId, trackId, status, positionMs]
+      required: [itemId, status, positionMs]
       description: |
         Sent over the realtime connection by the playing device, or one taking playback over
         (`start`); a report is the device's whose connection sends it. A report that is refused
-        — invalid, from any connection but the active one, or of a track out of the caller's
-        reach — is answered with the current state; one that does not parse is ignored.
-        `buffering` is recorded as `paused` at its position.
+        — invalid, from any connection but the active one, or naming an item the account's
+        active queue does not have — is answered with the current state; one that does not parse
+        is ignored. `buffering` is recorded as `paused` at its position.
 
-        Until the server keeps the queue, a report names its track, and `itemId` is the
-        device's own name for its place in its queue, opaque to the server.
+        A report names only the active queue's item, and no queue: item IDs never repeat across
+        an account's queues. A device restoring a kept queue reports as a start (`start`), since
+        another device may be playing.
       properties:
-        itemId: { type: string, minLength: 1, maxLength: 100, x-status: draft }
-        libraryId: { type: string }
-        trackId: { type: string }
+        itemId:
+          type: string
+          description: |
+            An item of the account's active queue, in any of its sections, `<key>.<position>`.
+            The track is the one the queue has under it.
         start:
           type: boolean
           default: false

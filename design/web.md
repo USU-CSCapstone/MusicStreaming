@@ -192,9 +192,11 @@ the queue only by editing it (`requirements/queue.md`, `design/queue.md` §3).
   seconds, or with an empty History, and otherwise sends `previous` with a fresh key; Repeat One
   plays the item again here, and Repeat All is the queue's own. `jump(item)`, shuffle (with a
   device-chosen `u32` seed) and repeat are edits too. The next row's track is fetched ahead.
-- **Reports** name the `itemId` alongside `libraryId` and `trackId`, which the server still goes
-  by until it follows the queue. A play records the queue's context.
+- **Reports** name only the `itemId`, which the server refuses unless the account's active queue
+  holds it. So a report waits until the server has the item: a start's takeover for the start's
+  answer, a Previous's copy for its edit's confirmation (the queue worker says which item the
+  server's queue has playing). A report the server refused is sent again when the queue next
+  changes, once per change. A play records the queue's context.
 - **Taking over** a track another device plays needs the state's `itemId` to be the queue's
   current item, with its row known: playback moves without rebuilding the queue. It fails, and
-  starts nothing, while the queue here is not that far. Only a place that is not a queue item, as
-  another client names it, becomes a queue of one track.
+  starts nothing, while the queue here is not that far or the item is of another library.

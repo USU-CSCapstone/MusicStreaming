@@ -5,8 +5,6 @@ import { Progress, type Snapshot } from './progress';
 const here = '1';
 const now: Snapshot = {
 	itemId: '0',
-	libraryId: '11',
-	trackId: '41',
 	status: 'playing',
 	positionMs: 1000,
 	volume: 1
@@ -17,8 +15,6 @@ const state = (device: string | null): PlayerState => ({
 	status: device ? 'playing' : 'stopped',
 	activeDeviceId: device,
 	itemId: '0',
-	libraryId: null,
-	trackId: null,
 	positionMs: 0,
 	positionAt: new Date().toISOString(),
 	volume: null

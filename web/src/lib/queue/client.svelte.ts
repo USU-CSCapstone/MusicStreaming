@@ -33,6 +33,10 @@ export class QueueClient {
 	current = $state<string | null>(null);
 	/** The item playing came from the Manual Queue, for a play to record. */
 	playingManual = $state(false);
+	/** The item playing in the server's queue, as far as is heard: what a report may name. */
+	held = $state<string | null>(null);
+	/** The server's version of the queue, as far as this device has applied it. */
+	version = $state(0);
 	/** How many rows the Manual Queue, all of Up Next and History hold. */
 	counts = $state({ manual: 0, upNext: 0, history: 0 });
 	repeat = $state<Repeat>('off');
@@ -77,6 +81,8 @@ export class QueueClient {
 		this.context = null;
 		this.current = null;
 		this.playingManual = false;
+		this.held = null;
+		this.version = 0;
 		this.counts = { manual: 0, upNext: 0, history: 0 };
 		this.repeat = 'off';
 		this.shuffled = false;
@@ -140,6 +146,8 @@ export class QueueClient {
 		this.revision = summary.revision;
 		this.current = summary.current;
 		this.playingManual = summary.playingManual;
+		this.held = summary.held;
+		this.version = summary.version;
 		this.repeat = summary.repeat;
 		this.shuffled = summary.shuffled;
 		this.counts = { manual: summary.manual, upNext: summary.upNext, history: summary.history };

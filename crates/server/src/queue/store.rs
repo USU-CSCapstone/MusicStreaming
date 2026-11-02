@@ -178,6 +178,13 @@ impl Queues {
         Ok(Queues::holding(db.read(load).await?))
     }
 
+    /// Whether `user`'s active queue holds `item`, in any of its sections. An account with no
+    /// queue holds none, and nor does an item that is not `<key>.<position>`.
+    pub fn holds(&self, user: i64, item: &str) -> bool {
+        let Ok(item) = item.parse::<ItemId>() else { return false };
+        self.lock().get(&user).is_some_and(|account| account.state.holds_item(&item))
+    }
+
     /// Each account's queues, locked.
     pub(super) fn lock(&self) -> MutexGuard<'_, HashMap<i64, Account>> {
         self.accounts.lock().recover()

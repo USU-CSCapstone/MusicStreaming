@@ -20,6 +20,11 @@ export type Summary = {
 	current: string | null;
 	/** The item playing came from the Manual Queue, not the context. */
 	playingManual: boolean;
+	/**
+	 * The item playing in the server's queue, as far as this device has heard: what a report
+	 * may name. Null with no queue, and while a start waits for the server's answer.
+	 */
+	held: string | null;
 	/** The rows of the Manual Queue, which is the top of Up Next, and of all of Up Next. */
 	manual: number;
 	upNext: number;

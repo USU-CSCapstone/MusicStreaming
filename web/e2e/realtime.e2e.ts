@@ -58,11 +58,25 @@ test('playing here takes playback over from the other device', async ({ page }) 
 	const takeovers = () => sent.flatMap((m) => (m.type === 'progress' ? [m.report] : []));
 	await expect
 		.poll(takeovers)
-		.toContainEqual(expect.objectContaining({ start: true, trackId: '42' }));
+		.toContainEqual(expect.objectContaining({ start: true, itemId: 'phone.1' }));
 	await expect(player.getByRole('button', { name: 'Devices', exact: true })).toBeVisible();
 	// The button gone, focus stays in the list, which says where playback went.
 	await expect(page.getByRole('list', { name: 'Devices' })).toBeFocused();
 	await expect(page.getByRole('status').filter({ hasText: 'Playback is' })).toHaveText(
 		'Playback is on this device'
 	);
+});
+
+test('a song played here from a view takes playback over from the other device', async ({
+	page
+}) => {
+	await serveLibrary(page);
+	const { state } = await serveRealtime(page);
+	await page.goto('/albums/31');
+	await page.getByRole('region', { name: 'Player' }).getByText('Signal Part 2').waitFor();
+
+	await page.locator('main').getByText('Signal Remix').dblclick();
+	// The server has the queue before it hears of this device at an item of it.
+	await expect.poll(() => state().activeDeviceId).not.toBe(phone.id);
+	expect(state().itemId).not.toMatch(/^phone\./);
 });

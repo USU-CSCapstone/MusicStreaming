@@ -151,6 +151,53 @@ async fn restore_returns_position() {
     assert_eq!(player["itemId"], json!(format!("{KEY}.0")));
 }
 
+/// `restoreQueue` as the owner: the answer's `position`.
+async fn restored_position(app: &Router, queue: &str) -> Value {
+    let (status, answer) =
+        call(app, TOKEN, "POST", &format!("/api/v1/me/queues/{queue}/restore"), None).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    answer["position"].clone()
+}
+
+/// A start or restore parks the active queue with the item and point the player state names
+/// under the queues' lock, end to end through the API: while playing, the point is as far as it
+/// has played; the account's own state is read, never another's; and a state naming no item of
+/// the queue leaves the position the queue had.
+#[tokio::test]
+async fn parking_takes_its_place_from_the_player_state() {
+    let (_temp, state, app) = setup().await;
+    let address = serve(app.clone()).await;
+    let mut desk = connect_with(address, TOKEN).await;
+    let mut stranger = connect_with(address, "user2").await;
+    let item = |key: &str, n: u64| format!("{key}.{n}");
+    // Another account's state, naming an item of its own queue under a key the owner uses later.
+    let theirs = start_body(OTHER, KEY2, &["1", "2"], 0);
+    assert_eq!(start(&app, "user2", theirs).await.0, StatusCode::OK);
+    let place = json!({ "itemId": item(KEY2, 0), "positionMs": 9000, "start": true });
+    report(&mut stranger, "playing", place).await;
+
+    begin(&app, QUEUE, KEY, true).await;
+    let place = json!({ "itemId": item(KEY, 1), "positionMs": 4200, "start": true });
+    report(&mut desk, "playing", place).await;
+    begin(&app, OTHER, KEY2, true).await;
+    report(&mut desk, "paused", json!({ "itemId": item(KEY2, 0), "positionMs": 700 })).await;
+    state.queues.save(&state.db).await;
+
+    // Parked while playing: as far as it played, which is never short of where it was reported.
+    let first = restored_position(&app, QUEUE).await;
+    assert_eq!(first["item"], json!(item(KEY, 1)));
+    let at = first["positionMs"].as_u64().unwrap();
+    assert!((4200..4200 + 10_000).contains(&at), "{first}");
+    // OTHER was parked by that restore, paused at its own place.
+    let other = restored_position(&app, OTHER).await;
+    assert_eq!(other, json!({ "item": item(KEY2, 0), "positionMs": 700 }));
+
+    // The state still names OTHER's item, which QUEUE lacks, so parking QUEUE keeps its place.
+    assert_eq!(restored_position(&app, QUEUE).await, first);
+    begin(&app, &queue(3), &key(3), true).await;
+    assert_eq!(restored_position(&app, QUEUE).await, first, "kept through another parking");
+}
+
 #[tokio::test]
 async fn restore_of_the_active_queue_is_refused() {
     let (_temp, _state, app) = setup().await;

@@ -29,9 +29,10 @@
 	function movable(device: Device): boolean {
 		const state = playback.state;
 		if (stale || !device.connected || device.id === realtime.deviceId) return false;
-		return state?.trackId != null && device.id !== state.activeDeviceId;
+		return state?.itemId != null && device.id !== state.activeDeviceId;
 	}
 
+	/** What to say of `device`: whether and what it is playing, or whether it is connected. */
 	function status(device: Device): string {
 		const state = playback.state;
 		if (device.id === realtime.deviceId && stale) return 'Not connected';
@@ -47,7 +48,7 @@
 					? 'Playing'
 					: 'Paused';
 			const track = controls.track;
-			const title = track && track.id === state.trackId ? track.title : null;
+			const title = track && controls.item === state.itemId ? track.title : null;
 			return title ? `${said} · ${title}` : said;
 		}
 		if (!device.connected) return 'Not connected';

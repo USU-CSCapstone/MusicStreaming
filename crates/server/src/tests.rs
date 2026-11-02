@@ -11,7 +11,7 @@ use tokio::time::{Instant, sleep, timeout};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::*;
-use crate::api::testing::player::{report, start_playing};
+use crate::api::testing::player::{KEY, report, start_playing};
 use crate::api::testing::socket::connect_with;
 use crate::api::testing::{TOKEN, add_device};
 use crate::db::testing;
@@ -141,8 +141,6 @@ async fn a_stop_saves_players_and_closes_connections_while_a_request_hangs() {
             sleep(Duration::from_millis(100)).await;
         }
         let mut socket = connect_with(address, TOKEN).await;
-        start_playing(&mut socket).await;
-        report(&mut socket, "playing", json!({ "positionMs": 60_000 })).await;
         // Part of a header holds the drain open, once the server has the connection.
         let mut hanging = TcpStream::connect(address).await.unwrap();
         hanging.write_all(b"GET /api/v1/health HTTP/1.1\r\n").await.unwrap();
@@ -157,9 +155,11 @@ async fn a_stop_saves_players_and_closes_connections_while_a_request_hangs() {
         sleep(Duration::from_millis(200)).await;
         // A queue started just before the stop, so the periodic save has not taken it: only the
         // save the stop ends with can.
-        let start = String::from(
-            r#"{"queueId":"11111111-1111-4111-8111-111111111111","context":{"type":"album"},"source":{"key":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","libraryId":"1","tracks":["1"]},"start":0}"#,
-        );
+        let start = json!({
+            "queueId": "11111111-1111-4111-8111-111111111111", "context": { "type": "album" },
+            "source": { "key": KEY, "libraryId": "1", "tracks": ["1"] }, "start": 0,
+        })
+        .to_string();
         let mut starting = TcpStream::connect(address).await.unwrap();
         let request = format!(
             "POST /api/v1/me/queue HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\n\
@@ -173,6 +173,9 @@ async fn a_stop_saves_players_and_closes_connections_while_a_request_hangs() {
             .unwrap()
             .unwrap();
         assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        // Playing the queue's item, which a report must name.
+        start_playing(&mut socket).await;
+        report(&mut socket, "playing", json!({ "positionMs": 60_000 })).await;
         stop.send(()).unwrap();
         let stopped = Instant::now();
 

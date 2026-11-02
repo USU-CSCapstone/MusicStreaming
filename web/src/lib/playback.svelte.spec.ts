@@ -5,6 +5,17 @@ import type { PlayerState, RealtimeServerMessage, Track } from '$lib/api/types';
 const fake = vi.hoisted(() => ({
 	listeners: [] as ((message: RealtimeServerMessage) => void)[],
 	tracks: new Map<string, Promise<unknown>>(),
+	/** The queue as playback meets it: the item playing, which is of the track `track`. */
+	queue: {
+		current: null as string | null,
+		revision: 0,
+		track: '',
+		rows: async () => ({
+			rows: [
+				{ item: fake.queue.current, libraryId: '11', status: 'known', track: fake.queue.track }
+			]
+		})
+	},
 	sent: [] as {
 		type: string;
 		command: { type: string; commandId: string; volume?: number; play?: boolean };
@@ -23,6 +34,11 @@ const fake = vi.hoisted(() => ({
 }));
 
 vi.mock('$lib/realtime.svelte', () => ({ realtime: fake.realtime }));
+vi.mock('$lib/queue/client.svelte', () => ({ queue: fake.queue }));
+
+// As reactive as the real one, so the player looks the item up again as the queue changes.
+const queue = $state(fake.queue);
+Object.assign(fake, { queue });
 vi.mock('$lib/api/client', () => ({
 	getTrack: (_: unknown, _library: string, id: string) =>
 		fake.tracks.get(id) ?? new Promise(() => {}),
@@ -35,21 +51,27 @@ const send = (message: RealtimeServerMessage) =>
 	fake.listeners.forEach((listener) => listener(message));
 const track = (id: string, seconds: number) => ({ id, durationUs: seconds * 1e6 }) as Track;
 
+/** The account's state, with `trackId` playing as the queue's current item, which is looked up as it would be. */
 function state(device: string | null, trackId: string, changes: Partial<PlayerState> = {}) {
+	const itemId = `k.${trackId}`;
+	if (!changes.itemId && queue.current !== itemId) {
+		queue.track = trackId;
+		queue.current = itemId;
+		queue.revision++;
+	}
 	send({
 		type: 'player',
 		state: {
 			status: 'playing',
 			activeDeviceId: device,
-			itemId: '0',
-			libraryId: '11',
-			trackId,
+			itemId,
 			positionMs: 10_000,
 			positionAt: new Date(Date.now() + 2000).toISOString(),
 			volume: null,
 			...changes
 		}
 	});
+	flushSync();
 }
 
 beforeEach(() => {
@@ -101,16 +123,42 @@ describe('playback', () => {
 	it('fetches a track again after failing to, and not for the device playing it', async () => {
 		fake.tracks.set('f', Promise.reject(new Error('offline')));
 		state('2', 'f');
-		await Promise.resolve();
-		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(0);
 		fake.tracks.set('f', Promise.resolve(track('f', 30)));
 		state('2', 'f');
 		await vi.waitFor(() => expect(playback.track?.id).toBe('f'));
 
 		fake.tracks.set('g', Promise.resolve(track('g', 30)));
 		state('1', 'g');
-		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(0);
 		expect(playback.track?.id).toBe('f');
+	});
+
+	it("waits for the queue to reach the state's item, and caps the position by no other track", async () => {
+		fake.tracks.set('w', Promise.resolve(track('w', 30)));
+		fake.tracks.set('x', Promise.resolve(track('x', 60)));
+		state('2', 'w');
+		await vi.waitFor(() => expect(playback.track?.id).toBe('w'));
+
+		// A Next on the device playing: its report is heard before the queue's edit is.
+		const at = Date.now();
+		state('2', 'x', {
+			itemId: 'k.x',
+			positionMs: 45_000,
+			positionAt: new Date(at + 2000).toISOString()
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(playback.track?.id, 'not fetched before the queue is there').toBe('w');
+		expect(playback.positionAt(at), 'not capped by the track of another item').toBe(45);
+
+		queue.track = 'x';
+		queue.current = 'k.x';
+		queue.revision++;
+		flushSync();
+		await vi.waitFor(() => expect(playback.track?.id).toBe('x'));
+		expect(playback.positionAt(at)).toBe(45);
+		state('2', 'x', { itemId: 'k.x', positionMs: 45_000 });
+		expect(playback.positionAt(at + 60_000), 'capped by its own').toBe(60);
 	});
 
 	it('keeps the track the state names, whatever answers first', async () => {
@@ -121,7 +169,7 @@ describe('playback', () => {
 		state('2', 'd');
 		await vi.waitFor(() => expect(playback.track?.id).toBe('d'));
 		slow(track('c', 30));
-		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(0);
 		expect(playback.track?.id).toBe('d');
 	});
 

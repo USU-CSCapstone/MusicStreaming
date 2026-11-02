@@ -16,6 +16,7 @@ const fake = vi.hoisted(() => ({
 		playing: true,
 		remote: true,
 		track: { id: '41', title: 'Brain Stew' } as unknown,
+		item: '0' as string | null,
 		pickable: true,
 		playHere: () => {}
 	}
@@ -36,12 +37,11 @@ const { default: DevicesPanel } = await import('./DevicesPanel.svelte');
 const device = (id: string, name: string, type: Device['type'], connected: boolean) =>
 	({ id, name, type, connected, firstSeenAt: '', lastSeenAt: '' }) as Device;
 
+/** A state of `activeDeviceId` playing item `0`. */
 const playingOn = (activeDeviceId: string): PlayerState => ({
 	status: 'playing',
 	activeDeviceId,
 	itemId: '0',
-	libraryId: '11',
-	trackId: '41',
 	positionMs: 0,
 	positionAt: new Date().toISOString(),
 	volume: null
@@ -59,6 +59,7 @@ beforeEach(() => {
 	fake.playback.track = fake.controls.track;
 	fake.playback.moving = null;
 	fake.controls.playing = true;
+	fake.controls.item = '0';
 	fake.controls.remote = true;
 	fake.controls.pickable = true;
 	panels.devices = true;
@@ -157,7 +158,7 @@ describe('DevicesPanel', () => {
 			...playingOn('1'),
 			status: 'stopped',
 			activeDeviceId: null,
-			trackId: null
+			itemId: null
 		};
 		render(DevicesPanel);
 		await expect.element(rows().nth(1)).toHaveTextContent(/Desk\s*Connected/);
@@ -175,6 +176,14 @@ describe('DevicesPanel', () => {
 		fake.controls.playing = false;
 		render(DevicesPanel);
 		await expect.element(rows().nth(1)).toHaveTextContent(/Paused · Brain Stew/);
+	});
+
+	it('names the track from the item the state names, not another that is shown', async () => {
+		fake.controls.item = 'k.9';
+		render(DevicesPanel);
+		await expect.element(rows().nth(1)).toHaveTextContent(/Desk\s*Playing$/);
+		fake.controls.item = '0';
+		await expect.element(rows().nth(1)).toHaveTextContent(/Playing · Brain Stew/);
 	});
 
 	it('shows nothing as current while offline', async () => {

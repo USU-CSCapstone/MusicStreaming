@@ -46,15 +46,17 @@ const isTransient = (error: unknown) =>
 	(error instanceof ApiError &&
 		(error.status >= 500 || error.status === 429 || error.status === 408));
 
-/** Whether an item is `<key>.<position>`, as the queue names them, and not another client's name for its place. */
-const isQueueItem = (id: string) => /^[^.]+\.\d+$/.test(id);
-
 /** A random seed for a shuffle, which fixes its order. */
 const newSeed = () => crypto.getRandomValues(new Uint32Array(1))[0];
 
 class Player {
 	/** The library the user browses, which a track picked up from another device must be of. */
-	libraryId = '';
+	libraryId = $state('');
+
+	/** The queue item loaded, or null. */
+	get item(): string | null {
+		return this.#item;
+	}
 
 	/** The track loaded, playing or waiting where it stopped. */
 	current = $state<TrackSummary | null>(null);
@@ -75,7 +77,7 @@ class Player {
 	waveform = $state<Uint8Array | null>(null);
 
 	/** The queue item `current` is, which reports name. */
-	#item: string | null = null;
+	#item = $state<string | null>(null);
 	/** What `current` is, with the library its audio is in. */
 	#loaded: Loaded | null = null;
 	/**
@@ -137,12 +139,27 @@ class Player {
 				untrack(() => this.#follow(current));
 			});
 			$effect(() => {
+				// The server has the item, or has moved on: what it was not told while it lacked the
+				// item, or refused for that, is told now, once per change.
+				const { held } = queue;
+				void queue.version;
+				untrack(() => this.#told(held));
+			});
+			$effect(() => {
 				const { refusal } = queue;
 				// A start the server refused: the queue is the old one again, and the track chosen
 				// stays where it is, paused, rather than the audio switching to another queue's.
 				if (refusal && refusal.edit === null) untrack(() => this.#refused(refusal.message));
 			});
 		});
+	}
+
+	/** Reports the loaded item if the server holds it and its state does not show this device at it. */
+	#told(held: string | null) {
+		if (held === null || held !== this.#item) return;
+		const state = playback.state;
+		if (state?.activeDeviceId === realtime.deviceId && state?.itemId === held) return;
+		this.#report();
 	}
 
 	/** Pauses on the track a refused start was for, and says why. */
@@ -271,7 +288,7 @@ class Player {
 	/** The account's playback state, as the server just sent it. */
 	#heard(state: PlayerState) {
 		// Anything playing since, or a stop that is not this player's, as one heard on reconnecting.
-		if (state.activeDeviceId !== null || state.trackId !== this.current?.id) {
+		if (state.activeDeviceId !== null || state.itemId !== this.#item) {
 			this.finished = false;
 		}
 		if (!realtime.deviceId) return;
@@ -320,42 +337,33 @@ class Player {
 	 * Takes the account's playback over here, playing, or paused if not `play`: the item the state
 	 * names, from where it got to, which must be the queue's current item (playback moves
 	 * without rebuilding the queue, `requirements/queue.md` §7). It fails, and starts nothing,
-	 * if the queue here is not that far yet. Only a track whose place is not an item of a queue,
-	 * as another client names it, becomes a queue of its own. The volume stays this device's own.
-	 * Fails too if there is nothing to pick up, or playback moves on meanwhile.
+	 * if the queue here is not that far yet, or the item is of another library than this
+	 * device's. The volume stays this device's own. Fails too if there is nothing to pick up, or
+	 * playback moves on meanwhile.
 	 */
 	async pickUp(play = true) {
 		const state = playback.state;
-		const { libraryId, trackId, itemId } = state ?? {};
-		if (!libraryId || libraryId !== this.libraryId || !trackId) {
-			throw new Error('Nothing here to pick up.');
-		}
+		const itemId = state?.itemId;
+		if (!itemId) throw new Error('Nothing here to pick up.');
+		if (itemId !== queue.current) throw new Error('The queue is not here yet.');
+		const {
+			rows: [row]
+		} = await queue.rows('current', 0, 1);
+		if (row?.item !== itemId || row.status !== 'known')
+			throw new Error('The queue is not here yet.');
+		if (row.libraryId !== this.libraryId) throw new Error('Nothing here to pick up.');
+		const { libraryId, track: trackId } = row;
 		const track =
-			playback.track?.id === trackId ? playback.track : await getTrack(fetch, libraryId, trackId);
-		const queued = !!itemId && isQueueItem(itemId);
-		let row;
-		if (queued) {
-			if (itemId !== queue.current) throw new Error('The queue is not here yet.');
-			({
-				rows: [row]
-			} = await queue.rows('current', 0, 1));
-			if (row?.item !== itemId || row.status !== 'known' || row.track !== trackId) {
-				throw new Error('The queue is not here yet.');
-			}
-		}
+			playback.track?.id === trackId ? playback.track : await getTrack(fetch, libraryId, trackId!);
 		// Another device took over, or this one changed library, while the track was on its way.
 		const now = playback.state;
-		const moved = now?.trackId !== trackId || now.activeDeviceId !== state?.activeDeviceId;
+		const moved = now?.itemId !== itemId || now.activeDeviceId !== state?.activeDeviceId;
 		if (moved || libraryId !== this.libraryId) throw new Error('Playback moved on.');
 		const seconds = Math.min(playback.positionAt(Date.now()), track.durationUs / 1_000_000);
-		if (row) {
-			this.#summaries.set(trackId, track);
-			this.#started();
-			this.#go(track, libraryId, row.item, seconds, play);
-			void this.#preload();
-		} else {
-			this.#begin([track], 0, { type: 'library' }, undefined, seconds, play);
-		}
+		this.#summaries.set(track.id, track);
+		this.#started();
+		this.#go(track, libraryId, itemId, seconds, play);
+		void this.#preload();
 	}
 
 	/**
@@ -571,7 +579,9 @@ class Player {
 	/** Tells the server where the player is: `status`, or as the audio element says. */
 	#report(status?: Status) {
 		const track = this.current;
+		// The server refuses an item its queue lacks: a start's, or a Previous's copy, waits for it.
 		if (!track || !this.#item || !this.#loaded || !realtime.deviceId) return;
+		if (queue.held !== this.#item) return;
 		status ??= !this.playing
 			? 'paused'
 			: this.#loading || this.#buffering
@@ -579,8 +589,6 @@ class Player {
 				: 'playing';
 		this.#progress.report({
 			itemId: this.#item,
-			libraryId: this.#loaded.libraryId,
-			trackId: track.id,
 			status,
 			positionMs: Math.round(this.position * 1000),
 			volume: this.volume
