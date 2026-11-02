@@ -6,7 +6,7 @@
 	import { isFiltered, showFiltered } from '$lib/filters';
 	import { plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
-	import { type PlayFrom, recipeSort } from '$lib/queue';
+	import type { PlayFrom } from '$lib/queue';
 	import { showSorted } from '$lib/sort-url';
 
 	let { data } = $props();
@@ -29,7 +29,12 @@
 		filtered
 			? undefined
 			: {
-					recipe: { type: 'library', filters: [], sort: recipeSort(data.query) },
+					recipe: {
+						type: 'library',
+						filters: {},
+						sort: data.query.sort,
+						order: data.query.order
+					},
 					total: tracks.total
 				}
 	);

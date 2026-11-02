@@ -674,6 +674,7 @@ class Player {
 				this.#loaded.libraryId,
 				this.current.id,
 				queue.context ?? { type: 'library' },
+				queue.playingManual ? 'manual' : 'context',
 				audio.currentTime
 			);
 		});

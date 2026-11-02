@@ -12,7 +12,7 @@
 	import { artistName, plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
 	import { player } from '$lib/player.svelte';
-	import { type PlayFrom, recipeSort } from '$lib/queue';
+	import { artistRecipe, type PlayFrom } from '$lib/queue';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { FIELDS } from '$lib/sorting';
 	import { toast } from '$lib/toast.svelte';
@@ -59,13 +59,7 @@
 	);
 	// The songs shown, as the server resolves them in the same order.
 	const from = $derived<PlayFrom>({
-		recipe: {
-			type: 'artist',
-			artistId: artist.id,
-			scope: 'all',
-			artistCredit: 'any',
-			sort: recipeSort(songs.order)
-		},
+		recipe: artistRecipe(artist.id, songs.order),
 		total: tracks.total
 	});
 	// Every song the artist is credited on, as the server expands an artist, which the page

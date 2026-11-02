@@ -62,6 +62,12 @@ impl QueueState {
             || self.order_row_of(item).is_some()
     }
 
+    /// Whether the item playing came from the Manual Queue: something plays, and it isn't an
+    /// item of the context. O(spans + base spans).
+    pub fn playing_manual(&self) -> bool {
+        self.current.as_ref().is_some_and(|item| self.order_row_of(item).is_none())
+    }
+
     /// The row of the context that reads `item`, passed rows included. While shuffled, an item
     /// of the base is found by its base position and then π⁻¹. O(spans + base spans).
     pub(super) fn order_row_of(&self, item: &ItemId) -> Option<u64> {
@@ -202,6 +208,26 @@ mod tests {
         assert_eq!(state.sources[1].tracks(), Some(&[7, 8, 9][..]));
         assert_eq!(state.attach_hash("g", &list), Err(crate::QueueError::LengthMismatch));
         assert!(state.sources[2].tracks().is_none());
+    }
+
+    #[test]
+    fn playing_manual_while_a_manual_item_plays() {
+        let mut state = started(3, 0);
+        assert!(!state.playing_manual());
+        let add = serde_json::json!({
+            "type": "add",
+            "source": {"key": "m", "libraryId": "lib", "length": 1},
+            "before": {"type": "manualStart"}
+        });
+        state.apply(&serde_json::from_value(add).unwrap()).unwrap();
+        assert!(!state.playing_manual());
+        state.apply(&crate::Edit::Next).unwrap();
+        assert_eq!(state.current, Some(item("m", 0)));
+        assert!(state.playing_manual());
+        state.apply(&crate::Edit::Next).unwrap();
+        assert_eq!(state.current, Some(item("k", 1)));
+        assert!(!state.playing_manual());
+        assert!(!QueueState::default().playing_manual());
     }
 
     #[test]

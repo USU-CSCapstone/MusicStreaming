@@ -62,9 +62,12 @@ test('permutation matches native vectors', () => {
 
 test('a started queue matches native', () => {
 	const { source, at, state } = parity.started;
-	const queue = Queue.started(source.key, source.libraryId, source.length, at);
+	const queue = Queue.started(source.key, source.libraryId, source.length, at, 'off');
 	expect(JSON.parse(queue.toJson())).toEqual(state);
-	expect(() => Queue.started('a', 'lib', 3, 3)).toThrow();
+	expect(() => Queue.started('a', 'lib', 3, 3, 'off')).toThrow();
+	expect(() => Queue.started('a', 'lib', 3, 0, 'twice')).toThrow();
+	// A start keeps the repeat mode (`requirements/queue.md` §5).
+	expect(JSON.parse(Queue.started('a', 'lib', 3, 0, 'all').toJson()).repeat).toBe('all');
 });
 
 test('edits match native', () => {

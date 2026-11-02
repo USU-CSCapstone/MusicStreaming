@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { firstPlayable, recipeSort, restartsOnPrevious } from './queue';
+import { albumRecipe, artistRecipe, firstPlayable, restartsOnPrevious } from './queue';
 
 const ok = { availability: 'available' as const };
 const gone = { availability: 'missing' as const };
@@ -28,8 +28,16 @@ describe('restartsOnPrevious', () => {
 	});
 });
 
-describe('recipeSort', () => {
-	it('names the sort as the recipe does', () => {
-		expect(recipeSort({ sort: 'dateAdded', order: 'desc' })).toBe('dateAdded.desc');
+describe('recipes', () => {
+	it('take the sort and order as listTracks does, in album order unless told', () => {
+		expect(albumRecipe('1')).toEqual({ type: 'album', albumId: '1', sort: 'album', order: 'asc' });
+		expect(artistRecipe('2', { sort: 'releaseDate', order: 'desc' })).toEqual({
+			type: 'artist',
+			artistId: '2',
+			scope: 'all',
+			artistCredit: 'any',
+			sort: 'releaseDate',
+			order: 'desc'
+		});
 	});
 });

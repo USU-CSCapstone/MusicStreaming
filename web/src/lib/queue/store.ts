@@ -278,7 +278,8 @@ export class QueueStore {
 	 * queue is the new one, its source as long as the view says and with no list, the clicked row
 	 * playing, and the request goes to the server in the background, before anything else. The view's
 	 * own rows fill the unshuffled rows they cover. Answers false, changing nothing, if the
-	 * start is not a position of the source.
+	 * start is not a position of the source. The new queue keeps the repeat mode shown, as the
+	 * server's does (`requirements/queue.md` §5).
 	 */
 	start({ total, loaded, ...body }: StartRequest): boolean {
 		const { key, libraryId, tracks } = body.source;
@@ -287,7 +288,8 @@ export class QueueStore {
 		if (!Number.isInteger(body.start) || body.start < 0) return false;
 		let next: Queue;
 		try {
-			next = Queue.started(key, libraryId, length, body.start);
+			const repeat = this.#view ? JSON.parse(this.#view.toJson()).repeat : 'off';
+			next = Queue.started(key, libraryId, length, body.start, repeat);
 		} catch {
 			return false;
 		}
@@ -496,6 +498,7 @@ export class QueueStore {
 			version: this.#version,
 			revision: ++this.#revision,
 			current: state?.current ?? null,
+			playingManual: view?.playingManual() ?? false,
 			manual: view?.manualLen() ?? 0,
 			upNext: view?.upNextLen() ?? 0,
 			history: view?.historyLen() ?? 0,
