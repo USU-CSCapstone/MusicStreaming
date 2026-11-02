@@ -514,6 +514,20 @@ class Player {
 		queue.edit({ type: 'jump', item });
 	}
 
+	/**
+	 * The user picks `play` of History: the queue goes back to it as Previous would that many
+	 * times, and playback is taken over here to play it. The server refuses a play that is no
+	 * longer there, and the queue client's `refusal` says so.
+	 */
+	rewind(play: { play: number; item: string }) {
+		this.#started();
+		this.#holds = true;
+		this.#direction = -1;
+		this.#tried.clear();
+		this.#adoptable = false;
+		queue.edit({ type: 'rewind', play, key: crypto.randomUUID() });
+	}
+
 	/** Turns shuffle on or off for the whole account's queue, with a new seed. */
 	setShuffle(on: boolean) {
 		queue.edit({ type: 'shuffle', on, seed: newSeed() });

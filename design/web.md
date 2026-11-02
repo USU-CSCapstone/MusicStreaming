@@ -73,7 +73,7 @@ It is a stand-in for the server, so it has these limits. None of them are client
 ## Not built yet
 
 These are client work still to do: virtualized lists beyond the queue panel's (the other long
-lists page in as you scroll), the panel's History tab and kept queues, loudness normalization, offline, and account preferences. Grid/list view and
+lists page in as you scroll), the panel's kept queues, loudness normalization, offline, and account preferences. Grid/list view and
 theme are per-browser for now.
 
 ## Queue worker
@@ -205,8 +205,10 @@ the queue only by editing it (`requirements/queue.md`, `design/queue.md` §3).
 
 Opened from the player bar, over the main area like Lyrics and Devices. It shows and edits the
 account's queue, so it works the same whichever device plays: every edit goes through the queue
-client, applied here at once and sent on, and the device holding playback follows the queue. Only
-the Up Next tab is built.
+client, applied here at once and sent on, and the device holding playback follows the queue. It
+has two tabs, Up Next and History, an accessible tab list (arrows, Home and End move between the
+tabs, and the selected tab's panel is labelled by it); each tab draws its own list, so nothing but
+the tab's name carries from one to the other.
 
 - **Up Next** is the Manual Queue under its own heading (a hint stands in when it is empty), then
   the context's items under theirs. **Shuffle and Repeat** (Off, All, One) sit beside the heading,
@@ -228,5 +230,17 @@ the Up Next tab is built.
   removes it, or the selection it is in. Presses made before the list has caught up with the last
   edit wait for it, so holding a key moves one place per press. Clicking a row jumps to it
   (`player.jump`), and everything ahead of it goes to History.
+- **History** is the same virtualized list, newest first, read as `rows('history', offset, limit)`
+  (each row carries its play number) and shown through the same by-IDs lookup. A row is named
+  `<play>:<item>`, since Repeat All can play an item more than once, and every History edit names
+  `{play, item}`. Clicking a title, or Enter on it, goes back to that play (`player.rewind`, a
+  `rewind` edit with a key minted here, the device taking playback as for a jump); the ✕, or
+  Delete, removes it (`removePlays`); the plus puts it at the front of Up Next (`requeue`, with its
+  own key) and takes it out of History. Rows do not move, so where Up Next has its grab handle
+  History has a check button that selects, and Space on a title selects too; the ✕ removes the
+  whole selection. A row that is still being learned or cannot be read cannot be rewound to or
+  re-queued, and can be removed. An empty History says nothing has played.
 - **A change that did not stay is explained** in the panel from the client's `refusal` (`anchor_gone`,
-  `superseded`, `lost`, ...), until dismissed.
+  `play_gone`, `superseded`, `lost`, ...), until dismissed. A rewind to a play another device
+  removed first (`play_gone`) is dropped from the view, as every refused edit is, and the panel
+  says that song is no longer in History.

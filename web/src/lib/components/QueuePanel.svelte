@@ -7,9 +7,28 @@
 	import Panel from './Panel.svelte';
 	import QueueList from './QueueList.svelte';
 
-	// The account's queue: what is coming, with shuffle and repeat. It shows and edits the
-	// account's queue, whichever device plays it (`requirements/queue.md` §2, §7). Shuffle and
-	// Repeat are here at every width, since the player bar hides them on a phone.
+	// The account's queue: what is coming and what has played, with shuffle and repeat. It shows
+	// and edits the account's queue, whichever device plays it (`requirements/queue.md` §2, §7).
+	// Shuffle and Repeat are here at every width, since the player bar hides them on a phone.
+
+	const tabs = [
+		{ id: 'upNext', label: 'Up Next' },
+		{ id: 'history', label: 'History' }
+	] as const;
+	let tab = $state<'upNext' | 'history'>('upNext');
+	const count = $derived({ upNext: queue.counts.upNext, history: queue.counts.history });
+
+	/** Left and Right, Home and End move between the tabs, as a tab list does. */
+	function onkeydown(e: KeyboardEvent) {
+		const keys: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, Home: -2, End: 2 };
+		const step = keys[e.key];
+		if (step === undefined || e.altKey || e.ctrlKey || e.metaKey) return;
+		e.preventDefault();
+		const at = tabs.findIndex((t) => t.id === tab);
+		const to = Math.abs(step) === 2 ? (step < 0 ? 0 : tabs.length - 1) : at + step;
+		tab = tabs[(to + tabs.length) % tabs.length].id;
+		document.getElementById(`queue-tab-${tab}`)?.focus();
+	}
 
 	/** What each repeat mode turns into when pressed: Off, All, One, then Off again. */
 	const NEXT_REPEAT: Record<Repeat, Repeat> = { off: 'all', all: 'one', one: 'off' };
@@ -32,10 +51,22 @@
 	<Panel title="Queue" onclose={() => (panels.queue = false)}>
 		<div class="queue">
 			<div class="bar">
-				<h3 class="tab">
-					Up Next
-					<span class="muted tabular">{queue.counts.upNext.toLocaleString()}</span>
-				</h3>
+				<div class="tabs" role="tablist" aria-label="Queue" tabindex="-1" {onkeydown}>
+					{#each tabs as { id, label } (id)}
+						<button
+							type="button"
+							role="tab"
+							id="queue-tab-{id}"
+							aria-selected={tab === id}
+							aria-controls="queue-tabpanel"
+							tabindex={tab === id ? 0 : -1}
+							onclick={() => (tab = id)}
+						>
+							{label}
+							<span class="muted tabular">{count[id].toLocaleString()}</span>
+						</button>
+					{/each}
+				</div>
 				<button
 					type="button"
 					class="toggle"
@@ -68,7 +99,11 @@
 					</button>
 				</div>
 			{/if}
-			<QueueList />
+			<div class="tabpanel" id="queue-tabpanel" role="tabpanel" aria-labelledby="queue-tab-{tab}">
+				{#key tab}
+					<QueueList {tab} />
+				{/key}
+			</div>
 		</div>
 	</Panel>
 {/if}
@@ -87,11 +122,33 @@
 		gap: var(--space-1);
 	}
 
-	.tab {
+	.tabs {
+		display: flex;
 		flex: 1;
-		margin: 0;
+		gap: var(--space-1);
+	}
+
+	.tabs button {
+		padding: var(--space-2) var(--space-3);
+		border: 0;
+		border-radius: var(--radius-m);
+		background: transparent;
+		color: var(--text-muted);
+		font: inherit;
 		font-size: 14px;
-		font-weight: 600;
+		cursor: pointer;
+	}
+
+	.tabs button[aria-selected='true'] {
+		background: var(--accent-soft);
+		color: var(--accent);
+	}
+
+	.tabpanel {
+		display: flex;
+		flex: 1;
+		flex-direction: column;
+		min-height: 0;
 	}
 
 	.toggle {
