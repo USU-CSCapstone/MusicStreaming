@@ -46,6 +46,7 @@ and commit the result.
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/lib/api/`             | Generated schema types, the aliases in use, and the typed client. Catalog reads move to the worker later, and this is the one module that changes then. |
 | `src/lib/player.svelte.ts` | Playback: one audio element, the play context, and Media Session                                                                                        |
+| `src/lib/queue/`           | The queue on this device: a worker holding it through the shared core, and the page's client of it (`design/queue.md`)                                  |
 | `src/lib/queue.ts`         | Moving through a context: next/previous and skipping missing tracks                                                                                     |
 | `src/lib/components/`      | Shell (sidebar, tab bar, player), collection and track views, waveform                                                                                  |
 | `src/routes/`              | One route per view: `/albums`, `/albums/[id]`, `/artists/…`, `/playlists/…`, `/songs`, `/search`, `/account`; `/setup` and `/login` without the shell   |
@@ -74,3 +75,43 @@ It is a stand-in for the server, so it has these limits. None of them are client
 These are client work still to do: virtualized lists (long lists currently page in as you scroll),
 the queue panel, loudness normalization, offline, and account preferences. Grid/list view and
 theme are per-browser for now.
+
+## Queue worker
+
+`src/lib/queue/` holds the account's queue in a web worker, so loading and editing a queue of any
+size stays off the page's thread (`design/general.md` §7.1). `worker.ts` is a shell around
+`QueueStore` (`store.ts`, plain TypeScript, so it also runs in tests); `client.svelte.ts` is the
+page's side, and `protocol.ts` is what they say. The store runs the shared core, built to
+WebAssembly by `pnpm wasm`, and holds no rule about the queue's order. Its state holds no tracks:
+the core knows each source's length and, once attached, its list, which later steps fill in
+(`design/queue.md` §3).
+
+- **Snapshot.** On every realtime `hello` the store fetches `GET /me/queue`, naming the `ETag` it
+  holds, `"<run>.<queueId>.<version>"`. The server answers `304` when nothing changed, so a
+  reconnect downloads and rebuilds nothing, and the page hears nothing. Otherwise the state loads
+  into the core with `Queue.fromJson`. `404` is no queue.
+- **Two queues.** The *confirmed* queue is the snapshot with every `queueEdit` applied in version
+  order. The *view*, which the page shows, is a `copy()` of it with this device's *pending* edits
+  replayed on top, so the copy shares attached lists. With nothing pending the view is the
+  confirmed queue itself.
+- **Edits.** `edit()` applies at once to the view, then sends `POST /me/queue/edits` in the
+  background, one request at a time and in order, before any fetch. Each carries a device-minted
+  `editId`, resent unchanged if the answer is lost, so the server applies it once (D14). The edit
+  carries no base version. A `queueEdit` one past the confirmed version applies to it; if it is
+  ours, by `editId`, the pending edit is done, so it is never applied twice. A gap, another
+  queue's edit or an edit the core refuses means the copy cannot be trusted, and the queue is
+  fetched again.
+- **Edits that do not stay.** The store reports each, with a `Refusal` carrying the code and the
+  edit, to the page, which shows nothing yet (`client.refusal`): the core refused it here
+  (`anchor_gone`, `invalid`); the server refused it (`anchor_gone`, `play_gone`, 422 and the
+  like), and the view is rebuilt without it; a `queueEdit` heard first took what a pending edit
+  needed (the core's code on the replay); a new queue replaced it (`superseded`); or the server
+  answered it but, after a restart, no longer has it (`lost`), which is told by its version
+  being past the snapshot's. A lost edit is not sent again, since that could apply it twice.
+- **An `add` of a `recipe`,** such as an album, has no length here, so it is only sent. It shows
+  when its `queueEdit`, carrying the source as the server registered it, arrives, and edits made
+  after it replay on top.
+- **`queueReplaced`** for a queue other than the one held fetches the new queue; pending edits
+  for the old one are dropped as `superseded`. `queuesChanged` is not the worker's.
+- **Connection.** `connect()` spawns the worker and passes it `hello`, `queueEdit` and
+  `queueReplaced`. A request that fails, or answers 429 or 5xx, is tried again after a wait.
