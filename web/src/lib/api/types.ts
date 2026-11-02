@@ -58,6 +58,8 @@ export type PlayerState = Schemas['PlayerState'];
 export type ProgressReport = Schemas['ProgressReport'];
 export type PlayerCommand = Schemas['PlayerCommand'];
 export type QueueSnapshot = Schemas['QueueSnapshot'];
+/** A page of the queue's rows, with each row's track. */
+export type QueueRows = Schemas['QueueRows'];
 /** An edit as the server applies it and `queueEdit` carries it. */
 export type QueueEdit = Schemas['QueueEdit'];
 /** An edit as a device sends it: an `add`'s source names `tracks` or a `recipe`. */

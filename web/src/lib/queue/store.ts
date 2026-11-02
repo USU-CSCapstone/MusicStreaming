@@ -1,8 +1,10 @@
 // The account's queue on this device: the server's queue as confirmed, plus this device's own
 // edits that the server has not yet confirmed, replayed on top (`design/queue.md` §9,
 // `requirements/general.md` §3.4). The order is the shared core's, run in WebAssembly, so this
-// holds no rule about it, and it holds no tracks: lists and rows are filled in elsewhere. Plain
-// TypeScript so it runs in a worker and in tests; `worker.ts` is its shell.
+// holds no rule about it, and it holds no tracks in its state. Tracks come from the lists, which
+// it downloads by hash in the background and attaches to the core, and meanwhile from pages of
+// rows (`design/queue.md` §3). Plain TypeScript so it runs in a worker and in tests; `worker.ts`
+// is its shell.
 
 import { Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
 import type {
@@ -12,7 +14,9 @@ import type {
 	RealtimeServerMessage,
 	SentEdit
 } from '$lib/api/types';
-import type { Refusal, Repeat, Summary } from './protocol';
+import { download, ListCache } from './lists';
+import { PAGE, RowPages } from './rows';
+import type { QueueRow, Refusal, Repeat, RowSection, RowsWindow, Summary } from './protocol';
 
 export type Options = {
 	/** The API's base path, such as `/api/v1`. */
@@ -20,6 +24,8 @@ export type Options = {
 	fetch?: typeof fetch;
 	/** How long to wait before sending again what could not be sent. */
 	retryMs?: number;
+	/** Where lists are kept; the browser's Cache Storage if left out. Without any, memory. */
+	storage?: CacheStorage;
 	/** Called after every change, with what the page shows. */
 	changed: (summary: Summary) => void;
 	/** Called when an edit could not be kept. */
@@ -37,10 +43,25 @@ type Pending = {
 	version?: number;
 };
 
+/** What the state says of a source that rows need. */
+type SourceInfo = { libraryId: string; list?: string };
+
+/** A row as the core reads it. */
+type CoreRow = {
+	item: string;
+	source: string;
+	position: number;
+	track: string | null;
+	play?: number;
+};
+
+/** Why a list cannot be had: the server has no such list, or it could not be reached. */
+type Problem = 'gone' | 'failed';
+
 type QueueEditMessage = Extract<RealtimeServerMessage, { type: 'queueEdit' }>;
 
 /** The server's problem body, if it sent one. */
-type Problem = { code?: string; detail?: string; title?: string } | null;
+type ProblemBody = { code?: string; detail?: string; title?: string } | null;
 
 export class QueueStore {
 	#api: string;
@@ -66,11 +87,24 @@ export class QueueStore {
 	#held: QueueEditMessage[] | null = null;
 	#draining = false;
 
+	#lists: ListCache;
+	#pages: RowPages;
+	/** The lists attached to the confirmed queue, by hash. */
+	#attached = new Set<string>();
+	/** The hashes either queue references, as of the last change, to tell what clean-up dropped. */
+	#referenced = new Set<string>();
+	/** The lists that cannot be had, and are not asked for again: `failed` ones when the connection is back. */
+	#problems = new Map<string, Problem>();
+	/** What the view's state says of each source, by key. */
+	#sources = new Map<string, SourceInfo>();
+	#loading = false;
+
 	/** Makes an empty store; it loads the server's queue when the connection says hello. */
 	constructor({
 		api,
 		fetch: fetcher = (...args) => fetch(...args),
 		retryMs = 2000,
+		storage = globalThis.caches,
 		changed,
 		refused
 	}: Options) {
@@ -79,6 +113,117 @@ export class QueueStore {
 		this.#retryMs = retryMs;
 		this.#changed = changed;
 		this.#refused = refused;
+		this.#lists = new ListCache(storage, api);
+		this.#pages = new RowPages(
+			(path) => this.#get(path),
+			() => this.#emit()
+		);
+	}
+
+	/**
+	 * Up to `limit` rows of `section` from `offset`, as the page shows them (`design/queue.md`
+	 * §3). Each row's track is the list's once attached, else a page's, else it is `unknown` while
+	 * a list or page that holds it is on its way, and `unavailable` if none is. Rows for which
+	 * no list is attached yet start pages for the window, asked for again only when the version
+	 * changes, so asking again when `revision` changes never loops.
+	 */
+	rows({
+		section,
+		offset,
+		limit
+	}: {
+		section: RowSection;
+		offset: number;
+		limit: number;
+	}): RowsWindow {
+		const view = this.#view;
+		if (!view) return { section, offset, total: 0, revision: this.#revision, rows: [] };
+		const raw = this.#coreRows(view, section, offset, limit);
+		const total =
+			section === 'upNext'
+				? view.upNextLen()
+				: section === 'history'
+					? view.historyLen()
+					: raw.length;
+		if (raw.some((row) => this.#needsPage(row))) this.#ensurePages(section, offset, limit);
+		const rows = raw.map((row): QueueRow => {
+			const { libraryId, list } = this.#sources.get(row.source) ?? { libraryId: '' };
+			// The list, else a page, else the tracks of an add of this device's own that waits.
+			const held = row.track !== null ? row.track : this.#fromPageOrOwn(row);
+			if (row.track !== null) this.#pages.forget(row.item);
+			// A list not yet confirmed, or not given up on, is on its way, and so is a page for it.
+			const status =
+				typeof held === 'string'
+					? 'known'
+					: held === null || (list !== undefined && this.#problems.has(list))
+						? 'unavailable'
+						: 'unknown';
+			const out: QueueRow = {
+				item: row.item,
+				libraryId,
+				status,
+				track: typeof held === 'string' ? held : null
+			};
+			if (row.play !== undefined) out.play = row.play;
+			return out;
+		});
+		return { section, offset, total, revision: this.#revision, rows };
+	}
+
+	/** A page's track for the row, null if the server could not read it, else a pending add's, else undefined. */
+	#fromPageOrOwn(row: CoreRow): string | null | undefined {
+		const page = this.#pages.track(row.item);
+		return page === undefined ? this.#ownTrack(row) : page;
+	}
+
+	/**
+	 * The track a pending add of `tracks` gave the row, by its position: the server's list is
+	 * those tracks, so this is right through a copy or the shuffle too; undefined if none.
+	 */
+	#ownTrack(row: CoreRow): string | undefined {
+		for (const { edit } of this.#pending) {
+			if (edit.type === 'add' && edit.source.key === row.source) {
+				return edit.source.tracks?.[row.position];
+			}
+		}
+		return undefined;
+	}
+
+	/** The rows of `view` the core reads for a window. */
+	#coreRows(view: Queue, section: RowSection, offset: number, limit: number): CoreRow[] {
+		if (section === 'current') {
+			const row = view.currentRow();
+			return row ? [JSON.parse(row)] : [];
+		}
+		return JSON.parse(
+			section === 'upNext' ? view.upNextRows(offset, limit) : view.historyRows(offset, limit)
+		);
+	}
+
+	/** Whether a page could tell the row's track: no list has it, and no page or problem has said. */
+	#needsPage(row: CoreRow): boolean {
+		const list = this.#sources.get(row.source)?.list;
+		return (
+			row.track === null &&
+			list !== undefined &&
+			this.#problems.get(list) !== 'gone' &&
+			this.#pages.track(row.item) === undefined
+		);
+	}
+
+	/** Starts the pages for a window; the item playing is in Up Next's first. */
+	#ensurePages(section: RowSection, offset: number, limit: number) {
+		if (!this.#queueId) return;
+		const [part, from, rows]: [Exclude<RowSection, 'current'>, number, number] =
+			section === 'current' ? ['upNext', 0, 1] : [section, offset, limit];
+		this.#pages.ensure(this.#queueId, this.#version, part, from, rows);
+	}
+
+	/** One request to the API, with no wait after a failure; null when it could not be made. */
+	async #get(path: string): Promise<Response | null> {
+		return this.#fetch(`${this.#api}${path}`, { headers: { 'X-Jewelcase-Client': 'web' } }).catch(
+			() => null
+		);
 	}
 
 	/**
@@ -111,8 +256,14 @@ export class QueueStore {
 	/** Takes in what the server said over the realtime connection. */
 	message(message: RealtimeServerMessage) {
 		if (message.type === 'hello') {
+			// What could not be reached is asked for again.
+			for (const [hash, problem] of this.#problems) {
+				if (problem === 'failed') this.#problems.delete(hash);
+			}
+			this.#pages.retry();
 			this.#refetch = true;
 			this.#drain();
+			this.#sync();
 		} else if (message.type === 'queueReplaced') {
 			// A fetch under way may answer with the queue this replaces, so it is fetched again.
 			if (this.#held || message.queueId !== this.#queueId) {
@@ -145,12 +296,18 @@ export class QueueStore {
 	 * is never replayed over a queue that has it.
 	 */
 	#confirm(confirmed: Queue, { edit, editId, version }: QueueEditMessage) {
+		const own = this.#pending.find((pending) => pending.editId === editId);
+		const mine = own && edit.type === 'add' && edit.source.list ? edit.source.list : null;
+		const body = own && mine ? ownBody(own.edit) : null;
+		if (mine && body) void this.#lists.put(mine, body);
 		if (applyTo(confirmed, edit) !== undefined) {
 			// The server applied what the core refuses: this device cannot trust its copy.
 			this.#refetch = true;
 			return;
 		}
 		this.#version = version;
+		// Its tracks are held, so the rows need no page and the list no download.
+		if (mine && body) this.#attach(mine, body);
 		this.#pending = this.#pending.filter((pending) => pending.editId !== editId);
 		this.#rebuild();
 	}
@@ -195,9 +352,13 @@ export class QueueStore {
 	/** Tells the page what changed. */
 	#emit() {
 		const view = this.#view;
-		const state: { current: string | null; repeat: Repeat; shuffle: unknown } | null = view
-			? JSON.parse(view.toJson())
-			: null;
+		const state: {
+			current: string | null;
+			repeat: Repeat;
+			shuffle: unknown;
+			sources: { key: string; libraryId: string; list?: string }[];
+		} | null = view ? JSON.parse(view.toJson()) : null;
+		this.#sources = new Map(state?.sources.map((source) => [source.key, source]));
 		this.#changed({
 			queueId: this.#queueId,
 			context: this.#context,
@@ -210,6 +371,105 @@ export class QueueStore {
 			repeat: state?.repeat ?? 'off',
 			shuffled: !!state?.shuffle
 		});
+		this.#sync();
+	}
+
+	/**
+	 * Settles what the lists and rows need after a change: lists the clean-up dropped are let go
+	 * of, the others are loaded in the background, and the rows the page will show first, the
+	 * item playing, Up Next's first page and History's, are fetched as pages if no list gives them.
+	 */
+	#sync() {
+		const confirmed = this.#confirmed;
+		const view = this.#view;
+		if (!confirmed || !view) return;
+		const referenced = new Set([...hashesOf(confirmed), ...hashesOf(view)]);
+		for (const hash of this.#referenced) {
+			if (referenced.has(hash)) continue;
+			this.#attached.delete(hash);
+			this.#problems.delete(hash);
+			void this.#lists.delete(hash);
+		}
+		this.#referenced = referenced;
+		const rows = (section: 'upNext' | 'history'): CoreRow[] =>
+			this.#coreRows(view, section, 0, PAGE);
+		if (this.#coreRows(view, 'current', 0, 1).some((row) => this.#needsPage(row))) {
+			this.#ensurePages('current', 0, 1);
+		}
+		for (const section of ['upNext', 'history'] as const) {
+			if (rows(section).some((row) => this.#needsPage(row))) this.#ensurePages(section, 0, PAGE);
+		}
+		void this.#loadLists();
+	}
+
+	/** Loads the lists the confirmed queue lacks, one at a time. */
+	async #loadLists() {
+		if (this.#loading) return;
+		this.#loading = true;
+		try {
+			// Decided with no wait before the flag is cleared, so a change in between is not missed.
+			for (let hash = this.#nextList(); hash; hash = this.#nextList()) await this.#load(hash);
+		} finally {
+			this.#loading = false;
+		}
+	}
+
+	/**
+	 * The next list to load, or null: one that the item playing or Up Next's first rows read,
+	 * else any. A list that cannot be had is not asked for again.
+	 */
+	#nextList(): string | null {
+		const confirmed = this.#confirmed;
+		const view = this.#view;
+		if (!confirmed || !view) return null;
+		const wanted = hashesOf(confirmed).filter(
+			(hash) => !this.#attached.has(hash) && !this.#problems.has(hash)
+		);
+		const first = new Set(
+			[...this.#coreRows(view, 'current', 0, 1), ...this.#coreRows(view, 'upNext', 0, PAGE)].map(
+				(row) => this.#sources.get(row.source)?.list
+			)
+		);
+		return wanted.find((hash) => first.has(hash)) ?? wanted[0] ?? null;
+	}
+
+	/** Takes the list `hash` from storage or the server, and attaches it. */
+	async #load(hash: string) {
+		let body = await this.#lists.get(hash);
+		const stored = body !== null;
+		if (body === null) {
+			const got = await download((path) => this.#get(path), hash);
+			if (typeof got === 'string') {
+				this.#problems.set(hash, got);
+				this.#emit();
+				return;
+			}
+			body = got.body;
+		}
+		if (!this.#referenced.has(hash)) return;
+		if (!this.#attach(hash, body)) {
+			// Not a list this queue can use; asking again would only get the same.
+			this.#problems.set(hash, 'gone');
+			void this.#lists.delete(hash);
+			this.#emit();
+			return;
+		}
+		if (!stored) void this.#lists.put(hash, body);
+		this.#rebuild();
+	}
+
+	/** Attaches a list to the confirmed queue, and drops what pages gave for its sources; false if it does not fit. */
+	#attach(hash: string, body: string): boolean {
+		try {
+			this.#confirmed?.attachList(hash, body);
+		} catch {
+			return false;
+		}
+		this.#attached.add(hash);
+		const keys = new Set<string>();
+		for (const [key, source] of this.#sources) if (source.list === hash) keys.add(key);
+		this.#pages.forgetSources(keys);
+		return true;
 	}
 
 	/** Sends and fetches what is waiting, one request at a time, so the server hears edits in order. */
@@ -262,7 +522,11 @@ export class QueueStore {
 		});
 		if (!response || !this.#pending.includes(pending)) return;
 		if (response.ok) {
-			pending.version = ((await response.json()) as { version: number }).version;
+			const applied = (await response.json()) as { version: number; source?: { list?: string } };
+			pending.version = applied.version;
+			// Kept under the hash it names, so a snapshot that has the add never downloads it back.
+			const body = ownBody(pending.edit);
+			if (applied.source?.list && body) void this.#lists.put(applied.source.list, body);
 			return;
 		}
 		const problem = await problemOf(response);
@@ -280,47 +544,75 @@ export class QueueStore {
 	 */
 	async #fetchQueue() {
 		this.#refetch = false;
-		this.#held = [];
-		const response = await this.#call(
-			'GET',
-			'/me/queue',
-			undefined,
-			this.#run !== null && this.#queueId
-				? { 'If-None-Match': `"${this.#run}.${this.#queueId}.${this.#version}"` }
-				: {}
-		);
-		const held = this.#held;
-		this.#held = null;
-		if (!response) {
-			this.#refetch = true;
-			return;
+		// Held until the snapshot is installed, which can wait for stored lists.
+		const held: QueueEditMessage[] = (this.#held = []);
+		let settle = false;
+		try {
+			const response = await this.#call(
+				'GET',
+				'/me/queue',
+				undefined,
+				this.#run !== null && this.#queueId
+					? { 'If-None-Match': `"${this.#run}.${this.#queueId}.${this.#version}"` }
+					: {}
+			);
+			if (!response) {
+				this.#refetch = true;
+				return;
+			}
+			this.#run = runOf(response.headers.get('ETag')) ?? this.#run;
+			if (response.status === 404) {
+				this.#clear();
+			} else if (response.status === 304) {
+				settle = this.#pending.length > 0 || held.length > 0;
+			} else if (response.ok) {
+				await this.#install((await response.json()) as QueueSnapshot);
+				settle = true;
+			}
+		} finally {
+			this.#held = null;
 		}
-		this.#run = runOf(response.headers.get('ETag')) ?? this.#run;
-		if (response.status === 404) {
-			this.#clear();
-		} else if (response.status === 304) {
-			if (this.#pending.length > 0 || held.length > 0) this.#caughtUp(held);
-		} else if (response.ok) {
-			this.#install((await response.json()) as QueueSnapshot);
-			this.#caughtUp(held);
-		}
+		if (settle) this.#caughtUp(held);
 	}
 
-	/** The account has no queue; what was pending went with it. */
+	/** The account has no queue; what was pending went with it, and so do its lists. */
 	#clear() {
 		this.#release();
 		this.#queueId = null;
 		this.#context = null;
 		this.#version = 0;
+		this.#attached.clear();
+		this.#referenced.clear();
+		this.#problems.clear();
+		this.#pages.reset(null);
+		void this.#lists.keep(new Set());
 		this.#supersede(() => true);
 		this.#emit();
 	}
 
-	/** Makes the snapshot the confirmed queue; pending edits for another queue go. */
-	#install({ queueId, version, context, state }: QueueSnapshot) {
+	/**
+	 * Makes the snapshot the confirmed queue, with the lists already stored attached again, since
+	 * a new core queue holds none; pending edits for another queue go. Stored lists the snapshot
+	 * does not use are deleted: after a reload nothing else knows they were kept.
+	 */
+	async #install({ queueId, version, context, state }: QueueSnapshot) {
 		const next = Queue.fromJson(JSON.stringify(state));
+		const hashes = hashesOf(next);
+		const attached = new Set<string>();
+		for (const hash of hashes) {
+			const body = await this.#lists.get(hash);
+			if (body === null) continue;
+			try {
+				next.attachList(hash, body);
+				attached.add(hash);
+			} catch {
+				void this.#lists.delete(hash);
+			}
+		}
+		void this.#lists.keep(new Set(hashes));
 		this.#release();
 		this.#confirmed = this.#view = next;
+		this.#attached = attached;
 		this.#queueId = queueId;
 		this.#context = context;
 		this.#version = version;
@@ -382,7 +674,7 @@ function localEdit(edit: SentEdit): QueueEdit | null {
 
 /** The reason the server refused a request. */
 async function problemOf(response: Response): Promise<{ code: string; message: string }> {
-	const problem: Problem = await response.json().catch(() => null);
+	const problem: ProblemBody = await response.json().catch(() => null);
 	return {
 		code: problem?.code ?? 'failed',
 		message: problem?.detail ?? problem?.title ?? response.statusText
@@ -392,4 +684,15 @@ async function problemOf(response: Response): Promise<{ code: string; message: s
 /** The run part of an `ETag`, `"<run>.<queueId>.<version>"`, or `null` without one. */
 function runOf(etag: string | null): string | null {
 	return etag?.replace(/^"/, '').split('.')[0] || null;
+}
+
+/** The hashes of the lists `queue` references. */
+function hashesOf(queue: Queue): string[] {
+	return JSON.parse(queue.listHashes());
+}
+
+/** The JSON of the tracks of this device's own add, as the list's download would give them; null if it has none. */
+function ownBody(edit: SentEdit): string | null {
+	if (edit.type !== 'add' || !edit.source.tracks?.length) return null;
+	return JSON.stringify({ libraryId: edit.source.libraryId, tracks: edit.source.tracks });
 }

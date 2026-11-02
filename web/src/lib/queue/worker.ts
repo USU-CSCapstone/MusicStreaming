@@ -24,8 +24,10 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 				})
 		);
 	} else {
-		store?.then((ready) =>
-			data.type === 'message' ? ready.message(data.message) : ready.edit(data.edit)
-		);
+		store?.then((ready) => {
+			if (data.type === 'message') ready.message(data.message);
+			else if (data.type === 'edit') ready.edit(data.edit);
+			else post({ type: 'rows', id: data.id, window: ready.rows(data) });
+		});
 	}
 };

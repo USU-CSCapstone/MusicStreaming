@@ -78,4 +78,24 @@ describe('QueueClient', () => {
 		expect(worker.terminated).toBe(true);
 		expect(client.queueId).toBeNull();
 	});
+
+	it('asks the worker for a window of rows and gets the answer meant for it', async () => {
+		const { worker, client } = setup();
+		const first = client.rows('upNext', 0, 10);
+		const second = client.rows('history', 0, 5);
+		const [one, two] = worker.sent.slice(1) as Extract<ToWorker, { type: 'rows' }>[];
+		const window = (section: 'upNext' | 'history') => ({
+			section,
+			offset: 0,
+			total: 0,
+			revision: 1,
+			rows: []
+		});
+		worker.say({ type: 'rows', id: two.id, window: window('history') });
+		worker.say({ type: 'rows', id: one.id, window: window('upNext') });
+
+		expect(one).toMatchObject({ section: 'upNext', offset: 0, limit: 10 });
+		expect((await first).section).toBe('upNext');
+		expect((await second).section).toBe('history');
+	});
 });

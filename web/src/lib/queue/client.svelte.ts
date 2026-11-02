@@ -5,7 +5,15 @@
 import { API } from '$lib/api/client';
 import type { RealtimeServerMessage, SentEdit } from '$lib/api/types';
 import type { Realtime } from '$lib/realtime.svelte';
-import type { FromWorker, Refusal, Repeat, Summary, ToWorker } from './protocol';
+import type {
+	FromWorker,
+	Refusal,
+	Repeat,
+	RowSection,
+	RowsWindow,
+	Summary,
+	ToWorker
+} from './protocol';
 
 /** The realtime messages the queue needs: `hello` says to catch up. */
 const QUEUE_MESSAGES = new Set(['hello', 'queueEdit', 'queueReplaced']);
@@ -32,6 +40,9 @@ export class QueueClient {
 	#spawn: () => Worker;
 	#worker: Worker | null = null;
 	#unsubscribe: (() => void) | null = null;
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- waiting askers are not state to render
+	#asks = new Map<number, (window: RowsWindow) => void>();
+	#askId = 0;
 
 	/** Makes a client that starts its worker with `create` on `connect`; tests pass a fake. */
 	constructor(create: () => Worker = spawn) {
@@ -55,6 +66,7 @@ export class QueueClient {
 		this.#unsubscribe = null;
 		this.#worker?.terminate();
 		this.#worker = null;
+		this.#asks.clear();
 		this.queueId = null;
 		this.context = null;
 		this.current = null;
@@ -68,6 +80,19 @@ export class QueueClient {
 		this.#send({ type: 'edit', edit });
 	}
 
+	/**
+	 * Asks the worker for up to `limit` rows of `section` from `offset`. Rows it is still
+	 * learning come back `unknown`; ask again when `revision` changes. Never answered if the
+	 * worker is stopped first.
+	 */
+	rows(section: RowSection, offset: number, limit: number): Promise<RowsWindow> {
+		const id = ++this.#askId;
+		return new Promise((resolve) => {
+			this.#asks.set(id, resolve);
+			this.#send({ type: 'rows', id, section, offset, limit });
+		});
+	}
+
 	/** Posts a message to the worker, if it is running. */
 	#send(message: ToWorker) {
 		this.#worker?.postMessage(message);
@@ -75,6 +100,11 @@ export class QueueClient {
 
 	/** Takes in what the worker said. */
 	#heard(message: FromWorker) {
+		if (message.type === 'rows') {
+			this.#asks.get(message.id)?.(message.window);
+			this.#asks.delete(message.id);
+			return;
+		}
 		if (message.type === 'refused') {
 			this.refusal = message.refusal;
 			return;

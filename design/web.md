@@ -83,8 +83,8 @@ size stays off the page's thread (`design/general.md` §7.1). `worker.ts` is a s
 `QueueStore` (`store.ts`, plain TypeScript, so it also runs in tests); `client.svelte.ts` is the
 page's side, and `protocol.ts` is what they say. The store runs the shared core, built to
 WebAssembly by `pnpm wasm`, and holds no rule about the queue's order. Its state holds no tracks:
-the core knows each source's length and, once attached, its list, which later steps fill in
-(`design/queue.md` §3).
+the core knows each source's length and, once attached, its list, which the store fills in from
+the server (*Lists and rows* below, `design/queue.md` §3).
 
 - **Snapshot.** On every realtime `hello` the store fetches `GET /me/queue`, naming the `ETag` it
   holds, `"<run>.<queueId>.<version>"`. The server answers `304` when nothing changed, so a
@@ -113,5 +113,34 @@ the core knows each source's length and, once attached, its list, which later st
   after it replay on top.
 - **`queueReplaced`** for a queue other than the one held fetches the new queue; pending edits
   for the old one are dropped as `superseded`. `queuesChanged` is not the worker's.
+- **Lists.** The store downloads each list the confirmed queue references, `GET
+  /me/queue/lists/{hash}`, one at a time in the background, those the item playing and Up Next's
+  first 100 rows read first. A list is kept by hash in Cache Storage (`lists.ts`, cache
+  `jewelcase-queue-lists`, not the HTTP cache, which iOS evicts quickly) and attached to the core
+  when it arrives. A fetch installs a fresh core queue that holds no list, so `#install` attaches
+  the stored ones again before the queue is swapped in, and downloads only those it lacks. When a
+  change leaves the queue no longer referencing a hash, as clean-up drops a source, the list is
+  released: deleted from storage. Loading a snapshot also deletes every stored list it does not
+  reference. A `404` marks the list `gone` for as long as the queue references it; a failed
+  request, `failed`, is tried again on the next `hello`. Where Cache Storage is missing or throws,
+  as in a private window, lists stay in memory instead and pages cover the gap. Every Cache
+  Storage call is bounded by a 2 s timeout; past it Cache Storage is given up for the session, so
+  a cache that never answers cannot stall the queue.
+- **Own adds.** An add of `tracks` shows its tracks at once: with no list and no page for a row,
+  `rows()` reads the pending add's `tracks` by the row's source and position, which is right
+  through a copy or the shuffle, since the server's list is those tracks. It needs no hash. When
+  the `queueEdit` names the `list`, the tracks are kept under that hash and attached to the
+  confirmed queue, so they are never downloaded back and no page is fetched.
+- **Rows.** `rows()` (the `rows` message, `QueueClient.rows`) answers a window of `current`, `upNext`
+  or `history` with each row's `item`, `libraryId` and `track`, filled from the attached list,
+  else from a page (`rows.ts`), else from a pending add's own tracks, else not at all. A row without a track is `unknown` while its
+  list is on its way or not yet confirmed, and `unavailable` when its list is `gone` or `failed`, or
+  a page says the server cannot read it, so the player can skip it in place. Pages,
+  `GET /me/queue/rows`, are fetched for the first 100 rows of Up Next and of History and the item
+  playing as soon as any lacks a track, and for a requested window; they fill by item, so any
+  version's is right. A page is asked for again only when the confirmed version changes (or on
+  `hello`), so a window asked for again whenever `revision` changes never loops. What a page gave
+  for a source is dropped once its list is attached. No edit waits for a list or a page. The view's
+  loaded rows, the last fill of §3 for an unshuffled start, are left to the start flow.
 - **Connection.** `connect()` spawns the worker and passes it `hello`, `queueEdit` and
   `queueReplaced`. A request that fails, or answers 429 or 5xx, is tried again after a wait.
