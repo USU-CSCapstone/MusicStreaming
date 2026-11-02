@@ -1,24 +1,26 @@
-//! The `tag` and `tagMatch` filters: which of a list's rows carry the tags named
-//! (`requirements/tags.md` §2, §7). Types are independent, so a list's rows match the tags of
-//! every type named, each type's by `tagMatch`.
+//! The `tagAll` and `tagAny` filters: which of a list's rows carry the tags named
+//! (`requirements/tags.md` §2, §7). A row carries every tag `tagAll` names and, since types are
+//! independent, one of `tagAny`'s of each type.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rusqlite::types::Value;
 use rusqlite::{Connection, params_from_iter};
-use serde::Deserialize;
 
-use super::AnyId;
 use super::page::{self, Check, Lead, Source, Table, Total};
+use super::{AnyId, Problem};
 
-/// The spec's `TagMatch`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
+/// How a group's rows carry its tags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TagMatch {
-    #[default]
     Any,
     All,
 }
+
+/// The most tags a filter may name, `tagAll` and `tagAny` together. Each is a term of the query
+/// that reads the rows, and SQLite refuses a query of more than 500 joined by `INTERSECT`; this
+/// is still more than anyone picks.
+pub const MAX_TAGS: usize = 100;
 
 /// How a list's rows carry tags.
 pub struct Tagged {
@@ -65,19 +67,35 @@ pub fn source(
     Ok(source)
 }
 
-/// A list's `tag` and `tagMatch` parameters.
+/// A list's `tagAll` and `tagAny` parameters.
 #[derive(Debug, Clone, Default)]
 pub struct TagFilter {
-    /// The tags named, each as [`AnyId`] reads it.
-    pub ids: Vec<AnyId>,
-    pub tag_match: TagMatch,
+    /// The tags a row carries every one of, each as [`AnyId`] reads it.
+    pub all: Vec<AnyId>,
+    /// The tags a row carries one of of each type, each as [`AnyId`] reads it.
+    pub any: Vec<AnyId>,
 }
 
 impl TagFilter {
-    /// The filter `tag`, comma-separated tag IDs, and `tag_match` make.
-    pub fn new(tag: Option<&str>, tag_match: TagMatch) -> TagFilter {
-        let ids = tag.into_iter().flat_map(|tag| tag.split(',')).filter(|id| !id.is_empty());
-        TagFilter { ids: ids.map(AnyId::from).collect(), tag_match }
+    /// The filter `all` and `any`, each comma-separated tag IDs, make, refused when they name
+    /// more than [`MAX_TAGS`] together.
+    pub fn new(all: Option<&str>, any: Option<&str>) -> Result<TagFilter, Problem> {
+        let ids = |list: Option<&str>| -> Vec<AnyId> {
+            let ids = list.into_iter().flat_map(|list| list.split(',')).filter(|id| !id.is_empty());
+            ids.map(AnyId::from).collect()
+        };
+        let filter = TagFilter { all: ids(all), any: ids(any) };
+        if filter.all.len() + filter.any.len() > MAX_TAGS {
+            return Err(Problem::invalid(format!(
+                "tagAll and tagAny must name at most {MAX_TAGS} tags together"
+            )));
+        }
+        Ok(filter)
+    }
+
+    /// Whether the filter names no tags.
+    pub fn is_empty(&self) -> bool {
+        self.all.is_empty() && self.any.is_empty()
     }
 }
 
@@ -87,11 +105,12 @@ pub enum Tags {
     Unfiltered,
     /// It names a tag the library does not have, so nothing matches.
     Nothing,
-    /// Its tags of each type, each type's a group the rows must match.
+    /// Its groups, each of which the rows must match.
     Groups(Vec<Group>),
 }
 
-/// The tags of one type a filter names, and how its rows must carry them.
+/// The tags of one type a filter names in one list, `tagAll`'s or `tagAny`'s, and how its rows
+/// must carry them.
 pub struct Group {
     ids: Vec<i64>,
     tag_match: TagMatch,
@@ -111,54 +130,60 @@ pub struct Plan {
 }
 
 impl Tags {
-    /// The tags of `library` that `filter` names, grouped by type, with their stored counts of
-    /// the rows `tagged` describes.
+    /// The tags of `library` that `filter` names, a group for each list's tags of each type, with
+    /// their stored counts of the rows `tagged` describes.
     pub fn read(
         conn: &Connection,
         library: i64,
         tagged: &Tagged,
         filter: &TagFilter,
     ) -> rusqlite::Result<Tags> {
-        let TagFilter { ids, tag_match } = filter;
-        let tag_match = *tag_match;
-        if ids.is_empty() {
+        if filter.is_empty() {
             return Ok(Tags::Unfiltered);
         }
-        let Some(ids) = ids.iter().map(|id| id.0).collect::<Option<Vec<i64>>>() else {
+        let known = |ids: &[AnyId]| {
+            let mut ids = ids.iter().map(|id| id.0).collect::<Option<Vec<i64>>>()?;
+            ids.sort_unstable();
+            ids.dedup();
+            Some(ids)
+        };
+        let (Some(all), Some(any)) = (known(&filter.all), known(&filter.any)) else {
             return Ok(Tags::Nothing);
         };
-        let marks = vec!["?"; ids.len()].join(", ");
-        let sql = format!(
-            "SELECT id, type, {} FROM tags WHERE library_id = ? AND id IN ({marks}) ORDER BY type, id",
-            tagged.count
-        );
-        let params = std::iter::once(library).chain(ids.iter().copied());
-        let rows: Vec<(i64, String, i64)> = conn
-            .prepare_cached(&sql)?
-            .query_map(params_from_iter(params), |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
-            .collect::<rusqlite::Result<_>>()?;
-        let mut found: Vec<i64> = rows.iter().map(|&(id, _, _)| id).collect();
-        let mut named = ids;
-        found.sort_unstable();
+        let mut named: Vec<i64> = all.iter().chain(&any).copied().collect();
         named.sort_unstable();
         named.dedup();
-        if found != named {
+        let marks = vec!["?"; named.len()].join(", ");
+        let sql = format!(
+            "SELECT id, type, {} FROM tags WHERE library_id = ? AND id IN ({marks})",
+            tagged.count
+        );
+        let params = std::iter::once(library).chain(named.iter().copied());
+        let found: HashMap<i64, (String, i64)> = conn
+            .prepare_cached(&sql)?
+            .query_map(params_from_iter(params), |row| {
+                Ok((row.get(0)?, (row.get(1)?, row.get(2)?)))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        if found.len() != named.len() {
             return Ok(Tags::Nothing);
         }
-        let mut groups: Vec<(String, Group)> = Vec::new();
-        for (id, tag_type, count) in rows {
-            match groups.last_mut() {
-                Some((last, group)) if *last == tag_type => {
-                    group.ids.push(id);
-                    group.size = match tag_match {
-                        TagMatch::Any => group.size + count,
-                        TagMatch::All => group.size.min(count),
-                    };
-                }
-                _ => groups.push((tag_type, Group { ids: vec![id], tag_match, size: count })),
+        let mut groups: BTreeMap<(&str, TagMatch), Group> = BTreeMap::new();
+        for (ids, tag_match) in [(all, TagMatch::All), (any, TagMatch::Any)] {
+            for id in ids {
+                let (tag_type, count) = &found[&id];
+                let key = (tag_type.as_str(), tag_match);
+                let group =
+                    groups.entry(key).or_insert(Group { ids: Vec::new(), tag_match, size: 0 });
+                group.size = match (tag_match, group.ids.is_empty()) {
+                    (_, true) => *count,
+                    (TagMatch::Any, false) => group.size + count,
+                    (TagMatch::All, false) => group.size.min(*count),
+                };
+                group.ids.push(id);
             }
         }
-        Ok(Tags::Groups(groups.into_iter().map(|(_, group)| group).collect()))
+        Ok(Tags::Groups(groups.into_values().collect()))
     }
 
     /// How a list of `rows` rows of `tagged`, aliased `alias`, reads the filter. A list given a
@@ -366,8 +391,17 @@ mod tests {
 
     #[test]
     fn lists_ids_separated_by_commas() {
-        assert!(TagFilter::new(None, TagMatch::All).ids.is_empty());
-        let ids = TagFilter::new(Some("1,,x"), TagMatch::Any).ids;
-        assert_eq!(ids.iter().map(|id| id.0).collect::<Vec<_>>(), [Some(1), None]);
+        assert!(TagFilter::new(None, None).unwrap().is_empty());
+        let filter = TagFilter::new(Some("2"), Some("1,,x")).unwrap();
+        assert_eq!(filter.all.iter().map(|id| id.0).collect::<Vec<_>>(), [Some(2)]);
+        assert_eq!(filter.any.iter().map(|id| id.0).collect::<Vec<_>>(), [Some(1), None]);
+    }
+
+    #[test]
+    fn names_at_most_so_many_tags() {
+        let ids = |n: usize| vec!["1"; n].join(",");
+        assert!(TagFilter::new(Some(&ids(60)), Some(&ids(40))).is_ok());
+        assert!(TagFilter::new(Some(&ids(60)), Some(&ids(41))).is_err());
+        assert!(TagFilter::new(None, Some(&ids(MAX_TAGS + 1))).is_err());
     }
 }

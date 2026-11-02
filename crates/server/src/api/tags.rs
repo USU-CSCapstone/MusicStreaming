@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use jewelcase_core::tag_sort_key;
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
@@ -84,6 +85,7 @@ impl TagSort {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ListQuery {
     r#type: Option<String>,
+    q: Option<String>,
     #[serde(default)]
     sort: TagSort,
     #[serde(default)]
@@ -110,15 +112,15 @@ pub async fn types(
     Ok(Json(types))
 }
 
-/// `listTags`: the library's tags, of `type` when it names one. A type the library has no tag
-/// of lists none.
+/// `listTags`: the library's tags, of `type` when it names one and with `q` in their names when
+/// it is given. A type the library has no tag of lists none.
 pub async fn list(
     State(db): State<Arc<Database>>,
     Scope { library, .. }: Scope,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<Tag>>, Problem> {
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
-    let source = source(library, query.r#type);
+    let source = source(library, query.r#type, query.q.as_deref());
     let page = db.read(move |conn| request.read(conn, &source, tag)).await?;
     Ok(Json(page))
 }
@@ -132,8 +134,9 @@ pub async fn get(
     db.read(move |conn| find(conn, library, id)).await?.map(Json).ok_or_else(Problem::not_found)
 }
 
-/// The tags of `library`, of `tag_type` when there is one.
-fn source(library: i64, tag_type: Option<String>) -> Source {
+/// The tags of `library`, of `tag_type` when there is one, whose names hold `q` when it holds
+/// more than spaces.
+fn source(library: i64, tag_type: Option<String>, q: Option<&str>) -> Source {
     let mut source = Source {
         select: SELECT,
         from: "tags g".to_owned(),
@@ -145,6 +148,12 @@ fn source(library: i64, tag_type: Option<String>) -> Source {
     if let Some(tag_type) = tag_type {
         source.filter += " AND g.type = ?";
         source.params.push(tag_type.into());
+    }
+    // A name holds `q` where its sort key holds `q` folded the same way, so case and accents do
+    // not count. Every tag the list walks is tested, which a library's tags are few enough for.
+    if let Some(q) = q.map(tag_sort_key).filter(|q| !q.is_empty()) {
+        source.filter += " AND instr(g.sort_key, ?) > 0";
+        source.params.push(q.into_bytes().into());
     }
     source
 }

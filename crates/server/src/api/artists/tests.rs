@@ -153,7 +153,7 @@ async fn every_sort_reads_from_an_index() {
     .await
     .unwrap();
     db.read(|conn| {
-        let tagged = TagFilter { ids: vec![AnyId(Some(1))], tag_match: TagMatch::Any };
+        let tagged = TagFilter { any: vec![AnyId(Some(1))], ..TagFilter::default() };
         for sort in [ArtistSort::Name, ArtistSort::DateAdded] {
             page::assert_indexed(conn, &source(conn, 1, &TagFilter::default())?, sort.sort())?;
             let walked = source(conn, 1, &tagged)?;
@@ -172,16 +172,16 @@ async fn every_sort_reads_from_an_index() {
 async fn filters_by_the_tags_of_their_work() {
     let (_temp, _db, app) = catalog::app().await;
     for (query, expected) in [
-        ("tag=31", json!(["The Beatles"])),
-        ("tag=30,31&tagMatch=all", json!(["The Beatles"])),
-        ("tag=31,32", json!(["The Beatles"])),
-        ("tag=30,50", json!([])),
-        ("tag=nope", json!([])),
+        ("tagAny=31", json!(["The Beatles"])),
+        ("tagAll=30,31", json!(["The Beatles"])),
+        ("tagAny=31,32", json!(["The Beatles"])),
+        ("tagAny=30,50", json!([])),
+        ("tagAny=nope", json!([])),
     ] {
         let uri = format!("/api/v1/libraries/1/artists?{query}");
         assert_eq!(page_through(&app, &uri, 1, "name").await, expected, "{query}");
         let (_, page) = json(&app, &uri).await;
         assert_eq!(page["total"], expected.as_array().unwrap().len(), "{query}");
     }
-    assert_eq!(json(&app, "/api/v1/libraries/2/artists?tag=31").await.1["total"], 0);
+    assert_eq!(json(&app, "/api/v1/libraries/2/artists?tagAny=31").await.1["total"], 0);
 }

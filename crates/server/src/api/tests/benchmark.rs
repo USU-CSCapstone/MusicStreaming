@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 
 use super::super::AnyId;
 use super::super::page::{Order, Request, Sort, Unknown};
-use super::super::tag_filter::{LEAD_SHARE, TagFilter, TagMatch, Tags};
+use super::super::tag_filter::{LEAD_SHARE, TagFilter, Tags};
 use super::super::testing::{app, json, send};
 use super::super::tracks;
 use crate::db::Database;
@@ -114,7 +114,7 @@ async fn benchmark_list_pages() {
 /// long each took the database.
 fn time_reads(db: &Database, tag: i64, share: i64) -> Vec<Duration> {
     db.read_blocking(move |conn| {
-        let filter = TagFilter { ids: vec![AnyId(Some(tag))], tag_match: TagMatch::Any };
+        let filter = TagFilter { any: vec![AnyId(Some(tag))], ..TagFilter::default() };
         let rows = super::super::page::library_number(conn, 1, "track_count")?;
         let read = |cursor: Option<String>| {
             let tags = Tags::read(conn, 1, &tracks::TAGGED, &filter)?;
@@ -160,14 +160,14 @@ async fn benchmark_tag_filters() {
     time_pages(&app, &format!("{lists}/search?q=track")).await;
     for (tag, name, count) in tags {
         println!("\n{name}: {count} tracks");
-        time_pages(&app, &format!("{lists}/tracks?tag={tag}&limit=100")).await;
+        time_pages(&app, &format!("{lists}/tracks?tagAny={tag}&limit=100")).await;
         for (way, share) in [("lead", 0), ("walk", i64::MAX)] {
             let db = db.clone();
             let mut times =
                 tokio::task::spawn_blocking(move || time_reads(&db, tag, share)).await.unwrap();
             println!("  {way}  {}", summary(&mut times));
         }
-        time_pages(&app, &format!("{lists}/albums?tag={tag}&limit=100")).await;
-        time_pages(&app, &format!("{lists}/search?q=track&tag={tag}")).await;
+        time_pages(&app, &format!("{lists}/albums?tagAny={tag}&limit=100")).await;
+        time_pages(&app, &format!("{lists}/search?q=track&tagAny={tag}")).await;
     }
 }
