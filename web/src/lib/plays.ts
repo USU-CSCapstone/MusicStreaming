@@ -31,8 +31,17 @@ export class PlayRecorder {
 		return this.#play !== null;
 	}
 
-	/** A track has started playing at media time `time`. Ends any play before it as skipped. */
-	start(libraryId: string, trackId: string, context: PlayContext, time = 0) {
+	/**
+	 * A track has started playing at media time `time`, from the context or the Manual Queue as
+	 * `origin` says. Ends any play before it as skipped.
+	 */
+	start(
+		libraryId: string,
+		trackId: string,
+		context: PlayContext,
+		origin: PlayReport['origin'],
+		time = 0
+	) {
 		this.end('skipped');
 		this.#play = {
 			playId: crypto.randomUUID(),
@@ -42,7 +51,7 @@ export class PlayRecorder {
 			listenTimeMs: 0,
 			end: null,
 			context,
-			origin: 'context'
+			origin
 		};
 		this.#heard = 0;
 		this.#last = time;

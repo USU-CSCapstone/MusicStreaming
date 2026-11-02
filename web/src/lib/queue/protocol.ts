@@ -18,6 +18,8 @@ export type Summary = {
 	revision: number;
 	/** The item playing now. */
 	current: string | null;
+	/** The item playing came from the Manual Queue, not the context. */
+	playingManual: boolean;
 	/** The rows of the Manual Queue, which is the top of Up Next, and of all of Up Next. */
 	manual: number;
 	upNext: number;

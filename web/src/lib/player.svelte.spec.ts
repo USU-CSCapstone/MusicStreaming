@@ -86,6 +86,8 @@ class FakeQueue {
 	key = '';
 	repeat = 'off';
 	shuffled = false;
+	/** Whether the item playing is said to come from the Manual Queue. */
+	playingManual = false;
 	revision = 0;
 	/** What the page sent, in order. */
 	sent: ToWorker[] = [];
@@ -124,6 +126,7 @@ class FakeQueue {
 				version: 0,
 				revision: this.revision,
 				current: this.slots.length ? `${this.key}.${this.at}` : null,
+				playingManual: this.playingManual,
 				manual: 0,
 				upNext: Math.max(0, this.slots.length - this.at - 1),
 				history: this.moves,
@@ -232,6 +235,7 @@ const action = (name: MediaSessionAction) =>
 const { player } = await import('./player.svelte');
 const { controls } = await import('./controls.svelte');
 const { playback } = await import('./playback.svelte');
+const { queue } = await import('$lib/queue/client.svelte');
 
 const send = (message: RealtimeServerMessage) =>
 	fake.listeners.forEach((listener) => listener(message));
@@ -267,6 +271,7 @@ beforeEach(() => {
 	queueWorker.refuseStart = false;
 	queueWorker.repeat = 'off';
 	queueWorker.shuffled = false;
+	queueWorker.playingManual = false;
 	queueWorker.release();
 	fake.sent.length = 0;
 	fake.plays.length = 0;
@@ -476,6 +481,19 @@ describe('player', () => {
 		play.mockRestore();
 	});
 
+	it('records a play of a Manual Queue item as manual', async () => {
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+		queueWorker.playingManual = true;
+		player.play([track('61', 60)], 0);
+		await vi.waitFor(() => expect(play).toHaveBeenCalled());
+		expect(queue.playingManual).toBe(true);
+		const audio = play.mock.contexts[0] as HTMLAudioElement;
+		audio.dispatchEvent(new Event('playing'));
+		expect(fake.plays.filter((p) => p.trackId === '61').map((p) => p.origin)).toEqual(['manual']);
+		play.mockRestore();
+	});
+
 	it('leaves the lock screen to the device that took over', () => {
 		player.play([track('59', 60), track('60', 60)], 0);
 		expect(navigator.mediaSession.metadata).not.toBeNull();
@@ -517,7 +535,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 
 describe('player and the queue', () => {
 	const album = { type: 'album', id: '9' } as const;
-	const recipe = { type: 'album', albumId: '9', sort: 'album.asc' } as const;
+	const recipe = { type: 'album', albumId: '9', sort: 'album', order: 'asc' } as const;
 	/** Plays a started queue's audio, and answers with the element so a test can end its track. */
 	async function playing(...ids: string[]) {
 		fake.info = () => Promise.resolve({ variant: 'original' });

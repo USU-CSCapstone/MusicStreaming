@@ -21,7 +21,10 @@ test('plays an album from the queue', async ({ page }) => {
 	// The album's recipe, with the row clicked and how many rows the view has, not its tracks.
 	expect(queue.starts[0]).toMatchObject({
 		context: { type: 'album', id: '31' },
-		source: { libraryId: '11', recipe: { type: 'album', albumId: '31', sort: 'album.asc' } },
+		source: {
+			libraryId: '11',
+			recipe: { type: 'album', albumId: '31', sort: 'album', order: 'asc' }
+		},
 		start: 0,
 		startTrackId: '41'
 	});

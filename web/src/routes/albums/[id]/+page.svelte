@@ -9,7 +9,7 @@
 	import { albumTitle, formatLength, plural, releaseYear } from '$lib/format';
 	import { knownTags } from '$lib/known-tags.svelte';
 	import { player } from '$lib/player.svelte';
-	import { type PlayFrom, recipeSort } from '$lib/queue';
+	import { albumRecipe, type PlayFrom } from '$lib/queue';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { ALBUM_FIELDS, serverSort, sortTracks } from '$lib/sorting';
 
@@ -37,11 +37,7 @@
 		isFiltered(filter)
 			? undefined
 			: {
-					recipe: {
-						type: 'album',
-						albumId: album.id,
-						sort: recipeSort(serverSort(sort) ?? { sort: 'album', order: 'asc' })
-					},
+					recipe: albumRecipe(album.id, serverSort(sort) ?? undefined),
 					total: shown.length
 				}
 	);

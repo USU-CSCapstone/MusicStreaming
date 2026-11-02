@@ -78,10 +78,18 @@ impl Queue {
     }
 
     /// A queue just started over one source of `length` positions whose list hasn't arrived,
-    /// with position `at` playing: what the core's start makes of an empty queue. Throws if `at`
-    /// is not a position of the source.
-    pub fn started(key: &str, library_id: &str, length: f64, at: f64) -> Result<Queue, JsError> {
-        let mut state = QueueState::default();
+    /// with position `at` playing: what the core's start makes of a queue whose repeat mode is
+    /// `repeat` (`"off"`, `"all"` or `"one"`), which a start keeps. Throws if `at` is not a
+    /// position of the source, or on another `repeat`.
+    pub fn started(
+        key: &str,
+        library_id: &str,
+        length: f64,
+        at: f64,
+        repeat: &str,
+    ) -> Result<Queue, JsError> {
+        let mut state =
+            QueueState { repeat: serde_json::from_value(repeat.into())?, ..QueueState::default() };
         let source = Source::new(key, library_id, whole(length), None);
         state.start(source, whole(at)).map_err(|e| JsError::new(&e.to_string()))?;
         Ok(Self(state))
@@ -158,6 +166,12 @@ impl Queue {
     #[wasm_bindgen(js_name = manualLen)]
     pub fn manual_len(&self) -> f64 {
         self.0.manual.len() as f64
+    }
+
+    /// Whether the item playing came from the Manual Queue rather than the context.
+    #[wasm_bindgen(js_name = playingManual)]
+    pub fn playing_manual(&self) -> bool {
+        self.0.playing_manual()
     }
 
     /// How many plays History holds.

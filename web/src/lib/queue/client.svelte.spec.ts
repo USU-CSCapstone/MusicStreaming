@@ -60,6 +60,7 @@ describe('QueueClient', () => {
 				version: 2,
 				revision: 5,
 				current: 'a.0',
+				playingManual: true,
 				manual: 1,
 				upNext: 4,
 				history: 0,
@@ -71,6 +72,7 @@ describe('QueueClient', () => {
 		worker.say({ type: 'refused', refusal: { code: 'anchor_gone', message: 'gone', edit } });
 
 		expect(client).toMatchObject({ queueId: 'q', current: 'a.0', revision: 5, repeat: 'all' });
+		expect(client.playingManual).toBe(true);
 		expect(client.counts).toEqual({ manual: 1, upNext: 4, history: 0 });
 		expect(client.refusal?.code).toBe('anchor_gone');
 

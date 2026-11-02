@@ -3,6 +3,7 @@
 // untouched (`requirements/conventions.md` §6).
 
 import type { StartRecipe } from './api/types';
+import type { ServerSort } from './sorting';
 
 /** Previous restarts the current track once it has played this long. */
 export const RESTART_AFTER_S = 3;
@@ -21,8 +22,24 @@ export function firstPlayable(tracks: { availability: 'available' | 'missing' }[
 	return null;
 }
 
-/** The recipe's name for `listTracks`' `sort` and `order`. */
-export const recipeSort = ({ sort, order }: { sort: string; order: string }) => `${sort}.${order}`;
+/** In disc then track order, as an unsorted album plays and an artist's albums are listed. */
+const BY_ALBUM: ServerSort = { sort: 'album', order: 'asc' };
+
+/** An album's songs in `sort`, as the server resolves them. */
+export const albumRecipe = (albumId: string, sort = BY_ALBUM): StartRecipe => ({
+	type: 'album',
+	albumId,
+	...sort
+});
+
+/** Every song an artist is credited on in `sort`, as the server resolves them. */
+export const artistRecipe = (artistId: string, sort = BY_ALBUM): StartRecipe => ({
+	type: 'artist',
+	artistId,
+	scope: 'all',
+	artistCredit: 'any',
+	...sort
+});
 
 /** Whether Previous restarts the track: it is under way, or nothing has played before it. */
 export function restartsOnPrevious(positionS: number, history: number): boolean {

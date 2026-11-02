@@ -163,8 +163,7 @@ function resolveRecipe(recipe: NonNullable<StartQueue['source']['recipe']>): Tra
 	if (recipe.type === 'search') {
 		return tracks.filter((t) => t.title.toLowerCase().includes(recipe.q.toLowerCase()));
 	}
-	const [sort, order] = (recipe.sort as string).split('.');
-	return sortedAsAsked(new URLSearchParams({ sort, order }));
+	return sortedAsAsked(new URLSearchParams({ sort: recipe.sort, order: recipe.order }));
 }
 
 /**
@@ -205,7 +204,8 @@ class FixtureQueue {
 		const ids = sent ?? resolveRecipe(recipe!).map((t) => t.id);
 		const at = sent ? body.start : ids.indexOf(body.startTrackId!);
 		const list = `list-${this.starts.length}`;
-		const state = JSON.parse(Queue.started(key, libraryId, ids.length, at).toJson());
+		const repeat = this.queue ? JSON.parse(this.queue.toJson()).repeat : 'off';
+		const state = JSON.parse(Queue.started(key, libraryId, ids.length, at, repeat).toJson());
 		state.sources[0].list = list;
 		this.queue?.free();
 		this.queue = Queue.fromJson(JSON.stringify(state));

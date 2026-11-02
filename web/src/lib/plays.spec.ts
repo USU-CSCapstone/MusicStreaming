@@ -17,7 +17,7 @@ const album = { type: 'album', id: '101' } as const;
 describe('PlayRecorder', () => {
 	it('reports a play when it starts and when it ends, under one ID', () => {
 		const { r, sent } = recorder();
-		r.start('1', '7', album);
+		r.start('1', '7', album, 'context');
 		r.end('finished');
 		expect(sent.map((p) => [p.trackId, p.end])).toEqual([
 			['7', null],
@@ -29,7 +29,7 @@ describe('PlayRecorder', () => {
 
 	it('counts audio heard, not jumps or time paused', () => {
 		const { r, sent } = recorder();
-		r.start('1', '7', album);
+		r.start('1', '7', album, 'context');
 		for (let t = 0.25; t <= 10; t += 0.25) r.heard(t);
 		r.seeked(100);
 		r.heard(100.25);
@@ -42,20 +42,21 @@ describe('PlayRecorder', () => {
 
 	it('skips the play under way when another starts, and starts the next from nothing', () => {
 		const { r, sent } = recorder();
-		r.start('1', '7', album);
+		r.start('1', '7', album, 'context');
 		r.heard(0.5);
-		r.start('1', '8', album);
+		r.start('1', '8', album, 'manual');
 		expect(sent.map((p) => [p.trackId, p.end, p.listenTimeMs])).toEqual([
 			['7', null, 0],
 			['7', 'skipped', 500],
 			['8', null, 0]
 		]);
 		expect(sent[2].playId).not.toBe(sent[0].playId);
+		expect(sent.map((p) => p.origin)).toEqual(['context', 'context', 'manual']);
 	});
 
 	it('sends the last report to outlive the page, and nothing once it has ended', () => {
 		const { r, sent, closing } = recorder();
-		r.start('1', '7', album);
+		r.start('1', '7', album, 'context');
 		expect(r.active).toBe(true);
 		r.end('stopped', true);
 		expect(r.active).toBe(false);

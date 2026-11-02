@@ -105,7 +105,8 @@ class FakeServer {
 		const tracks: string[] = source.tracks ?? this.resolved5;
 		const at = source.tracks ? start : tracks.indexOf(startTrackId!);
 		const list = `hs-${queueId.slice(0, 4)}`;
-		const state = JSON.parse(Queue.started(source.key, 'lib', tracks.length, at).toJson());
+		const repeat = JSON.parse(this.queue.toJson()).repeat;
+		const state = JSON.parse(Queue.started(source.key, 'lib', tracks.length, at, repeat).toJson());
 		state.sources[0].list = list;
 		this.queue = Queue.fromJson(JSON.stringify(state));
 		this.queueId = queueId;
@@ -356,6 +357,16 @@ describe('QueueStore', () => {
 			shuffled: false
 		});
 		expect(server.requests[0].headers).not.toHaveProperty('If-None-Match');
+	});
+
+	it('says when the item playing came from the Manual Queue', async () => {
+		await hello();
+		expect(summary.playingManual).toBe(false);
+		store.edit(queueManual('m'));
+		store.edit(next);
+		expect(summary).toMatchObject({ current: 'm.0', playingManual: true });
+		store.edit(next);
+		expect(summary).toMatchObject({ current: 'a.1', playingManual: false });
 	});
 
 	it('replays pending edits over edits from elsewhere, each applied once', async () => {
@@ -1025,7 +1036,12 @@ describe('QueueStore lists and rows', () => {
 			source: {
 				key: SOURCE,
 				libraryId: 'lib',
-				recipe: { type: 'album' as const, albumId: '1', sort: 'album.asc' }
+				recipe: {
+					type: 'album' as const,
+					albumId: '1',
+					sort: 'album' as const,
+					order: 'asc' as const
+				}
 			},
 			start: 1,
 			startTrackId: '201',
@@ -1055,6 +1071,18 @@ describe('QueueStore lists and rows', () => {
 				start: 1,
 				startTrackId: '201'
 			});
+		});
+
+		it('keeps the repeat mode, here and on the server', async () => {
+			await hello();
+			store.edit({ type: 'repeat', mode: 'all' });
+			await settle();
+			store.start(recipeStart());
+			expect(summary).toMatchObject({ queueId: STARTED, repeat: 'all' });
+			await settle();
+
+			expect(server.gets()).toBe(2);
+			expect(summary).toMatchObject({ queueId: STARTED, repeat: 'all' });
 		});
 
 		it("fetches the server's queue once it answers a recipe, and fills the rest from its list", async () => {
