@@ -688,7 +688,13 @@ async fn a_plan_is_written_only_while_the_playlist_is_as_it_was_planned_from() {
     let plan =
         |ops: Vec<Op<i64>>| db.try_read(move |conn| super::super::edit::plan(conn, 1, id, ops, 5));
     let write = |plan: super::super::edit::Plan, base: i64| {
-        db.try_write(move |tx| super::super::edit::write(tx, 1, 1, id, base, &plan))
+        db.try_write(move |tx| {
+            use super::super::edit::{fresh, write};
+            if !fresh(tx, 1, &plan)? {
+                return Ok(false);
+            }
+            write(tx, 1, 1, id, base, &plan).map(|()| true)
+        })
     };
 
     let remove = plan(vec![Op::Remove { positions: vec![0] }]).await.unwrap();

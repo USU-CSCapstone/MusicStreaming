@@ -137,9 +137,11 @@ pub async fn edit(
                 if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
                     return Ok::<_, Problem>(Some(answer));
                 }
-                if !write(tx, user, library, id, base, &plan)? {
+                // Retention keeps the tracks the playlist holds; only an added one can be gone.
+                if !fresh(tx, library, &plan)? {
                     return Ok(None);
                 }
+                write(tx, user, library, id, base, &plan)?;
                 let (count, duration) = plan.totals.unzip();
                 let new_title = title.as_deref();
                 tx.prepare_cached(
@@ -325,11 +327,16 @@ pub(super) fn plan(
     Ok(Plan { totals: Some((count, duration)), added: added.into_keys().collect(), delete, insert })
 }
 
+/// Whether every track `plan` adds is still in `library`, which a plan made off the writer must
+/// ask in the writer before it is written: one purged since is `false`, and the plan is to be
+/// made again. A plan made in the writer itself needs no such check.
+pub(super) fn fresh(tx: &Connection, library: i64, plan: &Plan) -> rusqlite::Result<bool> {
+    Ok(durations(tx, library, plan.added.iter().copied())?.len() == plan.added.len())
+}
+
 /// Writes `plan`, made from playlist `id` at version `base`, if the playlist is still `user`'s
 /// in `library` and at `base`: otherwise `404` or `409 version_conflict`, and nothing is
-/// written. Returns `false`, having written nothing, when a track the plan adds was purged
-/// since it was made, so it is out of date and to be made again. The details, totals and
-/// version are the caller's to write.
+/// written. The details, totals and version are the caller's to write.
 pub(super) fn write(
     tx: &Connection,
     user: i64,
@@ -337,13 +344,10 @@ pub(super) fn write(
     id: i64,
     base: i64,
     plan: &Plan,
-) -> Result<bool, Problem> {
+) -> Result<(), Problem> {
     // The version moves with every change to the items, so at `base` they are what the plan
-    // was made from. Retention keeps the tracks they hold; only an added one can be gone.
+    // was made from.
     at(tx, user, library, id, base)?;
-    if durations(tx, library, plan.added.iter().copied())?.len() < plan.added.len() {
-        return Ok(false);
-    }
     // Deleted before anything is inserted, so no new key meets an old one on its way out.
     match &plan.delete {
         Some(keys) => {
@@ -365,5 +369,5 @@ pub(super) fn write(
     for (key, track, added_at) in &plan.insert {
         insert.execute(params![id, key, library, track, added_at])?;
     }
-    Ok(true)
+    Ok(())
 }
