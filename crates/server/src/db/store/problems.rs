@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use jewelcase_scanner::{Problem, Scope, UNOPENED, problem_group_key};
+use jewelcase_scanner::{Problem, ProblemKind, Scope, UNOPENED, problem_group_key};
 use rusqlite::{Connection, OptionalExtension, Result, ToSql, Transaction, params};
 
 use super::SqliteStore;
@@ -127,21 +127,36 @@ pub fn clear_problem(roots: &Roots, tx: &Transaction<'_>, lib: i64, path: &Path)
 /// Clears the problem at `path` if it says the file could not be opened ([`UNOPENED`]), now
 /// that a background job has opened it, in a transaction of its own.
 pub fn clear_unopened(store: &SqliteStore, lib: i64, path: &Path) -> Result<(), DbError> {
-    let Some((root_id, rel)) = store.roots.locate(lib, path) else {
+    let roots = store.roots.clone();
+    let path = path.to_path_buf();
+    store.db.write_blocking(move |tx| clear_problem_of(&roots, tx, lib, &path, &UNOPENED))
+}
+
+/// Clears the problem at `path`, if it lies under one of `lib`'s roots and is of one of `kinds`,
+/// and leaves any other.
+pub fn clear_problem_of(
+    roots: &Roots,
+    tx: &Transaction<'_>,
+    lib: i64,
+    path: &Path,
+    kinds: &[ProblemKind],
+) -> Result<()> {
+    let Some((root_id, rel)) = roots.locate(lib, path) else {
         return Ok(());
     };
-    store.db.write_blocking(move |tx| {
-        let [unreadable, denied] = UNOPENED.map(Text);
-        let group = tx
-            .prepare_cached(
-                "SELECT p.group_id FROM scan_problems p \
-                 JOIN scan_problem_groups g ON g.id = p.group_id \
-                 WHERE p.root_id = ?1 AND p.path = ?2 AND g.kind IN (?3, ?4)",
-            )?
-            .query_row(params![root_id, rel, unreadable, denied], |r| r.get(0))
-            .optional()?;
-        clear_problem_rel(tx, root_id, &rel, group)
-    })
+    let marks = (3..3 + kinds.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ");
+    let kinds: Vec<Text<ProblemKind>> = kinds.iter().copied().map(Text).collect();
+    let mut args: Vec<&dyn ToSql> = vec![&root_id, &rel];
+    args.extend(kinds.iter().map(|k| k as &dyn ToSql));
+    let group = tx
+        .prepare_cached(&format!(
+            "SELECT p.group_id FROM scan_problems p \
+             JOIN scan_problem_groups g ON g.id = p.group_id \
+             WHERE p.root_id = ?1 AND p.path = ?2 AND g.kind IN ({marks})"
+        ))?
+        .query_row(args.as_slice(), |r| r.get(0))
+        .optional()?;
+    clear_problem_rel(tx, root_id, &rel, group)
 }
 
 /// Deletes the problem at `rel` under `root_id` when `group`, the group it is in, is `Some`, and

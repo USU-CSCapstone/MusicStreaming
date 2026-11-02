@@ -34,6 +34,11 @@ pub struct Problem {
 /// The kinds a background job records for a file it could not open, which an open clears.
 pub const UNOPENED: [ProblemKind; 2] = [ProblemKind::Unreadable, ProblemKind::PermissionDenied];
 
+/// The kinds a file whose tags were read again can no longer have: it opened and its tags read.
+/// A background decode's verdict is never one of them, so a file read for its tags alone keeps it.
+pub const UNREAD: [ProblemKind; 3] =
+    [ProblemKind::Unreadable, ProblemKind::PermissionDenied, ProblemKind::MalformedTags];
+
 /// The problem a [`ReadError`] reading the file at `path` records.
 pub fn from_read_error(path: &Path, e: &ReadError) -> Problem {
     let (kind, detail) = match e {

@@ -32,6 +32,7 @@ macro_rules! store_suite {
             a_scope_at_a_file_reconciles_nothing,
             a_dangling_link_keeps_its_problem,
             a_problem_on_a_present_file_stays,
+            a_file_read_for_its_tags_keeps_its_decode_problem,
             a_folder_problem_clears_once_it_lists,
             an_unreadable_folder_keeps_its_tracks,
             untagged_file_is_named_after_itself,

@@ -129,6 +129,31 @@ pub fn a_problem_on_a_present_file_stays<S: InspectStore>(make: Factory<S>) {
     assert_eq!(problems, [track]);
 }
 
+/// A file read again for its tags alone keeps a problem recorded by its analysis, which keeps its
+/// result and so never records it again, and loses one saying its tags could not be read.
+pub fn a_file_read_for_its_tags_keeps_its_decode_problem<S: InspectStore>(make: Factory<S>) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("lib");
+    make_album(&root, "A", "X", 2);
+    let lib = library(&root);
+    let store = make(&lib);
+    scan_library(&store, &lib);
+    let [broken, mistagged] = [1, 2].map(|n| root.join(format!("A/X/0{n} - Track {n}.wav")));
+    let problem =
+        |path: &PathBuf, kind| Problem { path: path.clone(), kind, detail: "".into(), seen_at: 0 };
+    let problems = vec![
+        problem(&broken, ProblemKind::CorruptAudio),
+        problem(&mistagged, ProblemKind::MalformedTags),
+    ];
+    store.apply(lib.id, Batch { problems, ..Batch::default() }).unwrap();
+
+    store.age_tag_reads(lib.id);
+    assert_eq!(scan_library(&store, &lib).progress.files_processed, 2, "both read for their tags");
+    let problems: Vec<(PathBuf, ProblemKind)> =
+        store.inspect_problems(lib.id).into_iter().map(|p| (p.path, p.kind)).collect();
+    assert_eq!(problems, [(broken, ProblemKind::CorruptAudio)]);
+}
+
 /// A folder that could not be listed loses its problem once it lists. Skipped, saying so, where
 /// permissions do not stop this user reading, as for root.
 pub fn a_folder_problem_clears_once_it_lists<S: InspectStore>(make: Factory<S>) {
