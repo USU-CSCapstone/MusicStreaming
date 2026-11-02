@@ -12,7 +12,7 @@
 		withoutTags
 	} from '$lib/filters';
 	import { knownTags } from '$lib/known-tags.svelte';
-	import { tagTypeName } from '$lib/tags';
+	import { tagTypeName, tagTypePlural } from '$lib/tags';
 	import TagPicker from './TagPicker.svelte';
 
 	let {
@@ -44,6 +44,7 @@
 	{type}
 	{variant}
 	label={tagTypeName(type.key, page.data.tagTypes)}
+	labels={tagTypePlural(type.key, page.data.tagTypes)}
 	{chosen}
 	match={typeMatch(filter, chosen)}
 	ontoggle={(tag) => {

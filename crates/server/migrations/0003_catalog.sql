@@ -310,15 +310,14 @@ CREATE TABLE track_waveforms (
 
 -- Every type the scanner reads (requirements/tags.md §2). Server-wide: a type is a field files
 -- carry, whichever library they are in (design/database.md §3). Genre and mood are built in, and
--- the scanner holds their fields and generations.
+-- the scanner holds their fields.
 CREATE TABLE tag_types (
     -- The type's name in the API and in tags.type
     key       TEXT    PRIMARY KEY,
     -- For a type a plugin added, all four, and for a built-in one none: the name it is shown by,
     -- the plugin that added it, which it outlives, so nothing references plugins, the custom
-    -- field it is read from, uppercase, and the generation of plugins' types it was added in,
-    -- above every one's before it and counted apart from the built-in ones, so a scan reads files
-    -- already scanned again for it.
+    -- field it is read from, uppercase, and the tag_generation it was added in, or last given
+    -- another field in.
     name      TEXT,
     plugin_id TEXT,
     field     TEXT,
@@ -329,6 +328,20 @@ CREATE TABLE tag_types (
 ) STRICT;
 
 INSERT INTO tag_types (key) VALUES ('genre'), ('mood');
+
+-- The generation of tag types a scan reads with, in one row (design/scanning.md §4). It rises by
+-- one whenever what a scan reads changes: a plugin's type added or read from another field, or a
+-- release adding to the built-in types, which the server counts as it starts. It never falls,
+-- even as a type is removed, so a track read with an older one (tracks.tags_generation) is read
+-- again for its tags, and one read with it never is. built_in is the scanner's
+-- BUILT_IN_GENERATION it last counted.
+CREATE TABLE tag_generation (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    generation INTEGER NOT NULL,
+    built_in   INTEGER NOT NULL
+) STRICT;
+
+INSERT INTO tag_generation (id, generation, built_in) VALUES (1, 0, 0);
 
 CREATE TABLE tags (
     id           INTEGER PRIMARY KEY,
