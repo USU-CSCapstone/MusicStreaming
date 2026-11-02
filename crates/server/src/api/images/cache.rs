@@ -3,11 +3,11 @@
 //! each keep their own copy, so how fast one answers says nothing of what the other has viewed
 //! (`requirements/general.md` §3.6). A playlist's mosaic of four images is kept in the folder
 //! `m/<user>` of the library, named by their IDs, and the sweep keeps it only while that user has
-//! a playlist in the library whose artwork it is and the library holds all four. An
-//! image's ID changes whenever its content does, so a cached copy never goes stale. An image
-//! ffmpeg cannot decode leaves a `.failed` marker instead, so it is not tried again on every
-//! request until the next start, when [`Images::sweep`] deletes every marker along with what no
-//! image needs any more; changed content has a new hash, and gets a new try at once.
+//! a playlist in the library whose artwork it is and the library holds all four. An image's ID
+//! changes whenever its content does, so a cached copy never goes stale. An image ffmpeg cannot
+//! decode leaves a `.failed` marker instead, so it is not tried again on every request until the
+//! next start, when [`Images::sweep`] deletes every marker along with what no image needs any
+//! more; changed content has a new hash, and gets a new try at once.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -75,8 +75,8 @@ impl Images {
     /// The mosaic of `library`'s images `ids`, a 2×2 grid read from their files `sources` in the
     /// same order, `size` pixels square, composed first if it is not cached yet. It is kept under
     /// the IDs, which change with the images' content, in `user`'s folder within [`MOSAICS`], so a
-    /// hit says nothing of what another user holds. `None`,
-    /// errors and failures are as for [`Images::resized`], for any one of the sources.
+    /// hit says nothing of what another user holds. `None`, errors and failures are as for
+    /// [`Images::resized`], for any one of the sources.
     pub async fn mosaic(
         &self,
         library: i64,
@@ -168,9 +168,9 @@ impl Images {
     /// only of them that a playlist of the user they are kept for still has as its artwork: a
     /// library's copies of images it no longer holds, mosaics no playlist names any more, the
     /// folders of libraries that are gone, the files of renders cut short, and every failure
-    /// marker, so a failure that may pass, such as a file read as a
-    /// tagger rewrote it, is tried again after a restart. Call it before the server takes
-    /// requests, since it would delete the file of a render still being written.
+    /// marker, so a failure that may pass, such as a file read as a tagger rewrote it, is tried
+    /// again after a restart. Call it before the server takes requests, since it would delete
+    /// the file of a render still being written.
     pub async fn sweep(&self, db: &Database) -> anyhow::Result<()> {
         let held = db.read(held).await?;
         let cache = self.cache.clone();
