@@ -61,10 +61,16 @@
 	);
 	const shownTracks = $derived(shown.map((r) => r.track));
 	const context = $derived({ type: 'playlist', id: playlist.id } as const);
-	// This whole playlist, into another. Its songs here leave out external tracks, which only
-	// matters when skipping songs already there.
+	// This whole playlist, into another or the queue. Its songs here leave out external tracks,
+	// which only matters when skipping songs already there. Queued, it is in the order shown.
 	const adding = $derived(
-		collection('playlist', playlist.id, playlist.title, playlist.trackCount, async () => tracks)
+		collection(
+			'playlist',
+			playlist.id,
+			playlist.title,
+			playlist.trackCount,
+			async () => shownTracks
+		)
 	);
 	let editing = $state(false);
 

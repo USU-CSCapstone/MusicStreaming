@@ -70,5 +70,7 @@ export type QueueRows = Schemas['QueueRows'];
 export type QueueEdit = Schemas['QueueEdit'];
 /** An edit as a device sends it: an `add`'s source names `tracks` or a `recipe`. */
 export type SentEdit = Schemas['EditQueue']['edit'];
+/** How the server makes the list of an add's source, as an add names it. */
+export type QueueRecipe = NonNullable<Extract<SentEdit, { type: 'add' }>['source']['recipe']>;
 /** Where an add or move lands. */
 export type QueueAnchor = Schemas['QueueAnchor'];

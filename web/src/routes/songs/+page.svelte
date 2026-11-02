@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { songs, view } from '$lib/adding.svelte';
 	import { listTracks } from '$lib/api/client';
+	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import type { PlayContext } from '$lib/api/types';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
@@ -38,12 +40,21 @@
 					total: tracks.total
 				}
 	);
+	// All of them, in the order shown, which only queues: there is no entity to add to a playlist.
+	// Filtered, the songs loaded, since a recipe cannot name tags yet.
+	const all = $derived(
+		from ? view('all songs', tracks.total, from.recipe) : { ...songs(tracks.items), refs: [] }
+	);
 </script>
 
 <svelte:head><title>Songs · Jewelcase</title></svelte:head>
 
 <!-- Songs are always a list: a grid of one album cover per song says nothing. -->
-<PageHeader title="Songs" subtitle={plural(tracks.total, 'song')} />
+<PageHeader title="Songs" subtitle={plural(tracks.total, 'song')}>
+	{#snippet actions()}
+		{#if tracks.total}<AddToPlaylistButton what={all} />{/if}
+	{/snippet}
+</PageHeader>
 <TrackList
 	tracks={tracks.items}
 	sentinel={tracks.sentinel}

@@ -1,7 +1,11 @@
 <script lang="ts">
-	import { fullText } from '$lib/full-text';
+	import { page } from '$app/state';
+	import { cardAdding } from '$lib/adding.svelte';
 	import type { Card } from '$lib/cards';
+	import { canDrag, drop, lift } from '$lib/dragging';
+	import { fullText } from '$lib/full-text';
 	import { prefs } from '$lib/prefs.svelte';
+	import AddToPlaylistButton from './AddToPlaylistButton.svelte';
 	import Artwork from './Artwork.svelte';
 
 	let {
@@ -14,6 +18,12 @@
 		sentinel?: (el: Element) => () => void;
 		empty?: string;
 	} = $props();
+
+	const libraryId = $derived(page.data.library?.id ?? '');
+
+	/** A mouse drags the card toward the queue panel; its songs are only fetched if it is dropped. */
+	const dragCard = (e: DragEvent, card: Card) =>
+		lift(e, cardAdding(fetch, libraryId, card), libraryId);
 </script>
 
 {#if cards.length === 0}
@@ -22,8 +32,15 @@
 	<ul class="grid">
 		{#each cards as card (card.id)}
 			<li>
-				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- resolved in cards.ts -->
-				<a class="card" href={card.href}>
+				<!-- eslint-disable svelte/no-navigation-without-resolve -- resolved in cards.ts -->
+				<a
+					class="card"
+					href={card.href}
+					draggable={canDrag}
+					ondragstart={(e) => dragCard(e, card)}
+					ondragend={drop}
+				>
+					<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					<Artwork
 						image={card.image}
 						seed={card.id}
@@ -34,6 +51,7 @@
 					<span class="title" {@attach fullText}>{card.title}</span>
 					<span class="subtitle muted" {@attach fullText}>{card.subtitle}</span>
 				</a>
+				<span class="more"><AddToPlaylistButton what={cardAdding(fetch, libraryId, card)} /></span>
 			</li>
 		{/each}
 	</ul>
@@ -41,8 +59,15 @@
 	<ul class="list">
 		{#each cards as card (card.id)}
 			<li>
-				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- resolved in cards.ts -->
-				<a class="row" href={card.href}>
+				<!-- eslint-disable svelte/no-navigation-without-resolve -- resolved in cards.ts -->
+				<a
+					class="row"
+					href={card.href}
+					draggable={canDrag}
+					ondragstart={(e) => dragCard(e, card)}
+					ondragend={drop}
+				>
+					<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					<span class="thumb">
 						<Artwork
 							image={card.image}
@@ -57,6 +82,7 @@
 						<span class="subtitle muted" {@attach fullText}>{card.subtitle}</span>
 					</span>
 				</a>
+				<span class="more"><AddToPlaylistButton what={cardAdding(fetch, libraryId, card)} /></span>
 			</li>
 		{/each}
 	</ul>
@@ -70,6 +96,39 @@
 		list-style: none;
 		margin: 0;
 		padding: 0;
+	}
+
+	li {
+		position: relative;
+	}
+
+	/* Over a card's corner, or at a row's end; shown for the card pointed at, and always where
+	   there is no pointing. */
+	.more {
+		position: absolute;
+		opacity: 0;
+	}
+
+	.grid .more {
+		top: var(--space-2);
+		right: var(--space-2);
+	}
+
+	.list .more {
+		/* Centred on the row, without a transform, which would hold the menu's fixed position. */
+		top: calc(50% - 19px);
+		right: var(--space-2);
+	}
+
+	li:hover .more,
+	li:focus-within .more {
+		opacity: 1;
+	}
+
+	@media (hover: none) {
+		.more {
+			opacity: 1;
+		}
 	}
 
 	.grid {

@@ -62,15 +62,16 @@
 		recipe: artistRecipe(artist.id, songs.order),
 		total: tracks.total
 	});
-	// Every song the artist is credited on, as the server expands an artist, which the page
-	// shows a page at a time; `tracks.total` counts the same songs.
+	// Every song the artist is credited on, which the page shows a page at a time and
+	// `tracks.total` counts. Queued, it is the order shown, as the server resolves it.
 	const adding = $derived(
 		collection(
 			'artist',
 			artist.id,
 			artistName(artist.name),
 			tracks.total,
-			artistTracks(fetch, data.lib, artist.id)
+			artistTracks(fetch, data.lib, artist.id),
+			from.recipe
 		)
 	);
 	const counts = $derived(

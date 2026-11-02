@@ -343,13 +343,13 @@ test('scrolling past the end of a long playlist leaves the app where it is', asy
 test.describe('adding to a playlist', () => {
 	const titles = (page: Page) => page.locator('.track .title');
 	const more = (page: Page, title: string) =>
-		page.getByRole('button', { name: `Add ${title} to a playlist` });
+		page.getByRole('button', { name: `Actions for ${title}` });
 
 	test('adds a song from its ⋯, and opens the playlist', async ({ page }) => {
 		await serveLibrary(page, { playlists: [signalMix, roadTrip] });
 		await page.goto(`/albums/${album.id}`);
 		await more(page, 'Signal Part 2').click();
-		const menu = page.getByRole('menu', { name: 'Add “Signal Part 2” to a playlist' });
+		const menu = page.getByRole('menu', { name: 'Actions for “Signal Part 2”' });
 		await menu.getByRole('menuitem', { name: /Road Trip/ }).click();
 		await expect(menu).toBeHidden();
 		await expect(page.getByRole('status')).toHaveText(/Added “Signal Part 2” to “Road Trip”/);
@@ -411,7 +411,7 @@ test.describe('adding to a playlist', () => {
 		await expect(titles(page)).toHaveCount(3);
 		await page.keyboard.press('ControlOrMeta+a');
 		const bar = page.getByRole('toolbar', { name: 'Selected songs' });
-		await bar.getByRole('button', { name: 'Add to playlist' }).click();
+		await bar.getByRole('button', { name: 'Add to queue or playlist' }).click();
 		await page.getByRole('menuitem', { name: /Road Trip/ }).click();
 
 		const dialog = page.getByRole('dialog', { name: 'Already in this playlist' });
@@ -463,11 +463,12 @@ test.describe('adding to a playlist', () => {
 		await more(page, 'Signal Part 1').click();
 		const menu = page.getByRole('menu');
 		const items = menu.getByRole('menuitem');
-		await expect(items).toHaveCount(101);
+		// The three queue actions, New playlist and the first page of playlists.
+		await expect(items).toHaveCount(104);
 
-		await items.nth(2).hover();
+		await items.nth(5).hover();
 		await page.mouse.wheel(0, 10_000);
-		await expect(items).toHaveCount(151);
+		await expect(items).toHaveCount(154);
 		// Its end reached, it still holds the scroll.
 		await page.mouse.wheel(0, 10_000);
 		await expect(menu).toBeVisible();
@@ -478,10 +479,17 @@ test.describe('adding to a playlist', () => {
 		await page.goto(`/albums/${album.id}`);
 		await more(page, 'Signal Part 1').focus();
 		await page.keyboard.press('Enter');
-		await expect(page.getByRole('menuitem', { name: 'New playlist…' })).toBeFocused();
-		await expect(page.getByRole('menuitem')).toHaveCount(3);
+		await expect(page.getByRole('menuitem', { name: 'Queue next' })).toBeFocused();
+		await expect(page.getByRole('menuitem')).toHaveCount(6);
+		for (const name of ['Queue last', 'Add to Up Next…', 'New playlist…']) {
+			await page.keyboard.press('ArrowDown');
+			await expect(page.getByRole('menuitem', { name })).toBeFocused();
+		}
 		await page.keyboard.press('ArrowDown');
 		await expect(page.getByRole('menuitem', { name: /Signal Mix/ })).toBeFocused();
+		await page.keyboard.press('ArrowUp');
+		await page.keyboard.press('ArrowUp');
+		await page.keyboard.press('ArrowUp');
 		await page.keyboard.press('ArrowUp');
 		await page.keyboard.press('ArrowUp');
 		await expect(page.getByRole('menuitem', { name: /Road Trip/ })).toBeFocused();
@@ -502,7 +510,7 @@ test.describe('adding a whole album, artist, or playlist', () => {
 	test('adds an album, which the server expands', async ({ page }) => {
 		await serveLibrary(page, { playlists: [roadTrip] });
 		await page.goto(`/albums/${album.id}`);
-		await page.getByRole('button', { name: 'Add “Signal” to a playlist' }).click();
+		await page.getByRole('button', { name: 'Actions for “Signal”' }).click();
 		const sent = nextEdit(page);
 		await page.getByRole('menuitem', { name: /Road Trip/ }).click();
 		expect((await sent)[0].items).toEqual([{ type: 'album', id: album.id }]);
@@ -517,7 +525,7 @@ test.describe('adding a whole album, artist, or playlist', () => {
 			playlists: [{ ...roadTrip, trackIds: [BigInt(signalMix.trackIds[1])] }]
 		});
 		await page.goto(`/albums/${album.id}`);
-		await page.getByRole('button', { name: 'Add “Signal” to a playlist' }).click();
+		await page.getByRole('button', { name: 'Actions for “Signal”' }).click();
 		await page.getByRole('menuitem', { name: /Road Trip/ }).click();
 		const dialog = page.getByRole('dialog', { name: 'Already in this playlist' });
 		await expect(dialog).toContainText(
@@ -538,7 +546,7 @@ test.describe('adding a whole album, artist, or playlist', () => {
 	test('makes a new playlist from an artist', async ({ page }) => {
 		await serveLibrary(page);
 		await page.goto(`/artists/${artist.id}`);
-		await page.getByRole('button', { name: 'Add “Aurora Lane” to a playlist' }).click();
+		await page.getByRole('button', { name: 'Actions for “Aurora Lane”' }).click();
 		await page.getByRole('menuitem', { name: 'New playlist…' }).click();
 		const dialog = page.getByRole('dialog', { name: 'New playlist' });
 		await dialog.getByRole('textbox', { name: 'Title' }).fill('All of Aurora');
@@ -556,7 +564,7 @@ test.describe('adding a whole album, artist, or playlist', () => {
 	test('adds a playlist to another, or to itself at once', async ({ page }) => {
 		await serveLibrary(page, { playlists: [signalMix, roadTrip] });
 		await page.goto(`/playlists/${signalMix.id}`);
-		const more = page.getByRole('button', { name: 'Add “Signal Mix” to a playlist' });
+		const more = page.getByRole('button', { name: 'Actions for “Signal Mix”' });
 
 		await more.click();
 		const sent = nextEdit(page);

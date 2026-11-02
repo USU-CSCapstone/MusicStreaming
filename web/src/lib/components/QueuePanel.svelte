@@ -2,6 +2,7 @@
 	import { panels } from '$lib/panels.svelte';
 	import { player } from '$lib/player.svelte';
 	import { queue } from '$lib/queue/client.svelte';
+	import { placing } from '$lib/queueing.svelte';
 	import type { Refusal, Repeat } from '$lib/queue/protocol';
 	import Icon from './Icon.svelte';
 	import Panel from './Panel.svelte';
@@ -16,6 +17,13 @@
 		{ id: 'history', label: 'History' }
 	] as const;
 	let tab = $state<'upNext' | 'history'>('upNext');
+	// Choosing where something goes happens in Up Next, so show it; closing the panel gives the choice up.
+	$effect(() => {
+		if (placing.what) tab = 'upNext';
+	});
+	$effect(() => {
+		if (!panels.queue) placing.what = null;
+	});
 	const count = $derived({ upNext: queue.counts.upNext, history: queue.counts.history });
 
 	/** Left and Right, Home and End move between the tabs, as a tab list does. */
