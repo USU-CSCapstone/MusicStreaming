@@ -49,7 +49,7 @@ info:
     twice.
 
     **Pagination.** The lists that can grow without bound — tracks, albums, artists,
-    playlists, and a playlist's items — are cursor-paged: pass the previous page's
+    playlists, a playlist's items, and kept queues — are cursor-paged: pass the previous page's
     `nextCursor` as `cursor`, with the same `sort` and `order`; the last page's `nextCursor`
     is `null`. `limit` defaults to 100 and may be up to 1000 — a bound on one transfer,
     never on a collection. Each page reports the list's `total`. Every other list is one
@@ -1456,7 +1456,8 @@ paths:
         Each entry is computed from the stored queue when listed: what was `current`, and how
         many rows `upNext` and `history` hold. A queue kept a moment ago, before the server has
         saved it, is listed too, with the time of the request as its `lastActive`. A queue that
-        cannot be read is left out. `current.trackId` is `null` where its track cannot be read.
+        cannot be read is left out, though `total` counts it. `current.trackId` is `null` where
+        its track cannot be read.
 
         Devices showing the list fetch it again on `queuesChanged`. An expiry sends nothing.
       operationId: listKeptQueues
@@ -1517,7 +1518,7 @@ paths:
         Deletes a kept queue. Every connection of the account is sent `queuesChanged`. `404` for a
         queue that is not kept (as `restoreQueue`); `409` `queue_active` for the active queue,
         which is replaced by a start instead.
-      operationId: deleteQueue
+      operationId: deleteKeptQueue
       parameters:
         - name: queueId
           in: path
@@ -3702,13 +3703,14 @@ components:
         history: { type: integer, minimum: 0, description: The rows in History. }
 
     KeptQueuePage:
-      type: object
-      required: [items, nextCursor]
-      properties:
-        items:
-          type: array
-          items: { $ref: '#/components/schemas/KeptQueue' }
-        nextCursor: { type: [string, 'null'] }
+      allOf:
+        - $ref: '#/components/schemas/PageInfo'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items: { $ref: '#/components/schemas/KeptQueue' }
 
     RestoredQueue:
       description: The queue as `getQueue` answers, with where its playback was left.

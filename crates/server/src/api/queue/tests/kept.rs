@@ -1,4 +1,4 @@
-//! Kept queues: `listKeptQueues`, `restoreQueue` and `deleteQueue`, and `queuesChanged`.
+//! Kept queues: `listKeptQueues`, `restoreQueue` and `deleteKeptQueue`, and `queuesChanged`.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -88,18 +88,19 @@ async fn kept_queue_listed_before_save() {
     let (status, page) = kept(&app, TOKEN, "").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(ids(&page), [QUEUE]);
-    assert_eq!(page["nextCursor"], Value::Null);
+    assert_eq!((&page["nextCursor"], &page["total"]), (&Value::Null, &json!(1)));
     let item = &page["items"][0];
     assert_eq!(item["context"], json!({ "type": "album", "id": "101" }));
     assert_eq!(item["current"], json!({ "libraryId": "1", "trackId": "1" }));
     assert_eq!((&item["upNext"], &item["history"]), (&json!(2), &json!(0)));
     assert!(item["lastActive"].as_str().unwrap().ends_with('Z'), "{item}");
-    assert_eq!(kept(&app, "user2", "").await.1["items"], json!([]));
+    let (_, theirs) = kept(&app, "user2", "").await;
+    assert_eq!((&theirs["items"], &theirs["total"]), (&json!([]), &json!(0)));
 
     // Saved, it is listed once, and its track is read from the stored list.
     state.queues.save(&state.db).await;
     let (_, saved) = kept(&app, TOKEN, "").await;
-    assert_eq!(ids(&saved), [QUEUE]);
+    assert_eq!((ids(&saved), &saved["total"]), (vec![QUEUE.to_owned()], &json!(1)));
     assert_eq!(saved["items"][0]["current"], json!({ "libraryId": "1", "trackId": "1" }));
 }
 
@@ -196,7 +197,8 @@ async fn kept_queues_are_per_account() {
     let address = serve(app.clone()).await;
     let mut stranger = connect_with(address, "user2").await;
 
-    assert_eq!(kept(&app, "user2", "").await.1["items"], json!([]));
+    let (_, theirs) = kept(&app, "user2", "").await;
+    assert_eq!((&theirs["items"], &theirs["total"]), (&json!([]), &json!(0)));
     for (method, path) in [("DELETE", String::new()), ("POST", "/restore".to_owned())] {
         let uri = format!("/api/v1/me/queues/{QUEUE}{path}");
         let (status, body) = call(&app, "user2", method, &uri, None).await;
@@ -226,6 +228,8 @@ async fn kept_queues_page_by_keyset() {
         loop {
             let (status, page) = kept(&app, TOKEN, &format!("limit=2{query}{cursor}")).await;
             assert_eq!(status, StatusCode::OK, "{page}");
+            // Every page counts the whole list.
+            assert_eq!(page["total"], 3, "{page}");
             let next = page["nextCursor"].as_str().map(str::to_owned);
             pages.push(page);
             match next {
@@ -275,6 +279,7 @@ async fn an_unreadable_kept_row_is_skipped() {
     let (status, page) = kept(&app, TOKEN, "").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(ids(&page), [OTHER]);
+    assert_eq!(page["total"], 2, "the total counts it");
 }
 
 #[tokio::test]

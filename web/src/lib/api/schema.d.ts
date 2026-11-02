@@ -1092,7 +1092,8 @@ export interface paths {
          *     Each entry is computed from the stored queue when listed: what was `current`, and how
          *     many rows `upNext` and `history` hold. A queue kept a moment ago, before the server has
          *     saved it, is listed too, with the time of the request as its `lastActive`. A queue that
-         *     cannot be read is left out. `current.trackId` is `null` where its track cannot be read.
+         *     cannot be read is left out, though `total` counts it. `current.trackId` is `null` where
+         *     its track cannot be read.
          *
          *     Devices showing the list fetch it again on `queuesChanged`. An expiry sends nothing.
          */
@@ -1150,7 +1151,7 @@ export interface paths {
          *     queue that is not kept (as `restoreQueue`); `409` `queue_active` for the active queue,
          *     which is replaced by a start instead.
          */
-        delete: operations["deleteQueue"];
+        delete: operations["deleteKeptQueue"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2449,9 +2450,8 @@ export interface components {
             /** @description The rows in History. */
             history: number;
         };
-        KeptQueuePage: {
+        KeptQueuePage: components["schemas"]["PageInfo"] & {
             items: components["schemas"]["KeptQueue"][];
-            nextCursor: string | null;
         };
         /** @description The queue as `getQueue` answers, with where its playback was left. */
         RestoredQueue: components["schemas"]["QueueSnapshot"] & {
@@ -4733,7 +4733,7 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
-    deleteQueue: {
+    deleteKeptQueue: {
         parameters: {
             query?: never;
             header?: never;
