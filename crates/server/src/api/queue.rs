@@ -6,7 +6,9 @@
 //! checks that the caller reaches every track the source names.
 
 mod edits;
+mod lists;
 mod resolve;
+mod rows;
 mod start;
 
 use std::sync::Arc;
@@ -21,7 +23,9 @@ use super::scope::Caller;
 use super::{Problem, plays};
 use crate::queue::Queues;
 pub use edits::edit;
+pub use lists::get_list;
 pub use resolve::{Recipe, resolve};
+pub use rows::get_rows;
 pub use start::start;
 
 /// The largest body a start or an edit accepts: about 760,000 real (19-digit) track IDs. With the

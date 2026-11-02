@@ -26,6 +26,9 @@ pub fn router() -> Router<AppState> {
         )
         // An add carries its tracks, so an edit takes a body as large as a start does.
         .route("/me/queue/edits", post(queue::edit).layer(DefaultBodyLimit::max(queue::BODY_LIMIT)))
+        // A list is gzipped like the snapshot, and no other answer is.
+        .route("/me/queue/lists/{hash}", get(queue::get_list).layer(CompressionLayer::new()))
+        .route("/me/queue/rows", get(queue::get_rows))
         .route("/me/plays", post(plays::record))
         .route("/me/plugins", get(connections::list))
         .route(
