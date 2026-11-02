@@ -95,11 +95,12 @@ describe('QueuePanel', () => {
 			.toHaveTextContent('That song is no longer in History.');
 	});
 
-	it('switches between Up Next and History by click and by arrow keys', async () => {
+	it('switches between Up Next, History and Kept by click and by arrow keys', async () => {
 		fake.queue.counts = { manual: 0, upNext: 3, history: 2 };
 		render(QueuePanel);
 		const up = page.getByRole('tab', { name: /Up Next/ });
 		const history = page.getByRole('tab', { name: /History/ });
+		const keptTab = page.getByRole('tab', { name: 'Kept' });
 		await expect.element(page.getByRole('tablist', { name: 'Queue' })).toBeVisible();
 		await expect.element(up).toHaveAttribute('aria-selected', 'true');
 		await expect.element(history).toHaveTextContent('2');
@@ -117,9 +118,14 @@ describe('QueuePanel', () => {
 			.element(page.getByRole('tabpanel'))
 			.toHaveAttribute('aria-labelledby', 'queue-tab-history');
 		await userEvent.keyboard('{ArrowRight}');
+		await expect.element(keptTab).toHaveAttribute('aria-selected', 'true');
+		await expect
+			.element(page.getByRole('tabpanel'))
+			.toHaveAttribute('aria-labelledby', 'queue-tab-kept');
+		await userEvent.keyboard('{ArrowRight}');
 		await expect.element(up).toHaveAttribute('aria-selected', 'true');
 		await userEvent.keyboard('{End}');
-		await expect.element(history).toHaveAttribute('aria-selected', 'true');
+		await expect.element(keptTab).toHaveAttribute('aria-selected', 'true');
 		await userEvent.keyboard('{Home}');
 		await expect.element(up).toHaveAttribute('aria-selected', 'true');
 		await history.click();

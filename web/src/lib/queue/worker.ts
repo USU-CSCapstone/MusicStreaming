@@ -29,6 +29,10 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 			else if (data.type === 'edit') ready.edit(data.edit, data.length);
 			else if (data.type === 'start')
 				post({ type: 'started', id: data.id, ok: ready.start(data.request) });
+			else if (data.type === 'restore')
+				void ready
+					.restore(data.queueId)
+					.then((result) => post({ type: 'restored', id: data.id, result }));
 			else post({ type: 'rows', id: data.id, window: ready.rows(data) });
 		});
 	}

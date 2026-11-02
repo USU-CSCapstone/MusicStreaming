@@ -10,6 +10,7 @@ import type {
 	Artist,
 	ArtistPage,
 	ImageRef,
+	KeptQueue,
 	Library,
 	LoginRequest,
 	Lyrics,
@@ -129,6 +130,14 @@ export const login = (f: Fetch, request: LoginRequest) =>
 
 /** Logs this browser out: the server forgets the device and clears the cookie. */
 export const logout = (f: Fetch) => send<void>(f, 'POST', '/auth/logout');
+
+/** One page of the account's kept queues, most recently active first; `cursor` is the last page's `nextCursor`. */
+export const listKeptQueues = (f: Fetch, cursor?: string) =>
+	get<{ items: KeptQueue[]; nextCursor: string | null }>(f, '/me/queues', { cursor });
+
+/** Deletes a kept queue; the active queue is refused with `queue_active`. */
+export const deleteKeptQueue = (f: Fetch, queueId: string) =>
+	send<void>(f, 'DELETE', `/me/queues/${encodeURIComponent(queueId)}`);
 
 export const getMe = (f: Fetch) => get<User>(f, '/me');
 

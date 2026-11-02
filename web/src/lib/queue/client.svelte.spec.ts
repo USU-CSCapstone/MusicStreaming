@@ -120,4 +120,21 @@ describe('QueueClient', () => {
 		expect(await taken).toBe(true);
 		expect(await refused).toBe(false);
 	});
+
+	it('settles each restore with the worker answer to it', async () => {
+		const { worker, client } = setup();
+		const first = client.restore('q1');
+		const second = client.restore('q2');
+		const [one, two] = worker.sent.slice(1) as Extract<ToWorker, { type: 'restore' }>[];
+		worker.say({
+			type: 'restored',
+			id: two.id,
+			result: { ok: false, code: 'queue_active', message: '' }
+		});
+		worker.say({ type: 'restored', id: one.id, result: { ok: true, position: null } });
+
+		expect(one).toMatchObject({ type: 'restore', queueId: 'q1' });
+		expect(await first).toEqual({ ok: true, position: null });
+		expect(await second).toMatchObject({ ok: false, code: 'queue_active' });
+	});
 });

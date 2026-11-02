@@ -58,6 +58,10 @@ export type PlayerState = Schemas['PlayerState'];
 export type ProgressReport = Schemas['ProgressReport'];
 export type PlayerCommand = Schemas['PlayerCommand'];
 export type QueueSnapshot = Schemas['QueueSnapshot'];
+/** A kept queue, as the list of them shows it. */
+export type KeptQueue = Schemas['KeptQueue'];
+/** A kept queue made active again: the snapshot, and where playback was left. */
+export type RestoredQueue = Schemas['RestoredQueue'];
 /** A queue's state, as a snapshot carries it. */
 export type QueueState = Schemas['QueueState'];
 /** A start as `POST /me/queue` takes it. */

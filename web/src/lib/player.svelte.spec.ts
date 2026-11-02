@@ -95,6 +95,17 @@ class FakeQueue {
 	holdStart = false;
 	/** Whether the server refuses the next start. */
 	refuseStart = false;
+	/** The kept queue a restore makes the active one: its items, the one playing, and the point in it. */
+	kept: {
+		key: string;
+		slots: Slot[];
+		at: number;
+		positionMs: number;
+		/** The item the position names, if not the current one. */
+		positionItem?: string;
+	} | null = null;
+	/** While set, a restore is not answered until `release`. */
+	holdRestore = false;
 	/** Whether a Previous makes a new item, a copy, as one from History does. */
 	copyOnPrevious = false;
 	/** The copy that is the current item, if any. */
@@ -112,6 +123,7 @@ class FakeQueue {
 		this.sent.push(message);
 		if (message.type === 'start') this.#start(message.id, message.request);
 		else if (message.type === 'edit') this.#edit(message.edit);
+		else if (message.type === 'restore') this.#restore(message.id);
 		else if (message.type === 'rows') this.#rows(message.id, message.section, message.offset);
 	}
 
@@ -172,6 +184,35 @@ class FakeQueue {
 			}
 		};
 		if (this.holdStart) this.#held = reply;
+		else reply();
+	}
+
+	/** Answers a restore of `kept`, or with `not_found` if none; held back while `holdRestore` is set. */
+	#restore(id: number) {
+		const reply = () => {
+			const kept = this.kept;
+			if (!kept) {
+				return this.#say({
+					type: 'restored',
+					id,
+					result: { ok: false, code: 'not_found', message: 'That queue is gone.' }
+				});
+			}
+			Object.assign(this, { key: kept.key, slots: kept.slots, at: kept.at, moves: 0 });
+			this.#state();
+			this.#say({
+				type: 'restored',
+				id,
+				result: {
+					ok: true,
+					position: {
+						item: kept.positionItem ?? `${kept.key}.${kept.at}`,
+						positionMs: kept.positionMs
+					}
+				}
+			});
+		};
+		if (this.holdRestore) this.#held = reply;
 		else reply();
 	}
 
@@ -614,6 +655,71 @@ describe('player and the queue', () => {
 			itemId: `${request.source.key}.1`,
 			status: 'buffering'
 		});
+	});
+
+	it('restores a kept queue where it was left, and reports as a start once the server has it', async () => {
+		const { play } = await playing('61', 'x');
+		fake.sent.length = 0;
+		queueWorker.kept = { key: 'K', slots: ['71', '72', '73'], at: 1, positionMs: 42_500 };
+		queueWorker.holdRestore = true;
+
+		const restored = player.restore('kept-queue');
+		await settle();
+		expect(player.current?.id, 'the queue playing stays until the server answers').toBe('61');
+		expect(fake.sent, 'nothing is reported meanwhile').toEqual([]);
+
+		queueWorker.release();
+		expect(await restored).toBeNull();
+		await settle();
+		expect(player.current?.id).toBe('72');
+		expect(player.position).toBeCloseTo(42.5, 1);
+		expect(play.mock.calls.length).toBeGreaterThan(1);
+		expect(fake.sent.at(-1)!.report).toMatchObject({ start: true, itemId: 'K.1' });
+		queueWorker.holdRestore = false;
+	});
+
+	it('plays a restored queue whose current row is still unknown, on a device not holding playback', async () => {
+		await playing('61', 'x');
+		// Another tab plays, so this player no longer holds playback.
+		const tab = new BroadcastChannel('jewelcase.player');
+		tab.postMessage('started');
+		tab.close();
+		await settle();
+		fake.sent.length = 0;
+		queueWorker.kept = { key: 'K', slots: ['71', 'unknown', '73'], at: 1, positionMs: 9_000 };
+		expect(await player.restore('kept-queue')).toBeNull();
+		await settle();
+		expect(player.current?.id).toBe('61');
+
+		queueWorker.learn(1, '72');
+		await settle();
+		expect(player.current?.id).toBe('72');
+		expect(player.position).toBeCloseTo(9, 0);
+		expect(fake.sent.at(-1)!.report).toMatchObject({ start: true, itemId: 'K.1' });
+	});
+
+	it('starts a restored queue at the beginning when the position names another item', async () => {
+		await playing('61', 'x');
+		queueWorker.kept = {
+			key: 'K',
+			slots: ['71', '72'],
+			at: 1,
+			positionMs: 30_000,
+			positionItem: 'K.0'
+		};
+		expect(await player.restore('kept-queue')).toBeNull();
+		await settle();
+		expect(player.current?.id).toBe('72');
+		expect(player.position).toBeLessThan(1);
+	});
+
+	it('says why a kept queue was not restored, and plays on', async () => {
+		await playing('61', 'x');
+		queueWorker.kept = null;
+		expect(await player.restore('kept-queue')).toBe('That queue is gone.');
+		await settle();
+		expect(player.current?.id).toBe('61');
+		expect(player.playing).toBe(true);
 	});
 
 	it('reports a Previous that makes a new item once the server has the edit', async () => {

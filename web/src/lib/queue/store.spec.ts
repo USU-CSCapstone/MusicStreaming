@@ -59,10 +59,16 @@ class FakeServer {
 	rowsGate: Promise<void> | null = null;
 	/** Holds back the answer to an edit, once it is applied, until it is opened. */
 	editGate: Promise<void> | null = null;
-	/** Holds back the answer to a start until it is opened. */
+	/** Runs once a restore is answered: what the server does next. */
+	afterRestore: (() => void) | null = null;
+	/** Holds back the answer to a restore until it is opened. */
+	restoreGate: Promise<void> | null = null;
+	/** Holds back the answer to a start until it is opened.*/
 	startGate: Promise<void> | null = null;
 	/** What a recipe resolves to, as the tracks of the list the server holds for a recipe's start. */
 	resolved5 = ['200', '201', '202', '203', '204'];
+	/** The kept queues, by ID: the queue, and where playback was left. */
+	kept = new Map<string, { queue: Queue; position: { item: string; positionMs: number } }>();
 	/** The status pages of rows are answered with instead of the page. */
 	rowsStatus = 0;
 	/** Edits applied whose answer is lost on its way, in count. */
@@ -215,6 +221,24 @@ class FakeServer {
 				answer = new Response(JSON.stringify(snapshot), { headers: { ETag: tag } });
 			}
 			this.onGet?.();
+			return answer;
+		}
+		const restoring = /^\/me\/queues\/(.+)\/restore$/.exec(path)?.[1];
+		if (restoring && method === 'POST') {
+			await this.restoreGate;
+			if (restoring === this.queueId) return problem(409, 'queue_active');
+			const kept = this.kept.get(restoring);
+			if (!kept) return problem(404, 'not_found');
+			this.kept.delete(restoring);
+			this.queue = kept.queue;
+			this.queueId = restoring;
+			this.version = 7;
+			const state = JSON.parse(this.queue.toJson());
+			const snapshot = { queueId: this.queueId, version: 7, context: CONTEXT, state };
+			const answer = new Response(JSON.stringify({ ...snapshot, position: kept.position }), {
+				headers: { ETag: `"${this.run}.${this.queueId}.7"` }
+			});
+			this.afterRestore?.();
 			return answer;
 		}
 		if (path === '/me/queue' && method === 'POST') {
@@ -641,6 +665,133 @@ describe('QueueStore', () => {
 
 		expect(refusals).toMatchObject([{ code: 'superseded', edit: queueManual('m') }]);
 		expect(summary).toMatchObject({ queueId: server.queueId, manual: 0 });
+	});
+
+	it('restores a kept queue as the active one, where it was left, dropping edits for the one it replaced', async () => {
+		await hello();
+		const kept = '33333333-3333-4333-8333-333333333333';
+		const left = albumQueue();
+		left.apply(JSON.stringify(next));
+		server.kept.set(kept, { queue: left, position: { item: 'a.1', positionMs: 42_000 } });
+		server.failures = [0];
+		store.edit(queueManual('m'));
+
+		const result = await store.restore(kept);
+		expect(result).toEqual({ ok: true, position: { item: 'a.1', positionMs: 42_000 } });
+		expect(summary).toMatchObject({ queueId: kept, current: 'a.1', version: 7, held: 'a.1' });
+		expect(refusals).toMatchObject([{ code: 'superseded', edit: queueManual('m') }]);
+
+		// The server tells every device the queue is replaced, this one included; it already holds it.
+		store.message({ type: 'queueReplaced', queueId: kept });
+		await settle();
+		expect(server.gets()).toBe(1);
+		// And its edits go to it.
+		store.edit(queueManual('n'));
+		await settle();
+		expect(server.requests.at(-1)).toMatchObject({
+			path: '/me/queue/edits',
+			body: { queueId: kept }
+		});
+	});
+
+	it('restores after a start that is not yet answered, so the start cannot replace it', async () => {
+		await hello();
+		const kept = '33333333-3333-4333-8333-333333333333';
+		server.kept.set(kept, { queue: albumQueue(), position: { item: 'a.0', positionMs: 0 } });
+		const held = gate();
+		server.startGate = held.wait;
+		store.start({
+			queueId: '55555555-5555-4555-8555-555555555555',
+			context: CONTEXT,
+			source: {
+				key: '22222222-2222-4222-8222-222222222222',
+				libraryId: 'lib',
+				recipe: { type: 'album', albumId: '1', sort: 'album.asc' }
+			},
+			start: 1,
+			startTrackId: '201',
+			total: 5,
+			loaded: ['200', '201']
+		});
+		const restored = store.restore(kept);
+		await settle();
+		expect(server.requests.some((r) => r.path.endsWith('/restore'))).toBe(false);
+
+		held.open();
+		expect(await restored).toMatchObject({ ok: true });
+		const posts = server.requests.filter((r) => r.method === 'POST').map((r) => r.path);
+		expect(posts).toEqual(['/me/queue', `/me/queues/${kept}/restore`]);
+		expect(summary).toMatchObject({ queueId: kept });
+	});
+
+	it('keeps an edit heard while a restore is answered, and fetches only to hear 304', async () => {
+		await hello();
+		const kept = '33333333-3333-4333-8333-333333333333';
+		server.kept.set(kept, { queue: albumQueue(), position: { item: 'a.0', positionMs: 0 } });
+		const held = gate();
+		server.restoreGate = held.wait;
+		// Another device's edit lands as the restore is answered.
+		server.afterRestore = () => {
+			server.version = 8;
+			server.queue.apply(JSON.stringify({ type: 'repeat', mode: 'all' }));
+		};
+		const restored = store.restore(kept);
+		await settle();
+		// As the server does: the queue is replaced before the restore is answered, and an edit follows.
+		store.message({ type: 'queueReplaced', queueId: kept });
+		store.message({
+			type: 'queueEdit',
+			queueId: kept,
+			version: 8,
+			editId: 'other',
+			edit: { type: 'repeat', mode: 'all' }
+		});
+		held.open();
+		expect(await restored).toMatchObject({ ok: true });
+		await settle();
+		expect(summary).toMatchObject({ queueId: kept, version: 8, repeat: 'all' });
+		expect(server.gets()).toBe(2);
+	});
+
+	it('stays caught up when a restore is refused while another device edits', async () => {
+		await hello();
+		const held = gate();
+		server.restoreGate = held.wait;
+		const restored = store.restore('44444444-4444-4444-8444-444444444444');
+		await settle();
+		store.message(server.apply({ type: 'repeat', mode: 'all' }));
+		held.open();
+		expect(await restored).toMatchObject({ ok: false, code: 'not_found' });
+		await settle();
+		expect(summary).toMatchObject({ version: 1, repeat: 'all' });
+	});
+
+	it('sends the restore after a start whose first try failed', async () => {
+		await hello();
+		const kept = '33333333-3333-4333-8333-333333333333';
+		server.kept.set(kept, { queue: albumQueue(), position: { item: 'a.0', positionMs: 0 } });
+		server.failures = [503];
+		store.start({
+			queueId: '55555555-5555-4555-8555-555555555555',
+			context: CONTEXT,
+			source: { key: '22222222-2222-4222-8222-222222222222', libraryId: 'lib', tracks: ['1', '2'] },
+			start: 0
+		});
+		const restored = store.restore(kept);
+		expect(await restored).toMatchObject({ ok: true });
+		const posts = server.requests.filter((r) => r.method === 'POST').map((r) => r.path);
+		expect(posts).toEqual(['/me/queue', '/me/queue', `/me/queues/${kept}/restore`]);
+	});
+
+	it('says why a kept queue was not restored, and keeps the queue it has', async () => {
+		await hello();
+		expect(await store.restore(QUEUE)).toMatchObject({ ok: false, code: 'queue_active' });
+		const gone = '44444444-4444-4444-8444-444444444444';
+		expect(await store.restore(gone)).toMatchObject({ ok: false, code: 'not_found' });
+		server.failures = [0];
+		expect(await store.restore(gone)).toMatchObject({ ok: false, code: 'unreachable' });
+		await settle();
+		expect(summary).toMatchObject({ queueId: QUEUE, current: 'a.0' });
 	});
 
 	it('has no queue when the server has none', async () => {
