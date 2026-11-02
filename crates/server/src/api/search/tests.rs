@@ -210,19 +210,19 @@ async fn a_search_with_tags_finds_what_carries_them() {
         ("artists".to_owned(), ids(&["14"])),
     ];
     let base = "/api/v1/libraries/1/search?q=elsewhere";
-    for query in ["tag=30", "tag=30,32", "tag=32&sectionLimit=1"] {
+    for query in ["tagAny=30", "tagAny=30,32", "tagAny=32&sectionLimit=1"] {
         let (status, body) = json(&app, &format!("{base}&{query}")).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(sections(&body), all, "{query}");
     }
-    let (_, body) = json(&app, &format!("{base}&tag=32")).await;
+    let (_, body) = json(&app, &format!("{base}&tagAny=32")).await;
     assert_eq!(body["sections"][0]["total"], 2, "1008 and 1009");
-    let (_, body) = json(&app, &format!("{base}&tag=30&types=tracks")).await;
+    let (_, body) = json(&app, &format!("{base}&tagAny=30&types=tracks")).await;
     assert_eq!(sections(&body), all[..1]);
-    for query in ["tag=31", "tag=30,31&tagMatch=all", "tag=nope"] {
+    for query in ["tagAny=31", "tagAll=30,31", "tagAny=nope"] {
         let (_, body) = json(&app, &format!("{base}&{query}")).await;
         assert_eq!(body["sections"], json!([]), "{query}");
     }
-    let (_, body) = json(&app, "/api/v1/libraries/2/search?q=elsewhere&tag=30").await;
+    let (_, body) = json(&app, "/api/v1/libraries/2/search?q=elsewhere&tagAny=30").await;
     assert_eq!(body["sections"], json!([]), "another library's tag");
 }

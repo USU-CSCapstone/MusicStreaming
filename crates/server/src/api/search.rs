@@ -18,7 +18,7 @@ use super::albums::{self, AlbumSummary};
 use super::artists::{self, ArtistSummary};
 use super::extract::Query;
 use super::scope::Scope;
-use super::tag_filter::{TagFilter, TagMatch};
+use super::tag_filter::TagFilter;
 use super::tracks::{self, TrackSummary};
 use super::{Problem, page};
 use crate::db::{Database, by_ids};
@@ -30,9 +30,8 @@ pub struct SearchQuery {
     q: String,
     /// Comma-separated section types.
     types: Option<String>,
-    tag: Option<String>,
-    #[serde(default)]
-    tag_match: TagMatch,
+    tag_all: Option<String>,
+    tag_any: Option<String>,
     section_limit: Option<usize>,
 }
 
@@ -66,7 +65,7 @@ enum SearchResult {
 }
 
 /// The spec's `search`: each section's best matches for `q` in `library`, of those carrying the
-/// tags `tag` names as `tagMatch` says.
+/// tags `tagAll` and `tagAny` name.
 pub async fn search(
     State(db): State<Arc<Database>>,
     State(indexes): State<Arc<Indexes>>,
@@ -85,7 +84,7 @@ pub async fn search(
 
     let track_count =
         db.read(move |conn| page::library_number(conn, library, "track_count")).await?;
-    let filter = TagFilter::new(query.tag.as_deref(), query.tag_match);
+    let filter = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
     let tagged = indexes.tagged.get(&db, library, &filter, &kinds).await?;
     let index = indexes.index(&db, library).await?;
     let found = index.search_within(&query.q, &kinds, limit, |kind, id| {

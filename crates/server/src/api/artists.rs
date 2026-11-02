@@ -14,7 +14,7 @@ pub use representation::{Artist, ArtistSummary, SELECT, summary};
 use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
-use super::tag_filter::{self, TagFilter, TagMatch, Tagged};
+use super::tag_filter::{self, TagFilter, Tagged};
 use super::{Id, Problem};
 use crate::db::Database;
 
@@ -56,23 +56,22 @@ pub struct ListQuery {
     sort: ArtistSort,
     #[serde(default)]
     order: Order,
-    tag: Option<String>,
-    #[serde(default)]
-    tag_match: TagMatch,
+    tag_all: Option<String>,
+    tag_any: Option<String>,
     cursor: Option<String>,
     limit: Option<u32>,
 }
 
 /// Every artist credited in the library, featured-only ones included
-/// (`requirements/artists.md` §5), or those whose work carries the tags `tag` names as
-/// `tagMatch` says.
+/// (`requirements/artists.md` §5), or those whose work carries the tags `tagAll` and
+/// `tagAny` name.
 pub async fn list(
     State(db): State<Arc<Database>>,
     Scope { library, .. }: Scope,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<ArtistSummary>>, Problem> {
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
-    let tags = TagFilter::new(query.tag.as_deref(), query.tag_match);
+    let tags = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
     let page = db
         .read(move |conn| {
             let source = source(conn, library, &tags)?;

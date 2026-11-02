@@ -205,7 +205,7 @@ async fn every_sort_reads_from_an_index() {
                 &source(conn, 1, None, ArtistCredit::Any, &TagFilter::default())?,
                 sort.sort(),
             )?;
-            let tagged = TagFilter { ids: vec![AnyId(Some(1))], tag_match: TagMatch::Any };
+            let tagged = TagFilter { any: vec![AnyId(Some(1))], ..TagFilter::default() };
             let walked = source(conn, 1, None, ArtistCredit::Any, &tagged)?;
             assert!(matches!(walked.total, page::Total::Stored(10_000)));
             page::assert_indexed(conn, &walked, sort.sort())?;
@@ -222,21 +222,21 @@ async fn every_sort_reads_from_an_index() {
 async fn filters_by_the_tags_of_their_tracks() {
     let (_temp, _db, app) = catalog::app().await;
     for (query, expected) in [
-        ("tag=30", json!(["Abbey Road"])),
-        ("tag=31", json!([])),
-        ("tag=30,31", json!(["Abbey Road"])),
-        ("tag=30,31&tagMatch=all", json!([])),
-        ("tag=30,32", json!(["Abbey Road"])),
-        ("tag=30&artistId=10", json!(["Abbey Road"])),
+        ("tagAny=30", json!(["Abbey Road"])),
+        ("tagAny=31", json!([])),
+        ("tagAny=30,31", json!(["Abbey Road"])),
+        ("tagAll=30,31", json!([])),
+        ("tagAny=30,32", json!(["Abbey Road"])),
+        ("tagAny=30&artistId=10", json!(["Abbey Road"])),
         // Radiohead is featured on Abbey Road and owns Kid A, which carries no Rock.
-        ("tag=30&artistId=11", json!(["Abbey Road"])),
-        ("tag=30&artistId=11&artistCredit=owned", json!([])),
-        ("tag=nope", json!([])),
+        ("tagAny=30&artistId=11", json!(["Abbey Road"])),
+        ("tagAny=30&artistId=11&artistCredit=owned", json!([])),
+        ("tagAny=nope", json!([])),
     ] {
         let uri = format!("/api/v1/libraries/1/albums?{query}");
         assert_eq!(page_through(&app, &uri, 1, "title").await, expected, "{query}");
         let (_, page) = json(&app, &uri).await;
         assert_eq!(page["total"], expected.as_array().unwrap().len(), "{query}");
     }
-    assert_eq!(json(&app, "/api/v1/libraries/2/albums?tag=30").await.1["total"], 0);
+    assert_eq!(json(&app, "/api/v1/libraries/2/albums?tagAny=30").await.1["total"], 0);
 }

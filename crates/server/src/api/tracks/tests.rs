@@ -5,6 +5,7 @@ use super::super::testing::catalog::{self, page_through};
 use super::super::testing::{app, json};
 use super::*;
 use crate::api::page;
+use crate::api::tag_filter::MAX_TAGS;
 use crate::db::testing::{Album, Image, Track, library, scattered_key};
 
 #[tokio::test]
@@ -351,7 +352,7 @@ async fn every_sort_reads_from_an_index() {
         page::assert_indexed(conn, &one_album, &WITHIN_ALBUM)?;
         // Half the tracks carry tag 1, too many to lead, so a page walks each sort's index. The
         // other half carry one of 299 other genres, so the planner knows tags as a library has them.
-        let tagged = TagFilter { ids: vec![AnyId(Some(1))], tag_match: TagMatch::Any };
+        let tagged = TagFilter { any: vec![AnyId(Some(1))], ..TagFilter::default() };
         for sort in [TrackSort::Name, TrackSort::DateAdded, TrackSort::ReleaseDate] {
             let source = source(conn, 1, None, None, ArtistCredit::Any, &tagged)?;
             assert!(matches!(source.total, page::Total::Stored(10_000)));
@@ -392,8 +393,8 @@ async fn a_track_row_reads_its_album_once() {
 
 /// 300 tracks of library 1, `0001` to `0300` by name, each on album `1 + i % 10`, every fourth
 /// credited to artist 9. Genre Rock (30) is on every third, Jazz (31) every fifth, Blues (34)
-/// every seventh, mood Calm (32) every second, and mood Rare (33) on track 15 alone. Library 2 has a track of its own, which
-/// its Rock (50) is on.
+/// every seventh, mood Calm (32) every second, and moods Rare (33) and Rarer (35) on track 15
+/// alone. Library 2 has a track of its own, which its Rock (50) is on.
 async fn tagged_library() -> (tempfile::TempDir, std::sync::Arc<crate::db::Database>, axum::Router)
 {
     let (temp, db, app) = app("");
@@ -417,7 +418,7 @@ async fn tagged_library() -> (tempfile::TempDir, std::sync::Arc<crate::db::Datab
              INSERT INTO tags (id, library_id, type, name, name_key, sort_key) VALUES
                  (30, 1, 'genre', 'Rock', 'rock', x'72'), (31, 1, 'genre', 'Jazz', 'jazz', x'6a'),
                  (32, 1, 'mood', 'Calm', 'calm', x'63'), (33, 1, 'mood', 'Rare', 'rare', x'72'),
-                 (34, 1, 'genre', 'Blues', 'blues', x'62'),
+                 (34, 1, 'genre', 'Blues', 'blues', x'62'), (35, 1, 'mood', 'Rarer', 'rarer', x'72'),
                  (50, 2, 'genre', 'Rock', 'rock', x'72');
              INSERT INTO track_tags (library_id, track_id, tag_id, tag_name)
              SELECT 1, id, 30, 'Rock' FROM tracks WHERE library_id = 1 AND id % 3 = 0
@@ -425,6 +426,7 @@ async fn tagged_library() -> (tempfile::TempDir, std::sync::Arc<crate::db::Datab
              UNION ALL SELECT 1, id, 32, 'Calm' FROM tracks WHERE library_id = 1 AND id % 2 = 0
              UNION ALL SELECT 1, id, 34, 'Blues' FROM tracks WHERE library_id = 1 AND id % 7 = 0
              UNION ALL SELECT 1, 15, 33, 'Rare'
+             UNION ALL SELECT 1, 15, 35, 'Rarer'
              UNION ALL SELECT 2, 400, 50, 'Rock';",
         )
     })
@@ -437,27 +439,33 @@ async fn tagged_library() -> (tempfile::TempDir, std::sync::Arc<crate::db::Datab
 type Keep = fn(i64) -> bool;
 
 /// Each query's tracks are those of library 1 that its [`Keep`] keeps, in name order, whether a
-/// page starts from a tag (Rare, one track of 300) or walks the sort's index and checks each
-/// track (the rest), and however it is paged.
+/// page starts from tags (Rare, or Rare and Rarer, both on one track of 300) or walks the sort's
+/// index and checks each track (the rest), and however it is paged.
 #[tokio::test]
 async fn filters_by_tags_of_every_type() {
     let (_temp, _db, app) = tagged_library().await;
-    let cases: [(&str, Keep); 15] = [
-        ("tag=30", |i| i % 3 == 0),
-        ("tag=30,31", |i| i % 3 == 0 || i % 5 == 0),
-        ("tag=30,31&tagMatch=all", |i| i % 15 == 0),
-        ("tag=30,32", |i| i % 6 == 0),
-        ("tag=31,30,32", |i| (i % 3 == 0 || i % 5 == 0) && i % 2 == 0),
-        ("tag=33", |i| i == 15),
-        ("tag=33,30,31&tagMatch=all", |i| i == 15),
-        ("tag=33,32", |i| i == 15 || i % 2 == 0),
-        ("tag=33,32&tagMatch=all", |_| false),
-        ("tag=33,31", |i| i == 15),
-        ("tag=33,34", |_| false),
-        ("tag=30&albumId=4", |i| i % 3 == 0 && i % 10 == 3),
-        ("tag=30&artistId=9", |i| i % 12 == 0),
-        ("tag=30,50", |_| false),
-        ("tag=30,nope", |_| false),
+    let cases: [(&str, Keep); 19] = [
+        ("tagAny=30", |i| i % 3 == 0),
+        ("tagAny=30,31", |i| i % 3 == 0 || i % 5 == 0),
+        ("tagAll=30,31", |i| i % 15 == 0),
+        ("tagAny=30,32", |i| i % 6 == 0),
+        ("tagAny=31,30,32", |i| (i % 3 == 0 || i % 5 == 0) && i % 2 == 0),
+        ("tagAny=33", |i| i == 15),
+        ("tagAll=33,30,31", |i| i == 15),
+        ("tagAny=33,32", |i| i == 15 || i % 2 == 0),
+        ("tagAll=33,32", |_| false),
+        ("tagAny=33,31", |i| i == 15),
+        ("tagAny=33,34", |_| false),
+        // A track carrying both tags it starts from is listed once.
+        ("tagAny=33,35", |i| i == 15),
+        // Rock, and Jazz or Blues: all and any of one type.
+        ("tagAll=30&tagAny=31,34", |i| i % 3 == 0 && (i % 5 == 0 || i % 7 == 0)),
+        ("tagAll=30&tagAny=31,32", |i| i % 30 == 0),
+        ("tagAll=30&tagAny=30,31", |i| i % 3 == 0),
+        ("tagAny=30&albumId=4", |i| i % 3 == 0 && i % 10 == 3),
+        ("tagAny=30&artistId=9", |i| i % 12 == 0),
+        ("tagAny=30,50", |_| false),
+        ("tagAny=30,nope", |_| false),
     ];
     for (query, keep) in cases {
         let expected: Vec<Value> =
@@ -478,9 +486,12 @@ async fn filters_by_tags_of_every_type() {
         let (_, page) = json(&app, &base).await;
         assert_eq!(page["total"], expected.len(), "{query}");
     }
-    let (_, other) = json(&app, "/api/v1/libraries/2/tracks?tag=50").await;
+    let (_, other) = json(&app, "/api/v1/libraries/2/tracks?tagAny=50").await;
     assert_eq!(other["items"][0]["id"], "400");
-    assert_eq!(json(&app, "/api/v1/libraries/2/tracks?tag=30").await.1["total"], 0);
-    let (status, _) = json(&app, "/api/v1/libraries/1/tracks?tag=30&tagMatch=most").await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(json(&app, "/api/v1/libraries/2/tracks?tagAny=30").await.1["total"], 0);
+    let too_many = vec!["30"; MAX_TAGS + 1].join(",");
+    for query in ["tag=30", &format!("tagAny={too_many}"), "tagAll=30&tagAny=30,31&tagMatch=all"] {
+        let (status, _) = json(&app, &format!("/api/v1/libraries/1/tracks?{query}")).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{query}");
+    }
 }

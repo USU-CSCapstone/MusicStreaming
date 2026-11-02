@@ -62,42 +62,44 @@ const tracks = (query: Record<string, string>) =>
 	catalog.listTracks(1n, new URLSearchParams(query)).items.map((t) => t.id);
 
 describe('the tag filter', () => {
-	it('matches any of one type, and every type named', () => {
-		expect(tracks({ tag: '30,31' })).toEqual(['11', '12', '13']);
-		expect(tracks({ tag: '30,31,32' })).toEqual(['11', '13']);
-		expect(tracks({ tag: '32' })).toEqual(['11', '13']);
+	it('matches any of each type named in tagAny, and every type named', () => {
+		expect(tracks({ tagAny: '30,31' })).toEqual(['11', '12', '13']);
+		expect(tracks({ tagAny: '30,31,32' })).toEqual(['11', '13']);
+		expect(tracks({ tagAny: '32' })).toEqual(['11', '13']);
 	});
 
-	it('matches all of one type with tagMatch=all', () => {
-		expect(tracks({ tag: '30,31', tagMatch: 'all' })).toEqual(['12']);
+	it('matches every tag named in tagAll, alongside tagAny', () => {
+		expect(tracks({ tagAll: '30,31' })).toEqual(['12']);
+		expect(tracks({ tagAll: '32', tagAny: '30,31' })).toEqual(['11', '13']);
+		expect(tracks({ tagAll: '31', tagAny: '30,31' })).toEqual(['12', '13']);
 	});
 
 	it('matches nothing for a tag the library does not have', () => {
-		expect(tracks({ tag: '30,50' })).toEqual([]);
-		expect(tracks({ tag: 'nope' })).toEqual([]);
+		expect(tracks({ tagAny: '30,50' })).toEqual([]);
+		expect(tracks({ tagAll: 'nope' })).toEqual([]);
 	});
 
 	it('narrows a search, counting only what carries the tags', () => {
-		const calm = new URLSearchParams({ tag: '32' });
+		const calm = new URLSearchParams({ tagAny: '32' });
 		const found = catalog.searchTracks(1n, 'track', 10, calm);
 		expect([found.items.map((t) => t.id), found.total]).toEqual([['11', '13'], 2]);
-		expect(catalog.searchAlbums(1n, 'signal', 10, new URLSearchParams({ tag: '50' })).total).toBe(
-			0
-		);
+		expect(
+			catalog.searchAlbums(1n, 'signal', 10, new URLSearchParams({ tagAny: '50' })).total
+		).toBe(0);
 	});
 
 	it('narrows albums and artists by their tracks', () => {
-		const q = new URLSearchParams({ tag: '31,30', tagMatch: 'all' });
+		const q = new URLSearchParams({ tagAll: '31,30' });
 		expect(catalog.listAlbums(1n, q).items.map((a) => a.id)).toEqual(['101']);
 		expect(catalog.listArtists(1n, q).items.map((a) => a.id)).toEqual(['301']);
-		const other = new URLSearchParams({ tag: '50' });
+		const other = new URLSearchParams({ tagAny: '50' });
 		expect(catalog.listAlbums(1n, other).items).toEqual([]);
 	});
 });
 
 describe('tags', () => {
 	it('come by type on summaries', () => {
-		const [first] = catalog.listTracks(1n, new URLSearchParams({ tag: '32' })).items;
+		const [first] = catalog.listTracks(1n, new URLSearchParams({ tagAny: '32' })).items;
 		expect(first.tags).toEqual({
 			genre: [{ id: '30', name: 'Rock' }],
 			mood: [{ id: '32', name: 'Calm' }]
@@ -114,6 +116,13 @@ describe('tags', () => {
 		expect(genres.items.map((t) => [t.name, t.trackCount, t.albumCount])).toEqual([
 			['Jazz', 2, 1],
 			['Rock', 2, 1]
+		]);
+		const named = (q: string) =>
+			catalog.listTags(1n, new URLSearchParams({ q })).items.map((t) => t.name);
+		expect([named('A'), named('ck'), named(' ')]).toEqual([
+			['Calm', 'Jazz'],
+			['Rock'],
+			['Calm', 'Jazz', 'Rock']
 		]);
 		expect(catalog.tag(1n, 50n)).toBeNull();
 	});

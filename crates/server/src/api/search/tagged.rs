@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use jewelcase_core::{Kind, Recover};
 use rusqlite::Connection;
 
-use crate::api::tag_filter::{TagFilter, TagMatch, Tagged, Tags};
-use crate::api::{albums, artists, tracks};
+use crate::api::tag_filter::{TagFilter, Tagged, Tags};
+use crate::api::{AnyId, albums, artists, tracks};
 use crate::db::{Database, DbError};
 
 /// How many filters' rows are kept, the least recently used going first. One genre of a large
@@ -20,13 +20,13 @@ const KEPT: usize = 4;
 /// for a kind it does not search.
 pub type Sets = Arc<[HashSet<i64>; 3]>;
 
-/// What kept rows are found by: the library, the tags as the filter names them, sorted and each
-/// once, how they match, and the kinds searched, sorted.
+/// What kept rows are found by: the library, the tags as the filter's `tagAll` and `tagAny` name
+/// them, each sorted and each tag once, and the kinds searched, sorted.
 #[derive(Clone, PartialEq, Eq)]
 struct Key {
     library: i64,
-    ids: Vec<Option<i64>>,
-    tag_match: TagMatch,
+    all: Vec<Option<i64>>,
+    any: Vec<Option<i64>>,
     kinds: Vec<Kind>,
 }
 
@@ -49,16 +49,19 @@ impl TaggedSets {
         filter: &TagFilter,
         kinds: &[Kind],
     ) -> Result<Option<Sets>, DbError> {
-        if filter.ids.is_empty() {
+        if filter.is_empty() {
             return Ok(None);
         }
-        let mut ids: Vec<Option<i64>> = filter.ids.iter().map(|id| id.0).collect();
-        ids.sort_unstable();
-        ids.dedup();
+        let ids = |ids: &[AnyId]| {
+            let mut ids: Vec<Option<i64>> = ids.iter().map(|id| id.0).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        };
         let mut kinds = kinds.to_vec();
         kinds.sort_unstable();
         kinds.dedup();
-        let key = Key { library, ids, tag_match: filter.tag_match, kinds };
+        let key = Key { library, all: ids(&filter.all), any: ids(&filter.any), kinds };
         let (kept, filter) = (self.kept.clone(), filter.clone());
         let sets = db
             .read(move |conn| {
@@ -119,12 +122,15 @@ fn read(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::AnyId;
     use crate::api::testing::catalog;
     use crate::db::feed::{self, Entity, Op};
 
-    fn filter(ids: &[i64]) -> TagFilter {
-        TagFilter { ids: ids.iter().map(|&id| AnyId(Some(id))).collect(), tag_match: TagMatch::Any }
+    fn ids(ids: &[i64]) -> Vec<AnyId> {
+        ids.iter().map(|&id| AnyId(Some(id))).collect()
+    }
+
+    fn filter(any: &[i64]) -> TagFilter {
+        TagFilter { any: ids(any), ..TagFilter::default() }
     }
 
     #[tokio::test]
@@ -140,6 +146,14 @@ mod tests {
         assert!(!Arc::ptr_eq(&first, &all), "more kinds are read again");
         assert_eq!(all[1], HashSet::from([101]));
         let rock = sets.get(&db, 1, &filter(&[30]), &tracks).await.unwrap().unwrap();
+
+        // Rock or Pop is track 1001, and Rock and Pop no track, so the same tags as `tagAll` are
+        // another filter.
+        let any = sets.get(&db, 1, &filter(&[30, 31]), &tracks).await.unwrap().unwrap();
+        let both = TagFilter { all: ids(&[30, 31]), ..TagFilter::default() };
+        let all = sets.get(&db, 1, &both, &tracks).await.unwrap().unwrap();
+        assert!(!Arc::ptr_eq(&any, &all), "tags all named are kept apart from any named");
+        assert_eq!((&any[0], &all[0]), (&HashSet::from([1001]), &HashSet::new()));
 
         // Track 1002 becomes Rock, which the feed records.
         db.write(|tx| {

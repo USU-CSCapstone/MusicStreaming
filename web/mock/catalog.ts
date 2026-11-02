@@ -133,9 +133,9 @@ export class Catalog {
 	}
 
 	/**
-	 * Adds the `tag` filter to `where` as conditions on `column`, the ID of an `owner`: the tags of
-	 * each type matched by `tagMatch`, and every type's together. An ID naming no tag in the library
-	 * matches nothing.
+	 * Adds the `tagAll` and `tagAny` filters to `where` as conditions on `column`, the ID of an
+	 * `owner`: every tag `tagAll` names, and one of `tagAny`'s of each type. An ID naming no tag in
+	 * the library matches nothing.
 	 */
 	#tagFilter(
 		lib: bigint,
@@ -145,26 +145,29 @@ export class Catalog {
 		where: string[],
 		params: SQLInputValue[]
 	) {
-		const byType = new Map<string, bigint[]>();
-		for (const raw of q.get('tag')?.split(',').filter(Boolean) ?? []) {
-			const key = toKey(raw);
-			const row =
-				key === null
-					? undefined
-					: this.db.get('SELECT type FROM tags WHERE library_id = ? AND id = ?', lib, key);
-			if (key === null || !row) {
-				where.push('0');
-				return;
-			}
-			byType.set(String(row.type), [...(byType.get(String(row.type)) ?? []), key]);
-		}
 		const carrying = `${column} IN (SELECT ${owner}_id FROM ${owner}_tags WHERE tag_id`;
-		for (const keys of byType.values()) {
-			if (q.get('tagMatch') === 'all') {
-				where.push(...keys.map(() => `${carrying} = ?)`));
-			} else {
-				where.push(`${carrying} IN (${keys.map(() => '?').join(', ')}))`);
+		const anyByType = new Map<string, bigint[]>();
+		for (const list of ['tagAll', 'tagAny']) {
+			for (const raw of q.get(list)?.split(',').filter(Boolean) ?? []) {
+				const key = toKey(raw);
+				const row =
+					key === null
+						? undefined
+						: this.db.get('SELECT type FROM tags WHERE library_id = ? AND id = ?', lib, key);
+				if (key === null || !row) {
+					where.push('0');
+					return;
+				}
+				if (list === 'tagAll') {
+					where.push(`${carrying} = ?)`);
+					params.push(key);
+				} else {
+					anyByType.set(String(row.type), [...(anyByType.get(String(row.type)) ?? []), key]);
+				}
 			}
+		}
+		for (const keys of anyByType.values()) {
+			where.push(`${carrying} IN (${keys.map(() => '?').join(', ')}))`);
 			params.push(...keys);
 		}
 	}
@@ -197,6 +200,11 @@ export class Catalog {
 		if (type) {
 			where.push('type = ?');
 			params.push(type);
+		}
+		const name = q.get('q')?.trim();
+		if (name) {
+			where.push("name LIKE ? ESCAPE '\\'");
+			params.push(likeAnywhere(name));
 		}
 		const sorts: Record<string, string[]> = {
 			name: ['sort_key', 'id'],

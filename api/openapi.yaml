@@ -443,8 +443,8 @@ paths:
           schema: { type: string }
         - $ref: '#/components/parameters/ArtistFilter'
         - $ref: '#/components/parameters/ArtistCredit'
-        - $ref: '#/components/parameters/Tag'
-        - $ref: '#/components/parameters/TagMatch'
+        - $ref: '#/components/parameters/TagAll'
+        - $ref: '#/components/parameters/TagAny'
         - $ref: '#/components/parameters/YearFrom'
         - $ref: '#/components/parameters/YearTo'
         - $ref: '#/components/parameters/Availability'
@@ -511,8 +511,8 @@ paths:
           schema:
             type: array
             items: { $ref: '#/components/schemas/AlbumType' }
-        - $ref: '#/components/parameters/Tag'
-        - $ref: '#/components/parameters/TagMatch'
+        - $ref: '#/components/parameters/TagAll'
+        - $ref: '#/components/parameters/TagAny'
         - $ref: '#/components/parameters/YearFrom'
         - $ref: '#/components/parameters/YearTo'
         - $ref: '#/components/parameters/Availability'
@@ -567,8 +567,8 @@ paths:
             enum: [name, dateAdded, playCount, lastPlayed]
             default: name
         - $ref: '#/components/parameters/Order'
-        - $ref: '#/components/parameters/Tag'
-        - $ref: '#/components/parameters/TagMatch'
+        - $ref: '#/components/parameters/TagAll'
+        - $ref: '#/components/parameters/TagAny'
         - $ref: '#/components/parameters/Availability'
         - $ref: '#/components/parameters/Played'
         - $ref: '#/components/parameters/LastPlayedBefore'
@@ -637,6 +637,13 @@ paths:
           in: query
           description: Only tags of this type (`listTagTypes`).
           schema: { type: string }
+        - name: q
+          in: query
+          description: |
+            Only tags whose names hold this text, whatever its case and accents, so a picker
+            narrows a type of many tags without reading them all. Text that is only spaces
+            filters nothing.
+          schema: { type: string }
         - name: sort
           in: query
           schema:
@@ -662,7 +669,7 @@ paths:
       tags: [Browse]
       summary: Get a tag
       description: |
-        A tag's tracks, albums, and artists are browsed with the `tag` filter on the browse
+        A tag's tracks, albums, and artists are browsed with the `tagAll` filter on the browse
         endpoints (`requirements/tags.md` §7).
       operationId: getTag
       responses:
@@ -821,8 +828,8 @@ paths:
         - $ref: '#/components/parameters/Query'
         - $ref: '#/components/parameters/SearchTypes'
         - $ref: '#/components/parameters/Within'
-        - $ref: '#/components/parameters/Tag'
-        - $ref: '#/components/parameters/TagMatch'
+        - $ref: '#/components/parameters/TagAll'
+        - $ref: '#/components/parameters/TagAny'
         - $ref: '#/components/parameters/YearFrom'
         - $ref: '#/components/parameters/YearTo'
         - $ref: '#/components/parameters/Played'
@@ -1535,28 +1542,32 @@ components:
         type: string
         enum: [asc, desc]
         default: asc
-    Tag:
-      name: tag
+    TagAll:
+      name: tagAll
       in: query
       description: |
-        Tag IDs, of any types. An item must match the tags of every type named, since types are
-        independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
-        or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
-        does not have matches nothing, as `artistId` does.
+        Tag IDs, of any types, every one of which an item must carry. With `tagAny`, genre Rock
+        in `tagAll` and Jazz and Blues in `tagAny` is Rock and (Jazz or Blues). A filter naming
+        a tag the library does not have matches nothing, as `artistId` does. `tagAll` and
+        `tagAny` name at most 100 tags together.
       style: form
       explode: false
       schema:
         type: array
         items: { type: string }
-    TagMatch:
-      name: tagMatch
+    TagAny:
+      name: tagAny
       in: query
       description: |
-        Whether an item must carry all or any of the given tags of each type.
+        Tag IDs, of any types, of which an item must carry one of each type named, since types
+        are independent (`requirements/tags.md` §2): genre Rock and Jazz with mood Calm is
+        (Rock or Jazz) and Calm. A filter naming a tag the library does not have matches
+        nothing, as `artistId` does.
+      style: form
+      explode: false
       schema:
-        type: string
-        enum: [all, any]
-        default: any
+        type: array
+        items: { type: string }
     TagId:
       name: tagId
       in: path
@@ -2729,12 +2740,12 @@ components:
       type: object
       description: The browse filters, as a value (`requirements/tags.md` §7).
       properties:
-        tags:
+        tagAll:
           type: array
           items: { type: string }
-        tagMatch:
-          type: string
-          enum: [all, any]
+        tagAny:
+          type: array
+          items: { type: string }
         yearFrom: { type: integer }
         yearTo: { type: integer }
         albumTypes:

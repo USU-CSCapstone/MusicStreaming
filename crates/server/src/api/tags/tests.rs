@@ -70,6 +70,33 @@ async fn pages_through_tags_of_one_type_or_every_type() {
     );
 }
 
+/// A query keeps the tags whose names hold it, whatever its case and accents, of the library alone,
+/// paged and counted as the whole list is.
+#[tokio::test]
+async fn lists_the_tags_whose_names_hold_a_query() {
+    let (_temp, db, app) = catalog::app().await;
+    other_library_genre(&db).await;
+    let base = "/api/v1/libraries/1/tags";
+    for limit in [1, 100] {
+        let names = page_through(&app, &format!("{base}?q=O"), limit, "name").await;
+        assert_eq!(names, json!(["Pop", "Rock"]), "limit {limit}");
+    }
+    assert_eq!(json(&app, &format!("{base}?q=O")).await.1["total"], 2);
+    let cases = [
+        ("q=%C3%93C", json!(["Rock"])),
+        ("q=LM&type=mood", json!(["Calm"])),
+        ("q=lm&type=genre", json!([])),
+        ("q=%20&sort=trackCount", json!(["Pop", "Rock", "Calm"])),
+    ];
+    for (query, names) in cases {
+        assert_eq!(
+            page_through(&app, &format!("{base}?{query}"), 100, "name").await,
+            names,
+            "{query}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn gets_a_tag_of_the_library_and_no_other() {
     let (_temp, db, app) = catalog::app().await;
@@ -120,8 +147,13 @@ async fn a_list_of_one_type_reads_from_an_index() {
     .await
     .unwrap();
     db.read(|conn| {
-        for sort in [TagSort::Name, TagSort::TrackCount] {
-            page::assert_indexed(conn, &source(1, Some("genre".to_owned())), sort.sort())?;
+        // Tags whose names hold a query too, which `a` is in the generated keys of many.
+        for (sort, q) in [TagSort::Name, TagSort::TrackCount]
+            .into_iter()
+            .flat_map(|sort| [(sort, None), (sort, Some("a"))])
+        {
+            let source = source(1, Some("genre".to_owned()), q);
+            page::assert_indexed(conn, &source, sort.sort())?;
         }
         Ok(())
     })

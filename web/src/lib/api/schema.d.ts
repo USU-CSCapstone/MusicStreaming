@@ -470,7 +470,7 @@ export interface paths {
         };
         /**
          * Get a tag
-         * @description A tag's tracks, albums, and artists are browsed with the `tag` filter on the browse
+         * @description A tag's tracks, albums, and artists are browsed with the `tagAll` filter on the browse
          *     endpoints (`requirements/tags.md` §7).
          */
         get: operations["getTag"];
@@ -1743,9 +1743,8 @@ export interface components {
         };
         /** @description The browse filters, as a value (`requirements/tags.md` §7). */
         BrowseFilter: {
-            tags?: string[];
-            /** @enum {string} */
-            tagMatch?: "all" | "any";
+            tagAll?: string[];
+            tagAny?: string[];
             yearFrom?: number;
             yearTo?: number;
             albumTypes?: components["schemas"]["AlbumType"][];
@@ -2291,14 +2290,19 @@ export interface components {
         ArtistCredit: "any" | "owned" | "featured";
         Order: "asc" | "desc";
         /**
-         * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
-         *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
-         *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
-         *     does not have matches nothing, as `artistId` does.
+         * @description Tag IDs, of any types, every one of which an item must carry. With `tagAny`, genre Rock
+         *     in `tagAll` and Jazz and Blues in `tagAny` is Rock and (Jazz or Blues). A filter naming
+         *     a tag the library does not have matches nothing, as `artistId` does. `tagAll` and
+         *     `tagAny` name at most 100 tags together.
          */
-        Tag: string[];
-        /** @description Whether an item must carry all or any of the given tags of each type. */
-        TagMatch: "all" | "any";
+        TagAll: string[];
+        /**
+         * @description Tag IDs, of any types, of which an item must carry one of each type named, since types
+         *     are independent (`requirements/tags.md` §2): genre Rock and Jazz with mood Calm is
+         *     (Rock or Jazz) and Calm. A filter naming a tag the library does not have matches
+         *     nothing, as `artistId` does.
+         */
+        TagAny: string[];
         TagId: string;
         /** @description Planned. */
         YearFrom: number;
@@ -2733,14 +2737,19 @@ export interface operations {
                  */
                 artistCredit?: components["parameters"]["ArtistCredit"];
                 /**
-                 * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
-                 *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
-                 *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
-                 *     does not have matches nothing, as `artistId` does.
+                 * @description Tag IDs, of any types, every one of which an item must carry. With `tagAny`, genre Rock
+                 *     in `tagAll` and Jazz and Blues in `tagAny` is Rock and (Jazz or Blues). A filter naming
+                 *     a tag the library does not have matches nothing, as `artistId` does. `tagAll` and
+                 *     `tagAny` name at most 100 tags together.
                  */
-                tag?: components["parameters"]["Tag"];
-                /** @description Whether an item must carry all or any of the given tags of each type. */
-                tagMatch?: components["parameters"]["TagMatch"];
+                tagAll?: components["parameters"]["TagAll"];
+                /**
+                 * @description Tag IDs, of any types, of which an item must carry one of each type named, since types
+                 *     are independent (`requirements/tags.md` §2): genre Rock and Jazz with mood Calm is
+                 *     (Rock or Jazz) and Calm. A filter naming a tag the library does not have matches
+                 *     nothing, as `artistId` does.
+                 */
+                tagAny?: components["parameters"]["TagAny"];
                 /** @description Planned. */
                 yearFrom?: components["parameters"]["YearFrom"];
                 /** @description Planned. */
@@ -2818,14 +2827,19 @@ export interface operations {
                 /** @description Filter by album type (`requirements/albums.md` §6). Planned. */
                 type?: components["schemas"]["AlbumType"][];
                 /**
-                 * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
-                 *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
-                 *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
-                 *     does not have matches nothing, as `artistId` does.
+                 * @description Tag IDs, of any types, every one of which an item must carry. With `tagAny`, genre Rock
+                 *     in `tagAll` and Jazz and Blues in `tagAny` is Rock and (Jazz or Blues). A filter naming
+                 *     a tag the library does not have matches nothing, as `artistId` does. `tagAll` and
+                 *     `tagAny` name at most 100 tags together.
                  */
-                tag?: components["parameters"]["Tag"];
-                /** @description Whether an item must carry all or any of the given tags of each type. */
-                tagMatch?: components["parameters"]["TagMatch"];
+                tagAll?: components["parameters"]["TagAll"];
+                /**
+                 * @description Tag IDs, of any types, of which an item must carry one of each type named, since types
+                 *     are independent (`requirements/tags.md` §2): genre Rock and Jazz with mood Calm is
+                 *     (Rock or Jazz) and Calm. A filter naming a tag the library does not have matches
+                 *     nothing, as `artistId` does.
+                 */
+                tagAny?: components["parameters"]["TagAny"];
                 /** @description Planned. */
                 yearFrom?: components["parameters"]["YearFrom"];
                 /** @description Planned. */
@@ -2894,14 +2908,19 @@ export interface operations {
                 sort?: "name" | "dateAdded" | "playCount" | "lastPlayed";
                 order?: components["parameters"]["Order"];
                 /**
-                 * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
-                 *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
-                 *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
-                 *     does not have matches nothing, as `artistId` does.
+                 * @description Tag IDs, of any types, every one of which an item must carry. With `tagAny`, genre Rock
+                 *     in `tagAll` and Jazz and Blues in `tagAny` is Rock and (Jazz or Blues). A filter naming
+                 *     a tag the library does not have matches nothing, as `artistId` does. `tagAll` and
+                 *     `tagAny` name at most 100 tags together.
                  */
-                tag?: components["parameters"]["Tag"];
-                /** @description Whether an item must carry all or any of the given tags of each type. */
-                tagMatch?: components["parameters"]["TagMatch"];
+                tagAll?: components["parameters"]["TagAll"];
+                /**
+                 * @description Tag IDs, of any types, of which an item must carry one of each type named, since types
+                 *     are independent (`requirements/tags.md` §2): genre Rock and Jazz with mood Calm is
+                 *     (Rock or Jazz) and Calm. A filter naming a tag the library does not have matches
+                 *     nothing, as `artistId` does.
+                 */
+                tagAny?: components["parameters"]["TagAny"];
                 /** @description Server availability (`requirements/conventions.md` §6). Playability on a device is the client's to filter. Planned. */
                 availability?: components["parameters"]["Availability"];
                 /** @description Filter by whether the caller has ever played the item. Planned. */
@@ -2987,6 +3006,12 @@ export interface operations {
             query?: {
                 /** @description Only tags of this type (`listTagTypes`). */
                 type?: string;
+                /**
+                 * @description Only tags whose names hold this text, whatever its case and accents, so a picker
+                 *     narrows a type of many tags without reading them all. Text that is only spaces
+                 *     filters nothing.
+                 */
+                q?: string;
                 sort?: "name" | "trackCount";
                 order?: components["parameters"]["Order"];
                 cursor?: components["parameters"]["Cursor"];
@@ -3238,14 +3263,19 @@ export interface operations {
                 /** @description Narrow to a container, as `artist:ID`, `album:ID`, or `playlist:ID` (`requirements/search.md` §5). Planned. */
                 within?: components["parameters"]["Within"];
                 /**
-                 * @description Tag IDs, of any types. An item must match the tags of every type named, since types are
-                 *     independent (`requirements/tags.md` §2): those of one type by `tagMatch`, so genre Rock
-                 *     or Jazz with mood Calm is (Rock or Jazz) and Calm. A filter naming a tag the library
-                 *     does not have matches nothing, as `artistId` does.
+                 * @description Tag IDs, of any types, every one of which an item must carry. With `tagAny`, genre Rock
+                 *     in `tagAll` and Jazz and Blues in `tagAny` is Rock and (Jazz or Blues). A filter naming
+                 *     a tag the library does not have matches nothing, as `artistId` does. `tagAll` and
+                 *     `tagAny` name at most 100 tags together.
                  */
-                tag?: components["parameters"]["Tag"];
-                /** @description Whether an item must carry all or any of the given tags of each type. */
-                tagMatch?: components["parameters"]["TagMatch"];
+                tagAll?: components["parameters"]["TagAll"];
+                /**
+                 * @description Tag IDs, of any types, of which an item must carry one of each type named, since types
+                 *     are independent (`requirements/tags.md` §2): genre Rock and Jazz with mood Calm is
+                 *     (Rock or Jazz) and Calm. A filter naming a tag the library does not have matches
+                 *     nothing, as `artistId` does.
+                 */
+                tagAny?: components["parameters"]["TagAny"];
                 /** @description Planned. */
                 yearFrom?: components["parameters"]["YearFrom"];
                 /** @description Planned. */
