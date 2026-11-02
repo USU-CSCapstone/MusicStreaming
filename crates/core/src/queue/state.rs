@@ -1,5 +1,6 @@
 //! The queue's state and how a start builds it (`design/queue.md` §3, §5).
 
+use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -292,13 +293,12 @@ impl QueueState {
 
     /// The hashes of the lists the sources reference, each once, in source order.
     pub fn list_hashes(&self) -> Vec<&str> {
-        let mut hashes: Vec<&str> = Vec::new();
-        for hash in self.sources.iter().filter_map(|s| s.hash.as_deref()) {
-            if !hashes.contains(&hash) {
-                hashes.push(hash);
-            }
-        }
-        hashes
+        let mut seen = HashSet::new();
+        self.sources
+            .iter()
+            .filter_map(|s| s.hash.as_deref())
+            .filter(|&hash| seen.insert(hash))
+            .collect()
     }
 }
 
