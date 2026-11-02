@@ -1,8 +1,9 @@
 //! Resized artwork, made by ffmpeg once per size and kept in `cache/images`, in a folder for
 //! each library and named by the image's content hash. Two libraries holding the same artwork
 //! each keep their own copy, so how fast one answers says nothing of what the other has viewed
-//! (`requirements/general.md` §3.6). A playlist's mosaic of four images is kept in the library's
-//! folder `m`, named by their IDs, and the sweep keeps it while the library holds all four. An
+//! (`requirements/general.md` §3.6). A playlist's mosaic of four images is kept in the folder
+//! `m/<user>` of the library, named by their IDs, and the sweep keeps it only while that user has
+//! a playlist in the library whose artwork it is and the library holds all four. An
 //! image's ID changes whenever its content does, so a cached copy never goes stale. An image
 //! ffmpeg cannot decode leaves a `.failed` marker instead, so it is not tried again on every
 //! request until the next start, when [`Images::sweep`] deletes every marker along with what no
@@ -71,16 +72,18 @@ impl Images {
 
     /// The mosaic of `library`'s images `ids`, a 2×2 grid read from their files `sources` in the
     /// same order, `size` pixels square, composed first if it is not cached yet. It is kept under
-    /// the IDs, which change with the images' content, in the folder [`MOSAICS`]. `None`,
+    /// the IDs, which change with the images' content, in `user`'s folder within [`MOSAICS`], so a
+    /// hit says nothing of what another user holds. `None`,
     /// errors and failures are as for [`Images::resized`], for any one of the sources.
     pub async fn mosaic(
         &self,
         library: i64,
+        user: i64,
         ids: [i64; 4],
         size: u32,
         sources: [FileToDecode; 4],
     ) -> anyhow::Result<Option<PathBuf>> {
-        let dir = self.cache.join(library.to_string()).join(MOSAICS);
+        let dir = self.cache.join(library.to_string()).join(MOSAICS).join(user.to_string());
         let [a, b, c, d] = ids;
         let stem = format!("{a}-{b}-{c}-{d}-{size}");
         self.cached(dir, &stem, sources.into(), |real| self.ffmpeg.mosaic_command(real, size / 2))
@@ -134,9 +137,45 @@ impl Images {
         )
     }
 
+    /// Deletes `user`'s cached mosaics in `library` that none of their playlists there has as
+    /// its artwork, failure markers included, so a playlist whose artwork moves on does not leave
+    /// its mosaics behind until the next start. Best effort: a failure is logged and ignored,
+    /// since the sweep catches what this misses. Call it after the change that moved the artwork
+    /// has committed.
+    pub async fn prune_mosaics(&self, db: &Database, library: i64, user: i64) {
+        let dir = self.cache.join(library.to_string()).join(MOSAICS).join(user.to_string());
+        let artwork = db
+            .read(move |conn| {
+                conn.prepare_cached(
+                    "SELECT image_key FROM playlists \
+                     WHERE user_id = ?1 AND library_id = ?2 AND image_key GLOB 'm*'",
+                )?
+                .query_map([user, library], |row| row.get(0))?
+                .collect::<Result<HashSet<String>, _>>()
+            })
+            .await;
+        let pruned = match artwork {
+            Ok(artwork) => {
+                tokio::task::spawn_blocking(move || match sweep_user(&dir, &artwork, None) {
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                    other => other,
+                })
+                .await
+                .map_err(io::Error::other)
+                .and_then(|done| done)
+            }
+            Err(error) => Err(io::Error::other(error)),
+        };
+        if let Err(error) = pruned {
+            tracing::warn!(%error, library, user, "cannot prune superseded mosaics");
+        }
+    }
+
     /// Deletes from the cache everything but the copies of images `db` holds and the mosaics made
-    /// only of them: a library's copies of images it no longer holds, the folders of libraries that are gone, the files of renders
-    /// cut short, and every failure marker, so a failure that may pass, such as a file read as a
+    /// only of them that a playlist of the user they are kept for still has as its artwork: a
+    /// library's copies of images it no longer holds, mosaics no playlist names any more, the
+    /// folders of libraries that are gone, the files of renders cut short, and every failure
+    /// marker, so a failure that may pass, such as a file read as a
     /// tagger rewrote it, is tried again after a restart. Call it before the server takes
     /// requests, since it would delete the file of a render still being written.
     pub async fn sweep(&self, db: &Database) -> anyhow::Result<()> {
@@ -195,11 +234,13 @@ async fn keep(dir: PathBuf, path: PathBuf, jpeg: Vec<u8>) -> anyhow::Result<Path
     Ok(kept.await??)
 }
 
-/// What a library holds of its images: their content hashes, in hexadecimal, and their IDs.
+/// What a library holds of its images: their content hashes, in hexadecimal, and their IDs; and
+/// the artwork of each user's playlists, by user.
 #[derive(Default)]
 struct Held {
     hashes: HashSet<String>,
     ids: HashSet<i64>,
+    artwork: HashMap<i64, HashSet<String>>,
 }
 
 /// What every library holds of its images.
@@ -211,6 +252,16 @@ fn held(conn: &Connection) -> rusqlite::Result<HashMap<i64, Held>> {
         let library = held.entry(row.get(0)?).or_default();
         library.ids.insert(row.get(1)?);
         library.hashes.insert(hex(&row.get::<_, Vec<u8>>(2)?));
+    }
+    let mut select = conn.prepare(
+        "SELECT library_id, user_id, image_key FROM playlists WHERE image_key GLOB 'm*'",
+    )?;
+    let mut rows = select.query([])?;
+    while let Some(row) = rows.next()? {
+        // A playlist of a library with no images has no cached files to keep either way.
+        if let Some(library) = held.get_mut(&row.get::<_, i64>(0)?) {
+            library.artwork.entry(row.get(1)?).or_default().insert(row.get(2)?);
+        }
     }
     Ok(held)
 }
@@ -242,25 +293,61 @@ fn sweep_library(library: &Path, held: &Held) -> io::Result<()> {
             fs::remove_file(&shard)?;
             continue;
         }
-        let mosaics = shard.file_name().is_some_and(|name| name == MOSAICS);
+        if shard.file_name().is_some_and(|name| name == MOSAICS) {
+            sweep_mosaics(&shard, held)?;
+            continue;
+        }
         for file in fs::read_dir(&shard)? {
             let file = file?.path();
             let stem = file.file_name().and_then(|name| name.to_str()?.strip_suffix(".jpg"));
-            let keep = stem.is_some_and(|stem| {
-                if mosaics {
-                    // A mosaic is `{id}-{id}-{id}-{id}-{size}.jpg`.
-                    let mut parts = stem.split('-');
-                    let ids: Vec<_> = parts.by_ref().take(4).collect();
-                    ids.len() == 4
-                        && ids.iter().all(|id| id.parse().is_ok_and(|id| held.ids.contains(&id)))
-                } else {
-                    // A copy is `{hash}-{size}.jpg`.
-                    stem.split_once('-').is_some_and(|(hash, _)| held.hashes.contains(hash))
-                }
-            });
+            // A copy is `{hash}-{size}.jpg`.
+            let keep = stem
+                .and_then(|stem| stem.split_once('-'))
+                .is_some_and(|(hash, _)| held.hashes.contains(hash));
             if !keep {
                 remove(&file)?;
             }
+        }
+    }
+    Ok(())
+}
+
+/// Deletes everything in a library's mosaic folder, `dir`, but the mosaics `held` names as the
+/// artwork of a playlist of the user whose folder holds them, and whose four images it holds.
+fn sweep_mosaics(dir: &Path, held: &Held) -> io::Result<()> {
+    for user in fs::read_dir(dir)? {
+        let user = user?.path();
+        let artwork = user
+            .file_name()
+            .and_then(|name| name.to_str()?.parse::<i64>().ok())
+            .and_then(|id| held.artwork.get(&id));
+        let Some(artwork) = artwork.filter(|_| user.is_dir()) else {
+            remove(&user)?;
+            continue;
+        };
+        sweep_user(&user, artwork, Some(&held.ids))?;
+    }
+    Ok(())
+}
+
+/// Deletes everything in one user's mosaic folder, `dir`, but the mosaics whose four images
+/// are among `ids`, if given, and that `artwork` names as a playlist's.
+fn sweep_user(dir: &Path, artwork: &HashSet<String>, ids: Option<&HashSet<i64>>) -> io::Result<()> {
+    for file in fs::read_dir(dir)? {
+        let file = file?.path();
+        let stem = file.file_name().and_then(|name| name.to_str()?.strip_suffix(".jpg"));
+        // A mosaic is `{id}-{id}-{id}-{id}-{size}.jpg`; a playlist holds `m{a}-{b}-{c}-{d}`.
+        let keep = stem.is_some_and(|stem| {
+            let mut parts = stem.split('-');
+            let four: Vec<_> = parts.by_ref().take(4).collect();
+            four.len() == 4
+                && four
+                    .iter()
+                    .all(|id| id.parse().is_ok_and(|id| ids.is_none_or(|ids| ids.contains(&id))))
+                && artwork.contains(&format!("m{}", four.join("-")))
+        });
+        if !keep {
+            remove(&file)?;
         }
     }
     Ok(())

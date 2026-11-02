@@ -23,6 +23,7 @@ use super::artwork;
 use super::idempotency::{Answer, Key};
 use super::keys::assign;
 use super::representation::{self, header};
+use crate::api::Images;
 use crate::api::extract::{self, Path};
 use crate::api::playables::{self, Playable};
 use crate::api::scope::Scope;
@@ -95,10 +96,11 @@ struct Item {
 /// `editPlaylist`: applies the details and ops to the caller's playlist if it is at
 /// `baseVersion`, and returns it at the next version. Another version is `409 version_conflict`,
 /// a position out of range, or an item the caller cannot add, `422`, and nothing is applied
-/// either way. With an `Idempotency-Key` the caller already used for an edit that applied,
+/// either way. An edit that moves the artwork on deletes the old mosaics afterwards. With an `Idempotency-Key` the caller already used for an edit that applied,
 /// returns that answer and applies nothing.
 pub async fn edit(
     State(db): State<Arc<Database>>,
+    State(images): State<Arc<Images>>,
     Scope { user, library }: Scope,
     Path((_, Id(id))): Path<(Id, Id)>,
     Key(key): Key,
@@ -133,6 +135,7 @@ pub async fn edit(
             Err(answer) => return Ok(answer.into_response()),
         };
         let (key, title, description) = (key.clone(), title.clone(), description.clone());
+        let moves_items = plan.totals.is_some();
         let answer = db
             .try_write(move |tx| {
                 if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
@@ -182,6 +185,11 @@ pub async fn edit(
             })
             .await?;
         if let Some(answer) = answer {
+            if moves_items {
+                // The edit may have moved the artwork on; its old mosaics go, off the request.
+                let db = db.clone();
+                tokio::spawn(async move { images.prune_mosaics(&db, library, user).await });
+            }
             return Ok(answer.into_response());
         }
     }

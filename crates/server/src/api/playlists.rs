@@ -27,6 +27,7 @@ use rusqlite::params;
 use rusqlite::types::Value;
 use serde::Deserialize;
 
+pub use artwork::held as holds_artwork;
 pub use edit::edit;
 use idempotency::{Answer, Key};
 pub use items::{duplicates, list_items};
@@ -36,7 +37,7 @@ use super::extract::{self, Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Total, Unknown};
 use super::playables::{self, Playable};
 use super::scope::Scope;
-use super::{Id, Problem};
+use super::{Id, Images, Problem};
 use crate::db::{Database, new_id, now_ms};
 
 /// How far apart the keys of a playlist's items start, so an item put between two takes the
@@ -231,6 +232,7 @@ pub async fn get(
 /// theirs in this library.
 pub async fn delete(
     State(db): State<Arc<Database>>,
+    State(images): State<Arc<Images>>,
     Scope { user, library }: Scope,
     Path((_, Id(id))): Path<(Id, Id)>,
 ) -> Result<StatusCode, Problem> {
@@ -245,6 +247,8 @@ pub async fn delete(
     if deleted == 0 {
         return Err(Problem::not_found());
     }
+    // Its mosaics go too, off the request, unless another of the user's playlists shows them.
+    tokio::spawn(async move { images.prune_mosaics(&db, library, user).await });
     Ok(StatusCode::NO_CONTENT)
 }
 

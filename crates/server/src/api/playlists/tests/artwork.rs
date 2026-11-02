@@ -157,7 +157,7 @@ async fn a_mosaic_is_served_at_every_size_and_never_enlarged_past_its_covers() {
         let uri = format!("/api/v1/libraries/1/images/{id}?size={asked}");
         assert_eq!(dimensions(&app, &uri).await, (made, made), "{uri}");
     }
-    let mut cached: Vec<_> = std::fs::read_dir(temp.path().join("cache/1/m"))
+    let mut cached: Vec<_> = std::fs::read_dir(temp.path().join("cache/1/m/1"))
         .unwrap()
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect();
@@ -219,10 +219,18 @@ async fn the_sweep_keeps_mosaics_of_held_images_only() {
     created(&app, &[1, 2, 3, 4]).await;
     assert_eq!(dimensions(&app, "/api/v1/libraries/1/images/m1-2-3-4?size=64").await, (64, 64));
     let cache = temp.path().join("cache");
-    let kept = "1/m/1-2-3-4-64.jpg";
+    let kept = "1/m/1/1-2-3-4-64.jpg";
     assert!(cache.join(kept).exists());
-    let unheld =
-        ["1/m/1-2-3-9-64.jpg", "1/m/1-2-3-20-64.jpg", "1/m/1-2-3-4-64.failed", "1/m/stray"];
+    let unheld = [
+        "1/m/1/1-2-3-9-64.jpg",
+        "1/m/1/1-2-3-20-64.jpg",
+        "1/m/1/1-2-3-4-64.failed",
+        "1/m/1/stray",
+        // The same mosaic in the folder of a user with no playlist that holds it.
+        "1/m/2/1-2-3-4-64.jpg",
+        "1/m/stray",
+    ];
+    std::fs::create_dir(cache.join("1/m/2")).unwrap();
     for file in unheld {
         std::fs::write(cache.join(file), "").unwrap();
     }
@@ -240,6 +248,63 @@ async fn the_sweep_keeps_mosaics_of_held_images_only() {
     .unwrap();
     Images::new(cache.clone(), jewelcase_ffmpeg::Config::default()).sweep(&db).await.unwrap();
     assert!(!cache.join(kept).exists());
+}
+
+#[tokio::test]
+async fn the_sweep_removes_mosaics_that_no_playlist_holds_any_more() {
+    let (temp, db, app) = covers().await;
+    let playlist = created(&app, &[1, 2, 3, 4, 5, 6]).await;
+    let current = playlist["image"]["id"].as_str().unwrap().to_owned();
+    dimensions(&app, &format!("/api/v1/libraries/1/images/{current}?size=64")).await;
+    // Leftovers of artwork the playlist moved on from, of images the library still holds, as a
+    // crash before the pruning, or a version without it, leaves them.
+    let folder = temp.path().join("cache/1/m/1");
+    for old in ["2-3-4-5-64.jpg", "2-3-4-5-128.jpg", "6-1-2-3-64.jpg"] {
+        std::fs::write(folder.join(old), "").unwrap();
+    }
+    let cache = temp.path().join("cache");
+    Images::new(cache.clone(), jewelcase_ffmpeg::Config::default()).sweep(&db).await.unwrap();
+    let left: Vec<_> = std::fs::read_dir(&folder)
+        .unwrap()
+        .map(|file| file.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(left, [format!("{}-64.jpg", &current[1..])]);
+}
+
+#[tokio::test]
+async fn an_edit_or_delete_removes_the_mosaics_the_artwork_moved_on_from() {
+    let (temp, _db, app) = covers().await;
+    let mut playlist = created(&app, &[1, 2, 3, 4, 5, 6]).await;
+    let folder = temp.path().join("cache/1/m/1");
+    let names = || -> Vec<String> {
+        std::fs::read_dir(&folder)
+            .map(|dir| dir.map(|f| f.unwrap().file_name().into_string().unwrap()).collect())
+            .unwrap_or_default()
+    };
+    for _ in 0..4 {
+        let id = playlist["image"]["id"].as_str().unwrap().to_owned();
+        for size in [64, 128] {
+            dimensions(&app, &format!("/api/v1/libraries/1/images/{id}?size={size}")).await;
+        }
+        playlist =
+            edited(&app, &playlist, json!([{ "op": "move", "positions": [0], "at": 5 }])).await.0;
+    }
+    let current = playlist["image"]["id"].as_str().unwrap().to_owned();
+    dimensions(&app, &format!("/api/v1/libraries/1/images/{current}?size=64")).await;
+    // The pruning runs after the response, so wait for the last edit's to finish.
+    let wanted = [format!("{}-64.jpg", &current[1..])];
+    crate::api::testing::eventually("the old mosaics to go", async || {
+        (names() == wanted).then_some(())
+    })
+    .await;
+
+    // Deleting the playlist takes the rest.
+    let uri = format!("{URI}/{}", playlist["id"].as_str().unwrap());
+    assert_eq!(call(&app, TOKEN, "DELETE", &uri, None).await.0, StatusCode::NO_CONTENT);
+    crate::api::testing::eventually("the last mosaic to go", async || {
+        names().is_empty().then_some(())
+    })
+    .await;
 }
 
 #[tokio::test]
