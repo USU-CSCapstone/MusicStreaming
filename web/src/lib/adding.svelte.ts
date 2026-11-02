@@ -1,5 +1,6 @@
-// Adding to a playlist from anywhere (`requirements/playlists.md` §4): songs, or a whole album,
-// artist, or playlist. Any songs already in it are warned about first (§3).
+// What can be added to a playlist (`requirements/playlists.md` §4) or the queue
+// (`requirements/queue.md` §1) from anywhere: songs, or a whole album, artist, or playlist. Any
+// songs already in a playlist are warned about first (§3).
 
 import { goto } from '$app/navigation';
 import { resolve } from '$app/paths';
@@ -9,9 +10,11 @@ import {
 	checkPlaylistDuplicates,
 	editPlaylist,
 	getPlaylist,
+	listPlaylistItems,
 	listTracks
 } from './api/client';
-import type { Playable, Playlist, TrackSummary } from './api/types';
+import type { Playable, Playlist, QueueRecipe, TrackSummary } from './api/types';
+import type { Card } from './cards';
 import { plural } from './format';
 import type { EditablePlaylist } from './playlist.svelte';
 import { toast } from './toast.svelte';
@@ -29,8 +32,14 @@ export type Adding = {
 	label: string;
 	/** How many songs, so a warning can say how many are already there. */
 	count: number;
+	/** Empty for a view that is no entity, such as all the songs, which only queues. */
 	refs: Playable[];
 	tracks: () => Promise<TrackSummary[]>;
+	/**
+	 * How the server makes the list, when it can: queueing it sends this, so the device need not
+	 * fetch the songs, and the rows show once the server has resolved it.
+	 */
+	recipe?: QueueRecipe;
 };
 
 /**
@@ -52,15 +61,65 @@ export function songs(tracks: TrackSummary[]): Adding {
 	};
 }
 
-/** An album, artist, or playlist, named `title`, with `tracks` as the server expands it. */
+/**
+ * An album, artist, or playlist, named `title`, with `tracks` as the server expands it. Give
+ * its `recipe` if the server can resolve one for it, which a playlist has none.
+ */
 export function collection(
 	type: 'album' | 'artist' | 'playlist',
 	id: string,
 	title: string,
 	count: number,
-	tracks: () => Promise<TrackSummary[]>
+	tracks: () => Promise<TrackSummary[]>,
+	recipe?: QueueRecipe
 ): Adding {
-	return { label: `“${title}”`, count, refs: [{ type, id }], tracks };
+	return { label: `“${title}”`, count, refs: [{ type, id }], tracks, recipe };
+}
+
+/** The songs of a view that is no entity, such as the library or a search, as `recipe` resolves them: only queued. */
+export function view(label: string, count: number, recipe: QueueRecipe): Adding {
+	return { label, count, refs: [], tracks: async () => [], recipe };
+}
+
+/** An album's songs in `sort`, as the server resolves them. */
+export const albumRecipe = (albumId: string, sort = 'album.asc'): QueueRecipe => ({
+	type: 'album',
+	albumId,
+	sort
+});
+
+/** Every song an artist is credited on in `sort`, as the server resolves them. */
+export const artistRecipe = (artistId: string, sort = 'album.asc'): QueueRecipe => ({
+	type: 'artist',
+	artistId,
+	scope: 'all',
+	artistCredit: 'any',
+	sort
+});
+
+/**
+ * The album, artist, or playlist a card stands for. It holds no songs: an album's or artist's
+ * are read by the server when queued, or fetched when needed here, and a playlist's are
+ * fetched.
+ */
+export function cardAdding(fetch: Fetch, libraryId: string, card: Card): Adding {
+	const { type, id, title, count } = card;
+	if (type === 'artist') {
+		const recipe = artistRecipe(id);
+		return collection(type, id, title, count, artistTracks(fetch, libraryId, id), recipe);
+	}
+	if (type === 'album') {
+		const tracks = () =>
+			all((cursor) =>
+				listTracks(fetch, libraryId, { albumId: id, sort: 'album', limit: 1000, cursor })
+			);
+		return collection(type, id, title, count, tracks, albumRecipe(id));
+	}
+	const tracks = async () =>
+		(await all((cursor) => listPlaylistItems(fetch, libraryId, id, { cursor }))).flatMap((item) =>
+			item.track ? [item.track] : []
+		);
+	return collection(type, id, title, count, tracks);
 }
 
 /** Every song by an artist, in the order the server expands an artist: album, disc, track. */

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { queueOf, serveLibrary } from './fixtures';
+import { queueOf, serveLibrary, serveQueueEdits, signalMix } from './fixtures';
 
 test('plays an album from the queue', async ({ page }) => {
 	const { plays } = await serveLibrary(page);
@@ -187,4 +187,175 @@ test('re-queues a played track', async ({ page }) => {
 		.poll(() => upNext.locator('[data-item] .title').allInnerTexts())
 		.toEqual(['Signal Part 1', 'Signal Remix']);
 	await expect(player.getByText('Signal Part 2')).toBeVisible();
+});
+
+/** Plays the album from its page, with the realtime connection telling the page what the queue applies. */
+async function playAlbum(page: Page) {
+	await serveLibrary(page);
+	await serveQueueEdits(page);
+	await page.goto('/albums/31');
+	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
+	const player = page.getByRole('region', { name: 'Player' });
+	await expect(player.getByText('Signal Part 1')).toBeVisible();
+	const panel = page.getByRole('complementary', { name: 'Queue' });
+	/** The titles of the rows in Up Next, in order. */
+	const manual = () =>
+		panel.getByRole('list', { name: 'Up Next' }).locator('[data-item] .title').allInnerTexts();
+	return { player, panel, manual };
+}
+
+test('queues an album next', async ({ page }) => {
+	const queue = queueOf(page);
+	const { player, panel } = await playAlbum(page);
+
+	await page.locator('main').getByRole('button', { name: 'Actions for “Signal”' }).click();
+	await page.getByRole('menuitem', { name: 'Queue next' }).click();
+	await expect(page.getByRole('status').getByText('“Signal” queued next')).toBeVisible();
+	// The album's recipe goes, not its tracks, at the Manual Queue's front.
+	await expect
+		.poll(() => queue.edits.at(-1))
+		.toMatchObject({
+			type: 'add',
+			source: { libraryId: '11', recipe: { type: 'album', albumId: '31', sort: 'album.asc' } },
+			before: { type: 'manualStart' }
+		});
+	expect(queue.edits.at(-1)).not.toHaveProperty('source.tracks');
+
+	await player.getByRole('button', { name: 'Queue' }).click();
+	await expect(panel.getByRole('heading', { name: /Queued by you\s*3/ })).toBeVisible();
+	await expect
+		.poll(() =>
+			panel.getByRole('list', { name: 'Up Next' }).locator('[data-item] .title').allInnerTexts()
+		)
+		.toEqual(['Signal Part 1', 'Signal Part 2', 'Signal Remix', 'Signal Part 2', 'Signal Remix']);
+});
+
+test('queues a song last', async ({ page }) => {
+	const queue = queueOf(page);
+	const { player, panel, manual } = await playAlbum(page);
+
+	const row = page.locator('main').getByRole('button', { name: 'Actions for Signal Remix' });
+	await row.click();
+	await page.getByRole('menuitem', { name: 'Queue last' }).click();
+	await expect(page.getByRole('status').getByText('“Signal Remix” queued last')).toBeVisible();
+	await expect
+		.poll(() => queue.edits.at(-1))
+		.toMatchObject({
+			type: 'add',
+			source: { libraryId: '11', tracks: ['43'] },
+			before: { type: 'manualEnd' }
+		});
+	await player.getByRole('button', { name: 'Queue' }).click();
+	await expect(panel.getByRole('heading', { name: /Queued by you\s*1/ })).toBeVisible();
+	await expect.poll(manual).toEqual(['Signal Remix', 'Signal Part 2', 'Signal Remix']);
+});
+
+test('drops a song into Up Next where it lands', async ({ page }) => {
+	const queue = queueOf(page);
+	const { player, panel, manual } = await playAlbum(page);
+	await player.getByRole('button', { name: 'Queue' }).click();
+	await expect.poll(manual).toEqual(['Signal Part 2', 'Signal Remix']);
+
+	// Dragged from the album's row onto the gap above the context's last row.
+	const row = page.locator('main').locator('li.track', { hasText: 'Signal Part 1' }).first();
+	const last = panel.locator('[data-item]').last();
+	const box = (await last.boundingBox())!;
+	await row.dragTo(panel.getByRole('list', { name: 'Up Next' }), {
+		targetPosition: {
+			x: 80,
+			y: box.y - (await panel.getByRole('list', { name: 'Up Next' }).boundingBox())!.y + 2
+		}
+	});
+	await expect
+		.poll(() => queue.edits.at(-1))
+		.toMatchObject({
+			type: 'add',
+			source: { tracks: ['41'] },
+			before: { type: 'before', item: expect.stringMatching(/\.2$/) }
+		});
+	await expect.poll(manual).toEqual(['Signal Part 2', 'Signal Part 1', 'Signal Remix']);
+});
+
+test('adds to a chosen point of Up Next from the keyboard', async ({ page }) => {
+	const queue = queueOf(page);
+	const { panel, manual } = await playAlbum(page);
+	await page.locator('main').getByRole('button', { name: 'Actions for Signal Part 1' }).focus();
+	await page.keyboard.press('Enter');
+	await page.getByRole('menuitem', { name: 'Add to Up Next…' }).click();
+
+	// The panel opens to choose where: Escape would give it up.
+	const choose = panel.getByRole('group', { name: 'Choose where to add' });
+	await expect(choose).toBeVisible();
+	await expect(choose.getByRole('button', { name: 'Add to the end' })).toBeFocused();
+	await panel
+		.getByRole('button', { name: 'Add “Signal Part 1” before Signal Remix' })
+		.press('Enter');
+	await expect(choose).toBeHidden();
+	await expect
+		.poll(() => queue.edits.at(-1))
+		.toMatchObject({
+			type: 'add',
+			source: { tracks: ['41'] },
+			before: { type: 'before', item: expect.stringMatching(/\.2$/) }
+		});
+	await expect.poll(manual).toEqual(['Signal Part 2', 'Signal Part 1', 'Signal Remix']);
+	// Focus stays on the row it was added before.
+	await expect(panel.getByRole('button', { name: 'Signal Remix', exact: true })).toBeFocused();
+});
+
+test('queues a sorted playlist in the order shown', async ({ page }) => {
+	const queue = queueOf(page);
+	await serveLibrary(page, { playlists: [signalMix] });
+	await serveQueueEdits(page);
+	await page.goto(`/playlists/${signalMix.id}?sort=title&order=desc`);
+	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
+	await expect(
+		page.getByRole('region', { name: 'Player' }).getByText('Signal Remix')
+	).toBeVisible();
+	await page.locator('main').getByRole('button', { name: 'Actions for “Signal Mix”' }).click();
+	await page.getByRole('menuitem', { name: 'Queue last' }).click();
+	await expect
+		.poll(() => queue.edits.at(-1))
+		.toMatchObject({ type: 'add', source: { tracks: ['43', '42', '41'] } });
+});
+
+test('queues a tag-filtered view as the songs it shows, not a recipe', async ({ page }) => {
+	const queue = queueOf(page);
+	await serveLibrary(page);
+	await serveQueueEdits(page);
+	// The album filtered to Calm: Part 2 is left out.
+	await page.goto('/albums/31?tagAny=63');
+	await expect(page.locator('main .track .title')).toHaveText(['Signal Part 1', 'Signal Remix']);
+	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
+	await expect(
+		page.getByRole('region', { name: 'Player' }).getByText('Signal Part 1')
+	).toBeVisible();
+	await page.locator('main').getByRole('button', { name: 'Actions for “Signal”' }).click();
+	await page.getByRole('menuitem', { name: 'Queue last' }).click();
+	// A recipe can't name tags yet, so the add sends the songs shown.
+	await expect
+		.poll(() => queue.edits.at(-1))
+		.toMatchObject({ type: 'add', source: { tracks: ['41', '43'] } });
+	expect(queue.edits.at(-1)).not.toHaveProperty('source.recipe');
+
+	// All the songs filtered to Ambient, the same way.
+	await page.goto('/songs?tagAny=61');
+	await expect(page.locator('main .track .title')).toHaveText(['Signal Part 2', 'Signal Part 1']);
+	await page.locator('main').getByRole('button', { name: 'Actions for 2 songs' }).click();
+	await page.getByRole('menuitem', { name: 'Queue next' }).click();
+	await expect
+		.poll(() => queue.edits.at(-1))
+		.toMatchObject({ type: 'add', source: { tracks: ['42', '41'] } });
+	expect(queue.edits.at(-1)).not.toHaveProperty('source.recipe');
+});
+
+test('says to start something first when there is no queue to add to', async ({ page }) => {
+	await serveLibrary(page);
+	await page.goto('/albums/31');
+	await page.locator('main').getByRole('button', { name: 'Actions for “Signal”' }).click();
+	await page.getByRole('menuitem', { name: 'Queue last' }).click();
+	await expect(
+		page.getByRole('status').getByText('Start something playing first, then queue more.')
+	).toBeVisible();
+	expect(queueOf(page).edits).toEqual([]);
 });

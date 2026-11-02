@@ -55,6 +55,8 @@ queue.rows = async (section, offset, limit) => ({
 });
 
 const { default: QueueList, forgetShown } = await import('./QueueList.svelte');
+const { carried } = await import('$lib/dragging');
+const { placing } = await import('$lib/queueing.svelte');
 
 /** A track summary with the given ID and title. */
 const summary = (id: string, title: string) =>
@@ -459,6 +461,173 @@ describe('QueueList', () => {
 		fake.queue.queueId = null;
 		mount();
 		await expect.element(page.getByText('Play something to start a queue.')).toBeVisible();
+	});
+});
+
+describe('QueueList adding', () => {
+	/** What a mouse drags from a view: `tracks` of its own, unless it has a `recipe`. */
+	const album = {
+		label: '“Signal”',
+		count: 2,
+		refs: [],
+		tracks: async () => [summary('t8', 'Eight'), summary('t9', 'Nine')],
+		recipe: { type: 'album', albumId: '31', sort: 'album.asc' } as const
+	};
+	const two = { ...album, recipe: undefined };
+	let edits: SentEdit[];
+
+	beforeEach(() => {
+		edits = [];
+		// The worker answers a moment after the edit is sent, with the queue as it then is.
+		fake.queue.edit = (e) => {
+			edits.push(e);
+			setTimeout(() => fake.queue.revision++, 0);
+		};
+		// Up Next: one Manual row (rows 0 heading, 1 item), then the context's heading (2) and two rows.
+		setUpNext([known(0), known(1), known(2)], 1);
+		placing.what = null;
+		carried.what = null;
+	});
+
+	/** Drops what is carried on the line before row `gap` of Up Next. */
+	async function dropAt(gap: number, type = 'drop') {
+		const scroller = document.querySelector('.scroll')!;
+		const top = scroller.getBoundingClientRect().top;
+		const event = new DragEvent(type, {
+			bubbles: true,
+			cancelable: true,
+			clientY: top + gap * 56
+		});
+		scroller.dispatchEvent(event);
+		return event;
+	}
+
+	it('drop inserts at the anchor', async () => {
+		mount();
+		await expect.element(list().getByRole('button', { name: 'Song 2', exact: true })).toBeVisible();
+		carried.what = two;
+		carried.libraryId = '11';
+
+		// Before the context's last row: just ahead of that item.
+		await dropAt(4);
+		await expect
+			.poll(() => edits.at(-1))
+			.toMatchObject({
+				type: 'add',
+				source: { libraryId: '11', tracks: ['t8', 't9'] },
+				before: { type: 'before', item: 'k.2' }
+			});
+		expect(carried.what, 'let go of once dropped').toBeNull();
+
+		// Above the context's heading is the Manual Queue's end, and above all the rows its front.
+		carried.what = two;
+		await dropAt(2);
+		await expect.poll(() => edits.at(-1)).toMatchObject({ before: { type: 'manualEnd' } });
+		carried.what = two;
+		await dropAt(0);
+		await expect.poll(() => edits.at(-1)).toMatchObject({ before: { type: 'manualStart' } });
+		// Below the last row is the context's end.
+		carried.what = two;
+		await dropAt(5);
+		await expect.poll(() => edits.at(-1)).toMatchObject({ before: { type: 'contextEnd' } });
+	});
+
+	it('drops a collection by its recipe, and draws the line while it is over the list', async () => {
+		mount();
+		await expect.element(list().getByRole('button', { name: 'Song 2', exact: true })).toBeVisible();
+		carried.what = album;
+		carried.libraryId = '11';
+		const over = await dropAt(3, 'dragover');
+		expect(over.defaultPrevented, 'accepts the drag').toBe(true);
+		expect(document.querySelector('.drop')).not.toBeNull();
+		await dropAt(3);
+		await expect
+			.poll(() => edits.at(-1))
+			.toEqual({
+				type: 'add',
+				source: {
+					key: expect.any(String),
+					libraryId: '11',
+					recipe: { type: 'album', albumId: '31', sort: 'album.asc' }
+				},
+				before: { type: 'before', item: 'k.1' }
+			});
+		expect(document.querySelector('.drop')).toBeNull();
+	});
+
+	it('takes nothing dropped on History, or that is not carried from a view', async () => {
+		mount('history');
+		const dragover = await dropAt(1, 'dragover');
+		carried.what = two;
+		await dropAt(1);
+		expect(dragover.defaultPrevented).toBe(false);
+		expect(edits).toEqual([]);
+	});
+
+	it('adds at a point chosen with the keyboard, before a row or at either end', async () => {
+		mount();
+		await expect.element(list().getByRole('button', { name: 'Song 2', exact: true })).toBeVisible();
+		placing.what = two;
+		placing.libraryId = '11';
+		const group = page.getByRole('group', { name: 'Choose where to add' });
+		await expect.element(group).toBeVisible();
+		await expect.element(group.getByRole('button', { name: 'Add to the end' })).toHaveFocus();
+
+		// Before the context's first row.
+		await list()
+			.getByRole('button', { name: /^Add .* before Song 1$/ })
+			.click();
+		await expect
+			.poll(() => edits.at(-1))
+			.toMatchObject({
+				type: 'add',
+				source: { tracks: ['t8', 't9'] },
+				before: { type: 'before', item: 'k.1' }
+			});
+		await expect.element(group).not.toBeInTheDocument();
+		expect(placing.what).toBeNull();
+
+		// At the end of the Manual Queue, by its heading.
+		placing.what = two;
+		await list()
+			.getByRole('button', { name: /last in Queued by you$/ })
+			.click();
+		await expect.poll(() => edits.at(-1)).toMatchObject({ before: { type: 'manualEnd' } });
+		// At the front of it.
+		placing.what = two;
+		await list()
+			.getByRole('button', { name: /first in Queued by you$/ })
+			.click();
+		await expect.poll(() => edits.at(-1)).toMatchObject({ before: { type: 'manualStart' } });
+		// And at the end of Up Next.
+		placing.what = two;
+		await page.getByRole('button', { name: 'Add to the end' }).click();
+		await expect.poll(() => edits.at(-1)).toMatchObject({ before: { type: 'contextEnd' } });
+	});
+
+	it('adds before a row when its title is pressed while choosing, and never jumps', async () => {
+		const jumps: string[] = [];
+		fake.player.jump = (item) => void jumps.push(item);
+		mount();
+		await expect.element(list().getByRole('button', { name: 'Song 2', exact: true })).toBeVisible();
+		placing.what = two;
+		await list().getByRole('button', { name: 'Song 2', exact: true }).click();
+		await expect
+			.poll(() => edits.at(-1))
+			.toMatchObject({ type: 'add', before: { type: 'before', item: 'k.2' } });
+		expect(jumps).toEqual([]);
+	});
+
+	it('gives up choosing a place with Escape or Cancel, adding nothing', async () => {
+		mount();
+		placing.what = two;
+		await expect.element(page.getByRole('group', { name: 'Choose where to add' })).toBeVisible();
+		await userEvent.keyboard('{Escape}');
+		expect(placing.what).toBeNull();
+		placing.what = two;
+		await page.getByRole('button', { name: 'Cancel' }).click();
+		expect(placing.what).toBeNull();
+		expect(edits).toEqual([]);
 	});
 });
 

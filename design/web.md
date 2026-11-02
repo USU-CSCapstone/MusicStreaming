@@ -240,6 +240,22 @@ the tab's name carries from one to the other.
   History has a check button that selects, and Space on a title selects too; the ✕ removes the
   whole selection. A row that is still being learned or cannot be read cannot be rewound to or
   re-queued, and can be removed. An empty History says nothing has played.
+- **Adding to the queue** (`queueing.svelte.ts`). Every ⋯ menu (song rows and the selection bar,
+  album, artist and playlist cards and detail headers, the Songs page and the search Songs
+  header) opens Queue next, Queue last and Add to Up Next…, above Add to playlist (which a view
+  with no entity, such as all songs, lacks). They are an `add` at `manualStart` / `manualEnd`, or
+  at a point chosen in Up Next, and a toast says what was done at once. **What goes as a recipe:**
+  album and artist pages and cards (in the order shown), the Songs page, and an unsorted search's
+  songs; the device holds no tracks for these, so the store keeps the add pending and its rows
+  wait for the server's `queueEdit`. **What goes as `tracks`:** songs, selections, playlists (in
+  the order shown) and sorted search rows; these show at once from the tracks sent. **Dropping at
+  a point:** with a mouse (`pointer: fine`) song rows, the selection and cards drag from a view
+  onto Up Next, which draws the drop line and scrolls near its edges; the gap becomes an anchor
+  with `anchorAt`. Touch and keyboard use **choose where**: Add to Up Next… opens the panel on Up
+  Next with a bar (Add to the end, Cancel), an Add-here button and the title of each row, and
+  Add first / Add last on the Manual Queue's headings; Escape or Cancel gives it up, and closing
+  the panel clears it. **With no queue** these say "Start something playing first, then queue
+  more." and send nothing, since the core has no empty queue to add to (D25).
 - **A change that did not stay is explained** in the panel from the client's `refusal` (`anchor_gone`,
   `play_gone`, `superseded`, `lost`, ...), until dismissed. A rewind to a play another device
   removed first (`play_gone`) is dropped from the view, as every refused edit is, and the panel

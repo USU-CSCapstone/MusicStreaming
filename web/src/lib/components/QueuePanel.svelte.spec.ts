@@ -30,6 +30,7 @@ const queue = $state(fake.queue);
 Object.assign(fake, { queue });
 
 const { panels } = await import('$lib/panels.svelte');
+const { placing } = await import('$lib/queueing.svelte');
 const { default: QueuePanel } = await import('./QueuePanel.svelte');
 
 beforeEach(() => {
@@ -123,6 +124,21 @@ describe('QueuePanel', () => {
 		await expect.element(up).toHaveAttribute('aria-selected', 'true');
 		await history.click();
 		await expect.element(history).toHaveAttribute('aria-selected', 'true');
+	});
+
+	it('shows Up Next while choosing where to add, and forgets it when closed', async () => {
+		render(QueuePanel);
+		await page.getByRole('tab', { name: /History/ }).click();
+		await expect
+			.element(page.getByRole('tab', { name: /History/ }))
+			.toHaveAttribute('aria-selected', 'true');
+		placing.what = { label: '“Signal”', count: 1, refs: [], tracks: async () => [] };
+		await expect
+			.element(page.getByRole('tab', { name: /Up Next/ }))
+			.toHaveAttribute('aria-selected', 'true');
+		await expect.element(page.getByRole('group', { name: 'Choose where to add' })).toBeVisible();
+		panels.queue = false;
+		await expect.poll(() => placing.what).toBeNull();
 	});
 
 	it('is not drawn while closed', async () => {

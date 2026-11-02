@@ -184,6 +184,8 @@ class FixtureQueue {
 	edits: SentEdit[] = [];
 	/** While set, a start is not answered until it settles. */
 	holdStarts: Promise<void> | null = null;
+	/** Where `queueEdit` goes, as the realtime connection would send it; unset with none. */
+	broadcast: ((message: RealtimeServerMessage) => void) | null = null;
 	/** The editIds answered, with the version each made. */
 	#answered = new Map<string, number>();
 
@@ -223,9 +225,23 @@ class FixtureQueue {
 		const done = this.#answered.get(body.editId);
 		if (done !== undefined) return done;
 		this.edits.push(body.edit);
-		this.queue.apply(JSON.stringify(body.edit as QueueEdit));
+		const applied = this.#registered(body.edit);
+		this.queue.apply(JSON.stringify(applied));
 		this.#answered.set(body.editId, ++this.version);
+		const { queueId, version } = this;
+		this.broadcast?.({ type: 'queueEdit', queueId, version, editId: body.editId, edit: applied });
 		return this.version;
+	}
+
+	/** An add as the server registers it: its list held by hash, its source with the list and length. */
+	#registered(edit: SentEdit): QueueEdit {
+		if (edit.type !== 'add') return edit;
+		const { key, libraryId, tracks: sent, recipe } = edit.source;
+		const ids = sent ?? resolveRecipe(recipe!).map((t) => t.id);
+		const list = `list-add-${key}`;
+		this.lists.set(list, ids);
+		const source = { key, libraryId, list, length: ids.length, ...(recipe ? { recipe } : {}) };
+		return { ...edit, source } as QueueEdit;
 	}
 
 	/** A page of rows as `GET /me/queue/rows` answers it, from the list of every source. */
@@ -719,6 +735,18 @@ export async function serveLibrary(
 	// After the rest, so it is asked first for the queue's paths.
 	await serveQueue(page, queueOf(page));
 	return { plays, searches };
+}
+
+/**
+ * Opens the realtime connection as a server would for the queue alone: it says hello and tells
+ * the page every edit the account's queue applies, the page's own included, as `queueEdit`.
+ */
+export async function serveQueueEdits(page: Page) {
+	await page.routeWebSocket('**/api/v1/realtime', (ws) => {
+		const send = (message: RealtimeServerMessage) => ws.send(JSON.stringify(message));
+		send({ type: 'hello', deviceId, serverTime: new Date().toISOString() });
+		queueOf(page).broadcast = send;
+	});
 }
 
 /** Another of the account's devices, connected, which the realtime fixture has playing. */

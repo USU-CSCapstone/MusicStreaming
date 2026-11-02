@@ -3,8 +3,10 @@
 	import type { NavigationTarget } from '@sveltejs/kit';
 	import { beforeNavigate } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { view } from '$lib/adding.svelte';
 	import type { SearchResult } from '$lib/api/types';
 	import { albumCard, artistCard, playlistCard, type Card } from '$lib/cards';
+	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import CollectionView from '$lib/components/CollectionView.svelte';
 	import FilterPicker from '$lib/components/FilterPicker.svelte';
 	import Icon from '$lib/components/Icon.svelte';
@@ -64,6 +66,10 @@
 					total: sections.find((s) => s.type === 'tracks')?.total ?? songs.length
 				}
 	);
+
+	// All the songs the search finds, in its ranking, which only queues. Sorted, there is no
+	// recipe for the order shown, and the rows queue one by one.
+	const everySong = $derived(from ? view('all songs found', from.total, from.recipe) : null);
 
 	// A search is kept once it settles (`$lib/recent`): the user opens or plays one of its
 	// results, submits it in the box, or leaves it after it has stood a moment.
@@ -165,6 +171,7 @@
 		<section>
 			<header>
 				<h2>{titles[section.type]}</h2>
+				{#if section.type === 'tracks' && everySong}<AddToPlaylistButton what={everySong} />{/if}
 				{#if section.type !== 'tracks' && section.type !== 'lyrics'}<ViewToggle />{/if}
 			</header>
 			{#if section.type === 'tracks'}

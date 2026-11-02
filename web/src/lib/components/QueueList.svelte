@@ -14,7 +14,7 @@
 	import { tick, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import type { QueueAnchor } from '$lib/api/types';
-	import { edgeStep } from '$lib/dragging';
+	import { carried, drop, edgeStep } from '$lib/dragging';
 	import { artistName, formatDuration, plural } from '$lib/format';
 	import { player } from '$lib/player.svelte';
 	import { queue } from '$lib/queue/client.svelte';
@@ -22,6 +22,7 @@
 	import type { QueueRow } from '$lib/queue/protocol';
 	import { realtime } from '$lib/realtime.svelte';
 	import { lookup, trackKey } from '$lib/queue/summaries';
+	import { addToQueue, placing } from '$lib/queueing.svelte';
 	import Artwork from './Artwork.svelte';
 	import Icon from './Icon.svelte';
 
@@ -350,6 +351,7 @@
 	/** A click on a row's title: Ctrl/Cmd selects it; otherwise it plays. */
 	function titleClick(e: MouseEvent, item: string, ready: boolean) {
 		if (e.ctrlKey || e.metaKey) toggle(item);
+		else if (up && placing.what) placeHere(rowOf.get(item) ?? 0, item);
 		else if (ready) choose(item);
 	}
 
@@ -371,6 +373,11 @@
 	};
 	let drag = $state<Drag | null>(null);
 	let frame = 0;
+	/** Where focus goes when a place is to be chosen, so the keyboard starts there. */
+	let endButton = $state<HTMLButtonElement>();
+	$effect(() => {
+		if (up && placing.what) endButton?.focus();
+	});
 
 	/** Begins a press on a row's handle; the pointer moving makes it a drag. */
 	function gripDown(e: PointerEvent, item: string) {
@@ -405,15 +412,73 @@
 		if (drag && scroller) drag.gap = gapAt(drag.y);
 	}
 
+	/**
+	 * Near the top or bottom of the list, scrolls toward it, faster the closer `y`, the pointer's,
+	 * gets. Returns whether it scrolled.
+	 */
+	function nudge(y: number): boolean {
+		const by = edgeStep(y, scroller!.getBoundingClientRect());
+		if (by) scroller!.scrollTop += by;
+		return by !== 0;
+	}
+
 	/** Keeps scrolling while a drag is held near an edge. */
 	function autoScroll() {
 		if (!drag?.started || !scroller) return;
-		const by = edgeStep(drag.y, scroller.getBoundingClientRect());
-		if (by) {
-			scroller.scrollTop += by;
-			aim();
-		}
+		if (nudge(drag.y)) aim();
 		frame = requestAnimationFrame(autoScroll);
+	}
+
+	// Songs, or an album, artist or playlist, dragged in from a browse view over Up Next
+	// (`requirements/queue.md` §3): the gap they would drop into, as the browser reports the
+	// drag, which it does steadily even when the mouse is still.
+	let incoming = $state<number | null>(null);
+
+	/** Aims a drag from a browse view, and scrolls toward an edge it is held at. */
+	function dragOver(e: DragEvent) {
+		if (!up || !carried.what || !scroller) return;
+		e.preventDefault();
+		if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+		nudge(e.clientY);
+		incoming = gapAt(e.clientY);
+	}
+
+	/** Takes the line away when the drag leaves the list. */
+	function dragLeave(e: DragEvent) {
+		if (!scroller?.contains(e.relatedTarget as Node | null)) incoming = null;
+	}
+
+	/** Adds what was dragged in at the gap it was dropped on. */
+	function dragIn(e: DragEvent) {
+		const { what, libraryId } = carried;
+		if (!up || !what || !scroller) return;
+		e.preventDefault();
+		const gap = gapAt(e.clientY);
+		incoming = null;
+		drop();
+		place(what, libraryId, gap);
+	}
+
+	/**
+	 * Adds `what` before row `gap` of Up Next, in its turn after earlier edits, once the rows
+	 * drawn are the queue as it is. The rows are stale until the queue answers the add.
+	 */
+	function place(what: NonNullable<typeof placing.what>, libraryId: string, gap: number) {
+		act(async () => {
+			const before = await anchorFor(gap, []);
+			if (await addToQueue(what, libraryId, before)) sentAt = queue.revision;
+		});
+	}
+
+	/** Puts what waits to be placed before row `gap`, the keyboard and touch way to drop it. */
+	function placeHere(gap: number, item?: string) {
+		const { what, libraryId } = placing;
+		if (!what) return;
+		placing.what = null;
+		if (item) focusItem = item;
+		else focusFirst = true;
+		said = `${what.label} added to Up Next`;
+		place(what, libraryId, gap);
 	}
 
 	/** Ends a press: a drag drops where the line is; a press that did not move selects the row. */
@@ -436,11 +501,15 @@
 		cancelAnimationFrame(frame);
 	}
 
-	/** Escape in the middle of a drag drops nothing. */
+	/** Escape in the middle of a drag drops nothing, and while choosing a place adds nothing. */
 	function onkeydown(e: KeyboardEvent) {
-		if (drag && e.key === 'Escape') {
+		if (e.key !== 'Escape') return;
+		if (drag) {
 			e.preventDefault();
 			dragStop();
+		} else if (up && placing.what) {
+			e.preventDefault();
+			placing.what = null;
 		}
 	}
 
@@ -462,6 +531,17 @@
 
 <svelte:window onkeydowncapture={onkeydown} />
 
+{#if up && placing.what}
+	<!-- The keyboard and touch way to drop: each row and heading below offers its place. -->
+	<div class="placing" role="group" aria-label="Choose where to add">
+		<span>Where should {placing.what.label} go?</span>
+		<button type="button" bind:this={endButton} onclick={() => placeHere(total)}>
+			Add to the end
+		</button>
+		<button type="button" onclick={() => (placing.what = null)}>Cancel</button>
+	</div>
+{/if}
+
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="scroll"
@@ -471,6 +551,9 @@
 	onpointermove={dragMove}
 	onpointerup={dragUp}
 	onpointercancel={dragStop}
+	ondragover={dragOver}
+	ondragleave={dragLeave}
+	ondrop={dragIn}
 	class:dragging={drag?.started}
 >
 	{#if !queue.queueId}
@@ -498,7 +581,17 @@
 						onkeyup={(e) => onrowkey(e, item)}
 						aria-busy={s.state === 'loading'}
 					>
-						{#if up}
+						{#if up && placing.what}
+							<button
+								type="button"
+								class="action here"
+								aria-label="Add {placing.what.label} before {named(s)}"
+								title="Add here"
+								onclick={() => placeHere(row.v, item)}
+							>
+								<Icon name="plus" size={16} />
+							</button>
+						{:else if up}
 							<!-- A pointer's way to move rows; the keyboard moves them with Alt+↑/↓ from the title. -->
 							<span
 								class="grip"
@@ -585,14 +678,29 @@
 									{(row.key === 'heading-manual' ? manual : upNext - manual).toLocaleString()}
 								</span>
 							</h3>
+							{#if placing.what}
+								{@const first = row.key === 'heading-manual'}
+								<button
+									type="button"
+									class="here-heading"
+									aria-label="Add {placing.what.label} {first ? 'first' : 'last'} in Queued by you"
+									onclick={() => placeHere(row.v)}
+								>
+									{first ? 'Add first' : 'Add last'}
+								</button>
+							{/if}
 						{:else}
 							<span class="muted">Nothing queued.</span>
 						{/if}
 					</li>
 				{/if}
 			{/each}
-			{#if drag?.started}
-				<li class="drop" style:top="{topOf(drag.gap)}px" aria-hidden="true"></li>
+			{#if drag?.started || incoming !== null}
+				<li
+					class="drop"
+					style:top="{topOf(drag?.started ? drag.gap : incoming!)}px"
+					aria-hidden="true"
+				></li>
 			{/if}
 		</ol>
 	{/if}
@@ -799,6 +907,46 @@
 		margin-top: -1px;
 		background: var(--accent);
 		pointer-events: none;
+	}
+
+	.placing {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-2);
+		padding: var(--space-2) var(--space-3);
+		border: 1px solid var(--accent);
+		border-radius: var(--radius-m);
+		font-size: 13px;
+	}
+
+	.placing span {
+		flex: 1 1 100%;
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+
+	.placing button,
+	.here-heading {
+		padding: var(--space-1) var(--space-3);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-m);
+		background: var(--surface);
+		color: var(--text);
+		font: inherit;
+		font-size: 13px;
+		cursor: pointer;
+	}
+
+	.here-heading {
+		margin-left: auto;
+		text-transform: none;
+		letter-spacing: 0;
+		font-weight: 400;
+	}
+
+	.here {
+		color: var(--accent);
 	}
 
 	.ghost {

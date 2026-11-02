@@ -1,6 +1,6 @@
 <script lang="ts">
-	// ⋯ beside a detail page's Play, which adds the whole album, artist, or playlist to a playlist
-	// (`requirements/playlists.md` §4).
+	// ⋯ beside a detail page's Play, and on a card, which opens the actions for the whole album,
+	// artist, or playlist: queue it, or add it to a playlist.
 	import type { Adding } from '$lib/adding.svelte';
 	import AddToPlaylistMenu from './AddToPlaylistMenu.svelte';
 	import Icon from './Icon.svelte';
@@ -21,8 +21,8 @@
 	bind:this={button}
 	type="button"
 	class:open
-	aria-label="Add {what.label} to a playlist"
-	title="Add to playlist"
+	aria-label="Actions for {what.label}"
+	title="More actions"
 	aria-haspopup="menu"
 	aria-expanded={open}
 	onclick={() => (open ? close() : (open = true))}

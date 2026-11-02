@@ -992,6 +992,43 @@ describe('QueueStore lists and rows', () => {
 		expect(server.listGets()).toEqual(['h']);
 	});
 
+	it('shows every row of an add of several tracks before the server confirms it', async () => {
+		await hello();
+		const answer = gate();
+		server.editGate = answer.wait;
+		store.edit(queueManual('x'));
+		store.edit({
+			type: 'add',
+			source: { key: 'm', libraryId: 'lib', tracks: ['7', '8', '9', '10'] },
+			before: { type: 'manualEnd' }
+		});
+		// Behind a pending add of one, and before anything is sent or answered.
+		expect(summary.manual).toBe(5);
+		expect(upNext(7)).toEqual(['x-0', '7', '8', '9', '10', '101', '102']);
+		// A move of the added rows keeps each its own track.
+		store.edit({ type: 'move', items: ids('m', 3, 1), before: { type: 'manualStart' } });
+		expect(upNext(5)).toEqual(['8', '10', 'x-0', '7', '9']);
+		answer.open();
+		await settle();
+		expect(upNext(5)).toEqual(['8', '10', 'x-0', '7', '9']);
+	});
+
+	it('shows no row for an add of a recipe before the server resolves it', async () => {
+		await hello();
+		server.editGate = gate().wait;
+		store.edit({
+			type: 'add',
+			source: {
+				key: 'r',
+				libraryId: 'lib',
+				recipe: { type: 'album', albumId: '1', sort: 'album.asc' }
+			},
+			before: { type: 'manualStart' }
+		});
+		expect(summary.manual).toBe(0);
+		expect(upNext(2)).toEqual(['101', '102']);
+	});
+
 	it('does not download its own add back when the edit is heard before it is answered', async () => {
 		await hello();
 		const answer = gate();

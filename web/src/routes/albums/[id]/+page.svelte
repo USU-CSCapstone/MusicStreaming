@@ -41,14 +41,16 @@
 					total: shown.length
 				}
 	);
-	// The whole album, as the server expands it: every track, in disc then track order.
+	// The whole album, as a play or a queueing resolves it: every track, in the order shown.
+	// Filtered, the songs shown, since a recipe cannot name tags yet.
 	const adding = $derived(
 		collection(
 			'album',
 			album.id,
 			albumTitle(album.title),
 			data.tracks.length,
-			async () => data.tracks
+			async () => (from ? data.tracks : shown),
+			from?.recipe
 		)
 	);
 	const kinds = { album: 'Album', ep: 'EP', single: 'Single', compilation: 'Compilation' };
