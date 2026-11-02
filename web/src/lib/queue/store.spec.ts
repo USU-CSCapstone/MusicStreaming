@@ -706,7 +706,7 @@ describe('QueueStore', () => {
 			source: {
 				key: '22222222-2222-4222-8222-222222222222',
 				libraryId: 'lib',
-				recipe: { type: 'album', albumId: '1', sort: 'album.asc' }
+				recipe: { type: 'album', albumId: '1', sort: 'album', order: 'asc' }
 			},
 			start: 1,
 			startTrackId: '201',

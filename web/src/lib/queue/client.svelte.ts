@@ -48,13 +48,10 @@ export class QueueClient {
 	#spawn: () => Worker;
 	#worker: Worker | null = null;
 	#unsubscribe: (() => void) | null = null;
+	/** What waits for the worker's answer to a start, a restore or rows, by the asking message's ID. */
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- waiting askers are not state to render
-	#asks = new Map<number, (window: RowsWindow) => void>();
+	#waiting = new Map<number, (answer: never) => void>();
 	#askId = 0;
-	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- waiting askers are not state to render
-	#starts = new Map<number, (ok: boolean) => void>();
-	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- waiting askers are not state to render
-	#restores = new Map<number, (result: RestoreResult) => void>();
 
 	/** Makes a client that starts its worker with `create` on `connect`; tests pass a fake. */
 	constructor(create: () => Worker = spawn) {
@@ -78,9 +75,7 @@ export class QueueClient {
 		this.#unsubscribe = null;
 		this.#worker?.terminate();
 		this.#worker = null;
-		this.#asks.clear();
-		this.#starts.clear();
-		this.#restores.clear();
+		this.#waiting.clear();
 		this.queueId = null;
 		this.context = null;
 		this.current = null;
@@ -106,11 +101,7 @@ export class QueueClient {
 	 * of its source. Never settles if the worker is stopped first.
 	 */
 	start(request: StartRequest): Promise<boolean> {
-		const id = ++this.#askId;
-		return new Promise((resolve) => {
-			this.#starts.set(id, resolve);
-			this.#send({ type: 'start', id, request });
-		});
+		return this.#ask((id) => ({ type: 'start', id, request }));
 	}
 
 	/**
@@ -119,11 +110,7 @@ export class QueueClient {
 	 * settles if the worker is stopped first.
 	 */
 	restore(queueId: string): Promise<RestoreResult> {
-		const id = ++this.#askId;
-		return new Promise((resolve) => {
-			this.#restores.set(id, resolve);
-			this.#send({ type: 'restore', id, queueId });
-		});
+		return this.#ask((id) => ({ type: 'restore', id, queueId }));
 	}
 
 	/**
@@ -132,10 +119,15 @@ export class QueueClient {
 	 * worker is stopped first.
 	 */
 	rows(section: RowSection, offset: number, limit: number): Promise<RowsWindow> {
+		return this.#ask((id) => ({ type: 'rows', id, section, offset, limit }));
+	}
+
+	/** Sends the message `make` builds with a fresh ID, settling with the worker's answer to it. */
+	#ask<T>(make: (id: number) => ToWorker): Promise<T> {
 		const id = ++this.#askId;
-		return new Promise((resolve) => {
-			this.#asks.set(id, resolve);
-			this.#send({ type: 'rows', id, section, offset, limit });
+		return new Promise<T>((resolve) => {
+			this.#waiting.set(id, resolve);
+			this.#send(make(id));
 		});
 	}
 
@@ -146,19 +138,15 @@ export class QueueClient {
 
 	/** Takes in what the worker said. */
 	#heard(message: FromWorker) {
-		if (message.type === 'rows') {
-			this.#asks.get(message.id)?.(message.window);
-			this.#asks.delete(message.id);
-			return;
-		}
-		if (message.type === 'started') {
-			this.#starts.get(message.id)?.(message.ok);
-			this.#starts.delete(message.id);
-			return;
-		}
-		if (message.type === 'restored') {
-			this.#restores.get(message.id)?.(message.result);
-			this.#restores.delete(message.id);
+		if (message.type === 'rows' || message.type === 'started' || message.type === 'restored') {
+			const answer =
+				message.type === 'rows'
+					? message.window
+					: message.type === 'started'
+						? message.ok
+						: message.result;
+			this.#waiting.get(message.id)?.(answer as never);
+			this.#waiting.delete(message.id);
 			return;
 		}
 		if (message.type === 'refused') {
