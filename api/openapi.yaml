@@ -1330,9 +1330,11 @@ paths:
         the library, as a start refuses them (whether or not they exist), a source of both
         `tracks` and a `recipe` or of neither, a recipe the server cannot resolve, a key that is
         not a UUID, an item of a `remove`, `move` or `removePlays` that is not `<key>.<position>`
-        with a UUID key (an item whose key is in capitals names the same item in lowercase),
-        `duplicate_key` for a key that already names a source or copy of the queue, or a body
-        larger than the server accepts, which holds hundreds of thousands of tracks.
+        with a UUID key (an item whose key is in capitals names the same item in lowercase), an
+        anchor or a recipe larger than 4 KiB, an edit other than `add`, `remove`, `move` and
+        `removePlays` larger than 4 KiB, `duplicate_key` for a key that already names a source
+        or copy of the queue, or a body larger than the server accepts, which holds hundreds of
+        thousands of tracks.
       operationId: editQueue
       requestBody:
         required: true

@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde::de::{self, Deserializer, Visitor};
 use serde_json::value::RawValue;
 
+use super::small;
 use super::start::{NewSource, Resolved};
 use crate::api::realtime::{Hub, ServerMessage};
 use crate::api::scope::Caller;
@@ -35,6 +36,9 @@ pub struct EditRequest {
     edit: Box<RawValue>,
 }
 
+/// What a refusal calls an anchor that is too large.
+const ANCHOR: &str = "An anchor";
+
 /// An edit's `type`, read without building the rest of it.
 #[derive(Deserialize)]
 struct Kind {
@@ -52,7 +56,8 @@ struct Remove {
 #[derive(Deserialize)]
 struct Move {
     items: Vec<SentItem>,
-    before: Anchor,
+    /// An [`Anchor`], kept raw until its size is checked.
+    before: Box<RawValue>,
 }
 
 /// A `removePlays` as sent.
@@ -107,7 +112,8 @@ fn items(sent: Vec<SentItem>) -> Vec<ItemId> {
 #[derive(Deserialize)]
 struct Add {
     source: NewSource,
-    before: Anchor,
+    /// An [`Anchor`], kept raw until its size is checked.
+    before: Box<RawValue>,
 }
 
 /// `editQueue`: applies the edit to the caller's active queue and answers the version it made,
@@ -117,7 +123,8 @@ struct Add {
 /// Keys must be UUIDs, and so must the keys of the items a `remove`, `move` or `removePlays`
 /// names. `404` without a queue, `409` if `queueId` is not the active queue or an
 /// anchor is gone, `422` for tracks out of reach or not in the library, a key that is not a UUID
-/// or already in use, or an edit the core refuses.
+/// or already in use, an anchor or recipe over 4 KiB, any edit but those four over 4 KiB, or an
+/// edit the core refuses.
 pub async fn edit(
     State(db): State<Arc<Database>>,
     State(queues): State<Arc<Queues>>,
@@ -127,11 +134,13 @@ pub async fn edit(
     extract::Json(request): extract::Json<EditRequest>,
 ) -> Result<Json<Applied>, Problem> {
     let invalid = |error: serde_json::Error| Problem::invalid(error.to_string());
-    let text = request.edit.get();
+    let EditRequest { edit_id, queue_id, edit: raw } = request;
+    let text = raw.get();
     // Only an edit whose `type` is `add` can read as an add, so no other path skips the checks.
     let Kind { kind } = serde_json::from_str(text).map_err(invalid)?;
     let (edit, added) = if kind == "add" {
         let Add { source, before } = serde_json::from_str(text).map_err(invalid)?;
+        let before: Anchor = small(&before, ANCHOR)?;
         let Resolved { key, library, ids, recipe } = source.resolve(&db, &indexes, &caller).await?;
         let tracks: Arc<[u64]> = ids.into();
         let hash = list_hash(&tracks);
@@ -146,6 +155,7 @@ pub async fn edit(
         (Edit::Remove { items: items(sent) }, None)
     } else if kind == "move" {
         let Move { items: sent, before } = serde_json::from_str(text).map_err(invalid)?;
+        let before: Anchor = small(&before, ANCHOR)?;
         (Edit::Move { items: items(sent), before }, None)
     } else if kind == "removePlays" {
         let RemovePlays { plays } = serde_json::from_str(text).map_err(invalid)?;
@@ -155,7 +165,7 @@ pub async fn edit(
             .collect();
         (Edit::RemovePlays { plays }, None)
     } else {
-        let mut edit: Edit = serde_json::from_str(text).map_err(invalid)?;
+        let mut edit: Edit = small(&raw, "An edit of this type")?;
         // Keys are kept in lowercase, as an add's are.
         if let Edit::Previous { key } | Edit::Requeue { key, .. } | Edit::Rewind { key, .. } =
             &mut edit
@@ -166,8 +176,10 @@ pub async fn edit(
         }
         (edit, None)
     };
+    // The edit is read, so its text need not wait for it to apply.
+    drop(raw);
 
-    let (user, queue_id, edit_id) = (caller.user, request.queue_id, request.edit_id);
+    let user = caller.user;
     let announced = (queue_id.clone(), edit_id.clone());
     let announce = |version, edit| {
         let (queue_id, edit_id) = announced;
