@@ -267,19 +267,12 @@ impl QueueState {
     /// Takes the rows at Up Next indices `at` (ascending, distinct) out of the queue and
     /// returns them in queue order, one span per row until they are put back. A Manual Queue
     /// row that also has a passed place in the context loses it unless `keep_passed`. One pass
-    /// over each span list, so a remove or move of k rows is O(s + k) besides finding those
-    /// passed places.
+    /// over each span list, and one sweep to find those passed places, so a remove or move of
+    /// k rows is O((s + k) log k).
     fn take(&mut self, at: &[u64], keep_passed: bool) -> Vec<Span> {
         let manual_len = self.manual.len();
         let (manual, rest) = at.split_at(at.partition_point(|&index| index < manual_len));
-        let mut rows: Vec<u64> = if keep_passed {
-            Vec::new()
-        } else {
-            manual
-                .iter()
-                .filter_map(|&index| self.passed_row(&item_of(self.manual.get(index))?))
-                .collect()
-        };
+        let mut rows = if keep_passed { Vec::new() } else { self.passed_rows(manual) };
         // Passed places are behind the cursor, so they sort ahead of the Up Next rows.
         rows.sort_unstable();
         let passed = rows.len();
@@ -290,10 +283,19 @@ impl QueueState {
         taken
     }
 
-    /// The context row of `item`'s passed place, if it has one. O(spans).
-    fn passed_row(&self, item: &ItemId) -> Option<u64> {
-        let view = View::Key(item.key.clone());
-        self.order.find(&view, item.pos).filter(|&i| i < self.cursor)
+    /// The context rows of the passed places that the Manual Queue rows at `manual` have, in
+    /// no particular order. One sweep over `order`.
+    fn passed_rows(&self, manual: &[u64]) -> Vec<u64> {
+        let mut items: Vec<(&str, u64)> = manual
+            .iter()
+            .filter_map(|&index| match self.manual.get(index)? {
+                (View::Key(key), pos) => Some((key.as_str(), pos)),
+                (View::Shuffle, _) => None,
+            })
+            .collect();
+        items.sort_unstable();
+        let found = self.order.find_sorted(&items).into_iter().flatten();
+        found.filter(|&row| row < self.cursor).collect()
     }
 
     /// Splices `spans` in at `spot`.
