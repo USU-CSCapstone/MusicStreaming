@@ -694,3 +694,47 @@ fn removing_half_of_500k_scattered_items_is_fast() {
     assert_eq!(q.up_next_len(), 249_999);
     assert_invariants(&q);
 }
+
+/// Splits a context of `5·k` rows into about `k` pieces, then moves `k` scattered rows to the
+/// Manual Queue and removes them again. Returns how long the move and the removal took.
+fn scattered_manual_edits(k: u64) -> (Duration, Duration) {
+    let mut q = QueueState::default();
+    q.start(source("big", 5 * k), 0).unwrap();
+    let pick = |offset: u64| -> Vec<ItemId> {
+        (0..k).map(|i| ItemId { key: "big".into(), pos: 5 * i + offset }).collect()
+    };
+    q.apply(&Edit::Remove { items: pick(4) }).unwrap();
+    assert!(q.order.spans().len() as u64 >= k - 1);
+
+    let started = Instant::now();
+    q.apply(&Edit::Move { items: pick(2), before: Anchor::ManualEnd }).unwrap();
+    let moved = started.elapsed();
+    assert_eq!(q.manual.len(), k);
+
+    let started = Instant::now();
+    q.apply(&Edit::Remove { items: pick(2) }).unwrap();
+    let removed = started.elapsed();
+    assert!(q.manual.is_empty());
+    assert_eq!(q.up_next_len(), 3 * k - 1);
+    assert_invariants(&q);
+    (moved, removed)
+}
+
+/// Finding each item an edit names is one sweep over each span list, not one scan per item,
+/// which on 40k items over 40k pieces would take minutes.
+#[test]
+fn scattered_moves_to_the_manual_queue_and_back_out_are_fast() {
+    let bound =
+        if cfg!(debug_assertions) { Duration::from_secs(5) } else { Duration::from_secs(1) };
+    let (moved, removed) = scattered_manual_edits(40_000);
+    assert!(moved < bound, "move took {moved:?}");
+    assert!(removed < bound, "remove took {removed:?}");
+}
+
+#[test]
+#[ignore = "timing run: cargo test -p jewelcase-core --release -- --ignored --nocapture"]
+fn scattered_manual_edits_at_370k_are_fast() {
+    let (moved, removed) = scattered_manual_edits(370_000);
+    println!("move 370k scattered to the Manual Queue: {moved:?}; remove them: {removed:?}");
+    assert!(moved < Duration::from_secs(1) && removed < Duration::from_secs(1));
+}

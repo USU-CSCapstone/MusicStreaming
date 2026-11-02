@@ -113,6 +113,25 @@ impl SpanList {
         Some(self.start_of(i) + pos - self.spans[i].start)
     }
 
+    /// The first row that reads each of `items` (sorted by key, then position), or `None` for
+    /// an item no row reads. One pass over the spans with a binary search in `items` for each,
+    /// so finding k items is O(s log k + k) rather than O(s) per item.
+    pub fn find_sorted(&self, items: &[(&str, u64)]) -> Vec<Option<u64>> {
+        let mut rows = vec![None; items.len()];
+        for (i, span) in self.spans.iter().enumerate() {
+            let View::Key(key) = &span.view else { continue };
+            let (key, end) = (key.as_str(), span.start + span.len);
+            let from = items.partition_point(|&item| item < (key, span.start));
+            for (row, &(k, pos)) in rows[from..].iter_mut().zip(&items[from..]) {
+                if k != key || pos >= end {
+                    break;
+                }
+                row.get_or_insert(self.start_of(i) + pos - span.start);
+            }
+        }
+        rows
+    }
+
     /// Makes row `index` the start of a span, splitting the span that holds it, and returns
     /// that span's index (the span count when `index` is the end). An `index` past the end is
     /// the end.
@@ -334,6 +353,26 @@ mod tests {
             assert_eq!(one_pass, one_by_one, "rows {rows:?}");
             assert_invariants(&one_pass);
         }
+    }
+
+    #[test]
+    fn find_sorted_matches_find() {
+        let list = SpanList::from_spans([
+            span("a", 4, 3),
+            span("b", 0, 1),
+            Span::new(View::Shuffle, 0, 2),
+            span("a", 0, 3),
+            span("a", 5, 1),
+        ]);
+        let mut items: Vec<(&str, u64)> =
+            ["a", "b", "c"].iter().flat_map(|&k| (0..9).map(move |pos| (k, pos))).collect();
+        items.sort_unstable();
+        let expected: Vec<Option<u64>> =
+            items.iter().map(|&(k, pos)| list.find(&key(k), pos)).collect();
+        assert_eq!(list.find_sorted(&items), expected);
+        // Position 5 of `a` is read twice: the first row counts.
+        assert_eq!(list.find(&key("a"), 5), Some(1));
+        assert!(SpanList::new().find_sorted(&items).iter().all(Option::is_none));
     }
 
     #[test]
