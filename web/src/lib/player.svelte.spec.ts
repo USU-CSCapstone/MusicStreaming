@@ -195,6 +195,8 @@ class FakeQueue {
 			this.moves++;
 		} else if (edit.type === 'jump') {
 			this.at = Number(edit.item.split('.')[1]);
+		} else if (edit.type === 'rewind') {
+			this.at = Number(edit.play.item.split('.')[1]);
 		} else if (edit.type === 'previous') {
 			this.at = Math.max(0, this.at - 1);
 			this.copy = this.copyOnPrevious ? `${this.key}.p` : null;
@@ -763,6 +765,59 @@ describe('player and the queue', () => {
 
 		expect(queueWorker.edits).toEqual([{ type: 'jump', item }]);
 		await vi.waitFor(() => expect(player.current?.id).toBe('88'));
+	});
+
+	it('rewinds to a play of History with a rewind edit under a key of its own', async () => {
+		await playing('86', '87', '88');
+		queueWorker.edits.length = 0;
+		player.rewind({ play: 4, item: `${queueWorker.key}.0` });
+
+		expect(queueWorker.edits).toEqual([
+			{
+				type: 'rewind',
+				play: { play: 4, item: `${queueWorker.key}.0` },
+				key: expect.stringMatching(/^[0-9a-f-]{36}$/)
+			}
+		]);
+	});
+
+	it('takes playback over when it rewinds, though another device holds it', async () => {
+		await playing('86', '87', '88');
+		queueWorker.moveTo(2);
+		await vi.waitFor(() => expect(player.current?.id).toBe('88'));
+		// Another device takes playback, so this one only shows the queue.
+		state({ itemId: own(), activeDeviceId: '1' });
+		state({ itemId: own(), activeDeviceId: '3' });
+		await settle();
+		expect(player.playing).toBe(false);
+		fake.sent.length = 0;
+
+		player.rewind({ play: 0, item: `${queueWorker.key}.0` });
+		await vi.waitFor(() => expect(player.current?.id).toBe('86'));
+		expect(fake.sent.some((m) => m.type === 'progress' && m.report.start)).toBe(true);
+	});
+
+	it('loads the rewound item afresh even when it is another copy of the track playing', async () => {
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+		player.play([track('87', 60), track('87', 60), track('88', 60)] as never, 1, album);
+		await settle();
+		queueWorker.moves = 1;
+		const before = play.mock.calls.length;
+
+		player.rewind({ play: 0, item: `${queueWorker.key}.0` });
+		await settle();
+		expect(play.mock.calls.length).toBeGreaterThan(before);
+	});
+
+	it('steps back over a track that cannot play after a rewind, not forward', async () => {
+		await playing('86', '87', '88');
+		queueWorker.slots[1] = 'unavailable';
+		queueWorker.moves = 2;
+		queueWorker.moveTo(2);
+		await vi.waitFor(() => expect(player.current?.id).toBe('88'));
+		player.rewind({ play: 0, item: `${queueWorker.key}.1` });
+		await vi.waitFor(() => expect(player.current?.id).toBe('86'));
 	});
 
 	it('moves on once the start is answered, if Next was pressed before', async () => {

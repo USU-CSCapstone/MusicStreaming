@@ -1,4 +1,4 @@
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import type { SentEdit } from '$lib/api/types';
@@ -13,12 +13,13 @@ const fake = vi.hoisted(() => ({
 		shuffled: false,
 		refusal: null as unknown,
 		edit: (() => {}) as (edit: SentEdit) => void,
-		rows: async () => ({ rows: [] })
+		rows: async (): Promise<{ rows: unknown[] }> => ({ rows: [] })
 	},
 	player: {
 		setShuffle: (() => {}) as (on: boolean) => void,
 		setRepeat: (() => {}) as (mode: string) => void,
-		jump: () => {}
+		jump: () => {},
+		rewind: () => {}
 	}
 }));
 
@@ -83,6 +84,45 @@ describe('QueuePanel', () => {
 		// The next refusal shows again, and an unknown code shows the queue's own words.
 		fake.queue.refusal = { code: 'odd', message: 'Something odd.', edit: null };
 		await expect.element(page.getByRole('alert')).toHaveTextContent('Something odd.');
+	});
+
+	it('says in plain words that a rewind to a play that is gone did not stay', async () => {
+		render(QueuePanel);
+		fake.queue.refusal = { code: 'play_gone', message: 'play_gone', edit: null };
+		await expect
+			.element(page.getByRole('alert'))
+			.toHaveTextContent('That song is no longer in History.');
+	});
+
+	it('switches between Up Next and History by click and by arrow keys', async () => {
+		fake.queue.counts = { manual: 0, upNext: 3, history: 2 };
+		render(QueuePanel);
+		const up = page.getByRole('tab', { name: /Up Next/ });
+		const history = page.getByRole('tab', { name: /History/ });
+		await expect.element(page.getByRole('tablist', { name: 'Queue' })).toBeVisible();
+		await expect.element(up).toHaveAttribute('aria-selected', 'true');
+		await expect.element(history).toHaveTextContent('2');
+		await expect.element(page.getByRole('list', { name: 'Up Next' })).toBeVisible();
+
+		up.element().focus();
+		await userEvent.keyboard('{ArrowRight}');
+		await expect.element(history).toHaveAttribute('aria-selected', 'true');
+		await expect.element(up).toHaveAttribute('aria-selected', 'false');
+		await expect.element(up).toHaveAttribute('tabindex', '-1');
+		await expect.element(history).toHaveAttribute('tabindex', '0');
+		expect(document.activeElement).toBe(history.element());
+		await expect.element(page.getByRole('list', { name: 'History' })).toBeVisible();
+		await expect
+			.element(page.getByRole('tabpanel'))
+			.toHaveAttribute('aria-labelledby', 'queue-tab-history');
+		await userEvent.keyboard('{ArrowRight}');
+		await expect.element(up).toHaveAttribute('aria-selected', 'true');
+		await userEvent.keyboard('{End}');
+		await expect.element(history).toHaveAttribute('aria-selected', 'true');
+		await userEvent.keyboard('{Home}');
+		await expect.element(up).toHaveAttribute('aria-selected', 'true');
+		await history.click();
+		await expect.element(history).toHaveAttribute('aria-selected', 'true');
 	});
 
 	it('is not drawn while closed', async () => {

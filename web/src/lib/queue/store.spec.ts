@@ -490,6 +490,31 @@ describe('QueueStore', () => {
 		expect(summary).toMatchObject({ upNext: 3, version: 1 });
 	});
 
+	it('play_gone reverts and says so: a rewind to a play another device removed', async () => {
+		await hello();
+		store.edit(next);
+		store.edit(next);
+		await settle();
+		store.message(server.heardOf(0));
+		store.message(server.heardOf(1));
+		expect(summary).toMatchObject({ current: 'a.2', history: 2, version: 2 });
+		const rewind: SentEdit = {
+			type: 'rewind',
+			play: { play: 0, item: 'a.0' },
+			key: crypto.randomUUID()
+		};
+		// Removed elsewhere, unheard here: the rewind looks fine on this device.
+		const removal = server.apply({ type: 'removePlays', plays: [{ play: 0, item: 'a.0' }] });
+		store.edit(rewind);
+		expect(summary).toMatchObject({ current: 'a.0', history: 0 });
+		await settle();
+
+		expect(refusals).toEqual([{ code: 'play_gone', message: 'play_gone', edit: rewind }]);
+		expect(summary).toMatchObject({ current: 'a.2', history: 2 });
+		store.message(removal);
+		expect(summary).toMatchObject({ current: 'a.2', history: 1, version: 3 });
+	});
+
 	it('refuses at once an edit the core refuses, and does not send it', async () => {
 		await hello();
 		const move: SentEdit = {

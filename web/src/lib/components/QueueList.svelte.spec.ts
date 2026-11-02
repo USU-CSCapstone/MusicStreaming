@@ -19,9 +19,14 @@ const fake = vi.hoisted(() => ({
 			limit: number
 		) => Promise<{ rows: QueueRow[] }>
 	},
-	player: { jump: (() => {}) as (item: string) => void },
+	player: {
+		jump: (() => {}) as (item: string) => void,
+		rewind: (() => {}) as (play: { play: number; item: string }) => void
+	},
 	/** The rows of Up Next, in order. */
 	upNext: [] as QueueRow[],
+	/** The rows of History, newest first. */
+	history: [] as QueueRow[],
 	/** The tracks the lookup gives, by ID. */
 	tracks: new Map<string, unknown>(),
 	/** While set, a lookup that starts waits for it. */
@@ -45,11 +50,11 @@ vi.mock('$lib/queue/summaries', async (original) => ({
 
 const queue = $state(fake.queue);
 Object.assign(fake, { queue });
-queue.rows = async (_section, offset, limit) => ({
-	rows: fake.upNext.slice(offset, offset + limit)
+queue.rows = async (section, offset, limit) => ({
+	rows: (section === 'history' ? fake.history : fake.upNext).slice(offset, offset + limit)
 });
 
-const { default: QueueList } = await import('./QueueList.svelte');
+const { default: QueueList, forgetShown } = await import('./QueueList.svelte');
 
 /** A track summary with the given ID and title. */
 const summary = (id: string, title: string) =>
@@ -77,6 +82,19 @@ function setUpNext(rows: QueueRow[], manual = 0) {
 	fake.queue.revision++;
 }
 
+/** A known History row for play `play` of item `k.<n>`. */
+const played = (play: number, n: number): QueueRow => ({ ...known(n), play });
+
+/** Sets History to `rows`, newest first. */
+function setHistory(rows: QueueRow[]) {
+	fake.history = rows;
+	fake.queue.counts = { manual: 0, upNext: 0, history: rows.length };
+	fake.queue.revision++;
+}
+
+/** The History list. */
+const historyList = () => page.getByRole('list', { name: 'History' });
+
 /** The Up Next list. */
 const list = () => page.getByRole('list', { name: 'Up Next' });
 /** The row of `item`, once it is drawn. */
@@ -85,6 +103,7 @@ const row = (item: string) =>
 
 beforeEach(() => {
 	vi.restoreAllMocks();
+	forgetShown();
 	fake.tracks = new Map([0, 1, 2, 3].map((n) => [`t${n}`, summary(`t${n}`, `Song ${n}`)]));
 	fake.queue.queueId = 'q1';
 	fake.queue.refusal = null;
@@ -92,9 +111,9 @@ beforeEach(() => {
 	realtime.connected = false;
 });
 
-/** Renders the list in a box with a height, as the panel gives it. */
-function mount() {
-	return render(QueueList, {}, { baseElement: document.body });
+/** Renders the list of `tab`. */
+function mount(tab: 'upNext' | 'history' = 'upNext') {
+	return render(QueueList, { tab }, { baseElement: document.body });
 }
 
 describe('QueueList', () => {
@@ -440,5 +459,131 @@ describe('QueueList', () => {
 		fake.queue.queueId = null;
 		mount();
 		await expect.element(page.getByText('Play something to start a queue.')).toBeVisible();
+	});
+});
+
+describe('QueueList History', () => {
+	/** Records the edits sent, as the queue applies them: the rows are read again after each. */
+	function record() {
+		const edits: SentEdit[] = [];
+		fake.queue.edit = (e) => {
+			edits.push(e);
+			fake.queue.revision++;
+		};
+		return edits;
+	}
+
+	it('lists plays newest first, and rewinds to the one clicked', async () => {
+		const rewind = vi.spyOn(fake.player, 'rewind');
+		setHistory([played(7, 2), played(5, 1), played(4, 0)]);
+		mount('history');
+		const titles = () =>
+			[...document.querySelectorAll('[data-item] .title')].map((e) => e.textContent?.trim());
+		await expect.poll(titles).toEqual(['Song 2', 'Song 1', 'Song 0']);
+		await historyList().getByRole('button', { name: 'Song 1', exact: true }).click();
+		expect(rewind).toHaveBeenCalledWith({ play: 5, item: 'k.1' });
+		// Enter on a title does the same, from the keyboard.
+		historyList().getByRole('button', { name: 'Song 0', exact: true }).element().focus();
+		await userEvent.keyboard('{Enter}');
+		expect(rewind).toHaveBeenLastCalledWith({ play: 4, item: 'k.0' });
+	});
+
+	it('keeps two plays of one item apart', async () => {
+		const edits = record();
+		setHistory([played(9, 0), played(3, 0)]);
+		mount('history');
+		await expect.element(historyList().getByRole('listitem').nth(1)).toBeVisible();
+		await page.getByRole('button', { name: 'Remove Song 0' }).nth(1).click();
+		expect(edits).toEqual([{ type: 'removePlays', plays: [{ play: 3, item: 'k.0' }] }]);
+	});
+
+	it('removes a play with Delete, or with its button, and the selected plays together', async () => {
+		const edits = record();
+		setHistory([played(7, 3), played(6, 2), played(5, 1), played(4, 0)]);
+		mount('history');
+		const title = (n: number) =>
+			historyList().getByRole('button', { name: `Song ${n}`, exact: true });
+		await expect.element(title(0)).toBeVisible();
+		title(3).element().focus();
+		await userEvent.keyboard('{Delete}');
+		// Re-read after the edit: Song 3 is gone from the drawn rows.
+		setHistory([played(6, 2), played(5, 1), played(4, 0)]);
+		await expect.poll(() => document.activeElement).toBe(title(2).element());
+		await page.getByRole('button', { name: 'Remove Song 2' }).click();
+		expect(edits).toEqual([
+			{ type: 'removePlays', plays: [{ play: 7, item: 'k.3' }] },
+			{ type: 'removePlays', plays: [{ play: 6, item: 'k.2' }] }
+		]);
+
+		// Select two with the check handle and with Space, then one press removes both.
+		setHistory([played(5, 1), played(4, 0)]);
+		await expect.element(title(1)).toBeVisible();
+		await page.getByRole('button', { name: 'Select Song 1' }).click();
+		title(0).element().focus();
+		await userEvent.keyboard(' ');
+		await expect.element(row('5:k.1')).toHaveClass('selected');
+		await expect.element(row('4:k.0')).toHaveClass('selected');
+		await page.getByRole('button', { name: 'Remove Song 0' }).click();
+		expect(edits.at(-1)).toEqual({
+			type: 'removePlays',
+			plays: [
+				{ play: 5, item: 'k.1' },
+				{ play: 4, item: 'k.0' }
+			]
+		});
+	});
+
+	it('queues a played track next, under a key of its own', async () => {
+		const edits = record();
+		setHistory([played(7, 2), played(5, 1)]);
+		mount('history');
+		const title = (n: number) =>
+			historyList().getByRole('button', { name: `Song ${n}`, exact: true });
+		await expect.element(title(2)).toBeVisible();
+		await expect.element(title(1)).toBeVisible();
+		title(1).element().focus();
+		await page.getByRole('button', { name: 'Queue Song 1 next' }).click();
+		// The edit is applied: the played song leaves History, and focus stays in the list.
+		setHistory([played(7, 2)]);
+		await expect.poll(() => document.activeElement).toBe(title(2).element());
+		expect(edits).toEqual([
+			{
+				type: 'requeue',
+				play: { play: 5, item: 'k.1' },
+				key: expect.stringMatching(/^[0-9a-f-]{36}$/)
+			}
+		]);
+	});
+
+	it('draws plays that are unknown or unavailable without a track, and does not rewind to them', async () => {
+		const rewind = vi.spyOn(fake.player, 'rewind');
+		const edits = record();
+		fake.tracks.delete('t2');
+		setHistory([
+			played(9, 0),
+			{ item: 'k.1', libraryId: '11', status: 'unknown', track: null, play: 8 },
+			{ item: 'k.2', libraryId: '11', status: 'unavailable', track: null, play: 7 }
+		]);
+		mount('history');
+		await expect.poll(() => document.querySelector('[data-item="7:k.2"]')).not.toBeNull();
+		await expect.element(row('9:k.0')).toHaveAttribute('data-state', 'ready');
+		await expect.element(row('8:k.1')).toHaveAttribute('data-state', 'loading');
+		const gone = row('7:k.2');
+		await expect.element(gone).toHaveAttribute('data-state', 'unavailable');
+		await expect.element(gone).toHaveTextContent('Unavailable');
+		const title = gone.getByRole('button', { name: 'Unavailable track', exact: true });
+		await expect.element(title).toHaveAttribute('aria-disabled', 'true');
+		(title.element() as HTMLElement).click();
+		expect(rewind).not.toHaveBeenCalled();
+		// It cannot be put back in Up Next, but can be removed.
+		await expect.element(gone.getByRole('button', { name: /Queue .* next/ })).toBeDisabled();
+		await gone.getByRole('button', { name: 'Remove unavailable track' }).click();
+		expect(edits).toEqual([{ type: 'removePlays', plays: [{ play: 7, item: 'k.2' }] }]);
+	});
+
+	it('says so when nothing has played', async () => {
+		setHistory([]);
+		mount('history');
+		await expect.element(page.getByText('Nothing has played yet.')).toBeVisible();
 	});
 });

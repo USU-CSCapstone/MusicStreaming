@@ -135,3 +135,56 @@ test('reaches Shuffle and Repeat from the panel at phone width', async ({ page }
 		.toEqual(expect.arrayContaining(['shuffle', 'repeat']));
 	expect(queue.edits.at(-1)).toMatchObject({ type: 'repeat', mode: 'all' });
 });
+
+/** Plays the album, skips `nexts` tracks, then opens the queue panel and its History tab. */
+async function openHistory(page: Page, nexts: number) {
+	const { panel, list } = await openUpNext(page);
+	const player = page.getByRole('region', { name: 'Player' });
+	for (let i = 0; i < nexts; i++) await player.getByRole('button', { name: 'Next' }).click();
+	await panel.getByRole('tab', { name: /History/ }).click();
+	return { panel, player, list, history: panel.getByRole('list', { name: 'History' }) };
+}
+
+test('rewinds from History', async ({ page }) => {
+	const queue = queueOf(page);
+	const { panel, player, history } = await openHistory(page, 2);
+	await expect(player.getByText('Signal Remix')).toBeVisible();
+	const titles = () => history.locator('[data-item] .title').allInnerTexts();
+	// Newest first.
+	await expect.poll(titles).toEqual(['Signal Part 2', 'Signal Part 1']);
+
+	// Choosing the older play goes back to it, as Previous twice would.
+	await history.getByRole('button', { name: 'Signal Part 1', exact: true }).click();
+	await expect(player.getByText('Signal Part 1')).toBeVisible();
+	await expect
+		.poll(() => queue.edits.at(-1))
+		.toMatchObject({ type: 'rewind', play: { play: 0 }, key: expect.any(String) });
+	await expect(panel.getByText('Nothing has played yet.')).toBeVisible();
+	await panel.getByRole('tab', { name: /Up Next/ }).click();
+	const upNext = panel.getByRole('list', { name: 'Up Next' });
+	await expect
+		.poll(() => upNext.locator('[data-item] .title').allInnerTexts())
+		.toEqual(['Signal Part 2', 'Signal Remix']);
+});
+
+test('re-queues a played track', async ({ page }) => {
+	const queue = queueOf(page);
+	const { panel, player, history } = await openHistory(page, 1);
+	await expect(player.getByText('Signal Part 2')).toBeVisible();
+	await expect(history.getByRole('button', { name: 'Signal Part 1', exact: true })).toBeVisible();
+
+	await panel.getByRole('button', { name: 'Queue Signal Part 1 next' }).click();
+	await expect
+		.poll(() => queue.edits.at(-1))
+		.toMatchObject({ type: 'requeue', play: { play: 0 }, key: expect.any(String) });
+	await expect(panel.getByText('Nothing has played yet.')).toBeVisible();
+
+	// It is at the front of Up Next, in the Manual Queue, and the song playing is undisturbed.
+	await panel.getByRole('tab', { name: /Up Next/ }).click();
+	const upNext = panel.getByRole('list', { name: 'Up Next' });
+	await expect(panel.getByRole('heading', { name: /Queued by you\s*1/ })).toBeVisible();
+	await expect
+		.poll(() => upNext.locator('[data-item] .title').allInnerTexts())
+		.toEqual(['Signal Part 1', 'Signal Remix']);
+	await expect(player.getByText('Signal Part 2')).toBeVisible();
+});

@@ -1,7 +1,19 @@
+<script module lang="ts">
+	import type { TrackSummary } from '$lib/api/types';
+
+	/** Each track shown, by `trackKey`: held beyond one list, so switching tabs does not look them up again. */
+	let shown = $state.raw(new Map<string, TrackSummary | null>());
+
+	/** Lets go of every track held, as a new session would; for tests, which share the module. */
+	export function forgetShown() {
+		shown = new Map();
+	}
+</script>
+
 <script lang="ts">
 	import { tick, untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
-	import type { QueueAnchor, TrackSummary } from '$lib/api/types';
+	import type { QueueAnchor } from '$lib/api/types';
 	import { edgeStep } from '$lib/dragging';
 	import { artistName, formatDuration, plural } from '$lib/format';
 	import { player } from '$lib/player.svelte';
@@ -13,18 +25,26 @@
 	import Artwork from './Artwork.svelte';
 	import Icon from './Icon.svelte';
 
-	// Up Next as a list of rows that are all `ROW` tall, so only the rows in view, and a few
-	// beyond, are read from the queue and drawn however long it is (`requirements/performance.md`
-	// §6). It shows the Manual Queue apart from the context and edits both (`requirements/queue.md`
-	// §2, §3): anything moves anywhere, by dragging the grip or with Alt+↑/↓, and any row is
-	// removed with one press. Every change is an edit the queue client applies at once and sends on.
+	// A tab of the queue as a list of rows that are all `ROW` tall, so only the rows in view, and
+	// a few beyond, are read from the queue and drawn however long it is
+	// (`requirements/performance.md` §6). Up Next shows the Manual Queue apart from the context and
+	// edits both (`requirements/queue.md` §2, §3): anything moves anywhere, by dragging the grip or
+	// with Alt+↑/↓, and any row is removed with one press. History shows what played, newest
+	// first: choosing a row goes back to it, and a row is removed or put at the front of Up Next.
+	// Every change is an edit the queue client applies at once and sends on.
+
+	let { tab = 'upNext' }: { tab?: 'upNext' | 'history' } = $props();
+	/** Which tab this is; the parent draws a new list for each, so it never changes. */
+	// svelte-ignore state_referenced_locally
+	const up = tab === 'upNext';
 
 	/** Rows drawn beyond the ones in view, so a scroll shows rows at once. */
 	const OVERSCAN = 6;
 
 	const manual = $derived(queue.counts.manual);
 	const upNext = $derived(queue.counts.upNext);
-	const total = $derived(upNextRows(manual, upNext));
+	const history = $derived(queue.counts.history);
+	const total = $derived(up ? upNextRows(manual, upNext) : history);
 
 	let scroller = $state<HTMLDivElement>();
 	let scrollTop = $state(0);
@@ -40,11 +60,21 @@
 	/** Where row `v` is drawn, in the scrolled content. */
 	const topOf = (v: number) => v * ROW - offset + scrollTop;
 
+	/**
+	 * What names a row in this list: an Up Next item, or a History play with its item, as
+	 * `<play>:<item>`, since an item can have been played more than once.
+	 */
+	const idOf = (row: QueueRow) => (up ? row.item : `${row.play}:${row.item}`);
+	/** The play an id of a History row names, as edits do. */
+	const playOf = (id: string) => ({
+		play: Number(id.slice(0, id.indexOf(':'))),
+		item: id.slice(id.indexOf(':') + 1)
+	});
+
 	/** The queue's row of each row of the list that has one, and each track shown: read for the rows in view. */
 	let ids = $state.raw(new Map<number, QueueRow>());
-	let shown = $state.raw(new Map<string, TrackSummary | null>());
 	/** Where each item is, the inverse of `ids`. */
-	const rowOf = $derived(new Map([...ids].map(([v, row]) => [row.item, v])));
+	const rowOf = $derived(new Map([...ids].map(([v, row]) => [idOf(row), v])));
 
 	/** The rows to draw: a heading or hint at once, an item once the queue has said which it is. */
 	const drawn = $derived.by(() => {
@@ -58,6 +88,11 @@
 			place?: number;
 		}[] = [];
 		for (let v = first; v < last; v++) {
+			if (!up) {
+				const row = ids.get(v);
+				if (row) out.push({ key: idOf(row), v, kind: 'item', row, place: v + 1 });
+				continue;
+			}
 			const row = upNextRow(v, manual);
 			if (row.kind === 'heading') {
 				const text = row.section === 'manual' ? 'Queued by you' : 'Up next';
@@ -121,12 +156,16 @@
 		const revision = queue.revision;
 		const [from, to] = [first, last];
 		const [m, n] = [manual, upNext];
+		const h = history;
 		let current = true;
 		(async () => {
 			// eslint-disable-next-line svelte/prefer-svelte-reactivity -- made whole, then replaces `ids`
 			const found = new Map<number, QueueRow>();
-			for (const piece of upNextPieces(from, to, m, n)) {
-				const window = await queue.rows('upNext', piece.offset, piece.limit);
+			const pieces = up
+				? upNextPieces(from, to, m, n)
+				: [{ offset: from, limit: Math.min(to, h) - from, row: from }];
+			for (const piece of pieces.filter((p) => p.limit > 0)) {
+				const window = await queue.rows(tab, piece.offset, piece.limit);
 				window.rows.forEach((row, k) => found.set(piece.row + k, row));
 			}
 			if (!current) return;
@@ -160,8 +199,8 @@
 		};
 	});
 
-	// A selection belongs to one queue, and to what has not been played: a song that moved to
-	// History is not one to drag or remove with the rest.
+	// A selection belongs to one queue and to the song playing: when either changes, rows have
+	// moved to History or gone from it, so what was selected is dropped.
 	const selected = new SvelteSet<string>();
 	$effect(() => {
 		void [queue.queueId, queue.current];
@@ -246,18 +285,31 @@
 	function remove(item: string) {
 		const items = targets(item);
 		const v = rowOf.get(item) ?? 0;
-		const next = ids.get(v + 1)?.item ?? ids.get(v - 1)?.item;
+		const near = ids.get(v + 1) ?? ids.get(v - 1);
+		const next = near && idOf(near);
 		if (next && !items.includes(next)) focusItem = next;
 		else focusFirst = true;
-		send({ type: 'remove', items });
+		send(up ? { type: 'remove', items } : { type: 'removePlays', plays: items.map(playOf) });
 		selected.clear();
 		said = `${plural(items.length, 'song')} removed`;
 	}
 
-	/** Plays `item` now: everything ahead of it goes to History. */
-	function jump(item: string) {
+	/** Plays the row now: from Up Next, everything ahead of it goes to History; from History, the queue goes back to it. */
+	function choose(id: string) {
 		focusFirst = true;
-		player.jump(item);
+		if (up) player.jump(id);
+		else player.rewind(playOf(id));
+	}
+
+	/** Puts the History play at the front of Up Next, and takes it out of History. */
+	function requeue(id: string) {
+		const v = rowOf.get(id) ?? 0;
+		const near = ids.get(v + 1) ?? ids.get(v - 1);
+		if (near) focusItem = idOf(near);
+		else focusFirst = true;
+		send({ type: 'requeue', play: playOf(id), key: crypto.randomUUID() });
+		selected.delete(id);
+		said = 'Song queued next';
 	}
 
 	/** Keys on a row: arrows between rows, Alt+arrows to move, Space to select, Delete to remove. */
@@ -269,7 +321,7 @@
 			e.preventDefault();
 			const by = key === 'ArrowUp' ? -1 : 1;
 			if (e.altKey) {
-				step(item, by);
+				if (up) step(item, by);
 				return;
 			}
 			const titles = [...(scroller?.querySelectorAll<HTMLElement>('.title') ?? [])];
@@ -294,7 +346,7 @@
 	/** A click on a row's title: Ctrl/Cmd selects it; otherwise it plays. */
 	function titleClick(e: MouseEvent, item: string, ready: boolean) {
 		if (e.ctrlKey || e.metaKey) toggle(item);
-		else if (ready) jump(item);
+		else if (ready) choose(item);
 	}
 
 	// Dragging by the grab handle, with pointer events so a finger drags as a mouse does. The
@@ -419,11 +471,13 @@
 >
 	{#if !queue.queueId}
 		<p class="state muted">Play something to start a queue.</p>
+	{:else if !up && history === 0}
+		<p class="state muted">Nothing has played yet.</p>
 	{:else}
-		<ol class="space" style:height="{space}px" aria-label="Up Next">
+		<ol class="space" style:height="{space}px" aria-label={up ? 'Up Next' : 'History'}>
 			{#each drawn as row (row.key)}
 				{#if row.kind === 'item'}
-					{@const item = row.row!.item}
+					{@const item = idOf(row.row!)}
 					{@const s = show(row.row!)}
 					<!-- Keys are handled here for the buttons inside the row. -->
 					<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -433,22 +487,36 @@
 						class:dragged={drag?.started && drag.items.includes(item)}
 						data-item={item}
 						data-state={s.state}
-						aria-setsize={upNext}
+						aria-setsize={up ? upNext : history}
 						aria-posinset={row.place}
 						style:top="{topOf(row.v)}px"
 						onkeydown={(e) => onrowkey(e, item)}
 						onkeyup={(e) => onrowkey(e, item)}
 						aria-busy={s.state === 'loading'}
 					>
-						<!-- A pointer's way to move rows; the keyboard moves them with Alt+↑/↓ from the title. -->
-						<span
-							class="grip"
-							title="Drag to move; Alt+↑/↓ moves from the keyboard"
-							aria-hidden="true"
-							onpointerdown={(e) => gripDown(e, item)}
-						>
-							<Icon name="grip" size={18} />
-						</span>
+						{#if up}
+							<!-- A pointer's way to move rows; the keyboard moves them with Alt+↑/↓ from the title. -->
+							<span
+								class="grip"
+								title="Drag to move; Alt+↑/↓ moves from the keyboard"
+								aria-hidden="true"
+								onpointerdown={(e) => gripDown(e, item)}
+							>
+								<Icon name="grip" size={18} />
+							</span>
+						{:else}
+							<!-- History's rows do not move, so the handle's place is a way to select by touch or mouse. -->
+							<button
+								type="button"
+								class="pick"
+								aria-label="Select {named(s)}"
+								aria-pressed={selected.has(item)}
+								title="Select"
+								onclick={() => toggle(item)}
+							>
+								<Icon name="check" size={16} />
+							</button>
+						{/if}
 						<span class="thumb">
 							{#if s.track}
 								<Artwork image={s.track.album.image} seed={s.track.album.id} size={40} />
@@ -462,7 +530,7 @@
 								class="title"
 								class:unavailable={s.state === 'unavailable'}
 								aria-disabled={s.state !== 'ready'}
-								aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown Delete"
+								aria-keyshortcuts={up ? 'Alt+ArrowUp Alt+ArrowDown Delete' : 'Delete'}
 								onclick={(e) => titleClick(e, item, s.state === 'ready')}
 							>
 								{s.state === 'ready'
@@ -481,6 +549,18 @@
 						</span>
 						{#if s.track}
 							<span class="muted tabular duration">{formatDuration(s.track.durationUs)}</span>
+						{/if}
+						{#if !up}
+							<button
+								type="button"
+								class="action"
+								aria-label="Queue {named(s)} next"
+								title="Queue next"
+								disabled={s.state !== 'ready'}
+								onclick={() => requeue(item)}
+							>
+								<Icon name="plus" size={16} />
+							</button>
 						{/if}
 						<button
 							type="button"
@@ -610,6 +690,31 @@
 
 	.grip:hover {
 		color: var(--text);
+	}
+
+	.pick {
+		display: grid;
+		place-items: center;
+		flex-shrink: 0;
+		width: 24px;
+		height: 24px;
+		padding: 0;
+		border: 1px solid var(--border);
+		border-radius: 50%;
+		background: transparent;
+		color: transparent;
+		cursor: pointer;
+	}
+
+	.pick[aria-pressed='true'] {
+		border-color: var(--accent);
+		background: var(--accent);
+		color: var(--bg);
+	}
+
+	.pick:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
 	}
 
 	.thumb {
