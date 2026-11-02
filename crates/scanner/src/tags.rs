@@ -12,6 +12,7 @@ use std::panic;
 use std::path::Path;
 
 use jewelcase_core::Format;
+use lofty::aac::AacFile;
 use lofty::config::ParseOptions;
 use lofty::error::{FileParseError, UnknownFormatError, UnsupportedTagError};
 use lofty::file::{AudioFile, FileType, TaggedFile, TaggedFileExt};
@@ -89,6 +90,10 @@ fn parse(path: &Path) -> Result<ReadResult, ReadError> {
                 Layer::Layer3 => (mpeg.into(), Format::Mp3, user_texts),
                 other => return Err(ReadError::Unsupported(format!("MPEG {other:?}"))),
             }
+        } else if probe.file_type() == Some(FileType::Aac) {
+            let aac = AacFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
+            let user_texts = user_texts(aac.id3v2());
+            (aac.into(), Format::Aac, user_texts)
         } else if probe.file_type() == Some(FileType::Wav) {
             let wav = WavFile::read_from(probe.into_inner(), options).map_err(map_parse_error)?;
             let user_texts = user_texts(wav.id3v2());
@@ -101,11 +106,8 @@ fn parse(path: &Path) -> Result<ReadResult, ReadError> {
             let tagged = probe.read().map_err(map_parse_error)?;
             let format = match tagged.file_type() {
                 FileType::Flac => Format::Flac,
-                FileType::Aac => Format::Aac,
                 FileType::Vorbis => Format::Vorbis,
                 FileType::Opus => Format::Opus,
-                FileType::Wav => Format::Wav,
-                FileType::Aiff => Format::Aiff,
                 // MP4 without an `ftyp` sniff hit; lofty found it anyway.
                 FileType::Mp4 => Format::Aac,
                 other => return Err(ReadError::Unsupported(format!("{other:?}"))),

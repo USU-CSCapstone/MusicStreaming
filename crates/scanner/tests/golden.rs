@@ -116,6 +116,7 @@ fn every_format_reads_the_same_tagset() {
         ("t.flac", vec!["-c:a", "flac"], TagType::VorbisComments, Format::Flac),
         ("t.mp3", vec!["-c:a", "libmp3lame", "-b:a", "128k"], TagType::Id3v2, Format::Mp3),
         ("aac.m4a", vec!["-c:a", "aac", "-b:a", "128k"], TagType::Mp4Ilst, Format::Aac),
+        ("t.aac", vec!["-c:a", "aac", "-b:a", "128k", "-f", "adts"], TagType::Id3v2, Format::Aac),
         ("alac.m4a", vec!["-c:a", "alac"], TagType::Mp4Ilst, Format::Alac),
         ("t.ogg", vec!["-c:a", "libvorbis"], TagType::VorbisComments, Format::Vorbis),
         ("t.opus", vec!["-c:a", "libopus"], TagType::VorbisComments, Format::Opus),
@@ -146,6 +147,32 @@ fn every_format_reads_the_same_tagset() {
         assert!(got.properties.sample_rate.is_some(), "{name}");
     }
     assert!(failures.is_empty(), "golden corpus diverged:\n{}", failures.join("\n"));
+}
+
+/// Every format that carries ID3v2 reads mood from the `TXXX:MOOD` frame ID3v2.3 taggers write,
+/// which lofty's generic tag drops.
+#[test]
+fn every_id3v2_format_reads_mood_from_txxx() {
+    use lofty::TextEncoding;
+    use lofty::id3::v2::{ExtendedTextFrame, Frame, Id3v2Tag};
+    let tmp = tempfile::tempdir().unwrap();
+    let wav = tmp.path().join("src.wav");
+    write_small_wav(&wav);
+    let cases: [(&str, Vec<&str>); 4] = [
+        ("t.mp3", vec!["-c:a", "libmp3lame"]),
+        ("t.aac", vec!["-c:a", "aac", "-f", "adts"]),
+        ("t.aiff", vec!["-c:a", "pcm_s16be"]),
+        ("t.wav", vec!["-c:a", "pcm_s16le"]),
+    ];
+    for (name, args) in cases {
+        let path = tmp.path().join(name);
+        encode(&wav, &path, &args);
+        let mut tag = Id3v2Tag::new();
+        tag.insert(Frame::UserText(ExtendedTextFrame::new(TextEncoding::UTF8, "MOOD", "Calm")));
+        tag.save_to_path(&path, WriteOptions::default()).unwrap();
+        let got = read_tags(&path).unwrap_or_else(|e| panic!("read {name}: {e}")).tags;
+        assert_eq!(got.values_of("mood"), ["Calm"], "{name}");
+    }
 }
 
 #[test]
