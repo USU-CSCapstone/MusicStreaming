@@ -21,12 +21,12 @@
 	const sort = $derived(currentSort(FIELDS));
 	const albums = $derived(
 		new Paged(data.albums, (cursor) =>
-			listAlbums(fetch, data.lib, { tag: tag.id, sort: 'name', cursor })
+			listAlbums(fetch, data.lib, { tagAll: tag.id, sort: 'name', cursor })
 		)
 	);
 	const artists = $derived(
 		new Paged(data.artists, (cursor) =>
-			listArtists(fetch, data.lib, { tag: tag.id, sort: 'name', cursor })
+			listArtists(fetch, data.lib, { tagAll: tag.id, sort: 'name', cursor })
 		)
 	);
 	const tracks = $derived(

@@ -3,30 +3,34 @@
 
 import type { TagsByType } from './api/types';
 
-/** Whether an item must carry all or any of the chosen tags of each type (`api/openapi.yaml`). */
+/** Whether an item must carry all or any of a type's chosen tags. */
 export type TagMatch = 'any' | 'all';
 
 /**
- * The tags a list is narrowed to, by ID, in the order they were chosen. The server groups them
- * by type: within one type `match` decides, and every type named must match, since types are
- * independent (`requirements/tags.md` §2).
+ * The tags a list is narrowed to, by ID, each list in the order its tags were chosen, as the
+ * API's `tagAll` and `tagAny` name them: an item carries every tag of `all` and, since types are
+ * independent (`requirements/tags.md` §2), one of `any`'s of each type.
  */
-export type TagFilter = { tags: string[]; match: TagMatch };
+export type TagFilter = { all: string[]; any: string[] };
 
 /** No filter. */
-export const UNFILTERED: TagFilter = { tags: [], match: 'any' };
+export const UNFILTERED: TagFilter = { all: [], any: [] };
 
 /** Whether `filter` narrows a list at all. */
 export function isFiltered(filter: TagFilter): boolean {
-	return filter.tags.length > 0;
+	return filter.all.length > 0 || filter.any.length > 0;
+}
+
+/** Every tag `filter` names, `all`'s first. */
+export function chosenTags(filter: TagFilter): string[] {
+	return [...filter.all, ...filter.any];
 }
 
 /**
- * The items of `items` whose tags `filter` keeps, in their order, as the server keeps them: the
- * chosen tags grouped by type, each type's matched by `filter.match`, and every type's at once. A
- * chosen tag's type is read off the items that carry it, or else from `typeOf`. One whose type is
- * not known is a group of its own that nothing matches, as a tag the library does not have
- * matches nothing.
+ * The items of `items` whose tags `filter` keeps, in their order, as the server keeps them: every
+ * tag of `filter.all`, and one of `filter.any`'s of each type. An `any` tag's type is read off the
+ * items that carry it, or else from `typeOf`. One whose type is not known is a group of its own
+ * that nothing matches, as a tag the library does not have matches nothing.
  */
 export function filterByTags<T>(
 	items: readonly T[],
@@ -42,16 +46,15 @@ export function filterByTags<T>(
 		}
 	}
 	const groups = new Map<string, string[]>();
-	for (const tag of filter.tags) {
+	for (const tag of filter.any) {
 		const type = carried.get(tag) ?? typeOf(tag) ?? `unknown:${tag}`;
 		groups.set(type, [...(groups.get(type) ?? []), tag]);
 	}
 	return items.filter((item) => {
 		const has = new Set(Object.values(tagsOf(item)).flatMap((tags) => tags.map((tag) => tag.id)));
-		return [...groups.values()].every((group) =>
-			filter.match === 'all'
-				? group.every((tag) => has.has(tag))
-				: group.some((tag) => has.has(tag))
+		return (
+			filter.all.every((tag) => has.has(tag)) &&
+			[...groups.values()].every((group) => group.some((tag) => has.has(tag)))
 		);
 	});
 }

@@ -19,7 +19,7 @@
 	// (`requirements/playlists.md` Overview, `requirements/analytics.md` §1).
 	const context: PlayContext = $derived(
 		filtered
-			? { type: 'filter', filter: { tags: data.filter.tags, tagMatch: data.filter.match } }
+			? { type: 'filter', filter: { tagAll: data.filter.all, tagAny: data.filter.any } }
 			: { type: 'library' }
 	);
 </script>

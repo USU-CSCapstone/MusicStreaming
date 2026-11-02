@@ -19,7 +19,7 @@ test('songs filter by tags from their columns, held in the URL', async ({ page }
 
 	await page.getByRole('button', { name: 'Filter by genre' }).click();
 	await page.getByRole('checkbox', { name: /Ambient/ }).check();
-	await expect(page).toHaveURL(/tag=61/);
+	await expect(page).toHaveURL(/tagAny=61/);
 	await page.keyboard.press('Escape');
 	await expect(songs).toHaveText(['Signal Part 2', 'Signal Part 1']);
 
@@ -40,7 +40,7 @@ test('songs filter by tags from their columns, held in the URL', async ({ page }
 		await page.keyboard.press('Escape');
 	}
 	await expect(songs).toHaveCount(3);
-	await expect(page).not.toHaveURL(/tag=/);
+	await expect(page).not.toHaveURL(/tag(All|Any)=/);
 });
 
 test('the account chooses which tags are columns', async ({ page }) => {
@@ -52,7 +52,7 @@ test('the account chooses which tags are columns', async ({ page }) => {
 	await expect(page.getByRole('button', { name: 'Filter by mood' })).toHaveCount(0);
 
 	// A filter by a hidden type still shows its column, so it never narrows the list unseen.
-	await page.goto('/songs?tag=63');
+	await page.goto('/songs?tagAny=63');
 	await expect(page.getByRole('button', { name: 'Filter by mood, 1 chosen' })).toBeVisible();
 	await expect(titles(page)).toHaveText(['Signal Remix', 'Signal Part 1']);
 });
@@ -93,6 +93,42 @@ test('on a phone, a tag type opens as a sheet', async ({ page }) => {
 	await sheet.getByRole('button', { name: 'Close genre filter' }).click();
 	await expect(sheet).not.toBeVisible();
 	await expect(titles(page)).toHaveText(['Signal Remix']);
+});
+
+test('a search filters from above its results, and keeps the filter when it leaves nothing', async ({
+	page
+}) => {
+	await serveLibrary(page);
+	await page.goto('/search?q=signal');
+	const songs = titles(page);
+	await expect(songs).toHaveCount(3);
+	const filters = page.getByRole('group', { name: 'Filter by tags' });
+
+	await filters.getByRole('button', { name: 'Genre' }).click();
+	await page.getByRole('checkbox', { name: /Electronic/ }).check();
+	await page.getByRole('checkbox', { name: /Ambient/ }).check();
+	await expect(songs).toHaveCount(3);
+	// All of both genres is no song, and the filter stays to change.
+	await page.getByRole('radio', { name: 'All' }).click();
+	await expect(page).toHaveURL(/tagAll=62%2C61|tagAll=61%2C62/);
+	await expect(page.getByRole('heading', { name: /with these tags/ })).toBeVisible();
+	await page.getByRole('checkbox', { name: /Ambient/ }).uncheck();
+	await page.keyboard.press('Escape');
+	await expect(songs).toHaveText(['Signal Remix']);
+
+	await filters.getByRole('button', { name: 'Clear filters' }).click();
+	await expect(songs).toHaveCount(3);
+});
+
+test('on a phone, search leads to each tag type', async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	await serveLibrary(page);
+	await page.goto('/search');
+	await page
+		.getByRole('navigation', { name: 'Browse tags' })
+		.getByRole('link', { name: 'Moods' })
+		.click();
+	await expect(page.getByRole('heading', { level: 1, name: 'Moods' })).toBeVisible();
 });
 
 test('the sidebar has a section for each tag type, listing its tags', async ({ page }) => {

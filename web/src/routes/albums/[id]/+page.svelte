@@ -5,7 +5,7 @@
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
 	import TagLinks from '$lib/components/TagLinks.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
-	import { currentFilter, filterByTags, isFiltered, showFiltered } from '$lib/filters';
+	import { currentFilter, filterByTags, isFiltered, showFiltered, shownFilter } from '$lib/filters';
 	import { albumTitle, formatLength, plural, releaseYear } from '$lib/format';
 	import { knownTags } from '$lib/known-tags.svelte';
 	import { player } from '$lib/player.svelte';
@@ -19,9 +19,9 @@
 	// Unsorted is disc then track order (`requirements/albums.md` §4); sorted, it plays as shown
 	// (`requirements/conventions.md` §4.1).
 	const sort = $derived(currentSort(ALBUM_FIELDS));
-	// The album holds its tracks, so it filters them itself, as the server would
-	// (`requirements/tags.md` §7).
-	const filter = $derived(currentFilter());
+	// The album holds its tracks, so it filters them itself, as the server would, and at once
+	// for a filter just chosen (`requirements/tags.md` §7).
+	const filter = $derived(shownFilter(currentFilter()));
 	const shown = $derived(
 		filterByTags(
 			sortTracks(data.tracks, sort),
@@ -66,7 +66,7 @@
 	image={album.image}
 	seed={album.id}
 	icon="album"
-	onplay={data.tracks.length ? () => player.play(shown, 0, context) : undefined}
+	onplay={shown.length ? () => player.play(shown, 0, context) : undefined}
 >
 	<span class="artists"><ArtistLinks artists={album.artists} /></span>
 	{#if Object.keys(album.tags).length}<TagLinks tags={album.tags} />{/if}

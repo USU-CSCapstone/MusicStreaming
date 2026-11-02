@@ -1,13 +1,14 @@
 <script lang="ts">
 	// One tag type's button in the filter bar, opening a checklist of the library's tags of that
 	// type, most used first, with a search that ignores case and accents, since a library can carry
-	// thousands of genres (`requirements/tags.md` §7). It sits and closes as SortMenu does; on a
+	// thousands of genres (`requirements/tags.md` §7). It reads one page of the type's tags: a type
+	// that fits in it is searched here, as each letter is typed, and a larger one by the server. It sits and closes as SortMenu does; on a
 	// phone, where a panel beside the button would leave no room for the list, it is a sheet across
 	// the bottom of the screen, closed from its own button or by tapping above it
 	// (`requirements/general.md` §4).
 	import { tick } from 'svelte';
-	import { all, listTags } from '$lib/api/client';
-	import type { Tag, TagType } from '$lib/api/types';
+	import { listTags } from '$lib/api/client';
+	import type { Tag, TagPage, TagType } from '$lib/api/types';
 	import type { TagMatch } from '$lib/filters';
 	import { fullText } from '$lib/full-text';
 	import Icon from './Icon.svelte';
@@ -19,7 +20,7 @@
 		chosen,
 		ontoggle,
 		variant = 'button',
-		match = 'any',
+		match,
 		onmatch,
 		onclear
 	}: {
@@ -33,7 +34,7 @@
 		ontoggle: (tag: Tag) => void;
 		/** `heading`: a column's heading in a list of songs; `button`: a button of its own. */
 		variant?: 'button' | 'heading';
-		/** Whether the filter's chosen tags of a type must all match, or any. */
+		/** Whether the filter's chosen tags of a type must all match, or any; neither for a mix. */
 		match?: TagMatch;
 		/** All or any chosen, offered once two of this type are. */
 		onmatch?: (match: TagMatch) => void;
@@ -43,10 +44,17 @@
 
 	/** At most this many tags are listed at once; the search finds the rest. */
 	const SHOWN = 200;
+	/** How many of the type's tags are read when it opens, the most a page holds. */
+	const READ = 1000;
 
 	let open = $state(false);
-	let tags = $state<Tag[] | null>(null);
+	/** The type's most used tags, every one of them where they fit in one page. */
+	let first = $state<TagPage | null>(null);
+	/** What the server last found for a search, where the type has more tags than one page. */
+	let found = $state<TagPage | null>(null);
 	let failed = $state(false);
+	/** Counts the tries, so trying again searches again. */
+	let attempt = $state(0);
 	let query = $state('');
 	let button = $state<HTMLButtonElement>();
 	let panel = $state<HTMLElement>();
@@ -62,28 +70,62 @@
 			.replace(/\p{Mn}/gu, '')
 			.toLowerCase();
 
-	const matching = $derived.by(() => {
-		const wanted = fold(query.trim());
-		return (tags ?? []).filter((tag) => fold(tag.name).includes(wanted));
+	const wanted = $derived(query.trim());
+	// Every tag of the type was read, so the search runs here.
+	const complete = $derived(first !== null && first.nextCursor === null);
+	/** The tags to list, and how many match in all; `null` until there are any. */
+	const result = $derived.by((): { tags: Tag[]; total: number } | null => {
+		if (!first) return null;
+		if (complete || wanted === '') {
+			const tags = first.items.filter((tag) => fold(tag.name).includes(fold(wanted)));
+			return { tags, total: complete ? tags.length : first.total };
+		}
+		// The last search's tags stay listed until the next one's arrive.
+		return found && { tags: found.items, total: found.total };
 	});
 
-	/** Loads the type's tags the first time it opens. */
-	async function load() {
-		if (tags) return;
-		failed = false;
-		try {
-			tags = await all((cursor) =>
-				listTags(fetch, libraryId, {
+	// A type with more tags than one page is searched by the server, once typing pauses.
+	$effect(() => {
+		if (!open || !first || complete || wanted === '') return;
+		const q = wanted;
+		void attempt;
+		const timer = setTimeout(async () => {
+			try {
+				const page = await listTags(fetch, libraryId, {
 					type: type.key,
+					q,
 					sort: 'trackCount',
 					order: 'desc',
-					limit: 1000,
-					cursor
-				})
-			);
+					limit: SHOWN
+				});
+				if (query.trim() === q) found = page;
+			} catch {
+				failed = true;
+			}
+		}, 150);
+		return () => clearTimeout(timer);
+	});
+
+	/** Loads the type's most used tags the first time it opens. */
+	async function load() {
+		if (first) return;
+		failed = false;
+		try {
+			first = await listTags(fetch, libraryId, {
+				type: type.key,
+				sort: 'trackCount',
+				order: 'desc',
+				limit: READ
+			});
 		} catch {
 			failed = true;
 		}
+	}
+
+	function retry() {
+		failed = false;
+		attempt++;
+		void load();
 	}
 
 	async function show() {
@@ -213,15 +255,15 @@
 		{#if failed}
 			<p class="note muted">
 				Couldn't load the {label.toLowerCase()}s.
-				<button type="button" class="retry" onclick={load}>Try again</button>
+				<button type="button" class="retry" onclick={retry}>Try again</button>
 			</p>
-		{:else if !tags}
-			<p class="note muted">Loading…</p>
-		{:else if matching.length === 0}
+		{:else if !result}
+			<p class="note muted">{first ? 'Searching…' : 'Loading…'}</p>
+		{:else if result.tags.length === 0}
 			<p class="note muted">No {label.toLowerCase()} matches “{query.trim()}”.</p>
 		{:else}
 			<ul aria-label="{label}s">
-				{#each matching.slice(0, SHOWN) as tag (tag.id)}
+				{#each result.tags.slice(0, SHOWN) as tag (tag.id)}
 					<li>
 						<label class="tag">
 							<input
@@ -235,10 +277,9 @@
 					</li>
 				{/each}
 			</ul>
-			{#if matching.length > SHOWN}
-				<p class="note muted">
-					{(matching.length - SHOWN).toLocaleString()} more. Search to find them.
-				</p>
+			{@const more = result.total - Math.min(result.tags.length, SHOWN)}
+			{#if more > 0}
+				<p class="note muted">{more.toLocaleString()} more. Search to find them.</p>
 			{/if}
 		{/if}
 	</div>
