@@ -124,6 +124,8 @@ impl Database {
         writer.pragma_update(None, "journal_size_limit", JOURNAL_SIZE_LIMIT)?;
 
         let schema_version = migrations::migrate(&mut writer, migrations::MIGRATIONS)?;
+        // A release that adds a built-in tag type has files read again for it.
+        store::tag_types::count_built_in(&writer)?;
         // Once the libraries are large enough to describe (design/database.md §4).
         gather_statistics(&writer)?;
 

@@ -241,11 +241,11 @@ fn a_plugins_field_reads_back_from_every_format() {
     let tmp = tempfile::tempdir().unwrap();
     let wav = tmp.path().join("src.wav");
     write_small_wav(&wav);
-    let types = TagTypes::with(vec![jewelcase_scanner::AddedTagType {
+    let energy = jewelcase_scanner::AddedTagType {
         key: "acousticbrainz.energy".into(),
         field: "ENERGY".into(),
-        since: 3,
-    }]);
+    };
+    let types = TagTypes::with(vec![energy], 3);
 
     let cases: [(&str, &[&str]); 9] = [
         ("t.flac", &["-c:a", "flac"]),

@@ -274,72 +274,71 @@ fn labels(tags: &[&Tag]) -> Vec<String> {
 }
 
 /// A tag type the mapper reads (`design/scanning.md` §4): its key, as `tag_types` lists it, the
-/// lofty key its values come from, if lofty maps one, the custom field that carries them where
-/// that finds none, and the generation of types it was added in.
+/// lofty key its values come from, if lofty maps one, and the custom field that carries them
+/// where that finds none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TagTypeField {
     key: Cow<'static, str>,
     item: Option<ItemKey>,
     field: Option<Cow<'static, str>>,
-    since: u32,
 }
 
-/// The tag types built in (`requirements/tags.md` §2). A new one is an entry here, in the
-/// generation after the newest, which raises [`TagTypes::generation`]. ID3v2.3 has no mood
-/// frame, so taggers write mood there as `TXXX:MOOD`.
+/// The tag types built in (`requirements/tags.md` §2). A new one is an entry here, and raises
+/// [`BUILT_IN_GENERATION`]. ID3v2.3 has no mood frame, so taggers write mood there as
+/// `TXXX:MOOD`.
 static BUILT_IN: [TagTypeField; 2] = [
-    TagTypeField { key: Cow::Borrowed("genre"), item: Some(ItemKey::Genre), field: None, since: 1 },
+    TagTypeField { key: Cow::Borrowed("genre"), item: Some(ItemKey::Genre), field: None },
     TagTypeField {
         key: Cow::Borrowed("mood"),
         item: Some(ItemKey::Mood),
         field: Some(Cow::Borrowed("MOOD")),
-        since: 2,
     },
 ];
 
-/// A tag type a plugin added, as the store holds it (`requirements/tags.md` §2): its key, the
-/// custom field it is read from, and the generation of plugins' types it was added in, after
-/// every one before it. Plugins' types count their generations apart from the built-in ones,
-/// which a release raises ([`TagTypes::generation`]).
+/// How many times a release has added to the built-in types: one more with each new one. The
+/// store's generation of tag types counts a rise in it as a change to what a scan reads
+/// (`design/scanning.md` §4).
+pub const BUILT_IN_GENERATION: u32 = 2;
+
+/// A tag type a plugin added, as the store holds it (`requirements/tags.md` §2): its key and the
+/// custom field it is read from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddedTagType {
     pub key: String,
     pub field: String,
-    pub since: u32,
 }
 
 /// The tag types a scan reads, each the same way, by [`strings`] and then [`custom_values`]: the
-/// built-in ones, and those plugins added, which the scan takes from the store as it starts.
+/// built-in ones, and those plugins added, which the scan takes from the store as it starts, with
+/// the generation they are read with.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TagTypes(Vec<TagTypeField>);
+pub struct TagTypes {
+    fields: Vec<TagTypeField>,
+    generation: u32,
+}
 
 impl TagTypes {
-    /// The built-in types alone.
+    /// The built-in types alone, read with [`BUILT_IN_GENERATION`], as by a store that keeps no
+    /// generation of its own.
     pub fn built_in() -> TagTypes {
-        TagTypes(BUILT_IN.to_vec())
+        TagTypes { fields: BUILT_IN.to_vec(), generation: BUILT_IN_GENERATION }
     }
 
-    /// The built-in types and `added`.
-    pub fn with(added: Vec<AddedTagType>) -> TagTypes {
+    /// The built-in types and `added`, read with the store's `generation`.
+    pub fn with(added: Vec<AddedTagType>, generation: u32) -> TagTypes {
         let added = added.into_iter().map(|t| TagTypeField {
             key: Cow::Owned(t.key),
             item: None,
             field: Some(Cow::Owned(t.field)),
-            since: t.since,
         });
-        TagTypes(BUILT_IN.iter().cloned().chain(added).collect())
+        TagTypes { fields: BUILT_IN.iter().cloned().chain(added).collect(), generation }
     }
 
-    /// The generation the types are read with: the one the newest built-in type was added in,
-    /// plus the one the newest of plugins' types was. A track read with an older one is read
-    /// again, though its file is unchanged, for the types added since (`design/scanning.md` §2).
-    /// Each part only grows, so the sum grows whenever either does: a release adding a type
-    /// reaches files read with plugins' types, and a plugin's type files read by an older
-    /// release.
+    /// The generation the types are read with, which rises whenever what a scan reads changes
+    /// and never falls. A track read with an older one is read again, though its file is
+    /// unchanged, for the types added since (`design/scanning.md` §2).
     pub fn generation(&self) -> u32 {
-        let (built_in, added) = self.0.split_at(BUILT_IN.len());
-        let newest = |types: &[TagTypeField]| types.iter().map(|t| t.since).max().unwrap_or(0);
-        newest(built_in) + newest(added)
+        self.generation
     }
 }
 
@@ -408,7 +407,7 @@ impl Raw<'_> {
 /// are taken from them, each from the first that has any.
 fn custom_values(types: &TagTypes, raw: &[Option<Raw<'_>>]) -> CustomValues {
     let mut out = CustomValues::new();
-    for tag_type in &types.0 {
+    for tag_type in &types.fields {
         let Some(field) = &tag_type.field else { continue };
         let values = raw.iter().flatten().map(|raw| raw.values(field)).find(|v| !v.is_empty());
         if let Some(values) = values {
@@ -436,7 +435,7 @@ fn flag(raw: &str) -> bool {
 fn map_tags(file: &TaggedFile, types: &TagTypes, mut custom: CustomValues) -> TagSet {
     let tags = ordered_tags(file);
     let mut out = TagSet::default();
-    for tag_type in &types.0 {
+    for tag_type in &types.fields {
         let values = tag_type.item.map(|item| strings(&tags, &item)).unwrap_or_default();
         let values = if values.is_empty() {
             custom.remove(tag_type.key.as_ref()).unwrap_or_default()
@@ -586,11 +585,8 @@ mod tests {
 
     #[test]
     fn a_type_reads_the_first_of_a_files_tags_that_carries_its_field() {
-        let types = TagTypes::with(vec![AddedTagType {
-            key: "acousticbrainz.energy".into(),
-            field: "ENERGY".into(),
-            since: 3,
-        }]);
+        let energy = AddedTagType { key: "acousticbrainz.energy".into(), field: "ENERGY".into() };
+        let types = TagTypes::with(vec![energy], 3);
         let mut first = VorbisComments::default();
         first.push("MOOD".into(), "Calm".into());
         let mut second = VorbisComments::default();
@@ -605,11 +601,11 @@ mod tests {
     }
 
     #[test]
-    fn the_generation_adds_the_newest_plugin_types_to_the_newest_built_in_types() {
-        assert_eq!(TagTypes::built_in().generation(), 2);
-        let added = |since| AddedTagType { key: "p.k".into(), field: "K".into(), since };
-        assert_eq!(TagTypes::with(vec![added(1), added(3)]).generation(), 5);
-        assert_eq!(TagTypes::with(Vec::new()), TagTypes::built_in());
+    fn the_generation_is_the_stores() {
+        assert_eq!(TagTypes::built_in().generation(), BUILT_IN_GENERATION);
+        let added = AddedTagType { key: "p.k".into(), field: "K".into() };
+        assert_eq!(TagTypes::with(vec![added], 7).generation(), 7);
+        assert_eq!(TagTypes::with(Vec::new(), BUILT_IN_GENERATION), TagTypes::built_in());
     }
 
     #[test]

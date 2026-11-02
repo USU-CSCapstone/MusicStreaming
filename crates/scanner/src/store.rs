@@ -18,7 +18,7 @@ use crate::problems::Problem;
 use crate::scan::{Scan, Trigger};
 use crate::scope::Scope;
 use crate::sidecar::SidecarStamp;
-use crate::tags::AddedTagType;
+use crate::tags::TagTypes;
 use crate::track::{TrackId, TrackRecord};
 
 /// What the store already knows about a file. Enough for the skip check.
@@ -185,9 +185,10 @@ pub trait Store: Send + Sync {
     -> Result<Vec<PathBuf>, StoreError>;
 
     // --- tag types ---
-    /// The tag types plugins added, which a scan reads with the built-in ones
-    /// ([`crate::TagTypes::with`]).
-    fn added_tag_types(&self) -> Result<Vec<AddedTagType>, StoreError>;
+    /// The tag types a scan reads: the built-in ones and those plugins added, with the store's
+    /// generation of them, which rises whenever they change and never falls
+    /// ([`TagTypes::with`]).
+    fn tag_types(&self) -> Result<TagTypes, StoreError>;
 }
 
 /// Where a background job records what it made of a file it could not decode, and clears the

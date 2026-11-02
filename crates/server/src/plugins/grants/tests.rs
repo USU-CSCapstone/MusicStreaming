@@ -8,7 +8,8 @@ use serde_json::{Value, json};
 
 use super::super::Plugins;
 use super::super::testing::{database, install, manifest, plugins};
-use super::granted;
+use super::{granted, set as set_in};
+use crate::db::store::tag_types;
 use crate::db::testing::{library, stored};
 use crate::db::{Database, Text};
 
@@ -180,20 +181,29 @@ fn row(key: &str, name: &str, field: &str, since: u32) -> (String, String, Strin
     (key.into(), name.into(), "plugin".into(), field.into(), since)
 }
 
+/// The generation of tag types a scan reads with.
+async fn generation(db: &Database) -> u32 {
+    db.read(tag_types::generation).await.unwrap()
+}
+
 #[tokio::test]
 async fn approving_tag_types_registers_them_under_the_plugin_and_they_outlive_it() {
     let (temp, db) = database().await;
     install(&db, adding(&[("energy", "Energy", "energy"), ("tempo", " Tempo ", "TEMPO")])).await;
     let plugins = plugins(&temp, &db);
     assert_eq!(added_types(&db).await, [], "asking adds nothing");
+    // A new database is in generation 1, which counts the built-in types.
+    assert_eq!(generation(&db).await, 1);
     set(&plugins, &[TagTypes], &[]).await;
     let first =
-        [row("plugin.energy", "Energy", "ENERGY", 1), row("plugin.tempo", "Tempo", "TEMPO", 1)];
+        [row("plugin.energy", "Energy", "ENERGY", 2), row("plugin.tempo", "Tempo", "TEMPO", 2)];
     assert_eq!(added_types(&db).await, first, "in one generation, with the field uppercase");
+    assert_eq!(generation(&db).await, 2);
 
     set(&plugins, &[], &[]).await;
     set(&plugins, &[TagTypes], &[]).await;
     assert_eq!(added_types(&db).await, first, "revoked and approved again, as they were");
+    assert_eq!(generation(&db).await, 2, "which changes nothing a scan reads");
 
     // Approved again for another name changes the name; for another field, it is read anew.
     reinstall(
@@ -204,11 +214,48 @@ async fn approving_tag_types_registers_them_under_the_plugin_and_they_outlive_it
     .await;
     set(&plugins, &[TagTypes], &[]).await;
     let second =
-        [row("plugin.energy", "Liveliness", "ENERGY", 1), row("plugin.tempo", "Tempo", "BPM", 2)];
+        [row("plugin.energy", "Liveliness", "ENERGY", 2), row("plugin.tempo", "Tempo", "BPM", 3)];
     assert_eq!(added_types(&db).await, second);
 
     plugins.uninstall("plugin".into()).await.unwrap();
     assert_eq!(added_types(&db).await, second, "an uninstall leaves them");
+}
+
+/// A request that names the permission twice registers the types once, and says a scan must
+/// read files again for them all the same.
+#[tokio::test]
+async fn tag_types_approved_twice_at_once_are_still_read_anew() {
+    let (_temp, db) = database().await;
+    install(&db, adding(&[("energy", "Energy", "ENERGY")])).await;
+    let read_anew = db
+        .write(|tx| {
+            let manifest = super::manifest(tx, "plugin")?.unwrap();
+            set_in(tx, "plugin", &manifest, &[TagTypes, TagTypes], &[])
+        })
+        .await
+        .unwrap();
+    assert!(read_anew);
+    assert_eq!(added_types(&db).await, [row("plugin.energy", "Energy", "ENERGY", 2)]);
+    assert_eq!(generation(&db).await, 2);
+}
+
+/// A type removed takes nothing back: the next type added is in a newer generation than any
+/// before it, so files read with the removed one's are read again for it.
+#[tokio::test]
+async fn a_removed_types_generation_is_never_taken_again() {
+    let (temp, db) = database().await;
+    install(&db, adding(&[("energy", "Energy", "ENERGY")])).await;
+    let plugins = plugins(&temp, &db);
+    set(&plugins, &[TagTypes], &[]).await;
+    db.write(|tx| tx.execute("DELETE FROM tag_types WHERE key = 'plugin.energy'", []))
+        .await
+        .unwrap();
+    assert_eq!(generation(&db).await, 2, "removing a type leaves the generation");
+
+    reinstall(&db, &plugins, adding(&[("tempo", "Tempo", "BPM")])).await;
+    set(&plugins, &[TagTypes], &[]).await;
+    assert_eq!(added_types(&db).await, [row("plugin.tempo", "Tempo", "BPM", 3)]);
+    assert_eq!(generation(&db).await, 3);
 }
 
 /// Each permission is stored by its name in manifests and the API, which the shared manifest

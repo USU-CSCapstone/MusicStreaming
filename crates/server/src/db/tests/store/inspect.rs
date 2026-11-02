@@ -10,7 +10,7 @@ use rusqlite::{OptionalExtension, Result};
 
 use super::libraries;
 use crate::db::Text;
-use crate::db::store::SqliteStore;
+use crate::db::store::{SqliteStore, tag_types};
 
 /// The format of a stored codec and container.
 fn format_of(codec: &str, container: &str) -> Format {
@@ -214,9 +214,10 @@ impl InspectStore for SqliteStore {
         let (key, field) = (key.to_owned(), field.to_owned());
         self.db()
             .write_blocking(move |tx| {
+                tag_types::raise(tx)?;
                 tx.execute(
                     "INSERT INTO tag_types (key, name, plugin_id, field, since) \
-                     SELECT ?1, ?1, 'test', ?2, ifnull(max(since), 0) + 1 FROM tag_types",
+                     SELECT ?1, ?1, 'test', ?2, generation FROM tag_generation",
                     rusqlite::params![key, field],
                 )
             })

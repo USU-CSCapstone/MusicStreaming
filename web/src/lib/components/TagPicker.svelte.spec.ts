@@ -44,6 +44,7 @@ function show(chosen: string[] = [], match: TagMatch | null = 'any', key = 'genr
 		libraryId: '1',
 		type: { key, tagCount: 3 },
 		label: key === 'genre' ? 'Genre' : 'Mood',
+		labels: key === 'genre' ? 'Genres' : 'Moods',
 		chosen,
 		variant: 'heading',
 		match: match ?? undefined,

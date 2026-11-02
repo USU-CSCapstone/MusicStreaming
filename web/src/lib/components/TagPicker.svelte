@@ -17,6 +17,7 @@
 		libraryId,
 		type,
 		label,
+		labels,
 		chosen,
 		ontoggle,
 		variant = 'button',
@@ -28,6 +29,8 @@
 		type: TagType;
 		/** The type's name, such as `Genre`. */
 		label: string;
+		/** Its name for more than one, such as `Genres`. */
+		labels: string;
 		/** The IDs of the tags of this type the filter holds. */
 		chosen: readonly string[];
 		/** A tag checked or unchecked. */
@@ -254,7 +257,7 @@
 		{/if}
 		{#if failed}
 			<p class="note muted">
-				Couldn't load the {label.toLowerCase()}s.
+				Couldn't load the {labels.toLowerCase()}.
 				<button type="button" class="retry" onclick={retry}>Try again</button>
 			</p>
 		{:else if !result}
@@ -262,7 +265,7 @@
 		{:else if result.tags.length === 0}
 			<p class="note muted">No {label.toLowerCase()} matches “{query.trim()}”.</p>
 		{:else}
-			<ul aria-label="{label}s">
+			<ul aria-label={labels}>
 				{#each result.tags.slice(0, SHOWN) as tag (tag.id)}
 					<li>
 						<label class="tag">

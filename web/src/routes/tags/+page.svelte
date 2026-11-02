@@ -16,11 +16,16 @@
 		new Paged(data.tags, (cursor) => listTags(fetch, data.lib, { ...data.query, cursor }))
 	);
 	const name = $derived(tagTypeName(data.type, data.tagTypes).toLowerCase());
+	// A plugin gives its type one name, for one tag and for more.
+	const names = $derived(tagTypePlural(data.type, data.tagTypes).toLowerCase());
 </script>
 
 <svelte:head><title>{tagTypePlural(data.type, data.tagTypes)} · Jewelcase</title></svelte:head>
 
-<PageHeader title={tagTypePlural(data.type, data.tagTypes)} subtitle={plural(tags.total, name)} />
+<PageHeader
+	title={tagTypePlural(data.type, data.tagTypes)}
+	subtitle={plural(tags.total, name, names)}
+/>
 
 {#if tags.items.length}
 	<ul class="tags">
@@ -36,7 +41,7 @@
 	</ul>
 	<div {@attach tags.sentinel} aria-hidden="true"></div>
 {:else}
-	<p class="muted">No {name}s yet. They appear here as the library's files are scanned.</p>
+	<p class="muted">No {names} yet. They appear here as the library's files are scanned.</p>
 {/if}
 
 <style>

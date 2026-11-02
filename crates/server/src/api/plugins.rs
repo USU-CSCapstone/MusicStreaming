@@ -102,9 +102,15 @@ struct LibraryGrants {
     granted: Vec<String>,
 }
 
-/// The permissions `names` names, leaving out any name that is no permission.
+/// The permissions `names` names, each once, leaving out any name that is no permission.
 fn permissions(names: &[String]) -> Vec<Permission> {
-    names.iter().filter_map(|name| Permission::from_name(name)).collect()
+    let mut permissions = Vec::new();
+    for permission in names.iter().filter_map(|name| Permission::from_name(name)) {
+        if !permissions.contains(&permission) {
+            permissions.push(permission);
+        }
+    }
+    permissions
 }
 
 /// Replaces what the plugin is granted, itself and per library ([`grants::set`]). A name that

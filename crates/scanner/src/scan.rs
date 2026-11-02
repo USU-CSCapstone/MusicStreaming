@@ -140,8 +140,7 @@ fn scan_scopes(
     }
     writer.save(ctx, scan)?;
     // A type added while the scan runs is read by the next one, which the store has requested.
-    let added = ctx.store.added_tag_types().map_err(|e| writer.fail(ctx, scan, &e))?;
-    let types = TagTypes::with(added);
+    let types = ctx.store.tag_types().map_err(|e| writer.fail(ctx, scan, &e))?;
 
     for (scope_index, scope) in from_cursor(scan) {
         if ctx.stopping() {
