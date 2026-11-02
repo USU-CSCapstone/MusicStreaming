@@ -1,9 +1,9 @@
 //! The in-memory store: per account, the active queue and the lists not yet saved.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use jewelcase_core::{ItemId, QueueState, Recover};
+use jewelcase_core::{ItemId, QueueState, Recover, Source};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -45,8 +45,20 @@ pub(super) struct Account {
     /// Queues replaced by a start or restore and not yet saved: each is kept or deleted by the
     /// next save, whichever its `adjusted` says.
     pub(super) parked: Vec<Queue>,
+    /// The latest edits applied, oldest first, so one sent again is answered and not applied
+    /// twice.
+    pub(super) done: VecDeque<Done>,
     /// Whether anything changed since the state was last taken to be saved.
     pub(super) changed: bool,
+}
+
+/// An edit already applied, which its device may send again.
+pub(super) struct Done {
+    pub(super) edit_id: Uuid,
+    /// The queue's version once the edit was applied.
+    pub(super) version: u32,
+    /// For an add, the source as the server registered it.
+    pub(super) source: Option<Source>,
 }
 
 /// The item and point in its track that playback was at when a queue was parked, so a restore
@@ -88,6 +100,7 @@ impl Account {
             lists: HashMap::new(),
             position: None,
             parked: Vec::new(),
+            done: VecDeque::new(),
             changed: true,
         }
     }
@@ -200,10 +213,20 @@ fn load(conn: &Connection) -> rusqlite::Result<HashMap<i64, Account>> {
         };
         let lists = HashMap::new();
         let position = position.and_then(|text| serde_json::from_str(&text).ok());
-        let parked = Vec::new();
+        let (parked, done) = (Vec::new(), VecDeque::new());
         accounts.insert(
             user,
-            Account { queue_id, version, context, state, lists, position, parked, changed: false },
+            Account {
+                queue_id,
+                version,
+                context,
+                state,
+                lists,
+                position,
+                parked,
+                done,
+                changed: false,
+            },
         );
     }
     Ok(accounts)

@@ -16,6 +16,7 @@ use super::super::testing::{
 use crate::db::testing::{Track, access};
 use crate::queue::{Queues, list_hash};
 
+mod edits;
 mod recipes;
 
 const QUEUE: &str = "11111111-1111-4111-8111-111111111111";

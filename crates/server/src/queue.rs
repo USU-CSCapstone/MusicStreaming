@@ -6,6 +6,7 @@
 //! and once more as the server stops, so the database sees one write however many people are
 //! listening.
 
+mod edit;
 mod hash;
 mod keep;
 mod save;
@@ -14,6 +15,7 @@ mod store;
 #[cfg(test)]
 mod tests;
 
+pub use edit::{Added, Applied, EditError};
 pub use hash::list_hash;
 pub use keep::{KeepError, NewQueue};
 pub use store::{Position, Queues};

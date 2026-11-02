@@ -37,13 +37,13 @@ pub struct Start {
 /// resolve. Exactly one of the two.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct NewSource {
-    key: Uuid,
-    library_id: String,
+pub(super) struct NewSource {
+    pub(super) key: Uuid,
+    pub(super) library_id: String,
     /// Read straight into IDs, eight bytes each, so the body is the largest thing a start holds.
-    tracks: Option<Vec<Id>>,
+    pub(super) tracks: Option<Vec<Id>>,
     /// Kept raw until its size is checked, as `context` is.
-    recipe: Option<Box<RawValue>>,
+    pub(super) recipe: Option<Box<RawValue>>,
 }
 
 /// The spec's `StartedQueue`: the list the server holds for the start, which the device attaches
@@ -146,7 +146,7 @@ fn context(raw: &RawValue) -> Result<Value, Problem> {
 
 /// Checks that every one of `ids` is in `library`, which the caller must reach. Refused, `422`,
 /// as a start is.
-async fn check_tracks(
+pub(super) async fn check_tracks(
     db: &Database,
     caller: &Caller,
     library: Id,

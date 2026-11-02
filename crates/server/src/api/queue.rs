@@ -1,10 +1,11 @@
-//! The account's queue: `getQueue` and `startQueue` (`requirements/queue.md`,
+//! The account's queue: `getQueue`, `startQueue` and `editQueue` (`requirements/queue.md`,
 //! `design/queue.md` §9).
 //!
 //! The queue itself lives in [`crate::queue`]; this is its API. A device that starts a queue
 //! chooses its `queueId` and its source's key, so it can apply the start at once, and the server
 //! checks that the caller reaches every track the source names.
 
+mod edits;
 mod resolve;
 mod start;
 
@@ -19,10 +20,11 @@ use serde_json::value::RawValue;
 use super::scope::Caller;
 use super::{Problem, plays};
 use crate::queue::Queues;
+pub use edits::edit;
 pub use resolve::{Recipe, resolve};
 pub use start::start;
 
-/// The largest body a start accepts: about 760,000 real (19-digit) track IDs. A request at the
+/// The largest body a start or an edit accepts: about 760,000 real (19-digit) track IDs. A request at the
 /// limit peaks at about 4× its size, with the shortest IDs, so a few at once still fit a small
 /// host's memory. A larger list starts from a recipe. Past it the body is refused as
 /// `422 validation_failed`.

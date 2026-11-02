@@ -24,6 +24,8 @@ pub fn router() -> Router<AppState> {
                 .layer(CompressionLayer::new())
                 .merge(post(queue::start).layer(DefaultBodyLimit::max(queue::BODY_LIMIT))),
         )
+        // An add carries its tracks, so an edit takes a body as large as a start does.
+        .route("/me/queue/edits", post(queue::edit).layer(DefaultBodyLimit::max(queue::BODY_LIMIT)))
         .route("/me/plays", post(plays::record))
         .route("/me/plugins", get(connections::list))
         .route(
