@@ -552,7 +552,30 @@ describe('QueueStore', () => {
 		server.failures = [];
 	});
 
-	it('sends an add of a recipe in its turn and shows it when the server answers', async () => {
+	it('shows an add of a recipe at once as the rows the view counts, until the server says how many', async () => {
+		await hello();
+		const answer = gate();
+		server.editGate = answer.wait;
+		const add: SentEdit = {
+			type: 'add',
+			source: { key: 'q', libraryId: 'lib', recipe: { type: 'album', albumId: '9' } as never },
+			before: { type: 'manualStart' }
+		};
+		store.edit(add, 3);
+		expect(summary.manual).toBe(3);
+		expect(upNext(4)).toEqual(['unknown', 'unknown', 'unknown', '101']);
+		await settle();
+		expect(summary.manual).toBe(3);
+
+		// The server resolved two.
+		store.message(server.heardOf());
+		answer.open();
+		await settle();
+		expect(summary).toMatchObject({ manual: 2, version: 1 });
+		expect(refusals).toEqual([]);
+	});
+
+	it('sends an add of a recipe with no length in its turn and shows it when the server answers', async () => {
 		await hello();
 		const add: SentEdit = {
 			type: 'add',
@@ -1021,7 +1044,7 @@ describe('QueueStore lists and rows', () => {
 			source: {
 				key: 'r',
 				libraryId: 'lib',
-				recipe: { type: 'album', albumId: '1', sort: 'album.asc' }
+				recipe: { type: 'album', albumId: '1', sort: 'album', order: 'asc' }
 			},
 			before: { type: 'manualStart' }
 		});

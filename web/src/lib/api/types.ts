@@ -62,15 +62,13 @@ export type QueueSnapshot = Schemas['QueueSnapshot'];
 export type QueueState = Schemas['QueueState'];
 /** A start as `POST /me/queue` takes it. */
 export type StartQueue = Schemas['StartQueue'];
-/** How the server makes a source's list, for a start to name. */
-export type StartRecipe = NonNullable<StartQueue['source']['recipe']>;
 /** A page of the queue's rows, with each row's track. */
 export type QueueRows = Schemas['QueueRows'];
 /** An edit as the server applies it and `queueEdit` carries it. */
 export type QueueEdit = Schemas['QueueEdit'];
 /** An edit as a device sends it: an `add`'s source names `tracks` or a `recipe`. */
 export type SentEdit = Schemas['EditQueue']['edit'];
-/** How the server makes the list of an add's source, as an add names it. */
+/** How the server makes a source's list, as a start or an add names it. */
 export type QueueRecipe = NonNullable<Extract<SentEdit, { type: 'add' }>['source']['recipe']>;
 /** Where an add or move lands. */
 export type QueueAnchor = Schemas['QueueAnchor'];

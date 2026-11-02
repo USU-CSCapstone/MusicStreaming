@@ -216,7 +216,10 @@ test('queues an album next', async ({ page }) => {
 		.poll(() => queue.edits.at(-1))
 		.toMatchObject({
 			type: 'add',
-			source: { libraryId: '11', recipe: { type: 'album', albumId: '31', sort: 'album.asc' } },
+			source: {
+				libraryId: '11',
+				recipe: { type: 'album', albumId: '31', sort: 'album', order: 'asc' }
+			},
 			before: { type: 'manualStart' }
 		});
 	expect(queue.edits.at(-1)).not.toHaveProperty('source.tracks');

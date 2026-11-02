@@ -88,9 +88,12 @@ export class QueueClient {
 		this.shuffled = false;
 	}
 
-	/** Applies `edit` here at once and sends it to the server in the background. */
-	edit(edit: SentEdit) {
-		this.#send({ type: 'edit', edit });
+	/**
+	 * Applies `edit` here at once and sends it to the server in the background. An `add` of a
+	 * `recipe` shows as `length` rows, the view's count, until the server says how many it made.
+	 */
+	edit(edit: SentEdit, length?: number) {
+		this.#send({ type: 'edit', edit, length });
 	}
 
 	/**

@@ -363,15 +363,17 @@ export class QueueStore {
 	/**
 	 * Applies `edit` here at once and sends it in the background, once, however many times the
 	 * send is tried: it carries a fresh `editId`. An edit the core refuses changes nothing and is
-	 * reported. One only the server can resolve, an `add` of a `recipe`, is just sent, and shows
-	 * when the server's `queueEdit` for it arrives.
+	 * reported. An `add` of a `recipe` applies here as `length` rows, the count of the view it
+	 * comes from, which wait for the server's list or pages (`design/queue.md` §3); the server's
+	 * `queueEdit` gives the length it resolved. Without a length it is just sent, and shows when
+	 * that arrives.
 	 */
-	edit(edit: SentEdit) {
+	edit(edit: SentEdit, length?: number) {
 		if (!this.#view || !this.#queueId) {
 			this.#refused({ code: 'no_queue', message: 'There is no queue to change.', edit });
 			return;
 		}
-		const local = localEdit(edit);
+		const local = localEdit(edit, length);
 		if (local) {
 			const next = this.#view === this.#confirmed ? this.#view.copy() : this.#view;
 			const code = applyTo(next, local);
@@ -448,10 +450,10 @@ export class QueueStore {
 	/**
 	 * Makes the view from the confirmed queue and the pending edits. A pending edit the queue
 	 * no longer accepts, because of what arrived, is dropped and reported with the core's code,
-	 * `anchor_gone` when the item it was placed by went. A pending `add` of a `recipe` stays
-	 * pending without showing: the server applies it in the order it heard it, and so do the
-	 * edits replayed on top of it once it arrives. With none pending the view is the confirmed
-	 * queue itself, so nothing is copied.
+	 * `anchor_gone` when the item it was placed by went. A pending `add` of a `recipe` with no
+	 * length stays pending without showing: the server applies it in the order it heard it, and
+	 * so do the edits replayed on top of it once it arrives. With none pending the view is the
+	 * confirmed queue itself, so nothing is copied.
 	 */
 	#rebuild() {
 		const confirmed = this.#confirmed;
@@ -825,14 +827,15 @@ function applyTo(queue: Queue, edit: QueueEdit): string | undefined {
 
 /**
  * The edit as the core applies it here, or null if only the server can resolve it: an `add` of
- * a `recipe`, or of no tracks. An add of `tracks` has just their count here; the list attaches
- * later, under the hash the server gives it.
+ * no tracks, or of a `recipe` with no `length`. An add has just its count here, a recipe's
+ * `length` or the number of `tracks`; the list attaches later, under the hash the server gives it.
  */
-function localEdit(edit: SentEdit): QueueEdit | null {
+function localEdit(edit: SentEdit, length?: number): QueueEdit | null {
 	if (edit.type !== 'add') return edit;
-	const { key, libraryId, tracks } = edit.source;
-	if (edit.source.recipe || !tracks?.length) return null;
-	return { ...edit, source: { key, libraryId, length: tracks.length } };
+	const { key, libraryId, tracks, recipe } = edit.source;
+	const count = recipe ? length : tracks?.length;
+	if (!count) return null;
+	return { ...edit, source: { key, libraryId, length: count } };
 }
 
 /** The reason the server refused a request. */

@@ -471,7 +471,7 @@ describe('QueueList adding', () => {
 		count: 2,
 		refs: [],
 		tracks: async () => [summary('t8', 'Eight'), summary('t9', 'Nine')],
-		recipe: { type: 'album', albumId: '31', sort: 'album.asc' } as const
+		recipe: { type: 'album', albumId: '31', sort: 'album', order: 'asc' } as const
 	};
 	const two = { ...album, recipe: undefined };
 	let edits: SentEdit[];
@@ -548,7 +548,7 @@ describe('QueueList adding', () => {
 				source: {
 					key: expect.any(String),
 					libraryId: '11',
-					recipe: { type: 'album', albumId: '31', sort: 'album.asc' }
+					recipe: { type: 'album', albumId: '31', sort: 'album', order: 'asc' }
 				},
 				before: { type: 'before', item: 'k.1' }
 			});

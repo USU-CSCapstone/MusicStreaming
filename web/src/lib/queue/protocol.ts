@@ -94,7 +94,7 @@ export type ToWorker =
 	/** First: where the API is. */
 	| { type: 'init'; api: string }
 	| { type: 'message'; message: RealtimeServerMessage }
-	| { type: 'edit'; edit: SentEdit }
+	| { type: 'edit'; edit: SentEdit; length?: number }
 	/** Starts a queue; answered with `started` carrying the same `id`. */
 	| { type: 'start'; id: number; request: StartRequest }
 	/** Asks for up to `limit` rows from `offset`; answered with `rows` carrying the same `id`. */

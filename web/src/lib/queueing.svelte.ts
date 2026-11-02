@@ -44,7 +44,8 @@ function hasQueue(): boolean {
 /**
  * Adds `what`, which is in library `libraryId`, to the queue at `before`, saying so at once
  * (`requirements/general.md` §3.4). What has a recipe goes as that, for the server to resolve:
- * its rows show when the server answers. Anything else goes as its tracks, which show at once.
+ * it shows at once as as many rows as `what` counts, whose songs show once the server has
+ * resolved them. Anything else goes as its tracks, which show at once.
  * A refusal is explained by the queue panel. Returns whether an edit was sent.
  */
 export async function addToQueue(
@@ -56,7 +57,10 @@ export async function addToQueue(
 	const key = crypto.randomUUID();
 	try {
 		if (what.recipe) {
-			queue.edit({ type: 'add', source: { key, libraryId, recipe: what.recipe }, before });
+			queue.edit(
+				{ type: 'add', source: { key, libraryId, recipe: what.recipe }, before },
+				what.count
+			);
 		} else {
 			const tracks = (await what.tracks()).map((track) => track.id);
 			if (tracks.length === 0) {
