@@ -70,7 +70,7 @@ struct Play {
 const MAX_REPORTS: usize = 500;
 
 /// The most bytes a report's `context` or `reason` takes as JSON.
-const MAX_JSON_BYTES: usize = 4096;
+pub(super) const MAX_JSON_BYTES: usize = 4096;
 
 /// Records every report, or none if one is malformed or the request holds more than
 /// [`MAX_REPORTS`]. A play of a track that is not in a library the caller reaches is left out:
