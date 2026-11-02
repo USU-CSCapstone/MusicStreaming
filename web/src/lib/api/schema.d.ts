@@ -898,6 +898,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the queue
+         * @description The account's active queue, for a device to load into the shared core
+         *     (`requirements/queue.md` §7). `404` until a queue has been started. The state carries each
+         *     list's `list` hash and `length`, never its tracks (`QueueState`); a device downloads the
+         *     lists it lacks by hash. The shape is a stable public contract.
+         *
+         *     The `ETag` is `"<run>.<queueId>.<version>"`, where `<run>` is new each time the server
+         *     starts, so no tag from before a restart matches: a crash can lose edits a device
+         *     already heard, and the queue it comes back with can reach the same version with other
+         *     contents. A request whose `If-None-Match` names the current tag is answered `304` with
+         *     no body, so a device that reconnects downloads only what it lacks. Any other value, or
+         *     none, gets the whole snapshot. The body is gzipped when the client sends
+         *     `Accept-Encoding: gzip`.
+         */
+        get: operations["getQueue"];
+        put?: never;
+        /**
+         * Start a queue
+         * @description Makes a new queue the account's active one, playing `source`'s tracks from the one at
+         *     `start`, with an empty Manual Queue (`requirements/queue.md` §6). The queue it replaces
+         *     is kept if it was adjusted, and deleted otherwise. The device chooses the `queueId` and
+         *     the source's `key` so it can apply the start at once. The server holds the list under the
+         *     hash it answers with, and the device attaches the tracks it sent to that hash instead of
+         *     downloading them back. Every connection of the account, the sender's included, is sent
+         *     `queueReplaced`.
+         *
+         *     A start naming any queue of the account, active or kept, changes nothing and sends
+         *     nothing, so a retried start never revives or replaces one. It is answered `200` with the
+         *     `list` and `length` of the tracks it sent, as the first start was.
+         *
+         *     Answers `422` unless every track is in `libraryId` and the caller reaches the library,
+         *     whether or not one that is refused exists (`requirements/users.md` §10); when `tracks` is
+         *     empty or `start` is not one of its positions; when a key or `queueId` is not a UUID; when
+         *     `context` is not an object with a string `type` of at most 4 KiB; or when the body is
+         *     larger than the server accepts, which is far past any library it is meant for.
+         */
+        post: operations["startQueue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/plays": {
         parameters: {
             query?: never;
@@ -1986,6 +2037,204 @@ export interface components {
             /** @description The device's current volume, so remote controls show it (`requirements/realtime.md` §3). */
             volume?: number;
         };
+        StartQueue: {
+            /**
+             * Format: uuid
+             * @description Client-generated. Names the queue among the account's own.
+             */
+            queueId: string;
+            /** @description What the queue started from, kept as sent. */
+            context: Omit<components["schemas"]["Context"], "type">;
+            /**
+             * @description The tracks as the device resolved them, in play order. A track may appear more than
+             *     once; each place is its own item.
+             */
+            source: {
+                /**
+                 * Format: uuid
+                 * @description Client-generated. Names the source's items, `<key>.<position>`.
+                 */
+                key: string;
+                libraryId: string;
+                tracks: string[];
+            };
+            /** @description The position in `tracks` of the track that plays first. */
+            start: number;
+        };
+        StartedQueue: {
+            /** @description The hash the server holds the source's list under, which is the source's `list` in the snapshot. */
+            list: string;
+            length: number;
+        };
+        QueueSnapshot: {
+            /** Format: uuid */
+            queueId: string;
+            /** @description Zero as the queue starts. Each edit the server applies adds one. */
+            version: number;
+            context: components["schemas"]["Context"];
+            state: components["schemas"]["QueueState"];
+        };
+        /**
+         * @description The queue as the shared core holds it: a few spans over views of frozen lists, so it grows
+         *     with edits and not with tracks. A client may read it without the core. The shape is
+         *     stable: a change to it is a breaking change.
+         *
+         *     A **source** is a frozen list of tracks, named by its `key`. An **item** is one place in a
+         *     source or a copy: its ID is `<key>.<position>`, and it never changes while the item is
+         *     queued. The same track twice is two items. A **view** is a source or copy, read as it is,
+         *     or the context's one shuffle. A **span** is positions `start` to `start + len` of a view,
+         *     and is never empty.
+         *
+         *     The queue plays `current`, then **Up Next**: the `manual` spans in order (the Manual
+         *     Queue), then the rows of `order` from `cursor` on (the context). `history` holds what has
+         *     played. An item is in Up Next at most once.
+         */
+        QueueState: {
+            sources: components["schemas"]["QueueSource"][];
+            /** @description Copies of spans made by edits, each under its own key. */
+            copies: components["schemas"]["QueueCopy"][];
+            /** @description The Manual Queue, in play order. It plays before the context's Up Next. */
+            manual: components["schemas"]["QueueSpan"][];
+            /**
+             * @description The context in play order, the part already passed included, so Repeat All can play
+             *     it again and unshuffling can put it back.
+             */
+            order: components["schemas"]["QueueSpan"][];
+            /**
+             * @description How many rows of `order` are passed. The context's Up Next is the rows from `cursor`
+             *     on. It counts passed context rows and nothing more: `current` is the last of them
+             *     only while a context item plays that was reached in order. While a Manual item plays,
+             *     or after an unshuffle that leaves passed additions, it is not.
+             */
+            cursor: number;
+            /** @description The item playing, or `null` when the queue has ended. */
+            current: string | null;
+            /** @description Runs of plays, oldest first. The newest 1,000 runs are kept. */
+            history: components["schemas"]["QueueRun"][];
+            /** @description The number of the next play. It only counts up, so a number is never reused. */
+            nextPlay: number;
+            /**
+             * @description Set while the context is shuffled, which `order` then reads through the `shuffle`
+             *     view: position `p` of that view is the item at position π(`p`) of `base`, where π is
+             *     the seeded permutation of the base's rows that the shared core defines. `null`
+             *     otherwise.
+             */
+            shuffle: {
+                /** @description Fixes the permutation. */
+                seed: number;
+                /** @description The context's unplayed spans, frozen when the shuffle began. */
+                base: components["schemas"]["QueueSpan"][];
+            } | null;
+            /**
+             * @description What happens when the context ends: `off` stops, `all` plays the context again in the
+             *     order it was in, and `one` plays the current item again.
+             * @enum {string}
+             */
+            repeat: "off" | "all" | "one";
+            /**
+             * @description Whether anything was queued, removed or moved. It is never cleared, and decides
+             *     whether a start keeps this queue or deletes it.
+             */
+            adjusted: boolean;
+        };
+        /** @description A frozen list of tracks. The snapshot carries its hash and length, never its tracks. */
+        QueueSource: {
+            /**
+             * Format: uuid
+             * @description Chosen by the device that added it, and unique across sources and copies.
+             */
+            key: string;
+            /** @description The library every track of the list belongs to. */
+            libraryId: string;
+            /**
+             * @description The lowercase hex SHA-256 of the list's track IDs, each as 8 bytes little-endian,
+             *     in order. It names the list. Left out until the server confirms the list.
+             */
+            list?: string;
+            /** @description The number of tracks, and so of positions. */
+            length: number;
+            /** @description How the list was made, when it is known. It is not what plays; the list is. */
+            recipe?: Omit<components["schemas"]["QueueRecipe"], "type">;
+        };
+        /** @description How a list was made. Every field that changes the order is part of it. */
+        QueueRecipe: components["schemas"]["QueueAlbumRecipe"] | components["schemas"]["QueueArtistRecipe"] | components["schemas"]["QueueLibraryRecipe"] | components["schemas"]["QueueSearchRecipe"] | components["schemas"]["QueueTracksRecipe"];
+        /** @description An album's tracks in a sort. */
+        QueueAlbumRecipe: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "album";
+            albumId: string;
+            sort: string;
+        };
+        /** @description An artist's tracks, by scope and credit, in a sort. */
+        QueueArtistRecipe: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "artist";
+            artistId: string;
+            scope: string;
+            artistCredit: string;
+            sort: string;
+        };
+        /** @description A library's tracks under filters, in a sort. */
+        QueueLibraryRecipe: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "library";
+            /** @description Pairs of a filter's name and its value. */
+            filters: string[][];
+            sort: string;
+        };
+        /** @description A search's tracks. */
+        QueueSearchRecipe: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "search";
+            q: string;
+        };
+        /** @description Track IDs the device sent. */
+        QueueTracksRecipe: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "tracks";
+        };
+        /**
+         * @description A copy of some spans under a new identity: its position `p` is the item `<key>.<p>`. The
+         *     spans it covers name sources only.
+         */
+        QueueCopy: {
+            /** Format: uuid */
+            key: string;
+            of: components["schemas"]["QueueSpan"][];
+        };
+        /** @description Positions `start` to `start + len` of a view. */
+        QueueSpan: {
+            /** @description The key of a source or copy, or the context's shuffle. */
+            view: {
+                key: string;
+            } | "shuffle";
+            start: number;
+            len: number;
+        };
+        /**
+         * @description Consecutive plays of consecutive positions of one view: an album played through is one run.
+         *     Play `first + i` played the item at position `span.start + i`.
+         */
+        QueueRun: {
+            /** @description The number of the run's first play. */
+            first: number;
+            span: components["schemas"]["QueueSpan"];
+        };
         /**
          * @description `automatic` marks radio and endless-play additions (`requirements/queue.md` §5).
          * @enum {string}
@@ -2273,6 +2522,11 @@ export interface components {
              *     (they are left out): the device reads the items again. Left out otherwise.
              */
             refetch?: boolean;
+        } | {
+            /** @constant */
+            type: "queueReplaced";
+            /** Format: uuid */
+            queueId: string;
         } | {
             /** @constant */
             type: "sessionRevoked";
@@ -3827,6 +4081,65 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getQueue: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The `ETag` of the snapshot the device already holds, or a list of them. */
+                "If-None-Match"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    /** @description `"<run>.<queueId>.<version>"`. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueSnapshot"];
+                };
+            };
+            /** @description The device's queue and version are current. */
+            304: {
+                headers: {
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    startQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartQueue"];
+            };
+        };
+        responses: {
+            /** @description Started, or already started. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartedQueue"];
                 };
             };
             default: components["responses"]["Problem"];

@@ -2,9 +2,11 @@
 //! connections.
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post, put};
+use tower_http::compression::CompressionLayer;
 
-use crate::api::{AppState, connections, devices, me, player, plays};
+use crate::api::{AppState, connections, devices, me, player, plays, queue};
 
 /// Every route under `/me`.
 pub fn router() -> Router<AppState> {
@@ -13,6 +15,15 @@ pub fn router() -> Router<AppState> {
         .route("/me/devices", get(devices::list))
         .route("/me/player", get(player::get))
         .route("/me/player/commands", post(player::send_command))
+        .route(
+            "/me/queue",
+            // A queue's state grows with its edits, so the snapshot is sent gzipped to a client
+            // that asks. A start carries its tracks, so it takes a larger body than axum's
+            // default.
+            get(queue::get)
+                .layer(CompressionLayer::new())
+                .merge(post(queue::start).layer(DefaultBodyLimit::max(queue::BODY_LIMIT))),
+        )
         .route("/me/plays", post(plays::record))
         .route("/me/plugins", get(connections::list))
         .route(

@@ -14,6 +14,17 @@ use crate::api::Uuid;
 /// Each account's active queue, for those that have one.
 pub struct Queues {
     pub(super) accounts: Mutex<HashMap<i64, Account>>,
+    /// Drawn as the server starts, and part of every snapshot's `ETag`. A crash can lose edits
+    /// a device already heard, and the restored queue can then reach the same version with other
+    /// contents; a new value makes every tag from before the restart a mismatch.
+    pub(super) boot: u64,
+}
+
+impl Default for Queues {
+    /// No queues, and a new value for `boot`.
+    fn default() -> Self {
+        Queues::holding(HashMap::new())
+    }
 }
 
 /// One account's active queue and what the server needs to know about it.
@@ -140,9 +151,11 @@ impl Account {
 }
 
 impl Queues {
-    /// Queues holding `accounts`.
+    /// Queues holding `accounts`, with a new value for `boot`; if the system's random source
+    /// cannot be read, the clock stands in.
     pub(super) fn holding(accounts: HashMap<i64, Account>) -> Queues {
-        Queues { accounts: Mutex::new(accounts) }
+        let boot = getrandom::u64().unwrap_or_else(|_| crate::db::now_ms().unsigned_abs());
+        Queues { accounts: Mutex::new(accounts), boot }
     }
 
     /// Every account's active queue as saved, as the server starts. Lists are not loaded: they

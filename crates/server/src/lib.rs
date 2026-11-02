@@ -98,6 +98,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
         plugins: plugins.clone(),
         hub: hub.clone(),
         players: players.clone(),
+        queues: queues.clone(),
         prefix: api::prefix(&config.base_path),
         trusted_proxies: Arc::new(config.trusted_proxies.clone()),
     });

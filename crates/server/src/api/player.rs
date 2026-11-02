@@ -35,6 +35,7 @@ use super::realtime::{Hub, Presence, ServerMessage};
 use super::scope::Caller;
 use super::time::serialize_rfc3339;
 use crate::db::now_ms;
+use crate::queue::Position;
 pub use commands::{CommandResult, PlayerCommand, send as send_command};
 use jewelcase_core::Recover;
 pub use progress::{ProgressReport, apply};
@@ -115,6 +116,16 @@ impl Players {
     /// `user`'s current state.
     fn current(&self, user: i64) -> PlayerState {
         self.lock().get(&user).cloned().unwrap_or_else(PlayerState::stopped)
+    }
+
+    /// Where `user`'s playback is: the item reported and how far into it. `None` before any
+    /// item has been reported. Takes the player-state lock, so never call it holding the lock of
+    /// something that takes it first, such as the queues'.
+    pub fn position(&self, user: i64) -> Option<Position> {
+        let accounts = self.lock();
+        let state = accounts.get(&user)?;
+        let item = state.item_id.clone()?;
+        Some(Position { item, position_ms: state.played_to(now_ms()) })
     }
 
     /// Counts `device` of `user` as connected, with its account's current state queued first.
