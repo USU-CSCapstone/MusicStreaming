@@ -79,6 +79,13 @@ describe('addToQueue', () => {
 		expect(toaster.current?.message).toBe('“Signal” queued last');
 	});
 
+	it('sends the recipe of what is being placed in a form that can be posted to the worker', async () => {
+		fake.queue.edit = (e) => void structuredClone(e);
+		startPlacing(album, '11');
+
+		expect(await addToQueue(placing.what!, '11', { type: 'manualEnd' })).toBe(true);
+	});
+
 	it('mints a key for each add', async () => {
 		await addToQueue(songs(['4']), '11', { type: 'manualEnd' });
 		await addToQueue(songs(['4']), '11', { type: 'manualEnd' });
