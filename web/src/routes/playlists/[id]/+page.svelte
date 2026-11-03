@@ -73,7 +73,8 @@
 	// The server resolves the playlist in the order shown, under the filter shown. Its tags are
 	// read from the tracks and the known tags, so while a tag's type is still unknown the rows
 	// shown may differ from the server's, and the songs shown play instead. So do they while edits
-	// are unconfirmed: the server resolves the playlist as it last saved it.
+	// are unconfirmed, as the server resolves the playlist as it last saved it, and sorted by date
+	// added once songs were added here, which the server dated by its own clock.
 	const settled = $derived(
 		tagTypesKnown(
 			tracks,
@@ -83,7 +84,7 @@
 		)
 	);
 	const from = $derived<PlayFrom | undefined>(
-		settled && !list.saving
+		settled && !list.saving && !(sort?.field === 'added' && list.added)
 			? { recipe: playlistRecipe(playlist.id, sort, filter), total: shown.length }
 			: undefined
 	);
@@ -95,7 +96,7 @@
 			playlist.id,
 			playlist.title,
 			shown.length,
-			async () => (filtered ? shownTracks : tracks),
+			async () => shownTracks,
 			from?.recipe
 		),
 		// Filtered, only the songs shown are checked and added to another playlist, matching the rows.

@@ -24,7 +24,7 @@ import type {
 } from '../src/lib/api/types';
 import '../core-node';
 import { Queue } from '../src/lib/core-wasm/jewelcase_core_wasm.js';
-import type { SortField } from '../src/lib/sorting';
+import { PLAYLIST_FIELDS, type SortField, sortName } from '../src/lib/sorting';
 import { sortRows, sortTracks } from '../src/lib/track-sort';
 import { type TagFilter, filterByTags } from '../src/lib/tag-match';
 import { withManifest } from '../../tools/plugin-pack/manifest.mjs';
@@ -170,9 +170,10 @@ function resolveRecipe(
 	/** `items` that carry the recipe's tags, as the list endpoints keep them. */
 	const kept = (items: TrackSummary[]) => tagged(items, filter, (t) => t.tags);
 	if (recipe.type === 'playlist') {
-		// The playlist's items, filter by the tags' real types, then in the core's order.
+		// The playlist's items, narrowed by the tags' real types, then in the core's order.
 		const rows = tagged(playlistRows(recipe.playlistId), filter, (r) => r.track.tags);
-		const sort = recipe.sort && { field: recipe.sort, order: recipe.order! };
+		const field = PLAYLIST_FIELDS.find((field) => sortName(field) === recipe.sort);
+		const sort = field && { field, order: recipe.order! };
 		return sortRows(
 			rows,
 			sort ?? null,

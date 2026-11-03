@@ -54,6 +54,7 @@ export class EditablePlaylist {
 	// Reassigned, never mutated, so `saving` is reactive.
 	#queue = $state.raw<Pending[]>([]);
 	#sending: Promise<void> | null = null;
+	#added = $state(false);
 
 	constructor(fetch: Fetch, loaded: LoadedPlaylist) {
 		this.#fetch = fetch;
@@ -65,6 +66,15 @@ export class EditablePlaylist {
 	/** Whether there are edits the server has not confirmed yet. */
 	get saving(): boolean {
 		return this.#queue.length > 0;
+	}
+
+	/**
+	 * Whether items were added here, an undo's included, since the playlist was loaded. Their
+	 * dates added are this device's, and the server dates what it adds by its own clock when it
+	 * saves the edit, so the two may order those items differently by date added.
+	 */
+	get added(): boolean {
+		return this.#added;
 	}
 
 	/**
@@ -94,6 +104,7 @@ export class EditablePlaylist {
 		const apply = (items: PlaylistItem[]) => (ops ? applyOps(items, ops, resolve) : items);
 
 		this.items = apply(this.items);
+		if (ops?.some((op) => op.op === 'add')) this.#added = true;
 		this.#queue = [...this.#queue, { change, key: crypto.randomUUID(), apply }];
 		this.#present();
 		this.#sending ??= this.#send();

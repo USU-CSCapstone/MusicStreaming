@@ -228,6 +228,14 @@ describe('undo', () => {
 		expect(list.playlist.version).toBe(3);
 	});
 
+	it('says items were added here, by an undo too', async () => {
+		expect(list.added).toBe(false);
+		const undo = list.edit({ ops: [{ op: 'remove', positions: [0] }] });
+		expect(list.added).toBe(false);
+		undo();
+		expect(list.added).toBe(true);
+	});
+
 	it('reverses details too', () => {
 		const undo = list.edit({ title: 'Renamed', pinned: true });
 		undo();

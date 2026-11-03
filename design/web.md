@@ -186,8 +186,9 @@ the queue only by editing it (`requirements/queue.md`, `design/queue.md` §3).
   rows; without it, the tracks. Album, artist, songs, search and playlist views send a recipe,
   carrying the view's tag filter as `filters` (`tagAll`, `tagAny`) so the server resolves the
   rows shown; a sorted search sends tracks, since no recipe gives its order. A playlist's recipe
-  is `{type: 'playlist', playlistId}` with the page's `sort` and `order` together (`added`
-  included) or neither for the playlist's own order (D40); the server resolves the stored
+  is `{type: 'playlist', playlistId}` with the page's `sort` and `order` together, named as
+  `listTracks` names them and date added as `addedToPlaylist` (D41), or neither for the
+  playlist's own order (D40); the server resolves the stored
   playlist with the core's comparator, so it equals the rows shown, and never takes a `version`
   from the device. A playlist card sends the bare recipe and queues by the summary's `trackCount`
   without fetching its items. The
@@ -195,7 +196,9 @@ the queue only by editing it (`requirements/queue.md`, `design/queue.md` §3).
   filter their own tracks, the filter shown. An album or playlist whose `tagAny` tag has no known type (not
   carried by its tracks, not yet read) would group it differently from the server, so it sends
   the tracks shown until the type is read; so does a playlist with edits not yet confirmed, which
-  the server would resolve as last saved. A Next pressed before the
+  the server would resolve as last saved. So does a playlist sorted by date added once songs were
+  added on the page, an undo's included: the server dates them by its own clock as it saves them,
+  and the page keeps this device's dates. A Next pressed before the
   worker has the queue is carried out once it has.
 - **Following.** A device holding playback plays whatever the queue's current item becomes,
   whoever moved it. The item's row is read from the worker. `unknown`, a row still being learned,
