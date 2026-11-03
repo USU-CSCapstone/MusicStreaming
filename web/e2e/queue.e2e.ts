@@ -43,7 +43,7 @@ test('plays an album from the queue', async ({ page }) => {
 		.toMatchObject({ context: { type: 'album', id: '31' }, origin: 'context' });
 });
 
-test('a tag-filtered view starts from the songs it shows, not a recipe', async ({ page }) => {
+test('a tag-filtered view starts by a recipe carrying its filter', async ({ page }) => {
 	await serveLibrary(page);
 	const queue = queueOf(page);
 	await page.goto('/songs?tagAny=61');
@@ -52,11 +52,16 @@ test('a tag-filtered view starts from the songs it shows, not a recipe', async (
 	const player = page.getByRole('region', { name: 'Player' });
 	await expect(player.getByText('Signal Part 1')).toBeVisible();
 	await expect.poll(() => queue.starts.length).toBeGreaterThan(0);
-	// A recipe can't name tags yet, so the start sends the filtered songs themselves.
+	// The start names the filter, not the songs, and the server's resolve is the rows shown.
 	for (const start of queue.starts) {
-		expect(start).toMatchObject({ source: { tracks: ['42', '41'] }, start: 1 });
-		expect(start.source).not.toHaveProperty('recipe');
+		expect(start).toMatchObject({
+			source: { recipe: { type: 'library', filters: { tagAny: ['61'] } } },
+			startTrackId: '41',
+			context: { type: 'filter', filter: { tagAny: ['61'] } }
+		});
+		expect(start.source).not.toHaveProperty('tracks');
 	}
+	expect([...queue.lists.values()].at(-1)).toEqual(['42', '41']);
 });
 
 /** Starts the album on its first track, with the queue panel open, and answers the start. */
@@ -352,35 +357,116 @@ test('queues a sorted playlist in the order shown', async ({ page }) => {
 		.toMatchObject({ type: 'add', source: { tracks: ['43', '42', '41'] } });
 });
 
-test('queues a tag-filtered view as the songs it shows, not a recipe', async ({ page }) => {
+test('queues a tag-filtered view by a recipe carrying its filter', async ({ page }) => {
 	const queue = queueOf(page);
 	await serveLibrary(page);
 	await serveQueueEdits(page);
 	// The album filtered to Calm: Part 2 is left out.
 	await page.goto('/albums/31?tagAny=63');
-	await expect(page.locator('main .track .title')).toHaveText(['Signal Part 1', 'Signal Remix']);
+	const shown = ['Signal Part 1', 'Signal Remix'];
+	await expect(page.locator('main .track .title')).toHaveText(shown);
 	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
 	await expect(
 		page.getByRole('region', { name: 'Player' }).getByText('Signal Part 1')
 	).toBeVisible();
+	await expect.poll(() => queue.starts.length).toBeGreaterThan(0);
+	expect(queue.starts.at(-1)).toMatchObject({
+		source: { recipe: { type: 'album', albumId: '31', filters: { tagAny: ['63'] } } }
+	});
 	await page.locator('main').getByRole('button', { name: 'Actions for “Signal”' }).click();
 	await page.getByRole('menuitem', { name: 'Queue last' }).click();
-	// A recipe can't name tags yet, so the add sends the songs shown.
 	await expect
 		.poll(() => queue.edits.at(-1))
-		.toMatchObject({ type: 'add', source: { tracks: ['41', '43'] } });
-	expect(queue.edits.at(-1)).not.toHaveProperty('source.recipe');
+		.toMatchObject({
+			type: 'add',
+			source: { recipe: { type: 'album', albumId: '31', filters: { tagAny: ['63'] } } }
+		});
+	expect(queue.edits.at(-1)).not.toHaveProperty('source.tracks');
+	// What the server resolves for it is exactly the songs shown.
+	expect([...queue.lists.values()].at(-1)).toEqual(['41', '43']);
 
 	// All the songs filtered to Ambient, the same way.
 	await page.goto('/songs?tagAny=61');
 	await expect(page.locator('main .track .title')).toHaveText(['Signal Part 2', 'Signal Part 1']);
 	await queueLoaded(page);
-	await page.locator('main').getByRole('button', { name: 'Actions for 2 songs' }).click();
+	await page.locator('main').getByRole('button', { name: 'Actions for all songs' }).click();
 	await page.getByRole('menuitem', { name: 'Queue next' }).click();
 	await expect
 		.poll(() => queue.edits.at(-1))
-		.toMatchObject({ type: 'add', source: { tracks: ['42', '41'] } });
-	expect(queue.edits.at(-1)).not.toHaveProperty('source.recipe');
+		.toMatchObject({
+			type: 'add',
+			source: { recipe: { type: 'library', filters: { tagAny: ['61'] } } }
+		});
+	expect([...queue.lists.values()].at(-1)).toEqual(['42', '41']);
+});
+
+test('a filtered album sends its songs until a tag type is known, then a recipe', async ({
+	page
+}) => {
+	const queue = queueOf(page);
+	await serveLibrary(page);
+	await serveQueueEdits(page);
+	await page.goto('/albums/31');
+	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
+	await expect.poll(() => queue.starts.length).toBeGreaterThan(0);
+
+	// Tag 70 is a genre no song carries, and its type is not read yet.
+	const release = Promise.withResolvers<void>();
+	await page.route('**/tags/70', async (route) => {
+		await release.promise;
+		await route.fulfill({
+			json: {
+				id: '70',
+				type: 'genre',
+				name: 'Ambient Folk',
+				trackCount: 0,
+				albumCount: 0,
+				artistCount: 0
+			}
+		});
+	});
+	await page.goto('/albums/31?tagAny=61,70');
+	await page.locator('main').getByRole('button', { name: 'Actions for “Signal”' }).click();
+	await page.getByRole('menuitem', { name: 'Queue last' }).click();
+	// Nothing is shown to send: no recipe went for rows the server might read differently.
+	await expect(page.getByRole('status')).toContainText('no songs in “Signal”');
+	expect(queue.edits).toEqual([]);
+
+	release.resolve();
+	await expect(page.locator('main .track .title')).toHaveText(['Signal Part 1', 'Signal Part 2']);
+	await page.locator('main').getByRole('button', { name: 'Actions for “Signal”' }).click();
+	await page.getByRole('menuitem', { name: 'Queue last' }).click();
+	await expect
+		.poll(() => queue.edits.at(-1))
+		.toMatchObject({
+			type: 'add',
+			source: { recipe: { type: 'album', filters: { tagAny: ['61', '70'] } } }
+		});
+});
+
+test('queues every song a filtered search finds', async ({ page }) => {
+	const queue = queueOf(page);
+	await serveLibrary(page);
+	await serveQueueEdits(page);
+	await page.goto('/search?q=signal&tagAny=61');
+	await expect(page.locator('main .track .title')).toHaveText(['Signal Part 1', 'Signal Part 2']);
+	await page.getByRole('button', { name: 'Signal Part 2', exact: true }).click();
+	await expect(
+		page.getByRole('region', { name: 'Player' }).getByText('Signal Part 2')
+	).toBeVisible();
+	await expect.poll(() => queue.starts.length).toBeGreaterThan(0);
+	expect(queue.starts.at(-1)).toMatchObject({
+		source: { recipe: { type: 'search', q: 'signal', filters: { tagAny: ['61'] } } }
+	});
+	await page.locator('main').getByRole('button', { name: 'Actions for all songs found' }).click();
+	await page.getByRole('menuitem', { name: 'Queue last' }).click();
+	await expect
+		.poll(() => queue.edits.at(-1))
+		.toMatchObject({
+			type: 'add',
+			source: { recipe: { type: 'search', q: 'signal', filters: { tagAny: ['61'] } } }
+		});
+	expect([...queue.lists.values()].at(-1)).toEqual(['41', '42']);
 });
 
 test('says to start something first when there is no queue to add to', async ({ page }) => {

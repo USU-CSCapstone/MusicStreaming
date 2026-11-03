@@ -11,6 +11,7 @@ import {
 	readFilter,
 	showFiltered,
 	shownFilter,
+	tagTypesKnown,
 	toggleTag,
 	typeMatch,
 	withFilter,
@@ -211,5 +212,21 @@ describe('filterByTags', () => {
 		expect(kept(['30', '34'], [], genre)).toEqual([]);
 		// Not known, or not the library's, it matches nothing.
 		expect(kept([], ['30', '34'])).toEqual([]);
+	});
+
+	it('says whether every any tag has a type to group by', () => {
+		/** A `known` that says only `ids` have their type read. */
+		const known = (ids: string[]) => (tag: string) => ids.includes(tag);
+		/** Whether the tags in `any` all have a type, given the types read for `ids`. */
+		const types = (any: string[], ids: string[] = []) =>
+			tagTypesKnown(items, { all: [], any }, (i) => i.tags, known(ids));
+		expect(types([])).toBe(true);
+		// Carried by an item: rock and jazz.
+		expect(types(['30', '31'])).toBe(true);
+		// Pop is carried by none, so its type must have been read.
+		expect(types(['30', '34'])).toBe(false);
+		expect(types(['30', '34'], ['34'])).toBe(true);
+		// A tag in `all` needs no type.
+		expect(tagTypesKnown(items, { all: ['34'], any: [] }, (i) => i.tags, known([]))).toBe(true);
 	});
 });

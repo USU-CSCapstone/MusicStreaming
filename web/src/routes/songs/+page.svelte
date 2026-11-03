@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { songs, view } from '$lib/adding.svelte';
+	import { view } from '$lib/adding.svelte';
 	import { listTracks } from '$lib/api/client';
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import type { PlayContext } from '$lib/api/types';
@@ -8,7 +8,7 @@
 	import { isFiltered, showFiltered } from '$lib/filters';
 	import { plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
-	import type { PlayFrom } from '$lib/queue';
+	import { libraryRecipe, type PlayFrom } from '$lib/queue';
 	import { showSorted } from '$lib/sort-url';
 
 	let { data } = $props();
@@ -25,26 +25,13 @@
 			? { type: 'filter', filter: { tagAll: data.filter.all, tagAny: data.filter.any } }
 			: { type: 'library' }
 	);
-	// Unfiltered, the library in the order shown, as the server resolves it. Filtered, the songs
-	// play as loaded, since a recipe cannot name tags yet.
-	const from = $derived<PlayFrom | undefined>(
-		filtered
-			? undefined
-			: {
-					recipe: {
-						type: 'library',
-						filters: {},
-						sort: data.query.sort,
-						order: data.query.order
-					},
-					total: tracks.total
-				}
-	);
+	// The library under the loaded filter, in the order shown, as the server resolves it.
+	const from = $derived<PlayFrom>({
+		recipe: libraryRecipe({ sort: data.query.sort, order: data.query.order }, data.filter),
+		total: tracks.total
+	});
 	// All of them, in the order shown, which only queues: there is no entity to add to a playlist.
-	// Filtered, the songs loaded, since a recipe cannot name tags yet.
-	const all = $derived(
-		from ? view('all songs', tracks.total, from.recipe) : { ...songs(tracks.items), refs: [] }
-	);
+	const all = $derived(view('all songs', tracks.total, from.recipe));
 </script>
 
 <svelte:head><title>Songs · Jewelcase</title></svelte:head>

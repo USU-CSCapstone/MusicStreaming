@@ -183,8 +183,13 @@ the queue only by editing it (`requirements/queue.md`, `design/queue.md` §3).
   summary the view holds, before anything is answered, and starts the queue in the background. The
   item is `<key>.<index>`, which the report names. With `from`, a recipe and the view's `total`
   (`PlayFrom`), the request carries the recipe, `start`, `startTrackId`, `total` and the loaded
-  rows; without it, the tracks. Album, artist, songs and search views send a recipe; a sorted
-  search and playlists send tracks, since no recipe gives their order. A Next pressed before the
+  rows; without it, the tracks. Album, artist, songs and search views send a recipe,
+  carrying the view's tag filter as `filters` (`tagAll`, `tagAny`) so the server resolves the
+  rows shown; a sorted search and playlists send tracks, since no recipe gives their order. The
+  recipe's filter is the one the rows were loaded under (`data.filter`), or on an album, which
+  filters its own tracks, the filter shown. An album whose `tagAny` tag has no known type (not
+  carried by its tracks, not yet read) would group it differently from the server, so it sends
+  the tracks shown until the type is read. A Next pressed before the
   worker has the queue is carried out once it has.
 - **Following.** A device holding playback plays whatever the queue's current item becomes,
   whoever moved it. The item's row is read from the worker. `unknown`, a row still being learned,
@@ -279,7 +284,7 @@ the tab's name carries from one to the other.
   with no entity, such as all songs, lacks). They are an `add` at `manualStart` / `manualEnd`, or
   at a point chosen in Up Next, and a toast says what was done at once. **What goes as a recipe:**
   album and artist pages and cards (in the order shown), the Songs page, and an unsorted search's
-  songs; the device holds no tracks for these, so the add shows at once as the view's count of
+  songs, each under the view's tag filter; the device holds no tracks for these, so the add shows at once as the view's count of
   rows, which wait for the server's list or pages. **What goes as `tracks`:** songs, selections, playlists (in
   the order shown) and sorted search rows; these show at once from the tracks sent. **Dropping at
   a point:** with a mouse (`pointer: fine`) song rows, the selection and cards drag from a view

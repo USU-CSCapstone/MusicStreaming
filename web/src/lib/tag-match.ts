@@ -58,3 +58,20 @@ export function filterByTags<T>(
 		);
 	});
 }
+
+/**
+ * Whether `filterByTags` can tell every `filter.any` tag's type: each is carried by one of `items`
+ * or `known` says its type has been read. Until then it may leave out items the server keeps,
+ * which groups a tag it knows nothing of by itself.
+ */
+export function tagTypesKnown<T>(
+	items: readonly T[],
+	filter: TagFilter,
+	tagsOf: (item: T) => TagsByType,
+	known: (tag: string) => boolean
+): boolean {
+	const carried = new Set(
+		items.flatMap((item) => Object.values(tagsOf(item)).flatMap((tags) => tags.map((t) => t.id)))
+	);
+	return filter.any.every((tag) => carried.has(tag) || known(tag));
+}
