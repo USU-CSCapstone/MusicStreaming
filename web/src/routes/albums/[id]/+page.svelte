@@ -1,11 +1,18 @@
 <script lang="ts">
-	import { collection } from '$lib/adding.svelte';
+	import { collection, playables } from '$lib/adding.svelte';
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import ArtistLinks from '$lib/components/ArtistLinks.svelte';
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
 	import TagLinks from '$lib/components/TagLinks.svelte';
 	import TrackList from '$lib/components/TrackList.svelte';
-	import { currentFilter, filterByTags, isFiltered, showFiltered, shownFilter } from '$lib/filters';
+	import {
+		currentFilter,
+		filterByTags,
+		isFiltered,
+		showFiltered,
+		shownFilter,
+		tagTypesKnown
+	} from '$lib/filters';
 	import { albumTitle, formatLength, plural, releaseYear } from '$lib/format';
 	import { knownTags } from '$lib/known-tags.svelte';
 	import { player } from '$lib/player.svelte';
@@ -31,28 +38,39 @@
 			(tag) => knownTags.get(data.lib, tag)?.type
 		)
 	);
-	// The server resolves the album in the order shown: within the album, or as sorted. Filtered,
-	// it plays as shown, since a recipe cannot name tags yet.
+	// The server resolves the album in the order shown, under the filter shown: within the album,
+	// or as sorted. Its tags are read from the tracks and the known tags, so while a tag's type is
+	// still unknown the rows shown may differ from the server's, and the songs shown play instead.
+	const settled = $derived(
+		tagTypesKnown(
+			data.tracks,
+			filter,
+			(track) => track.tags,
+			(tag) => knownTags.get(data.lib, tag) !== undefined
+		)
+	);
 	const from = $derived<PlayFrom | undefined>(
-		isFiltered(filter)
-			? undefined
-			: {
-					recipe: albumRecipe(album.id, serverSort(sort) ?? undefined),
+		settled
+			? {
+					recipe: albumRecipe(album.id, serverSort(sort) ?? undefined, filter),
 					total: shown.length
 				}
+			: undefined
 	);
-	// The whole album, as a play or a queueing resolves it: every track, in the order shown.
-	// Filtered, the songs shown, since a recipe cannot name tags yet.
-	const adding = $derived(
-		collection(
+	// The songs shown, as a play or a queueing resolves them: unfiltered, the whole album, in the
+	// order shown. Filtered, a playlist takes just the songs shown, so its duplicate check and
+	// its add agree with the rows; the queue still goes by the recipe.
+	const adding = $derived({
+		...collection(
 			'album',
 			album.id,
 			albumTitle(album.title),
-			data.tracks.length,
-			async () => (from ? data.tracks : shown),
+			shown.length,
+			async () => (isFiltered(filter) ? shown : data.tracks),
 			from?.recipe
-		)
-	);
+		),
+		...(isFiltered(filter) && { refs: playables(shown) })
+	});
 	const kinds = { album: 'Album', ep: 'EP', single: 'Single', compilation: 'Compilation' };
 	const kind = $derived(
 		[kinds[album.type], releaseYear(album.releaseDate)].filter(Boolean).join(' · ')

@@ -160,10 +160,17 @@ function sortedAsAsked(query: URLSearchParams): TrackSummary[] {
 
 /** The tracks a start's recipe resolves to, as the server runs it; what the fixture does not know is empty. */
 function resolveRecipe(recipe: NonNullable<StartQueue['source']['recipe']>): TrackSummary[] {
+	const { tagAll, tagAny } = 'filters' in recipe ? (recipe.filters ?? {}) : {};
+	const narrowed = new URLSearchParams({
+		...(tagAll?.length && { tagAll: tagAll.join(',') }),
+		...(tagAny?.length && { tagAny: tagAny.join(',') })
+	});
+	/** `items` that carry the recipe's tags, as the list endpoints keep them. */
+	const kept = (items: TrackSummary[]) => tagged(items, narrowed, (t) => t.tags);
 	if (recipe.type === 'search') {
-		return tracks.filter((t) => t.title.toLowerCase().includes(recipe.q.toLowerCase()));
+		return kept(tracks.filter((t) => t.title.toLowerCase().includes(recipe.q.toLowerCase())));
 	}
-	return sortedAsAsked(new URLSearchParams({ sort: recipe.sort, order: recipe.order }));
+	return kept(sortedAsAsked(new URLSearchParams({ sort: recipe.sort, order: recipe.order })));
 }
 
 /**

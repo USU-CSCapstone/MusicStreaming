@@ -14,7 +14,8 @@ export {
 	UNFILTERED,
 	chosenTags,
 	filterByTags,
-	isFiltered
+	isFiltered,
+	tagTypesKnown
 } from './tag-match';
 
 /** The filter `params` hold: each list's tags once, in the order chosen. */

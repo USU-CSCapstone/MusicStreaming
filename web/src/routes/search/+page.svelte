@@ -15,7 +15,7 @@
 	import { UNFILTERED, isFiltered, showFiltered, shownFilter } from '$lib/filters';
 	import { tagTypePlural } from '$lib/tags';
 	import type { Selected } from '$lib/recent';
-	import type { PlayFrom } from '$lib/queue';
+	import { searchRecipe, type PlayFrom } from '$lib/queue';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { FIELDS, sortTracks } from '$lib/sorting';
 	import ViewToggle from '$lib/components/ViewToggle.svelte';
@@ -55,14 +55,13 @@
 		];
 	});
 
-	// Unsorted, the songs are the first of what the search finds, in its ranking, which the server
-	// resolves to the end. Sorted, or filtered by tags, which a recipe cannot name yet, they play
-	// as shown.
+	// Unsorted, the songs are the first of what the search finds under the loaded filter, in its
+	// ranking, which the server resolves to the end. Sorted, they play as shown.
 	const from = $derived<PlayFrom | undefined>(
-		sort || filtered || !data.q
+		sort || !data.q
 			? undefined
 			: {
-					recipe: { type: 'search', q: data.q },
+					recipe: searchRecipe(data.q, data.filter),
 					total: sections.find((s) => s.type === 'tracks')?.total ?? songs.length
 				}
 	);
