@@ -30,7 +30,7 @@ The Manual Queue, the context and History are each a short list of spans or runs
 A **list** is `{libraryId, hash, length, recipe?}`. A source names its list by that hash in a field called `list`, everywhere.
 
 - **The hash** is SHA-256 over the track IDs in order, as 8-byte little-endian integers, in lowercase hex.
-  - Only the server computes it. It never takes one from a device.
+  - Only the server's hash names a list; it never takes one from a device. From Stage 10 a device computes one only to check a list it rebuilt ([§7](#7-where-it-is-built-and-what-is-not-yet)).
   - It names the list everywhere: in queues, on the wire, in storage and in device caches. It must resist collisions, since devices trust it as the list's name.
 - **The recipe** is how the list was made. It is not what plays; the hash is. It is kept so a device can rebuild the list from its own catalog once it keeps one ([§7](#7-where-it-is-built-and-what-is-not-yet)), and so the interface can say what is playing.
 
@@ -47,7 +47,7 @@ A **list** is `{libraryId, hash, length, recipe?}`. A source names its list by t
 
   The `playlist` recipe names the caller's own playlist. Its `sort` and `order` come together (a `sort` without an `order`, or the reverse, is refused, `422`) or are both left out for the playlist's own order. Its `sort` is `listTracks`' sort of the same name (`name`, `artist`, `album`, `releaseDate`, `duration`) or `addedToPlaylist`, when the playlist took the track, which only a playlist has, and its `order` is the other recipes' `order`. The server resolves the playlist at its current version and records that `version` in the stored recipe; a device never sends one. Only the caller's own playlist resolves: another account's, and one that does not exist, are the same `404`.
   Every recipe resolves exactly the rows its view pages in to the end under the same filter, so what a client starts or queues is what its page shows. A playlist's items resolve in key order, one row for each time it holds a track and one in place for a missing track, kept if they carry the filter's tags, then sorted by the core's comparator over the keys its page sorts by.
-- **A queue's sources** are `{key, libraryId, list: hash, length, recipe?}`. Item `<key>.<p>` is position `p` of that list. A track listed twice is two positions, so two items ([`requirements/queue.md` §8](../requirements/queue.md#8-resilience)).
+- **A queue's sources** are `{key, libraryId, list?: hash, length, recipe?}`. `list` is missing only on a device, from its own start or add until the server's answer names the list. Item `<key>.<p>` is position `p` of that list. A track listed twice is two positions, so two items ([`requirements/queue.md` §8](../requirements/queue.md#8-resilience)).
 
 **The sort is part of the recipe.** Each combination of collection, filters, sort and direction is its own list.
 
