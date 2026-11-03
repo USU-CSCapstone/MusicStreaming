@@ -224,7 +224,11 @@
 		const item = focusItem;
 		focusItem = null;
 		if (item) titleOf(item)?.focus();
-		else if (focusFirst) scroller?.querySelector<HTMLElement>('.title')?.focus();
+		else if (focusFirst) {
+			// With no row left, focus stays with the tab rather than falling to the page.
+			const first = scroller?.querySelector<HTMLElement>('.title');
+			(first ?? document.getElementById(`queue-tab-${tab}`))?.focus();
+		}
 		focusFirst = false;
 	}
 

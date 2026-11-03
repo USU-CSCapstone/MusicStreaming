@@ -586,4 +586,24 @@ describe('QueueList History', () => {
 		mount('history');
 		await expect.element(page.getByText('Nothing has played yet.')).toBeVisible();
 	});
+
+	it('puts focus on the History tab when removing the last play leaves no row', async () => {
+		fake.queue.edit = (e) => {
+			if (e.type === 'removePlays') setHistory([]);
+		};
+		// The panel's tab, which the list does not draw.
+		const tab = document.createElement('button');
+		tab.id = 'queue-tab-history';
+		document.body.append(tab);
+		onTestFinished(() => tab.remove());
+		setHistory([played(3, 0)]);
+		mount('history');
+		const remove = page.getByRole('button', { name: 'Remove Song 0' });
+		await expect.element(remove).toBeVisible();
+		(remove.element() as HTMLElement).focus();
+		await userEvent.keyboard('{Delete}');
+
+		await expect.poll(() => document.activeElement).toBe(tab);
+		await expect.element(page.getByText('Nothing has played yet.')).toBeVisible();
+	});
 });
