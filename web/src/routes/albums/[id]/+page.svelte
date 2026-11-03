@@ -18,7 +18,8 @@
 	import { player } from '$lib/player.svelte';
 	import { albumRecipe, type PlayFrom } from '$lib/queue';
 	import { currentSort, showSorted } from '$lib/sort-url';
-	import { ALBUM_FIELDS, serverSort, sortTracks } from '$lib/sorting';
+	import { ALBUM_FIELDS, serverSort } from '$lib/sorting';
+	import { sortTracks } from '$lib/track-sort';
 
 	let { data } = $props();
 

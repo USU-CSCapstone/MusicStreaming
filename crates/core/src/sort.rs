@@ -34,13 +34,18 @@ pub fn tag_sort_key(name: &str) -> String {
 }
 
 /// What a track list can be sorted by (`requirements/conventions.md` §4.1). `Added` is when a
-/// playlist took the track, so only a playlist's rows carry one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// playlist took the track, so only a playlist's rows carry one. It deserializes from the API's
+/// names: `listTracks`' sorts, and `addedToPlaylist`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SortField {
+    #[serde(rename = "name")]
     Title,
     Artist,
     Album,
+    #[serde(rename = "releaseDate")]
     Year,
+    #[serde(rename = "addedToPlaylist")]
     Added,
     Duration,
 }
@@ -400,15 +405,7 @@ mod tests {
             serde_json::from_str(include_str!("queue/parity.json")).unwrap();
         let rows: Vec<SortRow> = serde_json::from_value(fixture["sort"]["rows"].clone()).unwrap();
         for case in fixture["sort"]["cases"].as_array().unwrap() {
-            let field = match case["field"].as_str().unwrap() {
-                "title" => SortField::Title,
-                "artist" => SortField::Artist,
-                "album" => SortField::Album,
-                "year" => SortField::Year,
-                "added" => SortField::Added,
-                "duration" => SortField::Duration,
-                other => panic!("{other}"),
-            };
+            let field: SortField = serde_json::from_value(case["field"].clone()).unwrap();
             let descending = case["order"] == "desc";
             let want: Vec<usize> = serde_json::from_value(case["positions"].clone()).unwrap();
             assert_eq!(sort_rows(&rows, field, descending), want, "{case}");

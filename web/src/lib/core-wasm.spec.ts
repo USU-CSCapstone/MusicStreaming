@@ -63,8 +63,8 @@ test('sorting rows matches native', () => {
 		expect(Array.from(sortRows(rows, field, order)), `${field} ${order}`).toEqual(positions);
 	}
 	expect(() => sortRows(rows, 'bitrate', 'asc')).toThrow();
-	expect(() => sortRows(rows, 'title', 'up')).toThrow();
-	expect(() => sortRows('[{"id":"x"}]', 'title', 'asc')).toThrow();
+	expect(() => sortRows(rows, 'name', 'up')).toThrow();
+	expect(() => sortRows('[{"id":"x"}]', 'name', 'asc')).toThrow();
 });
 
 test('a started queue matches native', () => {

@@ -1,14 +1,5 @@
-// Sorting track lists (`requirements/conventions.md` §4.1). A list already on the device sorts
-// here, in exactly the order the server's `listTracks` would give it: the core's one comparator
-// (same keys, same tie-breaks, unknown values last either way).
-
-import init, { sortRows as coreSortRows } from '$lib/core-wasm/jewelcase_core_wasm.js';
-import type { TrackSummary } from './api/types';
-
-// The core loads before any list sorts; its sort is synchronous. The queue worker is told this
-// same file's URL (`queue/client.svelte.ts`), so the browser fetches it once. (A no-op once
-// loaded.)
-await init();
+// Sorting track lists (`requirements/conventions.md` §4.1): what each list sorts by and how the
+// API names each sort. A list already on the device sorts through the core (`track-sort.ts`).
 
 export type SortField = 'title' | 'artist' | 'album' | 'year' | 'duration' | 'added';
 export type SortOrder = 'asc' | 'desc';
@@ -43,58 +34,30 @@ export function nextSort(sort: TrackSort, field: SortField): TrackSort {
 	return sort.order === 'asc' ? { field, order: 'desc' } : null;
 }
 
-/** `listTracks`' name for each sort. Date added to a playlist is never sorted by the server. */
-const SERVER = {
+/**
+ * Each sort as the API names it: `listTracks`' name for the fields it sorts by, and
+ * `addedToPlaylist` for when a playlist took the track, which the server sorts only a playlist
+ * recipe by. The core's comparator takes these names too.
+ */
+const NAMES = {
 	title: 'name',
 	artist: 'artist',
 	album: 'album',
 	year: 'releaseDate',
-	duration: 'duration'
-} as const;
+	duration: 'duration',
+	added: 'addedToPlaylist'
+} as const satisfies Record<SortField, string>;
 
-export type ServerSort = { sort: (typeof SERVER)[keyof typeof SERVER]; order: SortOrder };
+/** `field` as the API names it. */
+export const sortName = <F extends SortField>(field: F): (typeof NAMES)[F] => NAMES[field];
+
+export type ServerSort = {
+	sort: (typeof NAMES)[Exclude<SortField, 'added'>];
+	order: SortOrder;
+};
 
 /** The `sort` and `order` to ask `listTracks` for, or `null` for the list's own order. */
 export function serverSort(sort: TrackSort): ServerSort | null {
 	if (!sort || sort.field === 'added') return null;
-	return { sort: SERVER[sort.field], order: sort.order };
-}
-
-/**
- * `rows` in `sort`'s order, as a new array; unsorted, `rows` as they are. The order is the
- * core's (`sort_rows`), the one the server reproduces: rows with no value sort last in either
- * direction, and rows the sort cannot tell apart, such as a track a playlist holds twice, keep
- * the order they had. `added` reads the row's date added to the playlist.
- */
-export function sortRows<T>(
-	rows: readonly T[],
-	sort: TrackSort,
-	track: (row: T) => TrackSummary,
-	added: (row: T) => string = () => ''
-): readonly T[] {
-	if (!sort) return rows;
-	const keys = rows.map((row) => {
-		const t = track(row);
-		return {
-			id: t.id,
-			titleKey: t.sortKeys.title,
-			artistKey: t.sortKeys.artist,
-			albumKey: t.sortKeys.album,
-			albumId: t.album.id,
-			releaseDate: t.releaseDate,
-			disc: t.discNumber,
-			number: t.trackNumber,
-			durationUs: t.durationUs,
-			added: added(row)
-		};
-	});
-	return Array.from(coreSortRows(JSON.stringify(keys), sort.field, sort.order), (i) => rows[i]);
-}
-
-/** Tracks in `sort`'s order. */
-export function sortTracks(
-	tracks: readonly TrackSummary[],
-	sort: TrackSort
-): readonly TrackSummary[] {
-	return sortRows(tracks, sort, (t) => t);
+	return { sort: sortName(sort.field), order: sort.order };
 }
