@@ -86,10 +86,14 @@ function byType(tags: Tag[]): TagsByType {
 	return out;
 }
 
-/** The filter a list's `tagAll` and `tagAny` ask for, and the items of `items` it keeps. */
-function tagged<T>(items: T[], query: URLSearchParams, tagsOf: (item: T) => TagsByType): T[] {
+/** The filter a list's `tagAll` and `tagAny` ask for. */
+function filterOf(query: URLSearchParams): TagFilter {
 	const ids = (key: string) => (query.get(key) ?? '').split(',').filter(Boolean);
-	const filter: TagFilter = { all: ids('tagAll'), any: ids('tagAny') };
+	return { all: ids('tagAll'), any: ids('tagAny') };
+}
+
+/** The items of `items` that `filter` keeps, each tag of the type the library gives it. */
+function tagged<T>(items: T[], filter: TagFilter, tagsOf: (item: T) => TagsByType): T[] {
 	return filterByTags(items, filter, tagsOf, (id) => TAGS.find((t) => t.id === id)?.type);
 }
 
@@ -161,12 +165,9 @@ function sortedAsAsked(query: URLSearchParams): TrackSummary[] {
 /** The tracks a start's recipe resolves to, as the server runs it; what the fixture does not know is empty. */
 function resolveRecipe(recipe: NonNullable<StartQueue['source']['recipe']>): TrackSummary[] {
 	const { tagAll, tagAny } = 'filters' in recipe ? (recipe.filters ?? {}) : {};
-	const narrowed = new URLSearchParams({
-		...(tagAll?.length && { tagAll: tagAll.join(',') }),
-		...(tagAny?.length && { tagAny: tagAny.join(',') })
-	});
+	const filter = { all: tagAll ?? [], any: tagAny ?? [] };
 	/** `items` that carry the recipe's tags, as the list endpoints keep them. */
-	const kept = (items: TrackSummary[]) => tagged(items, narrowed, (t) => t.tags);
+	const kept = (items: TrackSummary[]) => tagged(items, filter, (t) => t.tags);
 	if (recipe.type === 'search') {
 		return kept(tracks.filter((t) => t.title.toLowerCase().includes(recipe.q.toLowerCase())));
 	}
@@ -700,7 +701,7 @@ export async function serveLibrary(
 
 		if (path === '/libraries') return json({ items: empty ? [] : [library] });
 		if (path === `${lib}/albums`)
-			return json(pageOf(tagged([album], url.searchParams, (a) => a.tags)));
+			return json(pageOf(tagged([album], filterOf(url.searchParams), (a) => a.tags)));
 		if (path === `${lib}/albums/${album.id}`) {
 			return json({
 				...album,
@@ -717,7 +718,9 @@ export async function serveLibrary(
 			return json(pageOf(named.flatMap((id) => tracks.filter((t) => t.id === id))));
 		}
 		if (path === `${lib}/tracks`) {
-			return json(pageOf(tagged(sortedAsAsked(url.searchParams), url.searchParams, (t) => t.tags)));
+			return json(
+				pageOf(tagged(sortedAsAsked(url.searchParams), filterOf(url.searchParams), (t) => t.tags))
+			);
 		}
 		if (path === `${lib}/tag-types`) {
 			return json([
@@ -737,7 +740,7 @@ export async function serveLibrary(
 		if (tag) return json(tag);
 		if (path === `${lib}/artists`) {
 			const all = [{ ...artist, image: null, albumCount: 1, trackCount: 3 }];
-			return json(pageOf(tagged(all, url.searchParams, () => byType(TAGS))));
+			return json(pageOf(tagged(all, filterOf(url.searchParams), () => byType(TAGS))));
 		}
 		if (path === `${lib}/artists/${artist.id}`) {
 			return json({
@@ -791,7 +794,7 @@ export async function serveLibrary(
 			const q = url.searchParams.get('q') ?? '';
 			const hits = tagged(
 				tracks.filter((t) => t.title.toLowerCase().includes(q.toLowerCase())),
-				url.searchParams,
+				filterOf(url.searchParams),
 				(t) => t.tags
 			);
 			return json({

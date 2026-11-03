@@ -426,6 +426,7 @@ test('a filtered album sends its songs until a tag type is known, then a recipe'
 		});
 	});
 	await page.goto('/albums/31?tagAny=61,70');
+	await queueLoaded(page);
 	await page.locator('main').getByRole('button', { name: 'Actions for “Signal”' }).click();
 	await page.getByRole('menuitem', { name: 'Queue last' }).click();
 	// Nothing is shown to send: no recipe went for rows the server might read differently.
