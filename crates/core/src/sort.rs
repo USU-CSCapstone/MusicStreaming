@@ -50,6 +50,20 @@ pub enum SortField {
     Duration,
 }
 
+impl SortField {
+    /// The field's name in the API, which it deserializes from.
+    pub fn name(self) -> &'static str {
+        match self {
+            SortField::Title => "name",
+            SortField::Artist => "artist",
+            SortField::Album => "album",
+            SortField::Year => "releaseDate",
+            SortField::Added => "addedToPlaylist",
+            SortField::Duration => "duration",
+        }
+    }
+}
+
 /// A track row's keys, everything [`sort_rows`] reads, in the wire's shape: IDs are decimal
 /// strings (they pass 2⁵³) and keys are as the API's `sortKeys` give them, so an empty one is
 /// unknown.
@@ -395,6 +409,14 @@ mod tests {
         .unwrap();
         assert_eq!((rows[0].id, rows[0].album_id, rows[0].number), (u64::MAX, 7, Some(3)));
         assert!(serde_json::from_str::<Vec<SortRow>>(r#"[{"id":"x"}]"#).is_err());
+    }
+
+    #[test]
+    fn a_field_deserializes_from_its_name() {
+        use SortField::*;
+        for field in [Title, Artist, Album, Year, Added, Duration] {
+            assert_eq!(serde_json::from_value::<SortField>(field.name().into()).unwrap(), field);
+        }
     }
 
     /// The cases in `queue/parity.json`, which the web build's `core-wasm.spec.ts` checks in

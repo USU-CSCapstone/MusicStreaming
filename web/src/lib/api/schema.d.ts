@@ -2681,19 +2681,18 @@ export interface components {
              */
             filters?: components["schemas"]["BrowseFilter"];
             /**
-             * @description A sort of the playlist's page; `added` is when the item was added to the playlist.
-             *     Left out, with `order`, for the playlist's own order.
+             * @description A sort of the playlist's page: `listTracks`' sort of the same name, or
+             *     `addedToPlaylist`, when the item was added to the playlist. Left out, with `order`,
+             *     for the playlist's own order.
              * @enum {string}
              */
-            sort?: "title" | "artist" | "album" | "year" | "added" | "duration";
+            sort?: "name" | "artist" | "album" | "releaseDate" | "addedToPlaylist" | "duration";
             /**
-             * @description The direction of `sort`. Sent with `sort` and only with it, as `listTracks` takes
-             *     them; either alone is `422`. Descending reverses the sort, ties and tracks with no
-             *     value included in their rule, but items the sort cannot tell apart keep the
-             *     playlist's order.
-             * @enum {string}
+             * @description The direction of `sort`. Sent with `sort` and only with it; either alone is `422`.
+             *     Descending reverses the sort, ties and tracks with no value included in their rule,
+             *     but items the sort cannot tell apart keep the playlist's order.
              */
-            order?: "asc" | "desc";
+            order?: components["schemas"]["QueueTrackOrder"];
         };
         /** @description Track IDs the device sent. */
         QueueTracksRecipe: {

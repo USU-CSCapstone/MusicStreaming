@@ -10,7 +10,7 @@ use rusqlite::Connection;
 use serde::Deserialize;
 
 pub use representation::{
-    JOINS, LOUDNESS, Loudness, SELECT, Track, TrackSummary, list_summary, loudness,
+    JOINS, LOUDNESS, Loudness, SELECT, Track, TrackSummary, list_summary, loudness, sort_keys,
 };
 
 use super::credit::{ArtistCredit, Credits};

@@ -3996,18 +3996,18 @@ components:
             library lacks matches no track.
         sort:
           type: string
-          enum: [title, artist, album, year, added, duration]
+          enum: [name, artist, album, releaseDate, addedToPlaylist, duration]
           description: |
-            A sort of the playlist's page; `added` is when the item was added to the playlist.
-            Left out, with `order`, for the playlist's own order.
+            A sort of the playlist's page: `listTracks`' sort of the same name, or
+            `addedToPlaylist`, when the item was added to the playlist. Left out, with `order`,
+            for the playlist's own order.
         order:
-          type: string
-          enum: [asc, desc]
+          allOf:
+            - $ref: '#/components/schemas/QueueTrackOrder'
           description: |
-            The direction of `sort`. Sent with `sort` and only with it, as `listTracks` takes
-            them; either alone is `422`. Descending reverses the sort, ties and tracks with no
-            value included in their rule, but items the sort cannot tell apart keep the
-            playlist's order.
+            The direction of `sort`. Sent with `sort` and only with it; either alone is `422`.
+            Descending reverses the sort, ties and tracks with no value included in their rule,
+            but items the sort cannot tell apart keep the playlist's order.
 
     QueueTracksRecipe:
       type: object

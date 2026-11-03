@@ -137,15 +137,7 @@ async fn page(app: &axum::Router, sort: Option<(&str, bool)>, filters: &Value) -
                     .unwrap()
                 })
                 .collect();
-            let field = match field {
-                "title" => jewelcase_core::SortField::Title,
-                "artist" => jewelcase_core::SortField::Artist,
-                "album" => jewelcase_core::SortField::Album,
-                "year" => jewelcase_core::SortField::Year,
-                "added" => jewelcase_core::SortField::Added,
-                _ => jewelcase_core::SortField::Duration,
-            };
-            sort_rows(&keys, field, descending)
+            sort_rows(&keys, serde_json::from_value(json!(field)).unwrap(), descending)
         }
     };
     order
@@ -178,7 +170,7 @@ async fn a_playlist_recipe_resolves_the_rows_its_page_shows() {
             resolved(&state, &recipe(None, None, filters)).await,
             page(&app, None, filters).await
         );
-        for field in ["title", "artist", "album", "year", "added", "duration"] {
+        for field in ["name", "artist", "album", "releaseDate", "addedToPlaylist", "duration"] {
             for order in ["asc", "desc"] {
                 let shown = page(&app, Some((field, order == "desc")), filters).await;
                 let recipe = recipe(Some(field), Some(order), filters);
@@ -189,7 +181,7 @@ async fn a_playlist_recipe_resolves_the_rows_its_page_shows() {
     }
     assert!(differs > 20, "the sorts are not all the playlist's own order");
 
-    let up = resolved(&state, &recipe(Some("added"), Some("asc"), &json!({}))).await;
+    let up = resolved(&state, &recipe(Some("addedToPlaylist"), Some("asc"), &json!({}))).await;
     // Items added at the same time, and a track twice, end on the ID and then the item's place.
     assert_eq!(&up[..5], ["1", "1", "2", "5", "10"].map(String::from));
 }
@@ -198,7 +190,7 @@ async fn a_playlist_recipe_resolves_the_rows_its_page_shows() {
 async fn a_started_playlist_records_the_version_it_resolved() {
     let (_temp, state, app) = fixture().await;
     playlists(&state).await;
-    let sorted = recipe(Some("year"), Some("desc"), &json!({ "tagAny": ["30", "31"] }));
+    let sorted = recipe(Some("releaseDate"), Some("desc"), &json!({ "tagAny": ["30", "31"] }));
     let body = recipe_start(QUEUE, KEY, sorted.clone(), "6", 0);
     let (status, answer) = start(&app, TOKEN, body).await;
     assert_eq!(status, StatusCode::OK, "{answer}");
@@ -225,14 +217,14 @@ async fn a_started_playlist_records_the_version_it_resolved() {
         json!({ "type": "playlist", "playlistId": "501", "version": 8 })
     );
     let up: crate::api::queue::Recipe =
-        serde_json::from_value(recipe(Some("title"), Some("asc"), &json!({}))).unwrap();
+        serde_json::from_value(recipe(Some("name"), Some("asc"), &json!({}))).unwrap();
     let (_, stored) =
         crate::api::queue::resolve(&state.db, &state.indexes, &caller, crate::api::Id(1), &up)
             .await
             .unwrap();
     assert_eq!(
         serde_json::to_value(stored).unwrap(),
-        json!({ "type": "playlist", "playlistId": "501", "version": 8, "sort": "title", "order": "asc" })
+        json!({ "type": "playlist", "playlistId": "501", "version": 8, "sort": "name", "order": "asc" })
     );
 }
 
@@ -244,7 +236,7 @@ async fn only_the_callers_own_playlist_in_a_library_they_reach_resolves() {
         let mut body = recipe_start(
             QUEUE,
             KEY,
-            json!({ "type": "playlist", "playlistId": id, "sort": "title", "order": "asc" }),
+            json!({ "type": "playlist", "playlistId": id, "sort": "name", "order": "asc" }),
             "1",
             0,
         );
@@ -294,8 +286,9 @@ async fn playlist_recipes_the_server_cannot_resolve_are_refused() {
             "an order without a sort",
             json!({ "type": "playlist", "playlistId": "501", "order": "desc" }),
         ),
-        ("a sort of listTracks", recipe(Some("name"), Some("asc"), &json!({}))),
-        ("an unknown direction", recipe(Some("title"), Some("up"), &json!({}))),
+        ("a sort the page lacks", recipe(Some("dateAdded"), Some("asc"), &json!({}))),
+        ("the page's own name for a sort", recipe(Some("title"), Some("asc"), &json!({}))),
+        ("an unknown direction", recipe(Some("name"), Some("up"), &json!({}))),
         ("a version", json!({ "type": "playlist", "playlistId": "501", "version": 7 })),
         ("a filter", recipe(None, None, &json!({ "genres": ["30"] }))),
         ("no playlist", json!({ "type": "playlist" })),
@@ -305,4 +298,15 @@ async fn playlist_recipes_the_server_cannot_resolve_are_refused() {
     }
     let (status, _) = call(&app, TOKEN, "GET", "/api/v1/me/queue", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "nothing started");
+}
+
+#[tokio::test]
+async fn a_start_at_a_tracks_second_place_plays_there() {
+    let (_temp, state, app) = fixture().await;
+    playlists(&state).await;
+    // Track 5 is items 0 and 2 of the playlist's own order.
+    let body = recipe_start(QUEUE, KEY, recipe(None, None, &json!({})), "5", 2);
+    let (status, answer) = start(&app, TOKEN, body).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(snapshot(&app).await["state"]["current"], json!(format!("{KEY}.2")));
 }
