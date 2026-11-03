@@ -51,7 +51,7 @@ test('a tag-filtered view starts by a recipe carrying its filter', async ({ page
 	await page.getByRole('button', { name: 'Signal Part 1', exact: true }).click();
 	const player = page.getByRole('region', { name: 'Player' });
 	await expect(player.getByText('Signal Part 1')).toBeVisible();
-	await expect.poll(() => queue.starts.length).toBeGreaterThan(0);
+	await expect.poll(() => queue.starts.length).toBe(1);
 	// The start names the filter, not the songs, and the server's resolve is the rows shown.
 	for (const start of queue.starts) {
 		expect(start).toMatchObject({
@@ -352,7 +352,7 @@ test('queues a sorted playlist by a recipe that resolves to the rows shown', asy
 	await expect(
 		page.getByRole('region', { name: 'Player' }).getByText('Signal Remix')
 	).toBeVisible();
-	await expect.poll(() => queue.starts.length).toBeGreaterThan(0);
+	await expect.poll(() => queue.starts.length).toBe(1);
 	expect(queue.starts[0]).toMatchObject({
 		context: { type: 'playlist', id: signalMix.id },
 		source: { recipe: { type: 'playlist', playlistId: signalMix.id, sort: 'name', order: 'desc' } }
@@ -388,7 +388,7 @@ test('a sorted, tag-filtered playlist starts by a recipe resolving to the rows s
 	const tabs = page.getByRole('complementary', { name: 'Queue' }).getByRole('tab');
 	await expect(tabs).toHaveText(['Up Next 1', 'History 0', 'Kept']);
 	answer();
-	await expect.poll(() => queue.starts.length).toBeGreaterThan(0);
+	await expect.poll(() => queue.starts.length).toBe(1);
 	expect(queue.starts[0]).toMatchObject({
 		source: {
 			recipe: {
@@ -410,7 +410,7 @@ test('an unsorted, unfiltered playlist starts by a recipe of its own order', asy
 	await page.goto(`/playlists/${signalMix.id}`);
 	await expect(page.locator('main .track .title')).toHaveCount(3);
 	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
-	await expect.poll(() => queue.starts.length).toBeGreaterThan(0);
+	await expect.poll(() => queue.starts.length).toBe(1);
 	expect(queue.starts[0].source.recipe).toEqual({ type: 'playlist', playlistId: signalMix.id });
 	expect(queue.starts[0]).toMatchObject({ start: 0, startTrackId: '41' });
 	expect([...queue.lists.values()][0]).toEqual(['41', '42', '43']);
@@ -424,7 +424,7 @@ test('a filtered playlist sends its songs until a tag type is known, then a reci
 	await serveQueueEdits(page);
 	await page.goto(`/playlists/${signalMix.id}`);
 	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
-	await expect.poll(() => queue.starts.length).toBeGreaterThan(0);
+	await expect.poll(() => queue.starts.length).toBe(1);
 
 	// Tag 70 is a genre no song carries, and its type is not read yet.
 	const release = Promise.withResolvers<void>();
@@ -473,7 +473,7 @@ test('queues a tag-filtered view by a recipe carrying its filter', async ({ page
 	await expect(
 		page.getByRole('region', { name: 'Player' }).getByText('Signal Part 1')
 	).toBeVisible();
-	await expect.poll(() => queue.starts.length).toBeGreaterThan(0);
+	await expect.poll(() => queue.starts.length).toBe(1);
 	expect(queue.starts.at(-1)).toMatchObject({
 		source: { recipe: { type: 'album', albumId: '31', filters: { tagAny: ['63'] } } }
 	});
@@ -512,7 +512,7 @@ test('a filtered album sends its songs until a tag type is known, then a recipe'
 	await serveQueueEdits(page);
 	await page.goto('/albums/31');
 	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
-	await expect.poll(() => queue.starts.length).toBeGreaterThan(0);
+	await expect.poll(() => queue.starts.length).toBe(1);
 
 	// Tag 70 is a genre no song carries, and its type is not read yet.
 	const release = Promise.withResolvers<void>();
@@ -559,7 +559,7 @@ test('queues every song a filtered search finds', async ({ page }) => {
 	await expect(
 		page.getByRole('region', { name: 'Player' }).getByText('Signal Part 2')
 	).toBeVisible();
-	await expect.poll(() => queue.starts.length).toBeGreaterThan(0);
+	await expect.poll(() => queue.starts.length).toBe(1);
 	expect(queue.starts.at(-1)).toMatchObject({
 		source: { recipe: { type: 'search', q: 'signal', filters: { tagAny: ['61'] } } }
 	});
@@ -682,7 +682,7 @@ test('a filtered playlist queues as many pending rows as it shows', async ({ pag
 	await serveQueueEdits(page);
 	await page.goto('/albums/31');
 	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
-	await expect.poll(() => queue.starts.length).toBeGreaterThan(0);
+	await expect.poll(() => queue.starts.length).toBe(1);
 	// The server does not answer the add yet.
 	const release = Promise.withResolvers<void>();
 	await page.route('**/api/v1/me/queue/edits', async (route) => {
@@ -710,7 +710,7 @@ test('a start from a clicked row of a playlist names the row and its track', asy
 	await page.goto(`/playlists/${longMix.id}`);
 	// The second Signal Part 2 is row 4; the first is row 1.
 	await page.getByRole('button', { name: 'Signal Part 2', exact: true }).nth(1).dblclick();
-	await expect.poll(() => queue.starts.length).toBeGreaterThan(0);
+	await expect.poll(() => queue.starts.length).toBe(1);
 	expect(queue.starts[0]).toMatchObject({
 		source: { recipe: { type: 'playlist', playlistId: longMix.id } },
 		start: 4,

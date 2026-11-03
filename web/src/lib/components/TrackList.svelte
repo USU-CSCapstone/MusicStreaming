@@ -535,6 +535,7 @@
 		if (anchor?.isConnected) anchor.focus();
 	}
 
+	/** A click on row `i`: selects where rows select, otherwise plays once; links and the ⋯ menu are left alone. */
 	function rowClick(e: MouseEvent, i: number) {
 		// Links inside the row navigate, and its ⋯ opens its own menu.
 		if ((e.target as Element).closest('a, .more')) return;
@@ -543,7 +544,8 @@
 			return;
 		}
 		if (editable && !(e.target as Element).closest('.num')) select(e, i);
-		else play(i);
+		// A double-click's second click (detail 2) would start again; keyboard clicks are detail 0.
+		else if (e.detail <= 1) play(i);
 	}
 </script>
 
@@ -693,15 +695,16 @@
 						</span>
 					{/if}
 					<span class="title-col" {@attach fullText}>
-						<!-- A pointer's click on the title selects when rows do; Enter (detail 0) plays.
-					     A missing track can still be selected, to remove it. -->
+						<!-- Where rows select, a pointer's click on the title selects and Enter (detail 0)
+					     plays. Elsewhere the click reaches the row, which plays; playing here too
+					     would start twice. A missing track can still be selected, to remove it. -->
 						<button
 							type="button"
 							class="title"
 							disabled={missing && !editable}
 							aria-describedby={selected.has(i) ? hintId : undefined}
 							onclick={(e) => {
-								if (!editable || e.detail === 0) play(i);
+								if (editable && e.detail === 0) play(i);
 							}}
 							onkeydown={(e) => titleKey(e, i)}
 							onkeyup={(e) => titleKey(e, i)}

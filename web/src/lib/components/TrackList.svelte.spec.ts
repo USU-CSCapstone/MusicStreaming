@@ -1,8 +1,9 @@
 import { page, userEvent } from 'vitest/browser';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import type { TrackSummary } from '$lib/api/types';
 import type { TrackSort } from '$lib/sorting';
+import { player } from '$lib/player.svelte';
 import TrackList from './TrackList.svelte';
 
 const track = (id: string, title: string): TrackSummary => ({
@@ -241,5 +242,51 @@ describe('TrackList.svelte on an album', () => {
 		await expect.element(page.getByText('Signal Remix')).toBeVisible();
 		await expect.element(page.getByText('Disc 1')).not.toBeInTheDocument();
 		await expect.element(page.getByText('Disc 2')).not.toBeInTheDocument();
+	});
+});
+
+describe('TrackList.svelte playing', () => {
+	beforeEach(async () => {
+		await page.viewport(1280, 800);
+	});
+
+	afterEach(() => vi.restoreAllMocks());
+
+	it.each([false, true])(
+		'plays once for a title click and once for Enter (editable: %s)',
+		async (editable) => {
+			const play = vi.spyOn(player, 'play').mockImplementation(() => {});
+			const list = render(TrackList, { tracks, editable });
+			const title = (name: string) => page.getByRole('button', { name, exact: true });
+			if (!editable) {
+				await title('Signal Part 2').click();
+				expect(play).toHaveBeenCalledTimes(1);
+				expect(play.mock.calls[0][1]).toBe(1);
+				play.mockClear();
+			}
+			(title('Signal Part 1').element() as HTMLElement).focus();
+			await userEvent.keyboard('{Enter}');
+			expect(play).toHaveBeenCalledTimes(1);
+			expect(play.mock.calls[0][1]).toBe(0);
+			list.unmount();
+		}
+	);
+
+	it('plays once for a double-click on a title', async () => {
+		const play = vi.spyOn(player, 'play').mockImplementation(() => {});
+		render(TrackList, { tracks });
+		await page.getByRole('button', { name: 'Signal Part 2', exact: true }).dblClick();
+		expect(play).toHaveBeenCalledTimes(1);
+	});
+
+	it('selects on a pointer click on an editable title, without playing', async () => {
+		const play = vi.spyOn(player, 'play').mockImplementation(() => {});
+		render(TrackList, { tracks, editable: true });
+		const title = page.getByRole('button', { name: 'Signal Part 2', exact: true });
+		await title.click();
+		expect(play).not.toHaveBeenCalled();
+		await expect
+			.element(page.getByRole('listitem').filter({ hasText: 'Signal Part 2' }))
+			.toHaveClass(/selected/);
 	});
 });
