@@ -17,6 +17,7 @@ use crate::api::credit::ArtistCredit;
 use crate::api::page::Order;
 use crate::api::scope::Caller;
 use crate::api::search::Indexes;
+use crate::api::tag_filter::TagFilter;
 use crate::api::tracks::{self, TrackOrder, TrackSort};
 use crate::api::{AnyId, Code, Id, Problem};
 use crate::db::{Database, by_ids, reaches};
@@ -31,21 +32,32 @@ use crate::db::{Database, by_ids, reaches};
     deny_unknown_fields
 )]
 pub enum Recipe {
-    /// An album's tracks in a sort.
-    Album { album_id: String, sort: TrackSort, order: Order },
-    /// An artist's tracks, credited as `artist_credit` says, in a sort.
+    /// An album's tracks under a filter, in a sort.
+    Album {
+        album_id: String,
+        #[serde(default)]
+        filters: Map<String, Value>,
+        sort: TrackSort,
+        order: Order,
+    },
+    /// An artist's tracks, credited as `artist_credit` says, under a filter, in a sort.
     Artist {
         artist_id: String,
         scope: Scope,
         artist_credit: ArtistCredit,
+        #[serde(default)]
+        filters: Map<String, Value>,
         sort: TrackSort,
         order: Order,
     },
-    /// A library's tracks under a browse filter, in a sort. No filter is supported yet, so
-    /// `filters` must be empty.
+    /// A library's tracks under a browse filter, in a sort.
     Library { filters: Map<String, Value>, sort: TrackSort, order: Order },
-    /// The tracks a search finds, in its ranking.
-    Search { q: String },
+    /// The tracks a search finds under a filter, in its ranking.
+    Search {
+        q: String,
+        #[serde(default)]
+        filters: Map<String, Value>,
+    },
 }
 
 /// Which of an artist's tracks a recipe covers. Only `all` is supported so far, since the other
@@ -56,20 +68,39 @@ pub enum Scope {
     All,
 }
 
+/// The spec's `BrowseFilter` as far as a recipe supports it: the tags, as a view's `tagAll` and
+/// `tagAny` name them. Any other filter is refused, `422`.
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+struct Filters {
+    tag_all: Vec<String>,
+    tag_any: Vec<String>,
+}
+
+/// The tag filter `filters` names, as a list reads it: refused, `422`, when it holds any other
+/// filter, or more than `MAX_TAGS` tags.
+fn tag_filter(filters: &Map<String, Value>) -> Result<TagFilter, Problem> {
+    let Filters { tag_all, tag_any } = serde_json::from_value(Value::Object(filters.clone()))
+        .map_err(|e| Problem::invalid(format!("A recipe's filters can only be tags: {e}")))?;
+    let join = |ids: Vec<String>| (!ids.is_empty()).then(|| ids.join(","));
+    TagFilter::new(join(tag_all).as_deref(), join(tag_any).as_deref())
+}
+
 impl Recipe {
     /// The recipe as the core keeps it, which is how a snapshot shows it.
     pub fn stored(&self) -> Stored {
         match self {
-            Recipe::Album { album_id, sort, order } => {
+            Recipe::Album { album_id, filters, sort, order } => {
                 let (sort, order) = names(*sort, *order);
-                Stored::Album { album_id: album_id.clone(), sort, order }
+                Stored::Album { album_id: album_id.clone(), filters: filters.clone(), sort, order }
             }
-            Recipe::Artist { artist_id, artist_credit, sort, order, .. } => {
+            Recipe::Artist { artist_id, artist_credit, filters, sort, order, .. } => {
                 let (sort, order) = names(*sort, *order);
                 Stored::Artist {
                     artist_id: artist_id.clone(),
                     scope: "all".to_owned(),
                     artist_credit: artist_credit.name().to_owned(),
+                    filters: filters.clone(),
                     sort,
                     order,
                 }
@@ -78,18 +109,22 @@ impl Recipe {
                 let (sort, order) = names(*sort, *order);
                 Stored::Library { filters: filters.clone(), sort, order }
             }
-            Recipe::Search { q } => Stored::Search { q: q.clone() },
+            Recipe::Search { q, filters } => {
+                Stored::Search { q: q.clone(), filters: filters.clone() }
+            }
         }
     }
 
-    /// Refuses, `422`, what the server cannot resolve yet.
-    fn check(&self) -> Result<(), Problem> {
+    /// Refuses, `422`, what the server cannot resolve, and gives the tag filter.
+    fn check(&self) -> Result<TagFilter, Problem> {
         match self {
-            Recipe::Library { filters, .. } if !filters.is_empty() => {
-                Err(Problem::invalid("A library recipe supports no filters yet."))
+            Recipe::Search { q, .. } if q.is_empty() => {
+                Err(Problem::invalid("q must not be empty"))
             }
-            Recipe::Search { q } if q.is_empty() => Err(Problem::invalid("q must not be empty")),
-            _ => Ok(()),
+            Recipe::Album { filters, .. }
+            | Recipe::Artist { filters, .. }
+            | Recipe::Library { filters, .. }
+            | Recipe::Search { filters, .. } => tag_filter(filters),
         }
     }
 }
@@ -105,7 +140,8 @@ fn names(sort: TrackSort, order: Order) -> (String, String) {
 /// reaches the library, whether or not it exists, so no one learns what a library they cannot
 /// reach holds (`requirements/users.md` §10). Every track is in the library, since a recipe
 /// reads only its tracks, and a search leaves out the ones its index still holds that are gone.
-/// An album or artist the library lacks resolves to no tracks. A start or add must treat an empty
+/// An album, artist or tag the library lacks resolves to no tracks. A recipe's filters can only be
+/// tags, at most `MAX_TAGS`, or the call is refused, `422`. A start or add must treat an empty
 /// list as it does one sent.
 pub async fn resolve(
     db: &Arc<Database>,
@@ -114,7 +150,7 @@ pub async fn resolve(
     library: Id,
     recipe: &Recipe,
 ) -> Result<Vec<u64>, Problem> {
-    recipe.check()?;
+    let tags = recipe.check()?;
     let (admin, user) = (caller.admin, caller.user);
     let reached: bool = db
         .read(move |conn| {
@@ -132,43 +168,54 @@ pub async fn resolve(
 
     let library = library.0;
     let ids = match recipe.clone() {
-        Recipe::Album { album_id, sort, order } => {
+        Recipe::Album { album_id, sort, order, .. } => {
             let album = Some(AnyId::from(album_id.as_str()));
             let sort = TrackOrder { sort, order };
             db.read(move |conn| {
-                tracks::resolve(conn, library, album, None, ArtistCredit::Any, sort)
+                tracks::resolve(conn, library, album, None, ArtistCredit::Any, &tags, sort)
             })
             .await?
         }
-        Recipe::Artist { artist_id, artist_credit, sort, order, scope: Scope::All } => {
+        Recipe::Artist { artist_id, artist_credit, sort, order, scope: Scope::All, .. } => {
             let artist = Some(AnyId::from(artist_id.as_str()));
             let sort = TrackOrder { sort, order };
-            db.read(move |conn| tracks::resolve(conn, library, None, artist, artist_credit, sort))
-                .await?
+            db.read(move |conn| {
+                tracks::resolve(conn, library, None, artist, artist_credit, &tags, sort)
+            })
+            .await?
         }
         Recipe::Library { sort, order, .. } => {
             let sort = TrackOrder { sort, order };
-            db.read(move |conn| tracks::resolve(conn, library, None, None, ArtistCredit::Any, sort))
-                .await?
+            db.read(move |conn| {
+                tracks::resolve(conn, library, None, None, ArtistCredit::Any, &tags, sort)
+            })
+            .await?
         }
-        Recipe::Search { q } => search(db, indexes, library, q).await?,
+        Recipe::Search { q, .. } => search(db, indexes, library, q, &tags).await?,
     };
     Ok(ids)
 }
 
 /// Every track of `library` that matches `q`, best first, as a search's tracks section ranks
-/// them but with no limit. Those the index holds that are gone since are left out.
+/// them but with no limit, and only those that carry the tags `tags` names. Those the index holds
+/// that are gone since are left out.
 async fn search(
     db: &Arc<Database>,
     indexes: &Indexes,
     library: i64,
     q: String,
+    tags: &TagFilter,
 ) -> Result<Vec<u64>, Problem> {
+    let tagged = indexes.tagged.get(db, library, tags, &[Kind::Track]).await?;
     let index = indexes.index(db, library).await?;
     // Ranking every match of a common word takes a while, so it runs off the async threads.
-    let found = tokio::task::spawn_blocking(move || index.search(&q, &[Kind::Track], usize::MAX))
-        .await
-        .map_err(|_| Problem::new(Code::Internal))?;
+    let found = tokio::task::spawn_blocking(move || {
+        index.search_within(&q, &[Kind::Track], usize::MAX, |kind, id| {
+            tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
+        })
+    })
+    .await
+    .map_err(|_| Problem::new(Code::Internal))?;
     let ids = found.into_iter().next().map(|section| section.ids).unwrap_or_default();
     let ids = db
         .read(move |conn| {

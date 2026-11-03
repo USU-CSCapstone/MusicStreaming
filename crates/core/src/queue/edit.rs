@@ -39,6 +39,13 @@ pub struct PlayRef {
 /// One change to a queue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::large_enum_variant,
+        reason = "an edit is read, applied and dropped, so an Add's source is not worth a box at every construction"
+    )
+)]
 pub enum Edit {
     /// Register a new source and put all its rows at the anchor, in order.
     Add {
