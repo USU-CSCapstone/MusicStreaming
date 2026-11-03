@@ -573,3 +573,18 @@ async fn filters_by_tags_of_every_type() {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{query}");
     }
 }
+
+#[test]
+fn a_sort_is_named_as_it_is_parsed() {
+    for sort in [
+        TrackSort::Name,
+        TrackSort::Artist,
+        TrackSort::Album,
+        TrackSort::DateAdded,
+        TrackSort::ReleaseDate,
+        TrackSort::Duration,
+    ] {
+        let parsed: TrackSort = serde_json::from_value(json!(sort.name())).unwrap();
+        assert_eq!(parsed, sort);
+    }
+}
