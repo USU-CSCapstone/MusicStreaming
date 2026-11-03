@@ -44,7 +44,7 @@ const TRACKS: [Row; 14] = [
 /// `user2`. Artist 10 owns album 101 and is on tracks 1 to 3, 6 and 13; artist 11 owns album 102
 /// and is on tracks 4 to 6, 11 and 13. Tags 30 to 32 are on library 1's tracks, and tag 50 on
 /// library 2's.
-async fn fixture() -> (tempfile::TempDir, AppState, Router) {
+pub(super) async fn fixture() -> (tempfile::TempDir, AppState, Router) {
     let (temp, db, _app) = app("");
     db.write(|tx| {
         library(tx, 1, "Music", "/music")?;
@@ -109,15 +109,22 @@ async fn fixture() -> (tempfile::TempDir, AppState, Router) {
 }
 
 /// The tracks `recipe` resolves to in library 1 for the owner, as the API spells their IDs.
-async fn resolved(state: &AppState, recipe: &Value) -> Vec<String> {
+pub(super) async fn resolved(state: &AppState, recipe: &Value) -> Vec<String> {
     let caller = Caller { user: 1, device: 1, admin: true };
     let recipe: Recipe = serde_json::from_value(recipe.clone()).unwrap();
-    let ids = resolve(&state.db, &state.indexes, &caller, Id(1), &recipe).await.unwrap();
+    let (ids, _) = resolve(&state.db, &state.indexes, &caller, Id(1), &recipe).await.unwrap();
     ids.iter().map(u64::to_string).collect()
 }
 
-/// A start of the recipe in `source`, playing `track` first, shown at index `start`.
-fn recipe_start(queue: &str, key: &str, recipe: Value, track: &str, start: u64) -> Value {
+/// The body of a start whose source is `recipe` in library 1 under `key`, playing `track` first,
+/// shown at index `start`.
+pub(super) fn recipe_start(
+    queue: &str,
+    key: &str,
+    recipe: Value,
+    track: &str,
+    start: u64,
+) -> Value {
     json!({
         "queueId": queue, "context": { "type": "library" }, "start": start,
         "startTrackId": track, "source": { "key": key, "libraryId": "1", "recipe": recipe },

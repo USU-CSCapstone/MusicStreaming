@@ -39,6 +39,20 @@ pub enum Recipe {
         #[serde(default, skip_serializing_if = "Map::is_empty")]
         filters: Map<String, Value>,
     },
+    /// A playlist's items, tag-filtered and sorted as its page shows them. `version` is the
+    /// playlist's version the server resolved, left out until it has; `sort` and `order` are
+    /// left out for the playlist's own order, and `filters` when empty.
+    Playlist {
+        playlist_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<i64>,
+        #[serde(default, skip_serializing_if = "Map::is_empty")]
+        filters: Map<String, Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sort: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        order: Option<String>,
+    },
     /// Explicit track IDs the device sent.
     Tracks,
 }

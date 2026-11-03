@@ -27,7 +27,7 @@ use crate::db::{Database, Json as JsonColumn, by_ids};
 const LABEL: &str = "playlists.items";
 
 /// A playlist's items after a key, in order: one range of the primary key.
-pub(super) const ITEMS: &str = "SELECT key, track_id, added_at FROM playlist_items \
+pub(crate) const ITEMS: &str = "SELECT key, track_id, added_at FROM playlist_items \
                      WHERE playlist_id = ?1 AND key > ?2 ORDER BY key LIMIT ?3";
 
 /// Which of the IDs in a JSON array the playlist holds, in the array's order, each found by

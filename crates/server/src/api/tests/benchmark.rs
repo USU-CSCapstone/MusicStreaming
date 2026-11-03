@@ -235,7 +235,7 @@ async fn benchmark_queue_resolves() {
         let mut length = 0;
         for _ in 0..20 {
             let started = Instant::now();
-            length = resolve(&db, &indexes, &caller, Id(1), &recipe).await.unwrap().len();
+            length = resolve(&db, &indexes, &caller, Id(1), &recipe).await.unwrap().0.len();
             times.push(started.elapsed());
         }
         if what.starts_with("library by") && !what.contains('(') {
