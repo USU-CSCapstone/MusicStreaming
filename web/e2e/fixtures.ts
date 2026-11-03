@@ -1,6 +1,6 @@
 // A tiny library served by intercepting /api/v1, so the tests need no music folder.
 
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Page, Route } from '@playwright/test';
@@ -22,7 +22,8 @@ import type {
 	TagsByType,
 	TrackSummary
 } from '../src/lib/api/types';
-import { initSync, Queue } from '../src/lib/core-wasm/jewelcase_core_wasm.js';
+import '../core-node';
+import { Queue } from '../src/lib/core-wasm/jewelcase_core_wasm.js';
 import { type SortField, sortTracks } from '../src/lib/sorting';
 import { type TagFilter, filterByTags } from '../src/lib/tag-match';
 import { withManifest } from '../../tools/plugin-pack/manifest.mjs';
@@ -33,10 +34,6 @@ import {
 	playlistRoute
 } from '../mock/playlists';
 import { PluginStore, adminRoute } from '../mock/plugins';
-
-initSync({
-	module: readFileSync(new URL('../src/lib/core-wasm/jewelcase_core_wasm_bg.wasm', import.meta.url))
-});
 
 export const library: Library = {
 	id: '11',

@@ -3,6 +3,7 @@
 // worker.
 
 import { API } from '$lib/api/client';
+import wasmUrl from '$lib/core-wasm/jewelcase_core_wasm_bg.wasm?url';
 import type { RealtimeServerMessage, SentEdit } from '$lib/api/types';
 import type { Realtime } from '$lib/realtime.svelte';
 import type {
@@ -63,7 +64,7 @@ export class QueueClient {
 		if (this.#worker) return;
 		const worker = (this.#worker = this.#spawn());
 		worker.onmessage = ({ data }: MessageEvent<FromWorker>) => this.#heard(data);
-		this.#send({ type: 'init', api: API });
+		this.#send({ type: 'init', api: API, wasm: wasmUrl });
 		this.#unsubscribe = realtime.on((message: RealtimeServerMessage) => {
 			if (QUEUE_MESSAGES.has(message.type)) this.#send({ type: 'message', message });
 		});

@@ -21,5 +21,5 @@ pub use queue::{
     Recipe, Repeat, Row, Run, Shuffle, Source, Span, SpanList, View,
 };
 pub use search::{Document, Index, Kind, Section, words};
-pub use sort::{sort_key, tag_sort_key};
+pub use sort::{SortField, SortRow, sort_key, sort_rows, tag_sort_key};
 pub use waveform::{shape_waveform, waveform_level};
