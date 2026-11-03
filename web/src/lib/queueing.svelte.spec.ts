@@ -10,6 +10,7 @@ const fake = vi.hoisted(() => ({
 }));
 vi.mock('$lib/queue/client.svelte', () => ({ queue: fake.queue }));
 
+const { cardAdding } = await import('./adding.svelte');
 const { addToQueue, placing, startPlacing } = await import('./queueing.svelte');
 const { panels } = await import('./panels.svelte');
 const { toaster } = await import('./toast.svelte');
@@ -50,6 +51,36 @@ beforeEach(() => {
 afterEach(() => toaster.dismiss());
 
 describe('addToQueue', () => {
+	it('queues a playlist card by its recipe and count, fetching none of its items', async () => {
+		const fetched = vi.fn(() => Promise.reject(new Error('no fetch expected')));
+		const card = {
+			type: 'playlist' as const,
+			count: 4,
+			id: '9',
+			href: '/x',
+			title: 'Mix',
+			subtitle: '',
+			image: null,
+			icon: 'playlist' as const,
+			round: false
+		};
+		const what = cardAdding(fetched as unknown as typeof fetch, '11', card);
+		expect(await addToQueue(what, '11', { type: 'manualEnd' })).toBe(true);
+		expect(edits).toEqual([
+			{
+				type: 'add',
+				source: {
+					key: expect.any(String),
+					libraryId: '11',
+					recipe: { type: 'playlist', playlistId: '9' }
+				},
+				before: { type: 'manualEnd' }
+			}
+		]);
+		expect(lengths).toEqual([4]);
+		expect(fetched).not.toHaveBeenCalled();
+	});
+
 	it('sends the tracks held at the front for Queue Next, and says so', async () => {
 		expect(await addToQueue(songs(['4', '5']), '11', { type: 'manualStart' })).toBe(true);
 		expect(edits).toEqual([

@@ -4,6 +4,7 @@ import {
 	artistRecipe,
 	firstPlayable,
 	libraryRecipe,
+	playlistRecipe,
 	recipeFilters,
 	restartsOnPrevious,
 	searchRecipe
@@ -78,6 +79,18 @@ describe('recipes with a tag filter', () => {
 			type: 'search',
 			q: 'sig',
 			filters: { tagAll: ['30', '32'], tagAny: ['61'] }
+		});
+	});
+
+	it('name a playlist, with sort and order together and its filter, or its own order', () => {
+		expect(playlistRecipe('9')).toEqual({ type: 'playlist', playlistId: '9' });
+		expect(playlistRecipe('9', null, none)).toEqual({ type: 'playlist', playlistId: '9' });
+		expect(playlistRecipe('9', { field: 'added', order: 'desc' }, filter)).toEqual({
+			type: 'playlist',
+			playlistId: '9',
+			filters: { tagAll: ['30', '32'], tagAny: ['61'] },
+			sort: 'added',
+			order: 'desc'
 		});
 	});
 

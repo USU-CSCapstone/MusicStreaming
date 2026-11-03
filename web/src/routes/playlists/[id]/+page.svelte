@@ -10,12 +10,20 @@
 	} from '$lib/components/PlaylistDetailsDialog.svelte';
 	import TrackList, { type RowMove } from '$lib/components/TrackList.svelte';
 	import { deleteWithUndo } from '$lib/deletions.svelte';
-	import { currentFilter, filterByTags, isFiltered, showFiltered, shownFilter } from '$lib/filters';
+	import {
+		currentFilter,
+		filterByTags,
+		isFiltered,
+		showFiltered,
+		shownFilter,
+		tagTypesKnown
+	} from '$lib/filters';
 	import { formatLength, plural } from '$lib/format';
 	import { knownTags } from '$lib/known-tags.svelte';
 	import { toast } from '$lib/toast.svelte';
 	import { player } from '$lib/player.svelte';
 	import { EditablePlaylist, rowMoveOps } from '$lib/playlist.svelte';
+	import { playlistRecipe, type PlayFrom } from '$lib/queue';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { PLAYLIST_FIELDS } from '$lib/sorting';
 	import { sortRows } from '$lib/track-sort';
@@ -62,10 +70,34 @@
 	);
 	const shownTracks = $derived(shown.map((r) => r.track));
 	const context = $derived({ type: 'playlist', id: playlist.id } as const);
+	// The server resolves the playlist in the order shown, under the filter shown. Its tags are
+	// read from the tracks and the known tags, so while a tag's type is still unknown the rows
+	// shown may differ from the server's, and the songs shown play instead. So do they while edits
+	// are unconfirmed: the server resolves the playlist as it last saved it.
+	const settled = $derived(
+		tagTypesKnown(
+			tracks,
+			filter,
+			(track) => track.tags,
+			(tag) => knownTags.get(data.lib, tag) !== undefined
+		)
+	);
+	const from = $derived<PlayFrom | undefined>(
+		settled && !list.saving
+			? { recipe: playlistRecipe(playlist.id, sort, filter), total: shown.length }
+			: undefined
+	);
 	// This playlist as shown, into another or the queue. Its songs here leave out external tracks,
-	// which only matters when skipping songs already there. Queued, it is in the order shown.
+	// which only matters when skipping songs already there. Queued, the server resolves it as shown.
 	const adding = $derived({
-		...collection('playlist', playlist.id, playlist.title, shown.length, async () => shownTracks),
+		...collection(
+			'playlist',
+			playlist.id,
+			playlist.title,
+			shown.length,
+			async () => (filtered ? shownTracks : tracks),
+			from?.recipe
+		),
 		// Filtered, only the songs shown are checked and added to another playlist, matching the rows.
 		...(filtered && { refs: playables(shownTracks) })
 	});
@@ -108,7 +140,7 @@
 	image={playlist.image}
 	seed={playlist.id}
 	icon="playlist"
-	onplay={shownTracks.length ? () => player.play(shownTracks, 0, context) : undefined}
+	onplay={shownTracks.length ? () => player.play(shownTracks, 0, context, from) : undefined}
 >
 	{#if playlist.description}<span>{playlist.description}</span>{/if}
 	<span>{plural(playlist.trackCount, 'song')} · {formatLength(playlist.durationUs)}</span>
@@ -149,6 +181,7 @@
 	onsort={showSorted}
 	empty={filtered ? 'No songs in this playlist carry these tags.' : 'This playlist is empty.'}
 	{context}
+	{from}
 	editable
 	onremove={removeRows}
 	onmove={moveRows}
