@@ -3140,8 +3140,7 @@ components:
           format: uuid
           description: Client-generated. Names the queue among the account's own.
         context:
-          allOf:
-            - $ref: '#/components/schemas/Context'
+          $ref: '#/components/schemas/Context'
           description: What the queue started from, kept as sent.
         source:
           type: object
@@ -3290,8 +3289,7 @@ components:
           minimum: 0
           description: The number of tracks, and so of positions.
         recipe:
-          allOf:
-            - $ref: '#/components/schemas/QueueRecipe'
+          $ref: '#/components/schemas/QueueRecipe'
           description: How the list was made, when it is known. It is not what plays; the list is.
 
     QueueRecipe:

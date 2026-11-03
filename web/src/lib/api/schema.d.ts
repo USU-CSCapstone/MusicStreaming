@@ -2044,7 +2044,7 @@ export interface components {
              */
             queueId: string;
             /** @description What the queue started from, kept as sent. */
-            context: Omit<components["schemas"]["Context"], "type">;
+            context: components["schemas"]["Context"];
             /**
              * @description The tracks as the device resolved them, in play order. A track may appear more than
              *     once; each place is its own item.
@@ -2154,7 +2154,7 @@ export interface components {
             /** @description The number of tracks, and so of positions. */
             length: number;
             /** @description How the list was made, when it is known. It is not what plays; the list is. */
-            recipe?: Omit<components["schemas"]["QueueRecipe"], "type">;
+            recipe?: components["schemas"]["QueueRecipe"];
         };
         /** @description How a list was made. Every field that changes the order is part of it. */
         QueueRecipe: components["schemas"]["QueueAlbumRecipe"] | components["schemas"]["QueueArtistRecipe"] | components["schemas"]["QueueLibraryRecipe"] | components["schemas"]["QueueSearchRecipe"] | components["schemas"]["QueueTracksRecipe"];

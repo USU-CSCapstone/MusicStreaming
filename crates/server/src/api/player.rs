@@ -119,8 +119,8 @@ impl Players {
     }
 
     /// Where `user`'s playback is: the item reported and how far into it. `None` before any
-    /// item has been reported. Takes the player-state lock, so never call it holding the lock of
-    /// something that takes it first, such as the queues'.
+    /// item has been reported. May be called holding the queues' lock; never take the queues' lock
+    /// while holding this one.
     pub fn position(&self, user: i64) -> Option<Position> {
         let accounts = self.lock();
         let state = accounts.get(&user)?;
