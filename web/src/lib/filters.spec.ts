@@ -229,4 +229,11 @@ describe('filterByTags', () => {
 		// A tag in `all` needs no type.
 		expect(tagTypesKnown(items, { all: ['34'], any: [] }, (i) => i.tags, known([]))).toBe(true);
 	});
+
+	it('reads no item when every any tag has its type read', () => {
+		const tagsOf = vi.fn((i: (typeof items)[number]) => i.tags);
+		const filter = { all: [], any: ['30', '34'] };
+		expect(tagTypesKnown(items, filter, tagsOf, () => true)).toBe(true);
+		expect(tagsOf).not.toHaveBeenCalled();
+	});
 });
