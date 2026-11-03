@@ -18,6 +18,7 @@ use crate::queue::{Queues, list_hash};
 
 mod edits;
 mod kept;
+mod playlist_recipes;
 mod recipes;
 mod rows;
 

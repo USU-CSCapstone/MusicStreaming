@@ -76,7 +76,8 @@ impl NewSource {
             }
             (None, Some(recipe)) => {
                 let recipe: Recipe = small(&recipe, "A recipe")?;
-                (resolve(db, indexes, caller, library, &recipe).await?, Some(recipe.stored()))
+                let (ids, stored) = resolve(db, indexes, caller, library, &recipe).await?;
+                (ids, Some(stored))
             }
             _ => return Err(Problem::invalid("A source is either tracks or a recipe.")),
         };

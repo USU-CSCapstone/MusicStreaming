@@ -953,7 +953,8 @@ export interface paths {
          *     larger than 4 KiB; when a key or `queueId` is not a UUID; when `context` is not an object
          *     with a string `type` of at most 4 KiB; or when the body is larger than the server
          *     accepts, which holds hundreds of thousands of tracks (a longer list starts from a
-         *     recipe).
+         *     recipe). A playlist recipe naming a playlist the caller does not own in `libraryId`,
+         *     another account's or one that does not exist, is `404`, as `getPlaylist` answers it.
          */
         post: operations["startQueue"];
         delete?: never;
@@ -1005,7 +1006,8 @@ export interface paths {
          *     anchor or a recipe larger than 4 KiB, an edit other than `add`, `remove`, `move` and
          *     `removePlays` larger than 4 KiB, `duplicate_key` for a key that already names a source
          *     or copy of the queue, or a body larger than the server accepts, which holds hundreds of
-         *     thousands of tracks.
+         *     thousands of tracks. An `add` of a playlist recipe whose playlist the caller does not own
+         *     in `libraryId` is `404` too.
          */
         post: operations["editQueue"];
         delete?: never;
@@ -2271,7 +2273,7 @@ export interface components {
                  */
                 tracks?: string[];
                 /** @description What the server resolves into the list. Needs `startTrackId`. */
-                recipe?: components["schemas"]["QueueAlbumRecipe"] | components["schemas"]["QueueArtistRecipe"] | components["schemas"]["QueueLibraryRecipe"] | components["schemas"]["QueueSearchRecipe"];
+                recipe?: components["schemas"]["QueueAlbumRecipe"] | components["schemas"]["QueueArtistRecipe"] | components["schemas"]["QueueLibraryRecipe"] | components["schemas"]["QueueSearchRecipe"] | components["schemas"]["QueuePlaylistRecipe"];
             };
             /**
              * @description With `tracks`, the position of the track that plays first. With a recipe, the index of
@@ -2310,7 +2312,7 @@ export interface components {
                     key: string;
                     libraryId: string;
                     tracks?: string[];
-                    recipe?: components["schemas"]["QueueAlbumRecipe"] | components["schemas"]["QueueArtistRecipe"] | components["schemas"]["QueueLibraryRecipe"] | components["schemas"]["QueueSearchRecipe"];
+                    recipe?: components["schemas"]["QueueAlbumRecipe"] | components["schemas"]["QueueArtistRecipe"] | components["schemas"]["QueueLibraryRecipe"] | components["schemas"]["QueueSearchRecipe"] | components["schemas"]["QueuePlaylistRecipe"];
                 };
                 before: components["schemas"]["QueueAnchor"];
             };
@@ -2557,7 +2559,7 @@ export interface components {
             recipe?: components["schemas"]["QueueRecipe"];
         };
         /** @description How a list was made. Every field that changes the order is part of it. */
-        QueueRecipe: components["schemas"]["QueueAlbumRecipe"] | components["schemas"]["QueueArtistRecipe"] | components["schemas"]["QueueLibraryRecipe"] | components["schemas"]["QueueSearchRecipe"] | components["schemas"]["QueueTracksRecipe"];
+        QueueRecipe: components["schemas"]["QueueAlbumRecipe"] | components["schemas"]["QueueArtistRecipe"] | components["schemas"]["QueueLibraryRecipe"] | components["schemas"]["QueueSearchRecipe"] | components["schemas"]["QueuePlaylistRecipe"] | components["schemas"]["QueueTracksRecipe"];
         /** @description An album's tracks in a sort. */
         QueueAlbumRecipe: {
             /**
@@ -2648,6 +2650,50 @@ export interface components {
              *     no track.
              */
             filters?: components["schemas"]["BrowseFilter"];
+        };
+        /**
+         * @description The caller's own playlist in the source's library, at its current version, under a tag
+         *     filter and in a sort. Its items are in the playlist's own order unless `sort` is given,
+         *     a track as often as the playlist holds it and a missing track in place. The list is the
+         *     playlist's page as it shows it with that sort and filter, in the same order: sorted
+         *     as the page sorts, by the sort keys of `Track`, ties ending on the track ID and then the
+         *     item's place in the playlist, and a track with no value in the sort's field last in both
+         *     directions. Only the caller's own playlist resolves; another account's, an admin's
+         *     included, and one that does not exist are `404` alike.
+         */
+        QueuePlaylistRecipe: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "playlist";
+            playlistId: string;
+            /**
+             * @description The playlist's version the server resolved, for the interface to say what played.
+             *     Set on the stored recipe, never sent; a request with it is `422`.
+             */
+            readonly version?: number;
+            /**
+             * @description The page's tag filter, `tagAll` and `tagAny` as of `listTracks`; the list is the
+             *     playlist's items whose track carries them. Left out for none. Any other filter of
+             *     `BrowseFilter` is `422` on a start, as are more than 100 tags together; a tag the
+             *     library lacks matches no track.
+             */
+            filters?: components["schemas"]["BrowseFilter"];
+            /**
+             * @description A sort of the playlist's page; `added` is when the item was added to the playlist.
+             *     Left out, with `order`, for the playlist's own order.
+             * @enum {string}
+             */
+            sort?: "title" | "artist" | "album" | "year" | "added" | "duration";
+            /**
+             * @description The direction of `sort`. Sent with `sort` and only with it, as `listTracks` takes
+             *     them; either alone is `422`. Descending reverses the sort, ties and tracks with no
+             *     value included in their rule, but items the sort cannot tell apart keep the
+             *     playlist's order.
+             * @enum {string}
+             */
+            order?: "asc" | "desc";
         };
         /** @description Track IDs the device sent. */
         QueueTracksRecipe: {

@@ -7,17 +7,21 @@
 
 use std::sync::Arc;
 
-use jewelcase_core::{Kind, Recipe as Stored};
-use rusqlite::params;
+use std::collections::HashMap;
+
+use jewelcase_core::{Kind, Recipe as Stored, SortField, SortRow, sort_rows};
+use rusqlite::{Connection, params};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use super::refused;
 use crate::api::credit::ArtistCredit;
 use crate::api::page::Order;
+use crate::api::playlists::{ITEMS, header};
 use crate::api::scope::Caller;
 use crate::api::search::Indexes;
-use crate::api::tag_filter::TagFilter;
+use crate::api::tag_filter::{TagFilter, Tags};
+use crate::api::time::rfc3339;
 use crate::api::tracks::{self, TrackOrder, TrackSort};
 use crate::api::{AnyId, Code, Id, Problem};
 use crate::db::{Database, by_ids, reaches};
@@ -58,6 +62,42 @@ pub enum Recipe {
         #[serde(default)]
         filters: Map<String, Value>,
     },
+    /// The caller's own playlist at its current version, under a filter, in the sort its page
+    /// offers or, with none, in its own order.
+    Playlist {
+        playlist_id: String,
+        #[serde(default)]
+        filters: Map<String, Value>,
+        sort: Option<PlaylistSort>,
+        order: Option<Order>,
+    },
+}
+
+/// What a playlist's page sorts by: `listTracks`' fields and the date a track was added to the
+/// playlist, as the core's comparator knows them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlaylistSort {
+    Title,
+    Artist,
+    Album,
+    Year,
+    Added,
+    Duration,
+}
+
+impl PlaylistSort {
+    /// The sort as a stored recipe spells it, and the core's field for it.
+    fn parts(self) -> (&'static str, SortField) {
+        match self {
+            PlaylistSort::Title => ("title", SortField::Title),
+            PlaylistSort::Artist => ("artist", SortField::Artist),
+            PlaylistSort::Album => ("album", SortField::Album),
+            PlaylistSort::Year => ("year", SortField::Year),
+            PlaylistSort::Added => ("added", SortField::Added),
+            PlaylistSort::Duration => ("duration", SortField::Duration),
+        }
+    }
 }
 
 /// Which of an artist's tracks a recipe covers. Only `all` is supported so far, since the other
@@ -87,8 +127,9 @@ fn tag_filter(filters: &Map<String, Value>) -> Result<TagFilter, Problem> {
 }
 
 impl Recipe {
-    /// The recipe as the core keeps it, which is how a snapshot shows it.
-    pub fn stored(&self) -> Stored {
+    /// The recipe as the core keeps it, which is how a snapshot shows it. A playlist's has no
+    /// version until [`resolve`] gives it one.
+    fn stored(&self) -> Stored {
         match self {
             Recipe::Album { album_id, filters, sort, order } => {
                 let (sort, order) = names(*sort, *order);
@@ -112,6 +153,14 @@ impl Recipe {
             Recipe::Search { q, filters } => {
                 Stored::Search { q: q.clone(), filters: filters.clone() }
             }
+            Recipe::Playlist { playlist_id, filters, sort, order } => Stored::Playlist {
+                playlist_id: playlist_id.clone(),
+                version: None,
+                filters: filters.clone(),
+                sort: sort.map(|sort| sort.parts().0.to_owned()),
+                order: order
+                    .map(|order| (if order == Order::Asc { "asc" } else { "desc" }).to_owned()),
+            },
         }
     }
 
@@ -121,7 +170,11 @@ impl Recipe {
             Recipe::Search { q, .. } if q.is_empty() => {
                 Err(Problem::invalid("q must not be empty"))
             }
+            Recipe::Playlist { sort, order, .. } if sort.is_some() != order.is_some() => {
+                Err(Problem::invalid("A playlist recipe's sort and order come together."))
+            }
             Recipe::Album { filters, .. }
+            | Recipe::Playlist { filters, .. }
             | Recipe::Artist { filters, .. }
             | Recipe::Library { filters, .. }
             | Recipe::Search { filters, .. } => tag_filter(filters),
@@ -141,15 +194,17 @@ fn names(sort: TrackSort, order: Order) -> (String, String) {
 /// reach holds (`requirements/users.md` §10). Every track is in the library, since a recipe
 /// reads only its tracks, and a search leaves out the ones its index still holds that are gone.
 /// An album, artist or tag the library lacks resolves to no tracks. A recipe's filters can only be
-/// tags, at most `MAX_TAGS`, or the call is refused, `422`. A start or add must treat an empty
-/// list as it does one sent.
+/// tags, at most `MAX_TAGS`, or the call is refused, `422`. A playlist recipe resolves only
+/// the caller's own playlist in the library, as the playlist endpoints find it: another account's,
+/// or one that does not exist, is `404`. A start or add must treat an empty list as it does one
+/// sent. Gives the recipe as stored beside the IDs, which for a playlist records the version read.
 pub async fn resolve(
     db: &Arc<Database>,
     indexes: &Indexes,
     caller: &Caller,
     library: Id,
     recipe: &Recipe,
-) -> Result<Vec<u64>, Problem> {
+) -> Result<(Vec<u64>, Stored), Problem> {
     let tags = recipe.check()?;
     let (admin, user) = (caller.admin, caller.user);
     let reached: bool = db
@@ -167,6 +222,7 @@ pub async fn resolve(
     }
 
     let library = library.0;
+    let mut stored = recipe.stored();
     let ids = match recipe.clone() {
         Recipe::Album { album_id, sort, order, .. } => {
             let album = Some(AnyId::from(album_id.as_str()));
@@ -192,8 +248,99 @@ pub async fn resolve(
             .await?
         }
         Recipe::Search { q, .. } => search(db, indexes, library, q, &tags).await?,
+        Recipe::Playlist { playlist_id, sort, order, .. } => {
+            let playlist = AnyId::from(playlist_id.as_str()).0.ok_or_else(Problem::not_found)?;
+            let sort = sort.map(|sort| (sort.parts().1, order == Some(Order::Desc)));
+            let user = caller.user;
+            let (ids, read) = db
+                .try_read(move |conn| playlist_ids(conn, user, library, playlist, sort, &tags))
+                .await?;
+            if let Stored::Playlist { version, .. } = &mut stored {
+                *version = Some(read);
+            }
+            ids
+        }
     };
-    Ok(ids)
+    Ok((ids, stored))
+}
+
+/// The IDs of the items of `user`'s playlist `playlist` in `library`, and the playlist's
+/// version, from one read: its items in key order, a track as often as it holds it and a missing
+/// track in place, kept if they carry the tags `tags` names, then in `sort`'s order if given
+/// (`SortField` and whether descending) by the core's comparator over the keys the playlist's
+/// page sorts by. `404` for a playlist that is not the user's own in the library.
+fn playlist_ids(
+    conn: &Connection,
+    user: i64,
+    library: i64,
+    playlist: i64,
+    sort: Option<(SortField, bool)>,
+    tags: &TagFilter,
+) -> Result<(Vec<u64>, i64), Problem> {
+    let (version, _) = header(conn, user, library, playlist)?.ok_or_else(Problem::not_found)?;
+    // No limit: a negative one reads every item.
+    let mut items: Vec<(i64, i64)> = conn
+        .prepare_cached(ITEMS)?
+        .query_map(params![playlist, i64::MIN, -1], |row| Ok((row.get(1)?, row.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+    let tagged = Tags::read(conn, library, &tracks::TAGGED, tags)?.ids(conn, &tracks::TAGGED)?;
+    if let Some(tagged) = tagged {
+        items.retain(|(track, _)| tagged.contains(track));
+    }
+    let Some((field, descending)) = sort else {
+        return Ok((items.iter().map(|(track, _)| track.cast_unsigned()).collect(), version));
+    };
+    let mut wanted: Vec<i64> = items.iter().map(|(track, _)| *track).collect();
+    wanted.sort_unstable();
+    wanted.dedup();
+    let keys: HashMap<i64, SortRow> = by_ids(
+        conn,
+        &[
+            "t.id",
+            "t.sort_key",
+            "t.artist_sort_key",
+            "t.album_sort_key",
+            "t.album_id",
+            "t.release_date",
+            "t.disc_number",
+            "t.track_number",
+            "t.duration_us",
+        ],
+        "tracks t",
+        "",
+        library,
+        &wanted,
+        |row| {
+            let key = |index| {
+                row.get::<_, Vec<u8>>(index).map(|key| String::from_utf8_lossy(&key).into_owned())
+            };
+            let id: i64 = row.get(0)?;
+            let row = SortRow {
+                id: id.cast_unsigned(),
+                title_key: key(1)?,
+                artist_key: key(2)?,
+                album_key: key(3)?,
+                album_id: row.get::<_, i64>(4)?.cast_unsigned(),
+                release_date: row.get(5)?,
+                disc: Some(row.get::<_, u32>(6)?),
+                number: row.get::<_, Option<i64>>(7)?.and_then(|n| u32::try_from(n).ok()),
+                duration_us: row.get::<_, i64>(8)?.cast_unsigned(),
+                added: String::new(),
+            };
+            Ok((id, row))
+        },
+    )?
+    .into_iter()
+    .collect();
+    // A row for each item, as the page lists them; one whose track is gone has none to show.
+    let rows: Vec<SortRow> = items
+        .iter()
+        .filter_map(|(track, added_at)| {
+            Some(SortRow { added: rfc3339(*added_at), ..keys.get(track)?.clone() })
+        })
+        .collect();
+    let ids = sort_rows(&rows, field, descending).into_iter().map(|at| rows[at].id).collect();
+    Ok((ids, version))
 }
 
 /// Every track of `library` that matches `q`, best first, as a search's tracks section ranks
