@@ -57,10 +57,9 @@ export async function addToQueue(
 	const key = crypto.randomUUID();
 	try {
 		if (what.recipe) {
-			queue.edit(
-				{ type: 'add', source: { key, libraryId, recipe: what.recipe }, before },
-				what.count
-			);
+			// A snapshot, since `what` may be a proxy of `placing`, which cannot be posted to the worker.
+			const recipe = $state.snapshot(what.recipe);
+			queue.edit({ type: 'add', source: { key, libraryId, recipe }, before }, what.count);
 		} else {
 			const tracks = (await what.tracks()).map((track) => track.id);
 			if (tracks.length === 0) {

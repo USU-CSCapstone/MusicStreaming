@@ -317,6 +317,25 @@ test('adds to a chosen point of Up Next from the keyboard', async ({ page }) => 
 	await expect(panel.getByRole('button', { name: 'Signal Remix', exact: true })).toBeFocused();
 });
 
+test('adds an album to a chosen point of Up Next from the keyboard', async ({ page }) => {
+	const queue = queueOf(page);
+	const { panel } = await playAlbum(page);
+	await page.locator('main').getByRole('button', { name: 'Actions for “Signal”' }).focus();
+	await page.keyboard.press('Enter');
+	await page.getByRole('menuitem', { name: 'Add to Up Next…' }).click();
+
+	const choose = panel.getByRole('group', { name: 'Choose where to add' });
+	await choose.getByRole('button', { name: 'Add to the end' }).press('Enter');
+	await expect(choose).toBeHidden();
+	// The recipe is posted to the worker, which cannot take what the page's state wraps.
+	await expect
+		.poll(() => queue.edits.at(-1))
+		.toMatchObject({
+			type: 'add',
+			source: { recipe: { type: 'album', albumId: '31' } }
+		});
+});
+
 test('queues a sorted playlist in the order shown', async ({ page }) => {
 	const queue = queueOf(page);
 	await serveLibrary(page, { playlists: [signalMix] });
