@@ -50,6 +50,7 @@ and commit the result.
 | `src/lib/queueing.svelte.ts` | Adding to the queue from every menu and drag, and the toast that says what was done (*The queue panel* below) |
 | `src/lib/core-wasm/`       | The shared core built to WebAssembly by `pnpm wasm` (gitignored); needs the `wasm-bindgen` CLI at the version in `scripts/wasm.sh` |
 | `src/lib/queue.ts`         | What a start from a view sends (`PlayFrom`), and when Previous restarts rather than steps back                                                          |
+| `src/lib/sorting.ts`       | A track list's sort. It calls the core's comparator through `core-wasm`, the order the server reproduces for a recipe (`design/general.md` §3); the page and the queue worker download the one WebAssembly file between them |
 | `src/lib/components/`      | Shell (sidebar, tab bar, player), collection and track views, waveform                                                                                  |
 | `src/routes/`              | One route per view: `/albums`, `/albums/[id]`, `/artists/…`, `/playlists/…`, `/songs`, `/search`, `/account`; `/setup` and `/login` without the shell   |
 | `mock/`                    | The dev-only mock API. Never bundled into the client.                                                                                                   |
@@ -294,7 +295,7 @@ the tab's name carries from one to the other.
   at a point chosen in Up Next, and a toast says what was done at once. **What goes as a recipe:**
   album, artist and playlist pages and cards (in the order shown), the Songs page, and an
   unsorted search's songs, each under the view's tag filter; the device holds no tracks for these, so the add shows at once as the view's count of
-  rows, which wait for the server's list or pages. **What goes as `tracks`:** songs, selections and sorted search rows; these show at once from the tracks sent. **Dropping at
+  rows, which wait for the server's list or pages. **What goes as `tracks`:** individual song rows, selections and sorted search rows; these show at once from the tracks sent. **Dropping at
   a point:** with a mouse (`pointer: fine`) song rows, the selection and cards drag from a view
   onto Up Next, which draws the drop line and scrolls near its edges; the gap becomes an anchor
   with `anchorAt`. Touch and keyboard use **choose where**: Add to Up Next… opens the panel on Up

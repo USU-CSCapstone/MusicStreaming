@@ -53,7 +53,7 @@ One crate holds every rule that must behave identically on the server and a devi
 Rules:
 
 - **Pure.** No I/O, clock, or platform APIs; callers pass in what it needs.
-- **Deterministic.** Shuffle is seeded and the seed is stored with the queue. Every ordering ends in a tie-break on a stable ID. A sorted list of tracks compares sort keys, then ends on the track ID, then on the track's position in the unsorted list, with unknown values last, so the same sort of the same list gives the same order on the server and every device. Nothing that decides an order may differ between native and WebAssembly builds.
+- **Deterministic.** Shuffle is seeded and the seed is stored with the queue. Every ordering ends in a tie-break on a stable ID. A sorted list of tracks compares sort keys, then ends on the track ID, then on the track's position in the unsorted list, with unknown values last, so the same sort of the same list gives the same order on the server and every device. The comparator is the core's (`sort_rows`): the web sorts the lists it holds through `core-wasm`, and the server sorts a playlist's rows with it, so a recipe resolves to the order a page shows. Nothing that decides an order may differ between native and WebAssembly builds.
 - **Sort keys are computed by the core at scan time** and synced. No database collation or client locale ever decides an order.
 - **Clients never reimplement a core rule.** Any client code that orders, matches, or selects tracks calls the core.
 

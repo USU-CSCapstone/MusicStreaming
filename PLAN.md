@@ -137,7 +137,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 ### Stage 9 — Queue, playback & Shift
 
 - A server-owned queue with the Manual Queue, Context Queue, and History. Seeded shuffle in `crates/core`, repeat, and kept sessions. Move player state onto the queue.
-  - **Built:** all of this, online: the core's queue rules, the server's queue, kept queues and player state on items, and the web's queue panel, player and queueing ([`design/queue.md`](design/queue.md), [`design/web.md`](design/web.md#queue-worker)). Endless play, and the queue offline, are not (Stage 10).
+  - **Built:** all of this, online: the core's queue rules, the server's queue, kept queues and player state on items, and the web's queue panel, player and queueing ([`design/queue.md`](design/queue.md), [`design/web.md`](design/web.md#queue-worker)). Views start and queue by recipe (album, artist, songs, search and playlist, with their tag filters), and the playlist and track sorts are the core's. Endless play, and the queue offline, are not (Stage 10).
 - The web client side of realtime: connection, progress, a device picker, and remote control. Then Shift, waking, and per-device volume.
 - Transcoding with a cache and seekable streams. Gapless playback, normalization, crossfade, silence skipping, and failure handling.
 
@@ -156,7 +156,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 
 ### Stage 10 — Offline & PWA
 
-- Build search and sort rules into `core-wasm`, with a parity test suite against the native build. The queue's rules already run there, with golden vectors pinning shuffle parity (Stage 9).
+- Build search rules and the catalog's sort orders into `core-wasm`, with a parity test suite against the native build. The queue's rules already run there, with golden vectors pinning shuffle parity (Stage 9), and so does the track-list comparator (`sort_rows`), which the web's local sorts use.
 - A web worker holds the catalog, synced from the change feeds, with a durable command queue for optimistic actions.
 - A service worker, an installable PWA, downloads with a storage budget, choosing between local and stream, and reconciliation.
 - **The queue goes offline** ([`design/queue.md` §7](design/queue.md#7-where-it-is-built-and-what-is-not-yet)). Until now devices download every list and kept queues need the server:
