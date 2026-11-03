@@ -141,6 +141,10 @@ pub async fn edit(
     let (edit, added) = if kind == "add" {
         let Add { source, before } = serde_json::from_str(text).map_err(invalid)?;
         let before: Anchor = small(&before, ANCHOR)?;
+        // A retry of an applied add is answered as the first was, even if its source is gone.
+        if let Some(applied) = queues.answered(caller.user, &queue_id, &edit_id) {
+            return Ok(Json(applied));
+        }
         let Resolved { key, library, ids, recipe } = source.resolve(&db, &indexes, &caller).await?;
         let tracks: Arc<[u64]> = ids.into();
         let hash = list_hash(&tracks);
