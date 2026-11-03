@@ -24,7 +24,8 @@ import type {
 } from '../src/lib/api/types';
 import '../core-node';
 import { Queue } from '../src/lib/core-wasm/jewelcase_core_wasm.js';
-import { type SortField, sortTracks } from '../src/lib/sorting';
+import type { SortField } from '../src/lib/sorting';
+import { sortTracks } from '../src/lib/track-sort';
 import { type TagFilter, filterByTags } from '../src/lib/tag-match';
 import { withManifest } from '../../tools/plugin-pack/manifest.mjs';
 import {

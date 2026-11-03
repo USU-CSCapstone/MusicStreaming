@@ -17,7 +17,8 @@
 	import type { Selected } from '$lib/recent';
 	import { searchRecipe, type PlayFrom } from '$lib/queue';
 	import { currentSort, showSorted } from '$lib/sort-url';
-	import { FIELDS, sortTracks } from '$lib/sorting';
+	import { FIELDS } from '$lib/sorting';
+	import { sortTracks } from '$lib/track-sort';
 	import ViewToggle from '$lib/components/ViewToggle.svelte';
 
 	let { data } = $props();

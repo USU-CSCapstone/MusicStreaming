@@ -17,7 +17,8 @@
 	import { player } from '$lib/player.svelte';
 	import { EditablePlaylist, rowMoveOps } from '$lib/playlist.svelte';
 	import { currentSort, showSorted } from '$lib/sort-url';
-	import { PLAYLIST_FIELDS, sortRows } from '$lib/sorting';
+	import { PLAYLIST_FIELDS } from '$lib/sorting';
+	import { sortRows } from '$lib/track-sort';
 
 	let { data } = $props();
 

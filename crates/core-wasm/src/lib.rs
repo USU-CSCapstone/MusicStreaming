@@ -50,21 +50,14 @@ impl<'a> RowOut<'a> {
 }
 
 /// The positions of the track rows in `rows_json` (an array of the core's `SortRow` shape) in
-/// `field`'s order (`title`, `artist`, `album`, `year`, `added` or `duration`), `order` being
-/// `asc` or `desc`: element 0 is the position of the row that comes first. One call sorts a
-/// whole list. Throws on malformed rows or an unknown field or order.
+/// `field`'s order (the API's name for it: `name`, `artist`, `album`, `releaseDate`,
+/// `addedToPlaylist` or `duration`), `order` being `asc` or `desc`: element 0 is the position of
+/// the row that comes first. One call sorts a whole list. Throws on malformed rows or an unknown
+/// field or order.
 #[wasm_bindgen(js_name = sortRows)]
 pub fn sort_track_rows(rows_json: &str, field: &str, order: &str) -> Result<Vec<u32>, JsError> {
     let rows: Vec<SortRow> = serde_json::from_str(rows_json)?;
-    let field = match field {
-        "title" => SortField::Title,
-        "artist" => SortField::Artist,
-        "album" => SortField::Album,
-        "year" => SortField::Year,
-        "added" => SortField::Added,
-        "duration" => SortField::Duration,
-        _ => return Err(JsError::new("unknown sort field")),
-    };
+    let field: SortField = serde_json::from_value(field.into())?;
     let descending = match order {
         "asc" => false,
         "desc" => true,
