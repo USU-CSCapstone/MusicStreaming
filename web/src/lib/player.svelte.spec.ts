@@ -722,6 +722,31 @@ describe('player and the queue', () => {
 		expect(player.playing).toBe(true);
 	});
 
+	it('moves on when a track ends while a restore that fails is awaited', async () => {
+		const { audio } = await playing('61', '62');
+		queueWorker.kept = null;
+		queueWorker.holdRestore = true;
+		const restored = player.restore('kept-queue');
+		await settle();
+		audio.dispatchEvent(new Event('ended'));
+		expect(queueWorker.edits, 'the queue it would move is not the one held yet').toEqual([]);
+
+		queueWorker.release();
+		expect(await restored).toBe('That queue is gone.');
+		expect(queueWorker.edits).toEqual([{ type: 'next' }]);
+		await vi.waitFor(() => expect(player.current?.id).toBe('62'));
+		queueWorker.holdRestore = false;
+	});
+
+	it('stops the audio of the queue it replaces when the restored queue has no current item', async () => {
+		await playing('61');
+		queueWorker.kept = { key: 'K', slots: [], at: 0, positionMs: 0 };
+		expect(await player.restore('kept-queue')).toBeNull();
+		await settle();
+		expect(player.playing).toBe(false);
+		expect(player.finished).toBe(true);
+	});
+
 	it('reports a Previous that makes a new item once the server has the edit', async () => {
 		fake.info = () => Promise.resolve({ variant: 'original' });
 		player.play([track('64', 60), track('65', 60), track('67', 60)] as never, 0, album);

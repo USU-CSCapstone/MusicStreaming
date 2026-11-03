@@ -386,37 +386,42 @@ export class QueueStore {
 		});
 	}
 
-	/** Sends the restore and installs its answer; see [`restore`](#restore). */
+	/** Sends the restore and installs its answer; see [`restore`](#restore). A restore asked for meanwhile is `busy` until it is answered. */
 	async #sendRestore({ queueId, settle }: Restoring) {
-		this.#restoring = null;
-		const epoch = ++this.#epoch;
-		const path = `/me/queues/${encodeURIComponent(queueId)}/restore`;
-		const response = await this.#call('POST', path);
-		if (!response?.ok) {
-			if (!response) {
+		try {
+			const epoch = ++this.#epoch;
+			const path = `/me/queues/${encodeURIComponent(queueId)}/restore`;
+			const response = await this.#call('POST', path);
+			if (!response?.ok) {
+				if (!response) {
+					// Whether it was applied is not known: the queue is fetched to find out.
+					this.#refetch = true;
+					return settle({
+						ok: false,
+						code: 'unreachable',
+						message: 'The server could not be reached.'
+					});
+				}
+				const { code, message } = await problemOf(response);
+				return settle({ ok: false, code, message });
+			}
+			const restored = (await response.json()) as RestoredQueue;
+			this.#run = runOf(response.headers.get('ETag')) ?? this.#run;
+			this.#startItem = null;
+			this.#viewRows.clear();
+			if (!(await this.#install(restored, epoch))) {
 				return settle({
 					ok: false,
-					code: 'unreachable',
-					message: 'The server could not be reached.'
+					code: 'superseded',
+					message: 'Another queue replaced this one.'
 				});
 			}
-			const { code, message } = await problemOf(response);
-			return settle({ ok: false, code, message });
+			// An edit heard before this was installed named another queue, so a fetch follows for it.
+			this.#caughtUp([]);
+			settle({ ok: true, position: restored.position ?? null });
+		} finally {
+			this.#restoring = null;
 		}
-		const restored = (await response.json()) as RestoredQueue;
-		this.#run = runOf(response.headers.get('ETag')) ?? this.#run;
-		this.#startItem = null;
-		this.#viewRows.clear();
-		if (!(await this.#install(restored, epoch))) {
-			return settle({
-				ok: false,
-				code: 'superseded',
-				message: 'Another queue replaced this one.'
-			});
-		}
-		// An edit heard before this was installed named another queue, so a fetch follows for it.
-		this.#caughtUp([]);
-		settle({ ok: true, position: restored.position ?? null });
 	}
 
 	/**
