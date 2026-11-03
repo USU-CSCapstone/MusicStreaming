@@ -34,7 +34,7 @@ Two tabs, because "what's coming" and "what just played" are different questions
 - **Up Next** — everything still to play, top to bottom in play order. The Manual Queue is **visually separated** from the context, so it is always obvious where Queue Last will land.
 - **History** — what has already played this session, most recent first.
 - **Choosing a History entry goes back to it, as pressing Previous that many times would.** It plays, then every track heard after it, plus the one that was playing, in the order heard, then Up Next as it was. Hear 1, 2, 3 (queued by hand), 4, 5, then choose 1, and 1, 2, 3, 4, 5 play again, so going back never loses or reorders what was upcoming.
-- **Each History entry can be removed or re-queued**, which puts it at the front of Up Next.
+- **Each History entry can be removed or re-queued**. Re-queueing moves it from History to the front of Up Next.
 - **History belongs to the queue, not the account.** It reflects this queue only, and is distinct from listening history ([`analytics.md`](analytics.md)), which records every play on every device.
 
 ---
