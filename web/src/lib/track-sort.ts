@@ -7,9 +7,8 @@ import init, { sortRows as coreSortRows } from '$lib/core-wasm/jewelcase_core_wa
 import type { TrackSummary } from './api/types';
 import { sortName, type TrackSort } from './sorting';
 
-// The core loads before any list sorts; its sort is synchronous. The queue worker is told this
-// same file's URL (`queue/client.svelte.ts`), so the browser fetches it once. (A no-op once
-// loaded.)
+// The core loads before any list sorts; its sort is synchronous. The queue worker is given the
+// WebAssembly file's URL (`queue/client.svelte.ts`), so the browser fetches it once.
 await init();
 
 /**
