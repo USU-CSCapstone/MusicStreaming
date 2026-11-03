@@ -40,15 +40,20 @@ A **list** is `{libraryId, hash, length, recipe?}`. A source names its list by t
   | `artist` | `artistId`, `scope`/`artistCredit`, `filters`, `sort`/`order` |
   | `library` | `filters`, `sort`/`order` |
   | `search` | `q`, `filters` |
+  | `playlist` | `playlistId`, `version`, `filters`, `sort`/`order` |
   | `tracks` | none: the IDs the device sent |
 
   `sort` and `order` are `listTracks`' own, and `filters` is the API's `BrowseFilter`, so a client names a recipe as it names the view it shows. Only the tag filter (`tagAll`, `tagAny`) is supported, validated as the list endpoints do; a search narrows by tags as the search endpoint does. The core keeps them as given, so recipes compare exactly.
+
+  The `playlist` recipe names the caller's own playlist. Its `sort` and `order` come together (a `sort` without an `order`, or the reverse, is refused, `422`) or are both left out for the playlist's own order. Its `sort` is `listTracks`' fields and `added`, when the playlist took the track, which only a playlist has. The server resolves the playlist at its current version and records that `version` in the stored recipe; a device never sends one. Only the caller's own playlist resolves: another account's, and one that does not exist, are the same `404`.
+  Every recipe resolves exactly the rows its view pages in to the end under the same filter, so what a client starts or queues is what its page shows. A playlist's items resolve in key order, one row for each time it holds a track and one in place for a missing track, kept if they carry the filter's tags, then sorted by the core's comparator over the keys its page sorts by.
 - **A queue's sources** are `{key, libraryId, list: hash, length, recipe?}`. Item `<key>.<p>` is position `p` of that list. A track listed twice is two positions, so two items ([`requirements/queue.md` §8](../requirements/queue.md#8-resilience)).
 
 **The sort is part of the recipe.** Each combination of collection, filters, sort and direction is its own list.
 
 - **Re-sorting a page never changes a playing queue.** Starting from a re-sorted view starts a new queue ([`requirements/conventions.md` §4.1](../requirements/conventions.md#41-track-lists)).
 - **Every sort is deterministic** ([`general.md` §3](general.md#3-shared-core)). It compares the core's sort keys, ties end on the track ID and then on the position in the unsorted list, and unknown values sort last.
+  - **One comparator, the core's** (`sort_rows`, `crates/core/src/sort.rs`). The web sorts a list it holds by it, through `core-wasm`, and the server sorts a playlist's rows by it, so a sort on the page and the recipe's resolve give one order. Descending reverses the value and its tie-breaks down to the track ID, but not the final position, and unknown values stay last. The `added` sort ties end on the track ID like every other field.
 - **If the server and a device disagree on an order, the hashes differ** and the device downloads the list, so it never plays a wrong order.
 - **Sorts a device cannot reproduce always travel as lists:** personal-data sorts (`playCount`, `lastPlayed`, `top`) and the server's search ranking. Freezing them keeps "top tracks" from reshuffling under a playing queue.
 
@@ -204,7 +209,6 @@ Not built yet:
 
 - **Kept queues are online-only until the device keeps its own catalog** (Stage 10, [`PLAN.md`](../PLAN.md)). Their lists and restores need the server until devices store kept states, which falls short of [`requirements/offline.md` §6](../requirements/offline.md#6-what-works-offline) until then ([`requirements/general.md` §3.5](../requirements/general.md#35-offline-parity)).
 - **Stage 10 also lets a device build a list from stored orders** and check its hash, downloading only on a mismatch. Until then, devices download every list.
-- **Playlists** are the recipe `tracks` until a playlist can name `{playlistId, version, sort}`.
 - **Endless play.** Nothing adds tracks yet. When the server does, it mints UUID keys as a device does, and avoids re-selecting a played track by reading History's tracks from the lists it holds.
 - **An index for finding an item** and a **resolve cache** wait until a measurement says they are needed. Finding is a scan of the spans, which stay few.
 
