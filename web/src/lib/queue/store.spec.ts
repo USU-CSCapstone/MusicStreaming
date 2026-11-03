@@ -1095,6 +1095,16 @@ describe('QueueStore lists and rows', () => {
 			expect(now()).toEqual(['201', 'unknown', 'unknown', 'unknown']);
 		});
 
+		it('keeps the rows the view had not loaded unknown when the server accepts the start but its queue cannot be fetched', async () => {
+			await hello();
+			// The start is answered; every request after it fails.
+			server.failures = [undefined as never, ...Array(1000).fill(0)];
+			store.start(recipeStart(['200', '201']));
+			await settle();
+
+			expect(now()).toEqual(['201', 'unknown', 'unknown', 'unknown']);
+		});
+
 		it('sends a repeat change the start replaced before it was sent, so here and the server agree', async () => {
 			await hello();
 			const answer = gate();

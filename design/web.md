@@ -159,8 +159,8 @@ the server (*Lists and rows* below, `design/queue.md` §3).
   queue is unshuffled, or for the item playing, they fill the rows read straight from the source,
   after the list and a page, so a page the server gives replaces them if the library changed.
   They are dropped once the list is attached or clean-up drops the source. A row nothing can fill
-  is `unknown` while a request that could tell it may still answer, and `unavailable` while the
-  last request to the server failed (`failing`), until one succeeds.
+  is `unknown`, however the server answers: it waits for the snapshot that follows a confirmed start,
+  and the player waits with it rather than skip it.
 - **Connection.** `connect()` spawns the worker and passes it `hello`, `queueEdit` and
   `queueReplaced`. A request that fails, or answers 429 or 5xx, is tried again after a wait.
 
