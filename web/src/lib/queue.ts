@@ -3,7 +3,7 @@
 // untouched (`requirements/conventions.md` §6).
 
 import type { QueueRecipe } from './api/types';
-import type { ServerSort } from './sorting';
+import type { ServerSort, TrackSort } from './sorting';
 import { isFiltered, type TagFilter } from './tag-match';
 
 type QueueLibrary = Extract<QueueRecipe, { type: 'library' }>;
@@ -71,6 +71,22 @@ export const artistRecipe = (artistId: string, sort = BY_ALBUM): QueueRecipe => 
 	scope: 'all',
 	artistCredit: 'any',
 	...sort
+});
+
+/**
+ * A playlist's songs as the server resolves its stored playlist: in the playlist's own order, or
+ * in `sort` (which has `added`, unlike the others), narrowed to `filter`'s tags. `sort` and
+ * `order` go together or not at all.
+ */
+export const playlistRecipe = (
+	playlistId: string,
+	sort: TrackSort = null,
+	filter?: TagFilter
+): QueueRecipe => ({
+	type: 'playlist',
+	playlistId,
+	...(filter && isFiltered(filter) && { filters: recipeFilters(filter) }),
+	...(sort && { sort: sort.field, order: sort.order })
 });
 
 /** Whether Previous restarts the track: it is under way, or nothing has played before it. */

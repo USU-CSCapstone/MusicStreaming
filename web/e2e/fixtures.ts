@@ -25,7 +25,7 @@ import type {
 import '../core-node';
 import { Queue } from '../src/lib/core-wasm/jewelcase_core_wasm.js';
 import type { SortField } from '../src/lib/sorting';
-import { sortTracks } from '../src/lib/track-sort';
+import { sortRows, sortTracks } from '../src/lib/track-sort';
 import { type TagFilter, filterByTags } from '../src/lib/tag-match';
 import { withManifest } from '../../tools/plugin-pack/manifest.mjs';
 import {
@@ -161,16 +161,33 @@ function sortedAsAsked(query: URLSearchParams): TrackSummary[] {
 }
 
 /** The tracks a start's recipe resolves to, as the server runs it; what the fixture does not know is empty. */
-function resolveRecipe(recipe: NonNullable<StartQueue['source']['recipe']>): TrackSummary[] {
+function resolveRecipe(
+	recipe: NonNullable<StartQueue['source']['recipe']>,
+	playlistRows: PlaylistRows
+): TrackSummary[] {
 	const { tagAll, tagAny } = 'filters' in recipe ? (recipe.filters ?? {}) : {};
 	const filter = { all: tagAll ?? [], any: tagAny ?? [] };
 	/** `items` that carry the recipe's tags, as the list endpoints keep them. */
 	const kept = (items: TrackSummary[]) => tagged(items, filter, (t) => t.tags);
+	if (recipe.type === 'playlist') {
+		// The playlist's items, filter by the tags' real types, then in the core's order.
+		const rows = tagged(playlistRows(recipe.playlistId), filter, (r) => r.track.tags);
+		const sort = recipe.sort && { field: recipe.sort, order: recipe.order! };
+		return sortRows(
+			rows,
+			sort ?? null,
+			(r) => r.track,
+			(r) => r.addedAt
+		).map((r) => r.track);
+	}
 	if (recipe.type === 'search') {
 		return kept(tracks.filter((t) => t.title.toLowerCase().includes(recipe.q.toLowerCase())));
 	}
 	return kept(sortedAsAsked(new URLSearchParams({ sort: recipe.sort, order: recipe.order })));
 }
+
+/** A playlist's items in its own order, with when each was added; empty for one the fixture lacks. */
+type PlaylistRows = (playlistId: string) => { track: TrackSummary; addedAt: string }[];
 
 /**
  * The account's queue as the server keeps it: the shared core in Node holds the state, and the
@@ -188,6 +205,8 @@ class FixtureQueue {
 	starts: StartQueue[] = [];
 	/** The edits received, as sent. */
 	edits: SentEdit[] = [];
+	/** The playlists a playlist recipe resolves, set once the page's playlists are served. */
+	playlistRows: PlaylistRows = () => [];
 	/** While set, a start is not answered until it settles. */
 	holdStarts: Promise<void> | null = null;
 	/** Where `queueEdit` goes, as the realtime connection would send it; unset with none. */
@@ -219,8 +238,13 @@ class FixtureQueue {
 	start(body: StartQueue) {
 		this.starts.push(body);
 		const { key, libraryId, tracks: sent, recipe } = body.source;
-		const ids = sent ?? resolveRecipe(recipe!).map((t) => t.id);
-		const at = sent ? body.start : ids.indexOf(body.startTrackId!);
+		const ids = sent ?? resolveRecipe(recipe!, this.playlistRows).map((t) => t.id);
+		// As the server: `start` if the list holds the track there, else its first place.
+		const at = sent
+			? body.start
+			: ids[body.start] === body.startTrackId
+				? body.start
+				: ids.indexOf(body.startTrackId!);
 		const list = `list-${this.starts.length}`;
 		const repeat = this.queue ? JSON.parse(this.queue.toJson()).repeat : 'off';
 		const state = JSON.parse(Queue.started(key, libraryId, ids.length, at, repeat).toJson());
@@ -312,7 +336,7 @@ class FixtureQueue {
 	#registered(edit: SentEdit): QueueEdit {
 		if (edit.type !== 'add') return edit;
 		const { key, libraryId, tracks: sent, recipe } = edit.source;
-		const ids = sent ?? resolveRecipe(recipe!).map((t) => t.id);
+		const ids = sent ?? resolveRecipe(recipe!, this.playlistRows).map((t) => t.id);
 		const list = `list-add-${key}`;
 		this.lists.set(list, ids);
 		const source = { key, libraryId, list, length: ids.length, ...(recipe ? { recipe } : {}) };
@@ -583,6 +607,11 @@ export async function serveLibrary(
 	);
 	// Playlists, too, run through the mock's own store.
 	const playlistStore = new PlaylistStore(playlistLibrary(playlists));
+	queueOf(page).playlistRows = (id) =>
+		(
+			playlistStore.items(BigInt(library.id), id, new URLSearchParams({ limit: '1000' }))?.items ??
+			[]
+		).flatMap((i) => (i.track ? [{ track: i.track, addedAt: i.addedAt ?? '' }] : []));
 	const plays: PlayReport[] = [];
 	const searches: RecentSearch[] = [];
 	// A scrobbler this user can connect with their own token, which it never shows again, and

@@ -51,7 +51,8 @@ export class EditablePlaylist {
 
 	#fetch: Fetch;
 	#confirmed: LoadedPlaylist;
-	#queue: Pending[] = [];
+	// Reassigned, never mutated, so `saving` is reactive.
+	#queue = $state.raw<Pending[]>([]);
 	#sending: Promise<void> | null = null;
 
 	constructor(fetch: Fetch, loaded: LoadedPlaylist) {
@@ -93,7 +94,7 @@ export class EditablePlaylist {
 		const apply = (items: PlaylistItem[]) => (ops ? applyOps(items, ops, resolve) : items);
 
 		this.items = apply(this.items);
-		this.#queue.push({ change, key: crypto.randomUUID(), apply });
+		this.#queue = [...this.#queue, { change, key: crypto.randomUUID(), apply }];
 		this.#present();
 		this.#sending ??= this.#send();
 
@@ -130,7 +131,7 @@ export class EditablePlaylist {
 					next.key
 				);
 				this.#confirmed = { playlist: confirmed, items: next.apply(items) };
-				this.#queue.shift();
+				this.#queue = this.#queue.slice(1);
 				attempt = 0;
 				this.#present();
 			} catch (e) {

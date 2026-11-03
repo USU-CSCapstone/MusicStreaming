@@ -183,13 +183,19 @@ the queue only by editing it (`requirements/queue.md`, `design/queue.md` §3).
   summary the view holds, before anything is answered, and starts the queue in the background. The
   item is `<key>.<index>`, which the report names. With `from`, a recipe and the view's `total`
   (`PlayFrom`), the request carries the recipe, `start`, `startTrackId`, `total` and the loaded
-  rows; without it, the tracks. Album, artist, songs and search views send a recipe,
+  rows; without it, the tracks. Album, artist, songs, search and playlist views send a recipe,
   carrying the view's tag filter as `filters` (`tagAll`, `tagAny`) so the server resolves the
-  rows shown; a sorted search and playlists send tracks, since no recipe gives their order. The
-  recipe's filter is the one the rows were loaded under (`data.filter`), or on an album, which
-  filters its own tracks, the filter shown. An album whose `tagAny` tag has no known type (not
+  rows shown; a sorted search sends tracks, since no recipe gives its order. A playlist's recipe
+  is `{type: 'playlist', playlistId}` with the page's `sort` and `order` together (`added`
+  included) or neither for the playlist's own order (D40); the server resolves the stored
+  playlist with the core's comparator, so it equals the rows shown, and never takes a `version`
+  from the device. A playlist card sends the bare recipe and queues by the summary's `trackCount`
+  without fetching its items. The
+  recipe's filter is the one the rows were loaded under (`data.filter`), or on an album and a playlist, which
+  filter their own tracks, the filter shown. An album or playlist whose `tagAny` tag has no known type (not
   carried by its tracks, not yet read) would group it differently from the server, so it sends
-  the tracks shown until the type is read. A Next pressed before the
+  the tracks shown until the type is read; so does a playlist with edits not yet confirmed, which
+  the server would resolve as last saved. A Next pressed before the
   worker has the queue is carried out once it has.
 - **Following.** A device holding playback plays whatever the queue's current item becomes,
   whoever moved it. The item's row is read from the worker. `unknown`, a row still being learned,
@@ -283,10 +289,9 @@ the tab's name carries from one to the other.
   header) opens Queue next, Queue last and Add to Up Next…, above Add to playlist (which a view
   with no entity, such as all songs, lacks). They are an `add` at `manualStart` / `manualEnd`, or
   at a point chosen in Up Next, and a toast says what was done at once. **What goes as a recipe:**
-  album and artist pages and cards (in the order shown), the Songs page, and an unsorted search's
-  songs, each under the view's tag filter; the device holds no tracks for these, so the add shows at once as the view's count of
-  rows, which wait for the server's list or pages. **What goes as `tracks`:** songs, selections, playlists (in
-  the order shown) and sorted search rows; these show at once from the tracks sent. **Dropping at
+  album, artist and playlist pages and cards (in the order shown), the Songs page, and an
+  unsorted search's songs, each under the view's tag filter; the device holds no tracks for these, so the add shows at once as the view's count of
+  rows, which wait for the server's list or pages. **What goes as `tracks`:** songs, selections and sorted search rows; these show at once from the tracks sent. **Dropping at
   a point:** with a mouse (`pointer: fine`) song rows, the selection and cards drag from a view
   onto Up Next, which draws the drop line and scrolls near its edges; the gap becomes an anchor
   with `anchorAt`. Touch and keyboard use **choose where**: Add to Up Next… opens the panel on Up

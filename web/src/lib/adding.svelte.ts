@@ -16,7 +16,7 @@ import {
 import type { Playable, Playlist, QueueRecipe, TrackSummary } from './api/types';
 import type { Card } from './cards';
 import { plural } from './format';
-import { albumRecipe, artistRecipe } from './queue';
+import { albumRecipe, artistRecipe, playlistRecipe } from './queue';
 import type { EditablePlaylist } from './playlist.svelte';
 import { toast } from './toast.svelte';
 
@@ -64,7 +64,7 @@ export function songs(tracks: TrackSummary[]): Adding {
 
 /**
  * An album, artist, or playlist, named `title`, with `tracks` as the server expands it. Give
- * its `recipe` if the server can resolve one for it, which a playlist has none.
+ * its `recipe` if the server can resolve one for it.
  */
 export function collection(
 	type: 'album' | 'artist' | 'playlist',
@@ -83,9 +83,8 @@ export function view(label: string, count: number, recipe: QueueRecipe): Adding 
 }
 
 /**
- * The album, artist, or playlist a card stands for. It holds no songs: an album's or artist's
- * are read by the server when queued, or fetched when needed here, and a playlist's are
- * fetched.
+ * The album, artist, or playlist a card stands for. It holds no songs: the server reads them
+ * when it is queued, and they are fetched only when needed here.
  */
 export function cardAdding(fetch: Fetch, libraryId: string, card: Card): Adding {
 	const { type, id, title, count } = card;
@@ -104,7 +103,7 @@ export function cardAdding(fetch: Fetch, libraryId: string, card: Card): Adding 
 		(await all((cursor) => listPlaylistItems(fetch, libraryId, id, { cursor }))).flatMap((item) =>
 			item.track ? [item.track] : []
 		);
-	return collection(type, id, title, count, tracks);
+	return collection(type, id, title, count, tracks, playlistRecipe(id));
 }
 
 /** Every song by an artist, in the order the server expands an artist: album, disc, track. */

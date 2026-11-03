@@ -32,7 +32,21 @@ describe('cardAdding', () => {
 		});
 	});
 
-	it('has no recipe for a playlist, which goes as its songs', () => {
-		expect(cardAdding(fetch, '11', card('playlist')).recipe).toBeUndefined();
+	it('names a playlist by its recipe, queued by the count the card has and with no fetch', async () => {
+		const fetched: string[] = [];
+		const spy = ((input: RequestInfo | URL) => {
+			fetched.push(String(input));
+			return Promise.reject(new Error('no fetch expected'));
+		}) as typeof fetch;
+		const adding = cardAdding(spy, '11', card('playlist'));
+		expect(adding).toMatchObject({
+			label: '“Signal”',
+			count: 7,
+			refs: [{ type: 'playlist', id: '5' }],
+			recipe: { type: 'playlist', playlistId: '5' }
+		});
+		// No sort or order is sent for the playlist's own order, and no version, which is the server's.
+		expect(adding.recipe).toEqual({ type: 'playlist', playlistId: '5' });
+		expect(fetched).toEqual([]);
 	});
 });
