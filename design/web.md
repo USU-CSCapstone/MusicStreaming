@@ -50,7 +50,8 @@ and commit the result.
 | `src/lib/queueing.svelte.ts` | Adding to the queue from every menu and drag, and the toast that says what was done (*The queue panel* below) |
 | `src/lib/core-wasm/`       | The shared core built to WebAssembly by `pnpm wasm` (gitignored); needs the `wasm-bindgen` CLI at the version in `scripts/wasm.sh` |
 | `src/lib/queue.ts`         | What a start from a view sends (`PlayFrom`), and when Previous restarts rather than steps back                                                          |
-| `src/lib/sorting.ts`       | A track list's sort. It calls the core's comparator through `core-wasm`, the order the server reproduces for a recipe (`design/general.md` §3); the page and the queue worker download the one WebAssembly file between them |
+| `src/lib/sorting.ts`       | What each track list sorts by, and each sort's name in the API (`listTracks`' names, and `addedToPlaylist`) |
+| `src/lib/track-sort.ts`    | Sorting a list the page holds by the core's comparator through `core-wasm`, the order the server reproduces for a recipe (`design/general.md` §3). Only the pages that sort locally import it, so no other page waits for the core; they and the queue worker download the one WebAssembly file between them (`design/general.md` §7.1) |
 | `src/lib/components/`      | Shell (sidebar, tab bar, player), collection and track views, waveform                                                                                  |
 | `src/routes/`              | One route per view: `/albums`, `/albums/[id]`, `/artists/…`, `/playlists/…`, `/songs`, `/search`, `/account`; `/setup` and `/login` without the shell   |
 | `mock/`                    | The dev-only mock API. Never bundled into the client.                                                                                                   |

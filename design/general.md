@@ -94,7 +94,7 @@ Rules:
 - **Static files served by the server.** Unknown paths fall back to the SPA entry page.
 - **The base path is rewritten at startup.** The client is built with a placeholder base path. At startup the server writes a copy of the build into `cache/` with the placeholder replaced by the configured prefix, so one image works under any path ([`requirements/deployment.md` §6](../requirements/deployment.md#6-remote-access)). CI runs the client under a non-root prefix.
 - **Pages load from the worker, not the network.** A page's `load` awaits its first query to the worker, and live changes reach the page through Svelte stores fed by the change feeds.
-- **Three threads:** the UI thread handles rendering, input, and audio; a worker holds the core (WebAssembly), catalog, search, sync, and command queue; a service worker holds the app shell and downloaded audio and imagery.
+- **Three threads:** the UI thread handles rendering, input, and audio; a worker holds the core (WebAssembly), catalog, search, sync, and command queue; a service worker holds the app shell and downloaded audio and imagery. One exception: a page that sorts a list it holds (an album, a playlist, a sorted search) loads the core on the UI thread too, so the sort stays synchronous as the page renders it ([§3](#3-shared-core)); only those pages import it, and they and the worker share one download of the WebAssembly file.
 - **The UI thread never does work proportional to library size.** Lists are virtualized.
 - **Search runs on the server when reachable**, on the device otherwise — the same core either way.
 
