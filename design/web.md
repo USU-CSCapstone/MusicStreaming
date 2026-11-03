@@ -102,7 +102,7 @@ the server (*Lists and rows* below, `design/queue.md` §3).
   queue's edit or an edit the core refuses means the copy cannot be trusted, and the queue is
   fetched again.
 - **Edits that do not stay.** The store reports each, with a `Refusal` carrying the code and the
-  edit, to the page, which shows nothing yet (`client.refusal`): the core refused it here
+  edit, to the page (`client.refusal`, shown as *The queue panel* says): the core refused it here
   (`anchor_gone`, `invalid`); the server refused it (`anchor_gone`, `play_gone`, 422 and the
   like), and the view is rebuilt without it; a `queueEdit` heard first took what a pending edit
   needed (the core's code on the replay); a new queue replaced it (`superseded`); or the server

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import type { SentEdit, TrackSummary } from '$lib/api/types';
 import type { QueueRow } from '$lib/queue/protocol';
+import { realtime } from '$lib/realtime.svelte';
 
 const fake = vi.hoisted(() => ({
 	queue: {
@@ -24,7 +25,9 @@ const fake = vi.hoisted(() => ({
 	/** The tracks the lookup gives, by ID. */
 	tracks: new Map<string, unknown>(),
 	/** While set, a lookup that starts waits for it. */
-	gate: null as Promise<void> | null
+	gate: null as Promise<void> | null,
+	/** While set, a lookup fails: it gives nothing. */
+	failing: false
 }));
 
 vi.mock('$lib/queue/client.svelte', () => ({ queue: fake.queue }));
@@ -33,6 +36,7 @@ vi.mock('$lib/queue/summaries', async (original) => ({
 	...(await original<typeof import('$lib/queue/summaries')>()),
 	lookup: async (refs: { libraryId: string; trackId: string }[]) => {
 		await fake.gate;
+		if (fake.failing) return new Map();
 		return new Map(
 			refs.map((r) => [`${r.libraryId}/${r.trackId}`, fake.tracks.get(r.trackId) ?? null])
 		);
@@ -84,6 +88,8 @@ beforeEach(() => {
 	fake.tracks = new Map([0, 1, 2, 3].map((n) => [`t${n}`, summary(`t${n}`, `Song ${n}`)]));
 	fake.queue.queueId = 'q1';
 	fake.queue.refusal = null;
+	fake.failing = false;
+	realtime.connected = false;
 });
 
 /** Renders the list in a box with a height, as the panel gives it. */
@@ -270,6 +276,19 @@ describe('QueueList', () => {
 		await expect.element(row('k.0')).toHaveAttribute('data-state', 'ready');
 		await expect.element(row('k.1')).toHaveAttribute('data-state', 'unavailable');
 		await expect.element(row('k.2')).toHaveAttribute('data-state', 'unavailable');
+	});
+
+	it('looks again for the tracks a failed lookup left out once the connection returns', async () => {
+		fake.failing = true;
+		setUpNext([known(0), known(1)]);
+		mount();
+		await expect.poll(() => document.querySelector('[data-item="k.1"]')).not.toBeNull();
+		await expect.element(row('k.0')).toHaveAttribute('data-state', 'loading');
+
+		fake.failing = false;
+		realtime.connected = true;
+		await expect.element(row('k.0')).toHaveAttribute('data-state', 'ready');
+		await expect.element(row('k.1')).toHaveAttribute('data-state', 'ready');
 	});
 
 	it('sends nothing for a move past either end', async () => {
