@@ -50,7 +50,7 @@ Two tabs, because "what's coming" and "what just played" are different questions
 
 ## 4. Shuffle
 
-- **Shuffle randomizes only the unplayed context.** The Manual Queue keeps its order and still plays first. Turning shuffle on with nothing left to play shuffles the next lap of Repeat All instead.
+- **Shuffle randomizes only the unplayed context.** The Manual Queue keeps its order and still plays first. Turning shuffle on with nothing left to play shuffles the next lap of Repeat All instead, since that lap is the only unplayed context there is; it is shuffled once, then replays like any shuffled order.
 - **Unshuffle restores the original order** and resumes from the current track's natural position in it, so turning shuffle off mid-album continues rather than jumping. Keep in mind that the same track can appear multiple times in the same context!
 - **Unshuffling may revisit tracks played while shuffled.** It resumes from the current track's natural position, so tracks after it are upcoming again whether or not they played while shuffled. Resuming in the album's order matters more than a clean tally.
 - **Endless play never re-selects a track that has already played.** The same holds for radio ([`recommendations.md` §4](recommendations.md#4-radio--endless-play)), so a user who walks away never hears a repeat they did not ask for.
