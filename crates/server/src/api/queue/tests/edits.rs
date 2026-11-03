@@ -339,6 +339,21 @@ async fn an_edit_sent_again_is_applied_once_and_answered_the_same() {
 }
 
 #[tokio::test]
+async fn an_add_sent_again_is_answered_though_its_source_is_gone() {
+    let (temp, _state, app) = setup().await;
+    start(&app, TOKEN, start_body(QUEUE, KEY, &["1", "2"], 0)).await;
+    let first = add(ADDED, &["2"], manual_end());
+    let answered = send(&app, TOKEN, QUEUE, 1, first.clone()).await;
+    assert_eq!(answered.0, StatusCode::OK);
+
+    conn(&temp).execute("DELETE FROM tracks", []).unwrap();
+    // A new add of the same tracks is out of reach now, but the retry is not asked to resolve.
+    let fresh = send(&app, TOKEN, QUEUE, 2, first.clone()).await;
+    assert_ne!(fresh.0, StatusCode::OK);
+    assert_eq!(send(&app, TOKEN, QUEUE, 1, first).await, answered);
+}
+
+#[tokio::test]
 async fn every_core_edit_applies_and_reaches_the_account() {
     let (_temp, _state, app) = setup().await;
     let address = serve(app.clone()).await;

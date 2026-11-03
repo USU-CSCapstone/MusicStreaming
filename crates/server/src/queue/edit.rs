@@ -46,6 +46,15 @@ pub struct Applied {
 }
 
 impl Queues {
+    /// The answer to `edit_id`, if it is among the latest edits applied to `user`'s queue
+    /// `queue_id`: what a retry gets without resolving or applying anything again.
+    pub fn answered(&self, user: i64, queue_id: &Uuid, edit_id: &Uuid) -> Option<Applied> {
+        let accounts = self.lock();
+        let account = accounts.get(&user).filter(|account| account.queue_id == *queue_id)?;
+        let done = account.done.iter().find(|done| done.edit_id == *edit_id)?;
+        Some(Applied { version: done.version, source: done.source.clone() })
+    }
+
     /// Applies `edit`, which `edit_id` names, to `user`'s queue `queue_id`, holding the list of an
     /// add (`added`, whose hash the edit's source must carry), and marks the account changed.
     /// `announce` is called under the lock with the new version and the edit, to send it to
