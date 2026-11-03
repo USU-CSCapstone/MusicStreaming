@@ -753,6 +753,36 @@ async fn delete_unsaved_parked_queue() {
 }
 
 #[tokio::test]
+async fn failed_delete_puts_the_queue_back_on_the_writer() {
+    let (_temp, db, conn) = setup();
+    let (account, _) = playing(QUEUE, &[1, 2]);
+    let queues = holding([(1, account)]);
+    queues.save(&db).await;
+    adjust(&queues);
+    start(&queues, &db, OTHER, &[3]).await.unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER refuse BEFORE DELETE ON queues \
+         BEGIN SELECT RAISE(ABORT, 'refused'); END",
+    )
+    .unwrap();
+
+    // Inside the writer, before any other save could run, the queue is back and marked.
+    let inside = queues.clone();
+    let back = db
+        .try_write(move |tx| {
+            let slot = Default::default();
+            let result = inside.delete_in(tx, 1, &id(QUEUE), &slot);
+            let accounts = inside.lock();
+            let account = &accounts[&1];
+            let back = account.parked.iter().any(|q| q.queue_id.as_str() == QUEUE);
+            Ok::<_, KeepError>((result.is_err(), back, account.changed))
+        })
+        .await
+        .unwrap();
+    assert_eq!(back, (true, true, true));
+}
+
+#[tokio::test]
 async fn two_starts_in_one_second_keep_one_active_row() {
     let (_temp, db, conn) = setup();
     let (queues, _) = adjusted_and_saved(&db).await;
