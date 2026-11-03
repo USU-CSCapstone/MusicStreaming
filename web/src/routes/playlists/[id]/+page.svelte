@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { collection, opened } from '$lib/adding.svelte';
+	import { collection, opened, playables } from '$lib/adding.svelte';
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
 	import DetailHeader from '$lib/components/DetailHeader.svelte';
 	import Icon from '$lib/components/Icon.svelte';
@@ -61,17 +61,13 @@
 	);
 	const shownTracks = $derived(shown.map((r) => r.track));
 	const context = $derived({ type: 'playlist', id: playlist.id } as const);
-	// This whole playlist, into another or the queue. Its songs here leave out external tracks,
+	// This playlist as shown, into another or the queue. Its songs here leave out external tracks,
 	// which only matters when skipping songs already there. Queued, it is in the order shown.
-	const adding = $derived(
-		collection(
-			'playlist',
-			playlist.id,
-			playlist.title,
-			playlist.trackCount,
-			async () => shownTracks
-		)
-	);
+	const adding = $derived({
+		...collection('playlist', playlist.id, playlist.title, shown.length, async () => shownTracks),
+		// Filtered, only the songs shown are checked and added to another playlist, matching the rows.
+		...(filtered && { refs: playables(shownTracks) })
+	});
 	let editing = $state(false);
 
 	/** Sends only what changed; nothing changed is no edit. */

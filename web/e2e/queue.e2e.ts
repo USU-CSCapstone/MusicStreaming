@@ -71,6 +71,17 @@ async function openUpNext(page: Page) {
 	return { panel, plays, list: panel.getByRole('list', { name: 'Up Next' }) };
 }
 
+/**
+ * Waits, in the queue panel, until a page just loaded has fetched the queue again, then closes
+ * the panel. Queueing before the page has a queue only says to start something first.
+ */
+async function queueLoaded(page: Page) {
+	await page.getByRole('region', { name: 'Player' }).getByRole('button', { name: 'Queue' }).click();
+	const panel = page.getByRole('complementary', { name: 'Queue' });
+	await expect(panel.getByRole('tab').first()).toHaveText(/Up Next [1-9]/);
+	await panel.getByRole('button', { name: 'Close queue' }).click();
+}
+
 test('reorders and removes in Up Next', async ({ page }) => {
 	const queue = queueOf(page);
 	const { panel, list } = await openUpNext(page);
@@ -344,6 +355,7 @@ test('queues a tag-filtered view as the songs it shows, not a recipe', async ({ 
 	// All the songs filtered to Ambient, the same way.
 	await page.goto('/songs?tagAny=61');
 	await expect(page.locator('main .track .title')).toHaveText(['Signal Part 2', 'Signal Part 1']);
+	await queueLoaded(page);
 	await page.locator('main').getByRole('button', { name: 'Actions for 2 songs' }).click();
 	await page.getByRole('menuitem', { name: 'Queue next' }).click();
 	await expect

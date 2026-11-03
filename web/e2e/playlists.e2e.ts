@@ -520,6 +520,22 @@ test.describe('adding a whole album, artist, or playlist', () => {
 		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Part 2', 'Signal Remix']);
 	});
 
+	test('checks a filtered playlist by the songs shown', async ({ page }) => {
+		await serveLibrary(page, {
+			playlists: [signalMix, { ...roadTrip, trackIds: [BigInt(41)] }]
+		});
+		// Calm leaves out Part 2, so the two shown are Part 1, which Road Trip holds, and Remix.
+		await page.goto(`/playlists/${signalMix.id}?tagAny=63`);
+		await expect(titles(page)).toHaveText(['Signal Part 1', 'Signal Remix']);
+		await page.locator('main').getByRole('button', { name: 'Actions for “Signal Mix”' }).click();
+		await page.getByRole('menuitem', { name: /Road Trip/ }).click();
+		const dialog = page.getByRole('dialog', { name: 'Already in this playlist' });
+		await expect(dialog).toContainText('1 of these 2 songs is already in “Road Trip”.');
+		const sent = nextEdit(page);
+		await dialog.getByRole('button', { name: 'Skip duplicates' }).click();
+		expect((await sent)[0].items).toEqual([{ type: 'track', id: '43' }]);
+	});
+
 	test('skips the songs of an album already there, if asked', async ({ page }) => {
 		await serveLibrary(page, {
 			playlists: [{ ...roadTrip, trackIds: [BigInt(signalMix.trackIds[1])] }]
