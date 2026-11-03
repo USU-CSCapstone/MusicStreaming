@@ -36,13 +36,13 @@ A **list** is `{libraryId, hash, length, recipe?}`. A source names its list by t
 
   | Recipe | Fields |
   |---|---|
-  | `album` | `albumId`, `sort`/`order` |
-  | `artist` | `artistId`, `scope`/`artistCredit`, `sort`/`order` |
+  | `album` | `albumId`, `filters`, `sort`/`order` |
+  | `artist` | `artistId`, `scope`/`artistCredit`, `filters`, `sort`/`order` |
   | `library` | `filters`, `sort`/`order` |
-  | `search` | `q` |
+  | `search` | `q`, `filters` |
   | `tracks` | none: the IDs the device sent |
 
-  `sort` and `order` are `listTracks`' own, and `filters` is the API's `BrowseFilter`, so a client names a recipe as it names the view it shows. The core keeps them as given, so recipes compare exactly.
+  `sort` and `order` are `listTracks`' own, and `filters` is the API's `BrowseFilter`, so a client names a recipe as it names the view it shows. Only the tag filter (`tagAll`, `tagAny`) is supported, validated as the list endpoints do; a search narrows by tags as the search endpoint does. The core keeps them as given, so recipes compare exactly.
 - **A queue's sources** are `{key, libraryId, list: hash, length, recipe?}`. Item `<key>.<p>` is position `p` of that list. A track listed twice is two positions, so two items ([`requirements/queue.md` §8](../requirements/queue.md#8-resilience)).
 
 **The sort is part of the recipe.** Each combination of collection, filters, sort and direction is its own list.

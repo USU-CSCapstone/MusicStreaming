@@ -219,18 +219,19 @@ impl TrackOrder {
 }
 
 /// The ID of every track in `library` that `list` pages through for the same `album`, `artist`,
-/// `credit` and `order` with no tag filter, in the same order, read at once: one statement for
-/// each part of the sort's index, not a page at a time.
+/// `credit`, `tags` and `order`, in the same order, read at once: one statement for each part of
+/// the sort's index, not a page at a time.
 pub fn resolve(
     conn: &Connection,
     library: i64,
     album: Option<AnyId>,
     artist: Option<AnyId>,
     credit: ArtistCredit,
+    tags: &TagFilter,
     order: TrackOrder,
 ) -> rusqlite::Result<Vec<u64>> {
     let (sort, order) = order.keyset(album.is_some());
-    let source = source(conn, library, album, artist, credit, &TagFilter::default())?;
+    let source = source(conn, library, album, artist, credit, tags)?;
     // Only the IDs are wanted, so the columns and joins for summaries are left out.
     let source = Source { select: &["t.id"], joins: "", ..source };
     page::ids(conn, &source, sort, order)

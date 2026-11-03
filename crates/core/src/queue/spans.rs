@@ -12,14 +12,33 @@ use serde_json::{Map, Value};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Recipe {
-    /// An album's tracks in a sort.
-    Album { album_id: String, sort: String, order: String },
-    /// An artist's tracks, by scope and credit, in a sort.
-    Artist { artist_id: String, scope: String, artist_credit: String, sort: String, order: String },
+    /// An album's tracks under filters, in a sort. `filters` is left out when empty.
+    Album {
+        album_id: String,
+        #[serde(default, skip_serializing_if = "Map::is_empty")]
+        filters: Map<String, Value>,
+        sort: String,
+        order: String,
+    },
+    /// An artist's tracks, by scope and credit, under filters, in a sort. `filters` is left out
+    /// when empty.
+    Artist {
+        artist_id: String,
+        scope: String,
+        artist_credit: String,
+        #[serde(default, skip_serializing_if = "Map::is_empty")]
+        filters: Map<String, Value>,
+        sort: String,
+        order: String,
+    },
     /// A library's tracks under filters, in a sort.
     Library { filters: Map<String, Value>, sort: String, order: String },
-    /// A search query.
-    Search { q: String },
+    /// A search query, narrowed by filters. `filters` is left out when empty.
+    Search {
+        q: String,
+        #[serde(default, skip_serializing_if = "Map::is_empty")]
+        filters: Map<String, Value>,
+    },
     /// Explicit track IDs the device sent.
     Tracks,
 }

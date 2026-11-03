@@ -3872,6 +3872,14 @@ components:
       properties:
         type: { const: album }
         albumId: { type: string }
+        filters:
+          allOf:
+            - $ref: '#/components/schemas/BrowseFilter'
+          description: |
+            The view's tag filter, `tagAll` and `tagAny` as of `listTracks`; the list is the
+            view's tracks under it. Left out for none. Any other filter of `BrowseFilter` is
+            `422` on a start, as are more than 100 tags together; a tag the library lacks matches
+            no track.
         sort: { $ref: '#/components/schemas/QueueTrackSort' }
         order: { $ref: '#/components/schemas/QueueTrackOrder' }
 
@@ -3891,6 +3899,14 @@ components:
           type: string
           enum: [any, owned, featured]
           description: As `artistCredit` of `listTracks`.
+        filters:
+          allOf:
+            - $ref: '#/components/schemas/BrowseFilter'
+          description: |
+            The view's tag filter, `tagAll` and `tagAny` as of `listTracks`; the list is the
+            view's tracks under it. Left out for none. Any other filter of `BrowseFilter` is
+            `422` on a start, as are more than 100 tags together; a tag the library lacks matches
+            no track.
         sort: { $ref: '#/components/schemas/QueueTrackSort' }
         order: { $ref: '#/components/schemas/QueueTrackOrder' }
 
@@ -3903,7 +3919,10 @@ components:
         filters:
           allOf:
             - $ref: '#/components/schemas/BrowseFilter'
-          description: The view's filters. No filter is supported yet, so a start with any is `422`.
+          description: |
+            The view's tag filter, `tagAll` and `tagAny` as of `listTracks`; the list is the
+            view's tracks under it. Any other filter of `BrowseFilter` is `422` on a start, as
+            are more than 100 tags together; a tag the library lacks matches no track.
         sort: { $ref: '#/components/schemas/QueueTrackSort' }
         order: { $ref: '#/components/schemas/QueueTrackOrder' }
 
@@ -3928,6 +3947,14 @@ components:
       properties:
         type: { const: search }
         q: { type: string, minLength: 1 }
+        filters:
+          allOf:
+            - $ref: '#/components/schemas/BrowseFilter'
+          description: |
+            The search's tag filter, `tagAll` and `tagAny` as of `search`; the list is the
+            tracks it finds under it. Left out for none. Any other filter of `BrowseFilter` is
+            `422` on a start, as are more than 100 tags together; a tag the library lacks matches
+            no track.
 
     QueueTracksRecipe:
       type: object

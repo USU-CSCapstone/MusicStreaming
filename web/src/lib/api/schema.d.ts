@@ -2566,6 +2566,13 @@ export interface components {
              */
             type: "album";
             albumId: string;
+            /**
+             * @description The view's tag filter, `tagAll` and `tagAny` as of `listTracks`; the list is the
+             *     view's tracks under it. Left out for none. Any other filter of `BrowseFilter` is
+             *     `422` on a start, as are more than 100 tags together; a tag the library lacks matches
+             *     no track.
+             */
+            filters?: components["schemas"]["BrowseFilter"];
             sort: components["schemas"]["QueueTrackSort"];
             order: components["schemas"]["QueueTrackOrder"];
         };
@@ -2587,6 +2594,13 @@ export interface components {
              * @enum {string}
              */
             artistCredit: "any" | "owned" | "featured";
+            /**
+             * @description The view's tag filter, `tagAll` and `tagAny` as of `listTracks`; the list is the
+             *     view's tracks under it. Left out for none. Any other filter of `BrowseFilter` is
+             *     `422` on a start, as are more than 100 tags together; a tag the library lacks matches
+             *     no track.
+             */
+            filters?: components["schemas"]["BrowseFilter"];
             sort: components["schemas"]["QueueTrackSort"];
             order: components["schemas"]["QueueTrackOrder"];
         };
@@ -2597,7 +2611,11 @@ export interface components {
              * @enum {string}
              */
             type: "library";
-            /** @description The view's filters. No filter is supported yet, so a start with any is `422`. */
+            /**
+             * @description The view's tag filter, `tagAll` and `tagAny` as of `listTracks`; the list is the
+             *     view's tracks under it. Any other filter of `BrowseFilter` is `422` on a start, as
+             *     are more than 100 tags together; a tag the library lacks matches no track.
+             */
             filters: components["schemas"]["BrowseFilter"];
             sort: components["schemas"]["QueueTrackSort"];
             order: components["schemas"]["QueueTrackOrder"];
@@ -2623,6 +2641,13 @@ export interface components {
              */
             type: "search";
             q: string;
+            /**
+             * @description The search's tag filter, `tagAll` and `tagAny` as of `search`; the list is the
+             *     tracks it finds under it. Left out for none. Any other filter of `BrowseFilter` is
+             *     `422` on a start, as are more than 100 tags together; a tag the library lacks matches
+             *     no track.
+             */
+            filters?: components["schemas"]["BrowseFilter"];
         };
         /** @description Track IDs the device sent. */
         QueueTracksRecipe: {

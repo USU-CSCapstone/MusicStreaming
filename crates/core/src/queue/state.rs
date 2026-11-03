@@ -352,7 +352,12 @@ mod tests {
             "k",
             "lib",
             4,
-            Some(Recipe::Album { album_id: "7".into(), sort: "album".into(), order: "asc".into() }),
+            Some(Recipe::Album {
+                album_id: "7".into(),
+                filters: Default::default(),
+                sort: "album".into(),
+                order: "asc".into(),
+            }),
         );
         source.hash = Some("ab".into());
         state.start(source, 1).unwrap();
