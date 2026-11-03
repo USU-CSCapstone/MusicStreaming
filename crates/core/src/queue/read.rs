@@ -26,7 +26,7 @@ impl QueueState {
     pub fn up_next_row(&self, index: u64) -> Option<Row<'_>> {
         match index.checked_sub(self.manual.len()) {
             None => self.row_in(&self.manual, index),
-            Some(rest) => self.row_in(&self.order, self.cursor + rest),
+            Some(rest) => self.row_in(&self.order, self.cursor.checked_add(rest)?),
         }
     }
 
@@ -119,6 +119,7 @@ mod tests {
         assert_eq!((row.item, row.source, row.position, row.track), (item("k", 2), "k", 2, None));
         assert_eq!(state.current_row().unwrap().track, None);
         assert!(state.up_next_row(3).is_none());
+        assert!(state.up_next_row(u64::MAX).is_none());
 
         state.attach_list("k", "h".into(), Arc::from([10, 11, 12, 13, 14])).unwrap();
         assert_eq!(state.up_next_row(0).unwrap().track, Some(12));
