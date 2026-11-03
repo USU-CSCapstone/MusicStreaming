@@ -137,6 +137,24 @@ async fn list_added_and_removed_is_never_written() {
 }
 
 #[tokio::test]
+async fn a_stored_list_is_read_with_or_without_its_body() {
+    let (_temp, db, _conn) = setup();
+    let (account, hash) = playing(QUEUE, &[1, 2]);
+    let queues = holding([(1, account)]);
+    queues.save(&db).await;
+    // Saved, so memory has let go of it and the read goes to the database.
+    assert!(queues.lock()[&1].lists.is_empty());
+
+    let with = queues.list_json(&db, 1, &hash, true).await.unwrap().unwrap();
+    assert_eq!(with, br#"{"libraryId":"1","tracks":["1","2"]}"#);
+    assert_eq!(queues.list_json(&db, 1, &hash, false).await.unwrap(), Some(Vec::new()));
+    for body in [true, false] {
+        assert_eq!(queues.list_json(&db, 1, &list_hash(&[9]), body).await.unwrap(), None);
+        assert_eq!(queues.list_json(&db, 2, &hash, body).await.unwrap(), None);
+    }
+}
+
+#[tokio::test]
 async fn unused_list_deleted_on_save() {
     let (_temp, db, conn) = setup();
     let (first, old) = playing(QUEUE, &[1, 2]);
