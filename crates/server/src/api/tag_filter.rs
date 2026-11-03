@@ -40,9 +40,19 @@ pub struct Tagged {
 /// there costs under a millisecond (`design/database.md` §4).
 pub const LEAD_SHARE: i64 = 128;
 
+/// [`LEAD_SHARE`] for a list read whole, as a queue's recipe is (`api/queue/resolve.rs`): walking
+/// reads every row of the sort's index then, not a page's worth, so a group leads when it holds
+/// one row in this many at most. Measured at 500,000 tracks, leading resolved a tag of 4,881
+/// tracks in 6.5 ms against 130 ms walking, and lost past about a quarter of the library, 416 ms
+/// against 180 ms for 144,386 tracks (`design/database.md` §4).
+pub const RESOLVE_SHARE: i64 = 8;
+
 /// The rows of `table` in `library` that start from `lead` and pass `check`, if given, and carry
 /// the tags `filter` names, the way `tagged` links them. An artist's or album's
-/// filter comes as `lead` or `check`; the tags plan around it ([`Tags::plan`]).
+/// filter comes as `lead` or `check`; the tags plan around it ([`Tags::plan`]), a group leading
+/// when it holds one row in `share` at most: [`LEAD_SHARE`] for a page, [`RESOLVE_SHARE`] for a
+/// list read whole.
+#[expect(clippy::too_many_arguments, reason = "each is a part of the list the caller names")]
 pub fn source(
     conn: &Connection,
     library: i64,
@@ -51,6 +61,7 @@ pub fn source(
     lead: Option<Lead>,
     check: Option<Check>,
     filter: &TagFilter,
+    share: i64,
 ) -> rusqlite::Result<Source> {
     let tags = Tags::read(conn, library, tagged, filter)?;
     let rows = match tags {
@@ -58,7 +69,7 @@ pub fn source(
         _ => 0,
     };
     let alone = lead.is_none() && check.is_none();
-    let plan = tags.plan(tagged, table.alias, lead, rows, alone);
+    let plan = tags.plan(tagged, table.alias, lead, rows, alone, share);
     let mut source =
         table.source(conn, library, plan.lead, Check::all(check.into_iter().chain(plan.check)))?;
     if let Some(total) = plan.total {
@@ -187,24 +198,12 @@ impl Tags {
     }
 
     /// How a list of `rows` rows of `tagged`, aliased `alias`, reads the filter. A list given a
-    /// `lead` keeps it; otherwise its smallest group leads when it is a small enough share of the
-    /// list ([`LEAD_SHARE`]). Every other group becomes a check. The total is the one tag's stored
-    /// count where it is all that filters the list, which `alone` says, and is counted otherwise.
+    /// `lead` keeps it; otherwise its smallest group leads when it holds one row in `share` of the
+    /// list at most ([`LEAD_SHARE`], [`RESOLVE_SHARE`]): 0 has the smallest always lead, and
+    /// `i64::MAX` has every group checked. Every other group becomes a check. The total is the one
+    /// tag's stored count where it is all that filters the list, which `alone` says, and is
+    /// counted otherwise.
     pub fn plan(
-        self,
-        tagged: &Tagged,
-        alias: &str,
-        lead: Option<Lead>,
-        rows: i64,
-        alone: bool,
-    ) -> Plan {
-        self.plan_sharing(tagged, alias, lead, rows, alone, LEAD_SHARE)
-    }
-
-    /// [`Tags::plan`], with a group leading when it holds one row in `share` of the list at most:
-    /// 0 has the smallest always lead, and `i64::MAX` has every group checked. For the benchmark
-    /// that weighs one against the other.
-    pub fn plan_sharing(
         self,
         tagged: &Tagged,
         alias: &str,
@@ -321,7 +320,7 @@ mod tests {
                 group(&[3], TagMatch::Any, 100),
             ])
         };
-        let plan = tags().plan(&TAGGED, "t", None, 300_000, true);
+        let plan = tags().plan(&TAGGED, "t", None, 300_000, true, LEAD_SHARE);
         let lead = plan.lead.expect("the small group leads");
         assert_eq!(lead.ids, "SELECT track_id AS id FROM track_tags WHERE tag_id = ?");
         assert_eq!(lead.size, 100);
@@ -329,16 +328,24 @@ mod tests {
         assert!(matches!(plan.total, Some(Total::Counted)));
 
         // Beside fewer tracks, neither is small enough, and both are checked.
-        let plan = tags().plan(&TAGGED, "t", None, 10_000, true);
+        let plan = tags().plan(&TAGGED, "t", None, 10_000, true, LEAD_SHARE);
         assert!(plan.lead.is_none());
         assert_eq!(plan.check.unwrap().params.len(), 3);
+    }
+
+    #[test]
+    fn a_list_read_whole_leads_from_a_larger_share() {
+        // One track in 20: too many to sort for every page, few enough to read whole from the tag.
+        let tags = || Tags::Groups(vec![group(&[3], TagMatch::Any, 15_000)]);
+        assert!(tags().plan(&TAGGED, "t", None, 300_000, true, LEAD_SHARE).lead.is_none());
+        assert!(tags().plan(&TAGGED, "t", None, 300_000, true, RESOLVE_SHARE).lead.is_some());
     }
 
     #[test]
     fn another_lead_is_kept() {
         let artist = Lead { ids: "SELECT 7 AS id".to_owned(), params: Vec::new(), size: 1 };
         let tags = Tags::Groups(vec![group(&[3], TagMatch::Any, 1)]);
-        let plan = tags.plan(&TAGGED, "t", Some(artist), 300_000, false);
+        let plan = tags.plan(&TAGGED, "t", Some(artist), 300_000, false, LEAD_SHARE);
         assert_eq!(plan.lead.unwrap().ids, "SELECT 7 AS id");
         assert!(plan.check.is_some());
     }
@@ -346,9 +353,15 @@ mod tests {
     #[test]
     fn one_tag_alone_keeps_its_stored_count() {
         let one = || Tags::Groups(vec![group(&[3], TagMatch::All, 40)]);
-        assert!(matches!(one().plan(&TAGGED, "t", None, 100, true).total, Some(Total::Stored(40))));
-        assert!(matches!(one().plan(&TAGGED, "t", None, 100, false).total, Some(Total::Counted)));
-        let nothing = Tags::Nothing.plan(&TAGGED, "t", None, 100, false);
+        assert!(matches!(
+            one().plan(&TAGGED, "t", None, 100, true, LEAD_SHARE).total,
+            Some(Total::Stored(40))
+        ));
+        assert!(matches!(
+            one().plan(&TAGGED, "t", None, 100, false, LEAD_SHARE).total,
+            Some(Total::Counted)
+        ));
+        let nothing = Tags::Nothing.plan(&TAGGED, "t", None, 100, false, LEAD_SHARE);
         assert!(matches!(nothing.total, Some(Total::Stored(0))));
         assert_eq!(nothing.check.unwrap().condition, "0");
     }

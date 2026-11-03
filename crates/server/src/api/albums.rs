@@ -15,7 +15,7 @@ use super::credit::{ArtistCredit, Credits};
 use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
-use super::tag_filter::{self, TagFilter, Tagged};
+use super::tag_filter::{self, LEAD_SHARE, TagFilter, Tagged};
 use super::{AnyId, Id, Problem};
 use crate::db::Database;
 
@@ -146,7 +146,7 @@ fn source(
     tags: &TagFilter,
 ) -> rusqlite::Result<Source> {
     let lead = artist.map(|artist| credit.lead(conn, library, &CREDITS, artist)).transpose()?;
-    tag_filter::source(conn, library, &ALBUMS, &TAGGED, lead, None, tags)
+    tag_filter::source(conn, library, &ALBUMS, &TAGGED, lead, None, tags, LEAD_SHARE)
 }
 
 #[cfg(test)]

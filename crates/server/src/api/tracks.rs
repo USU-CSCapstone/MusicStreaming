@@ -17,7 +17,7 @@ use super::credit::{ArtistCredit, Credits};
 use super::extract::{Path, Query};
 use super::page::{self, Check, Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
-use super::tag_filter::{self, TagFilter, Tagged};
+use super::tag_filter::{self, LEAD_SHARE, RESOLVE_SHARE, TagFilter, Tagged};
 use super::{AnyId, Id, Problem};
 use crate::db::{self, Database};
 
@@ -200,7 +200,7 @@ pub async fn list(
     let tags = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
     let page = db
         .read(move |conn| {
-            let source = source(conn, library, album, artist, credit, &tags)?;
+            let source = source(conn, library, album, artist, credit, &tags, LEAD_SHARE)?;
             request.read(conn, &source, list_summary)
         })
         .await?;
@@ -220,7 +220,8 @@ impl TrackOrder {
 
 /// The ID of every track in `library` that `list` pages through for the same `album`, `artist`,
 /// `credit`, `tags` and `order`, in the same order, read at once: one statement for each part of
-/// the sort's index, not a page at a time.
+/// the sort's index, not a page at a time. Being read whole, it starts from a larger tag's tracks
+/// than a page does ([`RESOLVE_SHARE`]).
 pub fn resolve(
     conn: &Connection,
     library: i64,
@@ -231,7 +232,7 @@ pub fn resolve(
     order: TrackOrder,
 ) -> rusqlite::Result<Vec<u64>> {
     let (sort, order) = order.keyset(album.is_some());
-    let source = source(conn, library, album, artist, credit, tags)?;
+    let source = source(conn, library, album, artist, credit, tags, RESOLVE_SHARE)?;
     // Only the IDs are wanted, so the columns and joins for summaries are left out.
     let source = Source { select: &["t.id"], joins: "", ..source };
     page::ids(conn, &source, sort, order)
@@ -278,7 +279,7 @@ pub const TAGGED: Tagged = Tagged { links: "track_tags", owner: "track_id", coun
 
 /// The tracks `list` pages through in `library`: every one, or those on `album`, credited to
 /// `artist` as `credit` says, and carrying the tags `tags` names. An artist's
-/// tracks lead a page; failing that, the tags' may ([`tag_filter::source`]).
+/// tracks lead a page; failing that, the tags' may, by `share` ([`tag_filter::source`]).
 fn source(
     conn: &Connection,
     library: i64,
@@ -286,13 +287,14 @@ fn source(
     artist: Option<AnyId>,
     credit: ArtistCredit,
     tags: &TagFilter,
+    share: i64,
 ) -> rusqlite::Result<Source> {
     let lead = artist.map(|artist| credit.lead(conn, library, &CREDITS, artist)).transpose()?;
     let album = album.map(|album| Check {
         condition: "t.album_id = ?".to_owned(),
         params: vec![album.0.into()],
     });
-    tag_filter::source(conn, library, &TRACKS, &TAGGED, lead, album, tags)
+    tag_filter::source(conn, library, &TRACKS, &TAGGED, lead, album, tags, share)
 }
 
 #[cfg(test)]
