@@ -147,10 +147,12 @@ impl Queues {
             }
             let row = conn
                 .prepare_cached(
-                    "SELECT library_id, tracks FROM queue_lists WHERE user_id = ?1 AND hash = ?2",
+                    // The blob is selected only for a body: SQLite reads it when it is selected.
+                    "SELECT library_id, CASE WHEN ?3 THEN tracks END FROM queue_lists \
+                     WHERE user_id = ?1 AND hash = ?2",
                 )?
-                .query_row(params![user, hash], |row| {
-                    let bytes = if body { row.get::<_, Vec<u8>>(1)? } else { Vec::new() };
+                .query_row(params![user, hash, body], |row| {
+                    let bytes = row.get::<_, Option<Vec<u8>>>(1)?.unwrap_or_default();
                     Ok((row.get::<_, i64>(0)?, bytes))
                 })
                 .optional()?;
