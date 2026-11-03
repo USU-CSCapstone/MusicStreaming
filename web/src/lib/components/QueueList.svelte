@@ -8,6 +8,7 @@
 	import { queue } from '$lib/queue/client.svelte';
 	import { anchorAt, MAX_SPACE, ROW, upNextPieces, upNextRow, upNextRows } from '$lib/queue/layout';
 	import type { QueueRow } from '$lib/queue/protocol';
+	import { realtime } from '$lib/realtime.svelte';
 	import { lookup, trackKey } from '$lib/queue/summaries';
 	import Artwork from './Artwork.svelte';
 	import Icon from './Icon.svelte';
@@ -113,8 +114,10 @@
 	// Reads what is in view. A change to the queue, or a scroll, asks again. The rows are known
 	// as soon as the queue answers, so a drop can be aimed at them; each is drawn at once, and
 	// shows its track once the lookup has it. A lookup that is overtaken by a scroll still lands,
-	// since the next view may want the same tracks.
+	// since the next view may want the same tracks. A lookup that failed asks again once the
+	// connection returns.
 	$effect(() => {
+		void realtime.connected;
 		const revision = queue.revision;
 		const [from, to] = [first, last];
 		const [m, n] = [manual, upNext];
