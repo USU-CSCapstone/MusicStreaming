@@ -262,7 +262,7 @@ impl Queues {
     /// The active queue is refused, decided from memory, since a parked queue not yet saved is
     /// still active in the database. A parked queue that was not adjusted is not found, as it is
     /// due for deletion anyway. An adjusted one is dropped from memory, then its row and lists
-    /// go; if the write fails it is put back.
+    /// go; if the write fails it is put back, on the writer, and if only the commit fails, after it.
     pub async fn delete(
         self: &Arc<Self>,
         db: &Database,
@@ -282,8 +282,9 @@ impl Queues {
         deleted
     }
 
-    /// The delete's job on the writer. Records in `removed` the parked queue it took.
-    fn delete_in(
+    /// The delete's job on the writer. Records in `removed` the parked queue it took, and puts
+    /// it back itself if the statements fail.
+    pub(super) fn delete_in(
         &self,
         tx: &Transaction,
         user: i64,
@@ -312,14 +313,25 @@ impl Queues {
         };
         let was_parked = parked.is_some();
         *removed.lock().recover() = parked;
-        let deleted = tx
-            .prepare_cached("DELETE FROM queues WHERE user_id = ?1 AND queue_id = ?2")?
-            .execute(params![user, queue_id.as_str()])?;
-        if deleted == 0 && !was_parked {
-            return Err(KeepError::NotFound);
+        let result = (|| {
+            let deleted = tx
+                .prepare_cached("DELETE FROM queues WHERE user_id = ?1 AND queue_id = ?2")?
+                .execute(params![user, queue_id.as_str()])?;
+            if deleted == 0 && !was_parked {
+                return Err(KeepError::NotFound);
+            }
+            delete_unused_lists(tx, user)?;
+            Ok(())
+        })();
+        if result.is_err()
+            && let Some(queue) = removed.lock().recover().take()
+            && let Some(account) = self.lock().get_mut(&user)
+        {
+            // Put back here, on the writer, so no save can run in between.
+            account.parked.push(queue);
+            account.changed = true;
         }
-        delete_unused_lists(tx, user)?;
-        Ok(())
+        result
     }
 }
 
