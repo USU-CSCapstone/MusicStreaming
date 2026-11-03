@@ -4,8 +4,10 @@
 //! name costs several times as much. A single track reads the rest by name, with each column
 //! named by `AS`: SQLite leaves unnamed columns' names open.
 
+use std::collections::HashMap;
 use std::num::NonZeroI64;
 
+use jewelcase_core::SortRow;
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
@@ -14,7 +16,7 @@ use crate::api::refs::{
     AlbumRef, Credit, ImageRef, TagsByType, artists_json, availability, placeholder, tags_json,
 };
 use crate::api::time::serialize_rfc3339;
-use crate::db::Json;
+use crate::db::{Json, by_ids};
 
 /// The spec's `TrackSummary`, without `personal`. A full `Track` has the same fields with more
 /// `audio`, so the audio type is a parameter.
@@ -203,6 +205,45 @@ fn summary<A>(row: &Row, audio: A) -> rusqlite::Result<TrackSummary<A>> {
             album: key(row, 20)?,
         },
     })
+}
+
+/// The keys the core's comparator sorts each of the tracks `ids` of `library` by, as a
+/// [`TrackSummary`] gives them to a client that sorts its list (`jewelcase_core::sort_rows`), by
+/// track ID; with no date added, which only a playlist's items have. A track the library lacks
+/// has none.
+pub fn sort_keys(
+    conn: &Connection,
+    library: i64,
+    ids: &[i64],
+) -> rusqlite::Result<HashMap<i64, SortRow>> {
+    let columns = [
+        "t.id",
+        "t.sort_key",
+        "t.artist_sort_key",
+        "t.album_sort_key",
+        "t.album_id",
+        "t.release_date",
+        "t.disc_number",
+        "t.track_number",
+        "t.duration_us",
+    ];
+    let rows = by_ids(conn, &columns, "tracks t", "", library, ids, |row| {
+        let id: i64 = row.get(0)?;
+        let keys = SortRow {
+            id: id.cast_unsigned(),
+            title_key: key(row, 1)?,
+            artist_key: key(row, 2)?,
+            album_key: key(row, 3)?,
+            album_id: row.get::<_, i64>(4)?.cast_unsigned(),
+            release_date: row.get(5)?,
+            disc: NonZeroI64::new(row.get(6)?).and_then(|disc| u32::try_from(disc.get()).ok()),
+            number: row.get::<_, Option<i64>>(7)?.and_then(|n| u32::try_from(n).ok()),
+            duration_us: row.get::<_, i64>(8)?.cast_unsigned(),
+            added: String::new(),
+        };
+        Ok((id, keys))
+    })?;
+    Ok(rows.into_iter().collect())
 }
 
 /// A sort key, stored as the UTF-8 bytes `jewelcase_core::sort` built it from.

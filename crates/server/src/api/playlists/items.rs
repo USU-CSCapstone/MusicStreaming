@@ -27,7 +27,7 @@ use crate::db::{Database, Json as JsonColumn, by_ids};
 const LABEL: &str = "playlists.items";
 
 /// A playlist's items after a key, in order: one range of the primary key.
-pub(crate) const ITEMS: &str = "SELECT key, track_id, added_at FROM playlist_items \
+pub(super) const ITEMS: &str = "SELECT key, track_id, added_at FROM playlist_items \
                      WHERE playlist_id = ?1 AND key > ?2 ORDER BY key LIMIT ?3";
 
 /// Which of the IDs in a JSON array the playlist holds, in the array's order, each found by
@@ -61,6 +61,25 @@ pub struct ItemPage {
     next_cursor: Option<String>,
     total: i64,
     version: i64,
+}
+
+/// The version of `user`'s playlist `id` in `library` and every one of its items in the user's
+/// order, as (track, added at), a duplicate as often as it occurs and a missing track in place,
+/// from one read. Not found, as `listPlaylistItems` answers, if the playlist is not theirs in
+/// the library.
+pub fn all_items(
+    conn: &rusqlite::Connection,
+    user: i64,
+    library: i64,
+    id: i64,
+) -> Result<(i64, Vec<(i64, i64)>), Problem> {
+    let (version, _) = header(conn, user, library, id)?.ok_or_else(Problem::not_found)?;
+    // No limit: a negative one reads every item.
+    let items = conn
+        .prepare_cached(ITEMS)?
+        .query_map(params![id, i64::MIN, -1], |row| Ok((row.get(1)?, row.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+    Ok((version, items))
 }
 
 /// One page of the playlist's items in the user's order, a duplicate as often as it occurs and

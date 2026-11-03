@@ -32,10 +32,8 @@ pub use announce::Change;
 pub use artwork::{all_mosaics, held as holds_artwork, mosaics_of};
 pub use edit::edit;
 use idempotency::{Answer, Key};
-pub(crate) use items::ITEMS;
-pub use items::{duplicates, list_items};
+pub use items::{all_items, duplicates, list_items};
 pub use representation::Playlist;
-pub(crate) use representation::header;
 use representation::{SELECT, playlist};
 
 use super::extract::{self, Path, Query};

@@ -7,8 +7,6 @@
 
 use std::sync::Arc;
 
-use std::collections::HashMap;
-
 use jewelcase_core::{Kind, Recipe as Stored, SortField, SortRow, sort_rows};
 use rusqlite::{Connection, params};
 use serde::Deserialize;
@@ -17,7 +15,7 @@ use serde_json::{Map, Value};
 use super::refused;
 use crate::api::credit::ArtistCredit;
 use crate::api::page::Order;
-use crate::api::playlists::{ITEMS, header};
+use crate::api::playlists;
 use crate::api::scope::Caller;
 use crate::api::search::Indexes;
 use crate::api::tag_filter::{TagFilter, Tags};
@@ -68,36 +66,9 @@ pub enum Recipe {
         playlist_id: String,
         #[serde(default)]
         filters: Map<String, Value>,
-        sort: Option<PlaylistSort>,
+        sort: Option<SortField>,
         order: Option<Order>,
     },
-}
-
-/// What a playlist's page sorts by: `listTracks`' fields and the date a track was added to the
-/// playlist, as the core's comparator knows them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum PlaylistSort {
-    Title,
-    Artist,
-    Album,
-    Year,
-    Added,
-    Duration,
-}
-
-impl PlaylistSort {
-    /// The sort as a stored recipe spells it, and the core's field for it.
-    fn parts(self) -> (&'static str, SortField) {
-        match self {
-            PlaylistSort::Title => ("title", SortField::Title),
-            PlaylistSort::Artist => ("artist", SortField::Artist),
-            PlaylistSort::Album => ("album", SortField::Album),
-            PlaylistSort::Year => ("year", SortField::Year),
-            PlaylistSort::Added => ("added", SortField::Added),
-            PlaylistSort::Duration => ("duration", SortField::Duration),
-        }
-    }
 }
 
 /// Which of an artist's tracks a recipe covers. Only `all` is supported so far, since the other
@@ -157,7 +128,7 @@ impl Recipe {
                 playlist_id: playlist_id.clone(),
                 version: None,
                 filters: filters.clone(),
-                sort: sort.map(|sort| sort.parts().0.to_owned()),
+                sort: sort.map(|sort| sort.name().to_owned()),
                 order: order
                     .map(|order| (if order == Order::Asc { "asc" } else { "desc" }).to_owned()),
             },
@@ -250,7 +221,7 @@ pub async fn resolve(
         Recipe::Search { q, .. } => search(db, indexes, library, q, &tags).await?,
         Recipe::Playlist { playlist_id, sort, order, .. } => {
             let playlist = AnyId::from(playlist_id.as_str()).0.ok_or_else(Problem::not_found)?;
-            let sort = sort.map(|sort| (sort.parts().1, order == Some(Order::Desc)));
+            let sort = sort.map(|sort| (sort, order == Some(Order::Desc)));
             let user = caller.user;
             let (ids, read) = db
                 .try_read(move |conn| playlist_ids(conn, user, library, playlist, sort, &tags))
@@ -277,12 +248,7 @@ fn playlist_ids(
     sort: Option<(SortField, bool)>,
     tags: &TagFilter,
 ) -> Result<(Vec<u64>, i64), Problem> {
-    let (version, _) = header(conn, user, library, playlist)?.ok_or_else(Problem::not_found)?;
-    // No limit: a negative one reads every item.
-    let mut items: Vec<(i64, i64)> = conn
-        .prepare_cached(ITEMS)?
-        .query_map(params![playlist, i64::MIN, -1], |row| Ok((row.get(1)?, row.get(2)?)))?
-        .collect::<Result<_, _>>()?;
+    let (version, mut items) = playlists::all_items(conn, user, library, playlist)?;
     let tagged = Tags::read(conn, library, &tracks::TAGGED, tags)?.ids(conn, &tracks::TAGGED)?;
     if let Some(tagged) = tagged {
         items.retain(|(track, _)| tagged.contains(track));
@@ -293,45 +259,7 @@ fn playlist_ids(
     let mut wanted: Vec<i64> = items.iter().map(|(track, _)| *track).collect();
     wanted.sort_unstable();
     wanted.dedup();
-    let keys: HashMap<i64, SortRow> = by_ids(
-        conn,
-        &[
-            "t.id",
-            "t.sort_key",
-            "t.artist_sort_key",
-            "t.album_sort_key",
-            "t.album_id",
-            "t.release_date",
-            "t.disc_number",
-            "t.track_number",
-            "t.duration_us",
-        ],
-        "tracks t",
-        "",
-        library,
-        &wanted,
-        |row| {
-            let key = |index| {
-                row.get::<_, Vec<u8>>(index).map(|key| String::from_utf8_lossy(&key).into_owned())
-            };
-            let id: i64 = row.get(0)?;
-            let row = SortRow {
-                id: id.cast_unsigned(),
-                title_key: key(1)?,
-                artist_key: key(2)?,
-                album_key: key(3)?,
-                album_id: row.get::<_, i64>(4)?.cast_unsigned(),
-                release_date: row.get(5)?,
-                disc: Some(row.get::<_, u32>(6)?),
-                number: row.get::<_, Option<i64>>(7)?.and_then(|n| u32::try_from(n).ok()),
-                duration_us: row.get::<_, i64>(8)?.cast_unsigned(),
-                added: String::new(),
-            };
-            Ok((id, row))
-        },
-    )?
-    .into_iter()
-    .collect();
+    let keys = tracks::sort_keys(conn, library, &wanted)?;
     // A row for each item, as the page lists them; one whose track is gone has none to show.
     let rows: Vec<SortRow> = items
         .iter()
