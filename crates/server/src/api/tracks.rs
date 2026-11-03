@@ -48,15 +48,17 @@ pub enum TrackSort {
 }
 
 impl TrackSort {
-    /// Every sort a track list supports, with the name `listTracks` and a recipe spell it by.
-    const ALL: [(TrackSort, &'static str); 6] = [
-        (TrackSort::Name, "name"),
-        (TrackSort::Artist, "artist"),
-        (TrackSort::Album, "album"),
-        (TrackSort::DateAdded, "dateAdded"),
-        (TrackSort::ReleaseDate, "releaseDate"),
-        (TrackSort::Duration, "duration"),
-    ];
+    /// The name `listTracks` and a recipe spell this sort by.
+    fn name(self) -> &'static str {
+        match self {
+            TrackSort::Name => "name",
+            TrackSort::Artist => "artist",
+            TrackSort::Album => "album",
+            TrackSort::DateAdded => "dateAdded",
+            TrackSort::ReleaseDate => "releaseDate",
+            TrackSort::Duration => "duration",
+        }
+    }
 
     /// The keyset this sort pages by. Each one's columns are one of `tracks`' indexes after
     /// `library_id`.
@@ -113,9 +115,8 @@ pub struct TrackOrder {
 impl TrackOrder {
     /// The sort's and the direction's names, as `listTracks` and a recipe spell them.
     pub fn names(self) -> (&'static str, &'static str) {
-        let name = TrackSort::ALL.into_iter().find(|(sort, _)| *sort == self.sort);
         let order = if self.order == Order::Asc { "asc" } else { "desc" };
-        (name.map_or("", |(_, name)| name), order)
+        (self.sort.name(), order)
     }
 }
 
