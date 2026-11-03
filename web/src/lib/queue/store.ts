@@ -111,8 +111,6 @@ export class QueueStore {
 	#startItem: string | null = null;
 	/** Counts starts, so a fetch that began before one is not installed over it. */
 	#epoch = 0;
-	/** Whether the last request that could be made failed, so what it would have fetched is not coming. */
-	#failing = false;
 	/** The context's rows are in a shuffled order, which a view's rows cannot fill. */
 	#shuffled = false;
 	/** The item playing, which the shuffle does not move. */
@@ -154,10 +152,11 @@ export class QueueStore {
 	/**
 	 * Up to `limit` rows of `section` from `offset`, as the page shows them (`design/queue.md`
 	 * §3). Each row's track is the list's once attached, else a page's, else it is `unknown` while
-	 * a list or page that holds it is on its way, and `unavailable` if none is: a list that could
-	 * not be reached counts as on its way only while a page for the row is, and the rows of a
-	 * start of this device's own still unanswered always do. Rows for which no list is attached yet start pages for the window, asked for again only when the version
-	 * changes, so asking again when `revision` changes never loops.
+	 * a list or page that holds it is on its way, and `unavailable` if none is: a list not yet
+	 * confirmed is always on its way, however the server answers, and one that could not be reached
+	 * only while a page for the row is. Rows for which no list is attached yet start pages for the
+	 * window, asked for again only when the version changes, so asking again when `revision`
+	 * changes never loops.
 	 */
 	rows({
 		section,
@@ -191,10 +190,8 @@ export class QueueStore {
 				typeof held === 'string'
 					? 'known'
 					: held === null ||
-						  (list === undefined
-								? this.#failing && !this.#sending(row.source)
-								: problem === 'gone' ||
-									(problem === 'failed' && !this.#pages.fetching(part, first + i)))
+						  problem === 'gone' ||
+						  (problem === 'failed' && !this.#pages.fetching(part, first + i))
 						? 'unavailable'
 						: 'unknown';
 			const out: QueueRow = {
@@ -207,14 +204,6 @@ export class QueueStore {
 			return out;
 		});
 		return { section, offset, total, revision: this.#revision, rows };
-	}
-
-	/**
-	 * Whether a send of this device's own not yet answered names `source`'s list once it reaches
-	 * the server: a start's, so its rows wait for it rather than read `unavailable`.
-	 */
-	#sending(source: string): boolean {
-		return this.#starting?.body.source.key === source;
 	}
 
 	/**
@@ -307,7 +296,7 @@ export class QueueStore {
 		this.#release();
 		this.#confirmed = this.#view = next;
 		this.#queueId = body.queueId;
-		this.#context = body.context as PlayContext;
+		this.#context = body.context;
 		this.#version = 0;
 		this.#run = null;
 		this.#refetch = false;
@@ -661,19 +650,10 @@ export class QueueStore {
 			body: body && JSON.stringify(body)
 		}).catch(() => null);
 		if (response && response.status < 500 && response.status !== 429) {
-			this.#reached(true);
 			return response;
 		}
-		this.#reached(false);
 		await new Promise((resolve) => setTimeout(resolve, this.#retryMs));
 		return null;
-	}
-
-	/** Notes whether the server could be reached, so rows that only it could tell are `unavailable` while it cannot. */
-	#reached(reached: boolean) {
-		if (this.#failing === !reached) return;
-		this.#failing = !reached;
-		this.#emit();
 	}
 
 	/** Sends one edit, again with the same `editId` if the answer was lost. */
