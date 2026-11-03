@@ -14,7 +14,7 @@ pub use representation::{Artist, ArtistSummary, SELECT, summary};
 use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
-use super::tag_filter::{self, TagFilter, Tagged};
+use super::tag_filter::{self, LEAD_SHARE, TagFilter, Tagged};
 use super::{Id, Problem};
 use crate::db::Database;
 
@@ -104,7 +104,7 @@ pub const TAGGED: Tagged =
 /// The artists `list` pages through in `library`: every one, or those carrying the tags `tags`
 /// names.
 fn source(conn: &Connection, library: i64, tags: &TagFilter) -> rusqlite::Result<Source> {
-    tag_filter::source(conn, library, &ARTISTS, &TAGGED, None, None, tags)
+    tag_filter::source(conn, library, &ARTISTS, &TAGGED, None, None, tags, LEAD_SHARE)
 }
 
 #[cfg(test)]

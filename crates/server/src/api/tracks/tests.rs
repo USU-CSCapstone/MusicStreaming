@@ -422,17 +422,25 @@ async fn every_sort_reads_from_an_index() {
             TrackSort::ReleaseDate,
             TrackSort::Duration,
         ] {
-            let source = source(conn, 1, None, None, ArtistCredit::Any, &TagFilter::default())?;
+            let source =
+                source(conn, 1, None, None, ArtistCredit::Any, &TagFilter::default(), LEAD_SHARE)?;
             page::assert_indexed(conn, &source, sort.sort())?;
         }
-        let one_album =
-            source(conn, 1, Some(AnyId(Some(7))), None, ArtistCredit::Any, &TagFilter::default())?;
+        let one_album = source(
+            conn,
+            1,
+            Some(AnyId(Some(7))),
+            None,
+            ArtistCredit::Any,
+            &TagFilter::default(),
+            LEAD_SHARE,
+        )?;
         page::assert_indexed(conn, &one_album, &WITHIN_ALBUM)?;
         // Half the tracks carry tag 1, too many to lead, so a page walks each sort's index. The
         // other half carry one of 299 other genres, so the planner knows tags as a library has them.
         let tagged = TagFilter { any: vec![AnyId(Some(1))], ..TagFilter::default() };
         for sort in [TrackSort::Name, TrackSort::DateAdded, TrackSort::ReleaseDate] {
-            let source = source(conn, 1, None, None, ArtistCredit::Any, &tagged)?;
+            let source = source(conn, 1, None, None, ArtistCredit::Any, &tagged, LEAD_SHARE)?;
             assert!(matches!(source.total, page::Total::Stored(10_000)));
             page::assert_indexed(conn, &source, sort.sort())?;
         }
@@ -447,7 +455,8 @@ async fn every_sort_reads_from_an_index() {
 async fn a_track_row_reads_its_album_once() {
     let (_temp, db, _app) = catalog::app().await;
     db.read(|conn| {
-        let source = source(conn, 1, None, None, ArtistCredit::Any, &TagFilter::default())?;
+        let source =
+            source(conn, 1, None, None, ArtistCredit::Any, &TagFilter::default(), LEAD_SHARE)?;
         let sql = format!(
             "EXPLAIN QUERY PLAN SELECT {} FROM {} {} WHERE {}",
             SELECT.join(", "),
