@@ -89,7 +89,7 @@ describe('recipes with a tag filter', () => {
 			type: 'playlist',
 			playlistId: '9',
 			filters: { tagAll: ['30', '32'], tagAny: ['61'] },
-			sort: 'added',
+			sort: 'addedToPlaylist',
 			order: 'desc'
 		});
 	});
