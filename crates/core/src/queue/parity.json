@@ -44,5 +44,32 @@
     {"type":"rewind","play":{"play":3,"item":"b.1"},"key":"w1"},
     {"type":"removePlays","plays":[{"play":1,"item":"b.0"}]}
   ],
-  "final": {"sources":[{"key":"a","libraryId":"lib","length":8},{"key":"b","libraryId":"lib","list":"hb","length":4},{"key":"c","libraryId":"lib","length":3}],"copies":[{"key":"r1","of":[{"view":{"key":"a"},"start":1,"len":1}]}],"manual":[{"view":{"key":"c"},"start":0,"len":2},{"view":{"key":"r1"},"start":0,"len":1},{"view":{"key":"c"},"start":2,"len":1},{"view":{"key":"b"},"start":2,"len":2}],"order":[{"view":{"key":"a"},"start":0,"len":7}],"cursor":2,"current":"b.1","history":[],"nextPlay":7,"shuffle":null,"repeat":"all","adjusted":true}
+  "final": {"sources":[{"key":"a","libraryId":"lib","length":8},{"key":"b","libraryId":"lib","list":"hb","length":4},{"key":"c","libraryId":"lib","length":3}],"copies":[{"key":"r1","of":[{"view":{"key":"a"},"start":1,"len":1}]}],"manual":[{"view":{"key":"c"},"start":0,"len":2},{"view":{"key":"r1"},"start":0,"len":1},{"view":{"key":"c"},"start":2,"len":1},{"view":{"key":"b"},"start":2,"len":2}],"order":[{"view":{"key":"a"},"start":0,"len":7}],"cursor":2,"current":"b.1","history":[],"nextPlay":7,"shuffle":null,"repeat":"all","adjusted":true},
+  "sort": {
+  "rows": [
+    {"id": "18446744073709551615", "titleKey": "come together", "artistKey": "beatles", "albumKey": "abbey road", "albumId": "101", "releaseDate": "1969", "disc": 1, "number": 1, "durationUs": 259, "added": "2026-03-01T00:00:00.000Z"},
+    {"id": "9007199254740993", "titleKey": "something", "artistKey": "beatles", "albumKey": "abbey road", "albumId": "101", "releaseDate": "1969", "disc": 1, "number": 2, "durationUs": 182, "added": "2026-01-01T00:00:00.000Z"},
+    {"id": "1003", "titleKey": "her majesty", "artistKey": "beatles", "albumKey": "abbey road", "albumId": "101", "releaseDate": "1969", "disc": 1, "number": null, "durationUs": 23, "added": "2026-02-01T00:00:00.000Z"},
+    {"id": "1004", "titleKey": "bonus", "artistKey": "beatles", "albumKey": "abbey road", "albumId": "101", "releaseDate": "1969-09", "disc": 2, "number": 1, "durationUs": 182, "added": "2026-02-01T00:00:00.000Z"},
+    {"id": "1005", "titleKey": "idioteque", "artistKey": "radiohead", "albumKey": "kid a", "albumId": "102", "releaseDate": "1960", "disc": 1, "number": 8, "durationUs": 251, "added": "2026-02-01T00:00:00.000Z"},
+    {"id": "1006", "titleKey": "", "artistKey": "", "albumKey": "", "albumId": "104", "releaseDate": null, "disc": null, "number": null, "durationUs": 1000000, "added": "2026-02-01T00:00:00.000Z"},
+    {"id": "1005", "titleKey": "idioteque", "artistKey": "radiohead", "albumKey": "kid a", "albumId": "102", "releaseDate": "1960", "disc": 1, "number": 8, "durationUs": 251, "added": "2026-04-01T00:00:00.000Z"},
+    {"id": "1007", "titleKey": "🎵 note", "artistKey": "", "albumKey": "", "albumId": "104", "releaseDate": null, "disc": null, "number": null, "durationUs": 5, "added": "2026-01-01T00:00:00.000Z"},
+    {"id": "1008", "titleKey": "� note", "artistKey": "", "albumKey": "", "albumId": "103", "releaseDate": null, "disc": null, "number": null, "durationUs": 5, "added": "2026-01-01T00:00:00.000Z"}
+  ],
+  "cases": [
+    {"field": "title", "order": "asc", "positions": [3, 0, 2, 4, 6, 1, 8, 7, 5]},
+    {"field": "title", "order": "desc", "positions": [7, 8, 1, 4, 6, 2, 0, 3, 5]},
+    {"field": "artist", "order": "asc", "positions": [3, 0, 2, 1, 4, 6, 5, 8, 7]},
+    {"field": "artist", "order": "desc", "positions": [4, 6, 1, 2, 0, 3, 7, 8, 5]},
+    {"field": "album", "order": "asc", "positions": [0, 1, 2, 3, 4, 6, 8, 5, 7]},
+    {"field": "album", "order": "desc", "positions": [4, 6, 3, 2, 1, 0, 7, 5, 8]},
+    {"field": "year", "order": "asc", "positions": [4, 6, 0, 1, 2, 3, 8, 5, 7]},
+    {"field": "year", "order": "desc", "positions": [3, 2, 1, 0, 4, 6, 7, 5, 8]},
+    {"field": "added", "order": "asc", "positions": [7, 8, 1, 2, 3, 4, 5, 0, 6]},
+    {"field": "added", "order": "desc", "positions": [6, 0, 5, 4, 3, 2, 1, 8, 7]},
+    {"field": "duration", "order": "asc", "positions": [7, 8, 2, 3, 1, 4, 6, 0, 5]},
+    {"field": "duration", "order": "desc", "positions": [5, 0, 4, 6, 1, 3, 2, 8, 7]}
+  ]
+  }
 }

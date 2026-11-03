@@ -100,7 +100,7 @@ export type RowsWindow = {
 /** The page to the worker. */
 export type ToWorker =
 	/** First: where the API is. */
-	| { type: 'init'; api: string }
+	| { type: 'init'; api: string; wasm: string }
 	| { type: 'message'; message: RealtimeServerMessage }
 	| { type: 'edit'; edit: SentEdit; length?: number }
 	/** Starts a queue; answered with `started` carrying the same `id`. */

@@ -15,7 +15,7 @@ let store: Promise<QueueStore> | undefined;
 /** Starts the store on `init`; every other message waits for it, then goes to it. */
 onmessage = ({ data }: MessageEvent<ToWorker>) => {
 	if (data.type === 'init') {
-		store = init().then(
+		store = init({ module_or_path: data.wasm }).then(
 			() =>
 				new QueueStore({
 					api: data.api,

@@ -1,14 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
-import { initSync, Queue } from '$lib/core-wasm/jewelcase_core_wasm.js';
-
-initSync({
-	module: readFileSync(new URL('./core-wasm/jewelcase_core_wasm_bg.wasm', import.meta.url))
-});
+import { Queue, sortRows } from '$lib/core-wasm/jewelcase_core_wasm.js';
 
 /**
  * The cases the native core's `permutation_golden_vectors` and `parity_edit_sequence` tests
- * check too, so the two cannot drift apart.
+ * check too (and `sort_golden_cases`), so the two cannot drift apart.
  */
 const parity = JSON.parse(
 	readFileSync(new URL('../../../crates/core/src/queue/parity.json', import.meta.url), 'utf8')
@@ -22,6 +18,7 @@ const parity = JSON.parse(
 	initial: unknown;
 	edits: unknown[];
 	final: unknown;
+	sort: { rows: unknown[]; cases: { field: string; order: string; positions: number[] }[] };
 };
 
 type Row = { item: string; source: string; position: number; track: string | null; play?: number };
@@ -58,6 +55,16 @@ test('permutation matches native vectors', () => {
 		expect(row.position - 1, `seed ${seed} m ${m} x ${x}`).toBe(y);
 		expect(queue.upNextLen()).toBe(m);
 	}
+});
+
+test('sorting rows matches native', () => {
+	const rows = JSON.stringify(parity.sort.rows);
+	for (const { field, order, positions } of parity.sort.cases) {
+		expect(Array.from(sortRows(rows, field, order)), `${field} ${order}`).toEqual(positions);
+	}
+	expect(() => sortRows(rows, 'bitrate', 'asc')).toThrow();
+	expect(() => sortRows(rows, 'title', 'up')).toThrow();
+	expect(() => sortRows('[{"id":"x"}]', 'title', 'asc')).toThrow();
 });
 
 test('a started queue matches native', () => {

@@ -85,12 +85,12 @@ test.describe('a playlist', () => {
 		await heading(page, 'Date added').click();
 		await expect(titles(page)).toHaveText(order);
 		await heading(page, 'Date added, sorted ascending').click();
-		// Newest first; the songs added together keep the playlist's order.
+		// Newest first; the songs added together follow the track ID, reversed (design/general.md §3).
 		await expect(titles(page)).toHaveText([
 			'Signal Part 1',
-			'Signal Part 1',
+			'Signal Remix',
 			'Signal Part 2',
-			'Signal Remix'
+			'Signal Part 1'
 		]);
 	});
 });

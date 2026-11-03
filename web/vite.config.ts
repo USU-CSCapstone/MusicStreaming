@@ -45,6 +45,7 @@ export default defineConfig({
 				test: {
 					name: 'server',
 					environment: 'node',
+					setupFiles: ['./core-node.ts'],
 					include: ['src/**/*.{test,spec}.{js,ts}', 'mock/**/*.{test,spec}.ts'],
 					exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
 				}

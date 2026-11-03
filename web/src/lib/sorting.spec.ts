@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TrackSummary } from './api/types';
-import { compareKeys, nextSort, serverSort, sortRows, sortTracks, type TrackSort } from './sorting';
+import { nextSort, serverSort, sortRows, sortTracks, type TrackSort } from './sorting';
 
 type Fields = {
 	artist?: string;
@@ -83,20 +83,6 @@ describe('serverSort', () => {
 	});
 });
 
-describe('compareKeys', () => {
-	it('orders by code point, as the server orders UTF-8 bytes', () => {
-		// U+1F3B5 is two UTF-16 units starting 0xD83C, below U+FFFD's one; by code point it is above.
-		expect(compareKeys('\u{1F3B5}', '�')).toBeGreaterThan(0);
-		expect(compareKeys('�', '\u{1F3B5}')).toBeLessThan(0);
-		expect(compareKeys('b', 'é')).toBeLessThan(0);
-	});
-
-	it('puts a prefix first', () => {
-		expect(compareKeys('abbey', 'abbey road')).toBeLessThan(0);
-		expect(compareKeys('abbey road', 'abbey road')).toBe(0);
-	});
-});
-
 describe('sortTracks', () => {
 	it("orders the server's fixture as the server does", () => {
 		expect(titles({ field: 'title', order: 'asc' })).toEqual([
@@ -172,6 +158,15 @@ describe('sortTracks', () => {
 		expect(titles({ field: 'artist', order: 'asc' }, [beatles, abba])).toEqual(['y', 'x']);
 	});
 
+	it('orders an album by track number, and albums of one name by album ID', () => {
+		const numbered = [
+			track('1', 'y', { album: 'a', albumId: '10', n: 2 }),
+			track('2', 'x', { album: 'a', albumId: '10', n: 1 }),
+			track('3', 'z', { album: 'a', albumId: '9', n: 5 })
+		];
+		expect(titles({ field: 'album', order: 'asc' }, numbered)).toEqual(['z', 'x', 'y']);
+	});
+
 	it('leaves a list unsorted as it is', () => {
 		expect(sortTracks(library, null)).toBe(library);
 	});
@@ -206,8 +201,9 @@ describe('sortRows', () => {
 		expect(positions({ field: 'title', order: 'desc' })).toEqual([0, 2, 1, 3]);
 	});
 
-	it('sorts by date added to the playlist, ties in the playlist order', () => {
-		expect(positions({ field: 'added', order: 'asc' })).toEqual([1, 2, 3, 0]);
+	it('sorts by date added to the playlist, ties by track ID then playlist order', () => {
+		// The two rows added on 2026-02-01 tie on date: track 1 (position 3) before track 2.
+		expect(positions({ field: 'added', order: 'asc' })).toEqual([1, 3, 2, 0]);
 		expect(positions({ field: 'added', order: 'desc' })).toEqual([0, 2, 3, 1]);
 	});
 });
