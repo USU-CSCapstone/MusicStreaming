@@ -794,6 +794,35 @@ describe('QueueStore', () => {
 		expect(summary).toMatchObject({ queueId: QUEUE, current: 'a.0' });
 	});
 
+	it('answers a second restore busy while the first is under way', async () => {
+		await hello();
+		const kept = '33333333-3333-4333-8333-333333333333';
+		server.kept.set(kept, { queue: albumQueue(), position: { item: 'a.0', positionMs: 0 } });
+		const held = gate();
+		server.restoreGate = held.wait;
+		const first = store.restore(kept);
+		await settle();
+
+		expect(await store.restore(kept)).toMatchObject({ ok: false, code: 'busy' });
+		held.open();
+		expect(await first).toMatchObject({ ok: true });
+		await settle();
+		expect(server.requests.filter((r) => r.path.endsWith('/restore'))).toHaveLength(1);
+	});
+
+	it('fetches the queue again after a restore the server could not be reached for', async () => {
+		await hello();
+		const before = server.gets();
+		server.failures = [0];
+		expect(await store.restore('44444444-4444-4444-8444-444444444444')).toMatchObject({
+			ok: false,
+			code: 'unreachable'
+		});
+		await settle();
+
+		expect(server.gets()).toBe(before + 1);
+	});
+
 	it('has no queue when the server has none', async () => {
 		await hello();
 		server.failures = [404];

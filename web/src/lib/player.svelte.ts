@@ -404,14 +404,18 @@ class Player {
 		void queue.start({ queueId: crypto.randomUUID(), context, source, ...request }).then(() => {
 			this.#starting = false;
 			void this.#preload();
-			if (this.#wantsNext) {
-				const skip = this.#wantsSkip;
-				this.#wantsNext = false;
-				this.#wantsSkip = null;
-				if (skip) this.#skip(skip);
-				else this.#advance();
-			}
+			this.#carryOutWait();
 		});
+	}
+
+	/** Carries out the Next or skip that came while a start or restore was on its way, now that it has settled. */
+	#carryOutWait() {
+		if (!this.#wantsNext) return;
+		const skip = this.#wantsSkip;
+		this.#wantsNext = false;
+		this.#wantsSkip = null;
+		if (skip) this.#skip(skip);
+		else this.#advance();
 	}
 
 	/**
@@ -425,17 +429,25 @@ class Player {
 		this.#starting = true;
 		const result = await queue.restore(queueId);
 		this.#starting = false;
-		if (!result.ok) return result.message;
+		if (!result.ok) {
+			// What was pressed meanwhile applies to the queue that is still playing.
+			this.#carryOutWait();
+			return result.message;
+		}
+		this.#wantsNext = false;
+		this.#wantsSkip = null;
 		const item = queue.current;
-		if (item === null) return null;
+		if (item === null) {
+			// A queue played to its end has nothing to play, and the old audio is not its.
+			this.#end();
+			return null;
+		}
 		const { position } = result;
 		this.#resumeAt = {
 			item,
 			seconds: position?.item === item ? position.positionMs / 1000 : 0
 		};
 		this.#adoptable = false;
-		this.#wantsNext = false;
-		this.#wantsSkip = null;
 		this.#tried.clear();
 		this.#started();
 		// As a jump: the restored item is followed, however long its row takes to be known.
