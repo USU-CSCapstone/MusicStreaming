@@ -2,6 +2,7 @@
 
 use axum::Router;
 use axum::http::StatusCode;
+use jewelcase_core::{SortField, SortRow, sort_rows};
 use serde_json::{Value, json};
 
 use super::{KEY, KEY2, OTHER, QUEUE, snapshot, start};
@@ -200,6 +201,50 @@ async fn paged_view_equals_resolve() {
     let down = ["4", "3", "12", "2", "1", "9", "14", "8", "7", "13", "6", "5", "11", "10"];
     assert_eq!(resolved(&state, &name("asc")).await, up);
     assert_eq!(resolved(&state, &name("desc")).await, down);
+}
+
+/// An album page sorts its own tracks by the core's comparator over the keys the API gives it,
+/// while the album recipe resolves in SQL: for every sort the page offers, in both directions
+/// and under each filter, the two agree (`requirements/conventions.md` §4.1).
+#[tokio::test]
+async fn an_album_recipe_resolves_the_rows_its_page_sorts() {
+    let (_temp, state, app) = fixture().await;
+    for album in ["101", "102", "103"] {
+        for (filters, query) in FILTERS {
+            let uri =
+                format!("/api/v1/libraries/1/tracks?albumId={album}&sort=album&limit=100{query}");
+            let (_, page) = json(&app, &uri).await;
+            let rows = page["items"].as_array().unwrap();
+            let keys: Vec<SortRow> = rows
+                .iter()
+                .map(|t| {
+                    serde_json::from_value(json!({
+                        "id": t["id"], "titleKey": t["sortKeys"]["title"],
+                        "artistKey": t["sortKeys"]["artist"], "albumKey": t["sortKeys"]["album"],
+                        "albumId": t["album"]["id"], "releaseDate": t["releaseDate"],
+                        "disc": t["discNumber"], "number": t["trackNumber"],
+                        "durationUs": t["durationUs"],
+                    }))
+                    .unwrap()
+                })
+                .collect();
+            for sort in ["name", "artist", "duration"] {
+                for order in ["asc", "desc"] {
+                    let field: SortField = serde_json::from_value(json!(sort)).unwrap();
+                    let shown: Vec<String> = sort_rows(&keys, field, order == "desc")
+                        .into_iter()
+                        .map(|at| rows[at]["id"].as_str().unwrap().to_owned())
+                        .collect();
+                    let mut recipe =
+                        json!({ "type": "album", "albumId": album, "sort": sort, "order": order });
+                    if !query.is_empty() {
+                        recipe["filters"] = serde_json::from_str(filters).unwrap();
+                    }
+                    assert_eq!(resolved(&state, &recipe).await, shown, "{recipe}");
+                }
+            }
+        }
+    }
 }
 
 #[tokio::test]
