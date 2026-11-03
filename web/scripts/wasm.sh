@@ -13,7 +13,11 @@ if [ "$(wasm-bindgen --version 2>/dev/null)" != "wasm-bindgen $version" ]; then
 	exit 1
 fi
 
+target=${CARGO_TARGET_DIR:-$root/target}
+
 cd "$root"
-cargo build --quiet --release --target wasm32-unknown-unknown --package jewelcase-core-wasm
+# Builds into the directory bound below, whatever target-dir Cargo is configured with.
+cargo build --quiet --release --target wasm32-unknown-unknown --package jewelcase-core-wasm \
+	--target-dir "$target"
 wasm-bindgen --target web --out-dir web/src/lib/core-wasm \
-	"${CARGO_TARGET_DIR:-$root/target}/wasm32-unknown-unknown/release/jewelcase_core_wasm.wasm"
+	"$target/wasm32-unknown-unknown/release/jewelcase_core_wasm.wasm"
