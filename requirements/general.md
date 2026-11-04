@@ -32,7 +32,7 @@ Explicitly out of scope for the Jewelcase server. Naming them protects the scope
 - **Social features.** No follows, feeds, comments, or public profiles.
 - **Being a general-purpose file manager.** No file browsing, moving, or deletion tools.
 
-Narrower exclusions are stated where they bite: casting protocols in [`playback.md` §9](playback.md#9-output-scope), ratings and hiding in [`analytics.md` §7](analytics.md#7-explicit-signals), user-applied tags in [`tags.md` §1](tags.md#1-tags-come-from-files).
+Narrower exclusions are stated where they bite: casting protocols in [`playback.md` §9](playback.md#9-output-scope), ratings in [`analytics.md` §7](analytics.md#7-explicit-signals), user-applied tags in [`tags.md` §1](tags.md#1-tags-come-from-files).
 
 ---
 
