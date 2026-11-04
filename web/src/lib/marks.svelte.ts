@@ -39,9 +39,17 @@ class Marks {
 		return this.#marks.get(key(library, track.id))?.liked ?? track.liked ?? false;
 	}
 
-	/** Whether the user hid track `id` of `library`; a track read in a list was not. */
-	hidden(library: string, id: string): boolean {
-		return this.#marks.get(key(library, id))?.hidden ?? false;
+	/**
+	 * Whether the user hid track `id` of `library`: as it was read, `read`, unless a change since
+	 * says otherwise. A track read in a list was not; a playlist's item says.
+	 */
+	hidden(library: string, id: string, read = false): boolean {
+		return this.#marks.get(key(library, id))?.hidden ?? read;
+	}
+
+	/** `tracks` of `library` but those the user hid since they were read, which no list shows. */
+	unhidden<T extends { id: string }>(library: string, tracks: readonly T[]): T[] {
+		return tracks.filter((track) => !this.hidden(library, track.id));
 	}
 
 	/** Likes `track`, which unhides it, or unlikes it. */

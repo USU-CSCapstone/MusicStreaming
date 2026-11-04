@@ -132,7 +132,6 @@ const track = (
 	audio: { codec: 'pcm', lossless: true },
 	availability: 'available',
 	sortKeys: { title: title.toLowerCase(), artist: 'aurora lane', album: 'signal' },
-
 	liked: false
 });
 

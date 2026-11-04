@@ -466,13 +466,13 @@ test.describe('adding to a playlist', () => {
 		await more(page, 'Signal Part 1').click();
 		const menu = page.getByRole('menu');
 		const items = menu.getByRole('menuitem');
-		// The three queue actions, New playlist and the first page of playlists, Liked Songs among
-		// them.
-		await expect(items).toHaveCount(104);
+		// The three queue actions, liking and hiding the song, New playlist and the first page of
+		// playlists, Liked Songs among them.
+		await expect(items).toHaveCount(106);
 
-		await items.nth(5).hover();
+		await items.nth(6).hover();
 		await page.mouse.wheel(0, 10_000);
-		await expect(items).toHaveCount(155);
+		await expect(items).toHaveCount(157);
 		// Its end reached, it still holds the scroll.
 		await page.mouse.wheel(0, 10_000);
 		await expect(menu).toBeVisible();
@@ -484,17 +484,24 @@ test.describe('adding to a playlist', () => {
 		await more(page, 'Signal Part 1').focus();
 		await page.keyboard.press('Enter');
 		await expect(page.getByRole('menuitem', { name: 'Queue next' })).toBeFocused();
-		await expect(page.getByRole('menuitem')).toHaveCount(7);
-		for (const name of ['Queue last', 'Add to Up Next…', 'New playlist…']) {
+		await expect(page.getByRole('menuitem')).toHaveCount(9);
+		const names = [
+			'Queue last',
+			'Add to Up Next…',
+			'Add to Liked Songs',
+			'Hide song',
+			'New playlist…'
+		];
+		for (const name of names) {
 			await page.keyboard.press('ArrowDown');
 			await expect(page.getByRole('menuitem', { name })).toBeFocused();
 		}
 		// Liked Songs is pinned, so it comes first.
 		await page.keyboard.press('ArrowDown');
-		await expect(page.getByRole('menuitem', { name: /Liked Songs/ })).toBeFocused();
+		await expect(page.getByRole('menuitem', { name: /^Liked Songs/ })).toBeFocused();
 		await page.keyboard.press('ArrowDown');
 		await expect(page.getByRole('menuitem', { name: /Signal Mix/ })).toBeFocused();
-		for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowUp');
+		for (let i = 0; i < 8; i++) await page.keyboard.press('ArrowUp');
 		await expect(page.getByRole('menuitem', { name: /Road Trip/ })).toBeFocused();
 		await page.keyboard.press('Escape');
 		await expect(page.getByRole('menu')).toBeHidden();

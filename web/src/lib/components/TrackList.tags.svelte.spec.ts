@@ -45,7 +45,6 @@ const track = (id: string, title: string, tags: Tag[]): TrackSummary => ({
 	audio: { codec: 'flac', lossless: true },
 	availability: 'available',
 	sortKeys: { title: title.toLowerCase(), artist: 'aurora lane', album: 'signal' },
-
 	liked: false
 });
 const tracks = [
