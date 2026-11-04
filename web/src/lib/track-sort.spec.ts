@@ -27,7 +27,6 @@ const track = (id: string, title: string, f: Fields = {}): TrackSummary => ({
 	audio: { codec: 'flac', lossless: true },
 	availability: 'available',
 	sortKeys: { title: title.toLowerCase(), artist: f.artist ?? '', album: f.album ?? '' },
-
 	liked: false
 });
 

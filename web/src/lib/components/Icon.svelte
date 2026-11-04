@@ -132,6 +132,33 @@
 		down: [['path', { d: 'M12 5v14M5.5 12.5 12 19l6.5-6.5' }]],
 		// Opens a menu or panel below, where `down` is a descending sort.
 		chevron: [['path', { d: 'm6 9 6 6 6-6' }]],
+		heart: [
+			[
+				'path',
+				{
+					d: 'M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z'
+				}
+			]
+		],
+		// The heart filled in, for a liked song.
+		liked: [
+			[
+				'path',
+				{
+					d: 'M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z'
+				}
+			]
+		],
+		// An eye struck through, for hiding a song.
+		hide: [
+			['path', { d: 'M9.88 9.88a3 3 0 1 0 4.24 4.24' }],
+			[
+				'path',
+				{ d: 'M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68' }
+			],
+			['path', { d: 'M6.61 6.61A13.53 13.53 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61' }],
+			['path', { d: 'm2 2 20 20' }]
+		],
 		tag: [
 			[
 				'path',
@@ -151,7 +178,7 @@
 	} satisfies Record<string, Shape[]>;
 
 	/** Transport icons and ⋯ are solid; the rest are strokes. */
-	const filled = new Set(['play', 'pause', 'next', 'previous', 'more']);
+	const filled = new Set(['play', 'pause', 'next', 'previous', 'more', 'liked']);
 
 	export type IconName = keyof typeof icons;
 </script>

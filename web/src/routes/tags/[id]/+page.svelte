@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { marks } from '$lib/marks.svelte';
 	import { listAlbums, listArtists, listTracks } from '$lib/api/client';
 	import { albumCard, artistCard } from '$lib/cards';
 	import CollectionView from '$lib/components/CollectionView.svelte';
@@ -74,7 +75,7 @@
 <section>
 	<header><h2>Songs</h2></header>
 	<TrackList
-		tracks={tracks.items}
+		tracks={marks.unhidden(data.lib, tracks.items)}
 		sentinel={tracks.sentinel}
 		{sort}
 		onsort={showSorted}

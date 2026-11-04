@@ -215,16 +215,19 @@ export class EditablePlaylist {
 }
 
 /**
- * Moves of the rows a list shows, which leave out external items, as moves of positions in the
- * playlist. Each row move is made on the rows as the ones before it left them, and so is each op.
+ * Moves of the rows a list shows, the items `shows` says (by default all but external ones), as
+ * moves of positions in the playlist. A row moved between two others goes in front of the one that
+ * follows it, wherever items not shown lie. Each row move is made on the rows as the ones before
+ * it left them, and so is each op.
  */
 export function rowMoveOps(
 	items: PlaylistItem[],
-	moves: { indexes: number[]; to: number }[]
+	moves: { indexes: number[]; to: number }[],
+	shows: (item: PlaylistItem) => boolean = (item) => !!item.track
 ): PlaylistOp[] {
 	const ops: PlaylistOp[] = [];
 	for (const { indexes, to } of moves) {
-		const shown = items.flatMap((item, position) => (item.track ? [position] : []));
+		const shown = items.flatMap((item, position) => (shows(item) ? [position] : []));
 		const positions = indexes.map((i) => shown[i]);
 		const rest = shown.filter((p) => !positions.includes(p));
 		// In front of the row that will follow them, or at the end.

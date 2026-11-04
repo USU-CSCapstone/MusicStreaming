@@ -19,7 +19,9 @@
 		tagTypesKnown
 	} from '$lib/filters';
 	import { formatLength, plural } from '$lib/format';
+	import type { PlaylistItem } from '$lib/api/types';
 	import { knownTags } from '$lib/known-tags.svelte';
+	import { marks } from '$lib/marks.svelte';
 	import { toast } from '$lib/toast.svelte';
 	import { player } from '$lib/player.svelte';
 	import { EditablePlaylist, rowMoveOps } from '$lib/playlist.svelte';
@@ -40,11 +42,16 @@
 		};
 	});
 	const playlist = $derived(list.playlist);
-	// External tracks from plugins are not shown yet (`requirements/plugins.md` §10), so a row's
-	// index is not always its position in the playlist: each row carries its own.
+	// External tracks from plugins are not shown yet (`requirements/plugins.md` §10), nor are tracks
+	// the user hid, which keep their places (`requirements/playlists.md` §3), so a row's index is
+	// not always its position in the playlist: each row carries its own.
+	const shows = (item: PlaylistItem) =>
+		!!item.track && !marks.hidden(data.lib, item.track.id, item.hidden);
 	const rows = $derived(
 		list.items.flatMap((item, position) =>
-			item.track ? [{ track: item.track, position, addedAt: item.addedAt ?? '' }] : []
+			item.track && shows(item)
+				? [{ track: item.track, position, addedAt: item.addedAt ?? '' }]
+				: []
 		)
 	);
 	const tracks = $derived(rows.map((r) => r.track));
@@ -122,7 +129,7 @@
 	}
 
 	function moveRows(moves: RowMove[]) {
-		list.edit({ ops: rowMoveOps(list.items, moves) });
+		list.edit({ ops: rowMoveOps(list.items, moves, shows) });
 	}
 
 	/** No confirmation: Undo is offered instead (`requirements/playlists.md` §4). */

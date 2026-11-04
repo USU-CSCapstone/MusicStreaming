@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { marks } from '$lib/marks.svelte';
 	import { view } from '$lib/adding.svelte';
 	import { listTracks } from '$lib/api/client';
 	import AddToPlaylistButton from '$lib/components/AddToPlaylistButton.svelte';
@@ -43,7 +44,7 @@
 	{/snippet}
 </PageHeader>
 <TrackList
-	tracks={tracks.items}
+	tracks={marks.unhidden(data.lib, tracks.items)}
 	sentinel={tracks.sentinel}
 	sort={data.sort}
 	onsort={showSorted}
