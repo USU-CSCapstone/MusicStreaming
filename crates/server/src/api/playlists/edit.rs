@@ -24,12 +24,12 @@ use super::idempotency::{Answer, Key};
 use super::keys::assign;
 use super::liked;
 use super::representation::{self, header};
-use crate::api::Images;
 use crate::api::extract::{self, Path};
 use crate::api::playables::{self, Playable};
 use crate::api::realtime::Hub;
 use crate::api::scope::Scope;
 use crate::api::{Id, Problem};
+use crate::api::{Images, hidden};
 use crate::db::{Database, catalog, now_ms};
 
 /// The spec's `PlaylistEdit`.
@@ -97,7 +97,8 @@ struct Item {
 
 /// `editPlaylist`: applies the details and ops to the caller's playlist if it is at
 /// `baseVersion`, and returns it at the next version. A Liked Songs keeps its title and
-/// description, so an edit of either is `422`, and its adds like tracks ([`liked::only_new`]).
+/// description, so an edit of either is `422`, and its adds like tracks ([`liked::only_new`]),
+/// which unhides them.
 /// Otherwise it is edited as any playlist. Another version is `409 version_conflict`,
 /// a position out of range, or an item the caller cannot add, `422`, and nothing is applied
 /// either way. With an `Idempotency-Key` the caller already used for an edit that applied,
@@ -142,11 +143,11 @@ pub async fn edit(
                         .map(|op| expand(conn, user, library, op))
                         .collect::<Result<Vec<_>, _>>()?;
                     let ops = if liked { liked::only_new(conn, library, id, ops)? } else { ops };
-                    Ok(Ok(plan(conn, library, id, ops, now)?))
+                    Ok(Ok((plan(conn, library, id, ops, now)?, liked)))
                 })
                 .await?;
-            let plan = match prepared {
-                Ok(plan) => plan,
+            let (plan, liked) = match prepared {
+                Ok(prepared) => prepared,
                 Err(answer) => return Ok(answer.into_response()),
             };
             let (key, title, description) = (key.clone(), title.clone(), description.clone());
@@ -154,13 +155,20 @@ pub async fn edit(
             let answer = db
                 .try_write(move |tx| {
                     if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
-                        return Ok::<_, Problem>(Some((answer, None)));
+                        return Ok::<_, Problem>(Some((answer, None, Vec::new())));
                     }
                     // Retention keeps the tracks the playlist holds; only an added one can be gone.
                     if !fresh(tx, library, &plan)? {
                         return Ok(None);
                     }
                     write(tx, user, library, id, base, &plan)?;
+                    // A track added to Liked Songs is liked, and so not hidden.
+                    let mut unhidden = Vec::new();
+                    for &track in plan.added.iter().filter(|_| liked) {
+                        if hidden::unhide_in(tx, user, library, track)? {
+                            unhidden.push(track);
+                        }
+                    }
                     // An edit of details alone leaves the items, and so the artwork.
                     if plan.totals.is_some() {
                         catalog::playlist_artwork(tx, id)?;
@@ -196,10 +204,11 @@ pub async fn edit(
                     if let Some(key) = &key {
                         answer.store(tx, user, key, now)?;
                     }
-                    Ok(Some((answer, Some(Change::of(edited, plan.applied)))))
+                    Ok(Some((answer, Some(Change::of(edited, plan.applied)), unhidden)))
                 })
                 .await?;
-            if let Some((answer, change)) = answer {
+            if let Some((answer, change, unhidden)) = answer {
+                hidden::announce(&hub, user, library, unhidden, false);
                 if moves_items && change.is_some() {
                     // The edit may have moved the artwork on; its old mosaics go, off the request.
                     let db = db.clone();
@@ -260,7 +269,7 @@ pub(super) struct Plan {
     /// leaves them as they are.
     pub(super) totals: Option<(i64, i64)>,
     /// The distinct tracks the ops add.
-    added: Vec<i64>,
+    pub(super) added: Vec<i64>,
     /// The keys of the rows to delete, or `None` to delete them all, for a renumber.
     delete: Option<Vec<i64>>,
     /// The rows to insert, as `(key, track, added_at)`.

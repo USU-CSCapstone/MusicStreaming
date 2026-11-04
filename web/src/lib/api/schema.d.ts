@@ -340,7 +340,9 @@ export interface paths {
          *     already (`requirements/playlists.md` §11). A caller who deleted their Liked Songs has it
          *     made again, pinned. Not checked against a version: a like says whether a track is liked,
          *     not where it sits, so it applies whatever else changed the playlist. It is announced as
-         *     an edit of the playlist is (`playlist`). A track the library does not have is `404`.
+         *     an edit of the playlist is (`playlist`). A hidden track is unhidden (`trackHidden`), since
+         *     liking and hiding undo each other (`requirements/conventions.md` §8). A track the library
+         *     does not have is `404`.
          */
         put: operations["likeTrack"];
         post?: never;
@@ -350,6 +352,62 @@ export interface paths {
          *     that is `204` too.
          */
         delete: operations["unlikeTrack"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/libraries/{libraryId}/tracks/{trackId}/hidden": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+                trackId: components["parameters"]["TrackId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Hide a track
+         * @description Hides the track from the caller in this library: it is gone from their library, shown
+         *     only in `listHiddenTracks` (`requirements/conventions.md` §8). A liked track is unliked,
+         *     taken out of Liked Songs as `unlikeTrack` does. Announced to the caller's devices
+         *     (`trackHidden`). A track the library does not have is `404`; one hidden already stays
+         *     as it was.
+         */
+        put: operations["hideTrack"];
+        post?: never;
+        /**
+         * Unhide a track
+         * @description Brings the track back into the caller's library. One not hidden is already so, which is
+         *     `204` too.
+         */
+        delete: operations["unhideTrack"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/libraries/{libraryId}/hidden-tracks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List hidden tracks
+         * @description Hidden Songs: the tracks the caller hid in this library, by when they were hidden,
+         *     newest first unless `order` is `asc` (`requirements/conventions.md` §8). The one place a
+         *     hidden track is listed. None is `liked`, since hiding unlikes.
+         */
+        get: operations["listHiddenTracks"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3067,6 +3125,12 @@ export interface components {
             refetch?: boolean;
         } | {
             /** @constant */
+            type: "trackHidden";
+            libraryId: components["schemas"]["Id"];
+            trackId: components["schemas"]["Id"];
+            hidden: boolean;
+        } | {
+            /** @constant */
             type: "queueReplaced";
             /** Format: uuid */
             queueId: string;
@@ -3751,6 +3815,77 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    hideTrack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+                trackId: components["parameters"]["TrackId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Hidden. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    unhideTrack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+                trackId: components["parameters"]["TrackId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Not hidden. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listHiddenTracks: {
+        parameters: {
+            query?: {
+                order?: "asc" | "desc";
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackPage"];
+                };
             };
             default: components["responses"]["Problem"];
         };

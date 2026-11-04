@@ -4,8 +4,8 @@ use axum::Router;
 use axum::routing::{delete, get, post, put};
 
 use crate::api::{
-    AppState, albums, artists, audio, images, libraries, lyrics, playlists, recent_searches,
-    search, tags, tracks, waveform,
+    AppState, albums, artists, audio, hidden, images, libraries, lyrics, playlists,
+    recent_searches, search, tags, tracks, waveform,
 };
 
 /// Every route under `/libraries`.
@@ -34,6 +34,11 @@ pub fn router() -> Router<AppState> {
             "/libraries/{library_id}/tracks/{track_id}/like",
             put(playlists::like).delete(playlists::unlike),
         )
+        .route(
+            "/libraries/{library_id}/tracks/{track_id}/hidden",
+            put(hidden::hide).delete(hidden::unhide),
+        )
+        .route("/libraries/{library_id}/hidden-tracks", get(hidden::list))
         .route("/libraries/{library_id}/search", get(search::search))
         .route(
             "/libraries/{library_id}/recent-searches",

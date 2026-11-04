@@ -2,10 +2,12 @@
 // to start with, which the client can then create, edit, and delete (`api/openapi.yaml`,
 // Playlists). They are the user's data, not the library's, so the scanner's database is never
 // written, and they reset whenever the dev server restarts. Liking a track adds it to Liked Songs
-// (`requirements/playlists.md` §11).
+// (`requirements/playlists.md` §11), and the tracks the user hid are kept here too, since liking
+// and hiding undo each other (`requirements/conventions.md` §8).
 
 import { randomUUID } from 'node:crypto';
 import type {
+	Page,
 	Playable,
 	Playlist,
 	PlaylistItemPage,
@@ -67,6 +69,8 @@ export class PlaylistStore {
 	#libraries = new Map<bigint, Map<string, Entry>>();
 	/** Responses by `Idempotency-Key`, so a retried write answers as it first did. */
 	#replies = new Map<string, PlaylistResponse>();
+	/** Each library's hidden tracks, with when each was hidden, oldest first. */
+	#hidden = new Map<bigint, Map<bigint, string>>();
 
 	constructor(readonly library: PlaylistLibrary) {}
 
@@ -76,6 +80,7 @@ export class PlaylistStore {
 	 */
 	like(lib: bigint, trackId: bigint): boolean {
 		if (!this.library.track(lib, trackId)) return false;
+		this.unhide(lib, trackId);
 		let entry = this.#liked(lib);
 		if (!entry) {
 			entry = likedSongs(lib, `liked-${lib}-${randomUUID()}`, new Date().toISOString());
@@ -94,6 +99,33 @@ export class PlaylistStore {
 		if (!entry?.items.some((i) => i.trackId === trackId)) return;
 		entry.items = entry.items.filter((i) => i.trackId !== trackId);
 		this.#touch(lib, entry, new Date().toISOString());
+	}
+
+	/** Hides `trackId`, and unlikes it. False if the library has no such track. */
+	hide(lib: bigint, trackId: bigint): boolean {
+		if (!this.library.track(lib, trackId)) return false;
+		const hidden = this.#hiddenIn(lib);
+		if (!hidden.has(trackId)) hidden.set(trackId, new Date().toISOString());
+		this.unlike(lib, trackId);
+		return true;
+	}
+
+	unhide(lib: bigint, trackId: bigint) {
+		this.#hiddenIn(lib).delete(trackId);
+	}
+
+	/** Hidden Songs: newest hidden first, or oldest with `order=asc`. */
+	hiddenTracks(lib: bigint, query: URLSearchParams): Page<TrackSummary> {
+		const ids = [...this.#hiddenIn(lib).keys()];
+		if (query.get('order') !== 'asc') ids.reverse();
+		const tracks = ids.flatMap((id) => this.library.track(lib, id) ?? []);
+		return slice(tracks, paging(query));
+	}
+
+	#hiddenIn(lib: bigint): Map<bigint, string> {
+		let hidden = this.#hidden.get(lib);
+		if (!hidden) this.#hidden.set(lib, (hidden = new Map()));
+		return hidden;
 	}
 
 	/** Sets each of `tracks`' `liked`, from Liked Songs. */
@@ -240,6 +272,8 @@ export class PlaylistStore {
 							if (!liked) return true;
 							if (held.has(trackId)) return false;
 							held.add(trackId);
+							// Liked, so not hidden.
+							this.unhide(lib, trackId);
 							return true;
 						})
 						.map((trackId) => ({ trackId, addedAt: now }))
