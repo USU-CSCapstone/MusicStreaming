@@ -88,6 +88,26 @@ async fn setup_creates_the_owner_and_logs_it_in() {
     assert_eq!((status, &problem["code"]), (StatusCode::NOT_FOUND, &json!("not_found")));
 }
 
+/// The owner reaches every library, and has a Liked Songs in each from the start
+/// (`requirements/playlists.md` §11).
+#[tokio::test]
+async fn the_owner_has_a_liked_songs_in_each_library() {
+    let (_temp, db, app) = app_before_setup("");
+    db.write(|tx| crate::db::testing::library(tx, 1, "Music", "/music")).await.unwrap();
+    let (status, _, session) =
+        send_json(app, "POST", "/api/v1/setup", &setup_request("Sam", PASSWORD)).await;
+    assert_eq!(status, StatusCode::CREATED, "{session}");
+    let liked: Vec<(String, i64)> = db
+        .read(|conn| {
+            conn.prepare("SELECT title, library_id FROM playlists WHERE kind = 'liked'")?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect()
+        })
+        .await
+        .unwrap();
+    assert_eq!(liked, [("Liked Songs".to_owned(), 1)]);
+}
+
 #[tokio::test]
 async fn the_web_client_gets_the_cookie_and_no_token_in_the_body() {
     let (_temp, _db, app) = app_before_setup("");

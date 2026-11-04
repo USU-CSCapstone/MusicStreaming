@@ -18,7 +18,7 @@ use super::extract;
 use super::login::limits;
 use super::origin::Origin;
 use super::{AppState, Code, Problem, me, password, session};
-use crate::db::{Database, new_id, now_ms};
+use crate::db::{Database, liked_songs, new_id, now_ms};
 
 /// Whether setup is done, which is whether the owner exists.
 #[derive(Default)]
@@ -121,6 +121,8 @@ pub async fn complete(
                  VALUES (?1, ?2, ?3, 'owner', ?4, ?5)",
                 params![user, username, display_name, password, now],
             )?;
+            // The owner reaches every library, and has a Liked Songs in each from the start.
+            liked_songs::ensure(tx)?;
             let attempt = limits::record(tx, &username, Some(user), from.client, now)?;
             limits::succeeded(tx, attempt)?;
             Ok(session::register(tx, user, &device, &hash)?)
