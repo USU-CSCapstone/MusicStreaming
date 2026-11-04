@@ -488,3 +488,31 @@ async fn an_album_hidden_whole_leaves_every_count() {
     let (owned, totals) = walk(&app, &format!("{radiohead_albums}&artistCredit=owned"), 1).await;
     assert_eq!((owned.len(), totals), (0, vec![0]));
 }
+
+/// Each like and unlike reaches the user's devices as `trackLiked`, by track, however it was
+/// made: a like, a hide, or an edit of Liked Songs that removes the track.
+#[tokio::test]
+async fn a_like_reaches_the_users_devices() {
+    let (temp, _db, app) = app_with_tracks().await;
+    add_device(&conn(&temp), 1, 2, "phone");
+    let address = serve(app.clone()).await;
+    let mut phone = connect_with(address, "phone").await;
+    let liked = |track: &str, liked: bool| json!({ "type": "trackLiked", "libraryId": "1", "trackId": track, "liked": liked });
+    let like = |track: &str| format!("/api/v1/libraries/1/tracks/{track}/like");
+
+    call(&app, TOKEN, "PUT", &like("1"), None).await;
+    assert_eq!(next_of(&mut phone, "trackLiked").await, liked("1", true));
+    hide(&app, TOKEN, "PUT", "1").await;
+    assert_eq!(next_of(&mut phone, "trackLiked").await, liked("1", false), "hiding unlikes");
+
+    call(&app, TOKEN, "PUT", &like("2"), None).await;
+    assert_eq!(next_of(&mut phone, "trackLiked").await, liked("2", true));
+    let (_, lists) = call(&app, TOKEN, "GET", "/api/v1/libraries/1/playlists", None).await;
+    let liked_songs = &lists["items"][0];
+    let uri = format!("/api/v1/libraries/1/playlists/{}", liked_songs["id"].as_str().unwrap());
+    let remove = json!({ "baseVersion": liked_songs["version"], "ops": [
+        { "op": "remove", "positions": [0] }
+    ] });
+    assert_eq!(call(&app, TOKEN, "PATCH", &uri, Some(remove)).await.0, StatusCode::OK);
+    assert_eq!(next_of(&mut phone, "trackLiked").await, liked("2", false), "removed is unliked");
+}
