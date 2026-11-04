@@ -98,7 +98,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 **Open questions:**
 1. **What identity reads from a file.** Hashing whole files is ruled out at scale. The candidates are audio-region sampling, tag-independent fingerprints, inode plus size, and MusicBrainz IDs ([`design/general.md` §11](design/general.md#11-open-decisions) #3).
 2. How audio replacement is told apart from a new track.
-3. How existing path-keyed IDs migrate without breaking play history.
+3. How existing path-keyed IDs migrate without breaking play history, playlists, or likes. Until then a moved or renamed file loses its place in every playlist, Liked Songs included: the entry stays on the track left missing at the old path, which the playlist keeps, so the migration can carry it to the file's new track.
 
 **End goal:** Moving, renaming, or retagging files keeps every track's identity, history, and playlist membership. [`scanning.md` §6–7](requirements/scanning.md#6-track-identity) and [`tracks.md` §1](requirements/tracks.md#1-identity) are met.
 

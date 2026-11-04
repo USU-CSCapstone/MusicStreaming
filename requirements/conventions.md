@@ -13,6 +13,7 @@ Per-user and private. Never shared between accounts, never visible to other non-
 
 - **Play count** and **last played**, shown on the entity itself.
 - **Listening data** — plays, listen time, and everything derived from them ([`analytics.md`](analytics.md)).
+- **Likes**, on tracks, which are the user's Liked Songs ([`playlists.md` §11](playlists.md#11-liked-songs)), shown on each track wherever it appears.
 
 ---
 
@@ -23,6 +24,7 @@ Every entity offers the same actions wherever it appears — in a list, a queue,
 - Play now
 - **Queue Next** and **Queue Last**
 - Add to playlist
+- **Like** and unlike, on tracks: Liked Songs holds songs, so an album or artist is liked by liking its tracks ([`playlists.md` §11](playlists.md#11-liked-songs))
 - Start radio / explore recommendations ([`recommendations.md`](recommendations.md))
 - Download for offline use ([`offline.md`](offline.md))
 - Navigate to related entities
