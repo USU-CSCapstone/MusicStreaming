@@ -128,39 +128,104 @@ pub fn ids(conn: &Connection, user: i64, library: i64) -> rusqlite::Result<HashS
     .collect()
 }
 
-/// `source`, a list of tracks `t`, without the tracks `user` hid in `library`. Each row is one
-/// probe of `hidden_tracks`. A stored total loses the hidden tracks the list holds, counted by
-/// reading the list for those alone, which costs what they cost to find rather than the list, so
-/// a total stays a stored count. Nothing changes for a user who hid nothing in it.
+/// `source`, a list of tracks `t`, without the tracks `user` hid in `library`
+/// ([`leave_out_ids`]).
 pub fn leave_out(
     conn: &Connection,
     source: &mut Source,
     user: i64,
     library: i64,
 ) -> rusqlite::Result<()> {
-    let any: bool = conn
-        .prepare_cached(
-            "SELECT EXISTS (SELECT 1 FROM hidden_tracks WHERE user_id = ?1 AND library_id = ?2)",
-        )?
-        .query_row([user, library], |row| row.get(0))?;
-    if !any {
+    let hidden: Vec<i64> = ids(conn, user, library)?.into_iter().collect();
+    leave_out_ids(conn, source, "t.id", &hidden)
+}
+
+/// `source`, a list whose rows `column` names, such as `al.id`, without the rows `ids`, which
+/// are few: what the caller hid, or hid whole. Each row is one lookup in them. A stored total
+/// loses those of them the list holds, counted by reading the list for those alone, which costs
+/// what they do, so the total stays a stored count. Nothing changes where there are none, the
+/// common case.
+pub fn leave_out_ids(
+    conn: &Connection,
+    source: &mut Source,
+    column: &str,
+    ids: &[i64],
+) -> rusqlite::Result<()> {
+    if ids.is_empty() {
         return Ok(());
     }
+    let ids = Value::from(serde_json::to_string(ids).expect("IDs serialize"));
     if let Total::Stored(total) = source.total {
         let sql = format!(
-            "SELECT count(*) FROM {} WHERE {} AND t.id IN \
-             (SELECT track_id FROM hidden_tracks WHERE user_id = ? AND library_id = ?)",
+            "SELECT count(*) FROM {} WHERE {} AND {column} IN (SELECT value FROM json_each(?))",
             source.from, source.filter
         );
-        let params = source.params.iter().cloned().chain([Value::from(user), Value::from(library)]);
-        let hidden: i64 =
+        let params = source.params.iter().cloned().chain([ids.clone()]);
+        let held: i64 =
             conn.prepare_cached(&sql)?.query_row(params_from_iter(params), |row| row.get(0))?;
-        source.total = Total::Stored(total - hidden);
+        source.total = Total::Stored(total - held);
     }
-    source.filter += " AND NOT EXISTS (SELECT 1 FROM hidden_tracks h WHERE h.user_id = ? \
-                      AND h.library_id = t.library_id AND h.track_id = t.id)";
-    source.params.push(Value::from(user));
+    source.filter += &format!(" AND {column} NOT IN (SELECT value FROM json_each(?))");
+    source.params.push(ids);
     Ok(())
+}
+
+/// The user's hidden tracks, as the queries of [`albums`], [`artists`] and [`tags`] start from.
+const HID: &str =
+    "WITH hid AS (SELECT track_id FROM hidden_tracks WHERE user_id = ?1 AND library_id = ?2) ";
+
+/// The albums of `library` every track of which `user` hid, which are gone from their library
+/// with them (`requirements/conventions.md` §8). Only the albums of hidden tracks can be, and
+/// each is kept unless a probe of `tracks_by_album_order` finds a track left, which it stops at.
+pub fn albums(conn: &Connection, user: i64, library: i64) -> rusqlite::Result<Vec<i64>> {
+    wholly(
+        conn,
+        user,
+        library,
+        "SELECT DISTINCT t.album_id FROM hid CROSS JOIN tracks t ON t.id = hid.track_id \
+         WHERE NOT EXISTS (SELECT 1 FROM tracks o \
+                           WHERE o.album_id = t.album_id AND o.id NOT IN hid)",
+    )
+}
+
+/// The artists of `library` every track of which `user` hid: those that credit them and those
+/// on their albums, each probed through its index until one is found left, as for [`albums`].
+pub fn artists(conn: &Connection, user: i64, library: i64) -> rusqlite::Result<Vec<i64>> {
+    wholly(
+        conn,
+        user,
+        library,
+        "SELECT c.artist_id FROM ( \
+           SELECT ta.artist_id FROM hid CROSS JOIN track_artists ta ON ta.track_id = hid.track_id \
+           UNION \
+           SELECT ta.artist_id FROM hid \
+             CROSS JOIN track_album_artists ta ON ta.track_id = hid.track_id) c \
+         WHERE c.artist_id IS NOT NULL \
+           AND NOT EXISTS (SELECT 1 FROM track_artists o \
+                           WHERE o.artist_id = c.artist_id AND o.track_id NOT IN hid) \
+           AND NOT EXISTS (SELECT 1 FROM track_album_artists o \
+                           WHERE o.artist_id = c.artist_id AND o.track_id NOT IN hid)",
+    )
+}
+
+/// The tags of `library` every track carrying which `user` hid, each probed through
+/// `track_tags_by_tag`, as for [`albums`].
+pub fn tags(conn: &Connection, user: i64, library: i64) -> rusqlite::Result<Vec<i64>> {
+    wholly(
+        conn,
+        user,
+        library,
+        "SELECT DISTINCT tt.tag_id FROM hid CROSS JOIN track_tags tt ON tt.track_id = hid.track_id \
+         WHERE NOT EXISTS (SELECT 1 FROM track_tags o \
+                           WHERE o.tag_id = tt.tag_id AND o.track_id NOT IN hid)",
+    )
+}
+
+/// The IDs `select`, a query after [`HID`], finds for `user` in `library`.
+fn wholly(conn: &Connection, user: i64, library: i64, select: &str) -> rusqlite::Result<Vec<i64>> {
+    conn.prepare_cached(&format!("{HID}{select}"))?
+        .query_map([user, library], |row| row.get(0))?
+        .collect()
 }
 
 /// Unhides `track` for `user` in `library`, and says whether it was hidden.
