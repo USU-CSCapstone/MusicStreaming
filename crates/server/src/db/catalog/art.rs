@@ -71,7 +71,8 @@ pub fn mosaic_id(ids: [i64; 4]) -> String {
 /// images among them, the mosaic of the first four in item order; with one to three, the first
 /// of them alone; with none, `NULL`. The ID changes exactly when the images it is made of do, so
 /// an artwork cached under it never goes stale. Reads items in order and stops at the fourth
-/// image, so it reads the playlist's start unless few of its tracks have art.
+/// image, so it reads the playlist's start unless few of its tracks have art. A Liked Songs
+/// keeps none: its artwork is a heart clients draw (`requirements/playlists.md` §11).
 pub fn playlist(conn: &Connection, id: i64) -> Result<()> {
     let mut images: Vec<i64> = Vec::with_capacity(4);
     {
@@ -96,7 +97,8 @@ pub fn playlist(conn: &Connection, id: i64) -> Result<()> {
         Err(_) => images.first().map(i64::to_string),
     };
     conn.prepare_cached(
-        "UPDATE playlists SET image_key = ?2 WHERE id = ?1 AND image_key IS NOT ?2",
+        "UPDATE playlists SET image_key = ?2 WHERE id = ?1 AND kind = 'saved' \
+         AND image_key IS NOT ?2",
     )?
     .execute(params![id, key])?;
     Ok(())

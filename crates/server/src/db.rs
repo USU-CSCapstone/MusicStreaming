@@ -13,6 +13,7 @@ pub mod catalog;
 mod columns;
 pub mod feed;
 pub mod libraries;
+pub mod liked_songs;
 pub mod migrations;
 mod new_id;
 pub mod plays;

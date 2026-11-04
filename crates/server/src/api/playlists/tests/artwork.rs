@@ -34,6 +34,7 @@ async fn covers() -> (tempfile::TempDir, Arc<Database>, Router) {
     db.write(move |tx| {
         library(tx, 1, "Music", music)?;
         library(tx, 2, "Other", other)?;
+        super::saved_only(tx)?;
         for (n, name) in (1..).zip(PNGS) {
             let image = Image { width: 40, height: 30, ..Image::new(n, 1, name) };
             image.insert(tx)?;

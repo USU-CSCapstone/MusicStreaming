@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use jewelcase_scanner::{FileToDecode, LibraryConfig};
 use rusqlite::{Connection, Result, params};
 
-use super::{Json, new_id, now_ms};
+use super::{Json, liked_songs, new_id, now_ms};
 
 /// One of a library's root folders.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,7 +103,8 @@ pub fn file(
 
 /// Creates a library with its roots, and returns its id: `id` if given (for tests and imports),
 /// otherwise a new one. Roots are stored as given; callers should pass canonical absolute
-/// paths.
+/// paths. Each user who reaches it, every admin, gets their Liked Songs in it
+/// ([`liked_songs::ensure`]).
 pub fn create(
     conn: &Connection,
     id: Option<i64>,
@@ -122,6 +123,7 @@ pub fn create(
     for root in roots {
         add_root(conn, id, root)?;
     }
+    liked_songs::ensure(conn)?;
     Ok(id)
 }
 
