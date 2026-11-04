@@ -270,3 +270,90 @@ async fn what_is_made_only_of_hidden_tracks_is_hidden_too() {
     }
     assert_eq!(types(&app).await, all_types);
 }
+
+/// The owner's view of `uri` in library 1.
+async fn get(app: &Router, uri: &str) -> Value {
+    let (status, body) = call(app, TOKEN, "GET", &format!("/api/v1/libraries/1{uri}"), None).await;
+    assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+    body
+}
+
+/// Every count is of what the caller sees: a hidden track leaves its library's, album's, disc's,
+/// artists', tags' and playlists' counts and durations, and takes from its album and artist the
+/// tags only it brought them, and from a tag the albums and artists only it brought it.
+#[tokio::test]
+async fn counts_leave_out_hidden_tracks() {
+    let (_temp, db, app) = super::super::testing::catalog::app().await;
+    // Rock on Kid A's Idioteque too, by Radiohead with The Beatles, beside Come Together.
+    db.write(|tx| {
+        tx.execute(
+            "INSERT INTO track_tags (library_id, track_id, tag_id, tag_name) \
+             VALUES (1, 1005, 30, 'Rock')",
+            [],
+        )
+    })
+    .await
+    .unwrap();
+    let (_, made) = call(
+        &app,
+        TOKEN,
+        "POST",
+        "/api/v1/libraries/1/playlists",
+        Some(json!({ "title": "Mix", "items": [
+            { "type": "track", "id": "1001" }, { "type": "track", "id": "1003" },
+            { "type": "track", "id": "1001" }
+        ] })),
+    )
+    .await;
+    let playlist = format!("/playlists/{}", made["id"].as_str().unwrap());
+    let duration = |track: &Value| track["durationUs"].as_i64().unwrap();
+    let tracks = get(&app, "/tracks?ids=1001,1003,1004").await;
+    let [come_together, her_majesty, bonus] = [0, 1, 2].map(|i| duration(&tracks["items"][i]));
+    let pages = ["", "/albums/101", "/artists/10", "/artists/11", "/tags/30", &playlist];
+    let mut before = Vec::new();
+    for uri in pages {
+        before.push(get(&app, uri).await);
+    }
+    let [library, abbey_road, beatles, radiohead, rock, mix] = before.try_into().unwrap();
+
+    for track in ["1001", "1004"] {
+        hide(&app, TOKEN, "PUT", track).await;
+    }
+    let count = |page: &Value, field: &str| page[field].as_i64().unwrap();
+    let now = get(&app, "").await;
+    assert_eq!(count(&now, "trackCount"), count(&library, "trackCount") - 2);
+    assert_eq!(count(&now, "durationUs"), count(&library, "durationUs") - come_together - bonus);
+    assert_eq!(count(&now, "albumCount"), count(&library, "albumCount"));
+
+    let now = get(&app, "/albums/101").await;
+    assert_eq!(count(&now, "trackCount"), count(&abbey_road, "trackCount") - 2);
+    assert_eq!(count(&now, "durationUs"), count(&abbey_road, "durationUs") - come_together - bonus);
+    assert_eq!(
+        now["discs"][0]["trackCount"],
+        abbey_road["discs"][0]["trackCount"].as_i64().unwrap() - 1
+    );
+    assert_eq!(now["tags"], json!({}), "Rock and Calm came to it only on Come Together");
+
+    let now = get(&app, "/artists/10").await;
+    assert_eq!(count(&now, "trackCount"), count(&beatles, "trackCount") - 2);
+    assert_eq!(
+        now["tags"]["genre"],
+        json!([{ "id": "31", "name": "Pop" }, { "id": "30", "name": "Rock" }])
+    );
+    assert_eq!(now["tags"].get("mood"), None, "Calm came to them only on Come Together");
+    let now = get(&app, "/artists/11").await;
+    assert_eq!(count(&now, "appearanceCount"), count(&radiohead, "appearanceCount") - 1, "Bonus");
+
+    let now = get(&app, "/tags/30").await;
+    let counts = |tag: &Value| ["trackCount", "albumCount", "artistCount"].map(|f| count(tag, f));
+    let [tracks, albums, artists] = counts(&rock);
+    assert_eq!(
+        counts(&now),
+        [tracks - 1, albums - 1, artists],
+        "The Beatles keep Rock on Idioteque"
+    );
+
+    let now = get(&app, &playlist).await;
+    assert_eq!((count(&now, "trackCount"), count(&now, "durationUs")), (1, her_majesty));
+    assert_eq!(count(&mix, "trackCount"), 3);
+}

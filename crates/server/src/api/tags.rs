@@ -9,9 +9,10 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 
 use super::extract::{Path, Query};
+use super::hidden::{self, Losses};
 use super::page::{Order, Page, Request, Sort, Source, Total, Unknown};
 use super::scope::Scope;
-use super::{Id, Problem, hidden};
+use super::{Id, Problem};
 use crate::db::Database;
 
 /// The spec's `TagType`.
@@ -40,6 +41,17 @@ pub struct Tag {
 /// The columns [`tag`] reads, in order.
 const SELECT: &[&str] =
     &["g.id", "g.type", "g.name", "g.track_count", "g.album_count", "g.artist_count"];
+
+impl Tag {
+    /// The tag as the user who hid what `losses` counts sees it: its counts of what is left
+    /// (`requirements/conventions.md` §8).
+    fn lose(&mut self, losses: &Losses) {
+        let Some(loss) = losses.tags.get(&self.id.0) else { return };
+        self.track_count -= loss.tracks;
+        self.album_count -= loss.albums;
+        self.artist_count -= loss.artists;
+    }
+}
 
 /// A tag from a row of [`SELECT`].
 fn tag(row: &Row) -> rusqlite::Result<Tag> {
@@ -137,7 +149,10 @@ pub async fn list(
     let page = db
         .read(move |conn| {
             hidden::leave_out_ids(conn, &mut source, "g.id", &hidden::tags(conn, user, library)?)?;
-            request.read(conn, &source, tag)
+            let mut page = request.read(conn, &source, tag)?;
+            let losses = hidden::losses(conn, user, library)?;
+            page.items.iter_mut().for_each(|item| item.lose(&losses));
+            Ok(page)
         })
         .await?;
     Ok(Json(page))
@@ -154,7 +169,11 @@ pub async fn get(
         if hidden::tags(conn, user, library)?.contains(&id) {
             return Ok(None);
         }
-        find(conn, library, id)
+        let mut found = find(conn, library, id)?;
+        if let Some(tag) = &mut found {
+            tag.lose(&hidden::losses(conn, user, library)?);
+        }
+        Ok(found)
     })
     .await?
     .map(Json)

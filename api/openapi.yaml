@@ -2494,6 +2494,9 @@ components:
     # ───────────────────────────── Libraries ─────────────────────────────
     Library:
       type: object
+      description: |
+        Its counts and duration are of what the caller sees: tracks they hid, and albums and
+        artists every track of which they hid, are left out (`requirements/conventions.md` §8).
       required: [id, name, trackCount, albumCount, artistCount, durationUs, scanning]
       properties:
         id: { $ref: '#/components/schemas/Id' }
@@ -2560,6 +2563,10 @@ components:
 
     Tag:
       type: object
+      description: |
+        Its counts are of what the caller sees: tracks they hid are left out, and so are albums
+        and artists only those brought it (`requirements/conventions.md` §8). A list sorted by
+        `trackCount` is sorted by the library's counts.
       required: [id, type, name, trackCount, albumCount, artistCount]
       properties:
         id: { $ref: '#/components/schemas/Id' }
@@ -2812,6 +2819,10 @@ components:
         Completeness has two parts (`requirements/albums.md` §4): tracks missing from discs you
         have (`trackCount` below `trackTotal`), and discs you do not have (`discCount` below
         `discTotal`). Incomplete is information, never an error.
+
+        Its counts and duration are of what the caller sees: tracks they hid are left out, and
+        so is a disc of only those, and its `tags` are those the tracks left bring it
+        (`requirements/conventions.md` §8).
       allOf:
         - $ref: '#/components/schemas/AlbumBase'
         - type: object
@@ -2896,6 +2907,10 @@ components:
                 - type: 'null'
 
     ArtistSummary:
+      description: |
+        Its counts are of what the caller sees: tracks they hid, and their albums every track of
+        which they hid, are left out (`requirements/conventions.md` §8). A full `Artist`'s
+        `appearanceCount` too, and its `tags` are those the tracks left bring it.
       allOf:
         - $ref: '#/components/schemas/ArtistBase'
         - type: object
@@ -3058,10 +3073,10 @@ components:
               description: Whether `image` is a custom upload rather than the generated mosaic; `deletePlaylistImage` reverts it.
             trackCount:
               type: integer
-              description: Every track in the playlist, missing ones included (`requirements/playlists.md` §3).
+              description: Every track in the playlist, missing ones included (`requirements/playlists.md` §3), and those the caller hid left out (`requirements/conventions.md` §8).
             durationUs:
               $ref: '#/components/schemas/DurationUs'
-              description: Of every track in the playlist, missing ones included.
+              description: Of every track in the playlist, missing ones included, and those the caller hid left out.
             pinned: { type: boolean }
             createdAt: { type: string, format: date-time }
             modifiedAt: { type: string, format: date-time }

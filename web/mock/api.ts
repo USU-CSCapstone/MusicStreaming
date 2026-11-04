@@ -5,16 +5,21 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import type {
+	Album,
+	AlbumSummary,
+	ArtistSummary,
 	Device,
+	Library,
 	Lyrics,
 	Problem,
 	RecentSearch,
 	SearchResponse,
 	SearchResult,
 	SearchSectionType,
+	Tag,
 	User
 } from '../src/lib/api/types.ts';
-import { Catalog, matchRank } from './catalog.ts';
+import { Catalog, type Losses, matchRank } from './catalog.ts';
 import { Db, toKey } from './db.ts';
 import { image, imageSize, playbackInfo, streamAudio, waveform } from './media.ts';
 import { PlaylistStore, dbLibrary, playlistRoute } from './playlists.ts';
@@ -83,13 +88,22 @@ export function createApi(dataDir: string) {
 	// Paths under /libraries/{libraryId}; the library is resolved before the handler runs,
 	// so nothing is reachable in a library that does not exist.
 	const scoped: [RegExp, Handler][] = [
-		[/^$/, ({ lib }) => catalog.library(lib) ?? undefined],
-		[/^\/albums$/, ({ lib, query }) => catalog.listAlbums(lib, query, wholly(lib).albums)],
+		[/^$/, ({ lib }) => mapRow(catalog.library(lib) ?? undefined, seenLibrary)],
+		[
+			/^\/albums$/,
+			({ lib, query }) => {
+				const page = catalog.listAlbums(lib, query, wholly(lib).albums);
+				const lost = losses(lib);
+				return { ...page, items: page.items.map((a) => seenAlbum(lost, a)) };
+			}
+		],
 		[
 			/^\/albums\/([^/]+)$/,
 			({ lib, params }) =>
 				withKey(params[0], (k) =>
-					wholly(lib).albums.includes(k) ? undefined : catalog.album(lib, k)
+					wholly(lib).albums.includes(k)
+						? undefined
+						: mapRow(catalog.album(lib, k) ?? undefined, (a) => seenAlbum(losses(lib), a))
 				)
 		],
 		[
@@ -109,21 +123,41 @@ export function createApi(dataDir: string) {
 					return tracks[0];
 				})
 		],
-		[/^\/artists$/, ({ lib, query }) => catalog.listArtists(lib, query, wholly(lib).artists)],
+		[
+			/^\/artists$/,
+			({ lib, query }) => {
+				const page = catalog.listArtists(lib, query, wholly(lib).artists);
+				const lost = losses(lib);
+				return { ...page, items: page.items.map((a) => seenArtist(lost, a)) };
+			}
+		],
 		[
 			/^\/artists\/([^/]+)$/,
 			({ lib, params }) =>
 				withKey(params[0], (k) =>
-					wholly(lib).artists.includes(k) ? undefined : catalog.artist(lib, k)
+					wholly(lib).artists.includes(k)
+						? undefined
+						: mapRow(catalog.artist(lib, k) ?? undefined, (a) => seenArtist(losses(lib), a))
 				)
 		],
 		[/^\/hidden-tracks$/, ({ lib, query }) => playlists.hiddenTracks(lib, query)],
 		[/^\/tag-types$/, ({ lib }) => catalog.tagTypes(lib, wholly(lib).tags)],
-		[/^\/tags$/, ({ lib, query }) => catalog.listTags(lib, query, wholly(lib).tags)],
+		[
+			/^\/tags$/,
+			({ lib, query }) => {
+				const page = catalog.listTags(lib, query, wholly(lib).tags);
+				const lost = losses(lib);
+				return { ...page, items: page.items.map((t) => seenTag(lost, t)) };
+			}
+		],
 		[
 			/^\/tags\/([^/]+)$/,
 			({ lib, params }) =>
-				withKey(params[0], (k) => (wholly(lib).tags.includes(k) ? undefined : catalog.tag(lib, k)))
+				withKey(params[0], (k) =>
+					wholly(lib).tags.includes(k)
+						? undefined
+						: mapRow(catalog.tag(lib, k) ?? undefined, (t) => seenTag(losses(lib), t))
+				)
 		],
 		[/^\/search$/, ({ lib, query }) => search(lib, query)],
 		[
@@ -173,6 +207,43 @@ export function createApi(dataDir: string) {
 	/** What the user hid whole in `lib`, from the tracks they hid (`requirements/conventions.md` §8). */
 	const wholly = (lib: bigint) => catalog.wholly(playlists.hiddenIds(lib));
 
+	// Counts as the user sees them, without the tracks they hid (`requirements/conventions.md` §8).
+	const losses = (lib: bigint) => catalog.losses(playlists.hiddenIds(lib));
+	function seenLibrary(library: Library): Library {
+		const lib = BigInt(library.id);
+		const [lost, whole] = [losses(lib), wholly(lib)];
+		return {
+			...library,
+			trackCount: library.trackCount - lost.tracks,
+			durationUs: library.durationUs - lost.durationUs,
+			albumCount: library.albumCount - whole.albums.length,
+			artistCount: library.artistCount - whole.artists.length
+		};
+	}
+	function seenAlbum<T extends AlbumSummary>(lost: Losses, album: T): T {
+		const loss = lost.albums.get(album.id);
+		if (!loss) return album;
+		const seen = {
+			...album,
+			trackCount: album.trackCount - loss.tracks,
+			durationUs: album.durationUs - loss.durationUs
+		};
+		if ('discs' in seen && Array.isArray(seen.discs)) {
+			seen.discs = (seen.discs as Album['discs'])
+				.map((d) => ({ ...d, trackCount: d.trackCount - (loss.discs.get(d.number ?? 0) ?? 0) }))
+				.filter((d) => d.trackCount > 0);
+		}
+		return seen;
+	}
+	const seenArtist = <T extends ArtistSummary>(lost: Losses, artist: T): T => ({
+		...artist,
+		trackCount: artist.trackCount - (lost.artists.get(artist.id) ?? 0)
+	});
+	const seenTag = (lost: Losses, tag: Tag): Tag => ({
+		...tag,
+		trackCount: tag.trackCount - (lost.tags.get(tag.id) ?? 0)
+	});
+
 	/** What the scanner stored from embedded tags or a `.lrc`/`.txt` beside the track (`requirements/tracks.md` §5). */
 	function lyrics(lib: bigint, trackId: bigint): Lyrics | undefined {
 		if (!catalog.trackFile(lib, trackId)) return undefined;
@@ -217,8 +288,9 @@ export function createApi(dataDir: string) {
 			tracks.total,
 			tracks.items[0]?.title ?? null
 		);
-		const whole = wholly(lib);
+		const [whole, lost] = [wholly(lib), losses(lib)];
 		const albums = catalog.searchAlbums(lib, text, limit, query, whole.albums);
+		albums.items = albums.items.map((a) => seenAlbum(lost, a));
 		add(
 			'albums',
 			albums.items.map((album) => ({ type: 'album', album })),
@@ -226,6 +298,7 @@ export function createApi(dataDir: string) {
 			albums.items[0]?.title ?? null
 		);
 		const artists = catalog.searchArtists(lib, text, limit, query, whole.artists);
+		artists.items = artists.items.map((a) => seenArtist(lost, a));
 		add(
 			'artists',
 			artists.items.map((artist) => ({ type: 'artist', artist })),
@@ -267,7 +340,7 @@ export function createApi(dataDir: string) {
 		if (path === '/me') return MOCK_USER;
 		// Nothing to connect: the mock's plugins act for no one in particular.
 		if (path === '/me/plugins') return { items: [] };
-		if (path === '/libraries') return { items: catalog.libraries() };
+		if (path === '/libraries') return { items: catalog.libraries().map(seenLibrary) };
 		const m = /^\/libraries\/([^/]+)(.*)$/.exec(path);
 		const lib = toKey(m?.[1]);
 		if (!m || lib === null || !catalog.library(lib)) return undefined;

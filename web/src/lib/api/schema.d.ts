@@ -1700,6 +1700,10 @@ export interface components {
             /** @description Whether this is the calling device. Present only in `/me` responses. */
             current?: boolean;
         };
+        /**
+         * @description Its counts and duration are of what the caller sees: tracks they hid, and albums and
+         *     artists every track of which they hid, are left out (`requirements/conventions.md` §8).
+         */
         Library: {
             id: components["schemas"]["Id"];
             name: string;
@@ -1737,6 +1741,11 @@ export interface components {
             /** @description Its tags in the library, never 0 (`listTagTypes`). */
             tagCount: number;
         };
+        /**
+         * @description Its counts are of what the caller sees: tracks they hid are left out, and so are albums
+         *     and artists only those brought it (`requirements/conventions.md` §8). A list sorted by
+         *     `trackCount` is sorted by the library's counts.
+         */
         Tag: {
             id: components["schemas"]["Id"];
             /** @description Its type's key (`TagType.key`). */
@@ -1906,6 +1915,10 @@ export interface components {
          * @description Completeness has two parts (`requirements/albums.md` §4): tracks missing from discs you
          *     have (`trackCount` below `trackTotal`), and discs you do not have (`discCount` below
          *     `discTotal`). Incomplete is information, never an error.
+         *
+         *     Its counts and duration are of what the caller sees: tracks they hid are left out, and
+         *     so is a disc of only those, and its `tags` are those the tracks left bring it
+         *     (`requirements/conventions.md` §8).
          */
         AlbumSummary: components["schemas"]["AlbumBase"] & {
             type: components["schemas"]["AlbumType"];
@@ -1956,6 +1969,11 @@ export interface components {
             source?: components["schemas"]["Source"];
             image: components["schemas"]["ImageRef"] | null;
         };
+        /**
+         * @description Its counts are of what the caller sees: tracks they hid, and their albums every track of
+         *     which they hid, are left out (`requirements/conventions.md` §8). A full `Artist`'s
+         *     `appearanceCount` too, and its `tags` are those the tracks left bring it.
+         */
         ArtistSummary: components["schemas"]["ArtistBase"] & {
             /** @description Albums the artist owns. */
             albumCount: number;
@@ -2045,9 +2063,9 @@ export interface components {
             kind: "saved" | "liked";
             /** @description Whether `image` is a custom upload rather than the generated mosaic; `deletePlaylistImage` reverts it. */
             customImage: boolean;
-            /** @description Every track in the playlist, missing ones included (`requirements/playlists.md` §3). */
+            /** @description Every track in the playlist, missing ones included (`requirements/playlists.md` §3), and those the caller hid left out (`requirements/conventions.md` §8). */
             trackCount: number;
-            /** @description Of every track in the playlist, missing ones included. */
+            /** @description Of every track in the playlist, missing ones included, and those the caller hid left out. */
             durationUs: components["schemas"]["DurationUs"];
             pinned: boolean;
             /** Format: date-time */
