@@ -125,17 +125,18 @@ async fn a_purged_track_takes_its_hide() {
     assert_eq!(left, 0);
 }
 
-/// The IDs of library 1's tracks a list shows, a page of `limit` at a time, and each page's
-/// total, for `query`.
-async fn shown(app: &Router, query: &str, limit: usize) -> (Vec<String>, Vec<i64>) {
+/// The IDs of the items the list at `uri` shows to the owner, a page of `limit` at a time, and
+/// each page's total.
+async fn walk(app: &Router, uri: &str, limit: usize) -> (Vec<String>, Vec<i64>) {
     let (mut ids, mut totals, mut cursor) = (Vec::new(), Vec::new(), None::<String>);
     loop {
         let after = cursor.map(|c| format!("&cursor={c}")).unwrap_or_default();
-        let uri = format!("/api/v1/libraries/1/tracks?limit={limit}{query}{after}");
-        let (status, page) = call(app, TOKEN, "GET", &uri, None).await;
-        assert_eq!(status, StatusCode::OK, "{uri}: {page}");
-        for track in page["items"].as_array().unwrap() {
-            ids.push(track["id"].as_str().unwrap().to_owned());
+        let separator = if uri.contains('?') { '&' } else { '?' };
+        let page_uri = format!("{uri}{separator}limit={limit}{after}");
+        let (status, page) = call(app, TOKEN, "GET", &page_uri, None).await;
+        assert_eq!(status, StatusCode::OK, "{page_uri}: {page}");
+        for item in page["items"].as_array().unwrap() {
+            ids.push(item["id"].as_str().unwrap().to_owned());
         }
         totals.push(page["total"].as_i64().unwrap());
         match page["nextCursor"].as_str() {
@@ -143,6 +144,15 @@ async fn shown(app: &Router, query: &str, limit: usize) -> (Vec<String>, Vec<i64
             None => return (ids, totals),
         }
     }
+}
+
+/// The IDs of library 1's tracks a list shows for `query`, and each page's total ([`walk`]).
+async fn shown(app: &Router, query: &str, limit: usize) -> (Vec<String>, Vec<i64>) {
+    let uri = match query.trim_start_matches('&') {
+        "" => "/api/v1/libraries/1/tracks".to_owned(),
+        query => format!("/api/v1/libraries/1/tracks?{query}"),
+    };
+    walk(app, &uri, limit).await
 }
 
 /// A hidden track is in no list of tracks, and no list counts it: the library's, an album's,
@@ -203,4 +213,60 @@ async fn a_playlist_marks_a_hidden_track_in_its_place() {
         .collect();
     assert_eq!(marks, [(json!("1"), json!(true)), (json!("2"), json!(false))]);
     assert_eq!(page["total"], 2, "its positions are the playlist's");
+}
+
+/// An album, artist, or tag every track of which the caller hid is gone with them: from its
+/// list, and its list's total, from its own page, from search, and from the tag types' counts.
+/// One with a track left stays. Unhidden, they are back.
+#[tokio::test]
+async fn what_is_made_only_of_hidden_tracks_is_hidden_too() {
+    let (_temp, _db, app) = super::super::testing::catalog::app().await;
+    let lists = ["albums", "artists", "tags"].map(|list| format!("/api/v1/libraries/1/{list}"));
+    let mut before = Vec::new();
+    for uri in &lists {
+        before.push(walk(&app, uri, 100).await);
+    }
+    let types =
+        |app| async move { call(app, TOKEN, "GET", "/api/v1/libraries/1/tag-types", None).await.1 };
+    let all_types = types(&app).await;
+
+    // The unknown album's one track, by the unknown artist, and the one track carrying Rock and
+    // Calm. Pop is carried by no track here, so no track hides it.
+    for track in ["1006", "1001"] {
+        hide(&app, TOKEN, "PUT", track).await;
+    }
+    let gone = [vec!["104"], vec!["13"], vec!["30", "32"]];
+    for ((uri, (ids, totals)), gone) in lists.iter().zip(&before).zip(&gone) {
+        let left: Vec<_> = ids.iter().filter(|id| !gone.contains(&id.as_str())).cloned().collect();
+        assert_eq!(left.len(), ids.len() - gone.len(), "{uri}: all of {gone:?} were listed");
+        for limit in [1, 100] {
+            let (now, counted) = walk(&app, uri, limit).await;
+            assert_eq!(now, left, "{uri} by {limit}");
+            let expected = totals[0] - i64::try_from(gone.len()).unwrap();
+            assert!(counted.iter().all(|total| *total == expected), "{uri}: {counted:?}");
+        }
+        for id in gone {
+            let (status, _) = call(&app, TOKEN, "GET", &format!("{uri}/{id}"), None).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{uri}/{id}");
+        }
+    }
+    let (status, _) = call(&app, TOKEN, "GET", "/api/v1/libraries/1/albums/101", None).await;
+    assert_eq!(status, StatusCode::OK, "Abbey Road has tracks left");
+    assert_eq!(types(&app).await, json!([{ "key": "genre", "tagCount": 1 }]), "Pop alone");
+
+    // Every track of Abbey Road, so search finds the album no more.
+    for track in ["1002", "1003", "1004"] {
+        hide(&app, TOKEN, "PUT", track).await;
+    }
+    let (_, found) = call(&app, TOKEN, "GET", "/api/v1/libraries/1/search?q=abbey", None).await;
+    let albums = found["sections"].as_array().unwrap().iter().find(|s| s["type"] == "albums");
+    assert_eq!(albums, None, "{found}");
+
+    for track in ["1001", "1002", "1003", "1004", "1006"] {
+        hide(&app, TOKEN, "DELETE", track).await;
+    }
+    for (uri, listed) in lists.iter().zip(&before) {
+        assert_eq!(&walk(&app, uri, 100).await, listed, "{uri}");
+    }
+    assert_eq!(types(&app).await, all_types);
 }

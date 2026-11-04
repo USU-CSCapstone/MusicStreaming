@@ -4,6 +4,7 @@
 mod indexes;
 mod tagged;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::Json;
@@ -87,10 +88,20 @@ pub async fn search(
     let filter = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
     let tagged = indexes.tagged.get(&db, library, &filter, &kinds).await?;
     let index = indexes.index(&db, library).await?;
-    // A track the caller hid is gone from their library, so a search finds it nowhere.
-    let hid = db.read(move |conn| hidden::ids(conn, user, library)).await?;
+    // What the caller hid is gone from their library, so a search finds it nowhere: tracks, and
+    // albums and artists every track of which they hid.
+    let hid: [HashSet<i64>; 3] = db
+        .read(move |conn| {
+            // By `Kind`, as the tagged sets are.
+            Ok::<_, rusqlite::Error>([
+                hidden::ids(conn, user, library)?,
+                hidden::albums(conn, user, library)?.into_iter().collect(),
+                hidden::artists(conn, user, library)?.into_iter().collect(),
+            ])
+        })
+        .await?;
     let found = index.search_within(&query.q, &kinds, limit, |kind, id| {
-        !(kind == Kind::Track && hid.contains(&id))
+        !hid[kind as usize].contains(&id)
             && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
     });
     let sections = db.read(move |conn| results(conn, user, library, found)).await?;
