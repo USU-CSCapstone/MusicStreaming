@@ -433,6 +433,9 @@ export interface paths {
          *     their `type`, leaving out empty groups (`requirements/artists.md` §3.1). Their
          *     appearances are `artistCredit=featured`; the tracks on each come from `listTracks` with
          *     `artistId`, `artistCredit=featured`, and `sort=album` (`requirements/artists.md` §3.2).
+         *
+         *     An album every track of which the caller hid is left out, and out of `total`
+         *     (`requirements/conventions.md` §8).
          */
         get: operations["listAlbums"];
         put?: never;
@@ -458,6 +461,8 @@ export interface paths {
          * @description The album with a summary of each disc present. Its tracks are listed with `listTracks`
          *     using `albumId` and `sort=album`, since an album's size is unbounded — the unknown album
          *     holds every file with no album tag.
+         *
+         *     One every track of which the caller hid is `404` (`requirements/conventions.md` §8).
          */
         get: operations["getAlbum"];
         put?: never;
@@ -480,6 +485,9 @@ export interface paths {
         /**
          * Browse artists
          * @description Includes artists credited only as features (`requirements/artists.md` §5).
+         *
+         *     An artist every track of whom the caller hid is left out, and out of `total`
+         *     (`requirements/conventions.md` §8).
          */
         get: operations["listArtists"];
         put?: never;
@@ -500,7 +508,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Get an artist */
+        /**
+         * Get an artist
+         * @description An artist every track of whom the caller hid is `404` (`requirements/conventions.md` §8).
+         */
         get: operations["getArtist"];
         put?: never;
         post?: never;
@@ -525,6 +536,9 @@ export interface paths {
          *     least one tag in the library, and its count of tags. A type no file in the library
          *     carries is left out, so a filter drawn from this list never shows an empty section
          *     (`requirements/tags.md` §2, §8).
+         *
+         *     Tags every track carrying which the caller hid are not counted, and a type left with none
+         *     is not listed (`requirements/conventions.md` §8).
          */
         get: operations["listTagTypes"];
         put?: never;
@@ -548,6 +562,9 @@ export interface paths {
          * Browse tags
          * @description The library's tags, of one type or every type. A tag sorts by its name, its
          *     leading article kept (`requirements/conventions.md` §4).
+         *
+         *     A tag every track carrying which the caller hid is left out, and out of `total`
+         *     (`requirements/conventions.md` §8).
          */
         get: operations["listTags"];
         put?: never;
@@ -572,6 +589,9 @@ export interface paths {
          * Get a tag
          * @description A tag's tracks, albums, and artists are browsed with the `tagAll` filter on the browse
          *     endpoints (`requirements/tags.md` §7).
+         *
+         *     One every track carrying which the caller hid is `404`
+         *     (`requirements/conventions.md` §8).
          */
         get: operations["getTag"];
         put?: never;
@@ -723,7 +743,8 @@ export interface paths {
          *     exact-match precedence (`requirements/search.md` §3). Results are identical to on-device
          *     search over the same corpus (`requirements/search.md` §2.1). Playlists are not searched
          *     until they are built, so no playlists section comes back. A track the caller hid is not
-         *     found, nor counted in its section's `total` (`requirements/conventions.md` §8).
+         *     found, nor counted in its section's `total`, and nor is an album or artist every track of
+         *     which they hid (`requirements/conventions.md` §8).
          */
         get: operations["search"];
         put?: never;

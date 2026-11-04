@@ -15,7 +15,7 @@ use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
 use super::tag_filter::{self, LEAD_SHARE, TagFilter, Tagged};
-use super::{Id, Problem};
+use super::{Id, Problem, hidden};
 use crate::db::Database;
 
 /// The `sort` values `listArtists` supports.
@@ -67,30 +67,38 @@ pub struct ListQuery {
 /// `tagAny` name.
 pub async fn list(
     State(db): State<Arc<Database>>,
-    Scope { library, .. }: Scope,
+    Scope { user, library }: Scope,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<ArtistSummary>>, Problem> {
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
     let tags = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
     let page = db
         .read(move |conn| {
-            let source = source(conn, library, &tags)?;
+            let mut source = source(conn, library, &tags)?;
+            let whole = hidden::artists(conn, user, library)?;
+            hidden::leave_out_ids(conn, &mut source, "ar.id", &whole)?;
             request.read(conn, &source, summary)
         })
         .await?;
     Ok(Json(page))
 }
 
-/// `getArtist`: the artist, or not found when the library has no such artist.
+/// `getArtist`: the artist, or not found when the library has no such artist, or the caller hid
+/// every track of theirs.
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Scope { library, .. }: Scope,
+    Scope { user, library }: Scope,
     Path((_, Id(artist))): Path<(Id, Id)>,
 ) -> Result<Json<Artist>, Problem> {
-    db.read(move |conn| representation::artist(conn, library, artist))
-        .await?
-        .map(Json)
-        .ok_or_else(Problem::not_found)
+    db.read(move |conn| {
+        if hidden::artists(conn, user, library)?.contains(&artist) {
+            return Ok(None);
+        }
+        representation::artist(conn, library, artist)
+    })
+    .await?
+    .map(Json)
+    .ok_or_else(Problem::not_found)
 }
 
 /// The artists a list reads.

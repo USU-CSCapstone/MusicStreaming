@@ -84,8 +84,14 @@ export function createApi(dataDir: string) {
 	// so nothing is reachable in a library that does not exist.
 	const scoped: [RegExp, Handler][] = [
 		[/^$/, ({ lib }) => catalog.library(lib) ?? undefined],
-		[/^\/albums$/, ({ lib, query }) => catalog.listAlbums(lib, query)],
-		[/^\/albums\/([^/]+)$/, ({ lib, params }) => withKey(params[0], (k) => catalog.album(lib, k))],
+		[/^\/albums$/, ({ lib, query }) => catalog.listAlbums(lib, query, wholly(lib).albums)],
+		[
+			/^\/albums\/([^/]+)$/,
+			({ lib, params }) =>
+				withKey(params[0], (k) =>
+					wholly(lib).albums.includes(k) ? undefined : catalog.album(lib, k)
+				)
+		],
 		[
 			/^\/tracks$/,
 			({ lib, query }) => {
@@ -103,15 +109,22 @@ export function createApi(dataDir: string) {
 					return tracks[0];
 				})
 		],
-		[/^\/artists$/, ({ lib, query }) => catalog.listArtists(lib, query)],
+		[/^\/artists$/, ({ lib, query }) => catalog.listArtists(lib, query, wholly(lib).artists)],
 		[
 			/^\/artists\/([^/]+)$/,
-			({ lib, params }) => withKey(params[0], (k) => catalog.artist(lib, k))
+			({ lib, params }) =>
+				withKey(params[0], (k) =>
+					wholly(lib).artists.includes(k) ? undefined : catalog.artist(lib, k)
+				)
 		],
 		[/^\/hidden-tracks$/, ({ lib, query }) => playlists.hiddenTracks(lib, query)],
-		[/^\/tag-types$/, ({ lib }) => catalog.tagTypes(lib)],
-		[/^\/tags$/, ({ lib, query }) => catalog.listTags(lib, query)],
-		[/^\/tags\/([^/]+)$/, ({ lib, params }) => withKey(params[0], (k) => catalog.tag(lib, k))],
+		[/^\/tag-types$/, ({ lib }) => catalog.tagTypes(lib, wholly(lib).tags)],
+		[/^\/tags$/, ({ lib, query }) => catalog.listTags(lib, query, wholly(lib).tags)],
+		[
+			/^\/tags\/([^/]+)$/,
+			({ lib, params }) =>
+				withKey(params[0], (k) => (wholly(lib).tags.includes(k) ? undefined : catalog.tag(lib, k)))
+		],
 		[/^\/search$/, ({ lib, query }) => search(lib, query)],
 		[
 			/^\/tracks\/([^/]+)\/waveform$/,
@@ -157,6 +170,9 @@ export function createApi(dataDir: string) {
 		]
 	];
 
+	/** What the user hid whole in `lib`, from the tracks they hid (`requirements/conventions.md` §8). */
+	const wholly = (lib: bigint) => catalog.wholly(playlists.hiddenIds(lib));
+
 	/** What the scanner stored from embedded tags or a `.lrc`/`.txt` beside the track (`requirements/tracks.md` §5). */
 	function lyrics(lib: bigint, trackId: bigint): Lyrics | undefined {
 		if (!catalog.trackFile(lib, trackId)) return undefined;
@@ -201,14 +217,15 @@ export function createApi(dataDir: string) {
 			tracks.total,
 			tracks.items[0]?.title ?? null
 		);
-		const albums = catalog.searchAlbums(lib, text, limit, query);
+		const whole = wholly(lib);
+		const albums = catalog.searchAlbums(lib, text, limit, query, whole.albums);
 		add(
 			'albums',
 			albums.items.map((album) => ({ type: 'album', album })),
 			albums.total,
 			albums.items[0]?.title ?? null
 		);
-		const artists = catalog.searchArtists(lib, text, limit, query);
+		const artists = catalog.searchArtists(lib, text, limit, query, whole.artists);
 		add(
 			'artists',
 			artists.items.map((artist) => ({ type: 'artist', artist })),
