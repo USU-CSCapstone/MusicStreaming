@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use super::representation::header;
 use crate::api::cursor;
 use crate::api::extract::{self, Path, Query};
+use crate::api::hidden;
 use crate::api::playables::{self, Playable};
 use crate::api::problem::Code;
 use crate::api::scope::Scope;
@@ -51,6 +52,9 @@ struct Item {
     track: TrackSummary,
     #[serde(serialize_with = "serialize_rfc3339")]
     added_at: i64,
+    /// A track the caller hid, which keeps its place but is not shown or played
+    /// (`requirements/playlists.md` §3).
+    hidden: bool,
 }
 
 /// The spec's `PlaylistItemPage`.
@@ -134,12 +138,13 @@ pub async fn list_items(
                 .into_iter()
                 .collect();
             tracks::mark_liked(conn, user, library, summaries.values_mut())?;
+            let hid = hidden::ids(conn, user, library)?;
             // Every item's track is kept by retention, so none is left out in practice.
             let items = rows
                 .iter()
-                .filter_map(|(_, track, added_at)| {
-                    let track = summaries.get(track)?.clone();
-                    Some(Item { track, added_at: *added_at })
+                .filter_map(|(_, id, added_at)| {
+                    let track = summaries.get(id)?.clone();
+                    Some(Item { track, added_at: *added_at, hidden: hid.contains(id) })
                 })
                 .collect();
             Ok::<_, Problem>(ItemPage { items, next_cursor, total, version })
