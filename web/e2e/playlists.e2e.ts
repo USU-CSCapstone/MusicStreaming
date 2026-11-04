@@ -4,7 +4,9 @@ import { album, artist, longMix, roadTrip, serveLibrary, signalMix } from './fix
 test('creates a playlist and opens it', async ({ page }) => {
 	await serveLibrary(page);
 	await page.goto('/playlists');
-	await expect(page.getByText('No playlists yet.')).toBeVisible();
+	// Every user has Liked Songs from the start (`requirements/playlists.md` §11).
+	await expect(page.getByText('1 playlist', { exact: true })).toBeVisible();
+	await expect(page.getByRole('link', { name: /Liked Songs/ })).toBeVisible();
 
 	await page.getByRole('button', { name: 'New playlist' }).click();
 	const dialog = page.getByRole('dialog', { name: 'New playlist' });
@@ -24,7 +26,7 @@ test('creates a playlist and opens it', async ({ page }) => {
 	await expect(page.getByText('This playlist is empty.')).toBeVisible();
 
 	await page.goBack();
-	await expect(page.getByText('1 playlist', { exact: true })).toBeVisible();
+	await expect(page.getByText('2 playlists', { exact: true })).toBeVisible();
 	await expect(page.getByRole('link', { name: /Road Trip/ })).toBeVisible();
 });
 
@@ -44,7 +46,7 @@ test('cancelling creates nothing', async ({ page }) => {
 	await page.keyboard.press('Escape');
 	await expect(dialog).toBeHidden();
 
-	await expect(page.getByText('No playlists yet.')).toBeVisible();
+	await expect(page.getByText('1 playlist', { exact: true })).toBeVisible();
 	await expect(page).toHaveURL(/\/playlists$/);
 });
 
@@ -114,11 +116,11 @@ test('deletes a playlist, with a moment to undo it', async ({ page }) => {
 	// Undo brings it back, and nothing was sent.
 	await page.getByRole('button', { name: 'Delete playlist' }).click();
 	await expect(page).toHaveURL(/\/playlists$/);
-	await expect(page.getByText('No playlists yet.')).toBeVisible();
+	await expect(page.getByText('1 playlist', { exact: true })).toBeVisible();
 	await expect(page.getByRole('status')).toHaveText(/Deleted “Road Trip”/);
 	await page.getByRole('button', { name: 'Undo' }).click();
 	await expect(page.getByRole('link', { name: /Road Trip/ })).toBeVisible();
-	await expect(page.getByText('1 playlist', { exact: true })).toBeVisible();
+	await expect(page.getByText('2 playlists', { exact: true })).toBeVisible();
 
 	// Dismissing the toast deletes it for good.
 	await page.getByRole('link', { name: /Road Trip/ }).click();
@@ -127,7 +129,8 @@ test('deletes a playlist, with a moment to undo it', async ({ page }) => {
 	await page.getByRole('button', { name: 'Dismiss' }).click();
 	expect((await sent).status()).toBe(204);
 	await page.reload();
-	await expect(page.getByText('No playlists yet.')).toBeVisible();
+	await expect(page.getByText('1 playlist', { exact: true })).toBeVisible();
+	await expect(page.getByRole('link', { name: /Road Trip/ })).toBeHidden();
 
 	// Back does not return to the deleted playlist.
 	await page.goBack();
@@ -463,12 +466,13 @@ test.describe('adding to a playlist', () => {
 		await more(page, 'Signal Part 1').click();
 		const menu = page.getByRole('menu');
 		const items = menu.getByRole('menuitem');
-		// The three queue actions, New playlist and the first page of playlists.
+		// The three queue actions, New playlist and the first page of playlists, Liked Songs among
+		// them.
 		await expect(items).toHaveCount(104);
 
 		await items.nth(5).hover();
 		await page.mouse.wheel(0, 10_000);
-		await expect(items).toHaveCount(154);
+		await expect(items).toHaveCount(155);
 		// Its end reached, it still holds the scroll.
 		await page.mouse.wheel(0, 10_000);
 		await expect(menu).toBeVisible();
@@ -480,18 +484,17 @@ test.describe('adding to a playlist', () => {
 		await more(page, 'Signal Part 1').focus();
 		await page.keyboard.press('Enter');
 		await expect(page.getByRole('menuitem', { name: 'Queue next' })).toBeFocused();
-		await expect(page.getByRole('menuitem')).toHaveCount(6);
+		await expect(page.getByRole('menuitem')).toHaveCount(7);
 		for (const name of ['Queue last', 'Add to Up Next…', 'New playlist…']) {
 			await page.keyboard.press('ArrowDown');
 			await expect(page.getByRole('menuitem', { name })).toBeFocused();
 		}
+		// Liked Songs is pinned, so it comes first.
+		await page.keyboard.press('ArrowDown');
+		await expect(page.getByRole('menuitem', { name: /Liked Songs/ })).toBeFocused();
 		await page.keyboard.press('ArrowDown');
 		await expect(page.getByRole('menuitem', { name: /Signal Mix/ })).toBeFocused();
-		await page.keyboard.press('ArrowUp');
-		await page.keyboard.press('ArrowUp');
-		await page.keyboard.press('ArrowUp');
-		await page.keyboard.press('ArrowUp');
-		await page.keyboard.press('ArrowUp');
+		for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowUp');
 		await expect(page.getByRole('menuitem', { name: /Road Trip/ })).toBeFocused();
 		await page.keyboard.press('Escape');
 		await expect(page.getByRole('menu')).toBeHidden();
