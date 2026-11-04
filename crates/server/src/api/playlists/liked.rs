@@ -19,7 +19,7 @@ use super::announce::Change;
 use super::{edit, representation};
 use crate::api::extract::Path;
 use crate::api::hidden;
-use crate::api::realtime::Hub;
+use crate::api::realtime::{Hub, ServerMessage};
 use crate::api::scope::Scope;
 use crate::api::{Id, Problem};
 use crate::db::{Database, liked_songs, now_ms};
@@ -63,6 +63,9 @@ pub async fn like(
                 Ok((Some(apply(tx, user, library, id, version, add, now)?), unhidden))
             })
             .await?;
+        if change.is_some() {
+            announce(&hub, user, library, [track], true);
+        }
         super::announce(&hub, user, change);
         if unhidden {
             hidden::announce(&hub, user, library, [track], false);
@@ -83,11 +86,31 @@ pub async fn unlike(
 ) -> Result<StatusCode, Problem> {
     super::settle(async move {
         let change = db.try_write(move |tx| take_out(tx, user, library, track)).await?;
+        if change.is_some() {
+            announce(&hub, user, library, [track], false);
+        }
         super::announce(&hub, user, change);
         Ok(())
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Tells `user`'s devices that `tracks` of `library` were liked, or unliked, so each shows it on
+/// every copy of them it holds, which a change to Liked Songs alone, naming a removed item by its
+/// position, would not let it do. Call it once the change is committed.
+pub fn announce(
+    hub: &Hub,
+    user: i64,
+    library: i64,
+    tracks: impl IntoIterator<Item = i64>,
+    liked: bool,
+) {
+    for track in tracks {
+        let message =
+            ServerMessage::TrackLiked { library_id: Id(library), track_id: Id(track), liked };
+        hub.broadcast(user, &message);
+    }
 }
 
 /// Takes `track` out of `user`'s Liked Songs in `library`, in the writer, and returns the change

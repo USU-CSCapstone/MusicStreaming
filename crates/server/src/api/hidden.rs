@@ -65,6 +65,9 @@ pub async fn hide(
                 Ok((hid, playlists::unlike_in(tx, user, library, track)?))
             })
             .await?;
+        if unliked.is_some() {
+            playlists::announce_liked(&hub, user, library, [track], false);
+        }
         playlists::announce(&hub, user, unliked);
         if hid {
             announce(&hub, user, library, [track], true);
