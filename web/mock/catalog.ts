@@ -274,6 +274,50 @@ export class Catalog {
 		};
 	}
 
+	/** What the tracks `hidden` take from the counts the mock adjusts ([`Losses`]). */
+	losses(hidden: readonly bigint[]): Losses {
+		const losses: Losses = {
+			tracks: 0,
+			durationUs: 0,
+			albums: new Map(),
+			artists: new Map(),
+			tags: new Map()
+		};
+		if (!hidden.length) return losses;
+		const set = `(${hidden.map(() => '?').join(', ')})`;
+		for (const r of this.db.all(
+			`SELECT album_id, disc_number, COUNT(*) AS n, SUM(duration_us) AS us FROM tracks
+			 WHERE id IN ${set} GROUP BY album_id, disc_number`,
+			...hidden
+		)) {
+			const [n, us] = [num(r.n), num(r.us)];
+			const album = losses.albums.get(id(r.album_id)) ?? {
+				tracks: 0,
+				durationUs: 0,
+				discs: new Map()
+			};
+			album.tracks += n;
+			album.durationUs += us;
+			album.discs.set(num(r.disc_number), n);
+			losses.albums.set(id(r.album_id), album);
+			losses.tracks += n;
+			losses.durationUs += us;
+		}
+		const counted = (sql: string, into: Map<string, number>) => {
+			for (const r of this.db.all(sql, ...hidden)) into.set(id(r.owner), num(r.n));
+		};
+		counted(
+			`SELECT artist_id AS owner, COUNT(*) AS n FROM track_artists
+			 WHERE track_id IN ${set} AND artist_id IS NOT NULL GROUP BY artist_id`,
+			losses.artists
+		);
+		counted(
+			`SELECT tag_id AS owner, COUNT(*) AS n FROM track_tags WHERE track_id IN ${set} GROUP BY tag_id`,
+			losses.tags
+		);
+		return losses;
+	}
+
 	tag(lib: bigint, tagId: bigint): Tag | null {
 		const row = this.db.get('SELECT * FROM tags WHERE library_id = ? AND id = ?', lib, tagId);
 		return row ? this.#tag(row) : null;
@@ -722,6 +766,18 @@ function leaveOut(
 	where.push(`${column} NOT IN (${hidden.map(() => '?').join(', ')})`);
 	params.push(...hidden);
 }
+
+/**
+ * What the tracks the user hid take from the counts the mock adjusts: the library's, each
+ * album's and its discs', and each artist's and tag's tracks (`requirements/conventions.md` §8).
+ */
+export type Losses = {
+	tracks: number;
+	durationUs: number;
+	albums: Map<string, { tracks: number; durationUs: number; discs: Map<number, number> }>;
+	artists: Map<string, number>;
+	tags: Map<string, number>;
+};
 
 /** What the user hid whole: the albums, artists and tags every track of which they hid. */
 export type Wholly = { albums: bigint[]; artists: bigint[]; tags: bigint[] };

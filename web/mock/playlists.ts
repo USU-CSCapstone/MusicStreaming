@@ -157,11 +157,28 @@ export class PlaylistStore {
 	}
 
 	all(lib: bigint): Playlist[] {
-		return [...this.#entries(lib).values()].map((e) => e.playlist);
+		return [...this.#entries(lib).values()].map((e) => this.#seen(lib, e));
 	}
 
 	get(lib: bigint, playlistId: string): Playlist | undefined {
-		return this.#entries(lib).get(playlistId)?.playlist;
+		const entry = this.#entries(lib).get(playlistId);
+		return entry && this.#seen(lib, entry);
+	}
+
+	/** `entry`'s playlist as the user sees it: its counts without the tracks they hid. */
+	#seen(lib: bigint, entry: Entry): Playlist {
+		const hidden = this.#hiddenIn(lib);
+		const gone = entry.items.filter((i) => hidden.has(i.trackId));
+		if (!gone.length) return entry.playlist;
+		const us = gone.reduce(
+			(sum, i) => sum + (this.library.track(lib, i.trackId)?.durationUs ?? 0),
+			0
+		);
+		return {
+			...entry.playlist,
+			trackCount: entry.playlist.trackCount - gone.length,
+			durationUs: entry.playlist.durationUs - us
+		};
 	}
 
 	/** In order, duplicates included: what a mosaic is made from. */
@@ -299,7 +316,7 @@ export class PlaylistStore {
 			modifiedAt: new Date().toISOString()
 		};
 		this.#refresh(lib, entry);
-		return entry.playlist;
+		return this.#seen(lib, entry);
 	}
 
 	/** Whether there was such a playlist. */

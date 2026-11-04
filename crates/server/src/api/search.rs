@@ -170,6 +170,7 @@ fn results(
     found: Vec<Found>,
 ) -> rusqlite::Result<Vec<Section>> {
     let mut sections = Vec::with_capacity(found.len());
+    let losses = hidden::losses(conn, user, library)?;
     for section in found {
         let ids = &section.ids;
         let items = match section.kind {
@@ -182,11 +183,13 @@ fn results(
                 found.into_iter().map(|track| SearchResult::Track { track }).collect()
             }
             Kind::Album => by_ids(conn, albums::SELECT, "albums al", "", library, ids, |row| {
-                let album = albums::summary(row)?;
+                let mut album = albums::summary(row)?;
+                album.lose(&losses);
                 Ok(SearchResult::Album { album })
             })?,
             Kind::Artist => by_ids(conn, artists::SELECT, "artists ar", "", library, ids, |row| {
-                let artist = artists::summary(row)?;
+                let mut artist = artists::summary(row)?;
+                artist.lose(&losses);
                 Ok(SearchResult::Artist { artist })
             })?,
         };

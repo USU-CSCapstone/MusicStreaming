@@ -130,7 +130,16 @@ pub async fn list(
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
     let q = query.q;
     let page = db
-        .read(move |conn| request.read(conn, &source(user, library, q.as_deref()), playlist))
+        .read(move |conn| {
+            let mut page = request.read(conn, &source(user, library, q.as_deref()), playlist)?;
+            let lost = super::hidden::playlists(conn, user, library)?;
+            for playlist in &mut page.items {
+                if let Some(&lost) = lost.get(&playlist.id.0) {
+                    playlist.lose(lost);
+                }
+            }
+            Ok(page)
+        })
         .await?;
     Ok(Json(page))
 }

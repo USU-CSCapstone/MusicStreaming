@@ -9,6 +9,7 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
 use crate::api::Id;
+use crate::api::hidden::Losses;
 use crate::api::refs::{
     Credit, ImageRef, TagsByType, artists_json, availability, placeholder, tags_json,
 };
@@ -104,6 +105,32 @@ pub fn album(conn: &Connection, library: i64, album: i64) -> rusqlite::Result<Op
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(Some(Album { summary, labels, discs }))
+}
+
+impl AlbumSummary {
+    /// The album as the user who hid what `losses` counts sees it: its counts of what is left,
+    /// and the tags it brings them still (`requirements/conventions.md` §8).
+    pub fn lose(&mut self, losses: &Losses) {
+        let Some(loss) = losses.albums.get(&self.id.0) else { return };
+        self.track_count -= loss.tracks;
+        self.duration_us -= loss.duration_us;
+        self.disc_count -= loss.discs_gone;
+        self.tags.without(&loss.tags);
+    }
+}
+
+impl Album {
+    /// [`AlbumSummary::lose`], and each disc's count of what is left, leaving out a disc with
+    /// none.
+    pub fn lose(&mut self, losses: &Losses) {
+        self.summary.lose(losses);
+        let Some(loss) = losses.albums.get(&self.summary.id.0) else { return };
+        for disc in &mut self.discs {
+            let number = disc.number.map_or(0, NonZeroI64::get);
+            disc.track_count -= loss.discs.get(&number).copied().unwrap_or(0);
+        }
+        self.discs.retain(|disc| disc.track_count > 0);
+    }
 }
 
 /// An album from a row of [`SELECT`], with its artists and tags.

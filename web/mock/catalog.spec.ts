@@ -154,3 +154,18 @@ describe('what the user hid whole', () => {
 		expect(catalog.tagTypes(1n, [30n, 31n]).map((t) => t.key)).toEqual(['mood']);
 	});
 });
+
+describe('counts without hidden tracks', () => {
+	it('lose what each hidden track counted toward', () => {
+		const lost = catalog.losses([11n]);
+		expect([lost.tracks, lost.durationUs]).toEqual([1, 1_000_000]);
+		expect(lost.albums.get('101')?.tracks).toBe(1);
+		expect(lost.artists.get('301')).toBe(1);
+		expect([lost.tags.get('30'), lost.tags.get('31'), lost.tags.get('32')]).toEqual([
+			1,
+			undefined,
+			1
+		]);
+		expect(catalog.losses([]).tracks).toBe(0);
+	});
+});
