@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::num::NonZeroI64;
 
 use jewelcase_core::SortRow;
-use rusqlite::{Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::Serialize;
 
 use crate::api::Id;
@@ -16,10 +16,11 @@ use crate::api::refs::{
     AlbumRef, Credit, ImageRef, TagsByType, artists_json, availability, placeholder, tags_json,
 };
 use crate::api::time::serialize_rfc3339;
-use crate::db::{Json, by_ids};
+use crate::db::{Json, by_ids, liked_songs};
 
 /// The spec's `TrackSummary`, without `personal`. A full `Track` has the same fields with more
-/// `audio`, so the audio type is a parameter.
+/// `audio`, so the audio type is a parameter. `liked` is the caller's, so it is read apart from
+/// the rest, by [`mark_liked`]: false until then.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackSummary<A = AudioSummary> {
@@ -39,6 +40,7 @@ pub struct TrackSummary<A = AudioSummary> {
     #[serde(serialize_with = "serialize_rfc3339")]
     added_at: i64,
     sort_keys: TrackSortKeys,
+    liked: bool,
 }
 
 /// The spec's `TrackSortKeys`: what the server orders tracks by, so a client sorting a list it
@@ -204,7 +206,40 @@ fn summary<A>(row: &Row, audio: A) -> rusqlite::Result<TrackSummary<A>> {
             artist: key(row, 19)?,
             album: key(row, 20)?,
         },
+        liked: false,
     })
+}
+
+/// Marks each of `tracks` that `user` likes in `library`: those in their Liked Songs there
+/// (`requirements/playlists.md` §11). One read finds the playlist, then each track is one probe
+/// of `playlist_items_by_track`, so the cost follows the tracks shown, not the likes.
+pub fn mark_liked<'a, A: 'a>(
+    conn: &Connection,
+    user: i64,
+    library: i64,
+    tracks: impl IntoIterator<Item = &'a mut TrackSummary<A>>,
+) -> rusqlite::Result<()> {
+    let Some((liked, _)) = liked_songs::find(conn, user, library)? else { return Ok(()) };
+    let mut probe = conn.prepare_cached(
+        "SELECT EXISTS (SELECT 1 FROM playlist_items INDEXED BY playlist_items_by_track \
+         WHERE library_id = ?1 AND track_id = ?2 AND playlist_id = ?3)",
+    )?;
+    for track in tracks {
+        track.liked = probe.query_row(params![library, track.id.0, liked], |row| row.get(0))?;
+    }
+    Ok(())
+}
+
+impl Track {
+    /// Marks the track if `user` likes it in `library` ([`mark_liked`]).
+    pub fn mark_liked(
+        &mut self,
+        conn: &Connection,
+        user: i64,
+        library: i64,
+    ) -> rusqlite::Result<()> {
+        mark_liked(conn, user, library, [&mut self.summary])
+    }
 }
 
 /// The keys the core's comparator sorts each of the tracks `ids` of `library` by, as a

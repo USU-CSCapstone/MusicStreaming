@@ -131,7 +131,9 @@ const track = (
 	explicit: false,
 	audio: { codec: 'pcm', lossless: true },
 	availability: 'available',
-	sortKeys: { title: title.toLowerCase(), artist: 'aurora lane', album: 'signal' }
+	sortKeys: { title: title.toLowerCase(), artist: 'aurora lane', album: 'signal' },
+
+	liked: false
 });
 
 // Added out of title order, so newest first is an order of its own.

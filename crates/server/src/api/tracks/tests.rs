@@ -190,6 +190,7 @@ async fn summaries_and_full_tracks() {
         "audio": { "codec": "flac", "lossless": true }, "availability": "available",
         "addedAt": "1970-01-01T00:00:01.001Z",
         "sortKeys": { "title": "come together", "artist": "beatles", "album": "abbey road" },
+        "liked": false,
     });
     let (_, page) = json(&app, "/api/v1/libraries/1/tracks?albumId=101&sort=album").await;
     assert_eq!(page["items"][0], summary);

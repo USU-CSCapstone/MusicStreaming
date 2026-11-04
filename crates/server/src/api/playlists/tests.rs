@@ -105,9 +105,9 @@ async fn a_playlist_is_created_with_the_tracks_its_items_expand_to_in_order() {
     assert_eq!(
         shown,
         json!({
-            "libraryId": "1", "title": "Road", "description": "Long drives", "image": null,
-            "customImage": false, "trackCount": 11, "durationUs": 11_000_000, "pinned": false,
-            "version": 1,
+            "libraryId": "1", "kind": "saved", "title": "Road", "description": "Long drives",
+            "image": null, "customImage": false, "trackCount": 11, "durationUs": 11_000_000,
+            "pinned": false, "version": 1,
         })
     );
     // An album in its disc and number order; an artist's own album then what it features on, in

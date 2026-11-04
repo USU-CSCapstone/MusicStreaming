@@ -10,7 +10,8 @@ use rusqlite::Connection;
 use serde::Deserialize;
 
 pub use representation::{
-    JOINS, LOUDNESS, Loudness, SELECT, Track, TrackSummary, list_summary, loudness, sort_keys,
+    JOINS, LOUDNESS, Loudness, SELECT, Track, TrackSummary, list_summary, loudness, mark_liked,
+    sort_keys,
 };
 
 use super::credit::{ArtistCredit, Credits};
@@ -162,6 +163,7 @@ impl ListQuery {
 /// More than [`MAX_IDS`] IDs, or any parameter besides `ids`, is `422`.
 async fn by_ids(
     db: Arc<Database>,
+    user: i64,
     library: i64,
     query: ListQuery,
 ) -> Result<Json<Page<TrackSummary>>, Problem> {
@@ -174,7 +176,12 @@ async fn by_ids(
         return Err(Problem::invalid(format!("ids names at most {MAX_IDS} tracks")));
     }
     let items = db
-        .read(move |conn| db::by_ids(conn, SELECT, "tracks t", JOINS, library, &ids, list_summary))
+        .read(move |conn| {
+            let mut items =
+                db::by_ids(conn, SELECT, "tracks t", JOINS, library, &ids, list_summary)?;
+            mark_liked(conn, user, library, &mut items)?;
+            Ok(items)
+        })
         .await?;
     let total = i64::try_from(items.len()).unwrap_or(i64::MAX);
     Ok(Json(Page { items, next_cursor: None, total }))
@@ -185,11 +192,11 @@ async fn by_ids(
 /// those tracks (see [`by_ids`]).
 pub async fn list(
     State(db): State<Arc<Database>>,
-    Scope { library, .. }: Scope,
+    Scope { user, library }: Scope,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<TrackSummary>>, Problem> {
     if query.ids.is_some() {
-        return by_ids(db, library, query).await;
+        return by_ids(db, user, library, query).await;
     }
     let order =
         TrackOrder { sort: query.sort.unwrap_or_default(), order: query.order.unwrap_or_default() };
@@ -201,7 +208,9 @@ pub async fn list(
     let page = db
         .read(move |conn| {
             let source = source(conn, library, album, artist, credit, &tags, LEAD_SHARE)?;
-            request.read(conn, &source, list_summary)
+            let mut page = request.read(conn, &source, list_summary)?;
+            mark_liked(conn, user, library, &mut page.items)?;
+            Ok(page)
         })
         .await?;
     Ok(Json(page))
@@ -241,13 +250,19 @@ pub fn resolve(
 /// `getTrack`: the track, or not found when the library has no such track.
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Scope { library, .. }: Scope,
+    Scope { user, library }: Scope,
     Path((_, Id(track))): Path<(Id, Id)>,
 ) -> Result<Json<Track>, Problem> {
-    db.read(move |conn| representation::track(conn, library, track))
-        .await?
-        .map(Json)
-        .ok_or_else(Problem::not_found)
+    db.read(move |conn| {
+        let mut found = representation::track(conn, library, track)?;
+        if let Some(track) = &mut found {
+            track.mark_liked(conn, user, library)?;
+        }
+        Ok(found)
+    })
+    .await?
+    .map(Json)
+    .ok_or_else(Problem::not_found)
 }
 
 /// The tracks a list reads.

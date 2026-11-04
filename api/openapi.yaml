@@ -496,6 +496,34 @@ paths:
               schema: { $ref: '#/components/schemas/Track' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /libraries/{libraryId}/tracks/{trackId}/like:
+    parameters:
+      - $ref: '#/components/parameters/LibraryId'
+      - $ref: '#/components/parameters/TrackId'
+    put:
+      tags: [Playlists]
+      summary: Like a track
+      description: |
+        Puts the track at the top of the caller's Liked Songs in the library, unless it is there
+        already (`requirements/playlists.md` §11). A caller who deleted their Liked Songs has it
+        made again, pinned. Not checked against a version: a like says whether a track is liked,
+        not where it sits, so it applies whatever else changed the playlist. It is announced as
+        an edit of the playlist is (`playlist`). A track the library does not have is `404`.
+      operationId: likeTrack
+      responses:
+        '204': { description: Liked. }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Playlists]
+      summary: Unlike a track
+      description: |
+        Takes the track out of the caller's Liked Songs. A track not liked is already unliked, so
+        that is `204` too.
+      operationId: unlikeTrack
+      responses:
+        '204': { description: Not liked. }
+        default: { $ref: '#/components/responses/Problem' }
+
   /libraries/{libraryId}/albums:
     parameters:
       - $ref: '#/components/parameters/LibraryId'
@@ -944,7 +972,9 @@ paths:
     get:
       tags: [Playlists]
       summary: List the caller's playlists
-      description: Pinned playlists first, in either `order` (`requirements/playlists.md` §7).
+      description: |
+        Pinned playlists first, in either `order` (`requirements/playlists.md` §7). Every user has
+        a Liked Songs in each library, pinned until they unpin it, unless they deleted it (§11).
       operationId: listPlaylists
       parameters:
         - name: sort
@@ -1033,6 +1063,11 @@ paths:
         is a further edit that reverses the last. Send an `Idempotency-Key`, so a retried edit is
         not refused because its first attempt applied: a key the caller already used for an edit
         that applied returns that `200` and body again, whatever `baseVersion` the retry names.
+
+        A Liked Songs (`kind` `liked`) keeps its title and has no description, so an edit of
+        either is `422`. Adding to it likes tracks (`requirements/playlists.md` §11): an add with
+        no `at` goes to the top, and only tracks not in it are added, each once. Removing from it
+        unlikes them. It is otherwise edited as any playlist.
       operationId: editPlaylist
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -1052,7 +1087,10 @@ paths:
     delete:
       tags: [Playlists]
       summary: Delete a playlist
-      description: Deletes the playlist and its items, never the tracks. Anyone else's is `404`.
+      description: |
+        Deletes the playlist and its items, never the tracks. Anyone else's is `404`. Deleting a
+        Liked Songs unlikes every track in it, and it is not made again until the caller next
+        likes one (`likeTrack`).
       operationId: deletePlaylist
       responses:
         '204': { description: Deleted. }
@@ -2496,7 +2534,7 @@ components:
       allOf:
         - $ref: '#/components/schemas/TrackBase'
         - type: object
-          required: [audio, explicit, sortKeys, tags]
+          required: [audio, explicit, sortKeys, tags, liked]
           properties:
             album: { $ref: '#/components/schemas/AlbumRef' }
             explicit: { type: boolean }
@@ -2506,6 +2544,9 @@ components:
               description: Enough to tell a FLAC from an MP3 at a glance (`requirements/tracks.md` §4). The full `Track` extends it.
             addedAt: { type: string, format: date-time }
             sortKeys: { $ref: '#/components/schemas/TrackSortKeys' }
+            liked:
+              type: boolean
+              description: Whether it is in the caller's Liked Songs (`requirements/playlists.md` §11).
             personal: { $ref: '#/components/schemas/Personal' }
 
     TrackSortKeys:
@@ -2920,9 +2961,16 @@ components:
       allOf:
         - $ref: '#/components/schemas/PlaylistBase'
         - type: object
-          required: [libraryId, customImage, trackCount, durationUs, pinned, createdAt, modifiedAt, version]
+          required: [libraryId, kind, customImage, trackCount, durationUs, pinned, createdAt, modifiedAt, version]
           properties:
             libraryId: { $ref: '#/components/schemas/Id' }
+            kind:
+              type: string
+              enum: [saved, liked]
+              description: |
+                `liked` for the caller's Liked Songs, whose tracks are their likes, with a fixed
+                title and no image of its own, which clients draw as a heart; `saved` for the rest
+                (`requirements/playlists.md` §11).
             customImage:
               type: boolean
               description: Whether `image` is a custom upload rather than the generated mosaic; `deletePlaylistImage` reverts it.

@@ -410,7 +410,9 @@ export class Catalog {
 				title: sortKey(row.sort_key),
 				artist: sortKey(row.artist_sort_key),
 				album: sortKey(row.album_sort_key)
-			}
+			},
+			// Likes are the user's, which `PlaylistStore.markLiked` fills in.
+			liked: false
 		};
 	}
 

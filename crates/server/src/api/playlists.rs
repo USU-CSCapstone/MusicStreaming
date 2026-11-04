@@ -14,6 +14,7 @@ mod edit;
 mod idempotency;
 mod items;
 mod keys;
+mod liked;
 mod representation;
 
 use std::sync::Arc;
@@ -33,6 +34,7 @@ pub use artwork::{all_mosaics, held as holds_artwork, mosaics_of};
 pub use edit::edit;
 use idempotency::{Answer, Key};
 pub use items::{all_items, duplicates, list_items};
+pub use liked::{like, unlike};
 pub use representation::Playlist;
 use representation::{SELECT, playlist};
 

@@ -84,8 +84,9 @@ function create(body: object = { title: 'Mine' }, key?: string) {
 describe('reading', () => {
 	it('starts with the generated playlists', () => {
 		const page = call<PlaylistPage>('GET', '/playlists').body;
-		expect(page.items.map((p) => p.id)).toEqual(['pl-seed']);
-		expect(page.items[0]).toMatchObject({ version: 1, trackCount: 2, durationUs: 3_000_000 });
+		expect(page.items.map((p) => p.id)).toEqual(['liked-1', 'pl-seed']);
+		expect(page.items[0]).toMatchObject({ kind: 'liked', pinned: true, trackCount: 0 });
+		expect(page.items[1]).toMatchObject({ version: 1, trackCount: 2, durationUs: 3_000_000 });
 		expect(ids('/playlists/pl-seed')).toEqual(['1', '2']);
 	});
 
@@ -106,14 +107,13 @@ describe('reading', () => {
 		call('PATCH', `/playlists/${mine.id}`, { baseVersion: 1, pinned: true });
 		const list = (q = '') =>
 			call<PlaylistPage>('GET', `/playlists${q}`).body.items.map((p) => p.title);
-		expect(list()).toEqual(['Road Trip', 'Seed']);
+		expect(list()).toEqual(['Liked Songs', 'Road Trip', 'Seed']);
 		expect(list('?q=road')).toEqual(['Road Trip']);
 	});
 
 	it('keeps each library to its own playlists', () => {
-		expect(call<PlaylistPage>('GET', '/playlists', undefined, undefined, OTHER).body.items).toEqual(
-			[]
-		);
+		const other = call<PlaylistPage>('GET', '/playlists', undefined, undefined, OTHER).body;
+		expect(other.items.map((p) => p.id)).toEqual(['liked-2']);
 		expect(call('GET', '/playlists/pl-seed', undefined, undefined, OTHER).status).toBe(404);
 	});
 });
@@ -293,4 +293,44 @@ describe('duplicates', () => {
 
 it('refuses methods a path does not take', () => {
 	expect(call<Problem>('PUT', '/playlists/pl-seed').body.code).toBe('method_not_allowed');
+});
+
+describe('Liked Songs', () => {
+	const liked = () => ids('/playlists/liked-1');
+
+	it('takes a like at the top, once, and shows it on the track', () => {
+		expect([1n, 2n, 1n].map((t) => store.like(LIB, t))).toEqual([true, true, true]);
+		expect(liked()).toEqual(['2', '1']);
+		expect(store.get(LIB, 'liked-1')).toMatchObject({ trackCount: 2, version: 3, image: null });
+		const tracks = [track(1), track(3)];
+		store.markLiked(LIB, tracks);
+		expect(tracks.map((t) => t.liked)).toEqual([true, false]);
+		store.unlike(LIB, 1n);
+		store.unlike(LIB, 1n);
+		expect(liked()).toEqual(['2']);
+		expect(store.like(LIB, 7n)).toBe(false);
+	});
+
+	it('keeps its name, and an add to it likes', () => {
+		store.like(LIB, 1n);
+		const renamed = call<Problem>('PATCH', '/playlists/liked-1', {
+			baseVersion: 2,
+			title: 'Faves'
+		});
+		expect(renamed.status).toBe(422);
+		const items = [2, 1, 2].map((id) => ({ type: 'track', id: String(id) }));
+		const added = call('PATCH', '/playlists/liked-1', {
+			baseVersion: 2,
+			ops: [{ op: 'add', items }]
+		});
+		expect(added.status).toBe(200);
+		expect(liked()).toEqual(['2', '1']);
+	});
+
+	it('is made again, pinned, by a like after a delete', () => {
+		expect(call('DELETE', '/playlists/liked-1').status).toBe(204);
+		store.like(LIB, 3n);
+		const again = store.all(LIB).find((p) => p.kind === 'liked');
+		expect(again).toMatchObject({ pinned: true, trackCount: 1 });
+	});
 });

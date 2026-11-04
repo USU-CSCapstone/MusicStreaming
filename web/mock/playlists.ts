@@ -1,7 +1,8 @@
-// The user's playlists, kept in memory: a few generated from the library to start with, which
-// the client can then create, edit, and delete (`api/openapi.yaml`, Playlists). They are the
-// user's data, not the library's, so the scanner's database is never written, and they reset
-// whenever the dev server restarts.
+// The user's playlists, kept in memory: their Liked Songs and a few generated from the library
+// to start with, which the client can then create, edit, and delete (`api/openapi.yaml`,
+// Playlists). They are the user's data, not the library's, so the scanner's database is never
+// written, and they reset whenever the dev server restarts. Liking a track adds it to Liked Songs
+// (`requirements/playlists.md` §11).
 
 import { randomUUID } from 'node:crypto';
 import type {
@@ -69,6 +70,38 @@ export class PlaylistStore {
 
 	constructor(readonly library: PlaylistLibrary) {}
 
+	/**
+	 * Likes `trackId`: puts it at the top of Liked Songs, unless it is there already, making the
+	 * playlist again, pinned, if it was deleted. False if the library has no such track.
+	 */
+	like(lib: bigint, trackId: bigint): boolean {
+		if (!this.library.track(lib, trackId)) return false;
+		let entry = this.#liked(lib);
+		if (!entry) {
+			entry = likedSongs(lib, `liked-${lib}-${randomUUID()}`, new Date().toISOString());
+			this.#entries(lib).set(entry.playlist.id, entry);
+		}
+		if (entry.items.some((i) => i.trackId === trackId)) return true;
+		const now = new Date().toISOString();
+		entry.items = [{ trackId, addedAt: now }, ...entry.items];
+		this.#touch(lib, entry, now);
+		return true;
+	}
+
+	/** Takes `trackId` out of Liked Songs, if it is there. */
+	unlike(lib: bigint, trackId: bigint) {
+		const entry = this.#liked(lib);
+		if (!entry?.items.some((i) => i.trackId === trackId)) return;
+		entry.items = entry.items.filter((i) => i.trackId !== trackId);
+		this.#touch(lib, entry, new Date().toISOString());
+	}
+
+	/** Sets each of `tracks`' `liked`, from Liked Songs. */
+	markLiked(lib: bigint, tracks: TrackSummary[]) {
+		const liked = new Set(this.#liked(lib)?.items.map((i) => String(i.trackId)));
+		for (const track of tracks) track.liked = liked.has(track.id);
+	}
+
 	/** Pinned first, then by `sort` (`requirements/playlists.md` §7). */
 	list(lib: bigint, query: URLSearchParams): PlaylistPage {
 		const by: Record<string, (a: Playlist, b: Playlist) => number> = {
@@ -105,14 +138,15 @@ export class PlaylistStore {
 		const entry = this.#entries(lib).get(playlistId);
 		if (!entry) return undefined;
 		const page = slice(entry.items, paging(query));
-		return {
-			...page,
-			items: page.items.flatMap((i) => {
-				const track = this.library.track(lib, i.trackId);
-				return track ? [{ track, addedAt: i.addedAt }] : [];
-			}),
-			version: entry.playlist.version
-		};
+		const items = page.items.flatMap((i) => {
+			const track = this.library.track(lib, i.trackId);
+			return track ? [{ track, addedAt: i.addedAt }] : [];
+		});
+		this.markLiked(
+			lib,
+			items.map((i) => i.track)
+		);
+		return { ...page, items, version: entry.playlist.version };
 	}
 
 	create(lib: bigint, body: unknown): Playlist {
@@ -134,6 +168,7 @@ export class PlaylistStore {
 			playlist: {
 				id: `pl-${randomUUID()}`,
 				libraryId: String(lib),
+				kind: 'saved',
 				title,
 				description: description ?? null,
 				image: null,
@@ -174,6 +209,10 @@ export class PlaylistStore {
 			throw invalid('/pinned', 'Pinned must be true or false.');
 		}
 		if (ops !== undefined) this.#checkOps(lib, ops);
+		const liked = entry.playlist.kind === 'liked';
+		if (liked && (title !== undefined || description !== undefined)) {
+			throw invalid('', 'Liked Songs keeps its title, and has no description.');
+		}
 
 		const current = entry.playlist.version;
 		if (baseVersion !== current) {
@@ -188,10 +227,21 @@ export class PlaylistStore {
 		let items = entry.items;
 		if (ops !== undefined) {
 			const now = new Date().toISOString();
+			// Adding to Liked Songs likes: to the top unless placed, and only what it lacks, once.
+			const held = new Set(liked ? items.map((i) => i.trackId) : []);
+			const asked = (ops as PlaylistOp[]).map((op) =>
+				liked && op.op === 'add' && op.at === undefined ? { ...op, at: 0 } : op
+			);
 			try {
-				items = applyOps(items, ops as PlaylistOp[], (added) =>
+				items = applyOps(items, asked, (added) =>
 					added
 						.flatMap((p) => this.#expand(lib, p, ''))
+						.filter((trackId) => {
+							if (!liked) return true;
+							if (held.has(trackId)) return false;
+							held.add(trackId);
+							return true;
+						})
 						.map((trackId) => ({ trackId, addedAt: now }))
 				);
 			} catch (e) {
@@ -238,15 +288,32 @@ export class PlaylistStore {
 		this.#replies.set(key, response);
 	}
 
+	#liked(lib: bigint): Entry | undefined {
+		return [...this.#entries(lib).values()].find((e) => e.playlist.kind === 'liked');
+	}
+
+	/** A change to `entry`'s items at `now`, as a like or an unlike makes one. */
+	#touch(lib: bigint, entry: Entry, now: string) {
+		entry.playlist = {
+			...entry.playlist,
+			version: entry.playlist.version + 1,
+			modifiedAt: now
+		};
+		this.#refresh(lib, entry);
+	}
+
 	#entries(lib: bigint): Map<string, Entry> {
 		let entries = this.#libraries.get(lib);
 		if (!entries) {
-			entries = new Map();
+			// Every user has a Liked Songs from the start (`requirements/playlists.md` §11).
+			const liked = likedSongs(lib, `liked-${lib}`, new Date().toISOString());
+			entries = new Map([[liked.playlist.id, liked]]);
 			for (const g of this.library.generated(lib)) {
 				const entry: Entry = {
 					playlist: {
 						id: g.id,
 						libraryId: String(lib),
+						kind: 'saved',
 						title: g.title,
 						description: g.description,
 						image: null,
@@ -277,10 +344,12 @@ export class PlaylistStore {
 			0
 		);
 		// A mosaic of the albums inside, composed by `media.ts` (`requirements/playlists.md` §6).
-		// Its ID carries the version, as an image's ID changes whenever the image does.
-		playlist.image = items.length
-			? { id: `mosaic-${playlist.version}-${playlist.id}`, placeholder: null }
-			: null;
+		// Its ID carries the version, as an image's ID changes whenever the image does. Liked
+		// Songs has none: its artwork is a heart the client draws.
+		playlist.image =
+			items.length && playlist.kind === 'saved'
+				? { id: `mosaic-${playlist.version}-${playlist.id}`, placeholder: null }
+				: null;
 	}
 
 	/** Every op's shape and items, so an edit is refused before any of it applies. */
@@ -317,6 +386,28 @@ export class PlaylistStore {
 		if (!ids) throw invalid(field, `This library has no such ${ref.type}.`);
 		return ids;
 	}
+}
+
+/** An empty Liked Songs, pinned, made at `now`. */
+function likedSongs(lib: bigint, id: string, now: string): Entry {
+	return {
+		playlist: {
+			id,
+			libraryId: String(lib),
+			kind: 'liked',
+			title: 'Liked Songs',
+			description: null,
+			image: null,
+			customImage: false,
+			trackCount: 0,
+			durationUs: 0,
+			pinned: true,
+			createdAt: now,
+			modifiedAt: now,
+			version: 1
+		},
+		items: []
+	};
 }
 
 export type PlaylistResponse = { status: number; body?: unknown };

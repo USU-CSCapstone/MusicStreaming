@@ -323,6 +323,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/libraries/{libraryId}/tracks/{trackId}/like": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+                trackId: components["parameters"]["TrackId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Like a track
+         * @description Puts the track at the top of the caller's Liked Songs in the library, unless it is there
+         *     already (`requirements/playlists.md` §11). A caller who deleted their Liked Songs has it
+         *     made again, pinned. Not checked against a version: a like says whether a track is liked,
+         *     not where it sits, so it applies whatever else changed the playlist. It is announced as
+         *     an edit of the playlist is (`playlist`). A track the library does not have is `404`.
+         */
+        put: operations["likeTrack"];
+        post?: never;
+        /**
+         * Unlike a track
+         * @description Takes the track out of the caller's Liked Songs. A track not liked is already unliked, so
+         *     that is `204` too.
+         */
+        delete: operations["unlikeTrack"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/libraries/{libraryId}/albums": {
         parameters: {
             query?: never;
@@ -704,7 +736,8 @@ export interface paths {
         };
         /**
          * List the caller's playlists
-         * @description Pinned playlists first, in either `order` (`requirements/playlists.md` §7).
+         * @description Pinned playlists first, in either `order` (`requirements/playlists.md` §7). Every user has
+         *     a Liked Songs in each library, pinned until they unpin it, unless they deleted it (§11).
          */
         get: operations["listPlaylists"];
         put?: never;
@@ -746,7 +779,9 @@ export interface paths {
         post?: never;
         /**
          * Delete a playlist
-         * @description Deletes the playlist and its items, never the tracks. Anyone else's is `404`.
+         * @description Deletes the playlist and its items, never the tracks. Anyone else's is `404`. Deleting a
+         *     Liked Songs unlikes every track in it, and it is not made again until the caller next
+         *     likes one (`likeTrack`).
          */
         delete: operations["deletePlaylist"];
         options?: never;
@@ -769,6 +804,11 @@ export interface paths {
          *     is a further edit that reverses the last. Send an `Idempotency-Key`, so a retried edit is
          *     not refused because its first attempt applied: a key the caller already used for an edit
          *     that applied returns that `200` and body again, whatever `baseVersion` the retry names.
+         *
+         *     A Liked Songs (`kind` `liked`) keeps its title and has no description, so an edit of
+         *     either is `422`. Adding to it likes tracks (`requirements/playlists.md` §11): an add with
+         *     no `at` goes to the top, and only tracks not in it are added, each once. Removing from it
+         *     unlikes them. It is otherwise edited as any playlist.
          */
         patch: operations["editPlaylist"];
         trace?: never;
@@ -1653,6 +1693,8 @@ export interface components {
             /** Format: date-time */
             addedAt?: string;
             sortKeys: components["schemas"]["TrackSortKeys"];
+            /** @description Whether it is in the caller's Liked Songs (`requirements/playlists.md` §11). */
+            liked: boolean;
             personal?: components["schemas"]["Personal"];
         };
         /**
@@ -1911,6 +1953,13 @@ export interface components {
         };
         Playlist: components["schemas"]["PlaylistBase"] & {
             libraryId: components["schemas"]["Id"];
+            /**
+             * @description `liked` for the caller's Liked Songs, whose tracks are their likes, with a fixed
+             *     title and no image of its own, which clients draw as a heart; `saved` for the rest
+             *     (`requirements/playlists.md` §11).
+             * @enum {string}
+             */
+            kind: "saved" | "liked";
             /** @description Whether `image` is a custom upload rather than the generated mosaic; `deletePlaylistImage` reverts it. */
             customImage: boolean;
             /** @description Every track in the playlist, missing ones included (`requirements/playlists.md` §3). */
@@ -3658,6 +3707,50 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Track"];
                 };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    likeTrack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+                trackId: components["parameters"]["TrackId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Liked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    unlikeTrack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+                trackId: components["parameters"]["TrackId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Not liked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Problem"];
         };
