@@ -19,7 +19,9 @@ const track = (id: string, title: string): TrackSummary => ({
 	explicit: false,
 	audio: { codec: 'flac', lossless: true },
 	availability: 'available',
-	sortKeys: { title: title.toLowerCase(), artist: 'aurora lane', album: 'signal' }
+	sortKeys: { title: title.toLowerCase(), artist: 'aurora lane', album: 'signal' },
+
+	liked: false
 });
 const tracks = [track('1', 'Signal Part 1'), track('2', 'Signal Part 2')];
 

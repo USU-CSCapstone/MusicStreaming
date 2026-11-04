@@ -22,6 +22,7 @@ use super::KEY_GAP;
 use super::announce::{AppliedOp, Change};
 use super::idempotency::{Answer, Key};
 use super::keys::assign;
+use super::liked;
 use super::representation::{self, header};
 use crate::api::Images;
 use crate::api::extract::{self, Path};
@@ -95,7 +96,9 @@ struct Item {
 }
 
 /// `editPlaylist`: applies the details and ops to the caller's playlist if it is at
-/// `baseVersion`, and returns it at the next version. Another version is `409 version_conflict`,
+/// `baseVersion`, and returns it at the next version. A Liked Songs keeps its title and
+/// description, so an edit of either is `422`, and its adds like tracks ([`liked::only_new`]).
+/// Otherwise it is edited as any playlist. Another version is `409 version_conflict`,
 /// a position out of range, or an item the caller cannot add, `422`, and nothing is applied
 /// either way. With an `Idempotency-Key` the caller already used for an edit that applied,
 /// returns that answer and applies nothing. An edit that applied is announced to the caller's
@@ -110,6 +113,7 @@ pub async fn edit(
     extract::Json(body): extract::Json<Edit>,
 ) -> Result<Response, Problem> {
     let title = body.check()?;
+    let names = title.is_some() || body.description.is_some();
     let (base, pinned, description) = (body.base_version, body.pinned, body.description);
     let ops = body.ops.unwrap_or_default();
     super::settle(async move {
@@ -127,10 +131,17 @@ pub async fn edit(
                         return Ok::<_, Problem>(Err(answer));
                     }
                     at(conn, user, library, id, base)?;
+                    let liked = liked::is_liked(conn, id)?;
+                    if liked && names {
+                        return Err(Problem::invalid(
+                            "Liked Songs keeps its title, and has no description.",
+                        ));
+                    }
                     let ops = ops
                         .into_iter()
                         .map(|op| expand(conn, user, library, op))
                         .collect::<Result<Vec<_>, _>>()?;
+                    let ops = if liked { liked::only_new(conn, library, id, ops)? } else { ops };
                     Ok(Ok(plan(conn, library, id, ops, now)?))
                 })
                 .await?;

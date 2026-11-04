@@ -86,10 +86,22 @@ export function createApi(dataDir: string) {
 		[/^$/, ({ lib }) => catalog.library(lib) ?? undefined],
 		[/^\/albums$/, ({ lib, query }) => catalog.listAlbums(lib, query)],
 		[/^\/albums\/([^/]+)$/, ({ lib, params }) => withKey(params[0], (k) => catalog.album(lib, k))],
-		[/^\/tracks$/, ({ lib, query }) => catalog.listTracks(lib, query)],
+		[
+			/^\/tracks$/,
+			({ lib, query }) => {
+				const page = catalog.listTracks(lib, query);
+				playlists.markLiked(lib, page.items);
+				return page;
+			}
+		],
 		[
 			/^\/tracks\/([^/]+)$/,
-			({ lib, params }) => withKey(params[0], (k) => catalog.tracksByIds(lib, [k])[0])
+			({ lib, params }) =>
+				withKey(params[0], (k) => {
+					const tracks = catalog.tracksByIds(lib, [k]);
+					playlists.markLiked(lib, tracks);
+					return tracks[0];
+				})
 		],
 		[/^\/artists$/, ({ lib, query }) => catalog.listArtists(lib, query)],
 		[
@@ -181,6 +193,7 @@ export function createApi(dataDir: string) {
 				sections.push({ type, items, total, rank: matchRank(best, text) });
 		};
 		const tracks = catalog.searchTracks(lib, text, limit, query);
+		playlists.markLiked(lib, tracks.items);
 		add(
 			'tracks',
 			tracks.items.map((track) => ({ type: 'track', track })),
@@ -274,6 +287,18 @@ export function createApi(dataDir: string) {
 					await readBody(req)
 				)
 			);
+		}
+		// A like or an unlike is a write to Liked Songs (`requirements/playlists.md` §11).
+		const liking = /^\/libraries\/([^/]+)\/tracks\/([^/]+)\/like$/.exec(path);
+		if (liking && (req.method === 'PUT' || req.method === 'DELETE')) {
+			const [lib, track] = [toKey(liking[1]), toKey(liking[2])];
+			if (lib === null || track === null || !catalog.library(lib)) {
+				return problem(res, 404, 'Not Found', 'not_found');
+			}
+			if (req.method === 'DELETE') playlists.unlike(lib, track);
+			else if (!playlists.like(lib, track)) return problem(res, 404, 'Not Found', 'not_found');
+			res.statusCode = 204;
+			return res.end();
 		}
 		// Playlists take writes, so they are answered before the read-only routes.
 		const lists = /^\/libraries\/([^/]+)(\/playlists(?:\/.*)?)$/.exec(path);

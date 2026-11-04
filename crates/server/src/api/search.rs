@@ -69,7 +69,7 @@ enum SearchResult {
 pub async fn search(
     State(db): State<Arc<Database>>,
     State(indexes): State<Arc<Indexes>>,
-    Scope { library, .. }: Scope,
+    Scope { user, library }: Scope,
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<SearchResponse>, Problem> {
     let invalid = |detail| Problem::invalid(detail);
@@ -90,7 +90,7 @@ pub async fn search(
     let found = index.search_within(&query.q, &kinds, limit, |kind, id| {
         tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
     });
-    let sections = db.read(move |conn| results(conn, library, found)).await?;
+    let sections = db.read(move |conn| results(conn, user, library, found)).await?;
 
     Ok(Json(SearchResponse {
         query: query.q,
@@ -148,17 +148,24 @@ fn section_type(kind: Kind) -> &'static str {
     }
 }
 
-/// The summaries of what the index found, as the browse lists show them.
-fn results(conn: &Connection, library: i64, found: Vec<Found>) -> rusqlite::Result<Vec<Section>> {
+/// The summaries of what the index found, as the browse lists show them to `user`.
+fn results(
+    conn: &Connection,
+    user: i64,
+    library: i64,
+    found: Vec<Found>,
+) -> rusqlite::Result<Vec<Section>> {
     let mut sections = Vec::with_capacity(found.len());
     for section in found {
         let ids = &section.ids;
         let items = match section.kind {
             Kind::Track => {
-                by_ids(conn, tracks::SELECT, "tracks t", tracks::JOINS, library, ids, |row| {
-                    let track = tracks::list_summary(row)?;
-                    Ok(SearchResult::Track { track })
-                })?
+                let mut found =
+                    by_ids(conn, tracks::SELECT, "tracks t", tracks::JOINS, library, ids, |row| {
+                        tracks::list_summary(row)
+                    })?;
+                tracks::mark_liked(conn, user, library, &mut found)?;
+                found.into_iter().map(|track| SearchResult::Track { track }).collect()
             }
             Kind::Album => by_ids(conn, albums::SELECT, "albums al", "", library, ids, |row| {
                 let album = albums::summary(row)?;

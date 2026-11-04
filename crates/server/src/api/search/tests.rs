@@ -62,6 +62,12 @@ async fn results_look_like_the_browse_lists() {
         body["top"],
         json!({ "type": "track", "track": listed(&app, "tracks", "1001").await })
     );
+    // Liked, it shows so here as there.
+    let like = "/api/v1/libraries/1/tracks/1001/like";
+    assert_eq!(send(app.clone(), "PUT", like).await.0, StatusCode::NO_CONTENT);
+    let (_, body) = json(&app, "/api/v1/libraries/1/search?q=come%20togther").await;
+    let track = listed(&app, "tracks", "1001").await;
+    assert_eq!((&body["top"]["track"], &track["liked"]), (&track, &json!(true)));
 }
 
 #[tokio::test]

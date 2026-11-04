@@ -26,7 +26,9 @@ const track = (id: string, title: string, f: Fields = {}): TrackSummary => ({
 	explicit: false,
 	audio: { codec: 'flac', lossless: true },
 	availability: 'available',
-	sortKeys: { title: title.toLowerCase(), artist: f.artist ?? '', album: f.album ?? '' }
+	sortKeys: { title: title.toLowerCase(), artist: f.artist ?? '', album: f.album ?? '' },
+
+	liked: false
 });
 
 // The server's fixture (`crates/server/src/api/tracks/tests.rs`), whose orders its tests pin:

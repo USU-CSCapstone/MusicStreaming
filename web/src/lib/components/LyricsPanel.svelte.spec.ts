@@ -31,7 +31,9 @@ const track = {
 	explicit: false,
 	audio: { codec: 'mp3', lossless: false },
 	availability: 'available',
-	sortKeys: { title: 'brain stew', artist: 'green day', album: 'insomniac' }
+	sortKeys: { title: 'brain stew', artist: 'green day', album: 'insomniac' },
+
+	liked: false
 } as TrackSummary;
 
 function open(l: Lyrics) {

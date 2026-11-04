@@ -2,7 +2,7 @@
 //! (`requirements/playlists.md` §11, `design/database.md` §6).
 
 use jewelcase_core::{sort_key, words};
-use rusqlite::{Connection, Result, params};
+use rusqlite::{Connection, OptionalExtension, Result, params};
 
 use super::reach::reaches;
 use super::{new_id, now_ms};
@@ -30,6 +30,15 @@ pub fn ensure(conn: &Connection) -> Result<()> {
         create(conn, user, library, now)?;
     }
     Ok(())
+}
+
+/// The ID and version of `user`'s Liked Songs in `library`, if they have one.
+pub fn find(conn: &Connection, user: i64, library: i64) -> Result<Option<(i64, i64)>> {
+    conn.prepare_cached(
+        "SELECT id, version FROM playlists WHERE user_id = ?1 AND library_id = ?2 AND kind = 'liked'",
+    )?
+    .query_row([user, library], |row| Ok((row.get(0)?, row.get(1)?)))
+    .optional()
 }
 
 /// Makes `user`'s Liked Songs in `library`, empty and pinned, created at `now`, and returns its

@@ -126,13 +126,14 @@ pub async fn list_items(
             let mut wanted: Vec<i64> = rows.iter().map(|row| row.1).collect();
             wanted.sort_unstable();
             wanted.dedup();
-            let summaries: HashMap<i64, TrackSummary> =
+            let mut summaries: HashMap<i64, TrackSummary> =
                 by_ids(conn, tracks::SELECT, "tracks t", tracks::JOINS, library, &wanted, |row| {
                     let track = tracks::list_summary(row)?;
                     Ok((row.get::<_, i64>(0)?, track))
                 })?
                 .into_iter()
                 .collect();
+            tracks::mark_liked(conn, user, library, summaries.values_mut())?;
             // Every item's track is kept by retention, so none is left out in practice.
             let items = rows
                 .iter()

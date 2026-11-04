@@ -14,6 +14,8 @@ use crate::api::time::serialize_rfc3339;
 pub struct Playlist {
     pub(super) id: Id,
     pub(super) library_id: Id,
+    /// `liked` for the user's Liked Songs, `saved` for the rest (`requirements/playlists.md` §11).
+    kind: String,
     title: String,
     description: Option<String>,
     image: Option<ImageRef>,
@@ -44,6 +46,7 @@ pub const SELECT: &[&str] = &[
     // Only a single image has a placeholder; a mosaic's key starts with a letter.
     "CASE WHEN p.image_key GLOB '[0-9]*' THEN (SELECT im.placeholder FROM images im \
      WHERE im.library_id = p.library_id AND im.id = CAST(p.image_key AS INTEGER)) END",
+    "p.kind",
 ];
 
 /// A playlist from a row of [`SELECT`].
@@ -51,6 +54,7 @@ pub fn playlist(row: &Row) -> rusqlite::Result<Playlist> {
     Ok(Playlist {
         id: Id(row.get(0)?),
         library_id: Id(row.get(1)?),
+        kind: row.get(12)?,
         title: row.get(2)?,
         description: row.get(3)?,
         image: ImageRef::named(row.get(10)?, row.get(11)?),
