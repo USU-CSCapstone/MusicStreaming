@@ -11,12 +11,15 @@
 	import ArtistLinks from './ArtistLinks.svelte';
 	import Artwork from './Artwork.svelte';
 	import Icon from './Icon.svelte';
+	import LikeButton from './LikeButton.svelte';
 	import Waveform from './Waveform.svelte';
 
 	// This device's player, or another device's playback to control and pick up
 	// (`requirements/realtime.md` §2, §3, §6).
 	const remote = $derived(controls.remote);
 	const track = $derived(controls.track);
+	/** The library `track` is in: this device's queue's, or the device it controls. */
+	const library = $derived((remote ? playback.libraryId : player.libraryId) ?? '');
 	const playing = $derived(controls.playing);
 	/**
 	 * Where the music plays, when another device plays it; stopped, it plays nowhere. As the
@@ -74,6 +77,7 @@
 					<span class="where" {@attach fullText}>{where}</span>
 				{/if}
 			</div>
+			{#if library}<span class="like"><LikeButton {library} {track} /></span>{/if}
 		{:else if playback.error}
 			<span class="where error" role="alert" title={playback.error}>{playback.error}</span>
 		{:else}
@@ -448,9 +452,11 @@
 			grid-area: side;
 		}
 
+		/* No room for them: the queue panel has Shuffle and Repeat, and a song's menu likes it. */
 		.time,
 		.volume,
-		.mode {
+		.mode,
+		.like {
 			display: none;
 		}
 	}

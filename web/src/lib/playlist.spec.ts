@@ -18,7 +18,6 @@ const track = (n: number): TrackSummary => ({
 	audio: { codec: 'flac', lossless: true },
 	availability: 'available',
 	sortKeys: { title: `track ${n}`, artist: '', album: 'album' },
-
 	liked: false
 });
 const item = (n: number): PlaylistItem => ({
@@ -384,6 +383,15 @@ describe('rowMoveOps', () => {
 		// The rows are 1, 2, 3, 4.
 		expect(order([{ indexes: [0], to: 1 }])).toEqual(['ext', '2', '1', '3', '4']);
 		expect(order([{ indexes: [3], to: 0 }])).toEqual(['4', '1', 'ext', '2', '3']);
+	});
+
+	it('moves rows around items it is told the list does not show, such as hidden ones', () => {
+		// Track 2 is hidden, so the rows are 1, 3, 4.
+		const shows = (i: PlaylistItem) => !!i.track && i.track.id !== '2';
+		const moved = (moves: { indexes: number[]; to: number }[]) =>
+			applyOps(items, rowMoveOps(items, moves, shows), () => []).map((i) => i.track?.id ?? 'ext');
+		expect(moved([{ indexes: [2], to: 0 }])).toEqual(['4', '1', 'ext', '2', '3']);
+		expect(moved([{ indexes: [0], to: 1 }])).toEqual(['ext', '2', '3', '1', '4']);
 	});
 
 	it('gathers scattered rows, and moves them to the end', () => {

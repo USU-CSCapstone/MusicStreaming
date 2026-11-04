@@ -3,13 +3,15 @@
 	// playlist's: put them next or last in the queue, or at a point of Up Next chosen in the
 	// queue panel (`requirements/queue.md` §1, §3), or in a playlist (`requirements/playlists.md`
 	// §4): one of the user's own, or a new one made on the spot. Songs already in a playlist are
-	// warned about first, as adding them again is usually a mistake (§3).
+	// warned about first, as adding them again is usually a mistake (§3). One song can also be
+	// liked or unliked, or hidden, with Undo (`requirements/conventions.md` §2, §8).
 	import { onMount, tick } from 'svelte';
 	import { page } from '$app/state';
 	import { createPlaylist, listPlaylists } from '$lib/api/client';
 	import type { Playlist, PlaylistCreate, TrackSummary } from '$lib/api/types';
 	import { type Adding, addTo, alreadyIn } from '$lib/adding.svelte';
 	import { deleted } from '$lib/deletions.svelte';
+	import { marks } from '$lib/marks.svelte';
 	import { plural } from '$lib/format';
 	import { Paged } from '$lib/paged.svelte';
 	import { addToQueue, startPlacing } from '$lib/queueing.svelte';
@@ -19,10 +21,13 @@
 
 	let {
 		what,
+		song,
 		anchor,
 		onclose
 	}: {
 		what: Adding;
+		/** The one song `what` is, which can be liked and hidden; none for more than one. */
+		song?: TrackSummary;
 		/** What opened it, which it sits beside. */
 		anchor: Element;
 		onclose: () => void;
@@ -100,6 +105,19 @@
 	/** Queue Next or Queue Last. */
 	function queueIt(where: 'manualStart' | 'manualEnd') {
 		void addToQueue(what, libraryId, { type: where });
+		onclose();
+	}
+
+	function likeIt(song: TrackSummary, liked: boolean) {
+		void marks.like(fetch, libraryId, song, liked);
+		onclose();
+	}
+
+	/** Hides the song at once, gone from every list, and offers Undo. */
+	function hideIt(song: TrackSummary) {
+		void marks.hide(fetch, libraryId, song, true);
+		const undo = () => void marks.hide(fetch, libraryId, song, false);
+		toast(`Hid “${song.title}”`, { action: { label: 'Undo', run: undo } });
 		onclose();
 	}
 
@@ -201,6 +219,17 @@
 		<button type="button" role="menuitem" onclick={placeIt}>
 			<Icon name="down" size={16} /> Add to Up Next…
 		</button>
+		{#if song}
+			{@const liked = marks.liked(libraryId, song)}
+			<hr />
+			<button type="button" role="menuitem" onclick={() => likeIt(song, !liked)}>
+				<Icon name={liked ? 'liked' : 'heart'} size={16} />
+				{liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
+			</button>
+			<button type="button" role="menuitem" onclick={() => hideIt(song)}>
+				<Icon name="hide" size={16} /> Hide song
+			</button>
+		{/if}
 		{#if what.refs.length}
 			<hr />
 			<p class="heading muted" aria-hidden="true">Add to playlist</p>

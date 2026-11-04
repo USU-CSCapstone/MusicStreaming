@@ -54,6 +54,14 @@ describe('marks', () => {
 		expect(requests.at(-1)).toBe('DELETE /libraries/1/tracks/5/like');
 	});
 
+	it('leaves out of a list what was hidden since it was read', async () => {
+		const read = [track, { ...track, id: '6' }];
+		expect(marks.unhidden('1', read)).toEqual(read);
+		await marks.hide(fetch, '1', track, true);
+		expect(marks.unhidden('1', read).map((t) => t.id)).toEqual(['6']);
+		expect(marks.hidden('1', '6', true)).toBe(true);
+	});
+
 	it('hides and unhides', async () => {
 		await marks.hide(fetch, '1', track, true);
 		expect(marks.hidden('1', '5')).toBe(true);

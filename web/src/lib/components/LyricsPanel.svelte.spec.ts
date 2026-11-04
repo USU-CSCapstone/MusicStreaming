@@ -32,7 +32,6 @@ const track = {
 	audio: { codec: 'mp3', lossless: false },
 	availability: 'available',
 	sortKeys: { title: 'brain stew', artist: 'green day', album: 'insomniac' },
-
 	liked: false
 } as TrackSummary;
 
