@@ -34,7 +34,7 @@ pub use artwork::{all_mosaics, held as holds_artwork, mosaics_of};
 pub use edit::edit;
 use idempotency::{Answer, Key};
 pub use items::{all_items, duplicates, list_items};
-pub use liked::{like, unlike};
+pub use liked::{like, take_out as unlike_in, unlike};
 pub use representation::Playlist;
 use representation::{SELECT, playlist};
 
@@ -233,7 +233,7 @@ pub async fn create(
 /// of its own and waits for it. A client that gives up drops the handler, which would drop the
 /// work after the write was queued: the change would commit and never be announced, and a retry
 /// is answered from its stored answer, which announces nothing. The task runs on.
-async fn settle<T: Send + 'static>(
+pub async fn settle<T: Send + 'static>(
     work: impl Future<Output = Result<T, Problem>> + Send + 'static,
 ) -> Result<T, Problem> {
     tokio::spawn(work).await.map_err(|_| Problem::new(Code::Internal))?
@@ -242,7 +242,7 @@ async fn settle<T: Send + 'static>(
 /// Tells `user`'s devices of `change`, if there is one, which is only for a request that
 /// applied: a retry answered from its stored answer has nothing new to say. Call it once the
 /// change is committed.
-fn announce(hub: &Hub, user: i64, change: Option<Change>) {
+pub fn announce(hub: &Hub, user: i64, change: Option<Change>) {
     if let Some(change) = change {
         hub.broadcast(user, &ServerMessage::Playlist(change));
     }

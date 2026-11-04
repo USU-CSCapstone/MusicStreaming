@@ -108,6 +108,7 @@ export function createApi(dataDir: string) {
 			/^\/artists\/([^/]+)$/,
 			({ lib, params }) => withKey(params[0], (k) => catalog.artist(lib, k))
 		],
+		[/^\/hidden-tracks$/, ({ lib, query }) => playlists.hiddenTracks(lib, query)],
 		[/^\/tag-types$/, ({ lib }) => catalog.tagTypes(lib)],
 		[/^\/tags$/, ({ lib, query }) => catalog.listTags(lib, query)],
 		[/^\/tags\/([^/]+)$/, ({ lib, params }) => withKey(params[0], (k) => catalog.tag(lib, k))],
@@ -288,15 +289,21 @@ export function createApi(dataDir: string) {
 				)
 			);
 		}
-		// A like or an unlike is a write to Liked Songs (`requirements/playlists.md` §11).
-		const liking = /^\/libraries\/([^/]+)\/tracks\/([^/]+)\/like$/.exec(path);
-		if (liking && (req.method === 'PUT' || req.method === 'DELETE')) {
-			const [lib, track] = [toKey(liking[1]), toKey(liking[2])];
+		// A like or an unlike is a write to Liked Songs (`requirements/playlists.md` §11), and a
+		// hide or an unhide one to the hidden tracks kept beside it (`requirements/conventions.md` §8).
+		const marking = /^\/libraries\/([^/]+)\/tracks\/([^/]+)\/(like|hidden)$/.exec(path);
+		if (marking && (req.method === 'PUT' || req.method === 'DELETE')) {
+			const [lib, track] = [toKey(marking[1]), toKey(marking[2])];
 			if (lib === null || track === null || !catalog.library(lib)) {
 				return problem(res, 404, 'Not Found', 'not_found');
 			}
-			if (req.method === 'DELETE') playlists.unlike(lib, track);
-			else if (!playlists.like(lib, track)) return problem(res, 404, 'Not Found', 'not_found');
+			const liking = marking[3] === 'like';
+			if (req.method === 'DELETE') {
+				if (liking) playlists.unlike(lib, track);
+				else playlists.unhide(lib, track);
+			} else if (!(liking ? playlists.like(lib, track) : playlists.hide(lib, track))) {
+				return problem(res, 404, 'Not Found', 'not_found');
+			}
 			res.statusCode = 204;
 			return res.end();
 		}

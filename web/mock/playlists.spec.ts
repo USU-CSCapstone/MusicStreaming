@@ -334,3 +334,29 @@ describe('Liked Songs', () => {
 		expect(again).toMatchObject({ pinned: true, trackCount: 1 });
 	});
 });
+
+describe('hidden tracks', () => {
+	const hidden = (order = '') =>
+		store.hiddenTracks(LIB, new URLSearchParams(order)).items.map((t) => t.id);
+
+	it('lists them newest first, and each once', () => {
+		expect([1n, 2n, 1n].map((t) => store.hide(LIB, t))).toEqual([true, true, true]);
+		expect(hidden()).toEqual(['2', '1']);
+		expect(hidden('order=asc')).toEqual(['1', '2']);
+		store.unhide(LIB, 2n);
+		expect(hidden()).toEqual(['1']);
+		expect(store.hide(LIB, 7n)).toBe(false);
+	});
+
+	it('and likes undo each other', () => {
+		store.like(LIB, 1n);
+		store.hide(LIB, 1n);
+		expect(ids('/playlists/liked-1')).toEqual([]);
+		store.like(LIB, 1n);
+		expect(hidden()).toEqual([]);
+		store.hide(LIB, 2n);
+		const items = [{ type: 'track', id: '2' }];
+		call('PATCH', '/playlists/liked-1', { baseVersion: 4, ops: [{ op: 'add', items }] });
+		expect(hidden()).toEqual([]);
+	});
+});
