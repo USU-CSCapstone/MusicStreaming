@@ -14,6 +14,7 @@ Per-user and private. Never shared between accounts, never visible to other non-
 - **Play count** and **last played**, shown on the entity itself.
 - **Listening data** — plays, listen time, and everything derived from them ([`analytics.md`](analytics.md)).
 - **Likes**, on tracks, which are the user's Liked Songs ([`playlists.md` §11](playlists.md#11-liked-songs)), shown on each track wherever it appears.
+- **Hidden tracks**, which are gone from the user's library ([§8](#8-hidden-tracks)).
 
 ---
 
@@ -25,6 +26,7 @@ Every entity offers the same actions wherever it appears — in a list, a queue,
 - **Queue Next** and **Queue Last**
 - Add to playlist
 - **Like** and unlike, on tracks: Liked Songs holds songs, so an album or artist is liked by liking its tracks ([`playlists.md` §11](playlists.md#11-liked-songs))
+- **Hide**, on tracks ([§8](#8-hidden-tracks)); unhiding is in Hidden Songs, since a hidden track is shown nowhere else
 - Start radio / explore recommendations ([`recommendations.md`](recommendations.md))
 - Download for offline use ([`offline.md`](offline.md))
 - Navigate to related entities
@@ -91,3 +93,18 @@ Applies wherever an artist is displayed:
 - Tagged order is preserved; the first credit is primary.
 
 The ownership model that determines discography versus appearances is defined in [`artists.md` §2](artists.md#2-ownership-discography-vs-appearances).
+
+---
+
+## 8. Hidden Tracks
+
+**A user can hide a track, and a hidden track is gone from their library.** It is their one certain "no" ([`analytics.md` §7](analytics.md#7-explicit-signals)): for a track they own and never want to hear, such as a skit, an alternate take, or a song they have tired of, which nothing else would keep away.
+
+- **Hidden means not shown.** A hidden track is in none of the user's lists: songs, albums, artists, playlists, tag pages, search results. It is never recommended or played automatically. Like all personal data (§1) it is the user's own, per library; nobody else's library changes.
+- **It is skipped in place**, as an unavailable track is (§6): one already in a queue when it was hidden is passed over without a message.
+- **What is made only of hidden tracks is hidden too.** An album, artist, or tag whose every track the user hid is gone with them, and comes back when one is unhidden, since an album with nothing to show would only point at what the user chose not to see. One with tracks left shows only those.
+- **Counts are of what the user sees.** Track counts and durations, of an album, an artist, a tag, a playlist, or the library, leave out hidden tracks, so an album of twelve with one hidden is an album of eleven to that user. A count that included what they cannot see would promise tracks that are not there.
+- **Hiding edits nothing.** A playlist holding a hidden track keeps it in its place, and unhiding brings it back there.
+- **Hidden Songs, in the account's settings, is the one place a hidden track is shown**: every track the user hid in the library, each with Unhide. Without it a hidden track could never be found again to bring back.
+- **Liking and hiding undo each other.** Liking a hidden track unhides it, and hiding a liked one unlikes it, taking it out of Liked Songs ([`playlists.md` §11](playlists.md#11-liked-songs)), so the two never contradict each other.
+
