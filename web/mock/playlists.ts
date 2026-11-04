@@ -122,6 +122,11 @@ export class PlaylistStore {
 		return slice(tracks, paging(query));
 	}
 
+	/** The tracks the user hid, which lists and search leave out. */
+	hiddenIds(lib: bigint): bigint[] {
+		return [...this.#hiddenIn(lib).keys()];
+	}
+
 	#hiddenIn(lib: bigint): Map<bigint, string> {
 		let hidden = this.#hidden.get(lib);
 		if (!hidden) this.#hidden.set(lib, (hidden = new Map()));
@@ -170,9 +175,10 @@ export class PlaylistStore {
 		const entry = this.#entries(lib).get(playlistId);
 		if (!entry) return undefined;
 		const page = slice(entry.items, paging(query));
+		const hidden = this.#hiddenIn(lib);
 		const items = page.items.flatMap((i) => {
 			const track = this.library.track(lib, i.trackId);
-			return track ? [{ track, addedAt: i.addedAt }] : [];
+			return track ? [{ track, addedAt: i.addedAt, hidden: hidden.has(i.trackId) }] : [];
 		});
 		this.markLiked(
 			lib,

@@ -89,7 +89,7 @@ export function createApi(dataDir: string) {
 		[
 			/^\/tracks$/,
 			({ lib, query }) => {
-				const page = catalog.listTracks(lib, query);
+				const page = catalog.listTracks(lib, query, playlists.hiddenIds(lib));
 				playlists.markLiked(lib, page.items);
 				return page;
 			}
@@ -193,7 +193,7 @@ export function createApi(dataDir: string) {
 			if (wanted.includes(type) && items.length)
 				sections.push({ type, items, total, rank: matchRank(best, text) });
 		};
-		const tracks = catalog.searchTracks(lib, text, limit, query);
+		const tracks = catalog.searchTracks(lib, text, limit, query, playlists.hiddenIds(lib));
 		playlists.markLiked(lib, tracks.items);
 		add(
 			'tracks',

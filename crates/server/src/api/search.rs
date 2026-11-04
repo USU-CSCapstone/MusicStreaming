@@ -20,7 +20,7 @@ use super::extract::Query;
 use super::scope::Scope;
 use super::tag_filter::TagFilter;
 use super::tracks::{self, TrackSummary};
-use super::{Problem, page};
+use super::{Problem, hidden, page};
 use crate::db::{Database, by_ids};
 
 /// The spec's `search` parameters.
@@ -87,8 +87,11 @@ pub async fn search(
     let filter = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
     let tagged = indexes.tagged.get(&db, library, &filter, &kinds).await?;
     let index = indexes.index(&db, library).await?;
+    // A track the caller hid is gone from their library, so a search finds it nowhere.
+    let hid = db.read(move |conn| hidden::ids(conn, user, library)).await?;
     let found = index.search_within(&query.q, &kinds, limit, |kind, id| {
-        tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
+        !(kind == Kind::Track && hid.contains(&id))
+            && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
     });
     let sections = db.read(move |conn| results(conn, user, library, found)).await?;
 
