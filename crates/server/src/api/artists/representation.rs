@@ -7,6 +7,7 @@ use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
 use crate::api::Id;
+use crate::api::hidden::Losses;
 use crate::api::refs::{ImageRef, TagsByType, placeholder, tags_json};
 use crate::api::time::serialize_rfc3339;
 use crate::api::tracks::FEATURED_TRACKS;
@@ -37,6 +38,26 @@ pub struct Artist {
     biography: Option<String>,
     tags: TagsByType,
     appearance_count: i64,
+}
+
+impl ArtistSummary {
+    /// The artist as the user who hid what `losses` counts sees them: their counts of what is
+    /// left (`requirements/conventions.md` §8).
+    pub fn lose(&mut self, losses: &Losses) {
+        let Some(loss) = losses.artists.get(&self.id.0) else { return };
+        self.album_count -= loss.albums;
+        self.track_count -= loss.tracks;
+    }
+}
+
+impl Artist {
+    /// [`ArtistSummary::lose`], their appearances left, and the tags their work brings them still.
+    pub fn lose(&mut self, losses: &Losses) {
+        self.summary.lose(losses);
+        let Some(loss) = losses.artists.get(&self.summary.id.0) else { return };
+        self.appearance_count -= loss.featured;
+        self.tags.without(&loss.tags);
+    }
 }
 
 /// The columns [`summary`] reads, in order.

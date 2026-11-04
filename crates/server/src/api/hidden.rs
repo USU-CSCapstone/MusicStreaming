@@ -254,5 +254,8 @@ pub fn announce(
     }
 }
 
+mod losses;
+pub use losses::{LibraryLoss, Losses, losses, playlists};
+
 #[cfg(test)]
 mod tests;

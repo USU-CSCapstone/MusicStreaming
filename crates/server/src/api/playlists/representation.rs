@@ -3,9 +3,9 @@
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
-use crate::api::Id;
 use crate::api::refs::ImageRef;
 use crate::api::time::serialize_rfc3339;
+use crate::api::{Id, hidden};
 
 /// The spec's `Playlist`. `image` is the generated artwork (`artwork`), `customImage` is false
 /// as custom images are not served yet, and `personal` is left out.
@@ -28,6 +28,15 @@ pub struct Playlist {
     #[serde(serialize_with = "serialize_rfc3339")]
     modified_at: i64,
     pub(super) version: i64,
+}
+
+impl Playlist {
+    /// The playlist as its user sees it, less its items of tracks they hid, `(count, duration)`
+    /// (`requirements/conventions.md` §8).
+    pub(super) fn lose(&mut self, (count, duration): (i64, i64)) {
+        self.track_count -= count;
+        self.duration_us -= duration;
+    }
 }
 
 /// The columns [`playlist`] reads, in order, from `playlists p`.
@@ -75,12 +84,19 @@ pub fn get(
     library: i64,
     id: i64,
 ) -> rusqlite::Result<Option<Playlist>> {
-    conn.prepare_cached(&format!(
-        "SELECT {} FROM playlists p WHERE p.id = ?1 AND p.user_id = ?2 AND p.library_id = ?3",
-        SELECT.join(", ")
-    ))?
-    .query_row(rusqlite::params![id, user, library], playlist)
-    .optional()
+    let mut found = conn
+        .prepare_cached(&format!(
+            "SELECT {} FROM playlists p WHERE p.id = ?1 AND p.user_id = ?2 AND p.library_id = ?3",
+            SELECT.join(", ")
+        ))?
+        .query_row(rusqlite::params![id, user, library], playlist)
+        .optional()?;
+    if let Some(playlist) = &mut found
+        && let Some(&lost) = hidden::playlists(conn, user, library)?.get(&id)
+    {
+        playlist.lose(lost);
+    }
+    Ok(found)
 }
 
 /// The version and item count of `user`'s playlist `id` in `library`, if it is theirs.

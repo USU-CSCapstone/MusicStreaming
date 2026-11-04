@@ -77,7 +77,10 @@ pub async fn list(
             let mut source = source(conn, library, &tags)?;
             let whole = hidden::artists(conn, user, library)?;
             hidden::leave_out_ids(conn, &mut source, "ar.id", &whole)?;
-            request.read(conn, &source, summary)
+            let mut page = request.read(conn, &source, summary)?;
+            let losses = hidden::losses(conn, user, library)?;
+            page.items.iter_mut().for_each(|item| item.lose(&losses));
+            Ok(page)
         })
         .await?;
     Ok(Json(page))
@@ -94,7 +97,11 @@ pub async fn get(
         if hidden::artists(conn, user, library)?.contains(&artist) {
             return Ok(None);
         }
-        representation::artist(conn, library, artist)
+        let mut found = representation::artist(conn, library, artist)?;
+        if let Some(artist) = &mut found {
+            artist.lose(&hidden::losses(conn, user, library)?);
+        }
+        Ok(found)
     })
     .await?
     .map(Json)

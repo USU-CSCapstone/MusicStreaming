@@ -104,7 +104,10 @@ pub async fn list(
                 "al.id",
                 &hidden::albums(conn, user, library)?,
             )?;
-            request.read(conn, &source, summary)
+            let mut page = request.read(conn, &source, summary)?;
+            let losses = hidden::losses(conn, user, library)?;
+            page.items.iter_mut().for_each(|item| item.lose(&losses));
+            Ok(page)
         })
         .await?;
     Ok(Json(page))
@@ -121,7 +124,11 @@ pub async fn get(
         if hidden::albums(conn, user, library)?.contains(&album) {
             return Ok(None);
         }
-        representation::album(conn, library, album)
+        let mut found = representation::album(conn, library, album)?;
+        if let Some(album) = &mut found {
+            album.lose(&hidden::losses(conn, user, library)?);
+        }
+        Ok(found)
     })
     .await?
     .map(Json)

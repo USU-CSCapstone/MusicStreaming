@@ -10,6 +10,7 @@ use axum::extract::State;
 use rusqlite::{OptionalExtension, Row};
 use serde::Serialize;
 
+use super::hidden::{self, LibraryLoss};
 use super::scope::Caller;
 use super::scope::Scope;
 use super::{Id, Problem};
@@ -55,6 +56,11 @@ pub async fn list(
                 reaches!(admin: "?1", user: "?2", library: "libraries.id")
             ))?
             .query_map(rusqlite::params![caller.admin, caller.user], library)?
+            .map(|found| {
+                let mut library = found?;
+                library.lose(&hidden::losses(conn, caller.user, library.id.0)?.library);
+                Ok(library)
+            })
             .collect()
         })
         .await?;
@@ -64,14 +70,32 @@ pub async fn list(
 /// `getLibrary`: the library the path names.
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Scope { library: id, .. }: Scope,
+    Scope { user, library: id }: Scope,
 ) -> Result<Json<Library>, Problem> {
     db.read(move |conn| {
-        conn.prepare_cached(&format!("{SELECT} WHERE id = ?1"))?.query_row([id], library).optional()
+        let mut found = conn
+            .prepare_cached(&format!("{SELECT} WHERE id = ?1"))?
+            .query_row([id], library)
+            .optional()?;
+        if let Some(library) = &mut found {
+            library.lose(&hidden::losses(conn, user, id)?.library);
+        }
+        Ok(found)
     })
     .await?
     .map(Json)
     .ok_or_else(Problem::not_found)
+}
+
+impl Library {
+    /// The library as the user who hid what `loss` counts sees it: its counts of what is left
+    /// (`requirements/conventions.md` §8).
+    fn lose(&mut self, loss: &LibraryLoss) {
+        self.track_count -= loss.tracks;
+        self.duration_us -= loss.duration_us;
+        self.album_count -= loss.albums;
+        self.artist_count -= loss.artists;
+    }
 }
 
 /// A library from a row of [`SELECT`].
