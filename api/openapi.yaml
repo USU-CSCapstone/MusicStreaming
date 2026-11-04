@@ -508,7 +508,9 @@ paths:
         already (`requirements/playlists.md` §11). A caller who deleted their Liked Songs has it
         made again, pinned. Not checked against a version: a like says whether a track is liked,
         not where it sits, so it applies whatever else changed the playlist. It is announced as
-        an edit of the playlist is (`playlist`). A track the library does not have is `404`.
+        an edit of the playlist is (`playlist`). A hidden track is unhidden (`trackHidden`), since
+        liking and hiding undo each other (`requirements/conventions.md` §8). A track the library
+        does not have is `404`.
       operationId: likeTrack
       responses:
         '204': { description: Liked. }
@@ -522,6 +524,62 @@ paths:
       operationId: unlikeTrack
       responses:
         '204': { description: Not liked. }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /libraries/{libraryId}/tracks/{trackId}/hidden:
+    parameters:
+      - $ref: '#/components/parameters/LibraryId'
+      - $ref: '#/components/parameters/TrackId'
+    put:
+      tags: [Browse]
+      summary: Hide a track
+      description: |
+        Hides the track from the caller in this library: it is gone from their library, shown
+        only in `listHiddenTracks` (`requirements/conventions.md` §8). A liked track is unliked,
+        taken out of Liked Songs as `unlikeTrack` does. Announced to the caller's devices
+        (`trackHidden`). A track the library does not have is `404`; one hidden already stays
+        as it was.
+      operationId: hideTrack
+      responses:
+        '204': { description: Hidden. }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Browse]
+      summary: Unhide a track
+      description: |
+        Brings the track back into the caller's library. One not hidden is already so, which is
+        `204` too.
+      operationId: unhideTrack
+      responses:
+        '204': { description: Not hidden. }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /libraries/{libraryId}/hidden-tracks:
+    parameters:
+      - $ref: '#/components/parameters/LibraryId'
+    get:
+      tags: [Browse]
+      summary: List hidden tracks
+      description: |
+        Hidden Songs: the tracks the caller hid in this library, by when they were hidden,
+        newest first unless `order` is `asc` (`requirements/conventions.md` §8). The one place a
+        hidden track is listed. None is `liked`, since hiding unlikes.
+      operationId: listHiddenTracks
+      parameters:
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrackPage' }
         default: { $ref: '#/components/responses/Problem' }
 
   /libraries/{libraryId}/albums:
@@ -4525,6 +4583,18 @@ components:
               description: |
                 `true` when the edit changed the items but its `ops` were too many for one message
                 (they are left out): the device reads the items again. Left out otherwise.
+        - type: object
+          required: [type, libraryId, trackId, hidden]
+          description: |
+            A track was hidden from the account, or unhidden, in one library (`hideTrack`,
+            `unhideTrack`, or a like, which unhides). Sent to every connection of the account,
+            the sender's included. A device leaves a hidden track out of what it shows, and
+            shows an unhidden one again (`requirements/conventions.md` §8).
+          properties:
+            type: { const: trackHidden }
+            libraryId: { $ref: '#/components/schemas/Id' }
+            trackId: { $ref: '#/components/schemas/Id' }
+            hidden: { type: boolean }
         - type: object
           required: [type, queueId]
           description: |

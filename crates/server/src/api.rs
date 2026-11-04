@@ -10,6 +10,7 @@ mod cursor;
 mod devices;
 mod extract;
 mod health;
+mod hidden;
 mod id;
 mod images;
 mod libraries;
