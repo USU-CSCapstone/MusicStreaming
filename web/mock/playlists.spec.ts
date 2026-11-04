@@ -363,3 +363,14 @@ describe('hidden tracks', () => {
 		expect(hidden()).toEqual([]);
 	});
 });
+
+describe('a hidden track in a playlist', () => {
+	it('keeps its place, marked', () => {
+		store.hide(LIB, 1n);
+		const items = call<PlaylistItemPage>('GET', '/playlists/pl-seed/items').body.items;
+		expect(items.map((i) => [i.track?.id, i.hidden])).toEqual([
+			['1', true],
+			['2', false]
+		]);
+	});
+});

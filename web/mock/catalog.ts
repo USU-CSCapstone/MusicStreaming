@@ -416,9 +416,11 @@ export class Catalog {
 		};
 	}
 
-	listTracks(lib: bigint, q: URLSearchParams): Page<TrackSummary> {
+	/** The library's tracks `q` asks for, leaving out `hidden`, the tracks the user hid. */
+	listTracks(lib: bigint, q: URLSearchParams, hidden: readonly bigint[] = []): Page<TrackSummary> {
 		const where = ['t.library_id = ?'];
 		const params: SQLInputValue[] = [lib];
+		leaveOut(hidden, where, params);
 		const album = q.get('albumId');
 		if (album) {
 			where.push('t.album_id = ?');
@@ -507,11 +509,13 @@ export class Catalog {
 		lib: bigint,
 		text: string,
 		limit: number,
-		filters = new URLSearchParams()
+		filters = new URLSearchParams(),
+		hidden: readonly bigint[] = []
 	): { items: TrackSummary[]; total: number } {
 		const [match, matchParams, rank] = matchClause('t.title', text);
 		const conditions = [match];
 		const params: SQLInputValue[] = [...matchParams];
+		leaveOut(hidden, conditions, params);
 		this.#tagFilter(lib, filters, 'track', 't.id', conditions, params);
 		const where = conditions.join(' AND ');
 		const total = num(
@@ -657,4 +661,11 @@ export function matchRank(value: string | null, text: string): number {
 	if (v.startsWith(t)) return 2;
 	if (v.includes(` ${t}`)) return 1;
 	return v.includes(t) ? 0 : -1;
+}
+
+/** Leaves the tracks `hidden` out of a query on `tracks t`, each bound as a 64-bit ID. */
+function leaveOut(hidden: readonly bigint[], where: string[], params: SQLInputValue[]) {
+	if (!hidden.length) return;
+	where.push(`t.id NOT IN (${hidden.map(() => '?').join(', ')})`);
+	params.push(...hidden);
 }

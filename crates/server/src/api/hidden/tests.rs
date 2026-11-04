@@ -124,3 +124,83 @@ async fn a_purged_track_takes_its_hide() {
         .unwrap();
     assert_eq!(left, 0);
 }
+
+/// The IDs of library 1's tracks a list shows, a page of `limit` at a time, and each page's
+/// total, for `query`.
+async fn shown(app: &Router, query: &str, limit: usize) -> (Vec<String>, Vec<i64>) {
+    let (mut ids, mut totals, mut cursor) = (Vec::new(), Vec::new(), None::<String>);
+    loop {
+        let after = cursor.map(|c| format!("&cursor={c}")).unwrap_or_default();
+        let uri = format!("/api/v1/libraries/1/tracks?limit={limit}{query}{after}");
+        let (status, page) = call(app, TOKEN, "GET", &uri, None).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {page}");
+        for track in page["items"].as_array().unwrap() {
+            ids.push(track["id"].as_str().unwrap().to_owned());
+        }
+        totals.push(page["total"].as_i64().unwrap());
+        match page["nextCursor"].as_str() {
+            Some(next) => cursor = Some(next.to_owned()),
+            None => return (ids, totals),
+        }
+    }
+}
+
+/// A hidden track is in no list of tracks, and no list counts it: the library's, an album's,
+/// an artist's (read from their credits), a tag's (one alone takes its stored count), and
+/// search. Unhidden, it is back.
+#[tokio::test]
+async fn a_hidden_track_is_left_out_of_every_list_and_count() {
+    let (_temp, _db, app) = super::super::testing::catalog::app().await;
+    let lists = ["", "&albumId=101", "&artistId=10", "&tagAll=30", "&sort=name&order=desc"];
+    let mut before = Vec::new();
+    for query in lists {
+        before.push(shown(&app, query, 100).await);
+    }
+    assert!(before.iter().all(|(ids, _)| ids.contains(&"1001".to_owned())));
+
+    hide(&app, TOKEN, "PUT", "1001").await;
+    for (query, (ids, totals)) in lists.into_iter().zip(&before) {
+        for limit in [1, 100] {
+            let (now, counted) = shown(&app, query, limit).await;
+            let without: Vec<_> = ids.iter().filter(|id| *id != "1001").cloned().collect();
+            assert_eq!(now, without, "{query} by {limit}");
+            assert!(counted.iter().all(|total| *total == totals[0] - 1), "{query}: {counted:?}");
+        }
+    }
+    let (_, found) =
+        call(&app, TOKEN, "GET", "/api/v1/libraries/1/search?q=come%20together", None).await;
+    let tracks = found["sections"].as_array().unwrap().iter().find(|s| s["type"] == "tracks");
+    assert_eq!(tracks, None, "{found}");
+
+    hide(&app, TOKEN, "DELETE", "1001").await;
+    for (query, listed) in lists.into_iter().zip(&before) {
+        assert_eq!(&shown(&app, query, 100).await, listed, "{query}");
+    }
+}
+
+/// A playlist keeps a hidden track in its place, marked, so a device leaves it out of what it
+/// shows while its positions stay the playlist's.
+#[tokio::test]
+async fn a_playlist_marks_a_hidden_track_in_its_place() {
+    let (_temp, _db, app) = app_with_tracks().await;
+    let items = json!([{ "type": "track", "id": "1" }, { "type": "track", "id": "2" }]);
+    let (_, made) = call(
+        &app,
+        TOKEN,
+        "POST",
+        "/api/v1/libraries/1/playlists",
+        Some(json!({ "title": "Mix", "items": items })),
+    )
+    .await;
+    hide(&app, TOKEN, "PUT", "1").await;
+    let uri = format!("/api/v1/libraries/1/playlists/{}/items", made["id"].as_str().unwrap());
+    let (_, page) = call(&app, TOKEN, "GET", &uri, None).await;
+    let marks: Vec<_> = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| (item["track"]["id"].clone(), item["hidden"].clone()))
+        .collect();
+    assert_eq!(marks, [(json!("1"), json!(true)), (json!("2"), json!(false))]);
+    assert_eq!(page["total"], 2, "its positions are the playlist's");
+}

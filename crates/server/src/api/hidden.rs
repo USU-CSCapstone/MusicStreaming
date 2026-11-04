@@ -4,13 +4,14 @@
 //! liking a hidden one unhides it (`playlists::like`), so the two never contradict each other.
 //! Each change is announced to the caller's devices once it is committed.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use rusqlite::types::Value;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, params, params_from_iter};
 use serde::Deserialize;
 
 use super::extract::{Path, Query};
@@ -115,6 +116,51 @@ pub async fn list(
     // A hidden track is never liked, so none is marked.
     let page = db.read(move |conn| request.read(conn, &source, tracks::list_summary)).await?;
     Ok(Json(page))
+}
+
+/// The tracks `user` hid in `library`. A user hides few of a library's tracks, so they are held
+/// as a set, which a search consults for each match.
+pub fn ids(conn: &Connection, user: i64, library: i64) -> rusqlite::Result<HashSet<i64>> {
+    conn.prepare_cached(
+        "SELECT track_id FROM hidden_tracks WHERE user_id = ?1 AND library_id = ?2",
+    )?
+    .query_map([user, library], |row| row.get(0))?
+    .collect()
+}
+
+/// `source`, a list of tracks `t`, without the tracks `user` hid in `library`. Each row is one
+/// probe of `hidden_tracks`. A stored total loses the hidden tracks the list holds, counted by
+/// reading the list for those alone, which costs what they cost to find rather than the list, so
+/// a total stays a stored count. Nothing changes for a user who hid nothing in it.
+pub fn leave_out(
+    conn: &Connection,
+    source: &mut Source,
+    user: i64,
+    library: i64,
+) -> rusqlite::Result<()> {
+    let any: bool = conn
+        .prepare_cached(
+            "SELECT EXISTS (SELECT 1 FROM hidden_tracks WHERE user_id = ?1 AND library_id = ?2)",
+        )?
+        .query_row([user, library], |row| row.get(0))?;
+    if !any {
+        return Ok(());
+    }
+    if let Total::Stored(total) = source.total {
+        let sql = format!(
+            "SELECT count(*) FROM {} WHERE {} AND t.id IN \
+             (SELECT track_id FROM hidden_tracks WHERE user_id = ? AND library_id = ?)",
+            source.from, source.filter
+        );
+        let params = source.params.iter().cloned().chain([Value::from(user), Value::from(library)]);
+        let hidden: i64 =
+            conn.prepare_cached(&sql)?.query_row(params_from_iter(params), |row| row.get(0))?;
+        source.total = Total::Stored(total - hidden);
+    }
+    source.filter += " AND NOT EXISTS (SELECT 1 FROM hidden_tracks h WHERE h.user_id = ? \
+                      AND h.library_id = t.library_id AND h.track_id = t.id)";
+    source.params.push(Value::from(user));
+    Ok(())
 }
 
 /// Unhides `track` for `user` in `library`, and says whether it was hidden.

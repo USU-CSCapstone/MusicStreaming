@@ -287,6 +287,9 @@ export interface paths {
          *     for an artist follows from its `album.artists`. A playlist is an ordered item list, not
          *     a track filter, and has its own item endpoint (`listPlaylistItems`).
          *
+         *     A track the caller hid is left out, and out of `total` (`requirements/conventions.md`
+         *     §8); `listHiddenTracks` lists those.
+         *
          *     `ids` looks up specific tracks, as a client does to fill the rows it shows. The answer is
          *     one page in the order the IDs were given, with no `nextCursor`, and `total` is the number
          *     returned. An ID that is unknown, in another library, or not an ID is left out, so the
@@ -719,7 +722,8 @@ export interface paths {
          * @description Names, with typo tolerance, diacritic and case folding, word-order independence, and
          *     exact-match precedence (`requirements/search.md` §3). Results are identical to on-device
          *     search over the same corpus (`requirements/search.md` §2.1). Playlists are not searched
-         *     until they are built, so no playlists section comes back.
+         *     until they are built, so no playlists section comes back. A track the caller hid is not
+         *     found, nor counted in its section's `total` (`requirements/conventions.md` §8).
          */
         get: operations["search"];
         put?: never;
@@ -2045,6 +2049,12 @@ export interface components {
             external?: components["schemas"]["TrackBase"];
             /** Format: date-time */
             addedAt?: string;
+            /**
+             * @description A track the caller hid. It keeps its place, so positions stay the playlist's, but a
+             *     client neither shows nor plays it (`requirements/playlists.md` §3). Left out, or
+             *     `false`, for the rest.
+             */
+            hidden?: boolean;
         };
         PlaylistItemPage: components["schemas"]["PageInfo"] & {
             /** @description The playlist version these positions belong to, the `baseVersion` for edits made from them. */
