@@ -9,7 +9,7 @@ Twenty documents defining what Jewelcase must do. Project overview and core prin
 | File | Covers |
 |---|---|
 | [`general.md`](general.md) | Goals, non-goals, core principles, target platforms. The root of everything else. |
-| [`conventions.md`](conventions.md) | Behavior shared by all entities — personal data, actions, rendering, sorting, imagery, availability, multi-artist display. |
+| [`conventions.md`](conventions.md) | Behavior shared by all entities — personal data, actions, rendering, sorting, imagery, availability, multi-artist display, hidden tracks. |
 | [`libraries.md`](libraries.md) | Library definition, storage, administration, isolation, change feed. |
 | [`scanning.md`](scanning.md) | Ingestion — formats, tag and sidecar rules, triggers, track identity, file lifecycle. |
 | [`users.md`](users.md) | Accounts, roles, auth, devices, per-library access. |
@@ -42,6 +42,7 @@ The lookups where the obvious file isn't the owning one.
 | Track identity, and why moving or retagging files is safe | [`scanning.md` §6](scanning.md#6-track-identity) |
 | Missing files — marking, retention, what pins a track | [`scanning.md` §8](scanning.md#8-missing-files) |
 | Missing vs not-downloaded, and skipping in place | [`conventions.md` §6](conventions.md#6-availability) — nothing else restates it |
+| Hidden tracks: where they are left out, and Hidden Songs | [`conventions.md` §8](conventions.md#8-hidden-tracks) |
 | Whether an artist owns music or merely appears on it | [`artists.md` §2](artists.md#2-ownership-discography-vs-appearances) |
 | Semicolons as the only multi-value delimiter | [`artists.md` §1](artists.md#1-identity), echoed in [`tags.md` §3](tags.md#3-multiple-values) |
 | What plays next vs how audio gets there | [`queue.md`](queue.md) vs [`playback.md`](playback.md) |
@@ -60,6 +61,7 @@ Used precisely. Don't introduce synonyms.
 - **Manual Queue / Context Queue / History** — the three parts of a queue.
 - **Saved vs generated playlist** — both are "playlists" in the interface. A **filtered view** is neither and leaves nothing behind.
 - **Liked Songs** — the saved playlist every user has that holds their likes. Liking a track is adding it there; there is no other record of a like.
+- **Hidden track / Hidden Songs** — a track a user hid, gone from their library; Hidden Songs, in settings, is the one place it is shown.
 - **Shift** — using any of your devices to control any of your others.
 - **Catalog / imagery / audio** — the three things held on a device, with different sync rules.
 - **Available vs playable** — present on the server vs present on this device.

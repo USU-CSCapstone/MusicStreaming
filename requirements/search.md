@@ -12,6 +12,8 @@ Search is how a user reaches anything in a large library without navigating to i
 - **Names** — tracks, albums, artists, and playlists.
 - **Lyrics** — find a song by a line half-remembered.
 
+A track the user hid is not found ([`conventions.md` §8](conventions.md#8-hidden-tracks)).
+
 Nothing else in the library. File paths and folder names are **not** searched: the path carries no meaning in Jewelcase ([`scanning.md` §2](scanning.md#2-tags-are-the-only-truth)), and matching on it would produce results a user cannot explain.
 
 **External sources, where a plugin provides one, are searched too** — returned in their own clearly labelled section, never mixed into the sections describing what the user owns ([`plugins.md` §10.2](plugins.md#102-it-behaves-like-music)).
