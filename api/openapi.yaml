@@ -4629,6 +4629,19 @@ components:
                 `true` when the edit changed the items but its `ops` were too many for one message
                 (they are left out): the device reads the items again. Left out otherwise.
         - type: object
+          required: [type, libraryId, trackId, liked]
+          description: |
+            A track was liked by the account, or unliked, in one library, however it was: a like
+            or an unlike, a hide (which unlikes), or an edit of Liked Songs that adds or removes
+            it (`requirements/playlists.md` §11). Sent to every connection of the account, the
+            sender's included, beside the `playlist` message for Liked Songs, whose removes name
+            positions, so a device marks the track wherever it shows it.
+          properties:
+            type: { const: trackLiked }
+            libraryId: { $ref: '#/components/schemas/Id' }
+            trackId: { $ref: '#/components/schemas/Id' }
+            liked: { type: boolean }
+        - type: object
           required: [type, libraryId, trackId, hidden]
           description: |
             A track was hidden from the account, or unhidden, in one library (`hideTrack`,
