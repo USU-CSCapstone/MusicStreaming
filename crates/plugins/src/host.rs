@@ -45,8 +45,8 @@ use bindings::jewelcase::plugin::host;
 use bindings::{Plugin, PluginPre};
 
 pub use bindings::jewelcase::plugin::events::{
-    Changes, Event, Forgotten, Found, Play, PlayEnd, Playing, ResultKind, ScanFinished, Search,
-    Selected,
+    Changes, Event, Forgotten, Found, Mark, MarkKind, Play, PlayEnd, Playing, ResultKind,
+    ScanFinished, Search, Selected,
 };
 pub(crate) use bindings::jewelcase::plugin::files::{Entry, WriteMode};
 pub(crate) use bindings::jewelcase::plugin::host::Error;
@@ -388,12 +388,14 @@ fn wit(permission: Permission) -> Option<host::Permission> {
         Permission::ListeningActivity => Some(host::Permission::ListeningActivity),
         Permission::SearchActivity => Some(host::Permission::SearchActivity),
         Permission::HostRateLimits => Some(host::Permission::HostRateLimits),
+        Permission::LikesAndHides => Some(host::Permission::LikesAndHides),
         Permission::TracksChanged
         | Permission::ScanFinished
         | Permission::Schedule
         | Permission::Played
         | Permission::Playing
         | Permission::Searched
+        | Permission::Marked
         | Permission::AlbumsChanged
         | Permission::ArtistsChanged
         | Permission::TagTypes => None,
