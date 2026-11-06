@@ -125,3 +125,5 @@ Adding an explicit signal must not invalidate what was recorded before it — th
 **Scrobbling to Last.fm, ListenBrainz, and similar services is a plugin concern**, not a core one.
 
 **Plays are exposed with enough detail to scrobble accurately** — track, artist, album, timestamp, and listen time — since a plugin that has to guess at these produces bad data on somebody else's service.
+
+**Likes and hides are exposed the same way**, so a plugin can keep a service's own signals in step, such as Last.fm's loves or ListenBrainz's feedback ([`plugins.md` §8](plugins.md#8-events)). Each comes with the track's details, as a play does, and a plugin first hears the likes and hides the user already has, so mirroring them does not wait on the user liking everything again.
