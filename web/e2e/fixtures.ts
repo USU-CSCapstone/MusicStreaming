@@ -479,7 +479,11 @@ const playlistLibrary = (playlists: Generated[]): PlaylistLibrary => ({
 					: [];
 		return found.length ? found.map((t) => BigInt(t.id)) : undefined;
 	},
-	track: (_, id) => tracks.find((t) => t.id === String(id))
+	// A copy, since the store marks what it is given liked or not, and the fixtures are shared.
+	track: (_, id) => {
+		const found = tracks.find((t) => t.id === String(id));
+		return found && { ...found };
+	}
 });
 
 /** Two seconds of 8 kHz mono silence. */
@@ -629,6 +633,19 @@ export async function serveLibrary(
 		values: {},
 		secretsSet: token ? ['token'] : []
 	});
+	// The tracks as this user sees them, through the store, which keeps their likes and hides:
+	// copies marked liked or not, and in a list, without those hidden
+	// (`requirements/playlists.md` §11, `requirements/conventions.md` §8).
+	const libraryKey = BigInt(library.id);
+	const marked = (of: TrackSummary[]) => {
+		const copies = of.map((t) => ({ ...t }));
+		playlistStore.markLiked(libraryKey, copies);
+		return copies;
+	};
+	const seen = (of: TrackSummary[]) => {
+		const hidden = playlistStore.hiddenIds(libraryKey);
+		return marked(of.filter((t) => !hidden.includes(BigInt(t.id))));
+	};
 	await page.route('**/api/v1/**', async (route: Route) => {
 		const url = new URL(route.request().url());
 		const path = url.pathname.replace(/^.*\/api\/v1/, '');
@@ -744,12 +761,15 @@ export async function serveLibrary(
 		if (path === `${lib}/tracks` && url.searchParams.has('ids')) {
 			// A lookup by IDs: the tracks held, in the order named.
 			const named = url.searchParams.get('ids')!.split(',');
-			return json(pageOf(named.flatMap((id) => tracks.filter((t) => t.id === id))));
+			return json(pageOf(marked(named.flatMap((id) => tracks.filter((t) => t.id === id)))));
 		}
 		if (path === `${lib}/tracks`) {
-			return json(
-				pageOf(tagged(sortedAsAsked(url.searchParams), filterOf(url.searchParams), (t) => t.tags))
+			const listed = tagged(
+				sortedAsAsked(url.searchParams),
+				filterOf(url.searchParams),
+				(t) => t.tags
 			);
+			return json(pageOf(seen(listed)));
 		}
 		if (path === `${lib}/tag-types`) {
 			return json([
@@ -821,10 +841,12 @@ export async function serveLibrary(
 		}
 		if (path === `${lib}/search`) {
 			const q = url.searchParams.get('q') ?? '';
-			const hits = tagged(
-				tracks.filter((t) => t.title.toLowerCase().includes(q.toLowerCase())),
-				filterOf(url.searchParams),
-				(t) => t.tags
+			const hits = seen(
+				tagged(
+					tracks.filter((t) => t.title.toLowerCase().includes(q.toLowerCase())),
+					filterOf(url.searchParams),
+					(t) => t.tags
+				)
 			);
 			return json({
 				query: q,
@@ -842,10 +864,30 @@ export async function serveLibrary(
 				libraryEmpty: false
 			});
 		}
+		const marking = new RegExp(`^${lib}/tracks/(\\d+)/(like|hidden)$`).exec(path);
+		if (marking) {
+			const [method, id, liking] = [
+				route.request().method(),
+				BigInt(marking[1]),
+				marking[2] === 'like'
+			];
+			if (method === 'DELETE') {
+				if (liking) playlistStore.unlike(libraryKey, id);
+				else playlistStore.unhide(libraryKey, id);
+			} else if (
+				!(liking ? playlistStore.like(libraryKey, id) : playlistStore.hide(libraryKey, id))
+			) {
+				return problem(404, 'not_found');
+			}
+			return route.fulfill({ status: 204 });
+		}
+		if (path === `${lib}/hidden-tracks`) {
+			return json(playlistStore.hiddenTracks(libraryKey, url.searchParams));
+		}
 		const one = tracks.find((t) => path === `${lib}/tracks/${t.id}`);
 		if (one) {
 			const lyrics = one.id === tracks[0].id ? 'synced' : 'none';
-			return json({ ...one, lyrics, loudness: null, identifiers: {} });
+			return json({ ...marked([one])[0], lyrics, loudness: null, identifiers: {} });
 		}
 		const media = /^\/libraries\/\d+\/tracks\/(\d+)\/(playback|waveform|audio|lyrics)$/.exec(path);
 		if (media?.[2] === 'lyrics') {
