@@ -22,7 +22,7 @@ Shared behavior follows [`conventions.md`](conventions.md).
 - **The Manual Queue always plays first**, ahead of everything in the context. **Queue Next** inserts at its front, **Queue Last** at its end ([`conventions.md` §2](conventions.md#2-actions)).
 - **The Manual Queue is an interruption, not a replacement.** The context does not advance while manual tracks play; when the Manual Queue empties, the context resumes exactly where it was.
 - **Played tracks move to History**, manual and context alike.
-- **Adding a collection adds its tracks.** Queueing an album, artist, or playlist puts its tracks in individually, each reorderable and removable afterward.
+- **Adding a collection adds its tracks.** Queueing an album, artist, or playlist puts its tracks in individually, each reorderable and removable afterward, without those the user hid ([`conventions.md` §8](conventions.md#8-hidden-tracks)).
 - **A queue can mix owned and external content.** Where a plugin provides an external source, its tracks queue alongside the user's own and play in the same run, marked as external ([`plugins.md` §10.2](plugins.md#102-it-behaves-like-music)).
 
 ---

@@ -189,6 +189,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 4. How often mixes regenerate, how many there are, and how they're named.
 5. How clearing history removes its influence from statistics and recommendations ([`analytics.md` §9](requirements/analytics.md#9-privacy-and-control)).
 6. How period summaries are presented.
+7. How likes and hides weigh against listening behaviour: a like is a certain yes and a hide a certain no ([`recommendations.md` §2.2](requirements/recommendations.md#22-how-the-user-listens)), and a hidden track is never recommended or played by radio or endless play ([`conventions.md` §8](requirements/conventions.md#8-hidden-tracks)).
 
 **End goal:** Users can look back on what they played, and get back into their library without browsing. [`analytics.md`](requirements/analytics.md), [`recommendations.md`](requirements/recommendations.md), and generated playlists ([`playlists.md` §8](requirements/playlists.md#8-saving-a-generated-playlist)) are met.
 
