@@ -161,8 +161,20 @@ function sortedAsAsked(query: URLSearchParams): TrackSummary[] {
 	return [...sortTracks(tracks, { field: fields[sort] ?? 'album', order: desc ? 'desc' : 'asc' })];
 }
 
-/** The tracks a start's recipe resolves to, as the server runs it; what the fixture does not know is empty. */
+/**
+ * The tracks a start's recipe resolves to, as the server runs it, without those the user hid
+ * (`hidden`); what the fixture does not know is empty.
+ */
 function resolveRecipe(
+	recipe: NonNullable<StartQueue['source']['recipe']>,
+	playlistRows: PlaylistRows,
+	hidden: readonly string[]
+): TrackSummary[] {
+	return resolveShown(recipe, playlistRows).filter((t) => !hidden.includes(t.id));
+}
+
+/** The tracks a recipe's view holds, hidden ones included. */
+function resolveShown(
 	recipe: NonNullable<StartQueue['source']['recipe']>,
 	playlistRows: PlaylistRows
 ): TrackSummary[] {
@@ -209,6 +221,8 @@ class FixtureQueue {
 	edits: SentEdit[] = [];
 	/** The playlists a playlist recipe resolves, set once the page's playlists are served. */
 	playlistRows: PlaylistRows = () => [];
+	/** The tracks the user hid, which a recipe leaves out, set once the page's library is served. */
+	hiddenIds: () => string[] = () => [];
 	/** While set, a start is not answered until it settles. */
 	holdStarts: Promise<void> | null = null;
 	/** Where `queueEdit` goes, as the realtime connection would send it; unset with none. */
@@ -240,7 +254,8 @@ class FixtureQueue {
 	start(body: StartQueue) {
 		this.starts.push(body);
 		const { key, libraryId, tracks: sent, recipe } = body.source;
-		const ids = sent ?? resolveRecipe(recipe!, this.playlistRows).map((t) => t.id);
+		const ids =
+			sent ?? resolveRecipe(recipe!, this.playlistRows, this.hiddenIds()).map((t) => t.id);
 		// As the server: `start` if the list holds the track there, else its first place.
 		const at = sent
 			? body.start
@@ -338,7 +353,8 @@ class FixtureQueue {
 	#registered(edit: SentEdit): QueueEdit {
 		if (edit.type !== 'add') return edit;
 		const { key, libraryId, tracks: sent, recipe } = edit.source;
-		const ids = sent ?? resolveRecipe(recipe!, this.playlistRows).map((t) => t.id);
+		const ids =
+			sent ?? resolveRecipe(recipe!, this.playlistRows, this.hiddenIds()).map((t) => t.id);
 		const list = `list-add-${key}`;
 		this.lists.set(list, ids);
 		const source = { key, libraryId, list, length: ids.length, ...(recipe ? { recipe } : {}) };
@@ -618,6 +634,7 @@ export async function serveLibrary(
 			playlistStore.items(BigInt(library.id), id, new URLSearchParams({ limit: '1000' }))?.items ??
 			[]
 		).flatMap((i) => (i.track ? [{ track: i.track, addedAt: i.addedAt ?? '' }] : []));
+	queueOf(page).hiddenIds = () => playlistStore.hiddenIds(BigInt(library.id)).map(String);
 	const plays: PlayReport[] = [];
 	const searches: RecentSearch[] = [];
 	// A scrobbler this user can connect with their own token, which it never shows again, and
@@ -634,12 +651,13 @@ export async function serveLibrary(
 		secretsSet: token ? ['token'] : []
 	});
 	// The tracks as this user sees them, through the store, which keeps their likes and hides:
-	// copies marked liked or not, and in a list, without those hidden
+	// copies marked liked or not, and hidden on a lookup, and in a list, without those hidden
 	// (`requirements/playlists.md` §11, `requirements/conventions.md` §8).
 	const libraryKey = BigInt(library.id);
 	const marked = (of: TrackSummary[]) => {
 		const copies = of.map((t) => ({ ...t }));
 		playlistStore.markLiked(libraryKey, copies);
+		playlistStore.markHidden(libraryKey, copies);
 		return copies;
 	};
 	const seen = (of: TrackSummary[]) => {
