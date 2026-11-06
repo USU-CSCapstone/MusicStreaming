@@ -56,6 +56,10 @@
   (export $search "search" (type $search-type))
   (type $forgotten-type (record (field "user" u64) (field "searches" (option (list u64)))))
   (export $forgotten "forgotten" (type $forgotten-type))
+  (type $mark-kind-type (enum "liked" "unliked" "hidden" "unhidden"))
+  (export $mark-kind "mark-kind" (type $mark-kind-type))
+  (type $mark-type (record (field "track" $track) (field "kind" $mark-kind) (field "at-ms" u64)))
+  (export $mark "mark" (type $mark-type))
   (type $event-type (variant
     (case "run")
     (case "tracks-changed" $changes)
@@ -67,7 +71,8 @@
     (case "searched" (list $search))
     (case "searches-forgotten" $forgotten)
     (case "albums-changed" $changes)
-    (case "artists-changed" $changes)))
+    (case "artists-changed" $changes)
+    (case "marked" (list $mark))))
   (export $event "event" (type $event-type))
   (type $error-type (variant
     (case "not-granted")

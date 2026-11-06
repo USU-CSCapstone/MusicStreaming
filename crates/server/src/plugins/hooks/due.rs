@@ -4,8 +4,8 @@
 //! permissions it needs ([`Permission::needs`]) are granted, it is not waiting to retry a
 //! failure, and there is something past its position: changes of the kind it asked for, a
 //! finished scan, its interval gone by, plays ended by a user who connected it, a play one of
-//! them has just started and is still playing, or searches by a user who shares them with it,
-//! or their requests to forget them. Each user has a position of their own in the personal hooks
+//! them has just started and is still playing, searches by a user who shares them with it,
+//! or their requests to forget them, or likes and hides by a user who connected it. Each user has a position of their own in the personal hooks
 //! ([`Hook::Personal`]).
 
 use jewelcase_plugins::{Event, Hook, Permission};
@@ -13,6 +13,7 @@ use rusqlite::{Connection, params};
 
 use super::Due;
 use super::changes::{changed, scans};
+use super::marks::marks;
 use super::playing::{deliverable, playing};
 use super::plays::plays;
 use super::searches::{ACTS, searches};
@@ -115,7 +116,7 @@ pub fn still(conn: &Connection, due: &Due, now: i64) -> rusqlite::Result<bool> {
 /// Each hook, with its query for the pairs it is due for and how its event is read. The query
 /// is given the time as `?1` and the hook's name as `?2`, and finds the plugin, the library, the
 /// position, and the user.
-pub(super) fn hooks() -> [(Permission, String, Read); 8] {
+pub(super) fn hooks() -> [(Permission, String, Read); 9] {
     use Permission::*;
     let pair = position(Hook::Library);
     // Changes of one kind of entity in the library, for the hook that asked for them.
@@ -162,6 +163,15 @@ pub(super) fn hooks() -> [(Permission, String, Read); 8] {
         position(Hook::Personal),
         hook_granted(Playing),
         deliverable("p.library_id", "s.user_id", "coalesce(c.position, 0)"),
+    );
+    // For each user who connected it, what they liked, unliked, hid, or unhid since they did.
+    let marked = format!(
+        "SELECT p.plugin_id, p.library_id, {} WHERE {READY}{}{CONNECTED_REACHES} \
+         AND EXISTS (SELECT 1 FROM mark_events e WHERE e.library_id = p.library_id \
+                     AND e.user_id = s.user_id AND e.seq > coalesce(c.position, 0) \
+                     AND e.created_at >= s.connected_at)",
+        position(Hook::Personal),
+        hook_granted(Marked),
     );
     // For each user who shares their searches with it, what they searched or removed since; and
     // for each who stopped, the request to forget. The hook's grant holds for all three, what it
@@ -221,6 +231,11 @@ pub(super) fn hooks() -> [(Permission, String, Read); 8] {
         (Searched, shared, |conn, due, _| {
             let Some(user) = due.user else { return Ok((due.position, None)) };
             searches(conn, &due.plugin, due.library, user, due.position)
+        }),
+        (Marked, marked, |conn, due, _| {
+            let Some(user) = due.user else { return Ok((due.position, None)) };
+            let (next, marks) = marks(conn, &due.plugin, due.library, user, due.position)?;
+            Ok((next, (!marks.is_empty()).then_some(Event::Marked(marks))))
         }),
     ]
 }

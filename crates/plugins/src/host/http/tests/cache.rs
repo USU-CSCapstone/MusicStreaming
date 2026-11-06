@@ -43,7 +43,8 @@ async fn a_fresh_reply_is_shared_only_by_runs_for_the_same_user_with_the_same_ac
     // Each activity grant sees what a run without it cannot.
     assert_eq!(body(&mut granted(Permission::ListeningActivity), port, "/fresh").await, "4");
     assert_eq!(body(&mut granted(Permission::SearchActivity), port, "/fresh").await, "5");
-    assert_eq!(hits.lock().unwrap()["/fresh"], 5);
+    assert_eq!(body(&mut granted(Permission::LikesAndHides), port, "/fresh").await, "6");
+    assert_eq!(hits.lock().unwrap()["/fresh"], 6);
 }
 
 #[tokio::test]

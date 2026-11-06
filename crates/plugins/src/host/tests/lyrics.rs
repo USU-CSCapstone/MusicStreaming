@@ -48,6 +48,7 @@ fn answer(host: &Host<Memory>, url: &str, status: u16, body: &str) {
         library_read: true,
         listening_activity: false,
         search_activity: false,
+        likes_and_hides: false,
     };
     let reply = Reply {
         status,
@@ -90,6 +91,7 @@ async fn a_lookup_that_failed_ends_the_run() {
         library_read: true,
         listening_activity: false,
         search_activity: false,
+        likes_and_hides: false,
     };
     let url = "https://lrclib.net/api/get?track_name=Track%201&artist_name=Aurora%20Lane\
                &duration=200&album_name=Signal";

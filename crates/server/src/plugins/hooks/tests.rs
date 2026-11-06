@@ -19,6 +19,7 @@ mod faults;
 mod forgets;
 mod libraries;
 mod listening;
+mod marks;
 mod real;
 mod reenabling;
 mod reinstall;
@@ -63,6 +64,8 @@ async fn setup() -> (tempfile::TempDir, Arc<Database>, Arc<Plugins>) {
             Playing,
             SearchActivity,
             Searched,
+            LikesAndHides,
+            Marked,
         ],
     );
     let requests = p["permissions"].as_array_mut().unwrap();

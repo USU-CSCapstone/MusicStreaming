@@ -117,6 +117,15 @@ export const PERMISSION_LABELS: Record<PermissionName, { title: string; detail: 
 		detail:
 			'Runs on its own as each user who chose to share their searches settles on one, or removes one.'
 	},
+	likesAndHides: {
+		title: 'Likes and hides',
+		detail: 'The songs people like and hide, from those who connect this plugin.'
+	},
+	marked: {
+		title: 'Run when a connected user likes or hides a song',
+		detail:
+			'Runs on its own as each user who connected it likes, unlikes, hides, or unhides a song.'
+	},
 	hostRateLimits: {
 		title: 'Limit a service for every plugin',
 		detail:
