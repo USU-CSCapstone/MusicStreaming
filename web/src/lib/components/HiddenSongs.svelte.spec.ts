@@ -37,14 +37,17 @@ beforeEach(() => {
 afterEach(() => toaster.dismiss());
 
 describe('HiddenSongs.svelte', () => {
-	it('lists the hidden songs, and Unhide brings one back, with Undo', async () => {
+	it('lists the hidden songs under a count, and Unhide brings one back, with Undo', async () => {
 		render(HiddenSongs, { library: '1', first });
-		await expect.element(page.getByText('2 hidden songs')).toBeVisible();
+		await expect.element(page.getByRole('heading', { name: 'Hidden Songs' })).toBeVisible();
+		// A list to unhide from, not to play.
+		await expect.element(page.getByRole('button', { name: 'Play' })).not.toBeInTheDocument();
+		await expect.element(page.getByText('2 songs')).toBeVisible();
 		await expect.element(page.getByText('Skit')).toBeVisible();
 
 		await page.getByRole('button', { name: 'Unhide “Skit”' }).click();
 		await expect.element(page.getByText('Skit')).not.toBeInTheDocument();
-		await expect.element(page.getByText('1 hidden song')).toBeVisible();
+		await expect.element(page.getByText('1 song', { exact: true })).toBeVisible();
 		expect(toaster.current?.message).toBe('“Skit” is back in your library');
 
 		toaster.current?.action?.run();
@@ -58,10 +61,10 @@ describe('HiddenSongs.svelte', () => {
 		await expect.element(page.getByText('Interlude')).not.toBeInTheDocument();
 	});
 
-	it('says when there are none', async () => {
+	it('says when there are none, and how to hide one', async () => {
 		render(HiddenSongs, { library: '1', first: { items: [], nextCursor: null, total: 0 } });
 		await expect
-			.element(page.getByText("You haven't hidden any songs in this library."))
+			.element(page.getByText(/^You haven't hidden any songs in this library\./))
 			.toBeVisible();
 	});
 });

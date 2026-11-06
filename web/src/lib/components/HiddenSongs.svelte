@@ -1,15 +1,18 @@
 <script lang="ts">
-	// Hidden Songs: every song the user hid in a library, newest first, the one place a hidden song
-	// is shown, each with Unhide (`requirements/conventions.md` §8). Unhiding takes it out at once,
-	// and Undo hides it again.
+	// Hidden Songs: every song the user hid in a library, newest first, laid out as a playlist is
+	// but not played, since a hidden song plays only once it is unhidden. It is the one place a
+	// hidden song is shown, each with Unhide (`requirements/conventions.md` §8). Unhiding takes a
+	// song out at once, and Undo hides it again.
+	import { resolve } from '$app/paths';
 	import { listHiddenTracks } from '$lib/api/client';
 	import type { TrackPage, TrackSummary } from '$lib/api/types';
-	import { plural } from '$lib/format';
+	import { albumTitle, plural } from '$lib/format';
 	import { marks } from '$lib/marks.svelte';
 	import { Paged } from '$lib/paged.svelte';
 	import { toast } from '$lib/toast.svelte';
 	import ArtistLinks from './ArtistLinks.svelte';
 	import Artwork from './Artwork.svelte';
+	import DetailHeader from './DetailHeader.svelte';
 
 	let { library, first }: { library: string; first: TrackPage } = $props();
 
@@ -27,8 +30,11 @@
 	}
 </script>
 
+<DetailHeader kind="Account" title="Hidden Songs" image={null} seed="hidden" icon="hide">
+	<span>{plural(total, 'song')}</span>
+</DetailHeader>
+
 {#if shown.length}
-	<p class="muted">{plural(total, 'hidden song')}</p>
 	<ul>
 		{#each shown as track (track.id)}
 			<li>
@@ -39,6 +45,13 @@
 					<span class="title">{track.title}</span>
 					<span class="muted"><ArtistLinks artists={track.artists} /></span>
 				</span>
+				<span class="album muted">
+					{#if track.album}
+						<a href={resolve('/albums/[id]', { id: track.album.id })}
+							>{albumTitle(track.album.title)}</a
+						>
+					{/if}
+				</span>
 				<button type="button" aria-label="Unhide “{track.title}”" onclick={() => unhide(track)}>
 					Unhide
 				</button>
@@ -47,48 +60,55 @@
 	</ul>
 	<div {@attach hidden.sentinel} aria-hidden="true"></div>
 {:else}
-	<p class="muted">You haven't hidden any songs in this library.</p>
+	<p class="muted">
+		You haven't hidden any songs in this library. Hide a song from its ⋯ menu, and it's gone from
+		your library until you bring it back here.
+	</p>
 {/if}
 
 <style>
 	ul {
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-2);
-		width: 100%;
 		margin: 0;
 		padding: 0;
 		list-style: none;
 	}
 
 	li {
-		display: flex;
+		display: grid;
+		grid-template-columns: 40px minmax(0, 3fr) minmax(0, 2fr) auto;
 		align-items: center;
 		gap: var(--space-3);
+		min-height: 56px;
+		padding: var(--space-1) var(--space-3);
+		border-radius: var(--radius-m);
 	}
 
-	.art {
-		width: 40px;
-		flex-shrink: 0;
+	li:hover {
+		background: var(--surface-hover);
 	}
 
 	.text {
 		display: flex;
 		flex-direction: column;
-		flex: 1;
 		min-width: 0;
 	}
 
-	.title {
+	.title,
+	.album {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 
-	/* As the account page's own buttons. */
+	.album a {
+		color: inherit;
+	}
+
 	button {
-		height: 36px;
-		padding: 0 var(--space-4);
+		height: 32px;
+		padding: 0 var(--space-3);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-m);
 		background: var(--surface);
@@ -98,6 +118,18 @@
 	}
 
 	button:hover {
-		background: var(--surface-hover);
+		background: var(--surface-2);
+	}
+
+	/* A phone has no room for the album: the title and artists take it. */
+	@media (max-width: 767px) {
+		li {
+			grid-template-columns: 40px minmax(0, 1fr) auto;
+			padding-inline: var(--space-2);
+		}
+
+		.album {
+			display: none;
+		}
 	}
 </style>
