@@ -5,6 +5,7 @@
 mod cleanup;
 mod edit;
 mod history;
+mod holding;
 mod permutation;
 mod previous;
 mod read;
@@ -17,6 +18,7 @@ mod tests;
 
 pub use edit::{Anchor, Edit, PlayRef};
 pub use history::{HISTORY_RUNS, PlayRow};
+pub use holding::{Reading, positions_holding};
 pub use read::Row;
 pub use spans::{Recipe, Span, SpanList, View};
 pub use state::{ItemId, QueueCopy, QueueError, QueueState, Repeat, Run, Shuffle, Source};

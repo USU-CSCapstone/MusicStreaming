@@ -18,6 +18,9 @@ type Mark = { liked?: boolean; hidden?: boolean };
 /** A track as the marks need it. */
 type Marked = { id: string; title: string; liked?: boolean };
 
+/** Hears that a track was hidden or unhidden, as the marks show it. */
+export type HiddenListener = (library: string, track: string, hidden: boolean) => void;
+
 class Marks {
 	/** By `{library}/{track}`. */
 	#marks = new SvelteMap<string, Mark>();
@@ -37,6 +40,17 @@ class Marks {
 	#cleared = new SvelteSet<string>();
 	/** Each library's Liked Songs, by ID, as seen, so its deletion elsewhere is known. */
 	#likedSongs = new Map<string, string>();
+	/** Who hears of each hide and unhide shown, such as the queue, which leaves hidden rows out. */
+	#listeners = new Set<HiddenListener>();
+
+	/**
+	 * Calls `listener` with each hide and unhide as it shows, made here or heard of, and each one
+	 * undone; returns how to stop.
+	 */
+	onHidden(listener: HiddenListener): () => void {
+		this.#listeners.add(listener);
+		return () => this.#listeners.delete(listener);
+	}
 
 	/** Whether `track` of `library` is liked: as it was read, unless a change since says otherwise. */
 	liked(library: string, track: Pick<Marked, 'id' | 'liked'>): boolean {
@@ -142,6 +156,10 @@ class Marks {
 				const confirmed = this.#confirmed.get(at);
 				if (confirmed) this.#marks.set(at, confirmed);
 				else this.#marks.delete(at);
+				// What was hidden before the change, as far as is known, is again.
+				if (mark.hidden !== undefined) {
+					this.#tell(library, track.id, confirmed?.hidden ?? !mark.hidden);
+				}
 			}
 			toast(`Couldn’t ${what} “${track.title}”. ${e instanceof ApiError ? e.message : ''}`.trim());
 		} finally {
@@ -159,7 +177,16 @@ class Marks {
 	}
 
 	#merge(at: string, mark: Mark) {
-		this.#marks.set(at, { ...this.#marks.get(at), ...mark });
+		const was = this.#marks.get(at);
+		this.#marks.set(at, { ...was, ...mark });
+		if (mark.hidden !== undefined && mark.hidden !== was?.hidden) {
+			const split = at.indexOf('/');
+			this.#tell(at.slice(0, split), at.slice(split + 1), mark.hidden);
+		}
+	}
+
+	#tell(library: string, track: string, hidden: boolean) {
+		for (const listener of this.#listeners) listener(library, track, hidden);
 	}
 }
 

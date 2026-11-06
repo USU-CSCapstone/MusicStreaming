@@ -10,6 +10,7 @@
 	import TabBar from '$lib/components/TabBar.svelte';
 	import Toast from '$lib/components/Toast.svelte';
 	import { controls } from '$lib/controls.svelte';
+	import { marks } from '$lib/marks.svelte';
 	import { player } from '$lib/player.svelte';
 	import { queue } from '$lib/queue/client.svelte';
 	import { realtime } from '$lib/realtime.svelte';
@@ -28,7 +29,7 @@
 	$effect(() => {
 		if (bare || !data.me) return;
 		realtime.start();
-		queue.connect(realtime);
+		queue.connect(realtime, marks);
 		return () => {
 			queue.disconnect();
 			realtime.stop();
