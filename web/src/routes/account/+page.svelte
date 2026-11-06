@@ -12,6 +12,7 @@
 	import type { PersonalPlugin } from '$lib/api/plugins';
 	import type { User } from '$lib/api/types';
 	import DeviceList from '$lib/components/DeviceList.svelte';
+	import HiddenSongs from '$lib/components/HiddenSongs.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import SettingsDialog from '$lib/components/SettingsDialog.svelte';
 	import { prefs } from '$lib/prefs.svelte';
@@ -133,6 +134,17 @@
 		{:else}
 			<p class="muted">Your music carries no genres or moods yet.</p>
 		{/if}
+	</section>
+{/if}
+
+{#if me && data.hidden && page.data.library}
+	<section aria-labelledby="hidden">
+		<h2 id="hidden">Hidden songs</h2>
+		<p class="muted">
+			Songs you hid are gone from your library: from every list, search, and anything played for
+			you. Hide a song from its ⋯ menu, and bring it back here.
+		</p>
+		<HiddenSongs library={page.data.library.id} first={data.hidden} />
 	</section>
 {/if}
 
