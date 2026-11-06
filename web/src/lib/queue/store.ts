@@ -14,7 +14,8 @@ import type {
 	RealtimeServerMessage,
 	RestoredQueue,
 	SentEdit,
-	StartQueue
+	StartQueue,
+	TrackPage
 } from '$lib/api/types';
 import { download, ListCache } from './lists';
 import { PAGE, RowPages } from './rows';
@@ -77,6 +78,12 @@ type CoreRow = {
 	play?: number;
 };
 
+/** The rows of each part of the queue that hold a hidden track, by index, ascending. */
+type Holding = { upNext: number[]; history: number[] };
+
+/** How many hidden tracks a read of Hidden Songs asks for at once: the most the server gives. */
+const HIDDEN_PAGE = 1000;
+
 /** Why a list cannot be had: the server has no such list, or it could not be reached. */
 type Problem = 'gone' | 'failed';
 
@@ -135,6 +142,29 @@ export class QueueStore {
 	#sources = new Map<string, SourceInfo>();
 	#loading = false;
 
+	/**
+	 * The tracks the user hid, by library (`requirements/conventions.md` §8). Their rows stay in
+	 * the queue, which no hide edits, and are left out of the rows and counts the page is given,
+	 * so the player passes over them as they come up. Read from Hidden Songs for each library a
+	 * source plays from, again on reconnecting, and kept up by what the page says changed.
+	 */
+	#hidden = new Map<string, Set<string>>();
+	/** The libraries whose hidden tracks were asked for since the connection said hello. */
+	#hiddenAsked = new Set<string>();
+	/**
+	 * What the page said changed since the connection said hello, by library: a read of Hidden
+	 * Songs may predate any of it, or miss a change still on its way to the server.
+	 */
+	#told = new Map<string, Map<string, boolean>>();
+	/**
+	 * Where each attached list holds a hidden track, by hash. A list never changes, so this is
+	 * found once for each and holds until the hidden tracks change; a change to the queue then
+	 * costs what these number.
+	 */
+	#hits = new Map<string, number[]>();
+	/** The rows that hold a hidden track, as of the last change; rows not yet read hold none. */
+	#holding: Holding = { upNext: [], history: [] };
+
 	/** Makes an empty store; it loads the server's queue when the connection says hello. */
 	constructor({
 		api,
@@ -176,16 +206,27 @@ export class QueueStore {
 	}): RowsWindow {
 		const view = this.#view;
 		if (!view) return { section, offset, total: 0, revision: this.#revision, rows: [] };
-		const raw = this.#coreRows(view, section, offset, limit);
+		// Read past the rows that hold a hidden track, which the page is not shown: `at` is where
+		// each row shown is in the whole of its part.
+		const skip = section === 'current' ? [] : this.#holding[section];
+		const from = section === 'current' ? 0 : unskipped(offset, skip);
+		const left = new Set(skip);
+		const read = this.#coreRows(view, section, from, limit + skip.length)
+			.map((row, i) => ({ row, at: from + i }))
+			.filter(({ at }) => !left.has(at))
+			.slice(0, limit);
+		const raw = read.map(({ row }) => row);
 		const total =
 			section === 'upNext'
-				? view.upNextLen()
+				? view.upNextLen() - skip.length
 				: section === 'history'
-					? view.historyLen()
+					? view.historyLen() - skip.length
 					: raw.length;
-		if (raw.some((row) => this.#needsPage(row))) this.#ensurePages(section, offset, limit);
-		// The page that holds the window's rows: the item playing comes with Up Next's first.
-		const [part, first] = section === 'current' ? (['upNext', 0] as const) : [section, offset];
+		if (raw.some((row) => this.#needsPage(row))) {
+			this.#ensurePages(section, from, (read.at(-1)?.at ?? from) - from + 1);
+		}
+		// The part whose pages hold the window's rows: the item playing comes with Up Next's first.
+		const part = section === 'current' ? 'upNext' : section;
 		const rows = raw.map((row, i): QueueRow => {
 			const { libraryId, list } = this.#sources.get(row.source) ?? { libraryId: '' };
 			// The list, else a page, else the tracks of an add of this device's own that waits.
@@ -198,7 +239,7 @@ export class QueueStore {
 					? 'known'
 					: held === null ||
 						  problem === 'gone' ||
-						  (problem === 'failed' && !this.#pages.fetching(part, first + i))
+						  (problem === 'failed' && !this.#pages.fetching(part, read[i].at))
 						? 'unavailable'
 						: 'unknown';
 			const out: QueueRow = {
@@ -473,6 +514,62 @@ export class QueueStore {
 		} else if (message.type === 'queueEdit') {
 			this.#heard(message);
 		}
+		// What was hidden while the connection was down is read again.
+		if (message.type === 'hello') {
+			this.#hiddenAsked.clear();
+			this.#told.clear();
+		}
+	}
+
+	/**
+	 * Takes in that the user hid track `trackId` of `libraryId`, or unhid it, here or on another
+	 * device, which changes the rows the page is shown at once.
+	 */
+	hidden(libraryId: string, trackId: string, hidden: boolean) {
+		let told = this.#told.get(libraryId);
+		if (!told) this.#told.set(libraryId, (told = new Map()));
+		told.set(trackId, hidden);
+		let tracks = this.#hidden.get(libraryId);
+		if (!tracks) this.#hidden.set(libraryId, (tracks = new Set()));
+		if (tracks.has(trackId) === hidden) return;
+		if (hidden) tracks.add(trackId);
+		else tracks.delete(trackId);
+		this.#hits.clear();
+		this.#emit();
+	}
+
+	/**
+	 * Reads Hidden Songs for `libraryId` in the background, a page at a time, then takes it as
+	 * the library's hidden tracks with what the page told since on top. One that cannot be read
+	 * is asked for again only once the connection says hello.
+	 */
+	async #readHidden(libraryId: string) {
+		this.#hiddenAsked.add(libraryId);
+		try {
+			const found = new Set<string>();
+			let cursor: string | null | undefined = null;
+			do {
+				const after = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
+				const path = `/libraries/${encodeURIComponent(libraryId)}/hidden-tracks`;
+				const response = await this.#get(`${path}?limit=${HIDDEN_PAGE}${after}`);
+				if (!response?.ok) return;
+				const page = (await response.json()) as TrackPage;
+				for (const track of page.items) found.add(track.id);
+				cursor = page.nextCursor;
+			} while (cursor);
+			for (const [trackId, hidden] of this.#told.get(libraryId) ?? []) {
+				if (hidden) found.add(trackId);
+				else found.delete(trackId);
+			}
+			const before = this.#hidden.get(libraryId) ?? new Set();
+			this.#hidden.set(libraryId, found);
+			if (found.size !== before.size || [...found].some((id) => !before.has(id))) {
+				this.#hits.clear();
+				this.#emit();
+			}
+		} catch {
+			// Read again once the connection is back.
+		}
 	}
 
 	/** An edit another device (or this one) made, as the server applied it. */
@@ -564,6 +661,8 @@ export class QueueStore {
 		for (const key of this.#viewRows.keys())
 			if (!this.#sources.has(key)) this.#viewRows.delete(key);
 		const heldRow = this.#starting ? null : this.#confirmed?.currentRow();
+		this.#holding = view ? this.#holdingIn(view) : { upNext: [], history: [] };
+		const manual = view?.manualLen() ?? 0;
 		this.#changed({
 			queueId: this.#queueId,
 			context: this.#context,
@@ -572,13 +671,41 @@ export class QueueStore {
 			current: state?.current ?? null,
 			playingManual: view?.playingManual() ?? false,
 			held: heldRow ? (JSON.parse(heldRow) as CoreRow).item : null,
-			manual: view?.manualLen() ?? 0,
-			upNext: view?.upNextLen() ?? 0,
-			history: view?.historyLen() ?? 0,
+			manual: manual - this.#holding.upNext.filter((at) => at < manual).length,
+			upNext: (view?.upNextLen() ?? 0) - this.#holding.upNext.length,
+			history: (view?.historyLen() ?? 0) - this.#holding.history.length,
 			repeat: state?.repeat ?? 'off',
 			shuffled: !!state?.shuffle
 		});
 		this.#sync();
+	}
+
+	/**
+	 * The rows of `view` that hold a hidden track: where each attached list holds one, found
+	 * once for each list, then the rows that read those positions. None while nothing is hidden.
+	 */
+	#holdingIn(view: Queue): Holding {
+		const none = { upNext: [], history: [] };
+		const hidden = [...this.#hidden.values()].flatMap((tracks) => [...tracks]);
+		if (hidden.length === 0) return none;
+		try {
+			const tracks = JSON.stringify(hidden);
+			const hits: Record<string, number[]> = {};
+			for (const hash of JSON.parse(view.listHashes()) as string[]) {
+				let positions = this.#hits.get(hash);
+				if (!positions) {
+					const found = view.positionsHolding(hash, tracks);
+					if (found === undefined) continue;
+					positions = JSON.parse(found) as number[];
+					this.#hits.set(hash, positions);
+				}
+				if (positions.length > 0) hits[hash] = positions;
+			}
+			return Object.keys(hits).length > 0 ? JSON.parse(view.holding(JSON.stringify(hits))) : none;
+		} catch {
+			// An ID that is not a track's holds no row.
+			return none;
+		}
 	}
 
 	/**
@@ -595,9 +722,13 @@ export class QueueStore {
 			if (referenced.has(hash)) continue;
 			this.#attached.delete(hash);
 			this.#problems.delete(hash);
+			this.#hits.delete(hash);
 			void this.#lists.delete(hash);
 		}
 		this.#referenced = referenced;
+		for (const { libraryId } of this.#sources.values()) {
+			if (libraryId && !this.#hiddenAsked.has(libraryId)) void this.#readHidden(libraryId);
+		}
 		const rows = (section: 'upNext' | 'history'): CoreRow[] =>
 			this.#coreRows(view, section, 0, PAGE);
 		if (this.#coreRows(view, 'current', 0, 1).some((row) => this.#needsPage(row))) {
@@ -927,4 +1058,17 @@ function hashesOf(queue: Queue): string[] {
 function ownBody(edit: SentEdit): string | null {
 	if (edit.type !== 'add' || !edit.source.tracks?.length) return null;
 	return JSON.stringify({ libraryId: edit.source.libraryId, tracks: edit.source.tracks });
+}
+
+/**
+ * Where row `offset` of what the page is shown is in the whole of its part, past the rows
+ * `skip`, ascending, which it is not shown.
+ */
+function unskipped(offset: number, skip: readonly number[]): number {
+	let at = offset;
+	for (const row of skip) {
+		if (row > at) break;
+		at++;
+	}
+	return at;
 }
