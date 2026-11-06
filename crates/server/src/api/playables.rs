@@ -5,12 +5,18 @@
 //! and a playlist must be the caller's own in it. Anything else is as absent as an ID that never
 //! was (`requirements/users.md` §10), answered `422` here because the request, not its path,
 //! names it.
+//!
+//! An album, artist or playlist stands for the tracks its page shows, so without those the
+//! caller hid (`requirements/conventions.md` §8). A track named on its own is itself, hidden or
+//! not: the request asked for it.
+
+use std::collections::HashSet;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 
 use super::tracks::{CREDITS, TRACK_NUMBER};
-use super::{AnyId, Problem};
+use super::{AnyId, Problem, hidden};
 
 /// The spec's `Playable` as a request sends it. Only the kinds of library content are
 /// understood; the check is made when it is expanded.
@@ -35,8 +41,8 @@ const PLAYLIST_TRACKS: &str =
     "SELECT track_id FROM playlist_items WHERE playlist_id = ?1 ORDER BY key";
 
 /// The tracks `playables` stand for, in request order, each kind in its own order and a track
-/// as often as it is named. A track, album or artist is looked up in `library`, a playlist among
-/// `user`'s own in it. Fails with `422` for a playable that is not there, and for the kinds not
+/// as often as it is named, without those `user` hid in an album, artist or playlist. A track,
+/// album or artist is looked up in `library`, a playlist among `user`'s own in it. Fails with `422` for a playable that is not there, and for the kinds not
 /// supported yet.
 pub fn expand(
     conn: &Connection,
@@ -45,6 +51,8 @@ pub fn expand(
     playables: &[Playable],
 ) -> Result<Vec<i64>, Problem> {
     let mut tracks = Vec::new();
+    let collections = playables.iter().any(|playable| playable.kind != "track");
+    let hid = if collections { hidden::ids(conn, user, library)? } else { HashSet::new() };
     for playable in playables {
         let id = playable.id.and_then(|id| id.0);
         match playable.kind.as_str() {
@@ -54,11 +62,11 @@ pub fn expand(
             }
             "album" => {
                 require(exists(conn, "albums", library, id)?, "album")?;
-                collect(conn, &album_tracks(), params![library, id], &mut tracks)?;
+                collect(conn, &album_tracks(), params![library, id], &hid, &mut tracks)?;
             }
             "artist" => {
                 require(exists(conn, "artists", library, id)?, "artist")?;
-                collect(conn, &artist_tracks(), params![library, id], &mut tracks)?;
+                collect(conn, &artist_tracks(), params![library, id], &hid, &mut tracks)?;
             }
             "playlist" => {
                 let own = conn
@@ -69,7 +77,7 @@ pub fn expand(
                     .optional()?
                     .is_some();
                 require(own, "playlist")?;
-                collect(conn, PLAYLIST_TRACKS, params![id], &mut tracks)?;
+                collect(conn, PLAYLIST_TRACKS, params![id], &hid, &mut tracks)?;
             }
             "external" => {
                 return Err(Problem::invalid("External tracks are not supported yet."));
@@ -105,15 +113,19 @@ fn require(found: bool, kind: &str) -> Result<(), Problem> {
     if found { Ok(()) } else { Err(Problem::invalid(format!("This library has no such {kind}."))) }
 }
 
-/// Appends the first column of every row `sql` returns to `tracks`.
+/// Appends the first column of every row `sql` returns to `tracks`, but those in `hid`.
 fn collect(
     conn: &Connection,
     sql: &str,
     params: impl rusqlite::Params,
+    hid: &HashSet<i64>,
     tracks: &mut Vec<i64>,
 ) -> rusqlite::Result<()> {
     for track in conn.prepare_cached(sql)?.query_map(params, |row| row.get::<_, i64>(0))? {
-        tracks.push(track?);
+        let track = track?;
+        if !hid.contains(&track) {
+            tracks.push(track);
+        }
     }
     Ok(())
 }

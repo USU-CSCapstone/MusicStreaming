@@ -516,3 +516,102 @@ async fn a_like_reaches_the_users_devices() {
     assert_eq!(call(&app, TOKEN, "PATCH", &uri, Some(remove)).await.0, StatusCode::OK);
     assert_eq!(next_of(&mut phone, "trackLiked").await, liked("2", false), "removed is unliked");
 }
+
+/// The tracks of playlist `id` of library 1 as `token`'s account sees its items, in order.
+async fn items(app: &Router, token: &str, id: &str) -> Vec<String> {
+    let uri = format!("/api/v1/libraries/1/playlists/{id}/items");
+    let (status, page) = call(app, token, "GET", &uri, None).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let items = page["items"].as_array().unwrap();
+    items.iter().map(|item| item["track"]["id"].as_str().unwrap().to_owned()).collect()
+}
+
+/// Makes a playlist of `items` in library 1 as `token`'s account, and gives its ID.
+async fn made(app: &Router, token: &str, items: Value) -> String {
+    let body = json!({ "title": "Mix", "items": items });
+    let (status, made) =
+        call(app, token, "POST", "/api/v1/libraries/1/playlists", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{made}");
+    made["id"].as_str().unwrap().to_owned()
+}
+
+/// An album or playlist added to a playlist stands for the tracks its page shows, so the ones
+/// the caller hid stay out, and Liked Songs does not unhide them; a track named on its own is
+/// added, hidden or not. Another user's additions keep them.
+#[tokio::test]
+async fn adding_a_collection_leaves_out_what_the_caller_hid() {
+    let (temp, _db, app) = app_with_tracks().await;
+    {
+        let conn = conn(&temp);
+        add_user(&conn, 2, "user");
+        add_device(&conn, 2, 2, "user-token");
+        access(&conn, 2, 1).unwrap();
+    }
+    hide(&app, TOKEN, "PUT", "1").await;
+    let album = json!({ "type": "album", "id": "101" });
+
+    let mix = made(&app, TOKEN, json!([album])).await;
+    assert_eq!(items(&app, TOKEN, &mix).await, ["2"], "made from an album");
+    let named = made(&app, TOKEN, json!([{ "type": "track", "id": "1" }, album])).await;
+    assert_eq!(items(&app, TOKEN, &named).await, ["1", "2"], "a track named on its own");
+
+    let (_, mix_now) =
+        call(&app, TOKEN, "GET", &format!("/api/v1/libraries/1/playlists/{mix}"), None).await;
+    let edit = json!({ "baseVersion": mix_now["version"], "ops": [
+        { "op": "add", "items": [album, { "type": "playlist", "id": named }] }
+    ] });
+    let uri = format!("/api/v1/libraries/1/playlists/{mix}");
+    assert_eq!(call(&app, TOKEN, "PATCH", &uri, Some(edit)).await.0, StatusCode::OK);
+    assert_eq!(items(&app, TOKEN, &mix).await, ["2", "2", "2"], "an album and a playlist added");
+
+    let uri = format!("/api/v1/libraries/1/playlists/{mix}/duplicates");
+    let (status, found) = call(&app, TOKEN, "POST", &uri, Some(json!({ "items": [album] }))).await;
+    assert_eq!((status, &found["trackIds"]), (StatusCode::OK, &json!(["2"])));
+
+    // Added to Liked Songs by an edit, the album likes what it shows and unhides nothing.
+    let (_, lists) = call(&app, TOKEN, "GET", "/api/v1/libraries/1/playlists", None).await;
+    let liked_songs = &lists["items"][0];
+    let id = liked_songs["id"].as_str().unwrap();
+    let add = json!({ "baseVersion": liked_songs["version"], "ops": [
+        { "op": "add", "items": [album] }
+    ] });
+    let uri = format!("/api/v1/libraries/1/playlists/{id}");
+    assert_eq!(call(&app, TOKEN, "PATCH", &uri, Some(add)).await.0, StatusCode::OK);
+    assert_eq!(items(&app, TOKEN, id).await, ["2"]);
+    assert_eq!(hidden(&app, TOKEN, "").await.0, ["1"]);
+
+    let theirs = made(&app, "user-token", json!([album])).await;
+    assert_eq!(items(&app, "user-token", &theirs).await, ["1", "2"], "only the owner hid it");
+}
+
+/// A lookup by ID, which a device makes for the tracks it queued, says which the caller hid, so
+/// the device skips them; a list never holds one, so says nothing.
+#[tokio::test]
+async fn a_lookup_by_id_marks_what_the_caller_hid() {
+    let (temp, _db, app) = app_with_tracks().await;
+    {
+        let conn = conn(&temp);
+        add_user(&conn, 2, "user");
+        add_device(&conn, 2, 2, "user-token");
+        access(&conn, 2, 1).unwrap();
+    }
+    hide(&app, TOKEN, "PUT", "1").await;
+    let marks = |page: &Value| -> Vec<Value> {
+        page["items"].as_array().unwrap().iter().map(|track| track["hidden"].clone()).collect()
+    };
+
+    let by_ids = "/api/v1/libraries/1/tracks?ids=1,2";
+    let (_, page) = call(&app, TOKEN, "GET", by_ids, None).await;
+    assert_eq!(marks(&page), [json!(true), Value::Null], "sent only when hidden");
+    let (_, track) = call(&app, TOKEN, "GET", "/api/v1/libraries/1/tracks/1", None).await;
+    assert_eq!(track["hidden"], true);
+    let (_, track) = call(&app, TOKEN, "GET", "/api/v1/libraries/1/tracks/2", None).await;
+    assert_eq!(track.get("hidden"), None);
+    let (_, page) = call(&app, TOKEN, "GET", "/api/v1/libraries/1/hidden-tracks", None).await;
+    assert_eq!(marks(&page), [json!(true)]);
+
+    let (_, page) = call(&app, TOKEN, "GET", "/api/v1/libraries/1/tracks", None).await;
+    assert_eq!(marks(&page), [Value::Null]);
+    let (_, page) = call(&app, "user-token", "GET", by_ids, None).await;
+    assert_eq!(marks(&page), [Value::Null, Value::Null], "only the owner hid it");
+}

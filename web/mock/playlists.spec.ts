@@ -362,6 +362,30 @@ describe('hidden tracks', () => {
 		call('PATCH', '/playlists/liked-1', { baseVersion: 4, ops: [{ op: 'add', items }] });
 		expect(hidden()).toEqual([]);
 	});
+
+	it('are marked on a lookup, and in Hidden Songs', () => {
+		store.hide(LIB, 2n);
+		const tracks = [track(1), track(2)];
+		store.markHidden(LIB, tracks);
+		expect(tracks.map((t) => t.hidden)).toEqual([undefined, true]);
+		expect(store.hiddenTracks(LIB, new URLSearchParams()).items[0].hidden).toBe(true);
+	});
+
+	it('stay out of an album, artist or playlist added, but not of a track named', () => {
+		store.hide(LIB, 2n);
+		store.hide(LIB, 4n);
+		const items = [
+			{ type: 'album', id: '100' },
+			{ type: 'artist', id: '200' },
+			{ type: 'playlist', id: 'pl-seed' },
+			{ type: 'track', id: '2' }
+		];
+		const made = create({ title: 'Mix', items });
+		expect(ids(`/playlists/${made.id}`)).toEqual(['1', '3', '5', '1', '2']);
+		const asked = { items: [{ type: 'album', id: '100' }] };
+		const found = call<{ trackIds: string[] }>('POST', `/playlists/${made.id}/duplicates`, asked);
+		expect(found.body.trackIds).toEqual(['1', '3']);
+	});
 });
 
 describe('a hidden track in a playlist', () => {
