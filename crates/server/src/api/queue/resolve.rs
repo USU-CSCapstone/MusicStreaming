@@ -2,7 +2,7 @@
 //!
 //! A start, and later an add, names a recipe instead of sending tracks. The server runs it
 //! against the library, in the caller's reach, to the same order a view of it pages in to its
-//! end. The core keeps a recipe's fields as text ([`jewelcase_core::Recipe`]); here they are
+//! end, and so without the tracks the caller hid (`requirements/conventions.md` §8). The core keeps a recipe's fields as text ([`jewelcase_core::Recipe`]); here they are
 //! typed as the API needs them.
 
 use std::sync::Arc;
@@ -21,7 +21,7 @@ use crate::api::search::Indexes;
 use crate::api::tag_filter::{TagFilter, Tags};
 use crate::api::time::rfc3339;
 use crate::api::tracks::{self, TrackOrder, TrackSort};
-use crate::api::{AnyId, Code, Id, Problem};
+use crate::api::{AnyId, Code, Id, Problem, hidden};
 use crate::db::{Database, by_ids, reaches};
 
 /// How a source's list is made, as a request sends it: the spec's `QueueRecipe` without
@@ -160,7 +160,8 @@ fn names(sort: TrackSort, order: Order) -> (String, String) {
 }
 
 /// The track IDs `recipe` resolves to in `library`, in order, one statement for each part of the
-/// sort's index and read straight into `u64`, with no paging. Refused, `422`, unless the caller
+/// sort's index and read straight into `u64`, with no paging. As every view, it leaves out the
+/// tracks the caller hid, so two users may resolve one recipe to different lists. Refused, `422`, unless the caller
 /// reaches the library, whether or not it exists, so no one learns what a library they cannot
 /// reach holds (`requirements/users.md` §10). Every track is in the library, since a recipe
 /// reads only its tracks, and a search leaves out the ones its index still holds that are gone.
@@ -192,14 +193,14 @@ pub async fn resolve(
         return Err(refused());
     }
 
-    let library = library.0;
+    let (library, user) = (library.0, caller.user);
     let mut stored = recipe.stored();
     let ids = match recipe.clone() {
         Recipe::Album { album_id, sort, order, .. } => {
             let album = Some(AnyId::from(album_id.as_str()));
             let sort = TrackOrder { sort, order };
             db.read(move |conn| {
-                tracks::resolve(conn, library, album, None, ArtistCredit::Any, &tags, sort)
+                tracks::resolve(conn, user, library, album, None, ArtistCredit::Any, &tags, sort)
             })
             .await?
         }
@@ -207,22 +208,21 @@ pub async fn resolve(
             let artist = Some(AnyId::from(artist_id.as_str()));
             let sort = TrackOrder { sort, order };
             db.read(move |conn| {
-                tracks::resolve(conn, library, None, artist, artist_credit, &tags, sort)
+                tracks::resolve(conn, user, library, None, artist, artist_credit, &tags, sort)
             })
             .await?
         }
         Recipe::Library { sort, order, .. } => {
             let sort = TrackOrder { sort, order };
             db.read(move |conn| {
-                tracks::resolve(conn, library, None, None, ArtistCredit::Any, &tags, sort)
+                tracks::resolve(conn, user, library, None, None, ArtistCredit::Any, &tags, sort)
             })
             .await?
         }
-        Recipe::Search { q, .. } => search(db, indexes, library, q, &tags).await?,
+        Recipe::Search { q, .. } => search(db, indexes, user, library, q, &tags).await?,
         Recipe::Playlist { playlist_id, sort, order, .. } => {
             let playlist = AnyId::from(playlist_id.as_str()).0.ok_or_else(Problem::not_found)?;
             let sort = sort.map(|sort| (sort, order == Some(Order::Desc)));
-            let user = caller.user;
             let (ids, read) = db
                 .try_read(move |conn| playlist_ids(conn, user, library, playlist, sort, &tags))
                 .await?;
@@ -237,7 +237,8 @@ pub async fn resolve(
 
 /// The IDs of the items of `user`'s playlist `playlist` in `library`, and the playlist's
 /// version, from one read: its items in key order, a track as often as it holds it and a missing
-/// track in place, kept if they carry the tags `tags` names, then in `sort`'s order if given
+/// track in place, kept if they carry the tags `tags` names and `user` did not hide them, then in
+/// `sort`'s order if given
 /// (`SortField` and whether descending) by the core's comparator over the keys the playlist's
 /// page sorts by. `404` for a playlist that is not the user's own in the library.
 fn playlist_ids(
@@ -250,9 +251,10 @@ fn playlist_ids(
 ) -> Result<(Vec<u64>, i64), Problem> {
     let (version, mut items) = playlists::all_items(conn, user, library, playlist)?;
     let tagged = Tags::read(conn, library, &tracks::TAGGED, tags)?.ids(conn, &tracks::TAGGED)?;
-    if let Some(tagged) = tagged {
-        items.retain(|(track, _)| tagged.contains(track));
-    }
+    let hid = hidden::ids(conn, user, library)?;
+    items.retain(|(track, _)| {
+        !hid.contains(track) && tagged.as_ref().is_none_or(|tagged| tagged.contains(track))
+    });
     let Some((field, descending)) = sort else {
         return Ok((items.iter().map(|(track, _)| track.cast_unsigned()).collect(), version));
     };
@@ -272,21 +274,24 @@ fn playlist_ids(
 }
 
 /// Every track of `library` that matches `q`, best first, as a search's tracks section ranks
-/// them but with no limit, and only those that carry the tags `tags` names. Those the index holds
-/// that are gone since are left out.
+/// them but with no limit, and only those that carry the tags `tags` names and `user` did not
+/// hide. Those the index holds that are gone since are left out.
 async fn search(
     db: &Arc<Database>,
     indexes: &Indexes,
+    user: i64,
     library: i64,
     q: String,
     tags: &TagFilter,
 ) -> Result<Vec<u64>, Problem> {
     let tagged = indexes.tagged.get(db, library, tags, &[Kind::Track]).await?;
     let index = indexes.index(db, library).await?;
+    let hid = db.read(move |conn| hidden::ids(conn, user, library)).await?;
     // Ranking every match of a common word takes a while, so it runs off the async threads.
     let found = tokio::task::spawn_blocking(move || {
         index.search_within(&q, &[Kind::Track], usize::MAX, |kind, id| {
-            tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
+            !hid.contains(&id)
+                && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
         })
     })
     .await

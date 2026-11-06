@@ -17,7 +17,7 @@ pub use representation::{
 use super::credit::{ArtistCredit, Credits};
 use super::extract::{Path, Query};
 use super::hidden;
-use super::page::{self, Check, Order, Page, Request, Sort, Source, Table, Unknown};
+use super::page::{self, Check, Order, Page, Request, Sort, Source, Table, Total, Unknown};
 use super::scope::Scope;
 use super::tag_filter::{self, LEAD_SHARE, RESOLVE_SHARE, TagFilter, Tagged};
 use super::{AnyId, Id, Problem};
@@ -229,12 +229,14 @@ impl TrackOrder {
     }
 }
 
-/// The ID of every track in `library` that `list` pages through for the same `album`, `artist`,
-/// `credit`, `tags` and `order`, in the same order, read at once: one statement for each part of
-/// the sort's index, not a page at a time. Being read whole, it starts from a larger tag's tracks
-/// than a page does ([`RESOLVE_SHARE`]).
+/// The ID of every track in `library` that `list` pages through for `user` with the same
+/// `album`, `artist`, `credit`, `tags` and `order`, in the same order, so without those `user`
+/// hid, read at once: one statement for each part of the sort's index, not a page at a time.
+/// Being read whole, it starts from a larger tag's tracks than a page does ([`RESOLVE_SHARE`]).
+#[expect(clippy::too_many_arguments, reason = "a list's own parameters, and whose it is")]
 pub fn resolve(
     conn: &Connection,
+    user: i64,
     library: i64,
     album: Option<AnyId>,
     artist: Option<AnyId>,
@@ -244,8 +246,10 @@ pub fn resolve(
 ) -> rusqlite::Result<Vec<u64>> {
     let (sort, order) = order.keyset(album.is_some());
     let source = source(conn, library, album, artist, credit, tags, RESOLVE_SHARE)?;
-    // Only the IDs are wanted, so the columns and joins for summaries are left out.
-    let source = Source { select: &["t.id"], joins: "", ..source };
+    // Only the IDs are wanted, so the columns and joins for summaries are left out, and with them
+    // the total, which a stored count would cost a query to correct for what the user hid.
+    let mut source = Source { select: &["t.id"], joins: "", total: Total::Counted, ..source };
+    hidden::leave_out(conn, &mut source, user, library)?;
     page::ids(conn, &source, sort, order)
 }
 
