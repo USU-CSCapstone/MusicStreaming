@@ -11,16 +11,16 @@ use jewelcase_core::SortRow;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::Serialize;
 
-use crate::api::Id;
 use crate::api::refs::{
     AlbumRef, Credit, ImageRef, TagsByType, artists_json, availability, placeholder, tags_json,
 };
 use crate::api::time::serialize_rfc3339;
+use crate::api::{Id, hidden};
 use crate::db::{Json, by_ids, liked_songs};
 
 /// The spec's `TrackSummary`, without `personal`. A full `Track` has the same fields with more
-/// `audio`, so the audio type is a parameter. `liked` is the caller's, so it is read apart from
-/// the rest, by [`mark_liked`]: false until then.
+/// `audio`, so the audio type is a parameter. `liked` and `hidden` are the caller's, so they are
+/// read apart from the rest, by [`mark_liked`] and [`mark_hidden`]: false until then.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackSummary<A = AudioSummary> {
@@ -41,6 +41,10 @@ pub struct TrackSummary<A = AudioSummary> {
     added_at: i64,
     sort_keys: TrackSortKeys,
     liked: bool,
+    /// Sent only on a track the caller hid, which only a lookup by ID and Hidden Songs return:
+    /// every list leaves them out, and a playlist's item says so itself.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    hidden: bool,
 }
 
 /// The spec's `TrackSortKeys`: what the server orders tracks by, so a client sorting a list it
@@ -207,6 +211,7 @@ fn summary<A>(row: &Row, audio: A) -> rusqlite::Result<TrackSummary<A>> {
             album: key(row, 20)?,
         },
         liked: false,
+        hidden: false,
     })
 }
 
@@ -230,15 +235,28 @@ pub fn mark_liked<'a, A: 'a>(
     Ok(())
 }
 
+/// Marks each of `tracks` that `user` hid in `library` (`requirements/conventions.md` §8), as
+/// a lookup by ID needs: a device holding a track it queued learns from it to skip it. A user
+/// hides few of a library's tracks, so they are read as a set.
+pub fn mark_hidden<'a, A: 'a>(
+    conn: &Connection,
+    user: i64,
+    library: i64,
+    tracks: impl IntoIterator<Item = &'a mut TrackSummary<A>>,
+) -> rusqlite::Result<()> {
+    let hid = hidden::ids(conn, user, library)?;
+    for track in tracks {
+        track.hidden = hid.contains(&track.id.0);
+    }
+    Ok(())
+}
+
 impl Track {
-    /// Marks the track if `user` likes it in `library` ([`mark_liked`]).
-    pub fn mark_liked(
-        &mut self,
-        conn: &Connection,
-        user: i64,
-        library: i64,
-    ) -> rusqlite::Result<()> {
-        mark_liked(conn, user, library, [&mut self.summary])
+    /// Marks the track if `user` likes it in `library`, or hid it ([`mark_liked`],
+    /// [`mark_hidden`]).
+    pub fn mark(&mut self, conn: &Connection, user: i64, library: i64) -> rusqlite::Result<()> {
+        mark_liked(conn, user, library, [&mut self.summary])?;
+        mark_hidden(conn, user, library, [&mut self.summary])
     }
 }
 

@@ -10,8 +10,8 @@ use rusqlite::Connection;
 use serde::Deserialize;
 
 pub use representation::{
-    JOINS, LOUDNESS, Loudness, SELECT, Track, TrackSummary, list_summary, loudness, mark_liked,
-    sort_keys,
+    JOINS, LOUDNESS, Loudness, SELECT, Track, TrackSummary, list_summary, loudness, mark_hidden,
+    mark_liked, sort_keys,
 };
 
 use super::credit::{ArtistCredit, Credits};
@@ -181,6 +181,7 @@ async fn by_ids(
             let mut items =
                 db::by_ids(conn, SELECT, "tracks t", JOINS, library, &ids, list_summary)?;
             mark_liked(conn, user, library, &mut items)?;
+            mark_hidden(conn, user, library, &mut items)?;
             Ok(items)
         })
         .await?;
@@ -262,7 +263,7 @@ pub async fn get(
     db.read(move |conn| {
         let mut found = representation::track(conn, library, track)?;
         if let Some(track) = &mut found {
-            track.mark_liked(conn, user, library)?;
+            track.mark(conn, user, library)?;
         }
         Ok(found)
     })
