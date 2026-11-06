@@ -12,7 +12,7 @@
 	import type { PersonalPlugin } from '$lib/api/plugins';
 	import type { User } from '$lib/api/types';
 	import DeviceList from '$lib/components/DeviceList.svelte';
-	import HiddenSongs from '$lib/components/HiddenSongs.svelte';
+	import Icon from '$lib/components/Icon.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import SettingsDialog from '$lib/components/SettingsDialog.svelte';
 	import { prefs } from '$lib/prefs.svelte';
@@ -137,14 +137,19 @@
 	</section>
 {/if}
 
-{#if me && data.hidden && page.data.library}
+{#if me && page.data.library}
 	<section aria-labelledby="hidden">
 		<h2 id="hidden">Hidden songs</h2>
 		<p class="muted">
 			Songs you hid are gone from your library: from every list, search, and anything played for
-			you. Hide a song from its ⋯ menu, and bring it back here.
+			you. Hide a song from its ⋯ menu, and bring it back from Hidden Songs.
 		</p>
-		<HiddenSongs library={page.data.library.id} first={data.hidden} />
+		<a class="button" href={resolve('/account/hidden')}>
+			<Icon name="hide" size={16} />
+			Hidden Songs{#if data.hiddenCount !== null}<span class="muted">
+					· {data.hiddenCount.toLocaleString()}</span
+				>{/if}
+		</a>
 	</section>
 {/if}
 
@@ -297,8 +302,24 @@
 		cursor: pointer;
 	}
 
-	button:hover {
+	button:hover,
+	.button:hover {
 		background: var(--surface-hover);
+	}
+
+	/* A link that looks like the page's buttons. */
+	.button {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		height: 36px;
+		padding: 0 var(--space-4);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-m);
+		background: var(--surface);
+		color: var(--text);
+		font-weight: 500;
+		text-decoration: none;
 	}
 
 	button:disabled {

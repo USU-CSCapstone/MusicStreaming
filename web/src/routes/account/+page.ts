@@ -3,10 +3,11 @@ import type { PageLoad } from './$types';
 
 export const load: PageLoad = async ({ fetch, parent }) => {
 	const { library } = await parent();
-	// Hidden Songs is a part of the page; one that fails to load leaves it out, not the page.
+	// How many songs are hidden, for the link to them; one that fails to load leaves the count out,
+	// not the page.
 	const [{ items }, hidden] = await Promise.all([
 		listMyPlugins(fetch),
-		library ? listHiddenTracks(fetch, library.id).catch(() => null) : null
+		library ? listHiddenTracks(fetch, library.id, { limit: 1 }).catch(() => null) : null
 	]);
-	return { connectable: items, hidden };
+	return { connectable: items, hiddenCount: hidden?.total ?? null };
 };
