@@ -4,14 +4,17 @@
 use jewelcase_plugins::MarkKind::{Hidden, Liked, Unliked};
 use jewelcase_plugins::Permission::{LikesAndHides, ListeningActivity, Marked};
 use jewelcase_plugins::{Event, Mark, MarkKind};
+use rusqlite::OptionalExtension;
 use serde_json::json;
 
 use super::{HANDLED, Received, connected, deliver, plan, setup};
+use crate::api::testing::eventually;
 use crate::db::Database;
 use crate::db::retention::{WINDOW_MS, sweep};
 use crate::db::testing::Track;
 use crate::plugins::personal::disconnect;
 use crate::plugins::testing::{caller, connect};
+use crate::plugins::tests::HEARER;
 
 /// `user` marked track `track` of library 1 as `kind` at `at`, as the like and hide paths
 /// record it.
@@ -213,4 +216,26 @@ async fn the_marked_hook_reads_its_feed_by_user() {
     let steps = plan(&db, Marked).await;
     let reads = |step: &String| step.starts_with("SEARCH e ") && step.ends_with(feed);
     assert!(steps.iter().any(reads), "{steps:#?}");
+}
+
+/// The whole path, with a plugin compiled from its component: a user's likes reach its `handle`
+/// as a `marked` event, whose first mark names the track, and what it answers is recorded.
+#[tokio::test]
+async fn a_real_plugin_hears_a_users_likes() {
+    let (_temp, db, plugins) = setup().await;
+    connected(&plugins, &db, &[LikesAndHides, Marked]).await;
+    likes(&db, 7, vec![12, 11], 150).await;
+    let file = plugins.path("plugin");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(file, HEARER).unwrap();
+
+    plugins.dispatch().await;
+    let sql = "SELECT l.last_run_summary FROM plugin_cursors c \
+               JOIN plugin_libraries l USING (plugin_id, library_id) WHERE c.hook = 'marked'";
+    let summary: String = eventually("delivered", async || {
+        db.read(move |conn| conn.query_row(sql, [], |row| row.get(0)).optional()).await.unwrap()
+    })
+    .await;
+    // By track, so track 11 comes first.
+    assert!(summary.starts_with("Track 11 ("), "{summary}");
 }

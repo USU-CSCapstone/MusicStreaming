@@ -24,6 +24,10 @@ mod turns;
 /// that it is done.
 pub(super) const TOUCHER: &str = include_str!("tests/toucher.wat");
 
+/// A plugin written by hand that answers a `marked` event with the title of the first song it
+/// names, and anything else with "done".
+pub(super) const HEARER: &str = include_str!("tests/hearer.wat");
+
 /// A plugin written by hand that replaces `Album/01.wav` in root 1 on any event with a WAV whose
 /// `ENERGY` field is `High`, and answers that it is done.
 const ENERGIZER: &str = include_str!("tests/energizer.wat");

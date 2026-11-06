@@ -4305,7 +4305,7 @@ components:
 
     PersonalPlugin:
       type: object
-      required: [id, name, connected, asksForSearches, sharesSearches]
+      required: [id, name, connected, asksForSearches, sharesSearches, hearsLikes]
       properties:
         id: { type: string }
         name: { type: string }
@@ -4321,6 +4321,12 @@ components:
         sharesSearches:
           type: boolean
           description: Whether the caller has turned on sharing their searches with it.
+        hearsLikes:
+          type: boolean
+          description: |
+            Whether, once the caller connects it, it is sent their likes and hides: those they
+            have, then each change. It asks for them, and an admin allowed it, so the caller is
+            told before connecting (`requirements/users.md` §7).
 
     SearchSharing:
       type: object

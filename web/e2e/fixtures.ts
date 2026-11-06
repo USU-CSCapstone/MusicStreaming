@@ -712,7 +712,8 @@ export async function serveLibrary(
 						name: 'Scrobbler',
 						connected: token !== null,
 						asksForSearches: true,
-						sharesSearches
+						sharesSearches,
+						hearsLikes: false
 					}
 				]
 			});
