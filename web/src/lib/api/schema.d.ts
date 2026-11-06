@@ -1056,7 +1056,8 @@ export interface paths {
          *     The source is either `tracks`, which the device resolved and the server holds under the
          *     hash it answers with, so the device attaches the tracks it sent to that hash instead of
          *     downloading them back, or a `recipe`, which the server resolves in `libraryId` to the
-         *     same list, in the same order, that a view of it pages through to its end. A recipe start
+         *     same list, in the same order, that a view of it pages through to its end, so without the
+         *     tracks the caller hid; two users may resolve one recipe to different lists. A recipe start
          *     also sends `startTrackId`, the track that plays first: the server starts at `start` if
          *     its list holds that track there, and otherwise at the first place the list holds it. The
          *     device then fetches the snapshot (`getQueue`), since the server's list and start may
@@ -1580,7 +1581,7 @@ export interface components {
             type: components["schemas"]["EntityType"];
             id: components["schemas"]["Id"];
         };
-        /** @description Something that can be queued or added to a playlist — library content or an external track. */
+        /** @description Something that can be queued or added to a playlist — library content or an external track. An album, artist or playlist stands for the tracks its page shows, so without those the caller hid (`requirements/conventions.md` §8); a track named on its own is added whether hidden or not. */
         Playable: components["schemas"]["EntityRef"] | components["schemas"]["ExternalTrackRef"];
         ExternalTrackRef: {
             /** @constant */
@@ -1787,6 +1788,11 @@ export interface components {
             sortKeys: components["schemas"]["TrackSortKeys"];
             /** @description Whether it is in the caller's Liked Songs (`requirements/playlists.md` §11). */
             liked: boolean;
+            /**
+             * @description Present only on a track the caller hid (`requirements/conventions.md` §8), which only a lookup by ID (`listTracks` with `ids`, `getTrack`) and Hidden Songs (`listHiddenTracks`) return: every list leaves them out, and a playlist's item says so itself. A device holding a track it queued learns from this to skip it.
+             * @constant
+             */
+            hidden?: true;
             personal?: components["schemas"]["Personal"];
         };
         /**

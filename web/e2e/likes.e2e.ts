@@ -1,5 +1,5 @@
 import { type Page, expect, test } from '@playwright/test';
-import { album, serveLibrary } from './fixtures';
+import { album, queueOf, serveLibrary, serveQueueEdits } from './fixtures';
 
 // Liking and hiding songs, against the mock's own store of them (`requirements/playlists.md`
 // §11, `requirements/conventions.md` §8).
@@ -58,50 +58,84 @@ test('a hidden song leaves every list until it is unhidden from Hidden Songs', a
 	await expect(row(page, 'Signal Part 2')).toBeVisible();
 });
 
-test('liking a hidden song unhides it', async ({ page }) => {
+test('an album added to Liked Songs leaves its hidden song hidden', async ({ page }) => {
 	await serveLibrary(page);
 	await page.goto(`/albums/${album.id}`);
 	await page.getByRole('button', { name: 'Actions for Signal Part 2' }).click();
 	await page.getByRole('menuitem', { name: 'Hide song' }).click();
 	await expect(row(page, 'Signal Part 2')).toBeHidden();
 
-	// The whole album into Liked Songs, the hidden song with it.
+	// The album as its page shows it, without the hidden song, which no like unhides.
 	await page.getByRole('button', { name: 'Actions for “Signal”' }).click();
 	const added = page.waitForResponse((r) => r.request().method() === 'PATCH');
 	await page.getByRole('menuitem', { name: /^Liked Songs/ }).click();
 	await expect(page.getByRole('status')).toHaveText(/Added “Signal” to “Liked Songs”/);
 	expect((await added).status()).toBe(200);
 
-	await page.goto('/account/hidden');
-	await expect(page.getByText(/^You haven't hidden any songs/)).toBeVisible();
 	await openLikedSongs(page);
-	await expect(row(page, 'Signal Part 2')).toBeVisible();
+	await expect(row(page, 'Signal Part 1')).toBeVisible();
+	await expect(row(page, 'Signal Part 2')).toBeHidden();
+	await page.goto('/account/hidden');
+	await expect(page.getByRole('button', { name: 'Unhide “Signal Part 2”' })).toBeVisible();
 });
 
-test('deleting Liked Songs with songs in it asks first, and unlikes them', async ({ page }) => {
+/** Hides `title` from its ⋯ menu on the page shown. */
+async function hide(page: Page, title: string) {
+	await page.getByRole('button', { name: `Actions for ${title}` }).click();
+	await page.getByRole('menuitem', { name: 'Hide song' }).click();
+	await expect(row(page, title)).toBeHidden();
+}
+
+/** Opens the queue panel from the player, and gives the panel and its Up Next's titles. */
+async function openQueue(page: Page) {
+	await page.getByRole('region', { name: 'Player' }).getByRole('button', { name: 'Queue' }).click();
+	const panel = page.getByRole('complementary', { name: 'Queue' });
+	const titles = (name: 'Up Next' | 'History') => () =>
+		panel.getByRole('list', { name }).locator('[data-item] .title').allInnerTexts();
+	return { panel, upNext: titles('Up Next'), history: titles('History') };
+}
+
+test('an album played without its hidden song queues it not at all', async ({ page }) => {
 	await serveLibrary(page);
+	const queue = queueOf(page);
 	await page.goto(`/albums/${album.id}`);
-	await heart(page, 'Signal Part 1').click();
-	await openLikedSongs(page);
+	await hide(page, 'Signal Part 2');
+	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
+	const player = page.getByRole('region', { name: 'Player' });
+	await expect(player.getByText('Signal Part 1')).toBeVisible();
+	await expect.poll(() => [...queue.lists.values()].at(-1)).toEqual(['41', '43']);
+	const { upNext } = await openQueue(page);
+	await expect.poll(upNext).toEqual(['Signal Remix']);
+});
 
-	await page.getByRole('button', { name: 'Delete playlist' }).click();
-	const dialog = page.getByRole('dialog', { name: 'Delete Liked Songs?' });
-	await expect(dialog).toContainText('Its song will be unliked.');
-	await dialog.getByRole('button', { name: 'Cancel' }).click();
-	await expect(dialog).toBeHidden();
-	await expect(page).toHaveURL(/\/playlists\/[^/]+$/);
-
-	await page.getByRole('button', { name: 'Delete playlist' }).click();
-	await dialog.getByRole('button', { name: 'Delete' }).click();
-	await expect(page).toHaveURL(/\/playlists$/);
-	const sent = page.waitForResponse((r) => r.request().method() === 'DELETE');
-	await page.getByRole('button', { name: 'Dismiss' }).click();
-	expect((await sent).status()).toBe(204);
-
+test('a song hidden once queued leaves the queue, is skipped, and stays out of it', async ({
+	page
+}) => {
+	await serveLibrary(page);
+	await serveQueueEdits(page);
+	const queue = queueOf(page);
 	await page.goto(`/albums/${album.id}`);
-	await expect(heart(page, 'Signal Part 1')).toHaveAttribute('aria-pressed', 'false');
-	// The next like brings it back.
-	await heart(page, 'Signal Part 1').click();
-	await page.goto('/playlists');
-	await expect(page.getByRole('link', { name: /^Liked Songs/ })).toBeVisible();
+	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
+	const player = page.getByRole('region', { name: 'Player' });
+	await expect(player.getByText('Signal Part 1')).toBeVisible();
+	const first = await openQueue(page);
+	await expect.poll(first.upNext).toEqual(['Signal Part 2', 'Signal Remix']);
+	// The panel covers the album at this width.
+	await first.panel.getByRole('button', { name: 'Close queue' }).click();
+
+	await hide(page, 'Signal Part 2');
+	const { panel, upNext } = await openQueue(page);
+	await expect.poll(upNext).toEqual(['Signal Remix']);
+	await expect(panel.getByRole('tab').first()).toHaveText(/Up Next 1/);
+	// The queue keeps it, and the player passes over it.
+	expect([...queue.lists.values()].at(-1)).toEqual(['41', '42', '43']);
+	await player.getByRole('button', { name: 'Next' }).click();
+	await expect(player.getByText('Signal Remix')).toBeVisible();
+	await expect.poll(() => queue.edits).toEqual([{ type: 'next' }, { type: 'next' }]);
+
+	// A page loaded afresh learns what is hidden from Hidden Songs: History shows only Part 1.
+	await page.reload();
+	const again = await openQueue(page);
+	await again.panel.getByRole('tab', { name: /History/ }).click();
+	await expect.poll(again.history).toEqual(['Signal Part 1']);
 });

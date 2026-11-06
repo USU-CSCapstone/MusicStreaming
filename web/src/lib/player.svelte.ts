@@ -19,6 +19,7 @@ import {
 } from './api/client';
 import type { PlayContext, PlayerCommand, PlayerState, TrackSummary } from './api/types';
 import { albumTitle, artistName } from './format';
+import { marks } from './marks.svelte';
 import { playback } from './playback.svelte';
 import { PlayRecorder } from './plays';
 import { Progress } from './progress';
@@ -205,7 +206,12 @@ class Player {
 					throw error;
 				});
 				if (open !== this.#opens) return;
-				found = track?.availability === 'available' ? { track, libraryId: row.libraryId } : 'skip';
+				// A track the user hid since it was queued is passed over as an unavailable one is
+				// (`requirements/conventions.md` §8).
+				const plays =
+					track?.availability === 'available' &&
+					!marks.hidden(row.libraryId, track.id, track.hidden ?? false);
+				found = plays ? { track, libraryId: row.libraryId } : 'skip';
 			}
 		} catch {
 			// The server could not be reached: it waits, and asks again.

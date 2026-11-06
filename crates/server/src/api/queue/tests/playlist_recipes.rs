@@ -37,7 +37,7 @@ const ITEMS: [(i64, i64); 19] = [
 ];
 
 /// Adds the playlists to the fixture, as the owner's and user 2's.
-async fn playlists(state: &AppState) {
+pub(super) async fn playlists(state: &AppState) {
     state
         .db
         .write(|tx| {
@@ -71,7 +71,7 @@ async fn playlists(state: &AppState) {
 }
 
 /// The playlist recipe for 501 with a sort, direction and filters, each left out when `None`.
-fn recipe(sort: Option<&str>, order: Option<&str>, filters: &Value) -> Value {
+pub(super) fn recipe(sort: Option<&str>, order: Option<&str>, filters: &Value) -> Value {
     let mut recipe = json!({ "type": "playlist", "playlistId": "501" });
     for (name, value) in [("sort", sort), ("order", order)] {
         if let Some(value) = value {

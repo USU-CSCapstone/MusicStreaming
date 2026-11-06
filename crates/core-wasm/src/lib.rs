@@ -6,10 +6,10 @@
 //! `u64` a `BigInt`) and track IDs as decimal strings, since IDs pass 2⁵³. Malformed input
 //! throws; an edit the queue refuses returns its code.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use jewelcase_core::{ItemId, QueueState, Row, SortField, SortRow, Source, sort_rows};
+use jewelcase_core::{ItemId, QueueState, Reading, Row, SortField, SortRow, Source, sort_rows};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -23,6 +23,14 @@ pub struct Queue(QueueState);
 #[serde(rename_all = "camelCase")]
 struct List {
     tracks: Vec<String>,
+}
+
+/// The rows that hold some tracks, as `holding` answers.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Holding {
+    up_next: Vec<u64>,
+    history: Vec<u64>,
 }
 
 /// A row as JavaScript reads it. `play` is History's play number.
@@ -222,6 +230,29 @@ impl Queue {
             .map_while(|i| self.0.history_row(i))
             .map(|p| RowOut::new(p.row, Some(p.play)));
         rows_json(rows)
+    }
+
+    /// The positions of the list `hash` that hold one of `tracks`, a JSON array of decimal
+    /// track IDs such as the ones the user hid, as a JSON array ascending; `undefined` until the
+    /// list is attached. A list never changes, so its answer holds until `tracks` do. O(list).
+    /// Throws on an ID that isn't one.
+    #[wasm_bindgen(js_name = positionsHolding)]
+    pub fn positions_holding(&self, hash: &str, tracks: &str) -> Result<Option<String>, JsError> {
+        let ids: Vec<String> = serde_json::from_str(tracks)?;
+        let tracks: HashSet<u64> = ids.iter().map(|id| id.parse()).collect::<Result<_, _>>()?;
+        let list = self.0.sources.iter().filter(|s| s.hash.as_deref() == Some(hash));
+        let Some(list) = list.filter_map(Source::tracks).next() else { return Ok(None) };
+        Ok(Some(serde_json::to_string(&jewelcase_core::positions_holding(list, &tracks))?))
+    }
+
+    /// The rows that read `hits`, `{hash: positions}` as `positionsHolding` finds them, as
+    /// `{"upNext": [...], "history": [...]}`: Up Next indices ascending, and History's as
+    /// `historyRows` numbers them, newest first, ascending. It costs what the hits number, not
+    /// what the queue does. Throws on malformed hits.
+    pub fn holding(&self, hits: &str) -> Result<String, JsError> {
+        let hits: HashMap<String, Vec<u64>> = serde_json::from_str(hits)?;
+        let Reading { up_next, history } = self.0.rows_reading(&hits);
+        Ok(serde_json::to_string(&Holding { up_next, history })?)
     }
 
     /// The row of the item playing, as `upNextRows` gives rows, or `undefined` if nothing plays.

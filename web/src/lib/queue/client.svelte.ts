@@ -5,6 +5,7 @@
 import { API } from '$lib/api/client';
 import wasmUrl from '$lib/core-wasm/jewelcase_core_wasm_bg.wasm?url';
 import type { RealtimeServerMessage, SentEdit } from '$lib/api/types';
+import type { marks as Marks } from '$lib/marks.svelte';
 import type { Realtime } from '$lib/realtime.svelte';
 import type {
 	FromWorker,
@@ -59,15 +60,25 @@ export class QueueClient {
 		this.#spawn = create;
 	}
 
-	/** Starts the worker and feeds it the queue's realtime messages, until [`disconnect`](#disconnect). */
-	connect(realtime: Pick<Realtime, 'on'>) {
+	/**
+	 * Starts the worker and feeds it the queue's realtime messages, and each hide and unhide
+	 * `marks` shows, whose rows it leaves out, until [`disconnect`](#disconnect).
+	 */
+	connect(realtime: Pick<Realtime, 'on'>, marks?: Pick<typeof Marks, 'onHidden'>) {
 		if (this.#worker) return;
 		const worker = (this.#worker = this.#spawn());
 		worker.onmessage = ({ data }: MessageEvent<FromWorker>) => this.#heard(data);
 		this.#send({ type: 'init', api: API, wasm: wasmUrl });
-		this.#unsubscribe = realtime.on((message: RealtimeServerMessage) => {
+		const unsubscribe = realtime.on((message: RealtimeServerMessage) => {
 			if (QUEUE_MESSAGES.has(message.type)) this.#send({ type: 'message', message });
 		});
+		const unhear = marks?.onHidden((libraryId, trackId, hidden) =>
+			this.#send({ type: 'hidden', libraryId, trackId, hidden })
+		);
+		this.#unsubscribe = () => {
+			unsubscribe();
+			unhear?.();
+		};
 	}
 
 	/** Stops the worker, and with it the queue held on this device. */

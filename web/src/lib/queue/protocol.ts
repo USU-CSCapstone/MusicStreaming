@@ -6,7 +6,10 @@ import type { PlayContext, RealtimeServerMessage, SentEdit, StartQueue } from '$
 /** How the queue repeats: not at all, all of it, or the item playing. */
 export type Repeat = 'off' | 'all' | 'one';
 
-/** The queue as the page shows it, sent whenever it changes. It holds no tracks. */
+/**
+ * The queue as the page shows it, sent whenever it changes. It holds no tracks. Its counts, as
+ * its rows, leave out the rows of tracks the user hid (`requirements/conventions.md` §8).
+ */
 export type Summary = {
 	/** Null until there is a queue. */
 	queueId: string | null;
@@ -108,7 +111,9 @@ export type ToWorker =
 	/** Restores a kept queue; answered with `restored` carrying the same `id`. */
 	| { type: 'restore'; id: number; queueId: string }
 	/** Asks for up to `limit` rows from `offset`; answered with `rows` carrying the same `id`. */
-	| { type: 'rows'; id: number; section: RowSection; offset: number; limit: number };
+	| { type: 'rows'; id: number; section: RowSection; offset: number; limit: number }
+	/** The user hid track `trackId` of `libraryId`, or unhid it, here or on another device. */
+	| { type: 'hidden'; libraryId: string; trackId: string; hidden: boolean };
 
 /** The worker to the page. */
 export type FromWorker =

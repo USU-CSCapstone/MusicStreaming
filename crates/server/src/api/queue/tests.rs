@@ -17,6 +17,7 @@ use crate::db::testing::{Track, access};
 use crate::queue::{Queues, list_hash};
 
 mod edits;
+mod hidden;
 mod kept;
 mod playlist_recipes;
 mod recipes;

@@ -119,6 +119,7 @@ export class PlaylistStore {
 		const ids = [...this.#hiddenIn(lib).keys()];
 		if (query.get('order') !== 'asc') ids.reverse();
 		const tracks = ids.flatMap((id) => this.library.track(lib, id) ?? []);
+		this.markHidden(lib, tracks);
 		return slice(tracks, paging(query));
 	}
 
@@ -131,6 +132,15 @@ export class PlaylistStore {
 		let hidden = this.#hidden.get(lib);
 		if (!hidden) this.#hidden.set(lib, (hidden = new Map()));
 		return hidden;
+	}
+
+	/** Marks each of `tracks` the user hid, as a lookup by ID does; the rest say nothing. */
+	markHidden(lib: bigint, tracks: TrackSummary[]) {
+		const hidden = this.#hiddenIn(lib);
+		for (const track of tracks) {
+			if (hidden.has(BigInt(track.id))) track.hidden = true;
+			else delete track.hidden;
+		}
 	}
 
 	/** Sets each of `tracks`' `liked`, from Liked Songs. */
@@ -430,7 +440,11 @@ export class PlaylistStore {
 		});
 	}
 
-	/** The tracks something added stands for. Playlists are the store's own, the rest the library's. */
+	/**
+	 * The tracks something added stands for. Playlists are the store's own, the rest the library's.
+	 * An album, artist or playlist leaves out the tracks the user hid; a track named on its own is
+	 * itself (`requirements/conventions.md` §8).
+	 */
 	#expand(lib: bigint, p: unknown, field: string): bigint[] {
 		const ref = p as Playable;
 		if (!isObject(p) || typeof p.type !== 'string') throw invalid(field, 'Not something playable.');
@@ -441,7 +455,9 @@ export class PlaylistStore {
 			ids = this.library.expand(lib, { type: ref.type, id: String(ref.id) });
 		} else throw invalid(field, `A ${ref.type} can't be added to a playlist.`);
 		if (!ids) throw invalid(field, `This library has no such ${ref.type}.`);
-		return ids;
+		if (ref.type === 'track') return ids;
+		const hidden = this.#hiddenIn(lib);
+		return ids.filter((id) => !hidden.has(id));
 	}
 }
 

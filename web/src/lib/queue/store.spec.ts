@@ -73,6 +73,11 @@ class FakeServer {
 	rowsStatus = 0;
 	/** Edits applied whose answer is lost on its way, in count. */
 	loseAnswers = 0;
+	/** The tracks the user hid, by library, as Hidden Songs lists them, `hiddenPage` at a time. */
+	hidden = new Map<string, string[]>();
+	hiddenPage = 1000;
+	/** Holds back the answers to reads of Hidden Songs until it is opened. */
+	hiddenGate: Promise<void> | null = null;
 	#answered = new Map<string, number>();
 
 	/** An edit another device made: applied here, and the message every device hears. */
@@ -206,6 +211,16 @@ class FakeServer {
 		if (path.startsWith('/me/queue/rows')) {
 			await this.rowsGate;
 			return this.rowsStatus ? problem(this.rowsStatus, 'failed') : this.rowsPage(path);
+		}
+		const hiddenRead = /^\/libraries\/([^/]+)\/hidden-tracks\?(.*)$/.exec(path);
+		if (hiddenRead) {
+			await this.hiddenGate;
+			const at = Number(new URLSearchParams(hiddenRead[2]).get('cursor') ?? 0);
+			const all = this.hidden.get(decodeURIComponent(hiddenRead[1])) ?? [];
+			const end = at + this.hiddenPage;
+			const items = all.slice(at, end).map((id) => ({ id }));
+			const nextCursor = end < all.length ? String(end) : null;
+			return new Response(JSON.stringify({ items, nextCursor, total: all.length }));
 		}
 		const failure = this.failures.shift();
 		if (failure === 0) throw new TypeError('offline');
@@ -1624,5 +1639,95 @@ describe('QueueStore lists and rows', () => {
 		expect(summary.manual).toBe(2);
 		expect(upNext(2)).toEqual(['7', '8']);
 		expect(server.listGets()).toEqual(['h']);
+	});
+});
+
+describe('QueueStore hidden tracks', () => {
+	/** History's tracks as the store gives them. */
+	const history = () =>
+		store.rows({ section: 'history', offset: 0, limit: 10 }).rows.map((row) => row.track);
+	/** The reads of Hidden Songs, by cursor. */
+	const hiddenReads = () =>
+		server.requests
+			.filter((r) => r.path.startsWith('/libraries/lib/hidden-tracks'))
+			.map((r) => new URL(r.path, 'http://x').searchParams.get('cursor'));
+
+	it('leaves the rows of hidden tracks out of what it shows, and keeps them in the queue', async () => {
+		server.hidden.set('lib', ['102', '104']);
+		server.hiddenPage = 1;
+		await hello();
+		expect(hiddenReads()).toEqual([null, '1']);
+		// a.0 (100) plays; Up Next is 101 to 104.
+		expect(upNext()).toEqual(['101', '103']);
+		expect(summary).toMatchObject({ manual: 0, upNext: 2 });
+		const window = store.rows({ section: 'upNext', offset: 1, limit: 5 });
+		expect([window.total, window.rows.map((row) => row.track)]).toEqual([2, ['103']]);
+		expect(window.rows[0].item).toBe('a.3');
+
+		// Unhidden, it is back where it was.
+		store.hidden('lib', '102', false);
+		expect(upNext()).toEqual(['101', '102', '103']);
+		expect(summary.upNext).toBe(3);
+		store.edit(next);
+		store.edit(next);
+		expect(summary.current).toBe('a.2');
+		expect(upNext()).toEqual(['103']);
+	});
+
+	it('leaves them out of the Manual Queue and History, and their counts', async () => {
+		await hello();
+		store.edit({
+			type: 'add',
+			source: { key: 'm', libraryId: 'lib', tracks: ['300'] },
+			before: { type: 'manualEnd' }
+		});
+		await settle();
+		// The server's word on the add attaches its tracks.
+		store.message(server.heardOf());
+		store.hidden('lib', '300', true);
+		expect(summary).toMatchObject({ manual: 0, upNext: 4 });
+		expect(upNext()).toEqual(['101', '102', '103', '104']);
+
+		store.edit(next);
+		store.edit(next);
+		store.hidden('lib', '100', true);
+		// Played: a.0 (100), then m.0 (300), newest first; a.1 plays.
+		expect(history()).toEqual([]);
+		expect(summary.history).toBe(0);
+		store.hidden('lib', '300', false);
+		expect(history()).toEqual(['300']);
+		expect(summary).toMatchObject({ history: 1, upNext: 3 });
+	});
+
+	it('takes what the page told over a read of Hidden Songs that may predate it', async () => {
+		server.hidden.set('lib', ['102']);
+		const held = gate();
+		server.hiddenGate = held.wait;
+		await hello();
+		expect(upNext()).toEqual(['101', '102', '103', '104']);
+		store.hidden('lib', '102', false);
+		store.hidden('lib', '103', true);
+		expect(upNext()).toEqual(['101', '102', '104']);
+		held.open();
+		await settle();
+		expect(upNext()).toEqual(['101', '102', '104']);
+	});
+
+	it('reads Hidden Songs again on reconnecting, and not before', async () => {
+		server.hidden.set('lib', ['101']);
+		await hello();
+		expect(upNext()).toEqual(['102', '103', '104']);
+		store.hidden('lib', '103', true);
+		// The queue moves on to a.1 (101), hidden, which the player passes over.
+		store.edit(next);
+		await settle();
+		expect(upNext()).toEqual(['102', '104']);
+		expect(hiddenReads()).toHaveLength(1);
+
+		// What the server says then is the word, over what the page told before.
+		server.hidden.set('lib', ['104']);
+		await hello();
+		expect(hiddenReads()).toHaveLength(2);
+		expect(upNext()).toEqual(['102', '103']);
 	});
 });

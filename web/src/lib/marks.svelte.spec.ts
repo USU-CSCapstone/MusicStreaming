@@ -40,6 +40,21 @@ beforeEach(() => {
 afterEach(() => toaster.dismiss());
 
 describe('marks', () => {
+	it('tells who listens of each hide and unhide shown, and of one undone', async () => {
+		const heard: string[] = [];
+		const stop = marks.onHidden((library, id, hidden) => heard.push(`${library}/${id} ${hidden}`));
+		await marks.hide(fetch, '1', track, true);
+		await marks.like(fetch, '1', track, true);
+		marks.receive({ type: 'trackHidden', libraryId: '1', trackId: '6', hidden: true });
+		// Already showing as not hidden, so nothing changed.
+		await marks.like(fetch, '1', track, true);
+		status = 500;
+		await marks.hide(fetch, '1', track, true);
+		stop();
+		marks.receive({ type: 'trackHidden', libraryId: '1', trackId: '7', hidden: true });
+		expect(heard).toEqual(['1/5 true', '1/5 false', '1/6 true', '1/5 true', '1/5 false']);
+	});
+
 	it('shows a track as it was read until a change says otherwise', async () => {
 		expect(marks.liked('1', track)).toBe(false);
 		expect(marks.liked('1', { ...track, liked: true })).toBe(true);

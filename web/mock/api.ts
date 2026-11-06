@@ -109,6 +109,15 @@ export function createApi(dataDir: string) {
 		[
 			/^\/tracks$/,
 			({ lib, query }) => {
+				const ids = query.get('ids');
+				if (ids !== null) {
+					// A lookup by ID, which says which the user hid, as no list does.
+					const keys = ids.split(',').flatMap((id) => toKey(id) ?? []);
+					const items = catalog.tracksByIds(lib, keys);
+					playlists.markLiked(lib, items);
+					playlists.markHidden(lib, items);
+					return { items, nextCursor: null, total: items.length };
+				}
 				const page = catalog.listTracks(lib, query, playlists.hiddenIds(lib));
 				playlists.markLiked(lib, page.items);
 				return page;
@@ -120,6 +129,7 @@ export function createApi(dataDir: string) {
 				withKey(params[0], (k) => {
 					const tracks = catalog.tracksByIds(lib, [k]);
 					playlists.markLiked(lib, tracks);
+					playlists.markHidden(lib, tracks);
 					return tracks[0];
 				})
 		],

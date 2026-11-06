@@ -40,6 +40,31 @@ function setup() {
 }
 
 describe('QueueClient', () => {
+	it('tells the worker of each hide and unhide the marks show, until it disconnects', () => {
+		const worker = new FakeWorker();
+		const client = new QueueClient(() => worker as unknown as Worker);
+		let tell: (library: string, track: string, hidden: boolean) => void = () => {};
+		let stopped = false;
+		client.connect(
+			{ on: () => () => {} },
+			{
+				onHidden: (listener) => {
+					tell = listener;
+					return () => (stopped = true);
+				}
+			}
+		);
+		tell('1', '5', true);
+		expect(worker.sent.at(-1)).toEqual({
+			type: 'hidden',
+			libraryId: '1',
+			trackId: '5',
+			hidden: true
+		});
+		client.disconnect();
+		expect(stopped).toBe(true);
+	});
+
 	it('tells the worker where the API is, and passes on only the queue messages and edits', () => {
 		const { worker, client, hear } = setup();
 		hear({ type: 'hello', deviceId: '1', serverTime: '' });
