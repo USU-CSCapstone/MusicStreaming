@@ -2965,6 +2965,12 @@ export interface components {
             asksForSearches: boolean;
             /** @description Whether the caller has turned on sharing their searches with it. */
             sharesSearches: boolean;
+            /**
+             * @description Whether, once the caller connects it, it is sent their likes and hides: those they
+             *     have, then each change. It asks for them, and an admin allowed it, so the caller is
+             *     told before connecting (`requirements/users.md` §7).
+             */
+            hearsLikes: boolean;
         };
         SearchSharing: {
             sharing: boolean;
