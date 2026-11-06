@@ -3047,18 +3047,21 @@ export interface components {
          *       `tracksChanged`, `albumsChanged`, and `artistsChanged`, run as those change, and
          *       `scanFinished`, as a scan finishes, which each need `libraryRead`.
          *     - Per plugin: `network`; `listeningActivity`; `searchActivity`, the searches of users
-         *       who share them with it (`setMySearchSharing`); and `hostRateLimits`, under which its
+         *       who share them with it (`setMySearchSharing`); `likesAndHides`, the likes and hides of
+         *       users who connected it; and `hostRateLimits`, under which its
          *       `"per": "host"` rate limits bind every plugin's requests to that host, not only its own;
          *       and `tagTypes`, the scanner reading the fields its `types` name as types of tag, which
          *       once granted stay in the catalog however the grant changes (`requirements/tags.md` §2).
          *     - Per plugin, hooks: `schedule`, at its `everyMinutes`, in every library it is enabled
          *       in; `played` and `playing`, as each user who connected it finishes or starts playing
          *       something, needing `listeningActivity`, and `libraryRead` in the library played from;
-         *       and `searched`, as each user sharing searches with it settles on or removes one,
-         *       needing `searchActivity` and `libraryRead`.
+         *       `searched`, as each user sharing searches with it settles on or removes one,
+         *       needing `searchActivity` and `libraryRead`; and `marked`, as each user who connected
+         *       it likes, unlikes, hides, or unhides a song, needing `likesAndHides` and
+         *       `libraryRead`.
          * @enum {string}
          */
-        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played" | "playing" | "searchActivity" | "searched" | "albumsChanged" | "artistsChanged" | "hostRateLimits" | "tagTypes";
+        PermissionName: "libraryRead" | "libraryAdd" | "libraryChange" | "network" | "listeningActivity" | "tracksChanged" | "scanFinished" | "schedule" | "played" | "playing" | "searchActivity" | "searched" | "albumsChanged" | "artistsChanged" | "hostRateLimits" | "tagTypes" | "likesAndHides" | "marked";
         PermissionRequest: {
             permission: components["schemas"]["PermissionName"];
             /** @description Whether it cannot work without it (`requirements/plugins.md` §4.2). */

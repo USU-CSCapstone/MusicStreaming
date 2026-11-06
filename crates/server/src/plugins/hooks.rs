@@ -11,11 +11,12 @@
 //! once the plugin has handled what came before it.
 //! `playing` alone never catches up: what was playing a while ago is no longer news. `searched`
 //! reads the searches of users who share them with the plugin, and those they ask it to forget
-//! (`0005_activity.sql`), with a position per user as well.
+//! (`0005_activity.sql`), with a position per user as well, and `marked` the likes and hides of
+//! users who connected it.
 //! A failure is retried later from the same place, so nothing is lost to a crash, a restart,
 //! or a service that was briefly down. One that keeps failing is disabled in that library, and
 //! the admin is told why (§11), except in the hooks that act for one user (`played`, `playing`,
-//! `searched`): one user's failing account must not stop the plugin for everyone, so theirs
+//! `searched`, `marked`): one user's failing account must not stop the plugin for everyone, so theirs
 //! keeps being retried, at most an hour apart, instead.
 
 use std::sync::Arc;
@@ -28,6 +29,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 mod changes;
 mod delivering;
 mod due;
+mod marks;
 mod playing;
 mod plays;
 mod searches;

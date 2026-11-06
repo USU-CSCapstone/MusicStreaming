@@ -169,6 +169,7 @@ the plugin never names one, and can't reach a library it isn't enabled in.
 | `playing` | A connected user started a track. Dropped, not retried, once over a minute old. | `playing` |
 | `searched` | A user who shares their searches settled on some | `searched` |
 | `searches-forgotten` | A user asked for searches they shared to be forgotten | `searched` |
+| `marked` | A connected user liked, unliked, hid, or unhid songs. Each mark says what the song now is, so one heard twice changes nothing. | `marked` |
 
 A plugin receives only the events it asked for and the admin approved. Each hook keeps a
 saved position, so no change is missed, even across restarts. A change event names each item's
@@ -378,6 +379,7 @@ Each entry in `permissions` asks for one permission or hook:
 | `network` | Requests to its `destinations` | For the whole server |
 | `listeningActivity` | What connected users play | For the whole server |
 | `searchActivity` | What users who share them search for | For the whole server |
+| `likesAndHides` | What connected users like and hide | For the whole server |
 | `hostRateLimits` | Rate limits that every plugin keeps to ([below](#network)) | For the whole server |
 
 **When it runs (hooks):**
@@ -392,8 +394,9 @@ Each entry in `permissions` asks for one permission or hook:
 | `played` | A connected user finishes a play | `libraryRead`, `listeningActivity`, `personalSettings` |
 | `playing` | A connected user starts a track | `libraryRead`, `listeningActivity`, `personalSettings` |
 | `searched` | A user who shares searches settles on one | `libraryRead`, `searchActivity`, `personalSettings` |
+| `marked` | A connected user likes or hides a song | `libraryRead`, `likesAndHides`, `personalSettings` |
 
-**Connected users.** `played`, `playing`, and `searched` run only for users who connected the
+**Connected users.** `played`, `playing`, `searched`, and `marked` run only for users who connected the
 plugin, which they do by saving its `personalSettings` on their account page. So a plugin with
 those hooks must declare personal settings, such as an account token. `searched` also needs
 each user to turn on sharing their searches.
@@ -472,7 +475,7 @@ or refuse the call.
 | Library | 500 items per page or per list asked for by ID |
 | Files | 500 entries per `entries` call, 8 MiB per read, 32 MiB per write |
 | Network | 15 s for a reply (10 s to connect), 16 MiB bodies, 5 redirects |
-| Hook batches | Up to 100 changes, plays, or searches per event |
+| Hook batches | Up to 100 changes, plays, searches, or marks per event |
 | Plugin file | Up to 50 MB to install |
 
 The exact figures live in [`crates/plugins/src/host.rs`](../crates/plugins/src/host.rs) and

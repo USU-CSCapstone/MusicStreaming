@@ -22,6 +22,8 @@ interface host {
     /// Its rate limits that say `"per": "host"` are kept to by every plugin's requests to that
     /// host. Without it, they count only its own requests.
     host-rate-limits,
+    /// The likes and hides of users who connected the plugin.
+    likes-and-hides,
   }
 
   /// Why an import did not do what it was asked.
@@ -297,6 +299,23 @@ interface events {
     searches: option<list<u64>>,
   }
 
+  /// What a song now is to the user who marked it: never a toggle, so one heard twice changes
+  /// nothing.
+  enum mark-kind {
+    liked,
+    unliked,
+    hidden,
+    unhidden,
+  }
+
+  /// A like, unlike, hide, or unhide (design/hooks.md §1.4).
+  record mark {
+    track: track,
+    kind: mark-kind,
+    /// When it was made, in milliseconds since the Unix epoch.
+    at-ms: u64,
+  }
+
   variant event {
     /// An admin pressed Run now: do the plugin's whole job for this library.
     run,
@@ -330,6 +349,9 @@ interface events {
     albums-changed(changes),
     /// Artists added, changed, or removed.
     artists-changed(changes),
+    /// One user who connected the plugin liked, unliked, hid, or unhid songs in this library,
+    /// oldest first. `settings.get` answers with that user's personal settings, as for `played`.
+    marked(list<mark>),
   }
 }
 
