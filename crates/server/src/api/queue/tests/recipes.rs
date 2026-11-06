@@ -110,7 +110,11 @@ pub(super) async fn fixture() -> (tempfile::TempDir, AppState, Router) {
 
 /// The tracks `recipe` resolves to in library 1 for the owner, as the API spells their IDs.
 pub(super) async fn resolved(state: &AppState, recipe: &Value) -> Vec<String> {
-    let caller = Caller { user: 1, device: 1, admin: true };
+    resolved_as(state, Caller { user: 1, device: 1, admin: true }, recipe).await
+}
+
+/// The tracks `recipe` resolves to in library 1 for `caller`, as the API spells their IDs.
+pub(super) async fn resolved_as(state: &AppState, caller: Caller, recipe: &Value) -> Vec<String> {
     let recipe: Recipe = serde_json::from_value(recipe.clone()).unwrap();
     let (ids, _) = resolve(&state.db, &state.indexes, &caller, Id(1), &recipe).await.unwrap();
     ids.iter().map(u64::to_string).collect()
