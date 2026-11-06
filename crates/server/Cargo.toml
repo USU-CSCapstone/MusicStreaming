@@ -36,6 +36,7 @@ tower = { version = "0.5.3", features = ["util"] }
 rusqlite = { version = "0.41.1", features = ["hooks"] }
 tokio-tungstenite = "0.29"
 jewelcase-scanner = { version = "0.1.0", path = "../scanner", features = ["testing"] }
+jewelcase-catalog = { version = "0.1.0", path = "../catalog" }
 
 [lints]
 workspace = true

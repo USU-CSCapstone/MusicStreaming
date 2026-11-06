@@ -9,6 +9,8 @@ use sqlite_wasm_rs::WasmOsCallback;
 use sqlite_wasm_vfs::sahpool::{OpfsSAHPoolCfg, install};
 use wasm_bindgen::prelude::*;
 
+mod bench;
+
 /// The sahpool VFS's registered name, which `open` names when opening the file.
 const VFS: &str = "opfs-sahpool";
 
