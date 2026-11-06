@@ -11,6 +11,7 @@
 		seed,
 		icon,
 		round = false,
+		hue,
 		onplay,
 		actions,
 		children
@@ -22,6 +23,8 @@
 		seed: string;
 		icon: IconName;
 		round?: boolean;
+		/** The artwork's stand-in colour, where it is fixed ([`Artwork`]). */
+		hue?: number;
 		/** Plays the page's songs from the top; omitted when there is nothing to play. */
 		onplay?: () => void;
 		/** The page's own buttons, beside Play. */
@@ -33,7 +36,7 @@
 
 <header>
 	<div class="art">
-		<Artwork {image} {seed} size={200} {icon} {round} />
+		<Artwork {image} {seed} size={200} {icon} {round} {hue} />
 	</div>
 	<div class="text">
 		<span class="kind muted">{kind}</span>

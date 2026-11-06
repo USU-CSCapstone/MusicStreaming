@@ -45,6 +45,7 @@
 						image={card.image}
 						seed={card.id}
 						size={180}
+						hue={card.hue}
 						icon={card.icon}
 						round={card.round}
 					/>
@@ -73,6 +74,7 @@
 							image={card.image}
 							seed={card.id}
 							size={44}
+							hue={card.hue}
 							icon={card.icon}
 							round={card.round}
 						/>
