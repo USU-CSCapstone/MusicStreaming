@@ -207,6 +207,7 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 5. How long a plugin's section or search may take before it is dropped. [`performance.md`](requirements/performance.md) no longer sets numbers, so decide where this limit lives.
 6. Permissions for user-action hooks: one per kind of personal data, or one per kind of action.
 7. Whether plugins can call each other, and under whose grants.
+8. **Plugins setting likes and hides**, such as importing a user's Last.fm loves into Liked Songs. Plugins hear likes and hides ([`plugins.md` §8](requirements/plugins.md#8-events)) but cannot set them. Setting them would be a new path into personal data, which needs requirements of its own: whose consent, and whether the user sees what a plugin liked for them.
 
 **End goal:** A plugin can add a new kind of feature, including its own pages and music the user doesn't own, without a core release. [`plugins.md`](requirements/plugins.md) is fully met.
 
