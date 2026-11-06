@@ -11,7 +11,7 @@ Its companions are [`imports.md`](imports.md), covering what a plugin can call, 
 
 ## 1. Built Hooks
 
-**Eight hooks are built, each approved like a permission** ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)). The dispatcher is `crates/server/src/plugins/hooks.rs`. What each hook also needs comes from `Permission::needs`, which install and the dispatcher both read, and whether it is personal from `Permission::hook`, which install reads ([`permission.rs`](../crates/plugins/src/manifest/permission.rs)). The contract is [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.1`. A plugin learns a hook was granted only by its event arriving: `host.granted` names the permissions its imports check, and no hook, so a new hook never changes that type.
+**Nine hooks are built, each approved like a permission** ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)). The dispatcher is `crates/server/src/plugins/hooks.rs`. What each hook also needs comes from `Permission::needs`, which install and the dispatcher both read, and whether it is personal from `Permission::hook`, which install reads ([`permission.rs`](../crates/plugins/src/manifest/permission.rs)). The contract is [`wit/plugin.wit`](../crates/plugins/wit/plugin.wit) at `0.1`. A plugin learns a hook was granted only by its event arriving: `host.granted` names the permissions its imports check, and no hook, so a new hook never changes that type.
 
 | Hook (manifest / WIT) | Delivers | Granted | Also needs |
 |---|---|---|---|
@@ -22,16 +22,17 @@ Its companions are [`imports.md`](imports.md), covering what a plugin can call, 
 | `played` / `played` | Plays one connected user ended in this library, oldest first, up to 100, each with its track | Per plugin | `libraryRead`, `listeningActivity`, `personalSettings` |
 | `playing` / `playing` | The newest play one connected user started in this library, while it is still playing and under a minute old ([§1.1](#11-playing)) | Per plugin | As `played` |
 | `searched` / `searched`, `searches-forgotten` | Searches one user who shares them settled on in this library, up to 100, or those they asked it to forget ([§1.2](#12-searched)) | Per plugin | `libraryRead`, `searchActivity`, `personalSettings` |
+| `marked` / `marked` | One connected user's likes and hides in this library, up to 100: those they have when first delivered, then each change, each with its track ([§1.4](#14-marked)) | Per plugin | `libraryRead`, `likesAndHides`, `personalSettings` |
 
 Two more events need no approval, because nothing happens without someone asking:
 
 - **`run`**: an admin pressed **Run now**.
 - **`check-settings`**: an admin is saving settings, or a user is connecting. An error refuses the save ([`requirements/plugins.md` §6](../requirements/plugins.md#6-configuration--credentials)).
 
-All eight hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-running-plugins)), except that `playing` never catches up ([§1.1](#11-playing)):
+All nine hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-running-plugins)), except that `playing` never catches up ([§1.1](#11-playing)):
 
-- **A position per plugin and library, and per user in `played`, `playing`, and `searched`.** The position moves only once the plugin has handled a batch, so a crash, a restart, or an unreachable service loses nothing still kept: ends, finished scans and searches are kept for 30 days ([`database.md` §9](database.md#9-retention)).
-- **Failures back off.** The retry comes after as long as the plugin has been failing, from a minute up to an hour, and 72 hours of failing, with no success between, disable the plugin in that library, whatever the cause of each failure ([`plugins.md` §7](plugins.md#7-running-plugins)). In `played`, `playing`, and `searched`, one user's failures are retried at most hourly and never disable the plugin for everyone else.
+- **A position per plugin and library, and per user in `played`, `playing`, `searched`, and `marked`.** The position moves only once the plugin has handled a batch, so a crash, a restart, or an unreachable service loses nothing still kept: ends, finished scans and searches are kept for 30 days ([`database.md` §9](database.md#9-retention)).
+- **Failures back off.** The retry comes after as long as the plugin has been failing, from a minute up to an hour, and 72 hours of failing, with no success between, disable the plugin in that library, whatever the cause of each failure ([`plugins.md` §7](plugins.md#7-running-plugins)). In `played`, `playing`, `searched`, and `marked`, one user's failures are retried at most hourly and never disable the plugin for everyone else.
 - **One run of a plugin in a library at a time**, polled every 5 seconds, so a hook just enabled is delivered within one. With nothing enabled a poll is a few queries over a small table, so there is no sleeping until woken. Once the server begins to stop, the dispatcher starts no more deliveries. Its hooks, **Run now**, and settings checks there take turns, first come first served, since each may read and write the plugin's `state` there; other libraries and other plugins run alongside (`crates/server/src/plugins/turns.rs`). So one user's slow delivery delays the others in that library. A delivery takes its turn first and then a slot, of which there is one per core, so no more deliveries run at once than the host has cores, each with a store of up to 64 MiB beside playback. One waiting for its turn holds no slot; one waiting for a slot holds its turn. Once it has both, it is found due again, so one whose plugin was disabled, whose grant was revoked, or whose user lost the library meanwhile runs nothing. Run now and settings checks, which a person starts, take no slot. Run now runs nothing once the plugin is disabled in the library or uninstalled; a settings check runs nothing once it is uninstalled, but does run where it is disabled ([`requirements/plugins.md` §5](../requirements/plugins.md#5-installation--lifecycle)). A check whose request is dropped while it waits for its turn leaves the queue. A user's personal settings check has no `state`, so it takes a turn of that user's instead, one check of a plugin per user at a time. Uninstalling takes the plugin's turn at the server level and in every library, in order, so it waits for the runs under way there, and a run waiting behind it finds the plugin gone; it does not wait for a user's turn, and a personal check still running then connects nothing.
 
 ### 1.1 Playing
@@ -73,6 +74,18 @@ All eight hooks share the same delivery rules ([`plugins.md` §7](plugins.md#7-r
 - **Two hooks, not one `libraryChanged`.** A plugin hears only about what it asked for, and the admin sees "run when albums change" rather than a vaguer grant. The cost is two names in the manifest rather than one.
 - **Needs** `libraryRead`, granted per library.
 - **Read what changed by ID** with `get-albums` and `get-artists`, and where an album is with `album-tracks` ([`imports.md` §1.1](imports.md#11-albums-and-artists)).
+
+### 1.4 Marked
+
+**Run when a connected user likes, unlikes, hides, or unhides a song**, starting with the ones they already like and hid ([`requirements/plugins.md` §8](../requirements/plugins.md#8-events)). A sync of Last.fm's loves or ListenBrainz's feedback needs exactly this ([`requirements/analytics.md` §10](../requirements/analytics.md#10-external-services)). A mark is a like or a hide.
+
+- **Delivers** `marked(list<mark>)`: up to 100 marks, oldest first, each with its `track`, what it now is (`liked`, `unliked`, `hidden`, or `unhidden`), and when. A mark says what the song now is, never that it flipped, so one delivered twice changes nothing.
+- **Starts from where the user stands.** The first delivery to a user in a library, and any whose position the feed no longer holds, sends their current likes and hides first, in pages of 100 by track. It notes the feed's head before the first page, then delivers the feed from there. A change made while the pages are going out may arrive both in a page and from the feed, which is harmless, since each says what the song is.
+- **Where marks come from.** Every path that likes, unlikes, hides, or unhides a song writes a row to `mark_events` in the same transaction (`crates/server/migrations/0005_activity.sql`): the like and hide endpoints, hiding a liked song and liking a hidden one, edits to Liked Songs, and deleting Liked Songs, which unlikes everything in it. The row names the user, library, track, and what it now is.
+- **Delivered as `played` is**: a position per user, failures retried at most hourly, and never disabling the plugin for everyone else. A mark is sent only while its user's account is active and they reach the library. A mark of a song since purged is passed over, since there is no track to send; a plugin that needs to know of purges has `tracksChanged`.
+- **No request to forget.** Unliking is itself a mark the plugin hears. Disconnecting stops delivery and asks nothing back, as with `played`: what a plugin sent on is the user's to change on the service.
+- **Needs** `likesAndHides`, `libraryRead`, and `personalSettings` to connect. Likes and hides are personal data of their own kind, which `listeningActivity` does not cover ([`requirements/plugins.md` §4.1](../requirements/plugins.md#41-what-can-be-asked-for)).
+- **Kept for 30 days**, as play ends are ([`database.md` §9](database.md#9-retention)). A plugin that cannot take delivery for longer starts again from where the user stands, so it misses nothing, unlike `played`.
 
 ---
 
