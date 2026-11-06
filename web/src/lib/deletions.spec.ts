@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Playlist } from './api/types';
 import { deleteWithUndo, deleted } from './deletions.svelte';
+import { marks } from './marks.svelte';
 import { TOAST_MS, toast, toaster } from './toast.svelte';
 
 const playlist = { id: 'p1', libraryId: '11', title: 'Road Trip' } as Playlist;
@@ -25,6 +26,7 @@ beforeEach(() => {
 	requests = [];
 	status = 204;
 	deleted.clear();
+	marks.clear();
 });
 
 afterEach(() => {
@@ -33,6 +35,17 @@ afterEach(() => {
 });
 
 describe('deleteWithUndo', () => {
+	it('unlikes everything once Liked Songs is deleted, and not before', async () => {
+		const likedSongs = { ...playlist, id: 'p2', kind: 'liked' } as Playlist;
+		const read = { id: '5', liked: true };
+		deleteWithUndo(fetch, likedSongs);
+		expect(marks.liked('11', read)).toBe(true);
+		toaster.dismiss();
+		await settled();
+		expect(requests).toEqual([{ method: 'DELETE', path: '/libraries/11/playlists/p2' }]);
+		expect(marks.liked('11', read)).toBe(false);
+	});
+
 	it('hides the playlist at once and offers Undo, sending nothing yet', () => {
 		deleteWithUndo(fetch, playlist);
 		expect(deleted.has('p1')).toBe(true);

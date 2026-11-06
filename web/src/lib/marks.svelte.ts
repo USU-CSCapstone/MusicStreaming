@@ -4,9 +4,9 @@
 // another device, holds from then on over what was read. A change here shows at once and is sent
 // after, and one the server refuses is undone, with why (`requirements/general.md` §3.4).
 
-import { SvelteMap } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { ApiError, hideTrack, likeTrack, unhideTrack, unlikeTrack } from './api/client';
-import type { RealtimeServerMessage } from './api/types';
+import type { Playlist, RealtimeServerMessage } from './api/types';
 import { realtime } from './realtime.svelte';
 import { toast } from './toast.svelte';
 
@@ -33,10 +33,36 @@ class Marks {
 	 * what it told of. A refusal goes back to this, never to a change still unconfirmed.
 	 */
 	#confirmed = new Map<string, Mark>();
+	/** Libraries whose Liked Songs was deleted since tracks were read, which unliked them all. */
+	#cleared = new SvelteSet<string>();
+	/** Each library's Liked Songs, by ID, as seen, so its deletion elsewhere is known. */
+	#likedSongs = new Map<string, string>();
 
 	/** Whether `track` of `library` is liked: as it was read, unless a change since says otherwise. */
 	liked(library: string, track: Pick<Marked, 'id' | 'liked'>): boolean {
-		return this.#marks.get(key(library, track.id))?.liked ?? track.liked ?? false;
+		const read = !this.#cleared.has(library) && (track.liked ?? false);
+		return this.#marks.get(key(library, track.id))?.liked ?? read;
+	}
+
+	/**
+	 * Unlikes every track of `library`, as deleting its Liked Songs did. Each track liked since
+	 * reads as liked again only through a like this store hears of.
+	 */
+	unlikeAll(library: string) {
+		this.#cleared.add(library);
+		for (const [at, mark] of [...this.#marks]) {
+			if (at.startsWith(`${library}/`) && mark.liked)
+				this.#marks.set(at, { ...mark, liked: false });
+		}
+		for (const [at, mark] of this.#confirmed) {
+			if (at.startsWith(`${library}/`) && mark.liked)
+				this.#confirmed.set(at, { ...mark, liked: false });
+		}
+	}
+
+	/** Notes which of `playlists` is a library's Liked Songs, so its deletion elsewhere is known. */
+	note(playlists: readonly Pick<Playlist, 'id' | 'libraryId' | 'kind'>[]) {
+		for (const p of playlists) if (p.kind === 'liked') this.#likedSongs.set(p.libraryId, p.id);
 	}
 
 	/**
@@ -76,6 +102,10 @@ class Marks {
 		} else if (message.type === 'trackHidden') {
 			const { libraryId, trackId, hidden } = message;
 			this.#confirm(key(libraryId, trackId), hidden ? { hidden, liked: false } : { hidden });
+		} else if (message.type === 'playlist') {
+			const { libraryId, playlistId, playlist } = message;
+			if (playlist) this.note([playlist]);
+			else if (this.#likedSongs.get(libraryId) === playlistId) this.unlikeAll(libraryId);
 		}
 	}
 
@@ -84,6 +114,8 @@ class Marks {
 		this.#marks.clear();
 		this.#sending.clear();
 		this.#confirmed.clear();
+		this.#cleared.clear();
+		this.#likedSongs.clear();
 	}
 
 	/**
