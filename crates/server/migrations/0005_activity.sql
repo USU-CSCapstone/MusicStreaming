@@ -225,3 +225,20 @@ CREATE INDEX search_events_feed ON search_events (library_id, user_id, seq);
 CREATE INDEX search_events_age ON search_events (created_at);
 -- Who has stopped sharing with which plugin, which the searched hook must still tell.
 CREATE INDEX search_events_stopped ON search_events (plugin_id, user_id) WHERE kind = 'stopped';
+
+-- The marked hook's outbox: each like, unlike, hide, and unhide, written in the transaction that
+-- made it, saying what the track now is (design/hooks.md §1.4). Nothing references the track,
+-- so a mark outlives a purge and is passed over at delivery. Kept 30 days, delivered or not: a
+-- position older than that starts again from the user's likes and hides as they stand
+-- (design/database.md §9).
+CREATE TABLE mark_events (
+    seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    library_id INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
+    track_id   INTEGER NOT NULL,
+    kind       TEXT    NOT NULL CHECK (kind IN ('liked', 'unliked', 'hidden', 'unhidden')),
+    created_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX mark_events_feed ON mark_events (library_id, user_id, seq);
+CREATE INDEX mark_events_age ON mark_events (created_at);

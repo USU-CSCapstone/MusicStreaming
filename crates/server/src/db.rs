@@ -14,6 +14,7 @@ mod columns;
 pub mod feed;
 pub mod libraries;
 pub mod liked_songs;
+pub mod marks;
 pub mod migrations;
 mod new_id;
 pub mod plays;
