@@ -30,6 +30,7 @@ use crate::api::realtime::Hub;
 use crate::api::scope::Scope;
 use crate::api::{Id, Problem};
 use crate::api::{Images, hidden};
+use crate::db::marks::{self, Mark};
 use crate::db::{Database, catalog, now_ms};
 
 /// The spec's `PlaylistEdit`.
@@ -170,7 +171,14 @@ pub async fn edit(
                     // A track added to Liked Songs is liked, and so not hidden; one removed is
                     // unliked.
                     let likes = if liked {
-                        (plan.added.clone(), plan.removed.clone())
+                        // Liked Songs holds each track once, so each removed is unliked once.
+                        // In track order, which the plan's set of adds lacks.
+                        let mut liked = plan.added.clone();
+                        liked.sort_unstable();
+                        marks::record(tx, user, library, liked.iter().copied(), Mark::Liked)?;
+                        let unliked = plan.removed.iter().copied();
+                        marks::record(tx, user, library, unliked, Mark::Unliked)?;
+                        (liked, plan.removed.clone())
                     } else {
                         Default::default()
                     };

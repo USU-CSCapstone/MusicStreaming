@@ -21,6 +21,7 @@ use super::realtime::{Hub, ServerMessage};
 use super::scope::Scope;
 use super::tracks::{self, TrackSummary};
 use super::{Id, Problem};
+use crate::db::marks::{self, Mark};
 use crate::db::{Database, now_ms};
 
 /// Hidden Songs' order, by when each track was hidden, through `hidden_tracks_by_time`.
@@ -62,6 +63,9 @@ pub async fn hide(
                     )?
                     .execute(params![user, library, track, now_ms()])?
                     > 0;
+                if hid {
+                    marks::record(tx, user, library, [track], Mark::Hidden)?;
+                }
                 Ok((hid, playlists::unlike_in(tx, user, library, track)?))
             })
             .await?;
@@ -237,14 +241,18 @@ fn wholly(conn: &Connection, user: i64, library: i64, select: &str) -> rusqlite:
         .collect()
 }
 
-/// Unhides `track` for `user` in `library`, and says whether it was hidden.
-pub fn unhide_in(conn: &Connection, user: i64, library: i64, track: i64) -> rusqlite::Result<bool> {
-    let deleted = conn
+/// Unhides `track` for `user` in `library`, in the writer, and says whether it was hidden.
+pub fn unhide_in(tx: &Connection, user: i64, library: i64, track: i64) -> rusqlite::Result<bool> {
+    let deleted = tx
         .prepare_cached(
             "DELETE FROM hidden_tracks WHERE user_id = ?1 AND library_id = ?2 AND track_id = ?3",
         )?
-        .execute(params![user, library, track])?;
-    Ok(deleted > 0)
+        .execute(params![user, library, track])?
+        > 0;
+    if deleted {
+        marks::record(tx, user, library, [track], Mark::Unhidden)?;
+    }
+    Ok(deleted)
 }
 
 /// Tells `user`'s devices that `tracks` of `library` were hidden, or unhidden. Call it once the

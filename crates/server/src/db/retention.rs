@@ -51,10 +51,11 @@ type Stage = fn(&Transaction<'_>, i64, &mut i64) -> Result<bool>;
 
 /// Every kind of row, in order: missing tracks before the art and biographies they leave
 /// unreferenced.
-const STAGES: [Stage; 12] = [
+const STAGES: [Stage; 13] = [
     scans,
     login_attempts,
     play_ends,
+    marks,
     recent_searches,
     searches_noted,
     forgets_delivered,
@@ -155,6 +156,17 @@ fn play_ends(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
         now,
         "DELETE FROM play_events WHERE seq IN \
          (SELECT seq FROM play_events WHERE kind = 'ended' AND reported_at < ?1 LIMIT ?2)",
+    )
+}
+
+/// Likes and hides aged out of the `marked` hook's outbox, delivered or not. A position older
+/// than what is kept starts again from what the user likes and hid (`design/hooks.md` §1.4).
+fn marks(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
+    aged(
+        tx,
+        now,
+        "DELETE FROM mark_events WHERE seq IN \
+         (SELECT seq FROM mark_events WHERE created_at < ?1 LIMIT ?2)",
     )
 }
 
