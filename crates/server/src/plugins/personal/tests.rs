@@ -1,7 +1,7 @@
 //! Connecting a plugin that acts for a user: who is offered it, how what they set is checked
 //! and kept, and sharing their searches with it.
 
-use jewelcase_plugins::Permission::{LibraryRead, SearchActivity, Searched};
+use jewelcase_plugins::Permission::{LibraryRead, LikesAndHides, Marked, SearchActivity, Searched};
 use serde_json::{Map, Value, json};
 
 use super::super::testing::{caller, connect, database, enable, grant, install, manifest, plugins};
@@ -108,6 +108,28 @@ async fn settings_that_cannot_be_read_are_an_error() {
         matches!(read, Err(DbError::Sqlite(rusqlite::Error::FromSqlConversionFailure(0, ..)))),
         "{read:?}"
     );
+}
+
+/// A user is told a plugin hears their likes and hides only once it asks for the hook and the
+/// admin granted both it and likes and hides.
+#[tokio::test]
+async fn a_plugin_hears_likes_only_once_both_are_granted() {
+    let (temp, db) = database().await;
+    let plugins = plugins(&temp, &db);
+    let mut liker = manifest("liker", &[LibraryRead, LikesAndHides, Marked]);
+    liker["personalSettings"] = json!({ "properties": { "token": { "type": "string" } } });
+    install(&db, liker).await;
+    enable(&plugins, "liker", true).await;
+    db.write(|tx| User::new(7, "user").insert(tx).and_then(|()| access(tx, 7, 1))).await.unwrap();
+    let hears = async || {
+        let found = db.read(|conn| connectable(conn, caller(7, false))).await.unwrap();
+        found[0].hears_likes
+    };
+    assert!(!hears().await, "asked for, not granted");
+    grant(&plugins, "liker", &[Marked], &[LibraryRead]).await;
+    assert!(!hears().await, "the hook without what it carries");
+    grant(&plugins, "liker", &[Marked, LikesAndHides], &[LibraryRead]).await;
+    assert!(hears().await);
 }
 
 /// `first` and `second`, which users connect with a token and may share their searches with, each

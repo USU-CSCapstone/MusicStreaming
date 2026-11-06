@@ -169,6 +169,11 @@
 					<div>
 						<strong>{p.name}</strong>
 						<span class="muted">{p.connected ? 'Connected' : (p.description ?? '')}</span>
+						{#if p.hearsLikes}
+							<span class="muted hears">
+								Gets the songs you like and hide, starting with those you already have.
+							</span>
+						{/if}
 					</div>
 					<button type="button" onclick={() => (connecting = p)}>
 						{p.connected ? 'Change…' : 'Connect…'}
@@ -277,6 +282,10 @@
 	li div {
 		flex: 1;
 		min-width: 0;
+	}
+
+	.hears {
+		display: block;
 	}
 
 	p {
