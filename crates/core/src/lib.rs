@@ -18,7 +18,7 @@ pub use format::Format;
 pub use lock::Recover;
 pub use queue::{
     Anchor, Edit, HISTORY_RUNS, ItemId, PlayRef, PlayRow, QueueCopy, QueueError, QueueState,
-    Recipe, Repeat, Row, Run, Shuffle, Source, Span, SpanList, View,
+    Reading, Recipe, Repeat, Row, Run, Shuffle, Source, Span, SpanList, View, positions_holding,
 };
 pub use search::{Document, Index, Kind, Section, words};
 pub use sort::{SortField, SortRow, sort_key, sort_rows, tag_sort_key};

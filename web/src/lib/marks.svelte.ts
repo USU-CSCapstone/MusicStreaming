@@ -28,6 +28,9 @@ type Mark = { liked?: boolean; hidden?: boolean };
 /** A track as the marks need it. */
 type Marked = { id: string; title: string; liked?: boolean };
 
+/** Hears that a track was hidden or unhidden, as the marks show it. */
+export type HiddenListener = (library: string, track: string, hidden: boolean) => void;
+
 class Marks {
 	/** By `{library}/{track}`. */
 	#marks = new SvelteMap<string, Mark>();
@@ -58,6 +61,17 @@ class Marks {
 	#cleared = new SvelteSet<string>();
 	/** Each library's Liked Songs, by ID, as seen, so its deletion elsewhere is known. */
 	#likedSongs = new Map<string, string>();
+	/** Who hears of each hide and unhide shown, such as the queue, which leaves hidden rows out. */
+	#listeners = new Set<HiddenListener>();
+
+	/**
+	 * Calls `listener` with each hide and unhide as it shows, made here or heard of, and each one
+	 * undone; returns how to stop.
+	 */
+	onHidden(listener: HiddenListener): () => void {
+		this.#listeners.add(listener);
+		return () => this.#listeners.delete(listener);
+	}
 
 	/** Whether `track` of `library` is liked: as it was read, unless a change since says otherwise. */
 	liked(library: string, track: Pick<Marked, 'id' | 'liked'>): boolean {
@@ -180,6 +194,10 @@ class Marks {
 			if (this.#sending.get(at) === sent) {
 				const confirmed = this.#confirmed.get(at);
 				this.#put(at, confirmed);
+				// What was hidden before the change, as far as is known, is again.
+				if (mark.hidden !== undefined) {
+					this.#tell(library, track.id, confirmed?.hidden ?? !mark.hidden);
+				}
 			}
 			toast(`Couldn’t ${what} “${track.title}”. ${e instanceof ApiError ? e.message : ''}`.trim());
 		} finally {
@@ -197,7 +215,12 @@ class Marks {
 	}
 
 	#merge(at: string, mark: Mark) {
-		this.#put(at, { ...this.#marks.get(at), ...mark });
+		const was = this.#marks.get(at);
+		this.#put(at, { ...was, ...mark });
+		if (mark.hidden !== undefined && mark.hidden !== was?.hidden) {
+			const [library, track] = split(at);
+			this.#tell(library, track, mark.hidden);
+		}
 	}
 
 	/**
@@ -237,7 +260,7 @@ class Marks {
 						if (this.#sending.has(at) || (this.#written.get(at) ?? 0) > since) continue;
 						const mark = { liked: liked.has(track), hidden: hidden.has(track) };
 						this.#confirmed.set(at, mark);
-						this.#put(at, mark);
+						this.#merge(at, mark);
 					}
 				} catch {
 					// Kept as they are; the next connection checks again.
@@ -256,6 +279,10 @@ class Marks {
 		if (mark?.hidden === undefined) hides?.delete(track);
 		else if (hides) hides.set(track, mark.hidden);
 		else this.#hides.set(library, new SvelteMap([[track, mark.hidden]]));
+	}
+
+	#tell(library: string, track: string, hidden: boolean) {
+		for (const listener of this.#listeners) listener(library, track, hidden);
 	}
 }
 

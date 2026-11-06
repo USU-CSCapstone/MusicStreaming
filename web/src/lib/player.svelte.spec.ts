@@ -7,6 +7,7 @@ import type {
 	Track
 } from '$lib/api/types';
 import type { FromWorker, RowSection, StartRequest, ToWorker } from '$lib/queue/protocol';
+import { marks } from '$lib/marks.svelte';
 
 const fake = vi.hoisted(() => ({
 	/** Makes the worker the queue client talks to; set below, before the player loads. */
@@ -345,6 +346,7 @@ const transfer = (play: boolean) =>
 const result = () => vi.waitFor(() => fake.sent.find((m) => m.type === 'commandResult')!.result);
 
 beforeEach(() => {
+	marks.clear();
 	queueWorker.sent.length = queueWorker.edits.length = queueWorker.starts.length = 0;
 	queueWorker.holdStart = false;
 	queueWorker.copyOnPrevious = queueWorker.holdEdits = false;
@@ -857,6 +859,34 @@ describe('player and the queue', () => {
 		await vi.waitFor(() => expect(player.current?.id).toBe('81'));
 		expect(queueWorker.edits.map((e) => e.type)).toEqual(['next', 'next', 'previous', 'previous']);
 		expect(queueWorker.edits[2]).toMatchObject({ key: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+	});
+
+	it('skips in place a track the user hid since it was queued, as the server says or here', async () => {
+		fake.tracks.set('82', Promise.resolve({ ...track('82', 60), hidden: true } as Track));
+		fake.info = () => Promise.resolve({ variant: 'original' });
+		marks.receive({ type: 'trackHidden', libraryId: '11', trackId: '84', hidden: true });
+		player.play(
+			[
+				track('81', 60),
+				track('82', 60),
+				track('83', 60),
+				track('84', 60),
+				track('85', 60)
+			] as never,
+			0,
+			album
+		);
+		await settle();
+		player.next();
+		await vi.waitFor(() => expect(player.current?.id).toBe('83'));
+		player.next();
+		await vi.waitFor(() => expect(player.current?.id).toBe('85'));
+		expect(queueWorker.edits).toEqual([
+			{ type: 'next' },
+			{ type: 'next' },
+			{ type: 'next' },
+			{ type: 'next' }
+		]);
 	});
 
 	describe('Previous', () => {
