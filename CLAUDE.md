@@ -27,7 +27,7 @@ Load-bearing. Every requirement derives from them, and a proposal that violates 
 
 ## Out of scope
 
-Non-music content, social features, acquiring music (a plugin concern), file management, casting protocols, and explicit taste signals in v1.
+Non-music content, social features, acquiring music (a plugin concern), file management, casting protocols, and ratings and hiding in v1.
 
 ---
 

@@ -8,6 +8,8 @@ A playlist is an ordered list of tracks. Playlists come in two kinds, and both a
 | **Saved playlist** | Among the user's playlists | Until they delete it |
 | **Generated playlist** | Among recommendations ([`recommendations.md`](recommendations.md)) | Temporary, unless the user saves it |
 
+**Liked Songs** is a saved playlist every user has, holding the tracks they like ([§11](#11-liked-songs)). It is a playlist like any other, with the few differences §11 sets out.
+
 A **filtered view** — the library narrowed by genre, year, or listening data and played directly — is not a playlist. It is a way of browsing, and it leaves nothing behind. Users filter constantly, and doing so must never accumulate hundreds of accidental playlists.
 
 The requirements below describe **saved** playlists unless stated otherwise. Generated playlists are specified in [`recommendations.md`](recommendations.md); [§8](#8-saving-a-generated-playlist) covers what happens when one is saved.
@@ -38,7 +40,7 @@ Shared behavior follows [`conventions.md`](conventions.md).
 ## 3. Contents
 
 - **Order is the user's.** A playlist plays in the order it was arranged and never silently reorders itself.
-- **Duplicates are allowed, with a warning.** Adding a track already in the playlist works, but the user is told it is already there and can back out. Intentional repeats are legitimate; accidental ones are the common case.
+- **Duplicates are allowed, with a warning.** Adding a track already in the playlist works, but the user is told it is already there and can back out. Intentional repeats are legitimate; accidental ones are the common case. Liked Songs is the exception ([§11](#11-liked-songs)).
 - **Missing tracks stay put.** A track whose file has vanished remains in position, clearly marked, skipped on playback ([`conventions.md` §6](conventions.md#6-availability)), and retained for as long as any playlist references it ([`scanning.md` §8](scanning.md#8-missing-files)). If the file returns, it plays again.
 - **There is no arbitrary size limit.** A playlist of tens of thousands of tracks is supported, and the host is the only limit ([`general.md` §3.3](general.md#33-the-host-is-the-limiter)).
 
@@ -116,3 +118,19 @@ Beyond [`conventions.md`](conventions.md):
 - **Play and queue actions use the playlist's current order**, not a stored snapshot of it — sorted, when the playlist is shown sorted ([`conventions.md` §4.1](conventions.md#41-track-lists)).
 - **Date added is when the track was added to this playlist**, not to the library, and is a sort only playlists offer. It is the playlist's own history; when a file was scanned says nothing about it.
 - **Download is a standing instruction**, covering tracks added later while the download remains active ([`offline.md` §3](offline.md#3-what-can-be-downloaded)).
+
+---
+
+## 11. Liked Songs
+
+**Every user has a Liked Songs playlist in each library, and liking a track is adding it there** ([`analytics.md` §7](analytics.md#7-explicit-signals)). A heart on a track and its place in Liked Songs are one fact, so there is no separate list of likes to drift from the playlist.
+
+- **It is always there.** A user has one from the start, empty until they like something, pinned among their playlists ([§7](#7-organization)). They can unpin it like any other.
+- **A like goes to the top**, so the newest is first, and unliking takes the track out. Adding a track to Liked Songs from anywhere ([§4](#4-editing)) likes it, and removing one unlikes it.
+- **Each track is in it once.** A track is liked or it is not, so the duplicate warning of [§3](#3-contents) does not apply: liking a track already liked changes nothing.
+- **Its order is otherwise the user's.** They can rearrange it like any playlist, and a new like goes above their arrangement without disturbing it.
+- **Liking never conflicts.** A like or an unlike from any device applies whatever else changed the playlist meanwhile, since it says whether a track is liked, not where it sits; only rearranging is refused on a version the user was not looking at ([§5](#5-concurrent-edits)).
+- **Its title and artwork are fixed.** It is always called Liked Songs, with a heart for artwork, so it is recognisable wherever it appears. It cannot be renamed or given a description or artwork of its own.
+- **Deleting it unlikes everything in it.** An empty one is deleted as any playlist is. One holding tracks first warns the user that every song in it will be unliked. The delete can be undone like any other ([§4](#4-editing)), which likes them again.
+- **The next like brings it back.** After a delete the user has no Liked Songs until they like a track, which recreates it, pinned, holding that track.
+- **A liked track whose file has gone stays liked**, in place and kept, as in any playlist ([§3](#3-contents)).

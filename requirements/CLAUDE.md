@@ -17,7 +17,7 @@ Twenty documents defining what Jewelcase must do. Project overview and core prin
 | [`albums.md`](albums.md) | Album entity, identity, type, artwork, grouping. |
 | [`artists.md`](artists.md) | Artist entity, images, biographies, ownership model. |
 | [`tags.md`](tags.md) | Tag types (genre, mood), modeling, normalization. |
-| [`playlists.md`](playlists.md) | Creation, mutation, concurrency control, artwork, export. |
+| [`playlists.md`](playlists.md) | Creation, mutation, concurrency control, artwork, export, Liked Songs. |
 | [`queue.md`](queue.md) | Queue structure, shuffle, repeat, sessions, cross-device behavior. |
 | [`playback.md`](playback.md) | Streaming, transcoding, waveform, seeking, gapless, loudness, playback state. |
 | [`search.md`](search.md) | Matching, ranking, scoping, recent searches. |
@@ -59,6 +59,7 @@ Used precisely. Don't introduce synonyms.
 - **Context** — anything playable as a run of tracks: album, artist, playlist, tag page, search results, filtered view, whole library, radio station.
 - **Manual Queue / Context Queue / History** — the three parts of a queue.
 - **Saved vs generated playlist** — both are "playlists" in the interface. A **filtered view** is neither and leaves nothing behind.
+- **Liked Songs** — the saved playlist every user has that holds their likes. Liking a track is adding it there; there is no other record of a like.
 - **Shift** — using any of your devices to control any of your others.
 - **Catalog / imagery / audio** — the three things held on a device, with different sync rules.
 - **Available vs playable** — present on the server vs present on this device.

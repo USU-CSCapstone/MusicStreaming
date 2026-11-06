@@ -43,7 +43,8 @@ This is what makes recommendations work on a real collection:
 - **Completion, not play count** ([`analytics.md` §2](analytics.md#2-derived-measures)). A track started thirty times and skipped thirty times is evidence of dislike, and treating it as a favourite is the single easiest way to make recommendations feel broken.
 - **What is played together.** Tracks a user reaches in the same sittings belong together, whatever they sound like.
 - **When it is played.** Time of day and day of week are real patterns ([`analytics.md` §4](analytics.md#4-statistics)), and a user's morning music is rarely their evening music.
-- **Skips are the only "no" a user has.** With no hiding and no ratings ([`analytics.md` §7](analytics.md#7-no-explicit-signals-in-v1)), a repeatedly skipped track must stop appearing quickly. Nothing else in the system lets a user reject anything.
+- **A like is the one certain "yes".** A track in a user's Liked Songs is one they enjoy, whatever its completion says, so it counts toward what they like even if they rarely play it ([`analytics.md` §7](analytics.md#7-explicit-signals)).
+- **Skips are the only "no" a user has.** With no hiding and no ratings ([`analytics.md` §7](analytics.md#7-explicit-signals)), a repeatedly skipped track must stop appearing quickly. Nothing else in the system lets a user reject anything.
 
 ### 2.3 What Is Not Used
 
@@ -111,7 +112,7 @@ The surface that matters most in a large owned collection, built on what [`analy
 - **A recommendation is not a leaderboard.** A surface that returns a user's most-played tracks has told them nothing they did not know.
 - **The familiar and the forgotten are balanced.** All-familiar is pointless; all-unfamiliar is exhausting.
 - **Nothing recently played is recommended back.**
-- **Every recommendation explains itself** — "because you listened to", "similar to", "you have not heard this in two years". Without any way to like or hide ([`analytics.md` §7](analytics.md#7-no-explicit-signals-in-v1)), an explanation is the only thing that makes a bad recommendation legible instead of arbitrary.
+- **Every recommendation explains itself** — "because you listened to", "similar to", "you have not heard this in two years". With no way to hide or rate a track ([`analytics.md` §7](analytics.md#7-explicit-signals)), an explanation is the only thing that makes a bad recommendation legible instead of arbitrary.
 - **Recommendations are actionable in place** — playable, queueable, addable to a playlist ([`conventions.md` §2](conventions.md#2-actions)).
 - **They are fast.** Recommendation surfaces are as instant as anything else ([`performance.md` §3](performance.md#3-interactions)); computing them is the server's problem, not the user's wait.
 

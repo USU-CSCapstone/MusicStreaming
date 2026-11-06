@@ -6,6 +6,9 @@ CREATE TABLE playlists (
     id           INTEGER PRIMARY KEY,
     library_id   INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
     user_id      INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    -- 'liked' for the user's Liked Songs, whose items are their likes, and 'saved' for the rest
+    -- (requirements/playlists.md §11)
+    kind         TEXT    NOT NULL DEFAULT 'saved' CHECK (kind IN ('saved', 'liked')),
     title        TEXT    NOT NULL CHECK (title <> ''),
     -- The title as search folds it, which a name filter looks inside, and as the core sorts it
     folded       TEXT    NOT NULL,
@@ -32,6 +35,8 @@ CREATE TABLE playlists (
 ) STRICT;
 
 CREATE INDEX playlists_by_name ON playlists (user_id, library_id, pin_rank, sort_key, id);
+-- A user has one Liked Songs in a library at most
+CREATE UNIQUE INDEX playlists_liked ON playlists (user_id, library_id) WHERE kind = 'liked';
 CREATE INDEX playlists_by_created ON playlists (user_id, library_id, pin_rank, created_at, id);
 CREATE INDEX playlists_by_modified ON playlists (user_id, library_id, pin_rank, modified_at, id);
 
@@ -53,6 +58,14 @@ CREATE TABLE playlist_items (
 ) STRICT, WITHOUT ROWID;
 
 CREATE INDEX playlist_items_by_track ON playlist_items (library_id, track_id);
+
+-- Each library a user deleted their Liked Songs in, so it is not made again until they next like
+-- a track there (requirements/playlists.md §11)
+CREATE TABLE liked_songs_deleted (
+    user_id    INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    library_id INTEGER NOT NULL REFERENCES libraries (id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, library_id)
+) STRICT, WITHOUT ROWID;
 
 -- The answer to a create or an edit that came with an `Idempotency-Key`, kept for a day, so a
 -- retry of a request that applied (its answer was lost) gets that answer and not a second

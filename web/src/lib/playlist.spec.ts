@@ -17,7 +17,9 @@ const track = (n: number): TrackSummary => ({
 	explicit: false,
 	audio: { codec: 'flac', lossless: true },
 	availability: 'available',
-	sortKeys: { title: `track ${n}`, artist: '', album: 'album' }
+	sortKeys: { title: `track ${n}`, artist: '', album: 'album' },
+
+	liked: false
 });
 const item = (n: number): PlaylistItem => ({
 	track: track(n),
@@ -31,6 +33,7 @@ const playlist: Playlist = {
 	title: 'Road Trip',
 	description: null,
 	image: { id: 'mosaic-1', placeholder: null },
+	kind: 'saved',
 	customImage: false,
 	trackCount: 3,
 	durationUs: 6_000_000,

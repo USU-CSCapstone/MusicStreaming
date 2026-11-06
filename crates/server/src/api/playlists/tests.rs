@@ -12,6 +12,12 @@ use crate::db::testing::{
 const URI: &str = "/api/v1/libraries/1/playlists";
 const LIBRARY_2: &str = "/api/v1/libraries/2/playlists";
 
+/// Takes away every Liked Songs, which a library's creation gives each admin in it, so a test of
+/// saved playlists finds only those it makes. Liked Songs is tested in `liked`.
+pub(super) fn saved_only(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM playlists WHERE kind = 'liked'", []).map(drop)
+}
+
 /// Library 1 with tracks 1 and 2 on album 101, and album 102 holding tracks 13 (disc 1 number
 /// 1), 12 (1, 2), 14 (disc 1, no number) and 11 (disc 2, 1), listed in that album order. Artist
 /// 31 is album artist of 102 and features on track 2; artist 41 and library 2's artist 32 are
@@ -29,7 +35,8 @@ async fn catalog() -> (tempfile::TempDir, Arc<Database>, Router) {
         Artist::new(31, 1, "Thirty One").insert(tx)?;
         Artist::new(32, 2, "Other").insert(tx)?;
         album_artist(tx, 1, 102, 31)?;
-        track_artist(tx, 1, 2, 0, 31, "Thirty One")
+        track_artist(tx, 1, 2, 0, 31, "Thirty One")?;
+        saved_only(tx)
     })
     .await
     .unwrap();
@@ -98,9 +105,9 @@ async fn a_playlist_is_created_with_the_tracks_its_items_expand_to_in_order() {
     assert_eq!(
         shown,
         json!({
-            "libraryId": "1", "title": "Road", "description": "Long drives", "image": null,
-            "customImage": false, "trackCount": 11, "durationUs": 11_000_000, "pinned": false,
-            "version": 1,
+            "libraryId": "1", "kind": "saved", "title": "Road", "description": "Long drives",
+            "image": null, "customImage": false, "trackCount": 11, "durationUs": 11_000_000,
+            "pinned": false, "version": 1,
         })
     );
     // An album in its disc and number order; an artist's own album then what it features on, in
@@ -771,4 +778,5 @@ async fn items_and_duplicates_read_from_an_index() {
 
 mod artwork;
 mod edit;
+mod liked;
 mod realtime;

@@ -14,6 +14,7 @@ mod edit;
 mod idempotency;
 mod items;
 mod keys;
+mod liked;
 mod representation;
 
 use std::sync::Arc;
@@ -33,6 +34,7 @@ pub use artwork::{all_mosaics, held as holds_artwork, mosaics_of};
 pub use edit::edit;
 use idempotency::{Answer, Key};
 pub use items::{all_items, duplicates, list_items};
+pub use liked::{like, unlike};
 pub use representation::Playlist;
 use representation::{SELECT, playlist};
 
@@ -259,7 +261,9 @@ pub async fn get(
 }
 
 /// `deletePlaylist`: deletes the caller's playlist and its items, or not found when it is not
-/// theirs in this library. A deletion is announced to the caller's devices once it is committed.
+/// theirs in this library. Deleting their Liked Songs, which unlikes everything in it, is
+/// remembered, so it is not made again until they next like a track. A deletion is announced
+/// to the caller's devices once it is committed.
 pub async fn delete(
     State(db): State<Arc<Database>>,
     State(images): State<Arc<Images>>,
@@ -270,12 +274,25 @@ pub async fn delete(
     settle(async move {
         let version = db
             .write(move |tx| {
-                tx.prepare_cached(
-                    "DELETE FROM playlists WHERE id = ?1 AND user_id = ?2 AND library_id = ?3 \
-                 RETURNING version",
-                )?
-                .query_row(params![id, user, library], |row| row.get::<_, i64>(0))
-                .optional()
+                let deleted = tx
+                    .prepare_cached(
+                        "DELETE FROM playlists WHERE id = ?1 AND user_id = ?2 AND library_id = ?3 \
+                         RETURNING version, kind = 'liked'",
+                    )?
+                    .query_row(params![id, user, library], |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, bool>(1)?))
+                    })
+                    .optional()?;
+                // A Liked Songs deleted, which unliked everything in it, is not made again until
+                // the next like (`requirements/playlists.md` §11).
+                if let Some((_, true)) = deleted {
+                    tx.prepare_cached(
+                        "INSERT OR IGNORE INTO liked_songs_deleted (user_id, library_id) \
+                         VALUES (?1, ?2)",
+                    )?
+                    .execute([user, library])?;
+                }
+                Ok(deleted.map(|(version, _)| version))
             })
             .await?
             .ok_or_else(Problem::not_found)?;

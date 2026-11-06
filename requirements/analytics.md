@@ -37,7 +37,7 @@ Raw plays are a weak signal on their own; a track started thirty times and skipp
 
 - **Completion** — listen time against total possible listen time (duration × plays). Near zero means a track is repeatedly skipped; near one means it is heard through; above one means parts are replayed.
 - **Skip behaviour** follows directly, with no separate signal needed: a play that ended early and accumulated little listen time is a skip.
-- **These, not play counts, drive recommendations.** Because there is no explicit way to say "I like this" ([§7](#7-no-explicit-signals-in-v1)), completion is the primary evidence of enjoyment, and treating a high play count as approval without it would actively mislead.
+- **These, not play counts, drive recommendations.** Most of what a user enjoys they never like explicitly ([§7](#7-explicit-signals)), so completion is the primary evidence of enjoyment, and treating a high play count as approval without it would actively mislead.
 - **Derived measures are recomputed from the record**, never stored as a separate truth that could drift from it.
 
 ---
@@ -90,17 +90,15 @@ Summaries are **generated from the record on demand**, so a user can ask for any
 
 ---
 
-## 7. No Explicit Signals in v1
+## 7. Explicit Signals
 
-**There is no favouriting, liking, or rating, and no hiding.** Enjoyment is inferred from behaviour — what a user plays, finishes, repeats, and skips.
+**Liking a track is the one explicit signal in v1, and a user's likes are a playlist**, their Liked Songs ([`playlists.md` §11](playlists.md#11-liked-songs)). There is no rating, and no hiding.
 
-This is a real constraint rather than an omission, and it has consequences worth stating plainly:
-
-- **There is no Favourites collection**, and no way to mark a track a user loves but rarely plays.
-- **Recommendations rest entirely on implicit signals** ([§2](#2-derived-measures)), which makes completion data more important than it would otherwise be.
+- **A like adds to the implicit record; it never replaces it.** Most of what a user enjoys they will never like, so enjoyment is still inferred mainly from behaviour — what a user plays, finishes, repeats, and skips ([§2](#2-derived-measures)). A like is the evidence behaviour cannot give: a track loved but rarely played.
+- **A like is a yes and nothing more.** A track not liked says nothing, and unliking one is not a dislike, or a user would be punished for tidying their Liked Songs.
 - **Nothing can be suppressed.** A track a user dislikes keeps appearing until their listening behaviour says otherwise.
 
-Adding an explicit signal later must not invalidate what was recorded before it — the implicit record stands on its own.
+Adding an explicit signal must not invalidate what was recorded before it — the implicit record stands on its own.
 
 ---
 
