@@ -62,6 +62,9 @@ struct Due {
     plugin: String,
     library: i64,
     position: i64,
+    /// In `marked`, the last track of the user's likes and hides as they stand that was sent, 0
+    /// before the first, or none once the feed is followed (`snapshot_after`).
+    after: Option<i64>,
     /// The user it is due for, in `played`, `playing`, and `searched`, and acts for except in a
     /// request to forget ([`Due::run_for`]). Its cursor stores none as 0.
     user: Option<i64>,
@@ -74,6 +77,21 @@ impl Due {
     fn run_for(&self, event: &Event) -> RunFor {
         let forget = matches!(event, Event::SearchesForgotten(_));
         RunFor { library: self.library, user: self.user.filter(|_| !forget) }
+    }
+}
+
+/// Where a delivery leaves a hook once it is handled: its position, and in `marked`, how far the
+/// user's likes and hides as they stand have gone out ([`Due::after`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Next {
+    position: i64,
+    after: Option<i64>,
+}
+
+impl From<i64> for Next {
+    /// A position alone, as every hook but `marked` keeps.
+    fn from(position: i64) -> Next {
+        Next { position, after: None }
     }
 }
 
@@ -202,7 +220,7 @@ impl Plugins {
 fn record(
     conn: &Connection,
     due: &Due,
-    next: i64,
+    next: Next,
     ran: Ran,
     summary: &str,
     now: i64,
@@ -220,11 +238,12 @@ fn record(
     let failing_since = match ran {
         Ran::Handled => {
             conn.execute(
-                "INSERT INTO plugin_cursors (plugin_id, library_id, hook, user_id, position) \
-                 VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (plugin_id, library_id, hook, user_id) \
-                 DO UPDATE SET position = excluded.position, failing_since = NULL, \
-                 retry_at = NULL",
-                params![plugin, library, hook, user, next],
+                "INSERT INTO plugin_cursors (plugin_id, library_id, hook, user_id, position, \
+                 snapshot_after) VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                 ON CONFLICT (plugin_id, library_id, hook, user_id) \
+                 DO UPDATE SET position = excluded.position, \
+                 snapshot_after = excluded.snapshot_after, failing_since = NULL, retry_at = NULL",
+                params![plugin, library, hook, user, next.position, next.after],
             )?;
             return Ok(());
         }

@@ -52,6 +52,6 @@ async fn a_delivery_under_way_counts_from_the_fresh_start() {
     assert_eq!(found.len(), 1);
 
     enable(&plugins(&temp, &db), "plugin", true).await;
-    db.write(move |tx| record(tx, &found[0], 0, Ran::Failed, REFUSED, now)).await.unwrap();
+    db.write(move |tx| record(tx, &found[0], 0.into(), Ran::Failed, REFUSED, now)).await.unwrap();
     assert!(enabled(&db).await, "an instant of failing since it was enabled again");
 }
