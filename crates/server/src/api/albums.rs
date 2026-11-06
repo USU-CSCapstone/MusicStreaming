@@ -16,7 +16,7 @@ use super::extract::{Path, Query};
 use super::page::{Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
 use super::tag_filter::{self, LEAD_SHARE, TagFilter, Tagged};
-use super::{AnyId, Id, Problem};
+use super::{AnyId, Id, Problem, hidden};
 use crate::db::Database;
 
 /// The `sort` values `listAlbums` supports.
@@ -85,10 +85,11 @@ pub struct ListQuery {
 }
 
 /// The library's albums, or those credited to `artistId` as `artistCredit` says and whose
-/// tracks carry the tags `tagAll` and `tagAny` name, a page at a time.
+/// tracks carry the tags `tagAll` and `tagAny` name, a page at a time; without those the caller
+/// hid whole ([`hidden::albums`]).
 pub async fn list(
     State(db): State<Arc<Database>>,
-    Scope { library, .. }: Scope,
+    Scope { user, library }: Scope,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Page<AlbumSummary>>, Problem> {
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
@@ -96,23 +97,42 @@ pub async fn list(
     let tags = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
     let page = db
         .read(move |conn| {
-            let source = source(conn, library, artist, credit, &tags)?;
-            request.read(conn, &source, summary)
+            let mut source = source(conn, library, artist, credit, &tags)?;
+            hidden::leave_out_ids(
+                conn,
+                &mut source,
+                "al.id",
+                &hidden::albums(conn, user, library)?,
+            )?;
+            let mut page = request.read(conn, &source, summary)?;
+            let losses = hidden::losses(conn, user, library)?;
+            page.items.iter_mut().for_each(|item| item.lose(&losses));
+            Ok(page)
         })
         .await?;
     Ok(Json(page))
 }
 
-/// `getAlbum`: the album, or not found when the library has no such album.
+/// `getAlbum`: the album, or not found when the library has no such album, or the caller hid it
+/// whole.
 pub async fn get(
     State(db): State<Arc<Database>>,
-    Scope { library, .. }: Scope,
+    Scope { user, library }: Scope,
     Path((_, Id(album))): Path<(Id, Id)>,
 ) -> Result<Json<Album>, Problem> {
-    db.read(move |conn| representation::album(conn, library, album))
-        .await?
-        .map(Json)
-        .ok_or_else(Problem::not_found)
+    db.read(move |conn| {
+        if hidden::albums(conn, user, library)?.contains(&album) {
+            return Ok(None);
+        }
+        let mut found = representation::album(conn, library, album)?;
+        if let Some(album) = &mut found {
+            album.lose(&hidden::losses(conn, user, library)?);
+        }
+        Ok(found)
+    })
+    .await?
+    .map(Json)
+    .ok_or_else(Problem::not_found)
 }
 
 /// The albums a list reads.

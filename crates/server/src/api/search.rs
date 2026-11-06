@@ -4,6 +4,7 @@
 mod indexes;
 mod tagged;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::Json;
@@ -20,7 +21,7 @@ use super::extract::Query;
 use super::scope::Scope;
 use super::tag_filter::TagFilter;
 use super::tracks::{self, TrackSummary};
-use super::{Problem, page};
+use super::{Problem, hidden, page};
 use crate::db::{Database, by_ids};
 
 /// The spec's `search` parameters.
@@ -87,8 +88,21 @@ pub async fn search(
     let filter = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
     let tagged = indexes.tagged.get(&db, library, &filter, &kinds).await?;
     let index = indexes.index(&db, library).await?;
+    // What the caller hid is gone from their library, so a search finds it nowhere: tracks, and
+    // albums and artists every track of which they hid.
+    let hid: [HashSet<i64>; 3] = db
+        .read(move |conn| {
+            // By `Kind`, as the tagged sets are.
+            Ok::<_, rusqlite::Error>([
+                hidden::ids(conn, user, library)?,
+                hidden::albums(conn, user, library)?.into_iter().collect(),
+                hidden::artists(conn, user, library)?.into_iter().collect(),
+            ])
+        })
+        .await?;
     let found = index.search_within(&query.q, &kinds, limit, |kind, id| {
-        tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
+        !hid[kind as usize].contains(&id)
+            && tagged.as_ref().is_none_or(|tagged| tagged[kind as usize].contains(&id))
     });
     let sections = db.read(move |conn| results(conn, user, library, found)).await?;
 
@@ -156,6 +170,7 @@ fn results(
     found: Vec<Found>,
 ) -> rusqlite::Result<Vec<Section>> {
     let mut sections = Vec::with_capacity(found.len());
+    let losses = hidden::losses(conn, user, library)?;
     for section in found {
         let ids = &section.ids;
         let items = match section.kind {
@@ -168,11 +183,13 @@ fn results(
                 found.into_iter().map(|track| SearchResult::Track { track }).collect()
             }
             Kind::Album => by_ids(conn, albums::SELECT, "albums al", "", library, ids, |row| {
-                let album = albums::summary(row)?;
+                let mut album = albums::summary(row)?;
+                album.lose(&losses);
                 Ok(SearchResult::Album { album })
             })?,
             Kind::Artist => by_ids(conn, artists::SELECT, "artists ar", "", library, ids, |row| {
-                let artist = artists::summary(row)?;
+                let mut artist = artists::summary(row)?;
+                artist.lose(&losses);
                 Ok(SearchResult::Artist { artist })
             })?,
         };

@@ -25,7 +25,7 @@ Shared behavior follows [`conventions.md`](conventions.md).
 
 **A type is a field, and nothing more.** Every type is read, matched, and browsed by the same rules — §3 to §8 apply unchanged — and none is special-cased by name. A new type is therefore a new field to read, not new behaviour to build, and genre is the first entry in the list rather than the shape of the list.
 
-Anticipated but not built: **personal labels**, if user tagging is added later. A like is not a tag: liked tracks are a playlist ([`playlists.md` §11](playlists.md#11-liked-songs)), and hiding is out of scope for v1 ([`analytics.md` §7](analytics.md#7-explicit-signals)).
+Anticipated but not built: **personal labels**, if user tagging is added later. Likes and hidden tracks are not tags: liked tracks are a playlist ([`playlists.md` §11](playlists.md#11-liked-songs)), and a hidden track is gone from the library ([`conventions.md` §8](conventions.md#8-hidden-tracks)).
 
 - **Types are independent.** Filtering by one never implicitly filters by another, so a mood filter composes with the genre filter rather than replacing it.
 - **Adding a type must not change how existing tags behave**, or how users already interact with them.

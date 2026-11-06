@@ -2,10 +2,12 @@
 // to start with, which the client can then create, edit, and delete (`api/openapi.yaml`,
 // Playlists). They are the user's data, not the library's, so the scanner's database is never
 // written, and they reset whenever the dev server restarts. Liking a track adds it to Liked Songs
-// (`requirements/playlists.md` §11).
+// (`requirements/playlists.md` §11), and the tracks the user hid are kept here too, since liking
+// and hiding undo each other (`requirements/conventions.md` §8).
 
 import { randomUUID } from 'node:crypto';
 import type {
+	Page,
 	Playable,
 	Playlist,
 	PlaylistItemPage,
@@ -67,6 +69,8 @@ export class PlaylistStore {
 	#libraries = new Map<bigint, Map<string, Entry>>();
 	/** Responses by `Idempotency-Key`, so a retried write answers as it first did. */
 	#replies = new Map<string, PlaylistResponse>();
+	/** Each library's hidden tracks, with when each was hidden, oldest first. */
+	#hidden = new Map<bigint, Map<bigint, string>>();
 
 	constructor(readonly library: PlaylistLibrary) {}
 
@@ -76,6 +80,7 @@ export class PlaylistStore {
 	 */
 	like(lib: bigint, trackId: bigint): boolean {
 		if (!this.library.track(lib, trackId)) return false;
+		this.unhide(lib, trackId);
 		let entry = this.#liked(lib);
 		if (!entry) {
 			entry = likedSongs(lib, `liked-${lib}-${randomUUID()}`, new Date().toISOString());
@@ -94,6 +99,38 @@ export class PlaylistStore {
 		if (!entry?.items.some((i) => i.trackId === trackId)) return;
 		entry.items = entry.items.filter((i) => i.trackId !== trackId);
 		this.#touch(lib, entry, new Date().toISOString());
+	}
+
+	/** Hides `trackId`, and unlikes it. False if the library has no such track. */
+	hide(lib: bigint, trackId: bigint): boolean {
+		if (!this.library.track(lib, trackId)) return false;
+		const hidden = this.#hiddenIn(lib);
+		if (!hidden.has(trackId)) hidden.set(trackId, new Date().toISOString());
+		this.unlike(lib, trackId);
+		return true;
+	}
+
+	unhide(lib: bigint, trackId: bigint) {
+		this.#hiddenIn(lib).delete(trackId);
+	}
+
+	/** Hidden Songs: newest hidden first, or oldest with `order=asc`. */
+	hiddenTracks(lib: bigint, query: URLSearchParams): Page<TrackSummary> {
+		const ids = [...this.#hiddenIn(lib).keys()];
+		if (query.get('order') !== 'asc') ids.reverse();
+		const tracks = ids.flatMap((id) => this.library.track(lib, id) ?? []);
+		return slice(tracks, paging(query));
+	}
+
+	/** The tracks the user hid, which lists and search leave out. */
+	hiddenIds(lib: bigint): bigint[] {
+		return [...this.#hiddenIn(lib).keys()];
+	}
+
+	#hiddenIn(lib: bigint): Map<bigint, string> {
+		let hidden = this.#hidden.get(lib);
+		if (!hidden) this.#hidden.set(lib, (hidden = new Map()));
+		return hidden;
 	}
 
 	/** Sets each of `tracks`' `liked`, from Liked Songs. */
@@ -120,11 +157,28 @@ export class PlaylistStore {
 	}
 
 	all(lib: bigint): Playlist[] {
-		return [...this.#entries(lib).values()].map((e) => e.playlist);
+		return [...this.#entries(lib).values()].map((e) => this.#seen(lib, e));
 	}
 
 	get(lib: bigint, playlistId: string): Playlist | undefined {
-		return this.#entries(lib).get(playlistId)?.playlist;
+		const entry = this.#entries(lib).get(playlistId);
+		return entry && this.#seen(lib, entry);
+	}
+
+	/** `entry`'s playlist as the user sees it: its counts without the tracks they hid. */
+	#seen(lib: bigint, entry: Entry): Playlist {
+		const hidden = this.#hiddenIn(lib);
+		const gone = entry.items.filter((i) => hidden.has(i.trackId));
+		if (!gone.length) return entry.playlist;
+		const us = gone.reduce(
+			(sum, i) => sum + (this.library.track(lib, i.trackId)?.durationUs ?? 0),
+			0
+		);
+		return {
+			...entry.playlist,
+			trackCount: entry.playlist.trackCount - gone.length,
+			durationUs: entry.playlist.durationUs - us
+		};
 	}
 
 	/** In order, duplicates included: what a mosaic is made from. */
@@ -138,9 +192,10 @@ export class PlaylistStore {
 		const entry = this.#entries(lib).get(playlistId);
 		if (!entry) return undefined;
 		const page = slice(entry.items, paging(query));
+		const hidden = this.#hiddenIn(lib);
 		const items = page.items.flatMap((i) => {
 			const track = this.library.track(lib, i.trackId);
-			return track ? [{ track, addedAt: i.addedAt }] : [];
+			return track ? [{ track, addedAt: i.addedAt, hidden: hidden.has(i.trackId) }] : [];
 		});
 		this.markLiked(
 			lib,
@@ -240,6 +295,8 @@ export class PlaylistStore {
 							if (!liked) return true;
 							if (held.has(trackId)) return false;
 							held.add(trackId);
+							// Liked, so not hidden.
+							this.unhide(lib, trackId);
 							return true;
 						})
 						.map((trackId) => ({ trackId, addedAt: now }))
@@ -259,7 +316,7 @@ export class PlaylistStore {
 			modifiedAt: new Date().toISOString()
 		};
 		this.#refresh(lib, entry);
-		return entry.playlist;
+		return this.#seen(lib, entry);
 	}
 
 	/** Whether there was such a playlist. */

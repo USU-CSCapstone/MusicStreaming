@@ -34,7 +34,7 @@ pub use artwork::{all_mosaics, held as holds_artwork, mosaics_of};
 pub use edit::edit;
 use idempotency::{Answer, Key};
 pub use items::{all_items, duplicates, list_items};
-pub use liked::{like, unlike};
+pub use liked::{like, take_out as unlike_in, unlike};
 pub use representation::Playlist;
 use representation::{SELECT, playlist};
 
@@ -130,7 +130,16 @@ pub async fn list(
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
     let q = query.q;
     let page = db
-        .read(move |conn| request.read(conn, &source(user, library, q.as_deref()), playlist))
+        .read(move |conn| {
+            let mut page = request.read(conn, &source(user, library, q.as_deref()), playlist)?;
+            let lost = super::hidden::playlists(conn, user, library)?;
+            for playlist in &mut page.items {
+                if let Some(&lost) = lost.get(&playlist.id.0) {
+                    playlist.lose(lost);
+                }
+            }
+            Ok(page)
+        })
         .await?;
     Ok(Json(page))
 }
@@ -233,7 +242,7 @@ pub async fn create(
 /// of its own and waits for it. A client that gives up drops the handler, which would drop the
 /// work after the write was queued: the change would commit and never be announced, and a retry
 /// is answered from its stored answer, which announces nothing. The task runs on.
-async fn settle<T: Send + 'static>(
+pub async fn settle<T: Send + 'static>(
     work: impl Future<Output = Result<T, Problem>> + Send + 'static,
 ) -> Result<T, Problem> {
     tokio::spawn(work).await.map_err(|_| Problem::new(Code::Internal))?
@@ -242,7 +251,7 @@ async fn settle<T: Send + 'static>(
 /// Tells `user`'s devices of `change`, if there is one, which is only for a request that
 /// applied: a retry answered from its stored answer has nothing new to say. Call it once the
 /// change is committed.
-fn announce(hub: &Hub, user: i64, change: Option<Change>) {
+pub fn announce(hub: &Hub, user: i64, change: Option<Change>) {
     if let Some(change) = change {
         hub.broadcast(user, &ServerMessage::Playlist(change));
     }

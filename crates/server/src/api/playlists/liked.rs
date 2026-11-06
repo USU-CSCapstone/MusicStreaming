@@ -2,7 +2,9 @@
 //! caller's Liked Songs, made again if they deleted it, and an unlike takes it out
 //! (`requirements/playlists.md` §11). Neither is checked against a version: each says whether a
 //! track is liked, not where it sits, so it applies whatever else changed the playlist. Each is
-//! announced to the caller's devices as an edit is. And how an edit's adds apply to a Liked Songs
+//! announced to the caller's devices as an edit is. Liking a hidden track unhides it, and hiding
+//! one unlikes it ([`take_out`]), so the two never contradict each other
+//! (`requirements/conventions.md` §8). And how an edit's adds apply to a Liked Songs
 //! ([`only_new`]).
 
 use std::collections::HashSet;
@@ -16,14 +18,15 @@ use rusqlite::{Connection, params};
 use super::announce::Change;
 use super::{edit, representation};
 use crate::api::extract::Path;
+use crate::api::hidden;
 use crate::api::realtime::Hub;
 use crate::api::scope::Scope;
 use crate::api::{Id, Problem};
 use crate::db::{Database, liked_songs, now_ms};
 
 /// `likeTrack`: puts the track at the top of the caller's Liked Songs, unless it is in it
-/// already, making the playlist again, pinned, if they deleted it. A track the library does not
-/// have is not found.
+/// already, making the playlist again, pinned, if they deleted it, and unhides it. A track the
+/// library does not have is not found.
 pub async fn like(
     State(db): State<Arc<Database>>,
     State(hub): State<Arc<Hub>>,
@@ -31,7 +34,7 @@ pub async fn like(
     Path((_, Id(track))): Path<(Id, Id)>,
 ) -> Result<StatusCode, Problem> {
     super::settle(async move {
-        let change = db
+        let (change, unhidden) = db
             .try_write(move |tx| {
                 let found: bool = tx
                     .prepare_cached(
@@ -41,6 +44,7 @@ pub async fn like(
                 if !found {
                     return Err(Problem::not_found());
                 }
+                let unhidden = hidden::unhide_in(tx, user, library, track)?;
                 let now = now_ms();
                 let (id, version) = match liked_songs::find(tx, user, library)? {
                     Some(found) => found,
@@ -53,13 +57,16 @@ pub async fn like(
                     }
                 };
                 if !positions(tx, library, id, track)?.is_empty() {
-                    return Ok(None);
+                    return Ok((None, unhidden));
                 }
                 let add = Op::Add { at: Some(0), items: vec![track] };
-                apply(tx, user, library, id, version, add, now).map(Some)
+                Ok((Some(apply(tx, user, library, id, version, add, now)?), unhidden))
             })
             .await?;
         super::announce(&hub, user, change);
+        if unhidden {
+            hidden::announce(&hub, user, library, [track], false);
+        }
         Ok(())
     })
     .await?;
@@ -75,23 +82,28 @@ pub async fn unlike(
     Path((_, Id(track))): Path<(Id, Id)>,
 ) -> Result<StatusCode, Problem> {
     super::settle(async move {
-        let change = db
-            .try_write(move |tx| {
-                let Some((id, version)) = liked_songs::find(tx, user, library)? else {
-                    return Ok(None);
-                };
-                let positions = positions(tx, library, id, track)?;
-                if positions.is_empty() {
-                    return Ok::<_, Problem>(None);
-                }
-                apply(tx, user, library, id, version, Op::Remove { positions }, now_ms()).map(Some)
-            })
-            .await?;
+        let change = db.try_write(move |tx| take_out(tx, user, library, track)).await?;
         super::announce(&hub, user, change);
         Ok(())
     })
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Takes `track` out of `user`'s Liked Songs in `library`, in the writer, and returns the change
+/// to announce: none when it is not in it, or they have none.
+pub fn take_out(
+    tx: &Connection,
+    user: i64,
+    library: i64,
+    track: i64,
+) -> Result<Option<Change>, Problem> {
+    let Some((id, version)) = liked_songs::find(tx, user, library)? else { return Ok(None) };
+    let positions = positions(tx, library, id, track)?;
+    if positions.is_empty() {
+        return Ok(None);
+    }
+    apply(tx, user, library, id, version, Op::Remove { positions }, now_ms()).map(Some)
 }
 
 /// Where `track` is in playlist `id` of `library`: each probe finds it through

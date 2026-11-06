@@ -424,6 +424,9 @@ paths:
         for an artist follows from its `album.artists`. A playlist is an ordered item list, not
         a track filter, and has its own item endpoint (`listPlaylistItems`).
 
+        A track the caller hid is left out, and out of `total` (`requirements/conventions.md`
+        §8); `listHiddenTracks` lists those.
+
         `ids` looks up specific tracks, as a client does to fill the rows it shows. The answer is
         one page in the order the IDs were given, with no `nextCursor`, and `total` is the number
         returned. An ID that is unknown, in another library, or not an ID is left out, so the
@@ -508,7 +511,9 @@ paths:
         already (`requirements/playlists.md` §11). A caller who deleted their Liked Songs has it
         made again, pinned. Not checked against a version: a like says whether a track is liked,
         not where it sits, so it applies whatever else changed the playlist. It is announced as
-        an edit of the playlist is (`playlist`). A track the library does not have is `404`.
+        an edit of the playlist is (`playlist`). A hidden track is unhidden (`trackHidden`), since
+        liking and hiding undo each other (`requirements/conventions.md` §8). A track the library
+        does not have is `404`.
       operationId: likeTrack
       responses:
         '204': { description: Liked. }
@@ -524,6 +529,62 @@ paths:
         '204': { description: Not liked. }
         default: { $ref: '#/components/responses/Problem' }
 
+  /libraries/{libraryId}/tracks/{trackId}/hidden:
+    parameters:
+      - $ref: '#/components/parameters/LibraryId'
+      - $ref: '#/components/parameters/TrackId'
+    put:
+      tags: [Browse]
+      summary: Hide a track
+      description: |
+        Hides the track from the caller in this library: it is gone from their library, shown
+        only in `listHiddenTracks` (`requirements/conventions.md` §8). A liked track is unliked,
+        taken out of Liked Songs as `unlikeTrack` does. Announced to the caller's devices
+        (`trackHidden`). A track the library does not have is `404`; one hidden already stays
+        as it was.
+      operationId: hideTrack
+      responses:
+        '204': { description: Hidden. }
+        default: { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Browse]
+      summary: Unhide a track
+      description: |
+        Brings the track back into the caller's library. One not hidden is already so, which is
+        `204` too.
+      operationId: unhideTrack
+      responses:
+        '204': { description: Not hidden. }
+        default: { $ref: '#/components/responses/Problem' }
+
+  /libraries/{libraryId}/hidden-tracks:
+    parameters:
+      - $ref: '#/components/parameters/LibraryId'
+    get:
+      tags: [Browse]
+      summary: List hidden tracks
+      description: |
+        Hidden Songs: the tracks the caller hid in this library, by when they were hidden,
+        newest first unless `order` is `asc` (`requirements/conventions.md` §8). The one place a
+        hidden track is listed. None is `liked`, since hiding unlikes.
+      operationId: listHiddenTracks
+      parameters:
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrackPage' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /libraries/{libraryId}/albums:
     parameters:
       - $ref: '#/components/parameters/LibraryId'
@@ -537,6 +598,9 @@ paths:
         their `type`, leaving out empty groups (`requirements/artists.md` §3.1). Their
         appearances are `artistCredit=featured`; the tracks on each come from `listTracks` with
         `artistId`, `artistCredit=featured`, and `sort=album` (`requirements/artists.md` §3.2).
+
+        An album every track of which the caller hid is left out, and out of `total`
+        (`requirements/conventions.md` §8).
       operationId: listAlbums
       parameters:
         - name: sort
@@ -587,6 +651,8 @@ paths:
         The album with a summary of each disc present. Its tracks are listed with `listTracks`
         using `albumId` and `sort=album`, since an album's size is unbounded — the unknown album
         holds every file with no album tag.
+
+        One every track of which the caller hid is `404` (`requirements/conventions.md` §8).
       operationId: getAlbum
       responses:
         '200':
@@ -602,7 +668,11 @@ paths:
     get:
       tags: [Browse]
       summary: Browse artists
-      description: Includes artists credited only as features (`requirements/artists.md` §5).
+      description: |
+        Includes artists credited only as features (`requirements/artists.md` §5).
+
+        An artist every track of whom the caller hid is left out, and out of `total`
+        (`requirements/conventions.md` §8).
       operationId: listArtists
       parameters:
         - name: sort
@@ -637,6 +707,7 @@ paths:
     get:
       tags: [Browse]
       summary: Get an artist
+      description: An artist every track of whom the caller hid is `404` (`requirements/conventions.md` §8).
       operationId: getArtist
       responses:
         '200':
@@ -657,6 +728,9 @@ paths:
         least one tag in the library, and its count of tags. A type no file in the library
         carries is left out, so a filter drawn from this list never shows an empty section
         (`requirements/tags.md` §2, §8).
+
+        Tags every track carrying which the caller hid are not counted, and a type left with none
+        is not listed (`requirements/conventions.md` §8).
       operationId: listTagTypes
       responses:
         '200':
@@ -677,6 +751,9 @@ paths:
       description: |
         The library's tags, of one type or every type. A tag sorts by its name, its
         leading article kept (`requirements/conventions.md` §4).
+
+        A tag every track carrying which the caller hid is left out, and out of `total`
+        (`requirements/conventions.md` §8).
       operationId: listTags
       parameters:
         - name: type
@@ -717,6 +794,9 @@ paths:
       description: |
         A tag's tracks, albums, and artists are browsed with the `tagAll` filter on the browse
         endpoints (`requirements/tags.md` §7).
+
+        One every track carrying which the caller hid is `404`
+        (`requirements/conventions.md` §8).
       operationId: getTag
       responses:
         '200':
@@ -870,7 +950,9 @@ paths:
         Names, with typo tolerance, diacritic and case folding, word-order independence, and
         exact-match precedence (`requirements/search.md` §3). Results are identical to on-device
         search over the same corpus (`requirements/search.md` §2.1). Playlists are not searched
-        until they are built, so no playlists section comes back.
+        until they are built, so no playlists section comes back. A track the caller hid is not
+        found, nor counted in its section's `total`, and nor is an album or artist every track of
+        which they hid (`requirements/conventions.md` §8).
       operationId: search
       parameters:
         - $ref: '#/components/parameters/Query'
@@ -2412,6 +2494,9 @@ components:
     # ───────────────────────────── Libraries ─────────────────────────────
     Library:
       type: object
+      description: |
+        Its counts and duration are of what the caller sees: tracks they hid, and albums and
+        artists every track of which they hid, are left out (`requirements/conventions.md` §8).
       required: [id, name, trackCount, albumCount, artistCount, durationUs, scanning]
       properties:
         id: { $ref: '#/components/schemas/Id' }
@@ -2478,6 +2563,10 @@ components:
 
     Tag:
       type: object
+      description: |
+        Its counts are of what the caller sees: tracks they hid are left out, and so are albums
+        and artists only those brought it (`requirements/conventions.md` §8). A list sorted by
+        `trackCount` is sorted by the library's counts.
       required: [id, type, name, trackCount, albumCount, artistCount]
       properties:
         id: { $ref: '#/components/schemas/Id' }
@@ -2730,6 +2819,10 @@ components:
         Completeness has two parts (`requirements/albums.md` §4): tracks missing from discs you
         have (`trackCount` below `trackTotal`), and discs you do not have (`discCount` below
         `discTotal`). Incomplete is information, never an error.
+
+        Its counts and duration are of what the caller sees: tracks they hid are left out, and
+        so is a disc of only those, and its `tags` are those the tracks left bring it
+        (`requirements/conventions.md` §8).
       allOf:
         - $ref: '#/components/schemas/AlbumBase'
         - type: object
@@ -2814,6 +2907,10 @@ components:
                 - type: 'null'
 
     ArtistSummary:
+      description: |
+        Its counts are of what the caller sees: tracks they hid, and their albums every track of
+        which they hid, are left out (`requirements/conventions.md` §8). A full `Artist`'s
+        `appearanceCount` too, and its `tags` are those the tracks left bring it.
       allOf:
         - $ref: '#/components/schemas/ArtistBase'
         - type: object
@@ -2976,10 +3073,10 @@ components:
               description: Whether `image` is a custom upload rather than the generated mosaic; `deletePlaylistImage` reverts it.
             trackCount:
               type: integer
-              description: Every track in the playlist, missing ones included (`requirements/playlists.md` §3).
+              description: Every track in the playlist, missing ones included (`requirements/playlists.md` §3), and those the caller hid left out (`requirements/conventions.md` §8).
             durationUs:
               $ref: '#/components/schemas/DurationUs'
-              description: Of every track in the playlist, missing ones included.
+              description: Of every track in the playlist, missing ones included, and those the caller hid left out.
             pinned: { type: boolean }
             createdAt: { type: string, format: date-time }
             modifiedAt: { type: string, format: date-time }
@@ -3007,6 +3104,12 @@ components:
         track: { $ref: '#/components/schemas/TrackSummary' }
         external: { $ref: '#/components/schemas/TrackBase' }
         addedAt: { type: string, format: date-time }
+        hidden:
+          type: boolean
+          description: |
+            A track the caller hid. It keeps its place, so positions stay the playlist's, but a
+            client neither shows nor plays it (`requirements/playlists.md` §3). Left out, or
+            `false`, for the rest.
 
     PlaylistItemPage:
       allOf:
@@ -4525,6 +4628,18 @@ components:
               description: |
                 `true` when the edit changed the items but its `ops` were too many for one message
                 (they are left out): the device reads the items again. Left out otherwise.
+        - type: object
+          required: [type, libraryId, trackId, hidden]
+          description: |
+            A track was hidden from the account, or unhidden, in one library (`hideTrack`,
+            `unhideTrack`, or a like, which unhides). Sent to every connection of the account,
+            the sender's included. A device leaves a hidden track out of what it shows, and
+            shows an unhidden one again (`requirements/conventions.md` §8).
+          properties:
+            type: { const: trackHidden }
+            libraryId: { $ref: '#/components/schemas/Id' }
+            trackId: { $ref: '#/components/schemas/Id' }
+            hidden: { type: boolean }
         - type: object
           required: [type, queueId]
           description: |

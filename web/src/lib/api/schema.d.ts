@@ -287,6 +287,9 @@ export interface paths {
          *     for an artist follows from its `album.artists`. A playlist is an ordered item list, not
          *     a track filter, and has its own item endpoint (`listPlaylistItems`).
          *
+         *     A track the caller hid is left out, and out of `total` (`requirements/conventions.md`
+         *     §8); `listHiddenTracks` lists those.
+         *
          *     `ids` looks up specific tracks, as a client does to fill the rows it shows. The answer is
          *     one page in the order the IDs were given, with no `nextCursor`, and `total` is the number
          *     returned. An ID that is unknown, in another library, or not an ID is left out, so the
@@ -340,7 +343,9 @@ export interface paths {
          *     already (`requirements/playlists.md` §11). A caller who deleted their Liked Songs has it
          *     made again, pinned. Not checked against a version: a like says whether a track is liked,
          *     not where it sits, so it applies whatever else changed the playlist. It is announced as
-         *     an edit of the playlist is (`playlist`). A track the library does not have is `404`.
+         *     an edit of the playlist is (`playlist`). A hidden track is unhidden (`trackHidden`), since
+         *     liking and hiding undo each other (`requirements/conventions.md` §8). A track the library
+         *     does not have is `404`.
          */
         put: operations["likeTrack"];
         post?: never;
@@ -350,6 +355,62 @@ export interface paths {
          *     that is `204` too.
          */
         delete: operations["unlikeTrack"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/libraries/{libraryId}/tracks/{trackId}/hidden": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+                trackId: components["parameters"]["TrackId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Hide a track
+         * @description Hides the track from the caller in this library: it is gone from their library, shown
+         *     only in `listHiddenTracks` (`requirements/conventions.md` §8). A liked track is unliked,
+         *     taken out of Liked Songs as `unlikeTrack` does. Announced to the caller's devices
+         *     (`trackHidden`). A track the library does not have is `404`; one hidden already stays
+         *     as it was.
+         */
+        put: operations["hideTrack"];
+        post?: never;
+        /**
+         * Unhide a track
+         * @description Brings the track back into the caller's library. One not hidden is already so, which is
+         *     `204` too.
+         */
+        delete: operations["unhideTrack"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/libraries/{libraryId}/hidden-tracks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List hidden tracks
+         * @description Hidden Songs: the tracks the caller hid in this library, by when they were hidden,
+         *     newest first unless `order` is `asc` (`requirements/conventions.md` §8). The one place a
+         *     hidden track is listed. None is `liked`, since hiding unlikes.
+         */
+        get: operations["listHiddenTracks"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -372,6 +433,9 @@ export interface paths {
          *     their `type`, leaving out empty groups (`requirements/artists.md` §3.1). Their
          *     appearances are `artistCredit=featured`; the tracks on each come from `listTracks` with
          *     `artistId`, `artistCredit=featured`, and `sort=album` (`requirements/artists.md` §3.2).
+         *
+         *     An album every track of which the caller hid is left out, and out of `total`
+         *     (`requirements/conventions.md` §8).
          */
         get: operations["listAlbums"];
         put?: never;
@@ -397,6 +461,8 @@ export interface paths {
          * @description The album with a summary of each disc present. Its tracks are listed with `listTracks`
          *     using `albumId` and `sort=album`, since an album's size is unbounded — the unknown album
          *     holds every file with no album tag.
+         *
+         *     One every track of which the caller hid is `404` (`requirements/conventions.md` §8).
          */
         get: operations["getAlbum"];
         put?: never;
@@ -419,6 +485,9 @@ export interface paths {
         /**
          * Browse artists
          * @description Includes artists credited only as features (`requirements/artists.md` §5).
+         *
+         *     An artist every track of whom the caller hid is left out, and out of `total`
+         *     (`requirements/conventions.md` §8).
          */
         get: operations["listArtists"];
         put?: never;
@@ -439,7 +508,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Get an artist */
+        /**
+         * Get an artist
+         * @description An artist every track of whom the caller hid is `404` (`requirements/conventions.md` §8).
+         */
         get: operations["getArtist"];
         put?: never;
         post?: never;
@@ -464,6 +536,9 @@ export interface paths {
          *     least one tag in the library, and its count of tags. A type no file in the library
          *     carries is left out, so a filter drawn from this list never shows an empty section
          *     (`requirements/tags.md` §2, §8).
+         *
+         *     Tags every track carrying which the caller hid are not counted, and a type left with none
+         *     is not listed (`requirements/conventions.md` §8).
          */
         get: operations["listTagTypes"];
         put?: never;
@@ -487,6 +562,9 @@ export interface paths {
          * Browse tags
          * @description The library's tags, of one type or every type. A tag sorts by its name, its
          *     leading article kept (`requirements/conventions.md` §4).
+         *
+         *     A tag every track carrying which the caller hid is left out, and out of `total`
+         *     (`requirements/conventions.md` §8).
          */
         get: operations["listTags"];
         put?: never;
@@ -511,6 +589,9 @@ export interface paths {
          * Get a tag
          * @description A tag's tracks, albums, and artists are browsed with the `tagAll` filter on the browse
          *     endpoints (`requirements/tags.md` §7).
+         *
+         *     One every track carrying which the caller hid is `404`
+         *     (`requirements/conventions.md` §8).
          */
         get: operations["getTag"];
         put?: never;
@@ -661,7 +742,9 @@ export interface paths {
          * @description Names, with typo tolerance, diacritic and case folding, word-order independence, and
          *     exact-match precedence (`requirements/search.md` §3). Results are identical to on-device
          *     search over the same corpus (`requirements/search.md` §2.1). Playlists are not searched
-         *     until they are built, so no playlists section comes back.
+         *     until they are built, so no playlists section comes back. A track the caller hid is not
+         *     found, nor counted in its section's `total`, and nor is an album or artist every track of
+         *     which they hid (`requirements/conventions.md` §8).
          */
         get: operations["search"];
         put?: never;
@@ -1617,6 +1700,10 @@ export interface components {
             /** @description Whether this is the calling device. Present only in `/me` responses. */
             current?: boolean;
         };
+        /**
+         * @description Its counts and duration are of what the caller sees: tracks they hid, and albums and
+         *     artists every track of which they hid, are left out (`requirements/conventions.md` §8).
+         */
         Library: {
             id: components["schemas"]["Id"];
             name: string;
@@ -1654,6 +1741,11 @@ export interface components {
             /** @description Its tags in the library, never 0 (`listTagTypes`). */
             tagCount: number;
         };
+        /**
+         * @description Its counts are of what the caller sees: tracks they hid are left out, and so are albums
+         *     and artists only those brought it (`requirements/conventions.md` §8). A list sorted by
+         *     `trackCount` is sorted by the library's counts.
+         */
         Tag: {
             id: components["schemas"]["Id"];
             /** @description Its type's key (`TagType.key`). */
@@ -1823,6 +1915,10 @@ export interface components {
          * @description Completeness has two parts (`requirements/albums.md` §4): tracks missing from discs you
          *     have (`trackCount` below `trackTotal`), and discs you do not have (`discCount` below
          *     `discTotal`). Incomplete is information, never an error.
+         *
+         *     Its counts and duration are of what the caller sees: tracks they hid are left out, and
+         *     so is a disc of only those, and its `tags` are those the tracks left bring it
+         *     (`requirements/conventions.md` §8).
          */
         AlbumSummary: components["schemas"]["AlbumBase"] & {
             type: components["schemas"]["AlbumType"];
@@ -1873,6 +1969,11 @@ export interface components {
             source?: components["schemas"]["Source"];
             image: components["schemas"]["ImageRef"] | null;
         };
+        /**
+         * @description Its counts are of what the caller sees: tracks they hid, and their albums every track of
+         *     which they hid, are left out (`requirements/conventions.md` §8). A full `Artist`'s
+         *     `appearanceCount` too, and its `tags` are those the tracks left bring it.
+         */
         ArtistSummary: components["schemas"]["ArtistBase"] & {
             /** @description Albums the artist owns. */
             albumCount: number;
@@ -1962,9 +2063,9 @@ export interface components {
             kind: "saved" | "liked";
             /** @description Whether `image` is a custom upload rather than the generated mosaic; `deletePlaylistImage` reverts it. */
             customImage: boolean;
-            /** @description Every track in the playlist, missing ones included (`requirements/playlists.md` §3). */
+            /** @description Every track in the playlist, missing ones included (`requirements/playlists.md` §3), and those the caller hid left out (`requirements/conventions.md` §8). */
             trackCount: number;
-            /** @description Of every track in the playlist, missing ones included. */
+            /** @description Of every track in the playlist, missing ones included, and those the caller hid left out. */
             durationUs: components["schemas"]["DurationUs"];
             pinned: boolean;
             /** Format: date-time */
@@ -1987,6 +2088,12 @@ export interface components {
             external?: components["schemas"]["TrackBase"];
             /** Format: date-time */
             addedAt?: string;
+            /**
+             * @description A track the caller hid. It keeps its place, so positions stay the playlist's, but a
+             *     client neither shows nor plays it (`requirements/playlists.md` §3). Left out, or
+             *     `false`, for the rest.
+             */
+            hidden?: boolean;
         };
         PlaylistItemPage: components["schemas"]["PageInfo"] & {
             /** @description The playlist version these positions belong to, the `baseVersion` for edits made from them. */
@@ -3067,6 +3174,12 @@ export interface components {
             refetch?: boolean;
         } | {
             /** @constant */
+            type: "trackHidden";
+            libraryId: components["schemas"]["Id"];
+            trackId: components["schemas"]["Id"];
+            hidden: boolean;
+        } | {
+            /** @constant */
             type: "queueReplaced";
             /** Format: uuid */
             queueId: string;
@@ -3751,6 +3864,77 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    hideTrack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+                trackId: components["parameters"]["TrackId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Hidden. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    unhideTrack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+                trackId: components["parameters"]["TrackId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Not hidden. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listHiddenTracks: {
+        parameters: {
+            query?: {
+                order?: "asc" | "desc";
+                cursor?: components["parameters"]["Cursor"];
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrackPage"];
+                };
             };
             default: components["responses"]["Problem"];
         };

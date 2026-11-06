@@ -142,3 +142,30 @@ describe('tags', () => {
 		]);
 	});
 });
+
+describe('what the user hid whole', () => {
+	it('is an album, artist or tag every track of which they hid', () => {
+		expect(catalog.wholly([])).toEqual({ albums: [], artists: [], tags: [] });
+		// Calm is on tracks 11 and 13; Rock on 11 and 12; Jazz on 12 and 13.
+		expect(catalog.wholly([11n, 13n]).tags).toEqual([32n]);
+		const all = catalog.wholly([11n, 12n, 13n]);
+		expect([all.albums, all.artists]).toEqual([[101n], [301n]]);
+		expect(catalog.listAlbums(1n, new URLSearchParams(), all.albums).total).toBe(0);
+		expect(catalog.tagTypes(1n, [30n, 31n]).map((t) => t.key)).toEqual(['mood']);
+	});
+});
+
+describe('counts without hidden tracks', () => {
+	it('lose what each hidden track counted toward', () => {
+		const lost = catalog.losses([11n]);
+		expect([lost.tracks, lost.durationUs]).toEqual([1, 1_000_000]);
+		expect(lost.albums.get('101')?.tracks).toBe(1);
+		expect(lost.artists.get('301')).toBe(1);
+		expect([lost.tags.get('30'), lost.tags.get('31'), lost.tags.get('32')]).toEqual([
+			1,
+			undefined,
+			1
+		]);
+		expect(catalog.losses([]).tracks).toBe(0);
+	});
+});

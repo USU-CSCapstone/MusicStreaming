@@ -16,6 +16,7 @@ pub use representation::{
 
 use super::credit::{ArtistCredit, Credits};
 use super::extract::{Path, Query};
+use super::hidden;
 use super::page::{self, Check, Order, Page, Request, Sort, Source, Table, Unknown};
 use super::scope::Scope;
 use super::tag_filter::{self, LEAD_SHARE, RESOLVE_SHARE, TagFilter, Tagged};
@@ -207,7 +208,8 @@ pub async fn list(
     let tags = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
     let page = db
         .read(move |conn| {
-            let source = source(conn, library, album, artist, credit, &tags, LEAD_SHARE)?;
+            let mut source = source(conn, library, album, artist, credit, &tags, LEAD_SHARE)?;
+            hidden::leave_out(conn, &mut source, user, library)?;
             let mut page = request.read(conn, &source, list_summary)?;
             mark_liked(conn, user, library, &mut page.items)?;
             Ok(page)

@@ -1,7 +1,7 @@
 //! What the browse responses share: small references to other entities, and the fields every
 //! entity reads alike.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -29,6 +29,19 @@ pub struct TagRef {
 #[derive(Clone, Default, Serialize)]
 #[serde(transparent)]
 pub struct TagsByType(BTreeMap<String, Vec<TagRef>>);
+
+impl TagsByType {
+    /// Leaves out the tags `gone`, and any type left with none.
+    pub fn without(&mut self, gone: &HashSet<i64>) {
+        if gone.is_empty() {
+            return;
+        }
+        for tags in self.0.values_mut() {
+            tags.retain(|tag| !gone.contains(&tag.id.0));
+        }
+        self.0.retain(|_, tags| !tags.is_empty());
+    }
+}
 
 impl<'de> Deserialize<'de> for TagsByType {
     /// The tags of an array of `[type, id, name]`, in name order within each type.

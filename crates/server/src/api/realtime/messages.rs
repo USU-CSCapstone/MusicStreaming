@@ -53,6 +53,12 @@ pub enum ServerMessage {
     },
     /// A playlist of the user's was created, edited or deleted.
     Playlist(Change),
+    /// A track was hidden from the user, or unhidden, in one library.
+    TrackHidden {
+        library_id: Id,
+        track_id: Id,
+        hidden: bool,
+    },
     /// A start replaced the account's queue, so a device fetches it again.
     QueueReplaced {
         queue_id: Uuid,

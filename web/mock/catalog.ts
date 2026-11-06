@@ -187,13 +187,16 @@ export class Catalog {
 	 * The types the library's tags are of, each with its count of tags and the name a plugin gave
 	 * its own, in key order.
 	 */
-	tagTypes(lib: bigint): TagType[] {
+	tagTypes(lib: bigint, hidden: readonly bigint[] = []): TagType[] {
+		const where = ['library_id = ?'];
+		const params: SQLInputValue[] = [lib];
+		leaveOut(hidden, where, params, 'id');
 		return this.db
 			.all(
 				`SELECT used.type, kind.name, used.n FROM
-				   (SELECT type, COUNT(*) AS n FROM tags WHERE library_id = ? GROUP BY type) used
+				   (SELECT type, COUNT(*) AS n FROM tags WHERE ${where.join(' AND ')} GROUP BY type) used
 				   JOIN tag_types kind ON kind.key = used.type ORDER BY used.type`,
-				lib
+				...params
 			)
 			.map((r) => ({
 				key: String(r.type),
@@ -202,9 +205,10 @@ export class Catalog {
 			}));
 	}
 
-	listTags(lib: bigint, q: URLSearchParams): Page<Tag> {
+	listTags(lib: bigint, q: URLSearchParams, hidden: readonly bigint[] = []): Page<Tag> {
 		const where = ['library_id = ?'];
 		const params: SQLInputValue[] = [lib];
+		leaveOut(hidden, where, params, 'id');
 		const type = q.get('type');
 		if (type) {
 			where.push('type = ?');
@@ -234,6 +238,84 @@ export class Catalog {
 			total,
 			p
 		);
+	}
+
+	/**
+	 * The albums, artists and tags every track of which is among `hidden`, the tracks the user hid,
+	 * which are gone from their library with them (`requirements/conventions.md` §8).
+	 */
+	wholly(hidden: readonly bigint[]): Wholly {
+		if (!hidden.length) return { albums: [], artists: [], tags: [] };
+		const set = `(${hidden.map(() => '?').join(', ')})`;
+		const ids = (sql: string, uses: number) =>
+			this.db
+				.all(sql, ...Array.from({ length: uses }, () => hidden).flat())
+				.map((r) => r.id as bigint);
+		return {
+			albums: ids(
+				`SELECT DISTINCT t.album_id AS id FROM tracks t WHERE t.id IN ${set}
+				   AND NOT EXISTS (SELECT 1 FROM tracks o WHERE o.album_id = t.album_id AND o.id NOT IN ${set})`,
+				2
+			),
+			artists: ids(
+				`SELECT c.id FROM (SELECT artist_id AS id FROM track_artists WHERE track_id IN ${set}
+				   UNION SELECT artist_id FROM track_album_artists WHERE track_id IN ${set}) c
+				 WHERE c.id IS NOT NULL
+				   AND NOT EXISTS (SELECT 1 FROM track_artists o WHERE o.artist_id = c.id AND o.track_id NOT IN ${set})
+				   AND NOT EXISTS (SELECT 1 FROM track_album_artists o
+				                   WHERE o.artist_id = c.id AND o.track_id NOT IN ${set})`,
+				4
+			),
+			tags: ids(
+				`SELECT DISTINCT tt.tag_id AS id FROM track_tags tt WHERE tt.track_id IN ${set}
+				   AND NOT EXISTS (SELECT 1 FROM track_tags o WHERE o.tag_id = tt.tag_id AND o.track_id NOT IN ${set})`,
+				2
+			)
+		};
+	}
+
+	/** What the tracks `hidden` take from the counts the mock adjusts ([`Losses`]). */
+	losses(hidden: readonly bigint[]): Losses {
+		const losses: Losses = {
+			tracks: 0,
+			durationUs: 0,
+			albums: new Map(),
+			artists: new Map(),
+			tags: new Map()
+		};
+		if (!hidden.length) return losses;
+		const set = `(${hidden.map(() => '?').join(', ')})`;
+		for (const r of this.db.all(
+			`SELECT album_id, disc_number, COUNT(*) AS n, SUM(duration_us) AS us FROM tracks
+			 WHERE id IN ${set} GROUP BY album_id, disc_number`,
+			...hidden
+		)) {
+			const [n, us] = [num(r.n), num(r.us)];
+			const album = losses.albums.get(id(r.album_id)) ?? {
+				tracks: 0,
+				durationUs: 0,
+				discs: new Map()
+			};
+			album.tracks += n;
+			album.durationUs += us;
+			album.discs.set(num(r.disc_number), n);
+			losses.albums.set(id(r.album_id), album);
+			losses.tracks += n;
+			losses.durationUs += us;
+		}
+		const counted = (sql: string, into: Map<string, number>) => {
+			for (const r of this.db.all(sql, ...hidden)) into.set(id(r.owner), num(r.n));
+		};
+		counted(
+			`SELECT artist_id AS owner, COUNT(*) AS n FROM track_artists
+			 WHERE track_id IN ${set} AND artist_id IS NOT NULL GROUP BY artist_id`,
+			losses.artists
+		);
+		counted(
+			`SELECT tag_id AS owner, COUNT(*) AS n FROM track_tags WHERE track_id IN ${set} GROUP BY tag_id`,
+			losses.tags
+		);
+		return losses;
 	}
 
 	tag(lib: bigint, tagId: bigint): Tag | null {
@@ -269,9 +351,10 @@ export class Catalog {
 		};
 	}
 
-	listAlbums(lib: bigint, q: URLSearchParams): Page<AlbumSummary> {
+	listAlbums(lib: bigint, q: URLSearchParams, hidden: readonly bigint[] = []): Page<AlbumSummary> {
 		const where = ['al.library_id = ?'];
 		const params: SQLInputValue[] = [lib];
+		leaveOut(hidden, where, params, 'al.id');
 		const artist = q.get('artistId');
 		if (artist) {
 			const owned = 'al.id IN (SELECT album_id FROM album_artists WHERE artist_id = ?)';
@@ -352,11 +435,13 @@ export class Catalog {
 		lib: bigint,
 		text: string,
 		limit: number,
-		filters = new URLSearchParams()
+		filters = new URLSearchParams(),
+		hidden: readonly bigint[] = []
 	): { items: AlbumSummary[]; total: number } {
 		const [match, matchParams, rank] = matchClause('al.title', text);
 		const conditions = [match];
 		const params: SQLInputValue[] = [...matchParams];
+		leaveOut(hidden, conditions, params, 'al.id');
 		this.#tagFilter(lib, filters, 'album', 'al.id', conditions, params);
 		const where = conditions.join(' AND ');
 		const total = num(
@@ -416,9 +501,11 @@ export class Catalog {
 		};
 	}
 
-	listTracks(lib: bigint, q: URLSearchParams): Page<TrackSummary> {
+	/** The library's tracks `q` asks for, leaving out `hidden`, the tracks the user hid. */
+	listTracks(lib: bigint, q: URLSearchParams, hidden: readonly bigint[] = []): Page<TrackSummary> {
 		const where = ['t.library_id = ?'];
 		const params: SQLInputValue[] = [lib];
+		leaveOut(hidden, where, params);
 		const album = q.get('albumId');
 		if (album) {
 			where.push('t.album_id = ?');
@@ -507,11 +594,13 @@ export class Catalog {
 		lib: bigint,
 		text: string,
 		limit: number,
-		filters = new URLSearchParams()
+		filters = new URLSearchParams(),
+		hidden: readonly bigint[] = []
 	): { items: TrackSummary[]; total: number } {
 		const [match, matchParams, rank] = matchClause('t.title', text);
 		const conditions = [match];
 		const params: SQLInputValue[] = [...matchParams];
+		leaveOut(hidden, conditions, params);
 		this.#tagFilter(lib, filters, 'track', 't.id', conditions, params);
 		const where = conditions.join(' AND ');
 		const total = num(
@@ -545,7 +634,11 @@ export class Catalog {
 		};
 	}
 
-	listArtists(lib: bigint, q: URLSearchParams): Page<ArtistSummary> {
+	listArtists(
+		lib: bigint,
+		q: URLSearchParams,
+		hidden: readonly bigint[] = []
+	): Page<ArtistSummary> {
 		const sorts: Record<string, string[]> = {
 			name: ['sort_key', 'id'],
 			dateAdded: ['added_at', 'id']
@@ -553,6 +646,7 @@ export class Catalog {
 		const sort = sorts[q.get('sort') ?? 'name'] ?? sorts.name;
 		const where = ['library_id = ?'];
 		const params: SQLInputValue[] = [lib];
+		leaveOut(hidden, where, params, 'id');
 		this.#tagFilter(lib, q, 'artist', 'id', where, params);
 		const availability = q.get('availability');
 		if (availability === 'available') where.push('available_track_count > 0');
@@ -604,11 +698,13 @@ export class Catalog {
 		lib: bigint,
 		text: string,
 		limit: number,
-		filters = new URLSearchParams()
+		filters = new URLSearchParams(),
+		hidden: readonly bigint[] = []
 	): { items: ArtistSummary[]; total: number } {
 		const [match, matchParams, rank] = matchClause('name', text);
 		const conditions = [match];
 		const params: SQLInputValue[] = [...matchParams];
+		leaveOut(hidden, conditions, params, 'id');
 		this.#tagFilter(lib, filters, 'artist', 'id', conditions, params);
 		const where = conditions.join(' AND ');
 		const total = num(
@@ -658,3 +754,30 @@ export function matchRank(value: string | null, text: string): number {
 	if (v.includes(` ${t}`)) return 1;
 	return v.includes(t) ? 0 : -1;
 }
+
+/** Leaves the rows `hidden` out of a query by `column`, each bound as a 64-bit ID. */
+function leaveOut(
+	hidden: readonly bigint[],
+	where: string[],
+	params: SQLInputValue[],
+	column = 't.id'
+) {
+	if (!hidden.length) return;
+	where.push(`${column} NOT IN (${hidden.map(() => '?').join(', ')})`);
+	params.push(...hidden);
+}
+
+/**
+ * What the tracks the user hid take from the counts the mock adjusts: the library's, each
+ * album's and its discs', and each artist's and tag's tracks (`requirements/conventions.md` §8).
+ */
+export type Losses = {
+	tracks: number;
+	durationUs: number;
+	albums: Map<string, { tracks: number; durationUs: number; discs: Map<number, number> }>;
+	artists: Map<string, number>;
+	tags: Map<string, number>;
+};
+
+/** What the user hid whole: the albums, artists and tags every track of which they hid. */
+export type Wholly = { albums: bigint[]; artists: bigint[]; tags: bigint[] };

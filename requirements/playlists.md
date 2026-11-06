@@ -41,6 +41,7 @@ Shared behavior follows [`conventions.md`](conventions.md).
 
 - **Order is the user's.** A playlist plays in the order it was arranged and never silently reorders itself.
 - **Duplicates are allowed, with a warning.** Adding a track already in the playlist works, but the user is told it is already there and can back out. Intentional repeats are legitimate; accidental ones are the common case. Liked Songs is the exception ([§11](#11-liked-songs)).
+- **Hidden tracks stay put, unseen.** A track the user hid keeps its place but is not shown or played, and unhiding brings it back where it was ([`conventions.md` §8](conventions.md#8-hidden-tracks)).
 - **Missing tracks stay put.** A track whose file has vanished remains in position, clearly marked, skipped on playback ([`conventions.md` §6](conventions.md#6-availability)), and retained for as long as any playlist references it ([`scanning.md` §8](scanning.md#8-missing-files)). If the file returns, it plays again.
 - **There is no arbitrary size limit.** A playlist of tens of thousands of tracks is supported, and the host is the only limit ([`general.md` §3.3](general.md#33-the-host-is-the-limiter)).
 
@@ -127,6 +128,7 @@ Beyond [`conventions.md`](conventions.md):
 
 - **It is always there.** A user has one from the start, empty until they like something, pinned among their playlists ([§7](#7-organization)). They can unpin it like any other.
 - **A like goes to the top**, so the newest is first, and unliking takes the track out. Adding a track to Liked Songs from anywhere ([§4](#4-editing)) likes it, and removing one unlikes it.
+- **Hiding a liked track unlikes it**, taking it out, and liking a hidden track unhides it ([`conventions.md` §8](conventions.md#8-hidden-tracks)).
 - **Each track is in it once.** A track is liked or it is not, so the duplicate warning of [§3](#3-contents) does not apply: liking a track already liked changes nothing.
 - **Its order is otherwise the user's.** They can rearrange it like any playlist, and a new like goes above their arrangement without disturbing it.
 - **Liking never conflicts.** A like or an unlike from any device applies whatever else changed the playlist meanwhile, since it says whether a track is liked, not where it sits; only rearranging is refused on a version the user was not looking at ([§5](#5-concurrent-edits)).

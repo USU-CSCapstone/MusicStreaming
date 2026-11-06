@@ -92,11 +92,11 @@ Summaries are **generated from the record on demand**, so a user can ask for any
 
 ## 7. Explicit Signals
 
-**Liking a track is the one explicit signal in v1, and a user's likes are a playlist**, their Liked Songs ([`playlists.md` §11](playlists.md#11-liked-songs)). There is no rating, and no hiding.
+**Liking and hiding a track are the explicit signals in v1.** A user's likes are a playlist, their Liked Songs ([`playlists.md` §11](playlists.md#11-liked-songs)), and a track they hide is gone from their library ([`conventions.md` §8](conventions.md#8-hidden-tracks)). There is no rating.
 
 - **A like adds to the implicit record; it never replaces it.** Most of what a user enjoys they will never like, so enjoyment is still inferred mainly from behaviour — what a user plays, finishes, repeats, and skips ([§2](#2-derived-measures)). A like is the evidence behaviour cannot give: a track loved but rarely played.
 - **A like is a yes and nothing more.** A track not liked says nothing, and unliking one is not a dislike, or a user would be punished for tidying their Liked Songs.
-- **Nothing can be suppressed.** A track a user dislikes keeps appearing until their listening behaviour says otherwise.
+- **Hiding is a no, and the only certain one.** A hidden track is never recommended or played automatically again. A track a user merely dislikes, and does not hide, keeps appearing until their listening behaviour says otherwise.
 
 Adding an explicit signal must not invalidate what was recorded before it — the implicit record stands on its own.
 
