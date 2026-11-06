@@ -53,6 +53,12 @@ pub enum ServerMessage {
     },
     /// A playlist of the user's was created, edited or deleted.
     Playlist(Change),
+    /// A track was liked by the user, or unliked, in one library.
+    TrackLiked {
+        library_id: Id,
+        track_id: Id,
+        liked: bool,
+    },
     /// A track was hidden from the user, or unhidden, in one library.
     TrackHidden {
         library_id: Id,

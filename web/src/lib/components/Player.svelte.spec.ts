@@ -5,8 +5,13 @@ import { render } from 'vitest-browser-svelte';
 const fake = vi.hoisted(() => ({
 	queue: { queueId: 'q' as string | null, shuffled: false, repeat: 'off' as 'off' | 'all' | 'one' },
 	player: { setShuffle: vi.fn(), setRepeat: vi.fn() },
-	realtime: { connected: true, offline: false },
-	playback: { elsewhere: false, deviceName: 'Desk', error: null as string | null },
+	realtime: { connected: true, offline: false, on: () => () => {} },
+	playback: {
+		elsewhere: false,
+		deviceName: 'Desk',
+		error: null as string | null,
+		libraryId: '11' as string | null
+	},
 	controls: {
 		remote: true,
 		stopped: true,
@@ -41,6 +46,7 @@ beforeEach(() => {
 	fake.player.setRepeat.mockClear();
 	fake.controls.pickable = true;
 	fake.playback.error = null;
+	fake.playback.libraryId = '11';
 });
 
 describe('Player.svelte', () => {
@@ -49,6 +55,25 @@ describe('Player.svelte', () => {
 		render(Player);
 		await expect.element(page.getByRole('button', { name: 'Play' })).toBeEnabled();
 		await expect.element(page.getByRole('alert')).toHaveTextContent('Could not play that here.');
+	});
+
+	it('hearts the song playing, in the library it plays from', async () => {
+		// Wide enough for the heart, which a phone's player bar has no room for.
+		await page.viewport(1280, 800);
+		render(Player);
+		const heart = page.getByRole('region', { name: 'Player' }).getByRole('button', {
+			name: 'Like “Brain Stew”'
+		});
+		await expect.element(heart).toHaveAttribute('aria-pressed', 'false');
+	});
+
+	it('has no heart while the library is not known', async () => {
+		// Wide enough for the heart, which a phone's player bar has no room for.
+		await page.viewport(1280, 800);
+		fake.playback.libraryId = null;
+		render(Player);
+		await expect.element(page.getByRole('button', { name: 'Shuffle' })).toBeInTheDocument();
+		await expect.element(page.getByRole('button', { name: /^Like/ })).not.toBeInTheDocument();
 	});
 
 	it('cannot play where playback stopped in a library this device does not play', async () => {

@@ -155,14 +155,25 @@ pub async fn edit(
             let answer = db
                 .try_write(move |tx| {
                     if let Some(answer) = Answer::find(tx, user, key.as_deref())? {
-                        return Ok::<_, Problem>(Some((answer, None, Vec::new())));
+                        return Ok::<_, Problem>(Some((
+                            answer,
+                            None,
+                            Vec::new(),
+                            Default::default(),
+                        )));
                     }
                     // Retention keeps the tracks the playlist holds; only an added one can be gone.
                     if !fresh(tx, library, &plan)? {
                         return Ok(None);
                     }
                     write(tx, user, library, id, base, &plan)?;
-                    // A track added to Liked Songs is liked, and so not hidden.
+                    // A track added to Liked Songs is liked, and so not hidden; one removed is
+                    // unliked.
+                    let likes = if liked {
+                        (plan.added.clone(), plan.removed.clone())
+                    } else {
+                        Default::default()
+                    };
                     let mut unhidden = Vec::new();
                     for &track in plan.added.iter().filter(|_| liked) {
                         if hidden::unhide_in(tx, user, library, track)? {
@@ -204,11 +215,13 @@ pub async fn edit(
                     if let Some(key) = &key {
                         answer.store(tx, user, key, now)?;
                     }
-                    Ok(Some((answer, Some(Change::of(edited, plan.applied)), unhidden)))
+                    Ok(Some((answer, Some(Change::of(edited, plan.applied)), unhidden, likes)))
                 })
                 .await?;
-            if let Some((answer, change, unhidden)) = answer {
+            if let Some((answer, change, unhidden, (liked, unliked))) = answer {
                 hidden::announce(&hub, user, library, unhidden, false);
+                liked::announce(&hub, user, library, liked, true);
+                liked::announce(&hub, user, library, unliked, false);
                 if moves_items && change.is_some() {
                     // The edit may have moved the artwork on; its old mosaics go, off the request.
                     let db = db.clone();
@@ -270,6 +283,8 @@ pub(super) struct Plan {
     pub(super) totals: Option<(i64, i64)>,
     /// The distinct tracks the ops add.
     pub(super) added: Vec<i64>,
+    /// The tracks of the items the ops remove, one for each.
+    pub(super) removed: Vec<i64>,
     /// The keys of the rows to delete, or `None` to delete them all, for a renumber.
     delete: Option<Vec<i64>>,
     /// The rows to insert, as `(key, track, added_at)`.
@@ -295,6 +310,7 @@ pub(super) fn plan(
         return Ok(Plan {
             totals: None,
             added: Vec::new(),
+            removed: Vec::new(),
             delete: Some(Vec::new()),
             insert: Vec::new(),
             applied: Vec::new(),
@@ -356,7 +372,9 @@ pub(super) fn plan(
 
     let stored: Vec<Option<i64>> = after.iter().map(|item| item.key).collect();
     let kept: HashSet<i64> = stored.iter().flatten().copied().collect();
-    let removed = before.iter().filter_map(|item| item.key).filter(|key| !kept.contains(key));
+    let gone = |item: &&Item| item.key.is_some_and(|key| !kept.contains(&key));
+    let removed_tracks = before.iter().filter(gone).map(|item| item.track).collect();
+    let removed = before.iter().filter(gone).filter_map(|item| item.key);
     let duration = after.iter().map(|item| item.duration).sum::<i64>();
     let count = i64::try_from(after.len()).unwrap_or(i64::MAX);
     let (delete, insert) = match assign(&stored) {
@@ -383,6 +401,7 @@ pub(super) fn plan(
     Ok(Plan {
         totals: Some((count, duration)),
         added: added.into_keys().collect(),
+        removed: removed_tracks,
         delete,
         insert,
         applied,

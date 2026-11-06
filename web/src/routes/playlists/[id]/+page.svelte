@@ -9,6 +9,7 @@
 		type PlaylistDetails
 	} from '$lib/components/PlaylistDetailsDialog.svelte';
 	import TrackList, { type RowMove } from '$lib/components/TrackList.svelte';
+	import { playlistArt } from '$lib/cards';
 	import { deleteWithUndo } from '$lib/deletions.svelte';
 	import {
 		currentFilter,
@@ -19,7 +20,9 @@
 		tagTypesKnown
 	} from '$lib/filters';
 	import { formatLength, plural } from '$lib/format';
+	import type { PlaylistItem } from '$lib/api/types';
 	import { knownTags } from '$lib/known-tags.svelte';
+	import { marks } from '$lib/marks.svelte';
 	import { toast } from '$lib/toast.svelte';
 	import { player } from '$lib/player.svelte';
 	import { EditablePlaylist, rowMoveOps } from '$lib/playlist.svelte';
@@ -40,11 +43,23 @@
 		};
 	});
 	const playlist = $derived(list.playlist);
-	// External tracks from plugins are not shown yet (`requirements/plugins.md` §10), so a row's
-	// index is not always its position in the playlist: each row carries its own.
+	// Liked Songs keeps its name and draws a heart; its songs are the user's likes
+	// (`requirements/playlists.md` §11).
+	const liked = $derived(playlist.kind === 'liked');
+	$effect(() => marks.note([playlist]));
+	// External tracks from plugins are not shown yet (`requirements/plugins.md` §10), nor are tracks
+	// the user hid, which keep their places (`requirements/playlists.md` §3), so a row's index is
+	// not always its position in the playlist: each row carries its own.
+	// In Liked Songs, a song unliked since it loaded is no longer there.
+	const shows = (item: PlaylistItem) =>
+		!!item.track &&
+		!marks.hidden(data.lib, item.track.id, item.hidden) &&
+		(!liked || marks.liked(data.lib, item.track));
 	const rows = $derived(
 		list.items.flatMap((item, position) =>
-			item.track ? [{ track: item.track, position, addedAt: item.addedAt ?? '' }] : []
+			item.track && shows(item)
+				? [{ track: item.track, position, addedAt: item.addedAt ?? '' }]
+				: []
 		)
 	);
 	const tracks = $derived(rows.map((r) => r.track));
@@ -122,15 +137,29 @@
 	}
 
 	function moveRows(moves: RowMove[]) {
-		list.edit({ ops: rowMoveOps(list.items, moves) });
+		list.edit({ ops: rowMoveOps(list.items, moves, shows) });
 	}
 
-	/** No confirmation: Undo is offered instead (`requirements/playlists.md` §4). */
+	/**
+	 * No confirmation: Undo is offered instead (`requirements/playlists.md` §4). But deleting Liked
+	 * Songs with songs in it unlikes them all, so that is asked first (§11).
+	 */
 	function remove() {
+		if (liked && playlist.trackCount > 0 && !confirming) {
+			confirming = true;
+			return;
+		}
+		confirming = false;
 		deleteWithUndo(fetch, playlist, () => list.idle());
 		// Replacing this page, so Back does not lead to a deleted playlist.
 		void goto(resolve('/playlists'), { replaceState: true });
 	}
+
+	let confirming = $state(false);
+	let confirm = $state<HTMLDialogElement>();
+	$effect(() => {
+		if (confirming) confirm?.showModal();
+	});
 </script>
 
 <svelte:head><title>{playlist.title} · Jewelcase</title></svelte:head>
@@ -138,17 +167,18 @@
 <DetailHeader
 	kind="Playlist"
 	title={playlist.title}
-	image={playlist.image}
+	{...playlistArt(playlist)}
 	seed={playlist.id}
-	icon="playlist"
 	onplay={shownTracks.length ? () => player.play(shownTracks, 0, context, from) : undefined}
 >
 	{#if playlist.description}<span>{playlist.description}</span>{/if}
 	<span>{plural(playlist.trackCount, 'song')} · {formatLength(playlist.durationUs)}</span>
 	{#snippet actions()}
-		<button type="button" class="action" onclick={() => (editing = true)}>
-			<Icon name="edit" size={16} /> Edit
-		</button>
+		{#if !liked}
+			<button type="button" class="action" onclick={() => (editing = true)}>
+				<Icon name="edit" size={16} /> Edit
+			</button>
+		{/if}
 		<!-- Pinned playlists list first (`requirements/playlists.md` §7). -->
 		<button
 			type="button"
@@ -180,7 +210,11 @@
 	added={shown.map((r) => r.addedAt)}
 	{sort}
 	onsort={showSorted}
-	empty={filtered ? 'No songs in this playlist carry these tags.' : 'This playlist is empty.'}
+	empty={filtered
+		? 'No songs in this playlist carry these tags.'
+		: liked
+			? 'Songs you like appear here. Press a song’s heart to like it.'
+			: 'This playlist is empty.'}
 	{context}
 	{from}
 	editable
@@ -189,6 +223,29 @@
 	{filter}
 	onfilter={showFiltered}
 />
+
+{#if confirming}
+	<dialog
+		bind:this={confirm}
+		aria-labelledby="unlike-all"
+		oncancel={(e) => {
+			e.preventDefault();
+			confirming = false;
+		}}
+	>
+		<h2 id="unlike-all">Delete Liked Songs?</h2>
+		<p>
+			{playlist.trackCount === 1
+				? 'Its song will be unliked.'
+				: `All ${playlist.trackCount.toLocaleString()} songs in it will be unliked.`}
+			Liking a song brings it back.
+		</p>
+		<footer>
+			<button type="button" onclick={() => (confirming = false)}>Cancel</button>
+			<button type="button" class="primary" onclick={remove}>Delete</button>
+		</footer>
+	</dialog>
+{/if}
 
 {#if editing}
 	<PlaylistDetailsDialog
@@ -224,6 +281,51 @@
 		justify-content: center;
 		width: 38px;
 		padding: 0;
+	}
+
+	dialog {
+		width: min(400px, calc(100vw - 2 * var(--space-4)));
+		padding: var(--space-5);
+		border: 0;
+		border-radius: var(--radius-l);
+		background: var(--surface);
+		color: var(--text);
+		box-shadow: var(--shadow);
+	}
+
+	dialog::backdrop {
+		background: #0006;
+	}
+
+	dialog h2 {
+		font-size: 18px;
+	}
+
+	dialog p {
+		margin: var(--space-3) 0 var(--space-4);
+	}
+
+	footer {
+		display: flex;
+		justify-content: flex-end;
+		gap: var(--space-2);
+	}
+
+	footer button {
+		height: 36px;
+		padding: 0 var(--space-4);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-m);
+		background: var(--surface);
+		color: var(--text);
+		font-weight: 500;
+		cursor: pointer;
+	}
+
+	footer button.primary {
+		border-color: var(--accent);
+		background: var(--accent);
+		color: var(--accent-text);
 	}
 
 	.action[aria-pressed='true'] {

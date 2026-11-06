@@ -3174,6 +3174,12 @@ export interface components {
             refetch?: boolean;
         } | {
             /** @constant */
+            type: "trackLiked";
+            libraryId: components["schemas"]["Id"];
+            trackId: components["schemas"]["Id"];
+            liked: boolean;
+        } | {
+            /** @constant */
             type: "trackHidden";
             libraryId: components["schemas"]["Id"];
             trackId: components["schemas"]["Id"];

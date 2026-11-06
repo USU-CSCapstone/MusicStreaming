@@ -168,6 +168,29 @@ export const getTracksByIds = (f: Fetch, libraryId: string, ids: string[]) =>
 export const getTrack = (f: Fetch, libraryId: string, trackId: string) =>
 	get<Track>(f, `${lib(libraryId)}/tracks/${encodeURIComponent(trackId)}`);
 
+const track = (libraryId: string, trackId: string) =>
+	`${lib(libraryId)}/tracks/${encodeURIComponent(trackId)}`;
+
+/** Puts the track at the top of the caller's Liked Songs, and unhides it (`requirements/playlists.md` §11). */
+export const likeTrack = (f: Fetch, libraryId: string, trackId: string) =>
+	send<void>(f, 'PUT', `${track(libraryId, trackId)}/like`);
+
+/** Takes the track out of the caller's Liked Songs; one not liked is already so. */
+export const unlikeTrack = (f: Fetch, libraryId: string, trackId: string) =>
+	send<void>(f, 'DELETE', `${track(libraryId, trackId)}/like`);
+
+/** Hides the track from the caller's library, and unlikes it (`requirements/conventions.md` §8). */
+export const hideTrack = (f: Fetch, libraryId: string, trackId: string) =>
+	send<void>(f, 'PUT', `${track(libraryId, trackId)}/hidden`);
+
+/** Brings the track back into the caller's library; one not hidden is already so. */
+export const unhideTrack = (f: Fetch, libraryId: string, trackId: string) =>
+	send<void>(f, 'DELETE', `${track(libraryId, trackId)}/hidden`);
+
+/** Hidden Songs: the tracks the caller hid, newest first, a page at a time. */
+export const listHiddenTracks = (f: Fetch, libraryId: string, query: Query = {}) =>
+	get<TrackPage>(f, `${lib(libraryId)}/hidden-tracks`, query);
+
 export const listArtists = (f: Fetch, libraryId: string, query: Query = {}) =>
 	get<ArtistPage>(f, `${lib(libraryId)}/artists`, query);
 

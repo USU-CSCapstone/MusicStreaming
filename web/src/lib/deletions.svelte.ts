@@ -5,6 +5,7 @@
 import { SvelteSet } from 'svelte/reactivity';
 import { ApiError, deletePlaylist } from './api/client';
 import type { Playlist } from './api/types';
+import { marks } from './marks.svelte';
 import { toast, toaster } from './toast.svelte';
 
 type Fetch = typeof fetch;
@@ -36,6 +37,8 @@ export function deleteWithUndo(fetch: Fetch, playlist: Playlist, settle?: () => 
 			if (!keepalive) await settle?.();
 			const f: Fetch = keepalive ? (input, init) => fetch(input, { ...init, keepalive }) : fetch;
 			await deletePlaylist(f, libraryId, id);
+			// Deleting Liked Songs unliked everything in it (`requirements/playlists.md` §11).
+			if (playlist.kind === 'liked') marks.unlikeAll(libraryId);
 		} catch (e) {
 			// Already gone is what was wanted.
 			if (e instanceof ApiError && e.status === 404) return;

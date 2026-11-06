@@ -8,6 +8,7 @@
 	import Icon from '$lib/components/Icon.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { deleted } from '$lib/deletions.svelte';
+	import { marks } from '$lib/marks.svelte';
 	import PlaylistDetailsDialog, {
 		type PlaylistDetails
 	} from '$lib/components/PlaylistDetailsDialog.svelte';
@@ -21,6 +22,7 @@
 	);
 	// Deleted ones go at once, while their Undo is still on offer.
 	const shown = $derived(playlists.items.filter((p) => !deleted.has(p.id)));
+	$effect(() => marks.note(playlists.items));
 	const total = $derived(playlists.total - (playlists.items.length - shown.length));
 	let creating = $state(false);
 

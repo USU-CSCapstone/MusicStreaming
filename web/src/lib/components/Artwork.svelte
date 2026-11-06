@@ -10,7 +10,8 @@
 		size,
 		icon = 'album',
 		round = false,
-		alt = ''
+		alt = '',
+		hue: fixed
 	}: {
 		image: ImageRef | null | undefined;
 		/** Picks the placeholder's colours, so each entity's stand-in is stable. */
@@ -20,13 +21,17 @@
 		icon?: IconName;
 		round?: boolean;
 		alt?: string;
+		/** The stand-in's colour, in place of the one `seed` picks: Liked Songs' is always the same. */
+		hue?: number;
 	} = $props();
 
 	let loaded = $state(false);
 	let failed = $state(false);
 	const libraryId = $derived(page.data.library?.id ?? '');
 	const src = $derived(image && libraryId ? imageUrl(libraryId, image, size) : null);
-	const hue = $derived([...seed].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 360);
+	const hue = $derived(
+		fixed ?? [...seed].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 360
+	);
 
 	$effect(() => {
 		void src;

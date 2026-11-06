@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { marks } from '$lib/marks.svelte';
 	import { onMount } from 'svelte';
 	import type { NavigationTarget } from '@sveltejs/kit';
 	import { beforeNavigate } from '$app/navigation';
@@ -176,7 +177,7 @@
 			</header>
 			{#if section.type === 'tracks'}
 				<TrackList
-					tracks={songs}
+					tracks={marks.unhidden(data.lib, songs)}
 					{sort}
 					onsort={showSorted}
 					filter={data.filter}

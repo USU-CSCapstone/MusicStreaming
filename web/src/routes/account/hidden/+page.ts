@@ -1,0 +1,8 @@
+import { listHiddenTracks } from '$lib/api/client';
+import { requireLibrary } from '$lib/library';
+import type { PageLoad } from './$types';
+
+export const load: PageLoad = async ({ fetch, parent }) => {
+	const lib = await requireLibrary(parent);
+	return { lib, hidden: await listHiddenTracks(fetch, lib) };
+};

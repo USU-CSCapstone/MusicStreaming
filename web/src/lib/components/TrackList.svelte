@@ -11,6 +11,7 @@
 	import type { PlayContext, TagType, TrackSummary } from '$lib/api/types';
 	import { type TagFilter, UNFILTERED, chosenTags, isFiltered, shownFilter } from '$lib/filters';
 	import { knownTags } from '$lib/known-tags.svelte';
+	import { marks } from '$lib/marks.svelte';
 	import { fullText } from '$lib/full-text';
 	import { prefs } from '$lib/prefs.svelte';
 	import { tagTypeName } from '$lib/tags';
@@ -32,6 +33,7 @@
 	import Artwork from './Artwork.svelte';
 	import AddToPlaylistMenu from './AddToPlaylistMenu.svelte';
 	import Icon from './Icon.svelte';
+	import LikeButton from './LikeButton.svelte';
 	import SortMenu from './SortMenu.svelte';
 	import FilterPicker from './FilterPicker.svelte';
 
@@ -129,19 +131,19 @@
 		const areas = tagColumns.map((_, i) => ` tag${i}`).join('');
 		if (isAlbum) {
 			return {
-				columns: `32px minmax(0, 3fr) minmax(0, 2fr)${sizes} 56px 36px`,
-				areas: `'num title artist${areas} duration more'`
+				columns: `32px minmax(0, 3fr) minmax(0, 2fr)${sizes} 32px 56px 36px`,
+				areas: `'num title artist${areas} heart duration more'`
 			};
 		}
 		const lead = `32px 40px minmax(0, 3fr) minmax(0, 2fr) minmax(0, 2fr)${sizes} 48px`;
 		return added
 			? {
-					columns: `${lead} 104px 56px 36px`,
-					areas: `'num thumb title artist album${areas} year added duration more'`
+					columns: `${lead} 104px 32px 56px 36px`,
+					areas: `'num thumb title artist album${areas} year added heart duration more'`
 				}
 			: {
-					columns: `${lead} 56px 36px`,
-					areas: `'num thumb title artist album${areas} year duration more'`
+					columns: `${lead} 32px 56px 36px`,
+					areas: `'num thumb title artist album${areas} year heart duration more'`
 				};
 	});
 
@@ -272,7 +274,7 @@
 	let dragged = false;
 
 	function pointerDown(e: PointerEvent, i: number) {
-		if (!editable || e.button !== 0 || (e.target as Element).closest('.more')) return;
+		if (!editable || e.button !== 0 || (e.target as Element).closest('.more, .like')) return;
 		longPressed = false;
 		dragged = false;
 		const row = e.currentTarget as Element;
@@ -535,10 +537,13 @@
 		if (anchor?.isConnected) anchor.focus();
 	}
 
-	/** A click on row `i`: selects where rows select, otherwise plays once; links and the ⋯ menu are left alone. */
+	/**
+	 * A click on row `i`: selects where rows select, otherwise plays once; links, the heart and the
+	 * ⋯ menu are left alone.
+	 */
 	function rowClick(e: MouseEvent, i: number) {
-		// Links inside the row navigate, and its ⋯ opens its own menu.
-		if ((e.target as Element).closest('a, .more')) return;
+		// Links inside the row navigate, its heart likes, and its ⋯ opens its own menu.
+		if ((e.target as Element).closest('a, .more, .like')) return;
 		if (longPressed || dragged) {
 			longPressed = dragged = false;
 			return;
@@ -671,7 +676,8 @@
 					class:selected={selected.has(i)}
 					class:dragged={drag?.started && drag.indexes.includes(i)}
 					onclick={(e) => rowClick(e, i)}
-					ondblclick={(e) => editable && !(e.target as Element).closest('a, .more') && play(i)}
+					ondblclick={(e) =>
+						editable && !(e.target as Element).closest('a, .more, .like') && play(i)}
 					onpointerdown={(e) => pointerDown(e, i)}
 					onpointermove={pointerMove}
 					onpointerup={pointerUp}
@@ -732,6 +738,9 @@
 					{#if added}
 						<span class="added muted tabular">{added[i] ? formatDate(added[i]) : ''}</span>
 					{/if}
+					<span class="like" class:on={marks.liked(libraryId, track)}>
+						<LikeButton library={libraryId} {track} />
+					</span>
 					<span class="duration muted tabular">{formatDuration(track.durationUs)}</span>
 					<button
 						type="button"
@@ -764,7 +773,12 @@
 {/if}
 
 {#if adding}
-	<AddToPlaylistMenu what={songs(adding.tracks)} anchor={adding.anchor} onclose={closeAdding} />
+	<AddToPlaylistMenu
+		what={songs(adding.tracks)}
+		song={adding.tracks.length === 1 ? adding.tracks[0] : undefined}
+		anchor={adding.anchor}
+		onclose={closeAdding}
+	/>
 {/if}
 
 {#if editable}
@@ -821,20 +835,20 @@
 	   between the title's second line and a column of their own without being drawn twice. */
 	.row {
 		display: grid;
-		grid-template-columns: 32px 40px minmax(0, 3fr) minmax(0, 2fr) 56px 36px;
+		grid-template-columns: 32px 40px minmax(0, 3fr) minmax(0, 2fr) 32px 56px 36px;
 		grid-template-areas:
-			'num thumb title album duration more'
-			'num thumb artist album duration more';
+			'num thumb title album heart duration more'
+			'num thumb artist album heart duration more';
 		align-items: center;
 		column-gap: var(--space-3);
 		padding-inline: var(--space-3);
 	}
 
 	.album .row {
-		grid-template-columns: 32px minmax(0, 1fr) 56px 36px;
+		grid-template-columns: 32px minmax(0, 1fr) 32px 56px 36px;
 		grid-template-areas:
-			'num title duration more'
-			'num artist duration more';
+			'num title heart duration more'
+			'num artist heart duration more';
 	}
 
 	.track {
@@ -944,6 +958,30 @@
 
 	.duration {
 		grid-area: duration;
+	}
+
+	.like {
+		grid-area: heart;
+	}
+
+	/* A liked song's heart always shows. Another's shows, with a mouse, on the row pointed at,
+	   focused, or selected; on touch it does not, and the ⋯ menu likes instead. */
+	@media (hover: hover) {
+		.like:not(.on) {
+			opacity: 0;
+		}
+
+		.track:hover .like,
+		.track:focus-within .like,
+		.track.selected .like {
+			opacity: 1;
+		}
+	}
+
+	@media (hover: none) {
+		.like:not(.on) {
+			visibility: hidden;
+		}
 	}
 
 	.more {
@@ -1296,10 +1334,10 @@
 
 	@media (max-width: 767px) {
 		.row {
-			grid-template-columns: 40px minmax(0, 1fr) 48px 36px;
+			grid-template-columns: 40px minmax(0, 1fr) 32px 48px 36px;
 			grid-template-areas:
-				'thumb title duration more'
-				'thumb artist duration more';
+				'thumb title heart duration more'
+				'thumb artist heart duration more';
 			padding-inline: var(--space-2);
 		}
 
@@ -1309,10 +1347,10 @@
 		}
 
 		.album .row {
-			grid-template-columns: 28px minmax(0, 1fr) 48px 36px;
+			grid-template-columns: 28px minmax(0, 1fr) 32px 48px 36px;
 			grid-template-areas:
-				'num title duration more'
-				'num artist duration more';
+				'num title heart duration more'
+				'num artist heart duration more';
 		}
 
 		.album .track .num {
