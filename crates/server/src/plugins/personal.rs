@@ -239,9 +239,14 @@ pub(super) fn connect(
 }
 
 /// Disconnects `caller` from `id`: it stops being sent their searches, their settings are
-/// forgotten, and it no longer acts for them.
+/// forgotten, and it no longer acts for them. Connecting again sends their likes and hides as
+/// they stand then, since what changed meanwhile was never sent.
 pub fn disconnect(conn: &Connection, id: &str, caller: Caller) -> rusqlite::Result<()> {
     stop_sharing(conn, id, caller.user)?;
+    conn.execute(
+        "DELETE FROM plugin_cursors WHERE plugin_id = ?1 AND user_id = ?2 AND hook = 'marked'",
+        params![id, caller.user],
+    )?;
     conn.execute(
         "DELETE FROM plugin_connections WHERE plugin_id = ?1 AND user_id = ?2",
         params![id, caller.user],

@@ -81,9 +81,14 @@ CREATE TABLE plugin_cursors (
     -- kind delivered. scanFinished: when the last scan delivered finished. schedule: when it
     -- last ran. played: the last `play_events.seq` of an end delivered. playing: the last
     -- `play_events.seq` of a start delivered, or passed over as stale. searched: the last
-    -- `search_events.seq` delivered. Zero is before everything, so a plugin new to a library
-    -- works through all of it.
+    -- `search_events.seq` delivered. marked: the last `mark_events.seq` delivered, or, while its
+    -- user's starting likes and hides go out, the feed's head before they began. Zero is before
+    -- everything, so a plugin new to a library works through all of it.
     position   INTEGER NOT NULL DEFAULT 0,
+    -- marked alone: while a user's likes and hides as they stand go out, the last track sent, or
+    -- 0 before the first; null once they are all out and the feed is followed from `position`
+    -- (design/hooks.md §1.4). Every new row starts the user from where they stand.
+    snapshot_after INTEGER DEFAULT 0,
     -- When the failures since the last success began, which sets the backoff and tells a plugin
     -- that has failed too long, and when to try again after the latest. Both clear on a success.
     failing_since INTEGER,

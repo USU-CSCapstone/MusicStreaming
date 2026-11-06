@@ -206,7 +206,7 @@ async fn a_start_that_ended_or_went_stale_is_never_delivered() {
     // Found due just before it ended, it is read as nothing to deliver.
     let gone = due_for(Playing, 7);
     let (position, nothing) = db.read(move |conn| (gone.read)(conn, &gone, later)).await.unwrap();
-    assert!(nothing.is_none() && position == 0, "nothing to deliver, so nothing moves");
+    assert!(nothing.is_none() && position.position == 0, "nothing to deliver, so nothing moves");
 
     // A device catching up after being offline reports its plays already ended.
     play(&db, "offline", 7, 11, later, "finished").await;
