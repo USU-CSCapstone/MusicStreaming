@@ -51,10 +51,11 @@ type Stage = fn(&Transaction<'_>, i64, &mut i64) -> Result<bool>;
 
 /// Every kind of row, in order: missing tracks before the art and biographies they leave
 /// unreferenced.
-const STAGES: [Stage; 12] = [
+const STAGES: [Stage; 13] = [
     scans,
     login_attempts,
     play_ends,
+    marks,
     recent_searches,
     searches_noted,
     forgets_delivered,
@@ -155,6 +156,27 @@ fn play_ends(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
         now,
         "DELETE FROM play_events WHERE seq IN \
          (SELECT seq FROM play_events WHERE kind = 'ended' AND reported_at < ?1 LIMIT ?2)",
+    )
+}
+
+/// Likes and hides aged out of the `marked` hook's outbox, delivered or not. A plugin that had
+/// yet to be told of one starts again from what its user likes and hid, so it misses nothing
+/// (`design/hooks.md` §1.4); one starting already needs nothing.
+fn marks(tx: &Transaction<'_>, now: i64, _: &mut i64) -> Result<bool> {
+    tx.prepare_cached(
+        "UPDATE plugin_cursors SET snapshot_after = 0 \
+         WHERE hook = 'marked' AND snapshot_after IS NOT 0 \
+           AND EXISTS (SELECT 1 FROM mark_events e \
+                       WHERE e.library_id = plugin_cursors.library_id \
+                         AND e.user_id = plugin_cursors.user_id \
+                         AND e.seq > plugin_cursors.position AND e.created_at < ?1)",
+    )?
+    .execute([now - WINDOW_MS])?;
+    aged(
+        tx,
+        now,
+        "DELETE FROM mark_events WHERE seq IN \
+         (SELECT seq FROM mark_events WHERE created_at < ?1 LIMIT ?2)",
     )
 }
 

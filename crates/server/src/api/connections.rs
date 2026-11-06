@@ -31,6 +31,8 @@ pub struct PersonalPlugin {
     /// Whether the caller could share their searches with it.
     asks_for_searches: bool,
     shares_searches: bool,
+    /// Whether, once connected, it is sent the caller's likes and hides.
+    hears_likes: bool,
 }
 
 #[derive(Serialize)]
@@ -53,6 +55,7 @@ pub async fn list(
             connected: p.connected,
             asks_for_searches: p.asks_for_searches,
             shares_searches: p.shares_searches,
+            hears_likes: p.hears_likes,
         })
         .collect();
     Ok(Json(PersonalPluginList { items }))

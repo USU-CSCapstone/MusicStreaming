@@ -22,6 +22,7 @@ use crate::api::hidden;
 use crate::api::realtime::{Hub, ServerMessage};
 use crate::api::scope::Scope;
 use crate::api::{Id, Problem};
+use crate::db::marks::{self, Mark};
 use crate::db::{Database, liked_songs, now_ms};
 
 /// `likeTrack`: puts the track at the top of the caller's Liked Songs, unless it is in it
@@ -60,7 +61,9 @@ pub async fn like(
                     return Ok((None, unhidden));
                 }
                 let add = Op::Add { at: Some(0), items: vec![track] };
-                Ok((Some(apply(tx, user, library, id, version, add, now)?), unhidden))
+                let change = apply(tx, user, library, id, version, add, now)?;
+                marks::record(tx, user, library, [track], Mark::Liked)?;
+                Ok((Some(change), unhidden))
             })
             .await?;
         if change.is_some() {
@@ -126,7 +129,9 @@ pub fn take_out(
     if positions.is_empty() {
         return Ok(None);
     }
-    apply(tx, user, library, id, version, Op::Remove { positions }, now_ms()).map(Some)
+    let change = apply(tx, user, library, id, version, Op::Remove { positions }, now_ms())?;
+    marks::record(tx, user, library, [track], Mark::Unliked)?;
+    Ok(Some(change))
 }
 
 /// Where `track` is in playlist `id` of `library`: each probe finds it through

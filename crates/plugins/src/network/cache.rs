@@ -62,6 +62,8 @@ pub struct Visible {
     pub listening_activity: bool,
     /// Whether it may see the searches of users who share them with it.
     pub search_activity: bool,
+    /// Whether it may see the likes and hides of users who connected it.
+    pub likes_and_hides: bool,
 }
 
 /// Which request a reply answers.
@@ -340,6 +342,7 @@ mod tests {
             library_read: false,
             listening_activity: false,
             search_activity: false,
+            likes_and_hides: false,
         }
     }
 
@@ -464,6 +467,7 @@ mod tests {
         let reader = Visible { library_read: true, ..visible(1) };
         let listener = Visible { listening_activity: true, ..visible(1) };
         let searcher = Visible { search_activity: true, ..visible(1) };
+        let liker = Visible { likes_and_hides: true, ..visible(1) };
         let for_user = |user| Visible { user: Some(user), ..visible(1) };
         for other in [
             Key::new(visible(1), "https://api.example/", &theirs).unwrap(),
@@ -472,6 +476,7 @@ mod tests {
             Key::new(reader, "https://api.example/", &token).unwrap(),
             Key::new(listener, "https://api.example/", &token).unwrap(),
             Key::new(searcher, "https://api.example/", &token).unwrap(),
+            Key::new(liker, "https://api.example/", &token).unwrap(),
             Key::new(for_user(7), "https://api.example/", &token).unwrap(),
         ] {
             assert!(matches!(cache.lookup(&other, now), Lookup::Miss), "{other:?}");

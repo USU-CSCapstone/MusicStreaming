@@ -34,6 +34,10 @@ pub enum Permission {
     AlbumsChanged,
     /// A hook: run when artists are added, changed, or removed.
     ArtistsChanged,
+    /// The likes and hides of users who connected it: theirs as they stand, then each change.
+    LikesAndHides,
+    /// A hook: run when a user who connected it likes, unlikes, hides, or unhides a song.
+    Marked,
     /// Its rate limits that say `"per": "host"` are kept to by every plugin's requests to that
     /// host, so it can slow other plugins. Without it, they count its own.
     HostRateLimits,
@@ -54,7 +58,7 @@ pub enum Hook {
 impl Permission {
     /// Every permission, each once. Public so the server's tests can check its hook table
     /// against [`Permission::hook`].
-    pub const ALL: [Permission; 16] = [
+    pub const ALL: [Permission; 18] = [
         Self::LibraryRead,
         Self::LibraryAdd,
         Self::LibraryChange,
@@ -71,6 +75,8 @@ impl Permission {
         Self::ArtistsChanged,
         Self::HostRateLimits,
         Self::TagTypes,
+        Self::LikesAndHides,
+        Self::Marked,
     ];
 
     /// Its name in manifests, the API and the database, such as `libraryRead`. It is the name its
@@ -111,13 +117,14 @@ impl Permission {
             | Self::Schedule
             | Self::AlbumsChanged
             | Self::ArtistsChanged => Some(Hook::Library),
-            Self::Played | Self::Playing | Self::Searched => Some(Hook::Personal),
+            Self::Played | Self::Playing | Self::Searched | Self::Marked => Some(Hook::Personal),
             Self::LibraryRead
             | Self::LibraryAdd
             | Self::LibraryChange
             | Self::Network
             | Self::ListeningActivity
             | Self::SearchActivity
+            | Self::LikesAndHides
             | Self::HostRateLimits
             | Self::TagTypes => None,
         }
@@ -134,6 +141,7 @@ impl Permission {
             | Self::ArtistsChanged => &[Self::LibraryRead],
             Self::Played | Self::Playing => &[Self::LibraryRead, Self::ListeningActivity],
             Self::Searched => &[Self::LibraryRead, Self::SearchActivity],
+            Self::Marked => &[Self::LibraryRead, Self::LikesAndHides],
             Self::LibraryRead
             | Self::LibraryAdd
             | Self::LibraryChange
@@ -141,6 +149,7 @@ impl Permission {
             | Self::ListeningActivity
             | Self::Schedule
             | Self::SearchActivity
+            | Self::LikesAndHides
             | Self::HostRateLimits
             | Self::TagTypes => &[],
         }
@@ -165,6 +174,8 @@ impl Permission {
             Self::ArtistsChanged => "Run when artists change",
             Self::HostRateLimits => "Limit a service for every plugin",
             Self::TagTypes => "Add types of tag",
+            Self::LikesAndHides => "Likes and hides",
+            Self::Marked => "Run when a connected user likes or hides a song",
         }
     }
 }

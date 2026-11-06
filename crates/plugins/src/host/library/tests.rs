@@ -268,6 +268,7 @@ async fn granted_names_what_a_plugin_reaches_and_no_hook() {
         Reached::ListeningActivity,
         Reached::SearchActivity,
         Reached::HostRateLimits,
+        Reached::LikesAndHides,
     ];
     assert_eq!(host::Host::granted(run).await, reached);
 }

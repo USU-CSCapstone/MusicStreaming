@@ -50,7 +50,8 @@ async fn a_user_sees_and_disconnects_only_what_they_can_reach() {
             "name": "Scrobbler",
             "connected": true,
             "asksForSearches": false,
-            "sharesSearches": false
+            "sharesSearches": false,
+            "hearsLikes": false
         }] })
     );
 

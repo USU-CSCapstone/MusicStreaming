@@ -19,6 +19,7 @@ mod faults;
 mod forgets;
 mod libraries;
 mod listening;
+mod marks;
 mod real;
 mod reenabling;
 mod reinstall;
@@ -63,6 +64,8 @@ async fn setup() -> (tempfile::TempDir, Arc<Database>, Arc<Plugins>) {
             Playing,
             SearchActivity,
             Searched,
+            LikesAndHides,
+            Marked,
         ],
     );
     let requests = p["permissions"].as_array_mut().unwrap();
@@ -116,7 +119,8 @@ fn row(hook: Permission) -> (String, Read) {
 /// `hook` found due for the stand-in plugin in library 1, for `user`, at position 0.
 fn due_for(hook: Permission, user: i64) -> Due {
     let (_, read) = row(hook);
-    Due { hook, read, plugin: "plugin".into(), library: 1, position: 0, user: Some(user) }
+    let after = (hook == Permission::Marked).then_some(0);
+    Due { hook, read, plugin: "plugin".into(), library: 1, position: 0, after, user: Some(user) }
 }
 
 /// Every permission that is a hook has one row in the table, and nothing else has one.

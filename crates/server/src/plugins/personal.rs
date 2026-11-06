@@ -42,6 +42,8 @@ pub struct Connectable {
     /// Whether the user could share their searches with it ([`asks_for_searches`]).
     pub asks_for_searches: bool,
     pub shares_searches: bool,
+    /// Whether, once they connect it, it is sent their likes and hides ([`hears_likes`]).
+    pub hears_likes: bool,
 }
 
 /// Every plugin `caller` can connect: each with personal settings, enabled in a library they
@@ -64,12 +66,14 @@ pub fn connectable(conn: &Connection, caller: Caller) -> rusqlite::Result<Vec<Co
             connected: row.get(3)?,
             asks_for_searches: false,
             shares_searches: row.get(4)?,
+            hears_likes: false,
         })
     })?
     .collect::<rusqlite::Result<Vec<_>>>()?
     .into_iter()
     .map(|mut plugin| {
         plugin.asks_for_searches = asks_for_searches(conn, &plugin.id)?;
+        plugin.hears_likes = hears_likes(conn, &plugin.id)?;
         Ok(plugin)
     })
     .collect()
@@ -78,11 +82,27 @@ pub fn connectable(conn: &Connection, caller: Caller) -> rusqlite::Result<Vec<Co
 /// Whether `id` can be sent its users' searches: it asks for the `searched` hook, and the admin
 /// granted that and search activity. Without both, sharing would send nothing.
 pub fn asks_for_searches(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+    asks_and_granted(conn, id, Permission::Searched, Permission::SearchActivity)
+}
+
+/// Whether `id` is sent the likes and hides of each user who connects it: it asks for the
+/// `marked` hook, and the admin granted that and likes and hides, so a user is told so where
+/// they connect it (`requirements/users.md` §7).
+pub fn hears_likes(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+    asks_and_granted(conn, id, Permission::Marked, Permission::LikesAndHides)
+}
+
+/// Whether `id`'s manifest asks for `hook`, and the admin granted it and `data`, what it carries.
+fn asks_and_granted(
+    conn: &Connection,
+    id: &str,
+    hook: Permission,
+    data: Permission,
+) -> rusqlite::Result<bool> {
     let Some(manifest) = grants::manifest(conn, id)? else { return Ok(false) };
-    let asks = manifest.permissions.iter().any(|r| r.permission == Permission::Searched);
+    let asks = manifest.permissions.iter().any(|r| r.permission == hook);
     let granted = grants::granted(conn, id, SERVER)?;
-    Ok(asks
-        && [Permission::Searched, Permission::SearchActivity].iter().all(|p| granted.contains(p)))
+    Ok(asks && [hook, data].iter().all(|p| granted.contains(p)))
 }
 
 /// Why turning sharing searches on or off failed.
@@ -239,9 +259,14 @@ pub(super) fn connect(
 }
 
 /// Disconnects `caller` from `id`: it stops being sent their searches, their settings are
-/// forgotten, and it no longer acts for them.
+/// forgotten, and it no longer acts for them. Connecting again sends their likes and hides as
+/// they stand then, since what changed meanwhile was never sent.
 pub fn disconnect(conn: &Connection, id: &str, caller: Caller) -> rusqlite::Result<()> {
     stop_sharing(conn, id, caller.user)?;
+    conn.execute(
+        "DELETE FROM plugin_cursors WHERE plugin_id = ?1 AND user_id = ?2 AND hook = 'marked'",
+        params![id, caller.user],
+    )?;
     conn.execute(
         "DELETE FROM plugin_connections WHERE plugin_id = ?1 AND user_id = ?2",
         params![id, caller.user],
