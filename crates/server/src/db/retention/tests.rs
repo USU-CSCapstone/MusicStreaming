@@ -108,6 +108,23 @@ fn play_ends_age_out_and_plays_stay() {
     assert_eq!(column(&db, "SELECT count(*) FROM plays"), [2]);
 }
 
+/// The `marked` hook's likes and hides age out, delivered or not.
+#[test]
+fn marks_age_out() {
+    let (_temp, db) = open(|conn| {
+        for (track, at) in [(1, OLD), (2, RECENT)] {
+            conn.execute(
+                "INSERT INTO mark_events (user_id, library_id, track_id, kind, created_at) \
+                 VALUES (1, 1, ?1, 'liked', ?2)",
+                params![track, at],
+            )?;
+        }
+        Ok(())
+    });
+    sweep(&db, NOW);
+    assert_eq!(column(&db, "SELECT track_id FROM mark_events"), [2]);
+}
+
 /// Adds a `kind` row, `searched` or `forgotten`, to the `searched` hook's outbox for user 1's
 /// search 1 in `library` at `at`.
 fn noted(conn: &Connection, library: i64, kind: &str, at: i64) -> Result<()> {

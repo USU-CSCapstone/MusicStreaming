@@ -283,6 +283,16 @@ pub async fn delete(
     settle(async move {
         let version = db
             .write(move |tx| {
+                // Deleting their Liked Songs unlikes everything in it, which its items name
+                // until the delete takes them.
+                tx.prepare_cached(
+                    "INSERT INTO mark_events (user_id, library_id, track_id, kind, created_at) \
+                     SELECT ?2, ?3, i.track_id, 'unliked', ?4 FROM playlists p \
+                     CROSS JOIN playlist_items i ON i.playlist_id = p.id \
+                     WHERE p.id = ?1 AND p.user_id = ?2 AND p.library_id = ?3 AND p.kind = 'liked' \
+                     ORDER BY i.key",
+                )?
+                .execute(params![id, user, library, now_ms()])?;
                 let deleted = tx
                     .prepare_cached(
                         "DELETE FROM playlists WHERE id = ?1 AND user_id = ?2 AND library_id = ?3 \
