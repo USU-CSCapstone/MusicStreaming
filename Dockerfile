@@ -18,9 +18,14 @@ RUN rustup toolchain install
 ENV CARGO_TARGET_DIR=/target
 CMD ["cargo", "run", "--locked", "--package", "jewelcase-server"]
 
-# The queue core as a WebAssembly module for the web app, which the node image cannot build.
+# The queue core and the device catalog as WebAssembly modules for the web app, which the node
+# image cannot build.
 # The CLI version must match the one in web/scripts/wasm.sh.
 FROM rust:1-slim-trixie AS web-wasm
+# SQLite's C compiles to WebAssembly with clang (no emscripten).
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends clang \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY rust-toolchain.toml .
 RUN rustup toolchain install
@@ -39,6 +44,7 @@ COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml web/.npmrc ./
 RUN pnpm install --frozen-lockfile
 COPY web .
 COPY --from=web-wasm /src/web/src/lib/core-wasm src/lib/core-wasm
+COPY --from=web-wasm /src/web/src/lib/catalog-wasm src/lib/catalog-wasm
 # The mock validates plugin files with the pack tool, which it imports from beside the app.
 COPY tools /src/tools
 # Not `pnpm dev`, which would rebuild the module here, where there is no Rust.

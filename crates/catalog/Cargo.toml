@@ -1,0 +1,15 @@
+[package]
+name = "jewelcase-catalog"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rusqlite = "0.41.1"
+
+# Natively SQLite is bundled, so a test run of this crate alone needs no system SQLite. On wasm
+# rusqlite uses sqlite-wasm-rs instead.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+
+[lints]
+workspace = true

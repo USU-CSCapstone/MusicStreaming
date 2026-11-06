@@ -15,7 +15,7 @@ jewelcase-core = { version = "0.1.0", path = "../core" }
 jewelcase-ffmpeg = { version = "0.1.0", path = "../ffmpeg" }
 jewelcase-plugins = { version = "0.1.0", path = "../plugins" }
 jewelcase-scanner = { version = "0.1.0", path = "../scanner" }
-rusqlite = { version = "0.40.2", features = ["blob", "bundled", "fallible_uint"] }
+rusqlite = { version = "0.41.1", features = ["blob", "bundled", "fallible_uint"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.10"
@@ -33,7 +33,7 @@ flate2 = "1.1"
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 tokio = { version = "1.53.1", features = ["test-util"] }
 tower = { version = "0.5.3", features = ["util"] }
-rusqlite = { version = "0.40.2", features = ["hooks"] }
+rusqlite = { version = "0.41.1", features = ["hooks"] }
 tokio-tungstenite = "0.29"
 jewelcase-scanner = { version = "0.1.0", path = "../scanner", features = ["testing"] }
 

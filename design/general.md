@@ -117,6 +117,8 @@ Plugin UI surfaces must render natively on both web and Android ([`requirements/
 ```
 jewelcase/
 ├── crates/
+│   ├── catalog/     # the device catalog's schema and the SQL the server and the device share
+│   ├── catalog-wasm/ # WebAssembly bindings for the catalog: SQLite on OPFS in the catalog worker (§7.1)
 │   ├── core/        # shared core (§3)
 │   ├── core-wasm/   # WebAssembly bindings for the web client (later, with the worker in §7.1)
 │   ├── ffmpeg/      # ffmpeg subprocess wrapper — probe, decode, transcode (scanning.md §11)
