@@ -566,7 +566,7 @@ paths:
       description: |
         Hidden Songs: the tracks the caller hid in this library, by when they were hidden,
         newest first unless `order` is `asc` (`requirements/conventions.md` §8). The one place a
-        hidden track is listed. None is `liked`, since hiding unlikes.
+        hidden track is listed. Each is `hidden`, and none is `liked`, since hiding unlikes.
       operationId: listHiddenTracks
       parameters:
         - name: order
@@ -2307,7 +2307,11 @@ components:
         id: { $ref: '#/components/schemas/Id' }
 
     Playable:
-      description: Something that can be queued or added to a playlist — library content or an external track.
+      description: >-
+        Something that can be queued or added to a playlist — library content or an external
+        track. An album, artist or playlist stands for the tracks its page shows, so without those
+        the caller hid (`requirements/conventions.md` §8); a track named on its own is added
+        whether hidden or not.
       oneOf:
         - $ref: '#/components/schemas/EntityRef'
         - $ref: '#/components/schemas/ExternalTrackRef'
@@ -2637,6 +2641,13 @@ components:
             liked:
               type: boolean
               description: Whether it is in the caller's Liked Songs (`requirements/playlists.md` §11).
+            hidden:
+              const: true
+              description: >-
+                Present only on a track the caller hid (`requirements/conventions.md` §8), which
+                only a lookup by ID (`listTracks` with `ids`, `getTrack`) and Hidden Songs
+                (`listHiddenTracks`) return: every list leaves them out, and a playlist's item says
+                so itself. A device holding a track it queued learns from this to skip it.
             personal: { $ref: '#/components/schemas/Personal' }
 
     TrackSortKeys:

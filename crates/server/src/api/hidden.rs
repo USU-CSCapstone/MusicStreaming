@@ -116,8 +116,14 @@ pub async fn list(
         params: vec![Value::from(user), Value::from(library)],
         total: Total::Counted,
     };
-    // A hidden track is never liked, so none is marked.
-    let page = db.read(move |conn| request.read(conn, &source, tracks::list_summary)).await?;
+    // A hidden track is never liked, so none is marked so; every one is marked hidden.
+    let page = db
+        .read(move |conn| {
+            let mut page = request.read(conn, &source, tracks::list_summary)?;
+            tracks::mark_hidden(conn, user, library, &mut page.items)?;
+            Ok(page)
+        })
+        .await?;
     Ok(Json(page))
 }
 
