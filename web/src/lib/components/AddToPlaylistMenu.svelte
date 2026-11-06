@@ -66,6 +66,7 @@
 		try {
 			// Every playlist, a page at a time as the list scrolls.
 			const first = await listPlaylists(fetch, libraryId);
+			marks.note(first.items);
 			playlists = new Paged(first, (cursor) => listPlaylists(fetch, libraryId, { cursor }));
 		} catch (e) {
 			failed = e instanceof Error ? e.message : String(e);
@@ -133,6 +134,8 @@
 	}
 
 	async function choose(playlist: Playlist) {
+		// Adding to Liked Songs likes, and a song liked already is skipped, so nothing to warn of.
+		if (playlist.kind === 'liked') return add(playlist);
 		step = { kind: 'checking' };
 		let repeated: string[];
 		try {

@@ -16,7 +16,22 @@ export type Card = {
 	image: ImageRef | null;
 	icon: IconName;
 	round: boolean;
+	/** The stand-in's colour, where it is fixed rather than picked by the ID. */
+	hue?: number;
 };
+
+/** The hue of Liked Songs' artwork, the accent's: always a heart, never a mosaic of its songs. */
+export const LIKED_HUE = 252;
+
+/**
+ * A playlist's artwork: a mosaic of its songs' albums, or for Liked Songs a heart
+ * (`requirements/playlists.md` §11).
+ */
+export function playlistArt(p: Playlist): { image: ImageRef | null; icon: IconName; hue?: number } {
+	return p.kind === 'liked'
+		? { image: null, icon: 'liked', hue: LIKED_HUE }
+		: { image: p.image, icon: 'playlist' };
+}
 
 /** The card for an album, with its song count for queueing and dragging. */
 export function albumCard(a: AlbumSummary): Card {
@@ -59,8 +74,7 @@ export function playlistCard(p: Playlist): Card {
 		href: resolve('/playlists/[id]', { id: p.id }),
 		title: p.title,
 		subtitle: plural(p.trackCount, 'song'),
-		image: p.image,
-		icon: 'playlist',
+		...playlistArt(p),
 		round: false
 	};
 }

@@ -125,4 +125,49 @@ describe('marks', () => {
 		await Promise.all([liking, hiding]);
 		expect(shown()).toEqual([false, true]);
 	});
+
+	it('unlikes every track of a library whose Liked Songs was deleted', async () => {
+		const read = { ...track, liked: true };
+		await marks.like(fetch, '1', { ...track, id: '6' }, true);
+		marks.unlikeAll('1');
+		expect([marks.liked('1', read), marks.liked('1', { ...read, id: '6' })]).toEqual([
+			false,
+			false
+		]);
+		expect(marks.liked('2', read)).toBe(true);
+		await marks.like(fetch, '1', track, true);
+		expect(marks.liked('1', read)).toBe(true);
+	});
+
+	it('knows Liked Songs deleted elsewhere once it has seen which playlist it is', () => {
+		const read = { ...track, liked: true };
+		marks.receive({
+			type: 'playlist',
+			libraryId: '1',
+			playlistId: 'p9',
+			version: 2,
+			playlist: null
+		});
+		expect(marks.liked('1', read)).toBe(true);
+		marks.note([
+			{ id: 'p9', libraryId: '1', kind: 'liked' },
+			{ id: 'p8', libraryId: '1', kind: 'saved' }
+		]);
+		marks.receive({
+			type: 'playlist',
+			libraryId: '1',
+			playlistId: 'p8',
+			version: 2,
+			playlist: null
+		});
+		expect(marks.liked('1', read)).toBe(true);
+		marks.receive({
+			type: 'playlist',
+			libraryId: '1',
+			playlistId: 'p9',
+			version: 2,
+			playlist: null
+		});
+		expect(marks.liked('1', read)).toBe(false);
+	});
 });
