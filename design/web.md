@@ -78,8 +78,31 @@ It is a stand-in for the server, so it has these limits. None of them are client
 ## Not built yet
 
 These are client work still to do: virtualized lists beyond the queue panel's (the other long
-lists page in as you scroll), loudness normalization, offline, and account preferences. Grid/list view and
+lists page in as you scroll), loudness normalization, downloads and playing offline, and account preferences. The offline catalog and the installable app are designed in *Catalog worker* and *The installable app* below and are not built yet. Grid/list view and
 theme are per-browser for now.
+
+## Catalog worker
+
+**Planned; none of this is built yet.** The device keeps a copy of every library it can reach, in SQLite on the browser's private file system, so pages, search and queue building work offline ([ADR 0008](../adr/0008-sqlite-device-catalog.md), `design/general.md` §3.1). `src/lib/api/client.ts` stays the one module pages call: it sends catalog reads to the worker, which answers with the JSON the server would send.
+
+- **One owner tab.** The browser's file handle for the database belongs to one dedicated worker and is exclusive, so each tab asks for one Web Lock, and the tab that holds it runs the catalog worker. The other tabs send their requests to it over a `BroadcastChannel` and get answers back, and the queue worker reaches the catalog the same way. The database is opened only after the lock is held and is paused before the lock is released, so the next owner can resume it. When the owner closes, the browser hands the lock to another tab.
+- **A first sync is a file.** A library with no copy on the device streams the server's snapshot into a temporary database, checking its SHA-256 against the snapshot's ETag as it is written, and swaps it in. Nothing shows until the swap, so a library is never partly there. The feed is then pulled from the snapshot's position.
+- **Catching up.** The worker pulls the library's feed and the account's, on start, on every realtime `hello` and on every hint. Pages of changes are saved as they arrive, so a closed tab resumes where it stopped, and are applied together once the head is reached, so a reader never sees half a catch-up. One pull runs per feed at a time, and a hint that arrives during a pull starts another when it ends. A catch-up that would change more than a tenth of a library downloads the snapshot again. Each account pull re-reads the library list, so a library the account gained is downloaded and one it lost is deleted.
+- **A copy that cannot be trusted is replaced.** A library the account lost, sign-out, a schema version change, a `410`, a hash that does not match, a corruption error from any query, or storage the browser evicted (iOS does) each delete the copy and start again. The device never runs `quick_check`: it would block the worker for tens of seconds at 500,000 tracks. With no private file system (Safari's private windows) the worker answers nothing and pages read from the server. The app asks the browser to keep its storage and reports quota errors.
+- **Where a page reads from** follows the library's state, as in `design/general.md` §7.1. When the device is behind and the server answers too, a different server answer replaces the device's in place, keeping the rows loaded and the scroll position. Sorts the device cannot answer, such as those on personal data the server adds later, always go to the server and say they need it.
+- **Live changes.** After applying changes the worker announces that the library changed, and the pages that show it reload in place.
+- **Search** goes to the server when it is reachable and to the device otherwise. The worker builds the core's index from the device database the first time search is used and again after changes, no more often than the server does. The device holds the same names the server indexes, so search says nothing about coverage.
+- **Queue.** Starting or adding a recipe resolves on the device with the same SQL as the server, hashes with the core and attaches at once. The server's hash is compared when its snapshot arrives and the list is downloaded only if they differ. Offline, a start gets the full list rather than the rows the view held. Lists stay in Cache Storage.
+- **Measured at 500,000 tracks** (a laptop, with the worker's CPU throttled about 8 times, and 4 times as the target): the worker answers its first query within a second, and a sorted page or a deep keyset page takes a few milliseconds or less. Reading 500,000 track IDs in a recipe's order took 1.7 to 2.5 s until the device's indexes covered only playable tracks, after which it took 75 ms.
+
+## The installable app
+
+**Planned; not built yet.** The web app gets a manifest with icons, standalone display and the iOS tags, and a SvelteKit service worker with no extra library.
+
+- The service worker keeps the build, per version, so the app opens offline. A new version takes over on the next launch and never reloads an open app.
+- It caches no API response except images. Images are cached as they are seen, in a bounded cache that drops the oldest first, with its size on the account page. Album and artist art draws its ThumbHash placeholder until the picture loads, and when it is not cached offline.
+- An indicator shows when the app is offline. A per-device *Work offline* switch stops all network use, with reads local. Surfaces that need the server, such as admin, plugin pages and scan state, say so when offline, and are not hidden.
+- Downloads, and choosing between local and stream, are the next part of Stage 10 ([`PLAN.md`](../PLAN.md)).
 
 ## Queue worker
 

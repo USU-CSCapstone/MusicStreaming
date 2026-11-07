@@ -40,6 +40,7 @@ flowchart LR
 | Core | [`crates/core`](../crates/core/) | Rules that must give the same answer everywhere, such as search matching and sort order. No I/O, so the same code can later run in the browser and on Android. |
 | ffmpeg | [`crates/ffmpeg`](../crates/ffmpeg/) | Runs ffmpeg as a separate process to decode audio and images, so a broken file can't crash the server. |
 | Plugin host | [`crates/plugins`](../crates/plugins/) | Runs plugins in Wasmtime, checks their manifests, and enforces their permissions and limits. |
+| Catalog | [`crates/catalog`](../crates/catalog/) | The device catalog's table definitions. The SQL that reads the catalog is to move here, shared by the server and the browser, which will keep its own copy of each library to work offline. |
 | Web app | [`web`](../web/) | Svelte 5 and SvelteKit, built as static files with no server of its own. |
 
 ## How data moves
@@ -55,10 +56,14 @@ later, on a separate queue, so they never slow down indexing. See
 **The change feed.** Every change the scanner makes to a library is also written to that
 library's change feed, in the same transaction. Plugin hooks read the feed from a saved
 position, so a plugin never misses a change, even across restarts. Clients will sync from the
-same feed for offline use. See [`design/database.md`](../design/database.md).
+same feed for offline use: a device starts from a snapshot file of the library, then follows
+the feed, told to pull by a realtime hint. See [`design/database.md`](../design/database.md).
 
 **Browsing and search.** API requests read from SQLite. Search runs against
 an index each library keeps in memory, using the matching rules in `crates/core`.
+The web app will keep its own copy of each library in SQLite in the browser, read by the same
+queries, so browsing, search and queue building work offline. See
+[ADR 0008](../adr/0008-sqlite-device-catalog.md).
 
 **Playback.** Audio is streamed straight from the original file, with range requests for
 seeking. When a client reports a finished play (`POST /me/plays`), it's saved along with the

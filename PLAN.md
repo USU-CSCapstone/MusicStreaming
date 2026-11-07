@@ -34,9 +34,9 @@ Built: the scanner crate with discovery, every supported format, multi-value tag
 **Still open from this stage:**
 1. **Track identity is keyed on path for now** ([`design/scanning.md` §6](design/scanning.md#6-track-identity)). It moves to Stage 6.
 2. Analysis pool sizes and the governor threshold. These are starting values that benchmarks will tune ([`design/scanning.md` §16](design/scanning.md#16-open-decisions)).
-3. Whether to keep the denormalized counts, or compute them on read ([`design/database.md` §10](design/database.md#10-open-questions)).
-4. Tracks with no disc tag are stored as disc `0` and shown as `null`. Confirm or change this ([`design/database.md` §10](design/database.md#10-open-questions)).
-5. The change feed names an album, but not its tracks, when the album's title, artists, or image change, even though track summaries embed the album. Decide this with the offline catalog (Stage 10).
+3. Whether to keep the denormalized counts, or compute them on read ([`design/database.md` §11](design/database.md#11-open-questions)).
+4. Tracks with no disc tag are stored as disc `0` and shown as `null`. Confirm or change this ([`design/database.md` §11](design/database.md#11-open-questions)).
+5. The change feed names an album, but not its tracks, when the album's title, artists, or image change, even though track summaries embed the album. Decided with the offline catalog (Stage 10): it does not, because a device's tables are normalized.
 
 **End goal (reached):** A library on disk becomes a browsable index, kept current as files change, without Jewelcase writing to the library. Most of [`scanning.md`](requirements/scanning.md) is met. Identity (§6), the duplicate report (§9), and the sound description (§1) are not.
 
@@ -156,23 +156,34 @@ Built: device listing, an authenticated WebSocket with heartbeats, live device l
 
 ### Stage 10 — Offline & PWA
 
-- Build search rules and the catalog's sort orders into `core-wasm`, with a parity test suite against the native build. The queue's rules already run there, with golden vectors pinning shuffle parity (Stage 9), and so does the track-list comparator (`sort_rows`), which the web's local sorts use.
-- A web worker holds the catalog, synced from the change feeds, with a durable command queue for optimistic actions.
-- A service worker, an installable PWA, downloads with a storage budget, choosing between local and stream, and reconciliation.
-- **The queue goes offline** ([`design/queue.md` §7](design/queue.md#7-where-it-is-built-and-what-is-not-yet)). Until now devices download every list and kept queues need the server:
-  - stored sort orders in the catalog, kept by the core comparator, so a device builds the lists it can rebuild;
-  - starts that read them and check the result against the server's hash, downloading only on a mismatch (hashing moves into the core: `sha2` already builds for wasm);
-  - after an offline start, the recipe and the played tracks sent on reconnect;
-  - IndexedDB for lists and state, kept queues' too, so a restore works offline ([`offline.md` §6](requirements/offline.md#6-what-works-offline)) and lists stop depending on Cache Storage;
-  - a parity suite comparing stored orders with the server's resolves, since sorts a device cannot reproduce (personal-data sorts, search ranking) always travel as lists.
+Stage 10 is two plans. The first makes the catalog, search and queue building work offline and makes the app installable. The second adds audio and the writes that survive a closed app.
+
+#### Part 1: the offline catalog and the installable app (in progress)
+
+- **The device keeps the whole catalog in SQLite** ([ADR 0008](adr/0008-sqlite-device-catalog.md), [`design/general.md` §3.1](design/general.md#31-the-catalog-queries)). The catalog's read SQL moves into `crates/catalog`, which the server and the device's worker both run, with a test that every shared query gives identical JSON on both.
+- **Sync.** A first sync imports a snapshot file the server builds per library. After that a device pulls the library's change feed and the account's (playlists first), told to pull by realtime hints on `hello` and on every change ([`design/database.md` §5](design/database.md#5-change-feeds)). Catching up is applied at the head, so a reader never sees half of it.
+- **The catalog worker** is owned by one tab at a time, with the others asking it ([`design/web.md`](design/web.md#catalog-worker)). Pages, live updates and search read through it, by the rules of [`design/general.md` §7.1](design/general.md#71-web).
+- **Search rules into `core-wasm`**, with a parity test against the native build, so the device builds the same index the server does. The queue's rules and the track-list comparator (`sort_rows`) already run there.
+- **The queue builds on the device**: the list hash moves into the core, and a start or add of a recipe resolves, hashes and attaches on the device, downloading the server's list only on a mismatch ([`design/queue.md` §7](design/queue.md#7-where-it-is-built-and-what-is-not-yet)).
+- **The installable app**: a manifest, a service worker that precaches the build, an image cache with ThumbHash placeholders, a connectivity indicator and a per-device *Work offline* switch ([`design/web.md`](design/web.md#the-installable-app)).
+- **Accepted until Part 2**: tombstones never age out; a device offline before its first sync says the library is not on it yet; edits made offline are lost if the app closes before it reconnects; nothing plays offline.
 
 **Open questions:**
-1. **The on-device catalog and index format**, within the [`performance.md` §6](requirements/performance.md#6-client-footprint) goals ([`design/general.md` §11](design/general.md#11-open-decisions) #2).
-2. Where downloaded audio lives (Cache API, OPFS, or IndexedDB), and what iOS's storage limits allow ([`offline.md` §11](requirements/offline.md#11-platform-parity)).
-3. How long change-feed tombstones are kept, and what triggers a full resync.
-4. The format of the command queue, and how offline-created entities get server IDs (playlists already use an Idempotency-Key).
-5. Whether album changes in the feed carry their tracks (carried over from Stage 1).
-6. Background downloading in a PWA, especially on iOS.
+1. ~~The on-device catalog and index format~~ Answered: SQLite on the device, with the catalog's SQL shared with the server. A 500,000-track copy is about 310 MB, within [`performance.md` §6](requirements/performance.md#6-client-footprint)'s goal of well under 0.1% of the music.
+2. How long change-feed tombstones are kept, and what triggers a full resync. Carried: nothing is dropped and no horizon exists. A device whose cursor the server refuses (`410`) deletes its copy and downloads the snapshot again, and the same happens when a catch-up would change more than a tenth of a library.
+3. ~~Whether album changes in the feed carry their tracks~~ Answered: no. A device's tables are normalized, so a track's album, artist and tag names are joins and an album change sends only the album.
+
+#### Part 2: downloads and offline writes (next)
+
+- Downloads with a storage budget, choosing between local and stream, a download as a standing instruction, and reconciliation ([`requirements/offline.md`](requirements/offline.md)).
+- **Durable offline writes.** A command queue that survives a restart for playlist edits, plays and queue edits, replayed idempotently on reconnect.
+- **The queue works fully offline.** After an offline start the recipe and the played tracks are sent on reconnect. IndexedDB holds lists and state, kept queues' too, so a restore works offline ([`offline.md` §6](requirements/offline.md#6-what-works-offline)) and lists stop depending on Cache Storage. A parity suite compares what a device builds with the server's resolves, since sorts a device cannot reproduce (personal-data sorts, search ranking) always travel as lists.
+- The account feed grows to carry plays, queues and kept queues as the writes need them.
+
+**Open questions:**
+1. Where downloaded audio lives (Cache API, OPFS, or IndexedDB), and what iOS's storage limits allow ([`offline.md` §11](requirements/offline.md#11-platform-parity)).
+2. The format of the command queue, and how offline-created entities get server IDs (playlists already use an Idempotency-Key).
+3. Background downloading in a PWA, especially on iOS.
 
 **End goal:** The web app behaves the same with or without a network, apart from what audio can play and what there is to search. [`general.md` §3.4–3.5](requirements/general.md#34-optimistic-by-default), [`offline.md`](requirements/offline.md), [`search.md` §2](requirements/search.md#2-where-search-runs), and [`libraries.md` §5](requirements/libraries.md#5-staying-current) are met.
 

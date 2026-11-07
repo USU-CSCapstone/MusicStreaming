@@ -30,7 +30,7 @@ The Manual Queue, the context and History are each a short list of spans or runs
 A **list** is `{libraryId, hash, length, recipe?}`. A source names its list by that hash in a field called `list`, everywhere.
 
 - **The hash** is SHA-256 over the track IDs in order, as 8-byte little-endian integers, in lowercase hex.
-  - Only the server's hash names a list; it never takes one from a device. From Stage 10 a device computes one only to check a list it rebuilt ([§7](#7-where-it-is-built-and-what-is-not-yet)).
+  - Only the server's hash names a list; it never takes one from a device. Once the device catalog is built (Stage 10) a device computes one only to check a list it rebuilt ([§7](#7-where-it-is-built-and-what-is-not-yet)).
   - It names the list everywhere: in queues, on the wire, in storage and in device caches. It must resist collisions, since devices trust it as the list's name.
 - **The recipe** is how the list was made. It is not what plays; the hash is. It is kept so a device can rebuild the list from its own catalog once it keeps one ([§7](#7-where-it-is-built-and-what-is-not-yet)), and so the interface can say what is playing.
 
@@ -207,8 +207,8 @@ The rules above are `crates/core/src/queue`. The rest is built in these places:
 
 Not built yet:
 
-- **Kept queues are online-only until the device keeps its own catalog** (Stage 10, [`PLAN.md`](../PLAN.md)). Their lists and restores need the server until devices store kept states, which falls short of [`requirements/offline.md` §6](../requirements/offline.md#6-what-works-offline) until then ([`requirements/general.md` §3.5](../requirements/general.md#35-offline-parity)).
-- **Stage 10 also lets a device build a list from stored orders** and check its hash, downloading only on a mismatch. Until then, devices download every list.
+- **Kept queues are online-only until devices store them** (the second part of Stage 10, [`PLAN.md`](../PLAN.md)). Their lists and restores need the server until devices store kept states, which falls short of [`requirements/offline.md` §6](../requirements/offline.md#6-what-works-offline) until then ([`requirements/general.md` §3.5](../requirements/general.md#35-offline-parity)).
+- **The device catalog lets a device build a list itself** (the first part of Stage 10). A start or add of a recipe resolves on the device with the server's SQL, hashes with the core and attaches at once, and the server's list is downloaded only when its hash differs ([`web.md`](web.md#catalog-worker)). A source that is a list with no recipe stays missing on a device until the server answers. Until it is built, devices download every list.
 - **Endless play.** Nothing adds tracks yet. When the server does, it mints UUID keys as a device does, and avoids re-selecting a played track by reading History's tracks from the lists it holds.
 - **An index for finding an item** and a **resolve cache** wait until a measurement says they are needed. Finding is a scan of the spans, which stay few.
 

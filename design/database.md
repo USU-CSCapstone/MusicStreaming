@@ -95,7 +95,16 @@ The displayed name — `artists.name`, `albums.title`, `tags.name` — is the sp
 - **Coalesced on write.** Recording a change deletes that entity's earlier row, so each entity has at most one row, carrying its latest position. "Everything after cursor N" is then already the net effect.
 - **Tombstones age out.** Deletions leave one row. Dropping those older than the retention window advances the feed's horizon, and older cursors answer `410`. Neither the aging out nor the horizon is built yet; each feed gains its horizon column with them.
 - **Written in the same transaction** as the change itself.
-- **An embedded summary follows its entity's own change.** A track's summary embeds its album's title and art, its artists' names and its tags' names, but a change to the album, artist or tag names only that album, artist or tag, never every track that embeds it. A client patches the copies it holds from that entity's change.
+- **An embedded summary follows its entity's own change.** A track's summary embeds its album's title and art, its artists' names and its tags' names, but a change to the album, artist or tag names only that album, artist or tag, never every track that embeds it. A device keeps no copies to patch: its tables are normalized, as the server's are, so a track's summary is a join and an album change needs no track rows.
+
+**Planned: the device's copy of the catalog.** None of this is built yet.
+
+- **The library feed is served as `GET /libraries/{id}/changes?after=<seq>&limit=`.** It returns the changes in order, each with its position, whether it is an upsert or a delete, its kind and ID, and for an upsert the device rows that represent the entity, plus the position to continue from and the feed's head. `after=0` is the whole catalog, since every entity has one row. It has the access gate of every library endpoint, so a library out of reach is `404`. A cursor older than the horizon will answer `410 cursor_expired`, which a device treats as a full resync; the horizon itself is not built, and no tombstone is dropped yet.
+- **A snapshot file serves a first sync.** `GET /libraries/{id}/catalog` returns a SQLite file of the library in the device schema, with its feed position in a header. The server builds it in one read transaction that also reads the position, so the two agree, and compacts it with `VACUUM INTO`. It serves the file only after one `quick_check` passes, with the file's SHA-256 as its ETag, which the device checks while the file streams in; the device never runs `quick_check`. The file is kept in `cache/`, one per library, since a library's content does not depend on the account, and is rebuilt in the background once the feed has moved more than a tenth of the library's entities past it, with the old file served meanwhile. At 500,000 tracks a file is about 310 MB, 118 MB compressed, and importing it took 2 to 9 s where applying the same rows as JSON took 240 s.
+- **A catch-up that would change more than a tenth of a library downloads the snapshot again.** Applying that many rows one by one is far slower than importing a file and holds the device's worker.
+- **The account feed is `account_changes`**, one coalesced row per playlist and per playlist item, written in the same transaction as the change. `GET /me/changes?after=` returns the caller's own rows, for libraries they reach, so catching up after one item edit costs one item. Plays, queues and kept queues can join it later, each as a new kind.
+- **The device schema** is the server's catalog tables with the same names and types, minus paths, roots, file stamps, scan and analysis state, plugin data and other accounts' data ([`general.md` §3.1](general.md#31-the-catalog-queries)). Images travel as an ID with their size and placeholder.
+- **Library changes reach every account that reaches the library**, as a hint to pull the feed ([`general.md` §5](general.md#5-realtime)).
 
 ---
 
@@ -204,7 +213,7 @@ A hook that cannot deliver for 30 days misses what aged out meanwhile: ends for 
 
 ## 10. Not Yet Modelled
 
-Mixes, downloads, the job queue, external sources, the audit log, user settings, invites, password resets, the account change feed, and the completion-weighted score behind `sort=top`. Each arrives with its section of the API.
+Mixes, downloads, the job queue, external sources, the audit log, user settings, invites, password resets, the account change feed (§5), and the completion-weighted score behind `sort=top`. Each arrives with its section of the API.
 
 ---
 
