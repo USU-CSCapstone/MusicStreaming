@@ -4,6 +4,7 @@
 
 mod cleanup;
 mod edit;
+mod hash;
 mod history;
 mod permutation;
 mod previous;
@@ -16,6 +17,7 @@ mod state;
 mod tests;
 
 pub use edit::{Anchor, Edit, PlayRef};
+pub use hash::list_hash;
 pub use history::{HISTORY_RUNS, PlayRow};
 pub use read::Row;
 pub use spans::{Recipe, Span, SpanList, View};

@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use jewelcase_core::{ItemId, QueueState, Row, SortField, SortRow, Source, sort_rows};
+use jewelcase_core::{ItemId, QueueState, Row, SortField, SortRow, Source, list_hash, sort_rows};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -68,6 +68,13 @@ pub fn sort_track_rows(rows_json: &str, field: &str, order: &str) -> Result<Vec<
         reason = "a list of over 4 billion rows can't arrive"
     )]
     Ok(sort_rows(&rows, field, descending).into_iter().map(|p| p as u32).collect())
+}
+
+/// The hash that names the list in `body`, as for `Queue.attachList`: what the server computes
+/// for the same tracks. Throws on a malformed body.
+#[wasm_bindgen(js_name = listHash)]
+pub fn hash_list(body: &str) -> Result<String, JsError> {
+    Ok(list_hash(&parse_list(body)?))
 }
 
 /// A count or index from JavaScript. Negative, fractional and NaN values round to a whole
