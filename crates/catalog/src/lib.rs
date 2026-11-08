@@ -4,6 +4,8 @@
 
 use rusqlite::Connection;
 
+pub mod albums;
+pub mod artists;
 pub mod by_ids;
 pub mod credit;
 pub mod cursor;
@@ -14,6 +16,7 @@ pub mod refs;
 pub mod snapshot;
 pub mod sync;
 pub mod tag_filter;
+pub mod tags;
 pub mod time;
 pub mod tracks;
 

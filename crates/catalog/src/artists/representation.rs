@@ -6,11 +6,10 @@
 use rusqlite::{Connection, OptionalExtension, Row};
 use serde::Serialize;
 
-use crate::api::Id;
-use crate::api::refs::{ImageRef, TagsByType, placeholder, tags_json};
-use crate::api::time::serialize_rfc3339;
-use crate::api::tracks::FEATURED_TRACKS;
-use crate::db::Json;
+use crate::refs::{ImageRef, TagsByType, placeholder, tags_json};
+use crate::time::serialize_rfc3339;
+use crate::tracks::FEATURED_TRACKS;
+use crate::{Id, Json};
 
 /// The spec's `ArtistSummary`, without `personal`.
 #[derive(Clone, Serialize)]

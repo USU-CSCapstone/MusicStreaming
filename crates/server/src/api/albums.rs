@@ -1,70 +1,24 @@
-//! Albums: `listAlbums` and `getAlbum` (`api/openapi.yaml`).
-
-mod representation;
+//! Albums: `listAlbums` and `getAlbum` (`api/openapi.yaml`). The queries are the catalog's
+//! (`jewelcase_catalog::albums`), which a device runs too.
 
 use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
-use rusqlite::Connection;
+#[cfg(test)]
+use jewelcase_catalog::albums::source;
+use jewelcase_catalog::albums::{self, AlbumSort};
 use serde::Deserialize;
 
-pub use representation::{Album, AlbumSummary, SELECT, summary};
+pub use jewelcase_catalog::albums::{Album, AlbumSummary, SELECT, TAGGED, summary};
 
-use super::credit::{ArtistCredit, Credits};
+use super::credit::ArtistCredit;
 use super::extract::{Path, Query};
-use super::page::{Order, Page, Request, Sort, Source, Table, Unknown};
+use super::page::{Order, Page, Request};
 use super::scope::Scope;
-use super::tag_filter::{self, LEAD_SHARE, TagFilter, Tagged};
+use super::tag_filter::TagFilter;
 use super::{AnyId, Id, Problem};
 use crate::db::Database;
-
-/// The `sort` values `listAlbums` supports.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum AlbumSort {
-    #[default]
-    Name,
-    Artist,
-    DateAdded,
-    ReleaseDate,
-    Duration,
-    // The spec's `playCount` and `lastPlayed` are not implemented, so they answer `422`.
-}
-
-impl AlbumSort {
-    /// The keyset this sort pages by. Each one's columns are one of `albums`' indexes after
-    /// `library_id`.
-    fn sort(self) -> &'static Sort {
-        match self {
-            AlbumSort::Name => &Sort {
-                label: "albums.name",
-                columns: &["al.sort_key", "al.id"],
-                unknown: Unknown::Empty,
-            },
-            AlbumSort::Artist => &Sort {
-                label: "albums.artist",
-                columns: &["al.artist_sort_key", "al.sort_key", "al.id"],
-                unknown: Unknown::Empty,
-            },
-            AlbumSort::DateAdded => &Sort {
-                label: "albums.dateAdded",
-                columns: &["al.added_at", "al.id"],
-                unknown: Unknown::Never,
-            },
-            AlbumSort::ReleaseDate => &Sort {
-                label: "albums.releaseDate",
-                columns: &["al.release_date", "al.sort_key", "al.id"],
-                unknown: Unknown::Null,
-            },
-            AlbumSort::Duration => &Sort {
-                label: "albums.duration",
-                columns: &["al.duration_us", "al.id"],
-                unknown: Unknown::Never,
-            },
-        }
-    }
-}
 
 /// The parameters `listAlbums` supports so far. Any other, including the spec's other
 /// filters, answers `422` rather than being ignored.
@@ -94,12 +48,8 @@ pub async fn list(
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
     let (artist, credit) = (query.artist_id, query.artist_credit);
     let tags = TagFilter::new(query.tag_all.as_deref(), query.tag_any.as_deref())?;
-    let page = db
-        .read(move |conn| {
-            let source = source(conn, library, artist, credit, &tags)?;
-            request.read(conn, &source, summary)
-        })
-        .await?;
+    let page =
+        db.read(move |conn| albums::list(conn, library, request, artist, credit, &tags)).await?;
     Ok(Json(page))
 }
 
@@ -109,44 +59,10 @@ pub async fn get(
     Scope { library, .. }: Scope,
     Path((_, Id(album))): Path<(Id, Id)>,
 ) -> Result<Json<Album>, Problem> {
-    db.read(move |conn| representation::album(conn, library, album))
+    db.read(move |conn| albums::album(conn, library, album))
         .await?
         .map(Json)
         .ok_or_else(Problem::not_found)
-}
-
-/// The albums a list reads.
-const ALBUMS: Table =
-    Table { name: "albums", alias: "al", select: SELECT, joins: "", count: "album_count" };
-
-/// An expression over `artists` (aliased `ar`) counting the albums a track credits the artist on
-/// but whose album artists do not list it.
-const FEATURED_ALBUMS: &str = "(SELECT count(*) FROM album_credits ac WHERE ac.artist_id = ar.id \
-     AND NOT EXISTS (SELECT 1 FROM album_artists aa \
-                     WHERE aa.album_id = ac.album_id AND aa.artist_id = ac.artist_id))";
-
-/// How albums are credited to an artist.
-const CREDITS: Credits = Credits {
-    owned: "SELECT album_id AS id FROM album_artists WHERE artist_id = ?",
-    on_tracks: "SELECT album_id AS id FROM album_credits WHERE artist_id = ?",
-    owned_count: "album_count",
-    featured_count: FEATURED_ALBUMS,
-};
-
-/// How albums carry tags: those of their tracks (`requirements/tags.md` §6).
-pub const TAGGED: Tagged = Tagged { links: "album_tags", owner: "album_id", count: "album_count" };
-
-/// The albums `list` pages through in `library`: every one, or those credited to `artist` as
-/// `credit` says and carrying the tags `tags` names.
-fn source(
-    conn: &Connection,
-    library: i64,
-    artist: Option<AnyId>,
-    credit: ArtistCredit,
-    tags: &TagFilter,
-) -> rusqlite::Result<Source> {
-    let lead = artist.map(|artist| credit.lead(conn, library, &CREDITS, artist)).transpose()?;
-    tag_filter::source(conn, library, &ALBUMS, &TAGGED, lead, None, tags, LEAD_SHARE)
 }
 
 #[cfg(test)]
