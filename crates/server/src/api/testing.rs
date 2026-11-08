@@ -29,12 +29,17 @@ pub const TOKEN: &str = "owner-token";
 /// user 1, is logged in on device 1 with [`TOKEN`].
 pub fn app(base_path: &str) -> (tempfile::TempDir, Arc<Database>, Router) {
     let (temp, db, app) = app_before_setup(base_path);
-    let conn = conn(&temp);
+    add_owner(&temp);
+    (temp, db, app)
+}
+
+/// Adds the owner of [`app`], user 1, logged in on device 1 with [`TOKEN`].
+pub fn add_owner(temp: &tempfile::TempDir) {
+    let conn = conn(temp);
     let owner =
         User { username: "owner".into(), display_name: "Owner".into(), ..User::new(1, "owner") };
     owner.insert(&conn).unwrap();
     add_device(&conn, 1, 1, TOKEN);
-    (temp, db, app)
 }
 
 /// A connection of its own to the database in `temp`, for a test to set data up with inside the

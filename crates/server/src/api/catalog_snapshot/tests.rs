@@ -480,8 +480,15 @@ async fn a_failed_build_is_not_started_again_until_the_cooldown_passes() {
 
 #[tokio::test]
 async fn a_file_of_another_schema_version_is_not_served_and_a_build_replaces_it() {
-    let (temp, _db, app) = catalog::app().await;
+    let (temp, _db, app, snapshots) = catalog::app_with_snapshots().await;
     let (first, _) = built(&app).await;
+    // A poll that saw no file before the build finished can start a second, identical build,
+    // which would put the current file back after it is renamed below.
+    let idle = async || {
+        let idle = || snapshots.building.lock().unwrap().is_empty().then_some(());
+        eventually("the builds to finish", async || idle()).await;
+    };
+    idle().await;
     let dir = temp.path().join("cache/catalog/1");
     let old = newest(&dir).unwrap().unwrap();
     let name = |ext: &str| format!("{}-{}-{}.db{ext}", SCHEMA_VERSION - 1, old.seq, old.sha256);
@@ -495,6 +502,8 @@ async fn a_file_of_another_schema_version_is_not_served_and_a_build_replaces_it(
     let (_file, snapshot) = open(&bytes);
     let version: i32 = snapshot.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
     assert_eq!(version, SCHEMA_VERSION);
+    // The file is served before the build deletes the old ones.
+    idle().await;
     let files = std::fs::read_dir(&dir).unwrap().count();
     assert_eq!(files, 2, "the old version's files were removed by the build");
 }
