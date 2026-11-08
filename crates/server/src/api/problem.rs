@@ -187,7 +187,7 @@ impl From<jewelcase_catalog::Invalid> for Problem {
 
 impl From<jewelcase_catalog::playlists::ItemsError> for Problem {
     /// An invalid parameter is `422`, a playlist that is not the caller's `404`, and a cursor
-    /// from another version `410`.
+    /// from another version `410`. An item without its track breaks retention: `500`, logged.
     fn from(error: jewelcase_catalog::playlists::ItemsError) -> Problem {
         use jewelcase_catalog::playlists::ItemsError;
         match error {
@@ -195,7 +195,26 @@ impl From<jewelcase_catalog::playlists::ItemsError> for Problem {
             ItemsError::NotFound => Problem::not_found(),
             ItemsError::Expired => Problem::new(Code::CursorExpired)
                 .detail("The playlist changed since the first page; start again."),
+            ItemsError::Incomplete => {
+                tracing::error!("a playlist item names a track that is gone");
+                Problem::new(Code::Internal)
+            }
             ItemsError::Sql(error) => error.into(),
+        }
+    }
+}
+
+impl From<jewelcase_catalog::recipes::ResolveError> for Problem {
+    /// A playlist item without its track breaks retention, and a database error is one: `500`,
+    /// logged.
+    fn from(error: jewelcase_catalog::recipes::ResolveError) -> Problem {
+        use jewelcase_catalog::recipes::ResolveError;
+        match error {
+            ResolveError::Incomplete => {
+                tracing::error!("a playlist item names a track that is gone");
+                Problem::new(Code::Internal)
+            }
+            ResolveError::Sql(error) => error.into(),
         }
     }
 }

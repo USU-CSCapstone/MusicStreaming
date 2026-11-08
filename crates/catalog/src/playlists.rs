@@ -150,6 +150,10 @@ pub enum ItemsError {
     NotFound,
     /// The cursor is from another version of the playlist: the list starts again.
     Expired,
+    /// An item's track is not in the catalog, so the page would come up short against the
+    /// playlist's version and total. Never on the server, where retention keeps every track an
+    /// item names; on a device, a track the library feed has not brought yet.
+    Incomplete,
     Sql(rusqlite::Error),
 }
 
@@ -159,6 +163,7 @@ impl fmt::Display for ItemsError {
             ItemsError::Invalid(Invalid(why)) => f.write_str(why),
             ItemsError::NotFound => f.write_str("no such playlist"),
             ItemsError::Expired => f.write_str("the playlist changed since the first page"),
+            ItemsError::Incomplete => f.write_str("a playlist item's track is not here yet"),
             ItemsError::Sql(error) => error.fmt(f),
         }
     }
@@ -181,7 +186,7 @@ impl From<rusqlite::Error> for ItemsError {
 /// One page of `user`'s playlist `id` in `library`, in the user's order, a duplicate as often as
 /// it occurs and a missing track in place. The version check, the rows and the summaries come
 /// from one read, so a page is of one version. A cursor from another version is
-/// [`ItemsError::Expired`].
+/// [`ItemsError::Expired`], and an item whose track row is absent [`ItemsError::Incomplete`].
 pub fn items(
     conn: &Connection,
     user: i64,
@@ -227,13 +232,46 @@ pub fn items(
         })?
         .into_iter()
         .collect();
-    // Every item's track is kept by retention, so none is left out in practice.
+    // Leaving an item out would shift every position after it, which edits address items by.
     let items = rows
         .iter()
-        .filter_map(|(_, track, added_at)| {
-            let track = summaries.get(track)?.clone();
-            Some(Item { track, added_at: *added_at })
+        .map(|(_, track, added_at)| {
+            let track = summaries.get(track).ok_or(ItemsError::Incomplete)?.clone();
+            Ok(Item { track, added_at: *added_at })
         })
-        .collect();
+        .collect::<Result<_, ItemsError>>()?;
     Ok(ItemPage { items, next_cursor, total, version })
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    /// A device database whose library 1 holds tracks 101 and 103 but not yet 102, and user 7's
+    /// playlist 10 at version 4, whose items are tracks 101, 102 and 103 in that order.
+    pub(crate) fn behind_the_library_feed() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::create_schema(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO tracks (id, library_id, album_id, file_size, title, sort_key,
+                 artist_sort_key, album_sort_key, codec, container, lossless, sample_rate_hz,
+                 channels, duration_us, added_at)
+             VALUES (101, 1, 1, 1, 'A', x'61', x'', x'', 'flac', 'flac', 1, 44100, 2, 1, 0),
+                    (103, 1, 1, 1, 'C', x'63', x'', x'', 'flac', 'flac', 1, 44100, 2, 1, 0);
+             INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, version,
+                 created_at, modified_at, track_count)
+             VALUES (10, 1, 7, 'Mix', 'mix', x'6d6978', 4, 0, 0, 3);
+             INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at)
+             VALUES (10, 1, 1, 101, 0), (10, 2, 1, 102, 0), (10, 3, 1, 103, 0);",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn a_device_refuses_items_whose_track_has_not_arrived() {
+        let conn = behind_the_library_feed();
+        let result = items(&conn, 7, 1, 10, None, None);
+        assert!(matches!(result, Err(ItemsError::Incomplete)), "{:?}", result.err());
+    }
 }

@@ -55,9 +55,11 @@ pub async fn resolve(
         _ => Vec::new(),
     };
     let (user, recipe) = (caller.user, recipe.clone());
-    db.read(move |conn| run(conn, user, library, &recipe, &tags, |_| ranked))
-        .await?
-        .ok_or_else(Problem::not_found)
+    db.try_read(move |conn| {
+        run(conn, user, library, &recipe, &tags, |_| ranked).map_err(Problem::from)
+    })
+    .await?
+    .ok_or_else(Problem::not_found)
 }
 
 /// The IDs of every track of `library` that matches `q`, best first, as a search's tracks
