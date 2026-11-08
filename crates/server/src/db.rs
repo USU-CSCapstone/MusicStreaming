@@ -104,6 +104,8 @@ pub struct Database {
     /// The latest position in any library's change feed, as of the last write the writer
     /// committed.
     feed_head: watch::Sender<i64>,
+    /// The latest position in the account change feed, as of the same write.
+    account_head: watch::Sender<i64>,
     _threads: Threads,
 }
 
@@ -151,8 +153,10 @@ impl Database {
         // Readers take turns receiving from one queue, so a job goes to whichever is free.
         let reader_jobs = Arc::new(Mutex::new(reader_jobs));
 
-        let (feed_head, _) = watch::channel(feed_head(&writer)?);
+        let (feed_head, _) = watch::channel(head(&writer, LIBRARY_HEAD)?);
         let writer_head = feed_head.clone();
+        let (account_head, _) = watch::channel(head(&writer, ACCOUNT_HEAD)?);
+        let writer_account_head = account_head.clone();
         let mut threads = Vec::with_capacity(reader_count + 1);
         threads.push(spawn("db-writer", move || {
             let mut conn = writer;
@@ -162,7 +166,8 @@ impl Database {
                 match writer_jobs.recv_timeout(wait) {
                     Ok(job) => {
                         run(job, &mut conn);
-                        publish_feed_head(&conn, &writer_head);
+                        publish_head(&conn, LIBRARY_HEAD, &writer_head);
+                        publish_head(&conn, ACCOUNT_HEAD, &writer_account_head);
                     }
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
@@ -197,6 +202,7 @@ impl Database {
             writer: writer_queue,
             readers: reader_queue,
             feed_head,
+            account_head,
             _threads: Threads(threads),
         })
     }
@@ -205,6 +211,12 @@ impl Database {
     /// that recorded a change has committed. Changes made between two looks are one move.
     pub fn follow_feed(&self) -> watch::Receiver<i64> {
         self.feed_head.subscribe()
+    }
+
+    /// Follows the latest position in the account change feed, as
+    /// [`follow_feed`](Self::follow_feed) follows the libraries'.
+    pub fn follow_account_feed(&self) -> watch::Receiver<i64> {
+        self.account_head.subscribe()
     }
 
     /// Runs `f` on a reader. Every query inside it sees the same snapshot of the database.
@@ -270,20 +282,25 @@ impl Database {
     }
 }
 
-/// The latest position in any library's change feed, or 0 before the first change.
-fn feed_head(conn: &Connection) -> rusqlite::Result<i64> {
-    conn.prepare_cached("SELECT coalesce(max(seq), 0) FROM library_changes")?
-        .query_row([], |row| row.get(0))
+/// The query for the latest position in any library's change feed.
+const LIBRARY_HEAD: &str = "SELECT coalesce(max(seq), 0) FROM library_changes";
+
+/// The query for the latest position in the account change feed.
+const ACCOUNT_HEAD: &str = "SELECT coalesce(max(seq), 0) FROM account_changes";
+
+/// What the feed `sql` reads: its latest position, or 0 before the first change.
+fn head(conn: &Connection, sql: &str) -> rusqlite::Result<i64> {
+    conn.prepare_cached(sql)?.query_row([], |row| row.get(0))
 }
 
-/// Tells those following the feed where it is after a job, if it has moved. Runs on the writer
-/// once the job's transaction has committed or rolled back.
-fn publish_feed_head(conn: &Connection, head: &watch::Sender<i64>) {
-    match feed_head(conn) {
+/// Tells those following the feed `sql` reads where it is after a job, if it has moved. Runs on
+/// the writer once the job's transaction has committed or rolled back.
+fn publish_head(conn: &Connection, sql: &str, head: &watch::Sender<i64>) {
+    match self::head(conn, sql) {
         Ok(position) => {
             head.send_if_modified(|current| std::mem::replace(current, position) != position);
         }
-        Err(error) => warn!(%error, "cannot read the change feed's position"),
+        Err(error) => warn!(%error, "cannot read a change feed's position"),
     }
 }
 

@@ -1,11 +1,13 @@
 //! `getLibraryCatalog` (`api/openapi.yaml`): a library's catalog as a device-schema SQLite file,
 //! built in the background and kept under `cache/catalog/<library>/` (`design/general.md` §3).
 //!
-//! A file is `<seq>-<sha256>.db` and its gzip `<seq>-<sha256>.db.gz`, written by one build and
-//! named for the feed position it is current to and for the hash of the database itself, which is
-//! its ETag. The newest is served; once the feed holds more changes since it than a tenth of the
-//! library's entities, a rebuild starts and the old file is served meanwhile. A build works inside
-//! a `building-*` folder of its own, so a file is in place only whole.
+//! A file is `<version>-<seq>-<sha256>.db` and its gzip `<version>-<seq>-<sha256>.db.gz`, written
+//! by one build and named for the device schema version it holds, the feed position it is current
+//! to and the hash of the database itself, which is its ETag. A file of another schema version is
+//! never served, so a release that changes the schema builds afresh. The newest is served; once
+//! the feed holds more changes since it than a tenth of the library's entities, a rebuild starts
+//! and the old file is served meanwhile. A build works inside a `building-*` folder of its own, so
+//! a file is in place only whole.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -151,7 +153,8 @@ impl Snapshots {
     }
 }
 
-/// The newest finished file in a library's folder, if there is one.
+/// The newest finished file of the current schema version in a library's folder, if there is
+/// one.
 fn newest(dir: &Path) -> io::Result<Option<Current>> {
     let entries = match fs::read_dir(dir) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -161,10 +164,13 @@ fn newest(dir: &Path) -> io::Result<Option<Current>> {
     for entry in entries {
         let path = entry?.path();
         let parsed = path.file_name().and_then(|name| {
-            let (seq, sha256) = name.to_str()?.strip_suffix(".db")?.split_once('-')?;
-            Some((seq.parse::<i64>().ok()?, sha256.to_owned()))
+            let mut parts = name.to_str()?.strip_suffix(".db")?.splitn(3, '-');
+            let version = parts.next()?.parse::<i32>().ok()?;
+            let seq = parts.next()?.parse::<i64>().ok()?;
+            Some((version, seq, parts.next()?.to_owned()))
         });
-        if let Some((seq, sha256)) = parsed
+        if let Some((version, seq, sha256)) = parsed
+            && version == SCHEMA_VERSION
             && newest.as_ref().is_none_or(|n| seq > n.seq)
         {
             newest = Some(Current { seq, sha256, path });
@@ -213,7 +219,7 @@ fn build(
     let zipped = work.path().join("served.db.gz");
     let sha256 = compress(&served, &zipped)?;
     File::open(&served)?.sync_all()?;
-    let name = format!("{seq}-{sha256}.db");
+    let name = format!("{SCHEMA_VERSION}-{seq}-{sha256}.db");
     // The file that names the snapshot is the last in place.
     fs::rename(zipped, dir.join(format!("{name}.gz")))?;
     fs::rename(served, dir.join(&name))?;

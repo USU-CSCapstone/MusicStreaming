@@ -4,6 +4,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderMap, StatusCode, header};
 use flate2::read::GzDecoder;
+use jewelcase_catalog::SCHEMA_VERSION;
 use jewelcase_catalog::sync::{Kind, Row, Rows, apply, delete};
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
@@ -127,7 +128,7 @@ async fn the_snapshot_holds_exactly_the_device_rows_of_its_library_at_its_seq() 
             _ => tables.push((table.to_owned(), column.to_owned())),
         }
     }
-    assert_eq!(tables.len(), 13);
+    assert_eq!(tables.len(), 15);
     let read = |conn: &Connection, table: &str, cols: &str| -> Vec<Vec<rusqlite::types::Value>> {
         let scope = if table == "tag_types" {
             "key IN (SELECT type FROM tags WHERE library_id = 1)"
@@ -273,7 +274,7 @@ async fn the_feed_after_the_snapshots_seq_brings_a_device_current() {
     for change in page["changes"].as_array().unwrap() {
         let id = change["id"].as_str().unwrap();
         match change["op"].as_str().unwrap() {
-            "delete" => delete(&device, Kind::Track, id.parse().unwrap()).unwrap(),
+            "delete" => delete(&device, Kind::Track, id.parse().unwrap(), 0).unwrap(),
             _ => {
                 let tables = change["rows"]
                     .as_object()
@@ -287,7 +288,8 @@ async fn the_feed_after_the_snapshots_seq_brings_a_device_current() {
                         )
                     })
                     .collect();
-                apply(&device, &Rows { kind: Kind::Track, id: id.to_owned(), tables }).unwrap();
+                apply(&device, &Rows { kind: Kind::Track, id: id.to_owned(), key: 0, tables })
+                    .unwrap();
             }
         }
     }
@@ -396,7 +398,8 @@ async fn a_file_past_the_librarys_head_is_not_served() {
     let (first, _) = built(&app).await;
     let dir = temp.path().join("cache/catalog/1");
     let old = newest(&dir).unwrap().unwrap();
-    let name = |ext: &str| format!("{}-{}.db{ext}", seq(&first) + 1000, old.sha256);
+    let name =
+        |ext: &str| format!("{SCHEMA_VERSION}-{}-{}.db{ext}", seq(&first) + 1000, old.sha256);
     std::fs::rename(&old.path, dir.join(name(""))).unwrap();
     std::fs::rename(old.path.with_extension("db.gz"), dir.join(name(".gz"))).unwrap();
 
@@ -431,7 +434,7 @@ async fn a_file_a_rebuild_deleted_after_it_was_chosen_gives_way_to_its_replaceme
     let (temp, _db, app) = catalog::app().await;
     let (headers, bytes) = built(&app).await;
     let dir = temp.path().join("cache/catalog/1");
-    let gone = Current { seq: 1, sha256: "gone".to_owned(), path: dir.join("1-gone.db") };
+    let gone = Current { seq: 1, sha256: "gone".to_owned(), path: dir.join(format!("{SCHEMA_VERSION}-1-gone.db")) };
     let request = owner_request("GET", URI).body(Body::empty()).unwrap();
 
     let response = serve(dir, gone, request).await.unwrap();
@@ -469,4 +472,53 @@ async fn a_failed_build_is_not_started_again_until_the_cooldown_passes() {
     attempt().await;
     assert!(dir.exists(), "a build once the cooldown has passed");
     assert!(snapshots.failed.lock().unwrap().is_empty(), "its success lifts the cooldown");
+}
+
+#[tokio::test]
+async fn a_file_of_another_schema_version_is_not_served_and_a_build_replaces_it() {
+    let (temp, _db, app) = catalog::app().await;
+    let (first, _) = built(&app).await;
+    let dir = temp.path().join("cache/catalog/1");
+    let old = newest(&dir).unwrap().unwrap();
+    let name = |ext: &str| format!("{}-{}-{}.db{ext}", SCHEMA_VERSION - 1, old.seq, old.sha256);
+    std::fs::rename(&old.path, dir.join(name(""))).unwrap();
+    std::fs::rename(old.path.with_extension("db.gz"), dir.join(name(".gz"))).unwrap();
+
+    let (status, ..) = fetch(&app, URI, false).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "the old version's file is not served");
+    let (headers, bytes) = built(&app).await;
+    assert_eq!(seq(&headers), seq(&first));
+    let (_file, snapshot) = open(&bytes);
+    let version: i32 = snapshot.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    assert_eq!(version, SCHEMA_VERSION);
+    let files = std::fs::read_dir(&dir).unwrap().count();
+    assert_eq!(files, 2, "the old version's files were removed by the build");
+}
+
+#[tokio::test]
+async fn no_account_playlist_is_in_a_snapshot_every_account_shares() {
+    let (temp, db, app) = catalog::app().await;
+    add_user(&conn(&temp), 2, "user");
+    db.write(|tx| {
+        for (id, user) in [(5, 1), (6, 2)] {
+            tx.execute(
+                "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, \
+                 created_at, modified_at) VALUES (?1, 1, ?2, 'Mine', 'mine', x'01', 0, 0)",
+                [id, user],
+            )?;
+            tx.execute("INSERT INTO playlist_items VALUES (?1, 1048576, 1, 1001, 0)", [id])?;
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    let (_, bytes) = built(&app).await;
+    let (_file, snapshot) = open(&bytes);
+
+    for table in ["playlists", "playlist_items"] {
+        let rows: i64 =
+            snapshot.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 0, "{table}");
+    }
 }

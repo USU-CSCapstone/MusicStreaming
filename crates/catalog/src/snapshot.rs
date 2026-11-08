@@ -4,10 +4,15 @@
 
 use rusqlite::{Connection, params};
 
+/// The device tables of one account's own rows, which the account feed carries and a snapshot
+/// shared by every account that reaches the library never does.
+const ACCOUNT_TABLES: &str = "'playlists', 'playlist_items'";
+
 /// Copies `library`'s rows into `conn`'s own, empty, device-schema database from the server's
 /// database, which the caller attached as `server` beforehand (SQLite cannot attach inside a
 /// transaction). Only the device schema's tables and columns are read, so nothing server-only
-/// can reach the copy; a tag type is copied only if one of the library's tags has it.
+/// can reach the copy, and none of the account tables; a tag type is copied only if one of the
+/// library's tags has it.
 ///
 /// Returns the library's feed position. It and the rows are read in one transaction, so the
 /// copy is exactly the library as of that position. The schema's indexes are dropped for the
@@ -29,10 +34,11 @@ pub fn copy(conn: &mut Connection, library: i64) -> rusqlite::Result<i64> {
         |row| row.get(0),
     )?;
     let tables: Vec<(String, String)> = tx
-        .prepare(
+        .prepare(&format!(
             "SELECT m.name, group_concat(p.name, ', ') FROM sqlite_schema AS m, \
-             pragma_table_info(m.name) AS p WHERE m.type = 'table' GROUP BY m.name",
-        )?
+             pragma_table_info(m.name) AS p WHERE m.type = 'table' \
+             AND m.name NOT IN ({ACCOUNT_TABLES}) GROUP BY m.name"
+        ))?
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
     for (table, columns) in tables {

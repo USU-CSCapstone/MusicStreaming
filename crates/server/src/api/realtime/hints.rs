@@ -1,9 +1,10 @@
 //! `libraryChanged`: tells every connected account that reaches a library that its change feed
 //! moved, so a device pulls what it missed (`requirements/realtime.md` §4).
 //!
-//! The database says when the feed has moved, after the write that moved it has committed. A
-//! library is hinted at most once each [`WINDOW`]; a change inside one is hinted when it ends,
-//! carrying the latest position, so the last change of a burst is never left unhinted.
+//! The database says when a feed has moved, after the write that moved it has committed. A
+//! library, and an account, is hinted at most once each [`WINDOW`]; a change inside one is hinted
+//! when it ends, carrying the latest position, so the last change of a burst is never left
+//! unhinted. One [`Throttle`] per kind serves both, an account's ID being its key.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,60 +21,94 @@ use crate::db::{Database, reaches};
 /// The shortest time between two hints for one library.
 pub(super) const WINDOW: Duration = Duration::from_secs(1);
 
-/// Spawns the task that sends `libraryChanged` for every change committed from now on. The hints
-/// stop when the returned task is aborted or the database is dropped.
+/// Spawns the task that sends `libraryChanged` and `accountChanged` for every change committed
+/// from now on. The hints stop when the returned task is aborted or the database is dropped.
 pub fn start(db: Arc<Database>, hub: Arc<Hub>) -> JoinHandle<()> {
     // Before the task is polled, so a change committed meanwhile is hinted.
-    let mut feed = db.follow_feed();
-    let mut seen = *feed.borrow_and_update();
+    let mut library_feed = db.follow_feed();
+    let mut library_seen = *library_feed.borrow_and_update();
+    let mut account_feed = db.follow_account_feed();
+    let mut account_seen = *account_feed.borrow_and_update();
     tokio::spawn(async move {
-        let mut throttle = Throttle::default();
+        let (mut libraries, mut accounts) = (Throttle::default(), Throttle::default());
         loop {
-            let deadline = throttle.next_deadline();
+            let deadline =
+                [libraries.next_deadline(), accounts.next_deadline()].into_iter().flatten().min();
             let due = async {
                 match deadline {
                     Some(at) => sleep_until(at).await,
                     None => std::future::pending().await,
                 }
             };
-            let hints = tokio::select! {
-                moved = feed.changed() => {
+            let (library_hints, account_hints) = tokio::select! {
+                moved = library_feed.changed() => {
                     if moved.is_err() {
                         return;
                     }
                     let now = Instant::now();
-                    match moved_since(&db, seen).await {
-                        Ok(moved) => {
-                            seen = moved.iter().map(|&(_, seq)| seq).fold(seen, i64::max);
-                            moved.into_iter().filter_map(|(library, seq)| {
-                                throttle.moved(now, library, seq).map(|seq| (library, seq))
-                            }).collect()
-                        }
-                        Err(error) => {
-                            warn!(%error, "cannot read the change feed");
-                            Vec::new()
-                        }
-                    }
+                    let moved = moved_since(&db, LIBRARIES, library_seen).await;
+                    library_seen = advance(library_seen, &moved);
+                    (hinted(&mut libraries, now, moved), Vec::new())
                 }
-                () = due => throttle.due(Instant::now()),
+                moved = account_feed.changed() => {
+                    if moved.is_err() {
+                        return;
+                    }
+                    let now = Instant::now();
+                    let moved = moved_since(&db, ACCOUNTS, account_seen).await;
+                    account_seen = advance(account_seen, &moved);
+                    (Vec::new(), hinted(&mut accounts, now, moved))
+                }
+                () = due => {
+                    let now = Instant::now();
+                    (libraries.due(now), accounts.due(now))
+                }
             };
-            for (library, seq) in hints {
+            for (library, seq) in library_hints {
                 send(&db, &hub, library, seq).await;
+            }
+            for (user, seq) in account_hints {
+                hub.broadcast(user, &ServerMessage::AccountChanged { seq });
             }
         }
     })
 }
 
-/// Each library with changes after `seen`, and its latest position.
-async fn moved_since(db: &Database, seen: i64) -> Result<Vec<(i64, i64)>, crate::db::DbError> {
-    db.read(move |conn| {
-        conn.prepare_cached(
-            "SELECT library_id, max(seq) FROM library_changes WHERE seq > ?1 GROUP BY library_id",
-        )?
-        .query_map([seen], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .collect()
+/// The query for each library with changes after `?1`, and its latest position.
+const LIBRARIES: &str =
+    "SELECT library_id, max(seq) FROM library_changes WHERE seq > ?1 GROUP BY library_id";
+
+/// The query for each account with changes after `?1`, and its latest position.
+const ACCOUNTS: &str =
+    "SELECT user_id, max(seq) FROM account_changes WHERE seq > ?1 GROUP BY user_id";
+
+/// Each library or account `sql` finds with changes after `seen`, and its latest position. An
+/// error is logged and reads as no change.
+async fn moved_since(db: &Database, sql: &'static str, seen: i64) -> Vec<(i64, i64)> {
+    let moved = db
+        .read(move |conn| {
+            conn.prepare_cached(sql)?
+                .query_map([seen], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect()
+        })
+        .await;
+    moved.unwrap_or_else(|error| {
+        warn!(%error, "cannot read a change feed");
+        Vec::new()
     })
-    .await
+}
+
+/// The latest position `seen` moved to, given what [`moved_since`] found.
+fn advance(seen: i64, moved: &[(i64, i64)]) -> i64 {
+    moved.iter().map(|&(_, seq)| seq).fold(seen, i64::max)
+}
+
+/// What `throttle` lets through of `moved` at `now`: the positions to hint at once.
+fn hinted(throttle: &mut Throttle, now: Instant, moved: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
+    moved
+        .into_iter()
+        .filter_map(|(key, seq)| throttle.moved(now, key, seq).map(|seq| (key, seq)))
+        .collect()
 }
 
 /// Sends `libraryChanged` to each connection of each active account that reaches `library`.
@@ -99,7 +134,7 @@ async fn send(db: &Database, hub: &Hub, library: i64, seq: i64) {
     }
 }
 
-/// When each library was last hinted, and the latest position it has moved to since.
+/// When each library (or account) was last hinted, and the latest position it has moved to since.
 #[derive(Default)]
 pub(super) struct Throttle(HashMap<i64, Window>);
 

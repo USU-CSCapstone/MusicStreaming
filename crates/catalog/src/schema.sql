@@ -189,3 +189,34 @@ CREATE TABLE artist_tags (
 ) STRICT, WITHOUT ROWID;
 
 CREATE INDEX artist_tags_by_tag ON artist_tags (tag_id, artist_id);
+
+-- The account's own playlists, which the account feed (`GET /me/changes`) carries: only the
+-- signed-in user's, so the rows have no owner. Never in a library's snapshot, which every
+-- account that reaches the library shares.
+CREATE TABLE playlists (
+    id          INTEGER PRIMARY KEY,
+    library_id  INTEGER NOT NULL,
+    title       TEXT    NOT NULL,
+    -- The title as search folds it, which a name filter looks inside
+    folded      TEXT    NOT NULL,
+    sort_key    BLOB    NOT NULL,
+    description TEXT,
+    pinned      INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+    version     INTEGER NOT NULL DEFAULT 1,
+    created_at  INTEGER NOT NULL,
+    modified_at INTEGER NOT NULL,
+    track_count INTEGER NOT NULL DEFAULT 0,
+    duration_us INTEGER NOT NULL DEFAULT 0,
+    -- The artwork's key as the API gives it: an image ID, or a mosaic of four
+    image_key   TEXT
+) STRICT;
+
+-- A playlist's tracks in the user's order: `key` orders an item among its playlist's items
+CREATE TABLE playlist_items (
+    playlist_id INTEGER NOT NULL,
+    key         INTEGER NOT NULL,
+    library_id  INTEGER NOT NULL,
+    track_id    INTEGER NOT NULL,
+    added_at    INTEGER NOT NULL,
+    PRIMARY KEY (playlist_id, key)
+) STRICT, WITHOUT ROWID;

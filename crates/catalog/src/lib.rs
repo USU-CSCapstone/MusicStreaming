@@ -9,7 +9,7 @@ pub mod sync;
 
 /// The device schema's version. Raise it whenever [`SCHEMA`] changes: a device whose database
 /// carries another version deletes it and syncs again, since it is only a copy of the server's.
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
 /// The device schema's DDL: a subset of the server's catalog tables with the same table and
 /// column names and types, minus what never leaves the server.
@@ -34,6 +34,6 @@ mod tests {
             .query_row("SELECT count(*) FROM sqlite_schema WHERE type = 'table'", [], |r| r.get(0))
             .unwrap();
         let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-        assert_eq!((tables, version), (13, SCHEMA_VERSION));
+        assert_eq!((tables, version), (15, SCHEMA_VERSION));
     }
 }

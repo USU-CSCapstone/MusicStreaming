@@ -96,7 +96,7 @@ fn read(conn: &Connection, library: i64, after: i64, limit: u32) -> Result<Chang
         } else {
             // In the snapshot an upserted entity is always there: its change and it were
             // written together.
-            let Some(rows) = export(conn, library, kind, &id.to_string())? else { continue };
+            let Some(rows) = export(conn, library, kind, &id.to_string(), 0)? else { continue };
             (Op::Upsert, Some(rows.tables))
         };
         changes.push(Change { seq, op, kind, id: Id(id), rows });

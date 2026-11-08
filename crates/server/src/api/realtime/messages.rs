@@ -58,6 +58,11 @@ pub enum ServerMessage {
         library_id: Id,
         seq: i64,
     },
+    /// The account's own change feed moved to `seq`, so a device keeping its playlists fetches
+    /// what it missed.
+    AccountChanged {
+        seq: i64,
+    },
     /// A start replaced the account's queue, so a device fetches it again.
     QueueReplaced {
         queue_id: Uuid,

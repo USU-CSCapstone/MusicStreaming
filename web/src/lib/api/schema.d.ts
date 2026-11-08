@@ -127,6 +127,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the caller's changes
+         * @description The caller's own playlists as a feed of changes, for a device that keeps a copy of them
+         *     (`requirements/offline.md`). It is read like `listLibraryChanges`: each playlist and each
+         *     playlist item appears at most once, as its latest change, in order, so `after=0` is every
+         *     playlist now and a later `after` is only what changed since; a catch-up after one item
+         *     edit is that item. An upsert carries the current rows (`playlists` or `playlist_items`
+         *     of the device schema, `crates/catalog/src/schema.sql`) and a delete is a tombstone. A
+         *     deleted playlist is one tombstone: the device drops its items with it. An item's change
+         *     names its playlist in `id` and the item in `key`. Nothing of another account is ever
+         *     listed.
+         *
+         *     Only playlists in libraries the caller reaches are listed. A library the caller lost
+         *     access to is left out, so its playlists neither arrive nor are deleted here: a device
+         *     that finds a library gone from `listLibraries` removes that library and its playlists.
+         *     A library's catalog file (`getLibraryCatalog`) holds no playlists, and changes made
+         *     while the caller could not reach a library are left out, so a device that installs a
+         *     library's catalog file, the first time or again, pulls this feed again from `after=0`.
+         *
+         *     Pass `next` as `after` until it equals `head`, when the client is current. `head` is the
+         *     position of the caller's latest change, comparable with `accountChanged`'s `seq`.
+         */
+        get: operations["listAccountChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/plugins": {
         parameters: {
             query?: never;
@@ -1524,6 +1562,39 @@ export interface components {
              * @description With an upsert: the entity's rows by table name (`tracks`, `track_artists`, `images`
              *     and so on). A table the entity has no rows in is left out.
              */
+            rows?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                }[];
+            };
+        };
+        AccountChanges: {
+            changes: components["schemas"]["AccountChange"][];
+            /**
+             * Format: int64
+             * @description The `after` of the next page. It is `head` when this page was the last.
+             */
+            next: number;
+            /**
+             * Format: int64
+             * @description The position of the caller's latest change when the page was read.
+             */
+            head: number;
+        };
+        AccountChange: {
+            /** Format: int64 */
+            seq: number;
+            /** @enum {string} */
+            op: "upsert" | "delete";
+            /** @enum {string} */
+            kind: "playlist" | "playlistItem";
+            id: components["schemas"]["Id"];
+            /**
+             * Format: int64
+             * @description The item's key in its playlist, which `id` names, for a `playlistItem`.
+             */
+            key?: number;
+            /** @description The rows by table name, `playlists` or `playlist_items`, with an upsert. */
             rows?: {
                 [key: string]: {
                     [key: string]: unknown;
@@ -3132,6 +3203,11 @@ export interface components {
             seq: number;
         } | {
             /** @constant */
+            type: "accountChanged";
+            /** Format: int64 */
+            seq: number;
+        } | {
+            /** @constant */
             type: "queueReplaced";
             /** Format: uuid */
             queueId: string;
@@ -3474,6 +3550,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["User"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listAccountChanges: {
+        parameters: {
+            query?: {
+                /** @description The `next` of the last page applied, or 0 for everything. */
+                after?: number;
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountChanges"];
+                };
+            };
+            /** @description `cursor_expired` — `after` is past the caller's latest change; start again from `after=0`. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             default: components["responses"]["Problem"];

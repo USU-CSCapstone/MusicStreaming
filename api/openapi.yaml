@@ -252,6 +252,50 @@ paths:
               schema: { $ref: '#/components/schemas/User' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /me/changes:
+    get:
+      tags: [Account]
+      summary: List the caller's changes
+      description: |
+        The caller's own playlists as a feed of changes, for a device that keeps a copy of them
+        (`requirements/offline.md`). It is read like `listLibraryChanges`: each playlist and each
+        playlist item appears at most once, as its latest change, in order, so `after=0` is every
+        playlist now and a later `after` is only what changed since; a catch-up after one item
+        edit is that item. An upsert carries the current rows (`playlists` or `playlist_items`
+        of the device schema, `crates/catalog/src/schema.sql`) and a delete is a tombstone. A
+        deleted playlist is one tombstone: the device drops its items with it. An item's change
+        names its playlist in `id` and the item in `key`. Nothing of another account is ever
+        listed.
+
+        Only playlists in libraries the caller reaches are listed. A library the caller lost
+        access to is left out, so its playlists neither arrive nor are deleted here: a device
+        that finds a library gone from `listLibraries` removes that library and its playlists.
+        A library's catalog file (`getLibraryCatalog`) holds no playlists, and changes made
+        while the caller could not reach a library are left out, so a device that installs a
+        library's catalog file, the first time or again, pulls this feed again from `after=0`.
+
+        Pass `next` as `after` until it equals `head`, when the client is current. `head` is the
+        position of the caller's latest change, comparable with `accountChanged`'s `seq`.
+      operationId: listAccountChanges
+      parameters:
+        - name: after
+          in: query
+          description: The `next` of the last page applied, or 0 for everything.
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountChanges' }
+        '410':
+          description: '`cursor_expired` — `after` is past the caller''s latest change; start again from `after=0`.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   /me/plugins:
     get:
       tags: [Account]
@@ -2273,6 +2317,41 @@ components:
           description: |
             With an upsert: the entity's rows by table name (`tracks`, `track_artists`, `images`
             and so on). A table the entity has no rows in is left out.
+          additionalProperties:
+            type: array
+            items: { type: object, additionalProperties: true }
+
+    AccountChanges:
+      type: object
+      required: [changes, next, head]
+      properties:
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/AccountChange' }
+        next:
+          type: integer
+          format: int64
+          description: The `after` of the next page. It is `head` when this page was the last.
+        head:
+          type: integer
+          format: int64
+          description: The position of the caller's latest change when the page was read.
+
+    AccountChange:
+      type: object
+      required: [seq, op, kind, id]
+      properties:
+        seq: { type: integer, format: int64 }
+        op: { type: string, enum: [upsert, delete] }
+        kind: { type: string, enum: [playlist, playlistItem] }
+        id: { $ref: '#/components/schemas/Id' }
+        key:
+          type: integer
+          format: int64
+          description: The item's key in its playlist, which `id` names, for a `playlistItem`.
+        rows:
+          type: object
+          description: The rows by table name, `playlists` or `playlist_items`, with an upsert.
           additionalProperties:
             type: array
             items: { type: object, additionalProperties: true }
@@ -4633,6 +4712,19 @@ components:
           properties:
             type: { const: libraryChanged }
             libraryId: { $ref: '#/components/schemas/Id' }
+            seq: { type: integer, format: int64 }
+        - type: object
+          required: [type, seq]
+          description: |
+            The account's own change feed moved (`listAccountChanges`, with `after` set to the
+            position the device holds), so a device keeping its playlists fetches what it
+            missed. Sent to every connection of the account, once the change is committed, and
+            to no other account. It carries no data: `seq` is the feed's position, comparable
+            with `head` there. At most one is sent each second, carrying the latest `seq`, and a
+            change inside that second is announced when it ends. A device also fetches on
+            `hello`.
+          properties:
+            type: { const: accountChanged }
             seq: { type: integer, format: int64 }
         - type: object
           required: [type, queueId]

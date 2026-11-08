@@ -1,5 +1,6 @@
-//! `libraryChanged`: sent after a change commits, only to accounts that reach the library, at
-//! most once a second for each library, and never leaving the last change of a burst unhinted.
+//! `libraryChanged` and `accountChanged`: sent after a change commits, `libraryChanged` only to
+//! accounts that reach the library, at most once a second for each library or account, and never
+//! leaving the last change of a burst unhinted.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,7 +13,7 @@ use tokio::time::{Instant, timeout};
 use super::super::hints::{Throttle, WINDOW, start};
 use super::super::{Hub, Presence};
 use crate::db::Database;
-use crate::db::feed::{self, Entity, Op};
+use crate::db::feed::{self, Entity, Kind, Op};
 use crate::db::testing::{User, access, library, open};
 
 /// A database with libraries 1 and 2, the owner (account 1), account 2 who reaches library 1,
@@ -230,4 +231,50 @@ fn a_burst_of_changes_sends_at_most_one_hint_per_second_with_the_latest_seq() {
     );
     // Libraries are throttled apart.
     assert_eq!(throttle.moved(at(2100), 2, 3), Some(3));
+}
+
+/// Records a change to `user`'s playlist 7 in library 1 and returns the account feed's position.
+async fn account_change(db: &Database, user: i64) -> i64 {
+    db.write(move |tx| {
+        feed::record_account(tx, user, 1, Kind::Playlist, 7, 0, Op::Upsert)?;
+        tx.query_row("SELECT max(seq) FROM account_changes", [], |row| row.get(0))
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn account_changed_reaches_only_the_account() {
+    let (_temp, db, hub) = setup().await;
+    let (mut owner, mut user, mut stranger) =
+        (hub.connect(1, 1), hub.connect(2, 2), hub.connect(3, 3));
+    let mut tab = hub.connect(2, 2);
+
+    let seq = account_change(&db, 2).await;
+
+    let hint = json!({ "type": "accountChanged", "seq": seq });
+    assert_eq!(heard(&mut user).await, hint);
+    assert_eq!(heard(&mut tab).await, hint, "every connection of the account hears it");
+    // Account 1 reaches library 1 as the owner, and 3 reaches none: neither hears of account 2.
+    assert!(hears_nothing(&mut owner).await);
+    assert!(hears_nothing(&mut stranger).await);
+    assert!(hears_nothing(&mut user).await, "one hint for the change");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_last_account_change_of_a_burst_is_always_hinted() {
+    let (_temp, db, hub) = setup().await;
+    let mut user = hub.connect(2, 2);
+
+    let first = account_change(&db, 2).await;
+    assert_eq!(heard_paused(&mut user).await["seq"], json!(first));
+    let mut feed = db.follow_account_feed();
+    account_change(&db, 2).await;
+    let last = account_change(&db, 2).await;
+    settle(&mut feed).await;
+    assert!(hears_nothing(&mut user).await, "one hint a second");
+
+    tokio::time::advance(WINDOW).await;
+
+    assert_eq!(heard_paused(&mut user).await["seq"], json!(last));
 }

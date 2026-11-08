@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 
 use super::{make, tagged};
 use crate::db::store::SqliteStore;
+use crate::db::testing::User;
 
 /// The columns the server's tables have and the device's do not, per table: paths and roots,
 /// file stamps, scan and analysis state, plugin data, and keys the server derives. A column
@@ -21,6 +22,7 @@ const SERVER_ONLY: &[(&str, &[&str])] = &[
     ("albums", &["artists_key", "title_key"]),
     ("artists", &["name_key"]),
     ("images", &["hash", "path", "root_id"]),
+    ("playlists", &["user_id"]),
     ("tag_types", &["field", "plugin_id", "since"]),
     ("tags", &["name_key"]),
     (
@@ -86,7 +88,20 @@ fn fixture() -> (tempfile::TempDir, SqliteStore) {
     testing::scan_library(&store, &testing::library(&root));
     store
         .db()
-        .write_blocking(|tx| tx.execute("UPDATE images SET placeholder = x'00ff10'", []).map(drop))
+        .write_blocking(|tx| {
+            tx.execute("UPDATE images SET placeholder = x'00ff10'", [])?;
+            User::new(1, "owner").insert(tx)?;
+            tx.execute(
+                "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, \
+                 created_at, modified_at) VALUES (5, 1, 1, 'Mix', 'mix', x'01', 0, 0)",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO playlist_items SELECT 5, 1048576, 1, min(id), 0 FROM tracks",
+                [],
+            )
+            .map(drop)
+        })
         .unwrap();
     (tmp, store)
 }
@@ -149,7 +164,7 @@ fn every_device_column_exists_in_the_server_schema_with_the_same_type() {
             assert!(server[table].contains(column), "{table}.{} is not on the server", column.0);
         }
     }
-    assert_eq!(device.len(), 13);
+    assert_eq!(device.len(), 15);
 }
 
 #[test]
@@ -157,7 +172,7 @@ fn the_device_schema_changes_only_with_its_version() {
     let hash = format!("{:x}", Sha256::digest(SCHEMA));
     assert_eq!(
         (SCHEMA_VERSION, hash.as_str()),
-        (1, "24aa344b0ec8b9f8a8595f2b155471eac50648e95fbb8d7bce460e03092ea1eb"),
+        (2, "2f899ed9b85f3ff1b71a5048ac21577a8f4211213fb48431c917fd52ccd552ec"),
         "schema.sql changed: raise SCHEMA_VERSION, and pin its new hash here"
     );
 }
@@ -187,10 +202,14 @@ fn no_server_only_column_is_exported() {
     let exported = store
         .db()
         .read_blocking(|conn| {
-            Ok(entities(conn)
+            let mut exported: Vec<Rows> = entities(conn)
                 .iter()
-                .map(|(kind, id)| export(conn, 1, *kind, id).unwrap().unwrap())
-                .collect::<Vec<Rows>>())
+                .map(|(kind, id)| export(conn, 1, *kind, id, 0).unwrap().unwrap())
+                .collect();
+            // The account's playlist and its one item.
+            exported.push(export(conn, 1, Kind::Playlist, "5", 0).unwrap().unwrap());
+            exported.push(export(conn, 1, Kind::PlaylistItem, "5", 1_048_576).unwrap().unwrap());
+            Ok(exported)
         })
         .unwrap();
     let mut seen = BTreeSet::new();
@@ -200,7 +219,7 @@ fn no_server_only_column_is_exported() {
             assert!(list.iter().all(|row| row.len() == widths[table]), "{table}");
         }
     }
-    assert_eq!(seen.len(), 13, "{seen:?}");
+    assert_eq!(seen.len(), 15, "{seen:?}");
 }
 
 #[test]
@@ -213,18 +232,22 @@ fn export_then_apply_reproduces_each_entitys_device_rows() {
             let all = entities(conn);
             assert_eq!(all.len(), 10, "{all:?}");
             for (kind, id) in &all {
-                let rows = export(conn, 1, *kind, id).unwrap().unwrap();
+                let rows = export(conn, 1, *kind, id, 0).unwrap().unwrap();
                 // Through JSON, as the change feed carries it.
                 let wire = serde_json::to_string(&rows).unwrap();
                 let rows: Rows = serde_json::from_str(&wire).unwrap();
                 apply(&device, &rows).unwrap();
-                assert_eq!(export(&device, 1, *kind, id).unwrap().unwrap(), rows, "{kind:?} {id}");
+                assert_eq!(
+                    export(&device, 1, *kind, id, 0).unwrap().unwrap(),
+                    rows,
+                    "{kind:?} {id}"
+                );
             }
             // An entity applied again is replaced, not doubled.
             let (kind, id) = all.iter().find(|(kind, _)| *kind == Kind::Track).unwrap();
-            let rows = export(conn, 1, *kind, id).unwrap().unwrap();
+            let rows = export(conn, 1, *kind, id, 0).unwrap().unwrap();
             apply(&device, &rows).unwrap();
-            assert_eq!(export(&device, 1, *kind, id).unwrap().unwrap(), rows);
+            assert_eq!(export(&device, 1, *kind, id, 0).unwrap().unwrap(), rows);
             Ok(())
         })
         .unwrap();
@@ -238,7 +261,7 @@ fn ids_travel_as_strings_and_blobs_as_base64() {
         .read_blocking(|conn| {
             let id: i64 =
                 conn.query_row("SELECT id FROM tracks WHERE title = 'One'", [], |r| r.get(0))?;
-            let rows = export(conn, 1, Kind::Track, &id.to_string()).unwrap().unwrap();
+            let rows = export(conn, 1, Kind::Track, &id.to_string(), 0).unwrap().unwrap();
             Ok((id, serde_json::to_value(rows).unwrap()))
         })
         .unwrap();
@@ -262,7 +285,7 @@ fn applying_replaces_an_entitys_join_rows_and_deleting_removes_them() {
         .read_blocking(|conn| {
             let id: i64 =
                 conn.query_row("SELECT id FROM tracks WHERE title = 'One'", [], |r| r.get(0))?;
-            Ok((export(conn, 1, Kind::Track, &id.to_string()).unwrap().unwrap(), id.to_string()))
+            Ok((export(conn, 1, Kind::Track, &id.to_string(), 0).unwrap().unwrap(), id.to_string()))
         })
         .unwrap();
     assert_eq!(rows.tables["track_artists"].len(), 2);
@@ -275,13 +298,13 @@ fn applying_replaces_an_entitys_join_rows_and_deleting_removes_them() {
         .unwrap();
     apply(&device, &rows).unwrap();
     assert_eq!(
-        export(&device, 1, Kind::Track, &id).unwrap().unwrap(),
+        export(&device, 1, Kind::Track, &id, 0).unwrap().unwrap(),
         rows,
         "the stale credit is gone"
     );
 
-    delete(&device, Kind::Track, id.parse().unwrap()).unwrap();
-    assert_eq!(export(&device, 1, Kind::Track, &id).unwrap(), None);
+    delete(&device, Kind::Track, id.parse().unwrap(), 0).unwrap();
+    assert_eq!(export(&device, 1, Kind::Track, &id, 0).unwrap(), None);
     for table in ["tracks", "track_artists", "track_tags"] {
         let left: i64 =
             device.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap();
@@ -298,8 +321,8 @@ fn another_librarys_entity_is_absent() {
         .db()
         .read_blocking(|conn| {
             let id: i64 = conn.query_row("SELECT id FROM tracks LIMIT 1", [], |r| r.get(0))?;
-            assert!(export(conn, 2, Kind::Track, &id.to_string()).unwrap().is_none());
-            assert!(export(conn, 1, Kind::Track, "not an id").unwrap().is_none());
+            assert!(export(conn, 2, Kind::Track, &id.to_string(), 0).unwrap().is_none());
+            assert!(export(conn, 1, Kind::Track, "not an id", 0).unwrap().is_none());
             Ok(())
         })
         .unwrap();

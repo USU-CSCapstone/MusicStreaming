@@ -1,5 +1,6 @@
 //! The public API (`api/openapi.yaml`), served under `{basePath}/api/v1`.
 
+mod account_changes;
 mod albums;
 mod artists;
 mod audio;

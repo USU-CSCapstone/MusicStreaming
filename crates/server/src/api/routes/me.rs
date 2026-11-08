@@ -6,12 +6,14 @@ use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post, put};
 use tower_http::compression::CompressionLayer;
 
-use crate::api::{AppState, connections, devices, me, player, plays, queue};
+use crate::api::{AppState, account_changes, connections, devices, me, player, plays, queue};
 
 /// Every route under `/me`.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/me", get(me::get))
+        // Rows repeat the same few names, so a page is gzipped like the library's feed.
+        .route("/me/changes", get(account_changes::list).layer(CompressionLayer::new()))
         .route("/me/devices", get(devices::list))
         .route("/me/player", get(player::get))
         .route("/me/player/commands", post(player::send_command))
