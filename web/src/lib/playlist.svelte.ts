@@ -164,7 +164,7 @@ export class EditablePlaylist {
 	async #reload() {
 		const { playlist } = this.#confirmed;
 		try {
-			this.#confirmed = await loadPlaylist(this.#fetch, playlist.libraryId, playlist.id);
+			this.#confirmed = await loadPlaylist(this.#fetch, playlist.libraryId, playlist.id, true);
 		} catch {
 			// Shown as last confirmed; the next edit meets the conflict again and reloads.
 		}
@@ -230,12 +230,14 @@ export function rowMoveOps(
 
 /**
  * A playlist and every item, at one version, so positions and `baseVersion` agree. Tries again
- * when the playlist changes while it loads.
+ * when the playlist changes while it loads. With `fresh`, from the server alone, as the reload
+ * after a conflict needs: a device behind the server would give the version that just conflicted.
  */
 export async function loadPlaylist(
 	fetch: Fetch,
 	libraryId: string,
-	playlistId: string
+	playlistId: string,
+	fresh = false
 ): Promise<LoadedPlaylist> {
 	for (let attempt = 1; ; attempt++) {
 		try {
@@ -243,12 +245,18 @@ export async function loadPlaylist(
 			let version: number | undefined;
 			let cursor: string | undefined;
 			do {
-				const page = await listPlaylistItems(fetch, libraryId, playlistId, { limit: 1000, cursor });
+				const page = await listPlaylistItems(
+					fetch,
+					libraryId,
+					playlistId,
+					{ limit: 1000, cursor },
+					fresh
+				);
 				version ??= page.version;
 				items.push(...page.items);
 				cursor = page.nextCursor ?? undefined;
 			} while (cursor);
-			const playlist = await getPlaylist(fetch, libraryId, playlistId);
+			const playlist = await getPlaylist(fetch, libraryId, playlistId, fresh);
 			if (playlist.version === version) return { playlist, items };
 		} catch (e) {
 			// `cursor_expired`: it changed between pages.

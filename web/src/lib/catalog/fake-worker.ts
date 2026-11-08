@@ -67,6 +67,11 @@ export class Harness {
 		return this.#sync!.busy();
 	}
 
+	/** Whether the library's file answers reads now, as the page's reads ask, rather than the server. */
+	onDevice(library: string) {
+		return this.#sync!.onDevice(library);
+	}
+
 	/** The IDs of the libraries on the device. */
 	libraries() {
 		return [...(this.#sync?.catalogs.keys() ?? [])].sort();
@@ -90,11 +95,6 @@ export class Harness {
 	async #midApply(library: string) {
 		const applying = () => this.#sync!.catalogs.get(library)?.applying('library') !== undefined;
 		while (!applying()) await new Promise((resolve) => setTimeout(resolve));
-	}
-
-	/** Whether the library's file can answer, rather than the server. */
-	onDevice(library: string) {
-		return this.#sync!.onDevice(library);
 	}
 
 	/** Closes the sync once the library's file is part-way through an apply, as a closed tab does. */

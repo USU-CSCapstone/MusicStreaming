@@ -19,6 +19,7 @@ class FakeWorker {
 			stalled: boolean;
 			slow: boolean;
 			mute: boolean;
+			onDevice: string;
 		}
 	) {}
 
@@ -29,11 +30,9 @@ class FakeWorker {
 			if (this.flags.slow) setTimeout(() => this.say({ type: 'started' }), 300);
 			else if (!this.flags.stalled) this.say({ type: 'started' });
 		} else if (message.type === 'busy')
-			this.say({
-				type: 'answer',
-				id: message.id,
-				result: this.flags.busy ? '1' : ''
-			});
+			this.say({ type: 'answer', id: message.id, result: this.flags.busy ? '1' : '' });
+		else if (message.type === 'onDevice' && !this.silent())
+			this.say({ type: 'answer', id: message.id, result: this.flags.onDevice });
 		else if (message.type === 'pause') this.say({ type: 'paused' });
 		else if (message.type === 'signOut' && !this.flags.mute)
 			this.say({ type: 'answer', id: message.id, result: '' });
@@ -62,7 +61,7 @@ let tabs = 0;
 function browser() {
 	const name = `catalog-test-${++tabs}-${Math.random()}`;
 	let silent = false;
-	const flags = { busy: false, stalled: false, slow: false, mute: false };
+	const flags = { busy: false, stalled: false, slow: false, mute: false, onDevice: '1' };
 	let hear: (message: RealtimeServerMessage) => void = () => {};
 	const realtime = {
 		on: (listener: (message: RealtimeServerMessage) => void) => {
@@ -113,6 +112,49 @@ describe('CatalogClient', () => {
 		expect(types(workers[0])).toEqual(['init', 'start', 'message', 'message', 'message']);
 		expect(workers[0].sent[0]).toMatchObject({ type: 'init', user: '7' });
 		client.disconnect();
+	});
+
+	it('a library is not on the device with no owner, and the owner’s answer from any tab', async () => {
+		const b = browser();
+		const first = b.tab('first');
+		const second = b.tab('second');
+		expect(await second.client.onDevice('1')).toBe(false);
+
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+		second.client.connect(b.realtime, '7');
+		expect(await second.client.onDevice('1')).toBe(true);
+		b.flags.onDevice = '';
+		expect(await first.client.onDevice('1')).toBe(false);
+		first.client.disconnect();
+		second.client.disconnect();
+	});
+
+	it('a library’s place falls back at once with no owner, and after the state wait with a silent one', async () => {
+		const b = browser();
+		const first = b.tab('first');
+		const second = b.tab('second');
+		const since = performance.now();
+		expect(await second.client.onDevice('1')).toBe(false);
+		expect(performance.now() - since).toBeLessThan(500);
+
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+		b.silence(true);
+		const asked = performance.now();
+		expect(await second.client.onDevice('1')).toBe(false);
+		// The state wait, not the router's own (a second tab's router waits 10 s by default).
+		expect(performance.now() - asked).toBeGreaterThan(1000);
+		expect(performance.now() - asked).toBeLessThan(5000);
+		first.client.disconnect();
+	});
+
+	it('a request’s own timeout replaces the router’s', async () => {
+		const b = browser();
+		const router = new CatalogRouter(b.name, 5000);
+		const since = performance.now();
+		await expect(router.ask({ type: 'onDevice', library: '1' }, 100)).rejects.toThrow();
+		expect(performance.now() - since).toBeLessThan(1000);
 	});
 
 	it('a second tab’s query is answered by the owner', async () => {

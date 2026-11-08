@@ -52,6 +52,8 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 					id: data.id,
 					result: await sync.query(data.library, data.name, data.params, data.offline)
 				});
+			} else if (data.type === 'onDevice') {
+				post({ type: 'answer', id: data.id, result: sync.onDevice(data.library) ? '1' : '' });
 			} else {
 				await sync.signOut();
 				post({ type: 'answer', id: data.id, result: '' });

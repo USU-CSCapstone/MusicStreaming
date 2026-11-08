@@ -262,6 +262,30 @@ describe('catalog sync', () => {
 		]);
 	});
 
+	it('a library is on the device only once its snapshot is swapped in', async () => {
+		await serve('1');
+		await h.api.hold('/catalog');
+		await h.start();
+		await expect.poll(() => h.api.holding()).toBe(true);
+		expect(await h.onDevice('1')).toBe(false);
+		await h.api.release();
+		await h.idle();
+		expect(await h.onDevice('1')).toBe(true);
+		expect(await h.onDevice('2')).toBe(false);
+	});
+
+	it('queries made while a new library makes room in the pool wait for it and do not fail', async () => {
+		await started('1');
+		await serve('1', '2');
+		await h.message(hello);
+		// The new library's bootstrap reserves pool files and opens its file; the queries land throughout.
+		const answers = Array.from({ length: 150 }, () => h.query('1', 'listTracks', { limit: 1 }));
+		await expect(Promise.all(answers)).resolves.toHaveLength(150);
+		await h.idle();
+		expect(await h.libraries()).toEqual(['1', '2']);
+		expect(await h.reported()).toEqual([]);
+	});
+
 	it('a corrupt or missing database bootstraps again', async () => {
 		await started('1');
 		await h.stop();

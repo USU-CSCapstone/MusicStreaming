@@ -1,9 +1,10 @@
-// Typed calls to the public API (`api/openapi.yaml`). Pages load through here,
-// so this is the one module that changes when catalog reads move to the worker
+// Typed calls to the public API (`api/openapi.yaml`). Pages load through here. Catalog reads
+// go through `catalog/read.ts`, which answers from the device or the server
 // (`design/general.md` §7.1).
 
 import { redirect } from '@sveltejs/kit';
-import { base, resolve } from '$app/paths';
+import { read, unavailableIfOffline } from '$lib/catalog/read';
+import { API, ApiError, loginUrl } from './root';
 import type {
 	Album,
 	AlbumPage,
@@ -46,19 +47,7 @@ import type {
 type Fetch = typeof fetch;
 type Query = Record<string, string | number | undefined>;
 
-export const API = `${base}/api/v1`;
-
-export class ApiError extends Error {
-	constructor(
-		readonly status: number,
-		readonly code: string | undefined,
-		message: string,
-		/** Seconds until trying again is worth it, with `rate_limited`. */
-		readonly retryAfter?: number
-	) {
-		super(message);
-	}
-}
+export { API, ApiError, loginUrl };
 
 function url(path: string, query: Query = {}): string {
 	const params = new URLSearchParams();
@@ -66,10 +55,6 @@ function url(path: string, query: Query = {}): string {
 	const qs = params.toString();
 	return `${API}${path}${qs ? `?${qs}` : ''}`;
 }
-
-/** The login page, returning to where the browser is now once logged in. */
-export const loginUrl = () =>
-	`${resolve('/login')}?${new URLSearchParams({ next: location.pathname + location.search })}`;
 
 /**
  * The response's JSON, or its Problem as an `ApiError` whose message is safe to show. A
@@ -90,8 +75,9 @@ async function body<T>(res: Response): Promise<T> {
 	return res.json();
 }
 
+/** A GET of `path` at the server, rejecting as unavailable offline when the request cannot be sent. */
 const get = async <T>(fetch: Fetch, path: string, query?: Query): Promise<T> =>
-	body(await fetch(url(path, query)));
+	body(await fetch(url(path, query)).catch(unavailableIfOffline));
 
 /**
  * A state-changing request, with a JSON body or a file. Cookie-authenticated writes must
@@ -147,51 +133,110 @@ export const recordPlays = (f: Fetch, items: PlayReport[], keepalive = false) =>
 
 const lib = (libraryId: string) => `/libraries/${encodeURIComponent(libraryId)}`;
 
+/**
+ * A catalog read the device can answer, as the operation `name` of `libraryId` with the API's
+ * `params`, and the server's answer to the same request at `path` (`catalog/read.ts` says which
+ * answers). `path` params, such as an ID, go in `ids` by their names in the API. With `fresh`,
+ * the server alone answers: for a read that a write is based on, which the device may hold
+ * stale until its catch-up finishes.
+ */
+const device = <T>(
+	f: Fetch,
+	name: string,
+	libraryId: string,
+	path: string,
+	query: Query = {},
+	ids: Query = {},
+	fresh = false
+) => {
+	const server = () => get<T>(f, `${lib(libraryId)}${path}`, query);
+	return fresh ? server() : read<T>(name, libraryId, { ...ids, ...query }, server);
+};
+
 export const listLibraries = (f: Fetch) => get<{ items: Library[] }>(f, '/libraries');
 
+/** A page of the library's albums. */
 export const listAlbums = (f: Fetch, libraryId: string, query: Query = {}) =>
-	get<AlbumPage>(f, `${lib(libraryId)}/albums`, query);
+	device<AlbumPage>(f, 'listAlbums', libraryId, '/albums', query);
 
+/** One album of the library. */
 export const getAlbum = (f: Fetch, libraryId: string, albumId: string) =>
-	get<Album>(f, `${lib(libraryId)}/albums/${encodeURIComponent(albumId)}`);
+	device<Album>(
+		f,
+		'getAlbum',
+		libraryId,
+		`/albums/${encodeURIComponent(albumId)}`,
+		{},
+		{ albumId }
+	);
 
+/** A page of the library's tracks. */
 export const listTracks = (f: Fetch, libraryId: string, query: Query = {}) =>
-	get<TrackPage>(f, `${lib(libraryId)}/tracks`, query);
+	device<TrackPage>(f, 'listTracks', libraryId, '/tracks', query);
 
 /**
  * The tracks `ids` names that `libraryId` holds, in the order named; an ID the library does not
  * hold is left out. At most 100, and never none: with no `ids` the endpoint lists the library.
  */
 export const getTracksByIds = (f: Fetch, libraryId: string, ids: string[]) =>
-	get<TrackPage>(f, `${lib(libraryId)}/tracks`, { ids: ids.join(',') });
+	device<TrackPage>(f, 'listTracksByIds', libraryId, '/tracks', { ids: ids.join(',') });
 
+/** One track of the library. */
 export const getTrack = (f: Fetch, libraryId: string, trackId: string) =>
-	get<Track>(f, `${lib(libraryId)}/tracks/${encodeURIComponent(trackId)}`);
+	device<Track>(
+		f,
+		'getTrack',
+		libraryId,
+		`/tracks/${encodeURIComponent(trackId)}`,
+		{},
+		{ trackId }
+	);
 
+/** A page of the library's artists. */
 export const listArtists = (f: Fetch, libraryId: string, query: Query = {}) =>
-	get<ArtistPage>(f, `${lib(libraryId)}/artists`, query);
+	device<ArtistPage>(f, 'listArtists', libraryId, '/artists', query);
 
 /** The tag types the library's music carries, each with its count of tags (`requirements/tags.md` §2). */
 export const listTagTypes = (f: Fetch, libraryId: string) =>
-	get<TagType[]>(f, `${lib(libraryId)}/tag-types`);
+	device<TagType[]>(f, 'listTagTypes', libraryId, '/tag-types');
 
+/** A page of the library's tags. */
 export const listTags = (f: Fetch, libraryId: string, query: Query = {}) =>
-	get<TagPage>(f, `${lib(libraryId)}/tags`, query);
+	device<TagPage>(f, 'listTags', libraryId, '/tags', query);
 
+/** One tag of the library. */
 export const getTag = (f: Fetch, libraryId: string, tagId: string) =>
-	get<Tag>(f, `${lib(libraryId)}/tags/${encodeURIComponent(tagId)}`);
+	device<Tag>(f, 'getTag', libraryId, `/tags/${encodeURIComponent(tagId)}`, {}, { tagId });
 
+/** One artist of the library. */
 export const getArtist = (f: Fetch, libraryId: string, artistId: string) =>
-	get<Artist>(f, `${lib(libraryId)}/artists/${encodeURIComponent(artistId)}`);
+	device<Artist>(
+		f,
+		'getArtist',
+		libraryId,
+		`/artists/${encodeURIComponent(artistId)}`,
+		{},
+		{ artistId }
+	);
 
+/** A page of the library's playlists. */
 export const listPlaylists = (f: Fetch, libraryId: string, query: Query = {}) =>
-	get<PlaylistPage>(f, `${lib(libraryId)}/playlists`, query);
+	device<PlaylistPage>(f, 'listPlaylists', libraryId, '/playlists', query);
 
 const playlist = (libraryId: string, playlistId: string) =>
 	`${lib(libraryId)}/playlists/${encodeURIComponent(playlistId)}`;
 
-export const getPlaylist = (f: Fetch, libraryId: string, playlistId: string) =>
-	get<Playlist>(f, playlist(libraryId, playlistId));
+/** One playlist. With `fresh`, from the server alone: use it for the version an edit is based on. */
+export const getPlaylist = (f: Fetch, libraryId: string, playlistId: string, fresh = false) =>
+	device<Playlist>(
+		f,
+		'getPlaylist',
+		libraryId,
+		`/playlists/${encodeURIComponent(playlistId)}`,
+		{},
+		{ playlistId },
+		fresh
+	);
 
 /** At version 1. To retry, pass the first attempt's `key`, so only one playlist is created. */
 export const createPlaylist = (
@@ -228,12 +273,23 @@ export const checkPlaylistDuplicates = (
 		items
 	});
 
+/** A page of a playlist's items. With `fresh`, from the server alone: use it for the items an edit is based on. */
 export const listPlaylistItems = (
 	f: Fetch,
 	libraryId: string,
 	playlistId: string,
-	query: Query = {}
-) => get<PlaylistItemPage>(f, `${playlist(libraryId, playlistId)}/items`, query);
+	query: Query = {},
+	fresh = false
+) =>
+	device<PlaylistItemPage>(
+		f,
+		'listPlaylistItems',
+		libraryId,
+		`/playlists/${encodeURIComponent(playlistId)}/items`,
+		query,
+		{ playlistId },
+		fresh
+	);
 
 export const search = (f: Fetch, libraryId: string, q: string, query: Query = {}) =>
 	get<SearchResponse>(f, `${lib(libraryId)}/search`, { q, ...query });

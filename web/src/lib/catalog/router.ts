@@ -49,8 +49,8 @@ export class CatalogRouter {
 
 	/**
 	 * Asks the owner, which may be this tab, and resolves with its answer. Rejects with the
-	 * owner's error, or if nobody answered in `timeout` milliseconds. An owner that goes away
-	 * leaves it waiting for the next one.
+	 * owner's error, or if nobody answered in `timeout` milliseconds, the usual wait unless given.
+	 * An owner that goes away leaves it waiting for the next one.
 	 */
 	ask(request: Request, timeout = this.#timeout): Promise<string> {
 		return new Promise((resolve, reject) => {

@@ -50,5 +50,7 @@ export type Request =
 			offline?: boolean;
 			user?: string;
 	  }
+	/** Whether the library has a file on the device that can answer; answered 1 or empty. */
+	| { type: 'onDevice'; library: string }
 	/** Deletes every file on the device. */
 	| { type: 'signOut' };

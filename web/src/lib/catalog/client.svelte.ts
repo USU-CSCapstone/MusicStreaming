@@ -3,7 +3,7 @@
 // tab is not it. The owner tells the worker who is signed in and what the realtime connection
 // hears, and shows what the worker cannot fix itself.
 
-import { API, ApiError, getMe } from '$lib/api/client';
+import { API } from '$lib/api/root';
 import wasmUrl from '$lib/catalog-wasm/jewelcase_catalog_wasm_bg.wasm?url';
 import type { RealtimeServerMessage } from '$lib/api/types';
 import type { Realtime } from '$lib/realtime.svelte';
@@ -21,6 +21,8 @@ const SIGN_OUT_TRIES = 3;
 const SIGN_OUT_MS = 3000;
 /** How long the owner waits for its worker to open the files before giving the lock up. */
 const START_MS = 20_000;
+/** How long a read waits to learn where a library stands before the server answers it instead. */
+const STATE_MS = 1500;
 
 /** Whether the browser can elect an owner at all; without Web Locks (plain HTTP, old iOS) the catalog is unavailable. */
 const available = () => !!navigator.locks;
@@ -108,12 +110,28 @@ export class CatalogClient {
 	/**
 	 * Answers the API operation `name` for `library` from the device's files, in whichever tab
 	 * owns them. Resolves with the JSON the server would send; rejects if the library is not on
-	 * the device, nobody answers, or the browser has no Web Locks.
+	 * the device, nobody answers or the browser has no Web Locks, and, unless this device is `offline`, at once while the
+	 * library's copy is being updated, so the caller asks the server.
 	 */
-	query(library: string, name: string, params: object = {}) {
+	query(library: string, name: string, params: object = {}, offline = false) {
 		if (!available()) return Promise.reject(new Error('the catalog is not available'));
 		const user = this.#user || undefined;
-		return this.#route().ask({ type: 'query', library, name, params, user });
+		return this.#route().ask({ type: 'query', library, name, params, offline, user });
+	}
+
+	/**
+	 * Whether `library` is fully on the device: false if it is not or there is no owner to ask.
+	 * Answers at once when no tab owns the catalog; an owner that is starting has `STATE_MS` to
+	 * answer.
+	 */
+	async onDevice(library: string) {
+		const { held } = (await navigator.locks?.query()) ?? {};
+		if (!held?.some((lock) => lock.name === this.#name)) return false;
+		return (
+			(await this.#route()
+				.ask({ type: 'onDevice', library }, STATE_MS)
+				.catch(() => '')) === '1'
+		);
 	}
 
 	/**
@@ -253,9 +271,11 @@ export class CatalogClient {
 	/** Gives the catalog up if the session now belongs to someone other than this tab's account; offline or on any other failure, keeps it. */
 	async #leaveIfStale() {
 		try {
-			if ((await getMe(fetch)).id !== this.#user) this.disconnect();
+			const response = await fetch(`${API}/me`);
+			if (response.status === 401) this.disconnect();
+			else if (response.ok && String((await response.json()).id) !== this.#user) this.disconnect();
 		} catch (error) {
-			if (error instanceof ApiError && error.status === 401) this.disconnect();
+			console.error(error);
 		}
 	}
 
