@@ -9,9 +9,10 @@
 //! `tag_types` row in those of its tag. Embedded summaries are not carried: the device joins
 //! them from its own rows.
 //!
-//! On the wire a row is an array of cells in the device schema's column order. As in the API, an
+//! On the wire a row is an object keyed by the device schema's column names. As in the API, an
 //! ID is a decimal string, since a random 63-bit ID does not survive JSON in JavaScript, and a
-//! blob is base64.
+//! blob is base64. A key that is not a column is ignored on `apply`, so a server that adds a
+//! column never breaks a device that has not learned it; a column a row lacks is refused.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -22,7 +23,10 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use rusqlite::types::{Value as Sql, ValueRef};
 use rusqlite::{Connection, params_from_iter};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
+
+/// A row as it travels: its cells by column name.
+pub type Row = Map<String, Value>;
 
 /// What a change names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,7 +108,7 @@ pub struct Rows {
     /// The entity's ID as the API spells it.
     pub id: String,
     /// Each table's rows, in order. A table with none is left out.
-    pub tables: BTreeMap<String, Vec<Vec<Value>>>,
+    pub tables: BTreeMap<String, Vec<Row>>,
 }
 
 /// Why rows could not be applied.
@@ -193,8 +197,10 @@ pub fn export(
             .query_map(params, |row| {
                 cols.iter()
                     .enumerate()
-                    .map(|(i, col)| row.get_ref(i).map(|cell| to_json(col, cell)))
-                    .collect::<rusqlite::Result<Vec<Value>>>()
+                    .map(|(i, col)| {
+                        row.get_ref(i).map(|cell| (col.name.clone(), to_json(col, cell)))
+                    })
+                    .collect::<rusqlite::Result<Row>>()
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         if rows.is_empty() && tables.is_empty() {
@@ -260,11 +266,13 @@ pub fn apply(conn: &Connection, rows: &Rows) -> Result<(), Error> {
             names.join(", ")
         ))?;
         for row in list {
-            if row.len() != cols.len() {
-                return Err(Error::Invalid("a row has the wrong number of cells"));
-            }
-            let cells =
-                cols.iter().zip(row).map(|(c, v)| to_sql(c, v)).collect::<Result<Vec<_>, _>>()?;
+            let cells = cols
+                .iter()
+                .map(|col| {
+                    let cell = row.get(&col.name).ok_or(Error::Invalid("a row lacks a column"))?;
+                    to_sql(col, cell)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             stmt.execute(params_from_iter(cells))?;
         }
     }
@@ -286,6 +294,19 @@ mod tests {
 
     use super::*;
 
+    /// The tag's row, with `edit` applied to its cells.
+    fn tag_row(edit: impl FnOnce(&mut Row)) -> Row {
+        let mut row = json!({
+            "id": "5", "library_id": "1", "type": "genre", "name": "Rock", "sort_key": "AA==",
+            "track_count": 0, "album_count": 0, "artist_count": 0,
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        edit(&mut row);
+        row
+    }
+
     /// Rows of the tag `id` with the given tables.
     fn tag(id: &str, tables: Value) -> Rows {
         Rows { kind: Kind::Tag, id: id.into(), tables: serde_json::from_value(tables).unwrap() }
@@ -306,18 +327,26 @@ mod tests {
     #[test]
     fn rows_that_do_not_fit_the_device_schema_are_refused() {
         let conn = device();
-        let row = |cells: Value| tag("5", json!({ "tags": [cells] }));
+        let with = |edit: fn(&mut Row)| tag("5", json!({ "tags": [tag_row(edit)] }));
         for bad in [
             tag("5", json!({ "tracks": [] })),
-            row(json!(["5", "1", "genre", "Rock", "AA==", 0, 0])),
-            row(json!([5, "1", "genre", "Rock", "AA==", 0, 0, 0])),
-            row(json!(["5", "1", "genre", "Rock", "AA==", "0", 0, 0])),
-            row(json!(["5", "1", "genre", "Rock", "not base64!", 0, 0, 0])),
+            with(|r| drop(r.remove("sort_key"))),
+            with(|r| drop(r.insert("id".into(), json!(5)))),
+            with(|r| drop(r.insert("track_count".into(), json!("0")))),
+            with(|r| drop(r.insert("sort_key".into(), json!("not base64!")))),
             tag("05", json!({})),
         ] {
             assert!(matches!(apply(&conn, &bad), Err(Error::Invalid(_))), "{bad:?}");
         }
         assert_eq!(count(&conn, "tags"), 0);
+    }
+
+    #[test]
+    fn a_key_that_is_no_column_is_ignored() {
+        let conn = device();
+        let row = tag_row(|r| drop(r.insert("added_later".into(), json!({ "any": [1] }))));
+        apply(&conn, &tag("5", json!({ "tags": [row] }))).unwrap();
+        assert_eq!(count(&conn, "tags"), 1);
     }
 
     #[test]
@@ -327,8 +356,8 @@ mod tests {
             tag(
                 "5",
                 json!({
-                    "tags": [["5", "1", "genre", "Rock", "AA==", 0, 0, 0]],
-                    "tag_types": [["genre", name]],
+                    "tags": [tag_row(|_| {})],
+                    "tag_types": [{ "key": "genre", "name": name }],
                 }),
             )
         };

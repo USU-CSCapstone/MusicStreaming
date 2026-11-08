@@ -119,10 +119,10 @@ fn files<K>(roots: &Roots, lib: i64, found: Vec<(K, i64, String)>) -> Vec<(K, Fi
         .collect()
 }
 
-/// Stores `placeholder` for `lib`'s image with content `hash`, and puts the albums and artists
-/// showing it on the change feed. An empty placeholder, one that could not be made, keeps the
-/// image from being picked again and changes nothing clients see. An image no longer there is
-/// left alone.
+/// Stores `placeholder` for `lib`'s image with content `hash`, and puts the tracks, albums and
+/// artists showing it on the change feed. An empty placeholder, one that could not be made,
+/// keeps the image from being picked again and changes nothing clients see. An image no longer
+/// there is left alone.
 pub fn store_placeholder(
     store: &SqliteStore,
     lib: i64,
@@ -143,10 +143,12 @@ pub fn store_placeholder(
         else {
             return Ok(());
         };
-        // What clients see of an album or artist includes its image's placeholder. One
+        // What clients see of a track, album or artist includes its image's placeholder. One
         // that could not be made leaves them as they were.
         if changed {
-            for (entity, table) in [(Entity::Album, "albums"), (Entity::Artist, "artists")] {
+            for (entity, table) in
+                [(Entity::Track, "tracks"), (Entity::Album, "albums"), (Entity::Artist, "artists")]
+            {
                 let ids: Vec<i64> = tx
                     .prepare_cached(&format!(
                         "SELECT id FROM {table} WHERE library_id = ?1 AND image_id = ?2"

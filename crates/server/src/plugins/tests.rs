@@ -195,6 +195,53 @@ async fn approved_tag_types_are_read_from_files_already_indexed() {
     stop(thread).await;
 }
 
+/// A plugin renaming a tag type it added puts that type's tags, in every library and under their
+/// own library, on the change feed again, since a tag's device rows carry its type's name; other
+/// types' tags, and approving it unrenamed, do not.
+#[tokio::test]
+async fn renaming_a_tag_type_puts_its_tags_on_the_change_feed() {
+    let (_temp, db, plugins, thread) = scanned().await;
+    install(&db, adding_energy(&[TagTypes])).await;
+    grant(&plugins, "plugin", &[TagTypes], &[]).await;
+    db.write(|tx| {
+        libraries::create(tx, Some(2), "Other", &[], &[])?;
+        tx.execute_batch(
+            "INSERT INTO tags (id, library_id, type, name, name_key, sort_key) VALUES \
+             (70, 1, 'plugin.energy', 'High', 'high', x'01'), \
+             (71, 1, 'genre', 'Rock', 'rock', x'02'), \
+             (72, 2, 'plugin.energy', 'High', 'high', x'01');",
+        )
+    })
+    .await
+    .unwrap();
+    let on_feed = || {
+        db.read(|conn| {
+            conn.prepare(
+                "SELECT library_id, entity_id FROM library_changes WHERE entity_type = 'tag' \
+                 ORDER BY entity_id",
+            )?
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+        })
+    };
+    assert_eq!(on_feed().await.unwrap(), []);
+
+    grant(&plugins, "plugin", &[TagTypes], &[]).await;
+    assert_eq!(on_feed().await.unwrap(), [], "approved as it was, nothing is renamed");
+
+    let mut renamed = adding_energy(&[TagTypes]);
+    for request in renamed["permissions"].as_array_mut().unwrap() {
+        if request["permission"] == "tagTypes" {
+            request["types"][0]["name"] = "Power".into();
+        }
+    }
+    let renamed = renamed.to_string();
+    db.write(move |tx| tx.execute("UPDATE plugins SET manifest = ?1", [renamed])).await.unwrap();
+    grant(&plugins, "plugin", &[TagTypes], &[]).await;
+    assert_eq!(on_feed().await.unwrap(), [(1, 70), (2, 72)]);
+    stop(thread).await;
+}
+
 /// A field a plugin writes into a file, as a tagger does, is read as tags of the type it added,
 /// by the scan of what its run touched (`requirements/tags.md` §2).
 #[tokio::test]

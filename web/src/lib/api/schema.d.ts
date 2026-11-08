@@ -270,6 +270,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/libraries/{libraryId}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List the library's changes
+         * @description The library's catalog as a feed of changes, for a device that keeps a copy of it
+         *     (`requirements/offline.md`). Each track, album, artist, and tag appears at most once, as
+         *     its latest change, in the order the changes were made, so `after=0` is the whole catalog
+         *     and a later `after` is only what changed since. An upsert carries the entity's current
+         *     rows, keyed by table, each row an object keyed by column name; a delete is a tombstone
+         *     with no rows. The tables and columns are those of the device schema
+         *     (`crates/catalog/src/schema.sql`, `design/general.md` §3); a `sort_key` column is opaque
+         *     bytes to compare, not to show. IDs are strings and blobs are base64. A client ignores a
+         *     column it does not know, as the server may add columns.
+         *
+         *     An image or tag type is not a change of its own: its row is in the rows of every track,
+         *     album, artist, or tag that shows it, and a change to the image or the type puts them all
+         *     on the feed again.
+         *
+         *     Pass `next` as `after` until it equals `head`, when the client is current. A client that
+         *     has applied a page has applied every change up to its `next`, and may stop and resume
+         *     from there.
+         */
+        get: operations["listLibraryChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/libraries/{libraryId}/tracks": {
         parameters: {
             query?: never;
@@ -1421,6 +1459,37 @@ export interface components {
             reason?: "credentials_changed" | "logged_out";
             /** @description With `version_conflict`. */
             currentVersion?: number;
+        };
+        LibraryChanges: {
+            changes: components["schemas"]["LibraryChange"][];
+            /**
+             * Format: int64
+             * @description The `after` of the next page. It is `head` when this page was the last.
+             */
+            next: number;
+            /**
+             * Format: int64
+             * @description The position of the library's latest change when the page was read.
+             */
+            head: number;
+        };
+        LibraryChange: {
+            /** Format: int64 */
+            seq: number;
+            /** @enum {string} */
+            op: "upsert" | "delete";
+            /** @enum {string} */
+            kind: "track" | "album" | "artist" | "tag";
+            id: components["schemas"]["Id"];
+            /**
+             * @description With an upsert: the entity's rows by table name (`tracks`, `track_artists`, `images`
+             *     and so on). A table the entity has no rows in is left out.
+             */
+            rows?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                }[];
+            };
         };
         PageInfo: {
             nextCursor: string | null;
@@ -3558,6 +3627,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Library"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listLibraryChanges: {
+        parameters: {
+            query?: {
+                /** @description The `next` of the last page applied, or 0 for the whole catalog. */
+                after?: number;
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                libraryId: components["parameters"]["LibraryId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryChanges"];
+                };
+            };
+            /**
+             * @description `cursor_expired` — the server cannot continue from `after`, because it is past the
+             *     library's latest change or older than the feed reaches back; start again from
+             *     `after=0`.
+             */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
             default: components["responses"]["Problem"];

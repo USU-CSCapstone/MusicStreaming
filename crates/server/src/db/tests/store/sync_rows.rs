@@ -244,11 +244,13 @@ fn ids_travel_as_strings_and_blobs_as_base64() {
         .unwrap();
     assert_eq!(wire["kind"], "track");
     assert_eq!(wire["id"], id.to_string());
-    assert_eq!(wire["tables"]["tracks"][0][0], id.to_string());
-    assert_eq!(wire["tables"]["tracks"][0][1], "1", "library_id");
+    let track = &wire["tables"]["tracks"][0];
+    assert_eq!(track["id"], id.to_string());
+    assert_eq!(track["library_id"], "1");
+    assert!(track["duration_us"].is_number(), "other integers stay numbers");
     let image = &wire["tables"]["images"][0];
-    assert_eq!(image[0], wire["tables"]["tracks"][0][26], "the track's image_id");
-    assert_eq!(image[4], "AP8Q", "the placeholder");
+    assert_eq!(image["id"], track["image_id"], "the track's image_id");
+    assert_eq!(image["placeholder"], "AP8Q", "the placeholder");
 }
 
 #[test]

@@ -11,6 +11,7 @@ base64 = "0.23.1"
 getrandom = "0.4"
 hyper = { version = "1.11.1", features = ["server", "http1"] }
 hyper-util = { version = "0.1.20", features = ["tokio", "service"] }
+jewelcase-catalog = { version = "0.1.0", path = "../catalog" }
 jewelcase-core = { version = "0.1.0", path = "../core" }
 jewelcase-ffmpeg = { version = "0.1.0", path = "../ffmpeg" }
 jewelcase-plugins = { version = "0.1.0", path = "../plugins" }
@@ -36,7 +37,6 @@ tower = { version = "0.5.3", features = ["util"] }
 rusqlite = { version = "0.41.1", features = ["hooks"] }
 tokio-tungstenite = "0.29"
 jewelcase-scanner = { version = "0.1.0", path = "../scanner", features = ["testing"] }
-jewelcase-catalog = { version = "0.1.0", path = "../catalog" }
 
 [lints]
 workspace = true

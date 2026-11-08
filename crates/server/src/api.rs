@@ -4,6 +4,7 @@ mod albums;
 mod artists;
 mod audio;
 mod authenticate;
+mod changes;
 mod connections;
 mod credit;
 mod cursor;

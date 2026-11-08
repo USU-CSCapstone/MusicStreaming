@@ -410,6 +410,53 @@ paths:
               schema: { $ref: '#/components/schemas/Library' }
         default: { $ref: '#/components/responses/Problem' }
 
+  /libraries/{libraryId}/changes:
+    parameters:
+      - $ref: '#/components/parameters/LibraryId'
+    get:
+      tags: [Libraries]
+      summary: List the library's changes
+      description: |
+        The library's catalog as a feed of changes, for a device that keeps a copy of it
+        (`requirements/offline.md`). Each track, album, artist, and tag appears at most once, as
+        its latest change, in the order the changes were made, so `after=0` is the whole catalog
+        and a later `after` is only what changed since. An upsert carries the entity's current
+        rows, keyed by table, each row an object keyed by column name; a delete is a tombstone
+        with no rows. The tables and columns are those of the device schema
+        (`crates/catalog/src/schema.sql`, `design/general.md` §3); a `sort_key` column is opaque
+        bytes to compare, not to show. IDs are strings and blobs are base64. A client ignores a
+        column it does not know, as the server may add columns.
+
+        An image or tag type is not a change of its own: its row is in the rows of every track,
+        album, artist, or tag that shows it, and a change to the image or the type puts them all
+        on the feed again.
+
+        Pass `next` as `after` until it equals `head`, when the client is current. A client that
+        has applied a page has applied every change up to its `next`, and may stop and resume
+        from there.
+      operationId: listLibraryChanges
+      parameters:
+        - name: after
+          in: query
+          description: The `next` of the last page applied, or 0 for the whole catalog.
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LibraryChanges' }
+        '410':
+          description: |
+            `cursor_expired` — the server cannot continue from `after`, because it is past the
+            library's latest change or older than the feed reaches back; start again from
+            `after=0`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
+
   # ───────────────────────────── Browse ─────────────────────────────
   /libraries/{libraryId}/tracks:
     parameters:
@@ -2134,6 +2181,39 @@ components:
         currentVersion:
           type: integer
           description: With `version_conflict`.
+
+    LibraryChanges:
+      type: object
+      required: [changes, next, head]
+      properties:
+        changes:
+          type: array
+          items: { $ref: '#/components/schemas/LibraryChange' }
+        next:
+          type: integer
+          format: int64
+          description: The `after` of the next page. It is `head` when this page was the last.
+        head:
+          type: integer
+          format: int64
+          description: The position of the library's latest change when the page was read.
+
+    LibraryChange:
+      type: object
+      required: [seq, op, kind, id]
+      properties:
+        seq: { type: integer, format: int64 }
+        op: { type: string, enum: [upsert, delete] }
+        kind: { type: string, enum: [track, album, artist, tag] }
+        id: { $ref: '#/components/schemas/Id' }
+        rows:
+          type: object
+          description: |
+            With an upsert: the entity's rows by table name (`tracks`, `track_artists`, `images`
+            and so on). A table the entity has no rows in is left out.
+          additionalProperties:
+            type: array
+            items: { type: object, additionalProperties: true }
 
     PageInfo:
       type: object

@@ -12,7 +12,7 @@ use crate::db::store::SqliteStore;
 use crate::db::waveform;
 
 #[test]
-fn a_placeholder_is_an_album_change() {
+fn a_placeholder_is_a_track_and_album_change() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("lib");
     testing::make_album(&root, "A", "X", 1);
@@ -23,14 +23,18 @@ fn a_placeholder_is_an_album_change() {
     let album_seq = |store: &SqliteStore| {
         scalar::<i64>(store, "SELECT seq FROM library_changes WHERE entity_type = 'album'").unwrap()
     };
+    let track_seq = |store: &SqliteStore| {
+        scalar::<i64>(store, "SELECT seq FROM library_changes WHERE entity_type = 'track'").unwrap()
+    };
     let (hash, _) = store.next_without_placeholder(lib.id, 1).unwrap().remove(0);
 
     // One that could not be made changes nothing clients see.
-    let before = album_seq(&store);
+    let before = (album_seq(&store), track_seq(&store));
     store.store_placeholder(lib.id, &hash, Vec::new()).unwrap();
-    assert_eq!(album_seq(&store), before);
+    assert_eq!((album_seq(&store), track_seq(&store)), before);
     store.store_placeholder(lib.id, &hash, vec![1, 2, 3]).unwrap();
-    assert!(album_seq(&store) > before);
+    assert!(album_seq(&store) > before.0);
+    assert!(track_seq(&store) > before.1, "a track's rows carry its image's placeholder");
 }
 
 #[test]

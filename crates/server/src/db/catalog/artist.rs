@@ -53,11 +53,11 @@ pub(super) fn refresh_artist(tx: &Transaction<'_>, lib: i64, artist: i64, now: i
 }
 
 /// Gives every album `artist` heads, as its first album artist, and every track crediting it
-/// first the artist's `sort_key`, and records each of those albums in the feed. Albums the
-/// batch touched take it again as they are recomputed; this reaches the rest. It costs the
-/// artist's albums and tracks, so the caller runs it only when the artist's key changes. Each row
-/// is written by id, so no planner statistics can turn it into a scan of every album or track
-/// (`design/database.md` §4).
+/// first the artist's `sort_key`, and records each of those albums and tracks in the feed, since
+/// their device rows carry it. Albums the batch touched take it again as they are recomputed;
+/// this reaches the rest. It costs the artist's albums and tracks, so the caller runs it only
+/// when the artist's key changes. Each row is written by id, so no planner statistics can turn
+/// it into a scan of every album or track (`design/database.md` §4).
 fn follow_artist_sort_key(
     tx: &Transaction<'_>,
     lib: i64,
@@ -81,7 +81,9 @@ fn follow_artist_sort_key(
     let mut track_key =
         tx.prepare_cached("UPDATE tracks SET artist_sort_key = ?2 WHERE id = ?1")?;
     for track in tracks.query_map([artist], |r| r.get::<_, i64>(0))? {
-        track_key.execute(params![track?, sort_key])?;
+        let track = track?;
+        track_key.execute(params![track, sort_key])?;
+        feed::record(tx, lib, Entity::Track, track, Op::Upsert, now)?;
     }
     Ok(())
 }
