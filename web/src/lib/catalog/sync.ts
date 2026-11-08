@@ -8,6 +8,7 @@
 import {
 	Catalog,
 	Import,
+	schemaVersion,
 	storeNames,
 	storeRemove,
 	storeReserve
@@ -20,8 +21,19 @@ const PAGE = 1000;
 const REDOWNLOAD_SHARE = 0.1;
 /** Downloads of a snapshot whose hash did not match its ETag, before giving up. */
 const DOWNLOAD_TRIES = 3;
-/** Answers of `503 catalog_building` waited out, before leaving the library to the next pull. */
+/**
+ * Answers of `503 catalog_building` waited out, before leaving the library to the next pull; and
+ * answers of a snapshot no newer than the copy, which the server serves while it builds a newer
+ * one, before catching up from the feed instead.
+ */
 const BUILD_TRIES = 10;
+/** Seconds between asks for a snapshot newer than the copy, unless the server says otherwise. */
+const REBUILD_WAIT = 5;
+/**
+ * Staged changes applied in one transaction. One costs about 130 µs natively, so a chunk stays
+ * near 40 ms on a phone (wasm, 4× slower CPU), and the worker answers between chunks.
+ */
+const APPLY_CHUNK = 50;
 /** Bytes copied from a download into the pool at a time. */
 const CHUNK = 1 << 20;
 /** Tries at reading or deleting the files, which fail while another worker holds the pool. */
@@ -83,6 +95,13 @@ class Offline extends Error {}
 /** The sync was closed while this was under way. */
 class Closed extends Error {}
 
+/** The server's catalog is of another schema version than this build reads: a reload fixes it. */
+class Outdated extends Error {
+	constructor() {
+		super('the server has been updated: reload to keep its music library current on this device');
+	}
+}
+
 /** The server refused a request. */
 class Refused extends Error {
 	constructor(readonly status: number) {
@@ -99,9 +118,16 @@ export function describe(error: unknown): Report {
 	return { message, quota };
 }
 
-/** Whether `error` says the database file is damaged (`SQLITE_CORRUPT`, `SQLITE_NOTADB`). */
+/** Staged changes that would not apply: the file holds part of them, so it cannot be trusted. */
+class Unapplied extends Error {}
+
+/**
+ * Whether `error` says the database file is damaged (`SQLITE_CORRUPT`, `SQLITE_NOTADB`) or holds
+ * an apply that failed part-way.
+ */
 const damaged = (error: unknown) =>
-	error instanceof Error && /malformed|not a database/i.test(error.message);
+	error instanceof Unapplied ||
+	(error instanceof Error && /malformed|not a database/i.test(error.message));
 
 /** The device's copy of the libraries, kept current from the server's feeds. */
 export class CatalogSync {
@@ -119,6 +145,15 @@ export class CatalogSync {
 	#runs = new Map<string, { again: boolean; done: Promise<void> }>();
 	/** The libraries whose bootstrap failed, which only a start or a `hello` tries again. */
 	#failed = new Set<string>();
+	/** The libraries whose snapshot is of another schema version, which this worker leaves be. */
+	#outdated = new Set<string>();
+	/**
+	 * The files part-way through applying staged changes, each with the end of its applies, which
+	 * never rejects. Until then a file holds part of a catch-up.
+	 */
+	#applying = new Map<Catalog, Promise<void>>();
+	/** The files whose apply failed part-way, which answer nothing until they are replaced. */
+	#broken = new WeakSet<Catalog>();
 	/** Pool operations queued one behind another: a transfer holds the whole pool. */
 	#queue: Promise<unknown> = Promise.resolve();
 
@@ -172,6 +207,11 @@ export class CatalogSync {
 					}
 				}
 				await this.#removeFiles(id, kept);
+				// A worker closed mid-apply left the file part-way: it is finished before it answers.
+				const catalog = this.catalogs.get(id);
+				if (catalog && [LIBRARY, ACCOUNT].some((feed) => catalog.applying(feed) !== undefined)) {
+					void this.#pullLibrary(id);
+				}
 			}
 		} catch (error) {
 			this.#closed = true;
@@ -202,19 +242,38 @@ export class CatalogSync {
 	}
 
 	/**
-	 * Answers the operation `name` for `library` from its file, as `Catalog.query` does. Throws
-	 * where the library is not on the device. A file found damaged is deleted and downloaded
-	 * again in the background, and the error is still thrown.
+	 * Answers the operation `name` for `library` from its file, as `Catalog.query` does, once any
+	 * apply under way in it has ended. Throws where the library is not on the device. A file
+	 * found damaged is deleted and downloaded again in the background, and the error is still
+	 * thrown.
 	 */
-	query(library: string, name: string, params: object) {
-		const catalog = this.catalogs.get(library);
-		if (!catalog) throw new Error('the library is not on this device');
+	async query(library: string, name: string, params: object) {
+		let catalog = this.catalogs.get(library);
+		while (catalog && this.#applying.has(catalog)) {
+			await this.#applying.get(catalog);
+			catalog = this.catalogs.get(library);
+		}
+		if (!catalog || this.#broken.has(catalog)) throw new Error('the library is not on this device');
 		try {
 			return catalog.query(this.#user, library, name, JSON.stringify(params));
 		} catch (error) {
 			if (damaged(error)) void this.#run(`lib:${library}`, () => this.#rebuild(library));
 			throw error;
 		}
+	}
+
+	/**
+	 * Whether `library`'s file answers reads now: it is on the device and, online, not part-way
+	 * through applying a catch-up, which the server answers meanwhile. Offline, `query` waits for
+	 * the apply instead.
+	 */
+	onDevice(library: string) {
+		const catalog = this.catalogs.get(library);
+		return (
+			catalog !== undefined &&
+			!this.#broken.has(catalog) &&
+			!(this.#online() && this.#applying.has(catalog))
+		);
 	}
 
 	/** Resolves once no pull is under way. */
@@ -311,7 +370,9 @@ export class CatalogSync {
 		for (const id of listed) {
 			if (!this.catalogs.has(id) && !this.#failed.has(id)) void this.#pullLibrary(id);
 		}
-		for (const [id, catalog] of [...this.catalogs]) await this.#syncAccount(id, catalog);
+		for (const [id, catalog] of [...this.catalogs]) {
+			if (!this.#outdated.has(id)) await this.#syncAccount(id, catalog);
+		}
 	}
 
 	/** Brings `catalog`'s playlists up to the account feed's head. */
@@ -349,7 +410,7 @@ export class CatalogSync {
 			);
 			catalog.stage(ACCOUNT, JSON.stringify(mine));
 			if (page.next >= page.head) {
-				catalog.commit(ACCOUNT, BigInt(page.next));
+				await this.#apply(catalog, ACCOUNT, BigInt(page.next), stale);
 				return true;
 			}
 			after = page.next;
@@ -367,9 +428,17 @@ export class CatalogSync {
 	 * starts with a snapshot, as when the account feed no longer reaches back.
 	 */
 	async #syncLibrary(id: string, refresh = false) {
+		if (this.#outdated.has(id)) return;
 		let rebuilds = 0;
 		let fresh = false;
 		let outcome: 'current' | 'far' | 'expired' | 'damaged' = refresh ? 'expired' : 'current';
+		const held = this.catalogs.get(id);
+		try {
+			if (held) await this.#finish(id, held);
+		} catch (error) {
+			if (!damaged(error)) throw error;
+			outcome = 'damaged';
+		}
 		for (;;) {
 			let catalog = this.catalogs.get(id);
 			if (!catalog || outcome !== 'current') {
@@ -377,7 +446,8 @@ export class CatalogSync {
 					await this.#discard(id);
 				}
 				// A snapshot behind the feed's own reach replaces the copy; the copy serves until then.
-				if (outcome === 'expired' && ++rebuilds > 2) {
+				// A feed that keeps damaging fresh copies leaves the library to the server.
+				if ((outcome === 'expired' || outcome === 'damaged') && ++rebuilds > 2) {
 					throw new Error('the library cannot be brought up to date');
 				}
 				catalog = await this.#boot(id, outcome === 'expired');
@@ -431,10 +501,53 @@ export class CatalogSync {
 			if (!fresh && pulled > this.#entities(id, catalog) * REDOWNLOAD_SHARE) return 'far';
 			catalog.stage(LIBRARY, JSON.stringify(page.changes));
 			if (page.next >= page.head) {
-				catalog.commit(LIBRARY, BigInt(page.next));
+				await this.#apply(catalog, LIBRARY, BigInt(page.next), stale);
 				return 'current';
 			}
 			after = page.next;
+		}
+	}
+
+	/**
+	 * Applies what `catalog` has staged for `feed` and moves its position to `through`, a chunk a
+	 * transaction, yielding between chunks so the worker answers meanwhile. Until it ends, reads
+	 * of the file go to the server or wait ([`onDevice`](#onDevice)). Stops once `stale` says the
+	 * file is not the one to write, leaving the file's mark for the next pull to finish. A chunk
+	 * that fails marks the file broken, so it answers nothing, and throws [`Unapplied`], which
+	 * callers treat as damage.
+	 */
+	async #apply(catalog: Catalog, feed: string, through: bigint, stale: () => boolean) {
+		const before = this.#applying.get(catalog);
+		const run = (async () => {
+			await before;
+			while (!stale()) {
+				let done: boolean;
+				try {
+					done = catalog.commit(feed, through, APPLY_CHUNK);
+				} catch (error) {
+					this.#broken.add(catalog);
+					throw new Unapplied(`staged changes would not apply: ${describe(error).message}`);
+				}
+				if (done) return;
+				await new Promise((resolve) => setTimeout(resolve));
+				await this.#queue;
+			}
+		})();
+		const end = run.catch(() => {});
+		this.#applying.set(catalog, end);
+		try {
+			await run;
+		} finally {
+			if (this.#applying.get(catalog) === end) this.#applying.delete(catalog);
+		}
+	}
+
+	/** Finishes the applies a closed worker left part-way in the library's file `catalog`. */
+	async #finish(id: string, catalog: Catalog) {
+		const stale = () => this.#gone(id, catalog);
+		for (const feed of [LIBRARY, ACCOUNT]) {
+			const through = stale() ? undefined : catalog.applying(feed);
+			if (through !== undefined) await this.#apply(catalog, feed, through, stale);
 		}
 	}
 
@@ -491,7 +604,8 @@ export class CatalogSync {
 	 * Downloads a library's snapshot, imports it as a new file, adds the library's playlists to
 	 * it, and swaps it in for any copy the library has. Nothing shows until the swap. Undefined
 	 * when the account does not reach the library. Unless `forced`, a snapshot no newer than the
-	 * copy's own position is not imported, and the copy is returned.
+	 * copy's own position is not imported: it is asked for again while the server builds a newer
+	 * one, and the copy is returned if none comes.
 	 */
 	async #bootstrap(id: string, forced: boolean) {
 		const existing = this.catalogs.get(id);
@@ -502,7 +616,7 @@ export class CatalogSync {
 		const file = `lib-${id}-${generation + 1}.db`;
 		await this.#reserve(2 * (this.catalogs.size + 3));
 		let seq: number;
-		for (let tries = 1; ; tries++) {
+		for (let mismatches = 0, older = 0; ;) {
 			const response = await this.#snapshot(id);
 			if (!response) {
 				await this.#discard(id);
@@ -512,7 +626,10 @@ export class CatalogSync {
 			if (existing && !forced && seq <= Number(existing.cursor(LIBRARY))) {
 				if (this.catalogs.get(id) === existing) {
 					void response.body?.cancel();
-					return existing;
+					if (++older === BUILD_TRIES) return existing;
+					// Asking for a stale snapshot starts the build of a newer one.
+					await this.#sleep(this.#retryAfter(response, REBUILD_WAIT));
+					continue;
 				}
 			}
 			try {
@@ -520,7 +637,7 @@ export class CatalogSync {
 				break;
 			} catch (error) {
 				const mismatch = error instanceof Error && error.message.includes('hash mismatch');
-				if (!mismatch || tries === DOWNLOAD_TRIES) throw error;
+				if (!mismatch || ++mismatches === DOWNLOAD_TRIES) throw error;
 			}
 		}
 		let catalog: Catalog | undefined;
@@ -529,8 +646,9 @@ export class CatalogSync {
 			if (!(await this.#catchUpAccount(id, catalog, () => this.#closed))) {
 				throw new Error('the account feed refused a start from the beginning');
 			}
-			catalog.commit(LIBRARY, BigInt(seq));
-			catalog.commit(OWNER, BigInt(this.#user));
+			// A new file stages nothing for these, so each is done in one call.
+			catalog.commit(LIBRARY, BigInt(seq), APPLY_CHUNK);
+			catalog.commit(OWNER, BigInt(this.#user), APPLY_CHUNK);
 		} catch (error) {
 			catalog?.free();
 			await this.#remove(file);
@@ -549,7 +667,8 @@ export class CatalogSync {
 
 	/**
 	 * The snapshot's response, waiting out `503 catalog_building`; null where the account does
-	 * not reach the library.
+	 * not reach the library. A snapshot of another schema version than this build's stops the
+	 * library's sync for good: only a reload, which brings the new build, helps.
 	 */
 	async #snapshot(id: string) {
 		for (let tries = 0; tries < BUILD_TRIES; tries++) {
@@ -557,9 +676,14 @@ export class CatalogSync {
 			if (response.status === 404) return null;
 			if (response.status !== 503) {
 				if (!response.ok) throw new Refused(response.status);
+				if (Number(response.headers.get('x-jewelcase-schema')) !== schemaVersion()) {
+					void response.body?.cancel();
+					this.#outdated.add(id);
+					throw new Outdated();
+				}
 				return response;
 			}
-			await this.#sleep((Number(response.headers.get('retry-after')) || 1) * 1000);
+			await this.#sleep(this.#retryAfter(response, 1));
 		}
 		// Still building: a later pull asks again.
 		throw new Offline();
@@ -677,6 +801,12 @@ export class CatalogSync {
 	/** Fetches `path` as JSON. */
 	async #json<T>(path: string): Promise<T> {
 		return (await this.#page(await this.#get(path))) as T;
+	}
+
+	/** The milliseconds `response`'s `Retry-After` asks to wait, or `seconds` when it has none. */
+	#retryAfter(response: Response, seconds: number) {
+		const after = response.headers.get('retry-after');
+		return (after === null ? seconds : Number(after) || 0) * 1000;
 	}
 
 	/** Waits `ms`, or less if closed. */

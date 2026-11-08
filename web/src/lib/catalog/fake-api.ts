@@ -2,6 +2,8 @@
 // change feed, and the account feed, held in memory and served as `fetch` does. A test sets
 // what the server holds and how it misbehaves, and reads what was asked.
 
+import { schemaVersion } from '$lib/catalog-wasm/jewelcase_catalog_wasm.js';
+
 type Change = { seq: number; op: string; kind: string; id: string; key?: number; rows?: object };
 type Feed = { changes: Change[]; head: number };
 
@@ -22,6 +24,8 @@ export class FakeApi {
 	#libraries: string[] = [];
 	#snapshot: Uint8Array = new Uint8Array(0);
 	#seq = new Map<string, number>();
+	#rebuilds = new Map<string, number>();
+	#schema: number | undefined;
 	#etag = '';
 	#feeds = new Map<string, Feed>();
 	#account: Feed = { changes: [], head: 0 };
@@ -47,6 +51,19 @@ export class FakeApi {
 	/** The feed position the snapshot of `library` is current to. */
 	setSeq(library: string, seq: number) {
 		this.#seq.set(library, seq);
+	}
+
+	/**
+	 * Moves the snapshot of `library` on to `seq` after the next time it is asked for, as the
+	 * server serves a stale snapshot once more while that request rebuilds it.
+	 */
+	rebuild(library: string, seq: number) {
+		this.#rebuilds.set(library, seq);
+	}
+
+	/** Serves snapshots as of device schema version `version`, rather than this build's. */
+	setSchema(version: number) {
+		this.#schema = version;
 	}
 
 	/** The library's change feed: `changes` in order, and the position of its latest. */
@@ -165,6 +182,12 @@ export class FakeApi {
 		const wrong = this.#wrongEtags > 0;
 		if (wrong) this.#wrongEtags--;
 		const bytes = this.#snapshot;
+		const seq = this.#seq.get(library[1]) ?? 0;
+		const rebuilt = this.#rebuilds.get(library[1]);
+		if (rebuilt !== undefined) {
+			this.#rebuilds.delete(library[1]);
+			this.#seq.set(library[1], rebuilt);
+		}
 		// In pieces, as a download arrives.
 		let at = 0;
 		const stall = this.#bodyHeld;
@@ -181,7 +204,10 @@ export class FakeApi {
 		return new Response(body, {
 			headers: {
 				etag: `"${wrong ? '0'.repeat(64) : this.#etag}"`,
-				'x-jewelcase-seq': String(this.#seq.get(library[1]) ?? 0),
+				'x-jewelcase-seq': String(seq),
+				'x-jewelcase-schema': String(this.#schema ?? schemaVersion()),
+				// A stale snapshot is asked for again at once rather than after the sync's wait.
+				'retry-after': '0',
 				'content-type': 'application/vnd.sqlite3'
 			}
 		});

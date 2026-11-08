@@ -6,12 +6,11 @@
 // (port 4180, or PORT). OPFS needs a secure context, and a phone cannot reach this machine as
 // `localhost`, so put https in front of it, which must pass the COOP/COEP headers through:
 // `tailscale serve --bg 4180` or `cloudflared tunnel --url http://localhost:4180`. Open the https
-// URL in Safari and tap Run. The page downloads about 550 MB; add `?json=0` to the URL to skip
-// the JSON half (about 220 MB, and minutes of work).
+// URL in Safari and tap Run. The page downloads the database file, about 330 MB.
 import { createReadStream } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { extname, join, resolve, sep } from 'node:path';
+import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url)).replace(/\/$/, '');
@@ -24,8 +23,7 @@ const roots = [
 const types = {
 	'.html': 'text/html',
 	'.js': 'text/javascript',
-	'.wasm': 'application/wasm',
-	'.json': 'application/json'
+	'.wasm': 'application/wasm'
 };
 
 /** Starts the server on `port`, all interfaces, and resolves once it listens. */
@@ -35,17 +33,6 @@ export function serve(port) {
 		response.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
 		try {
 			const path = decodeURIComponent(new URL(request.url, 'http://x').pathname);
-			if (path === '/data/index.json') {
-				const names = (await readdir(join(data, 'json'))).filter((name) => name.endsWith('.jsonl'));
-				const tables = await Promise.all(
-					names.map(async (name) => ({
-						table: name.slice(0, -6),
-						size: (await stat(join(data, 'json', name))).size
-					}))
-				);
-				response.setHeader('Content-Type', 'application/json');
-				return response.end(JSON.stringify({ tables }));
-			}
 			const [prefix, root] = roots.find(([prefix]) => path.startsWith(prefix));
 			const file = resolve(root, path === '/' ? 'index.html' : path.slice(prefix.length));
 			if (!file.startsWith(root + sep)) throw new Error('outside');

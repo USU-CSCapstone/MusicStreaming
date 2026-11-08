@@ -15,6 +15,7 @@ export class Harness {
 	api = new FakeApi();
 	private reports: Report[] = [];
 	#sync: CatalogSync | undefined;
+	#online = true;
 
 	/** Closes any sync, deletes every file, and clears the fake server, with the snapshot to serve. */
 	async reset(snapshot: Uint8Array) {
@@ -23,6 +24,7 @@ export class Harness {
 		this.api = new FakeApi();
 		await this.api.setSnapshot(snapshot);
 		this.reports = [];
+		this.#online = true;
 	}
 
 	/** Starts a new sync for `user` as a restarted worker does, closing the old one. */
@@ -32,7 +34,8 @@ export class Harness {
 			api: '/api/v1',
 			user,
 			fetch: this.api.fetch,
-			report: (report) => this.reports.push(report)
+			report: (report) => this.reports.push(report),
+			online: () => this.#online
 		});
 		await this.#sync.start();
 	}
@@ -68,8 +71,41 @@ export class Harness {
 	}
 
 	/** The answer to a query of the library's file, as a person's page would ask it. */
-	query(library: string, name: string, params: object) {
-		return JSON.parse(this.#sync!.query(library, name, params));
+	async query(library: string, name: string, params: object) {
+		return JSON.parse(await this.#sync!.query(library, name, params));
+	}
+
+	/** Whether the library's file answers reads now, rather than the server. */
+	onDevice(library: string) {
+		return this.#sync!.onDevice(library);
+	}
+
+	/** Closes the sync once the library's file is part-way through an apply, as a closed tab does. */
+	async stopMidApply(library: string) {
+		while (this.#sync!.onDevice(library)) await new Promise((resolve) => setTimeout(resolve));
+		await this.#sync!.close();
+	}
+
+	/**
+	 * Waits, in the worker, until the library's file is part-way through an apply, and says what
+	 * a read of the file itself finds then, where the file's mark says the apply goes, whether
+	 * the file answers while offline, and what a person's read made then answers once it may (or
+	 * its error).
+	 */
+	async midApply(library: string, name: string, params: object) {
+		const sync = this.#sync!;
+		while (sync.onDevice(library)) await new Promise((resolve) => setTimeout(resolve));
+		const catalog = sync.catalogs.get(library)!;
+		const read = sync.query(library, name, params);
+		this.#online = false;
+		const offline = sync.onDevice(library);
+		this.#online = true;
+		return {
+			partial: JSON.parse(catalog.query('1', library, name, JSON.stringify(params))),
+			through: Number(catalog.applying('library')),
+			offline,
+			read: await read.then(JSON.parse, (error: Error) => ({ error: error.message }))
+		};
 	}
 
 	/** A query of `library`'s file for the library `as`, whose rows the file should not hold. */
@@ -102,7 +138,7 @@ export class Harness {
 	/** Runs `sql` on a file from under a stopped sync. */
 	async run(file: string, statements: string[]) {
 		const catalog = await Catalog.open(file);
-		for (const sql of statements) catalog.sql(sql, []);
+		for (const sql of statements) catalog.sql(sql);
 		catalog.free();
 	}
 
@@ -123,10 +159,9 @@ export class Harness {
 	/** Breaks the schema of the library's open file, so its next query finds it malformed. */
 	damage(library: string) {
 		const catalog = this.#sync!.catalogs.get(library)!;
-		catalog.sql('PRAGMA writable_schema = ON', []);
-		catalog.sql("UPDATE sqlite_schema SET sql = 'CREATE TABLE tracks (' WHERE name = 'tracks'", []);
-		catalog.sql('PRAGMA schema_version = 4242', []);
-		catalog.sql('PRAGMA writable_schema = OFF', []);
+		catalog.sql(
+			"PRAGMA writable_schema = ON; UPDATE sqlite_schema SET sql = 'CREATE TABLE tracks (' WHERE name = 'tracks'; PRAGMA schema_version = 4242; PRAGMA writable_schema = OFF"
+		);
 	}
 }
 

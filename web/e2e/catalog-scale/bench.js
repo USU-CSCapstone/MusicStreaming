@@ -1,6 +1,5 @@
 // The page of the device-catalog scale gate: runs each phase in a fresh worker and prints the
 // table. `runBench()` is what the Playwright spec calls; the Run button is for a phone.
-const CHUNK = 5000;
 
 /** Runs one phase in a new worker and resolves with its table rows. */
 function phase(message) {
@@ -67,14 +66,7 @@ window.runBench = async () => {
 		]
 	];
 	rows.push(...env);
-	// `?json=0` skips the JSON apply, which takes over an hour with the CPU held to a quarter.
-	const json = new URLSearchParams(location.search).get('json') !== '0';
-	for (const message of [
-		{ phase: 'import' },
-		...(json ? [{ phase: 'json', chunk: CHUNK }] : []),
-		{ phase: 'query', db: 'import.db' },
-		...(json ? [{ phase: 'query', db: 'json.db' }] : [])
-	]) {
+	for (const message of [{ phase: 'import' }, { phase: 'query', db: 'import.db' }]) {
 		rows.push(...(await phase(message)));
 	}
 	return table(rows);

@@ -1,7 +1,7 @@
-//! Writing the device database from the feeds: changes staged a page at a time and applied in one
-//! transaction at the head (`design/general.md` §3), with the position each feed has reached. The
-//! staging and the positions are tables of the database file but not of the device schema, which
-//! a downloaded snapshot replaces whole.
+//! Writing the device database from the feeds: changes staged a page at a time and applied at the
+//! head a chunk at a time (`design/general.md` §3), with the position each feed has reached and
+//! a mark while an apply is part-way. The staging, the positions and the marks are tables of the
+//! database file but not of the device schema, which a downloaded snapshot replaces whole.
 
 use std::collections::BTreeMap;
 
@@ -12,14 +12,17 @@ use wasm_bindgen::prelude::*;
 
 use super::Catalog;
 
-/// What a database file keeps besides the device schema: each feed's last applied position, and
-/// the changes pulled past it that are not applied yet.
+/// What a database file keeps besides the device schema: each feed's last applied position, the
+/// changes pulled past it that are not applied yet, and the position an apply that is part-way
+/// goes to.
 pub(crate) const FEED_STATE: &str = "\
     CREATE TABLE IF NOT EXISTS feed_cursors (feed TEXT PRIMARY KEY, seq INTEGER NOT NULL) \
         WITHOUT ROWID; \
     CREATE TABLE IF NOT EXISTS staged_changes ( \
         feed TEXT NOT NULL, seq INTEGER NOT NULL, change TEXT NOT NULL, PRIMARY KEY (feed, seq) \
-    ) WITHOUT ROWID;";
+    ) WITHOUT ROWID; \
+    CREATE TABLE IF NOT EXISTS feed_applying (feed TEXT PRIMARY KEY, through INTEGER NOT NULL) \
+        WITHOUT ROWID;";
 
 /// A feed's change as the library and account feeds send it.
 #[derive(Serialize, Deserialize)]
@@ -60,18 +63,23 @@ impl Catalog {
         Ok(tx.commit()?)
     }
 
-    /// Applies every change kept for `feed` in order, and moves its position to `through` (the
-    /// feed's head, or its next position), all in one transaction: a reader sees the database
-    /// before or after, never between, and a failure changes nothing. Throws on a change that
-    /// does not fit the schema.
-    pub fn commit(&self, feed: &str, through: i64) -> Result<(), JsError> {
+    /// Applies the oldest `limit` changes kept for `feed` in one transaction that also deletes
+    /// them, and says whether none is left. Until the last is applied, the file marks `feed` as
+    /// applying through `through` (see `applying`); the transaction that applies the last moves
+    /// the feed's position to `through` and clears the mark. Between two calls a reader sees part
+    /// of the changes, so the caller keeps readers off the file until this says it is done.
+    /// Throws on a change that does not fit the schema, which leaves that chunk as it was.
+    pub fn commit(&self, feed: &str, through: i64, limit: u32) -> Result<bool, JsError> {
         let tx = self.0.unchecked_transaction()?;
+        let mut last = None;
         {
-            let mut select =
-                tx.prepare("SELECT change FROM staged_changes WHERE feed = ?1 ORDER BY seq")?;
-            let mut staged = select.query([feed])?;
+            let mut select = tx.prepare_cached(
+                "SELECT seq, change FROM staged_changes WHERE feed = ?1 ORDER BY seq LIMIT ?2",
+            )?;
+            let mut staged = select.query(params![feed, limit])?;
             while let Some(row) = staged.next()? {
-                let text = row.get_ref(0)?.as_str().map_err(rusqlite::Error::from)?;
+                last = Some(row.get::<_, i64>(0)?);
+                let text = row.get_ref(1)?.as_str().map_err(rusqlite::Error::from)?;
                 let Change { op, kind, id, key, rows, .. } = serde_json::from_str(text)?;
                 match (op, rows) {
                     (Op::Upsert, Some(tables)) => {
@@ -88,12 +96,42 @@ impl Catalog {
                 }
             }
         }
-        tx.execute("DELETE FROM staged_changes WHERE feed = ?1", [feed])?;
-        tx.execute(
-            "INSERT OR REPLACE INTO feed_cursors (feed, seq) VALUES (?1, ?2)",
-            params![feed, through],
+        if let Some(last) = last {
+            tx.execute(
+                "DELETE FROM staged_changes WHERE feed = ?1 AND seq <= ?2",
+                params![feed, last],
+            )?;
+        }
+        let done = !tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM staged_changes WHERE feed = ?1)",
+            [feed],
+            |row| row.get::<_, bool>(0),
         )?;
-        Ok(tx.commit()?)
+        if done {
+            tx.execute("DELETE FROM feed_applying WHERE feed = ?1", [feed])?;
+            tx.execute(
+                "INSERT OR REPLACE INTO feed_cursors (feed, seq) VALUES (?1, ?2)",
+                params![feed, through],
+            )?;
+        } else {
+            tx.execute(
+                "INSERT OR REPLACE INTO feed_applying (feed, through) VALUES (?1, ?2)",
+                params![feed, through],
+            )?;
+        }
+        tx.commit()?;
+        Ok(done)
+    }
+
+    /// The position an apply of `feed` that stopped part-way, as when its worker was closed, was
+    /// going to: `commit` up to it finishes the apply. Undefined when none is part-way.
+    pub fn applying(&self, feed: &str) -> Result<Option<i64>, JsError> {
+        Ok(self
+            .0
+            .query_row("SELECT through FROM feed_applying WHERE feed = ?1", [feed], |row| {
+                row.get(0)
+            })
+            .optional()?)
     }
 
     /// The position `feed` was last applied through, or 0 if it never was.

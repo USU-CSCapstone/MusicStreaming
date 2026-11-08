@@ -116,17 +116,17 @@ async function started(...ids: string[]) {
 }
 
 /**
- * Moves the started library on to `BASE`, a catch-up of one change that gives it 1,000 tracks, so
- * the catch-ups that follow are each well under a tenth of it.
+ * Moves the started library on to `BASE`, a catch-up of one change that gives it `tracks` tracks,
+ * so the catch-ups that follow are each well under a tenth of it.
  */
 const BASE = SEQ + 1;
-async function grown() {
+async function grown(tracks = 1000) {
 	const counts = {
 		seq: BASE,
 		op: 'upsert',
 		kind: 'library',
 		id: '1',
-		rows: { libraries: [{ id: '1', track_count: 1000, album_count: 0, artist_count: 0 }] }
+		rows: { libraries: [{ id: '1', track_count: tracks, album_count: 0, artist_count: 0 }] }
 	};
 	await h.api.setFeed('1', [counts], BASE);
 	await h.message(libraryChanged(BASE));
@@ -143,6 +143,21 @@ const tagName = async (id: string) =>
 	((await h.query('1', 'getTag', { tagId: id })) as { name: string } | null)?.name;
 const total = async (name: string) =>
 	((await h.query('1', name, { limit: 1 })) as { total: number }).total;
+
+/** The changes of a catch-up of `count` new tags after `BASE`, which apply in many chunks. */
+const LARGE = 2000;
+const largeFeed = () =>
+	Array.from({ length: LARGE }, (_, i) => tag(BASE + 1 + i, `${100 + i}`, `Tag ${i}`));
+
+/** Starts library 1, large enough that `LARGE` changes are a catch-up, and serves them. */
+async function largeCatchUp() {
+	await started('1');
+	await grown(100 * LARGE);
+	const before = await total('listTags');
+	await h.api.setFeed('1', largeFeed(), BASE + LARGE);
+	await h.message(libraryChanged(BASE + LARGE));
+	return before;
+}
 
 describe('catalog sync', () => {
 	it('a library appears only after its snapshot is swapped in', async () => {
@@ -423,11 +438,14 @@ describe('catalog sync', () => {
 
 		const more = [tag(12, '91', 'Jazz'), tag(13, '92', 'Soul'), tag(14, '93', 'Folk')];
 		await h.api.setFeed('1', more, 14);
-		await h.api.setSeq('1', 14);
+		// As the server does, the first ask gets the stale snapshot and starts a newer one.
+		await h.api.rebuild('1', 14);
 		await h.message(libraryChanged(14));
 		await h.idle();
-		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(3);
 		expect(await h.cursor('1', 'library')).toBe(14);
+		// The changes came with the newer snapshot, which this one stands in for, not the feed.
+		expect(await tagName('91')).toBeUndefined();
 		expect(await h.libraries()).toEqual(['1']);
 		// The copy it replaced is gone, so the storage is not doubled.
 		expect(await h.files()).toHaveLength(1);
@@ -510,7 +528,7 @@ describe('catalog sync', () => {
 		expect(await tagName('90')).toBe('Rock');
 	});
 
-	it('a far catch-up whose snapshot is no newer is made from the feed, and asks once', async () => {
+	it('a far catch-up whose snapshot stays no newer is made from the feed, after asking again', async () => {
 		await started('1');
 		await grown();
 		const [file] = await h.files();
@@ -520,8 +538,9 @@ describe('catalog sync', () => {
 		await h.message(libraryChanged(BASE + 300));
 		await h.idle();
 
-		// The snapshot is at SEQ, behind the copy's position, so it is asked about and not imported.
-		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
+		// The snapshot stays at SEQ, behind the copy's position: asked for while the server might
+		// build a newer one, then never imported.
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(11);
 		expect(await h.files()).toEqual([file]);
 		expect(await h.cursor('1', 'library')).toBe(BASE + 300);
 		expect(await tagName('399')).toBe('Tag 299');
@@ -610,6 +629,88 @@ describe('catalog sync', () => {
 		await h.api.releaseBody();
 		await h.idle();
 		expect(await h.libraries()).toEqual(['1', '2']);
+	});
+
+	it('a large catch-up applies in several chunks and stays invisible until the end', async () => {
+		const before = await largeCatchUp();
+		const mid = await h.midApply('1', 'listTags', { limit: 1 });
+		expect(mid.partial.total).toBeGreaterThan(before);
+		expect(mid.partial.total).toBeLessThan(before + LARGE);
+		expect(mid.through).toBe(BASE + LARGE);
+		// A person's read made meanwhile answers only once all of it is in.
+		expect(mid.read.total).toBe(before + LARGE);
+
+		await h.idle();
+		expect(await h.onDevice('1')).toBe(true);
+		expect(await h.cursor('1', 'library')).toBe(BASE + LARGE);
+	});
+
+	it('reads during an apply go to the server, or offline wait for it', async () => {
+		const before = await largeCatchUp();
+		const mid = await h.midApply('1', 'listTags', { limit: 1 });
+		// `midApply` returns once the file stops answering online reads.
+		expect(mid.offline).toBe(true);
+		expect(mid.read.total).toBe(before + LARGE);
+		await h.idle();
+	});
+
+	it('an apply a closed worker left part-way is finished before the library answers', async () => {
+		const before = await largeCatchUp();
+		await h.stopMidApply('1');
+		const asked = (await h.api.asked('/')).length;
+
+		await h.start();
+		expect(await h.onDevice('1')).toBe(false);
+		expect(await total('listTags')).toBe(before + LARGE);
+		await h.idle();
+		expect(await h.cursor('1', 'library')).toBe(BASE + LARGE);
+		expect(await h.pulled('1', 'library')).toBe(BASE + LARGE);
+		// Nothing of the catch-up was pulled again: the finish and the start's pull ask after it.
+		const pulls = (await h.api.asked('/'))
+			.slice(asked)
+			.filter((p) => p.includes('/libraries/1/changes'));
+		expect(new Set(pulls)).toEqual(
+			new Set([`/libraries/1/changes?after=${BASE + LARGE}&limit=1000`])
+		);
+	});
+
+	it('a catch-up that will not apply bootstraps again, and its part is never read', async () => {
+		await started('1');
+		await grown(100 * LARGE);
+		const before = await total('listTags');
+		const feed = largeFeed();
+		// A NULL name breaks the table's constraint, in the last chunk.
+		(feed[LARGE - 1].rows.tags[0] as { name: string | null }).name = null;
+		await h.api.setFeed('1', feed, BASE + LARGE);
+		// The snapshot downloaded again is current to the feed's head.
+		await h.api.setSeq('1', BASE + LARGE);
+		await h.message(libraryChanged(BASE + LARGE));
+
+		const mid = await h.midApply('1', 'listTags', { limit: 1 });
+		expect(mid.partial.total).toBeGreaterThan(before);
+		expect(mid.read).toEqual({ error: 'the library is not on this device' });
+		await h.idle();
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
+		expect(await h.cursor('1', 'library')).toBe(BASE + LARGE);
+		expect(await total('listTags')).toBe(before);
+		expect(await h.files()).toHaveLength(1);
+	});
+
+	it('a snapshot of another schema version is not imported, and is not asked for again', async () => {
+		await serve('1');
+		await h.api.setSchema(99);
+		await h.start();
+		await h.idle();
+		expect(await h.libraries()).toEqual([]);
+		expect(await h.files()).toEqual([]);
+		expect(await h.reported()).toHaveLength(1);
+
+		await h.message(hello);
+		await h.message(libraryChanged(SEQ + 1));
+		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.idle();
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(1);
+		expect(await h.reported()).toHaveLength(1);
 	});
 
 	it('pulls on hello', async () => {

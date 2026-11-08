@@ -10,13 +10,18 @@ use sqlite_wasm_rs::WasmOsCallback;
 use sqlite_wasm_vfs::sahpool::{OpfsSAHPoolCfg, install};
 use wasm_bindgen::prelude::*;
 
-mod bench;
 mod feed;
 mod query;
 mod store;
 
 /// The sahpool VFS's registered name, which `open` names when opening the file.
 const VFS: &str = "opfs-sahpool";
+
+/// The device schema version this build reads and writes, which a snapshot must be of.
+#[wasm_bindgen(js_name = schemaVersion)]
+pub fn schema_version() -> i32 {
+    SCHEMA_VERSION
+}
 
 /// The device database, held in WebAssembly memory and (for `open`) on OPFS, with the search
 /// index built from it once `buildIndex` has run. A file holds one library. Call `free()` when
@@ -52,6 +57,12 @@ impl Catalog {
         let mut statement =
             self.0.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")?;
         Ok(statement.query_map([], |row| row.get(0))?.collect::<Result<_, _>>()?)
+    }
+
+    /// Runs `statements` as they are. Only the sync's tests call it, to damage a file as a failing
+    /// disk would; the app never does.
+    pub fn sql(&self, statements: &str) -> Result<(), JsError> {
+        Ok(self.0.execute_batch(statements)?)
     }
 
     /// Creates the schema in a new database, and checks the version of an existing one. Either way
