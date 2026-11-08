@@ -353,7 +353,13 @@ export class QueueStore {
 		if (!this.catalog || (recipe.type === 'search' && !offline)) return null;
 		try {
 			const params = { recipe };
-			const request = { type: 'query', library: libraryId, name: 'resolveRecipe', params } as const;
+			const request = {
+				type: 'query',
+				library: libraryId,
+				name: 'resolveRecipe',
+				params,
+				offline
+			} as const;
 			return JSON.parse(await this.catalog.ask(request));
 		} catch {
 			return null;

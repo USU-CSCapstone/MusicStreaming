@@ -311,11 +311,16 @@ class FakeCatalog {
 	answer: { ids: string[]; hash: string } | null | 'fails' = 'fails';
 	/** Holds back the answer until it is opened. */
 	gate: Promise<void> | null = null;
-	asked: { library: string; name: string }[] = [];
+	asked: { library: string; name: string; offline?: boolean }[] = [];
 
 	/** Answers a query as the catalog's owner does, with JSON; rejects as it does when it cannot. */
-	ask = async (request: { type: string; library?: string; name?: string }): Promise<string> => {
-		this.asked.push({ library: request.library!, name: request.name! });
+	ask = async (request: {
+		type: string;
+		library?: string;
+		name?: string;
+		offline?: boolean;
+	}): Promise<string> => {
+		this.asked.push({ library: request.library!, name: request.name!, offline: request.offline });
 		await this.gate;
 		if (this.answer === 'fails') throw new Error('the library is not on this device');
 		return JSON.stringify(this.answer && { ...this.answer, recipe: { type: 'album' } });
@@ -1531,7 +1536,7 @@ describe('QueueStore lists and rows', () => {
 			expect(now()).toEqual(['201', '202', '203', '204']);
 			expect(server.listGets()).toEqual(['h']);
 			expect(server.rowGets()).toEqual(pages);
-			expect(device.asked).toEqual([{ library: 'lib', name: 'resolveRecipe' }]);
+			expect(device.asked).toEqual([{ library: 'lib', name: 'resolveRecipe', offline: false }]);
 			expect(caches.hashes()).toEqual([SERVER_LIST]);
 		});
 
@@ -1634,6 +1639,7 @@ describe('QueueStore lists and rows', () => {
 			store.start({ ...search, queueId: QUEUE, offline: true });
 			await settle();
 			expect(device.asked).toHaveLength(1);
+			expect(device.asked[0].offline).toBe(true);
 		});
 
 		it('sends no offline flag to the server', async () => {
