@@ -286,6 +286,32 @@ describe('catalog sync', () => {
 		expect(await h.reported()).toEqual([]);
 	});
 
+	it('hints for a library arrive while others bootstrap, and none fails', async () => {
+		await started('1');
+		await grown();
+		const others = Array.from({ length: 5 }, (_, i) => `${i + 2}`);
+		await h.api.setLibraries(['1', ...others]);
+		for (const id of others) {
+			await h.api.setSeq(id, SEQ);
+			await h.api.setFeed(id, [], SEQ);
+		}
+		await h.api.setPageSize(1);
+		await h.message(hello);
+		// Each hint is a further page of changes, staged and applied while the others bootstrap.
+		for (let i = 0; i < 40; i++) {
+			const seq = BASE + 1 + i;
+			const changes = Array.from({ length: i + 1 }, (_, j) =>
+				tag(BASE + 1 + j, `${90 + j}`, `Tag ${j}`)
+			);
+			await h.api.setFeed('1', changes, seq);
+			await h.message(libraryChanged(seq));
+		}
+		await h.idle();
+		expect(await h.reported()).toEqual([]);
+		expect(await h.libraries()).toEqual(['1', ...others]);
+		expect(await tagName('129')).toBe('Tag 39');
+	});
+
 	it('a corrupt or missing database bootstraps again', async () => {
 		await started('1');
 		await h.stop();

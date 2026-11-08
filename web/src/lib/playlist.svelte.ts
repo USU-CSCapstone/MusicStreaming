@@ -54,6 +54,8 @@ export class EditablePlaylist {
 	// Reassigned, never mutated, so `saving` is reactive.
 	#queue = $state.raw<Pending[]>([]);
 	#sending: Promise<void> | null = null;
+	// Whether `#confirmed` is known to be the server's version, which the first edit makes sure of.
+	#verified = false;
 	#added = $state(false);
 
 	constructor(fetch: Fetch, loaded: LoadedPlaylist) {
@@ -132,8 +134,9 @@ export class EditablePlaylist {
 		let attempt = 0;
 		while (this.#queue.length > 0) {
 			const next = this.#queue[0];
-			const { playlist, items } = this.#confirmed;
 			try {
+				if (!this.#verified) await this.#verify();
+				const { playlist, items } = this.#confirmed;
 				const confirmed = await editPlaylist(
 					this.#fetch,
 					playlist.libraryId,
@@ -160,11 +163,33 @@ export class EditablePlaylist {
 		this.#sending = null;
 	}
 
+	/**
+	 * Before the first edit: makes sure the playlist is the server's version, which a device
+	 * that is behind does not give. Positions are the device's items', so if the server's items
+	 * differ the edit conflicts, as another device's change would.
+	 */
+	async #verify() {
+		const { playlist, items } = this.#confirmed;
+		let server = await getPlaylist(this.#fetch, playlist.libraryId, playlist.id, true);
+		if (server.version !== playlist.version) {
+			const loaded = await loadPlaylist(this.#fetch, playlist.libraryId, playlist.id, true);
+			const names = (list: PlaylistItem[]) => JSON.stringify(list.map(toPlayable));
+			if (names(loaded.items) !== names(items)) {
+				throw new ApiError(409, 'version_conflict', CONFLICT_MESSAGE);
+			}
+			server = loaded.playlist;
+		}
+		this.#confirmed = { playlist: server, items };
+		this.#verified = true;
+		this.#present();
+	}
+
 	/** After a conflict: the server's playlist, with nothing of this device's pending. */
 	async #reload() {
 		const { playlist } = this.#confirmed;
 		try {
 			this.#confirmed = await loadPlaylist(this.#fetch, playlist.libraryId, playlist.id, true);
+			this.#verified = true;
 		} catch {
 			// Shown as last confirmed; the next edit meets the conflict again and reloads.
 		}

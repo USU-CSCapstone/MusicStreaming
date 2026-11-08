@@ -3,7 +3,7 @@
 // (`design/general.md` §7.1).
 
 import { redirect } from '@sveltejs/kit';
-import { read, unavailableIfOffline } from '$lib/catalog/read';
+import { offline, read, unavailableIfOffline } from '$lib/catalog/read';
 import { API, ApiError, loginUrl } from './root';
 import type {
 	Album,
@@ -177,9 +177,18 @@ export const listTracks = (f: Fetch, libraryId: string, query: Query = {}) =>
 /**
  * The tracks `ids` names that `libraryId` holds, in the order named; an ID the library does not
  * hold is left out. At most 100, and never none: with no `ids` the endpoint lists the library.
+ * A device that answers fewer than asked may not have synced the rest yet, so while online the
+ * server answers the batch instead.
  */
-export const getTracksByIds = (f: Fetch, libraryId: string, ids: string[]) =>
-	device<TrackPage>(f, 'listTracksByIds', libraryId, '/tracks', { ids: ids.join(',') });
+export const getTracksByIds = async (f: Fetch, libraryId: string, ids: string[]) => {
+	let fromServer = false;
+	const server = () => {
+		fromServer = true;
+		return get<TrackPage>(f, `${lib(libraryId)}/tracks`, { ids: ids.join(',') });
+	};
+	const page = await read<TrackPage>('listTracksByIds', libraryId, { ids: ids.join(',') }, server);
+	return !fromServer && page.items.length < new Set(ids).size && !offline() ? server() : page;
+};
 
 /** One track of the library. */
 export const getTrack = (f: Fetch, libraryId: string, trackId: string) =>

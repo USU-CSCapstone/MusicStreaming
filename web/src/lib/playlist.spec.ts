@@ -48,7 +48,7 @@ type Reply = { status: number; body?: unknown };
  * advances it, and is refused with `version_conflict` otherwise. `next` answers the following
  * request instead, once, and may hold it open to see what is sent meanwhile.
  */
-function server() {
+function server(editing = true) {
 	const state = {
 		version: 1,
 		items: [item(1), item(2), item(3)],
@@ -56,6 +56,8 @@ function server() {
 	};
 	const requests: Request[] = [];
 	const next: ((r: Request) => Reply | Promise<Reply>)[] = [];
+	// An edited playlist's first edit reads its version from the server; that read is not recorded.
+	let unrecorded = editing;
 
 	function answer(r: Request): Reply {
 		if (r.method === 'GET' && r.path.endsWith('/items')) {
@@ -96,6 +98,10 @@ function server() {
 			body: init.body ? JSON.parse(String(init.body)) : {},
 			key: new Headers(init.headers).get('Idempotency-Key')
 		};
+		if (unrecorded && request.method === 'GET' && !request.path.endsWith('/items')) {
+			unrecorded = false;
+			return Response.json(answer(request).body);
+		}
 		requests.push(request);
 		const reply = await (next.shift() ?? answer)(request);
 		return new Response(JSON.stringify(reply.body), { status: reply.status });
@@ -266,7 +272,8 @@ describe('when the server refuses', () => {
 		list.edit({ ops: [{ op: 'remove', positions: [0] }] });
 		list.edit({ title: 'Mine' });
 		await list.idle();
-		expect(api.edits()).toHaveLength(1);
+		// The first edit's version check finds other items on the server, so nothing is sent.
+		expect(api.edits()).toHaveLength(0);
 		expect(ids(list.items)).toEqual(['3']);
 		expect(list.playlist).toMatchObject({ version: 5, title: 'Road Trip' });
 		expect(list.saving).toBe(false);
@@ -275,6 +282,7 @@ describe('when the server refuses', () => {
 
 	it('edits the reloaded playlist afterwards', async () => {
 		api.state.version = 5;
+		api.state.items = [item(3)];
 		list.edit({ pinned: true });
 		await list.idle();
 		list.edit({ pinned: true });
@@ -299,6 +307,10 @@ describe('when the server refuses', () => {
 });
 
 describe('loadPlaylist', () => {
+	beforeEach(() => {
+		api = server(false);
+	});
+
 	it('loads the playlist and its items at one version', async () => {
 		const loaded = await loadPlaylist(api.fetch, '11', 'p1');
 		expect(loaded.playlist.version).toBe(1);

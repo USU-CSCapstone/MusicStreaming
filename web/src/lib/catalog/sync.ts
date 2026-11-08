@@ -235,13 +235,16 @@ export class CatalogSync {
 		if (heard.type === 'hello') {
 			void this.#run('all', () => this.#pullAll(), true);
 		} else if (heard.type === 'libraryChanged') {
-			const catalog = this.catalogs.get(heard.libraryId);
-			if (!catalog) {
-				if (!this.#failed.has(heard.libraryId))
-					void this.#run(ACCOUNT, () => this.#pullAccount(), true);
-			} else if (Number(catalog.cursor(LIBRARY)) < heard.seq) {
-				void this.#pullLibrary(heard.libraryId, true);
-			}
+			// The cursor is read from the file, so not while a pool operation is under way.
+			void this.#pool(async () => {
+				const catalog = this.catalogs.get(heard.libraryId);
+				if (!catalog) {
+					if (!this.#failed.has(heard.libraryId))
+						void this.#run(ACCOUNT, () => this.#pullAccount(), true);
+				} else if (Number(catalog.cursor(LIBRARY)) < heard.seq) {
+					void this.#pullLibrary(heard.libraryId, true);
+				}
+			});
 		} else if (heard.type === 'accountChanged') {
 			void this.#run(ACCOUNT, () => this.#pullAccount(), true);
 		}
