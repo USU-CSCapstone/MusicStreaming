@@ -17,35 +17,52 @@ const SHELL = `${base}/`;
 const ASSETS = new Set([...build, ...files].filter((path) => !path.includes('/workers/assets/')));
 
 /**
- * Downloads the page and files into this version's cache. A new version installs beside the old
- * one and waits, with no `skipWaiting` or `claim`: it takes over when the old one's last tab
- * closes, so an open app is never reloaded under its user.
+ * Downloads the page and files into this version's cache, and takes over at once, with no
+ * prompt: pages of the old version keep working, since their files stay answerable below, and
+ * the next load runs this version.
  */
 worker.addEventListener('install', (event) => {
 	event.waitUntil(
 		caches
 			.open(CACHE)
 			.then((cache) => cache.addAll([new Request(SHELL, { cache: 'reload' }), ...ASSETS]))
+			.then(() => worker.skipWaiting())
 	);
 });
 
-/** Deletes the caches of other versions once this one takes over. */
+/**
+ * Deletes the caches of older versions but the newest one, which pages still open from before
+ * this version need for their lazy chunks. Versions are timestamps, so they sort by age; two
+ * shells bound the disk the build costs, and a page left open across two upgrades has to reload.
+ */
 worker.addEventListener('activate', (event) => {
 	event.waitUntil(
-		caches
-			.keys()
-			.then((keys) =>
-				Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)))
-			)
+		caches.keys().then((keys) => {
+			const older = keys
+				.filter((key) => key.startsWith('shell-') && key !== CACHE)
+				.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+			return Promise.all(older.slice(1).map((key) => caches.delete(key)));
+		})
 	);
 });
 
-/** Answers page loads with the kept page and the app's own files from the cache; everything else goes to the network untouched. */
+/**
+ * Answers page loads with this version's page and the app's own files from any version's cache
+ * (hashed names never clash), so an old page still loads its chunks; everything else goes to
+ * the network untouched.
+ */
 worker.addEventListener('fetch', (event) => {
 	const { request } = event;
 	const { origin, pathname } = new URL(request.url);
 	if (request.method !== 'GET' || origin !== location.origin || pathname.startsWith(`${base}/api/`))
 		return;
-	const cached = request.mode === 'navigate' ? SHELL : ASSETS.has(pathname) ? pathname : null;
-	if (cached !== null) event.respondWith(caches.match(cached).then((hit) => hit ?? fetch(request)));
+	// This version first: a file without a hash in its name, such as the manifest, may differ.
+	const current = (path: string) => caches.open(CACHE).then((cache) => cache.match(path));
+	const hit =
+		request.mode === 'navigate'
+			? current(SHELL)
+			: ASSETS.has(pathname) || pathname.startsWith(`${base}/_app/immutable/`)
+				? current(pathname).then((found) => found ?? caches.match(pathname))
+				: null;
+	if (hit) event.respondWith(hit.then((found) => found ?? fetch(request)));
 });

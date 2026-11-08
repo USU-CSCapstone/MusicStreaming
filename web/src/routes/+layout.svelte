@@ -13,6 +13,7 @@
 	import { controls } from '$lib/controls.svelte';
 	import { player } from '$lib/player.svelte';
 	import { queue } from '$lib/queue/client.svelte';
+	import { checkForUpdate } from '$lib/app-update';
 	import { realtime } from '$lib/realtime.svelte';
 
 	let { data, children } = $props();
@@ -32,9 +33,12 @@
 			return;
 		}
 		realtime.start();
+		// A restarted server may be a new version: its connection saying hello is the cue to look.
+		const unsubscribe = realtime.on((message) => message.type === 'hello' && checkForUpdate());
 		queue.connect(realtime, data.me.id);
 		catalog.connect(realtime, data.me.id);
 		return () => {
+			unsubscribe();
 			catalog.disconnect();
 			queue.disconnect();
 			realtime.stop();

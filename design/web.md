@@ -99,7 +99,7 @@ theme are per-browser for now.
 
 **Planned; not built yet.** The web app gets a manifest with icons, standalone display and the iOS tags, and a SvelteKit service worker with no extra library.
 
-- The service worker keeps the build, per version, so the app opens offline. A new version takes over on the next launch and never reloads an open app.
+- The service worker keeps the build, per version, so the app opens offline. A new version installs in the background and takes over as soon as it has installed, with no prompt and no reload of an open page: the page asks the browser to look for one at startup, when it is shown again and when the realtime connection says hello (a server upgrade restarts it), and the next load runs the new build. Open pages keep working, since the worker answers the build's hashed files from the previous version's cache too; it keeps that one older cache and no more, so a page left open across two upgrades must reload to load a new chunk.
 - It caches no API response except images. Images are cached as they are seen, in a bounded cache that drops the oldest first, with its size on the account page. Album and artist art draws its ThumbHash placeholder until the picture loads, and when it is not cached offline.
 - An indicator shows when the app is offline. A per-device *Work offline* switch stops all network use, with reads local. Surfaces that need the server, such as admin, plugin pages and scan state, say so when offline, and are not hidden.
 - Downloads, and choosing between local and stream, are the next part of Stage 10 ([`PLAN.md`](../PLAN.md)).
