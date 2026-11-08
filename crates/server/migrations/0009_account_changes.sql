@@ -24,3 +24,15 @@ CREATE INDEX account_changes_feed ON account_changes (user_id, seq);
 -- Leads with the playlist, so deleting one finds all its rows
 CREATE UNIQUE INDEX account_changes_thing
     ON account_changes (user_id, playlist_id, kind, item_key);
+
+-- Playlists made before this migration have no rows yet, so a device would never hear of them.
+-- Each gets its upsert, in id order, and each item after its playlist, so that a device
+-- reading the feed from the start receives all of them. The table is new, so nothing collides.
+INSERT INTO account_changes (user_id, library_id, kind, playlist_id, item_key, op)
+SELECT user_id, library_id, 'playlist', id, 0, 'upsert' FROM playlists ORDER BY id;
+
+INSERT INTO account_changes (user_id, library_id, kind, playlist_id, item_key, op)
+SELECT p.user_id, i.library_id, 'playlistItem', i.playlist_id, i.key, 'upsert'
+FROM playlist_items AS i
+JOIN playlists AS p ON p.id = i.playlist_id
+ORDER BY i.playlist_id, i.key;

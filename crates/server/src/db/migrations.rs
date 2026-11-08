@@ -215,6 +215,49 @@ mod tests {
     }
 
     #[test]
+    fn the_account_feed_starts_with_the_playlists_that_existed() {
+        use crate::db::testing::{Album, Track, User, library};
+
+        let mut conn = configured();
+        let before = MIGRATIONS.iter().position(|m| m.name.starts_with("0009")).unwrap();
+        migrate(&mut conn, &MIGRATIONS[..before]).unwrap();
+
+        let root = tempfile::tempdir().unwrap();
+        User::new(1, "owner").insert(&conn).unwrap();
+        library(&conn, 1, "Music", root.path()).unwrap();
+        Album::new(1, 1).insert(&conn).unwrap();
+        Track::new(1, 1, 1).insert(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, created_at, \
+                                    modified_at)
+             VALUES (7, 1, 1, 'Old', 'old', x'', 0, 0);
+             INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at)
+             VALUES (7, 1048576, 1, 1, 0), (7, 2097152, 1, 1, 0);",
+        )
+        .unwrap();
+
+        migrate(&mut conn, MIGRATIONS).unwrap();
+
+        let feed: Vec<(i64, i64, String, i64, i64, String)> = conn
+            .prepare(
+                "SELECT user_id, library_id, kind, playlist_id, item_key, op FROM account_changes \
+                 ORDER BY seq",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let row = |kind: &str, key| (1, 1, kind.to_owned(), 7, key, "upsert".to_owned());
+        assert_eq!(
+            feed,
+            [row("playlist", 0), row("playlistItem", 1_048_576), row("playlistItem", 2_097_152)]
+        );
+    }
+
+    #[test]
     fn refuses_a_database_from_a_newer_version() {
         let mut conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "user_version", 99).unwrap();
