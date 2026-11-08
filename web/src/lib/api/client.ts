@@ -3,7 +3,7 @@
 // (`design/general.md` §7.1).
 
 import { redirect } from '@sveltejs/kit';
-import { offline, read, unavailableIfOffline } from '$lib/catalog/read';
+import { knownOffline, offline, read, unavailableIfOffline, unreached } from '$lib/catalog/read';
 import { API, ApiError, loginUrl } from './root';
 import type {
 	Album,
@@ -187,7 +187,11 @@ export const getTracksByIds = async (f: Fetch, libraryId: string, ids: string[])
 		return get<TrackPage>(f, `${lib(libraryId)}/tracks`, { ids: ids.join(',') });
 	};
 	const page = await read<TrackPage>('listTracksByIds', libraryId, { ids: ids.join(',') }, server);
-	return !fromServer && page.items.length < new Set(ids).size && !offline() ? server() : page;
+	if (fromServer || page.items.length >= new Set(ids).size || knownOffline()) return page;
+	return server().catch((error) => {
+		if (offline() && unreached(error)) return page;
+		throw error;
+	});
 };
 
 /** One track of the library. */

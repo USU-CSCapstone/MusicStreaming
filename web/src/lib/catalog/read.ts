@@ -3,7 +3,8 @@
 // answer, so pages never know which. Page cursors need no source: server and device build and
 // read them with the same crate, so either accepts the other's.
 //
-// - Library not fully on the device: the server. Offline, an error saying so, never part of it.
+// - Library not fully on the device: the server. When the device knows it is offline, or the
+//   server cannot be reached while the realtime connection is down, an error saying so, never part of it.
 // - On the device: the device alone, at once, even while a pull is under way.
 // - A device that cannot answer: the server, as if the device were not there; offline, an
 //   error saying the page is unavailable.
@@ -17,6 +18,13 @@ const UNAVAILABLE = 'This needs the server, which this device cannot reach right
 
 /** Whether this device cannot reach the server: the browser says so, or the realtime connection has been lost. */
 export const offline = () => navigator.onLine === false || realtime.offline;
+
+/** Whether the device itself knows it cannot reach the server, so asking would only wait. */
+export const knownOffline = () => navigator.onLine === false;
+
+/** Whether a failed request never reached the server, as opposed to being answered by it. */
+export const unreached = (error: unknown) =>
+	error instanceof TypeError || (error instanceof ApiError && error.code === 'unavailable_offline');
 
 /** For a failed request to the server: says it is unavailable offline when the device is, and otherwise rethrows. */
 export function unavailableIfOffline(error: unknown): never {
@@ -36,14 +44,18 @@ export async function read<T>(
 	server: () => Promise<T>
 ): Promise<T> {
 	if (!(await catalog.onDevice(library))) {
-		if (offline()) {
-			throw new ApiError(
+		const notOnDevice = () =>
+			new ApiError(
 				503,
 				'not_on_device',
 				'This library has not been downloaded to this device yet.'
 			);
-		}
-		return server();
+		if (knownOffline()) throw notOnDevice();
+		// A realtime connection in backoff says nothing about HTTP: ask, and call a request that
+		// never reached the server offline; an answer, such as a redirect to log in, stands.
+		return server().catch((error) => {
+			throw offline() && unreached(error) ? notOnDevice() : error;
+		});
 	}
 	let local: unknown;
 	try {

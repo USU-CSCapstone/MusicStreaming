@@ -5,6 +5,7 @@ vi.mock('$lib/catalog/client.svelte', () => ({ catalog: device }));
 vi.mock('$lib/realtime.svelte', () => ({ realtime: { offline: false } }));
 vi.mock('$app/paths', () => ({ base: '', resolve: (path: string) => path }));
 
+import { realtime } from '$lib/realtime.svelte';
 import { getPlaylist, getTracksByIds, listPlaylistItems } from './client';
 
 /** A server whose playlist is at version 6 while the device, not yet caught up, holds version 5. */
@@ -57,5 +58,17 @@ describe('tracks looked up by ID', () => {
 		device.onDevice.mockResolvedValue(false);
 		await getTracksByIds(f, '1', ['1', '2', '3']);
 		expect(f).toHaveBeenCalledOnce();
+	});
+
+	it('are topped up from the server while only the realtime connection is down, and left short when it fails too', async () => {
+		realtime.offline = true;
+		try {
+			const f = behind();
+			expect((await getTracksByIds(f, '1', ['1', '2'])).items).toHaveLength(2);
+			const down = vi.fn(async () => Promise.reject(new TypeError('Failed to fetch')));
+			expect((await getTracksByIds(down, '1', ['1', '2'])).items).toHaveLength(1);
+		} finally {
+			realtime.offline = false;
+		}
 	});
 });

@@ -1,3 +1,4 @@
+import { ApiError } from '$lib/api/root';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const device = vi.hoisted(() => ({
@@ -43,12 +44,31 @@ describe('where a read is answered', () => {
 		expect(device.query).not.toHaveBeenCalled();
 	});
 
-	it('a library never fully synced says so offline, rather than asking the server', async () => {
+	it('a library never fully synced is still read from the server while only the realtime connection is down', async () => {
 		device.onDevice.mockResolvedValue(false);
 		link.offline = true;
 		const { server, result } = albums();
-		await expect(result).rejects.toMatchObject({ status: 503, code: 'not_on_device' });
-		expect(server).not.toHaveBeenCalled();
+		expect(await result).toEqual(ON_SERVER);
+		expect(server).toHaveBeenCalledOnce();
+	});
+
+	it('a library never fully synced says so when the server cannot be reached either, and rethrows when online', async () => {
+		device.onDevice.mockResolvedValue(false);
+		const failed = new TypeError('Failed to fetch');
+		await expect(read('listAlbums', '1', {}, () => Promise.reject(failed))).rejects.toBe(failed);
+		link.offline = true;
+		await expect(read('listAlbums', '1', {}, () => Promise.reject(failed))).rejects.toMatchObject({
+			status: 503,
+			code: 'not_on_device'
+		});
+		const unreachable = new ApiError(503, 'unavailable_offline', 'unreachable');
+		await expect(
+			read('listAlbums', '1', {}, () => Promise.reject(unreachable))
+		).rejects.toMatchObject({ code: 'not_on_device' });
+		const answered = new ApiError(401, 'unauthorized', 'signed out');
+		await expect(read('listAlbums', '1', {}, () => Promise.reject(answered))).rejects.toBe(
+			answered
+		);
 	});
 
 	it('a current library is read from the device alone, with the page’s parameters', async () => {
@@ -69,7 +89,9 @@ describe('where a read is answered', () => {
 		vi.stubGlobal('navigator', { onLine: false });
 		try {
 			device.onDevice.mockResolvedValue(false);
-			await expect(albums().result).rejects.toMatchObject({ code: 'not_on_device' });
+			const { server, result } = albums();
+			await expect(result).rejects.toMatchObject({ code: 'not_on_device' });
+			expect(server).not.toHaveBeenCalled();
 		} finally {
 			vi.unstubAllGlobals();
 		}
