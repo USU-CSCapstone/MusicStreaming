@@ -112,7 +112,9 @@ export async function readSearch<T>(
 		});
 	}
 	try {
-		return JSON.parse(await catalog.query(library, name, params)) as T;
+		// Reached only with the server offline, failing or slow, so the device waits for an
+		// update under way, or answers from a copy that no longer updates, as it does offline.
+		return JSON.parse(await catalog.query(library, name, params, true)) as T;
 	} catch (error) {
 		if (failure) throw failure;
 		console.error(error);

@@ -160,7 +160,7 @@ describe('readSearch', () => {
 		link.offline = true;
 		const { server, result } = search();
 		expect(await result).toEqual(ON_DEVICE);
-		expect(device.query).toHaveBeenCalledWith('1', 'search', { q: 'a' });
+		expect(device.query).toHaveBeenCalledWith('1', 'search', { q: 'a' }, true);
 		expect(server).not.toHaveBeenCalled();
 	});
 
