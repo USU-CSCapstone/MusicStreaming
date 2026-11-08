@@ -3,6 +3,7 @@
 // (`design/general.md` §7.1).
 
 import { redirect } from '@sveltejs/kit';
+import { type LastKnown, lastKnown, remember } from '$lib/last-known';
 import {
 	knownOffline,
 	offline,
@@ -111,7 +112,21 @@ async function send<T>(
 	return body(await fetch(url(path), { method, headers, body: payload }));
 }
 
-export const getServerInfo = (f: Fetch) => get<ServerInfo>(f, '/server');
+/**
+ * `answer`, kept for the next start with no network; with the server unreachable, what was kept
+ * of `key` instead, if anything. Only the layout's own reads use it, so the app can start offline.
+ */
+const kept = <K extends keyof LastKnown>(key: K, answer: Promise<NonNullable<LastKnown[K]>>) =>
+	answer.then(
+		(value) => (remember({ [key]: value }), value),
+		(error) => {
+			const value = lastKnown()[key];
+			if (value && unreachable(error)) return value;
+			throw error;
+		}
+	);
+
+export const getServerInfo = (f: Fetch) => kept('server', get<ServerInfo>(f, '/server'));
 
 /** Creates the owner and logs this browser in: the server sets the session cookie. */
 export const completeSetup = (f: Fetch, request: SetupRequest) =>
@@ -132,7 +147,7 @@ export const listKeptQueues = (f: Fetch, cursor?: string) =>
 export const deleteKeptQueue = (f: Fetch, queueId: string) =>
 	send<void>(f, 'DELETE', `/me/queues/${encodeURIComponent(queueId)}`);
 
-export const getMe = (f: Fetch) => get<User>(f, '/me');
+export const getMe = (f: Fetch) => kept('me', get<User>(f, '/me'));
 
 /** Records plays. With `keepalive`, the request outlives the page, for one closing. */
 export const recordPlays = (f: Fetch, items: PlayReport[], keepalive = false) =>
@@ -160,7 +175,8 @@ const device = <T>(
 	return fresh ? server() : read<T>(name, libraryId, { ...ids, ...query }, server);
 };
 
-export const listLibraries = (f: Fetch) => get<{ items: Library[] }>(f, '/libraries');
+export const listLibraries = (f: Fetch) =>
+	kept('libraries', get<{ items: Library[] }>(f, '/libraries'));
 
 /** A page of the library's albums. */
 export const listAlbums = (f: Fetch, libraryId: string, query: Query = {}) =>

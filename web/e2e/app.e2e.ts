@@ -197,8 +197,13 @@ test('logging out ends the session', async ({ page }) => {
 		page.getByText('The admins of this server can see your listening data')
 	).toBeVisible();
 
+	/** The offline-start data the app keeps in this browser, or null when nothing is kept. */
+	const kept = () => page.evaluate(() => localStorage.getItem('jewelcase-last-known'));
+	expect(await kept()).toContain('"me"');
 	await page.getByRole('button', { name: 'Log out' }).click();
 	await expect(page).toHaveURL(/\/login$/);
+	// What the app starts offline from goes with the session: the next person must not see it.
+	await expect.poll(kept).toBeNull();
 	await page.goto('/albums');
 	await expect(page).toHaveURL(/\/login\?next=%2Falbums$/);
 });

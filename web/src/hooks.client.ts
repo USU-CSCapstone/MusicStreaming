@@ -1,4 +1,6 @@
 import type { HandleClientError } from '@sveltejs/kit';
+import { dev } from '$app/environment';
+import { base } from '$app/paths';
 import { ApiError } from '$lib/api/root';
 
 /** Codes of the errors the error page explains: a library missing from the device, or a page that needs the server. */
@@ -11,3 +13,8 @@ export const handleError: HandleClientError = ({ error, message }) => {
 	console.error(error);
 	return { message };
 };
+
+// Offline start needs the worker, which development leaves out. Its URL and scope are the app's
+// own root, which is why SvelteKit's registration is turned off in `vite.config.ts`.
+if (!dev && 'serviceWorker' in navigator)
+	navigator.serviceWorker.register(`${base}/service-worker.js`).catch(console.error);

@@ -4,6 +4,7 @@
 // hears, and shows what the worker cannot fix itself.
 
 import { API } from '$lib/api/root';
+import { forget } from '$lib/last-known';
 import wasmUrl from '$lib/catalog-wasm/jewelcase_catalog_wasm_bg.wasm?url';
 import type { RealtimeServerMessage } from '$lib/api/types';
 import type { Realtime } from '$lib/realtime.svelte';
@@ -144,10 +145,11 @@ export class CatalogClient {
 
 	/**
 	 * Deletes every file of the catalog from this device, from every tab: the next person to
-	 * sign in must see nothing of the last. A tab that owns the catalog does it; if none does,
-	 * this tab starts a worker for it.
+	 * sign in must see nothing of the last, nor the account and library list kept for starting
+	 * offline. A tab that owns the catalog does it; if none does, this tab starts a worker for it.
 	 */
 	signOut() {
+		forget();
 		return (this.#signingOut = this.#signOut());
 	}
 

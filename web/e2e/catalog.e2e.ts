@@ -420,3 +420,40 @@ test('starting an album offline queues all its tracks', async ({ page }) => {
 		)
 		.toBe(1);
 });
+
+test.describe('the offline shell', () => {
+	// The service worker runs here, as in `pwa.e2e.ts`: it answers the reloads below from its own files.
+	test.use({ serviceWorkers: 'allow' });
+
+	test('reloading offline after one visit shows the app', async ({ page, context }) => {
+		await serveGolden(page, []);
+		await page.goto('/');
+		await synced(page);
+		await page.evaluate(() => navigator.serviceWorker.ready);
+		const { items } = await query<Albums>(page, 'listAlbums');
+		expect(items.length).toBeGreaterThan(0);
+
+		// The stubbed API would answer offline too, so it is closed as a dead network is.
+		await context.setOffline(true);
+		await page.route('**/api/v1/**', (route) => route.abort());
+		await page.reload();
+		await expect(page.getByRole('link', { name: 'Albums', exact: true }).first()).toBeVisible();
+		await page.getByRole('link', { name: 'Albums', exact: true }).first().click();
+		await expect(page.getByText(items[0].title, { exact: true }).first()).toBeVisible();
+	});
+
+	test('reloading with the server unreachable shows the app', async ({ page }) => {
+		await serveGolden(page, []);
+		await page.goto('/');
+		await synced(page);
+		await page.evaluate(() => navigator.serviceWorker.ready);
+		const { items } = await query<Albums>(page, 'listAlbums');
+
+		// The browser still says it is online, as on mobile data away from the server.
+		await page.route('**/api/v1/**', (route) => route.abort());
+		await page.reload();
+		await expect(page.getByRole('link', { name: 'Albums', exact: true }).first()).toBeVisible();
+		await page.getByRole('link', { name: 'Albums', exact: true }).first().click();
+		await expect(page.getByText(items[0].title, { exact: true }).first()).toBeVisible();
+	});
+});

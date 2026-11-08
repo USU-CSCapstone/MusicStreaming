@@ -5,6 +5,9 @@ import { defineConfig } from '@playwright/test';
 const scale = process.argv.some((arg) => arg.includes('catalog-scale'));
 
 export default defineConfig({
+	// Tests stub the API in the page, which a service worker's own requests would bypass; the
+	// offline and installability specs turn it on for themselves.
+	use: { serviceWorkers: 'block' },
 	webServer: scale
 		? undefined
 		: {
