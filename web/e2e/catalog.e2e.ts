@@ -47,6 +47,7 @@ function listTracks(page: Page) {
 					});
 				channel.onmessage = ({ data }) => {
 					if (data.id !== id) return;
+					clearInterval(timer);
 					channel.close();
 					if (data.error) reject(new Error(data.error));
 					else resolve(JSON.parse(data.result));
