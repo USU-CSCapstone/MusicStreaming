@@ -61,8 +61,6 @@
 		}
 		// Wiped here, not left to /login: with the server gone by then, the last-known account
 		// would answer and bring the app back up signed in.
-		// Disconnected first: a tab that owns the catalog holds it, and the wipe waits for that.
-		catalog.disconnect();
 		await catalog.signOut();
 		// A fresh start, so nothing of this session, playback above all, outlives it.
 		location.assign(resolve('/login'));
