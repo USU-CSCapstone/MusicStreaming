@@ -23,6 +23,7 @@ use crate::db::testing::{Artist, Image, access};
 pub(super) const ROUTES: &[(&str, &str)] = &[
     ("POST", "/auth/logout"),
     ("GET", "/me"),
+    ("GET", "/me/changes"),
     ("GET", "/me/devices"),
     ("GET", "/me/player"),
     ("POST", "/me/player/commands"),
