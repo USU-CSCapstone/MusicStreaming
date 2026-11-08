@@ -61,7 +61,7 @@ impl Catalog {
 
     /// The first column of the first row `sql` selects as text, or an empty string when it
     /// selects none, with `params` bound as text.
-    pub fn query(&self, sql: &str, params: Vec<String>) -> Result<String, JsError> {
+    pub fn sql(&self, sql: &str, params: Vec<String>) -> Result<String, JsError> {
         let mut statement = self.0.prepare_cached(sql)?;
         let mut rows = statement.query(params_from_iter(params))?;
         Ok(rows.next()?.map(|row| row.get(0)).transpose()?.unwrap_or_default())

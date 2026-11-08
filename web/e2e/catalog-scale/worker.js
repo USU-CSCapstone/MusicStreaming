@@ -177,7 +177,7 @@ async function queryPhase(rows, db, spawned) {
 	const catalog = await Catalog.open(db);
 	const opened = now() - openStart;
 	const firstStart = now();
-	const first = catalog.query(
+	const first = catalog.sql(
 		`SELECT json_group_array(${TRACK}) FROM (SELECT * FROM tracks WHERE library_id = 1 ORDER BY sort_key, id LIMIT 100)`,
 		[]
 	);
@@ -193,7 +193,7 @@ async function queryPhase(rows, db, spawned) {
 			'database size, pages in use',
 			mb(
 				Number(
-					catalog.query(
+					catalog.sql(
 						'SELECT CAST(page_count * page_size AS TEXT) FROM pragma_page_count, pragma_page_size',
 						[]
 					)
@@ -217,33 +217,29 @@ async function queryPhase(rows, db, spawned) {
 		const page = (after) =>
 			`SELECT json_group_array(${TRACK}) FROM (SELECT * FROM tracks WHERE library_id = 1 ${after ? `AND (${order}) > (${marks})` : ''} ORDER BY ${order} LIMIT 100)`;
 		const start = JSON.parse(
-			catalog.query(
+			catalog.sql(
 				`SELECT json_array(${cursor}) FROM tracks WHERE library_id = 1 ORDER BY ${order} LIMIT 1 OFFSET (SELECT count(*) / 2 FROM tracks)`,
 				[]
 			)
 		);
 		rows.push(
-			[
-				section,
-				`tracks by ${name}: page 1 of 100`,
-				timed(() => catalog.query(page(false), []), 20)
-			],
+			[section, `tracks by ${name}: page 1 of 100`, timed(() => catalog.sql(page(false), []), 20)],
 			[
 				section,
 				`tracks by ${name}: page from the middle (keyset)`,
-				timed(() => catalog.query(page(true), start), 20)
+				timed(() => catalog.sql(page(true), start), 20)
 			]
 		);
 	}
 
 	const tags = JSON.parse(
-		catalog.query(
+		catalog.sql(
 			`SELECT json_group_array(json_array(CAST(id AS TEXT), name)) FROM tags WHERE library_id = 1 AND (type = 'mood' OR name = (SELECT name FROM tags WHERE type = 'genre' ORDER BY track_count DESC LIMIT 1))`,
 			[]
 		)
 	);
 	for (const [id, name] of tags) {
-		const total = catalog.query(
+		const total = catalog.sql(
 			`SELECT CAST(count(*) AS TEXT) FROM track_tags tt JOIN tracks t ON t.id = tt.track_id WHERE tt.tag_id = CAST(? AS INTEGER) AND t.library_id = 1 AND t.missing_since IS NULL`,
 			[id]
 		);
@@ -252,7 +248,7 @@ async function queryPhase(rows, db, spawned) {
 			`tag-filtered total: ${name} (${total} tracks)`,
 			timed(
 				() =>
-					catalog.query(
+					catalog.sql(
 						`SELECT CAST(count(*) AS TEXT) FROM track_tags tt JOIN tracks t ON t.id = tt.track_id WHERE tt.tag_id = CAST(? AS INTEGER) AND t.library_id = 1 AND t.missing_since IS NULL`,
 						[id]
 					),
@@ -264,7 +260,7 @@ async function queryPhase(rows, db, spawned) {
 			`  same, counting the tag's rows only: ${name}`,
 			timed(
 				() =>
-					catalog.query(
+					catalog.sql(
 						'SELECT CAST(count(*) AS TEXT) FROM track_tags WHERE tag_id = CAST(? AS INTEGER)',
 						[id]
 					),
@@ -287,7 +283,7 @@ async function queryPhase(rows, db, spawned) {
 			section,
 			'total, unfiltered list (stored)',
 			timed(
-				() => catalog.query('SELECT CAST(track_count AS TEXT) FROM libraries WHERE id = 1', []),
+				() => catalog.sql('SELECT CAST(track_count AS TEXT) FROM libraries WHERE id = 1', []),
 				20
 			)
 		],
@@ -296,7 +292,7 @@ async function queryPhase(rows, db, spawned) {
 			'total, one tag alone (stored): genre 0',
 			timed(
 				() =>
-					catalog.query(
+					catalog.sql(
 						'SELECT CAST(track_count AS TEXT) FROM tags WHERE library_id = 1 AND id = CAST(? AS INTEGER)',
 						[genre]
 					),
@@ -308,7 +304,7 @@ async function queryPhase(rows, db, spawned) {
 			'total, one tag alone (stored): mood 100000ppm',
 			timed(
 				() =>
-					catalog.query(
+					catalog.sql(
 						'SELECT CAST(track_count AS TEXT) FROM tags WHERE library_id = 1 AND id = CAST(? AS INTEGER)',
 						[mood]
 					),
@@ -320,7 +316,7 @@ async function queryPhase(rows, db, spawned) {
 			'total, genre 0 + mood 100000ppm, counted from the smaller group',
 			timed(
 				() =>
-					catalog.query(
+					catalog.sql(
 						`SELECT CAST(count(*) AS TEXT) FROM (SELECT track_id AS id FROM track_tags WHERE tag_id = CAST(? AS INTEGER)) lead CROSS JOIN tracks t ON t.id = lead.id WHERE t.library_id = 1 AND ${exists}`,
 						[mood, genre]
 					),
@@ -332,7 +328,7 @@ async function queryPhase(rows, db, spawned) {
 			'  same, walking the library and checking each track (before counting from the smallest group)',
 			timed(
 				() =>
-					catalog.query(
+					catalog.sql(
 						`SELECT CAST(count(*) AS TEXT) FROM tracks t WHERE t.library_id = 1 AND ${exists} AND ${exists}`,
 						[genre, mood]
 					),
@@ -343,25 +339,21 @@ async function queryPhase(rows, db, spawned) {
 
 	const albumTracks = `SELECT json_group_array(${TRACK}) FROM (SELECT * FROM tracks WHERE album_id = CAST(? AS INTEGER) ORDER BY ${ALBUM_ORDER})`;
 	const albums = JSON.parse(
-		catalog.query(
+		catalog.sql(
 			`SELECT json_group_array(CAST(id AS TEXT)) FROM (SELECT id FROM albums WHERE library_id = 1 ORDER BY id LIMIT 100 OFFSET (SELECT count(*) / 3 FROM albums))`,
 			[]
 		)
 	);
-	const largest = catalog.query(
+	const largest = catalog.sql(
 		`SELECT CAST(id AS TEXT) FROM albums WHERE library_id = 1 ORDER BY track_count DESC LIMIT 1`,
 		[]
 	);
 	rows.push(
-		[
-			section,
-			'album tracks: 100 albums',
-			timed((i) => catalog.query(albumTracks, [albums[i]]), 100)
-		],
+		[section, 'album tracks: 100 albums', timed((i) => catalog.sql(albumTracks, [albums[i]]), 100)],
 		[
 			section,
 			'album tracks: the largest album',
-			timed(() => catalog.query(albumTracks, [largest]), 5)
+			timed(() => catalog.sql(albumTracks, [largest]), 5)
 		]
 	);
 
