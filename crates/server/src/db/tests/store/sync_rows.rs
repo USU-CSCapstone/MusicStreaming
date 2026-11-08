@@ -34,7 +34,6 @@ const SERVER_ONLY: &[(&str, &[&str])] = &[
             "watch",
         ],
     ),
-    ("playlists", &["user_id"]),
     ("tag_types", &["field", "plugin_id", "since"]),
     ("tags", &["name_key"]),
     (
@@ -185,7 +184,7 @@ fn the_device_schema_changes_only_with_its_version() {
     let hash = format!("{:x}", Sha256::digest(SCHEMA));
     assert_eq!(
         (SCHEMA_VERSION, hash.as_str()),
-        (3, "915127c7a6911d591ddf9eaa6dcb257da20575c4ecfc79be582b9bd4abd2d687"),
+        (4, "b31064378e3b7709126c58c1810ee9bb1aa97e28747fc5a62246841622ce5e7f"),
         "schema.sql changed: raise SCHEMA_VERSION, and pin its new hash here"
     );
 }

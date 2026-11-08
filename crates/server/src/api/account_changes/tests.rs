@@ -71,7 +71,15 @@ async fn another_accounts_playlists_never_appear() {
         assert!(ids.contains(own) && !ids.contains(other), "{page}");
         let text = page.to_string();
         assert!(!text.contains(if token == TOKEN { "Theirs" } else { "Mine" }), "{text}");
-        assert!(!text.contains("user_id"), "no owner column");
+        // A playlist's row names its owner, who is always the caller.
+        let owner = if token == TOKEN { "1" } else { "2" };
+        let owners: Vec<&Value> = page["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|c| c["rows"]["playlists"][0].get("user_id"))
+            .collect();
+        assert_eq!(owners, [owner], "{text}");
     }
     let (_, page) = feed(&app, TOKEN, "").await;
     assert_eq!(names(&page).len(), 2, "the playlist and its one item");

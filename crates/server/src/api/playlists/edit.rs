@@ -22,7 +22,8 @@ use super::KEY_GAP;
 use super::announce::{AppliedOp, Change};
 use super::idempotency::{Answer, Key};
 use super::keys::assign;
-use super::representation::{self, header};
+use jewelcase_catalog::playlists::{self, header};
+
 use crate::api::Images;
 use crate::api::extract::{self, Path};
 use crate::api::playables::{self, Playable};
@@ -181,8 +182,8 @@ pub async fn edit(
                         duration,
                     ])?;
                     feed::record_account(tx, user, library, Kind::Playlist, id, 0, FeedOp::Upsert)?;
-                    let edited = representation::get(tx, user, library, id)?
-                        .ok_or_else(Problem::not_found)?;
+                    let edited =
+                        playlists::get(tx, user, library, id)?.ok_or_else(Problem::not_found)?;
                     let answer = Answer::new(StatusCode::OK, &edited)?;
                     if let Some(key) = &key {
                         answer.store(tx, user, key, now)?;

@@ -185,6 +185,21 @@ impl From<jewelcase_catalog::Invalid> for Problem {
     }
 }
 
+impl From<jewelcase_catalog::playlists::ItemsError> for Problem {
+    /// An invalid parameter is `422`, a playlist that is not the caller's `404`, and a cursor
+    /// from another version `410`.
+    fn from(error: jewelcase_catalog::playlists::ItemsError) -> Problem {
+        use jewelcase_catalog::playlists::ItemsError;
+        match error {
+            ItemsError::Invalid(invalid) => invalid.into(),
+            ItemsError::NotFound => Problem::not_found(),
+            ItemsError::Expired => Problem::new(Code::CursorExpired)
+                .detail("The playlist changed since the first page; start again."),
+            ItemsError::Sql(error) => error.into(),
+        }
+    }
+}
+
 impl From<rusqlite::Error> for Problem {
     /// A database error, logged and answered as a `500 internal`, as a [`DbError`] is.
     fn from(error: rusqlite::Error) -> Problem {

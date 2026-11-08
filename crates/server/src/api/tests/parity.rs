@@ -8,10 +8,15 @@ use std::path::PathBuf;
 
 use jewelcase_catalog::albums::{self, AlbumSort};
 use jewelcase_catalog::artists::{self, ArtistSort};
+use jewelcase_catalog::playlists::{self, PlaylistSort};
+use jewelcase_catalog::recipes::{self, Recipe};
+use jewelcase_catalog::search;
 use jewelcase_catalog::sync::{Kind, Rows, apply, export};
+use jewelcase_catalog::tag_filter::Tags;
 use jewelcase_catalog::tags::{self, TagSort};
 use jewelcase_catalog::tracks::{self, TrackOrder, TrackSort};
 use jewelcase_catalog::{AnyId, Id, create_schema};
+use jewelcase_core::{Index, Kind as Found, list_hash};
 use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -21,8 +26,11 @@ use super::super::page::{Order, Request};
 use super::super::tag_filter::TagFilter;
 use super::super::testing::catalog;
 use crate::db::Database;
+use crate::db::testing::User;
 
+/// The library every query asks, and the account whose playlists it asks for.
 const LIBRARY: i64 = 1;
+const USER: i64 = 1;
 
 /// A `listTracks` request's parameters, as the API spells them in a query.
 #[derive(Deserialize)]
@@ -75,6 +83,32 @@ struct TagParams {
     q: Option<String>,
     cursor: Option<String>,
     limit: u32,
+}
+
+/// A `listPlaylists` request's parameters, as the API spells them in a query.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PlaylistParams {
+    sort: PlaylistSort,
+    order: Order,
+    q: Option<String>,
+    cursor: Option<String>,
+    limit: u32,
+}
+
+/// A `search` request's parameters, as the API spells them in a query.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SearchParams {
+    q: String,
+    types: Option<String>,
+    section_limit: usize,
+}
+
+/// The index the library's documents make, which the server and a device each build for
+/// themselves.
+fn index(conn: &Connection) -> Index {
+    Index::build(search::documents(conn, LIBRARY).unwrap())
 }
 
 /// The ID `params` holds under `key`, as the API's path would carry it.
@@ -149,6 +183,55 @@ fn answer(conn: &Connection, name: &str, params: &Value) -> Value {
             serde_json::to_value(tags::find(conn, LIBRARY, path_id(params, "tagId")).unwrap())
                 .unwrap()
         }
+        "listPlaylists" => {
+            let p: PlaylistParams = serde_json::from_value(params.clone()).unwrap();
+            let request = Request::new(p.sort.sort(), p.order, p.cursor, Some(p.limit)).unwrap();
+            let page = playlists::list(conn, USER, LIBRARY, request, p.q.as_deref()).unwrap();
+            serde_json::to_value(page).unwrap()
+        }
+        "getPlaylist" => {
+            let id = path_id(params, "playlistId");
+            serde_json::to_value(playlists::get(conn, USER, LIBRARY, id).unwrap()).unwrap()
+        }
+        "listPlaylistItems" => {
+            let id = path_id(params, "playlistId");
+            let cursor = params["cursor"].as_str();
+            let limit = params["limit"].as_u64().map(|limit| u32::try_from(limit).unwrap());
+            match playlists::items(conn, USER, LIBRARY, id, cursor, limit) {
+                Ok(page) => serde_json::to_value(page).unwrap(),
+                Err(error) => json!({ "error": error.to_string() }),
+            }
+        }
+        "search" => {
+            let p: SearchParams = serde_json::from_value(params.clone()).unwrap();
+            let kinds = p.types.as_deref().map_or_else(|| Ok(Found::ALL.to_vec()), search::kinds);
+            let found =
+                index(conn).search_within(&p.q, &kinds.unwrap(), p.section_limit, |_, _| true);
+            serde_json::to_value(search::response(conn, LIBRARY, p.q, found).unwrap()).unwrap()
+        }
+        "resolveRecipe" => {
+            let recipe: Recipe = serde_json::from_value(params["recipe"].clone()).unwrap();
+            let tags = recipe.check().unwrap();
+            // What the server's search index and tag sets give for a search recipe.
+            let ranked = |q: &str| {
+                let tagged = Tags::read(conn, LIBRARY, &tracks::TAGGED, &tags)
+                    .unwrap()
+                    .ids(conn, &tracks::TAGGED)
+                    .unwrap();
+                let found = index(conn).search_within(q, &[Found::Track], usize::MAX, |_, id| {
+                    tagged.as_ref().is_none_or(|tagged| tagged.contains(&id))
+                });
+                found.into_iter().next().map(|section| section.ids).unwrap_or_default()
+            };
+            match recipes::resolve(conn, USER, LIBRARY, &recipe, &tags, ranked).unwrap() {
+                Some((ids, stored)) => json!({
+                    "ids": ids.iter().map(u64::to_string).collect::<Vec<_>>(),
+                    "hash": list_hash(&ids),
+                    "recipe": stored,
+                }),
+                None => Value::Null,
+            }
+        }
         _ => panic!("unknown query {name}"),
     }
 }
@@ -172,6 +255,28 @@ fn feed(conn: &Connection) -> Vec<Rows> {
             .unwrap();
         for id in ids {
             rows.push(export(conn, LIBRARY, kind, &id.to_string(), 0).unwrap().unwrap());
+        }
+    }
+    // The account's own playlists and their items, as the account feed carries them.
+    let own: Vec<i64> = conn
+        .prepare("SELECT id FROM playlists WHERE user_id = ?1 AND library_id = ?2 ORDER BY id")
+        .unwrap()
+        .query_map([USER, LIBRARY], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    for id in own {
+        rows.push(export(conn, LIBRARY, Kind::Playlist, &id.to_string(), 0).unwrap().unwrap());
+        let keys: Vec<i64> = conn
+            .prepare("SELECT key FROM playlist_items WHERE playlist_id = ?1 ORDER BY key")
+            .unwrap()
+            .query_map([id], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        for key in keys {
+            let rows_of = export(conn, LIBRARY, Kind::PlaylistItem, &id.to_string(), key);
+            rows.push(rows_of.unwrap().unwrap());
         }
     }
     rows
@@ -276,6 +381,103 @@ fn tag_filters() -> Vec<Value> {
     ]
 }
 
+/// The filters `listPlaylists` is read with: none, and names that match by case, by a word, by
+/// words that are not adjacent and not at all.
+fn playlist_filters() -> Vec<Value> {
+    vec![
+        json!({}),
+        json!({ "q": "ROAD" }),
+        json!({ "q": "trip road" }),
+        json!({ "q": "   " }),
+        json!({ "q": "zzz" }),
+    ]
+}
+
+/// The queries `search` is asked: a track, an album and an artist by name and by a part of it, a
+/// word several share, a name the other library has, none that matches, each way a section may
+/// be left out, and a small section limit.
+fn searches() -> Vec<Value> {
+    let mut searches = Vec::new();
+    for q in [
+        "come",
+        "road",
+        "radio",
+        "a",
+        "the beatles",
+        "kid a",
+        "elsewhere",
+        "untitled",
+        "zzz",
+        "idioteque",
+    ] {
+        searches.push(json!({ "q": q, "sectionLimit": 5 }));
+    }
+    for q in ["a", "e"] {
+        for types in ["tracks", "albums,artists", "playlists", "artists,tracks"] {
+            searches.push(json!({ "q": q, "types": types, "sectionLimit": 1 }));
+        }
+    }
+    searches
+}
+
+/// The recipes `resolveRecipe` is asked, each with every sort and direction where it has one, and
+/// with each way tags filter: every kind a recipe has, over the library, an album (one of tracks
+/// that are missing, one unknown, one elsewhere), an artist each way it is credited, a search and
+/// a playlist (one that is not the account's, one elsewhere, and one unknown).
+fn recipes() -> Vec<Value> {
+    let tag_filters = [
+        json!({}),
+        json!({ "tagAll": ["30"] }),
+        json!({ "tagAny": ["30", "31"] }),
+        json!({ "tagAll": ["32"], "tagAny": ["30", "31"] }),
+        json!({ "tagAll": ["999"] }),
+    ];
+    let mut recipes = Vec::new();
+    for filters in &tag_filters {
+        for sort in SORTS {
+            for order in ["asc", "desc"] {
+                let by = json!({ "sort": sort, "order": order });
+                let mut with = |recipe: Value| {
+                    let mut recipe = recipe;
+                    recipe.as_object_mut().unwrap().extend(by.as_object().unwrap().clone());
+                    recipe["filters"] = filters.clone();
+                    recipes.push(recipe);
+                };
+                with(json!({ "type": "library" }));
+                for album in ["101", "102", "104", "201", "999"] {
+                    with(json!({ "type": "album", "albumId": album }));
+                }
+                for (artist, credit) in [
+                    ("10", "any"),
+                    ("10", "owned"),
+                    ("10", "featured"),
+                    ("13", "any"),
+                    ("20", "any"),
+                ] {
+                    with(json!({
+                        "type": "artist", "artistId": artist, "scope": "all", "artistCredit": credit,
+                    }));
+                }
+            }
+        }
+        for q in ["a", "e", "come", "zzz"] {
+            recipes.push(json!({ "type": "search", "q": q, "filters": filters }));
+        }
+        for playlist in ["501", "502", "503", "504", "999", "x"] {
+            recipes.push(json!({ "type": "playlist", "playlistId": playlist, "filters": filters }));
+            for sort in ["name", "artist", "album", "addedToPlaylist", "releaseDate", "duration"] {
+                for order in ["asc", "desc"] {
+                    recipes.push(json!({
+                        "type": "playlist", "playlistId": playlist, "filters": filters,
+                        "sort": sort, "order": order,
+                    }));
+                }
+            }
+        }
+    }
+    recipes
+}
+
 const SORTS: [&str; 6] = ["name", "artist", "album", "dateAdded", "releaseDate", "duration"];
 
 /// Each case of the golden file: the query and its answer.
@@ -314,6 +516,25 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
                  (33, 2, 'genre', 'Elsewhere', 'elsewhere', CAST('elsewhere' AS BLOB)), \
                  (34, 1, 'decade', '1960s', '1960s', CAST('1960s' AS BLOB)), \
                  (35, 2, 'venue', 'Arena', 'arena', CAST('arena' AS BLOB));",
+        )?;
+        // The account's playlists, one pinned and holding a duplicate and a missing track, one
+        // with artwork; and the ones it must not see: another account's, and one in library 2.
+        User::new(2, "user").insert(tx)?;
+        tx.execute_batch(
+            "INSERT INTO playlists (id, library_id, user_id, title, folded, sort_key, description, \
+                 pinned, version, created_at, modified_at, track_count, duration_us, image_key) \
+             VALUES (501, 1, 1, 'Road Trip', 'road trip', CAST('road trip' AS BLOB), 'Driving', 1, \
+                         3, 10, 40, 4, 1000, NULL), \
+                    (502, 1, 1, 'Quiet', 'quiet', CAST('quiet' AS BLOB), NULL, 0, 1, 20, 30, 2, \
+                         500, '40'), \
+                    (503, 1, 2, 'Theirs', 'theirs', CAST('theirs' AS BLOB), NULL, 0, 1, 1, 1, 1, \
+                         1, NULL), \
+                    (504, 2, 1, 'Road Elsewhere', 'road elsewhere', CAST('road elsewhere' AS BLOB), \
+                         NULL, 0, 1, 1, 1, 1, 1, NULL); \
+             INSERT INTO playlist_items (playlist_id, key, library_id, track_id, added_at) VALUES \
+                 (501, 100, 1, 1001, 5000), (501, 200, 1, 1002, 4000), (501, 300, 1, 1001, 3000), \
+                 (501, 400, 1, 1004, 2000), (502, 100, 1, 1003, 1000), (502, 200, 1, 1006, 6000), \
+                 (503, 100, 1, 1001, 1), (504, 100, 2, 2001, 1);",
         )
     })
     .await
@@ -361,6 +582,12 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
             sorts: &["name", "dateAdded"],
             every: artist_filters(),
             walked: vec![json!({}), json!({ "tagAny": "30,31" })],
+        },
+        List {
+            name: "listPlaylists",
+            sorts: &["name", "created", "modified"],
+            every: playlist_filters(),
+            walked: vec![json!({}), json!({ "q": "r" })],
         },
         List {
             name: "listTags",
@@ -423,6 +650,59 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
     let answer = ask(&db, &device, "listTagTypes", json!({})).await;
     assert_eq!(answer.as_array().unwrap().len(), 3, "only the types the library uses");
     cases.push(case("listTagTypes", json!({}), answer));
+    // A playlist by ID, then its items a page at a time and at once: the account's own, another
+    // account's, another library's and an unknown one. A cursor from another version of a
+    // playlist, and one that is not a cursor, are refused.
+    for id in ["501", "502", "503", "504", "999"] {
+        let params = json!({ "playlistId": id });
+        let answer = ask(&db, &device, "getPlaylist", params.clone()).await;
+        cases.push(case("getPlaylist", params, answer));
+        for limit in [2, 100] {
+            let mut next: Option<String> = None;
+            loop {
+                let params = json!({ "playlistId": id, "limit": limit, "cursor": next });
+                let answer = ask(&db, &device, "listPlaylistItems", params.clone()).await;
+                next = answer["nextCursor"].as_str().map(str::to_owned);
+                cases.push(case("listPlaylistItems", params, answer));
+                if next.is_none() {
+                    break;
+                }
+            }
+        }
+    }
+    let stale = jewelcase_catalog::cursor::encode(
+        "playlists.items",
+        &[rusqlite::types::Value::Integer(2), rusqlite::types::Value::Integer(100)],
+    );
+    for cursor in [stale.as_str(), "not a cursor"] {
+        let params = json!({ "playlistId": "501", "limit": 2, "cursor": cursor });
+        let answer = ask(&db, &device, "listPlaylistItems", params.clone()).await;
+        assert!(answer["error"].is_string(), "{answer}");
+        cases.push(case("listPlaylistItems", params, answer));
+    }
+    // The documents the search index is built from, and what searches find in it.
+    let documents = |conn: &Connection| {
+        let mut documents: Vec<String> = search::documents(conn, LIBRARY)
+            .unwrap()
+            .iter()
+            .map(|document| format!("{document:?}"))
+            .collect();
+        documents.sort();
+        documents
+    };
+    let on_server = db.read(move |conn| Ok(documents(conn))).await.unwrap();
+    assert_eq!(documents(&device), on_server, "the documents of the library");
+    assert_eq!(on_server.len(), 6 + 3 + 3, "the library's tracks, its named albums and artists");
+    for params in searches() {
+        let answer = ask(&db, &device, "search", params.clone()).await;
+        cases.push(case("search", params, answer));
+    }
+    // Every recipe's tracks, and the list hash they are named by.
+    for recipe in recipes() {
+        let params = json!({ "recipe": recipe });
+        let answer = ask(&db, &device, "resolveRecipe", params.clone()).await;
+        cases.push(case("resolveRecipe", params, answer));
+    }
     assert!(cases.len() > 200);
     assert!(
         cases.iter().any(|c| c["answer"]["items"].as_array().is_some_and(|i| !i.is_empty())),
@@ -431,11 +711,19 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
 
     let feed: Vec<Value> = rows.iter().map(|r| serde_json::to_value(r).unwrap()).collect();
     golden("library.json", &lines(&feed));
+    // Each file holds the queries of one part, so a change reads as a diff of that part.
+    let query = |c: &Value| c["query"].as_str().unwrap().to_owned();
     let (tracks, rest): (Vec<_>, Vec<_>) = cases.into_iter().partition(|c| {
-        c["query"].as_str().unwrap().ends_with("Tracks")
-            || c["query"] == "getTrack"
-            || c["query"] == "listTracksByIds"
+        query(c).ends_with("Tracks") || query(c) == "getTrack" || query(c) == "listTracksByIds"
     });
+    let (playlists, rest): (Vec<_>, Vec<_>) =
+        rest.into_iter().partition(|c| query(c).contains("Playlist"));
+    let (search, rest): (Vec<_>, Vec<_>) = rest.into_iter().partition(|c| query(c) == "search");
+    let (recipes, browse): (Vec<_>, Vec<_>) =
+        rest.into_iter().partition(|c| query(c) == "resolveRecipe");
     golden("tracks.json", &lines(&tracks));
-    golden("browse.json", &lines(&rest));
+    golden("browse.json", &lines(&browse));
+    golden("playlists.json", &lines(&playlists));
+    golden("search.json", &lines(&search));
+    golden("recipes.json", &lines(&recipes));
 }

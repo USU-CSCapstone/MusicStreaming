@@ -17,5 +17,13 @@
 {"id":"30","key":0,"kind":"tag","tables":{"tag_types":[{"key":"genre","name":null}],"tags":[{"album_count":1,"artist_count":1,"id":"30","library_id":"1","name":"Rock","sort_key":"cm9jaw==","track_count":1,"type":"genre"}]}},
 {"id":"31","key":0,"kind":"tag","tables":{"tag_types":[{"key":"genre","name":null}],"tags":[{"album_count":0,"artist_count":1,"id":"31","library_id":"1","name":"Pop","sort_key":"cG9w","track_count":0,"type":"genre"}]}},
 {"id":"32","key":0,"kind":"tag","tables":{"tag_types":[{"key":"mood","name":null}],"tags":[{"album_count":1,"artist_count":1,"id":"32","library_id":"1","name":"Calm","sort_key":"Y2FsbQ==","track_count":1,"type":"mood"}]}},
-{"id":"34","key":0,"kind":"tag","tables":{"tag_types":[{"key":"decade","name":"Decade"}],"tags":[{"album_count":0,"artist_count":0,"id":"34","library_id":"1","name":"1960s","sort_key":"MTk2MHM=","track_count":0,"type":"decade"}]}}
+{"id":"34","key":0,"kind":"tag","tables":{"tag_types":[{"key":"decade","name":"Decade"}],"tags":[{"album_count":0,"artist_count":0,"id":"34","library_id":"1","name":"1960s","sort_key":"MTk2MHM=","track_count":0,"type":"decade"}]}},
+{"id":"501","key":0,"kind":"playlist","tables":{"playlists":[{"created_at":10,"description":"Driving","duration_us":1000,"folded":"road trip","id":"501","image_key":null,"library_id":"1","modified_at":40,"pinned":1,"sort_key":"cm9hZCB0cmlw","title":"Road Trip","track_count":4,"user_id":"1","version":3}]}},
+{"id":"501","key":100,"kind":"playlistItem","tables":{"playlist_items":[{"added_at":5000,"key":100,"library_id":"1","playlist_id":"501","track_id":"1001"}]}},
+{"id":"501","key":200,"kind":"playlistItem","tables":{"playlist_items":[{"added_at":4000,"key":200,"library_id":"1","playlist_id":"501","track_id":"1002"}]}},
+{"id":"501","key":300,"kind":"playlistItem","tables":{"playlist_items":[{"added_at":3000,"key":300,"library_id":"1","playlist_id":"501","track_id":"1001"}]}},
+{"id":"501","key":400,"kind":"playlistItem","tables":{"playlist_items":[{"added_at":2000,"key":400,"library_id":"1","playlist_id":"501","track_id":"1004"}]}},
+{"id":"502","key":0,"kind":"playlist","tables":{"playlists":[{"created_at":20,"description":null,"duration_us":500,"folded":"quiet","id":"502","image_key":"40","library_id":"1","modified_at":30,"pinned":0,"sort_key":"cXVpZXQ=","title":"Quiet","track_count":2,"user_id":"1","version":1}]}},
+{"id":"502","key":100,"kind":"playlistItem","tables":{"playlist_items":[{"added_at":1000,"key":100,"library_id":"1","playlist_id":"502","track_id":"1003"}]}},
+{"id":"502","key":200,"kind":"playlistItem","tables":{"playlist_items":[{"added_at":6000,"key":200,"library_id":"1","playlist_id":"502","track_id":"1006"}]}}
 ]

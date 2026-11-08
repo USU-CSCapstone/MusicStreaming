@@ -14,7 +14,6 @@ mod edit;
 mod idempotency;
 mod items;
 mod keys;
-mod representation;
 
 use std::sync::Arc;
 
@@ -24,7 +23,6 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use jewelcase_core::playlist::Op;
 use jewelcase_core::{sort_key, words};
-use rusqlite::types::Value;
 use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
 
@@ -32,12 +30,14 @@ pub use announce::Change;
 pub use artwork::{all_mosaics, held as holds_artwork, mosaics_of};
 pub use edit::edit;
 use idempotency::{Answer, Key};
-pub use items::{all_items, duplicates, list_items};
-pub use representation::Playlist;
-use representation::{SELECT, playlist};
+pub use items::{duplicates, list_items};
+pub use jewelcase_catalog::playlists::Playlist;
+#[cfg(test)]
+use jewelcase_catalog::playlists::source;
+use jewelcase_catalog::playlists::{self, PlaylistSort, get as get_playlist};
 
 use super::extract::{self, Path, Query};
-use super::page::{Order, Page, Request, Sort, Source, Total, Unknown};
+use super::page::{Order, Page, Request};
 use super::playables::{self, Playable};
 use super::realtime::{Hub, ServerMessage};
 use super::scope::Scope;
@@ -48,43 +48,6 @@ use crate::db::{Database, catalog, new_id, now_ms};
 /// How far apart the keys of a playlist's items start, so an item put between two takes the
 /// midpoint, 20 times over, before the playlist is renumbered.
 pub const KEY_GAP: i64 = 1 << 20;
-
-/// The `sort` values `listPlaylists` supports.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum PlaylistSort {
-    Name,
-    Created,
-    #[default]
-    Modified,
-    // The spec's `playCount` needs listening data, which is not kept per playlist yet, so it
-    // answers `422`.
-}
-
-impl PlaylistSort {
-    /// The keyset this sort pages by. A pinned playlist's `pin_rank` is 1 and the rest's NULL,
-    /// the unknown part of the list, so the pinned come first in either order. Each sort's
-    /// columns are one of `playlists`' indexes after `user_id` and `library_id`.
-    fn sort(self) -> &'static Sort {
-        match self {
-            PlaylistSort::Name => &Sort {
-                label: "playlists.name",
-                columns: &["p.pin_rank", "p.sort_key", "p.id"],
-                unknown: Unknown::Null,
-            },
-            PlaylistSort::Created => &Sort {
-                label: "playlists.created",
-                columns: &["p.pin_rank", "p.created_at", "p.id"],
-                unknown: Unknown::Null,
-            },
-            PlaylistSort::Modified => &Sort {
-                label: "playlists.modified",
-                columns: &["p.pin_rank", "p.modified_at", "p.id"],
-                unknown: Unknown::Null,
-            },
-        }
-    }
-}
 
 /// The parameters `listPlaylists` supports. Any other answers `422` rather than being ignored.
 #[derive(Deserialize)]
@@ -99,28 +62,6 @@ pub struct ListQuery {
     limit: Option<u32>,
 }
 
-/// The playlists `user` has in `library`, those whose title holds all of `q`'s words, in order
-/// if `q` has any.
-fn source(user: i64, library: i64, q: Option<&str>) -> Source {
-    let mut filter = "p.user_id = ? AND p.library_id = ?".to_owned();
-    let mut params = vec![Value::from(user), Value::from(library)];
-    let folded = words(q.unwrap_or("")).join(" ");
-    if !folded.is_empty() {
-        filter += " AND instr(p.folded, ?) > 0";
-        params.push(Value::from(folded));
-    }
-    // Counted for every page: a user has hundreds of playlists at most, all in one index range.
-    Source {
-        select: SELECT,
-        from: "playlists p".to_owned(),
-        joins: "",
-        filter,
-        params,
-        total: Total::Counted,
-        counting: None,
-    }
-}
-
 /// The caller's playlists in `library`, pinned first, a page at a time.
 pub async fn list(
     State(db): State<Arc<Database>>,
@@ -129,9 +70,8 @@ pub async fn list(
 ) -> Result<Json<Page<Playlist>>, Problem> {
     let request = Request::new(query.sort.sort(), query.order, query.cursor, query.limit)?;
     let q = query.q;
-    let page = db
-        .read(move |conn| request.read(conn, &source(user, library, q.as_deref()), playlist))
-        .await?;
+    let page =
+        db.read(move |conn| playlists::list(conn, user, library, request, q.as_deref())).await?;
     Ok(Json(page))
 }
 
@@ -215,7 +155,7 @@ pub async fn create(
                 feed::record_account(tx, user, library, Kind::Playlist, id, 0, FeedOp::Upsert)?;
                 // The row was just inserted in this transaction.
                 let created =
-                    representation::get(tx, user, library, id)?.ok_or_else(Problem::not_found)?;
+                    get_playlist(tx, user, library, id)?.ok_or_else(Problem::not_found)?;
                 let answer = Answer::new(StatusCode::CREATED, &created)?;
                 if let Some(key) = &key {
                     answer.store(tx, user, key, now)?;
@@ -255,7 +195,7 @@ pub async fn get(
     Scope { user, library }: Scope,
     Path((_, Id(id))): Path<(Id, Id)>,
 ) -> Result<Json<Playlist>, Problem> {
-    db.read(move |conn| representation::get(conn, user, library, id))
+    db.read(move |conn| get_playlist(conn, user, library, id))
         .await?
         .map(Json)
         .ok_or_else(Problem::not_found)

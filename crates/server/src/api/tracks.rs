@@ -11,9 +11,11 @@ use serde::Deserialize;
 #[cfg(test)]
 pub use jewelcase_catalog::tracks::TRACKS;
 pub use jewelcase_catalog::tracks::{
-    CREDITS, JOINS, LOUDNESS, Loudness, SELECT, TAGGED, TRACK_NUMBER, Track, TrackOrder, TrackSort,
-    TrackSummary, list_summary, loudness, resolve, sort_keys,
+    CREDITS, LOUDNESS, Loudness, TAGGED, TRACK_NUMBER, Track, TrackOrder, TrackSort, TrackSummary,
+    loudness,
 };
+#[cfg(test)]
+pub use jewelcase_catalog::tracks::{SELECT, list_summary};
 #[cfg(test)]
 use jewelcase_catalog::tracks::{WITHIN_ALBUM, source};
 

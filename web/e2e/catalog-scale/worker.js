@@ -365,22 +365,16 @@ async function queryPhase(rows, db, spawned) {
 		]
 	);
 
+	// A recipe's read: every track's ID in each sort's order, from the sort's index alone.
 	let ids;
-	for (const [label, sql] of [
-		[
-			'by name, available only',
-			'SELECT id FROM tracks WHERE library_id = 1 AND missing_since IS NULL ORDER BY sort_key, id'
-		],
-		[
-			'by name, covering index only',
-			'SELECT id FROM tracks WHERE library_id = 1 ORDER BY sort_key, id'
-		],
-		[
-			'by album, available only',
-			'SELECT id FROM tracks WHERE library_id = 1 AND missing_since IS NULL ORDER BY album_sort_key, album_id, disc_number, ifnull(track_number, 9223372036854775807), id'
-		]
-	]) {
-		rows.push([section, `read every track ID, ${label}`, timed(() => (ids = catalog.ids(sql)), 3)]);
+	for (const [name, columns] of Object.entries(SORTS)) {
+		const order = columns.map(([c]) => c).join(', ');
+		const sql = `SELECT id FROM tracks WHERE library_id = 1 ORDER BY ${order}`;
+		rows.push([
+			section,
+			`read every track ID by ${name}`,
+			timed(() => (ids = catalog.ids(sql)), 3)
+		]);
 	}
 	const hashStart = now();
 	await crypto.subtle.digest('SHA-256', ids);
@@ -392,24 +386,6 @@ async function queryPhase(rows, db, spawned) {
 		],
 		[section, 'wasm linear memory after the queries', mb(exports.memory.buffer.byteLength)]
 	);
-	if (db === 'json.db') {
-		// An index that holds only the available tracks, for the recipe read that skips the others.
-		const sql =
-			'SELECT id FROM tracks WHERE library_id = 1 AND missing_since IS NULL ORDER BY sort_key, id';
-		const built = now();
-		catalog.query(
-			'CREATE INDEX tracks_by_name_available ON tracks (library_id, sort_key, id) WHERE missing_since IS NULL',
-			[]
-		);
-		rows.push(
-			[section, 'experiment: build a partial index of available tracks by name', ms(now() - built)],
-			[
-				section,
-				'experiment: read every track ID by name, available only, with it',
-				timed(() => catalog.ids(sql), 3)
-			]
-		);
-	}
 	rows.push([section, 'CPU calibration (100M integer steps)', ms(spin().ms)]);
 }
 

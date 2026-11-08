@@ -7,9 +7,9 @@
 
 use serde::Serialize;
 
-use super::representation::Playlist;
 use crate::api::Id;
 use crate::api::time::serialize_rfc3339;
+use jewelcase_catalog::playlists::Playlist;
 
 /// The most the ops of one message may take as JSON. Messages are at most 64 KiB, so a bigger
 /// edit, such as a playlist of thousands of tracks added at once, is announced without them.

@@ -200,11 +200,12 @@ CREATE TABLE artist_tags (
 CREATE INDEX artist_tags_by_tag ON artist_tags (tag_id, artist_id);
 
 -- The account's own playlists, which the account feed (`GET /me/changes`) carries: only the
--- signed-in user's, so the rows have no owner. Never in a library's snapshot, which every
--- account that reaches the library shares.
+-- signed-in user's, so `user_id` is always that user's own. Never in a library's snapshot, which
+-- every account that reaches the library shares.
 CREATE TABLE playlists (
     id          INTEGER PRIMARY KEY,
     library_id  INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
     title       TEXT    NOT NULL,
     -- The title as search folds it, which a name filter looks inside
     folded      TEXT    NOT NULL,
@@ -217,8 +218,14 @@ CREATE TABLE playlists (
     track_count INTEGER NOT NULL DEFAULT 0,
     duration_us INTEGER NOT NULL DEFAULT 0,
     -- The artwork's key as the API gives it: an image ID, or a mosaic of four
-    image_key   TEXT
+    image_key   TEXT,
+    -- 1 for a pinned playlist and NULL for the rest, so a list puts the pinned first in both orders
+    pin_rank    INTEGER GENERATED ALWAYS AS (nullif(pinned, 0)) VIRTUAL
 ) STRICT;
+
+CREATE INDEX playlists_by_name ON playlists (user_id, library_id, pin_rank, sort_key, id);
+CREATE INDEX playlists_by_created ON playlists (user_id, library_id, pin_rank, created_at, id);
+CREATE INDEX playlists_by_modified ON playlists (user_id, library_id, pin_rank, modified_at, id);
 
 -- A playlist's tracks in the user's order: `key` orders an item among its playlist's items
 CREATE TABLE playlist_items (

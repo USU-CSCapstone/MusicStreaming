@@ -12,7 +12,10 @@ pub mod cursor;
 mod id;
 mod json;
 pub mod page;
+pub mod playlists;
+pub mod recipes;
 pub mod refs;
+pub mod search;
 pub mod snapshot;
 pub mod sync;
 pub mod tag_filter;
@@ -30,7 +33,7 @@ pub struct Invalid(pub String);
 
 /// The device schema's version. Raise it whenever [`SCHEMA`] changes: a device whose database
 /// carries another version deletes it and syncs again, since it is only a copy of the server's.
-pub const SCHEMA_VERSION: i32 = 3;
+pub const SCHEMA_VERSION: i32 = 4;
 
 /// The device schema's DDL: a subset of the server's catalog tables with the same table and
 /// column names and types, minus what never leaves the server.

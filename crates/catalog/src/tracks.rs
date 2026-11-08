@@ -156,8 +156,9 @@ pub fn by_ids(
 
 /// The ID of every track in `library` that `list` pages through for the same `album`, `artist`,
 /// `credit`, `tags` and `order`, in the same order, read at once: one statement for each part of
-/// the sort's index, not a page at a time. Being read whole, it starts from a larger tag's tracks
-/// than a page does ([`RESOLVE_SHARE`]).
+/// the sort's index, not a page at a time. A missing track stays in place, as it does in a view.
+/// Being read whole, it starts from a larger tag's tracks than a page does
+/// ([`RESOLVE_SHARE`]).
 pub fn resolve(
     conn: &Connection,
     library: i64,
@@ -220,4 +221,38 @@ pub fn source(
         params: vec![album.0.into()],
     });
     tag_filter::source(conn, library, &TRACKS, &TAGGED, lead, album, tags, share)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_recipe_reads_each_sorts_ids_from_its_index_alone() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::create_schema(&conn).unwrap();
+        for sort in [
+            TrackSort::Name,
+            TrackSort::Artist,
+            TrackSort::Album,
+            TrackSort::DateAdded,
+            TrackSort::ReleaseDate,
+            TrackSort::Duration,
+        ] {
+            let columns = sort.sort().columns.join(", ");
+            let plan: Vec<String> = conn
+                .prepare(&format!(
+                    "EXPLAIN QUERY PLAN SELECT t.id FROM tracks t \
+                     WHERE t.library_id = 1 ORDER BY {columns}"
+                ))
+                .unwrap()
+                .query_map([], |row| row.get(3))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            let plan = plan.join("; ");
+            assert!(plan.contains("COVERING INDEX tracks_by_"), "{}: {plan}", sort.name());
+            assert!(!plan.contains("TEMP B-TREE"), "{}: {plan}", sort.name());
+        }
+    }
 }
