@@ -7,11 +7,12 @@
 //! library's entities, a rebuild starts and the old file is served meanwhile. A build works inside
 //! a `building-*` folder of its own, so a file is in place only whole.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -35,6 +36,10 @@ const PAGE_SIZE: u32 = 4096;
 /// What `Retry-After` says while the first build runs, in seconds.
 const RETRY_AFTER: i64 = 30;
 
+/// How long after a build fails the next request for that library's file waits before building
+/// again, so a failure that persists, such as a full disk, is not retried at every request.
+const RETRY_COOLDOWN: Duration = Duration::from_secs(300);
+
 /// The folder name a build works in.
 const BUILDING: &str = "building-";
 
@@ -45,6 +50,8 @@ pub struct Snapshots {
     database: PathBuf,
     /// The libraries with a build running, so no library is built twice at once.
     building: Mutex<HashSet<i64>>,
+    /// When each library's last build failed, until one succeeds.
+    failed: Mutex<HashMap<i64, Instant>>,
 }
 
 /// A library's build, registered in [`Snapshots::building`] until dropped, even if it panics.
@@ -69,7 +76,7 @@ struct Current {
 impl Snapshots {
     /// Keeps files in `dir`, built from the server database at `database`.
     pub fn new(dir: PathBuf, database: PathBuf) -> Snapshots {
-        Snapshots { dir, database, building: Mutex::default() }
+        Snapshots { dir, database, building: Mutex::default(), failed: Mutex::default() }
     }
 
     /// Deletes the files of libraries that are gone and the leftovers of builds cut short. Call
@@ -109,19 +116,38 @@ impl Snapshots {
         .map_err(io::Error::other)?
     }
 
-    /// Starts a build of `library`'s file in the background, unless one is running.
+    /// Starts a build of `library`'s file in the background, unless one is running or the last
+    /// one failed less than [`RETRY_COOLDOWN`] ago. It runs on a thread of its own, at lowered
+    /// priority, since a pooled thread would keep the lowered priority for later tasks.
     fn start(self: &Arc<Self>, library: i64) {
-        if !self.building.lock().recover().insert(library) {
+        let cooling = self
+            .failed
+            .lock()
+            .recover()
+            .get(&library)
+            .is_some_and(|at| at.elapsed() < RETRY_COOLDOWN);
+        if cooling || !self.building.lock().recover().insert(library) {
             return;
         }
         let snapshots = self.clone();
-        tokio::task::spawn_blocking(move || {
+        let spawned = std::thread::Builder::new().name("catalog-build".into()).spawn(move || {
             let _build = Build { snapshots: &snapshots, library };
+            jewelcase_ffmpeg::lower_thread_priority();
             let dir = snapshots.dir.join(library.to_string());
-            if let Err(error) = build(&snapshots.database, &dir, library, quick_check) {
-                tracing::warn!(%error, library, "cannot build the catalog file");
+            match build(&snapshots.database, &dir, library, quick_check) {
+                Ok(()) => {
+                    snapshots.failed.lock().recover().remove(&library);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, library, "cannot build the catalog file");
+                    snapshots.failed.lock().recover().insert(library, Instant::now());
+                }
             }
         });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, library, "cannot start the catalog build");
+            self.building.lock().recover().remove(&library);
+        }
     }
 }
 

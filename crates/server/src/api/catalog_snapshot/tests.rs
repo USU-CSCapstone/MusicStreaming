@@ -441,3 +441,22 @@ async fn a_file_a_rebuild_deleted_after_it_was_chosen_gives_way_to_its_replaceme
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert_eq!(body, bytes);
 }
+
+#[tokio::test]
+async fn a_failed_build_is_not_started_again_until_the_cooldown_passes() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path().join("1");
+    let snapshots = Arc::new(Snapshots::new(temp.path().to_owned(), temp.path().join("none.db")));
+    let attempt = async || {
+        snapshots.start(1);
+        eventually("the build to end", async || {
+            snapshots.building.lock().unwrap().is_empty().then_some(())
+        })
+        .await;
+    };
+    attempt().await;
+    assert!(dir.exists(), "the first build ran, and failed on the missing database");
+    std::fs::remove_dir_all(&dir).unwrap();
+    attempt().await;
+    assert!(!dir.exists(), "no second build while the failure is recent");
+}
