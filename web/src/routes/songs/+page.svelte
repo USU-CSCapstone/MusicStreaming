@@ -16,7 +16,7 @@
 	const tracks = $derived(
 		new Paged(
 			data.tracks,
-			(cursor) => listTracks(fetch, data.lib, { ...data.query, cursor }),
+			(cursor, limit) => listTracks(fetch, data.lib, { ...data.query, cursor, limit }),
 			data.lib
 		)
 	);

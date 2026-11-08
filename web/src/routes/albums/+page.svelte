@@ -11,7 +11,7 @@
 	const albums = $derived(
 		new Paged(
 			data.albums,
-			(cursor) => listAlbums(fetch, data.lib, { sort: 'name', cursor }),
+			(cursor, limit) => listAlbums(fetch, data.lib, { sort: 'name', cursor, limit }),
 			data.lib
 		)
 	);

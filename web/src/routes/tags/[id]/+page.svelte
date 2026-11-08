@@ -27,21 +27,23 @@
 	const albums = $derived(
 		new Paged(
 			data.albums,
-			(cursor) => listAlbums(fetch, data.lib, { tagAll: tag.id, sort: 'name', cursor }),
+			(cursor, limit) =>
+				listAlbums(fetch, data.lib, { tagAll: tag.id, sort: 'name', cursor, limit }),
 			data.lib
 		)
 	);
 	const artists = $derived(
 		new Paged(
 			data.artists,
-			(cursor) => listArtists(fetch, data.lib, { tagAll: tag.id, sort: 'name', cursor }),
+			(cursor, limit) =>
+				listArtists(fetch, data.lib, { tagAll: tag.id, sort: 'name', cursor, limit }),
 			data.lib
 		)
 	);
 	const tracks = $derived(
 		new Paged(
 			data.tracks,
-			(cursor) => listTracks(fetch, data.lib, { ...data.songs, cursor }),
+			(cursor, limit) => listTracks(fetch, data.lib, { ...data.songs, cursor, limit }),
 			data.lib
 		)
 	);

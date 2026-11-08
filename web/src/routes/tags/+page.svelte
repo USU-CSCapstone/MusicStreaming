@@ -13,7 +13,11 @@
 	let { data } = $props();
 
 	const tags = $derived(
-		new Paged(data.tags, (cursor) => listTags(fetch, data.lib, { ...data.query, cursor }), data.lib)
+		new Paged(
+			data.tags,
+			(cursor, limit) => listTags(fetch, data.lib, { ...data.query, cursor, limit }),
+			data.lib
+		)
 	);
 	const name = $derived(tagTypeName(data.type, data.tagTypes).toLowerCase());
 	// A plugin gives its type one name, for one tag and for more.

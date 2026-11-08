@@ -24,9 +24,11 @@ const announce = (library = '1') => listeners.forEach((listener) => listener(lib
  */
 function served(rows: () => string[], size = 2) {
 	const calls: (string | undefined)[] = [];
+	const limits: (number | undefined)[] = [];
 	const delay = { ms: 0 };
-	const load = async (cursor?: string): Promise<Page<string>> => {
+	const load = async (cursor?: string, limit?: number): Promise<Page<string>> => {
 		calls.push(cursor);
+		limits.push(limit);
 		const rest = rows().filter((row) => cursor === undefined || row > cursor);
 		const items = rest.slice(0, size);
 		const page = {
@@ -37,7 +39,7 @@ function served(rows: () => string[], size = 2) {
 		if (delay.ms) await new Promise((resolve) => setTimeout(resolve, delay.ms));
 		return page;
 	};
-	return { calls, delay, load };
+	return { calls, limits, delay, load };
 }
 
 /** Shows `paged` as a page does, so it listens; returns what takes it off the page. */
@@ -118,6 +120,20 @@ describe('a library changing on the device', () => {
 		expect(calls).toEqual([]);
 		await vi.advanceTimersByTimeAsync(1);
 		expect(calls).toEqual([undefined]);
+		await stop();
+	});
+
+	it('re-reads in large pages, while more() keeps its own size', async () => {
+		const { limits, load } = served(() => ['a', 'b', 'c', 'd']);
+		const paged = new Paged(await load(), load, '1');
+		const stop = show(paged);
+		await paged.more();
+		expect(limits).toEqual([undefined, undefined]);
+		limits.length = 0;
+
+		announce();
+		await vi.advanceTimersByTimeAsync(RELOAD_MS * 2);
+		expect(limits).toEqual([1000, 1000]);
 		await stop();
 	});
 

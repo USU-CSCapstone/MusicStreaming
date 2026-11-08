@@ -33,13 +33,14 @@
 	const albums = $derived(
 		new Paged(
 			data.albums,
-			(cursor) =>
+			(cursor, limit) =>
 				listAlbums(fetch, data.lib, {
 					artistId: artist.id,
 					artistCredit: 'owned',
 					sort: 'releaseDate',
 					order: 'desc',
-					cursor
+					cursor,
+					limit
 				}),
 			data.lib
 		)
@@ -66,7 +67,8 @@
 	const tracks = $derived(
 		new Paged(
 			songs.first,
-			(cursor) => listTracks(fetch, data.lib, { artistId: artist.id, ...songs.order, cursor }),
+			(cursor, limit) =>
+				listTracks(fetch, data.lib, { artistId: artist.id, ...songs.order, cursor, limit }),
 			data.lib
 		)
 	);

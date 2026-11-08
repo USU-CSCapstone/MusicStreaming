@@ -2,6 +2,9 @@ import { createSubscriber } from 'svelte/reactivity';
 import type { Page } from './api/types';
 import { reloadOnChange, same } from './live.svelte';
 
+/** Rows a reload reads a page, the most the API gives. */
+const RELOAD_PAGE = 1000;
+
 /**
  * A cursor-paged list that grows as the user scrolls, and reads the window loaded again, in
  * place, when its library changes on the device while something displays it.
@@ -14,10 +17,10 @@ export class Paged<T> {
 	#busy: Promise<void> | null = null;
 	#subscribe: () => void;
 
-	/** `load` reads the page after `cursor`, or the first page without one; `library` is the one it reads. */
+	/** `load` reads the page after `cursor`, or the first page without one, of at most `limit` rows, or its usual size without one; `library` is the one it reads. */
 	constructor(
 		first: Page<T>,
-		private load: (cursor?: string) => Promise<Page<T>>,
+		private load: (cursor?: string, limit?: number) => Promise<Page<T>>,
 		library: string
 	) {
 		this.#items = first.items;
@@ -63,7 +66,7 @@ export class Paged<T> {
 			let page: Page<T>;
 			let cursor: string | undefined;
 			do {
-				page = await this.load(cursor);
+				page = await this.load(cursor, RELOAD_PAGE);
 				rows.push(...page.items);
 				cursor = page.nextCursor ?? undefined;
 			} while (cursor && rows.length < this.#items.length);

@@ -63,7 +63,7 @@
 			const first = await listPlaylists(fetch, libraryId);
 			playlists = new Paged(
 				first,
-				(cursor) => listPlaylists(fetch, libraryId, { cursor }),
+				(cursor, limit) => listPlaylists(fetch, libraryId, { cursor, limit }),
 				libraryId
 			);
 		} catch (e) {

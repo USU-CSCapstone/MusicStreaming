@@ -11,7 +11,7 @@
 	const artists = $derived(
 		new Paged(
 			data.artists,
-			(cursor) => listArtists(fetch, data.lib, { sort: 'name', cursor }),
+			(cursor, limit) => listArtists(fetch, data.lib, { sort: 'name', cursor, limit }),
 			data.lib
 		)
 	);
