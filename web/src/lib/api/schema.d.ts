@@ -330,6 +330,9 @@ export interface paths {
          *     `ETag` is the SHA-256 of the database itself, as a quoted lowercase hex string,
          *     whether or not the response is compressed: a client checks it against the file it ends
          *     up with. A file is served only after SQLite's `quick_check` passed on it.
+         *     `X-Jewelcase-Schema` is the device schema's version, which the database also carries as
+         *     its `user_version`: a client that doesn't know that version doesn't import the file. The
+         *     response is `no-store`, so no HTTP cache keeps a copy of the catalog.
          *
          *     Until the first build has finished there is no file, and the answer is `503`. The client
          *     reads the catalog from the other endpoints in the meantime and asks again after
@@ -3726,6 +3729,10 @@ export interface operations {
                     ETag?: string;
                     /** @description The feed position the file is current to, for `listLibraryChanges`'s `after`. */
                     "X-Jewelcase-Seq"?: number;
+                    /** @description The device schema version of the file (`PRAGMA user_version`). */
+                    "X-Jewelcase-Schema"?: number;
+                    /** @description `no-store`. */
+                    "Cache-Control"?: string;
                     /** @description `gzip` when the client accepts it. */
                     "Content-Encoding"?: string;
                     [name: string]: unknown;

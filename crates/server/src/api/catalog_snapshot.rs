@@ -19,7 +19,7 @@ use axum::http::{HeaderValue, header};
 use axum::response::Response;
 use flate2::Compression;
 use flate2::write::GzEncoder;
-use jewelcase_catalog::{create_schema, snapshot};
+use jewelcase_catalog::{SCHEMA_VERSION, create_schema, snapshot};
 use jewelcase_core::Recover;
 use rusqlite::{Connection, OpenFlags};
 use sha2::{Digest, Sha256};
@@ -233,7 +233,7 @@ fn read_only_uri(path: &Path) -> String {
 }
 
 /// The spec's `getLibraryCatalog`: the library's newest file, gzipped if the client accepts it,
-/// with its ETag and feed position. A file the feed has moved too far past is rebuilt in the
+/// with its ETag, feed position and device schema version. A file the feed has moved too far past is rebuilt in the
 /// background. With no file yet, `503 catalog_building` and a build.
 pub async fn get(
     State(db): State<Arc<Database>>,
@@ -262,19 +262,37 @@ pub async fn get(
     if current.is_none() || changed > entities / 10 {
         snapshots.start(library);
     }
-    let Some(Current { seq, sha256, path }) = current else {
+    let Some(current) = current else {
         return Err(Problem::catalog_building(RETRY_AFTER));
     };
-    let mut response = ServeFile::new(path)
-        .precompressed_gzip()
-        .try_call(request)
-        .await
-        .map_err(internal)?
-        .map(Body::new);
+    serve(snapshots.dir.join(library.to_string()), current, request).await
+}
+
+/// Serves `chosen` with the catalog's headers. A rebuild that finished since `chosen` was picked
+/// has deleted it, so then the newest file in `dir`, its replacement, is served instead.
+async fn serve(dir: PathBuf, chosen: Current, request: Request) -> Result<Response, Problem> {
+    let (parts, _) = request.into_parts();
+    let open = |path: &Path| {
+        let request = Request::from_parts(parts.clone(), Body::empty());
+        ServeFile::new(path).precompressed_gzip().try_call(request)
+    };
+    let (Current { seq, sha256, .. }, served) = match open(&chosen.path).await {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let current = tokio::task::spawn_blocking(move || newest(&dir));
+            let current = current.await.map_err(internal)?.map_err(internal)?;
+            let current = current.ok_or_else(|| Problem::catalog_building(RETRY_AFTER))?;
+            let served = open(&current.path).await;
+            (current, served)
+        }
+        served => (chosen, served),
+    };
+    let mut response = served.map_err(internal)?.map(Body::new);
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/vnd.sqlite3"));
-    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-cache"));
+    // Not even the browser's HTTP cache keeps a copy, so none outlives a sign-out.
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert("x-jewelcase-seq", HeaderValue::from(seq));
+    headers.insert("x-jewelcase-schema", HeaderValue::from(SCHEMA_VERSION));
     if let Ok(etag) = HeaderValue::try_from(format!("\"{sha256}\"")) {
         headers.insert(header::ETAG, etag);
     }

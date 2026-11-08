@@ -106,6 +106,9 @@ async fn the_first_request_answers_building_and_a_later_one_the_file() {
         .unwrap();
     assert_eq!(seq(&headers), head, "the library's head, not the server's");
     assert_eq!(headers[header::CONTENT_TYPE], "application/vnd.sqlite3");
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store", "no copy left in the HTTP cache");
+    let schema = jewelcase_catalog::SCHEMA_VERSION.to_string();
+    assert_eq!(headers["x-jewelcase-schema"], schema.as_str());
 }
 
 #[tokio::test]
@@ -237,12 +240,16 @@ async fn a_stale_snapshot_is_served_while_its_replacement_builds() {
         (seq(&headers) > seq(&first)).then_some((headers, body))
     })
     .await;
-    let mut files: Vec<_> = std::fs::read_dir(temp.path().join("cache/catalog/1"))
-        .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    files.sort();
-    assert_eq!(files.len(), 2, "the superseded pair is deleted: {files:?}");
+    // The new file is in place a moment before the build deletes the superseded pair.
+    let files = eventually("the superseded pair deleted", async || {
+        let mut files: Vec<_> = std::fs::read_dir(temp.path().join("cache/catalog/1"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        files.sort();
+        (files.len() == 2).then_some(files)
+    })
+    .await;
     assert!(files[0].ends_with(".db") && files[1] == format!("{}.gz", files[0]));
 }
 
@@ -397,4 +404,40 @@ async fn a_file_past_the_librarys_head_is_not_served() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     let (headers, _) = built(&app).await;
     assert_eq!(seq(&headers), seq(&first));
+}
+
+#[tokio::test]
+async fn the_file_has_the_device_schema_with_every_index() {
+    let (_temp, _db, app) = catalog::app().await;
+    let (_, bytes) = built(&app).await;
+    let (_file, snapshot) = open(&bytes);
+    let device = Connection::open_in_memory().unwrap();
+    jewelcase_catalog::create_schema(&device).unwrap();
+    let schema = |conn: &Connection| -> Vec<(String, String, Option<String>)> {
+        conn.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY name")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    let indexes = schema(&snapshot).iter().filter(|(kind, ..)| kind == "index").count();
+    assert!(indexes >= 22, "schema.sql's indexes: {indexes}");
+    assert_eq!(schema(&snapshot), schema(&device));
+}
+
+#[tokio::test]
+async fn a_file_a_rebuild_deleted_after_it_was_chosen_gives_way_to_its_replacement() {
+    let (temp, _db, app) = catalog::app().await;
+    let (headers, bytes) = built(&app).await;
+    let dir = temp.path().join("cache/catalog/1");
+    let gone = Current { seq: 1, sha256: "gone".to_owned(), path: dir.join("1-gone.db") };
+    let request = owner_request("GET", URI).body(Body::empty()).unwrap();
+
+    let response = serve(dir, gone, request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::ETAG], headers[header::ETAG]);
+    assert_eq!(seq(response.headers()), seq(&headers));
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(body, bytes);
 }

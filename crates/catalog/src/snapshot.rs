@@ -10,9 +10,18 @@ use rusqlite::{Connection, params};
 /// can reach the copy; a tag type is copied only if one of the library's tags has it.
 ///
 /// Returns the library's feed position. It and the rows are read in one transaction, so the
-/// copy is exactly the library as of that position.
+/// copy is exactly the library as of that position. The schema's indexes are dropped for the
+/// copy and created again once it is committed, which is far cheaper than keeping them up to
+/// date row by row, and ends the read of the server's database sooner.
 pub fn copy(conn: &mut Connection, library: i64) -> rusqlite::Result<i64> {
     let tx = conn.transaction()?;
+    let indexes: Vec<(String, String)> = tx
+        .prepare("SELECT name, sql FROM main.sqlite_schema WHERE type = 'index' AND sql NOT NULL")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    for (name, _) in &indexes {
+        tx.execute_batch(&format!("DROP INDEX main.{name}"))?;
+    }
     // Read first: this opens the server database's snapshot, which every copy below shares.
     let seq = tx.query_row(
         "SELECT coalesce(max(seq), 0) FROM server.library_changes WHERE library_id = ?1",
@@ -39,6 +48,11 @@ pub fn copy(conn: &mut Connection, library: i64) -> rusqlite::Result<i64> {
             ),
             params![library],
         )?;
+    }
+    tx.commit()?;
+    let tx = conn.transaction()?;
+    for (_, sql) in indexes {
+        tx.execute_batch(&sql)?;
     }
     tx.commit()?;
     Ok(seq)
