@@ -8,31 +8,14 @@ use axum::Json;
 use axum::extract::State;
 use jewelcase_catalog::sync::{Kind, Row, export};
 use rusqlite::{Connection, params};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
+use super::changes::{Changes, ChangesQuery, next};
 use super::extract::Query;
-use super::page;
 use super::scope::Caller;
 use super::{Code, Id, Problem};
 use crate::db::feed::Op;
 use crate::db::{Database, reaches};
-
-/// The parameters of `listAccountChanges`.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ChangesQuery {
-    #[serde(default)]
-    after: i64,
-    limit: Option<u32>,
-}
-
-/// The spec's `AccountChanges`.
-#[derive(Serialize)]
-pub struct Changes {
-    changes: Vec<Change>,
-    next: i64,
-    head: i64,
-}
 
 /// The spec's `AccountChange`.
 #[derive(Serialize)]
@@ -54,16 +37,18 @@ pub async fn list(
     State(db): State<Arc<Database>>,
     caller: Caller,
     Query(query): Query<ChangesQuery>,
-) -> Result<Json<Changes>, Problem> {
-    let limit = page::limit(query.limit)?;
-    if query.after < 0 {
-        return Err(Problem::invalid("after must be at least 0"));
-    }
-    db.try_read(move |conn| read(conn, caller, query.after, limit)).await.map(Json)
+) -> Result<Json<Changes<Change>>, Problem> {
+    let (after, limit) = query.check()?;
+    db.try_read(move |conn| read(conn, caller, after, limit)).await.map(Json)
 }
 
 /// The changes of `caller` after `after` as [`list`] answers them.
-fn read(conn: &Connection, caller: Caller, after: i64, limit: u32) -> Result<Changes, Problem> {
+fn read(
+    conn: &Connection,
+    caller: Caller,
+    after: i64,
+    limit: u32,
+) -> Result<Changes<Change>, Problem> {
     let head: i64 = conn
         .prepare_cached("SELECT coalesce(max(seq), 0) FROM account_changes WHERE user_id = ?1")?
         .query_row([caller.user], |row| row.get(0))?;
@@ -82,10 +67,7 @@ fn read(conn: &Connection, caller: Caller, after: i64, limit: u32) -> Result<Cha
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?))
         })?
         .collect::<rusqlite::Result<_>>()?;
-    let next = match listed.last() {
-        Some(&(seq, ..)) if listed.len() == limit as usize => seq,
-        _ => head,
-    };
+    let next = next(listed.last().map(|row| row.0), listed.len(), limit, head);
     let mut changes = Vec::with_capacity(listed.len());
     for (seq, library, kind, playlist, item_key, op) in listed {
         let (kind, key) = match kind.as_str() {

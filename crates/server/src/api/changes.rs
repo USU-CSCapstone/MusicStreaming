@@ -26,12 +26,32 @@ pub struct ChangesQuery {
     limit: Option<u32>,
 }
 
-/// The spec's `LibraryChanges`.
+/// The spec's `LibraryChanges` and `AccountChanges`: one page of a change feed.
 #[derive(Serialize)]
-pub struct Changes {
-    changes: Vec<Change>,
-    next: i64,
-    head: i64,
+pub struct Changes<C> {
+    pub changes: Vec<C>,
+    pub next: i64,
+    pub head: i64,
+}
+
+impl ChangesQuery {
+    /// The checked `(after, limit)`: `after` at least 0, `limit` in bounds, else
+    /// `422 validation_failed`.
+    pub fn check(self) -> Result<(i64, u32), Problem> {
+        let limit = page::limit(self.limit)?;
+        if self.after < 0 {
+            return Err(Problem::invalid("after must be at least 0"));
+        }
+        Ok((self.after, limit))
+    }
+}
+
+/// Where a feed page ends: at the last row read when the page is full, else at the feed's `head`.
+pub fn next(last: Option<i64>, read: usize, limit: u32, head: i64) -> i64 {
+    match last {
+        Some(seq) if read == limit as usize => seq,
+        _ => head,
+    }
 }
 
 /// The spec's `LibraryChange`.
@@ -52,16 +72,18 @@ pub async fn list(
     State(db): State<Arc<Database>>,
     Scope { library, .. }: Scope,
     Query(query): Query<ChangesQuery>,
-) -> Result<Json<Changes>, Problem> {
-    let limit = page::limit(query.limit)?;
-    if query.after < 0 {
-        return Err(Problem::invalid("after must be at least 0"));
-    }
-    db.try_read(move |conn| read(conn, library, query.after, limit)).await.map(Json)
+) -> Result<Json<Changes<Change>>, Problem> {
+    let (after, limit) = query.check()?;
+    db.try_read(move |conn| read(conn, library, after, limit)).await.map(Json)
 }
 
 /// The changes of `library` after `after` as [`list`] answers them.
-fn read(conn: &Connection, library: i64, after: i64, limit: u32) -> Result<Changes, Problem> {
+fn read(
+    conn: &Connection,
+    library: i64,
+    after: i64,
+    limit: u32,
+) -> Result<Changes<Change>, Problem> {
     let head: i64 = conn
         .prepare_cached("SELECT coalesce(max(seq), 0) FROM library_changes WHERE library_id = ?1")?
         .query_row([library], |row| row.get(0))?;
@@ -79,10 +101,7 @@ fn read(conn: &Connection, library: i64, after: i64, limit: u32) -> Result<Chang
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?
         .collect::<rusqlite::Result<_>>()?;
-    let next = match listed.last() {
-        Some(&(seq, ..)) if listed.len() == limit as usize => seq,
-        _ => head,
-    };
+    let next = next(listed.last().map(|row| row.0), listed.len(), limit, head);
     let mut changes = Vec::with_capacity(listed.len());
     for (seq, entity, id, op) in listed {
         let kind = match entity.as_str() {

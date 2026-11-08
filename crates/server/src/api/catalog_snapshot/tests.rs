@@ -434,7 +434,11 @@ async fn a_file_a_rebuild_deleted_after_it_was_chosen_gives_way_to_its_replaceme
     let (temp, _db, app) = catalog::app().await;
     let (headers, bytes) = built(&app).await;
     let dir = temp.path().join("cache/catalog/1");
-    let gone = Current { seq: 1, sha256: "gone".to_owned(), path: dir.join(format!("{SCHEMA_VERSION}-1-gone.db")) };
+    let gone = Current {
+        seq: 1,
+        sha256: "gone".to_owned(),
+        path: dir.join(format!("{SCHEMA_VERSION}-1-gone.db")),
+    };
     let request = owner_request("GET", URI).body(Body::empty()).unwrap();
 
     let response = serve(dir, gone, request).await.unwrap();
