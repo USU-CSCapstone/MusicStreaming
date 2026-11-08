@@ -129,8 +129,9 @@ describe('CatalogClient', () => {
 	it('a tab that joined the election early answers a read once its owner is up, and connect keeps that owner', async () => {
 		const b = browser();
 		const { client, workers } = b.tab('a');
+		client.setWorkingOffline(true);
 		client.preconnect('7');
-		// Asked at once, before the election has the lock: it waits rather than saying no.
+		// Offline and asked at once, before the election has the lock: it waits rather than saying no.
 		expect(await client.onDevice('1')).toBe(true);
 		client.connect(b.realtime, '7');
 		await vi.waitFor(() => expect(types(workers[0])).toContain('start'));
@@ -639,5 +640,50 @@ describe('CatalogClient', () => {
 		} finally {
 			Object.defineProperty(Navigator.prototype, 'locks', locks);
 		}
+	});
+
+	it('online, a read does not wait for this tab’s own worker to start', async () => {
+		const b = browser();
+		b.flags.slow = true;
+		const { client, workers } = b.tab('a');
+		client.preconnect('7');
+		await vi.waitFor(() => expect(types(workers[0] ?? ({ sent: [] } as never))).toContain('start'));
+		const began = performance.now();
+		expect(await client.onDevice('1')).toBe(false);
+		expect(performance.now() - began).toBeLessThan(150);
+		client.disconnect();
+	});
+
+	it('online, a read goes to the server without waiting for an owner that did not answer, until one is serving', async () => {
+		const b = browser();
+		const first = b.tab('first');
+		const second = b.tab('second');
+		first.client.connect(b.realtime, '7');
+		await vi.waitFor(() => expect(types(first.workers[0])).toContain('start'));
+		b.silence(true);
+		expect(await second.client.onDevice('1')).toBe(false);
+		const again = performance.now();
+		expect(await second.client.onDevice('1')).toBe(false);
+		expect(performance.now() - again).toBeLessThan(150);
+		first.client.disconnect();
+	});
+
+	it('an owner that has to check who the session is makes no request while working offline', async () => {
+		const session = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ id: '8' }));
+		const b = browser();
+		const owner = b.tab('owner');
+		const stale = b.tab('stale');
+		owner.client.connect(b.realtime, '8');
+		owner.client.setWorkingOffline(true);
+		await vi.waitFor(() => expect(types(owner.workers[0])).toContain('start'));
+		stale.client.connect(b.realtime, '7');
+
+		await expect(stale.client.query('1', 'listTracks')).rejects.toThrow(/another account/);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(session).not.toHaveBeenCalled();
+		expect(owner.workers[0].terminated).toBe(false);
+		owner.client.disconnect();
+		stale.client.disconnect();
+		session.mockRestore();
 	});
 });

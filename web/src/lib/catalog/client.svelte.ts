@@ -29,6 +29,8 @@ const START_MS = 20_000;
 const STATE_MS = 1500;
 /** How long a read waits for this tab's own election and worker, when it is about to own the catalog. */
 const OWNER_MS = 5000;
+/** How long a tab that heard no answer from an owner online goes to the server without asking it again. */
+const DEAF_MS = 30_000;
 /** How often that wait looks for the lock. */
 const LOOK_MS = 25;
 
@@ -54,8 +56,12 @@ export class CatalogClient {
 	#workingOffline = connectivity.workOffline;
 	/** The sign-out under way, which this tab's next election waits for. */
 	#signingOut: Promise<unknown> = Promise.resolve();
+	/** This tab holds the lock, whether or not its worker has started. */
+	#holding = false;
 	/** This tab answers requests as the owner. */
 	#serving = false;
+	/** Until when an online read goes to the server without asking an owner that did not answer. */
+	#deafUntil = 0;
 	/** Ends this tab's wait for the lock, or its hold of it. */
 	#abort: AbortController | null = null;
 	#release: (() => void) | null = null;
@@ -166,10 +172,14 @@ export class CatalogClient {
 
 	/**
 	 * Whether `library` is fully on the device: false if it is not or there is no owner to ask.
-	 * Answers at once when no tab owns the catalog; an owner that is starting has `STATE_MS` to
-	 * answer.
+	 * Online, answers at once when no tab is serving the catalog yet, so the server answers the
+	 * read; an owner in another tab that is starting has `STATE_MS` to answer, and one that did
+	 * not answer is not asked again for a while. Offline, a tab about to elect waits for its own
+	 * owner, since the server cannot answer.
 	 */
 	async onDevice(library: string) {
+		const offline = this.#workingOffline || connectivity.stale || navigator.onLine === false;
+		if (!offline && Date.now() < this.#deafUntil) return false;
 		/** Whether some tab holds the lock, which says an owner is at least starting. */
 		const owned = async () =>
 			((await navigator.locks?.query()) ?? {}).held?.some((lock) => lock.name === this.#name);
@@ -179,13 +189,17 @@ export class CatalogClient {
 		const end = Date.now() + OWNER_MS;
 		while (!(await owned())) {
 			// Only a tab still in the election is worth waiting for: one that gave up is not coming.
-			if (!this.#abort || Date.now() >= end) return false;
+			if (!offline || !this.#abort || Date.now() >= end) return false;
 			waited = true;
 			await new Promise((resolve) => setTimeout(resolve, LOOK_MS));
 		}
+		if (!offline && this.#holding && !this.#serving) return false;
 		const answer = await this.#route()
 			.ask({ type: 'onDevice', library }, waited ? OWNER_MS : STATE_MS)
-			.catch(() => '');
+			.catch(() => {
+				if (!offline) this.#deafUntil = Date.now() + DEAF_MS;
+				return '';
+			});
 		return answer === '1';
 	}
 
@@ -294,6 +308,7 @@ export class CatalogClient {
 	 * from every tab until `released`, then pauses the pool so the next owner can take it.
 	 */
 	async #own(released: Promise<void>) {
+		this.#holding = true;
 		this.#launch(this.#user);
 		// A worker that cannot load leaves the lock to the next tab.
 		this.#worker!.onerror = () => this.#yield();
@@ -320,6 +335,7 @@ export class CatalogClient {
 				})
 			: () => {};
 		this.#serving = started;
+		if (started) this.#deafUntil = 0;
 		await released;
 		this.#serving = false;
 		stop();
@@ -329,10 +345,12 @@ export class CatalogClient {
 			await Promise.race([paused, new Promise((resolve) => setTimeout(resolve, PAUSE_MS))]);
 		}
 		this.#stop();
+		this.#holding = false;
 	}
 
-	/** Gives the catalog up if the session now belongs to someone other than this tab's account; offline or on any other failure, keeps it. */
+	/** Gives the catalog up if the session now belongs to someone other than this tab's account; while working offline (no request is made) or on any other failure, keeps it. */
 	async #leaveIfStale() {
+		if (this.#workingOffline) return;
 		try {
 			const response = await fetch(`${API}/me`);
 			if (response.status === 401) this.disconnect();
