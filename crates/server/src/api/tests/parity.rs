@@ -1,7 +1,8 @@
 //! The catalog's shared queries give the same JSON on the server's database and on a device
 //! database synced from it (`design/general.md` §3). The answers are also written to
-//! `crates/catalog/parity/`, with the rows that built the device, for `catalog-wasm` to replay
-//! (`UPDATE_PARITY=1` rewrites them).
+//! `crates/catalog/parity/`, with the rows that built the device, for `catalog-wasm` to replay,
+//! and the library as a snapshot file for the web client's sync tests (`UPDATE_PARITY=1` rewrites
+//! them).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -286,13 +287,32 @@ fn lines(cases: &[Value]) -> String {
 
 /// The file `name` in `crates/catalog/parity/`, which `UPDATE_PARITY=1` writes from `text`.
 fn golden(name: &str, text: &str) {
+    golden_bytes(name, text.as_bytes());
+}
+
+/// [`golden`] for a file that is not text.
+fn golden_bytes(name: &str, bytes: &[u8]) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../catalog/parity").join(name);
     if std::env::var_os("UPDATE_PARITY").is_some() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, text).unwrap();
+        std::fs::write(&path, bytes).unwrap();
     }
-    let kept = std::fs::read_to_string(&path).unwrap_or_default();
-    assert!(kept == text, "{name} is out of date: run with UPDATE_PARITY=1");
+    let kept = std::fs::read(&path).unwrap_or_default();
+    assert!(kept == bytes, "{name} is out of date: run with UPDATE_PARITY=1");
+}
+
+/// The library's rows as a snapshot file, which holds none of the account's playlists, written
+/// by `VACUUM INTO` as the server writes one.
+fn snapshot(rows: &[Rows]) -> Vec<u8> {
+    let temp = tempfile::tempdir().unwrap();
+    let conn = Connection::open(temp.path().join("device.db")).unwrap();
+    create_schema(&conn).unwrap();
+    for rows in rows.iter().filter(|r| !matches!(r.kind, Kind::Playlist | Kind::PlaylistItem)) {
+        apply(&conn, rows).unwrap();
+    }
+    let out = temp.path().join("served.db");
+    conn.execute("VACUUM INTO ?1", [out.to_str().unwrap()]).unwrap();
+    std::fs::read(out).unwrap()
 }
 
 #[tokio::test]
@@ -504,6 +524,7 @@ async fn every_list_sort_and_filter_and_every_get_give_identical_json_on_the_ser
 
     let feed: Vec<Value> = rows.iter().map(|r| serde_json::to_value(r).unwrap()).collect();
     golden("library.json", &lines(&feed));
+    golden_bytes("library.db", &snapshot(&rows));
     // Each file holds the queries of one part, so a change reads as a diff of that part.
     let query = |c: &Value| c["query"].as_str().unwrap().to_owned();
     let (tracks, rest): (Vec<_>, Vec<_>) = cases.into_iter().partition(|c| {

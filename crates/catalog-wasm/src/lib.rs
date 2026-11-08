@@ -13,6 +13,7 @@ use wasm_bindgen::prelude::*;
 mod bench;
 mod feed;
 mod query;
+mod store;
 
 /// The sahpool VFS's registered name, which `open` names when opening the file.
 const VFS: &str = "opfs-sahpool";
