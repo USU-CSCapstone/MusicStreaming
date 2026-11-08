@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { library, serveLibrary, serveRealtime } from './fixtures';
+import goldenRows from '../../crates/catalog/parity/library.json' with { type: 'json' };
 
 const snapshot = readFileSync(new URL('../../crates/catalog/parity/library.db', import.meta.url));
 const etag = createHash('sha256').update(snapshot).digest('hex');
@@ -14,7 +15,8 @@ async function serveCatalog(
 	page: Page,
 	asked: string[],
 	ids = ['11', '1'],
-	feed: { changes: object[]; next: number; head: number } = { changes: [], next: 0, head: 0 }
+	feed: { changes: object[]; next: number; head: number } = { changes: [], next: 0, head: 0 },
+	account: { seq: number }[] = []
 ) {
 	await page.route('**/api/v1/**', async (route) => {
 		const path = new URL(route.request().url()).pathname.replace(/^.*\/api\/v1/, '');
@@ -34,7 +36,13 @@ async function serveCatalog(
 				}
 			});
 		if (path === '/libraries/1/changes') return route.fulfill({ json: feed });
-		if (path === '/me/changes') return route.fulfill({ json: { changes: [], next: 0, head: 0 } });
+		if (path === '/me/changes') {
+			const after = Number(new URL(route.request().url()).searchParams.get('after'));
+			const head = account.at(-1)?.seq ?? 0;
+			return route.fulfill({
+				json: { changes: account.filter(({ seq }) => seq > after), next: head, head }
+			});
+		}
 		return route.fallback();
 	});
 }
@@ -111,18 +119,26 @@ test('two pages answer catalog queries with one database', async ({ context }) =
 async function serveGolden(
 	page: Page,
 	asked: string[],
-	hint = false,
-	feed?: Parameters<typeof serveCatalog>[3]
+	hint: boolean | 'account' = false,
+	feed?: Parameters<typeof serveCatalog>[3],
+	account?: Parameters<typeof serveCatalog>[4]
 ) {
 	await serveLibrary(page);
-	await serveCatalog(page, asked, ['1'], feed);
+	await serveCatalog(page, asked, ['1'], feed, account);
 	await page.routeWebSocket('**/api/v1/realtime', (ws) => {
 		const now = () => new Date().toISOString();
 		ws.send(JSON.stringify({ type: 'hello', deviceId: 'd1', serverTime: now() }));
 		// Said again and again, since a hint heard before the catalog's worker is up is lost.
 		const timer = hint
 			? setInterval(
-					() => ws.send(JSON.stringify({ type: 'libraryChanged', libraryId: '1', seq: 5 })),
+					() =>
+						ws.send(
+							JSON.stringify(
+								hint === 'account'
+									? { type: 'accountChanged', seq: 99 }
+									: { type: 'libraryChanged', libraryId: '1', seq: 5 }
+							)
+						),
 					300
 				)
 			: undefined;
@@ -246,4 +262,94 @@ test('an offline device that never synced says the library is not on it yet', as
 	await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { get: () => false }));
 	await page.getByRole('link', { name: 'Artists', exact: true }).first().click();
 	await expect(page.getByRole('heading', { name: 'Not on this device yet' })).toBeVisible();
+});
+
+/** An album's upsert at `seq`, as the library feed carries it. */
+const album = (seq: number, id: string, title: string) => ({
+	seq,
+	op: 'upsert',
+	kind: 'album',
+	id,
+	rows: {
+		albums: [
+			{
+				added_at: 5000,
+				artist_sort_key: '',
+				available_track_count: 0,
+				disc_count: 1,
+				disc_total: null,
+				duration_us: 0,
+				id,
+				image_id: null,
+				labels: '[]',
+				library_id: '1',
+				loudness_lufs: null,
+				peak_dbtp: null,
+				release_date: null,
+				sort_key: btoa(title.toLowerCase()),
+				title,
+				track_count: 0,
+				track_total: null,
+				type: 'album'
+			}
+		]
+	}
+});
+
+test('a libraryChanged hint adds the new album to the open albums page without losing scroll', async ({
+	page
+}) => {
+	// Short enough that four albums need scrolling.
+	await page.setViewportSize({ width: 600, height: 240 });
+	const asked: string[] = [];
+	const feed = { changes: [] as object[], next: 0, head: 0 };
+	await serveGolden(page, asked, true, feed);
+	await page.goto('/');
+	await synced(page);
+	await go(page, '/albums');
+	const first = page.getByText('Abbey Road', { exact: true }).first();
+	await expect(first).toBeAttached();
+	const main = page.locator('main');
+	await first.evaluate((el) => (el.dataset.kept = 'yes'));
+	await main.evaluate((m) => (m.scrollTop = m.scrollHeight));
+	const before = await main.evaluate((m) => m.scrollTop);
+	expect(before).toBeGreaterThan(0);
+
+	feed.changes = [album(5, '105', 'Aardvark')];
+	feed.next = feed.head = 5;
+	await expect(page.getByText('Aardvark', { exact: true }).first()).toBeAttached();
+	// The page was not remounted, and the user is not at the top.
+	await expect(first).toHaveAttribute('data-kept', 'yes');
+	expect(await main.evaluate((m) => m.scrollTop)).toBeGreaterThanOrEqual(before);
+});
+
+test('a playlist edited on another device updates the open playlist', async ({ page }) => {
+	const asked: string[] = [];
+	const rows = (goldenRows as { kind: string; id: string; key: number; tables: object }[])
+		.filter(({ kind }) => kind === 'playlist' || kind === 'playlistItem')
+		.map(({ kind, id, key, tables }, i) => ({
+			seq: i + 1,
+			op: 'upsert',
+			kind,
+			id,
+			key,
+			rows: tables
+		}));
+	const account = [...rows];
+	await serveGolden(page, asked, 'account', undefined, account);
+	await page.goto('/');
+	await synced(page);
+	await go(page, '/playlists/501');
+	await expect(page.getByRole('heading', { name: 'Road Trip' })).toBeVisible();
+
+	// Another device renamed it; the account feed carries that to this one.
+	const renamed = structuredClone(rows.find(({ kind }) => kind === 'playlist')!) as {
+		seq: number;
+		rows: { playlists: { title: string; version: number }[] };
+	};
+	renamed.seq = account.length + 1;
+	renamed.rows.playlists[0].title = 'Renamed Elsewhere';
+	renamed.rows.playlists[0].version = 4;
+	account.push(renamed);
+	await expect(page.getByRole('heading', { name: 'Renamed Elsewhere' })).toBeVisible();
 });

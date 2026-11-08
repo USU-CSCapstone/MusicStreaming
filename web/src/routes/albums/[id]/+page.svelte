@@ -13,6 +13,7 @@
 		shownFilter,
 		tagTypesKnown
 	} from '$lib/filters';
+	import { Live } from '$lib/live.svelte';
 	import { albumTitle, formatLength, plural, releaseYear } from '$lib/format';
 	import { knownTags } from '$lib/known-tags.svelte';
 	import { player } from '$lib/player.svelte';
@@ -20,10 +21,18 @@
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { ALBUM_FIELDS, serverSort } from '$lib/sorting';
 	import { sortTracks } from '$lib/track-sort';
+	import { _readAlbum } from './+page';
 
 	let { data } = $props();
 
-	const album = $derived(data.album);
+	// The album and its tracks read again, in place, when the library changes on the device.
+	const shownAlbum = $derived(
+		new Live({ album: data.album, tracks: data.tracks }, data.lib, () =>
+			_readAlbum(fetch, data.lib, data.album.id)
+		)
+	);
+	const album = $derived(shownAlbum.value.album);
+	const albumTracks = $derived(shownAlbum.value.tracks);
 	const context = $derived({ type: 'album', id: album.id } as const);
 	// Unsorted is disc then track order (`requirements/albums.md` §4); sorted, it plays as shown
 	// (`requirements/conventions.md` §4.1).
@@ -33,7 +42,7 @@
 	const filter = $derived(shownFilter(currentFilter()));
 	const shown = $derived(
 		filterByTags(
-			sortTracks(data.tracks, sort),
+			sortTracks(albumTracks, sort),
 			filter,
 			(track) => track.tags,
 			(tag) => knownTags.get(data.lib, tag)?.type
@@ -44,7 +53,7 @@
 	// still unknown the rows shown may differ from the server's, and the songs shown play instead.
 	const settled = $derived(
 		tagTypesKnown(
-			data.tracks,
+			albumTracks,
 			filter,
 			(track) => track.tags,
 			(tag) => knownTags.get(data.lib, tag) !== undefined
@@ -67,7 +76,7 @@
 			album.id,
 			albumTitle(album.title),
 			shown.length,
-			async () => (isFiltered(filter) ? shown : data.tracks),
+			async () => (isFiltered(filter) ? shown : albumTracks),
 			from?.recipe
 		),
 		...(isFiltered(filter) && { refs: playables(shown) })
@@ -107,7 +116,7 @@
 		{#if completeness}· <span class="incomplete">{completeness}</span>{/if}
 	</span>
 	{#snippet actions()}
-		{#if data.tracks.length}<AddToPlaylistButton what={adding} />{/if}
+		{#if albumTracks.length}<AddToPlaylistButton what={adding} />{/if}
 	{/snippet}
 </DetailHeader>
 

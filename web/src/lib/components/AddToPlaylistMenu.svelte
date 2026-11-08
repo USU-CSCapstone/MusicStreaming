@@ -61,7 +61,11 @@
 		try {
 			// Every playlist, a page at a time as the list scrolls.
 			const first = await listPlaylists(fetch, libraryId);
-			playlists = new Paged(first, (cursor) => listPlaylists(fetch, libraryId, { cursor }));
+			playlists = new Paged(
+				first,
+				(cursor) => listPlaylists(fetch, libraryId, { cursor }),
+				libraryId
+			);
 		} catch (e) {
 			failed = e instanceof Error ? e.message : String(e);
 		}

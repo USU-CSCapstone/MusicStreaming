@@ -15,7 +15,9 @@ type Wire =
 	| { type: 'request'; id: string; request: Request }
 	| { type: 'answer'; id: string; result?: string; error?: string }
 	/** A tab has become the owner and can answer. */
-	| { type: 'owner' };
+	| { type: 'owner' }
+	/** The owner changed the library's rows on the device. */
+	| { type: 'changed'; library: string };
 
 /** Answers a request with its JSON; never answers if the owner goes away meanwhile. */
 export type Handler = (request: Request) => Promise<string>;
@@ -35,6 +37,7 @@ export class CatalogRouter {
 	#pending = new Map<string, Pending>();
 	#handler: Handler | null = null;
 	#overheard?: (request: Request) => void;
+	#listeners = new Set<(library: string) => void>();
 
 	/**
 	 * Joins the channel `name`; tests use their own name and a short timeout. `heard` is told of
@@ -76,6 +79,18 @@ export class CatalogRouter {
 		return () => {
 			if (this.#handler === handler) this.#handler = null;
 		};
+	}
+
+	/** Tells every tab, this one included, that `library`'s rows on the device changed. */
+	announce(library: string) {
+		this.#channel.postMessage({ type: 'changed', library } satisfies Wire);
+		for (const listener of this.#listeners) listener(library);
+	}
+
+	/** Calls `listener` with each library announced, by any tab, until the returned function is called. */
+	listen(listener: (library: string) => void): () => void {
+		this.#listeners.add(listener);
+		return () => this.#listeners.delete(listener);
 	}
 
 	/** Sends the pending request `id` to the owner and starts its timeout again. */
@@ -123,6 +138,8 @@ export class CatalogRouter {
 				);
 		} else if (wire.type === 'answer') {
 			this.#answered(wire.id, wire);
+		} else if (wire.type === 'changed') {
+			for (const listener of this.#listeners) listener(wire.library);
 		} else if (!this.#handler) {
 			for (const id of this.#pending.keys()) this.#send(id);
 		}

@@ -120,6 +120,14 @@ export class CatalogClient {
 	}
 
 	/**
+	 * Calls `listener` with each library whose rows on the device change, announced by whichever
+	 * tab owns the catalog, until the returned function is called.
+	 */
+	onChanged(listener: (library: string) => void) {
+		return this.#route().listen(listener);
+	}
+
+	/**
 	 * Whether `library` is fully on the device: false if it is not or there is no owner to ask.
 	 * Answers at once when no tab owns the catalog; an owner that is starting has `STATE_MS` to
 	 * answer.
@@ -318,6 +326,8 @@ export class CatalogClient {
 		if (message.type === 'error') {
 			console.error(message.message);
 			if (message.quota) toast('There is no room on this device for the music library’s details.');
+		} else if (message.type === 'changed') {
+			this.#route().announce(message.libraryId);
 		} else if (message.type === 'answer') {
 			const call = this.#calls.get(message.id);
 			this.#calls.delete(message.id);

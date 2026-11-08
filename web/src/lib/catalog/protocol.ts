@@ -24,6 +24,8 @@ export type FromWorker =
 	| { type: 'error'; message: string; quota: boolean }
 	/** The files are open, or could not be. */
 	| { type: 'started' }
+	/** The library's rows on the device changed: a catch-up was committed or a snapshot swapped in. */
+	| { type: 'changed'; libraryId: string }
 	/** The pool is released. */
 	| { type: 'paused' }
 	/** The answer to the request of `id`: the JSON of a query, empty for a sign-out. */

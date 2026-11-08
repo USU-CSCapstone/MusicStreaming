@@ -558,6 +558,34 @@ describe('catalog sync', () => {
 		expect(await h.cursor('1', 'account')).toBe(accountHead + 2);
 	});
 
+	it('announces a library when its rows change: a snapshot, a catch-up, its playlists, and not a quiet pull', async () => {
+		await started('1');
+		expect(await h.changes()).toEqual(['1']);
+
+		await h.message(libraryChanged(SEQ));
+		await h.idle();
+		expect(await h.changes()).toEqual(['1']);
+
+		await h.api.setFeed('1', [tag(11, '90', 'Rock')], 11);
+		await h.message(libraryChanged(11));
+		await h.idle();
+		expect(await h.changes()).toEqual(['1', '1']);
+
+		// Another library's playlist is not this library's change.
+		const other = { ...elsewhere, seq: accountHead + 1 };
+		await h.api.setAccount([other], accountHead + 1);
+		await h.message({ type: 'accountChanged', seq: accountHead + 1 });
+		await h.idle();
+		expect(await h.changes()).toEqual(['1', '1']);
+
+		const renamed = structuredClone(playlists[0]);
+		renamed.seq = accountHead + 2;
+		await h.api.setAccount([renamed], accountHead + 2);
+		await h.message({ type: 'accountChanged', seq: accountHead + 2 });
+		await h.idle();
+		expect(await h.changes()).toEqual(['1', '1', '1']);
+	});
+
 	it('a 503 catalog_building waits and asks again', async () => {
 		await serve('1');
 		await h.api.building(2);

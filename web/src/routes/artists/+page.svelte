@@ -9,7 +9,11 @@
 	let { data } = $props();
 
 	const artists = $derived(
-		new Paged(data.artists, (cursor) => listArtists(fetch, data.lib, { sort: 'name', cursor }))
+		new Paged(
+			data.artists,
+			(cursor) => listArtists(fetch, data.lib, { sort: 'name', cursor }),
+			data.lib
+		)
 	);
 </script>
 

@@ -14,6 +14,7 @@ import { FakeApi } from './fake-api';
 export class Harness {
 	api = new FakeApi();
 	private reports: Report[] = [];
+	private changed: string[] = [];
 	#sync: CatalogSync | undefined;
 
 	/** Closes any sync, deletes every file, and clears the fake server, with the snapshot to serve. */
@@ -23,6 +24,7 @@ export class Harness {
 		this.api = new FakeApi();
 		await this.api.setSnapshot(snapshot);
 		this.reports = [];
+		this.changed = [];
 	}
 
 	/** Starts a new sync for `user` as a restarted worker does, closing the old one. */
@@ -32,7 +34,8 @@ export class Harness {
 			api: '/api/v1',
 			user,
 			fetch: this.api.fetch,
-			report: (report) => this.reports.push(report)
+			report: (report) => this.reports.push(report),
+			changed: (library) => this.changed.push(library)
 		});
 		await this.#sync.start();
 	}
@@ -40,6 +43,11 @@ export class Harness {
 	/** What the sync has reported. */
 	reported() {
 		return this.reports;
+	}
+
+	/** The libraries the sync has announced as changed, in order. */
+	changes() {
+		return this.changed;
 	}
 
 	/** Closes the sync, leaving the files. */

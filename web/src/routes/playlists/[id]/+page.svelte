@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { collection, opened, playables } from '$lib/adding.svelte';
@@ -19,10 +20,11 @@
 		tagTypesKnown
 	} from '$lib/filters';
 	import { formatLength, plural } from '$lib/format';
+	import { Live } from '$lib/live.svelte';
 	import { knownTags } from '$lib/known-tags.svelte';
 	import { toast } from '$lib/toast.svelte';
 	import { player } from '$lib/player.svelte';
-	import { EditablePlaylist, rowMoveOps } from '$lib/playlist.svelte';
+	import { EditablePlaylist, loadPlaylist, rowMoveOps } from '$lib/playlist.svelte';
 	import { playlistRecipe, type PlayFrom } from '$lib/queue';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { PLAYLIST_FIELDS } from '$lib/sorting';
@@ -32,6 +34,15 @@
 
 	// Edits show at once and are saved behind them (`requirements/playlists.md` §4).
 	const list = $derived(new EditablePlaylist(fetch, data.loaded));
+	// An edit from another device reaches this one through the library's feed: read again, in
+	// place, when it changes on the device, and shown unless an edit here is unconfirmed.
+	const reread = $derived(
+		new Live(data.loaded, data.lib, () => loadPlaylist(fetch, data.lib, data.loaded.playlist.id))
+	);
+	$effect(() => {
+		const loaded = reread.value;
+		untrack(() => list.refresh(loaded));
+	});
 	// Adding to this playlist from its own page goes through `list`, so it shows at once.
 	$effect(() => {
 		opened.list = list;

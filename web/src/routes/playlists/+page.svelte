@@ -17,7 +17,7 @@
 	let { data } = $props();
 
 	const playlists = $derived(
-		new Paged(data.playlists, (cursor) => listPlaylists(fetch, data.lib, { cursor }))
+		new Paged(data.playlists, (cursor) => listPlaylists(fetch, data.lib, { cursor }), data.lib)
 	);
 	// Deleted ones go at once, while their Undo is still on offer.
 	const shown = $derived(playlists.items.filter((p) => !deleted.has(p.id)));

@@ -10,27 +10,38 @@
 	import TrackList from '$lib/components/TrackList.svelte';
 	import ViewToggle from '$lib/components/ViewToggle.svelte';
 	import { artistName, plural } from '$lib/format';
+	import { Live } from '$lib/live.svelte';
 	import { Paged } from '$lib/paged.svelte';
 	import { player } from '$lib/player.svelte';
 	import { artistRecipe, type PlayFrom } from '$lib/queue';
 	import { currentSort, showSorted } from '$lib/sort-url';
 	import { FIELDS } from '$lib/sorting';
 	import { toast } from '$lib/toast.svelte';
-	import { _songOrder as songOrder } from './+page';
+	import { _readArtist, _songOrder as songOrder } from './+page';
 
 	let { data } = $props();
 
-	const artist = $derived(data.artist);
+	// The artist and their appearances read again, in place, when the library changes on the device.
+	const shownArtist = $derived(
+		new Live({ artist: data.artist, appearances: data.appearances }, data.lib, () =>
+			_readArtist(fetch, data.lib, data.artist.id)
+		)
+	);
+	const artist = $derived(shownArtist.value.artist);
+	const appearances = $derived(shownArtist.value.appearances);
 	const context = $derived({ type: 'artist', id: artist.id, scope: 'all' } as const);
 	const albums = $derived(
-		new Paged(data.albums, (cursor) =>
-			listAlbums(fetch, data.lib, {
-				artistId: artist.id,
-				artistCredit: 'owned',
-				sort: 'releaseDate',
-				order: 'desc',
-				cursor
-			})
+		new Paged(
+			data.albums,
+			(cursor) =>
+				listAlbums(fetch, data.lib, {
+					artistId: artist.id,
+					artistCredit: 'owned',
+					sort: 'releaseDate',
+					order: 'desc',
+					cursor
+				}),
+			data.lib
 		)
 	);
 	const sort = $derived(currentSort(FIELDS));
@@ -53,8 +64,10 @@
 		};
 	});
 	const tracks = $derived(
-		new Paged(songs.first, (cursor) =>
-			listTracks(fetch, data.lib, { artistId: artist.id, ...songs.order, cursor })
+		new Paged(
+			songs.first,
+			(cursor) => listTracks(fetch, data.lib, { artistId: artist.id, ...songs.order, cursor }),
+			data.lib
 		)
 	);
 	// The songs shown, as the server resolves them in the same order.
@@ -116,10 +129,10 @@
 	</section>
 {/if}
 
-{#if data.appearances.items.length}
+{#if appearances.items.length}
 	<section>
 		<header><h2>Appears On</h2></header>
-		<CollectionView cards={data.appearances.items.map(albumCard)} />
+		<CollectionView cards={appearances.items.map(albumCard)} />
 	</section>
 {/if}
 

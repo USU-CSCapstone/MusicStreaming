@@ -162,6 +162,67 @@ describe('editing', () => {
 	});
 });
 
+describe('refresh', () => {
+	const newer = {
+		playlist: { ...playlist, title: 'Elsewhere', version: 2 },
+		items: [item(3), item(1)]
+	};
+
+	it('shows another device’s edit', () => {
+		list.refresh(newer);
+		expect(list.playlist).toMatchObject({ title: 'Elsewhere', version: 2 });
+		expect(ids(list.items)).toEqual(['3', '1']);
+	});
+
+	it('ignores a playlist no newer than the one shown', () => {
+		list.refresh({ playlist, items: [item(9)] });
+		expect(ids(list.items)).toEqual(['1', '2', '3']);
+	});
+
+	it('never replaces an edit that is unconfirmed', async () => {
+		let answer!: (r: Reply) => void;
+		api.next.push(() => new Promise<Reply>((resolve) => (answer = resolve)));
+		list.edit({ title: 'Mine' });
+		await vi.waitFor(() => expect(api.edits()).toHaveLength(1));
+		list.refresh(newer);
+		expect(list.playlist.title).toBe('Mine');
+		answer({ status: 409, body: { status: 409, code: 'version_conflict', currentVersion: 2 } });
+		await list.idle();
+		expect(toaster.current?.message).toBe(CONFLICT_MESSAGE);
+	});
+});
+
+describe('refresh while sending', () => {
+	/** Holds the next request open; the returned function answers it. */
+	const hold = () => {
+		let answer!: (r: Reply) => void;
+		api.next.push(() => new Promise<Reply>((resolve) => (answer = resolve)));
+		return (r: Reply) => answer(r);
+	};
+	const newer = { playlist: { ...playlist, title: 'Elsewhere', version: 3 }, items: [item(3)] };
+
+	it('leaves an unconfirmed removal of rows in place', async () => {
+		const answer = hold();
+		list.edit({ ops: [{ op: 'remove', positions: [0] }] });
+		await vi.waitFor(() => expect(api.edits()).toHaveLength(1));
+		list.refresh(newer);
+		expect(ids(list.items)).toEqual(['2', '3']);
+		answer({ status: 200, body: { ...playlist, version: 4 } });
+		await list.idle();
+	});
+
+	it('shows a newer playlist heard meanwhile once the edit is confirmed', async () => {
+		const answer = hold();
+		list.edit({ title: 'Mine' });
+		await vi.waitFor(() => expect(api.edits()).toHaveLength(1));
+		list.refresh(newer);
+		answer({ status: 200, body: { ...playlist, title: 'Mine', version: 2 } });
+		await list.idle();
+		expect(list.playlist).toMatchObject({ title: 'Elsewhere', version: 3 });
+		expect(ids(list.items)).toEqual(['3']);
+	});
+});
+
 describe('sending', () => {
 	it('sends one edit at a time, each against the version the last produced', async () => {
 		let release!: () => void;

@@ -91,6 +91,8 @@ export type Options = {
 	report?: (report: Report) => void;
 	/** Whether the network may be there; pulls wait for it at the start. */
 	online?: () => boolean;
+	/** Told of each library whose rows on the device just changed: a catch-up, or a new snapshot. */
+	changed?: (libraryId: string) => void;
 };
 
 /** The server could not be reached, which is the normal state offline and not worth reporting. */
@@ -143,6 +145,7 @@ export class CatalogSync {
 	#fetch: typeof fetch;
 	#report: (report: Report) => void;
 	#online: () => boolean;
+	#changed: (libraryId: string) => void;
 	#abort = new AbortController();
 	#closed = false;
 	/** The pulls under way by name, so each feed has one at a time. */
@@ -169,13 +172,15 @@ export class CatalogSync {
 		user,
 		fetch: fetcher = (input, init) => fetch(input, init),
 		report = (report) => console.error(report.message),
-		online = () => navigator.onLine
+		online = () => navigator.onLine,
+		changed = () => {}
 	}: Options) {
 		this.#api = api;
 		this.#user = user;
 		this.#fetch = fetcher;
 		this.#report = report;
 		this.#online = online;
+		this.#changed = changed;
 	}
 
 	/**
@@ -419,10 +424,12 @@ export class CatalogSync {
 
 	/**
 	 * Stages the account feed's pages after the file's position, only for the library's own
-	 * playlists, and commits at the head. False if the server no longer reaches back that far.
+	 * playlists, and commits at the head, announcing the library as changed if any playlist of its own came. False if
+	 * the server no longer reaches back that far.
 	 */
 	async #catchUpAccount(id: string, catalog: Catalog, stale: () => boolean) {
 		let after = Number(catalog.pulled(ACCOUNT));
+		let touched = false;
 		for (;;) {
 			const response = await this.#get(`/me/changes?after=${after}&limit=${PAGE}`);
 			if (stale()) return true;
@@ -438,8 +445,11 @@ export class CatalogSync {
 			);
 			await this.#queue;
 			catalog.stage(ACCOUNT, JSON.stringify(mine));
+			touched ||= mine.length > 0;
 			if (page.next >= page.head) {
 				await this.#apply(catalog, ACCOUNT, BigInt(page.next), stale);
+				// A file not yet swapped in announces itself when it is.
+				if (touched && this.catalogs.get(id) === catalog) this.#changed(id);
 				return true;
 			}
 			after = page.next;
@@ -510,7 +520,7 @@ export class CatalogSync {
 	 * Stages a library's feed pages after the file's position and commits at the head. `far` as
 	 * soon as the changes pulled are more than a tenth of the library, which a snapshot is
 	 * quicker than, unless `fresh` says the file is only just downloaded; `expired` when the
-	 * server no longer reaches back that far.
+	 * server no longer reaches back that far. Announces the library as changed when it commits any.
 	 */
 	async #catchUp(id: string, catalog: Catalog, fresh: boolean) {
 		const stale = () => this.#gone(id, catalog);
@@ -532,6 +542,7 @@ export class CatalogSync {
 			catalog.stage(LIBRARY, JSON.stringify(page.changes));
 			if (page.next >= page.head) {
 				await this.#apply(catalog, LIBRARY, BigInt(page.next), stale);
+				if (pulled > 0 && !stale()) this.#changed(id);
 				return 'current';
 			}
 			after = page.next;
@@ -653,7 +664,8 @@ export class CatalogSync {
 
 	/**
 	 * Downloads a library's snapshot, imports it as a new file, adds the library's playlists to
-	 * it, and swaps it in for any copy the library has. Nothing shows until the swap. Undefined
+	 * it, and swaps it in for any copy the library has, announcing the library as changed. Nothing shows until
+	 * the swap. Undefined
 	 * when the account does not reach the library. Unless `forced`, a snapshot no newer than the
 	 * copy's own position is not imported: it is asked for again while the server builds a newer
 	 * one, and the copy is returned if none comes.
@@ -715,6 +727,7 @@ export class CatalogSync {
 		this.catalogs.get(id)?.free();
 		this.catalogs.set(id, catalog);
 		await this.#removeFiles(id, file);
+		this.#changed(id);
 		return catalog;
 	}
 

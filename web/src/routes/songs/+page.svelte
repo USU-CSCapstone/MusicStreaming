@@ -14,7 +14,11 @@
 	let { data } = $props();
 
 	const tracks = $derived(
-		new Paged(data.tracks, (cursor) => listTracks(fetch, data.lib, { ...data.query, cursor }))
+		new Paged(
+			data.tracks,
+			(cursor) => listTracks(fetch, data.lib, { ...data.query, cursor }),
+			data.lib
+		)
 	);
 	const filtered = $derived(isFiltered(data.filter));
 

@@ -20,7 +20,8 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 				new CatalogSync({
 					api: data.api,
 					user: data.user,
-					report: (r) => post({ type: 'error', ...r })
+					report: (r) => post({ type: 'error', ...r }),
+					changed: (libraryId) => post({ type: 'changed', libraryId })
 				}),
 			(error) => {
 				post({ type: 'error', ...describe(error) });

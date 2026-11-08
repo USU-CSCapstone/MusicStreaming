@@ -56,6 +56,8 @@ export class EditablePlaylist {
 	#sending: Promise<void> | null = null;
 	// Whether `#confirmed` is known to be the server's version, which the first edit makes sure of.
 	#verified = false;
+	/** The newest playlist `refresh` was given while edits were sending. */
+	#later: LoadedPlaylist | null = null;
 	#added = $state(false);
 
 	constructor(fetch: Fetch, loaded: LoadedPlaylist) {
@@ -125,11 +127,29 @@ export class EditablePlaylist {
 		};
 	}
 
+	/**
+	 * Shows `loaded`, read again after the library changed on this device, if it is newer than
+	 * what this shows and nothing is pending here: an edit made here is never replaced, as the
+	 * server's answer to it, or its conflict, comes first, and then the newest playlist held back
+	 * is offered again.
+	 */
+	refresh(loaded: LoadedPlaylist) {
+		if (this.#sending) {
+			this.#later = loaded;
+			return;
+		}
+		if (loaded.playlist.version <= this.#confirmed.playlist.version) return;
+		this.#confirmed = loaded;
+		this.items = loaded.items;
+		this.#present();
+	}
+
 	/** Settles once every pending edit is confirmed, refused, or dropped. */
 	async idle(): Promise<void> {
 		while (this.#sending) await this.#sending;
 	}
 
+	/** Sends the queued edits one at a time, then offers `refresh` the playlist held back meanwhile. */
 	async #send() {
 		let attempt = 0;
 		while (this.#queue.length > 0) {
@@ -161,6 +181,9 @@ export class EditablePlaylist {
 			}
 		}
 		this.#sending = null;
+		const later = this.#later;
+		this.#later = null;
+		if (later) this.refresh(later);
 	}
 
 	/**
