@@ -95,6 +95,15 @@ export type Options = {
 	changed?: (libraryId: string) => void;
 };
 
+/** A rebuild of a search index waits this many times as long as the last build took. */
+const INDEX_SPACING = 10;
+
+/** Whether the query `name` reads the search index: a search, or a recipe that starts from one. */
+const usesIndex = (name: string, params: object) =>
+	name === 'search' ||
+	(name === 'resolveRecipe' &&
+		(params as { recipe?: { type?: string } }).recipe?.type === 'search');
+
 /** The server could not be reached, which is the normal state offline and not worth reporting. */
 class Offline extends Error {}
 
@@ -163,6 +172,8 @@ export class CatalogSync {
 	#broken = new WeakSet<Catalog>();
 	/** Bootstraps under way: snapshot downloads that a stop would throw away. */
 	#booting = 0;
+	/** The search index of each open file, which a `Catalog` holds but does not keep current. */
+	#indexes = new WeakMap<Catalog, { stale: boolean; builtAt: number; took: number }>();
 	/** Pool operations queued one behind another: a transfer holds the whole pool. */
 	#queue: Promise<unknown> = Promise.resolve();
 
@@ -275,11 +286,58 @@ export class CatalogSync {
 		}
 		if (!catalog || this.#broken.has(catalog)) throw new Error('the library is not on this device');
 		try {
+			if (usesIndex(name, params)) this.#ensureIndex(library, catalog);
 			return catalog.query(this.#user, library, name, JSON.stringify(params));
 		} catch (error) {
 			if (damaged(error)) void this.#run(`lib:${library}`, () => this.#rebuild(library));
 			throw error;
 		}
+	}
+
+	/** Tells the page the library changed, and marks its search index out of date. */
+	#announce(library: string) {
+		const catalog = this.catalogs.get(library);
+		const index = catalog && this.#indexes.get(catalog);
+		if (index) index.stale = true;
+		this.#changed(library);
+	}
+
+	/**
+	 * Makes sure `catalog` has a search index: the first search builds it and waits. A later one
+	 * on a changed library answers from the index it has and schedules a rebuild once the file
+	 * has gone `INDEX_SPACING` times as long as the last build took, as the server spaces its own
+	 * (`api/search/indexes.rs`), so a scan costs a tenth of the worker at most.
+	 */
+	#ensureIndex(library: string, catalog: Catalog) {
+		const index = this.#indexes.get(catalog);
+		if (!index) {
+			this.#build(library, catalog);
+		} else if (index.stale && performance.now() - index.builtAt >= index.took * INDEX_SPACING) {
+			index.stale = false;
+			setTimeout(async () => {
+				await this.#queue;
+				if (this.#closed || this.catalogs.get(library) !== catalog) return;
+				// A file part-way through an apply is indexed once the apply announces itself.
+				if (this.#applying.has(catalog)) {
+					index.stale = true;
+					return;
+				}
+				try {
+					this.#build(library, catalog);
+				} catch (error) {
+					index.stale = true;
+					this.#report(describe(error));
+				}
+			});
+		}
+	}
+
+	/** Builds `catalog`'s search index now, recording how long it took. */
+	#build(library: string, catalog: Catalog) {
+		const started = performance.now();
+		catalog.buildIndex(library);
+		const builtAt = performance.now();
+		this.#indexes.set(catalog, { stale: false, builtAt, took: builtAt - started });
 	}
 
 	/**
@@ -542,7 +600,7 @@ export class CatalogSync {
 			catalog.stage(LIBRARY, JSON.stringify(page.changes));
 			if (page.next >= page.head) {
 				await this.#apply(catalog, LIBRARY, BigInt(page.next), stale);
-				if (pulled > 0 && !stale()) this.#changed(id);
+				if (pulled > 0 && !stale()) this.#announce(id);
 				return 'current';
 			}
 			after = page.next;
@@ -727,7 +785,7 @@ export class CatalogSync {
 		this.catalogs.get(id)?.free();
 		this.catalogs.set(id, catalog);
 		await this.#removeFiles(id, file);
-		this.#changed(id);
+		this.#announce(id);
 		return catalog;
 	}
 

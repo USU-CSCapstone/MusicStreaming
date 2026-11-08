@@ -355,3 +355,23 @@ test('a playlist edited on another device updates the open playlist', async ({ p
 	account.push(renamed);
 	await expect(page.getByRole('heading', { name: 'Renamed Elsewhere' })).toBeVisible();
 });
+
+test('searching offline finds a synced track', async ({ page }) => {
+	const asked: string[] = [];
+	await serveGolden(page, asked);
+	await page.goto('/');
+	await synced(page);
+	await page.getByRole('link', { name: 'Albums', exact: true }).first().click();
+	await expect(page).toHaveURL(/\/albums$/);
+
+	const blocked: string[] = [];
+	await page.route('**/api/v1/**', (route) => {
+		blocked.push(new URL(route.request().url()).pathname);
+		return route.abort();
+	});
+	await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { get: () => false }));
+	await page.getByRole('searchbox', { name: 'Search the library' }).fill('come tog');
+	await expect(page).toHaveURL(/\/search\?q=come/);
+	await expect(page.getByText('Come Together').first()).toBeVisible();
+	expect(blocked.filter((p) => p.endsWith('/search'))).toEqual([]);
+});

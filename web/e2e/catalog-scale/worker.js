@@ -140,6 +140,28 @@ async function queryPhase(rows, db, spawned) {
 	rows.push([section, 'CPU calibration (100M integer steps)', ms(spin().ms)]);
 }
 
+/** Builds the search index of `import.db` and measures it, with the searches it answers. */
+async function indexPhase(rows) {
+	const section = 'search index on import.db';
+	const exports = await init({ module_or_path: '/catalog-wasm/jewelcase_catalog_wasm_bg.wasm' });
+	const catalog = await Catalog.open('import.db');
+	const search = (q) =>
+		catalog.query('1', '1', 'search', JSON.stringify({ q, sectionLimit: 12 })).length;
+	rows.push(
+		[section, 'first build (a search waits this long)', timed(() => catalog.buildIndex('1'), 1)],
+		[
+			section,
+			'rebuild (a stale index, after its spacing)',
+			timed(() => catalog.buildIndex('1'), 3)
+		],
+		[section, 'search "love" with the index built', timed(() => search('love'), 20)],
+		[section, 'search "the beat" with the index built', timed(() => search('the beat'), 20)],
+		[section, 'wasm linear memory after the build', mb(exports.memory.buffer.byteLength)],
+		[section, 'CPU calibration (100M integer steps)', ms(spin().ms)]
+	);
+	catalog.free();
+}
+
 /** Runs the phase a message names and posts its table rows, or the error with the rows so far. */
 self.onmessage = async ({ data: { phase, spawned, db } }) => {
 	const rows = [];
@@ -148,6 +170,8 @@ self.onmessage = async ({ data: { phase, spawned, db } }) => {
 			await init({ module_or_path: '/catalog-wasm/jewelcase_catalog_wasm_bg.wasm' });
 			rows.push([phase, 'CPU calibration (100M integer steps)', ms(spin().ms)]);
 			await importPhase(rows);
+		} else if (phase === 'index') {
+			await indexPhase(rows);
 		} else {
 			await queryPhase(rows, db, spawned);
 		}

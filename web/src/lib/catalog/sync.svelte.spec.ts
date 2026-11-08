@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import snapshotUrl from '../../../../crates/catalog/parity/library.db?url';
 import library from '../../../../crates/catalog/parity/library.json';
+import searchCases from '../../../../crates/catalog/parity/search.json';
+import recipeCases from '../../../../crates/catalog/parity/recipes.json';
 import type { Harness } from './fake-worker';
 
 /** What a test asks of the worker, each call answered when the worker is done. */
@@ -132,6 +134,38 @@ async function grown(tracks = 1000) {
 	await h.message(libraryChanged(BASE));
 	await h.idle();
 }
+
+/** An album's upsert at `seq`, as the library feed carries it. */
+const album = (seq: number, id: string, title: string) => ({
+	seq,
+	op: 'upsert',
+	kind: 'album',
+	id,
+	rows: {
+		albums: [
+			{
+				added_at: 5000,
+				artist_sort_key: '',
+				available_track_count: 0,
+				disc_count: 1,
+				disc_total: null,
+				duration_us: 0,
+				id,
+				image_id: null,
+				labels: '[]',
+				library_id: '1',
+				loudness_lufs: null,
+				peak_dbtp: null,
+				release_date: null,
+				sort_key: btoa(title.toLowerCase()),
+				title,
+				track_count: 0,
+				track_total: null,
+				type: 'album'
+			}
+		]
+	}
+});
 
 const hello = { type: 'hello', deviceId: '1', serverTime: '' };
 const libraryChanged = (seq: number, libraryId = '1') => ({
@@ -861,5 +895,32 @@ describe('catalog sync', () => {
 		await h.message(hello);
 		await h.idle();
 		expect(await tagName('90')).toBe('Rock');
+	});
+
+	it('device search equals the golden server results', async () => {
+		await started('1');
+		// Recipes first, so a search recipe is what builds the index.
+		const searches = [
+			...recipeCases.filter((c) => c.params.recipe?.type === 'search'),
+			...searchCases
+		];
+		expect(searches.length).toBeGreaterThan(10);
+		for (const { query, params, answer } of searches)
+			expect(await h.query('1', query, params), JSON.stringify(params)).toEqual(answer);
+	});
+
+	it('a search finds what a catch-up added once the index is rebuilt', async () => {
+		await started('1');
+		const found = async () =>
+			(
+				(await h.query('1', 'search', { q: 'zebra', sectionLimit: 5 })) as {
+					sections: unknown[];
+				}
+			).sections.length;
+		expect(await found()).toBe(0);
+		await h.api.setFeed('1', [album(SEQ + 1, '900', 'Zebra Crossing')], SEQ + 1);
+		await h.message(libraryChanged(SEQ + 1));
+		await h.idle();
+		await expect.poll(async () => await found(), { timeout: 5000 }).toBe(1);
 	});
 });

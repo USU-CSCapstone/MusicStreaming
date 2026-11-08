@@ -8,6 +8,9 @@
 // - On the device: the device alone, at once, even while a pull is under way.
 // - A device that cannot answer: the server, as if the device were not there; offline, an
 //   error saying the page is unavailable.
+//
+// Search is the other way round (`requirements/search.md` §2): the server whenever it is
+// reachable, the device when offline or when the server fails (`readSearch`).
 
 import { ApiError } from '$lib/api/root';
 import { realtime } from '$lib/realtime.svelte';
@@ -21,10 +24,6 @@ export const offline = () => navigator.onLine === false || realtime.offline;
 
 /** Whether the device itself knows it cannot reach the server, so asking would only wait. */
 export const knownOffline = () => navigator.onLine === false;
-
-/** Whether a failed request never reached the server, as opposed to being answered by it. */
-export const unreached = (error: unknown) =>
-	error instanceof TypeError || (error instanceof ApiError && error.code === 'unavailable_offline');
 
 /** For a failed request to the server: says it is unavailable offline when the device is, and otherwise rethrows. */
 export function unavailableIfOffline(error: unknown): never {
@@ -54,7 +53,7 @@ export async function read<T>(
 		// A realtime connection in backoff says nothing about HTTP: ask, and call a request that
 		// never reached the server offline; an answer, such as a redirect to log in, stands.
 		return server().catch((error) => {
-			throw offline() && unreached(error) ? notOnDevice() : error;
+			throw offline() && unreachable(error) ? notOnDevice() : error;
 		});
 	}
 	let local: unknown;
@@ -71,4 +70,52 @@ export async function read<T>(
 		return server();
 	}
 	return local as T;
+}
+
+/** Whether a failed request to the server says it cannot be reached or is broken, not that the request is wrong. */
+export const unreachable = (error: unknown) =>
+	error instanceof TypeError || (error instanceof ApiError && error.status >= 500);
+
+/**
+ * The answer to the API operation `name` of `library` with `params`, for a read the server
+ * answers whenever it can be reached: the device answers when this one is offline or the server
+ * fails, and only if the library is on it. A refusal by the server (a request it finds invalid)
+ * is never the device's to second-guess.
+ */
+export async function readSearch<T>(
+	name: string,
+	library: string,
+	params: object,
+	server: () => Promise<T>
+): Promise<T> {
+	let failure: unknown;
+	if (!offline()) {
+		try {
+			return await server();
+		} catch (error) {
+			if (!unreachable(error)) throw error;
+			failure = error;
+		}
+	}
+	if (!(await catalog.onDevice(library))) {
+		if (failure) throw failure;
+		const notOnDevice = new ApiError(
+			503,
+			'not_on_device',
+			'This library has not been downloaded to this device yet.'
+		);
+		if (knownOffline()) throw notOnDevice;
+		// Skipped while the realtime connection is down, which says nothing about HTTP: with no
+		// device copy to answer instead, the server is worth asking.
+		return server().catch((error) => {
+			throw unreachable(error) ? notOnDevice : error;
+		});
+	}
+	try {
+		return JSON.parse(await catalog.query(library, name, params)) as T;
+	} catch (error) {
+		if (failure) throw failure;
+		console.error(error);
+		throw new ApiError(503, 'unavailable_offline', UNAVAILABLE);
+	}
 }

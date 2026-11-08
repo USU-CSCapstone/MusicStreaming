@@ -3,7 +3,14 @@
 // (`design/general.md` §7.1).
 
 import { redirect } from '@sveltejs/kit';
-import { knownOffline, offline, read, unavailableIfOffline, unreached } from '$lib/catalog/read';
+import {
+	knownOffline,
+	offline,
+	read,
+	readSearch,
+	unavailableIfOffline,
+	unreachable
+} from '$lib/catalog/read';
 import { API, ApiError, loginUrl } from './root';
 import type {
 	Album,
@@ -189,7 +196,7 @@ export const getTracksByIds = async (f: Fetch, libraryId: string, ids: string[])
 	const page = await read<TrackPage>('listTracksByIds', libraryId, { ids: ids.join(',') }, server);
 	if (fromServer || page.items.length >= new Set(ids).size || knownOffline()) return page;
 	return server().catch((error) => {
-		if (offline() && unreached(error)) return page;
+		if (offline() && unreachable(error)) return page;
 		throw error;
 	});
 };
@@ -304,8 +311,11 @@ export const listPlaylistItems = (
 		fresh
 	);
 
+/** Search results: from the server when it can be reached, from the device's index otherwise. */
 export const search = (f: Fetch, libraryId: string, q: string, query: Query = {}) =>
-	get<SearchResponse>(f, `${lib(libraryId)}/search`, { q, ...query });
+	readSearch<SearchResponse>('search', libraryId, { q, ...query }, () =>
+		get<SearchResponse>(f, `${lib(libraryId)}/search`, { q, ...query })
+	);
 
 const recent = (libraryId: string) => `${lib(libraryId)}/recent-searches`;
 
