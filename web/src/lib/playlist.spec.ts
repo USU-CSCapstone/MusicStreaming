@@ -46,7 +46,8 @@ type Reply = { status: number; body?: unknown };
 /**
  * A server holding the playlist at a version. PATCH succeeds against the current version and
  * advances it, and is refused with `version_conflict` otherwise. `next` answers the following
- * request instead, once, and may hold it open to see what is sent meanwhile.
+ * request instead, once, and may hold it open to see what is sent meanwhile. With `editing`, the
+ * first plain GET (the version read before a first edit) is answered but left out of `requests`.
  */
 function server(editing = true) {
 	const state = {

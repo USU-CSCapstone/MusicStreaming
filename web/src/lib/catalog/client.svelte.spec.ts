@@ -63,6 +63,7 @@ function browser() {
 	let silent = false;
 	const flags = { busy: false, stalled: false, slow: false, mute: false, onDevice: '1' };
 	let hear: (message: RealtimeServerMessage) => void = () => {};
+	/** A realtime connection whose messages the test sends through `hear`. */
 	const realtime = {
 		on: (listener: (message: RealtimeServerMessage) => void) => {
 			hear = listener;

@@ -16,7 +16,10 @@ let work: Promise<CatalogSync | undefined> = Promise.resolve(undefined);
 /** The device is working offline: no request leaves, and nothing pulls. */
 let workingOffline = false;
 
-/** Loads the module on `init`; `offline` takes effect at once, and every other message waits for it, then goes to the sync. */
+/**
+ * Handles a message from the page: `offline` takes effect at once, `init` loads the module
+ * and makes the sync, and every other message waits for that, then goes to the sync in order.
+ */
 onmessage = ({ data }: MessageEvent<ToWorker>) => {
 	// At once, ahead of the work already queued: a switch must stop what comes next.
 	if (data.type === 'offline') {

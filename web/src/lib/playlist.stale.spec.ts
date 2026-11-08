@@ -32,6 +32,7 @@ device.query.mockImplementation(async (_library: string, name: string) =>
 function server(serverItems: unknown[] = []) {
 	let version = 5;
 	const requests: { method: string; path: string; body: Record<string, unknown> }[] = [];
+	/** Answers the playlist API at the server's version, refusing edits based on another, and records each request. */
 	const fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
 		const path = new URL(String(input), 'http://test').pathname.replace(/^.*\/api\/v1/, '');
 		const method = init.method ?? 'GET';

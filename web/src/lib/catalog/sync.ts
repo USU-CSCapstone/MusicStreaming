@@ -42,9 +42,11 @@ const APPLY_CHUNK = 50;
 const CHUNK = 1 << 20;
 /** Tries at reading or deleting the files, which fail while another worker holds the pool. */
 const WIPE_TRIES = 5;
+/** How long to wait between those tries. */
 const WIPE_WAIT_MS = 300;
 /** A download's file name: a plain OPFS file beside the pool, which the pool never sees. */
 const DOWNLOAD = (id: string) => `download-${id}.tmp`;
+/** Matches every name `DOWNLOAD` makes. */
 const DOWNLOADS = /^download-.*\.tmp$/;
 
 /** The feeds' positions a file keeps: its library feed, its account feed, and its owner. */
@@ -56,8 +58,11 @@ const OWNER = 'owner';
 /** A database file's name: `lib-<library>-<generation>.db`, and its journal with `-journal`. */
 const FILE = /^lib-(\d+)-(\d+)\.db(-journal)?$/;
 
+/** One entry of a feed: `rows` are the entity's rows, by table, for anything but a delete. */
 type Change = { seq: number; op: string; kind: string; id: string; rows?: Rows };
+/** Rows by table name. */
 type Rows = Record<string, Record<string, unknown>[]>;
+/** A page of a feed: `next` is the position of its last change, `head` that of the feed. */
 type Page = { changes: Change[]; next: number; head: number };
 
 /** The messages of the realtime connection that make the worker pull. */
@@ -80,6 +85,7 @@ type WorkerFile = FileSystemFileHandle & {
 /** What went wrong that a person may need to know, such as a full disk. */
 export type Report = { message: string; quota: boolean };
 
+/** What a `CatalogSync` is made from. */
 export type Options = {
 	/** Where the API is, such as `/api/v1`. */
 	api: string;
@@ -480,8 +486,8 @@ export class CatalogSync {
 
 	/**
 	 * Stages the account feed's pages after the file's position, only for the library's own
-	 * playlists, and commits at the head, announcing the library as changed if any playlist of its own came. False if
-	 * the server no longer reaches back that far.
+	 * playlists, and commits at the head, announcing the library as changed if any playlist of
+	 * its own came. False if the server no longer reaches back that far.
 	 */
 	async #catchUpAccount(id: string, catalog: Catalog, stale: () => boolean) {
 		let after = Number(catalog.pulled(ACCOUNT));
@@ -728,9 +734,8 @@ export class CatalogSync {
 
 	/**
 	 * Downloads a library's snapshot, imports it as a new file, adds the library's playlists to
-	 * it, and swaps it in for any copy the library has, announcing the library as changed. Nothing shows until
-	 * the swap. Undefined
-	 * when the account does not reach the library. Unless `forced`, a snapshot no newer than the
+	 * it, and swaps it in for any copy the library has, announcing the library as changed.
+	 * Nothing shows until the swap. Undefined when the account does not reach the library. Unless `forced`, a snapshot no newer than the
 	 * copy's own position is not imported: it is asked for again while the server builds a newer
 	 * one, and the copy is returned if none comes.
 	 */

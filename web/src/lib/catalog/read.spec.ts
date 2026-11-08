@@ -8,6 +8,7 @@ const link = vi.hoisted(() => ({ offline: false, working: false }));
 vi.mock('./client.svelte', () => ({ catalog: device }));
 vi.mock('$lib/realtime.svelte', () => ({
 	realtime: {
+		/** Whether the realtime connection is down, as the test sets it. */
 		get offline() {
 			return link.offline;
 		}
@@ -15,6 +16,7 @@ vi.mock('$lib/realtime.svelte', () => ({
 }));
 vi.mock('$lib/connectivity.svelte', () => ({
 	connectivity: {
+		/** Whether the device is set to work offline, as the test sets it. */
 		get workOffline() {
 			return link.working;
 		}

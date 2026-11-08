@@ -84,6 +84,7 @@ function ask(page: Page, request: object) {
 const query = async <T>(page: Page, name: string, params: object = {}): Promise<T> =>
 	JSON.parse(await ask(page, { type: 'query', library: '1', name, params }));
 
+/** Library 1's first page of tracks, from the catalog's owner. */
 const listTracks = (page: Page) => query<{ items: { title: string }[] }>(page, 'listTracks');
 
 test('two pages answer catalog queries with one database', async ({ context }) => {

@@ -26,6 +26,7 @@ function served(rows: () => string[], size = 2) {
 	const calls: (string | undefined)[] = [];
 	const limits: (number | undefined)[] = [];
 	const delay = { ms: 0 };
+	/** Reads the page after `cursor`, at most `limit` rows, recording both and waiting `delay.ms`. */
 	const load = async (cursor?: string, limit?: number): Promise<Page<string>> => {
 		calls.push(cursor);
 		limits.push(limit);

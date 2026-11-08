@@ -23,7 +23,6 @@ export class Connectivity {
 
 	/** Starts following the choice other tabs of this browser make. */
 	constructor() {
-		// Another tab of this browser turned it on or off.
 		globalThis.addEventListener?.('storage', (event) => {
 			if (event.key === KEY) this.workOffline = kept();
 		});

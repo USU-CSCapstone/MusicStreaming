@@ -117,11 +117,13 @@ async function started(...ids: string[]) {
 	await h.idle();
 }
 
+/** The feed position `grown` moves a library to. */
+const BASE = SEQ + 1;
+
 /**
  * Moves the started library on to `BASE`, a catch-up of one change that gives it `tracks` tracks,
  * so the catch-ups that follow are each well under a tenth of it.
  */
-const BASE = SEQ + 1;
 async function grown(tracks = 1000) {
 	const counts = {
 		seq: BASE,
@@ -168,18 +170,23 @@ const album = (seq: number, id: string, title: string) => ({
 });
 
 const hello = { type: 'hello', deviceId: '1', serverTime: '' };
+/** The realtime hint that `libraryId`'s feed reached `seq`. */
 const libraryChanged = (seq: number, libraryId = '1') => ({
 	type: 'libraryChanged',
 	libraryId,
 	seq
 });
+/** The name the device's catalog holds for tag `id`, or undefined when it has none. */
 const tagName = async (id: string) =>
 	((await h.query('1', 'getTag', { tagId: id })) as { name: string } | null)?.name;
+/** The total of the device's catalog answer to the list query `name`. */
 const total = async (name: string) =>
 	((await h.query('1', name, { limit: 1 })) as { total: number }).total;
 
-/** The changes of a catch-up of `count` new tags after `BASE`, which apply in many chunks. */
+/** The number of changes in a catch-up large enough to apply in many chunks. */
 const LARGE = 2000;
+
+/** The `LARGE` changes of a catch-up: new tags after `BASE`. */
 const largeFeed = () =>
 	Array.from({ length: LARGE }, (_, i) => tag(BASE + 1 + i, `${100 + i}`, `Tag ${i}`));
 

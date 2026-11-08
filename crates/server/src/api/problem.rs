@@ -89,7 +89,8 @@ pub struct Problem {
     /// The version the resource is at now, with `version_conflict`.
     #[serde(rename = "currentVersion", skip_serializing_if = "Option::is_none")]
     current_version: Option<i64>,
-    /// When to try again, in whole seconds, with `rate_limited` or `catalog_building`: sent as `Retry-After`.
+    /// When to try again, in whole seconds, with `rate_limited` or `catalog_building`: sent as
+    /// `Retry-After`.
     #[serde(skip)]
     retry_after: Option<i64>,
 }

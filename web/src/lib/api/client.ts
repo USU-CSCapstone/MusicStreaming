@@ -132,6 +132,7 @@ const kept = <K extends keyof LastKnown>(key: K, answer: Promise<NonNullable<Las
 		}
 	);
 
+/** The server's public details; kept for starting offline. */
 export const getServerInfo = (f: Fetch) => kept('server', get<ServerInfo>(f, '/server'));
 
 /** Creates the owner and logs this browser in: the server sets the session cookie. */
@@ -153,6 +154,7 @@ export const listKeptQueues = (f: Fetch, cursor?: string) =>
 export const deleteKeptQueue = (f: Fetch, queueId: string) =>
 	send<void>(f, 'DELETE', `/me/queues/${encodeURIComponent(queueId)}`);
 
+/** The signed-in user; kept for starting offline. */
 export const getMe = (f: Fetch) => kept('me', get<User>(f, '/me'));
 
 /** Records plays. With `keepalive`, the request outlives the page, for one closing. */
@@ -181,6 +183,7 @@ const device = <T>(
 	return fresh ? server() : read<T>(name, libraryId, { ...ids, ...query }, server);
 };
 
+/** The libraries the user can reach; kept for starting offline. */
 export const listLibraries = (f: Fetch) =>
 	kept('libraries', get<{ items: Library[] }>(f, '/libraries'));
 

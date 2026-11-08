@@ -220,7 +220,7 @@ export class CatalogClient {
 		]));
 	}
 
-	/** Does [`signOut`](#signOut). */
+	/** Does the wipe of [`signOut`](#signOut): runs it here if no tab owns the catalog, else asks the owner, trying a few times. */
 	async #signOut() {
 		if (!available()) return;
 		await this.#held;
@@ -413,4 +413,5 @@ export class CatalogClient {
 	}
 }
 
+/** The page's one catalog client. */
 export const catalog = new CatalogClient();

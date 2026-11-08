@@ -138,7 +138,7 @@ export async function readSearch<T>(
 	}
 	try {
 		// Reached only with the server offline, failing or slow, so the device waits for an
-		// update under way, or answers from a copy that no longer updates, as it does offline.
+		// update under way, or answers from a copy that is not updating, as it does offline.
 		const device = catalog.query(library, name, params, true).then((json) => JSON.parse(json) as T);
 		// Whichever answers first wins: the slow server may still beat a device that is busy.
 		return await (late ? Promise.any([device, late]) : device);
