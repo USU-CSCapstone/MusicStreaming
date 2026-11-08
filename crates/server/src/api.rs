@@ -58,7 +58,7 @@ pub use id::{AnyId, Id, Uuid};
 pub use images::Images;
 pub use player::Players;
 pub use problem::{Code, Problem};
-pub use realtime::Hub;
+pub use realtime::{Hub, hint_library_changes};
 pub use scope::Caller;
 pub use search::Indexes;
 use setup::Setup;

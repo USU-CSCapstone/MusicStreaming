@@ -3126,6 +3126,12 @@ export interface components {
             refetch?: boolean;
         } | {
             /** @constant */
+            type: "libraryChanged";
+            libraryId: components["schemas"]["Id"];
+            /** Format: int64 */
+            seq: number;
+        } | {
+            /** @constant */
             type: "queueReplaced";
             /** Format: uuid */
             queueId: string;

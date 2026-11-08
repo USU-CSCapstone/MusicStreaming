@@ -4620,6 +4620,21 @@ components:
                 `true` when the edit changed the items but its `ops` were too many for one message
                 (they are left out): the device reads the items again. Left out otherwise.
         - type: object
+          required: [type, libraryId, seq]
+          description: |
+            A library's change feed moved, so a device holding the library fetches what it
+            missed (`listLibraryChanges`, with `after` set to the position it holds). Sent to every
+            connection of every account that reaches the library, once the change is committed,
+            and never to an account that does not. It carries no data: `seq` is the feed's
+            position, comparable with `head` there, and a device already at or past it does
+            nothing. At most one is sent for a library each second, carrying the latest `seq`,
+            and a change inside that second is announced when it ends, so a burst such as a scan
+            sends a few. A device also fetches on `hello`, so a reconnect and a hint are one path.
+          properties:
+            type: { const: libraryChanged }
+            libraryId: { $ref: '#/components/schemas/Id' }
+            seq: { type: integer, format: int64 }
+        - type: object
           required: [type, queueId]
           description: |
             A start replaced the account's queue, so a device fetches it again (`getQueue`). Not

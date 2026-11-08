@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tracing::{error, info, warn};
 
 pub use by_ids::by_ids;
@@ -101,6 +101,9 @@ pub struct Database {
     // before the data directory's lock is released.
     writer: mpsc::Sender<Job>,
     readers: mpsc::Sender<Job>,
+    /// The latest position in any library's change feed, as of the last write the writer
+    /// committed.
+    feed_head: watch::Sender<i64>,
     _threads: Threads,
 }
 
@@ -148,6 +151,8 @@ impl Database {
         // Readers take turns receiving from one queue, so a job goes to whichever is free.
         let reader_jobs = Arc::new(Mutex::new(reader_jobs));
 
+        let (feed_head, _) = watch::channel(feed_head(&writer)?);
+        let writer_head = feed_head.clone();
         let mut threads = Vec::with_capacity(reader_count + 1);
         threads.push(spawn("db-writer", move || {
             let mut conn = writer;
@@ -155,7 +160,10 @@ impl Database {
             loop {
                 let wait = next_optimize.saturating_duration_since(Instant::now());
                 match writer_jobs.recv_timeout(wait) {
-                    Ok(job) => run(job, &mut conn),
+                    Ok(job) => {
+                        run(job, &mut conn);
+                        publish_feed_head(&conn, &writer_head);
+                    }
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
@@ -185,7 +193,18 @@ impl Database {
             readers = reader_count,
             "database ready"
         );
-        Ok(Database { writer: writer_queue, readers: reader_queue, _threads: Threads(threads) })
+        Ok(Database {
+            writer: writer_queue,
+            readers: reader_queue,
+            feed_head,
+            _threads: Threads(threads),
+        })
+    }
+
+    /// Follows the latest position in any library's change feed, which moves once the write
+    /// that recorded a change has committed. Changes made between two looks are one move.
+    pub fn follow_feed(&self) -> watch::Receiver<i64> {
+        self.feed_head.subscribe()
     }
 
     /// Runs `f` on a reader. Every query inside it sees the same snapshot of the database.
@@ -248,6 +267,23 @@ impl Database {
     {
         let work = in_transaction(move |tx| f(tx).map_err(DbError::from));
         queue(&self.writer, work)?.blocking_recv().map_err(|_| DbError::Aborted)?
+    }
+}
+
+/// The latest position in any library's change feed, or 0 before the first change.
+fn feed_head(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.prepare_cached("SELECT coalesce(max(seq), 0) FROM library_changes")?
+        .query_row([], |row| row.get(0))
+}
+
+/// Tells those following the feed where it is after a job, if it has moved. Runs on the writer
+/// once the job's transaction has committed or rolled back.
+fn publish_feed_head(conn: &Connection, head: &watch::Sender<i64>) {
+    match feed_head(conn) {
+        Ok(position) => {
+            head.send_if_modified(|current| std::mem::replace(current, position) != position);
+        }
+        Err(error) => warn!(%error, "cannot read the change feed's position"),
     }
 }
 

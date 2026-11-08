@@ -97,6 +97,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
     let indexes = Arc::new(api::Indexes::default());
     indexes.build_all(&db);
     let hub = Arc::new(api::Hub::default());
+    let hints = api::hint_library_changes(db.clone(), hub.clone());
     let mut app = api::router(api::AppState {
         db: db.clone(),
         images: Arc::new(images),
@@ -126,6 +127,7 @@ async fn run_until(config: Config, shutdown: impl Future<Output = ()>) -> anyhow
     let as_it_stops = async {
         plugins.stop_hooks();
         hub.close_all();
+        hints.abort();
         // The periodic save stops first, leaving a write already begun to finish.
         saving.abort();
         // The sweep stops before its next chunk, leaving one already begun to finish.

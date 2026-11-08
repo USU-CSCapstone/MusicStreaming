@@ -11,6 +11,7 @@
 //! A device is authenticated only as it connects, so whatever signs one out must also
 //! [`Hub::revoke`] it, which tells its connections and closes them.
 
+mod hints;
 mod hub;
 mod messages;
 mod origin;
@@ -26,6 +27,7 @@ use axum::response::Response;
 use rusqlite::OptionalExtension;
 use tokio::time::{Instant, interval_at, timeout};
 
+pub use hints::start as hint_library_changes;
 pub use hub::{Hub, Presence};
 pub use messages::{Revoked, ServerMessage};
 

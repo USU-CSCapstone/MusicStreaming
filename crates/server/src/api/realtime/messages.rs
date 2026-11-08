@@ -53,6 +53,11 @@ pub enum ServerMessage {
     },
     /// A playlist of the user's was created, edited or deleted.
     Playlist(Change),
+    /// A library's change feed moved to `seq`, so a device holding it fetches what it missed.
+    LibraryChanged {
+        library_id: Id,
+        seq: i64,
+    },
     /// A start replaced the account's queue, so a device fetches it again.
     QueueReplaced {
         queue_id: Uuid,
