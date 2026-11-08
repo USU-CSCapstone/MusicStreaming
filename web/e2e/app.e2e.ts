@@ -200,10 +200,23 @@ test('logging out ends the session', async ({ page }) => {
 	/** The offline-start data the app keeps in this browser, or null when nothing is kept. */
 	const kept = () => page.evaluate(() => localStorage.getItem('jewelcase-last-known'));
 	expect(await kept()).toContain('"me"');
+	await page.evaluate(async () => {
+		await (await caches.open('jewelcase-queue-lists')).put('/q', new Response('{}'));
+	});
+	// The server goes away as it logs out, so nothing but the device could bring the account back.
+	let down = false;
+	await page.route('**/api/v1/**', (route) => {
+		if (down && new URL(route.request().url()).pathname.endsWith('/me')) return route.abort();
+		if (route.request().url().endsWith('/auth/logout')) down = true;
+		return route.fallback();
+	});
 	await page.getByRole('button', { name: 'Log out' }).click();
 	await expect(page).toHaveURL(/\/login$/);
+	await expect(page.getByRole('button', { name: 'Log in' })).toBeVisible();
+	expect(await page.evaluate(() => caches.has('jewelcase-queue-lists'))).toBe(false);
 	// What the app starts offline from goes with the session: the next person must not see it.
 	await expect.poll(kept).toBeNull();
+	down = false;
 	await page.goto('/albums');
 	await expect(page).toHaveURL(/\/login\?next=%2Falbums$/);
 });

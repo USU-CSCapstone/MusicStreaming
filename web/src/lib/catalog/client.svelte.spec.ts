@@ -388,12 +388,15 @@ describe('CatalogClient', () => {
 		expect(workers[0].terminated).toBe(true);
 	});
 
-	it('sign-out empties the image cache', async () => {
+	it('sign-out empties the image cache and the queue lists', async () => {
 		const images = await caches.open('images');
 		await images.put('/api/v1/libraries/1/images/9?size=96', new Response('jpeg'));
+		const lists = await caches.open('jewelcase-queue-lists');
+		await lists.put('/api/v1/me/queue/lists/abc', new Response('{}'));
 		const b = browser();
 		await b.tab('a').client.signOut();
 		expect(await caches.has('images')).toBe(false);
+		expect(await caches.has('jewelcase-queue-lists')).toBe(false);
 	});
 
 	it('signing out in one tab is done by the tab that owns the files, which then lets them go', async () => {

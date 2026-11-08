@@ -5,6 +5,7 @@
 
 import { API } from '$lib/api/root';
 import { clearImageCache } from '$lib/image-cache';
+import { clearQueueLists } from '$lib/queue/lists';
 import { forget } from '$lib/last-known';
 import wasmUrl from '$lib/catalog-wasm/jewelcase_catalog_wasm_bg.wasm?url';
 import type { RealtimeServerMessage } from '$lib/api/types';
@@ -147,12 +148,16 @@ export class CatalogClient {
 	/**
 	 * Deletes every file of the catalog from this device, from every tab: the next person to
 	 * sign in must see nothing of the last, nor the account and library list kept for starting
-	 * offline, nor the images kept for it. A tab that owns the catalog does it; if none does, this
+	 * offline, nor the images and queue lists kept for it. A tab that owns the catalog does it; if none does, this
 	 * tab starts a worker for it.
 	 */
 	signOut() {
 		forget();
-		return (this.#signingOut = Promise.all([clearImageCache(), this.#signOut()]));
+		return (this.#signingOut = Promise.all([
+			clearImageCache(),
+			clearQueueLists(),
+			this.#signOut()
+		]));
 	}
 
 	/** Does [`signOut`](#signOut). */

@@ -5,6 +5,15 @@
 /** The Cache Storage cache the lists live in. */
 const CACHE_NAME = 'jewelcase-queue-lists';
 
+/** Deletes every kept list: the next person to sign in must not see the last one's queue. */
+export async function clearQueueLists() {
+	try {
+		await caches.delete(CACHE_NAME);
+	} catch (error) {
+		console.error(error);
+	}
+}
+
 /** What a download came to: the list's JSON, `gone` for a `404`, or `failed` for anything else. */
 export type Download = { body: string } | 'gone' | 'failed';
 

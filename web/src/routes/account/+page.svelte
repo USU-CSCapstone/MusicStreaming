@@ -15,6 +15,7 @@
 	import DeviceList from '$lib/components/DeviceList.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import SettingsDialog from '$lib/components/SettingsDialog.svelte';
+	import { catalog } from '$lib/catalog/client.svelte';
 	import { imageCacheSize } from '$lib/image-cache';
 	import { prefs } from '$lib/prefs.svelte';
 	import { tagTypeName } from '$lib/tags';
@@ -57,6 +58,11 @@
 				return;
 			}
 		}
+		// Wiped here, not left to /login: with the server gone by then, the last-known account
+		// would answer and bring the app back up signed in.
+		// Disconnected first: a tab that owns the catalog holds it, and the wipe waits for that.
+		catalog.disconnect();
+		await catalog.signOut();
 		// A fresh start, so nothing of this session, playback above all, outlives it.
 		location.assign(resolve('/login'));
 	}
