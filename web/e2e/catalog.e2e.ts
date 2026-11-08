@@ -6,6 +6,8 @@ import { library, serveLibrary, serveRealtime } from './fixtures';
 
 const snapshot = readFileSync(new URL('../../crates/catalog/parity/library.db', import.meta.url));
 const etag = createHash('sha256').update(snapshot).digest('hex');
+/** The schema version the golden file was built at: its SQLite header's `user_version`. */
+const schema = String(snapshot.readUInt32BE(60));
 
 /** The dev mock has no feeds or snapshot, so serve the golden library's, as library 1, after `serveLibrary`'s routes, which come first otherwise. */
 async function serveCatalog(page: Page, asked: string[]) {
@@ -21,6 +23,7 @@ async function serveCatalog(page: Page, asked: string[]) {
 				headers: {
 					etag: `"${etag}"`,
 					'x-jewelcase-seq': '0',
+					'x-jewelcase-schema': schema,
 					'content-type': 'application/vnd.sqlite3'
 				}
 			});
