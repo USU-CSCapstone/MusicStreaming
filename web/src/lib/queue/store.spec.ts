@@ -305,6 +305,23 @@ class FakeCaches {
 	}
 }
 
+/** The device's catalog as far as the queue asks it: what `resolveRecipe` answers. */
+class FakeCatalog {
+	/** The list and hash a recipe resolves to; null as for a playlist that is not the user's, and a rejection by default, as with no owner. */
+	answer: { ids: string[]; hash: string } | null | 'fails' = 'fails';
+	/** Holds back the answer until it is opened. */
+	gate: Promise<void> | null = null;
+	asked: { library: string; name: string }[] = [];
+
+	/** Answers a query as the catalog's owner does, with JSON; rejects as it does when it cannot. */
+	ask = async (request: { type: string; library?: string; name?: string }): Promise<string> => {
+		this.asked.push({ library: request.library!, name: request.name! });
+		await this.gate;
+		if (this.answer === 'fails') throw new Error('the library is not on this device');
+		return JSON.stringify(this.answer && { ...this.answer, recipe: { type: 'album' } });
+	};
+}
+
 /** A gate to hold answers behind, and the way to open it. */
 function gate(): { wait: Promise<void>; open: () => void } {
 	let open!: () => void;
@@ -324,6 +341,7 @@ let store: QueueStore;
 let summary: Summary;
 let refusals: Refusal[];
 let caches: FakeCaches;
+let device: FakeCatalog;
 
 /** The first `limit` rows of Up Next as the store gives them: each track, or its status if it has none. */
 const upNext = (limit = 10) =>
@@ -349,12 +367,14 @@ beforeEach(() => {
 	server = new FakeServer();
 	refusals = [];
 	caches = new FakeCaches();
+	device = new FakeCatalog();
 	// A store from an earlier test can still be retrying; only this test's store reports here.
 	const created: QueueStore = new QueueStore({
 		api: API,
 		fetch: server.fetch as typeof fetch,
 		retryMs: 0,
 		storage: caches as unknown as CacheStorage,
+		catalog: device,
 		changed: (s) => {
 			if (store === created) summary = s;
 		},
@@ -597,6 +617,58 @@ describe('QueueStore', () => {
 		await settle();
 		expect(summary).toMatchObject({ manual: 2, version: 1 });
 		expect(refusals).toEqual([]);
+	});
+
+	describe('an add of a recipe resolved on the device', () => {
+		const add: SentEdit = {
+			type: 'add',
+			source: { key: 'q', libraryId: 'lib', recipe: { type: 'album', albumId: '9' } as never },
+			before: { type: 'manualStart' }
+		};
+
+		it('shows all its rows at once, and keeps the list for a server that names the same hash', async () => {
+			await hello();
+			device.answer = { ids: ['7', '8'], hash: 'h-q' };
+			server.editGate = gate().wait;
+			store.edit(add, 2);
+			await settle();
+			expect(upNext(3)).toEqual(['7', '8', '101']);
+
+			store.message(server.heardOf());
+			expect(upNext(3), 'at once, with no download').toEqual(['7', '8', '101']);
+			await settle();
+			expect(server.listGets()).toEqual(['h']);
+			expect(caches.hashes()).toEqual(['h']);
+		});
+
+		it('leaves an add of a search to the server unless the app counts itself offline', async () => {
+			await hello();
+			device.answer = { ids: ['7', '8'], hash: 'h-q' };
+			const search = (key: string): SentEdit => ({
+				...add,
+				source: { key, libraryId: 'lib', recipe: { type: 'search', q: 'a' } }
+			});
+			store.edit(search('q'), 2);
+			await settle();
+			expect(device.asked).toEqual([]);
+
+			store.edit(search('r'), 2, true);
+			await settle();
+			expect(device.asked).toHaveLength(1);
+		});
+
+		it("downloads the server's list when its hash differs", async () => {
+			await hello();
+			device.answer = { ids: ['7', '8'], hash: 'not-the-servers' };
+			server.lists.set('h-q', ['5', '6']);
+			store.edit(add, 2);
+			await settle();
+			store.message(server.heardOf());
+			await settle();
+
+			expect(upNext(3)).toEqual(['5', '6', '101']);
+			expect(server.listGets()).toEqual(['h', 'h-q']);
+		});
 	});
 
 	it('shows the rows of its own recipe add as unknown while the server cannot be reached', async () => {
@@ -1437,6 +1509,139 @@ describe('QueueStore lists and rows', () => {
 			// The list is on its way: the page the server gave says what its rows are.
 			expect(now()).toEqual(['201', '302', '303', '304']);
 			held.open();
+		});
+
+		/** The hash the server names for the recipe start's list. */
+		const SERVER_LIST = `hs-${STARTED.slice(0, 4)}`;
+
+		it('a matching hash downloads nothing', async () => {
+			await hello();
+			device.answer = { ids: server.resolved5, hash: SERVER_LIST };
+			const pages = server.rowGets();
+			const answer = gate();
+			server.startGate = answer.wait;
+			store.start(recipeStart(['200']));
+			await settle();
+			// Before the server has answered, the device's list is the queue's: all of it.
+			expect(now()).toEqual(['201', '202', '203', '204']);
+			expect(server.listGets()).toEqual(['h']);
+			answer.open();
+			await settle();
+
+			expect(now()).toEqual(['201', '202', '203', '204']);
+			expect(server.listGets()).toEqual(['h']);
+			expect(server.rowGets()).toEqual(pages);
+			expect(device.asked).toEqual([{ library: 'lib', name: 'resolveRecipe' }]);
+			expect(caches.hashes()).toEqual([SERVER_LIST]);
+		});
+
+		it("a mismatch downloads the server's list", async () => {
+			await hello();
+			device.answer = { ids: ['200', '201', '202', '203', '204'], hash: 'device-hash' };
+			server.resolved5 = ['200', '201', '302', '303', '304'];
+			const answer = gate();
+			server.startGate = answer.wait;
+			store.start(recipeStart(['200']));
+			await settle();
+			expect(now()).toEqual(['201', '202', '203', '204']);
+			answer.open();
+			await settle();
+
+			expect(server.listGets().at(-1)).toBe(SERVER_LIST);
+			expect(now()).toEqual(['201', '302', '303', '304']);
+			expect(caches.hashes()).toEqual([SERVER_LIST]);
+		});
+
+		it("uses the device's list that answers after the server has named a matching one, downloading nothing", async () => {
+			await hello();
+			const slow = gate();
+			device.gate = slow.wait;
+			device.answer = { ids: server.resolved5, hash: SERVER_LIST };
+			const held = gate();
+			server.listGate = held.wait;
+			store.start(recipeStart(['200']));
+			await settle();
+			expect(summary.held).toBe(`${SOURCE}.1`);
+			slow.open();
+			await settle();
+			held.open();
+			await settle();
+
+			expect(now()).toEqual(['201', '202', '203', '204']);
+			expect(caches.hashes()).toEqual([SERVER_LIST]);
+		});
+
+		it('ignores a device list that answers after another start', async () => {
+			await hello();
+			const slow = gate();
+			device.gate = slow.wait;
+			device.answer = { ids: server.resolved5, hash: 'device-hash' };
+			store.start(recipeStart());
+			store.start({
+				...recipeStart(),
+				queueId: QUEUE,
+				source: { key: 'b', libraryId: 'lib', tracks: ['7', '8'] },
+				startTrackId: undefined,
+				start: 0
+			});
+			slow.open();
+			await settle();
+
+			expect(now()).toEqual(['7', '8']);
+			expect(caches.hashes()).not.toContain('device-hash');
+		});
+
+		it('starts as without a catalog when the device cannot resolve the recipe', async () => {
+			await hello();
+			store.start(recipeStart());
+			await settle();
+
+			expect(now()).toEqual(['201', '202', '203', '204']);
+			expect(server.listGets().at(-1)).toBe(SERVER_LIST);
+			expect(refusals).toEqual([]);
+		});
+
+		it('a late device list with another hash never replaces the server list', async () => {
+			await hello();
+			const slow = gate();
+			device.gate = slow.wait;
+			device.answer = { ids: ['200', '201', '202', '203', '204'], hash: 'device-hash' };
+			server.resolved5 = ['200', '201', '302', '303', '304'];
+			const held = gate();
+			server.listGate = held.wait;
+			store.start(recipeStart(['200']));
+			await settle();
+			slow.open();
+			await settle();
+			held.open();
+			await settle();
+
+			expect(now()).toEqual(['201', '302', '303', '304']);
+			expect(caches.hashes()).toEqual([SERVER_LIST]);
+		});
+
+		it('leaves a search to the server unless the app counts itself offline', async () => {
+			await hello();
+			device.answer = { ids: server.resolved5, hash: SERVER_LIST };
+			const search = {
+				...recipeStart(),
+				source: { key: SOURCE, libraryId: 'lib', recipe: { type: 'search' as const, q: 'a' } }
+			};
+			store.start(search);
+			await settle();
+			expect(device.asked).toEqual([]);
+
+			store.start({ ...search, queueId: QUEUE, offline: true });
+			await settle();
+			expect(device.asked).toHaveLength(1);
+		});
+
+		it('sends no offline flag to the server', async () => {
+			await hello();
+			store.start({ ...recipeStart(), offline: true });
+			await settle();
+			const sent = server.requests.find((r) => r.method === 'POST' && r.path === '/me/queue')!;
+			expect(sent.body).not.toHaveProperty('offline');
 		});
 
 		it('attaches the tracks it sent under the hash the server gives, downloading and fetching nothing', async () => {

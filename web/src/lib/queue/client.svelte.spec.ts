@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { RealtimeServerMessage } from '$lib/api/types';
 import { QueueClient } from './client.svelte';
 import type { FromWorker, StartRequest, ToWorker } from './protocol';
@@ -119,6 +119,22 @@ describe('QueueClient', () => {
 		expect(one).toMatchObject({ type: 'start', request });
 		expect(await taken).toBe(true);
 		expect(await refused).toBe(false);
+	});
+
+	it('tells the worker whether the app counts itself offline with each edit and start', () => {
+		const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+		onTestFinished(() => onLine.mockRestore());
+		const { worker, client } = setup();
+		client.edit({ type: 'next' });
+		client.start({
+			queueId: 'q',
+			context: { type: 'library' } as StartRequest['context'],
+			source: { key: 'k', libraryId: '1', tracks: ['5'] },
+			start: 0
+		});
+		const [edit, start] = worker.sent.slice(1) as Extract<ToWorker, { type: 'edit' | 'start' }>[];
+		expect(edit).toMatchObject({ type: 'edit', offline: true });
+		expect(start).toMatchObject({ type: 'start', request: { offline: true } });
 	});
 
 	it('settles each restore with the worker answer to it', async () => {

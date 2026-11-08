@@ -28,7 +28,7 @@ onmessage = ({ data }: MessageEvent<ToWorker>) => {
 	} else {
 		store?.then((ready) => {
 			if (data.type === 'message') ready.message(data.message);
-			else if (data.type === 'edit') ready.edit(data.edit, data.length);
+			else if (data.type === 'edit') ready.edit(data.edit, data.length, data.offline);
 			else if (data.type === 'start')
 				post({ type: 'started', id: data.id, ok: ready.start(data.request) });
 			else if (data.type === 'restore')

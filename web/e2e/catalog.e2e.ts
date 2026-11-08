@@ -375,3 +375,48 @@ test('searching offline finds a synced track', async ({ page }) => {
 	await expect(page.getByText('Come Together').first()).toBeVisible();
 	expect(blocked.filter((p) => p.endsWith('/search'))).toEqual([]);
 });
+
+test('starting an album offline queues all its tracks', async ({ page }) => {
+	const asked: string[] = [];
+	await serveGolden(page, asked);
+	await page.goto('/');
+	await synced(page);
+	// The album with the most tracks, and its tracks in the order its page shows them.
+	const albums = await query<{ items: { id: string; trackCount: number }[] }>(page, 'listAlbums');
+	const { id } = albums.items.reduce((most, one) =>
+		one.trackCount > most.trackCount ? one : most
+	);
+	const tracks = await query<{ items: { title: string; availability: string }[] }>(
+		page,
+		'listTracks',
+		{
+			albumId: id,
+			sort: 'album',
+			order: 'asc'
+		}
+	);
+	// A missing track keeps its place, shown as unavailable (D36).
+	const titles = tracks.items.map((t) =>
+		t.availability === 'missing' ? 'Unavailable track' : t.title
+	);
+	expect(titles.length).toBeGreaterThan(2);
+
+	await page.route('**/api/v1/**', (route) => route.abort());
+	await page.evaluate(() => Object.defineProperty(navigator, 'onLine', { get: () => false }));
+	await go(page, `/albums/${id}`);
+	await page.locator('main').getByRole('button', { name: 'Play', exact: true }).click();
+	const player = page.getByRole('region', { name: 'Player' });
+	await player.getByRole('button', { name: 'Queue' }).click();
+	const panel = page.getByRole('complementary', { name: 'Queue' });
+	const upNext = () =>
+		panel.getByRole('list', { name: 'Up Next' }).locator('[data-item] .title').allInnerTexts();
+	await expect.poll(upNext).toEqual(titles.slice(1));
+
+	// The album page gave the queue every row it shows, so only the list the device built and
+	// kept, while every API call was aborted, tells the two apart.
+	await expect
+		.poll(() =>
+			page.evaluate(async () => (await (await caches.open('jewelcase-queue-lists')).keys()).length)
+		)
+		.toBe(1);
+});

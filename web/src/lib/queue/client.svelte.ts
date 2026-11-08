@@ -3,6 +3,7 @@
 // worker.
 
 import { API } from '$lib/api/client';
+import { offline } from '$lib/catalog/read';
 import wasmUrl from '$lib/core-wasm/jewelcase_core_wasm_bg.wasm?url';
 import type { RealtimeServerMessage, SentEdit } from '$lib/api/types';
 import type { Realtime } from '$lib/realtime.svelte';
@@ -91,18 +92,21 @@ export class QueueClient {
 	/**
 	 * Applies `edit` here at once and sends it to the server in the background. An `add` of a
 	 * `recipe` shows as `length` rows, the view's count, until the server says how many it made.
+	 * The worker is told whether the app counts itself offline, as it resolves a search on the
+	 * device only then.
 	 */
 	edit(edit: SentEdit, length?: number) {
-		this.#send({ type: 'edit', edit, length });
+		this.#send({ type: 'edit', edit, length, offline: offline() });
 	}
 
 	/**
 	 * Starts a queue here (`QueueStore.start`): settles once the worker has it, and then
 	 * `queueId`, `current` and the rest are the new queue's. False if the start is not a position
-	 * of its source. Never settles if the worker is stopped first.
+	 * of its source. Never settles if the worker is stopped first. The worker is told whether the
+	 * app counts itself offline, as with `edit`.
 	 */
 	start(request: StartRequest): Promise<boolean> {
-		return this.#ask((id) => ({ type: 'start', id, request }));
+		return this.#ask((id) => ({ type: 'start', id, request: { ...request, offline: offline() } }));
 	}
 
 	/**

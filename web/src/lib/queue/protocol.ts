@@ -56,6 +56,8 @@ export type Refusal = {
 export type StartRequest = StartQueue & {
 	total?: number;
 	loaded?: string[];
+	/** The app counts itself offline, so the device resolves a search recipe (it is left to the server otherwise). */
+	offline?: boolean;
 };
 
 /**
@@ -102,7 +104,7 @@ export type ToWorker =
 	/** First: where the API is. */
 	| { type: 'init'; api: string; wasm: string }
 	| { type: 'message'; message: RealtimeServerMessage }
-	| { type: 'edit'; edit: SentEdit; length?: number }
+	| { type: 'edit'; edit: SentEdit; length?: number; offline?: boolean }
 	/** Starts a queue; answered with `started` carrying the same `id`. */
 	| { type: 'start'; id: number; request: StartRequest }
 	/** Restores a kept queue; answered with `restored` carrying the same `id`. */
