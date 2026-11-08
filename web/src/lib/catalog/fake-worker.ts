@@ -15,7 +15,6 @@ export class Harness {
 	api = new FakeApi();
 	private reports: Report[] = [];
 	#sync: CatalogSync | undefined;
-	#online = true;
 
 	/** Closes any sync, deletes every file, and clears the fake server, with the snapshot to serve. */
 	async reset(snapshot: Uint8Array) {
@@ -24,7 +23,6 @@ export class Harness {
 		this.api = new FakeApi();
 		await this.api.setSnapshot(snapshot);
 		this.reports = [];
-		this.#online = true;
 	}
 
 	/** Starts a new sync for `user` as a restarted worker does, closing the old one. */
@@ -34,8 +32,7 @@ export class Harness {
 			api: '/api/v1',
 			user,
 			fetch: this.api.fetch,
-			report: (report) => this.reports.push(report),
-			online: () => this.#online
+			report: (report) => this.reports.push(report)
 		});
 		await this.#sync.start();
 	}
@@ -71,40 +68,54 @@ export class Harness {
 	}
 
 	/** The answer to a query of the library's file, as a person's page would ask it. */
-	async query(library: string, name: string, params: object) {
-		return JSON.parse(await this.#sync!.query(library, name, params));
+	async query(library: string, name: string, params: object, offline = false) {
+		return JSON.parse(await this.#sync!.query(library, name, params, offline));
 	}
 
-	/** Whether the library's file answers reads now, rather than the server. */
+	/** Makes the next commit of any file fail with `message`, as a full device does. */
+	failNextCommit(message: string) {
+		const commit = Catalog.prototype.commit;
+		Catalog.prototype.commit = function () {
+			Catalog.prototype.commit = commit;
+			throw new Error(message);
+		};
+	}
+
+	/** Resolves once the library's file is part-way through an apply: its mark is set. */
+	async #midApply(library: string) {
+		const applying = () => this.#sync!.catalogs.get(library)?.applying('library') !== undefined;
+		while (!applying()) await new Promise((resolve) => setTimeout(resolve));
+	}
+
+	/** Whether the library's file can answer, rather than the server. */
 	onDevice(library: string) {
 		return this.#sync!.onDevice(library);
 	}
 
 	/** Closes the sync once the library's file is part-way through an apply, as a closed tab does. */
 	async stopMidApply(library: string) {
-		while (this.#sync!.onDevice(library)) await new Promise((resolve) => setTimeout(resolve));
+		await this.#midApply(library);
 		await this.#sync!.close();
 	}
 
 	/**
 	 * Waits, in the worker, until the library's file is part-way through an apply, and says what
-	 * a read of the file itself finds then, where the file's mark says the apply goes, whether
-	 * the file answers while offline, and what a person's read made then answers once it may (or
-	 * its error).
+	 * a read of the file itself finds then, where the file's mark says the apply goes, and what a
+	 * person's read made then answers (or its error), online and offline.
 	 */
 	async midApply(library: string, name: string, params: object) {
 		const sync = this.#sync!;
-		while (sync.onDevice(library)) await new Promise((resolve) => setTimeout(resolve));
+		await this.#midApply(library);
 		const catalog = sync.catalogs.get(library)!;
-		const read = sync.query(library, name, params);
-		this.#online = false;
-		const offline = sync.onDevice(library);
-		this.#online = true;
+		const settle = (read: Promise<string>) =>
+			read.then(JSON.parse, (error: Error) => ({ error: error.message }));
+		const online = settle(sync.query(library, name, params));
+		const offline = settle(sync.query(library, name, params, true));
 		return {
 			partial: JSON.parse(catalog.query('1', library, name, JSON.stringify(params))),
 			through: Number(catalog.applying('library')),
-			offline,
-			read: await read.then(JSON.parse, (error: Error) => ({ error: error.message }))
+			online: await online,
+			offline: await offline
 		};
 	}
 

@@ -638,20 +638,20 @@ describe('catalog sync', () => {
 		expect(mid.partial.total).toBeLessThan(before + LARGE);
 		expect(mid.through).toBe(BASE + LARGE);
 		// A person's read made meanwhile answers only once all of it is in.
-		expect(mid.read.total).toBe(before + LARGE);
+		expect(mid.offline.total).toBe(before + LARGE);
 
 		await h.idle();
 		expect(await h.onDevice('1')).toBe(true);
 		expect(await h.cursor('1', 'library')).toBe(BASE + LARGE);
 	});
 
-	it('reads during an apply go to the server, or offline wait for it', async () => {
+	it('a query during an apply throws at once online, and offline waits for the apply', async () => {
 		const before = await largeCatchUp();
 		const mid = await h.midApply('1', 'listTags', { limit: 1 });
-		// `midApply` returns once the file stops answering online reads.
-		expect(mid.offline).toBe(true);
-		expect(mid.read.total).toBe(before + LARGE);
+		expect(mid.online).toEqual({ error: 'the library is being updated on this device' });
+		expect(mid.offline.total).toBe(before + LARGE);
 		await h.idle();
+		expect(await total('listTags')).toBe(before + LARGE);
 	});
 
 	it('an apply a closed worker left part-way is finished before the library answers', async () => {
@@ -660,8 +660,10 @@ describe('catalog sync', () => {
 		const asked = (await h.api.asked('/')).length;
 
 		await h.start();
-		expect(await h.onDevice('1')).toBe(false);
-		expect(await total('listTags')).toBe(before + LARGE);
+		await expect(h.query('1', 'listTags', { limit: 1 })).rejects.toThrow(/being updated/);
+		expect(await h.query('1', 'listTags', { limit: 1 }, true)).toMatchObject({
+			total: before + LARGE
+		});
 		await h.idle();
 		expect(await h.cursor('1', 'library')).toBe(BASE + LARGE);
 		expect(await h.pulled('1', 'library')).toBe(BASE + LARGE);
@@ -688,12 +690,48 @@ describe('catalog sync', () => {
 
 		const mid = await h.midApply('1', 'listTags', { limit: 1 });
 		expect(mid.partial.total).toBeGreaterThan(before);
-		expect(mid.read).toEqual({ error: 'the library is not on this device' });
+		expect(mid.online).toEqual({ error: 'the library is being updated on this device' });
+		expect(mid.offline).toEqual({ error: 'the library is not on this device' });
 		await h.idle();
 		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(2);
 		expect(await h.cursor('1', 'library')).toBe(BASE + LARGE);
 		expect(await total('listTags')).toBe(before);
 		expect(await h.files()).toHaveLength(1);
+	});
+
+	it('a full device during an apply keeps the copy, and a later pull finishes it', async () => {
+		await started('1');
+		await grown();
+		await h.api.setFeed('1', [tag(BASE + 1, '90', 'Rock')], BASE + 1);
+		await h.failNextCommit('database or disk is full');
+		await h.message(libraryChanged(BASE + 1));
+		await h.idle();
+		expect(await h.reported()).toMatchObject([{ quota: true }]);
+		expect(await h.libraries()).toEqual(['1']);
+		expect(await h.files()).toHaveLength(1);
+		expect(await h.onDevice('1')).toBe(false);
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(1);
+
+		await h.message(libraryChanged(BASE + 1));
+		await h.idle();
+		expect(await h.onDevice('1')).toBe(true);
+		expect(await tagName('90')).toBe('Rock');
+		expect(await h.cursor('1', 'library')).toBe(BASE + 1);
+		expect(await h.api.asked('/libraries/1/catalog')).toHaveLength(1);
+	});
+
+	it('a copy whose server moved to another schema version answers only offline', async () => {
+		await started('1');
+		// Three changes are more than a tenth of the library, so its snapshot is asked for.
+		const more = [tag(11, '91', 'Jazz'), tag(12, '92', 'Soul'), tag(13, '93', 'Folk')];
+		await h.api.setFeed('1', more, 13);
+		await h.api.setSchema(99);
+		await h.message(libraryChanged(13));
+		await h.idle();
+		expect(await h.reported()).toHaveLength(1);
+		expect(await h.libraries()).toEqual(['1']);
+		await expect(total('listTracks')).rejects.toThrow(/being updated/);
+		expect(await h.query('1', 'listTracks', { limit: 1 }, true)).toMatchObject({ total: 6 });
 	});
 
 	it('a snapshot of another schema version is not imported, and is not asked for again', async () => {

@@ -30,8 +30,11 @@ const BUILD_TRIES = 10;
 /** Seconds between asks for a snapshot newer than the copy, unless the server says otherwise. */
 const REBUILD_WAIT = 5;
 /**
- * Staged changes applied in one transaction. One costs about 130 µs natively, so a chunk stays
- * near 40 ms on a phone (wasm, 4× slower CPU), and the worker answers between chunks.
+ * Staged changes applied in one transaction, the worker answering between chunks. A chunk takes
+ * about 14 ms on average and 41 ms at worst natively at 500,000 tracks, so roughly 85 ms and
+ * 250 ms on a phone (wasm, 4× slower CPU). Online reads of the applying library go to the server
+ * meanwhile, so a chunk holds up only other libraries' reads and offline reads; smaller chunks
+ * would cost more per-transaction work and journal writes for that.
  */
 const APPLY_CHUNK = 50;
 /** Bytes copied from a download into the pool at a time. */
@@ -242,13 +245,18 @@ export class CatalogSync {
 	}
 
 	/**
-	 * Answers the operation `name` for `library` from its file, as `Catalog.query` does, once any
-	 * apply under way in it has ended. Throws where the library is not on the device. A file
-	 * found damaged is deleted and downloaded again in the background, and the error is still
-	 * thrown.
+	 * Answers the operation `name` for `library` from its file, as `Catalog.query` does. Throws
+	 * where the library is not on the device. Unless the caller is `offline`, it also throws at
+	 * once where the file is part-way through an apply or no longer kept current (another schema
+	 * version), so the caller asks the server; offline, it waits for the apply and answers from
+	 * the copy. A file found damaged is deleted and downloaded again in the background, and the
+	 * error is still thrown.
 	 */
-	async query(library: string, name: string, params: object) {
+	async query(library: string, name: string, params: object, offline = false) {
 		let catalog = this.catalogs.get(library);
+		if (catalog && !offline && (this.#applying.has(catalog) || this.#outdated.has(library))) {
+			throw new Error('the library is being updated on this device');
+		}
 		while (catalog && this.#applying.has(catalog)) {
 			await this.#applying.get(catalog);
 			catalog = this.catalogs.get(library);
@@ -263,17 +271,12 @@ export class CatalogSync {
 	}
 
 	/**
-	 * Whether `library`'s file answers reads now: it is on the device and, online, not part-way
-	 * through applying a catch-up, which the server answers meanwhile. Offline, `query` waits for
-	 * the apply instead.
+	 * Whether `library` has a file on the device that can answer: one whose apply failed part-way
+	 * does not. Whether it answers now depends on the caller being offline; see [`query`](#query).
 	 */
 	onDevice(library: string) {
 		const catalog = this.catalogs.get(library);
-		return (
-			catalog !== undefined &&
-			!this.#broken.has(catalog) &&
-			!(this.#online() && this.#applying.has(catalog))
-		);
+		return catalog !== undefined && !this.#broken.has(catalog);
 	}
 
 	/** Resolves once no pull is under way. */
@@ -513,8 +516,9 @@ export class CatalogSync {
 	 * transaction, yielding between chunks so the worker answers meanwhile. Until it ends, reads
 	 * of the file go to the server or wait ([`onDevice`](#onDevice)). Stops once `stale` says the
 	 * file is not the one to write, leaving the file's mark for the next pull to finish. A chunk
-	 * that fails marks the file broken, so it answers nothing, and throws [`Unapplied`], which
-	 * callers treat as damage.
+	 * that fails marks the file broken, so it answers nothing until an apply completes, and throws
+	 * [`Unapplied`], which callers treat as damage; or, where the device is full, the error itself,
+	 * reported as a quota error with the copy kept.
 	 */
 	async #apply(catalog: Catalog, feed: string, through: bigint, stale: () => boolean) {
 		const before = this.#applying.get(catalog);
@@ -526,9 +530,14 @@ export class CatalogSync {
 					done = catalog.commit(feed, through, APPLY_CHUNK);
 				} catch (error) {
 					this.#broken.add(catalog);
+					// A full device leaves the file whole, if part-way: a later pull finishes it.
+					if (describe(error).quota) throw error;
 					throw new Unapplied(`staged changes would not apply: ${describe(error).message}`);
 				}
-				if (done) return;
+				if (done) {
+					this.#broken.delete(catalog);
+					return;
+				}
 				await new Promise((resolve) => setTimeout(resolve));
 				await this.#queue;
 			}
