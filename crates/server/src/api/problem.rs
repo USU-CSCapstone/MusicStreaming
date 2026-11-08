@@ -204,21 +204,6 @@ impl From<jewelcase_catalog::playlists::ItemsError> for Problem {
     }
 }
 
-impl From<jewelcase_catalog::recipes::ResolveError> for Problem {
-    /// A playlist item without its track breaks retention, and a database error is one: `500`,
-    /// logged.
-    fn from(error: jewelcase_catalog::recipes::ResolveError) -> Problem {
-        use jewelcase_catalog::recipes::ResolveError;
-        match error {
-            ResolveError::Incomplete => {
-                tracing::error!("a playlist item names a track that is gone");
-                Problem::new(Code::Internal)
-            }
-            ResolveError::Sql(error) => error.into(),
-        }
-    }
-}
-
 impl From<rusqlite::Error> for Problem {
     /// A database error, logged and answered as a `500 internal`, as a [`DbError`] is.
     fn from(error: rusqlite::Error) -> Problem {

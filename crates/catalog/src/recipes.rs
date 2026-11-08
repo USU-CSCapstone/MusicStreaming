@@ -6,8 +6,6 @@
 //! text ([`jewelcase_core::Recipe`]); here they are typed as the API needs them. A device
 //! resolves with the same code, so the core's list hash of the IDs matches the server's.
 
-use std::fmt;
-
 use jewelcase_core::{Recipe as Stored, SortField, SortRow, sort_rows};
 use rusqlite::Connection;
 use serde::Deserialize;
@@ -16,7 +14,7 @@ use serde_json::{Map, Value};
 use crate::by_ids::by_ids;
 use crate::credit::ArtistCredit;
 use crate::page::Order;
-use crate::playlists;
+use crate::playlists::{self, ItemsError};
 use crate::tag_filter::{TagFilter, Tags};
 use crate::time::rfc3339;
 use crate::tracks::{self, TrackOrder, TrackSort};
@@ -151,34 +149,6 @@ impl Recipe {
     }
 }
 
-/// Why a recipe could not be resolved.
-#[derive(Debug)]
-pub enum ResolveError {
-    /// A track a filtered or sorted playlist recipe names is not in the catalog, so its tags and
-    /// sort keys are unknown and the list would come up short. Never on the server, where
-    /// retention keeps every track an item names; on a device, a track the library feed has not
-    /// brought yet.
-    Incomplete,
-    Sql(rusqlite::Error),
-}
-
-impl fmt::Display for ResolveError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ResolveError::Incomplete => f.write_str("a playlist item's track is not here yet"),
-            ResolveError::Sql(error) => error.fmt(f),
-        }
-    }
-}
-
-impl std::error::Error for ResolveError {}
-
-impl From<rusqlite::Error> for ResolveError {
-    fn from(error: rusqlite::Error) -> ResolveError {
-        ResolveError::Sql(error)
-    }
-}
-
 /// `sort` and `order` as a stored recipe spells them.
 fn names(sort: TrackSort, order: Order) -> (String, String) {
     let (sort, order) = TrackOrder { sort, order }.names();
@@ -190,7 +160,7 @@ fn names(sort: TrackSort, order: Order) -> (String, String) {
 /// An album, artist or tag the library lacks resolves to no tracks, and a missing track stays in
 /// place, as in a view. A playlist recipe resolves only `user`'s own playlist in the library, as
 /// the playlist endpoints find it: `None` if it is not theirs or does not exist, and
-/// [`ResolveError::Incomplete`] if it is filtered or sorted and an item's track row is absent.
+/// [`ItemsError::Incomplete`] if it is filtered or sorted and an item's track row is absent.
 /// `ranked` is called only for a search recipe, with its `q`, and gives
 /// the IDs of the library's tracks that match it, best first and only those that carry the tags,
 /// from the search index, which the catalog does not hold. Like every query here, this does not
@@ -202,7 +172,7 @@ pub fn resolve(
     recipe: &Recipe,
     tags: &TagFilter,
     ranked: impl FnOnce(&str) -> Vec<i64>,
-) -> Result<Option<(Vec<u64>, Stored)>, ResolveError> {
+) -> Result<Option<(Vec<u64>, Stored)>, ItemsError> {
     let mut stored = recipe.stored();
     let ids = match recipe {
         Recipe::Album { album_id, sort, order, .. } => {
@@ -241,7 +211,7 @@ pub fn resolve(
 /// track in place, kept if they carry the tags `tags` names, then in `sort`'s order if given
 /// (`SortField` and whether descending) by the core's comparator over the keys the playlist's
 /// page sorts by. `None` for a playlist that is not the user's own in the library;
-/// [`ResolveError::Incomplete`] when it is filtered or sorted and an item's track row is absent.
+/// [`ItemsError::Incomplete`] when it is filtered or sorted and an item's track row is absent.
 fn playlist_ids(
     conn: &Connection,
     user: i64,
@@ -249,7 +219,7 @@ fn playlist_ids(
     playlist: i64,
     sort: Option<(SortField, bool)>,
     tags: &TagFilter,
-) -> Result<Option<(Vec<u64>, i64)>, ResolveError> {
+) -> Result<Option<(Vec<u64>, i64)>, ItemsError> {
     let Some((version, mut items)) = playlists::all_items(conn, user, library, playlist)? else {
         return Ok(None);
     };
@@ -264,7 +234,7 @@ fn playlist_ids(
     let keys = tracks::sort_keys(conn, library, &wanted)?;
     // A track without a row has unknown tags and keys; dropping it would shorten the list.
     if keys.len() < wanted.len() {
-        return Err(ResolveError::Incomplete);
+        return Err(ItemsError::Incomplete);
     }
     if let Some(tagged) = tagged {
         items.retain(|(track, _)| tagged.contains(track));
@@ -298,7 +268,7 @@ mod tests {
     use crate::playlists::tests::behind_the_library_feed;
 
     /// What `recipe` resolves to on [`behind_the_library_feed`]'s device, for user 7 in library 1.
-    fn resolved(recipe: Value) -> Result<Option<(Vec<u64>, Stored)>, ResolveError> {
+    fn resolved(recipe: Value) -> Result<Option<(Vec<u64>, Stored)>, ItemsError> {
         let conn = behind_the_library_feed();
         let recipe: Recipe = serde_json::from_value(recipe).unwrap();
         let tags = recipe.check().unwrap();
@@ -313,7 +283,7 @@ mod tests {
             json!({ "type": "playlist", "playlistId": "10", "filters": { "tagAll": ["1"] } });
         for recipe in [sorted, filtered] {
             let result = resolved(recipe.clone());
-            assert!(matches!(result, Err(ResolveError::Incomplete)), "{recipe}: {result:?}");
+            assert!(matches!(result, Err(ItemsError::Incomplete)), "{recipe}: {result:?}");
         }
         let plain = resolved(json!({ "type": "playlist", "playlistId": "10" })).unwrap().unwrap();
         assert_eq!(plain.0, [101, 102, 103], "its own order keeps every item in place");
