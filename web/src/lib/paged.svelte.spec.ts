@@ -157,6 +157,46 @@ describe('a library changing on the device', () => {
 		await stop();
 	});
 
+	it('an empty list reloads a first page of its usual size, not one row', async () => {
+		let rows: string[] = [];
+		const { limits, load } = served(() => rows);
+		const paged = new Paged(await load(), load, '1');
+		const stop = show(paged);
+		limits.length = 0;
+
+		rows = ['a', 'b', 'c'];
+		announce();
+		await vi.advanceTimersByTimeAsync(RELOAD_MS);
+		expect(limits).toEqual([undefined]);
+		expect(paged.items).toEqual(['a', 'b']);
+		expect(paged.hasMore).toBe(true);
+		await stop();
+	});
+
+	it('keeps loading while the sentinel is in view after a reload pushed the last row out', async () => {
+		vi.useRealTimers();
+		let rows = ['a', 'b'];
+		const { load } = served(() => rows);
+		const paged = new Paged(await load(), load, '1');
+		const el = document.body.appendChild(document.createElement('div'));
+		const stop = show(paged);
+		const destroy = $effect.root(() => {
+			$effect(() => paged.sentinel(el));
+		});
+		flushSync();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+
+		try {
+			rows = ['0', 'a', 'b'];
+			announce();
+			await vi.waitFor(() => expect(paged.items).toEqual(['0', 'a', 'b']), { timeout: 4000 });
+		} finally {
+			destroy();
+			el.remove();
+			await stop();
+		}
+	});
+
 	it('reloads once for a burst', async () => {
 		const { calls, load } = served(() => ['a', 'b']);
 		const paged = new Paged(await load(), load, '1');

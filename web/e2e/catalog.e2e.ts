@@ -318,6 +318,8 @@ test('a libraryChanged hint adds the new album to the open albums page without l
 	feed.changes = [album(5, '105', 'Aardvark')];
 	feed.next = feed.head = 5;
 	await expect(page.getByText('Aardvark', { exact: true }).first()).toBeAttached();
+	// The last album, which the new one pushed past the loaded window, is loaded in turn.
+	await expect(page.getByText('Nevermind', { exact: true }).first()).toBeAttached();
 	// The page was not remounted, and the user is not at the top.
 	await expect(first).toHaveAttribute('data-kept', 'yes');
 	expect(await main.evaluate((m) => m.scrollTop)).toBeGreaterThanOrEqual(before);

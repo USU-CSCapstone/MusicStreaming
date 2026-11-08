@@ -12,7 +12,7 @@ const RELOAD_PAGE = 1000;
 export class Paged<T> {
 	#items = $state<T[]>([]);
 	#total = $state(0);
-	#cursor: string | null;
+	#cursor = $state<string | null>(null);
 	/** The read under way, which another waits for rather than runs beside. */
 	#busy: Promise<void> | null = null;
 	#subscribe: () => void;
@@ -66,9 +66,10 @@ export class Paged<T> {
 			let page: Page<T>;
 			let cursor: string | undefined;
 			do {
-				// No more rows than are shown, so an unchanged window reads back the same rows.
-				const wanted = Math.max(1, this.#items.length - rows.length);
-				page = await this.load(cursor, Math.min(RELOAD_PAGE, wanted));
+				// No more rows than are shown, so an unchanged window reads back the same rows; an
+				// empty list reads a first page of the usual size.
+				const wanted = this.#items.length - rows.length;
+				page = await this.load(cursor, wanted > 0 ? Math.min(RELOAD_PAGE, wanted) : undefined);
 				rows.push(...page.items);
 				cursor = page.nextCursor ?? undefined;
 			} while (cursor && rows.length < this.#items.length);
@@ -91,9 +92,11 @@ export class Paged<T> {
 	/**
 	 * An attachment for an element at the end of the list: loads pages while it is near
 	 * the viewport, so a page too short to fill the screen still leads to the next. A list
-	 * that scrolls inside an element of its own passes that element as `root`.
+	 * that scrolls inside an element of its own passes that element as `root`. It starts over
+	 * when the list gains or loses its end, as a reload can push a row past it.
 	 */
 	sentinel = (el: Element, root: Element | null = null) => {
+		void this.hasMore;
 		let visible = false;
 		let pumping = false;
 		const pump = async () => {
